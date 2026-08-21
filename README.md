@@ -6,6 +6,8 @@ Waypoint is a real Electron application: projects, cycles, modules, work
 items, pages, intake, and AI agent assignments, all running natively on your
 machine and talking to a real backend, not local-storage.
 
+![Waypoint — work item detail](./docs/screenshots/work-item-detail.png)
+
 This repo holds the entire product — frontend and backend — in one place.
 
 | Folder | What it is |
@@ -32,10 +34,18 @@ This repo holds the entire product — frontend and backend — in one place.
 
 ## Screenshots
 
-|  |  |
-|---|---|
-| ![Home](./docs/screenshots/home.png) | ![Work items](./docs/screenshots/work-items.png) |
-| ![Work item detail](./docs/screenshots/work-item-detail.png) | ![Cycles](./docs/screenshots/cycles.png) |
+**Home** — a daily-driver landing page, not a dashboard nobody opens twice.
+
+![Home](./docs/screenshots/home.png)
+
+**Work items** — states, priorities, labels, assignees, and sub-item
+progress at a glance.
+
+![Work items](./docs/screenshots/work-items.png)
+
+**Cycles** — sprint-style iterations with a live burndown chart.
+
+![Cycles](./docs/screenshots/cycles.png)
 
 ## Getting started
 
