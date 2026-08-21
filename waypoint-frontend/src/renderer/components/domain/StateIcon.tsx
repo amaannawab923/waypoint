@@ -1,0 +1,34 @@
+import { Circle, CircleDot, CircleCheck, CircleX, CircleDashed, Inbox } from 'lucide-react';
+import type { StateGroup, WorkItemState } from '@/types/entities';
+
+export const STATE_GROUP_LABEL: Record<StateGroup, string> = {
+  backlog: 'Backlog',
+  unstarted: 'Unstarted',
+  started: 'Started',
+  completed: 'Completed',
+  cancelled: 'Cancelled',
+  triage: 'Triage',
+};
+
+/** Fixed ordering for grouped board/list columns — mirrors the backend's state-group taxonomy. */
+export const STATE_GROUP_ORDER: StateGroup[] = ['triage', 'backlog', 'unstarted', 'started', 'completed', 'cancelled'];
+
+export function StateIcon({ state, size = 14 }: { state: Pick<WorkItemState, 'group' | 'color'>; size?: number }) {
+  const props = { size, color: state.color, strokeWidth: 2.2 };
+  switch (state.group) {
+    case 'triage':
+      return <Inbox {...props} />;
+    case 'backlog':
+      return <CircleDashed {...props} />;
+    case 'unstarted':
+      return <Circle {...props} />;
+    case 'started':
+      return <CircleDot {...props} />;
+    case 'completed':
+      return <CircleCheck {...props} fill={state.color} color="var(--surface)" />;
+    case 'cancelled':
+      return <CircleX {...props} />;
+    default:
+      return <Circle {...props} />;
+  }
+}

@@ -1,0 +1,48 @@
+import { z } from 'zod';
+
+const priority = z.enum(['urgent', 'high', 'medium', 'low', 'none']);
+
+export const createWorkItemSchema = z.object({
+  projectId: z.string(),
+  title: z.string().min(1),
+  description: z.string().optional(),
+  stateId: z.string(),
+  priority: priority.optional(),
+  assigneeIds: z.array(z.string()).optional(),
+  labelIds: z.array(z.string()).optional(),
+  moduleId: z.string().nullable().optional(),
+  cycleId: z.string().nullable().optional(),
+  parentId: z.string().nullable().optional(),
+  isDraft: z.boolean().optional(),
+});
+
+export const updateWorkItemSchema = z.object({
+  title: z.string().min(1).optional(),
+  description: z.string().optional(),
+  stateId: z.string().optional(),
+  priority: priority.optional(),
+  assigneeIds: z.array(z.string()).optional(),
+  labelIds: z.array(z.string()).optional(),
+  moduleId: z.string().nullable().optional(),
+  cycleId: z.string().nullable().optional(),
+  parentId: z.string().nullable().optional(),
+  estimatePoints: z.number().nullable().optional(),
+  estimateValue: z.string().nullable().optional(),
+  startDate: z.string().nullable().optional(),
+  dueDate: z.string().nullable().optional(),
+  isDraft: z.boolean().optional(),
+});
+
+export const reorderWorkItemSchema = z.object({
+  targetId: z.string(),
+  position: z.enum(['before', 'after']),
+});
+
+export const addWorkItemLinkSchema = z.object({
+  url: z.string(),
+  label: z.string(),
+});
+
+export const addCommentSchema = z.object({
+  bodyHtml: z.string().min(1),
+});

@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+release/
+waypoint-frontend/.erb/dll/
+
+# Env files
+.env
+.env.local
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+pids/
+*.pid
+*.seed
+
+# Editor/OS
+.DS_Store
+.idea/
+*.css.d.ts
+*.sass.d.ts
+*.scss.d.ts
+
+# Coverage
+coverage/
+.eslintcache
