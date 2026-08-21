@@ -13,6 +13,8 @@ import {
   Boxes,
   Settings,
   LogOut,
+  Sun,
+  Moon,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useAsync } from '@/lib/useAsync';
@@ -27,7 +29,9 @@ import {
 } from '@/mock/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { CreateWorkItemModal } from '@/components/domain/CreateWorkItemModal';
+import { Tooltip } from '@/components/ui/Tooltip';
 import { markOnboarding } from '@/lib/onboarding';
+import { useTheme } from '@/lib/theme';
 import type { Project, WorkItem, Page, Cycle, WorkModule } from '@/types/entities';
 
 /** Small self-contained popover, mirrors the local Dropdown pattern used in
@@ -304,6 +308,7 @@ export function Topbar() {
   const { data: modules } = useAsync(() => listAllModules(), []);
   const [quickCreateOpen, setQuickCreateOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [theme, toggleTheme] = useTheme();
 
   const unread = notifications?.filter((n) => !n.read).length ?? 0;
   const firstProjectId = projects?.[0]?.id;
@@ -341,6 +346,17 @@ export function Topbar() {
           <Plus size={14} />
           New work item
         </button>
+
+        <Tooltip label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}>
+          <button
+            type="button"
+            onClick={toggleTheme}
+            aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+            className="flex size-8 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary hover:bg-surface-2 hover:text-text"
+          >
+            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+        </Tooltip>
 
         <button
           type="button"

@@ -36,10 +36,46 @@
   --radius-sm: 6px;
   --radius: 10px;
   --radius-lg: 16px;
+
+  color-scheme: light;
 }
 
-/* This app has a single, permanent theme (the light palette above). It does
-   not read or react to OS/browser dark-mode preference. */
+/* Dark theme — same monochrome-accent identity as light, inverted: a near-
+   black canvas instead of near-white, and the accent flips from near-black
+   to near-white so primary buttons stay legible either way. Applied via
+   `data-theme="dark"` on <html>, set by useTheme() (lib/theme.ts) and
+   persisted to localStorage; the inline script in index.ejs applies it
+   synchronously before first paint so there's no flash of the wrong theme
+   on load. */
+:root[data-theme='dark'] {
+  --bg: #0a0a0c;
+  --bg-inset: #131316;
+  --surface: #131316;
+  --surface-2: #1c1c20;
+  --border: #29292f;
+  --border-strong: #3a3a42;
+  --text: #f2f2f4;
+  --text-secondary: #a8a8b3;
+  --text-muted: #6b6b76;
+
+  --accent: #f2f2f4;
+  --accent-hover: #ffffff;
+  --accent-gradient: linear-gradient(180deg, #ffffff 0%, #d8d8dc 100%);
+  --accent-soft-bg: #232328;
+  --accent-soft-text: #f2f2f4;
+  --on-accent: #0a0a0c;
+
+  --success: #3ecf7e;
+  --success-bg: #0d2418;
+  --warning: #e2a13d;
+  --warning-bg: #2a1e08;
+  --danger: #f0655f;
+  --danger-bg: #2c1210;
+  --info: #5b93e6;
+  --info-bg: #101f33;
+
+  color-scheme: dark;
+}
 
 @theme inline {
   --font-sans: var(--font-body);
