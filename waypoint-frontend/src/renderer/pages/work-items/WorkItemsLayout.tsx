@@ -17,6 +17,7 @@ import { clsx } from 'clsx';
 import { useProject } from '@/layouts/ProjectLayout';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
+import { Tooltip } from '@/components/ui/Tooltip';
 import { CreateWorkItemModal } from '@/components/domain/CreateWorkItemModal';
 import { WorkItemDrawer } from '@/components/domain/WorkItemDrawer';
 import { PriorityIcon, PRIORITY_LABEL, PRIORITY_ORDER } from '@/components/domain/PriorityIcon';
@@ -107,22 +108,22 @@ export default function WorkItemsLayout() {
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-0.5 rounded-[var(--radius-sm)] border border-border-strong p-0.5">
             {VIEW_TABS.map(({ key, label, Icon }) => (
-              <button
-                key={key}
-                type="button"
-                title={label}
-                aria-label={label}
-                aria-pressed={currentView === key}
-                onClick={() => setView(key)}
-                className={clsx(
-                  'flex size-7 cursor-pointer items-center justify-center rounded-[var(--radius-sm)] transition-colors',
-                  currentView === key
-                    ? 'bg-accent text-on-accent'
-                    : 'text-text-secondary hover:bg-surface-2 hover:text-text',
-                )}
-              >
-                <Icon size={15} />
-              </button>
+              <Tooltip key={key} label={label}>
+                <button
+                  type="button"
+                  aria-label={label}
+                  aria-pressed={currentView === key}
+                  onClick={() => setView(key)}
+                  className={clsx(
+                    'flex size-7 cursor-pointer items-center justify-center rounded-[var(--radius-sm)] transition-colors',
+                    currentView === key
+                      ? 'bg-accent text-on-accent'
+                      : 'text-text-secondary hover:bg-surface-2 hover:text-text',
+                  )}
+                >
+                  <Icon size={15} />
+                </button>
+              </Tooltip>
             ))}
           </div>
 
