@@ -30,30 +30,12 @@ This repo holds the entire product — frontend and backend — in one place.
   browser back/forward all work correctly, in the dev server, in the packaged
   desktop app, and (by construction) if this ever ships as a plain website too.
 
-## Architecture
+## Screenshots
 
-```mermaid
-flowchart LR
-  subgraph Desktop["waypoint-frontend (Electron)"]
-    UI[React renderer]
-    Main[Electron main process]
-  end
-  API[waypoint-backend<br/>Express API]
-  DB[(Postgres)]
-
-  UI -->|REST, http://localhost:4000| API
-  Main -->|app:// protocol handler<br/>serves the packaged renderer| UI
-  API --> DB
-```
-
-The frontend is a normal Electron app: a React renderer talking to a small
-Express REST API over HTTP, exactly like it would if this were a website. The
-only Electron-specific piece is the main process, which owns the native
-window and — in a packaged build — serves the renderer's files through a
-custom `app://` protocol with SPA-fallback routing, so real client-side routes
-keep working after a hard refresh with no server behind them. In dev, the
-renderer is just served by webpack-dev-server, which gets the same behavior
-for free.
+|  |  |
+|---|---|
+| ![Home](./docs/screenshots/home.png) | ![Work items](./docs/screenshots/work-items.png) |
+| ![Work item detail](./docs/screenshots/work-item-detail.png) | ![Cycles](./docs/screenshots/cycles.png) |
 
 ## Getting started
 
