@@ -52,6 +52,24 @@ progress at a glance.
 You need both halves running — the frontend has no offline/mock mode, it
 always talks to a real backend.
 
+**Prerequisites:** [Docker](https://www.docker.com/products/docker-desktop/)
+and Node.js.
+
+```bash
+./scripts/dev.sh
+```
+
+That's it. This builds and starts the backend (Postgres + the API) in
+Docker, waits for it to come up healthy, applies database migrations, seeds
+demo data on a first run only, then launches the desktop app. Subsequent
+runs reuse your existing data — nothing gets wiped on restart.
+
+To stop the backend afterward: `./scripts/stop.sh` (add `--wipe` to also
+delete its data).
+
+<details>
+<summary>Running each half manually instead</summary>
+
 ```bash
 # 1. Backend
 cd waypoint-backend
@@ -66,6 +84,8 @@ cd waypoint-frontend
 npm install
 npm start                 # opens the Electron app, hot-reloading
 ```
+
+</details>
 
 See each folder's own README for the full script list, project layout, and
 how to build a packaged installer.
