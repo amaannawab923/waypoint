@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { clsx } from 'clsx';
 import { ArrowLeft, ChevronLeft, Plus, Search, Send, X } from 'lucide-react';
@@ -44,6 +44,23 @@ const MOCK_REPLIES = [
 
 function nextMockReply(): string {
   return MOCK_REPLIES[Math.floor(Math.random() * MOCK_REPLIES.length)];
+}
+
+// Ticket identifiers are "PREFIX-N" — plain localeCompare sorts that
+// numeric suffix as a string (LAUNCH-1, LAUNCH-10, LAUNCH-11, ..., LAUNCH-2),
+// which round-3 QA flagged as confusing once a project passes 10 tickets.
+// Compare the numeric suffix numerically instead.
+function compareIdentifiers(a: string, b: string): number {
+  const aIdx = a.lastIndexOf('-');
+  const bIdx = b.lastIndexOf('-');
+  const aPrefix = aIdx === -1 ? a : a.slice(0, aIdx);
+  const bPrefix = bIdx === -1 ? b : b.slice(0, bIdx);
+  const prefixCompare = aPrefix.localeCompare(bPrefix);
+  if (prefixCompare !== 0) return prefixCompare;
+  const aNum = Number(aIdx === -1 ? NaN : a.slice(aIdx + 1));
+  const bNum = Number(bIdx === -1 ? NaN : b.slice(bIdx + 1));
+  if (!Number.isNaN(aNum) && !Number.isNaN(bNum)) return aNum - bNum;
+  return a.localeCompare(b);
 }
 
 function MessageComposer({ onSend }: { onSend: (text: string) => void }) {
@@ -96,6 +113,7 @@ export default function SessionsScreen() {
   const [query, setQuery] = useState('');
   // Only matters below the lg breakpoint — see the rail/detail classNames below.
   const [mobileView, setMobileView] = useState<'rail' | 'detail'>('detail');
+  const newSessionButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions));
@@ -107,7 +125,10 @@ export default function SessionsScreen() {
     const q = query.trim().toLowerCase();
     if (!q) return sessions;
     return sessions.filter(
-      (s) => s.workItemIdentifier.toLowerCase().includes(q) || s.workItemTitle.toLowerCase().includes(q),
+      (s) =>
+        s.workItemIdentifier.toLowerCase().includes(q) ||
+        s.workItemTitle.toLowerCase().includes(q) ||
+        s.projectName.toLowerCase().includes(q),
     );
   }, [sessions, query]);
 
@@ -127,7 +148,7 @@ export default function SessionsScreen() {
           projectId: w.projectId,
           projectName: projectNameById.get(w.projectId) ?? 'Other',
         }))
-        .sort((a, b) => a.projectName.localeCompare(b.projectName) || a.identifier.localeCompare(b.identifier)),
+        .sort((a, b) => a.projectName.localeCompare(b.projectName) || compareIdentifiers(a.identifier, b.identifier)),
     [workItems, projectNameById],
   );
 
@@ -178,6 +199,15 @@ export default function SessionsScreen() {
 
   function dismissSession(id: string, e: React.MouseEvent) {
     e.stopPropagation();
+    const row = e.currentTarget.closest('[role="button"]');
+    const nextFocusTarget =
+      (row?.nextElementSibling as HTMLElement | null) ?? (row?.previousElementSibling as HTMLElement | null) ?? null;
+    // Move focus off the dismiss button *before* removing its row, rather
+    // than after — removing the currently-focused element drops focus to
+    // <body> with no way back for keyboard users (round-3 QA). The
+    // neighboring row already exists in the DOM, so it can take focus
+    // immediately; no need to wait on React's re-render.
+    (nextFocusTarget ?? newSessionButtonRef.current)?.focus();
     setSessions((prev) => prev.filter((s) => s.id !== id));
   }
 
@@ -239,6 +269,7 @@ export default function SessionsScreen() {
         </div>
 
         <button
+          ref={newSessionButtonRef}
           type="button"
           onClick={() => setNewSessionOpen(true)}
           className="mx-3 mt-3 flex h-9 items-center gap-1.5 rounded-[var(--radius-sm)] border border-dashed border-border-strong px-3 text-sm text-text-secondary hover:border-accent hover:text-text"
@@ -366,7 +397,7 @@ export default function SessionsScreen() {
                   >
                     <div
                       className={clsx(
-                        'max-w-[85%] rounded-[var(--radius)] px-4 py-3 text-sm leading-relaxed',
+                        'max-w-[85%] break-words rounded-[var(--radius)] px-4 py-3 text-sm leading-relaxed',
                         message.role === 'user'
                           ? 'bg-accent text-on-accent'
                           : 'border border-border bg-surface text-text',
