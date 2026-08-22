@@ -3,6 +3,14 @@ import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { IconButton } from '@/components/ui/Button';
 
+function getFocusableElements(container: HTMLElement): HTMLElement[] {
+  return Array.from(
+    container.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ),
+  );
+}
+
 export function Modal({
   open,
   onClose,
@@ -19,6 +27,7 @@ export function Modal({
   width?: number;
 }) {
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   // Closing the modal (Escape, backdrop click, the × button, or a footer
   // action) otherwise drops focus to <body> once the portal unmounts —
@@ -44,6 +53,38 @@ export function Modal({
     return () => document.removeEventListener('keydown', onKey);
   }, [open, onClose]);
 
+  // Round-4 QA: nothing moved focus into the dialog on open or contained it
+  // while open, so Tab could walk a keyboard user straight out of a still-open
+  // modal into the page behind it. Focus the first focusable field (or the
+  // dialog itself, as a fallback with no focusable content) on open, and trap
+  // Tab/Shift+Tab between the first and last focusable elements while it's up.
+  useEffect(() => {
+    if (!open) return;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    (getFocusableElements(dialog)[0] ?? dialog).focus();
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab') return;
+      const focusable = getFocusableElements(dialog);
+      if (focusable.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [open]);
+
   if (!open) return null;
 
   return createPortal(
@@ -52,7 +93,12 @@ export function Modal({
       onClick={onClose}
     >
       <div
-        className="flex max-h-[78vh] w-full flex-col rounded-[var(--radius-lg)] border border-border bg-surface shadow-2xl"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+        className="flex max-h-[78vh] w-full flex-col rounded-[var(--radius-lg)] border border-border bg-surface shadow-2xl outline-none"
         style={{ maxWidth: width }}
         onClick={(e) => e.stopPropagation()}
       >
