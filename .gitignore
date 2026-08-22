@@ -3,7 +3,15 @@ node_modules/
 
 # Build output
 dist/
-release/
+# NOT a blanket `release/` — that silently swallowed
+# waypoint-frontend/release/app/package.json and package-lock.json, which
+# are required scaffold files (electron-react-boilerplate's per-platform
+# app package), not build output. Only the actual generated output under
+# them is excluded here; waypoint-frontend/.gitignore mirrors the same two
+# paths for anyone working inside that subtree directly.
+waypoint-frontend/release/app/dist/
+waypoint-frontend/release/build/
+waypoint-backend/dist/
 waypoint-frontend/.erb/dll/
 
 # Env files
