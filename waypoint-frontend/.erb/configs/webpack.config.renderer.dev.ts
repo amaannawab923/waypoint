@@ -150,6 +150,10 @@ const configuration: webpack.Configuration = {
     new webpack.EnvironmentPlugin({
       NODE_ENV: 'development',
       WAYPOINT_API_BASE_URL: 'http://localhost:4000',
+      // Feature flag for the in-progress agent-sessions UI (mock frontend,
+      // no real backend runtime yet) — see lib/featureFlags.ts. Off by
+      // default; run with WAYPOINT_FEATURE_AGENT_SESSIONS=true to see it.
+      WAYPOINT_FEATURE_AGENT_SESSIONS: 'false',
     }),
 
     new webpack.LoaderOptionsPlugin({
