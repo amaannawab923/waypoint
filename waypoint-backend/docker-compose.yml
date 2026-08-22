@@ -10,6 +10,26 @@ services:
       - '5432:5432'
     volumes:
       - waypoint_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U waypoint -d waypoint']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    restart: unless-stopped
+    environment:
+      # The compose network resolves service names as hostnames — this is
+      # deliberately not `localhost` (that's what .env is for when running
+      # `npm run dev` on the host against the container's published port).
+      DATABASE_URL: postgres://waypoint:waypoint@postgres:5432/waypoint
+      PORT: 4000
+    ports:
+      - '4000:4000'
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   waypoint_pgdata:
