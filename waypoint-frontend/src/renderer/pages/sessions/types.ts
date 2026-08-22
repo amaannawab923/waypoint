@@ -32,6 +32,10 @@ export interface SessionMessage {
   createdAt: string;
 }
 
+/** Statuses a session can still take further action in — used to detect an
+ * existing active session on a ticket before silently spawning a duplicate. */
+export const ACTIVE_STATUSES: AgentRunStatus[] = ['queued', 'running', 'needs-review', 'blocked'];
+
 /**
  * A single dispatch of a personal agent against one ticket. This is a mock
  * frontend type, deliberately not merged into the real `AgentAssignment`
@@ -54,4 +58,6 @@ export interface AgentSession {
   createdAt: string;
   updatedAt: string;
   messages: SessionMessage[];
+  /** Unset (or true) until the user opens it — drives the rail's unread treatment. */
+  unread: boolean;
 }

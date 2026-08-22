@@ -18,6 +18,7 @@ export const MOCK_SESSIONS: AgentSession[] = [
     status: 'running',
     createdAt: '2026-08-22T09:12:00Z',
     updatedAt: '2026-08-22T09:41:00Z',
+    unread: true,
     messages: [
       {
         id: 'm1',
@@ -59,6 +60,7 @@ export const MOCK_SESSIONS: AgentSession[] = [
     status: 'needs-review',
     createdAt: '2026-08-22T08:02:00Z',
     updatedAt: '2026-08-22T08:29:00Z',
+    unread: true,
     messages: [
       {
         id: 'm1',
@@ -88,6 +90,7 @@ export const MOCK_SESSIONS: AgentSession[] = [
     status: 'blocked',
     createdAt: '2026-08-21T15:40:00Z',
     updatedAt: '2026-08-21T16:05:00Z',
+    unread: true,
     messages: [
       {
         id: 'm1',
@@ -117,6 +120,7 @@ export const MOCK_SESSIONS: AgentSession[] = [
     status: 'done',
     createdAt: '2026-08-21T11:10:00Z',
     updatedAt: '2026-08-21T11:12:00Z',
+    unread: false,
     messages: [
       {
         id: 'm1',
@@ -146,6 +150,7 @@ export const MOCK_SESSIONS: AgentSession[] = [
     status: 'failed',
     createdAt: '2026-08-20T14:00:00Z',
     updatedAt: '2026-08-20T14:03:00Z',
+    unread: true,
     messages: [
       {
         id: 'm1',
@@ -176,6 +181,7 @@ export const MOCK_SESSIONS: AgentSession[] = [
     status: 'queued',
     createdAt: '2026-08-22T09:58:00Z',
     updatedAt: '2026-08-22T09:58:00Z',
+    unread: true,
     messages: [
       {
         id: 'm1',

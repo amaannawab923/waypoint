@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { clsx } from 'clsx';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
-import { SESSION_INTENT_LABEL, type SessionIntent } from './types';
+import { AgentStatusBadge } from '@/components/domain/AgentStatusBadge';
+import { SESSION_INTENT_LABEL, type AgentSession, type SessionIntent } from './types';
 
 const INTENT_ORDER: SessionIntent[] = ['rca', 'comment', 'follow-up', 'full-coding'];
 
@@ -17,15 +18,28 @@ export function NewSessionModal({
   onClose,
   tickets,
   onDispatch,
+  findActiveSession,
+  onJumpToSession,
 }: {
   open: boolean;
   onClose: () => void;
   tickets: TicketOption[];
   onDispatch: (input: { ticketId: string; intent: SessionIntent; customInstruction?: string }) => void;
+  /** An already-active session on the given ticket, if one exists — used to
+   * warn before silently spawning an indistinguishable duplicate. */
+  findActiveSession: (ticketId: string) => AgentSession | null;
+  onJumpToSession: (sessionId: string) => void;
 }) {
-  const [ticketId, setTicketId] = useState(tickets[0]?.id ?? '');
+  const [ticketId, setTicketId] = useState('');
   const [intent, setIntent] = useState<SessionIntent | null>(null);
   const [customText, setCustomText] = useState('');
+
+  // Tickets load async (real work-items API) — default to the first one
+  // once they arrive, but don't fight a selection the user already made.
+  useEffect(() => {
+    if (ticketId || tickets.length === 0) return;
+    setTicketId(tickets[0].id);
+  }, [tickets, ticketId]);
 
   function reset() {
     setTicketId(tickets[0]?.id ?? '');
@@ -52,6 +66,7 @@ export function NewSessionModal({
   }
 
   const canDispatch = Boolean(ticketId) && (intent === 'custom' ? customText.trim().length > 0 : intent !== null);
+  const activeSession = ticketId ? findActiveSession(ticketId) : null;
 
   return (
     <Modal
@@ -78,6 +93,7 @@ export function NewSessionModal({
             onChange={(e) => setTicketId(e.target.value)}
             className="h-9 rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 text-sm outline-none focus:border-accent"
           >
+            {tickets.length === 0 && <option value="">Loading tickets…</option>}
             {tickets.map((t) => (
               <option key={t.id} value={t.id}>
                 {t.identifier} — {t.title}
@@ -85,6 +101,24 @@ export function NewSessionModal({
             ))}
           </select>
         </div>
+
+        {activeSession && (
+          <div className="flex items-center justify-between gap-3 rounded-[var(--radius-sm)] border border-warning-bg bg-warning-bg px-3 py-2.5">
+            <div className="flex min-w-0 items-center gap-2 text-xs text-text">
+              <AgentStatusBadge status={activeSession.status} />
+              <span className="truncate">
+                Ethan already has an active session on this ticket ({SESSION_INTENT_LABEL[activeSession.intent]}).
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => onJumpToSession(activeSession.id)}
+              className="shrink-0 text-xs font-medium text-accent-soft-text underline hover:no-underline"
+            >
+              View it
+            </button>
+          </div>
+        )}
 
         <div className="flex flex-col gap-1.5">
           <label className="text-xs font-medium text-text-secondary">What should Ethan do?</label>
