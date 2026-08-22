@@ -7,12 +7,31 @@ import { Avatar } from '@/components/ui/Avatar';
 import { AgentStatusBadge } from '@/components/domain/AgentStatusBadge';
 import { IconButton } from '@/components/ui/Button';
 import { useAsync } from '@/lib/useAsync';
-import { listAllWorkItems } from '@/mock/api';
+import { listAllWorkItems, listProjects } from '@/mock/api';
 import { NewSessionModal } from './NewSessionModal';
 import { MOCK_SESSIONS } from './mockSessions';
 import { ACTIVE_STATUSES, SESSION_INTENT_LABEL, type AgentSession, type SessionIntent } from './types';
 
 const LAST_SESSION_KEY = 'waypoint:lastSessionId';
+// Round-2 QA found that only the *selected* session id was persisted —
+// everything a user actually did inside a session (replies, read state,
+// dismissals, new dispatches) reset the moment the screen unmounted, since
+// it only ever lived in this component's own useState. That made "Back to
+// Waypoint" look like it remembered your place while silently discarding
+// the conversation itself. Persisting the whole list, not just the
+// pointer, is the actual fix.
+const SESSIONS_KEY = 'waypoint:sessions';
+
+function loadSessions(): AgentSession[] {
+  try {
+    const raw = localStorage.getItem(SESSIONS_KEY);
+    if (!raw) return MOCK_SESSIONS;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : MOCK_SESSIONS;
+  } catch {
+    return MOCK_SESSIONS;
+  }
+}
 
 // A couple of canned acknowledgements so replying inside a session feels
 // like a real back-and-forth in this mock, without any real agent behind
@@ -68,14 +87,19 @@ function MessageComposer({ onSend }: { onSend: (text: string) => void }) {
 export default function SessionsScreen() {
   const navigate = useNavigate();
   const { data: workItems } = useAsync(() => listAllWorkItems(), []);
-  const [sessions, setSessions] = useState<AgentSession[]>(MOCK_SESSIONS);
+  const { data: projects } = useAsync(() => listProjects(), []);
+  const [sessions, setSessions] = useState<AgentSession[]>(loadSessions);
   const [selectedId, setSelectedId] = useState<string>(
-    () => localStorage.getItem(LAST_SESSION_KEY) ?? MOCK_SESSIONS[0]?.id ?? '',
+    () => localStorage.getItem(LAST_SESSION_KEY) ?? loadSessions()[0]?.id ?? '',
   );
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [query, setQuery] = useState('');
   // Only matters below the lg breakpoint — see the rail/detail classNames below.
   const [mobileView, setMobileView] = useState<'rail' | 'detail'>('detail');
+
+  useEffect(() => {
+    localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions));
+  }, [sessions]);
 
   const selected = useMemo(() => sessions.find((s) => s.id === selectedId) ?? null, [sessions, selectedId]);
 
@@ -87,9 +111,24 @@ export default function SessionsScreen() {
     );
   }, [sessions, query]);
 
+  const projectNameById = useMemo(() => new Map((projects ?? []).map((p) => [p.id, p.name])), [projects]);
+
+  // Grouped and sorted by project — a flat 19-item list spanning two
+  // unrelated projects (round-2 QA: "Design pricing page hero section" and
+  // "Migrate internal scripts off deprecated API" sitting in the same
+  // undifferentiated list) is hard to scan without this.
   const tickets = useMemo(
-    () => (workItems ?? []).map((w) => ({ id: w.id, identifier: w.identifier, title: w.title })),
-    [workItems],
+    () =>
+      (workItems ?? [])
+        .map((w) => ({
+          id: w.id,
+          identifier: w.identifier,
+          title: w.title,
+          projectId: w.projectId,
+          projectName: projectNameById.get(w.projectId) ?? 'Other',
+        }))
+        .sort((a, b) => a.projectName.localeCompare(b.projectName) || a.identifier.localeCompare(b.identifier)),
+    [workItems, projectNameById],
   );
 
   // Selecting a session that no longer exists (e.g. it was dismissed in
@@ -153,8 +192,8 @@ export default function SessionsScreen() {
       workItemId: ticket.id,
       workItemIdentifier: ticket.identifier,
       workItemTitle: ticket.title,
-      projectId: 'proj-launch',
-      projectName: 'Product Launch',
+      projectId: ticket.projectId,
+      projectName: ticket.projectName,
       agentId: 'agent-ethan',
       agentName: 'Ethan',
       agentAvatarColor: '#2f6fa8',
@@ -167,6 +206,11 @@ export default function SessionsScreen() {
       messages: [{ id: 'm1', role: 'user', text: instructionText, createdAt: now }],
     };
     setSessions((prev) => [session, ...prev]);
+    // Otherwise the new session lands invisibly under whatever search query
+    // was active — round-2 QA dispatched under a "zzz" filter and the rail
+    // showed no evidence anything happened, even though the detail pane
+    // correctly displayed it the whole time.
+    setQuery('');
     selectSession(session.id);
     setNewSessionOpen(false);
   }
@@ -214,7 +258,12 @@ export default function SessionsScreen() {
         </div>
 
         <div className="thin-scroll mt-2 flex-1 overflow-y-auto px-2 pb-3">
-          {filteredSessions.length === 0 && (
+          {filteredSessions.length === 0 && sessions.length === 0 && (
+            <p className="mt-6 px-2 text-center text-sm text-text-muted">
+              No sessions yet — start one with "New session."
+            </p>
+          )}
+          {filteredSessions.length === 0 && sessions.length > 0 && (
             <p className="mt-6 px-2 text-center text-sm text-text-muted">No sessions match "{query}".</p>
           )}
           {filteredSessions.map((session) => (
@@ -230,6 +279,16 @@ export default function SessionsScreen() {
               tabIndex={0}
               onClick={() => selectSession(session.id)}
               onKeyDown={(e) => {
+                // Guard against the dismiss <button> nested inside this row:
+                // without this, focusing *it* and pressing Enter/Space still
+                // bubbles up to this handler, which both wrongly selects the
+                // row AND — because it unconditionally calls
+                // preventDefault() — cancels the dismiss button's own native
+                // Enter/Space activation. Round-2 QA caught this exact
+                // regression: dismiss was keyboard-focusable but not
+                // keyboard-activatable. Only react when the row itself, not
+                // a descendant, is the actual event target.
+                if (e.target !== e.currentTarget) return;
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault();
                   selectSession(session.id);
@@ -324,7 +383,17 @@ export default function SessionsScreen() {
             </div>
 
             <div className="mx-auto w-full max-w-2xl">
-              <MessageComposer onSend={handleReply} />
+              {/* Round-2 QA flagged a "Done" session still showing an active
+                  composer as an accident waiting for a decision — this is
+                  that decision: a closed session (done/failed) is closed,
+                  not reply-able. */}
+              {selected.status === 'done' || selected.status === 'failed' ? (
+                <p className="border-t border-border px-8 py-4 text-center text-xs text-text-muted">
+                  This session is closed.
+                </p>
+              ) : (
+                <MessageComposer onSend={handleReply} />
+              )}
             </div>
           </>
         ) : (

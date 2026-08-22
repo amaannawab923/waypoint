@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { clsx } from 'clsx';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
@@ -11,6 +11,8 @@ interface TicketOption {
   id: string;
   identifier: string;
   title: string;
+  projectId: string;
+  projectName: string;
 }
 
 export function NewSessionModal({
@@ -33,6 +35,20 @@ export function NewSessionModal({
   const [ticketId, setTicketId] = useState('');
   const [intent, setIntent] = useState<SessionIntent | null>(null);
   const [customText, setCustomText] = useState('');
+
+  // `tickets` arrives pre-sorted by project name — grouping the already-
+  // sorted list preserves that order rather than re-sorting project names
+  // in insertion order. Round-2 QA: 19 tickets across two projects in one
+  // flat, ungrouped list was hard to scan.
+  const groupedTickets = useMemo(() => {
+    const groups: { projectName: string; tickets: TicketOption[] }[] = [];
+    for (const ticket of tickets) {
+      const last = groups[groups.length - 1];
+      if (last && last.projectName === ticket.projectName) last.tickets.push(ticket);
+      else groups.push({ projectName: ticket.projectName, tickets: [ticket] });
+    }
+    return groups;
+  }, [tickets]);
 
   // Tickets load async (real work-items API) — default to the first one
   // once they arrive, but don't fight a selection the user already made.
@@ -94,10 +110,14 @@ export function NewSessionModal({
             className="h-9 rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 text-sm outline-none focus:border-accent"
           >
             {tickets.length === 0 && <option value="">Loading tickets…</option>}
-            {tickets.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.identifier} — {t.title}
-              </option>
+            {groupedTickets.map((group) => (
+              <optgroup key={group.projectName} label={group.projectName}>
+                {group.tickets.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.identifier} — {t.title}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
         </div>
