@@ -12,6 +12,8 @@ import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom';
 import { AppShell } from '@/layouts/AppShell';
 import { ProjectLayout } from '@/layouts/ProjectLayout';
 import { isOnboarded } from '@/lib/onboarding';
+import { AGENT_SESSIONS_ENABLED } from '@/lib/featureFlags';
+import SessionsScreen from '@/pages/sessions/SessionsScreen';
 
 import Login from '@/pages/auth/Login';
 import Signup from '@/pages/auth/Signup';
@@ -183,6 +185,12 @@ export const router = createBrowserRouter([
           { path: '*', element: <Navigate to="/" replace /> },
         ],
       },
+
+      // Sibling of the AppShell-wrapped tree, not nested inside it — Sessions
+      // is a genuine full-viewport takeover with no sidebar/topbar, not a
+      // panel within the normal app chrome. Flag-gated: mock frontend only,
+      // no real backend runtime behind it yet (see lib/featureFlags.ts).
+      ...(AGENT_SESSIONS_ENABLED ? [{ path: '/sessions', element: <SessionsScreen /> }] : []),
     ],
   },
 ]);
