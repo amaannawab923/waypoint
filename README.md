@@ -53,7 +53,7 @@ You need both halves running — the frontend has no offline/mock mode, it
 always talks to a real backend.
 
 **Prerequisites:** [Docker](https://www.docker.com/products/docker-desktop/)
-and Node.js.
+and Node.js 22+ (see `waypoint-frontend/.nvmrc`).
 
 ```bash
 ./scripts/dev.sh
@@ -74,9 +74,12 @@ delete its data).
 # 1. Backend
 cd waypoint-backend
 cp .env.example .env
-docker compose up -d
+docker compose up -d postgres  # just Postgres — `up -d` with no service
+                                # name also starts the api container, which
+                                # conflicts on :4000 with `npm run dev` below
 npm install
-npm run db:generate && npm run db:migrate && npm run db:seed
+npm run db:generate && npm run db:migrate && npm run db:seed  # destructive:
+                                # truncates every table first
 npm run dev              # http://localhost:4000
 
 # 2. Frontend, in a second terminal
