@@ -1,6 +1,9 @@
 {
   "name": "waypoint-frontend",
   "description": "Waypoint's native Electron desktop app — the client for a project management tool that ships as a real desktop application instead of a browser tab.",
+  "engines": {
+    "node": ">=22"
+  },
   "keywords": [
     "waypoint",
     "electron",
@@ -249,7 +252,7 @@
   "devEngines": {
     "runtime": {
       "name": "node",
-      "version": ">=14.x",
+      "version": ">=22.0.0",
       "onFail": "error"
     },
     "packageManager": {
