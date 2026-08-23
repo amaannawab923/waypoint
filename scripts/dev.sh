@@ -15,11 +15,13 @@ FRONTEND_DIR="$ROOT_DIR/waypoint-frontend"
 # `command -v docker` only proves the CLI exists — it passes just as
 # happily when Docker Desktop is installed but not running, or when only
 # the legacy `docker-compose` v1 binary is present (no `compose`
-# subcommand). `docker compose version` fails in both of those cases, so
-# checking it instead catches "Docker isn't actually usable right now" up
-# front instead of a raw "Cannot connect to the Docker daemon" a few lines
-# into the build.
-if ! docker compose version >/dev/null 2>&1; then
+# subcommand). `docker compose ls` catches both: it fails on a missing
+# `compose` subcommand the same way `docker compose version` would, but
+# unlike `version` — which only prints the local plugin's version without
+# ever contacting the daemon — `ls` actually talks to the daemon, so it
+# also fails when Docker Desktop is installed but not running, instead of
+# a raw "Cannot connect to the Docker daemon" a few lines into the build.
+if ! docker compose ls >/dev/null 2>&1; then
   echo "Docker (with Compose v2) is required and must be running. Start Docker Desktop and try again." >&2
   exit 1
 fi
