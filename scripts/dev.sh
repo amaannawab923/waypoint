@@ -12,20 +12,31 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND_DIR="$ROOT_DIR/waypoint-backend"
 FRONTEND_DIR="$ROOT_DIR/waypoint-frontend"
 
-if ! command -v docker >/dev/null 2>&1; then
-  echo "Docker is required but was not found on PATH. Install Docker Desktop and try again." >&2
+# `command -v docker` only proves the CLI exists — it passes just as
+# happily when Docker Desktop is installed but not running, or when only
+# the legacy `docker-compose` v1 binary is present (no `compose`
+# subcommand). `docker compose version` fails in both of those cases, so
+# checking it instead catches "Docker isn't actually usable right now" up
+# front instead of a raw "Cannot connect to the Docker daemon" a few lines
+# into the build.
+if ! docker compose version >/dev/null 2>&1; then
+  echo "Docker (with Compose v2) is required and must be running. Start Docker Desktop and try again." >&2
   exit 1
 fi
 
 # The frontend's Tailwind build depends on a platform-specific native binary
-# (@tailwindcss/oxide-*) that requires Node >= 20. On an older Node, npm
+# (@tailwindcss/oxide-*) that requires Node >= 20 — see waypoint-frontend/
+# package.json's engines/devEngines and .nvmrc, which pin 22, the version
+# this was actually verified against (@electron/notarize, a transitive
+# dependency, separately requires >= 22.12.0). On an older Node, npm
 # silently skips that optional dependency instead of erroring — the app
 # still installs and even starts, but the renderer fails with an opaque
 # "Cannot GET /index.html" once the CSS build breaks. Catch it here with an
 # actionable message instead of that confusing downstream failure.
 NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
-if [ "$NODE_MAJOR" -lt 20 ]; then
-  echo "Node 20+ is required (found $(node -v 2>/dev/null || echo 'none')). If you use nvm: cd waypoint-frontend && nvm install && nvm use, then re-run this script." >&2
+case "$NODE_MAJOR" in '' | *[!0-9]*) NODE_MAJOR=0 ;; esac
+if [ "$NODE_MAJOR" -lt 22 ]; then
+  echo "Node 22+ is required (found $(node -v 2>/dev/null || echo 'none')). If you use nvm: cd waypoint-frontend && nvm install && nvm use, then re-run this script." >&2
   exit 1
 fi
 
@@ -53,7 +64,12 @@ done
 
 if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
   echo "==> Installing frontend dependencies (first run only)..."
-  (cd "$FRONTEND_DIR" && npm install)
+  # npm ci, not npm install: deterministic against the committed lockfile
+  # (the one this repo's Node 22 pin exists to keep correct — see the
+  # comment on the version check above) and it refuses to proceed on a
+  # lockfile/package.json mismatch instead of silently rewriting the
+  # lockfile this script's caller didn't ask to change.
+  (cd "$FRONTEND_DIR" && npm ci)
 fi
 
 echo "==> Launching the desktop app..."
