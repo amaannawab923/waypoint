@@ -21,7 +21,14 @@ function dateOnly(d: Date): string {
 
 const CURRENT_USER_ID = 'mem-1';
 
-async function truncateAll() {
+// The whole seed() body — truncate plus every insert — runs as one
+// transaction (see the wrapping db.transaction() call below), so a crash
+// partway through rolls back to whatever was there before instead of
+// leaving a half-seeded database that seedIfEmpty.ts would then mistake
+// for "already seeded" (it only checks whether `workspaces` has a row).
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+async function truncateAll(tx: Tx) {
   const tables = [
     'agent_assignments',
     'agent_project_scopes',
@@ -50,13 +57,14 @@ async function truncateAll() {
     'members',
     'workspaces',
   ];
-  await db.execute(sql.raw(`TRUNCATE TABLE ${tables.map((t) => `"${t}"`).join(', ')} RESTART IDENTITY CASCADE`));
+  await tx.execute(sql.raw(`TRUNCATE TABLE ${tables.map((t) => `"${t}"`).join(', ')} RESTART IDENTITY CASCADE`));
 }
 
 export async function seed() {
-  await truncateAll();
+  await db.transaction(async (tx) => {
+  await truncateAll(tx);
 
-  await db.insert(schema.workspaces).values({
+  await tx.insert(schema.workspaces).values({
     id: 'ws-1',
     name: 'Waypoint Labs',
     slug: 'waypoint-labs',
@@ -67,7 +75,7 @@ export async function seed() {
     restrictWorkspaceCreation: false,
   });
 
-  await db.insert(schema.members).values([
+  await tx.insert(schema.members).values([
     {
       id: 'mem-1',
       workspaceId: 'ws-1',
@@ -125,7 +133,7 @@ export async function seed() {
     },
   ]);
 
-  await db.insert(schema.projects).values([
+  await tx.insert(schema.projects).values([
     {
       id: 'proj-launch',
       workspaceId: 'ws-1',
@@ -179,7 +187,7 @@ export async function seed() {
     },
   ]);
 
-  await db.insert(schema.projectMembers).values([
+  await tx.insert(schema.projectMembers).values([
     ...['mem-1', 'mem-2', 'mem-3', 'mem-4'].map((memberId) => ({ projectId: 'proj-launch', memberId })),
     ...['mem-1', 'mem-2', 'mem-5'].map((memberId) => ({ projectId: 'proj-tools', memberId })),
   ]);
@@ -197,9 +205,9 @@ export async function seed() {
     ];
     return base.map((s) => ({ ...s, projectId }));
   }
-  await db.insert(schema.workItemStates).values([...statesFor('proj-launch'), ...statesFor('proj-tools')]);
+  await tx.insert(schema.workItemStates).values([...statesFor('proj-launch'), ...statesFor('proj-tools')]);
 
-  await db.insert(schema.labels).values([
+  await tx.insert(schema.labels).values([
     { id: 'lbl-1', projectId: 'proj-launch', name: 'bug', color: '#b7332a' },
     { id: 'lbl-2', projectId: 'proj-launch', name: 'design', color: '#a86fe0' },
     { id: 'lbl-3', projectId: 'proj-launch', name: 'marketing', color: '#c99a2e' },
@@ -208,7 +216,7 @@ export async function seed() {
     { id: 'lbl-6', projectId: 'proj-tools', name: 'bug', color: '#b7332a' },
   ]);
 
-  await db.insert(schema.workModules).values([
+  await tx.insert(schema.workModules).values([
     {
       id: 'mod-1',
       projectId: 'proj-launch',
@@ -241,7 +249,7 @@ export async function seed() {
     },
   ]);
 
-  await db.insert(schema.moduleMembers).values([
+  await tx.insert(schema.moduleMembers).values([
     { moduleId: 'mod-1', memberId: 'mem-4' },
     { moduleId: 'mod-1', memberId: 'mem-2' },
     { moduleId: 'mod-2', memberId: 'mem-3' },
@@ -249,7 +257,7 @@ export async function seed() {
     { moduleId: 'mod-3', memberId: 'mem-3' },
   ]);
 
-  await db.insert(schema.cycles).values([
+  await tx.insert(schema.cycles).values([
     {
       id: 'cyc-1',
       projectId: 'proj-launch',
@@ -452,7 +460,7 @@ export async function seed() {
 
   const prefixFor = (projectId: string) => (projectId === 'proj-launch' ? 'LAUNCH' : 'TOOLS');
   const wiByProjectSeq = new Map<string, number>();
-  await db.insert(schema.workItems).values(
+  await tx.insert(schema.workItems).values(
     wiSeeds.map((w, i) => {
       const count = (wiByProjectSeq.get(w.projectId) ?? 0) + 1;
       wiByProjectSeq.set(w.projectId, count);
@@ -480,7 +488,7 @@ export async function seed() {
   );
 
   const labelRows = wiSeeds.flatMap((w) => (w.labelIds ?? []).map((labelId) => ({ workItemId: w.id, labelId })));
-  if (labelRows.length) await db.insert(schema.workItemLabels).values(labelRows);
+  if (labelRows.length) await tx.insert(schema.workItemLabels).values(labelRows);
 
   const assigneeRows = wiSeeds.flatMap((w) =>
     (w.assigneeIds ?? []).map((assigneeId) => ({
@@ -489,10 +497,10 @@ export async function seed() {
       assigneeKind: (assigneeId.startsWith('agent-') ? 'agent' : 'member') as 'agent' | 'member',
     })),
   );
-  if (assigneeRows.length) await db.insert(schema.workItemAssignees).values(assigneeRows);
+  if (assigneeRows.length) await tx.insert(schema.workItemAssignees).values(assigneeRows);
 
   // --- Agents -----------------------------------------------------------
-  await db.insert(schema.agents).values([
+  await tx.insert(schema.agents).values([
     {
       id: 'agent-claude',
       workspaceId: 'ws-1',
@@ -568,13 +576,13 @@ export async function seed() {
     },
   ]);
 
-  await db.insert(schema.agentProjectScopes).values([
+  await tx.insert(schema.agentProjectScopes).values([
     { agentId: 'agent-codex', projectId: 'proj-launch' },
     { agentId: 'agent-gemini', projectId: 'proj-tools' },
     { agentId: 'agent-release-notes', projectId: 'proj-launch' },
   ]);
 
-  await db.insert(schema.agentAssignments).values([
+  await tx.insert(schema.agentAssignments).values([
     {
       id: 'aa-1',
       workItemId: navBreaks.id,
@@ -613,7 +621,7 @@ export async function seed() {
     },
   ]);
 
-  await db.insert(schema.comments).values([
+  await tx.insert(schema.comments).values([
     {
       id: 'cm-1',
       workItemId: navBreaks.id,
@@ -706,9 +714,9 @@ export async function seed() {
       createdAt: daysAgo(0),
     },
   ];
-  await db.insert(schema.activityEntries).values([...baseActivity, ...agentActivity]);
+  await tx.insert(schema.activityEntries).values([...baseActivity, ...agentActivity]);
 
-  await db.insert(schema.pages).values([
+  await tx.insert(schema.pages).values([
     {
       id: 'pg-1',
       projectId: 'proj-launch',
@@ -753,7 +761,7 @@ export async function seed() {
     },
   ]);
 
-  await db.insert(schema.savedViews).values([
+  await tx.insert(schema.savedViews).values([
     {
       id: 'view-1',
       projectId: 'proj-launch',
@@ -776,7 +784,7 @@ export async function seed() {
     },
   ]);
 
-  await db.insert(schema.intakeRequests).values([
+  await tx.insert(schema.intakeRequests).values([
     {
       id: 'in-1',
       projectId: 'proj-launch',
@@ -812,7 +820,7 @@ export async function seed() {
     },
   ]);
 
-  await db.insert(schema.stickies).values([
+  await tx.insert(schema.stickies).values([
     {
       id: 'sk-1',
       authorId: CURRENT_USER_ID,
@@ -831,7 +839,7 @@ export async function seed() {
     },
   ]);
 
-  await db.insert(schema.notifications).values([
+  await tx.insert(schema.notifications).values([
     {
       id: 'nt-1',
       recipientId: CURRENT_USER_ID,
@@ -865,6 +873,7 @@ export async function seed() {
   ]);
 
   console.log(`Seeded ${wiSeeds.length} work items across 2 projects.`);
+  });
 }
 
 // Only auto-run when executed directly (`npm run db:seed`) — importing this
