@@ -44,8 +44,10 @@ npm run dev                   # starts the API on PORT (default 4000)
 CORS is restricted to a known set of origins (see `src/app.ts`) — by
 default the webpack dev server and the packaged app's `app://waypoint`
 scheme, which covers the frontend's two normal run modes with nothing to
-configure. Set `CORS_ORIGIN` (comma-separated) in `.env` only if you're
-running the frontend from somewhere else.
+configure. Only set `CORS_ORIGIN` (comma-separated) in `.env` if you're
+running the frontend from somewhere else — it **replaces** both defaults,
+not adds to them, so include `app://waypoint` in the list too if you still
+need the packaged app to work.
 
 ## Useful scripts
 
