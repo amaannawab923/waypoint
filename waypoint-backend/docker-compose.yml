@@ -7,14 +7,24 @@ services:
       POSTGRES_PASSWORD: waypoint
       POSTGRES_DB: waypoint
     ports:
-      - '5432:5432'
+      # Bound to loopback only — 0.0.0.0 would put an unauthenticated
+      # Postgres on the LAN. Anyone on the same network reaching this port
+      # can already connect with the well-known waypoint/waypoint
+      # credentials; don't also hand them the network path.
+      - '127.0.0.1:5432:5432'
     volumes:
       - waypoint_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U waypoint -d waypoint']
+      # -h forces a TCP connection. Without it, pg_isready checks the local
+      # Unix socket, which comes up during postgres:16-alpine's initdb
+      # phase *before* the server is actually accepting connections —
+      # letting `depends_on: condition: service_healthy` go green early and
+      # race the api container's first migration attempt.
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -U waypoint -d waypoint']
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 30s
 
   api:
     build: .
@@ -26,7 +36,8 @@ services:
       DATABASE_URL: postgres://waypoint:waypoint@postgres:5432/waypoint
       PORT: 4000
     ports:
-      - '4000:4000'
+      # See the postgres service's port comment above — same reasoning.
+      - '127.0.0.1:4000:4000'
     depends_on:
       postgres:
         condition: service_healthy
