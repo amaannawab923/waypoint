@@ -16,13 +16,25 @@ together with the frontend.
 
 ## Getting started
 
+For most workflows, `../scripts/dev.sh` from the repo root is simpler — it
+builds and runs this whole service (Postgres + API) in Docker, including
+migrations and demo-data seeding, with no manual steps below required.
+
+Run the API natively instead (e.g. to use a debugger, or iterate faster
+than a container rebuild) with:
+
 ```bash
 cp .env.example .env          # DATABASE_URL, PORT (defaults to 4000)
-docker compose up -d          # starts Postgres
+docker compose up -d postgres # starts only Postgres — the api service in
+                               # this same compose file runs the API in a
+                               # container, which would conflict with the
+                               # `npm run dev` below on the same port
 npm install
 npm run db:generate           # generate migrations from the schema
 npm run db:migrate            # apply them
-npm run db:seed               # seed demo data (workspace, projects, work items, …)
+npm run db:seed               # seed demo data — destructive: truncates
+                               # every table first, so only run this
+                               # against a database you're fine resetting
 npm run dev                   # starts the API on PORT (default 4000)
 ```
 
