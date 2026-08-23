@@ -9,14 +9,27 @@ export function createApp() {
   // an arbitrary webpage a developer has open can't call this API from a
   // background fetch() while the stack is running; a wildcard origin
   // combined with no auth meant any site could read or write real
-  // workspace data. Non-browser clients (curl, the packaged Electron app
-  // loading over file://, which sends no Origin header) still work, since
-  // only the empty-origin and known-dev-origin cases are allowed through.
-  const allowedOrigin = process.env.CORS_ORIGIN ?? 'http://localhost:1212';
+  // workspace data. This can't be bypassed by a malicious page forging the
+  // header — Origin is a forbidden header name, set by the browser itself
+  // and not writable from page JS — so it's a real control against
+  // browser-based attackers specifically (curl and other non-browser
+  // clients bypass it by sending no Origin at all; the loopback binding in
+  // docker-compose.yml is what actually stops those).
+  //
+  // Two legitimate origins, not one: the webpack dev server
+  // (http://localhost:1212) during development, and the packaged app's
+  // custom app://waypoint scheme in production — registered `standard:
+  // true` in main.ts, which gives it a real origin Chromium does send,
+  // unlike a plain file:// load. Restricting to only the dev origin here
+  // previously shipped a packaged build that silently failed every API
+  // call. CORS_ORIGIN overrides both defaults with a comma-separated list
+  // — see .env.example.
+  const defaultAllowedOrigins = 'http://localhost:1212,app://waypoint';
+  const allowedOrigins = (process.env.CORS_ORIGIN ?? defaultAllowedOrigins).split(',').map((o) => o.trim());
   app.use(
     cors({
       origin(origin, callback) {
-        if (!origin || origin === allowedOrigin) {
+        if (!origin || allowedOrigins.includes(origin)) {
           callback(null, true);
           return;
         }
