@@ -41,6 +41,12 @@ npm run dev                   # starts the API on PORT (default 4000)
 `waypoint-frontend` expects this running on `http://localhost:4000` by default
 (`WAYPOINT_API_BASE_URL` on the frontend side if you need to point it elsewhere).
 
+CORS is restricted to a known set of origins (see `src/app.ts`) — by
+default the webpack dev server and the packaged app's `app://waypoint`
+scheme, which covers the frontend's two normal run modes with nothing to
+configure. Set `CORS_ORIGIN` (comma-separated) in `.env` only if you're
+running the frontend from somewhere else.
+
 ## Useful scripts
 
 ```bash
