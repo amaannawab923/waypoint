@@ -25,7 +25,12 @@ export function createApp() {
   // call. CORS_ORIGIN overrides both defaults with a comma-separated list
   // — see .env.example.
   const defaultAllowedOrigins = 'http://localhost:1212,app://waypoint';
-  const allowedOrigins = (process.env.CORS_ORIGIN ?? defaultAllowedOrigins).split(',').map((o) => o.trim());
+  // `||`, not `??` — CORS_ORIGIN="" (e.g. a blanked-out .env value, as
+  // opposed to leaving it commented out per .env.example) would otherwise
+  // survive as a truthy empty string, split into [''], and reject every
+  // origin including the packaged app's, failing the whole API closed with
+  // no indication why.
+  const allowedOrigins = (process.env.CORS_ORIGIN || defaultAllowedOrigins).split(',').map((o) => o.trim());
   app.use(
     cors({
       origin(origin, callback) {
