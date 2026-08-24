@@ -17,18 +17,21 @@ function nextCannedReply(): string {
 }
 
 export async function getOrCreateConversation(memberId: string) {
-  const [existing] = await db
+  // Insert-first, not select-then-insert: the latter is a classic
+  // check-then-act race — two near-simultaneous first requests for the
+  // same member (e.g. a panel firing GET and POST together on first open)
+  // could both see "no existing row" and both insert, silently splitting
+  // that member's history across two conversations with no way to tell
+  // which one is "the" conversation afterward. onConflictDoNothing against
+  // the unique memberId index makes this atomic: at most one row can ever
+  // exist per member, enforced by Postgres, not by application timing.
+  await db.insert(copilotConversations).values({ id: newId('conv'), memberId }).onConflictDoNothing();
+  const [conversation] = await db
     .select()
     .from(copilotConversations)
     .where(eq(copilotConversations.memberId, memberId))
     .limit(1);
-  if (existing) return existing;
-
-  const [created] = await db
-    .insert(copilotConversations)
-    .values({ id: newId('conv'), memberId })
-    .returning();
-  return created;
+  return conversation;
 }
 
 export async function listMessages(conversationId: string) {
@@ -36,7 +39,7 @@ export async function listMessages(conversationId: string) {
     .select()
     .from(copilotMessages)
     .where(eq(copilotMessages.conversationId, conversationId))
-    .orderBy(asc(copilotMessages.createdAt));
+    .orderBy(asc(copilotMessages.seq));
 }
 
 export async function postMessage(conversationId: string, content: string) {
