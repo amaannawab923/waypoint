@@ -1,5 +1,5 @@
 {
-  "id": "56b8d93b-3806-4801-839c-94736456e180",
+  "id": "c3f344c6-c49d-4a75-83b5-0f3a78d095d7",
   "prevId": "e0c72055-ba3d-4971-bb1a-df8de646e03e",
   "version": "7",
   "dialect": "postgresql",
@@ -2317,7 +2317,15 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "copilot_conversations_member_id_unique": {
+          "name": "copilot_conversations_member_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "member_id"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -2351,6 +2359,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "seq": {
+          "name": "seq",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -2359,7 +2373,23 @@
           "default": "now()"
         }
       },
-      "indexes": {},
+      "indexes": {
+        "copilot_messages_conversation_id_idx": {
+          "name": "copilot_messages_conversation_id_idx",
+          "columns": [
+            {
+              "expression": "conversation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
         "copilot_messages_conversation_id_copilot_conversations_id_fk": {
           "name": "copilot_messages_conversation_id_copilot_conversations_id_fk",
