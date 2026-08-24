@@ -7,3 +7,4 @@ export * from './views.js';
 export * from './intake.js';
 export * from './misc.js';
 export * from './agents.js';
+export * from './copilot.js';
