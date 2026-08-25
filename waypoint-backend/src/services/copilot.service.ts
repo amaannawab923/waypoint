@@ -25,7 +25,17 @@ export async function getOrCreateConversation(memberId: string) {
   // which one is "the" conversation afterward. onConflictDoNothing against
   // the unique memberId index makes this atomic: at most one row can ever
   // exist per member, enforced by Postgres, not by application timing.
-  await db.insert(copilotConversations).values({ id: newId('conv'), memberId }).onConflictDoNothing();
+  //
+  // target is explicit, not left bare: an untargeted ON CONFLICT DO
+  // NOTHING matches *any* unique/PK violation, so it would also silently
+  // swallow a (vanishingly unlikely, but real) id collision, or any other
+  // unique constraint this table ever gains later — either would return no
+  // row here with no error, and the route's destructuring would throw a
+  // confusing TypeError instead of failing in a way anyone could diagnose.
+  await db
+    .insert(copilotConversations)
+    .values({ id: newId('conv'), memberId })
+    .onConflictDoNothing({ target: copilotConversations.memberId });
   const [conversation] = await db
     .select()
     .from(copilotConversations)
