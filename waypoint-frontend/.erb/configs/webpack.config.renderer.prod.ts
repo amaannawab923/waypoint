@@ -117,6 +117,7 @@ const configuration: webpack.Configuration = {
       DEBUG_PROD: false,
       WAYPOINT_API_BASE_URL: 'http://localhost:4000',
       WAYPOINT_FEATURE_AGENT_SESSIONS: 'false',
+      WAYPOINT_FEATURE_COPILOT: 'false',
     }),
 
     new MiniCssExtractPlugin({
