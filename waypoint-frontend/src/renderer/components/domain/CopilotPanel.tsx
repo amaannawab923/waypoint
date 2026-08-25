@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { clsx } from 'clsx';
 import { X, Send } from 'lucide-react';
@@ -64,7 +64,7 @@ function Composer({ disabled, onSend }: { disabled: boolean; onSend: (content: s
  */
 export function CopilotPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [visible, setVisible] = useState(false);
-  const { data: conversation, loading, reload } = useAsync(() => getCopilotConversation(), []);
+  const { data: conversation, loading, error, reload } = useAsync(() => getCopilotConversation(), []);
   // The POST endpoint only returns the new assistant reply, not the user's
   // own persisted message (see waypoint-backend's copilot.routes.ts) — so
   // there's nothing to splice into `conversation.messages` client-side that
@@ -86,6 +86,22 @@ export function CopilotPanel({ open, onClose }: { open: boolean; onClose: () => 
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [open, onClose]);
+
+  // AppShell conditionally mounts this component only while `open`, so a
+  // plain mount/unmount effect lines up exactly with open/close either way
+  // (Escape or the topbar toggle) — no need for Modal.tsx's `[open]`-only
+  // variant of this same fix, since that component stays mounted and toggles
+  // its own visibility instead. Without this, closing via Escape dropped
+  // focus to <body> with nothing to return it to the topbar toggle — the
+  // same loss-of-place bug Modal.tsx already fixed once (see its
+  // previousFocusRef comment) for keyboard and screen-reader users.
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    previousFocusRef.current = document.activeElement as HTMLElement | null;
+    return () => {
+      previousFocusRef.current?.focus?.();
+    };
+  }, []);
 
   async function handleSend(content: string) {
     setPendingContent(content);
@@ -111,6 +127,22 @@ export function CopilotPanel({ open, onClose }: { open: boolean; onClose: () => 
 
       <div className="thin-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {loading && !conversation && <p className="text-center text-sm text-text-muted">Loading…</p>}
+        {error && !conversation && (
+          // httpClient.ts already toasts the same failure — this is for
+          // whoever misses (or dismisses) the toast and is left looking at
+          // the panel itself, which otherwise rendered nothing at all here
+          // with no indication anything had gone wrong.
+          <div className="mt-6 flex flex-col items-center gap-2 text-center">
+            <p className="text-sm text-text-muted">Couldn't load Copilot.</p>
+            <button
+              type="button"
+              onClick={() => reload()}
+              className="text-sm font-medium text-accent-soft-text hover:underline"
+            >
+              Try again
+            </button>
+          </div>
+        )}
         {conversation && conversation.messages.length === 0 && !pendingContent && (
           <p className="mt-6 text-center text-sm text-text-muted">
             Ask Copilot anything — it can help with your tickets.
