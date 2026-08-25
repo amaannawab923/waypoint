@@ -1,5 +1,5 @@
 {
-  "id": "c3f344c6-c49d-4a75-83b5-0f3a78d095d7",
+  "id": "d0105b66-d9aa-4ce6-8358-449084d3c324",
   "prevId": "e0c72055-ba3d-4971-bb1a-df8de646e03e",
   "version": "7",
   "dialect": "postgresql",
@@ -2374,11 +2374,17 @@
         }
       },
       "indexes": {
-        "copilot_messages_conversation_id_idx": {
-          "name": "copilot_messages_conversation_id_idx",
+        "copilot_messages_conversation_id_seq_idx": {
+          "name": "copilot_messages_conversation_id_seq_idx",
           "columns": [
             {
               "expression": "conversation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "seq",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
