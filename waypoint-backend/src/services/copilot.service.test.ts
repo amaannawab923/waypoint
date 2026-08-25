@@ -22,8 +22,19 @@ function chainable(resolvedValue: unknown) {
 const { db } = vi.hoisted(() => ({ db: { select: vi.fn(), insert: vi.fn(), update: vi.fn(), transaction: vi.fn() } }));
 vi.mock('../db/client.js', () => ({ db }));
 
+// Spies wrapping the REAL asc/eq (not fakes) — a mutation test caught that
+// merely asserting orderBy()/where() "were called" doesn't distinguish
+// ordering by seq from ordering by createdAt (the original bug this schema
+// fixed): the chain shape is identical either way. Spying on the column
+// actually passed to asc()/eq() is what makes that distinction assertable.
+vi.mock('drizzle-orm', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('drizzle-orm')>();
+  return { ...actual, asc: vi.fn(actual.asc), eq: vi.fn(actual.eq) };
+});
+
 const { copilotConversations, copilotMessages } = await import('../db/schema/index.js');
 const { getOrCreateConversation, listMessages, postMessage } = await import('./copilot.service.js');
+const { asc, eq } = await import('drizzle-orm');
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -46,13 +57,14 @@ describe('getOrCreateConversation', () => {
 
     expect(db.select).toHaveBeenCalled();
     expect(selectChain.where).toHaveBeenCalled();
+    expect(eq).toHaveBeenCalledWith(copilotConversations.memberId, 'mem-1');
     expect(selectChain.limit).toHaveBeenCalledWith(1);
     expect(result).toEqual({ id: 'conv-abc1234', memberId: 'mem-1' });
   });
 });
 
 describe('listMessages', () => {
-  it('selects messages for the conversation, ordered', async () => {
+  it('selects messages for the conversation, ordered by seq — not createdAt', async () => {
     const rows = [
       { id: 'msg-1', role: 'user', seq: 1 },
       { id: 'msg-2', role: 'assistant', seq: 2 },
@@ -65,7 +77,15 @@ describe('listMessages', () => {
     expect(db.select).toHaveBeenCalled();
     expect(selectChain.from).toHaveBeenCalledWith(copilotMessages);
     expect(selectChain.where).toHaveBeenCalled();
+    expect(eq).toHaveBeenCalledWith(copilotMessages.conversationId, 'conv-abc1234');
+    // The load-bearing assertion: merely checking orderBy() "was called"
+    // can't distinguish ordering by seq from ordering by createdAt — the
+    // chain shape is identical either way, and that's exactly the bug this
+    // schema fixed (same-transaction inserts get identical createdAt
+    // timestamps in Postgres). Asserting the actual column passed to asc()
+    // is what makes a regression back to createdAt fail this test.
     expect(selectChain.orderBy).toHaveBeenCalled();
+    expect(asc).toHaveBeenCalledWith(copilotMessages.seq);
     expect(result).toEqual(rows);
   });
 });
@@ -104,6 +124,7 @@ describe('postMessage', () => {
 
     expect(tx.update).toHaveBeenCalledTimes(1);
     expect(tx.update).toHaveBeenCalledWith(copilotConversations);
+    expect(eq).toHaveBeenCalledWith(copilotConversations.id, 'conv-abc1234');
 
     expect(result).toEqual({ id: 'msg-reply1', conversationId: 'conv-abc1234', role: 'assistant' });
   });
