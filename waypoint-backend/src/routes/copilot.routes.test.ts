@@ -10,6 +10,16 @@ import { errorHandler } from '../middleware/errorHandler.js';
 // this router rather than importing the real createApp(), since that would
 // pull in every other route module's services, which import a real db
 // client that needs DATABASE_URL set just to construct.
+//
+// The db client mock below is not for real — nothing in this file calls it
+// — it exists because vi.mock() with no factory is an automock, and an
+// automock still has to *import the real module* to see what shape to fake.
+// copilot.service.js imports db/client.js, which throws at import time if
+// DATABASE_URL isn't set. Without this, these tests only ever passed on a
+// machine with a local .env already in place — they failed outright on a
+// clean clone under CI-like conditions, silently running a smaller suite
+// than the file advertised.
+vi.mock('../db/client.js', () => ({ db: {} }));
 vi.mock('../services/copilot.service.js');
 const copilotService = await import('../services/copilot.service.js');
 const { copilotRouter } = await import('./copilot.routes.js');
