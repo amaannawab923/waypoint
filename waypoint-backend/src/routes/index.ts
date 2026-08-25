@@ -15,6 +15,7 @@ import { notificationsRouter } from './notifications.routes.js';
 import { exportsRouter } from './exports.routes.js';
 import { webhooksRouter } from './webhooks.routes.js';
 import { agentsRouter } from './agents.routes.js';
+import { copilotRouter } from './copilot.routes.js';
 import { devRouter } from './dev.routes.js';
 
 export const apiRouter = Router();
@@ -35,6 +36,7 @@ apiRouter.use(notificationsRouter);
 apiRouter.use(exportsRouter);
 apiRouter.use(webhooksRouter);
 apiRouter.use(agentsRouter);
+apiRouter.use(copilotRouter);
 if (process.env.NODE_ENV !== 'production') {
   apiRouter.use(devRouter);
 }
