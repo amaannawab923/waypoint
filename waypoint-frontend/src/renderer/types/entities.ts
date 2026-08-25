@@ -338,3 +338,22 @@ export interface AgentAssignment {
   startedAt: string | null;
   updatedAt: string;
 }
+
+export type CopilotMessageRole = 'user' | 'assistant';
+
+export interface CopilotMessage {
+  id: ID;
+  conversationId: ID;
+  role: CopilotMessageRole;
+  content: string;
+  seq: number;
+  createdAt: string;
+}
+
+export interface CopilotConversation {
+  id: ID;
+  memberId: ID;
+  createdAt: string;
+  updatedAt: string;
+  messages: CopilotMessage[];
+}
