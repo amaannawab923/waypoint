@@ -39,5 +39,10 @@ export const copilotMessages = pgTable(
     seq: bigserial('seq', { mode: 'number' }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index('copilot_messages_conversation_id_idx').on(table.conversationId)],
+  // Composite, not conversationId alone: the only query this feature runs
+  // is WHERE conversation_id = $1 ORDER BY seq ASC (listMessages) — a
+  // conversationId-only index still leaves Postgres sorting the matched
+  // rows separately. (conversationId, seq) serves the filter and the sort
+  // in one index scan.
+  (table) => [index('copilot_messages_conversation_id_seq_idx').on(table.conversationId, table.seq)],
 );
