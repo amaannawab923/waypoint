@@ -38,6 +38,8 @@ import type {
   AgentAutonomy,
   AgentTrigger,
   ExecutionMethod,
+  CopilotConversation,
+  CopilotMessage,
 } from '@/types/entities';
 
 // Server-side `numeric` columns come back over JSON as strings (to avoid
@@ -599,6 +601,18 @@ export async function listNotifications(): Promise<NotificationItem[]> {
 
 export async function markNotificationRead(id: string): Promise<void> {
   return http.post<void>(`/notifications/${id}/read`);
+}
+
+// ---------------------------------------------------------------------------
+// Copilot
+// ---------------------------------------------------------------------------
+
+export async function getCopilotConversation(): Promise<CopilotConversation> {
+  return http.get<CopilotConversation>('/copilot/conversation');
+}
+
+export async function sendCopilotMessage(content: string): Promise<CopilotMessage> {
+  return http.post<CopilotMessage>('/copilot/conversation/messages', { content });
 }
 
 // ---------------------------------------------------------------------------
