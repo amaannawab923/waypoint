@@ -4,7 +4,13 @@ export interface AsyncState<T> {
   data: T | undefined;
   loading: boolean;
   error: Error | null;
-  reload: () => void;
+  /**
+   * Resolves once the fetch settles (success or failure) — never rejects;
+   * a failure is reflected in `error`, not a thrown/rejected reload().
+   * Callers that need to know whether a reload actually succeeded should
+   * check `error` after awaiting, not wrap the call in try/catch.
+   */
+  reload: () => Promise<void>;
   /**
    * Update `data` locally without refetching or touching `loading` — for
    * optimistic UI updates (e.g. drag-and-drop) where re-running `fn()` would
@@ -30,7 +36,12 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []): AsyncSt
     const id = ++nonce.current;
     setLoading(true);
     setError(null);
-    fn()
+    // Returned (not fire-and-forget) so a caller that needs to sequence
+    // work after a reload actually completes — e.g. CopilotPanel.tsx's
+    // handleSend awaiting reload() after posting a message — can. Every
+    // existing caller that already ignores reload()'s return value is
+    // unaffected: a resolved-but-unused promise is a no-op for them.
+    return fn()
       .then((result) => {
         if (nonce.current === id) setData(result);
       })
