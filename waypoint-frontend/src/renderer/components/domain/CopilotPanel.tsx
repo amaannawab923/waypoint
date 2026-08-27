@@ -3,17 +3,32 @@ import { createPortal } from 'react-dom';
 import { clsx } from 'clsx';
 import { X, Send } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
-import { getCopilotConversation, sendCopilotMessage } from '@/mock/api';
+import {
+  getCopilotConversation,
+  postCopilotUserMessage,
+  postCopilotAssistantMessage,
+} from '@/mock/api';
 import { IconButton } from '@/components/ui/Button';
 import type { CopilotMessage } from '@/types/entities';
 
-function MessageBubble({ message }: { message: Pick<CopilotMessage, 'role' | 'content'> }) {
+function MessageBubble({
+  message,
+}: {
+  message: Pick<CopilotMessage, 'role' | 'content'>;
+}) {
   return (
-    <div className={clsx('flex flex-col gap-1', message.role === 'user' ? 'items-end' : 'items-start')}>
+    <div
+      className={clsx(
+        'flex flex-col gap-1',
+        message.role === 'user' ? 'items-end' : 'items-start',
+      )}
+    >
       <div
         className={clsx(
           'max-w-[85%] rounded-[var(--radius)] px-3.5 py-2.5 text-sm leading-relaxed break-words',
-          message.role === 'user' ? 'bg-accent text-on-accent' : 'border border-border bg-surface-2 text-text',
+          message.role === 'user'
+            ? 'bg-accent text-on-accent'
+            : 'border border-border bg-surface-2 text-text',
         )}
       >
         {message.content}
@@ -22,7 +37,13 @@ function MessageBubble({ message }: { message: Pick<CopilotMessage, 'role' | 'co
   );
 }
 
-function Composer({ disabled, onSend }: { disabled: boolean; onSend: (content: string) => Promise<void> }) {
+function Composer({
+  disabled,
+  onSend,
+}: {
+  disabled: boolean;
+  onSend: (content: string) => Promise<void>;
+}) {
   const [value, setValue] = useState('');
   const [sending, setSending] = useState(false);
 
@@ -88,16 +109,38 @@ function Composer({ disabled, onSend }: { disabled: boolean; onSend: (content: s
 export function CopilotPanel({ onClose }: { onClose: () => void }) {
   const [visible, setVisible] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
-  const { data: conversation, loading, error, reload } = useAsync(() => getCopilotConversation(), []);
-  // The POST endpoint only returns the new assistant reply, not the user's
-  // own persisted message (see waypoint-backend's copilot.routes.ts) — so
-  // there's nothing to splice into `conversation.messages` client-side that
-  // wouldn't need a second round-trip to get a real id/seq anyway. Shown as
-  // a transient, non-persisted bubble instead, kept visible through the
-  // post-send reload (not cleared until it settles) so there's no gap
-  // where neither the transient bubble nor the real persisted message is
-  // on screen — that gap is real on a slow connection, not just in theory.
+  const {
+    data: conversation,
+    loading,
+    error,
+    reload,
+  } = useAsync(() => getCopilotConversation(), []);
+  // The user's own message, shown immediately on send. Cleared only once a
+  // reload genuinely lands with fresh data (see the effect below) — kept
+  // visible through the whole round trip so there's never a gap where
+  // neither the transient bubble nor the real persisted message is on
+  // screen.
   const [pendingContent, setPendingContent] = useState<string | null>(null);
+  // Progressive text from an in-flight Claude Code run (issue #7). null
+  // means no run in progress; '' means a run just started with no tokens
+  // yet.
+  const [streamingText, setStreamingText] = useState<string | null>(null);
+  // A completed reply that hasn't been confirmed persisted yet. Shown as a
+  // real (non-streaming) bubble the instant the run finishes — the user
+  // sees their answer immediately, independent of whether saving it to
+  // Postgres has succeeded yet.
+  const [awaitingPersist, setAwaitingPersist] = useState<{
+    content: string;
+    sessionId: string | null;
+  } | null>(null);
+  const [persistError, setPersistError] = useState(false);
+  // A run that failed outright (Claude Code not installed, not logged in,
+  // or some other failure) — distinct from a persist failure, since no
+  // reply was ever generated to save. Kept so "Try again" can retry the
+  // same prompt without re-sending (and duplicating) the user's message.
+  const [runError, setRunError] = useState<{ message: string } | null>(null);
+  const [lastFailedPrompt, setLastFailedPrompt] = useState<string | null>(null);
+  const unsubscribeStreamRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     const raf = requestAnimationFrame(() => setVisible(true));
@@ -114,7 +157,11 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
       // while typing in, say, the global search input closed Copilot AND
       // yanked focus away from that unrelated input to restore it to the
       // topbar toggle instead.
-      if (panelRef.current && !panelRef.current.contains(document.activeElement)) return;
+      if (
+        panelRef.current &&
+        !panelRef.current.contains(document.activeElement)
+      )
+        return;
       onClose();
     };
     document.addEventListener('keydown', onKey);
@@ -143,10 +190,69 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     };
   }, []);
 
+  // Unsubscribes from any in-flight run's IPC listener on unmount, but does
+  // NOT cancel the main-process subprocess itself — the run is left to
+  // finish and its result is simply dropped if the panel is gone. Killing
+  // it would waste a turn Claude Code already spent tokens on, and would
+  // orphan Claude Code's own --resume state for no benefit.
+  useEffect(() => {
+    return () => {
+      unsubscribeStreamRef.current?.();
+    };
+  }, []);
+
+  async function persistReply(content: string, sessionId: string | null) {
+    try {
+      await postCopilotAssistantMessage(content, sessionId);
+    } catch {
+      // Nothing else to do here — awaitingPersist stays as-is so the reply
+      // remains visible, and the inline "Couldn't save" retry re-calls this
+      // exact function without re-running the LLM.
+      setPersistError(true);
+      return;
+    }
+    setPersistError(false);
+    // reload() never rejects (see useAsync.ts) — the existing "Couldn't
+    // refresh" banner (keyed off useAsync's own `error`) already covers a
+    // reload that fails after this point.
+    await reload();
+  }
+
+  async function runAndPersist(
+    content: string,
+    resumeSessionId: string | undefined,
+  ) {
+    setStreamingText('');
+    setRunError(null);
+    setLastFailedPrompt(null);
+
+    await new Promise<void>((resolve) => {
+      const unsubscribe = window.electron.copilot.runPrompt(
+        { prompt: content, resumeSessionId },
+        {
+          onChunk: (text) => setStreamingText((prev) => (prev ?? '') + text),
+          onDone: async ({ fullText, sessionId }) => {
+            setStreamingText(null);
+            setAwaitingPersist({ content: fullText, sessionId });
+            await persistReply(fullText, sessionId);
+            resolve();
+          },
+          onError: (err) => {
+            setStreamingText(null);
+            setRunError({ message: err.message });
+            setLastFailedPrompt(content);
+            resolve();
+          },
+        },
+      );
+      unsubscribeStreamRef.current = unsubscribe;
+    });
+  }
+
   async function handleSend(content: string) {
     setPendingContent(content);
     try {
-      await sendCopilotMessage(content);
+      await postCopilotUserMessage(content);
     } catch (err) {
       // Nothing was persisted — clear the transient bubble immediately and
       // rethrow so Composer's catch leaves the draft in place instead of
@@ -154,30 +260,38 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
       setPendingContent(null);
       throw err;
     }
-    // reload() never rejects (see useAsync.ts), so this function has no
-    // reliable way to tell success from failure after the fact — awaiting
-    // it here is only to keep the transient bubble visible for the
-    // duration, not to branch on the outcome. Clearing pendingContent
-    // itself is handled by the effect below, keyed off `conversation`
-    // actually receiving fresh data, not off this function returning.
-    await reload();
+    // The user's message IS persisted at this point — everything from here
+    // on (the model run, saving the reply) fails independently of it, so
+    // this function does not rethrow past this point. Composer will clear
+    // the draft either way; failures beyond here surface via runError /
+    // persistError instead of Composer's "keep the draft" path, since
+    // there's no draft left to protect.
+    await runAndPersist(
+      content,
+      awaitingPersist?.sessionId ?? conversation?.claudeSessionId ?? undefined,
+    );
   }
 
-  // Clears the transient "sending" bubble once — and only once — a fetch
-  // actually completes successfully with fresh data. Deliberately not done
-  // inline in handleSend: reload() never rejects, so there's no reliable
-  // success/failure signal to branch on right after awaiting it there. Also
-  // deliberately keyed on `conversation` alone, not `[conversation, error]`
+  // Clears the transient user bubble and any unpersisted reply once — and
+  // only once — a fetch actually completes successfully with fresh data.
+  // Deliberately keyed on `conversation` alone, not `[conversation, error]`
   // — a retry starting clears `error` to null immediately (before its
   // fetch has resolved), which would otherwise fire this early against
-  // still-stale data. Keying on `conversation`'s reference means this only
-  // fires when a fetch actually finished successfully (the only path that
-  // calls setData), so the persisted message either shows for real or the
-  // transient bubble stays up next to the "Couldn't refresh" retry.
+  // still-stale data.
   useEffect(() => {
-    if (pendingContent && !error) setPendingContent(null);
+    if (!error) {
+      setPendingContent(null);
+      setAwaitingPersist(null);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversation]);
+
+  const isEmpty =
+    conversation &&
+    conversation.messages.length === 0 &&
+    !pendingContent &&
+    streamingText === null &&
+    !awaitingPersist;
 
   return createPortal(
     <div
@@ -193,14 +307,18 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
       </div>
 
       <div className="thin-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        {loading && !conversation && <p className="text-center text-sm text-text-muted">Loading…</p>}
+        {loading && !conversation && (
+          <p className="text-center text-sm text-text-muted">Loading…</p>
+        )}
         {error && !conversation && (
           // httpClient.ts already toasts the same failure — this is for
           // whoever misses (or dismisses) the toast and is left looking at
           // the panel itself, which otherwise rendered nothing at all here
           // with no indication anything had gone wrong.
           <div className="mt-6 flex flex-col items-center gap-2 text-center">
-            <p className="text-sm text-text-muted">Couldn't load Copilot.</p>
+            <p className="text-sm text-text-muted">
+              Couldn&apos;t load Copilot.
+            </p>
             <button
               type="button"
               onClick={() => reload()}
@@ -210,14 +328,30 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
             </button>
           </div>
         )}
-        {conversation && conversation.messages.length === 0 && !pendingContent && (
+        {isEmpty && (
           <p className="mt-6 text-center text-sm text-text-muted">
             Ask Copilot anything — it can help with your tickets.
           </p>
         )}
         <div className="flex flex-col gap-3">
-          {conversation?.messages.map((message) => <MessageBubble key={message.id} message={message} />)}
-          {pendingContent && <MessageBubble message={{ role: 'user', content: pendingContent }} />}
+          {conversation?.messages.map((message) => (
+            <MessageBubble key={message.id} message={message} />
+          ))}
+          {pendingContent && (
+            <MessageBubble
+              message={{ role: 'user', content: pendingContent }}
+            />
+          )}
+          {streamingText !== null && (
+            <MessageBubble
+              message={{ role: 'assistant', content: streamingText || '…' }}
+            />
+          )}
+          {awaitingPersist && (
+            <MessageBubble
+              message={{ role: 'assistant', content: awaitingPersist.content }}
+            />
+          )}
         </div>
         {error && conversation && (
           // A reload after a successful send (or any other refresh) failed
@@ -226,7 +360,7 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
           // !conversation branch above). Inline and small, next to the
           // existing messages rather than replacing them.
           <div className="mt-3 flex flex-col items-center gap-1 text-center">
-            <p className="text-xs text-text-muted">Couldn't refresh.</p>
+            <p className="text-xs text-text-muted">Couldn&apos;t refresh.</p>
             <button
               type="button"
               onClick={() => reload()}
@@ -236,9 +370,47 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
             </button>
           </div>
         )}
+        {runError && lastFailedPrompt && (
+          <div className="mt-3 flex flex-col items-center gap-1 text-center">
+            <p className="text-xs text-text-muted">{runError.message}</p>
+            <button
+              type="button"
+              onClick={() => {
+                const prompt = lastFailedPrompt;
+                runAndPersist(
+                  prompt,
+                  conversation?.claudeSessionId ?? undefined,
+                );
+              }}
+              className="text-xs font-medium text-accent-soft-text hover:underline"
+            >
+              Try again
+            </button>
+          </div>
+        )}
+        {persistError && awaitingPersist && (
+          <div className="mt-3 flex flex-col items-center gap-1 text-center">
+            <p className="text-xs text-text-muted">
+              Couldn&apos;t save this reply.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                const reply = awaitingPersist;
+                persistReply(reply.content, reply.sessionId);
+              }}
+              className="text-xs font-medium text-accent-soft-text hover:underline"
+            >
+              Retry
+            </button>
+          </div>
+        )}
       </div>
 
-      <Composer disabled={!conversation} onSend={handleSend} />
+      <Composer
+        disabled={!conversation || awaitingPersist !== null}
+        onSend={handleSend}
+      />
     </div>,
     document.body,
   );
