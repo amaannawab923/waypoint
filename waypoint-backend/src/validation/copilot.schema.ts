@@ -6,3 +6,15 @@ import { z } from 'zod';
 export const postCopilotMessageSchema = z.object({
   content: z.string().trim().min(1).max(8000),
 });
+
+// An assistant reply can legitimately be much longer than a user's own
+// message (a real streamed completion, not a short canned line) — no upper
+// bound tight enough to matter without risking rejecting a real reply.
+// claudeSessionId is nullable, not just optional: the Claude Code CLI stream
+// always resolves to either a real session id or none (e.g. the run failed
+// before ever producing a `result` event) — there's no "not provided yet"
+// state once the stream has ended, which is the only time this is called.
+export const postCopilotAssistantMessageSchema = z.object({
+  content: z.string().trim().min(1),
+  claudeSessionId: z.string().min(1).nullable(),
+});
