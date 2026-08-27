@@ -15,6 +15,7 @@ import {
   LogOut,
   Sun,
   Moon,
+  Sparkles,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useAsync } from '@/lib/useAsync';
@@ -297,7 +298,15 @@ function SearchPalette({
   );
 }
 
-export function Topbar() {
+export function Topbar({
+  copilotEnabled,
+  copilotOpen,
+  onToggleCopilot,
+}: {
+  copilotEnabled: boolean;
+  copilotOpen: boolean;
+  onToggleCopilot: () => void;
+}) {
   const navigate = useNavigate();
   const { data: user } = useAsync(() => getCurrentUser(), []);
   const { data: notifications } = useAsync(() => listNotifications(), []);
@@ -369,6 +378,21 @@ export function Topbar() {
             <span className="absolute top-1 right-1.5 size-1.5 rounded-full bg-danger" />
           )}
         </button>
+
+        {copilotEnabled && (
+          <button
+            type="button"
+            onClick={onToggleCopilot}
+            aria-label={copilotOpen ? 'Close Copilot' : 'Open Copilot'}
+            aria-pressed={copilotOpen}
+            className={clsx(
+              'flex size-8 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary hover:bg-surface-2 hover:text-text',
+              copilotOpen && 'bg-accent-soft-bg text-accent-soft-text hover:bg-accent-soft-bg',
+            )}
+          >
+            <Sparkles size={16} />
+          </button>
+        )}
 
         <AccountMenu
           trigger={(toggle) => (
