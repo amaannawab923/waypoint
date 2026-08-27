@@ -16,6 +16,10 @@ import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
 import MenuBuilder from './menu';
 import { resolveHtmlPath } from './util';
+import {
+  registerCopilotIpc,
+  killAllCopilotProcesses,
+} from './copilot/copilotRunner';
 
 // The packaged app loads the renderer from disk with no server behind it —
 // a bare `file://` load can't support createBrowserRouter (a hard
@@ -29,7 +33,12 @@ import { resolveHtmlPath } from './util';
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'app',
-    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true },
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+    },
   },
 ]);
 
@@ -37,12 +46,18 @@ function registerAppProtocol() {
   const rendererDist = path.join(__dirname, '../renderer');
   protocol.handle('app', (request) => {
     const { pathname } = new URL(request.url);
-    let filePath = path.normalize(path.join(rendererDist, decodeURIComponent(pathname)));
+    let filePath = path.normalize(
+      path.join(rendererDist, decodeURIComponent(pathname)),
+    );
     // Path-traversal guard, and the actual SPA-fallback: any request that
     // doesn't resolve to a real file under rendererDist — including every
     // client-side route like /projects/proj-launch/work-items — serves
     // index.html instead, exactly like a server's `try_files` rewrite would.
-    if (!filePath.startsWith(rendererDist) || !fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+    if (
+      !filePath.startsWith(rendererDist) ||
+      !fs.existsSync(filePath) ||
+      fs.statSync(filePath).isDirectory()
+    ) {
       filePath = path.join(rendererDist, 'index.html');
     }
     return net.fetch(pathToFileURL(filePath).toString());
@@ -64,6 +79,12 @@ ipcMain.on('ipc-example', async (event, arg) => {
   console.log(msgTemplate(arg));
   event.reply('ipc-example', msgTemplate('pong'));
 });
+
+// A getter, not the window itself: registerCopilotIpc runs once at module
+// load (mainWindow is still null then), but a Copilot run started later —
+// after a close/reopen, `mainWindow` is reassigned — needs the *current*
+// window at send time, not whichever one existed at registration time.
+registerCopilotIpc(() => mainWindow);
 
 if (process.env.NODE_ENV === 'production') {
   const sourceMapSupport = require('source-map-support');
@@ -156,6 +177,13 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+// Kill any in-flight `claude` subprocess rather than leaving it orphaned —
+// this also covers electronmon's dev-time main-process restarts, which
+// otherwise had no hook to clean up a run that was still streaming.
+app.on('before-quit', () => {
+  killAllCopilotProcesses();
 });
 
 app
