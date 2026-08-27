@@ -15,6 +15,11 @@ export const copilotConversations = pgTable('copilot_conversations', {
     .notNull()
     .unique()
     .references(() => members.id, { onDelete: 'cascade' }),
+  // The Claude Code CLI's own session id (issue #7) — passed back to `claude
+  // -p ... --resume <id>` so a conversation's later turns continue the same
+  // Claude Code session instead of starting fresh each message. Null until
+  // the first assistant reply ever completes.
+  claudeSessionId: text('claude_session_id'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
