@@ -133,15 +133,30 @@ describe('POST /copilot/conversation/messages/assistant', () => {
 
     const res = await request(buildTestApp())
       .post('/copilot/conversation/messages/assistant')
-      .send({ content: 'here is my answer', claudeSessionId: 'sess-xyz789' });
+      .send({ content: 'here is my answer', claudeSessionId: '6b16ad5b-1e3f-4a2c-8f9d-2c7e5a9b3d10' });
 
     expect(res.status).toBe(201);
     expect(res.body.role).toBe('assistant');
     expect(copilotService.postAssistantMessage).toHaveBeenCalledWith(
       'conv-abc1234',
       'here is my answer',
-      'sess-xyz789',
+      '6b16ad5b-1e3f-4a2c-8f9d-2c7e5a9b3d10',
     );
+  });
+
+  // Real Claude Code session ids are always UUIDs — this value round-trips
+  // straight into copilotRunner.ts's `spawn(claude, [..., '--resume',
+  // claudeSessionId, ...])` on the frontend, so a non-UUID string (most
+  // importantly one starting with `-`, which `--resume`'s optional-value
+  // parsing would otherwise treat as a separate flag rather than its
+  // argument) must never reach the database in the first place.
+  it('rejects a non-UUID claudeSessionId with 400 and never calls the service', async () => {
+    const res = await request(buildTestApp())
+      .post('/copilot/conversation/messages/assistant')
+      .send({ content: 'reply', claudeSessionId: '--dangerously-skip-permissions' });
+
+    expect(res.status).toBe(400);
+    expect(copilotService.postAssistantMessage).not.toHaveBeenCalled();
   });
 
   it('accepts an explicit null claudeSessionId', async () => {
