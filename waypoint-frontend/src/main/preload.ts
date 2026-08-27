@@ -1,7 +1,21 @@
 // Disable no-unused-vars, broken for spread args
 /* eslint no-unused-vars: off */
-import { randomUUID } from 'crypto';
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
+
+// The global Web Crypto API, not Node's `crypto` module: this preload script
+// runs in Electron's sandboxed renderer context by default (Electron 20+),
+// where only a curated subset of Node's own built-ins is guaranteed
+// available — `require('crypto')` is not one of the documented ones.
+// `crypto.randomUUID()` is a standard Web Platform API present in every
+// Chromium context regardless of sandboxing, so it sidesteps the question
+// entirely instead of depending on the sandbox's Node module allowlist.
+//
+// Not destructured off `crypto` — `Crypto.prototype.randomUUID` is a native
+// method that throws "TypeError: Illegal invocation" when called without
+// its `crypto` receiver (confirmed live: destructuring it broke every
+// Copilot send with exactly that error). Wrapping in an arrow function
+// keeps the call bound to the right `this`.
+const randomUUID = () => crypto.randomUUID();
 
 export type Channels = 'ipc-example' | 'copilot:run' | 'copilot:stream';
 
