@@ -235,6 +235,48 @@ describe('electronHandler.copilot.runPrompt', () => {
     expect(onChunkSecond).toHaveBeenCalledWith('for the second run');
   });
 
+  it('removes its own listener once a done event arrives, without waiting on the caller to unsubscribe', () => {
+    electronHandler.copilot.runPrompt(
+      { prompt: 'hi' },
+      { onChunk: jest.fn(), onDone: jest.fn(), onError: jest.fn() },
+    );
+    const listener = getRegisteredStreamListener();
+
+    listener({}, { requestId: 'mock-uuid-1', type: 'done', fullText: 'ok' });
+
+    expect(ipcRendererMock.removeListener).toHaveBeenCalledWith(
+      'copilot:stream',
+      listener,
+    );
+  });
+
+  it('removes its own listener once an error event arrives, without waiting on the caller to unsubscribe', () => {
+    electronHandler.copilot.runPrompt(
+      { prompt: 'hi' },
+      { onChunk: jest.fn(), onDone: jest.fn(), onError: jest.fn() },
+    );
+    const listener = getRegisteredStreamListener();
+
+    listener({}, { requestId: 'mock-uuid-1', type: 'error' });
+
+    expect(ipcRendererMock.removeListener).toHaveBeenCalledWith(
+      'copilot:stream',
+      listener,
+    );
+  });
+
+  it('does not remove its listener for a chunk event — only done/error are terminal', () => {
+    electronHandler.copilot.runPrompt(
+      { prompt: 'hi' },
+      { onChunk: jest.fn(), onDone: jest.fn(), onError: jest.fn() },
+    );
+    const listener = getRegisteredStreamListener();
+
+    listener({}, { requestId: 'mock-uuid-1', type: 'chunk', text: 'hi' });
+
+    expect(ipcRendererMock.removeListener).not.toHaveBeenCalled();
+  });
+
   it('returns an unsubscribe function that removes exactly the listener it registered', () => {
     const unsubscribe = electronHandler.copilot.runPrompt(
       { prompt: 'hi' },
