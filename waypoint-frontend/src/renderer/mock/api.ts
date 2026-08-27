@@ -611,8 +611,19 @@ export async function getCopilotConversation(): Promise<CopilotConversation> {
   return http.get<CopilotConversation>('/copilot/conversation');
 }
 
-export async function sendCopilotMessage(content: string): Promise<CopilotMessage> {
+// Split from a single sendCopilotMessage (issue #6) into two calls (issue
+// #7): the assistant's reply now comes from a real, streamed Claude Code CLI
+// run in Electron's main process, not something the backend can compute and
+// return within one request — see CopilotPanel.tsx's handleSend.
+export async function postCopilotUserMessage(content: string): Promise<CopilotMessage> {
   return http.post<CopilotMessage>('/copilot/conversation/messages', { content });
+}
+
+export async function postCopilotAssistantMessage(
+  content: string,
+  claudeSessionId: string | null,
+): Promise<CopilotMessage> {
+  return http.post<CopilotMessage>('/copilot/conversation/messages/assistant', { content, claudeSessionId });
 }
 
 // ---------------------------------------------------------------------------
