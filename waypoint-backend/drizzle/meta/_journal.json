@@ -15,6 +15,13 @@
       "when": 1787639086214,
       "tag": "0001_strong_rhodey",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787818818635,
+      "tag": "0002_robust_chat",
+      "breakpoints": true
     }
   ]
 }
