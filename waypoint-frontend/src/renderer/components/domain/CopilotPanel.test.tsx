@@ -565,6 +565,50 @@ describe('CopilotPanel', () => {
       );
     });
 
+    // Regression test: a real bug found via live testing against the actual
+    // Electron app — window.electron.copilot.runPrompt threw synchronously
+    // (Illegal invocation, from a receiver-binding bug in preload.ts), and
+    // runAndPersist had no guard around that call. streamingText was set to
+    // '' right before the throw and nothing ever cleared it afterward — the
+    // panel showed an infinite "..." bubble with the composer eventually
+    // re-enabled but no way to ever know something had gone wrong.
+    it('shows a clear error instead of hanging forever when runPrompt itself throws synchronously', async () => {
+      mockGetConversation.mockResolvedValueOnce(conversation([]));
+      render(<CopilotPanel onClose={jest.fn()} />);
+      await screen.findByText(/Ask Copilot anything/i);
+
+      mockPostUserMessage.mockResolvedValueOnce(
+        message({ id: 'm1', content: 'hello' }),
+      );
+      copilotIpc.runPrompt.mockImplementationOnce(() => {
+        throw new TypeError('Illegal invocation');
+      });
+
+      await act(async () => {
+        await typeAndSend('hello');
+      });
+
+      expect(
+        await screen.findByText(/Couldn't reach Copilot's runtime/),
+      ).toBeInTheDocument();
+      expect(screen.getByText(/Illegal invocation/)).toBeInTheDocument();
+      // No reply was ever generated — nothing should be stuck showing a
+      // perpetual streaming bubble, and the composer must be usable again.
+      expect(
+        screen.queryByText('…', { selector: 'div' }),
+      ).not.toBeInTheDocument();
+      await waitFor(() => expect(getTextarea().disabled).toBe(false));
+
+      // "Try again" must retry the run (not silently do nothing, and not
+      // re-send the already-persisted user message).
+      copilotIpc.runPrompt.mockImplementationOnce(() => jest.fn());
+      act(() => {
+        fireEvent.click(screen.getByText('Try again'));
+      });
+      expect(mockPostUserMessage).toHaveBeenCalledTimes(1);
+      expect(copilotIpc.runPrompt).toHaveBeenCalledTimes(2);
+    });
+
     it('unsubscribes from the IPC stream on unmount without cancelling the run', async () => {
       mockGetConversation.mockResolvedValueOnce(conversation([]));
       const { unmount } = render(<CopilotPanel onClose={jest.fn()} />);
