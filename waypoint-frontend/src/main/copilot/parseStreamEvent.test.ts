@@ -76,6 +76,47 @@ describe('parseStreamEventLine', () => {
     });
   });
 
+  // The real shape a stale --resume produces (verified live against the
+  // actual CLI): no `result` field at all, only `errors`. A version of this
+  // check gated on `typeof event.result === 'string'` made this branch
+  // unreachable for exactly this case, silently returning `ignored` instead.
+  it('parses a result event with is_error: true and no result field, only errors, into a result_error', () => {
+    const line = JSON.stringify({
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      session_id: 'sess-abc123',
+      errors: ['No conversation found with session ID: sess-abc123'],
+    });
+    expect(parseStreamEventLine(line)).toEqual({
+      kind: 'result_error',
+      message: 'No conversation found with session ID: sess-abc123',
+      sessionId: 'sess-abc123',
+    });
+  });
+
+  it('joins multiple errors when result is absent', () => {
+    const line = JSON.stringify({
+      type: 'result',
+      is_error: true,
+      errors: ['first problem', 'second problem'],
+    });
+    expect(parseStreamEventLine(line)).toEqual({
+      kind: 'result_error',
+      message: 'first problem; second problem',
+      sessionId: null,
+    });
+  });
+
+  it('falls back to a generic message when a result error has neither result nor errors', () => {
+    const line = JSON.stringify({ type: 'result', is_error: true });
+    expect(parseStreamEventLine(line)).toEqual({
+      kind: 'result_error',
+      message: 'Claude Code reported an error while responding.',
+      sessionId: null,
+    });
+  });
+
   it('parses a result event with subtype error_during_execution but no explicit is_error field as a result_error', () => {
     const line = JSON.stringify({
       type: 'result',
