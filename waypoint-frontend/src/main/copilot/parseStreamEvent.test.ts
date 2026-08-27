@@ -61,6 +61,34 @@ describe('parseStreamEventLine', () => {
     });
   });
 
+  it('parses a result event with is_error: true into a result_error, not a real reply', () => {
+    const line = JSON.stringify({
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      result: 'Error: something went wrong internally.',
+      session_id: 'sess-abc123',
+    });
+    expect(parseStreamEventLine(line)).toEqual({
+      kind: 'result_error',
+      message: 'Error: something went wrong internally.',
+      sessionId: 'sess-abc123',
+    });
+  });
+
+  it('parses a result event with subtype error_during_execution but no explicit is_error field as a result_error', () => {
+    const line = JSON.stringify({
+      type: 'result',
+      subtype: 'error_during_execution',
+      result: 'ran out of retries',
+    });
+    expect(parseStreamEventLine(line)).toEqual({
+      kind: 'result_error',
+      message: 'ran out of retries',
+      sessionId: null,
+    });
+  });
+
   it('parses a system/api_retry authentication_failed event into an auth_error', () => {
     const line = JSON.stringify({
       type: 'system',
