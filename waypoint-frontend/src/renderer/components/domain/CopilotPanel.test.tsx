@@ -565,6 +565,91 @@ describe('CopilotPanel', () => {
       );
     });
 
+    // Regression test: the backend rejects blank content outright, so a run
+    // that completes with no real text (a possible outcome once auth_error
+    // is reported early but the CLI is still mid-retry, or any other run
+    // that produces an effectively empty result) used to go on to set
+    // awaitingPersist anyway, fail the save with a 400, and leave the
+    // composer permanently disabled — awaitingPersist never clears without
+    // a successful persist, and "Retry" could only ever resend the same
+    // empty text.
+    it('shows a retry instead of permanently locking the composer when the run finishes with an empty reply', async () => {
+      mockGetConversation.mockResolvedValueOnce(conversation([]));
+      render(<CopilotPanel onClose={jest.fn()} />);
+      await screen.findByText(/Ask Copilot anything/i);
+
+      mockPostUserMessage.mockResolvedValueOnce(
+        message({ id: 'm1', content: 'hello' }),
+      );
+      await typeAndSend('hello');
+      const handlers = await waitForRun('hello');
+
+      await act(async () => {
+        await handlers.onDone({ fullText: '   ', sessionId: 'sess-1' });
+      });
+
+      expect(
+        await screen.findByText(/didn't return a reply/i),
+      ).toBeInTheDocument();
+      expect(mockPostAssistantMessage).not.toHaveBeenCalled();
+      await waitFor(() => expect(getTextarea().disabled).toBe(false));
+
+      copilotIpc.runPrompt.mockImplementationOnce(() => jest.fn());
+      act(() => {
+        fireEvent.click(screen.getByText('Try again'));
+      });
+      expect(mockPostUserMessage).toHaveBeenCalledTimes(1); // not re-sent
+      expect(copilotIpc.runPrompt).toHaveBeenCalledTimes(2);
+    });
+
+    // Regression test: a run this side has already reported as failed (or
+    // superseded via "Try again") can still be alive in the main process —
+    // e.g. an auth_error is surfaced immediately while the CLI keeps
+    // retrying internally. Without a per-run generation guard, that stale
+    // run's later chunk/done events land in the same streamingText state a
+    // newer run is now writing to, interleaving two replies into one bubble.
+    it('ignores late chunk events from a superseded run after "Try again" starts a new one', async () => {
+      mockGetConversation.mockResolvedValueOnce(conversation([]));
+      render(<CopilotPanel onClose={jest.fn()} />);
+      await screen.findByText(/Ask Copilot anything/i);
+
+      mockPostUserMessage.mockResolvedValueOnce(
+        message({ id: 'm1', content: 'hello' }),
+      );
+      await typeAndSend('hello');
+      const firstHandlers = await waitForRun('hello');
+
+      act(() => {
+        firstHandlers.onError({
+          kind: 'generic',
+          message: 'transient failure',
+        });
+      });
+      expect(await screen.findByText('transient failure')).toBeInTheDocument();
+
+      act(() => {
+        fireEvent.click(screen.getByText('Try again'));
+      });
+      const secondHandlers = await waitForRun('hello');
+      expect(copilotIpc.runPrompt).toHaveBeenCalledTimes(2);
+
+      act(() => secondHandlers.onChunk('Second run reply'));
+      expect(
+        await screen.findByText('Second run reply', { selector: 'div' }),
+      ).toBeInTheDocument();
+
+      // The first run's process is still alive somewhere and emits a late
+      // chunk — it must not touch the bubble the second run now owns.
+      act(() => firstHandlers.onChunk('stale text from the dead run'));
+
+      expect(
+        screen.queryByText(/stale text from the dead run/),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByText('Second run reply', { selector: 'div' }),
+      ).toBeInTheDocument();
+    });
+
     // Regression test: a real bug found via live testing against the actual
     // Electron app — window.electron.copilot.runPrompt threw synchronously
     // (Illegal invocation, from a receiver-binding bug in preload.ts), and
