@@ -130,17 +130,166 @@ describe('registerCopilotIpc', () => {
     expect(child.stdin.ended).toBe(true);
   });
 
-  it('passes --resume only when a resumeSessionId is given', () => {
+  it('passes --resume only when a UUID-shaped resumeSessionId is given', () => {
     const win = fakeWindow();
     registerCopilotIpc(() => win as unknown as BrowserWindow);
 
     run({ requestId: 'req-1', prompt: 'hi' });
     expect(spawnCalls[0].args).not.toContain('--resume');
 
-    run({ requestId: 'req-2', prompt: 'hi', resumeSessionId: 'sess-1' });
+    run({
+      requestId: 'req-2',
+      prompt: 'hi',
+      resumeSessionId: '6b16ad5b-1e3f-4a2c-8f9d-2c7e5a9b3d10',
+    });
     const idx = spawnCalls[1].args.indexOf('--resume');
     expect(idx).toBeGreaterThan(-1);
-    expect(spawnCalls[1].args[idx + 1]).toBe('sess-1');
+    expect(spawnCalls[1].args[idx + 1]).toBe(
+      '6b16ad5b-1e3f-4a2c-8f9d-2c7e5a9b3d10',
+    );
+  });
+
+  // Defense in depth: the backend's own zod schema already requires a UUID,
+  // but --resume takes an *optional* value, so a flag-shaped resumeSessionId
+  // (e.g. one starting with `-`) isn't consumed as --resume's argument —
+  // it's parsed as a separate flag of its own (confirmed live against the
+  // real CLI: `claude -p --resume --help` prints help instead of erring).
+  // This must never reach argv regardless of what validated the value on
+  // its way into the database, including anything written before the
+  // schema was tightened.
+  it('does not pass a non-UUID resumeSessionId to argv, even a flag-shaped one', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({
+      requestId: 'req-1',
+      prompt: 'hi',
+      resumeSessionId: '--dangerously-skip-permissions',
+    });
+
+    expect(spawnCalls[0].args).not.toContain('--resume');
+    expect(spawnCalls[0].args).not.toContain('--dangerously-skip-permissions');
+  });
+
+  it('disables built-in tool access — this phase is text-only chat, not agentic', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi' });
+
+    const idx = spawnCalls[0].args.indexOf('--tools');
+    expect(idx).toBeGreaterThan(-1);
+    expect(spawnCalls[0].args[idx + 1]).toBe('');
+  });
+
+  // The bug this exists to catch: a --resume against a session id that's
+  // aged out of Claude Code's retention window failed identically on every
+  // retry, with no code path anywhere that ever cleared the stored id —
+  // permanently bricking the conversation.
+  it('retries once without --resume when a stale session id causes a result_error, transparently', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+    const firstChild = run({
+      requestId: 'req-1',
+      prompt: 'hi',
+      resumeSessionId: '6b16ad5b-1e3f-4a2c-8f9d-2c7e5a9b3d10',
+    });
+    expect(spawnCalls).toHaveLength(1);
+
+    // The real shape a stale --resume produces (verified live): no `result`
+    // field, only `errors`.
+    const staleLine = JSON.stringify({
+      type: 'result',
+      is_error: true,
+      session_id: '6b16ad5b-1e3f-4a2c-8f9d-2c7e5a9b3d10',
+      errors: [
+        'No conversation found with session ID: 6b16ad5b-1e3f-4a2c-8f9d-2c7e5a9b3d10',
+      ],
+    });
+    firstChild.stdout.emit('data', `${staleLine}\n`);
+
+    // A second, fresh attempt spawned — without --resume — and nothing was
+    // reported to the renderer yet; the retry is meant to be invisible.
+    expect(spawnCalls).toHaveLength(2);
+    expect(spawnCalls[1].args).not.toContain('--resume');
+    expect(win.webContents.send).not.toHaveBeenCalled();
+
+    const retryChild = lastChild as FakeChild;
+    const successLine = JSON.stringify({
+      type: 'result',
+      result: 'fresh reply',
+      session_id: 'fresh-session-id',
+    });
+    retryChild.stdout.emit('data', `${successLine}\n`);
+
+    expect(win.webContents.send).toHaveBeenCalledWith('copilot:stream', {
+      requestId: 'req-1',
+      type: 'done',
+      fullText: 'fresh reply',
+      sessionId: 'fresh-session-id',
+    });
+
+    // The first (abandoned) child closing afterward must not clobber the
+    // retry's tracked entry, nor produce a second/duplicate terminal
+    // message the renderer would have to reconcile against the first.
+    firstChild.emit('close', 1);
+    expect(win.webContents.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry a stale-session result_error that itself came from a retry (bounded to one retry)', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+    const firstChild = run({
+      requestId: 'req-1',
+      prompt: 'hi',
+      resumeSessionId: '6b16ad5b-1e3f-4a2c-8f9d-2c7e5a9b3d10',
+    });
+
+    const staleLine = JSON.stringify({
+      type: 'result',
+      is_error: true,
+      errors: ['No conversation found with session ID: whatever'],
+    });
+    firstChild.stdout.emit('data', `${staleLine}\n`);
+    expect(spawnCalls).toHaveLength(2);
+
+    // The retry attempt (which used no --resume) somehow still reports the
+    // same stale-session-shaped message — pathological, but must not loop.
+    const retryChild = lastChild as FakeChild;
+    retryChild.stdout.emit('data', `${staleLine}\n`);
+
+    expect(spawnCalls).toHaveLength(2);
+    expect(win.webContents.send).toHaveBeenCalledWith('copilot:stream', {
+      requestId: 'req-1',
+      type: 'error',
+      kind: 'generic',
+      message: 'No conversation found with session ID: whatever',
+    });
+  });
+
+  it('does not retry a result_error whose message does not match the stale-session pattern', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+    const child = run({
+      requestId: 'req-1',
+      prompt: 'hi',
+      resumeSessionId: '6b16ad5b-1e3f-4a2c-8f9d-2c7e5a9b3d10',
+    });
+
+    const line = JSON.stringify({
+      type: 'result',
+      is_error: true,
+      result: 'some unrelated failure',
+    });
+    child.stdout.emit('data', `${line}\n`);
+
+    expect(spawnCalls).toHaveLength(1);
+    expect(win.webContents.send).toHaveBeenCalledWith('copilot:stream', {
+      requestId: 'req-1',
+      type: 'error',
+      kind: 'generic',
+      message: 'some unrelated failure',
+    });
   });
 
   it('spawns with an isolated cwd and a PATH extended with common install locations', () => {
