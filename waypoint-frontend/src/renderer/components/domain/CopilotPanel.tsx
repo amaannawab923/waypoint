@@ -141,6 +141,16 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
   const [runError, setRunError] = useState<{ message: string } | null>(null);
   const [lastFailedPrompt, setLastFailedPrompt] = useState<string | null>(null);
   const unsubscribeStreamRef = useRef<(() => void) | null>(null);
+  // Bumped at the start of every runAndPersist call; each call's onChunk/
+  // onDone/onError closures capture the value current at their own start
+  // and compare against the ref before touching any state. A run's own
+  // process can outlive the run logically "finishing" on this side (e.g. an
+  // auth_error is reported immediately while the CLI is still mid-retry
+  // internally, or the user hits "Try again" on a run that never actually
+  // exited) — without this guard, a late chunk from that stale run would
+  // land in the same streamingText state a newer run is now writing to,
+  // interleaving two replies into one bubble.
+  const runGenerationRef = useRef(0);
 
   useEffect(() => {
     const raf = requestAnimationFrame(() => setVisible(true));
@@ -222,6 +232,10 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     content: string,
     resumeSessionId: string | undefined,
   ) {
+    runGenerationRef.current += 1;
+    const generation = runGenerationRef.current;
+    const isStale = () => runGenerationRef.current !== generation;
+
     setStreamingText('');
     setRunError(null);
     setLastFailedPrompt(null);
@@ -237,14 +251,37 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
         const unsubscribe = window.electron.copilot.runPrompt(
           { prompt: content, resumeSessionId },
           {
-            onChunk: (text) => setStreamingText((prev) => (prev ?? '') + text),
+            onChunk: (text) => {
+              if (isStale()) return;
+              setStreamingText((prev) => (prev ?? '') + text);
+            },
             onDone: async ({ fullText, sessionId }) => {
+              if (isStale()) return;
               setStreamingText(null);
+              // An empty (or whitespace-only) reply isn't a real answer to
+              // persist — the backend's own validation rejects blank
+              // content outright, which previously meant this went on to
+              // set awaitingPersist, fail to save with a 400, and leave the
+              // composer permanently disabled (disabled whenever
+              // awaitingPersist isn't null) with a "Retry" that could only
+              // ever resend the same empty text and fail the same way
+              // forever. Routing it through the run-error path instead
+              // gives the user a real way out: "Try again" re-runs the
+              // prompt from scratch.
+              if (!fullText.trim()) {
+                setRunError({
+                  message: "Copilot didn't return a reply — try again.",
+                });
+                setLastFailedPrompt(content);
+                resolve();
+                return;
+              }
               setAwaitingPersist({ content: fullText, sessionId });
               await persistReply(fullText, sessionId);
               resolve();
             },
             onError: (err) => {
+              if (isStale()) return;
               setStreamingText(null);
               setRunError({ message: err.message });
               setLastFailedPrompt(content);
