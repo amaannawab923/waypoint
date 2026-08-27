@@ -33,7 +33,9 @@ vi.mock('drizzle-orm', async (importOriginal) => {
 });
 
 const { copilotConversations, copilotMessages } = await import('../db/schema/index.js');
-const { getOrCreateConversation, listMessages, postMessage } = await import('./copilot.service.js');
+const { getOrCreateConversation, listMessages, postUserMessage, postAssistantMessage } = await import(
+  './copilot.service.js'
+);
 const { asc, eq } = await import('drizzle-orm');
 
 beforeEach(() => {
@@ -90,57 +92,82 @@ describe('listMessages', () => {
   });
 });
 
-describe('postMessage', () => {
-  it('inserts the user message, inserts a canned assistant reply, bumps updatedAt, returns the reply', async () => {
-    const insertChains: ReturnType<typeof chainable>[] = [];
+describe('postUserMessage', () => {
+  it('inserts the user message, bumps updatedAt, returns the inserted row', async () => {
     const tx = {
-      insert: vi.fn(() => {
-        // .returning() resolves to an array of rows in real Drizzle; the
-        // bare awaited chain (the first insert below, which never calls
-        // .returning()) resolves to something this code never reads.
-        const chain = chainable([{ id: 'msg-reply1', conversationId: 'conv-abc1234', role: 'assistant' }]);
-        insertChains.push(chain);
-        return chain;
-      }),
+      insert: vi.fn(() => chainable([{ id: 'msg-user1', conversationId: 'conv-abc1234', role: 'user' }])),
       update: vi.fn(() => chainable(undefined)),
     };
     db.transaction.mockImplementation(async (callback: (tx: unknown) => unknown) => callback(tx));
 
-    const result = await postMessage('conv-abc1234', 'hi');
+    const result = await postUserMessage('conv-abc1234', 'hi');
 
     expect(db.transaction).toHaveBeenCalledTimes(1);
-    expect(tx.insert).toHaveBeenCalledTimes(2);
-
-    const [userCall, assistantCall] = insertChains;
-    expect((userCall.values as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
-      conversationId: 'conv-abc1234',
-      role: 'user',
-      content: 'hi',
-    });
-    const assistantValues = (assistantCall.values as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(assistantValues.role).toBe('assistant');
-    expect(typeof assistantValues.content).toBe('string');
-    expect(assistantValues.content.length).toBeGreaterThan(0);
+    expect(tx.insert).toHaveBeenCalledTimes(1);
+    const insertedValues = (tx.insert.mock.results[0].value.values as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(insertedValues).toMatchObject({ conversationId: 'conv-abc1234', role: 'user', content: 'hi' });
 
     expect(tx.update).toHaveBeenCalledTimes(1);
     expect(tx.update).toHaveBeenCalledWith(copilotConversations);
     expect(eq).toHaveBeenCalledWith(copilotConversations.id, 'conv-abc1234');
+    // claudeSessionId is untouched here — only postAssistantMessage sets it,
+    // since it's only known once a Claude Code stream has completed.
+    const setArgs = (tx.update.mock.results[0].value.set as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(setArgs).not.toHaveProperty('claudeSessionId');
 
-    expect(result).toEqual({ id: 'msg-reply1', conversationId: 'conv-abc1234', role: 'assistant' });
+    expect(result).toEqual({ id: 'msg-user1', conversationId: 'conv-abc1234', role: 'user' });
   });
 
-  it('rolls the whole transaction into one db.transaction() call, not separate writes', async () => {
-    // The bug this guards against isn't reachable through mocks (that's the
-    // whole caveat at the top of this file) — this only confirms the *shape*
-    // of the call: everything routes through one db.transaction(), which is
-    // what makes atomicity possible at all in the real database.
+  it('rolls the insert and the updatedAt bump into one db.transaction() call', async () => {
     db.transaction.mockImplementation(async (callback: (tx: unknown) => unknown) =>
       callback({ insert: vi.fn(() => chainable([{}])), update: vi.fn(() => chainable(undefined)) }),
     );
 
-    await postMessage('conv-abc1234', 'hi');
+    await postUserMessage('conv-abc1234', 'hi');
 
     expect(db.insert).not.toHaveBeenCalled();
     expect(db.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('postAssistantMessage', () => {
+  it('inserts the assistant message and sets claudeSessionId in the same transaction', async () => {
+    const tx = {
+      insert: vi.fn(() =>
+        chainable([{ id: 'msg-reply1', conversationId: 'conv-abc1234', role: 'assistant' }]),
+      ),
+      update: vi.fn(() => chainable(undefined)),
+    };
+    db.transaction.mockImplementation(async (callback: (tx: unknown) => unknown) => callback(tx));
+
+    const result = await postAssistantMessage('conv-abc1234', 'here is my answer', 'sess-xyz789');
+
+    expect(db.transaction).toHaveBeenCalledTimes(1);
+    const insertedValues = (tx.insert.mock.results[0].value.values as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(insertedValues).toMatchObject({
+      conversationId: 'conv-abc1234',
+      role: 'assistant',
+      content: 'here is my answer',
+    });
+
+    expect(tx.update).toHaveBeenCalledWith(copilotConversations);
+    expect(eq).toHaveBeenCalledWith(copilotConversations.id, 'conv-abc1234');
+    const setArgs = (tx.update.mock.results[0].value.set as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(setArgs).toMatchObject({ claudeSessionId: 'sess-xyz789' });
+
+    expect(result).toEqual({ id: 'msg-reply1', conversationId: 'conv-abc1234', role: 'assistant' });
+  });
+
+  it('accepts a null claudeSessionId (the stream ended without ever producing one)', async () => {
+    const tx = {
+      insert: vi.fn(() => chainable([{ id: 'msg-reply1' }])),
+      update: vi.fn(() => chainable(undefined)),
+    };
+    db.transaction.mockImplementation(async (callback: (tx: unknown) => unknown) => callback(tx));
+
+    await postAssistantMessage('conv-abc1234', 'reply text', null);
+
+    const setArgs = (tx.update.mock.results[0].value.set as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(setArgs).toMatchObject({ claudeSessionId: null });
   });
 });
