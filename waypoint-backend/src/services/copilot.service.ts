@@ -69,6 +69,16 @@ export async function postUserMessage(conversationId: string, content: string) {
 // not a separate call: both are only ever known at the same instant (they
 // come off the same `result` event at the end of the Claude Code stream), so
 // there's no real atomicity boundary to draw between them.
+//
+// A null claudeSessionId is never written here, even though the parameter
+// accepts one — it's only ever passed for a run that failed before reaching
+// a `result` event, and this function isn't even called on a failed run (see
+// CopilotPanel.tsx's runAndPersist, which routes that case to onError
+// instead). If a caller ever does pass null for a conversation that already
+// has a real session id, unconditionally writing it through would silently
+// wipe that id, making the next message start a brand-new Claude Code
+// session instead of continuing the existing one — with nothing in the UI
+// to explain why Copilot suddenly "forgot" the conversation.
 export async function postAssistantMessage(
   conversationId: string,
   content: string,
@@ -86,7 +96,10 @@ export async function postAssistantMessage(
       .returning();
     await tx
       .update(copilotConversations)
-      .set({ updatedAt: new Date(), claudeSessionId })
+      .set({
+        updatedAt: new Date(),
+        ...(claudeSessionId !== null ? { claudeSessionId } : {}),
+      })
       .where(eq(copilotConversations.id, conversationId));
     return message;
   });
