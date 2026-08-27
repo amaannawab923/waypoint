@@ -8,6 +8,7 @@ export type ParsedStreamEvent =
   | { kind: 'session'; sessionId: string }
   | { kind: 'text_delta'; text: string }
   | { kind: 'result'; fullText: string; sessionId: string | null }
+  | { kind: 'result_error'; message: string; sessionId: string | null }
   | { kind: 'auth_error'; message: string }
   | { kind: 'ignored' };
 
@@ -69,6 +70,14 @@ export function parseStreamEventLine(line: string): ParsedStreamEvent {
   if (event.type === 'result' && typeof event.result === 'string') {
     const sessionId =
       typeof event.session_id === 'string' ? event.session_id : null;
+    // The CLI can end a run with a `result` event that is itself an error
+    // report (e.g. it gave up after exhausting retries) rather than a real
+    // reply — `result` alone doesn't distinguish the two, only these two
+    // fields do. Without this check, that error text would be persisted to
+    // Postgres and shown to the user as if Claude had actually said it.
+    if (event.is_error === true || event.subtype === 'error_during_execution') {
+      return { kind: 'result_error', message: event.result, sessionId };
+    }
     return { kind: 'result', fullText: event.result, sessionId };
   }
 
