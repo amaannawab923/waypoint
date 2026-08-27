@@ -76,12 +76,25 @@ const electronHandler = {
         if (payload.requestId !== requestId) return;
         if (payload.type === 'chunk' && typeof payload.text === 'string') {
           handlers.onChunk(payload.text);
-        } else if (payload.type === 'done') {
+          return;
+        }
+        // done/error are terminal — this run will never emit anything else
+        // for this requestId, so the listener removes itself right here
+        // instead of relying solely on the caller's returned unsubscribe.
+        // Without this, every run left its listener registered until
+        // either the caller happened to call unsubscribe or the whole
+        // panel unmounted — on a long conversation, dozens of long-dead
+        // listeners would sit on 'copilot:stream' for the rest of the
+        // panel's life, each still paying the requestId-mismatch check on
+        // every future run's every chunk.
+        if (payload.type === 'done') {
+          ipcRenderer.removeListener('copilot:stream', subscription);
           handlers.onDone({
             fullText: payload.fullText ?? '',
             sessionId: payload.sessionId ?? null,
           });
         } else if (payload.type === 'error') {
+          ipcRenderer.removeListener('copilot:stream', subscription);
           handlers.onError({
             kind: payload.kind ?? 'generic',
             message: payload.message ?? 'Unknown error',
