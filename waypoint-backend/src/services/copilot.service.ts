@@ -3,19 +3,6 @@ import { db } from '../db/client.js';
 import { copilotConversations, copilotMessages } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
 
-// Placeholder for the real LLM integration landing in issue #7 — lets the
-// persistence layer (this file), the route, and the frontend chat loop all
-// get built and verified end-to-end without an LLM dependency yet.
-const CANNED_REPLIES = [
-  "Got it — I'll look into that.",
-  "Thanks for the context, noted.",
-  "I can help with that once I'm wired up to look at real ticket data.",
-];
-
-function nextCannedReply(): string {
-  return CANNED_REPLIES[Math.floor(Math.random() * CANNED_REPLIES.length)];
-}
-
 export async function getOrCreateConversation(memberId: string) {
   // Insert-first, not select-then-insert: the latter is a classic
   // check-then-act race — two near-simultaneous first requests for the
@@ -52,27 +39,55 @@ export async function listMessages(conversationId: string) {
     .orderBy(asc(copilotMessages.seq));
 }
 
-export async function postMessage(conversationId: string, content: string) {
+// Split from a single postMessage() (issue #6) into two independent calls
+// (issue #7): the assistant's reply now comes from a real, possibly
+// multi-second, streamed Claude Code CLI subprocess orchestrated in the
+// Electron main process — nothing this service can compute synchronously
+// inside one request anymore. postUserMessage persists the user's turn the
+// moment it's sent; postAssistantMessage persists the reply once the stream
+// completes, which the caller invokes as a separate follow-up call.
+export async function postUserMessage(conversationId: string, content: string) {
   return db.transaction(async (tx) => {
-    await tx.insert(copilotMessages).values({
-      id: newId('msg'),
-      conversationId,
-      role: 'user',
-      content,
-    });
-    const [reply] = await tx
+    const [message] = await tx
       .insert(copilotMessages)
       .values({
         id: newId('msg'),
         conversationId,
-        role: 'assistant',
-        content: nextCannedReply(),
+        role: 'user',
+        content,
       })
       .returning();
     await tx
       .update(copilotConversations)
       .set({ updatedAt: new Date() })
       .where(eq(copilotConversations.id, conversationId));
-    return reply;
+    return message;
+  });
+}
+
+// claudeSessionId is updated in the same transaction as the message insert,
+// not a separate call: both are only ever known at the same instant (they
+// come off the same `result` event at the end of the Claude Code stream), so
+// there's no real atomicity boundary to draw between them.
+export async function postAssistantMessage(
+  conversationId: string,
+  content: string,
+  claudeSessionId: string | null,
+) {
+  return db.transaction(async (tx) => {
+    const [message] = await tx
+      .insert(copilotMessages)
+      .values({
+        id: newId('msg'),
+        conversationId,
+        role: 'assistant',
+        content,
+      })
+      .returning();
+    await tx
+      .update(copilotConversations)
+      .set({ updatedAt: new Date(), claudeSessionId })
+      .where(eq(copilotConversations.id, conversationId));
+    return message;
   });
 }
