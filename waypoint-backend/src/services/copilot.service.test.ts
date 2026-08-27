@@ -158,7 +158,12 @@ describe('postAssistantMessage', () => {
     expect(result).toEqual({ id: 'msg-reply1', conversationId: 'conv-abc1234', role: 'assistant' });
   });
 
-  it('accepts a null claudeSessionId (the stream ended without ever producing one)', async () => {
+  it('accepts a null claudeSessionId without writing it, so an existing session id is never clobbered', async () => {
+    // A null here only ever means "this run never reached a result event" —
+    // writing it through unconditionally would silently erase a real
+    // session id a previous successful run already set, forcing the next
+    // message to start a brand-new Claude Code session for no visible
+    // reason. The conversation's updatedAt timestamp should still bump.
     const tx = {
       insert: vi.fn(() => chainable([{ id: 'msg-reply1' }])),
       update: vi.fn(() => chainable(undefined)),
@@ -168,6 +173,7 @@ describe('postAssistantMessage', () => {
     await postAssistantMessage('conv-abc1234', 'reply text', null);
 
     const setArgs = (tx.update.mock.results[0].value.set as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(setArgs).toMatchObject({ claudeSessionId: null });
+    expect(setArgs).not.toHaveProperty('claudeSessionId');
+    expect(setArgs).toHaveProperty('updatedAt');
   });
 });
