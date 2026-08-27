@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { postCopilotMessageSchema } from './copilot.schema.js';
+import { postCopilotMessageSchema, postCopilotAssistantMessageSchema } from './copilot.schema.js';
 
 describe('postCopilotMessageSchema', () => {
   it('accepts a normal message', () => {
@@ -35,5 +35,47 @@ describe('postCopilotMessageSchema', () => {
 
   it('rejects content over the 8000-char limit', () => {
     expect(postCopilotMessageSchema.safeParse({ content: 'a'.repeat(8001) }).success).toBe(false);
+  });
+});
+
+describe('postCopilotAssistantMessageSchema', () => {
+  it('accepts a real session id', () => {
+    const result = postCopilotAssistantMessageSchema.safeParse({
+      content: 'here is my answer',
+      claudeSessionId: 'sess-abc123',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts a null session id (the stream ended without ever producing one)', () => {
+    const result = postCopilotAssistantMessageSchema.safeParse({
+      content: 'here is my answer',
+      claudeSessionId: null,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a missing claudeSessionId field — must be explicit, not merely absent', () => {
+    expect(postCopilotAssistantMessageSchema.safeParse({ content: 'hi' }).success).toBe(false);
+  });
+
+  it('rejects an empty-string session id', () => {
+    expect(
+      postCopilotAssistantMessageSchema.safeParse({ content: 'hi', claudeSessionId: '' }).success,
+    ).toBe(false);
+  });
+
+  it('rejects empty content', () => {
+    expect(
+      postCopilotAssistantMessageSchema.safeParse({ content: '', claudeSessionId: null }).success,
+    ).toBe(false);
+  });
+
+  it('allows content longer than the 8000-char user-message limit', () => {
+    const result = postCopilotAssistantMessageSchema.safeParse({
+      content: 'a'.repeat(20000),
+      claudeSessionId: null,
+    });
+    expect(result.success).toBe(true);
   });
 });
