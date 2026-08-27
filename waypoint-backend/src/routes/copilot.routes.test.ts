@@ -41,6 +41,7 @@ describe('GET /copilot/conversation', () => {
     vi.mocked(copilotService.getOrCreateConversation).mockResolvedValue({
       id: 'conv-abc1234',
       memberId: 'mem-1',
+      claudeSessionId: null,
       createdAt: new Date('2026-01-01'),
       updatedAt: new Date('2026-01-01'),
     });
@@ -59,19 +60,20 @@ describe('GET /copilot/conversation', () => {
 });
 
 describe('POST /copilot/conversation/messages', () => {
-  it('persists a valid message and returns 201 with the reply', async () => {
+  it('persists a valid message and returns 201 with the persisted user message', async () => {
     vi.mocked(copilotService.getOrCreateConversation).mockResolvedValue({
       id: 'conv-abc1234',
       memberId: 'mem-1',
+      claudeSessionId: null,
       createdAt: new Date(),
       updatedAt: new Date(),
     });
-    vi.mocked(copilotService.postMessage).mockResolvedValue({
-      id: 'msg-reply1',
+    vi.mocked(copilotService.postUserMessage).mockResolvedValue({
+      id: 'msg-user1',
       conversationId: 'conv-abc1234',
-      role: 'assistant',
-      content: 'canned reply',
-      seq: 2,
+      role: 'user',
+      content: 'hi',
+      seq: 1,
       createdAt: new Date(),
     });
 
@@ -80,8 +82,8 @@ describe('POST /copilot/conversation/messages', () => {
       .send({ content: 'hi' });
 
     expect(res.status).toBe(201);
-    expect(res.body.role).toBe('assistant');
-    expect(copilotService.postMessage).toHaveBeenCalledWith('conv-abc1234', 'hi');
+    expect(res.body.role).toBe('user');
+    expect(copilotService.postUserMessage).toHaveBeenCalledWith('conv-abc1234', 'hi');
   });
 
   it('rejects an empty body with 400 and never calls the service', async () => {
@@ -92,7 +94,7 @@ describe('POST /copilot/conversation/messages', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('invalid_input');
     expect(copilotService.getOrCreateConversation).not.toHaveBeenCalled();
-    expect(copilotService.postMessage).not.toHaveBeenCalled();
+    expect(copilotService.postUserMessage).not.toHaveBeenCalled();
   });
 
   it('rejects a missing content field with 400', async () => {
@@ -106,6 +108,81 @@ describe('POST /copilot/conversation/messages', () => {
     const res = await request(buildTestApp())
       .post('/copilot/conversation/messages')
       .send({ content: 'a'.repeat(8001) });
+
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('POST /copilot/conversation/messages/assistant', () => {
+  it('persists the reply and the claudeSessionId, returns 201 with the persisted assistant message', async () => {
+    vi.mocked(copilotService.getOrCreateConversation).mockResolvedValue({
+      id: 'conv-abc1234',
+      memberId: 'mem-1',
+      claudeSessionId: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    vi.mocked(copilotService.postAssistantMessage).mockResolvedValue({
+      id: 'msg-reply1',
+      conversationId: 'conv-abc1234',
+      role: 'assistant',
+      content: 'here is my answer',
+      seq: 2,
+      createdAt: new Date(),
+    });
+
+    const res = await request(buildTestApp())
+      .post('/copilot/conversation/messages/assistant')
+      .send({ content: 'here is my answer', claudeSessionId: 'sess-xyz789' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.role).toBe('assistant');
+    expect(copilotService.postAssistantMessage).toHaveBeenCalledWith(
+      'conv-abc1234',
+      'here is my answer',
+      'sess-xyz789',
+    );
+  });
+
+  it('accepts an explicit null claudeSessionId', async () => {
+    vi.mocked(copilotService.getOrCreateConversation).mockResolvedValue({
+      id: 'conv-abc1234',
+      memberId: 'mem-1',
+      claudeSessionId: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    vi.mocked(copilotService.postAssistantMessage).mockResolvedValue({
+      id: 'msg-reply1',
+      conversationId: 'conv-abc1234',
+      role: 'assistant',
+      content: 'reply',
+      seq: 2,
+      createdAt: new Date(),
+    });
+
+    const res = await request(buildTestApp())
+      .post('/copilot/conversation/messages/assistant')
+      .send({ content: 'reply', claudeSessionId: null });
+
+    expect(res.status).toBe(201);
+    expect(copilotService.postAssistantMessage).toHaveBeenCalledWith('conv-abc1234', 'reply', null);
+  });
+
+  it('rejects a missing claudeSessionId field with 400 and never calls the service', async () => {
+    const res = await request(buildTestApp())
+      .post('/copilot/conversation/messages/assistant')
+      .send({ content: 'reply' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid_input');
+    expect(copilotService.postAssistantMessage).not.toHaveBeenCalled();
+  });
+
+  it('rejects empty content with 400', async () => {
+    const res = await request(buildTestApp())
+      .post('/copilot/conversation/messages/assistant')
+      .send({ content: '', claudeSessionId: null });
 
     expect(res.status).toBe(400);
   });
