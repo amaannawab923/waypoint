@@ -12,6 +12,23 @@ export type ParsedStreamEvent =
   | { kind: 'auth_error'; message: string }
   | { kind: 'ignored' };
 
+// A `result` event reporting is_error can carry its message in either
+// field, confirmed live against a real stale --resume: `result` when the
+// CLI produced any text before failing, `errors` (and no `result` at all)
+// when it didn't.
+function extractErrorMessage(event: Record<string, unknown>): string {
+  if (typeof event.result === 'string' && event.result) {
+    return event.result;
+  }
+  if (
+    Array.isArray(event.errors) &&
+    event.errors.every((e) => typeof e === 'string')
+  ) {
+    return (event.errors as string[]).join('; ');
+  }
+  return 'Claude Code reported an error while responding.';
+}
+
 export function parseStreamEventLine(line: string): ParsedStreamEvent {
   const trimmed = line.trim();
   if (!trimmed) return { kind: 'ignored' };
@@ -67,18 +84,28 @@ export function parseStreamEventLine(line: string): ParsedStreamEvent {
     return { kind: 'ignored' };
   }
 
-  if (event.type === 'result' && typeof event.result === 'string') {
+  if (event.type === 'result') {
     const sessionId =
       typeof event.session_id === 'string' ? event.session_id : null;
     // The CLI can end a run with a `result` event that is itself an error
-    // report (e.g. it gave up after exhausting retries) rather than a real
-    // reply — `result` alone doesn't distinguish the two, only these two
-    // fields do. Without this check, that error text would be persisted to
-    // Postgres and shown to the user as if Claude had actually said it.
+    // report (e.g. a --resume against a session id that no longer exists)
+    // rather than a real reply. is_error/subtype is checked BEFORE
+    // requiring event.result to be a string — confirmed live against a
+    // stale --resume: that error shape carries no `result` field at all,
+    // only `errors: [string, ...]`. Gating this whole branch on
+    // `typeof event.result === 'string'` (as an earlier version did) made
+    // the error case unreachable for exactly the failure it exists to
+    // catch, silently falling through to `ignored` instead.
     if (event.is_error === true || event.subtype === 'error_during_execution') {
-      return { kind: 'result_error', message: event.result, sessionId };
+      return {
+        kind: 'result_error',
+        message: extractErrorMessage(event),
+        sessionId,
+      };
     }
-    return { kind: 'result', fullText: event.result, sessionId };
+    if (typeof event.result === 'string') {
+      return { kind: 'result', fullText: event.result, sessionId };
+    }
   }
 
   return { kind: 'ignored' };
