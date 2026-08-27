@@ -227,25 +227,40 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     setLastFailedPrompt(null);
 
     await new Promise<void>((resolve) => {
-      const unsubscribe = window.electron.copilot.runPrompt(
-        { prompt: content, resumeSessionId },
-        {
-          onChunk: (text) => setStreamingText((prev) => (prev ?? '') + text),
-          onDone: async ({ fullText, sessionId }) => {
-            setStreamingText(null);
-            setAwaitingPersist({ content: fullText, sessionId });
-            await persistReply(fullText, sessionId);
-            resolve();
+      // Guarded explicitly, not left to reject the surrounding promise: a
+      // throw here (e.g. the preload bridge itself failed to load, so
+      // window.electron.copilot is missing) previously left streamingText
+      // stuck at '' forever — nothing else in this function would ever
+      // clear it, since only onChunk/onDone/onError do, and none of those
+      // get a chance to run. Treated the same as a reported run failure.
+      try {
+        const unsubscribe = window.electron.copilot.runPrompt(
+          { prompt: content, resumeSessionId },
+          {
+            onChunk: (text) => setStreamingText((prev) => (prev ?? '') + text),
+            onDone: async ({ fullText, sessionId }) => {
+              setStreamingText(null);
+              setAwaitingPersist({ content: fullText, sessionId });
+              await persistReply(fullText, sessionId);
+              resolve();
+            },
+            onError: (err) => {
+              setStreamingText(null);
+              setRunError({ message: err.message });
+              setLastFailedPrompt(content);
+              resolve();
+            },
           },
-          onError: (err) => {
-            setStreamingText(null);
-            setRunError({ message: err.message });
-            setLastFailedPrompt(content);
-            resolve();
-          },
-        },
-      );
-      unsubscribeStreamRef.current = unsubscribe;
+        );
+        unsubscribeStreamRef.current = unsubscribe;
+      } catch (err) {
+        setStreamingText(null);
+        setRunError({
+          message: `Couldn't reach Copilot's runtime — ${err instanceof Error ? err.message : String(err)}`,
+        });
+        setLastFailedPrompt(content);
+        resolve();
+      }
     });
   }
 
