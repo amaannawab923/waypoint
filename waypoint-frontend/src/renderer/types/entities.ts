@@ -353,6 +353,10 @@ export interface CopilotMessage {
 export interface CopilotConversation {
   id: ID;
   memberId: ID;
+  // The Claude Code CLI's own session id (issue #7) — passed to `claude -p
+  // ... --resume` so a conversation's later turns continue the same Claude
+  // Code session. Null until the first assistant reply ever completes.
+  claudeSessionId: string | null;
   createdAt: string;
   updatedAt: string;
   messages: CopilotMessage[];
