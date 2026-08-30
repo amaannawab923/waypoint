@@ -158,6 +158,14 @@ const createWindow = async () => {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    // On macOS, closing the window doesn't quit the app (see
+    // window-all-closed below), so before-quit's cleanup alone would leave
+    // a still-running `claude setup-token` PTY orphaned — with its output
+    // now going nowhere anyway, since the window it would have streamed to
+    // is gone. The regular chat-run process is deliberately NOT killed
+    // here: unlike this one-shot connect flow, it's meant to keep running
+    // and persist its result even if the window closes mid-reply.
+    killAllCopilotConnectProcesses();
   });
 
   const menuBuilder = new MenuBuilder(mainWindow);
