@@ -219,7 +219,21 @@ export function registerCopilotAuthIpc(): void {
       return { ok: false, message: probe.message };
     }
 
-    writeStoredToken(token);
+    // Caught, not left to reject this invoke: a locked keychain or a full
+    // disk here previously left every caller's `await ...save(...)`
+    // permanently unresolved from the UI's perspective (the promise never
+    // settles the way callers expect), stranding the modal on "Waiting for
+    // sign-in…" or a manual-save button stuck on "Validating…" forever,
+    // with a validated-but-unsaved token silently discarded either way.
+    try {
+      writeStoredToken(token);
+    } catch {
+      return {
+        ok: false,
+        message:
+          "The token is valid, but it couldn't be saved securely on this device — try again.",
+      };
+    }
     return { ok: true, last4: token.slice(-4) };
   });
 
