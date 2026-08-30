@@ -29,3 +29,13 @@ export const postCopilotAssistantMessageSchema = z.object({
   content: z.string().trim().min(1),
   claudeSessionId: z.string().uuid().nullable(),
 });
+
+// .strict(), not just an empty object: a stray body field on a create
+// request should 400 rather than being silently ignored, matching this
+// app's other create schemas. There's genuinely nothing to accept here —
+// title comes from the schema's own column default, not the request.
+export const createCopilotConversationSchema = z.object({}).strict();
+
+export const renameCopilotConversationSchema = z.object({
+  title: z.string().trim().min(1).max(60),
+});

@@ -37,6 +37,13 @@ inspection, etc.).
 
 ## 2. Chrome DevTools MCP — live interactive debugging (recommended)
 
+**If you're an agent about to run a QA pass with this tool, read
+[`docs/qa-agent-playbook.md`](./qa-agent-playbook.md) first** — it's the
+step-by-step operating procedure (preconditions, how to explore via
+`take_snapshot`, timing expectations for real backend/LLM round-trips,
+screenshot conventions, what a good report looks like). This section below is
+the "why this exists and how it was set up" background.
+
 The richest option, and the one to reach for when debugging rather than
 just driving: Google's own
 [`chrome-devtools-mcp`](https://github.com/ChromeDevTools/chrome-devtools-mcp),

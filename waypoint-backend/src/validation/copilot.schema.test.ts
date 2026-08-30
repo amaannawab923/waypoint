@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { postCopilotMessageSchema, postCopilotAssistantMessageSchema } from './copilot.schema.js';
+import {
+  postCopilotMessageSchema,
+  postCopilotAssistantMessageSchema,
+  createCopilotConversationSchema,
+  renameCopilotConversationSchema,
+} from './copilot.schema.js';
 
 describe('postCopilotMessageSchema', () => {
   it('accepts a normal message', () => {
@@ -90,5 +95,51 @@ describe('postCopilotAssistantMessageSchema', () => {
       claudeSessionId: null,
     });
     expect(result.success).toBe(true);
+  });
+});
+
+describe('createCopilotConversationSchema', () => {
+  it('accepts an empty body', () => {
+    expect(createCopilotConversationSchema.safeParse({}).success).toBe(true);
+  });
+
+  // .strict() — there's nothing this endpoint accepts (title comes from the
+  // schema's own column default, not the request), so a stray field should
+  // 400 rather than being silently ignored.
+  it('rejects a stray field', () => {
+    expect(createCopilotConversationSchema.safeParse({ title: 'sneaky' }).success).toBe(false);
+  });
+});
+
+describe('renameCopilotConversationSchema', () => {
+  it('accepts a normal title', () => {
+    const result = renameCopilotConversationSchema.safeParse({ title: 'Sprint planning' });
+    expect(result.success).toBe(true);
+  });
+
+  it('trims surrounding whitespace', () => {
+    const result = renameCopilotConversationSchema.safeParse({ title: '  hi  ' });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.title).toBe('hi');
+  });
+
+  it('rejects an empty string', () => {
+    expect(renameCopilotConversationSchema.safeParse({ title: '' }).success).toBe(false);
+  });
+
+  it('rejects whitespace-only content (empty after trim)', () => {
+    expect(renameCopilotConversationSchema.safeParse({ title: '   ' }).success).toBe(false);
+  });
+
+  it('rejects a missing title field', () => {
+    expect(renameCopilotConversationSchema.safeParse({}).success).toBe(false);
+  });
+
+  it('accepts a title at exactly the 60-char limit', () => {
+    expect(renameCopilotConversationSchema.safeParse({ title: 'a'.repeat(60) }).success).toBe(true);
+  });
+
+  it('rejects a title over the 60-char limit', () => {
+    expect(renameCopilotConversationSchema.safeParse({ title: 'a'.repeat(61) }).success).toBe(false);
   });
 });

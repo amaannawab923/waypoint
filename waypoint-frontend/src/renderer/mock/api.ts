@@ -39,6 +39,7 @@ import type {
   AgentTrigger,
   ExecutionMethod,
   CopilotConversation,
+  CopilotConversationSummary,
   CopilotMessage,
 } from '@/types/entities';
 
@@ -50,13 +51,18 @@ function normalizeWorkItem(raw: WorkItem & { sortOrder?: string }): WorkItem {
   const { sortOrder: _sortOrder, ...rest } = raw;
   return {
     ...rest,
-    estimatePoints: rest.estimatePoints == null ? null : Number(rest.estimatePoints),
+    estimatePoints:
+      rest.estimatePoints == null ? null : Number(rest.estimatePoints),
   };
 }
-function normalizeWorkItems(raw: (WorkItem & { sortOrder?: string })[]): WorkItem[] {
+function normalizeWorkItems(
+  raw: (WorkItem & { sortOrder?: string })[],
+): WorkItem[] {
   return raw.map(normalizeWorkItem);
 }
-function normalizeWorkItemMaybe(raw: (WorkItem & { sortOrder?: string }) | undefined): WorkItem | undefined {
+function normalizeWorkItemMaybe(
+  raw: (WorkItem & { sortOrder?: string }) | undefined,
+): WorkItem | undefined {
   return raw ? normalizeWorkItem(raw) : undefined;
 }
 
@@ -72,7 +78,9 @@ export async function getWorkspace(): Promise<Workspace> {
   return http.get<Workspace>('/workspace');
 }
 
-export async function updateWorkspace(patch: Partial<Workspace>): Promise<Workspace> {
+export async function updateWorkspace(
+  patch: Partial<Workspace>,
+): Promise<Workspace> {
   return http.patch<Workspace>('/workspace', patch);
 }
 
@@ -80,7 +88,10 @@ export async function listMembers(): Promise<Member[]> {
   return http.get<Member[]>('/members');
 }
 
-export async function inviteMember(input: { email: string; role: Member['role'] }): Promise<Member> {
+export async function inviteMember(input: {
+  email: string;
+  role: Member['role'];
+}): Promise<Member> {
   return http.post<Member>('/members', input);
 }
 
@@ -102,7 +113,10 @@ export async function listExports(): Promise<WorkspaceExport[]> {
   return http.get<WorkspaceExport[]>('/exports');
 }
 
-export async function createExport(input: { scopeLabel: string; format: string }): Promise<WorkspaceExport> {
+export async function createExport(input: {
+  scopeLabel: string;
+  format: string;
+}): Promise<WorkspaceExport> {
   return http.post<WorkspaceExport>('/exports', input);
 }
 
@@ -114,7 +128,10 @@ export async function listWebhooks(): Promise<Webhook[]> {
   return http.get<Webhook[]>('/webhooks');
 }
 
-export async function createWebhook(input: { url: string; eventTypes: WebhookEventType[] }): Promise<Webhook> {
+export async function createWebhook(input: {
+  url: string;
+  eventTypes: WebhookEventType[];
+}): Promise<Webhook> {
   return http.post<Webhook>('/webhooks', input);
 }
 
@@ -131,7 +148,9 @@ export async function listAgents(): Promise<Agent[]> {
 }
 
 export async function getAgent(id: string): Promise<Agent | undefined> {
-  return http.get<Agent | undefined>(`/agents/${id}`, { notFoundAsUndefined: true });
+  return http.get<Agent | undefined>(`/agents/${id}`, {
+    notFoundAsUndefined: true,
+  });
 }
 
 export interface CreateAgentInput {
@@ -193,7 +212,12 @@ export async function detectLocalClaudeCode(): Promise<LocalClaudeDetection> {
   const me = await getCurrentUser().catch(() => undefined);
   return new Promise((resolve) =>
     setTimeout(
-      () => resolve({ status: 'connected', version: '2.4.1', account: me?.email ?? me?.displayName ?? 'you' }),
+      () =>
+        resolve({
+          status: 'connected',
+          version: '2.4.1',
+          account: me?.email ?? me?.displayName ?? 'you',
+        }),
       500 + Math.random() * 400,
     ),
   );
@@ -206,8 +230,13 @@ export async function listAgentAssignments(): Promise<AgentAssignment[]> {
 // Used right after createWorkItem when a brand-new ticket is born pre-assigned
 // to one or more agents (e.g. from the New Work Item modal) — createWorkItem
 // itself only knows about assigneeIds, not the agent-run bookkeeping.
-export async function ensureAgentAssignments(workItemId: string, agentIds: string[]): Promise<void> {
-  return http.post<void>(`/work-items/${workItemId}/agent-assignments`, { agentIds });
+export async function ensureAgentAssignments(
+  workItemId: string,
+  agentIds: string[],
+): Promise<void> {
+  return http.post<void>(`/work-items/${workItemId}/agent-assignments`, {
+    agentIds,
+  });
 }
 
 // Assigns/unassigns an agent the same way toggleWorkItemAssignee handles a
@@ -216,8 +245,13 @@ export async function ensureAgentAssignments(workItemId: string, agentIds: strin
 // record, which a human assignee doesn't need. Unassigning through this path
 // leaves the AgentAssignment row in place (with its history); use
 // takeBackOverFromAgent instead when the removal should read as a hand-off.
-export async function toggleWorkItemAgent(workItemId: string, agentId: string): Promise<WorkItem> {
-  const item = await http.post<WorkItem & { sortOrder?: string }>(`/work-items/${workItemId}/agents/${agentId}/toggle`);
+export async function toggleWorkItemAgent(
+  workItemId: string,
+  agentId: string,
+): Promise<WorkItem> {
+  const item = await http.post<WorkItem & { sortOrder?: string }>(
+    `/work-items/${workItemId}/agents/${agentId}/toggle`,
+  );
   return normalizeWorkItem(item);
 }
 
@@ -225,8 +259,13 @@ export async function toggleWorkItemAgent(workItemId: string, agentId: string): 
 // closes out its run record, and posts a system-style comment from the
 // current user — so a hand-off reads the same as everything else in the
 // Activity/Comments feed instead of the agent silently vanishing.
-export async function takeBackOverFromAgent(workItemId: string, agentId: string): Promise<WorkItem> {
-  const item = await http.post<WorkItem & { sortOrder?: string }>(`/work-items/${workItemId}/agents/${agentId}/take-back`);
+export async function takeBackOverFromAgent(
+  workItemId: string,
+  agentId: string,
+): Promise<WorkItem> {
+  const item = await http.post<WorkItem & { sortOrder?: string }>(
+    `/work-items/${workItemId}/agents/${agentId}/take-back`,
+  );
   return normalizeWorkItem(item);
 }
 
@@ -243,7 +282,9 @@ export async function listArchivedProjects(): Promise<Project[]> {
 }
 
 export async function getProject(id: string): Promise<Project | undefined> {
-  return http.get<Project | undefined>(`/projects/${id}`, { notFoundAsUndefined: true });
+  return http.get<Project | undefined>(`/projects/${id}`, {
+    notFoundAsUndefined: true,
+  });
 }
 
 export interface CreateProjectInput {
@@ -255,35 +296,61 @@ export interface CreateProjectInput {
   leadId?: string | null;
 }
 
-export async function createProject(input: CreateProjectInput): Promise<Project> {
+export async function createProject(
+  input: CreateProjectInput,
+): Promise<Project> {
   return http.post<Project>('/projects', input);
 }
 
-export async function updateProject(id: string, patch: Partial<Project>): Promise<Project> {
+export async function updateProject(
+  id: string,
+  patch: Partial<Project>,
+): Promise<Project> {
   return http.patch<Project>(`/projects/${id}`, patch);
 }
 
-export async function addProjectMember(projectId: string, memberId: string, role?: MemberRole): Promise<Project> {
-  return http.post<Project>(`/projects/${projectId}/members`, { memberId, role });
+export async function addProjectMember(
+  projectId: string,
+  memberId: string,
+  role?: MemberRole,
+): Promise<Project> {
+  return http.post<Project>(`/projects/${projectId}/members`, {
+    memberId,
+    role,
+  });
 }
 
-export async function removeProjectMember(projectId: string, memberId: string): Promise<Project> {
+export async function removeProjectMember(
+  projectId: string,
+  memberId: string,
+): Promise<Project> {
   return http.del<Project>(`/projects/${projectId}/members/${memberId}`);
 }
 
-export async function updateProjectFeatures(id: string, patch: Partial<ProjectFeatures>): Promise<Project> {
+export async function updateProjectFeatures(
+  id: string,
+  patch: Partial<ProjectFeatures>,
+): Promise<Project> {
   return http.patch<Project>(`/projects/${id}/features`, patch);
 }
 
-export async function updateProjectEstimate(id: string, estimate: ProjectEstimateSystem | null): Promise<Project> {
+export async function updateProjectEstimate(
+  id: string,
+  estimate: ProjectEstimateSystem | null,
+): Promise<Project> {
   return http.put<Project>(`/projects/${id}/estimate`, estimate);
 }
 
-export async function getProjectAutomations(projectId: string): Promise<ProjectAutomations> {
+export async function getProjectAutomations(
+  projectId: string,
+): Promise<ProjectAutomations> {
   return http.get<ProjectAutomations>(`/projects/${projectId}/automations`);
 }
 
-export async function updateProjectAutomations(id: string, patch: Partial<ProjectAutomations>): Promise<Project> {
+export async function updateProjectAutomations(
+  id: string,
+  patch: Partial<ProjectAutomations>,
+): Promise<Project> {
   return http.patch<Project>(`/projects/${id}/automations`, patch);
 }
 
@@ -303,7 +370,10 @@ export async function listStates(projectId: string): Promise<WorkItemState[]> {
   return http.get<WorkItemState[]>(`/states?projectId=${projectId}`);
 }
 
-export async function createState(projectId: string, input: Pick<WorkItemState, 'name' | 'group' | 'color'>): Promise<WorkItemState> {
+export async function createState(
+  projectId: string,
+  input: Pick<WorkItemState, 'name' | 'group' | 'color'>,
+): Promise<WorkItemState> {
   return http.post<WorkItemState>(`/projects/${projectId}/states`, input);
 }
 
@@ -315,7 +385,9 @@ export async function updateState(
 }
 
 export async function countWorkItemsInState(stateId: string): Promise<number> {
-  const { count } = await http.get<{ count: number }>(`/states/${stateId}/work-item-count`);
+  const { count } = await http.get<{ count: number }>(
+    `/states/${stateId}/work-item-count`,
+  );
   return count;
 }
 
@@ -327,11 +399,17 @@ export async function listLabels(projectId: string): Promise<Label[]> {
   return http.get<Label[]>(`/labels?projectId=${projectId}`);
 }
 
-export async function createLabel(projectId: string, input: Pick<Label, 'name' | 'color'>): Promise<Label> {
+export async function createLabel(
+  projectId: string,
+  input: Pick<Label, 'name' | 'color'>,
+): Promise<Label> {
   return http.post<Label>(`/projects/${projectId}/labels`, input);
 }
 
-export async function updateLabel(id: string, patch: Partial<Pick<Label, 'name' | 'color'>>): Promise<Label> {
+export async function updateLabel(
+  id: string,
+  patch: Partial<Pick<Label, 'name' | 'color'>>,
+): Promise<Label> {
   return http.patch<Label>(`/labels/${id}`, patch);
 }
 
@@ -351,11 +429,17 @@ export async function listAllModules(): Promise<WorkModule[]> {
   return http.get<WorkModule[]>('/modules');
 }
 
-export async function createModule(projectId: string, input: Partial<WorkModule> & { name: string }): Promise<WorkModule> {
+export async function createModule(
+  projectId: string,
+  input: Partial<WorkModule> & { name: string },
+): Promise<WorkModule> {
   return http.post<WorkModule>(`/projects/${projectId}/modules`, input);
 }
 
-export async function updateModule(id: string, patch: Partial<WorkModule>): Promise<WorkModule> {
+export async function updateModule(
+  id: string,
+  patch: Partial<WorkModule>,
+): Promise<WorkModule> {
   return http.patch<WorkModule>(`/modules/${id}`, patch);
 }
 
@@ -369,14 +453,20 @@ export async function listAllCycles(): Promise<Cycle[]> {
 
 export async function createCycle(
   projectId: string,
-  input: Pick<Cycle, 'name' | 'description' | 'startDate' | 'endDate'> & Partial<Pick<Cycle, 'leadId' | 'memberIds'>>,
+  input: Pick<Cycle, 'name' | 'description' | 'startDate' | 'endDate'> &
+    Partial<Pick<Cycle, 'leadId' | 'memberIds'>>,
 ): Promise<Cycle> {
   return http.post<Cycle>(`/projects/${projectId}/cycles`, input);
 }
 
 export async function updateCycle(
   id: string,
-  patch: Partial<Pick<Cycle, 'name' | 'description' | 'startDate' | 'endDate' | 'leadId' | 'memberIds'>>,
+  patch: Partial<
+    Pick<
+      Cycle,
+      'name' | 'description' | 'startDate' | 'endDate' | 'leadId' | 'memberIds'
+    >
+  >,
 ): Promise<Cycle> {
   return http.patch<Cycle>(`/cycles/${id}`, patch);
 }
@@ -390,28 +480,44 @@ export async function deleteCycle(id: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export async function listWorkItems(projectId: string): Promise<WorkItem[]> {
-  return normalizeWorkItems(await http.get<(WorkItem & { sortOrder?: string })[]>(`/projects/${projectId}/work-items`));
+  return normalizeWorkItems(
+    await http.get<(WorkItem & { sortOrder?: string })[]>(
+      `/projects/${projectId}/work-items`,
+    ),
+  );
 }
 
 export async function listAllWorkItems(): Promise<WorkItem[]> {
-  return normalizeWorkItems(await http.get<(WorkItem & { sortOrder?: string })[]>('/work-items'));
+  return normalizeWorkItems(
+    await http.get<(WorkItem & { sortOrder?: string })[]>('/work-items'),
+  );
 }
 
 export async function listDraftWorkItems(): Promise<WorkItem[]> {
-  return normalizeWorkItems(await http.get<(WorkItem & { sortOrder?: string })[]>('/work-items/drafts'));
+  return normalizeWorkItems(
+    await http.get<(WorkItem & { sortOrder?: string })[]>('/work-items/drafts'),
+  );
 }
 
 export async function getWorkItem(id: string): Promise<WorkItem | undefined> {
   return normalizeWorkItemMaybe(
-    await http.get<(WorkItem & { sortOrder?: string }) | undefined>(`/work-items/${id}`, { notFoundAsUndefined: true }),
+    await http.get<(WorkItem & { sortOrder?: string }) | undefined>(
+      `/work-items/${id}`,
+      { notFoundAsUndefined: true },
+    ),
   );
 }
 
-export async function getWorkItemByIdentifier(identifier: string): Promise<WorkItem | undefined> {
+export async function getWorkItemByIdentifier(
+  identifier: string,
+): Promise<WorkItem | undefined> {
   return normalizeWorkItemMaybe(
-    await http.get<(WorkItem & { sortOrder?: string }) | undefined>(`/work-items/by-identifier/${identifier}`, {
-      notFoundAsUndefined: true,
-    }),
+    await http.get<(WorkItem & { sortOrder?: string }) | undefined>(
+      `/work-items/by-identifier/${identifier}`,
+      {
+        notFoundAsUndefined: true,
+      },
+    ),
   );
 }
 
@@ -429,31 +535,64 @@ export interface CreateWorkItemInput {
   isDraft?: boolean;
 }
 
-export async function createWorkItem(input: CreateWorkItemInput): Promise<WorkItem> {
-  return normalizeWorkItem(await http.post<WorkItem & { sortOrder?: string }>('/work-items', input));
+export async function createWorkItem(
+  input: CreateWorkItemInput,
+): Promise<WorkItem> {
+  return normalizeWorkItem(
+    await http.post<WorkItem & { sortOrder?: string }>('/work-items', input),
+  );
 }
 
-export async function updateWorkItem(id: string, patch: Partial<WorkItem>): Promise<WorkItem> {
-  return normalizeWorkItem(await http.patch<WorkItem & { sortOrder?: string }>(`/work-items/${id}`, patch));
+export async function updateWorkItem(
+  id: string,
+  patch: Partial<WorkItem>,
+): Promise<WorkItem> {
+  return normalizeWorkItem(
+    await http.patch<WorkItem & { sortOrder?: string }>(
+      `/work-items/${id}`,
+      patch,
+    ),
+  );
 }
 
 // Toggles `memberId` in the item's assigneeIds — the server reads the
 // current persisted value itself, same race-avoidance as before.
-export async function toggleWorkItemAssignee(id: string, memberId: string): Promise<WorkItem> {
-  return normalizeWorkItem(await http.post<WorkItem & { sortOrder?: string }>(`/work-items/${id}/assignees/${memberId}/toggle`));
+export async function toggleWorkItemAssignee(
+  id: string,
+  memberId: string,
+): Promise<WorkItem> {
+  return normalizeWorkItem(
+    await http.post<WorkItem & { sortOrder?: string }>(
+      `/work-items/${id}/assignees/${memberId}/toggle`,
+    ),
+  );
 }
 
-export async function toggleWorkItemLabel(id: string, labelId: string): Promise<WorkItem> {
-  return normalizeWorkItem(await http.post<WorkItem & { sortOrder?: string }>(`/work-items/${id}/labels/${labelId}/toggle`));
+export async function toggleWorkItemLabel(
+  id: string,
+  labelId: string,
+): Promise<WorkItem> {
+  return normalizeWorkItem(
+    await http.post<WorkItem & { sortOrder?: string }>(
+      `/work-items/${id}/labels/${labelId}/toggle`,
+    ),
+  );
 }
 
 // Repositions `id` directly before/after `targetId` — list/board views
 // render in the server's `sortOrder`, so this is what makes manual
 // drag-to-reorder stick. If the target is in a different state, adopts that
 // state too (matching dropping a card into a column at a specific position).
-export async function reorderWorkItem(id: string, targetId: string, position: 'before' | 'after'): Promise<WorkItem> {
+export async function reorderWorkItem(
+  id: string,
+  targetId: string,
+  position: 'before' | 'after',
+): Promise<WorkItem> {
   return normalizeWorkItem(
-    await http.post<WorkItem & { sortOrder?: string }>(`/work-items/${id}/reorder`, { targetId, position }),
+    await http.post<WorkItem & { sortOrder?: string }>(
+      `/work-items/${id}/reorder`,
+      { targetId, position },
+    ),
   );
 }
 
@@ -462,15 +601,34 @@ export async function deleteWorkItem(id: string): Promise<void> {
 }
 
 export async function listSubItems(parentId: string): Promise<WorkItem[]> {
-  return normalizeWorkItems(await http.get<(WorkItem & { sortOrder?: string })[]>(`/work-items/${parentId}/sub-items`));
+  return normalizeWorkItems(
+    await http.get<(WorkItem & { sortOrder?: string })[]>(
+      `/work-items/${parentId}/sub-items`,
+    ),
+  );
 }
 
-export async function addWorkItemLink(workItemId: string, input: { url: string; label: string }): Promise<WorkItem> {
-  return normalizeWorkItem(await http.post<WorkItem & { sortOrder?: string }>(`/work-items/${workItemId}/links`, input));
+export async function addWorkItemLink(
+  workItemId: string,
+  input: { url: string; label: string },
+): Promise<WorkItem> {
+  return normalizeWorkItem(
+    await http.post<WorkItem & { sortOrder?: string }>(
+      `/work-items/${workItemId}/links`,
+      input,
+    ),
+  );
 }
 
-export async function removeWorkItemLink(workItemId: string, linkId: string): Promise<WorkItem> {
-  return normalizeWorkItem(await http.del<WorkItem & { sortOrder?: string }>(`/work-items/${workItemId}/links/${linkId}`));
+export async function removeWorkItemLink(
+  workItemId: string,
+  linkId: string,
+): Promise<WorkItem> {
+  return normalizeWorkItem(
+    await http.del<WorkItem & { sortOrder?: string }>(
+      `/work-items/${workItemId}/links/${linkId}`,
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -481,11 +639,16 @@ export async function listComments(workItemId: string): Promise<Comment[]> {
   return http.get<Comment[]>(`/work-items/${workItemId}/comments`);
 }
 
-export async function addComment(workItemId: string, bodyHtml: string): Promise<Comment> {
+export async function addComment(
+  workItemId: string,
+  bodyHtml: string,
+): Promise<Comment> {
   return http.post<Comment>(`/work-items/${workItemId}/comments`, { bodyHtml });
 }
 
-export async function listActivity(workItemId: string): Promise<ActivityEntry[]> {
+export async function listActivity(
+  workItemId: string,
+): Promise<ActivityEntry[]> {
   return http.get<ActivityEntry[]>(`/work-items/${workItemId}/activity`);
 }
 
@@ -502,7 +665,9 @@ export async function listAllPages(): Promise<Page[]> {
 }
 
 export async function getPage(id: string): Promise<Page | undefined> {
-  return http.get<Page | undefined>(`/pages/${id}`, { notFoundAsUndefined: true });
+  return http.get<Page | undefined>(`/pages/${id}`, {
+    notFoundAsUndefined: true,
+  });
 }
 
 export async function createPage(
@@ -510,10 +675,16 @@ export async function createPage(
   title = 'Untitled',
   parentPageId: string | null = null,
 ): Promise<Page> {
-  return http.post<Page>(`/projects/${projectId}/pages`, { title, parentPageId });
+  return http.post<Page>(`/projects/${projectId}/pages`, {
+    title,
+    parentPageId,
+  });
 }
 
-export async function updatePage(id: string, patch: Partial<Page>): Promise<Page> {
+export async function updatePage(
+  id: string,
+  patch: Partial<Page>,
+): Promise<Page> {
   return http.patch<Page>(`/pages/${id}`, patch);
 }
 
@@ -529,13 +700,22 @@ export async function listViews(projectId: string): Promise<SavedView[]> {
   return http.get<SavedView[]>(`/projects/${projectId}/views`);
 }
 
-export async function createView(projectId: string, name: string, filters: Record<string, unknown>): Promise<SavedView> {
-  return http.post<SavedView>(`/projects/${projectId}/views`, { name, filters });
+export async function createView(
+  projectId: string,
+  name: string,
+  filters: Record<string, unknown>,
+): Promise<SavedView> {
+  return http.post<SavedView>(`/projects/${projectId}/views`, {
+    name,
+    filters,
+  });
 }
 
 export async function updateView(
   id: string,
-  patch: Partial<Pick<SavedView, 'name' | 'filters' | 'visibility' | 'isFavorite'>>,
+  patch: Partial<
+    Pick<SavedView, 'name' | 'filters' | 'visibility' | 'isFavorite'>
+  >,
 ): Promise<SavedView> {
   return http.patch<SavedView>(`/views/${id}`, patch);
 }
@@ -561,11 +741,16 @@ export interface CreateIntakeRequestInput {
   sourceEmail: string;
 }
 
-export async function createIntakeRequest(input: CreateIntakeRequestInput): Promise<IntakeRequest> {
+export async function createIntakeRequest(
+  input: CreateIntakeRequestInput,
+): Promise<IntakeRequest> {
   return http.post<IntakeRequest>('/intake', input);
 }
 
-export async function updateIntakeStatus(id: string, status: IntakeStatus): Promise<IntakeRequest> {
+export async function updateIntakeStatus(
+  id: string,
+  status: IntakeStatus,
+): Promise<IntakeRequest> {
   return http.patch<IntakeRequest>(`/intake/${id}/status`, { status });
 }
 
@@ -575,7 +760,10 @@ export async function convertIntakeToWorkItem(
   overrides?: Partial<Pick<WorkItem, 'title' | 'description' | 'priority'>>,
 ): Promise<WorkItem> {
   return normalizeWorkItem(
-    await http.post<WorkItem & { sortOrder?: string }>(`/intake/${id}/convert`, { stateId, ...overrides }),
+    await http.post<WorkItem & { sortOrder?: string }>(
+      `/intake/${id}/convert`,
+      { stateId, ...overrides },
+    ),
   );
 }
 
@@ -587,7 +775,10 @@ export async function listStickies(): Promise<Sticky[]> {
   return http.get<Sticky[]>('/stickies');
 }
 
-export async function createSticky(title: string, body: string): Promise<Sticky> {
+export async function createSticky(
+  title: string,
+  body: string,
+): Promise<Sticky> {
   return http.post<Sticky>('/stickies', { title, body });
 }
 
@@ -607,23 +798,65 @@ export async function markNotificationRead(id: string): Promise<void> {
 // Copilot
 // ---------------------------------------------------------------------------
 
-export async function getCopilotConversation(): Promise<CopilotConversation> {
-  return http.get<CopilotConversation>('/copilot/conversation');
+// Multiple conversations per member (issue #11) — see
+// lib/useCopilotConversations.ts for the hook that fetches these and merges
+// in local-only pin/order metadata for the session-list UI.
+export async function listCopilotConversations(): Promise<
+  CopilotConversationSummary[]
+> {
+  return http.get<CopilotConversationSummary[]>('/copilot/conversations');
+}
+
+export async function createCopilotConversation(): Promise<CopilotConversationSummary> {
+  return http.post<CopilotConversationSummary>('/copilot/conversations');
+}
+
+export async function getCopilotConversation(
+  id: string,
+): Promise<CopilotConversation> {
+  return http.get<CopilotConversation>(`/copilot/conversations/${id}`);
+}
+
+export async function renameCopilotConversation(
+  id: string,
+  title: string,
+): Promise<CopilotConversationSummary> {
+  return http.patch<CopilotConversationSummary>(
+    `/copilot/conversations/${id}`,
+    { title },
+  );
+}
+
+export async function deleteCopilotConversation(id: string): Promise<void> {
+  return http.del<void>(`/copilot/conversations/${id}`);
 }
 
 // Split from a single sendCopilotMessage (issue #6) into two calls (issue
 // #7): the assistant's reply now comes from a real, streamed Claude Code CLI
 // run in Electron's main process, not something the backend can compute and
 // return within one request — see CopilotPanel.tsx's handleSend.
-export async function postCopilotUserMessage(content: string): Promise<CopilotMessage> {
-  return http.post<CopilotMessage>('/copilot/conversation/messages', { content });
+export async function postCopilotUserMessage(
+  conversationId: string,
+  content: string,
+): Promise<CopilotMessage> {
+  return http.post<CopilotMessage>(
+    `/copilot/conversations/${conversationId}/messages`,
+    { content },
+  );
 }
 
 export async function postCopilotAssistantMessage(
+  conversationId: string,
   content: string,
   claudeSessionId: string | null,
 ): Promise<CopilotMessage> {
-  return http.post<CopilotMessage>('/copilot/conversation/messages/assistant', { content, claudeSessionId });
+  return http.post<CopilotMessage>(
+    `/copilot/conversations/${conversationId}/messages/assistant`,
+    {
+      content,
+      claudeSessionId,
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------

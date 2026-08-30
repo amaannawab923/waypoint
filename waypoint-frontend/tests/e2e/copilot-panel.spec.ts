@@ -6,17 +6,15 @@ import { launchApp } from './fixtures';
 // flag is inlined into the renderer bundle at webpack build time, not read
 // at runtime, so it can't be set via this test's own env.
 //
-// Written against the single-conversation CopilotPanel currently on main
-// (backend-persisted via getCopilotConversation) — the multi-session UI
-// (session list, pin/rename/delete) lives on a separate not-yet-merged
-// branch and would need this test updated once it lands.
-//
-// Assertions here deliberately avoid the empty-conversation-only "Ask
-// Copilot anything" text: this suite runs against the real shared dev
-// backend (localhost:4000), which already carries message history from
-// manual testing — the composer input is what's actually always present
-// once the conversation loads, regardless of how many messages it holds.
-test('opens the Copilot panel from the topbar toggle', async () => {
+// The panel now opens to a session list, not straight to a composer (issue
+// #11's backend-backed multi-session migration) — every test below creates
+// its own fresh session via the header "+" rather than assuming an empty
+// conversation. This runs against the real shared dev backend
+// (localhost:4000), which already carries session history from manual
+// testing, so assertions are scoped to each test's own freshly-created
+// session rather than assuming the list (or any one session) starts empty.
+
+test('opens the Copilot panel from the topbar toggle, landing on the session list', async () => {
   const { app, window } = await launchApp();
   try {
     const toggle = window.getByLabel('Open Copilot');
@@ -24,29 +22,33 @@ test('opens the Copilot panel from the topbar toggle', async () => {
     await toggle.click();
 
     await expect(window.getByLabel('Close Copilot')).toBeVisible();
-    await expect(window.getByPlaceholder('Ask Copilot…')).toBeVisible({
+    // The list view's header — 'Copilot', not a session's own title — and
+    // its "New session" affordance, proving the conversations list loaded
+    // rather than hanging on the composer this suite used to open into
+    // directly.
+    await expect(window.getByText('Copilot', { exact: true })).toBeVisible({
       timeout: 15_000,
     });
+    await expect(window.getByLabel('New session')).toBeVisible();
   } finally {
     await app.close();
   }
 });
 
-test('sends a message through the real IPC bridge', async () => {
+test('creates a session and sends a message through the real IPC bridge', async () => {
   const { app, window } = await launchApp();
   try {
     await window.getByLabel('Open Copilot').click();
+    await expect(window.getByLabel('New session')).toBeVisible({
+      timeout: 15_000,
+    });
+
+    // A freshly created session has no history to fetch, so the composer is
+    // usable immediately — no long "wait for an existing conversation to
+    // load" delay like this suite needed before.
+    await window.getByLabel('New session').click();
     const composer = window.getByPlaceholder('Ask Copilot…');
-    // Visible as soon as the panel mounts, but stays disabled until the
-    // conversation finishes loading. This is the 4th Electron instance
-    // launched in this CI job (3 prior tests each launch and close their
-    // own) — even 60s wasn't consistently enough there, apparently real
-    // resource contention on a modest runner rather than a genuine app
-    // bug (the same load reliably finishes well under 15s as the *first*
-    // launch in the "opens the panel" test above). Comfortably under
-    // playwright.config.ts's own 120s test timeout, so this assertion's
-    // own message fires first if it's ever exceeded too.
-    await expect(composer).toBeEnabled({ timeout: 100_000 });
+    await expect(composer).toBeEnabled({ timeout: 15_000 });
 
     const marker = `hello from e2e ${Date.now()}`;
     await composer.fill(marker);
@@ -54,14 +56,62 @@ test('sends a message through the real IPC bridge', async () => {
 
     // Not asserting on a real Claude reply — that depends on the test
     // machine having `claude` installed and authenticated. This proves the
-    // message reached the real main-process IPC handler and the UI
-    // reflects it, which is what an E2E pass here is actually verifying;
-    // the reply content itself is covered by the jest suite's mocked IPC.
-    // A timestamped marker, not a fixed string, since this runs against
-    // the real shared dev backend and message history persists across runs.
+    // message reached the real main-process IPC handler, was persisted to
+    // the real backend, and the UI reflects it; the reply content itself is
+    // covered by the jest suite's mocked IPC. A timestamped marker, not a
+    // fixed string, since this runs against the real shared dev backend.
     await expect(
       window.getByText(marker, { exact: true }).first(),
     ).toBeVisible();
+  } finally {
+    await app.close();
+  }
+});
+
+// This is the one check that actually exercises issue #11's core
+// acceptance criterion end-to-end — "switching conversations shows the
+// correct, isolated message history for each" — which the old
+// single-conversation version of this suite structurally couldn't cover.
+test("keeps two sessions' histories isolated when switching between them", async () => {
+  const { app, window } = await launchApp();
+  try {
+    await window.getByLabel('Open Copilot').click();
+    await expect(window.getByLabel('New session')).toBeVisible({
+      timeout: 15_000,
+    });
+
+    const markerA = `session A marker ${Date.now()}`;
+    const markerB = `session B marker ${Date.now()}`;
+
+    await window.getByLabel('New session').click();
+    const composer = window.getByPlaceholder('Ask Copilot…');
+    await expect(composer).toBeEnabled({ timeout: 15_000 });
+    await composer.fill(markerA);
+    await window.getByLabel('Send').click();
+    await expect(
+      window.getByText(markerA, { exact: true }).first(),
+    ).toBeVisible();
+
+    await window.getByLabel('Back to sessions').click();
+    await window.getByLabel('New session').click();
+    await expect(composer).toBeEnabled({ timeout: 15_000 });
+    await composer.fill(markerB);
+    await window.getByLabel('Send').click();
+    await expect(
+      window.getByText(markerB, { exact: true }).first(),
+    ).toBeVisible();
+
+    // Session B's chat, still open, must not show session A's message.
+    await expect(window.getByText(markerA, { exact: true })).toHaveCount(0);
+
+    // Back to the list, into session A (auto-titled from markerA, its first
+    // message) — must show only markerA, not markerB.
+    await window.getByLabel('Back to sessions').click();
+    await window.getByText(markerA, { exact: true }).first().click();
+    await expect(
+      window.getByText(markerA, { exact: true }).first(),
+    ).toBeVisible();
+    await expect(window.getByText(markerB, { exact: true })).toHaveCount(0);
   } finally {
     await app.close();
   }

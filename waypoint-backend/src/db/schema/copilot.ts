@@ -3,26 +3,31 @@ import { members } from './workspace.js';
 
 export const copilotMessageRoleEnum = pgEnum('copilot_message_role', ['user', 'assistant']);
 
-// One conversation per member for now — see copilot.service.ts's
-// getOrCreateConversation. Multi-thread history is a later phase (issue #11).
-// unique() on memberId makes get-or-create atomic via onConflictDoNothing()
-// instead of a select-then-insert race that could otherwise create more
-// than one "the" conversation for the same member under concurrent first
-// requests (e.g. a panel firing GET and POST together on first open).
-export const copilotConversations = pgTable('copilot_conversations', {
-  id: text('id').primaryKey(),
-  memberId: text('member_id')
-    .notNull()
-    .unique()
-    .references(() => members.id, { onDelete: 'cascade' }),
-  // The Claude Code CLI's own session id (issue #7) — passed back to `claude
-  // -p ... --resume <id>` so a conversation's later turns continue the same
-  // Claude Code session instead of starting fresh each message. Null until
-  // the first assistant reply ever completes.
-  claudeSessionId: text('claude_session_id'),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+// Multiple conversations per member (issue #11) — memberId is deliberately
+// NOT unique. Listing (copilot.service.ts's listConversations) queries
+// WHERE member_id = ? ORDER BY updated_at DESC, served by the composite
+// index below in one scan.
+export const copilotConversations = pgTable(
+  'copilot_conversations',
+  {
+    id: text('id').primaryKey(),
+    memberId: text('member_id')
+      .notNull()
+      .references(() => members.id, { onDelete: 'cascade' }),
+    // Auto-derived from the conversation's first user message (see
+    // postUserMessage) until the user renames it. The default here is what a
+    // freshly created, still-empty conversation shows in the list.
+    title: text('title').notNull().default('New session'),
+    // The Claude Code CLI's own session id (issue #7) — passed back to `claude
+    // -p ... --resume <id>` so a conversation's later turns continue the same
+    // Claude Code session instead of starting fresh each message. Null until
+    // the first assistant reply ever completes.
+    claudeSessionId: text('claude_session_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('copilot_conversations_member_id_updated_at_idx').on(table.memberId, table.updatedAt)],
+);
 
 export const copilotMessages = pgTable(
   'copilot_messages',
