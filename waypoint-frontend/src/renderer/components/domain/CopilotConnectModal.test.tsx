@@ -16,6 +16,7 @@ type ConnectHandlers = {
 const mockSave = jest.fn();
 const mockOpenExternal = jest.fn();
 const mockUnsubscribe = jest.fn();
+const mockCancel = jest.fn();
 let capturedHandlers: ConnectHandlers | null = null;
 const mockConnect = jest.fn((_requestId: string, handlers: ConnectHandlers) => {
   capturedHandlers = handlers;
@@ -54,11 +55,16 @@ beforeEach(() => {
       return mockUnsubscribe;
     },
   );
+  // Succeeds by default so every test not specifically about the failure
+  // path doesn't have to opt in to a resolved value just to avoid calling
+  // .then() on undefined.
+  mockOpenExternal.mockResolvedValue({ ok: true });
   capturedHandlers = null;
   (window as unknown as { electron: typeof window.electron }).electron = {
     copilot: {
       auth: {
         connect: mockConnect,
+        cancel: mockCancel,
         openExternal: mockOpenExternal,
         save: mockSave,
       },
@@ -118,10 +124,13 @@ describe('CopilotConnectModal', () => {
       'sk-ant-oat01-FWcLvORkzyrK6StQIzUKV5aeF7bk30Kcquwg6cZCL2vL3JznPya63xBZ9KNbJejYMxN6LtYJa2VguAvLe8g-O7XW-QAA',
     );
     expect(await screen.findByText('Connected')).toBeInTheDocument();
-    // The unsubscribe is called the moment a candidate token is found, not
+    // A full stop is triggered the moment a candidate token is found, not
     // left open through the async save — a stray late chunk from the same
-    // process must not re-trigger extraction mid-save.
+    // process must not re-trigger extraction mid-save. Full stop means
+    // both: stop listening, AND explicitly cancel the PTY (unlike a plain
+    // unmount — see the cancel-vs-unmount tests below).
     expect(mockUnsubscribe).toHaveBeenCalledTimes(1);
+    expect(mockCancel).toHaveBeenCalledTimes(1);
 
     // onConnected/onClose fire after a short delay so "Connected" is
     // actually visible for a beat rather than flashing — assert eventually
@@ -133,6 +142,62 @@ describe('CopilotConnectModal', () => {
     });
     expect(onConnected).toHaveBeenCalledWith('wxyz');
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // The real failure mode this floor exists to catch: a box-drawing border
+  // character (or any other non-token character) landing directly against
+  // a token fragment mid-match previously still satisfied a too-low
+  // minimum length and got submitted as a truncated, garbage credential.
+  it('does not commit a token match shorter than the real minimum, and completes once more data arrives', async () => {
+    mockSave.mockResolvedValueOnce({ ok: true, last4: 'ijkl' });
+    const tokenPrefix = 'sk-ant-oat01-shortfrag';
+    const tokenSuffix = 'X'.repeat(40);
+    renderModal();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Continue in browser' }),
+    );
+    const handlers = getHandlers();
+
+    await act(async () => {
+      handlers.onData(`${tokenPrefix}\r\n`);
+      await flushWrites();
+    });
+    expect(mockSave).not.toHaveBeenCalled();
+    expect(screen.getByText('Waiting for sign-in…')).toBeInTheDocument();
+
+    await act(async () => {
+      handlers.onData(`${tokenSuffix}\r\n`);
+      await flushWrites();
+    });
+    expect(mockSave).toHaveBeenCalledWith(`${tokenPrefix}${tokenSuffix}`);
+    expect(await screen.findByText('Connected')).toBeInTheDocument();
+  });
+
+  // xterm's resolved buffer can genuinely lose already-printed content — a
+  // full clear, an alt-screen switch, or scrollback overflow all reproduce
+  // live against the real @xterm/headless build. The raw, ANSI-stripped
+  // accumulated-chunks fallback exists specifically so a token already
+  // printed before a clear isn't lost with it.
+  it('recovers a token from raw output when a screen clear wipes it from the resolved buffer', async () => {
+    mockSave.mockResolvedValueOnce({ ok: true, last4: 'mnop' });
+    const token = `sk-ant-oat01-${'Y'.repeat(45)}`;
+    renderModal();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Continue in browser' }),
+    );
+    const handlers = getHandlers();
+
+    await act(async () => {
+      handlers.onData(`${token}\r\n`);
+      // Erase in display + erase saved lines — after this, xterm's own
+      // resolved buffer.active no longer contains the token at all.
+      handlers.onData('\x1b[2J\x1b[3J');
+      handlers.onData('Some unrelated status line\r\n');
+      await flushWrites();
+    });
+
+    expect(mockSave).toHaveBeenCalledWith(token);
+    expect(await screen.findByText('Connected')).toBeInTheDocument();
   });
 
   it('opens the real OAuth URL exactly once via shell.openExternal, even if it also arrives split across chunks', async () => {
@@ -167,6 +232,45 @@ describe('CopilotConnectModal', () => {
     expect(mockOpenExternal).toHaveBeenCalledTimes(1);
   });
 
+  // A previously-invisible failure mode: shell.openExternal can fail (no
+  // default browser registered, a broken xdg-open, ...), and the UI used to
+  // just claim a browser opened and wait forever with no way out other than
+  // Cancel. Now the URL itself is always shown as a manual fallback the
+  // instant it's found, and a failed automatic attempt offers a retry.
+  it('shows a manual fallback with the URL and a retry button when the browser fails to open automatically', async () => {
+    mockOpenExternal.mockResolvedValueOnce({ ok: false });
+    renderModal();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Continue in browser' }),
+    );
+    const handlers = getHandlers();
+
+    await act(async () => {
+      handlers.onData('https://claude.com/cai/oauth/authorize?code=abc123\r\n');
+      await flushWrites();
+    });
+
+    expect(
+      await screen.findByText("Couldn't open your browser automatically."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('https://claude.com/cai/oauth/authorize?code=abc123'),
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Try opening again' }),
+      );
+    });
+
+    // The retry succeeds via the persistent default mock resolution set in
+    // beforeEach — the failure banner clears once it does.
+    expect(mockOpenExternal).toHaveBeenCalledTimes(2);
+    expect(
+      screen.queryByText("Couldn't open your browser automatically."),
+    ).not.toBeInTheDocument();
+  });
+
   it('shows the real rejection reason when the extracted token is invalid, and offers the manual fallback', async () => {
     mockSave.mockResolvedValueOnce({
       ok: false,
@@ -180,7 +284,9 @@ describe('CopilotConnectModal', () => {
     const handlers = getHandlers();
 
     await act(async () => {
-      handlers.onData('sk-ant-oat01-somecapturedtokenvalue1234567890\r\n');
+      handlers.onData(
+        `sk-ant-oat01-somecapturedtokenvalue1234567890${'a'.repeat(10)}\r\n`,
+      );
       await flushWrites();
     });
 
@@ -193,6 +299,27 @@ describe('CopilotConnectModal', () => {
     expect(
       await screen.findByLabelText('Subscription token'),
     ).toBeInTheDocument();
+  });
+
+  // A rejected save previously left the UI stuck on "Waiting for sign-in…"
+  // forever (the process was already torn down, but state never moved past
+  // 'connecting') — a locked keychain or a full disk on the main-process
+  // side would reject rather than resolve { ok: false }.
+  it('surfaces a rejected save as a real error instead of leaving the UI stuck', async () => {
+    mockSave.mockRejectedValueOnce(new Error('disk full'));
+    renderModal();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Continue in browser' }),
+    );
+    const handlers = getHandlers();
+
+    await act(async () => {
+      handlers.onData(`sk-ant-oat01-${'z'.repeat(45)}\r\n`);
+      await flushWrites();
+    });
+
+    expect(await screen.findByText("Couldn't connect")).toBeInTheDocument();
+    expect(screen.getByText('disk full')).toBeInTheDocument();
   });
 
   it('shows a clear error when the process exits with no token and was not cancelled', async () => {
@@ -238,7 +365,7 @@ describe('CopilotConnectModal', () => {
     const handlers = getHandlers();
 
     await act(async () => {
-      handlers.onData('sk-ant-oat01-alreadyfoundtoken1234567890\r\n');
+      handlers.onData(`sk-ant-oat01-alreadyfoundtoken${'q'.repeat(25)}\r\n`);
       await flushWrites();
     });
     expect(await screen.findByText('Connected')).toBeInTheDocument();
@@ -250,7 +377,7 @@ describe('CopilotConnectModal', () => {
     expect(screen.getByText('Connected')).toBeInTheDocument();
   });
 
-  it('cancelling while connecting unsubscribes and closes without saving anything', () => {
+  it('cancelling while connecting stops listening and explicitly cancels the process', () => {
     const { onClose } = renderModal();
     fireEvent.click(
       screen.getByRole('button', { name: 'Continue in browser' }),
@@ -259,8 +386,50 @@ describe('CopilotConnectModal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     expect(mockUnsubscribe).toHaveBeenCalledTimes(1);
+    expect(mockCancel).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(mockSave).not.toHaveBeenCalled();
+  });
+
+  // The whole reason connect()'s unsubscribe and the explicit cancel are
+  // two separate things: a plain unmount (route navigation away, say)
+  // shouldn't guarantee-fail a sign-in that might still complete moments
+  // later with the renderer no longer watching for it.
+  it('unmounting while connecting stops listening but does not cancel the process', () => {
+    renderModal();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Continue in browser' }),
+    );
+
+    cleanup();
+
+    expect(mockUnsubscribe).toHaveBeenCalledTimes(1);
+    expect(mockCancel).not.toHaveBeenCalled();
+  });
+
+  it('starting a fresh attempt over a failed one tears down the previous attempt first', async () => {
+    renderModal();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Continue in browser' }),
+    );
+    const firstUnsubscribeCalls = mockUnsubscribe.mock.calls.length;
+    const handlers = getHandlers();
+
+    await act(async () => {
+      handlers.onExit({ code: 1 });
+    });
+    expect(await screen.findByText("Couldn't connect")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    // The retry's own startConnect() calls teardown() first — on a fresh
+    // attempt (nothing to tear down yet) this is a no-op, but here it
+    // proves the *previous* attempt's listener was cleaned up rather than
+    // silently left registered alongside the new one.
+    expect(mockUnsubscribe.mock.calls.length).toBeGreaterThan(
+      firstUnsubscribeCalls,
+    );
+    expect(mockConnect).toHaveBeenCalledTimes(2);
   });
 
   it('supports the manual-paste fallback independently of the automated flow', async () => {
@@ -286,6 +455,32 @@ describe('CopilotConnectModal', () => {
     expect(mockSave).toHaveBeenCalledWith('sk-ant-oat01-manuallypasted');
     expect(onConnected).toHaveBeenCalledWith('nn12');
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // A rejected manual save must reset the "Validating…" busy state rather
+  // than leaving the Save button permanently disabled.
+  it('recovers the manual-paste form after a rejected save instead of leaving it stuck', async () => {
+    mockSave.mockRejectedValueOnce(new Error('network unreachable'));
+    renderModal();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Continue in browser' }),
+    );
+    const handlers = getHandlers();
+    await act(async () => {
+      handlers.onExit({ code: 1 });
+    });
+    fireEvent.click(screen.getByText('Having trouble? Paste a token manually'));
+
+    const input = await screen.findByLabelText('Subscription token');
+    fireEvent.change(input, { target: { value: 'sk-ant-oat01-retryme' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save token' }));
+    });
+
+    expect(await screen.findByText('network unreachable')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Save token' }),
+    ).not.toBeDisabled();
   });
 
   it('resets to the initial prompt state each time it is reopened', () => {
