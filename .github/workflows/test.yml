@@ -1,0 +1,120 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  unit:
+    name: Unit & component tests
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: waypoint-frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: waypoint-frontend/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck --if-present
+      # continue-on-error, not a hard gate: this is the first time lint has
+      # ever run in CI for this repo (no workflow existed before this PR),
+      # and it surfaces 100+ pre-existing violations across files this PR
+      # never touched. Reporting it now without blocking every future PR on
+      # unrelated legacy debt; tightening this to a hard gate is a real,
+      # separate follow-up once that debt is paid down.
+      - run: npm run lint
+        continue-on-error: true
+      # jest's own setupFiles check (.erb/scripts/check-build-exists.ts)
+      # refuses to run any suite at all without both halves built —
+      # confirmed live setting up this branch locally.
+      - run: npm run build
+      - run: npm test
+
+  e2e:
+    name: Electron E2E (Playwright)
+    # macos-latest, to actually build/run the real Electron app — but
+    # GitHub's macOS runners have no Docker at all (confirmed live: the
+    # `services:` block this job used to have failed instantly with
+    # "docker: command not found"), so the backend's own
+    # docker-compose.yml isn't usable here. Postgres is installed and run
+    # directly via Homebrew instead — the backend's own DATABASE_URL
+    # default (.env.example) already points at a plain local Postgres on
+    # 5432, which is exactly what this sets up.
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: waypoint-frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: waypoint-frontend/package-lock.json
+      - name: Install frontend deps
+        run: npm ci
+      - name: Set up Postgres (Homebrew, no Docker on this runner)
+        run: |
+          brew install postgresql@16
+          export PATH="/opt/homebrew/opt/postgresql@16/bin:$PATH"
+          brew services start postgresql@16
+          for i in $(seq 1 30); do
+            pg_isready -h localhost -p 5432 && break
+            sleep 1
+          done
+          createuser -s waypoint
+          createdb -O waypoint waypoint
+          # -d postgres, not bare: psql with no -d defaults to a database
+          # named after the current OS user ("runner" here), which doesn't
+          # exist — confirmed live ("database "runner" does not exist").
+          # postgres always exists after initdb; ALTER ROLE is cluster-wide
+          # regardless of which database the connection lands on.
+          psql -d postgres -c "ALTER ROLE waypoint WITH PASSWORD 'waypoint';"
+      - name: Install and start the backend API
+        working-directory: waypoint-backend
+        run: |
+          npm ci
+          cp .env.example .env
+          npm run db:migrate --if-present
+          # The actual root cause of every E2E run's flakiness so far —
+          # confirmed live via the renderer-console/response logging added
+          # above: a migrated-but-unseeded database has no member/workspace
+          # rows at all, so /me and /workspace 404 and /copilot/conversation
+          # 400s on every single launch. Every prior "timing" theory
+          # (resource contention, needs a longer timeout) was chasing a
+          # symptom that happened not to be asserted on by the first 3
+          # tests, not the real cause.
+          npm run db:seed --if-present
+          npm run build
+          # Backgrounded and redirected explicitly: a step's own log
+          # capture stops the moment the step ends (moving on to "Run E2E
+          # suite" here), so anything the backend prints *during the actual
+          # test run* — including the exact error behind a real, live
+          # failure this workflow hit ("Couldn't load Copilot", visible
+          # client-side, with zero server-side detail anywhere in CI logs)
+          # — was previously lost entirely. Without this, diagnosing a
+          # backend-side failure means reproducing it locally from scratch.
+          npm start > /tmp/waypoint-backend.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4000/health && break
+            sleep 2
+          done
+      - name: Run E2E suite
+        run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: waypoint-frontend/test-results
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: backend-log
+          path: /tmp/waypoint-backend.log
+          retention-days: 7
