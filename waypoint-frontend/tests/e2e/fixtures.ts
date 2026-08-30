@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import {
   _electron as electron,
@@ -13,7 +14,7 @@ export async function launchApp(): Promise<{
   app: ElectronApplication;
   window: Page;
 }> {
-  const mainPath = path.join(
+  const distMainPath = path.join(
     __dirname,
     '..',
     '..',
@@ -21,8 +22,27 @@ export async function launchApp(): Promise<{
     'app',
     'dist',
     'main',
-    'main.js',
   );
+  const mainPath = path.join(distMainPath, 'main.js');
+
+  // main.ts picks a preload path based on app.isPackaged — true when
+  // electron-builder actually packages the app (dist/main/preload.js,
+  // where webpack.config.main.prod.ts's own second entry already puts
+  // it), false otherwise, which is what this is: a real production
+  // build, but launched unpacked, directly, by Playwright — a third
+  // scenario main.ts's own two branches don't cover. Confirmed live: an
+  // unpacked launch takes the isPackaged-false (dev) branch and looks
+  // for .erb/dll/preload.js relative to dist/main, ENOENT. Copying the
+  // already-correct, already-built prod preload.js to that one dev-path
+  // location is a test-infrastructure accommodation, not a real app
+  // behavior change — main.ts itself is untouched.
+  const devDllDir = path.join(distMainPath, '..', '..', '.erb', 'dll');
+  fs.mkdirSync(devDllDir, { recursive: true });
+  fs.copyFileSync(
+    path.join(distMainPath, 'preload.js'),
+    path.join(devDllDir, 'preload.js'),
+  );
+
   const app = await electron.launch({
     args: [mainPath],
     env: { ...process.env, NODE_ENV: 'production' },
