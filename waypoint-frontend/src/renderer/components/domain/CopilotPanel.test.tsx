@@ -369,6 +369,10 @@ describe('CopilotPanel', () => {
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
       await typeAndSend('has real history');
+      // First message in the session — handleSend also awaits a reload()
+      // here (see its own comment), whose state updates land outside the
+      // act() scope typeAndSend's fireEvent established.
+      await act(async () => {});
       const handlers = await waitForRun('has real history');
       await act(async () => {
         handlers.onDone({ fullText: 'a reply', sessionId: 'sess-1' });
@@ -399,10 +403,10 @@ describe('CopilotPanel', () => {
         ).not.toBeInTheDocument(),
       );
       expect(
-        await screen.findByText('has real history', { selector: 'div' }),
+        await screen.findByText('has real history', { selector: 'p' }),
       ).toBeInTheDocument();
       expect(
-        await screen.findByText('a reply', { selector: 'div' }),
+        await screen.findByText('a reply', { selector: 'p' }),
       ).toBeInTheDocument();
     });
   });
@@ -414,12 +418,18 @@ describe('CopilotPanel', () => {
       await createAndOpenSession();
 
       await typeAndSend('What is my sprint status?');
+      // This is the session's first message, so handleSend also awaits a
+      // reload() to pick up the server-derived title (see its own comment)
+      // — that reload's state updates land outside the act() scope
+      // typeAndSend's fireEvent established, so flush it explicitly before
+      // asserting rather than relying on findByText's own retry timing.
+      await act(async () => {});
 
       // Appears fast — a local optimistic write, not waiting on the whole
       // round trip to settle before showing anything.
       expect(
         await screen.findByText('What is my sprint status?', {
-          selector: 'div',
+          selector: 'p',
         }),
       ).toBeInTheDocument();
 
@@ -428,7 +438,7 @@ describe('CopilotPanel', () => {
       act(() => handlers.onChunk('Your '));
       act(() => handlers.onChunk('sprint is on track.'));
       expect(
-        screen.getByText('Your sprint is on track.', { selector: 'div' }),
+        screen.getByText('Your sprint is on track.', { selector: 'p' }),
       ).toBeInTheDocument();
 
       await act(async () => {
@@ -443,7 +453,7 @@ describe('CopilotPanel', () => {
       // replaced by the persisted one, not stacked next to it.
       await waitFor(() =>
         expect(
-          screen.getAllByText('Your sprint is on track.', { selector: 'div' }),
+          screen.getAllByText('Your sprint is on track.', { selector: 'p' }),
         ).toHaveLength(1),
       );
       // And it's really persisted, not just held in component state.
@@ -520,10 +530,10 @@ describe('CopilotPanel', () => {
       // has to lazily fetch them, so these are real async appearances now,
       // not synchronous ones.
       expect(
-        await screen.findByText('remember this', { selector: 'div' }),
+        await screen.findByText('remember this', { selector: 'p' }),
       ).toBeInTheDocument();
       expect(
-        await screen.findByText('remembered reply', { selector: 'div' }),
+        await screen.findByText('remembered reply', { selector: 'p' }),
       ).toBeInTheDocument();
     });
 
@@ -570,7 +580,7 @@ describe('CopilotPanel', () => {
 
       await waitFor(() =>
         expect(
-          screen.queryByText('this will fail to save', { selector: 'div' }),
+          screen.queryByText('this will fail to save', { selector: 'p' }),
         ).not.toBeInTheDocument(),
       );
       // The failed run never even started — a message that couldn't be
@@ -602,7 +612,7 @@ describe('CopilotPanel', () => {
       expect(await screen.findByText(/couldn't save it/i)).toBeInTheDocument();
       // The reply text itself isn't lost even though saving it failed.
       expect(
-        screen.queryByText('a real reply', { selector: 'div' }),
+        screen.queryByText('a real reply', { selector: 'p' }),
       ).not.toBeInTheDocument();
 
       act(() => {
@@ -611,7 +621,7 @@ describe('CopilotPanel', () => {
 
       await waitFor(() =>
         expect(
-          screen.getByText('a real reply', { selector: 'div' }),
+          screen.getByText('a real reply', { selector: 'p' }),
         ).toBeInTheDocument(),
       );
       // Retrying the save must not spend a second real Claude Code turn.
@@ -641,9 +651,7 @@ describe('CopilotPanel', () => {
       expect(
         await screen.findByText("Claude Code isn't installed."),
       ).toBeInTheDocument();
-      expect(
-        screen.getByText('hello', { selector: 'div' }),
-      ).toBeInTheDocument();
+      expect(screen.getByText('hello', { selector: 'p' })).toBeInTheDocument();
       await waitFor(() => expect(getTextarea().disabled).toBe(false));
 
       // "Try again" retries the run with the same prompt, not a new send —
@@ -656,7 +664,7 @@ describe('CopilotPanel', () => {
         expect.objectContaining({ prompt: 'hello' }),
         expect.anything(),
       );
-      expect(screen.getAllByText('hello', { selector: 'div' })).toHaveLength(1);
+      expect(screen.getAllByText('hello', { selector: 'p' })).toHaveLength(1);
     });
 
     // An auth_failed error specifically gets a real recovery action, not
@@ -745,7 +753,7 @@ describe('CopilotPanel', () => {
 
       act(() => secondHandlers.onChunk('Second run reply'));
       expect(
-        screen.getByText('Second run reply', { selector: 'div' }),
+        screen.getByText('Second run reply', { selector: 'p' }),
       ).toBeInTheDocument();
 
       // The first run's process is still alive somewhere and emits a late
@@ -756,7 +764,7 @@ describe('CopilotPanel', () => {
         screen.queryByText(/stale text from the dead run/),
       ).not.toBeInTheDocument();
       expect(
-        screen.getByText('Second run reply', { selector: 'div' }),
+        screen.getByText('Second run reply', { selector: 'p' }),
       ).toBeInTheDocument();
     });
 
@@ -775,11 +783,15 @@ describe('CopilotPanel', () => {
 
       await createAndOpenSession();
       await typeAndSend('first session message');
+      // First message in the session — see the identical note above on
+      // handleSend's own first-message reload().
+      await act(async () => {});
       const handlersA = await waitForRun('first session message');
 
       fireEvent.click(screen.getByRole('button', { name: 'Back to sessions' }));
       await createAndOpenSession();
       await typeAndSend('second session message');
+      await act(async () => {});
       const handlersB = await waitForRun('second session message');
       expect(copilotIpc.runPrompt).toHaveBeenCalledTimes(2);
 
@@ -798,16 +810,23 @@ describe('CopilotPanel', () => {
         });
       });
 
+      // Reopening a session goes through handleOpenSession, which is async
+      // even on a cache hit (openSession() still returns a resolved
+      // promise one microtask later) — its finally-block state update lands
+      // outside the act() scope the row's fireEvent.click establishes, same
+      // as the first-message reload() case above. Flush before asserting.
       fireEvent.click(screen.getByRole('button', { name: 'Back to sessions' }));
       fireEvent.click(await screen.findByText('first session message'));
+      await act(async () => {});
       expect(
-        await screen.findByText('reply for session A', { selector: 'div' }),
+        await screen.findByText('reply for session A', { selector: 'p' }),
       ).toBeInTheDocument();
 
       fireEvent.click(screen.getByRole('button', { name: 'Back to sessions' }));
       fireEvent.click(await screen.findByText('second session message'));
+      await act(async () => {});
       expect(
-        await screen.findByText('reply for session B', { selector: 'div' }),
+        await screen.findByText('reply for session B', { selector: 'p' }),
       ).toBeInTheDocument();
     });
 
@@ -828,9 +847,8 @@ describe('CopilotPanel', () => {
         await screen.findByText(/Couldn't reach Copilot's runtime/),
       ).toBeInTheDocument();
       expect(screen.getByText(/Illegal invocation/)).toBeInTheDocument();
-      expect(
-        screen.queryByText('…', { selector: 'div' }),
-      ).not.toBeInTheDocument();
+      // No lingering typing indicator once the run has definitively failed.
+      expect(document.querySelector('.copilot-typing')).not.toBeInTheDocument();
       await waitFor(() => expect(getTextarea().disabled).toBe(false));
 
       copilotIpc.runPrompt.mockImplementationOnce(() => jest.fn());
@@ -855,6 +873,26 @@ describe('CopilotPanel', () => {
       });
 
       await waitFor(() => expect(getTextarea().disabled).toBe(false));
+    });
+
+    it('shows a typing indicator before the first token arrives, replaced by the real text once streaming starts', async () => {
+      render(<CopilotPanel onClose={jest.fn()} />);
+      await screen.findByText(/No sessions yet/i);
+      await createAndOpenSession();
+
+      await typeAndSend('what next');
+      const handlers = await waitForRun('what next');
+
+      // No tokens yet — the indicator shows, not a bare "…" bubble.
+      expect(document.querySelector('.copilot-typing')).toBeInTheDocument();
+
+      act(() => handlers.onChunk('Here is '));
+
+      // The first chunk replaces the indicator with the real streamed text.
+      expect(document.querySelector('.copilot-typing')).not.toBeInTheDocument();
+      expect(
+        screen.getByText('Here is', { selector: 'p', exact: false }),
+      ).toBeInTheDocument();
     });
 
     it('unsubscribes from the IPC stream on unmount without cancelling the run', async () => {
