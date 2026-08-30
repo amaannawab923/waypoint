@@ -177,8 +177,12 @@ const electronHandler = {
         ipcRenderer.on('copilot:auth:connect:exit', exitSubscription);
         ipcRenderer.send('copilot:auth:connect:start', { requestId });
 
+        // Listener-only, like runPrompt's own unsubscribe above — does NOT
+        // cancel the main-process PTY. A plain component unmount (e.g. route
+        // navigation away from Settings mid-handshake) shouldn't
+        // guarantee-fail an attempt that might still complete moments later
+        // with nobody watching; call cancel() below for that instead.
         return () => {
-          ipcRenderer.send('copilot:auth:connect:cancel', { requestId });
           ipcRenderer.removeListener(
             'copilot:auth:connect:data',
             dataSubscription,
@@ -188,6 +192,12 @@ const electronHandler = {
             exitSubscription,
           );
         };
+      },
+      // A separate, explicit kill — distinct from connect()'s unsubscribe
+      // above, which only stops listening. Callers use this for an actual
+      // user-initiated cancel/close, not a plain unmount.
+      cancel(requestId: string): void {
+        ipcRenderer.send('copilot:auth:connect:cancel', { requestId });
       },
       // Narrowly scoped on the main-process side to only the real Anthropic
       // OAuth host — see copilotConnect.ts's own handler.
