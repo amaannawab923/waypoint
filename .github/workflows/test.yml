@@ -29,6 +29,10 @@ jobs:
       # separate follow-up once that debt is paid down.
       - run: npm run lint
         continue-on-error: true
+      # jest's own setupFiles check (.erb/scripts/check-build-exists.ts)
+      # refuses to run at all without this — confirmed live setting up
+      # this branch locally: "The main process is not built yet."
+      - run: npm run build:main
       - run: npm test
 
   e2e:
@@ -65,7 +69,12 @@ jobs:
           done
           createuser -s waypoint
           createdb -O waypoint waypoint
-          psql -c "ALTER ROLE waypoint WITH PASSWORD 'waypoint';"
+          # -d postgres, not bare: psql with no -d defaults to a database
+          # named after the current OS user ("runner" here), which doesn't
+          # exist — confirmed live ("database "runner" does not exist").
+          # postgres always exists after initdb; ALTER ROLE is cluster-wide
+          # regardless of which database the connection lands on.
+          psql -d postgres -c "ALTER ROLE waypoint WITH PASSWORD 'waypoint';"
       - name: Install and start the backend API
         working-directory: waypoint-backend
         run: |
