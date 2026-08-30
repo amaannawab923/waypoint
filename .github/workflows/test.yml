@@ -81,6 +81,15 @@ jobs:
           npm ci
           cp .env.example .env
           npm run db:migrate --if-present
+          # The actual root cause of every E2E run's flakiness so far —
+          # confirmed live via the renderer-console/response logging added
+          # above: a migrated-but-unseeded database has no member/workspace
+          # rows at all, so /me and /workspace 404 and /copilot/conversation
+          # 400s on every single launch. Every prior "timing" theory
+          # (resource contention, needs a longer timeout) was chasing a
+          # symptom that happened not to be asserted on by the first 3
+          # tests, not the real cause.
+          npm run db:seed --if-present
           npm run build
           # Backgrounded and redirected explicitly: a step's own log
           # capture stops the moment the step ends (moving on to "Run E2E
