@@ -359,6 +359,57 @@ describe('CopilotPanel', () => {
       ).toBeInTheDocument();
     });
 
+    // Regression test: the staleness guard above was originally a single
+    // counter shared across every session (ported as-is from the
+    // pre-multi-session version of this file, where only one session could
+    // ever exist). Multi-session means a user can plausibly start a run in
+    // one session, switch away, and start a second run in a different
+    // session while the first is still in flight — with a shared counter,
+    // starting the second run marked the first one stale, silently
+    // discarding its real reply (and the subscription usage spent
+    // generating it) the moment it finished, with no error shown anywhere.
+    it('completes a run in one session even after a second run starts in a different session', async () => {
+      render(<CopilotPanel onClose={jest.fn()} />);
+      await screen.findByText(/No sessions yet/i);
+
+      await createAndOpenSession();
+      await typeAndSend('first session message');
+      const handlersA = await waitForRun('first session message');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Back to sessions' }));
+      await createAndOpenSession();
+      await typeAndSend('second session message');
+      const handlersB = await waitForRun('second session message');
+      expect(copilotIpc.runPrompt).toHaveBeenCalledTimes(2);
+
+      // Session A's run finishes for real, well after B's has already
+      // started — this must not be treated as stale.
+      await act(async () => {
+        await handlersA.onDone({
+          fullText: 'reply for session A',
+          sessionId: 'claude-session-a',
+        });
+      });
+      await act(async () => {
+        await handlersB.onDone({
+          fullText: 'reply for session B',
+          sessionId: 'claude-session-b',
+        });
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Back to sessions' }));
+      fireEvent.click(screen.getByText('first session message'));
+      expect(
+        await screen.findByText('reply for session A', { selector: 'div' }),
+      ).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Back to sessions' }));
+      fireEvent.click(screen.getByText('second session message'));
+      expect(
+        await screen.findByText('reply for session B', { selector: 'div' }),
+      ).toBeInTheDocument();
+    });
+
     it('shows a clear error instead of hanging forever when runPrompt itself throws synchronously', async () => {
       render(<CopilotPanel onClose={jest.fn()} />);
       await screen.findByText(/No sessions yet/i);
