@@ -40,11 +40,13 @@ test('sends a message through the real IPC bridge', async () => {
     // Visible as soon as the panel mounts, but stays disabled until the
     // conversation finishes loading. This is the 4th Electron instance
     // launched in this CI job (3 prior tests each launch and close their
-    // own) — 30s wasn't consistently enough there, apparently real
+    // own) — even 60s wasn't consistently enough there, apparently real
     // resource contention on a modest runner rather than a genuine app
     // bug (the same load reliably finishes well under 15s as the *first*
-    // launch in the "opens the panel" test above).
-    await expect(composer).toBeEnabled({ timeout: 60_000 });
+    // launch in the "opens the panel" test above). Comfortably under
+    // playwright.config.ts's own 120s test timeout, so this assertion's
+    // own message fires first if it's ever exceeded too.
+    await expect(composer).toBeEnabled({ timeout: 100_000 });
 
     const marker = `hello from e2e ${Date.now()}`;
     await composer.fill(marker);
