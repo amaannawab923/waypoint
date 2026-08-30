@@ -1,6 +1,7 @@
 export type ID = string;
 
-export type StateGroup = 'backlog' | 'unstarted' | 'started' | 'completed' | 'cancelled' | 'triage';
+export type StateGroup =
+  'backlog' | 'unstarted' | 'started' | 'completed' | 'cancelled' | 'triage';
 
 export type Priority = 'urgent' | 'high' | 'medium' | 'low' | 'none';
 
@@ -99,7 +100,13 @@ export interface WorkModule {
   name: string;
   description: string;
   leadId: ID | null;
-  status: 'backlog' | 'planned' | 'in-progress' | 'paused' | 'completed' | 'cancelled';
+  status:
+    | 'backlog'
+    | 'planned'
+    | 'in-progress'
+    | 'paused'
+    | 'completed'
+    | 'cancelled';
   startDate: string | null;
   targetDate: string | null;
   memberIds: ID[];
@@ -242,7 +249,13 @@ export interface NotificationItem {
   workItemId: ID | null;
   message: string;
   read: boolean;
-  kind: 'mention' | 'assigned' | 'comment' | 'state_change' | 'agent_needs_review' | 'agent_blocked';
+  kind:
+    | 'mention'
+    | 'assigned'
+    | 'comment'
+    | 'state_change'
+    | 'agent_needs_review'
+    | 'agent_blocked';
   createdAt: string;
 }
 
@@ -274,9 +287,11 @@ export interface Webhook {
   createdAt: string;
 }
 
-export type AgentAutonomy = 'plan-only' | 'ask-before-write' | 'ask-before-pr' | 'full-auto';
+export type AgentAutonomy =
+  'plan-only' | 'ask-before-write' | 'ask-before-pr' | 'full-auto';
 
-export type AgentTrigger = 'manual' | 'on-assign' | 'on-comment-mention' | 'on-label';
+export type AgentTrigger =
+  'manual' | 'on-assign' | 'on-comment-mention' | 'on-label';
 
 // How an agent actually runs. v1 offers exactly one real, selectable value —
 // 'local-claude-subscription' shells out to the Claude Code CLI already
@@ -323,7 +338,8 @@ export interface Agent {
   updatedAt: string;
 }
 
-export type AgentRunStatus = 'queued' | 'running' | 'needs-review' | 'blocked' | 'done' | 'failed';
+export type AgentRunStatus =
+  'queued' | 'running' | 'needs-review' | 'blocked' | 'done' | 'failed';
 
 // Tracks one agent's run against one ticket. Kept separate from WorkItem
 // itself (rather than a column on it) so a ticket's own `stateId` keeps
@@ -350,14 +366,18 @@ export interface CopilotMessage {
   createdAt: string;
 }
 
-export interface CopilotConversation {
+// The list shape (issue #11) — no messages, since the list endpoint doesn't
+// fetch them (see docs on useCopilotConversations.ts's lazy per-session
+// message loading).
+export interface CopilotConversationSummary {
   id: ID;
   memberId: ID;
-  // The Claude Code CLI's own session id (issue #7) — passed to `claude -p
-  // ... --resume` so a conversation's later turns continue the same Claude
-  // Code session. Null until the first assistant reply ever completes.
+  title: string;
   claudeSessionId: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface CopilotConversation extends CopilotConversationSummary {
   messages: CopilotMessage[];
 }
