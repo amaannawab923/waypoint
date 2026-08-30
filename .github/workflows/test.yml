@@ -82,7 +82,15 @@ jobs:
           cp .env.example .env
           npm run db:migrate --if-present
           npm run build
-          npm start &
+          # Backgrounded and redirected explicitly: a step's own log
+          # capture stops the moment the step ends (moving on to "Run E2E
+          # suite" here), so anything the backend prints *during the actual
+          # test run* — including the exact error behind a real, live
+          # failure this workflow hit ("Couldn't load Copilot", visible
+          # client-side, with zero server-side detail anywhere in CI logs)
+          # — was previously lost entirely. Without this, diagnosing a
+          # backend-side failure means reproducing it locally from scratch.
+          npm start > /tmp/waypoint-backend.log 2>&1 &
           for i in $(seq 1 30); do
             curl -sf http://localhost:4000/health && break
             sleep 2
@@ -94,4 +102,10 @@ jobs:
         with:
           name: playwright-report
           path: waypoint-frontend/test-results
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: backend-log
+          path: /tmp/waypoint-backend.log
           retention-days: 7
