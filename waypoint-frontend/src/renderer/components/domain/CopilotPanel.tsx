@@ -1,20 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { clsx } from 'clsx';
-import { X, Send } from 'lucide-react';
-import { useAsync } from '@/lib/useAsync';
+import { ArrowLeft, Plus, Send, X } from 'lucide-react';
 import {
-  getCopilotConversation,
-  postCopilotUserMessage,
-  postCopilotAssistantMessage,
-} from '@/mock/api';
+  useCopilotSessions,
+  type CopilotSessionMessageRole,
+} from '@/lib/copilotSessions';
 import { IconButton } from '@/components/ui/Button';
-import type { CopilotMessage } from '@/types/entities';
+import { CopilotSessionList } from './CopilotSessionList';
 
 function MessageBubble({
   message,
 }: {
-  message: Pick<CopilotMessage, 'role' | 'content'>;
+  message: { role: CopilotSessionMessageRole; content: string };
 }) {
   return (
     <div
@@ -97,48 +95,55 @@ function Composer({
 
 /**
  * Persistent right-hand chat panel — conditionally mounted by AppShell.tsx
- * (only while `copilotOpen`), so closing and reopening always re-fetches
- * from Postgres rather than trying to keep client state in sync between
- * visits. Deliberately has NO backdrop, unlike Modal.tsx/WorkItemDrawer.tsx's
- * portal convention this otherwise mirrors — the rest of the app stays
- * interactive while this is open. Positioned below the topbar (not
- * inset-y-0, which would run under it) so the topbar — including the
- * toggle that opened this panel — stays visible and clickable, not hidden
- * behind the panel's own z-index.
+ * (only while `copilotOpen`), with NO backdrop, unlike Modal.tsx/
+ * WorkItemDrawer.tsx's portal convention this otherwise mirrors — the rest
+ * of the app stays interactive while this is open. Positioned below the
+ * topbar (not inset-y-0, which would run under it) so the topbar —
+ * including the toggle that opened this panel — stays visible and
+ * clickable, not hidden behind the panel's own z-index.
+ *
+ * Holds two views in one panel (issue #11): a session list and a chat, both
+ * ~400px wide, swapped in place rather than via a separate sidebar or route
+ * — see CopilotSessionList.tsx for the list. Session data now lives in
+ * localStorage via lib/copilotSessions.ts, not the backend's single-
+ * conversation `copilot/conversation` endpoints (mock/api.ts's
+ * getCopilotConversation/postCopilotUserMessage/postCopilotAssistantMessage)
+ * — the backend's `copilot_conversations` table still has a unique
+ * constraint on `memberId` and structurally cannot hold more than one
+ * conversation per user yet. Those endpoints are left untouched, unused by
+ * this component, for a later backend-backed migration. The real
+ * `window.electron.copilot.runPrompt` streaming flow (issue #7) is
+ * unchanged — only where its result gets persisted has moved.
  */
 export function CopilotPanel({ onClose }: { onClose: () => void }) {
   const [visible, setVisible] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
-  const {
-    data: conversation,
-    loading,
-    error,
-    reload,
-  } = useAsync(() => getCopilotConversation(), []);
-  // The user's own message, shown immediately on send. Cleared only once a
-  // reload genuinely lands with fresh data (see the effect below) — kept
-  // visible through the whole round trip so there's never a gap where
-  // neither the transient bubble nor the real persisted message is on
-  // screen.
-  const [pendingContent, setPendingContent] = useState<string | null>(null);
-  // Progressive text from an in-flight Claude Code run (issue #7). null
-  // means no run in progress; '' means a run just started with no tokens
-  // yet.
-  const [streamingText, setStreamingText] = useState<string | null>(null);
-  // A completed reply that hasn't been confirmed persisted yet. Shown as a
-  // real (non-streaming) bubble the instant the run finishes — the user
-  // sees their answer immediately, independent of whether saving it to
-  // Postgres has succeeded yet.
-  const [awaitingPersist, setAwaitingPersist] = useState<{
-    content: string;
-    sessionId: string | null;
+  const sessionStore = useCopilotSessions();
+  const { sessions } = sessionStore;
+
+  // null = session-list view. Always starts on the list on open — this
+  // panel is conditionally (un)mounted by AppShell, so "closing and
+  // reopening" always lands back on the list rather than trying to restore
+  // whatever chat happened to be open last time.
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const activeSession = activeSessionId
+    ? (sessions.find((s) => s.id === activeSessionId) ?? null)
+    : null;
+
+  // A run's progressive text and any run-level error, each tagged with the
+  // session they belong to — not just component-level state — so that
+  // navigating back to the list mid-run (and possibly into a *different*
+  // chat) can never show one session's in-flight reply under another's
+  // header. null `streaming` means no run in progress; '' text means a run
+  // just started with no tokens yet.
+  const [streaming, setStreaming] = useState<{
+    sessionId: string;
+    text: string;
   } | null>(null);
-  const [persistError, setPersistError] = useState(false);
-  // A run that failed outright (Claude Code not installed, not logged in,
-  // or some other failure) — distinct from a persist failure, since no
-  // reply was ever generated to save. Kept so "Try again" can retry the
-  // same prompt without re-sending (and duplicating) the user's message.
-  const [runError, setRunError] = useState<{ message: string } | null>(null);
+  const [runError, setRunError] = useState<{
+    sessionId: string;
+    message: string;
+  } | null>(null);
   const [lastFailedPrompt, setLastFailedPrompt] = useState<string | null>(null);
   const unsubscribeStreamRef = useRef<(() => void) | null>(null);
   // Bumped at the start of every runAndPersist call; each call's onChunk/
@@ -148,7 +153,7 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
   // auth_error is reported immediately while the CLI is still mid-retry
   // internally, or the user hits "Try again" on a run that never actually
   // exited) — without this guard, a late chunk from that stale run would
-  // land in the same streamingText state a newer run is now writing to,
+  // land in the same `streaming` state a newer run is now writing to,
   // interleaving two replies into one bubble.
   const runGenerationRef = useRef(0);
 
@@ -156,6 +161,16 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     const raf = requestAnimationFrame(() => setVisible(true));
     return () => cancelAnimationFrame(raf);
   }, []);
+
+  // If the active session ever disappears from under the chat view (e.g.
+  // localStorage was cleared in another tab/window), fall back to the list
+  // instead of rendering a chat header/composer for a session that no
+  // longer exists.
+  useEffect(() => {
+    if (activeSessionId && !sessions.some((s) => s.id === activeSessionId)) {
+      setActiveSessionId(null);
+    }
+  }, [activeSessionId, sessions]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -211,24 +226,8 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     };
   }, []);
 
-  async function persistReply(content: string, sessionId: string | null) {
-    try {
-      await postCopilotAssistantMessage(content, sessionId);
-    } catch {
-      // Nothing else to do here — awaitingPersist stays as-is so the reply
-      // remains visible, and the inline "Couldn't save" retry re-calls this
-      // exact function without re-running the LLM.
-      setPersistError(true);
-      return;
-    }
-    setPersistError(false);
-    // reload() never rejects (see useAsync.ts) — the existing "Couldn't
-    // refresh" banner (keyed off useAsync's own `error`) already covers a
-    // reload that fails after this point.
-    await reload();
-  }
-
   async function runAndPersist(
+    sessionId: string,
     content: string,
     resumeSessionId: string | undefined,
   ) {
@@ -236,15 +235,15 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     const generation = runGenerationRef.current;
     const isStale = () => runGenerationRef.current !== generation;
 
-    setStreamingText('');
+    setStreaming({ sessionId, text: '' });
     setRunError(null);
     setLastFailedPrompt(null);
 
     await new Promise<void>((resolve) => {
-      // Guarded explicitly, not left to reject the surrounding promise: a
-      // throw here (e.g. the preload bridge itself failed to load, so
-      // window.electron.copilot is missing) previously left streamingText
-      // stuck at '' forever — nothing else in this function would ever
+      // Guarded explicitly, not left to throw past this function: a throw
+      // here (e.g. the preload bridge itself failed to load, so
+      // window.electron.copilot is missing) previously left the streaming
+      // bubble stuck forever — nothing else in this function would ever
       // clear it, since only onChunk/onDone/onError do, and none of those
       // get a chance to run. Treated the same as a reported run failure.
       try {
@@ -253,37 +252,40 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
           {
             onChunk: (text) => {
               if (isStale()) return;
-              setStreamingText((prev) => (prev ?? '') + text);
+              setStreaming((prev) =>
+                prev && prev.sessionId === sessionId
+                  ? { sessionId, text: prev.text + text }
+                  : prev,
+              );
             },
-            onDone: async ({ fullText, sessionId }) => {
+            onDone: ({ fullText, sessionId: claudeSessionId }) => {
               if (isStale()) return;
-              setStreamingText(null);
+              setStreaming(null);
               // An empty (or whitespace-only) reply isn't a real answer to
-              // persist — the backend's own validation rejects blank
-              // content outright, which previously meant this went on to
-              // set awaitingPersist, fail to save with a 400, and leave the
-              // composer permanently disabled (disabled whenever
-              // awaitingPersist isn't null) with a "Retry" that could only
-              // ever resend the same empty text and fail the same way
-              // forever. Routing it through the run-error path instead
-              // gives the user a real way out: "Try again" re-runs the
-              // prompt from scratch.
+              // keep — persisting it would leave a session with a blank
+              // assistant bubble and nothing to retry but re-running the
+              // whole prompt. "Try again" re-runs the prompt from scratch.
               if (!fullText.trim()) {
                 setRunError({
+                  sessionId,
                   message: "Copilot didn't return a reply — try again.",
                 });
                 setLastFailedPrompt(content);
                 resolve();
                 return;
               }
-              setAwaitingPersist({ content: fullText, sessionId });
-              await persistReply(fullText, sessionId);
+              sessionStore.appendMessage(sessionId, {
+                role: 'assistant',
+                content: fullText,
+              });
+              if (claudeSessionId)
+                sessionStore.setClaudeSessionId(sessionId, claudeSessionId);
               resolve();
             },
             onError: (err) => {
               if (isStale()) return;
-              setStreamingText(null);
-              setRunError({ message: err.message });
+              setStreaming(null);
+              setRunError({ sessionId, message: err.message });
               setLastFailedPrompt(content);
               resolve();
             },
@@ -291,8 +293,9 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
         );
         unsubscribeStreamRef.current = unsubscribe;
       } catch (err) {
-        setStreamingText(null);
+        setStreaming(null);
         setRunError({
+          sessionId,
           message: `Couldn't reach Copilot's runtime — ${err instanceof Error ? err.message : String(err)}`,
         });
         setLastFailedPrompt(content);
@@ -302,48 +305,36 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
   }
 
   async function handleSend(content: string) {
-    setPendingContent(content);
-    try {
-      await postCopilotUserMessage(content);
-    } catch (err) {
-      // Nothing was persisted — clear the transient bubble immediately and
-      // rethrow so Composer's catch leaves the draft in place instead of
-      // discarding it.
-      setPendingContent(null);
-      throw err;
-    }
-    // The user's message IS persisted at this point — everything from here
-    // on (the model run, saving the reply) fails independently of it, so
-    // this function does not rethrow past this point. Composer will clear
-    // the draft either way; failures beyond here surface via runError /
-    // persistError instead of Composer's "keep the draft" path, since
-    // there's no draft left to protect.
-    await runAndPersist(
-      content,
-      awaitingPersist?.sessionId ?? conversation?.claudeSessionId ?? undefined,
-    );
+    if (!activeSessionId) return;
+    const sessionId = activeSessionId;
+    const resumeSessionId = activeSession?.claudeSessionId ?? undefined;
+    // Synchronous, local — the message is in `sessions` (and localStorage)
+    // before this call returns, so unlike the old backend-backed flow there
+    // is no separate "transient bubble while the POST is in flight" state
+    // to manage here.
+    sessionStore.appendMessage(sessionId, { role: 'user', content });
+    await runAndPersist(sessionId, content, resumeSessionId);
   }
 
-  // Clears the transient user bubble and any unpersisted reply once — and
-  // only once — a fetch actually completes successfully with fresh data.
-  // Deliberately keyed on `conversation` alone, not `[conversation, error]`
-  // — a retry starting clears `error` to null immediately (before its
-  // fetch has resolved), which would otherwise fire this early against
-  // still-stale data.
-  useEffect(() => {
-    if (!error) {
-      setPendingContent(null);
-      setAwaitingPersist(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversation]);
+  function handleCreateSession() {
+    const created = sessionStore.createSession();
+    setActiveSessionId(created.id);
+  }
 
+  function retryRun() {
+    if (!runError || !lastFailedPrompt) return;
+    const { sessionId } = runError;
+    const resumeSessionId =
+      sessions.find((s) => s.id === sessionId)?.claudeSessionId ?? undefined;
+    runAndPersist(sessionId, lastFailedPrompt, resumeSessionId);
+  }
+
+  const isStreamingHere =
+    streaming !== null && streaming.sessionId === activeSessionId;
+  const runErrorHere =
+    runError && runError.sessionId === activeSessionId ? runError : null;
   const isEmpty =
-    conversation &&
-    conversation.messages.length === 0 &&
-    !pendingContent &&
-    streamingText === null &&
-    !awaitingPersist;
+    !!activeSession && activeSession.messages.length === 0 && !isStreamingHere;
 
   return createPortal(
     <div
@@ -351,118 +342,85 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
       className="fixed top-12 right-0 bottom-0 z-40 flex w-full max-w-[400px] flex-col border-l border-border bg-surface shadow-2xl transition-transform duration-200 ease-out"
       style={{ transform: visible ? 'translateX(0)' : 'translateX(100%)' }}
     >
-      <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3.5">
-        <h2 className="font-display text-sm font-medium text-text">Copilot</h2>
-        <IconButton label="Close panel" onClick={onClose}>
-          <X size={16} />
-        </IconButton>
-      </div>
-
-      <div className="thin-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        {loading && !conversation && (
-          <p className="text-center text-sm text-text-muted">Loading…</p>
-        )}
-        {error && !conversation && (
-          // httpClient.ts already toasts the same failure — this is for
-          // whoever misses (or dismisses) the toast and is left looking at
-          // the panel itself, which otherwise rendered nothing at all here
-          // with no indication anything had gone wrong.
-          <div className="mt-6 flex flex-col items-center gap-2 text-center">
-            <p className="text-sm text-text-muted">
-              Couldn&apos;t load Copilot.
-            </p>
-            <button
-              type="button"
-              onClick={() => reload()}
-              className="text-sm font-medium text-accent-soft-text hover:underline"
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-3.5">
+        <div className="flex min-w-0 items-center gap-1">
+          {activeSession && (
+            <IconButton
+              label="Back to sessions"
+              onClick={() => setActiveSessionId(null)}
+              className="-ml-1.5 shrink-0"
             >
-              Try again
-            </button>
-          </div>
-        )}
-        {isEmpty && (
-          <p className="mt-6 text-center text-sm text-text-muted">
-            Ask Copilot anything — it can help with your tickets.
-          </p>
-        )}
-        <div className="flex flex-col gap-3">
-          {conversation?.messages.map((message) => (
-            <MessageBubble key={message.id} message={message} />
-          ))}
-          {pendingContent && (
-            <MessageBubble
-              message={{ role: 'user', content: pendingContent }}
-            />
+              <ArrowLeft size={16} />
+            </IconButton>
           )}
-          {streamingText !== null && (
-            <MessageBubble
-              message={{ role: 'assistant', content: streamingText || '…' }}
-            />
-          )}
-          {awaitingPersist && (
-            <MessageBubble
-              message={{ role: 'assistant', content: awaitingPersist.content }}
-            />
-          )}
+          <h2 className="truncate font-display text-sm font-medium text-text">
+            {activeSession ? activeSession.title : 'Copilot'}
+          </h2>
         </div>
-        {error && conversation && (
-          // A reload after a successful send (or any other refresh) failed
-          // — the message the user just sent DID persist server-side, so
-          // this must not read as "your message failed" (that's the
-          // !conversation branch above). Inline and small, next to the
-          // existing messages rather than replacing them.
-          <div className="mt-3 flex flex-col items-center gap-1 text-center">
-            <p className="text-xs text-text-muted">Couldn&apos;t refresh.</p>
-            <button
-              type="button"
-              onClick={() => reload()}
-              className="text-xs font-medium text-accent-soft-text hover:underline"
-            >
-              Try again
-            </button>
-          </div>
-        )}
-        {runError && lastFailedPrompt && (
-          <div className="mt-3 flex flex-col items-center gap-1 text-center">
-            <p className="text-xs text-text-muted">{runError.message}</p>
-            <button
-              type="button"
-              onClick={() => {
-                const prompt = lastFailedPrompt;
-                runAndPersist(
-                  prompt,
-                  conversation?.claudeSessionId ?? undefined,
-                );
-              }}
-              className="text-xs font-medium text-accent-soft-text hover:underline"
-            >
-              Try again
-            </button>
-          </div>
-        )}
-        {persistError && awaitingPersist && (
-          <div className="mt-3 flex flex-col items-center gap-1 text-center">
-            <p className="text-xs text-text-muted">
-              Couldn&apos;t save this reply.
-            </p>
-            <button
-              type="button"
-              onClick={() => {
-                const reply = awaitingPersist;
-                persistReply(reply.content, reply.sessionId);
-              }}
-              className="text-xs font-medium text-accent-soft-text hover:underline"
-            >
-              Retry
-            </button>
-          </div>
-        )}
+        <div className="flex shrink-0 items-center gap-0.5">
+          {!activeSession && (
+            <IconButton label="New session" onClick={handleCreateSession}>
+              <Plus size={16} />
+            </IconButton>
+          )}
+          <IconButton label="Close panel" onClick={onClose}>
+            <X size={16} />
+          </IconButton>
+        </div>
       </div>
 
-      <Composer
-        disabled={!conversation || awaitingPersist !== null}
-        onSend={handleSend}
-      />
+      {!activeSession && (
+        <CopilotSessionList
+          sessions={sessions}
+          onOpen={setActiveSessionId}
+          onCreate={handleCreateSession}
+          onRename={sessionStore.renameSession}
+          onTogglePin={sessionStore.togglePinSession}
+          onDelete={sessionStore.deleteSession}
+          onReorder={sessionStore.reorderSessionsWithinGroup}
+        />
+      )}
+
+      {activeSession && (
+        <>
+          <div className="thin-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4">
+            {isEmpty && (
+              <p className="mt-6 text-center text-sm text-text-muted">
+                Ask Copilot anything — it can help with your tickets.
+              </p>
+            )}
+            <div className="flex flex-col gap-3">
+              {activeSession.messages.map((message) => (
+                <MessageBubble key={message.id} message={message} />
+              ))}
+              {isStreamingHere && (
+                <MessageBubble
+                  message={{
+                    role: 'assistant',
+                    content: streaming?.text || '…',
+                  }}
+                />
+              )}
+            </div>
+            {runErrorHere && lastFailedPrompt && (
+              <div className="mt-3 flex flex-col items-center gap-1 text-center">
+                <p className="text-xs text-text-muted">
+                  {runErrorHere.message}
+                </p>
+                <button
+                  type="button"
+                  onClick={retryRun}
+                  className="text-xs font-medium text-accent-soft-text hover:underline"
+                >
+                  Try again
+                </button>
+              </div>
+            )}
+          </div>
+
+          <Composer disabled={isStreamingHere} onSend={handleSend} />
+        </>
+      )}
     </div>,
     document.body,
   );
