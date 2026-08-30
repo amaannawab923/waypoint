@@ -12,6 +12,7 @@ const mockStatus = jest.fn();
 const mockSave = jest.fn();
 const mockClear = jest.fn();
 const mockConnect = jest.fn();
+const mockCancel = jest.fn();
 const mockOpenExternal = jest.fn();
 
 beforeEach(() => {
@@ -23,6 +24,7 @@ beforeEach(() => {
         save: mockSave,
         clear: mockClear,
         connect: mockConnect,
+        cancel: mockCancel,
         openExternal: mockOpenExternal,
       },
     },
@@ -188,6 +190,21 @@ describe('Copilot settings page', () => {
     expect(
       screen.queryByText('Claude subscription connected'),
     ).not.toBeInTheDocument();
+  });
+
+  // Previously a rejected status() left `status` null forever, and the
+  // whole page — neither the connected card nor the connect button — ever
+  // rendered anything again.
+  it('falls back to the connect prompt with a notice when status() itself rejects', async () => {
+    mockStatus.mockRejectedValueOnce(new Error('IPC unavailable'));
+    render(<Copilot />);
+
+    expect(
+      await screen.findByRole('button', { name: /Connect with Claude/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Couldn't check your connection status/),
+    ).toBeInTheDocument();
   });
 
   it('opens the automated connect modal from the primary button', async () => {
