@@ -35,10 +35,51 @@ the real main process. See
 for the full API surface (native dialog stubbing, main-process state
 inspection, etc.).
 
-## 2. `qa:electron` — interactive, agent-driven QA
+## 2. Chrome DevTools MCP — live interactive debugging (recommended)
 
-For driving the *dev* app live during a session — clicking through a fix to
-verify it, the way you'd drive a real browser — not a formal test file.
+The richest option, and the one to reach for when debugging rather than
+just driving: Google's own
+[`chrome-devtools-mcp`](https://github.com/ChromeDevTools/chrome-devtools-mcp),
+attached to the same `ELECTRON_QA_DEBUG_PORT` bridge described below.
+Electron's renderer is genuine Chromium speaking the same CDP, so this
+works against the app directly — verified live against Waypoint (it
+reports `1: Waypoint (http://localhost:1212/)` and returns a full
+accessibility snapshot).
+
+It gives an AI agent (or you) the things a hand-rolled driver doesn't:
+**console messages with source-mapped stack traces**, **network
+request/response inspection**, an **accessibility-tree snapshot** where
+every element has a stable `uid` (so interactions target semantic
+elements instead of hand-written CSS selectors), plus performance
+tracing, screenshots, and the usual click/fill/hover/press.
+
+Register it once (already done on this machine, at user scope):
+
+```bash
+claude mcp add electron-devtools --scope user -- \
+  npx -y chrome-devtools-mcp@latest --browserUrl http://127.0.0.1:9222
+```
+
+Then just run `npm run start:qa` (below) and the tools are live. Note
+that page-scoped tools take a numeric `pageId` (from `list_pages`), not a
+string — page-id routing is on by default.
+
+One caveat worth knowing: console and network tools only report what
+happened *after* the MCP server attached, so start it (or re-run the
+action) before the thing you want to observe.
+
+Google officially tests this against Chrome and Chrome for Testing, not
+Electron — it works here because Electron *is* Chromium, but that's our
+finding, not a supported guarantee.
+
+## 3. `qa:electron` — a minimal built-in driver
+
+Predates the MCP option above and is kept because it's dependency-light
+and needs no MCP client at all — useful from a plain shell script or CI
+step. For interactive debugging, prefer the MCP server: this one has no
+console or network visibility, which is exactly what turned out to matter
+most when diagnosing a real failure (see the git history for
+`tests/e2e/fixtures.ts`).
 
 ```bash
 # One command: builds nothing, just launches the dev app with CDP wired up
