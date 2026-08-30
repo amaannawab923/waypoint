@@ -264,7 +264,15 @@ function SessionRow({
         </div>
         {!isEditing && (
           <div className="truncate text-xs text-text-muted">
-            {preview ?? 'No messages yet'}
+            {/* preview is only available once a session's messages have
+                been fetched (see useCopilotConversations.ts's openSession)
+                — the list endpoint doesn't include them, so a session that
+                simply hasn't been opened yet reads identically to a
+                genuinely empty new one. "Tap to open" covers both honestly,
+                instead of "No messages yet" claiming knowledge this row
+                doesn't actually have for an unopened session with real
+                history. */}
+            {preview ?? 'Tap to open'}
           </div>
         )}
       </div>
