@@ -22,6 +22,10 @@ release/app/dist
 release/build
 .erb/dll
 
+# Playwright E2E test output (screenshots, traces) — see docs/qa-electron.md
+test-results
+playwright-report
+
 .idea
 npm-debug.log.*
 *.css.d.ts

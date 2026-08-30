@@ -42,7 +42,10 @@
     "start:main": "concurrently -k -P \"cross-env NODE_ENV=development TS_NODE_TRANSPILE_ONLY=true webpack --watch --config ./.erb/configs/webpack.config.main.dev.ts\" \"electronmon . -- {@}\" --",
     "start:preload": "cross-env NODE_ENV=development TS_NODE_TRANSPILE_ONLY=true NODE_OPTIONS=\"-r ts-node/register --no-warnings\" webpack --config ./.erb/configs/webpack.config.preload.dev.ts",
     "start:renderer": "cross-env NODE_ENV=development TS_NODE_TRANSPILE_ONLY=true NODE_OPTIONS=\"-r ts-node/register --no-warnings\" webpack serve --config ./.erb/configs/webpack.config.renderer.dev.ts",
-    "test": "jest"
+    "start:qa": "cross-env ELECTRON_QA_DEBUG_PORT=9222 WAYPOINT_FEATURE_COPILOT=true npm run start",
+    "qa:electron": "ts-node -T scripts/qa/electron-cdp.ts",
+    "test": "jest",
+    "test:e2e": "cross-env WAYPOINT_FEATURE_COPILOT=true npm run build && playwright test"
   },
   "browserslist": [
     "extends browserslist-config-erb"
@@ -88,7 +91,8 @@
     },
     "testPathIgnorePatterns": [
       "release/app/dist",
-      ".erb/dll"
+      ".erb/dll",
+      "tests/e2e"
     ],
     "transform": {
       "\\.(ts|tsx|js|jsx)$": "ts-jest"
@@ -119,6 +123,7 @@
   },
   "devDependencies": {
     "@electron/rebuild": "^3.7.1",
+    "@playwright/test": "^1.62.1",
     "@pmmmwh/react-refresh-webpack-plugin": "^0.5.15",
     "@svgr/webpack": "^8.1.0",
     "@tailwindcss/postcss": "^4.3.3",
@@ -131,6 +136,7 @@
     "@types/react-dom": "^19.0.4",
     "@types/react-test-renderer": "^19.0.0",
     "@types/webpack-bundle-analyzer": "^4.7.0",
+    "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^8.26.1",
     "@typescript-eslint/parser": "^8.26.1",
     "browserslist-config-erb": "^0.0.3",
@@ -184,7 +190,8 @@
     "webpack-bundle-analyzer": "^4.10.2",
     "webpack-cli": "^6.0.1",
     "webpack-dev-server": "^5.2.0",
-    "webpack-merge": "^6.0.1"
+    "webpack-merge": "^6.0.1",
+    "ws": "^8.21.3"
   },
   "build": {
     "productName": "ElectronReact",
@@ -273,5 +280,8 @@
   },
   "optionalDependencies": {
     "@tailwindcss/oxide-darwin-arm64": "^4.3.3"
+  },
+  "overrides": {
+    "yauzl": "^3.3.1"
   }
 }
