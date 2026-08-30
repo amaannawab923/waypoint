@@ -1,0 +1,79 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  unit:
+    name: Unit & component tests
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: waypoint-frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: waypoint-frontend/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck --if-present
+      - run: npm run lint
+      - run: npm test
+
+  e2e:
+    name: Electron E2E (Playwright)
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: waypoint-frontend
+    services:
+      # GitHub Actions' `services:` runs containers directly, not via
+      # docker compose — the backend's own docker-compose.yml (Postgres +
+      # API) isn't reusable here as-is. This starts just Postgres; the API
+      # itself still needs a real start step below.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: waypoint
+          POSTGRES_PASSWORD: waypoint
+          POSTGRES_DB: waypoint
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: waypoint-frontend/package-lock.json
+      - name: Install frontend deps
+        run: npm ci
+      - name: Install and start the backend API
+        working-directory: waypoint-backend
+        run: |
+          npm ci
+          cp .env.example .env
+          npm run db:migrate --if-present
+          npm run build
+          npm start &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4000/health && break
+            sleep 2
+          done
+      - name: Run E2E suite
+        run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: waypoint-frontend/test-results
+          retention-days: 7
