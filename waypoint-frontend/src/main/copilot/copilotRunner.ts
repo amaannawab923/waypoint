@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import * as os from 'os';
 import * as path from 'path';
 import { ipcMain, type BrowserWindow } from 'electron';
+import { getStoredSubscriptionToken } from './copilotAuth';
 import { parseStreamEventLine } from './parseStreamEvent';
 
 // Copilot's persona (issue #7). Layered on top of Claude Code's own default
@@ -106,10 +107,20 @@ const COMMON_INSTALL_DIRS = [
 function buildEnv(): Record<string, string | undefined> {
   const existing = (process.env.PATH || '').split(path.delimiter);
   const missing = COMMON_INSTALL_DIRS.filter((dir) => !existing.includes(dir));
-  return {
+  const env: Record<string, string | undefined> = {
     ...process.env,
     PATH: [...existing, ...missing].join(path.delimiter),
   };
+  // A user-connected subscription token (Settings → Profile → Copilot,
+  // generated via `claude setup-token`) takes priority over whatever's
+  // ambiently logged in via the CLI's own credentials — set here, the CLI
+  // itself picks it up automatically and "silently uses it instead of
+  // credentials stored in ~/.claude/.credentials.json" (Anthropic's own
+  // docs). Falls through to ambient login (this key simply isn't set) when
+  // no token has been connected, exactly the prior behavior.
+  const subscriptionToken = getStoredSubscriptionToken();
+  if (subscriptionToken) env.CLAUDE_CODE_OAUTH_TOKEN = subscriptionToken;
+  return env;
 }
 
 export type CopilotErrorKind = 'binary_not_found' | 'auth_failed' | 'generic';

@@ -296,6 +296,44 @@ describe('CopilotPanel', () => {
       expect(screen.getAllByText('hello', { selector: 'div' })).toHaveLength(1);
     });
 
+    // An auth_failed error specifically gets a real recovery action, not
+    // just inline text — this is the gap live testing found: the chat had
+    // no visible path from "not logged in" to actually fixing it short of
+    // already knowing to dig through Settings.
+    it('shows a "Connect your Claude subscription" action for an auth_failed error, distinct from other error kinds', async () => {
+      render(<CopilotPanel onClose={jest.fn()} />);
+      await screen.findByText(/No sessions yet/i);
+      await createAndOpenSession();
+
+      await typeAndSend('hii');
+      const handlers = await waitForRun('hii');
+
+      act(() => {
+        handlers.onError({
+          kind: 'auth_failed',
+          message: 'Not logged in to Claude Code — run `claude login`...',
+        });
+      });
+
+      expect(
+        await screen.findByText('Not connected to Claude'),
+      ).toBeInTheDocument();
+      const connectButton = screen.getByRole('button', {
+        name: /Connect your Claude subscription/,
+      });
+      expect(connectButton).toBeInTheDocument();
+      // The generic "Try again" link is specific to non-auth failures —
+      // showing both would be redundant with the connect action, and "Try
+      // again" alone would silently repeat the same failure forever without
+      // ever pointing at the actual fix.
+      expect(screen.queryByText('Try again')).not.toBeInTheDocument();
+
+      fireEvent.click(connectButton);
+      expect(
+        await screen.findByRole('dialog', { name: 'Connect Claude' }),
+      ).toBeInTheDocument();
+    });
+
     it('shows a retry instead of persisting an empty reply when the run finishes with no real text', async () => {
       render(<CopilotPanel onClose={jest.fn()} />);
       await screen.findByText(/No sessions yet/i);

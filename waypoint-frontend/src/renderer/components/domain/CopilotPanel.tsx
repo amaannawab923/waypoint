@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { clsx } from 'clsx';
-import { ArrowLeft, Plus, Send, X } from 'lucide-react';
+import { ArrowLeft, Plus, Send, Sparkles, X } from 'lucide-react';
 import {
   useCopilotSessions,
   type CopilotSessionMessageRole,
 } from '@/lib/copilotSessions';
-import { IconButton } from '@/components/ui/Button';
+import { IconButton, Button } from '@/components/ui/Button';
 import { CopilotSessionList } from './CopilotSessionList';
+import { CopilotConnectModal } from './CopilotConnectModal';
 
 function MessageBubble({
   message,
@@ -106,14 +107,21 @@ function Composer({
  * ~400px wide, swapped in place rather than via a separate sidebar or route
  * — see CopilotSessionList.tsx for the list. Session data now lives in
  * localStorage via lib/copilotSessions.ts, not the backend's single-
- * conversation `copilot/conversation` endpoints (mock/api.ts's
- * getCopilotConversation/postCopilotUserMessage/postCopilotAssistantMessage)
- * — the backend's `copilot_conversations` table still has a unique
- * constraint on `memberId` and structurally cannot hold more than one
- * conversation per user yet. Those endpoints are left untouched, unused by
- * this component, for a later backend-backed migration. The real
- * `window.electron.copilot.runPrompt` streaming flow (issue #7) is
- * unchanged — only where its result gets persisted has moved.
+ * conversation `copilot/conversation` endpoints — the backend's
+ * `copilot_conversations` table still has a unique constraint on `memberId`
+ * and structurally cannot hold more than one conversation per user yet.
+ * Those endpoints are left untouched, unused by this component, for a
+ * later backend-backed migration. The real `window.electron.copilot.runPrompt`
+ * streaming flow (issue #7) is unchanged — only where its result gets
+ * persisted has moved.
+ *
+ * An `auth_failed` run error (issue #7's chat panel hitting "not logged
+ * in") gets its own distinct recovery action — "Connect your Claude
+ * subscription" (issue: connecting a subscription token shouldn't require
+ * a terminal, see CopilotConnectModal.tsx) — instead of a dead-end generic
+ * "Try again". The exact prompt that hit the error auto-retries, in the
+ * *same session it failed in*, the moment a working connection exists, so
+ * nothing has to be re-typed or re-sent.
  */
 export function CopilotPanel({ onClose }: { onClose: () => void }) {
   const [visible, setVisible] = useState(false);
@@ -140,11 +148,17 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     sessionId: string;
     text: string;
   } | null>(null);
+  // `kind` drives whether the error gets a real "Connect your Claude
+  // subscription" action (auth_failed) instead of just "Try again" — a
+  // synchronous-throw failure (window.electron missing entirely) has no
+  // real `kind` to report, so it falls back to 'generic'.
   const [runError, setRunError] = useState<{
     sessionId: string;
     message: string;
+    kind: 'binary_not_found' | 'auth_failed' | 'generic';
   } | null>(null);
   const [lastFailedPrompt, setLastFailedPrompt] = useState<string | null>(null);
+  const [connectOpen, setConnectOpen] = useState(false);
   const unsubscribeStreamRef = useRef<(() => void) | null>(null);
   // Bumped, per session, at the start of every runAndPersist call for that
   // session; each call's onChunk/onDone/onError closures capture the value
@@ -281,6 +295,7 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
                 setRunError({
                   sessionId,
                   message: "Copilot didn't return a reply — try again.",
+                  kind: 'generic',
                 });
                 setLastFailedPrompt(content);
                 resolve();
@@ -297,7 +312,7 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
             onError: (err) => {
               if (isStale()) return;
               setStreaming(null);
-              setRunError({ sessionId, message: err.message });
+              setRunError({ sessionId, message: err.message, kind: err.kind });
               setLastFailedPrompt(content);
               resolve();
             },
@@ -309,6 +324,7 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
         setRunError({
           sessionId,
           message: `Couldn't reach Copilot's runtime — ${err instanceof Error ? err.message : String(err)}`,
+          kind: 'generic',
         });
         setLastFailedPrompt(content);
         resolve();
@@ -414,25 +430,63 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
                 />
               )}
             </div>
-            {runErrorHere && lastFailedPrompt && (
-              <div className="mt-3 flex flex-col items-center gap-1 text-center">
-                <p className="text-xs text-text-muted">
-                  {runErrorHere.message}
-                </p>
-                <button
-                  type="button"
-                  onClick={retryRun}
-                  className="text-xs font-medium text-accent-soft-text hover:underline"
-                >
-                  Try again
-                </button>
-              </div>
-            )}
+            {runErrorHere &&
+              lastFailedPrompt &&
+              runErrorHere.kind === 'auth_failed' && (
+                <div className="mt-3 flex flex-col items-center gap-2 rounded-[var(--radius-lg)] border border-border bg-surface-2 p-4 text-center">
+                  <p className="text-xs font-medium text-text">
+                    Not connected to Claude
+                  </p>
+                  <p className="text-xs text-text-muted">
+                    Copilot needs your Claude subscription to reply.
+                  </p>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => setConnectOpen(true)}
+                    className="mt-1"
+                  >
+                    <Sparkles size={13} />
+                    Connect your Claude subscription
+                  </Button>
+                </div>
+              )}
+            {runErrorHere &&
+              lastFailedPrompt &&
+              runErrorHere.kind !== 'auth_failed' && (
+                <div className="mt-3 flex flex-col items-center gap-1 text-center">
+                  <p className="text-xs text-text-muted">
+                    {runErrorHere.message}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={retryRun}
+                    className="text-xs font-medium text-accent-soft-text hover:underline"
+                  >
+                    Try again
+                  </button>
+                </div>
+              )}
           </div>
 
           <Composer disabled={isStreamingHere} onSend={handleSend} />
         </>
       )}
+
+      <CopilotConnectModal
+        open={connectOpen}
+        onClose={() => setConnectOpen(false)}
+        onConnected={() => {
+          // Closes the loop this whole flow exists for: the user shouldn't
+          // have to re-type or re-send anything they already sent once —
+          // the exact prompt that hit the auth error retries automatically,
+          // in the same session it failed in, the moment a working
+          // connection exists.
+          if (runError && lastFailedPrompt) {
+            retryRun();
+          }
+        }}
+      />
     </div>,
     document.body,
   );
