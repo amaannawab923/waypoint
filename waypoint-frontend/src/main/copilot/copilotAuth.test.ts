@@ -294,6 +294,29 @@ describe('copilot:auth:save', () => {
     expect(writeFileSyncMock).not.toHaveBeenCalled();
   });
 
+  // A locked keychain or a full disk previously rejected this invoke
+  // outright rather than resolving — every caller's `await ...save(...)`
+  // never settled the way it expected, stranding the UI (a modal stuck on
+  // "Waiting for sign-in…", a manual-save button stuck on "Validating…")
+  // with a validated-but-unsaved token silently discarded.
+  it('reports a clear message, not a rejected promise, when writing the token fails', async () => {
+    writeFileSyncMock.mockImplementation(() => {
+      throw new Error('ENOSPC: no space left on device');
+    });
+    const promise = getHandler('copilot:auth:save')({}, VALID_TOKEN);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const child = lastChild as FakeChild;
+    child.stdout.emit('data', successJsonOutput());
+    child.emit('close', 0);
+
+    await expect(promise).resolves.toEqual({
+      ok: false,
+      message: expect.stringContaining('valid'),
+    });
+  });
+
   it("writes the prompt to stdin, not argv, matching copilotRunner.ts's own injection guard", async () => {
     const promise = getHandler('copilot:auth:save')({}, VALID_TOKEN);
     await Promise.resolve();
