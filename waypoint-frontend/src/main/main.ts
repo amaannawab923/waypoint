@@ -26,6 +26,19 @@ import {
   killAllCopilotConnectProcesses,
 } from './copilot/copilotConnect';
 
+// Opt-in remote debugging for scripted/agent-driven QA (docs/qa-electron.md)
+// — off unless ELECTRON_QA_DEBUG_PORT is set, so normal dev/prod runs are
+// unaffected. Passing --remote-debugging-port as an extra CLI arg does NOT
+// work here: electronmon forwards it into this process's own process.argv
+// rather than Chromium's native switch parser ever seeing it (confirmed
+// live — the port never actually opens, with no error). appendSwitch()
+// before app.whenReady() is the documented, correct way to enable it
+// (electronjs.org/docs/latest/api/command-line-switches).
+const qaDebugPort = process.env.ELECTRON_QA_DEBUG_PORT;
+if (qaDebugPort) {
+  app.commandLine.appendSwitch('remote-debugging-port', qaDebugPort);
+}
+
 // The packaged app loads the renderer from disk with no server behind it —
 // a bare `file://` load can't support createBrowserRouter (a hard
 // refresh/deep-link at e.g. /projects/proj-launch/work-items has no file at
@@ -101,7 +114,13 @@ if (process.env.NODE_ENV === 'production') {
 const isDebug =
   process.env.NODE_ENV === 'development' || process.env.DEBUG_PROD === 'true';
 
-if (isDebug) {
+// electron-debug's auto-opened native DevTools inspector holds an
+// exclusive CDP connection to the renderer target — a remote debugging
+// client (Playwright, a raw CDP script, an MCP driver) attaching to that
+// same target fails immediately with "Debugging connection was closed:
+// WebSocket disconnected" (confirmed live). Skip the auto-open whenever
+// QA debugging is what this run is actually for.
+if (isDebug && !qaDebugPort) {
   require('electron-debug').default();
 }
 
