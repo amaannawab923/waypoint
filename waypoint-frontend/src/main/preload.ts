@@ -112,6 +112,99 @@ const electronHandler = {
         ipcRenderer.removeListener('copilot:stream', subscription);
       };
     },
+    // Request/response, not the stream bridge above — invoke/handle fits a
+    // single answer per call better than hand-rolling a send/on pair for
+    // each of these. Backs the "connect your Claude subscription" settings
+    // page: lets a user recover from an expired/missing CLI login without
+    // ever opening a terminal, by pasting a token generated once via
+    // Anthropic's own `claude setup-token` command instead.
+    auth: {
+      status(): Promise<{ connected: boolean; last4: string | null }> {
+        return ipcRenderer.invoke('copilot:auth:status');
+      },
+      save(
+        token: string,
+      ): Promise<{ ok: true; last4: string } | { ok: false; message: string }> {
+        return ipcRenderer.invoke('copilot:auth:save', token);
+      },
+      clear(): Promise<{ ok: true }> {
+        return ipcRenderer.invoke('copilot:auth:clear');
+      },
+      // Runs `claude setup-token` end to end without a terminal: a stream
+      // bridge (mirrors copilot.runPrompt's shape) rather than invoke/handle,
+      // since this produces an open-ended sequence of raw terminal output
+      // chunks followed by exactly one exit, not a single answer.
+      connect(
+        requestId: string,
+        handlers: {
+          onData: (chunk: string) => void;
+          onExit: (result: {
+            code: number | null;
+            spawnError?: string;
+          }) => void;
+        },
+      ): () => void {
+        const dataSubscription = (
+          _event: IpcRendererEvent,
+          payload: { requestId: string; chunk: string },
+        ) => {
+          if (payload.requestId !== requestId) return;
+          handlers.onData(payload.chunk);
+        };
+        const exitSubscription = (
+          _event: IpcRendererEvent,
+          payload: {
+            requestId: string;
+            code: number | null;
+            spawnError?: string;
+          },
+        ) => {
+          if (payload.requestId !== requestId) return;
+          ipcRenderer.removeListener(
+            'copilot:auth:connect:data',
+            dataSubscription,
+          );
+          ipcRenderer.removeListener(
+            'copilot:auth:connect:exit',
+            exitSubscription,
+          );
+          handlers.onExit({
+            code: payload.code,
+            spawnError: payload.spawnError,
+          });
+        };
+        ipcRenderer.on('copilot:auth:connect:data', dataSubscription);
+        ipcRenderer.on('copilot:auth:connect:exit', exitSubscription);
+        ipcRenderer.send('copilot:auth:connect:start', { requestId });
+
+        // Listener-only, like runPrompt's own unsubscribe above — does NOT
+        // cancel the main-process PTY. A plain component unmount (e.g. route
+        // navigation away from Settings mid-handshake) shouldn't
+        // guarantee-fail an attempt that might still complete moments later
+        // with nobody watching; call cancel() below for that instead.
+        return () => {
+          ipcRenderer.removeListener(
+            'copilot:auth:connect:data',
+            dataSubscription,
+          );
+          ipcRenderer.removeListener(
+            'copilot:auth:connect:exit',
+            exitSubscription,
+          );
+        };
+      },
+      // A separate, explicit kill — distinct from connect()'s unsubscribe
+      // above, which only stops listening. Callers use this for an actual
+      // user-initiated cancel/close, not a plain unmount.
+      cancel(requestId: string): void {
+        ipcRenderer.send('copilot:auth:connect:cancel', { requestId });
+      },
+      // Narrowly scoped on the main-process side to only the real Anthropic
+      // OAuth host — see copilotConnect.ts's own handler.
+      openExternal(url: string): Promise<{ ok: boolean }> {
+        return ipcRenderer.invoke('copilot:auth:open-external', url);
+      },
+    },
   },
 };
 

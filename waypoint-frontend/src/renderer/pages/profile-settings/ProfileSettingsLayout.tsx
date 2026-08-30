@@ -1,6 +1,13 @@
 import { NavLink, Outlet } from 'react-router-dom';
 import { clsx } from 'clsx';
-import { UserRound, Sliders, Bell, ShieldCheck, KeyRound } from 'lucide-react';
+import {
+  UserRound,
+  Sliders,
+  Bell,
+  ShieldCheck,
+  KeyRound,
+  Sparkles,
+} from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
 import { getCurrentUser } from '@/mock/api';
 import { Avatar } from '@/components/ui/Avatar';
@@ -18,6 +25,7 @@ const PROFILE_ITEMS = [
   { to: 'preferences', label: 'Preferences', icon: Sliders },
   { to: 'notifications', label: 'Notifications', icon: Bell },
   { to: 'security', label: 'Security', icon: ShieldCheck },
+  { to: 'copilot', label: 'Copilot', icon: Sparkles },
 ];
 
 export default function ProfileSettingsLayout() {
@@ -27,12 +35,16 @@ export default function ProfileSettingsLayout() {
     <div className="mx-auto flex max-w-5xl gap-10 px-6 py-8">
       <aside className="w-56 shrink-0">
         <div className="mb-5 flex items-center gap-2.5 px-2.5">
-          {user && <Avatar name={user.fullName} color={user.avatarColor} size={32} />}
+          {user && (
+            <Avatar name={user.fullName} color={user.avatarColor} size={32} />
+          )}
           <div className="min-w-0">
             <p className="truncate font-display text-sm font-medium text-text">
               {user?.fullName ?? 'Profile settings'}
             </p>
-            {user && <p className="truncate text-xs text-text-muted">{user.email}</p>}
+            {user && (
+              <p className="truncate text-xs text-text-muted">{user.email}</p>
+            )}
           </div>
         </div>
 

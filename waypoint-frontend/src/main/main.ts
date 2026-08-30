@@ -20,6 +20,11 @@ import {
   registerCopilotIpc,
   killAllCopilotProcesses,
 } from './copilot/copilotRunner';
+import { registerCopilotAuthIpc } from './copilot/copilotAuth';
+import {
+  registerCopilotConnectIpc,
+  killAllCopilotConnectProcesses,
+} from './copilot/copilotConnect';
 
 // The packaged app loads the renderer from disk with no server behind it —
 // a bare `file://` load can't support createBrowserRouter (a hard
@@ -85,6 +90,8 @@ ipcMain.on('ipc-example', async (event, arg) => {
 // after a close/reopen, `mainWindow` is reassigned — needs the *current*
 // window at send time, not whichever one existed at registration time.
 registerCopilotIpc(() => mainWindow);
+registerCopilotAuthIpc();
+registerCopilotConnectIpc(() => mainWindow);
 
 if (process.env.NODE_ENV === 'production') {
   const sourceMapSupport = require('source-map-support');
@@ -151,6 +158,14 @@ const createWindow = async () => {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    // On macOS, closing the window doesn't quit the app (see
+    // window-all-closed below), so before-quit's cleanup alone would leave
+    // a still-running `claude setup-token` PTY orphaned — with its output
+    // now going nowhere anyway, since the window it would have streamed to
+    // is gone. The regular chat-run process is deliberately NOT killed
+    // here: unlike this one-shot connect flow, it's meant to keep running
+    // and persist its result even if the window closes mid-reply.
+    killAllCopilotConnectProcesses();
   });
 
   const menuBuilder = new MenuBuilder(mainWindow);
@@ -184,6 +199,7 @@ app.on('window-all-closed', () => {
 // otherwise had no hook to clean up a run that was still streaming.
 app.on('before-quit', () => {
   killAllCopilotProcesses();
+  killAllCopilotConnectProcesses();
 });
 
 app

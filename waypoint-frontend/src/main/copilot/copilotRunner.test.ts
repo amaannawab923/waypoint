@@ -7,6 +7,14 @@ jest.mock('electron', () => ({
   ipcMain: { on: (...args: unknown[]) => ipcMainOnMock(...args) },
 }));
 
+// Defaults to "no token connected" (null) so every existing test below keeps
+// exercising the ambient-CLI-login path unchanged; individual tests override
+// this to cover the connected-subscription-token path.
+const getStoredSubscriptionTokenMock = jest.fn<string | null, []>(() => null);
+jest.mock('./copilotAuth', () => ({
+  getStoredSubscriptionToken: () => getStoredSubscriptionTokenMock(),
+}));
+
 type FakeStdin = EventEmitter & {
   writes: string[];
   ended: boolean;
@@ -302,6 +310,32 @@ describe('registerCopilotIpc', () => {
     expect(options.cwd).toBe(os.tmpdir());
     expect(String(options.env?.PATH)).toContain('/opt/homebrew/bin');
     expect(String(options.env?.PATH)).toContain('/usr/local/bin');
+  });
+
+  it('does not set CLAUDE_CODE_OAUTH_TOKEN when no subscription token is connected', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi' });
+
+    expect(spawnCalls[0].options.env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+  });
+
+  // Settings → Profile → Copilot lets a user connect their own subscription
+  // via a token generated with `claude setup-token`, so an expired/missing
+  // ambient CLI login no longer dead-ends every run.
+  it('passes a connected subscription token as CLAUDE_CODE_OAUTH_TOKEN, taking priority over ambient login', () => {
+    getStoredSubscriptionTokenMock.mockReturnValue(
+      'sk-ant-oat01-connected-token',
+    );
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi' });
+
+    expect(spawnCalls[0].options.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe(
+      'sk-ant-oat01-connected-token',
+    );
   });
 
   it('sets utf8 encoding on stdout and stderr, not per-chunk decoding', () => {
