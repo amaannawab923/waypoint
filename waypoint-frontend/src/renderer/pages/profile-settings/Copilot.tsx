@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, KeySquare, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
@@ -29,18 +29,33 @@ type Status = { connected: boolean; last4: string | null };
  */
 export default function Copilot() {
   const [status, setStatus] = useState<Status | null>(null);
+  const [statusError, setStatusError] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
   const [token, setToken] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [justConnected, setJustConnected] = useState(false);
   const [showManual, setShowManual] = useState(false);
+  const justConnectedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   useEffect(() => {
     let cancelled = false;
     async function loadStatus() {
-      const s = await window.electron.copilot.auth.status();
-      if (!cancelled) setStatus(s);
+      try {
+        const s = await window.electron.copilot.auth.status();
+        if (!cancelled) setStatus(s);
+      } catch {
+        // Fail open toward "not connected" rather than leaving `status`
+        // null forever — previously an unhandled rejection here (however
+        // unlikely) left this whole page permanently blank, with neither
+        // the connected card nor the connect button ever rendering.
+        if (!cancelled) {
+          setStatusError(true);
+          setStatus({ connected: false, last4: null });
+        }
+      }
     }
     loadStatus();
     return () => {
@@ -48,25 +63,49 @@ export default function Copilot() {
     };
   }, []);
 
+  useEffect(
+    () => () => {
+      if (justConnectedTimeoutRef.current) {
+        clearTimeout(justConnectedTimeoutRef.current);
+      }
+    },
+    [],
+  );
+
   function handleConnected(last4: string) {
     setStatus({ connected: true, last4 });
     setJustConnected(true);
-    setTimeout(() => setJustConnected(false), 2500);
+    if (justConnectedTimeoutRef.current) {
+      clearTimeout(justConnectedTimeoutRef.current);
+    }
+    justConnectedTimeoutRef.current = setTimeout(
+      () => setJustConnected(false),
+      2500,
+    );
   }
 
   async function handleManualConnect() {
     if (!token.trim() || saving) return;
     setSaving(true);
     setError(null);
-    const result = await window.electron.copilot.auth.save(token.trim());
-    setSaving(false);
-    if (!result.ok) {
-      setError(result.message);
-      return;
+    try {
+      const result = await window.electron.copilot.auth.save(token.trim());
+      if (!result.ok) {
+        setError(result.message);
+        return;
+      }
+      setToken('');
+      setShowManual(false);
+      handleConnected(result.last4);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Couldn't save the token — try again.",
+      );
+    } finally {
+      setSaving(false);
     }
-    setToken('');
-    setShowManual(false);
-    handleConnected(result.last4);
   }
 
   async function handleDisconnect() {
@@ -83,6 +122,13 @@ export default function Copilot() {
         Connect your own Claude subscription so Copilot keeps working without
         needing a terminal every time your login lapses.
       </p>
+
+      {statusError && (
+        <Badge tone="danger" outline className="mb-6">
+          Couldn&apos;t check your connection status — you can still try
+          connecting below.
+        </Badge>
+      )}
 
       {status?.connected && (
         <div className="mb-6 flex items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-border bg-surface p-3.5">
