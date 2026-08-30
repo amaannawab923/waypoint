@@ -31,10 +31,21 @@ const COMMON_INSTALL_DIRS = [
 function buildEnv(): Record<string, string> {
   const existing = (process.env.PATH || '').split(path.delimiter);
   const missing = COMMON_INSTALL_DIRS.filter((dir) => !existing.includes(dir));
-  return {
+  const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
-    PATH: [...existing, ...missing].join(path.delimiter),
   };
+  // `setup-token` runs a fresh, real interactive OAuth handshake — an
+  // inherited credential from a previous connect (or an ambient API key)
+  // has no business influencing that, the same reasoning
+  // copilotAuth.ts's buildProbeEnv() already applies for validating a
+  // candidate token. Everything else about the ambient env is left intact
+  // (unlike that isolated probe env): this spawns a real interactive TUI
+  // under a PTY, which can depend on locale/config/XDG state in ways a
+  // one-shot non-interactive probe call doesn't.
+  delete env.CLAUDE_CODE_OAUTH_TOKEN;
+  delete env.ANTHROPIC_API_KEY;
+  env.PATH = [...existing, ...missing].join(path.delimiter);
+  return env;
 }
 
 const inFlight = new Map<string, pty.IPty>();
@@ -59,6 +70,25 @@ export function registerCopilotConnectIpc(
       if (!args || typeof args.requestId !== 'string' || !args.requestId)
         return;
       const { requestId } = args;
+
+      // This flow is inherently one-at-a-time — the CLI drives a single
+      // interactive OAuth handshake in the user's own browser, so two
+      // concurrent attempts (two independent modal instances, a double
+      // invocation, a stale duplicate requestId) would spawn two real PTYs
+      // and could each open their own browser tab for their own OAuth
+      // flow. Refuse rather than silently fork a second process — this
+      // also prevents a repeat `start` with the SAME id from silently
+      // overwriting the map entry and orphaning the first PTY beyond the
+      // reach of both cancel and killAllCopilotConnectProcesses.
+      if (inFlight.size > 0) {
+        send('copilot:auth:connect:exit', {
+          requestId,
+          code: null,
+          spawnError:
+            'A sign-in is already in progress — finish or cancel that one first.',
+        });
+        return;
+      }
 
       const binary = process.env.CLAUDE_CLI_PATH || 'claude';
       // A wide terminal minimizes line-wrapping in the CLI's own rendered
@@ -113,22 +143,35 @@ export function registerCopilotConnectIpc(
   // renderer scans out of the CLI's own output, never an arbitrary
   // renderer-supplied string, so this can't become an open redirect for
   // whatever else might call it.
-  ipcMain.handle('copilot:auth:open-external', (_event, rawUrl: unknown) => {
-    if (typeof rawUrl !== 'string') return { ok: false };
-    let parsed: URL;
-    try {
-      parsed = new URL(rawUrl);
-    } catch {
-      return { ok: false };
-    }
-    if (
-      parsed.protocol !== 'https:' ||
-      (parsed.hostname !== 'claude.com' &&
-        parsed.hostname !== 'console.anthropic.com')
-    ) {
-      return { ok: false };
-    }
-    shell.openExternal(parsed.toString());
-    return { ok: true };
-  });
+  ipcMain.handle(
+    'copilot:auth:open-external',
+    async (_event, rawUrl: unknown) => {
+      if (typeof rawUrl !== 'string') return { ok: false };
+      let parsed: URL;
+      try {
+        parsed = new URL(rawUrl);
+      } catch {
+        return { ok: false };
+      }
+      if (
+        parsed.protocol !== 'https:' ||
+        (parsed.hostname !== 'claude.com' &&
+          parsed.hostname !== 'console.anthropic.com')
+      ) {
+        return { ok: false };
+      }
+      // Awaited and caught, not fire-and-forget: shell.openExternal's
+      // promise rejects when the OS handler fails (no default browser
+      // registered, a broken xdg-open, etc.) — previously that rejection
+      // both went unnoticed here (an unconditional { ok: true } regardless
+      // of outcome) and would otherwise surface as an unhandled rejection
+      // in the main process.
+      try {
+        await shell.openExternal(parsed.toString());
+        return { ok: true };
+      } catch {
+        return { ok: false };
+      }
+    },
+  );
 }
