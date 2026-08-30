@@ -65,6 +65,7 @@ import ProfileSettingsPreferences from '@/pages/profile-settings/Preferences';
 import ProfileSettingsNotifications from '@/pages/profile-settings/Notifications';
 import ProfileSettingsSecurity from '@/pages/profile-settings/Security';
 import ProfileSettingsTokens from '@/pages/profile-settings/Tokens';
+import ProfileSettingsCopilot from '@/pages/profile-settings/Copilot';
 
 import AdminLayout from '@/pages/admin/AdminLayout';
 import AdminGeneral from '@/pages/admin/General';
@@ -113,7 +114,10 @@ export const router = createBrowserRouter([
             children: [
               { index: true, element: <Navigate to="work-items" replace /> },
               { path: 'work-items', element: <WorkItemsLayout /> },
-              { path: 'work-items/:identifier', element: <WorkItemDetailPage /> },
+              {
+                path: 'work-items/:identifier',
+                element: <WorkItemDetailPage />,
+              },
               { path: 'cycles', element: <CyclesPage /> },
               { path: 'cycles/:cycleId', element: <CycleDetailPage /> },
               { path: 'modules', element: <ModulesPage /> },
@@ -133,7 +137,10 @@ export const router = createBrowserRouter([
                   { path: 'states', element: <ProjectSettingsStates /> },
                   { path: 'labels', element: <ProjectSettingsLabels /> },
                   { path: 'estimates', element: <ProjectSettingsEstimates /> },
-                  { path: 'automations', element: <ProjectSettingsAutomations /> },
+                  {
+                    path: 'automations',
+                    element: <ProjectSettingsAutomations />,
+                  },
                 ],
               },
             ],
@@ -162,9 +169,13 @@ export const router = createBrowserRouter([
               { index: true, element: <Navigate to="general" replace /> },
               { path: 'general', element: <ProfileSettingsProfile /> },
               { path: 'preferences', element: <ProfileSettingsPreferences /> },
-              { path: 'notifications', element: <ProfileSettingsNotifications /> },
+              {
+                path: 'notifications',
+                element: <ProfileSettingsNotifications />,
+              },
               { path: 'security', element: <ProfileSettingsSecurity /> },
               { path: 'tokens', element: <ProfileSettingsTokens /> },
+              { path: 'copilot', element: <ProfileSettingsCopilot /> },
             ],
           },
 
@@ -190,7 +201,9 @@ export const router = createBrowserRouter([
       // is a genuine full-viewport takeover with no sidebar/topbar, not a
       // panel within the normal app chrome. Flag-gated: mock frontend only,
       // no real backend runtime behind it yet (see lib/featureFlags.ts).
-      ...(AGENT_SESSIONS_ENABLED ? [{ path: '/sessions', element: <SessionsScreen /> }] : []),
+      ...(AGENT_SESSIONS_ENABLED
+        ? [{ path: '/sessions', element: <SessionsScreen /> }]
+        : []),
     ],
   },
 ]);
