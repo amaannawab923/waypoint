@@ -130,6 +130,70 @@ const electronHandler = {
       clear(): Promise<{ ok: true }> {
         return ipcRenderer.invoke('copilot:auth:clear');
       },
+      // Runs `claude setup-token` end to end without a terminal: a stream
+      // bridge (mirrors copilot.runPrompt's shape) rather than invoke/handle,
+      // since this produces an open-ended sequence of raw terminal output
+      // chunks followed by exactly one exit, not a single answer.
+      connect(
+        requestId: string,
+        handlers: {
+          onData: (chunk: string) => void;
+          onExit: (result: {
+            code: number | null;
+            spawnError?: string;
+          }) => void;
+        },
+      ): () => void {
+        const dataSubscription = (
+          _event: IpcRendererEvent,
+          payload: { requestId: string; chunk: string },
+        ) => {
+          if (payload.requestId !== requestId) return;
+          handlers.onData(payload.chunk);
+        };
+        const exitSubscription = (
+          _event: IpcRendererEvent,
+          payload: {
+            requestId: string;
+            code: number | null;
+            spawnError?: string;
+          },
+        ) => {
+          if (payload.requestId !== requestId) return;
+          ipcRenderer.removeListener(
+            'copilot:auth:connect:data',
+            dataSubscription,
+          );
+          ipcRenderer.removeListener(
+            'copilot:auth:connect:exit',
+            exitSubscription,
+          );
+          handlers.onExit({
+            code: payload.code,
+            spawnError: payload.spawnError,
+          });
+        };
+        ipcRenderer.on('copilot:auth:connect:data', dataSubscription);
+        ipcRenderer.on('copilot:auth:connect:exit', exitSubscription);
+        ipcRenderer.send('copilot:auth:connect:start', { requestId });
+
+        return () => {
+          ipcRenderer.send('copilot:auth:connect:cancel', { requestId });
+          ipcRenderer.removeListener(
+            'copilot:auth:connect:data',
+            dataSubscription,
+          );
+          ipcRenderer.removeListener(
+            'copilot:auth:connect:exit',
+            exitSubscription,
+          );
+        };
+      },
+      // Narrowly scoped on the main-process side to only the real Anthropic
+      // OAuth host — see copilotConnect.ts's own handler.
+      openExternal(url: string): Promise<{ ok: boolean }> {
+        return ipcRenderer.invoke('copilot:auth:open-external', url);
+      },
     },
   },
 };
