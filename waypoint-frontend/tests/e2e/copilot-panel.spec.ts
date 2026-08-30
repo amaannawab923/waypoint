@@ -37,7 +37,11 @@ test('sends a message through the real IPC bridge', async () => {
   try {
     await window.getByLabel('Open Copilot').click();
     const composer = window.getByPlaceholder('Ask Copilot…');
-    await expect(composer).toBeVisible({ timeout: 15_000 });
+    // Visible as soon as the panel mounts, but stays disabled until the
+    // conversation finishes loading — a cold CI backend (fresh migrate,
+    // first request) can take a while, longer than Playwright's default
+    // 30s action timeout covers on its own (hit live in CI).
+    await expect(composer).toBeEnabled({ timeout: 30_000 });
 
     const marker = `hello from e2e ${Date.now()}`;
     await composer.fill(marker);
