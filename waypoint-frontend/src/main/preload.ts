@@ -112,6 +112,25 @@ const electronHandler = {
         ipcRenderer.removeListener('copilot:stream', subscription);
       };
     },
+    // Request/response, not the stream bridge above — invoke/handle fits a
+    // single answer per call better than hand-rolling a send/on pair for
+    // each of these. Backs the "connect your Claude subscription" settings
+    // page: lets a user recover from an expired/missing CLI login without
+    // ever opening a terminal, by pasting a token generated once via
+    // Anthropic's own `claude setup-token` command instead.
+    auth: {
+      status(): Promise<{ connected: boolean; last4: string | null }> {
+        return ipcRenderer.invoke('copilot:auth:status');
+      },
+      save(
+        token: string,
+      ): Promise<{ ok: true; last4: string } | { ok: false; message: string }> {
+        return ipcRenderer.invoke('copilot:auth:save', token);
+      },
+      clear(): Promise<{ ok: true }> {
+        return ipcRenderer.invoke('copilot:auth:clear');
+      },
+    },
   },
 };
 
