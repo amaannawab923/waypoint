@@ -21,6 +21,10 @@ import {
   killAllCopilotProcesses,
 } from './copilot/copilotRunner';
 import { registerCopilotAuthIpc } from './copilot/copilotAuth';
+import {
+  registerCopilotConnectIpc,
+  killAllCopilotConnectProcesses,
+} from './copilot/copilotConnect';
 
 // The packaged app loads the renderer from disk with no server behind it —
 // a bare `file://` load can't support createBrowserRouter (a hard
@@ -87,6 +91,7 @@ ipcMain.on('ipc-example', async (event, arg) => {
 // window at send time, not whichever one existed at registration time.
 registerCopilotIpc(() => mainWindow);
 registerCopilotAuthIpc();
+registerCopilotConnectIpc(() => mainWindow);
 
 if (process.env.NODE_ENV === 'production') {
   const sourceMapSupport = require('source-map-support');
@@ -186,6 +191,7 @@ app.on('window-all-closed', () => {
 // otherwise had no hook to clean up a run that was still streaming.
 app.on('before-quit', () => {
   killAllCopilotProcesses();
+  killAllCopilotConnectProcesses();
 });
 
 app
