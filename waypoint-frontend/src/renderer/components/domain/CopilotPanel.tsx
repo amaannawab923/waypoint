@@ -8,6 +8,7 @@ import {
 } from '@/mock/api';
 import { useCopilotConversations } from '@/lib/useCopilotConversations';
 import type { CopilotSessionMessageRole } from '@/lib/copilotSessions';
+import { renderMarkdown } from '@/lib/markdown';
 import { IconButton, Button } from '@/components/ui/Button';
 import { CopilotSessionList } from './CopilotSessionList';
 import { CopilotConnectModal } from './CopilotConnectModal';
@@ -23,6 +24,13 @@ function generateLocalId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+// Rendered via lib/markdown.ts's small hand-rolled renderer (same one
+// AgentDetailPage.tsx uses for agent-brief previews) rather than a new
+// dependency — real Claude Code replies lean on bold/lists/code/links
+// heavily enough that plain text was genuinely hard to read (literal `**`
+// and `- ` markers, no distinction between prose and code). inline() there
+// escapes HTML before adding any tags, so this is safe against a reply (or
+// a pasted user message) containing raw HTML/script content.
 function MessageBubble({
   message,
 }: {
@@ -37,13 +45,31 @@ function MessageBubble({
     >
       <div
         className={clsx(
-          'max-w-[85%] rounded-[var(--radius)] px-3.5 py-2.5 text-sm leading-relaxed break-words',
+          'copilot-md max-w-[85%] rounded-[var(--radius)] px-3.5 py-2.5 text-sm leading-relaxed break-words',
           message.role === 'user'
             ? 'bg-accent text-on-accent'
             : 'border border-border bg-surface-2 text-text',
         )}
-      >
-        {message.content}
+        dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }}
+      />
+    </div>
+  );
+}
+
+// Shown in place of an assistant MessageBubble while a run is in flight but
+// hasn't produced any tokens yet — replaces a static "…" character, which
+// looked inert/stuck rather than visibly in-progress. Three bouncing dots,
+// same bubble chrome as a real assistant reply so it doesn't jump position
+// once real text starts arriving. prefers-reduced-motion swaps the bounce
+// for a plain static dim, matching this app's existing @media
+// (prefers-reduced-motion: reduce) convention (see index.css).
+function TypingIndicator() {
+  return (
+    <div className="flex flex-col items-start gap-1">
+      <div className="copilot-typing max-w-[85%] rounded-[var(--radius)] border border-border bg-surface-2 px-3.5 py-3">
+        <span className="copilot-typing-dot" />
+        <span className="copilot-typing-dot" />
+        <span className="copilot-typing-dot" />
       </div>
     </div>
   );
@@ -644,14 +670,17 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
               {activeSession.messages.map((message) => (
                 <MessageBubble key={message.id} message={message} />
               ))}
-              {isStreamingHere && (
-                <MessageBubble
-                  message={{
-                    role: 'assistant',
-                    content: streaming?.text || '…',
-                  }}
-                />
-              )}
+              {isStreamingHere &&
+                (streaming?.text ? (
+                  <MessageBubble
+                    message={{ role: 'assistant', content: streaming.text }}
+                  />
+                ) : (
+                  // No tokens yet — a real "thinking" indicator rather than
+                  // a static "…" character sitting in a message bubble,
+                  // which read as inert/stuck rather than in-progress.
+                  <TypingIndicator />
+                ))}
             </div>
             {runErrorHere && runErrorHere.kind === 'auth_failed' && (
               <div className="mt-3 flex flex-col items-center gap-2 rounded-[var(--radius-lg)] border border-border bg-surface-2 p-4 text-center">
@@ -706,6 +735,47 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
           }
         }}
       />
+
+      {/* Scoped rules for MessageBubble's rendered markdown — same
+          inline-<style> convention AgentDetailPage.tsx uses for its own
+          markdown preview. code/pre use color-mix against currentColor
+          rather than a fixed surface color, so they read correctly on both
+          the accent-colored user bubble and the neutral assistant one
+          without a role-specific branch.
+          user-select: text is explicit rather than left to the inherited
+          default — the bubble's own computed style already resolves to
+          "auto" without this, but chat-message content specifically should
+          never be non-selectable, so this is asserted directly rather than
+          left as an inherited side effect that a future ancestor style
+          change could quietly break. */}
+      <style>{`
+        .copilot-md { user-select: text; -webkit-user-select: text; cursor: text; }
+        .copilot-md > *:first-child { margin-top: 0; }
+        .copilot-md > *:last-child { margin-bottom: 0; }
+        .copilot-md h2 { margin: 0.6em 0 0.3em; font-family: var(--font-display); font-size: 1.05em; font-weight: 600; }
+        .copilot-md h3 { margin: 0.5em 0 0.25em; font-family: var(--font-display); font-size: 1em; font-weight: 600; }
+        .copilot-md p { margin: 0.5em 0; }
+        .copilot-md ul, .copilot-md ol { margin: 0.5em 0; padding-left: 1.3em; }
+        .copilot-md ul { list-style: disc; }
+        .copilot-md ol { list-style: decimal; }
+        .copilot-md li { margin: 0.2em 0; }
+        .copilot-md code { padding: 0.1em 0.35em; border-radius: 4px; background: color-mix(in srgb, currentColor 12%, transparent); font-family: var(--font-mono); font-size: 0.85em; overflow-wrap: anywhere; }
+        .copilot-md pre { margin: 0.6em 0; padding: 0.6em 0.75em; border-radius: var(--radius-sm); background: color-mix(in srgb, currentColor 10%, transparent); font-family: var(--font-mono); font-size: 0.85em; white-space: pre-wrap; overflow-wrap: anywhere; }
+        .copilot-md pre code { padding: 0; background: none; overflow-wrap: anywhere; }
+        .copilot-md a { text-decoration: underline; }
+
+        .copilot-typing { display: flex; align-items: center; gap: 4px; }
+        .copilot-typing-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 0.35; animation: copilot-typing-bounce 1.1s infinite ease-in-out; }
+        .copilot-typing-dot:nth-child(2) { animation-delay: 0.15s; }
+        .copilot-typing-dot:nth-child(3) { animation-delay: 0.3s; }
+        @keyframes copilot-typing-bounce {
+          0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
+          30% { transform: translateY(-4px); opacity: 0.9; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .copilot-typing-dot { animation: none; opacity: 0.6; }
+        }
+      `}</style>
     </div>,
     document.body,
   );
