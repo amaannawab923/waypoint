@@ -30,9 +30,9 @@ jobs:
       - run: npm run lint
         continue-on-error: true
       # jest's own setupFiles check (.erb/scripts/check-build-exists.ts)
-      # refuses to run at all without this — confirmed live setting up
-      # this branch locally: "The main process is not built yet."
-      - run: npm run build:main
+      # refuses to run any suite at all without both halves built —
+      # confirmed live setting up this branch locally.
+      - run: npm run build
       - run: npm test
 
   e2e:
