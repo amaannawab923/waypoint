@@ -146,16 +146,27 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
   } | null>(null);
   const [lastFailedPrompt, setLastFailedPrompt] = useState<string | null>(null);
   const unsubscribeStreamRef = useRef<(() => void) | null>(null);
-  // Bumped at the start of every runAndPersist call; each call's onChunk/
-  // onDone/onError closures capture the value current at their own start
-  // and compare against the ref before touching any state. A run's own
-  // process can outlive the run logically "finishing" on this side (e.g. an
-  // auth_error is reported immediately while the CLI is still mid-retry
-  // internally, or the user hits "Try again" on a run that never actually
-  // exited) — without this guard, a late chunk from that stale run would
-  // land in the same `streaming` state a newer run is now writing to,
-  // interleaving two replies into one bubble.
-  const runGenerationRef = useRef(0);
+  // Bumped, per session, at the start of every runAndPersist call for that
+  // session; each call's onChunk/onDone/onError closures capture the value
+  // current at their own start and compare against the ref before touching
+  // any state. A run's own process can outlive the run logically
+  // "finishing" on this side (e.g. an auth_error is reported immediately
+  // while the CLI is still mid-retry internally, or the user hits "Try
+  // again" on a run that never actually exited) — without this guard, a
+  // late chunk from that stale run would land in the same `streaming` state
+  // a newer run is now writing to, interleaving two replies into one
+  // bubble.
+  //
+  // Keyed by sessionId, not a single shared counter: multi-session means a
+  // user can plausibly start a run in session A, switch away, and start a
+  // second run in session B while A's is still in flight — a single global
+  // counter would mark A's own, still-legitimate run stale the moment B's
+  // starts, silently discarding A's real reply (and the subscription usage
+  // spent generating it) with no error, no retry, nothing. Each session
+  // tracks its own generation so concurrent runs across different sessions
+  // can complete independently, while a superseded run *within the same*
+  // session is still correctly ignored.
+  const runGenerationRef = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
     const raf = requestAnimationFrame(() => setVisible(true));
@@ -231,9 +242,10 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     content: string,
     resumeSessionId: string | undefined,
   ) {
-    runGenerationRef.current += 1;
-    const generation = runGenerationRef.current;
-    const isStale = () => runGenerationRef.current !== generation;
+    const generation = (runGenerationRef.current.get(sessionId) ?? 0) + 1;
+    runGenerationRef.current.set(sessionId, generation);
+    const isStale = () =>
+      runGenerationRef.current.get(sessionId) !== generation;
 
     setStreaming({ sessionId, text: '' });
     setRunError(null);
