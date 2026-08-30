@@ -125,7 +125,11 @@ describe('CopilotSessionList', () => {
     expect(screen.getByText('Older')).toBeInTheDocument();
   });
 
-  it('shows a message preview, or "No messages yet" for an empty session', () => {
+  it('shows a message preview when cached, or "Tap to open" otherwise', () => {
+    // The list endpoint doesn't include messages (issue #11) — a session's
+    // messages only populate once it's been opened, so an empty
+    // `messages` array here covers both "genuinely empty" and "not yet
+    // fetched" honestly, rather than claiming "No messages yet".
     renderList({
       sessions: [
         session({
@@ -140,12 +144,12 @@ describe('CopilotSessionList', () => {
             },
           ],
         }),
-        session({ id: 'b', title: 'No messages' }),
+        session({ id: 'b', title: 'Not yet opened' }),
       ],
     });
 
     expect(screen.getByText('hello there')).toBeInTheDocument();
-    expect(screen.getByText('No messages yet')).toBeInTheDocument();
+    expect(screen.getByText('Tap to open')).toBeInTheDocument();
   });
 
   it('opens a session when its row is clicked', () => {
