@@ -7,7 +7,26 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react';
+import {
+  listCopilotConversations,
+  createCopilotConversation,
+  getCopilotConversation,
+  renameCopilotConversation,
+  deleteCopilotConversation,
+  postCopilotUserMessage,
+  postCopilotAssistantMessage,
+} from '@/mock/api';
 import { CopilotPanel } from './CopilotPanel';
+
+jest.mock('@/mock/api', () => ({
+  listCopilotConversations: jest.fn(),
+  createCopilotConversation: jest.fn(),
+  getCopilotConversation: jest.fn(),
+  renameCopilotConversation: jest.fn(),
+  deleteCopilotConversation: jest.fn(),
+  postCopilotUserMessage: jest.fn(),
+  postCopilotAssistantMessage: jest.fn(),
+}));
 
 type RunPromptHandlers = {
   onChunk: (text: string) => void;
@@ -43,6 +62,159 @@ function mockCopilotIpc() {
     },
   };
 }
+
+// A small in-memory fake backend (issue #11's migration) standing in for
+// the real Postgres-backed service — mirrors its actual behavior (id
+// generation, updatedAt-descending listing, auto-titling the conversation
+// from its first message, never overwriting claudeSessionId with null)
+// closely enough that these tests exercise the same UI flows the real
+// backend would produce, without a real HTTP round trip.
+interface FakeMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+}
+interface FakeConversation {
+  id: string;
+  memberId: string;
+  title: string;
+  claudeSessionId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  messages: FakeMessage[];
+}
+
+const TITLE_MAX_LENGTH = 60;
+function truncateTitle(content: string): string {
+  const singleLine = content.replace(/\s+/g, ' ').trim();
+  if (!singleLine) return 'New session';
+  if (singleLine.length <= TITLE_MAX_LENGTH) return singleLine;
+  return `${singleLine.slice(0, TITLE_MAX_LENGTH - 1).trimEnd()}…`;
+}
+
+let store: FakeConversation[];
+let idCounter: number;
+function nextId(prefix: string): string {
+  idCounter += 1;
+  return `${prefix}-${idCounter}`;
+}
+
+function summaryOf(conv: FakeConversation) {
+  const { messages: _messages, ...summary } = conv;
+  return summary;
+}
+
+beforeEach(() => {
+  store = [];
+  idCounter = 0;
+
+  jest
+    .mocked(listCopilotConversations)
+    .mockImplementation(async () =>
+      [...store]
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+        .map(summaryOf),
+    );
+
+  jest.mocked(createCopilotConversation).mockImplementation(async () => {
+    const now = new Date().toISOString();
+    const conv: FakeConversation = {
+      id: nextId('conv'),
+      memberId: 'mem-1',
+      title: 'New session',
+      claudeSessionId: null,
+      createdAt: now,
+      updatedAt: now,
+      messages: [],
+    };
+    store.push(conv);
+    return summaryOf(conv);
+  });
+
+  jest.mocked(getCopilotConversation).mockImplementation(async (id: string) => {
+    const conv = store.find((c) => c.id === id);
+    if (!conv) throw new Error(`conversation not found: ${id}`);
+    return {
+      ...conv,
+      messages: conv.messages.map((m, index) => ({
+        ...m,
+        conversationId: conv.id,
+        seq: index + 1,
+      })),
+    };
+  });
+
+  jest
+    .mocked(renameCopilotConversation)
+    .mockImplementation(async (id: string, title: string) => {
+      const conv = store.find((c) => c.id === id);
+      if (!conv) throw new Error(`conversation not found: ${id}`);
+      conv.title = title;
+      conv.updatedAt = new Date().toISOString();
+      return summaryOf(conv);
+    });
+
+  jest
+    .mocked(deleteCopilotConversation)
+    .mockImplementation(async (id: string) => {
+      store = store.filter((c) => c.id !== id);
+    });
+
+  jest
+    .mocked(postCopilotUserMessage)
+    .mockImplementation(async (conversationId: string, content: string) => {
+      const conv = store.find((c) => c.id === conversationId);
+      if (!conv) throw new Error(`conversation not found: ${conversationId}`);
+      const message: FakeMessage = {
+        id: nextId('msg'),
+        role: 'user',
+        content,
+        createdAt: new Date().toISOString(),
+      };
+      conv.messages.push(message);
+      conv.updatedAt = message.createdAt;
+      if (conv.messages.length === 1) conv.title = truncateTitle(content);
+      return {
+        id: message.id,
+        conversationId,
+        role: 'user',
+        content,
+        seq: conv.messages.length,
+        createdAt: message.createdAt,
+      };
+    });
+
+  jest
+    .mocked(postCopilotAssistantMessage)
+    .mockImplementation(
+      async (
+        conversationId: string,
+        content: string,
+        claudeSessionId: string | null,
+      ) => {
+        const conv = store.find((c) => c.id === conversationId);
+        if (!conv) throw new Error(`conversation not found: ${conversationId}`);
+        const message: FakeMessage = {
+          id: nextId('msg'),
+          role: 'assistant',
+          content,
+          createdAt: new Date().toISOString(),
+        };
+        conv.messages.push(message);
+        conv.updatedAt = message.createdAt;
+        if (claudeSessionId !== null) conv.claudeSessionId = claudeSessionId;
+        return {
+          id: message.id,
+          conversationId,
+          role: 'assistant',
+          content,
+          seq: conv.messages.length,
+          createdAt: message.createdAt,
+        };
+      },
+    );
+});
 
 function getTextarea() {
   return screen.getByPlaceholderText('Ask Copilot…') as HTMLTextAreaElement;
@@ -84,7 +256,6 @@ async function waitForRun(prompt: string) {
 }
 
 beforeEach(() => {
-  localStorage.clear();
   copilotIpc = mockCopilotIpc();
   // A plain assignment, not Object.defineProperty: the pre-multi-session
   // suite found that a second Object.defineProperty(window, 'electron', ...)
@@ -150,22 +321,106 @@ describe('CopilotPanel', () => {
     // and the just-created session's own (still-default) title — the
     // second one is what proves the session survived the trip back to the
     // list.
-    expect(screen.getAllByText('New session')).toHaveLength(2);
+    await waitFor(() =>
+      expect(screen.getAllByText('New session')).toHaveLength(2),
+    );
     expect(screen.queryByText(/No sessions yet/i)).not.toBeInTheDocument();
   });
 
+  describe('session list load failure', () => {
+    // Regression coverage: a failed list fetch used to render identically to
+    // a genuinely empty list ("No sessions yet") — indistinguishable from
+    // real data loss to a user who actually has history. See
+    // useCopilotConversations.ts's `error` and CopilotPanel.tsx's `listError`.
+    it('shows an error with a retry instead of "No sessions yet" when the list fetch fails', async () => {
+      jest
+        .mocked(listCopilotConversations)
+        .mockRejectedValueOnce(new Error('network down'));
+      render(<CopilotPanel onClose={jest.fn()} />);
+
+      expect(
+        await screen.findByText(/Failed to load your Copilot sessions/i),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/No sessions yet/i)).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByText('Try again'));
+
+      expect(await screen.findByText(/No sessions yet/i)).toBeInTheDocument();
+      expect(
+        screen.queryByText(/Failed to load your Copilot sessions/i),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  describe('opening a session whose history fails to fetch', () => {
+    // Regression coverage: a failed openSession() used to clear the loading
+    // flag with no error shown, leaving the chat view rendering "Ask Copilot
+    // anything" — identical to a real empty conversation, silently hiding
+    // that real history failed to load.
+    it('shows an error with a retry instead of the empty-conversation prompt', async () => {
+      // A session with real history, populated the normal way (create, send,
+      // wait for reply) — its messages land in this hook instance's cache as
+      // a side effect of having been open, which would defeat the point of
+      // this test (openSession() short-circuits on an already-cached id, see
+      // its own "no-op if already cached" comment). Unmount and remount, the
+      // same way the "Loading messages…" coverage above does, to get a fresh
+      // hook instance whose cache is genuinely cold for this session.
+      const { unmount } = render(<CopilotPanel onClose={jest.fn()} />);
+      await screen.findByText(/No sessions yet/i);
+      await createAndOpenSession();
+      await typeAndSend('has real history');
+      const handlers = await waitForRun('has real history');
+      await act(async () => {
+        handlers.onDone({ fullText: 'a reply', sessionId: 'sess-1' });
+      });
+      unmount();
+      render(<CopilotPanel onClose={jest.fn()} />);
+      const row = await screen.findByText('has real history');
+
+      jest
+        .mocked(getCopilotConversation)
+        .mockRejectedValueOnce(new Error('conversation fetch failed'));
+      fireEvent.click(row);
+
+      expect(
+        await screen.findByText(/Failed to load the conversation history/i),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText(/Ask Copilot anything/i),
+      ).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByText('Try again'));
+
+      // The retry succeeds (getCopilotConversation only rejected once) and
+      // the real history — not an empty conversation — is what comes back.
+      await waitFor(() =>
+        expect(
+          screen.queryByText(/Failed to load the conversation history/i),
+        ).not.toBeInTheDocument(),
+      );
+      expect(
+        await screen.findByText('has real history', { selector: 'div' }),
+      ).toBeInTheDocument();
+      expect(
+        await screen.findByText('a reply', { selector: 'div' }),
+      ).toBeInTheDocument();
+    });
+  });
+
   describe('sending a message', () => {
-    it('appends the user message immediately (no network round trip), then streams and persists the reply', async () => {
+    it('appends the user message immediately, then streams and persists the reply', async () => {
       render(<CopilotPanel onClose={jest.fn()} />);
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
 
       await typeAndSend('What is my sprint status?');
 
-      // Appears immediately — appendMessage is a synchronous, local write,
-      // not something waiting on a POST to settle.
+      // Appears fast — a local optimistic write, not waiting on the whole
+      // round trip to settle before showing anything.
       expect(
-        screen.getByText('What is my sprint status?', { selector: 'div' }),
+        await screen.findByText('What is my sprint status?', {
+          selector: 'div',
+        }),
       ).toBeInTheDocument();
 
       const handlers = await waitForRun('What is my sprint status?');
@@ -186,12 +441,20 @@ describe('CopilotPanel', () => {
       await waitFor(() => expect(getTextarea().value).toBe(''));
       // Exactly one bubble for the reply — the streamed copy must be
       // replaced by the persisted one, not stacked next to it.
-      expect(
-        screen.getAllByText('Your sprint is on track.', { selector: 'div' }),
-      ).toHaveLength(1);
+      await waitFor(() =>
+        expect(
+          screen.getAllByText('Your sprint is on track.', { selector: 'div' }),
+        ).toHaveLength(1),
+      );
+      // And it's really persisted, not just held in component state.
+      expect(postCopilotAssistantMessage).toHaveBeenCalledWith(
+        expect.any(String),
+        'Your sprint is on track.',
+        'sess-1',
+      );
     });
 
-    it('auto-titles the session from the first message sent', async () => {
+    it('auto-titles the session from the first message sent (server-derived, refetched after send)', async () => {
       render(<CopilotPanel onClose={jest.fn()} />);
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
@@ -232,7 +495,7 @@ describe('CopilotPanel', () => {
       );
     });
 
-    it('persists sent and received messages across a full panel remount (localStorage-backed)', async () => {
+    it('persists sent and received messages across a full panel remount (backend-persisted)', async () => {
       const { unmount } = render(<CopilotPanel onClose={jest.fn()} />);
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
@@ -246,18 +509,118 @@ describe('CopilotPanel', () => {
       unmount();
 
       // A fresh mount (as if the panel were closed and reopened) always
-      // opens back on the session list — reads the same localStorage-backed
-      // store, not component state.
+      // opens back on the session list — reads from the same fake backend
+      // store, not component state, proving persistence survived the
+      // remount.
       render(<CopilotPanel onClose={jest.fn()} />);
       expect(await screen.findByText('remember this')).toBeInTheDocument();
 
       fireEvent.click(screen.getByText('remember this'));
+      // The list endpoint never included messages — a fresh hook instance
+      // has to lazily fetch them, so these are real async appearances now,
+      // not synchronous ones.
       expect(
         await screen.findByText('remember this', { selector: 'div' }),
       ).toBeInTheDocument();
       expect(
-        screen.getByText('remembered reply', { selector: 'div' }),
+        await screen.findByText('remembered reply', { selector: 'div' }),
       ).toBeInTheDocument();
+    });
+
+    it('shows a "Loading messages…" placeholder while a session\'s history is being fetched', async () => {
+      const { unmount } = render(<CopilotPanel onClose={jest.fn()} />);
+      await screen.findByText(/No sessions yet/i);
+      await createAndOpenSession();
+      await typeAndSend('will be fetched later');
+      const handlers = await waitForRun('will be fetched later');
+      await act(async () => {
+        handlers.onDone({ fullText: 'a reply', sessionId: 'sess-1' });
+      });
+      // A fresh mount, not just navigating back within the same one — this
+      // hook instance's messagesById cache starts empty, so opening the
+      // session for the first time here genuinely has to fetch, rather than
+      // short-circuiting on the cache the live session above already
+      // populated (see useCopilotConversations.ts's openSession).
+      unmount();
+      render(<CopilotPanel onClose={jest.fn()} />);
+
+      // Never resolves during this test — long enough to observe the
+      // in-between loading state deterministically instead of racing it.
+      jest
+        .mocked(getCopilotConversation)
+        .mockImplementationOnce(() => new Promise(() => {}));
+      const row = await screen.findByText('will be fetched later');
+      fireEvent.click(row);
+
+      expect(await screen.findByText(/Loading messages/i)).toBeInTheDocument();
+    });
+
+    it('rolls back the optimistic user bubble when persisting the user message fails', async () => {
+      render(<CopilotPanel onClose={jest.fn()} />);
+      await screen.findByText(/No sessions yet/i);
+      await createAndOpenSession();
+
+      jest
+        .mocked(postCopilotUserMessage)
+        .mockRejectedValueOnce(new Error('network error'));
+
+      await act(async () => {
+        await typeAndSend('this will fail to save');
+      });
+
+      await waitFor(() =>
+        expect(
+          screen.queryByText('this will fail to save', { selector: 'div' }),
+        ).not.toBeInTheDocument(),
+      );
+      // The failed run never even started — a message that couldn't be
+      // saved shouldn't be sent to Claude Code either.
+      expect(copilotIpc.runPrompt).not.toHaveBeenCalled();
+      // The composer's own "don't clear the draft on a failed send"
+      // behavior still holds — it's the message bubble, not the input,
+      // that gets rolled back.
+      await waitFor(() =>
+        expect(getTextarea().value).toBe('this will fail to save'),
+      );
+    });
+
+    it('offers a save-only retry (not a re-run) when persisting a successful reply fails', async () => {
+      render(<CopilotPanel onClose={jest.fn()} />);
+      await screen.findByText(/No sessions yet/i);
+      await createAndOpenSession();
+
+      jest
+        .mocked(postCopilotAssistantMessage)
+        .mockRejectedValueOnce(new Error('save failed'));
+
+      await typeAndSend('hello');
+      const handlers = await waitForRun('hello');
+      await act(async () => {
+        handlers.onDone({ fullText: 'a real reply', sessionId: 'sess-1' });
+      });
+
+      expect(await screen.findByText(/couldn't save it/i)).toBeInTheDocument();
+      // The reply text itself isn't lost even though saving it failed.
+      expect(
+        screen.queryByText('a real reply', { selector: 'div' }),
+      ).not.toBeInTheDocument();
+
+      act(() => {
+        fireEvent.click(screen.getByText('Try again'));
+      });
+
+      await waitFor(() =>
+        expect(
+          screen.getByText('a real reply', { selector: 'div' }),
+        ).toBeInTheDocument(),
+      );
+      // Retrying the save must not spend a second real Claude Code turn.
+      expect(copilotIpc.runPrompt).toHaveBeenCalledTimes(1);
+      expect(postCopilotAssistantMessage).toHaveBeenLastCalledWith(
+        expect.any(String),
+        'a real reply',
+        'sess-1',
+      );
     });
 
     it('shows a clear inline error when the Claude Code run itself fails, and keeps the sent message visible', async () => {
@@ -436,13 +799,13 @@ describe('CopilotPanel', () => {
       });
 
       fireEvent.click(screen.getByRole('button', { name: 'Back to sessions' }));
-      fireEvent.click(screen.getByText('first session message'));
+      fireEvent.click(await screen.findByText('first session message'));
       expect(
         await screen.findByText('reply for session A', { selector: 'div' }),
       ).toBeInTheDocument();
 
       fireEvent.click(screen.getByRole('button', { name: 'Back to sessions' }));
-      fireEvent.click(screen.getByText('second session message'));
+      fireEvent.click(await screen.findByText('second session message'));
       expect(
         await screen.findByText('reply for session B', { selector: 'div' }),
       ).toBeInTheDocument();
