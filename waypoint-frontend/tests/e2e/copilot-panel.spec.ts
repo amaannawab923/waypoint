@@ -38,10 +38,13 @@ test('sends a message through the real IPC bridge', async () => {
     await window.getByLabel('Open Copilot').click();
     const composer = window.getByPlaceholder('Ask Copilot…');
     // Visible as soon as the panel mounts, but stays disabled until the
-    // conversation finishes loading — a cold CI backend (fresh migrate,
-    // first request) can take a while, longer than Playwright's default
-    // 30s action timeout covers on its own (hit live in CI).
-    await expect(composer).toBeEnabled({ timeout: 30_000 });
+    // conversation finishes loading. This is the 4th Electron instance
+    // launched in this CI job (3 prior tests each launch and close their
+    // own) — 30s wasn't consistently enough there, apparently real
+    // resource contention on a modest runner rather than a genuine app
+    // bug (the same load reliably finishes well under 15s as the *first*
+    // launch in the "opens the panel" test above).
+    await expect(composer).toBeEnabled({ timeout: 60_000 });
 
     const marker = `hello from e2e ${Date.now()}`;
     await composer.fill(marker);
