@@ -113,11 +113,23 @@ beforeEach(() => {
   spawnCalls.length = 0;
   lastChild = null;
   delete process.env.CLAUDE_CLI_PATH;
+  delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  delete process.env.ANTHROPIC_API_KEY;
   spawnImpl = (binary, args, options) => {
     lastChild = makeFakeChild();
     spawnCalls.push({ binary, args, options });
     return lastChild;
   };
+});
+
+// `inFlight` is module-level state in copilotConnect.ts, not reset between
+// tests on its own — a test that starts a connect without ever exiting or
+// cancelling it would otherwise leak into the next test and trip the
+// single-flight guard there. killAllCopilotConnectProcesses() both kills
+// and clears the map, so this runs on the mock's own call log after each
+// test's own assertions have already been made.
+afterEach(() => {
+  killAllCopilotConnectProcesses();
 });
 
 describe('registerCopilotConnectIpc', () => {
@@ -146,6 +158,56 @@ describe('registerCopilotConnectIpc', () => {
     expect(options.cwd).toBe(os.tmpdir());
     expect(String(options.env?.PATH)).toContain('/opt/homebrew/bin');
     expect(String(options.env?.PATH)).toContain('/usr/local/bin');
+  });
+
+  // `setup-token` runs a fresh, real interactive OAuth handshake — an
+  // inherited credential from a previous connect (or an ambient API key)
+  // has no business influencing whether that handshake actually happens,
+  // the same reasoning copilotAuth.ts's buildProbeEnv() already applies to
+  // validating a candidate token.
+  it('strips an ambient CLAUDE_CODE_OAUTH_TOKEN and ANTHROPIC_API_KEY from the spawned env', () => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'sk-ant-oat01-ambient';
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-api-ambient';
+    const win = fakeWindow();
+    start(win);
+
+    expect(spawnCalls[0].options.env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(spawnCalls[0].options.env?.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+
+  // This flow is inherently one-at-a-time: the CLI drives a single
+  // interactive OAuth handshake in the user's own browser. Two independent
+  // entry points (the chat panel's auth_failed recovery and the Settings
+  // page) can each open their own CopilotConnectModal — without this guard,
+  // both could spawn their own real PTY and each open their own browser
+  // tab for their own OAuth flow.
+  it('refuses a second connect while one is already in flight, without spawning a second process', () => {
+    const win = fakeWindow();
+    start(win, 'req-1');
+    expect(spawnCalls).toHaveLength(1);
+
+    getHandler('copilot:auth:connect:start')({}, { requestId: 'req-2' });
+
+    expect(spawnCalls).toHaveLength(1);
+    expect(win.webContents.send).toHaveBeenCalledWith(
+      'copilot:auth:connect:exit',
+      {
+        requestId: 'req-2',
+        code: null,
+        spawnError:
+          'A sign-in is already in progress — finish or cancel that one first.',
+      },
+    );
+  });
+
+  it('allows a new connect once the in-flight one has exited', () => {
+    const win = fakeWindow();
+    const child = start(win, 'req-1');
+    child.emitExit(0);
+
+    getHandler('copilot:auth:connect:start')({}, { requestId: 'req-2' });
+
+    expect(spawnCalls).toHaveLength(2);
   });
 
   it('streams each PTY data chunk to the renderer, tagged with the request id', () => {
@@ -231,12 +293,12 @@ describe('registerCopilotConnectIpc', () => {
 });
 
 describe('copilot:auth:open-external', () => {
-  it('opens a real claude.com OAuth URL', () => {
+  it('opens a real claude.com OAuth URL', async () => {
     const win = fakeWindow();
     registerCopilotConnectIpc(() => win as unknown as BrowserWindow);
     const handler = getOpenExternalHandler();
 
-    const result = handler(
+    const result = await handler(
       {},
       'https://claude.com/cai/oauth/authorize?code=abc',
     );
@@ -247,23 +309,23 @@ describe('copilot:auth:open-external', () => {
     );
   });
 
-  it('opens a real console.anthropic.com URL', () => {
+  it('opens a real console.anthropic.com URL', async () => {
     const win = fakeWindow();
     registerCopilotConnectIpc(() => win as unknown as BrowserWindow);
     const handler = getOpenExternalHandler();
 
-    const result = handler({}, 'https://console.anthropic.com/some/path');
+    const result = await handler({}, 'https://console.anthropic.com/some/path');
 
     expect(result).toEqual({ ok: true });
     expect(shellOpenExternalMock).toHaveBeenCalledTimes(1);
   });
 
-  it('refuses a non-https URL', () => {
+  it('refuses a non-https URL', async () => {
     const win = fakeWindow();
     registerCopilotConnectIpc(() => win as unknown as BrowserWindow);
     const handler = getOpenExternalHandler();
 
-    const result = handler(
+    const result = await handler(
       {},
       'http://claude.com/cai/oauth/authorize?code=abc',
     );
@@ -275,47 +337,58 @@ describe('copilot:auth:open-external', () => {
   // The whole point of this being a narrowly-scoped opener rather than a
   // general "open any URL" bridge — it must never become an open redirect
   // for whatever else might call it.
-  it('refuses a URL on an unrelated host', () => {
+  it('refuses a URL on an unrelated host', async () => {
     const win = fakeWindow();
     registerCopilotConnectIpc(() => win as unknown as BrowserWindow);
     const handler = getOpenExternalHandler();
 
-    const result = handler({}, 'https://evil.example.com/phish');
+    const result = await handler({}, 'https://evil.example.com/phish');
 
     expect(result).toEqual({ ok: false });
     expect(shellOpenExternalMock).not.toHaveBeenCalled();
   });
 
-  it('refuses a malformed URL string instead of throwing', () => {
+  it('refuses a malformed URL string instead of throwing', async () => {
     const win = fakeWindow();
     registerCopilotConnectIpc(() => win as unknown as BrowserWindow);
     const handler = getOpenExternalHandler();
 
-    expect(() => handler({}, 'not a url')).not.toThrow();
-    expect(handler({}, 'not a url')).toEqual({ ok: false });
+    await expect(handler({}, 'not a url')).resolves.toEqual({ ok: false });
   });
 
-  it('refuses a non-string payload', () => {
+  it('refuses a non-string payload', async () => {
     const win = fakeWindow();
     registerCopilotConnectIpc(() => win as unknown as BrowserWindow);
     const handler = getOpenExternalHandler();
 
-    expect(handler({}, 12345)).toEqual({ ok: false });
+    await expect(handler({}, 12345)).resolves.toEqual({ ok: false });
     expect(shellOpenExternalMock).not.toHaveBeenCalled();
+  });
+
+  // Previously fire-and-forget: shell.openExternal's own promise rejecting
+  // (no default browser registered, a broken xdg-open, ...) went both
+  // unnoticed by the caller (an unconditional { ok: true } regardless) and
+  // unhandled in the main process.
+  it('returns { ok: false } when shell.openExternal itself rejects, without throwing', async () => {
+    shellOpenExternalMock.mockRejectedValueOnce(new Error('no handler'));
+    const win = fakeWindow();
+    registerCopilotConnectIpc(() => win as unknown as BrowserWindow);
+    const handler = getOpenExternalHandler();
+
+    await expect(
+      handler({}, 'https://claude.com/cai/oauth/authorize?code=abc'),
+    ).resolves.toEqual({ ok: false });
   });
 });
 
 describe('killAllCopilotConnectProcesses', () => {
-  it('kills every tracked in-flight process', () => {
+  it('kills the in-flight process', () => {
     const win = fakeWindow();
-    const child1 = start(win, 'req-1');
-    getHandler('copilot:auth:connect:start')({}, { requestId: 'req-2' });
-    const child2 = lastChild as FakeChild;
+    const child = start(win, 'req-1');
 
     killAllCopilotConnectProcesses();
 
-    expect(child1.kill).toHaveBeenCalledTimes(1);
-    expect(child2.kill).toHaveBeenCalledTimes(1);
+    expect(child.kill).toHaveBeenCalledTimes(1);
   });
 
   it('does not re-kill a process that already exited on its own', () => {
