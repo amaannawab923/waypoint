@@ -7,13 +7,25 @@ import { Button } from '@/components/ui/Button';
 type FlowState = 'prompt' | 'connecting' | 'success' | 'error';
 
 // Anthropic's own token shape (code.claude.com/docs/en/authentication):
-// "sk-ant-oat" prefixed. 20+ trailing chars is generous on purpose — this
-// only needs to not under-match, since whatever it captures still goes
+// "sk-ant-oat" prefixed. A real, live-captured token ran 90+ chars past
+// this prefix — 40 is a floor well below that, not a ceiling, chosen to
+// reject an accidentally-truncated ~30-char fragment (a real failure mode
+// hit building this: a box-drawing border character glued onto a token
+// mid-match — see bufferText below) while staying far under-strict enough
+// to never reject a genuine token. Whatever this captures still goes
 // through the real save/probe flow (copilot.auth.save) before ever being
-// trusted or stored.
-const TOKEN_PATTERN = /sk-ant-oat[\w-]{20,}/;
+// trusted or stored, so a false accept here just costs one wasted probe,
+// not a silent bad save.
+const TOKEN_PATTERN = /sk-ant-oat[\w-]{40,}/;
+// RFC 3986 unreserved + sub-delims + the URI-structural chars a real query
+// string uses — deliberately not "anything but whitespace/quotes": a stray
+// box-drawing border character (│, ║, ...) sitting directly against a
+// wrapped URL fragment is invisible to a permissive class like that (both
+// reproduced live against boxed TUI output), but isn't a valid URI
+// character at all, so restricting to the real URI alphabet excludes it
+// for free.
 const AUTHORIZE_URL_PATTERN =
-  /https:\/\/claude\.com\/cai\/oauth\/authorize\?[^\s"'<>]+/;
+  /https:\/\/claude\.com\/cai\/oauth\/authorize\?[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+/;
 
 // Neither pattern is end-anchored (a token/URL has no fixed length), so a
 // match found the instant new data lands can just be a still-growing
@@ -23,6 +35,28 @@ const AUTHORIZE_URL_PATTERN =
 // resolved immediately on process exit instead, since nothing else is ever
 // coming after that.
 const SETTLE_DEBOUNCE_MS = 150;
+
+// A conservative bound on how much raw output to keep for the fallback
+// scan below — vastly more than `setup-token` could ever legitimately
+// print, purely so a pathological/looping CLI can't grow this unboundedly
+// for the life of one connect attempt.
+const RAW_ACCUMULATOR_CAP = 50_000;
+
+// Strips ANSI/VT escape sequences (cursor movement, screen clears, alt-
+// screen switches, colors) without attempting to interpret them — unlike
+// bufferText's terminal-state resolution, this doesn't need to know what
+// they *mean*, only that they aren't real content. Used only as a fallback
+// source (see checkSettled) precisely because it does NOT correctly resolve
+// cursor-positioned overwrites the way xterm does; it's a safety net for
+// when xterm's own resolved state has lost the content some other way, not
+// a replacement for it.
+// Matching the real ESC byte is the entire point here — this exists to
+// strip ANSI/VT escape sequences.
+// eslint-disable-next-line no-control-regex
+const ANSI_ESCAPE_PATTERN = /\x1b(?:[@-Z\\-_]|\[[0-9?;]*[ -/]*[@-~])/g;
+function stripAnsi(text: string): string {
+  return text.replace(ANSI_ESCAPE_PATTERN, '');
+}
 
 /**
  * Runs `claude setup-token` (issue: connecting a Claude subscription
@@ -60,12 +94,20 @@ export function CopilotConnectModal({
   const [manualToken, setManualToken] = useState('');
   const [manualSaving, setManualSaving] = useState(false);
   const [manualError, setManualError] = useState<string | null>(null);
+  // Shown as a manual-open fallback the instant a URL is found — populated
+  // regardless of whether the automatic shell.openExternal call actually
+  // succeeds, so there's always a way forward even if it silently can't.
+  const [authorizeUrl, setAuthorizeUrl] = useState<string | null>(null);
+  const [browserOpenFailed, setBrowserOpenFailed] = useState(false);
 
   const cleanupRef = useRef<(() => void) | null>(null);
   const termRef = useRef<Terminal | null>(null);
-  const urlOpenedRef = useRef(false);
+  const requestIdRef = useRef<string | null>(null);
+  const authorizeUrlRef = useRef<string | null>(null);
   const settledRef = useRef(false);
   const settleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const successTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rawAccumulatorRef = useRef('');
 
   function clearSettleTimer() {
     if (settleTimeoutRef.current) {
@@ -74,12 +116,37 @@ export function CopilotConnectModal({
     }
   }
 
-  function teardown() {
+  function clearSuccessTimer() {
+    if (successTimeoutRef.current) {
+      clearTimeout(successTimeoutRef.current);
+      successTimeoutRef.current = null;
+    }
+  }
+
+  // Stops listening on this side only — does NOT kill the main-process PTY.
+  // This is the unmount path (see the effect below): a real unmount (route
+  // navigation away from Settings, say) shouldn't guarantee-fail a sign-in
+  // that might still complete moments later with nobody watching for it.
+  function stopListening() {
     clearSettleTimer();
+    clearSuccessTimer();
     cleanupRef.current?.();
     cleanupRef.current = null;
     termRef.current?.dispose();
     termRef.current = null;
+  }
+
+  // Full stop: stopListening() plus an explicit kill of the PTY. Used
+  // whenever the user (or the flow itself, on success) is actually done
+  // with this attempt — Cancel, closing the modal, starting a fresh
+  // attempt over an old one, or a successful match — as opposed to a plain
+  // component unmount, which uses stopListening() alone.
+  function teardown() {
+    stopListening();
+    if (requestIdRef.current) {
+      window.electron.copilot.auth.cancel(requestIdRef.current);
+    }
+    requestIdRef.current = null;
   }
 
   // Resets to the initial prompt every time the modal opens fresh — this is
@@ -93,6 +160,8 @@ export function CopilotConnectModal({
       setShowFallback(false);
       setManualToken('');
       setManualError(null);
+      setAuthorizeUrl(null);
+      setBrowserOpenFailed(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -104,7 +173,7 @@ export function CopilotConnectModal({
   // would only turn a possibly-still-successful flow into a guaranteed
   // failure for no benefit.
   useEffect(() => {
-    return () => teardown();
+    return () => stopListening();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -114,11 +183,7 @@ export function CopilotConnectModal({
   // stays false on that row, making "genuine newline" and "simulated wrap"
   // indistinguishable from buffer state alone) would otherwise insert a
   // literal break in the middle of a token or URL that only reads as
-  // contiguous once flattened. Safe for what this is actually used for:
-  // TOKEN_PATTERN and AUTHORIZE_URL_PATTERN are both self-terminating on
-  // whitespace/punctuation outside their own character classes, so
-  // flattening a genuine line break elsewhere just can't produce a false
-  // match.
+  // contiguous once flattened.
   function bufferText(term: Terminal): string {
     const buf = term.buffer.active;
     const lines: string[] = [];
@@ -129,29 +194,63 @@ export function CopilotConnectModal({
     return lines.join('');
   }
 
+  function attemptOpenUrl(url: string) {
+    setBrowserOpenFailed(false);
+    window.electron.copilot.auth
+      .openExternal(url)
+      .then((result) => setBrowserOpenFailed(!result.ok))
+      .catch(() => setBrowserOpenFailed(true));
+  }
+
   async function finishWithToken(token: string) {
-    const result = await window.electron.copilot.auth.save(token);
-    if (result.ok) {
-      setState('success');
-      setTimeout(() => {
-        onConnected(result.last4);
-        onClose();
-      }, 1400);
-    } else {
+    try {
+      const result = await window.electron.copilot.auth.save(token);
+      if (result.ok) {
+        setState('success');
+        successTimeoutRef.current = setTimeout(() => {
+          onConnected(result.last4);
+          onClose();
+        }, 1400);
+      } else {
+        setState('error');
+        setErrorMessage(result.message);
+      }
+    } catch (err) {
       setState('error');
-      setErrorMessage(result.message);
+      setErrorMessage(
+        err instanceof Error
+          ? err.message
+          : "Couldn't save the token — try again.",
+      );
     }
   }
 
   function startConnect() {
+    // Clean up any previous attempt first — retrying from the error state
+    // re-enters here, and without this, each retry would leak the prior
+    // attempt's Terminal instance and orphan its still-tracked PTY.
+    teardown();
+
     setState('connecting');
     setErrorMessage(null);
     setShowFallback(false);
-    urlOpenedRef.current = false;
+    setAuthorizeUrl(null);
+    setBrowserOpenFailed(false);
+    authorizeUrlRef.current = null;
     settledRef.current = false;
+    rawAccumulatorRef.current = '';
 
     const requestId = `connect-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    const term = new Terminal({ cols: 120, rows: 40, allowProposedApi: true });
+    requestIdRef.current = requestId;
+    const term = new Terminal({
+      cols: 120,
+      rows: 40,
+      allowProposedApi: true,
+      // Well beyond anything setup-token legitimately prints, so a wall of
+      // output can't scroll a still-needed token/URL out of the resolved
+      // buffer this component actually scans.
+      scrollback: 5000,
+    });
     termRef.current = term;
 
     // Fires after any settle-quiet period (or immediately on exit) — always
@@ -160,16 +259,29 @@ export function CopilotConnectModal({
     function checkSettled() {
       if (!termRef.current || settledRef.current) return;
       const text = bufferText(termRef.current);
+      // A secondary source, not the primary one: xterm's resolved buffer
+      // correctly handles cursor-positioned overwrites and is preferred
+      // whenever it has a match. This raw, ANSI-stripped concatenation of
+      // every chunk ever received exists only for what the resolved buffer
+      // can't represent — a full clear, an alt-screen switch, or output
+      // exceeding scrollback — any of which would otherwise silently
+      // destroy the only copy of a token/URL already printed.
+      const rawText = stripAnsi(rawAccumulatorRef.current);
 
-      if (!urlOpenedRef.current) {
-        const urlMatch = text.match(AUTHORIZE_URL_PATTERN);
+      if (!authorizeUrlRef.current) {
+        const urlMatch =
+          text.match(AUTHORIZE_URL_PATTERN) ??
+          rawText.match(AUTHORIZE_URL_PATTERN);
         if (urlMatch) {
-          urlOpenedRef.current = true;
-          window.electron.copilot.auth.openExternal(urlMatch[0]);
+          const [matchedUrl] = urlMatch;
+          authorizeUrlRef.current = matchedUrl;
+          setAuthorizeUrl(matchedUrl);
+          attemptOpenUrl(matchedUrl);
         }
       }
 
-      const tokenMatch = text.match(TOKEN_PATTERN);
+      const tokenMatch =
+        text.match(TOKEN_PATTERN) ?? rawText.match(TOKEN_PATTERN);
       if (tokenMatch) {
         settledRef.current = true;
         teardown();
@@ -186,6 +298,9 @@ export function CopilotConnectModal({
       // growing in the next chunk — checkSettled() only actually runs once
       // output has gone quiet for SETTLE_DEBOUNCE_MS.
       onData: (chunk) => {
+        rawAccumulatorRef.current = (rawAccumulatorRef.current + chunk).slice(
+          -RAW_ACCUMULATOR_CAP,
+        );
         term.write(chunk, () => {
           if (settledRef.current) return;
           clearSettleTimer();
@@ -224,15 +339,26 @@ export function CopilotConnectModal({
     if (!manualToken.trim() || manualSaving) return;
     setManualSaving(true);
     setManualError(null);
-    const result = await window.electron.copilot.auth.save(manualToken.trim());
-    setManualSaving(false);
-    if (!result.ok) {
-      setManualError(result.message);
-      return;
+    try {
+      const result = await window.electron.copilot.auth.save(
+        manualToken.trim(),
+      );
+      if (!result.ok) {
+        setManualError(result.message);
+        return;
+      }
+      setManualToken('');
+      onConnected(result.last4);
+      onClose();
+    } catch (err) {
+      setManualError(
+        err instanceof Error
+          ? err.message
+          : "Couldn't save the token — try again.",
+      );
+    } finally {
+      setManualSaving(false);
     }
-    setManualToken('');
-    onConnected(result.last4);
-    onClose();
   }
 
   return (
@@ -271,9 +397,27 @@ export function CopilotConnectModal({
               Waiting for sign-in…
             </p>
             <p className="max-w-[30ch] text-sm text-text-secondary">
-              A browser window opened to sign in with Anthropic. Come back here
-              once you&apos;re done.
+              {authorizeUrl && !browserOpenFailed
+                ? "A browser window opened to sign in with Anthropic. Come back here once you're done."
+                : "We're getting your sign-in link ready — this opens your browser automatically."}
             </p>
+            {browserOpenFailed && authorizeUrl && (
+              <div className="flex w-full flex-col gap-1.5 rounded-[var(--radius-sm)] border border-dashed border-border-strong bg-surface-2 p-2.5 text-left">
+                <p className="text-xs text-danger">
+                  Couldn&apos;t open your browser automatically.
+                </p>
+                <p className="text-xs break-all font-mono text-[11px] text-text-muted select-all">
+                  {authorizeUrl}
+                </p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => attemptOpenUrl(authorizeUrl)}
+                >
+                  Try opening again
+                </Button>
+              </div>
+            )}
             <Button
               variant="ghost"
               onClick={cancelConnect}
