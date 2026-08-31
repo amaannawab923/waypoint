@@ -1,8 +1,9 @@
 import { spawn } from 'child_process';
 import * as os from 'os';
 import * as path from 'path';
-import { app, ipcMain, type BrowserWindow } from 'electron';
+import { ipcMain, type BrowserWindow } from 'electron';
 import { getStoredSubscriptionToken } from './copilotAuth';
+import { copilotClaudeConfigDir } from './copilotConfigDir';
 import { parseStreamEventLine } from './parseStreamEvent';
 
 // Copilot's persona (issue #7). Layered on top of Claude Code's own default
@@ -88,13 +89,40 @@ function mcpConfigArg(): string {
 // this file's own cwd: os.tmpdir() below, every Copilot conversation on the
 // machine — and any other /tmp-cwd Claude Code session — would share ONE
 // memory namespace, leaking conversation content across unrelated Copilot
-// sessions. CLAUDE_CONFIG_DIR (set in buildEnv() below) is what actually
-// fixes that: pointed at an app-owned directory, confirmed live it
-// relocates memory_paths.auto (and the rest of the CLI's config home)
-// under that directory instead of the user's real one. So isolation here
-// is two independent mechanisms, each covering a different leak:
-// --setting-sources '' for skills/plugins/custom-agents/CLAUDE.md, and
-// CLAUDE_CONFIG_DIR for the memory/config namespace.
+// sessions. CLAUDE_CONFIG_DIR (set conditionally in buildEnv() below) is
+// what actually fixes that: pointed at an app-owned directory, confirmed
+// live it relocates memory_paths.auto (and the rest of the CLI's config
+// home) under that directory instead of the user's real one.
+//
+// It is NOT, however, safe to set unconditionally. Confirmed live:
+// CLAUDE_CONFIG_DIR also relocates where the CLI looks for CREDENTIALS
+// (~/.claude.json), not just memory. A user who's logged in ambiently via
+// a terminal `claude login` — and never connected a subscription token via
+// this app's own Settings → Profile → Copilot flow (copilotAuth.ts) — would
+// get "Not logged in · Please run /login" on every Copilot message
+// permanently once CLAUDE_CONFIG_DIR is redirected: running `claude login`
+// again doesn't fix it, because it writes to the REAL ~/.claude.json, which
+// the redirected CLAUDE_CONFIG_DIR never looks at, and there's no reliable
+// way to seed the redirected dir with working credentials either (copying
+// the real ~/.claude.json into it did not restore auth, confirmed live —
+// the real oauth token appears to live somewhere more than a portable file,
+// likely OS-keychain-backed). buildEnv() below therefore only sets
+// CLAUDE_CONFIG_DIR in the same branch that sets CLAUDE_CODE_OAUTH_TOKEN —
+// i.e. only when a subscription token is actually connected, since that
+// credential path is honored regardless of CLAUDE_CONFIG_DIR (confirmed
+// live: a bogus token under a redirected CLAUDE_CONFIG_DIR was still read
+// and sent to the server, which rejected it — proving the mechanism works
+// independent of CLAUDE_CONFIG_DIR). Ambient-login users (the majority,
+// with no token connected) get no CLAUDE_CONFIG_DIR at all and keep working
+// exactly as they did before this isolation fix landed — including the
+// shared-memory-namespace exposure described above, which is NOT a
+// regression: ambient-login users had that same exposure before any of
+// this PR's isolation work existed. So isolation here is two independent
+// mechanisms with different reach: --setting-sources '' for
+// skills/plugins/custom-agents/CLAUDE.md (applies unconditionally,
+// credential-independent), and CLAUDE_CONFIG_DIR for the memory/config
+// namespace (applies only when a connected subscription token makes it
+// safe to redirect credential lookup too).
 //
 // --tools '' turns the built-in tool set (Bash/Edit/Write/Task/WebFetch/
 // WebSearch/...) off entirely regardless of setting-sources or safe-mode
@@ -174,36 +202,35 @@ const COMMON_INSTALL_DIRS = [
   path.join(os.homedir(), '.local', 'bin'),
 ];
 
-// Same app.getPath('userData')-relative convention copilotAuth.ts's own
-// tokenFilePath() uses for app-owned data — a subdirectory here rather than
-// userData's root so a future unrelated CLAUDE_CONFIG_DIR-shaped file never
-// collides with anything else this app stores there.
-function copilotClaudeConfigDir(): string {
-  return path.join(app.getPath('userData'), 'copilot-claude-config');
-}
-
 function buildEnv(): Record<string, string | undefined> {
   const existing = (process.env.PATH || '').split(path.delimiter);
   const missing = COMMON_INSTALL_DIRS.filter((dir) => !existing.includes(dir));
   const env: Record<string, string | undefined> = {
     ...process.env,
     PATH: [...existing, ...missing].join(path.delimiter),
-    // Confirmed live (see the --setting-sources comment block above): without
-    // this, every Copilot conversation on the machine shares ONE memory
-    // namespace keyed off cwd: os.tmpdir()'s hash, since --setting-sources ''
-    // alone does not touch memory_paths — only an app-owned CLAUDE_CONFIG_DIR
-    // does.
-    CLAUDE_CONFIG_DIR: copilotClaudeConfigDir(),
   };
   // A user-connected subscription token (Settings → Profile → Copilot,
   // generated via `claude setup-token`) takes priority over whatever's
   // ambiently logged in via the CLI's own credentials — set here, the CLI
   // itself picks it up automatically and "silently uses it instead of
   // credentials stored in ~/.claude/.credentials.json" (Anthropic's own
-  // docs). Falls through to ambient login (this key simply isn't set) when
-  // no token has been connected, exactly the prior behavior.
+  // docs).
+  //
+  // CLAUDE_CONFIG_DIR is set in this SAME branch, deliberately not
+  // unconditionally — see the comment block above buildArgs for the full
+  // story. Short version: CLAUDE_CONFIG_DIR also relocates where the CLI
+  // looks up credentials, not just memory, so redirecting it is only safe
+  // once a connected subscription token means credential lookup no longer
+  // depends on the user's real ~/.claude.json. When no token is connected,
+  // neither var is set here: Copilot falls through to ambient login exactly
+  // as it did before this feature existed, with the memory-namespace
+  // isolation gap left as-is for that path (a pre-existing exposure, not a
+  // regression — see the comment block above).
   const subscriptionToken = getStoredSubscriptionToken();
-  if (subscriptionToken) env.CLAUDE_CODE_OAUTH_TOKEN = subscriptionToken;
+  if (subscriptionToken) {
+    env.CLAUDE_CODE_OAUTH_TOKEN = subscriptionToken;
+    env.CLAUDE_CONFIG_DIR = copilotClaudeConfigDir();
+  }
   return env;
 }
 
