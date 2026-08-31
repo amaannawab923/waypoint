@@ -24,7 +24,7 @@ Run the API natively instead (e.g. to use a debugger, or iterate faster
 than a container rebuild) with:
 
 ```bash
-cp .env.example .env          # DATABASE_URL, PORT (defaults to 4000)
+cp .env.example .env          # DATABASE_URL, PORT (defaults to 14000)
 docker compose up -d postgres # starts only Postgres — the api service in
                                # this same compose file runs the API in a
                                # container, which would conflict with the
@@ -35,10 +35,10 @@ npm run db:migrate            # apply them
 npm run db:seed               # seed demo data — destructive: truncates
                                # every table first, so only run this
                                # against a database you're fine resetting
-npm run dev                   # starts the API on PORT (default 4000)
+npm run dev                   # starts the API on PORT (default 14000)
 ```
 
-`waypoint-frontend` expects this running on `http://localhost:4000` by default
+`waypoint-frontend` expects this running on `http://localhost:14000` by default
 (`WAYPOINT_API_BASE_URL` on the frontend side if you need to point it elsewhere).
 
 CORS is restricted to a known set of origins (see `src/app.ts`) — by
