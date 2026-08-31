@@ -84,64 +84,60 @@ function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, '\\$&');
 }
 
-// Fallback cap for the assignee pre-query below when a caller doesn't pass
-// its own `filters.limit` (every current MCP tool caller does, via
-// effectiveLimit + 1 — see workItemTools.ts — so this mostly guards any
-// future caller that doesn't). Not meant to be precise, just to bound
-// worst-case work; the main query's own .limit() is still what
-// authoritatively caps the final result.
-const MAX_ASSIGNEE_PREQUERY_ROWS = 500;
-
 // assigneeId can't just be pushed into the WHERE alongside the others —
 // assignment is a separate many-to-many table (workItemAssignees), not a
-// column on workItems — so it's resolved as its own pre-query. Returns null
-// (not []) as a "no possible matches" sentinel so callers can short-circuit
-// before ever querying workItems, rather than issuing a query they already
-// know returns nothing. When projectId is given (listWorkItems only —
-// listAllWorkItems has no project to scope by), the pre-query itself is
-// scoped to that project via a join, which already keeps it fairly bounded
-// in practice — but neither branch had an actual LIMIT before, so an
-// assignee with many items (most sharply felt in listAllWorkItems, which
-// has no project to scope by at all) still made this pre-query fetch
-// everything before the main query's own .limit() ever got a chance to
-// matter. Both branches now cap at filters.limit (falling back to
-// MAX_ASSIGNEE_PREQUERY_ROWS) for that reason.
-async function withFilters(
-  baseConditions: SQL[],
-  filters: WorkItemFilters,
-  projectId?: string,
-  executor: Tx | typeof db = db,
-): Promise<SQL[] | null> {
+// column on workItems — so it's expressed as a subquery passed directly to
+// inArray(). Critically, this makes it participate in the SAME query as
+// every other filter (stateId, priority, dueBefore) and the SAME single
+// .limit(), applied once by the caller after ALL filters have narrowed the
+// set together.
+//
+// This replaced an earlier version that resolved assigneeId as a separate,
+// independently-limited pre-query run BEFORE the other filters ever got a
+// chance to narrow anything down. That pre-query's own cap (bounded at
+// filters.limit, or a fallback constant) was applied to the assignee's full
+// candidate set — with no ORDER BY, so which rows survived the cap was
+// nondeterministic — and then the main query's `truncated` signal was
+// computed from what was already a short, upstream-truncated set. A caller
+// asking for a heavy assignee's overdue items could get back an EMPTY,
+// confidently-non-truncated result even when real matches existed, because
+// the assignee's true matches were capped away before dueBefore ever ran.
+// Folding this into the main query removes that failure mode entirely: the
+// subquery has no LIMIT of its own, so it always contributes every one of
+// the assignee's work item ids to the AND'd condition set, and only the
+// final, fully-filtered result is capped.
+//
+// No project-scoping is needed inside the subquery: for listWorkItems, the
+// caller's own baseConditions already constrain the outer query to
+// workItems.projectId, so intersecting with the (unscoped) assignee subquery
+// via AND produces the same effective scoping as before, in one query.
+//
+// An assignee with zero items (or an unknown assigneeId) naturally yields
+// zero matching rows — `workItems.id IN (<subquery with no rows>)` is valid
+// SQL that simply never matches — so no separate "no possible matches"
+// short-circuit is needed here; that was only ever an optimization for the
+// old two-query shape, not a correctness requirement.
+function withFilters(baseConditions: SQL[], filters: WorkItemFilters): SQL[] {
   const conditions = [...baseConditions];
   if (filters.stateId) conditions.push(eq(workItems.stateId, filters.stateId));
   if (filters.priority) conditions.push(eq(workItems.priority, filters.priority));
   if (filters.dueBefore) conditions.push(lte(workItems.dueDate, filters.dueBefore));
   if (filters.assigneeId) {
-    const base = executor.select({ workItemId: workItemAssignees.workItemId }).from(workItemAssignees);
-    // Bounds worst-case pre-query work, most importantly for listAllWorkItems
-    // (no projectId to scope by): without a limit here, an assignee with
-    // many items makes this pre-query fetch every one of them before the
-    // main query's own .limit() (applied below, in the caller) ever gets a
-    // chance to matter. Doesn't need to be exact — the main query still
-    // authoritatively limits the final result — this just stops the
-    // pre-query itself from being unbounded.
-    const assigneeRows = await (projectId
-      ? base
-          .innerJoin(workItems, eq(workItems.id, workItemAssignees.workItemId))
-          .where(and(eq(workItemAssignees.assigneeId, filters.assigneeId), eq(workItems.projectId, projectId)))
-          .limit(filters.limit ?? MAX_ASSIGNEE_PREQUERY_ROWS)
-      : base
-          .where(eq(workItemAssignees.assigneeId, filters.assigneeId))
-          .limit(filters.limit ?? MAX_ASSIGNEE_PREQUERY_ROWS));
-    if (assigneeRows.length === 0) return null;
-    conditions.push(inArray(workItems.id, assigneeRows.map((r) => r.workItemId)));
+    conditions.push(
+      inArray(
+        workItems.id,
+        db
+          .select({ workItemId: workItemAssignees.workItemId })
+          .from(workItemAssignees)
+          .where(eq(workItemAssignees.assigneeId, filters.assigneeId)),
+      ),
+    );
   }
   return conditions;
 }
 
 export async function listWorkItems(projectId: string, filters: WorkItemFilters = {}) {
-  const conditions = await withFilters([eq(workItems.projectId, projectId), eq(workItems.isDraft, false)], filters, projectId);
-  if (!conditions) return [];
+  const conditions = withFilters([eq(workItems.projectId, projectId), eq(workItems.isDraft, false)], filters);
   const query = db
     .select()
     .from(workItems)
@@ -152,8 +148,7 @@ export async function listWorkItems(projectId: string, filters: WorkItemFilters 
 }
 
 export async function listAllWorkItems(filters: WorkItemFilters = {}) {
-  const conditions = await withFilters([eq(workItems.isDraft, false)], filters);
-  if (!conditions) return [];
+  const conditions = withFilters([eq(workItems.isDraft, false)], filters);
   const query = db
     .select()
     .from(workItems)
@@ -190,6 +185,20 @@ export async function getWorkItem(id: string) {
   if (!row) return undefined;
   const [enriched] = await attachRelations([row]);
   return enriched;
+}
+
+// Cheap draft/existence check for callers (e.g. listCommentsHandler/
+// listActivityHandler in workItemTools.ts) that only need to know whether a
+// work item is missing or a draft before proceeding — not its full enriched
+// record. getWorkItem() does the main select plus three relation joins
+// (labels/assignees/links) via attachRelations(), which is wasted work when
+// all that's needed is one boolean. Returns true for "missing" as well as
+// "draft" so callers can use a single check for both "not found" and
+// "hidden because it's a draft" cases, matching how those callers already
+// treat both as the same not-found result.
+export async function isWorkItemDraftOrMissing(id: string): Promise<boolean> {
+  const [row] = await db.select({ isDraft: workItems.isDraft }).from(workItems).where(eq(workItems.id, id));
+  return !row || row.isDraft;
 }
 
 export async function getWorkItemByIdentifier(identifier: string) {
