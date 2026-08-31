@@ -1,4 +1,4 @@
-import { eq, and, ne, isNull, inArray, asc, desc, sql } from 'drizzle-orm';
+import { eq, and, ne, isNull, inArray, asc, desc, sql, ilike, lte, type SQL } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import {
   workItems,
@@ -58,17 +58,69 @@ async function attachRelations(rows: WorkItemRow[], executor: Tx | typeof db = d
   }));
 }
 
-export async function listWorkItems(projectId: string) {
+export interface WorkItemFilters {
+  assigneeId?: string;
+  stateId?: string;
+  priority?: (typeof workItems.$inferInsert)['priority'];
+  // ISO date (YYYY-MM-DD) — matches items due on or before this date, e.g.
+  // "what's overdue" is dueBefore=<today>.
+  dueBefore?: string;
+}
+
+// assigneeId can't just be pushed into the WHERE alongside the others —
+// assignment is a separate many-to-many table (workItemAssignees), not a
+// column on workItems — so it's resolved as its own pre-query. Returns null
+// (not []) as a "no possible matches" sentinel so callers can short-circuit
+// before ever querying workItems, rather than issuing a query they already
+// know returns nothing.
+async function withFilters(baseConditions: SQL[], filters: WorkItemFilters): Promise<SQL[] | null> {
+  const conditions = [...baseConditions];
+  if (filters.stateId) conditions.push(eq(workItems.stateId, filters.stateId));
+  if (filters.priority) conditions.push(eq(workItems.priority, filters.priority));
+  if (filters.dueBefore) conditions.push(lte(workItems.dueDate, filters.dueBefore));
+  if (filters.assigneeId) {
+    const assigneeRows = await db
+      .select({ workItemId: workItemAssignees.workItemId })
+      .from(workItemAssignees)
+      .where(eq(workItemAssignees.assigneeId, filters.assigneeId));
+    if (assigneeRows.length === 0) return null;
+    conditions.push(inArray(workItems.id, assigneeRows.map((r) => r.workItemId)));
+  }
+  return conditions;
+}
+
+export async function listWorkItems(projectId: string, filters: WorkItemFilters = {}) {
+  const conditions = await withFilters([eq(workItems.projectId, projectId), eq(workItems.isDraft, false)], filters);
+  if (!conditions) return [];
   const rows = await db
     .select()
     .from(workItems)
-    .where(and(eq(workItems.projectId, projectId), eq(workItems.isDraft, false)))
+    .where(and(...conditions))
     .orderBy(asc(workItems.sortOrder));
   return attachRelations(rows);
 }
 
-export async function listAllWorkItems() {
-  const rows = await db.select().from(workItems).where(eq(workItems.isDraft, false)).orderBy(asc(workItems.sortOrder));
+export async function listAllWorkItems(filters: WorkItemFilters = {}) {
+  const conditions = await withFilters([eq(workItems.isDraft, false)], filters);
+  if (!conditions) return [];
+  const rows = await db
+    .select()
+    .from(workItems)
+    .where(and(...conditions))
+    .orderBy(asc(workItems.sortOrder));
+  return attachRelations(rows);
+}
+
+// Title-only match for now — description/identifier matching is a
+// reasonable fast-follow, not silently promised here.
+export async function searchWorkItems(query: string, projectId?: string) {
+  const conditions = [eq(workItems.isDraft, false), ilike(workItems.title, `%${query}%`)];
+  if (projectId) conditions.push(eq(workItems.projectId, projectId));
+  const rows = await db
+    .select()
+    .from(workItems)
+    .where(and(...conditions))
+    .orderBy(asc(workItems.sortOrder));
   return attachRelations(rows);
 }
 
