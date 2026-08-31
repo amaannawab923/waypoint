@@ -3,8 +3,10 @@ import * as os from 'os';
 import type { BrowserWindow } from 'electron';
 
 const ipcMainOnMock = jest.fn();
+const getPathMock = jest.fn(() => '/fake/userData');
 jest.mock('electron', () => ({
   ipcMain: { on: (...args: unknown[]) => ipcMainOnMock(...args) },
+  app: { getPath: getPathMock },
 }));
 
 // Defaults to "no token connected" (null) so every existing test below keeps
@@ -117,10 +119,28 @@ function fakeWindow() {
   return { isDestroyed: () => false, webContents: { send: jest.fn() } };
 }
 
+// buildArgs()/mcpConfigArg() read process.env.WAYPOINT_API_BASE_URL directly,
+// so a test asserting on its default ('http://localhost:14000') would
+// silently pass or fail based on whatever a given developer's shell already
+// has set — explicitly clearing it here (and restoring afterEach) makes that
+// test control the variable itself instead of relying on it being ambiently
+// unset.
+const originalApiBaseUrl = process.env.WAYPOINT_API_BASE_URL;
+
 beforeEach(() => {
   jest.clearAllMocks();
   spawnCalls.length = 0;
   lastChild = null;
+  getPathMock.mockReturnValue('/fake/userData');
+  delete process.env.WAYPOINT_API_BASE_URL;
+});
+
+afterEach(() => {
+  if (originalApiBaseUrl === undefined) {
+    delete process.env.WAYPOINT_API_BASE_URL;
+  } else {
+    process.env.WAYPOINT_API_BASE_URL = originalApiBaseUrl;
+  }
 });
 
 describe('registerCopilotIpc', () => {
@@ -220,6 +240,26 @@ describe('registerCopilotIpc', () => {
     expect(config).toEqual({
       mcpServers: {
         waypoint: { type: 'http', url: 'http://localhost:14000/mcp/copilot' },
+      },
+    });
+  });
+
+  it('uses WAYPOINT_API_BASE_URL for the MCP server URL when it is set, instead of the localhost default', () => {
+    process.env.WAYPOINT_API_BASE_URL = 'https://waypoint.example.com';
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi' });
+
+    const { args } = spawnCalls[0];
+    const configIdx = args.indexOf('--mcp-config');
+    const config = JSON.parse(args[configIdx + 1]);
+    expect(config).toEqual({
+      mcpServers: {
+        waypoint: {
+          type: 'http',
+          url: 'https://waypoint.example.com/mcp/copilot',
+        },
       },
     });
   });
@@ -366,6 +406,23 @@ describe('registerCopilotIpc', () => {
     expect(options.cwd).toBe(os.tmpdir());
     expect(String(options.env?.PATH)).toContain('/opt/homebrew/bin');
     expect(String(options.env?.PATH)).toContain('/usr/local/bin');
+  });
+
+  // Regression test for the memory-leak-across-sessions bug: --setting-
+  // sources '' alone does not isolate the CLI's memory namespace (confirmed
+  // live — memory_paths.auto still resolves under the real ~/.claude keyed
+  // off cwd's hash), so CLAUDE_CONFIG_DIR must point somewhere app-owned,
+  // not the user's real config home.
+  it("sets CLAUDE_CONFIG_DIR to an app-owned directory, not the user's real ~/.claude", () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi' });
+
+    expect(getPathMock).toHaveBeenCalledWith('userData');
+    expect(spawnCalls[0].options.env?.CLAUDE_CONFIG_DIR).toBe(
+      '/fake/userData/copilot-claude-config',
+    );
   });
 
   it('does not set CLAUDE_CODE_OAUTH_TOKEN when no subscription token is connected', () => {
