@@ -25,9 +25,24 @@ const PRIORITY = z.enum(['urgent', 'high', 'medium', 'low', 'none']);
 // verified against 2026-13-99, 2026-02-31, 2026-04-31 (April has 30 days),
 // 2023-02-29 (not a leap year) — all correctly rejected — and 2026-08-31,
 // 2026-12-31, 2024-02-29 (a real leap day) — all correctly accepted.
+//
+// The calendar-validity check alone still accepts any year from 0000-9999,
+// including years Postgres's `date` type itself rejects (e.g. "0000-01-01"
+// throws a Postgres range error) — that reaches the withErrorSafetyNet net
+// in this file and comes back as an opaque "internal error" instead of a
+// clean validation message, even though it's really a validation-catchable
+// bad input. MIN_YEAR/MAX_YEAR below is a generous, not exact, range for a
+// real due-date use case — it just needs to keep genuinely out-of-range
+// years from reaching Postgres at all.
+const MIN_YEAR = 1000;
+const MAX_YEAR = 9999;
 const ISO_DATE = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'must be an ISO date (YYYY-MM-DD)')
+  .refine((value) => {
+    const year = Number(value.slice(0, 4));
+    return year >= MIN_YEAR && year <= MAX_YEAR;
+  }, `year must be between ${MIN_YEAR} and ${MAX_YEAR}`)
   .refine((value) => {
     const parsed = new Date(`${value}T00:00:00Z`);
     return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
@@ -230,10 +245,12 @@ export async function searchWorkItemsHandler({
 // "created the work item" entry every item gets — see workItems.service.ts's
 // createWorkItem) were still fully retrievable via the draft's own internal
 // id, since neither of these handlers checked isDraft before fetching. One
-// extra query per call is the accepted cost of closing that.
+// extra query per call is the accepted cost of closing that — but it only
+// needs to be a cheap existence/isDraft check, not the full enriched fetch
+// (getWorkItem() also joins labels/assignees/links, none of which either
+// handler below uses), hence isWorkItemDraftOrMissing() instead of getWorkItem().
 export async function listCommentsHandler({ workItemId, limit }: { workItemId: string; limit?: number }) {
-  const workItem = await workItemsService.getWorkItem(workItemId);
-  if (!workItem || workItem.isDraft) return notFoundResult('work item');
+  if (await workItemsService.isWorkItemDraftOrMissing(workItemId)) return notFoundResult('work item');
   const effectiveLimit = resolveLimit(limit);
   const comments = await commentsService.listComments(workItemId, effectiveLimit + 1);
   const { items: pageItems, truncated } = page(comments, effectiveLimit);
@@ -245,8 +262,7 @@ export async function listCommentsHandler({ workItemId, limit }: { workItemId: s
 }
 
 export async function listActivityHandler({ workItemId, limit }: { workItemId: string; limit?: number }) {
-  const workItem = await workItemsService.getWorkItem(workItemId);
-  if (!workItem || workItem.isDraft) return notFoundResult('work item');
+  if (await workItemsService.isWorkItemDraftOrMissing(workItemId)) return notFoundResult('work item');
   const effectiveLimit = resolveLimit(limit);
   const activity = await activityService.listActivity(workItemId, effectiveLimit + 1);
   const { items: pageItems, truncated } = page(activity, effectiveLimit);
@@ -315,10 +331,16 @@ export function registerWorkItemTools(server: McpServer): void {
       description:
         'Search work items (tickets) by a title keyword, optionally scoped to one project. Returns a summary per match. Results are capped (see limit) — check the truncated flag and narrow the query if it comes back true.',
       inputSchema: {
-        // .min(1) — an empty query otherwise matches every work item's
-        // title (an unscoped `ilike(title, '%%')` in workItems.service.ts),
-        // effectively turning "search" into "list everything" by accident.
-        query: z.string().min(1),
+        // .trim().min(1) — an empty (or whitespace-only, e.g. " ") query
+        // otherwise matches every work item's title (an unscoped
+        // `ilike('%<query>%', title)` in workItems.service.ts), effectively
+        // turning "search" into "list everything" by accident. `.trim()` is
+        // a zod transform, so the value the MCP SDK hands to
+        // searchWorkItemsHandler below (parsed via safeParseAsync before the
+        // handler is called) is already the trimmed string — not the raw
+        // input — so the trimmed value is what actually reaches the ilike
+        // pattern too, not just what min(1) validates against.
+        query: z.string().trim().min(1),
         projectId: z.string().optional(),
         limit: LIMIT_SCHEMA,
       },
