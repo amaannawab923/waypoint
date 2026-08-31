@@ -20,6 +20,7 @@ const activityService = await import('../services/activity.service.js');
 const statesService = await import('../services/states.service.js');
 const membersService = await import('../services/members.service.js');
 const { resolveActorNames } = await import('../lib/actorNames.js');
+const { resolveStateNames } = statesService;
 const {
   listWorkItemsHandler,
   getWorkItemHandler,
@@ -41,6 +42,7 @@ const FULL_ITEM = {
   id: 'wi-1',
   identifier: 'WI-1',
   title: 'Fix login bug',
+  projectId: 'proj-1',
   stateId: 'state-1',
   priority: 'high' as const,
   dueDate: '2026-08-27',
@@ -63,6 +65,7 @@ beforeEach(() => {
   // resolved-name path. Falls back to the raw id, matching the handlers'
   // own "unresolvable id" behavior.
   vi.mocked(resolveActorNames).mockResolvedValue(new Map());
+  vi.mocked(resolveStateNames).mockResolvedValue(new Map());
 });
 
 describe('listWorkItemsHandler', () => {
@@ -82,7 +85,10 @@ describe('listWorkItemsHandler', () => {
           id: 'wi-1',
           identifier: 'WI-1',
           title: 'Fix login bug',
+          projectId: 'proj-1',
           stateId: 'state-1',
+          stateName: 'state-1',
+          stateGroup: undefined,
           priority: 'high',
           dueDate: '2026-08-27',
           assigneeIds: ['mem-4'],
@@ -92,6 +98,18 @@ describe('listWorkItemsHandler', () => {
       truncated: false,
     });
     expect(parsed.items[0]).not.toHaveProperty('description');
+  });
+
+  it('resolves stateId to a real name and group via resolveStateNames, batched across the whole result set', async () => {
+    vi.mocked(workItemsService.listAllWorkItems).mockResolvedValue([FULL_ITEM]);
+    vi.mocked(resolveStateNames).mockResolvedValue(new Map([['state-1', { name: 'In Progress', group: 'started' }]]));
+
+    const result = await listWorkItemsHandler({});
+
+    expect(resolveStateNames).toHaveBeenCalledWith(['state-1']);
+    const item = parseJsonContent(result).items[0];
+    expect(item.stateName).toBe('In Progress');
+    expect(item.stateGroup).toBe('started');
   });
 
   it('calls listWorkItems(projectId, filters) when a projectId is given', async () => {
@@ -154,14 +172,21 @@ describe('listWorkItemsHandler', () => {
 });
 
 describe('getWorkItemHandler', () => {
-  it('returns the full record (not a summary) plus resolved assigneeNames on a hit', async () => {
+  it('returns the full record (not a summary) plus resolved assigneeNames and stateName on a hit', async () => {
     vi.mocked(workItemsService.getWorkItem).mockResolvedValue(FULL_ITEM);
     vi.mocked(resolveActorNames).mockResolvedValue(new Map([['mem-4', 'Lena']]));
+    vi.mocked(resolveStateNames).mockResolvedValue(new Map([['state-1', { name: 'In Progress', group: 'started' }]]));
 
     const result = await getWorkItemHandler({ id: 'wi-1' });
 
     expect(workItemsService.getWorkItem).toHaveBeenCalledWith('wi-1');
-    expect(parseJsonContent(result)).toEqual({ ...FULL_ITEM, assigneeNames: ['Lena'] });
+    expect(resolveStateNames).toHaveBeenCalledWith(['state-1']);
+    expect(parseJsonContent(result)).toEqual({
+      ...FULL_ITEM,
+      assigneeNames: ['Lena'],
+      stateName: 'In Progress',
+      stateGroup: 'started',
+    });
   });
 
   it('returns an MCP error result, not a thrown exception, on a miss', async () => {
@@ -187,13 +212,16 @@ describe('getWorkItemHandler', () => {
 });
 
 describe('getWorkItemByIdentifierHandler', () => {
-  it('looks up by identifier and returns the full record plus assigneeNames on a hit', async () => {
+  it('looks up by identifier and returns the full record plus assigneeNames and stateName on a hit', async () => {
     vi.mocked(workItemsService.getWorkItemByIdentifier).mockResolvedValue(FULL_ITEM);
 
     const result = await getWorkItemByIdentifierHandler({ identifier: 'WI-1' });
 
     expect(workItemsService.getWorkItemByIdentifier).toHaveBeenCalledWith('WI-1');
-    expect(parseJsonContent(result)).toEqual({ ...FULL_ITEM, assigneeNames: ['mem-4'] });
+    // No name/state resolved in this test (default empty maps from the top
+    // beforeEach) — both fall back to their raw id, matching the handlers'
+    // own "unresolvable" behavior.
+    expect(parseJsonContent(result)).toEqual({ ...FULL_ITEM, assigneeNames: ['mem-4'], stateName: 'state-1' });
   });
 
   it('returns an MCP error result on a miss', async () => {

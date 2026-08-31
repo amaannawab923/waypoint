@@ -15,7 +15,9 @@ import { errorHandler } from '../middleware/errorHandler.js';
 // only needs one tool exercised to prove the wiring works.
 vi.mock('../db/client.js', () => ({ db: {} }));
 vi.mock('../services/workItems.service.js');
+vi.mock('../services/states.service.js');
 const workItemsService = await import('../services/workItems.service.js');
+const { resolveStateNames } = await import('../services/states.service.js');
 const { mcpRouter } = await import('./mcp.routes.js');
 
 function buildTestApp() {
@@ -31,6 +33,7 @@ let baseUrl: string;
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  vi.mocked(resolveStateNames).mockResolvedValue(new Map());
   const app = buildTestApp();
   await new Promise<void>((resolve) => {
     httpServer = app.listen(0, resolve);
@@ -47,7 +50,7 @@ afterEach(async () => {
 describe('POST /mcp/copilot', () => {
   it('serves a real MCP client end-to-end: initialize, then a tool call reaches the service layer', async () => {
     vi.mocked(workItemsService.listAllWorkItems).mockResolvedValue([
-      { id: 'wi-1', identifier: 'WI-1', title: 'Fix login bug', stateId: 'state-1', priority: 'high', assigneeIds: [] } as never,
+      { id: 'wi-1', identifier: 'WI-1', title: 'Fix login bug', projectId: 'proj-1', stateId: 'state-1', priority: 'high', assigneeIds: [] } as never,
     ]);
 
     const client = new Client({ name: 'test-client', version: '1.0.0' });
@@ -64,7 +67,9 @@ describe('POST /mcp/copilot', () => {
           id: 'wi-1',
           identifier: 'WI-1',
           title: 'Fix login bug',
+          projectId: 'proj-1',
           stateId: 'state-1',
+          stateName: 'state-1',
           priority: 'high',
           assigneeIds: [],
           assigneeNames: [],
