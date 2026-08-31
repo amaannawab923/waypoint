@@ -229,11 +229,18 @@ describe('copilot:auth:save', () => {
     await Promise.resolve();
 
     expect(spawnCalls).toHaveLength(1);
-    // The probe env is isolated — only the candidate token, PATH, and proxy
-    // vars — not the full ambient environment, so it can't be masked by an
-    // already-logged-in CLI session.
+    // The probe env is isolated — only the candidate token, CLAUDE_CONFIG_DIR,
+    // PATH, and proxy vars — not the full ambient environment, so it can't be
+    // masked by an already-logged-in CLI session.
     expect(spawnCalls[0].options.env).toEqual(
       expect.objectContaining({ CLAUDE_CODE_OAUTH_TOKEN: VALID_TOKEN }),
+    );
+    // Matches copilotRunner.ts's own gating: once this token is connected,
+    // every real run sets CLAUDE_CONFIG_DIR alongside CLAUDE_CODE_OAUTH_TOKEN
+    // (see copilotRunner.test.ts), so the probe must validate the token
+    // under that same redirected config/credential namespace.
+    expect(spawnCalls[0].options.env?.CLAUDE_CONFIG_DIR).toBe(
+      '/fake/userData/copilot-claude-config',
     );
     expect(spawnCalls[0].args).toEqual(
       expect.arrayContaining(['--tools', '', '--output-format', 'json']),
