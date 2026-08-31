@@ -164,6 +164,24 @@ describe('renderMarkdown', () => {
     );
   });
 
+  // Regression test: a `---` divider is NOT a GFM table separator row —
+  // previously the lookahead treated any `---`-shaped next line as one
+  // regardless of whether it had a pipe, so a header line containing `|`
+  // followed by a bare `---` divider rendered as a bogus one-row table,
+  // swallowing the header line's own markup instead of leaving it as a
+  // paragraph.
+  it('does not treat a bare "---" divider (no pipe) as a table separator row', () => {
+    const result = renderMarkdown('Use a | b syntax\n---\nnext para');
+    expect(result).toBe(
+      '<p>Use a | b syntax</p>\n<p>---</p>\n<p>next para</p>',
+    );
+  });
+
+  it('does not treat a header/separator with mismatched cell counts as a table', () => {
+    const result = renderMarkdown('A | B\n---|---|---\nrow');
+    expect(result).toBe('<p>A | B</p>\n<p>---|---|---</p>\n<p>row</p>');
+  });
+
   it('closes an open list before starting a table', () => {
     const result = renderMarkdown('- item\n| A |\n|---|\n| 1 |');
     expect(result).toBe(
