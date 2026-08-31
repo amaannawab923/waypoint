@@ -10,7 +10,7 @@ import { launchApp } from './fixtures';
 // #11's backend-backed multi-session migration) — every test below creates
 // its own fresh session via the header "+" rather than assuming an empty
 // conversation. This runs against the real shared dev backend
-// (localhost:4000), which already carries session history from manual
+// (localhost:14000), which already carries session history from manual
 // testing, so assertions are scoped to each test's own freshly-created
 // session rather than assuming the list (or any one session) starts empty.
 
