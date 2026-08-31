@@ -160,6 +160,72 @@ describe('POST /mcp/copilot', () => {
     await client.close();
   });
 
+  // MINOR regression test: .min(1) alone still let a whitespace-only query
+  // (e.g. a single space) through, since " ".length is 1 — and that still
+  // matched every work item's title the same way an empty string did, via
+  // the underlying ilike('%<query>%', title). query is now .trim().min(1),
+  // so a whitespace-only value must be rejected here too, not just a
+  // literally empty one.
+  it('rejects a whitespace-only search_work_items query at the protocol layer', async () => {
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+    const transport = new StreamableHTTPClientTransport(new URL(baseUrl));
+    await client.connect(transport);
+
+    const result = await client.callTool({ name: 'search_work_items', arguments: { query: '   ' } });
+
+    expect(result.isError).toBe(true);
+    expect(workItemsService.searchWorkItems).not.toHaveBeenCalled();
+
+    await client.close();
+  });
+
+  // Sanity check for the same fix: a query that's meaningful once trimmed
+  // (leading/trailing whitespace around real text) must still be accepted,
+  // and the ACTUAL value reaching the service must be the trimmed one, not
+  // the raw untrimmed string — proving zod's .trim() transform flows through
+  // to the handler (see safeParseAsync in the MCP SDK, which hands the
+  // handler parseResult.data, not the raw request arguments).
+  it('trims surrounding whitespace from a search_work_items query before it reaches the service', async () => {
+    vi.mocked(workItemsService.searchWorkItems).mockResolvedValue([]);
+
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+    const transport = new StreamableHTTPClientTransport(new URL(baseUrl));
+    await client.connect(transport);
+
+    const result = await client.callTool({ name: 'search_work_items', arguments: { query: '  login  ' } });
+
+    expect(result.isError).toBeFalsy();
+    expect(workItemsService.searchWorkItems).toHaveBeenCalledWith('login', undefined, expect.any(Number));
+
+    await client.close();
+  });
+
+  // MINOR regression test: dueBefore's ISO_DATE schema accepted any year
+  // 0000-9999 that was otherwise calendar-valid, including years Postgres's
+  // `date` type itself rejects (e.g. "0000-01-01" throws a Postgres range
+  // error) — reaching withErrorSafetyNet's generic "internal error" for what
+  // is really a validation-catchable bad input. A sane year range is now
+  // checked inside ISO_DATE's own .refine(), so this must be rejected at the
+  // protocol layer with a real validation message, before the service (or
+  // Postgres) is ever reached.
+  it('rejects a dueBefore year far outside a sane range at the protocol layer', async () => {
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+    const transport = new StreamableHTTPClientTransport(new URL(baseUrl));
+    await client.connect(transport);
+
+    const result = await client.callTool({
+      name: 'list_work_items',
+      arguments: { dueBefore: '0000-01-01' },
+    });
+
+    expect(result.isError).toBe(true);
+    const content = (result.content as { type: string; text: string }[])[0];
+    expect(content.text).toMatch(/year/i);
+    expect(workItemsService.listAllWorkItems).not.toHaveBeenCalled();
+
+    await client.close();
+  });
+
   // MAJOR regression test: this class of leak isn't specific to dueBefore —
   // any service-layer throw (a DB constraint, a timeout, a future bug)
   // previously reached the MCP SDK's own error serialization with its raw
