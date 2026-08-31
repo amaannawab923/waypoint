@@ -114,4 +114,78 @@ describe('POST /mcp/copilot', () => {
 
     await client.close();
   });
+
+  // Regression test: the regex behind dueBefore's ISO_DATE schema only
+  // checked the SHAPE (YYYY-MM-DD), not that the date is real — a
+  // calendar-invalid value like "2026-13-99" or "2026-02-31" matched it
+  // fine and reached workItems.service.ts's lte(workItems.dueDate, ...) raw,
+  // where Postgres's own rejection (including the full SQL statement,
+  // column names, and bound parameters) came back as the tool's error text.
+  // ISO_DATE now has a .refine() that actually parses the string — this
+  // must be rejected at the real protocol layer (zod's own tool-input
+  // validation), before the service is ever called, exactly like the
+  // shape-only "not-a-date" case above.
+  it('rejects a calendar-invalid dueBefore (real shape, impossible date) at the protocol layer, before the service is ever called', async () => {
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+    const transport = new StreamableHTTPClientTransport(new URL(baseUrl));
+    await client.connect(transport);
+
+    const result = await client.callTool({
+      name: 'list_work_items',
+      arguments: { dueBefore: '2026-13-99' },
+    });
+
+    expect(result.isError).toBe(true);
+    const content = (result.content as { type: string; text: string }[])[0];
+    expect(content.text).not.toMatch(/postgres|SELECT|column|relation/i);
+    expect(workItemsService.listAllWorkItems).not.toHaveBeenCalled();
+
+    await client.close();
+  });
+
+  // MINOR regression test: search_work_items's query param previously had
+  // no .min(1), so an empty string matched every work item's title (an
+  // unscoped ilike(title, '%%') in workItems.service.ts) — effectively
+  // turning "search" into "list everything" by accident.
+  it('rejects an empty search_work_items query at the protocol layer', async () => {
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+    const transport = new StreamableHTTPClientTransport(new URL(baseUrl));
+    await client.connect(transport);
+
+    const result = await client.callTool({ name: 'search_work_items', arguments: { query: '' } });
+
+    expect(result.isError).toBe(true);
+    expect(workItemsService.searchWorkItems).not.toHaveBeenCalled();
+
+    await client.close();
+  });
+
+  // MAJOR regression test: this class of leak isn't specific to dueBefore —
+  // any service-layer throw (a DB constraint, a timeout, a future bug)
+  // previously reached the MCP SDK's own error serialization with its raw
+  // `error.message`, which could contain arbitrary internal detail (driver
+  // text, SQL, etc). Every registered tool handler is now wrapped
+  // (withErrorSafetyNet in workItemTools.ts) so a thrown error becomes a
+  // generic message instead — verified here through the real protocol
+  // layer, not just by calling the handler function directly, so it proves
+  // the wrapping is actually wired into registerWorkItemTools and not just
+  // defined and unused.
+  it('turns a thrown service-layer error into a generic message instead of leaking it to the client', async () => {
+    vi.mocked(workItemsService.getWorkItem).mockRejectedValue(
+      new Error('relation "work_items" violates constraint "fk_work_items_project_id" — DETAIL: Key (project_id)=(proj-1) is not present in table "projects".'),
+    );
+
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+    const transport = new StreamableHTTPClientTransport(new URL(baseUrl));
+    await client.connect(transport);
+
+    const result = await client.callTool({ name: 'get_work_item', arguments: { id: 'wi-1' } });
+
+    expect(result.isError).toBe(true);
+    const content = (result.content as { type: string; text: string }[])[0];
+    expect(content.text).toBe('An internal error occurred while processing this request.');
+    expect(content.text).not.toMatch(/relation|constraint|DETAIL|project_id/i);
+
+    await client.close();
+  });
 });
