@@ -243,12 +243,16 @@ describe('searchWorkItemsHandler', () => {
 });
 
 describe('listCommentsHandler', () => {
-  // list_comments/list_activity fetch the work item first now (see MAJOR 1
-  // regression tests below) — default every test here to a real, non-draft
-  // item so existing tests exercising the comment-listing logic don't have
-  // to know about that check; the draft/missing tests below override it.
+  // list_comments/list_activity check the work item's draft/existence status
+  // first now (see MAJOR 1 regression tests below) — default every test here
+  // to a real, non-draft item so existing tests exercising the
+  // comment-listing logic don't have to know about that check; the
+  // draft/missing tests below override it. isWorkItemDraftOrMissing() (a
+  // cheap isDraft-only check), not getWorkItem() (the full enriched fetch
+  // with label/assignee/link joins), is what these handlers actually call —
+  // see MINOR 4's fix in workItems.service.ts.
   beforeEach(() => {
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(FULL_ITEM);
+    vi.mocked(workItemsService.isWorkItemDraftOrMissing).mockResolvedValue(false);
   });
 
   it('calls commentsService.listComments with the default limit+1 and attaches each comment\'s resolved authorName', async () => {
@@ -258,7 +262,8 @@ describe('listCommentsHandler', () => {
 
     const result = await listCommentsHandler({ workItemId: 'wi-1' });
 
-    expect(workItemsService.getWorkItem).toHaveBeenCalledWith('wi-1');
+    expect(workItemsService.isWorkItemDraftOrMissing).toHaveBeenCalledWith('wi-1');
+    expect(workItemsService.getWorkItem).not.toHaveBeenCalled();
     expect(commentsService.listComments).toHaveBeenCalledWith('wi-1', DEFAULT_LIMIT_PLUS_ONE);
     expect(resolveActorNames).toHaveBeenCalledWith(['mem-4']);
     expect(parseJsonContent(result)).toEqual({ items: [{ ...comments[0], authorName: 'Lena' }], truncated: false });
@@ -295,7 +300,7 @@ describe('listCommentsHandler', () => {
   // were fully retrievable via the draft's own internal id even though the
   // draft itself is correctly hidden from every get/list/search tool.
   it('treats a draft item as not found and never calls commentsService, even though the work item exists', async () => {
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(DRAFT_ITEM);
+    vi.mocked(workItemsService.isWorkItemDraftOrMissing).mockResolvedValue(true);
 
     const result = await listCommentsHandler({ workItemId: 'wi-draft' });
 
@@ -305,7 +310,7 @@ describe('listCommentsHandler', () => {
   });
 
   it('treats a missing work item as not found and never calls commentsService', async () => {
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(undefined);
+    vi.mocked(workItemsService.isWorkItemDraftOrMissing).mockResolvedValue(true);
 
     const result = await listCommentsHandler({ workItemId: 'missing' });
 
@@ -316,7 +321,7 @@ describe('listCommentsHandler', () => {
 
 describe('listActivityHandler', () => {
   beforeEach(() => {
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(FULL_ITEM);
+    vi.mocked(workItemsService.isWorkItemDraftOrMissing).mockResolvedValue(false);
   });
 
   it('calls activityService.listActivity with the default limit+1 and attaches each entry\'s resolved actorName', async () => {
@@ -326,7 +331,8 @@ describe('listActivityHandler', () => {
 
     const result = await listActivityHandler({ workItemId: 'wi-1' });
 
-    expect(workItemsService.getWorkItem).toHaveBeenCalledWith('wi-1');
+    expect(workItemsService.isWorkItemDraftOrMissing).toHaveBeenCalledWith('wi-1');
+    expect(workItemsService.getWorkItem).not.toHaveBeenCalled();
     expect(activityService.listActivity).toHaveBeenCalledWith('wi-1', DEFAULT_LIMIT_PLUS_ONE);
     expect(parseJsonContent(result)).toEqual({ items: [{ ...activity[0], actorName: 'Lena' }], truncated: false });
   });
@@ -353,7 +359,7 @@ describe('listActivityHandler', () => {
   // every work item gets, see workItems.service.ts's createWorkItem) was
   // fully retrievable via the draft's own internal id.
   it('treats a draft item as not found and never calls activityService, even though the work item exists', async () => {
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(DRAFT_ITEM);
+    vi.mocked(workItemsService.isWorkItemDraftOrMissing).mockResolvedValue(true);
 
     const result = await listActivityHandler({ workItemId: 'wi-draft' });
 
@@ -363,7 +369,7 @@ describe('listActivityHandler', () => {
   });
 
   it('treats a missing work item as not found and never calls activityService', async () => {
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(undefined);
+    vi.mocked(workItemsService.isWorkItemDraftOrMissing).mockResolvedValue(true);
 
     const result = await listActivityHandler({ workItemId: 'missing' });
 
