@@ -1,4 +1,4 @@
-import { eq, asc, count } from 'drizzle-orm';
+import { eq, asc, count, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { workItemStates, workItems } from '../db/schema/index.js';
 import { NotFoundError } from '../middleware/errors.js';
@@ -10,6 +10,21 @@ export async function listStates(projectId: string) {
     .from(workItemStates)
     .where(eq(workItemStates.projectId, projectId))
     .orderBy(asc(workItemStates.sortOrder));
+}
+
+// Batched sibling of listStates for callers that only have a scattered set
+// of stateIds (e.g. Copilot's MCP work-item summaries) and no single
+// projectId to list from — one query for every distinct id, not one query
+// per row. Mirrors lib/actorNames.ts's resolveActorNames: same batching
+// shape, same "id -> display info" purpose, different table.
+export async function resolveStateNames(ids: string[]): Promise<Map<string, { name: string; group: string }>> {
+  const uniqueIds = [...new Set(ids)];
+  if (uniqueIds.length === 0) return new Map();
+  const rows = await db
+    .select({ id: workItemStates.id, name: workItemStates.name, group: workItemStates.group })
+    .from(workItemStates)
+    .where(inArray(workItemStates.id, uniqueIds));
+  return new Map(rows.map((row) => [row.id, { name: row.name, group: row.group }]));
 }
 
 export async function createState(
