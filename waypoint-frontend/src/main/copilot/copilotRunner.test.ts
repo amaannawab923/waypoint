@@ -179,15 +179,71 @@ describe('registerCopilotIpc', () => {
     expect(spawnCalls[0].args).not.toContain('--dangerously-skip-permissions');
   });
 
-  it('disables built-in tool access — this phase is text-only chat, not agentic', () => {
+  it('disables built-in tool access — only the read-only work-item MCP tools are allowed', () => {
     const win = fakeWindow();
     registerCopilotIpc(() => win as unknown as BrowserWindow);
 
     run({ requestId: 'req-1', prompt: 'hi' });
 
-    const idx = spawnCalls[0].args.indexOf('--tools');
+    const { args } = spawnCalls[0];
+    const toolsIdx = args.indexOf('--tools');
+    expect(toolsIdx).toBeGreaterThan(-1);
+    expect(args[toolsIdx + 1]).toBe('');
+
+    const allowedIdx = args.indexOf('--allowedTools');
+    expect(allowedIdx).toBeGreaterThan(-1);
+    expect(args[allowedIdx + 1]).toBe(
+      [
+        'mcp__waypoint__list_work_items',
+        'mcp__waypoint__get_work_item',
+        'mcp__waypoint__get_work_item_by_identifier',
+        'mcp__waypoint__search_work_items',
+        'mcp__waypoint__list_comments',
+        'mcp__waypoint__list_activity',
+        'mcp__waypoint__list_states',
+        'mcp__waypoint__list_members',
+      ].join(' '),
+    );
+  });
+
+  it('points the CLI at the waypoint MCP server, in strict mode so no other MCP config leaks in', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi' });
+
+    const { args } = spawnCalls[0];
+    expect(args).toContain('--strict-mcp-config');
+    const configIdx = args.indexOf('--mcp-config');
+    expect(configIdx).toBeGreaterThan(-1);
+    const config = JSON.parse(args[configIdx + 1]);
+    expect(config).toEqual({
+      mcpServers: {
+        waypoint: { type: 'http', url: 'http://localhost:14000/mcp/copilot' },
+      },
+    });
+  });
+
+  // Regression test: --safe-mode's own --help text lists MCP servers among
+  // what it disables, with no override — confirmed live that --safe-mode
+  // plus this exact --mcp-config still comes back with an empty
+  // mcp_servers/tools list in the init event, so the model has zero tools
+  // and just narrates what it would do instead of actually calling one.
+  // --setting-sources '' is the fix: confirmed live it still empties out
+  // user-level skills/plugins/custom-agents (the leak --safe-mode existed
+  // to prevent) while leaving an explicit --mcp-config server free to
+  // connect.
+  it('uses --setting-sources instead of --safe-mode, so the MCP server can actually connect', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi' });
+
+    const { args } = spawnCalls[0];
+    expect(args).not.toContain('--safe-mode');
+    const idx = args.indexOf('--setting-sources');
     expect(idx).toBeGreaterThan(-1);
-    expect(spawnCalls[0].args[idx + 1]).toBe('');
+    expect(args[idx + 1]).toBe('');
   });
 
   // The bug this exists to catch: a --resume against a session id that's
