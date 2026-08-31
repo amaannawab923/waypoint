@@ -395,6 +395,30 @@ export function registerCopilotIpc(
               // new session id, which the renderer persists over the
               // stale one via postAssistantMessage — self-healing it for
               // every message after this one.
+              //
+              // Known gap, deliberately left as-is: this same retry path
+              // also fires — with the identical STALE_SESSION_PATTERN
+              // message — when a user connects or disconnects a Claude
+              // subscription token mid-conversation. Because
+              // CLAUDE_CONFIG_DIR (buildEnv() above) is set only when a
+              // token is connected, that toggle flips which config/memory
+              // namespace the CLI resolves to (see the CLAUDE_CONFIG_DIR
+              // comment block above buildArgs), so a --resume against the
+              // OLD namespace's session id fails here and silently starts a
+              // fresh one in the NEW namespace instead. The retry still
+              // makes the conversation technically continue working, but
+              // nothing tells the user their conversation's *effective*
+              // memory just reset — the chat transcript in CopilotPanel.tsx
+              // still shows full history, so this is invisible in the UI.
+              // Surfacing it properly would mean plumbing a new, non-error
+              // "notice" signal end-to-end (a new event kind here, an IPC
+              // payload, renderer state, and UI) — the existing runError
+              // channel this file already emits (kind: 'auth_failed' etc.,
+              // see CopilotPanel.tsx) only models failed runs, and this
+              // retry's whole point is that the run does NOT fail from the
+              // user's perspective, so it doesn't fit that channel. Left
+              // unbuilt as a deliberate, lower-priority scope call rather
+              // than added ad hoc here.
               if (
                 allowRetryOnStaleSession &&
                 effectiveResumeSessionId &&
