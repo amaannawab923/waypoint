@@ -160,6 +160,33 @@ describe('listAllWorkItems filters', () => {
 
     expect(mainChain.limit).toHaveBeenCalledWith(51);
   });
+
+  // Regression test: the assigneeId pre-query had no limit at all here —
+  // listAllWorkItems has no projectId to scope it by, so a heavy assignee
+  // made this pre-query fetch every one of their items before the main
+  // query's own .limit() (asserted above) ever got a chance to matter. The
+  // pre-query now passes the caller's own limit through to bound that
+  // worst case too.
+  it('caps the unscoped assigneeId pre-query at the caller-given limit', async () => {
+    const assigneeChain = chainable([{ workItemId: 'wi-1' }]);
+    const mainChain = chainable([]);
+    db.select.mockReturnValueOnce(assigneeChain).mockReturnValueOnce(mainChain);
+
+    await listAllWorkItems({ assigneeId: 'mem-4', limit: 51 });
+
+    expect(assigneeChain.limit).toHaveBeenCalledWith(51);
+  });
+
+  it('falls back to a default cap on the unscoped assigneeId pre-query when no limit is given', async () => {
+    const assigneeChain = chainable([{ workItemId: 'wi-1' }]);
+    const mainChain = chainable([]);
+    db.select.mockReturnValueOnce(assigneeChain).mockReturnValueOnce(mainChain);
+
+    await listAllWorkItems({ assigneeId: 'mem-4' });
+
+    expect(assigneeChain.limit).toHaveBeenCalledWith(expect.any(Number));
+    expect((assigneeChain.limit as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBeGreaterThan(0);
+  });
 });
 
 describe('listWorkItems filters', () => {
@@ -198,5 +225,15 @@ describe('listWorkItems filters', () => {
     await listWorkItems('proj-1', { limit: 51 });
 
     expect(mainChain.limit).toHaveBeenCalledWith(51);
+  });
+
+  it('also caps the project-scoped assigneeId pre-query at the caller-given limit', async () => {
+    const assigneeChain = chainable([{ workItemId: 'wi-1' }]);
+    const mainChain = chainable([]);
+    db.select.mockReturnValueOnce(assigneeChain).mockReturnValueOnce(mainChain);
+
+    await listWorkItems('proj-1', { assigneeId: 'mem-4', limit: 51 });
+
+    expect(assigneeChain.limit).toHaveBeenCalledWith(51);
   });
 });
