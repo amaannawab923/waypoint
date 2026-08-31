@@ -17,7 +17,9 @@ if (process.env.NODE_ENV === 'production') {
   checkNodeEnv('development');
 }
 
-const port = process.env.PORT || 1212;
+// 11212, not this template's conventional 1212 default — moved to avoid
+// colliding with another project's dev server on the same machine.
+const port = process.env.PORT || 11212;
 const manifest = path.resolve(webpackPaths.dllPath, 'renderer.json');
 const skipDLLs =
   module.parent?.filename.includes('webpack.config.renderer.dev.dll') ||
@@ -149,7 +151,9 @@ const configuration: webpack.Configuration = {
      */
     new webpack.EnvironmentPlugin({
       NODE_ENV: 'development',
-      WAYPOINT_API_BASE_URL: 'http://localhost:4000',
+      // 14000, not Express's conventional 4000 — matches waypoint-backend's
+      // moved default (see its docker-compose.yml/.env.example).
+      WAYPOINT_API_BASE_URL: 'http://localhost:14000',
       // Feature flag for the in-progress agent-sessions UI (mock frontend,
       // no real backend runtime yet) — see lib/featureFlags.ts. Off by
       // default; run with WAYPOINT_FEATURE_AGENT_SESSIONS=true to see it.
