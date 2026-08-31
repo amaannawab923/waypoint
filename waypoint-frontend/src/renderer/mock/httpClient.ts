@@ -4,7 +4,9 @@
 // .erb/configs/webpack.config.renderer.{dev,prod}.ts).
 import { showErrorToast } from '@/lib/toast';
 
-const API_BASE_URL = process.env.WAYPOINT_API_BASE_URL || 'http://localhost:4000';
+// 14000, not Express's conventional 4000 — matches waypoint-backend's
+// moved default (see its docker-compose.yml/.env.example).
+const API_BASE_URL = process.env.WAYPOINT_API_BASE_URL || 'http://localhost:14000';
 
 async function request<T>(
   path: string,

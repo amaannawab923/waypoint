@@ -3,7 +3,10 @@ import { URL } from 'url';
 
 export function resolveHtmlPath(htmlFileName: string) {
   if (process.env.NODE_ENV === 'development') {
-    const port = process.env.PORT || 1212;
+    // 11212, not this template's conventional 1212 default — moved to
+    // avoid colliding with another project's dev server on the same
+    // machine (see check-port-in-use.js and webpack.config.renderer.dev.ts).
+    const port = process.env.PORT || 11212;
     const url = new URL(`http://localhost:${port}`);
     url.pathname = htmlFileName;
     return url.href;

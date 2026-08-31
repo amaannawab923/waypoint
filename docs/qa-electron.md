@@ -21,7 +21,7 @@ runtime — see `src/renderer/lib/featureFlags.ts`), then runs everything
 under `tests/e2e/`.
 
 **Tests currently assume the real dev backend is reachable**
-(`http://localhost:4000` — see `scripts/dev.sh` at the repo root). The
+(`http://localhost:14000` — see `scripts/dev.sh` at the repo root). The
 Copilot panel tests hit the real `copilot/conversation` endpoints, so
 message history persists across runs — assertions are written to tolerate
 that (see the comments in `tests/e2e/copilot-panel.spec.ts`) rather than
@@ -50,7 +50,7 @@ just driving: Google's own
 attached to the same `ELECTRON_QA_DEBUG_PORT` bridge described below.
 Electron's renderer is genuine Chromium speaking the same CDP, so this
 works against the app directly — verified live against Waypoint (it
-reports `1: Waypoint (http://localhost:1212/)` and returns a full
+reports `1: Waypoint (http://localhost:11212/)` and returns a full
 accessibility snapshot).
 
 It gives an AI agent (or you) the things a hand-rolled driver doesn't:
@@ -64,7 +64,7 @@ Register it once (already done on this machine, at user scope):
 
 ```bash
 claude mcp add electron-devtools --scope user -- \
-  npx -y chrome-devtools-mcp@latest --browserUrl http://127.0.0.1:9222
+  npx -y chrome-devtools-mcp@latest --browserUrl http://127.0.0.1:19222
 ```
 
 Then just run `npm run start:qa` (below) and the tools are live. Note
@@ -109,7 +109,9 @@ to manage. Round-trip time is well under a second per command.
 ### How it works, and why it's built this way
 
 `npm run start:qa` sets two env vars: `WAYPOINT_FEATURE_COPILOT=true` (same
-flag as above) and `ELECTRON_QA_DEBUG_PORT=9222`. `src/main/main.ts` reads
+flag as above) and `ELECTRON_QA_DEBUG_PORT=19222` (moved off Chrome/CDP's
+conventional 9222 default to avoid colliding with another project's own
+CDP session on the same machine). `src/main/main.ts` reads
 that second one and calls `app.commandLine.appendSwitch('remote-debugging-port',
 port)` before `app.whenReady()` — the documented, correct way to enable
 Chrome DevTools Protocol remote debugging

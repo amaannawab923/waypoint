@@ -42,7 +42,7 @@
     "start:main": "concurrently -k -P \"cross-env NODE_ENV=development TS_NODE_TRANSPILE_ONLY=true webpack --watch --config ./.erb/configs/webpack.config.main.dev.ts\" \"electronmon . -- {@}\" --",
     "start:preload": "cross-env NODE_ENV=development TS_NODE_TRANSPILE_ONLY=true NODE_OPTIONS=\"-r ts-node/register --no-warnings\" webpack --config ./.erb/configs/webpack.config.preload.dev.ts",
     "start:renderer": "cross-env NODE_ENV=development TS_NODE_TRANSPILE_ONLY=true NODE_OPTIONS=\"-r ts-node/register --no-warnings\" webpack serve --config ./.erb/configs/webpack.config.renderer.dev.ts",
-    "start:qa": "cross-env ELECTRON_QA_DEBUG_PORT=9222 WAYPOINT_FEATURE_COPILOT=true npm run start",
+    "start:qa": "cross-env ELECTRON_QA_DEBUG_PORT=19222 WAYPOINT_FEATURE_COPILOT=true npm run start",
     "qa:electron": "ts-node -T scripts/qa/electron-cdp.ts",
     "test": "jest",
     "test:e2e": "cross-env WAYPOINT_FEATURE_COPILOT=true npm run build && playwright test"

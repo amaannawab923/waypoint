@@ -15,7 +15,7 @@ the app," follow this document top to bottom.
 
 The app must already be running in dev mode with its CDP debug port open
 (started via `npm run start:qa` from `waypoint-frontend/`, which sets
-`ELECTRON_QA_DEBUG_PORT=9222` and `WAYPOINT_FEATURE_COPILOT=true`). **Do not
+`ELECTRON_QA_DEBUG_PORT=19222` and `WAYPOINT_FEATURE_COPILOT=true`). **Do not
 start, stop, restart, rebuild, or otherwise touch the app process, the
 backend, git, or npm/build commands unless the task explicitly asks you to.**
 You are testing what's already running, not setting up the environment. If it

@@ -79,7 +79,20 @@ jobs:
         working-directory: waypoint-backend
         run: |
           npm ci
-          cp .env.example .env
+          # Not `cp .env.example .env` verbatim: that file's DATABASE_URL
+          # port (15432) was moved to dodge a *local* dev machine's other
+          # projects (see its own comment) — this runner is single-tenant,
+          # so Postgres is left on Homebrew's native 5432 above rather than
+          # also being reconfigured to match. PORT does still need to be
+          # 14000 here though, unlike DATABASE_URL — the frontend's
+          # production build (below, "npm run build" in waypoint-frontend)
+          # bakes in WAYPOINT_API_BASE_URL=http://localhost:14000 at build
+          # time regardless of this job's own .env, so the backend this
+          # job's build will actually be tested against must listen there.
+          cat > .env <<'ENV'
+          DATABASE_URL=postgres://waypoint:waypoint@localhost:5432/waypoint
+          PORT=14000
+          ENV
           npm run db:migrate --if-present
           # The actual root cause of every E2E run's flakiness so far —
           # confirmed live via the renderer-console/response logging added
@@ -101,7 +114,7 @@ jobs:
           # backend-side failure means reproducing it locally from scratch.
           npm start > /tmp/waypoint-backend.log 2>&1 &
           for i in $(seq 1 30); do
-            curl -sf http://localhost:4000/health && break
+            curl -sf http://localhost:14000/health && break
             sleep 2
           done
       - name: Run E2E suite

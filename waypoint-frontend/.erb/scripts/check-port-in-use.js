@@ -1,7 +1,9 @@
 import chalk from 'chalk';
 import detectPort from 'detect-port';
 
-const port = process.env.PORT || '1212';
+// 11212, not this template's conventional 1212 default — moved to avoid
+// colliding with another project's dev server on the same machine.
+const port = process.env.PORT || '11212';
 
 detectPort(port, (_err, availablePort) => {
   if (port !== String(availablePort)) {

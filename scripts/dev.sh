@@ -52,8 +52,8 @@ echo "==> Starting backend (Postgres + API)..."
 
 echo "==> Waiting for the API to become healthy..."
 for i in $(seq 1 60); do
-  if curl -sf http://localhost:4000/health >/dev/null 2>&1; then
-    echo "Backend is up (http://localhost:4000)."
+  if curl -sf http://localhost:14000/health >/dev/null 2>&1; then
+    echo "Backend is up (http://localhost:14000)."
     break
   fi
   if [ "$i" -eq 60 ]; then

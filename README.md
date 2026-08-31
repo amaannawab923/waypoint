@@ -76,11 +76,11 @@ cd waypoint-backend
 cp .env.example .env
 docker compose up -d postgres  # just Postgres — `up -d` with no service
                                 # name also starts the api container, which
-                                # conflicts on :4000 with `npm run dev` below
+                                # conflicts on :14000 with `npm run dev` below
 npm install
 npm run db:generate && npm run db:migrate && npm run db:seed  # destructive:
                                 # truncates every table first
-npm run dev              # http://localhost:4000
+npm run dev              # http://localhost:14000
 
 # 2. Frontend, in a second terminal
 cd waypoint-frontend

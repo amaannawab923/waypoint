@@ -11,7 +11,13 @@ services:
       # Postgres on the LAN. Anyone on the same network reaching this port
       # can already connect with the well-known waypoint/waypoint
       # credentials; don't also hand them the network path.
-      - '127.0.0.1:5432:5432'
+      #
+      # Host side is 15432, not Postgres's own 5432 default — picked to
+      # avoid colliding with another project's Postgres already claiming
+      # the standard port on the same dev machine. The container's own
+      # internal port stays 5432 (unchanged below and in the healthcheck) —
+      # only the host-published side needed to move.
+      - '127.0.0.1:15432:5432'
     volumes:
       - waypoint_pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -34,10 +40,16 @@ services:
       # deliberately not `localhost` (that's what .env is for when running
       # `npm run dev` on the host against the container's published port).
       DATABASE_URL: postgres://waypoint:waypoint@postgres:5432/waypoint
-      PORT: 4000
+      # 14000, not Express's conventional 4000 — same reasoning as the
+      # postgres service's host port above (a machine-local conflict with
+      # another project). Changed on both sides here (unlike postgres,
+      # which only moved its host-published port) so the app's own PORT
+      # env, this mapping, and every doc/URL referencing "the backend" all
+      # say the same number — nothing internal needs 4000 specifically the
+      # way postgres's default port is baked into the image/healthcheck.
+      PORT: 14000
     ports:
-      # See the postgres service's port comment above — same reasoning.
-      - '127.0.0.1:4000:4000'
+      - '127.0.0.1:14000:14000'
     depends_on:
       postgres:
         condition: service_healthy
