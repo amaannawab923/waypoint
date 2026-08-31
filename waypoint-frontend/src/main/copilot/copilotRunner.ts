@@ -6,38 +6,83 @@ import { getStoredSubscriptionToken } from './copilotAuth';
 import { parseStreamEventLine } from './parseStreamEvent';
 
 // Copilot's persona (issue #7). Layered on top of Claude Code's own default
-// system prompt via --append-system-prompt, not a full replacement — no tool
-// use to describe yet (that's issues #9/#10), just the identity and the
-// self-disclosure convention this app already uses elsewhere (see
+// system prompt via --append-system-prompt, not a full replacement. Issue
+// #9's read-only MCP tools (see V1_MCP_TOOLS below) have landed — #10's
+// write actions haven't, so the prompt is explicit that ticket lookup works
+// but acting on the user's behalf still doesn't, matching the self-
+// disclosure convention this app already uses elsewhere (see
 // waypoint-frontend's mockSessions.ts) for whenever that capability lands.
 const COPILOT_SYSTEM_PROMPT = [
   'You are Copilot, a personal AI assistant inside Waypoint, a project',
   "management tool. You're having a private conversation with the user about",
-  "their tickets and work. Be concise and direct. You don't yet have access",
-  'to real ticket data or the ability to act on the user’s behalf — if',
-  "asked to do something requiring that, say it's coming soon rather than",
-  'guessing. When a future capability lets you act on the user’s behalf',
-  '(e.g. posting a comment), you must always self-disclose clearly, e.g.',
-  '"Hi, this is Copilot — <name>’s agent — commenting on his behalf: ...",',
-  "matching Waypoint's existing convention.",
+  'their tickets and work. Be concise and direct. You have read-only access',
+  'to the user’s tickets via tools — you can look up, list, and search work',
+  'items, along with their comments and activity history. You still cannot',
+  "make changes on the user's behalf yet — if asked to update something, say",
+  "that's coming soon rather than guessing. When a future capability lets you",
+  'act on the user’s behalf (e.g. posting a comment), you must always',
+  'self-disclose clearly, e.g. "Hi, this is Copilot — <name>’s agent —',
+  'commenting on his behalf: ...", matching Waypoint\'s existing convention.',
 ].join(' ');
+
+// Read-only work-item lookup tools (issue #9) served by waypoint-backend's
+// MCP endpoint (see waypoint-backend/src/routes/mcp.routes.ts and
+// src/mcp/workItemTools.ts) — the "mcp__waypoint__*" naming is Claude Code's
+// own convention for a tool sourced from an MCP server named "waypoint" in
+// --mcp-config below. Write actions (issue #10) aren't listed here on
+// purpose: headless `-p` mode has no TTY, so Claude Code's own interactive
+// tool-approval prompt can never fire — a write tool would execute with
+// nothing to gate it, which is why none exists yet.
+const V1_MCP_TOOLS = [
+  'mcp__waypoint__list_work_items',
+  'mcp__waypoint__get_work_item',
+  'mcp__waypoint__get_work_item_by_identifier',
+  'mcp__waypoint__search_work_items',
+  'mcp__waypoint__list_comments',
+  'mcp__waypoint__list_activity',
+  'mcp__waypoint__list_states',
+  'mcp__waypoint__list_members',
+];
+
+// Same env var waypoint-frontend's own httpClient.ts reads to reach the
+// backend — reused here since copilotRunner.ts is main-process code and
+// doesn't share the renderer's module graph.
+function mcpConfigArg(): string {
+  const apiBaseUrl =
+    process.env.WAYPOINT_API_BASE_URL || 'http://localhost:14000';
+  return JSON.stringify({
+    mcpServers: {
+      waypoint: { type: 'http', url: `${apiBaseUrl}/mcp/copilot` },
+    },
+  });
+}
 
 // --bare would force API-key-only auth and skip the user's own Claude Code
 // subscription login entirely — the whole point of this integration is
-// reusing that login, so --bare is never passed. --safe-mode suppresses the
-// user's global CLAUDE.md/hooks/plugins/skills/auto-memory (which would
-// otherwise leak unrelated personal Claude Code config into Copilot's
-// persona) while still allowing normal (subscription) authentication —
-// verbatim from Anthropic's own docs, confirmed before this was built.
-// --safe-mode's own --help text says explicitly that "built-in tools ...
-// work normally" — confirmed live: without --tools, the spawned process's
-// own init event lists Bash/Edit/Write/Task/WebFetch/WebSearch as available,
-// even though Copilot's system prompt tells it it has none of that. This
-// phase is text-only chat by design (real tool use is issues #9/#10, behind
-// a not-yet-built MCP server) — `--tools ''` turns the built-in set off
-// entirely (confirmed live: the init event's own `tools` list comes back
-// empty), so argv states that intent instead of relying on default
-// permission prompts to deny everything in practice.
+// reusing that login, so --bare is never passed.
+//
+// Isolation from the user's own global Claude Code config used to be
+// --safe-mode, but --safe-mode's own --help text is explicit that it
+// disables "CLAUDE.md, skills, plugins, hooks, MCP servers, custom commands
+// and agents, ..." — MCP SERVERS INCLUDED, with no override, confirmed live:
+// --safe-mode plus a --mcp-config pointing at a real, independently-verified-
+// reachable server still comes back with an empty `mcp_servers`/`tools` list
+// in the init event. That's silent, not an error — the model then has zero
+// tools despite the system prompt telling it otherwise, so it just narrates
+// what it would do ("Let me look that up.") and ends its turn immediately.
+// --setting-sources '' is the replacement: confirmed live it still empties
+// out user-level skills/plugins/custom-agents (the actual leak --safe-mode
+// existed to prevent) while leaving an explicitly-passed --mcp-config
+// server free to connect — `mcp_servers` comes back `connected` and the
+// full tool list is present. Same auth behavior as --safe-mode (this only
+// touches config sources, not credentials).
+//
+// --tools '' turns the built-in tool set (Bash/Edit/Write/Task/WebFetch/
+// WebSearch/...) off entirely regardless of setting-sources or safe-mode
+// (confirmed live: the init event's own `tools` list comes back empty of
+// anything but the explicitly --allowedTools-listed MCP tools below) — so
+// argv states that intent directly instead of relying on default permission
+// prompts to deny everything in practice.
 //
 // The prompt is deliberately NOT one of these args (see registerCopilotIpc,
 // which writes it to the child's stdin instead): a prompt starting with `-`
@@ -63,9 +108,15 @@ const SESSION_ID_PATTERN =
 function buildArgs(resumeSessionId: string | undefined): string[] {
   const args = [
     '-p',
-    '--safe-mode',
+    '--setting-sources',
+    '', // no user/project/local settings — global skills/plugins/custom agents stay out (--safe-mode's old job), without also disabling MCP the way --safe-mode does
     '--tools',
-    '',
+    '', // deny every built-in (Bash/Edit/Write/Task/WebFetch/WebSearch/...)
+    '--mcp-config',
+    mcpConfigArg(),
+    '--strict-mcp-config', // ignore any ambient/global MCP config — only ours
+    '--allowedTools',
+    V1_MCP_TOOLS.join(' '),
     '--output-format',
     'stream-json',
     '--verbose',
