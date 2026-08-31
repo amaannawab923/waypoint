@@ -132,6 +132,11 @@ beforeEach(() => {
   spawnCalls.length = 0;
   lastChild = null;
   getPathMock.mockReturnValue('/fake/userData');
+  // jest.clearAllMocks() clears call history but not a prior test's
+  // mockReturnValue — explicitly restore the "no token connected" default
+  // here so test order can never leak a connected-token return value into a
+  // test that assumes the default.
+  getStoredSubscriptionTokenMock.mockReturnValue(null);
   delete process.env.WAYPOINT_API_BASE_URL;
 });
 
@@ -408,12 +413,25 @@ describe('registerCopilotIpc', () => {
     expect(String(options.env?.PATH)).toContain('/usr/local/bin');
   });
 
-  // Regression test for the memory-leak-across-sessions bug: --setting-
-  // sources '' alone does not isolate the CLI's memory namespace (confirmed
-  // live — memory_paths.auto still resolves under the real ~/.claude keyed
-  // off cwd's hash), so CLAUDE_CONFIG_DIR must point somewhere app-owned,
-  // not the user's real config home.
-  it("sets CLAUDE_CONFIG_DIR to an app-owned directory, not the user's real ~/.claude", () => {
+  // Regression test for a BLOCKER found in a second review round: setting
+  // CLAUDE_CONFIG_DIR unconditionally (the original fix for the memory-leak-
+  // across-sessions bug below) also relocates where the CLI looks up
+  // CREDENTIALS, not just memory — confirmed live, this permanently broke
+  // ambient `claude login` auth for anyone who hadn't also connected a
+  // subscription token via this app's own Settings → Profile → Copilot
+  // flow, with no in-app recovery (re-running `claude login` writes to the
+  // real ~/.claude.json, which the redirected dir never looks at again).
+  // CLAUDE_CONFIG_DIR must therefore only be set in the same branch that
+  // sets CLAUDE_CODE_OAUTH_TOKEN — i.e. only once a subscription token is
+  // actually connected, since that credential path is honored regardless of
+  // CLAUDE_CONFIG_DIR (confirmed live). With no token connected (the default
+  // state every other test in this file exercises), CLAUDE_CONFIG_DIR must
+  // be absent entirely so ambient-login users keep working exactly as they
+  // did before this isolation fix landed.
+  it("sets CLAUDE_CONFIG_DIR to an app-owned directory, not the user's real ~/.claude, but only when a subscription token is connected", () => {
+    getStoredSubscriptionTokenMock.mockReturnValue(
+      'sk-ant-oat01-connected-token',
+    );
     const win = fakeWindow();
     registerCopilotIpc(() => win as unknown as BrowserWindow);
 
@@ -425,19 +443,20 @@ describe('registerCopilotIpc', () => {
     );
   });
 
-  it('does not set CLAUDE_CODE_OAUTH_TOKEN when no subscription token is connected', () => {
+  it('does not set CLAUDE_CONFIG_DIR (or CLAUDE_CODE_OAUTH_TOKEN) when no subscription token is connected, so ambient `claude login` auth keeps working', () => {
     const win = fakeWindow();
     registerCopilotIpc(() => win as unknown as BrowserWindow);
 
     run({ requestId: 'req-1', prompt: 'hi' });
 
     expect(spawnCalls[0].options.env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(spawnCalls[0].options.env?.CLAUDE_CONFIG_DIR).toBeUndefined();
   });
 
   // Settings → Profile → Copilot lets a user connect their own subscription
   // via a token generated with `claude setup-token`, so an expired/missing
   // ambient CLI login no longer dead-ends every run.
-  it('passes a connected subscription token as CLAUDE_CODE_OAUTH_TOKEN, taking priority over ambient login', () => {
+  it('passes a connected subscription token as CLAUDE_CODE_OAUTH_TOKEN, taking priority over ambient login, and sets CLAUDE_CONFIG_DIR alongside it', () => {
     getStoredSubscriptionTokenMock.mockReturnValue(
       'sk-ant-oat01-connected-token',
     );
@@ -448,6 +467,9 @@ describe('registerCopilotIpc', () => {
 
     expect(spawnCalls[0].options.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe(
       'sk-ant-oat01-connected-token',
+    );
+    expect(spawnCalls[0].options.env?.CLAUDE_CONFIG_DIR).toBe(
+      '/fake/userData/copilot-claude-config',
     );
   });
 
