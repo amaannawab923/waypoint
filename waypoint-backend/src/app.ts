@@ -17,14 +17,16 @@ export function createApp() {
   // docker-compose.yml is what actually stops those).
   //
   // Two legitimate origins, not one: the webpack dev server
-  // (http://localhost:1212) during development, and the packaged app's
-  // custom app://waypoint scheme in production — registered `standard:
-  // true` in main.ts, which gives it a real origin Chromium does send,
-  // unlike a plain file:// load. Restricting to only the dev origin here
-  // previously shipped a packaged build that silently failed every API
-  // call. CORS_ORIGIN overrides both defaults with a comma-separated list
-  // — see .env.example.
-  const defaultAllowedOrigins = 'http://localhost:1212,app://waypoint';
+  // (http://localhost:11212 — moved off webpack-dev-server's conventional
+  // 1212 to avoid colliding with another project on the same dev machine,
+  // see .erb/configs/webpack.config.renderer.dev.ts) during development,
+  // and the packaged app's custom app://waypoint scheme in production —
+  // registered `standard: true` in main.ts, which gives it a real origin
+  // Chromium does send, unlike a plain file:// load. Restricting to only
+  // the dev origin here previously shipped a packaged build that silently
+  // failed every API call. CORS_ORIGIN overrides both defaults with a
+  // comma-separated list — see .env.example.
+  const defaultAllowedOrigins = 'http://localhost:11212,app://waypoint';
   // `||`, not `??` — CORS_ORIGIN="" (e.g. a blanked-out .env value, as
   // opposed to leaving it commented out per .env.example) would otherwise
   // survive as a truthy empty string, split into [''], and reject every
