@@ -84,6 +84,14 @@ function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, '\\$&');
 }
 
+// Fallback cap for the assignee pre-query below when a caller doesn't pass
+// its own `filters.limit` (every current MCP tool caller does, via
+// effectiveLimit + 1 — see workItemTools.ts — so this mostly guards any
+// future caller that doesn't). Not meant to be precise, just to bound
+// worst-case work; the main query's own .limit() is still what
+// authoritatively caps the final result.
+const MAX_ASSIGNEE_PREQUERY_ROWS = 500;
+
 // assigneeId can't just be pushed into the WHERE alongside the others —
 // assignment is a separate many-to-many table (workItemAssignees), not a
 // column on workItems — so it's resolved as its own pre-query. Returns null
@@ -91,9 +99,13 @@ function escapeLikePattern(value: string): string {
 // before ever querying workItems, rather than issuing a query they already
 // know returns nothing. When projectId is given (listWorkItems only —
 // listAllWorkItems has no project to scope by), the pre-query itself is
-// scoped to that project via a join, so a heavy assignee on a large
-// workspace never has to build an unbounded IN (...) list before the
-// project filter would have applied anyway.
+// scoped to that project via a join, which already keeps it fairly bounded
+// in practice — but neither branch had an actual LIMIT before, so an
+// assignee with many items (most sharply felt in listAllWorkItems, which
+// has no project to scope by at all) still made this pre-query fetch
+// everything before the main query's own .limit() ever got a chance to
+// matter. Both branches now cap at filters.limit (falling back to
+// MAX_ASSIGNEE_PREQUERY_ROWS) for that reason.
 async function withFilters(
   baseConditions: SQL[],
   filters: WorkItemFilters,
@@ -106,11 +118,21 @@ async function withFilters(
   if (filters.dueBefore) conditions.push(lte(workItems.dueDate, filters.dueBefore));
   if (filters.assigneeId) {
     const base = executor.select({ workItemId: workItemAssignees.workItemId }).from(workItemAssignees);
+    // Bounds worst-case pre-query work, most importantly for listAllWorkItems
+    // (no projectId to scope by): without a limit here, an assignee with
+    // many items makes this pre-query fetch every one of them before the
+    // main query's own .limit() (applied below, in the caller) ever gets a
+    // chance to matter. Doesn't need to be exact — the main query still
+    // authoritatively limits the final result — this just stops the
+    // pre-query itself from being unbounded.
     const assigneeRows = await (projectId
       ? base
           .innerJoin(workItems, eq(workItems.id, workItemAssignees.workItemId))
           .where(and(eq(workItemAssignees.assigneeId, filters.assigneeId), eq(workItems.projectId, projectId)))
-      : base.where(eq(workItemAssignees.assigneeId, filters.assigneeId)));
+          .limit(filters.limit ?? MAX_ASSIGNEE_PREQUERY_ROWS)
+      : base
+          .where(eq(workItemAssignees.assigneeId, filters.assigneeId))
+          .limit(filters.limit ?? MAX_ASSIGNEE_PREQUERY_ROWS));
     if (assigneeRows.length === 0) return null;
     conditions.push(inArray(workItems.id, assigneeRows.map((r) => r.workItemId)));
   }
