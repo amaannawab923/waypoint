@@ -37,7 +37,14 @@ edited. As last confirmed:
 | LAUNCH-7 | Product Launch | In Progress | Urgent | 2026-08-26 | Amaan, Dan (agent) |
 | LAUNCH-4 | Product Launch | In Review | High | 2026-08-29 | Priya |
 | TOOLS-2 | Internal Tools | In Progress | High | 2026-08-28 | Amaan |
+| LAUNCH-1 | Product Launch | Done | High | (none) | Lena |
+| LAUNCH-13 | Product Launch | In Progress | High | (none) | Lena |
+| LAUNCH-6 | Product Launch | Todo | Medium | (none) | Lena |
 
+- Lena's full assigned set (used by the `assigneeId` filter-combo cases
+  below): LAUNCH-1 (Done), LAUNCH-13 (In Progress), LAUNCH-3 (In Progress,
+  also in the main table above), LAUNCH-6 (Todo) — only LAUNCH-3 has a due
+  date set.
 - LAUNCH-3 comments: Priya — "Repro on iPad Air (1024×768) in Safari — the
   nav items wrap under the logo."; Lena — "Found it — the flex container is
   missing a min-width guard. Fix incoming."
@@ -199,7 +206,42 @@ Verify: reply does not claim the change was made; re-check LAUNCH-3 in the
 real Work Items UI afterward — priority must still read **Urgent**, proving
 nothing was actually mutated.
 
-**15. Multi-turn: context carried across the tool-use loop**
+**15a. Filter combo: `assigneeId` + `stateId` (the exact combination a prior
+regression broke)**
+Session: fresh.
+Prompt: "What's Lena working on that's currently In Progress?"
+Expected: Exactly LAUNCH-13 ("Fix nav overlap on 1024px breakpoint
+specifically") and LAUNCH-3 — the two of Lena's four assigned tickets
+(LAUNCH-1, LAUNCH-13, LAUNCH-3, LAUNCH-6) that are in the "In Progress"
+state; LAUNCH-1 (Done) and LAUNCH-6 (Todo) excluded.
+Verify: both LAUNCH-13 and LAUNCH-3 present; LAUNCH-1 and LAUNCH-6 **not**
+included — confirms `assigneeId` and `stateId` combine with AND, and that
+neither filter silently drops a real match of the other. This exercises the
+exact class of bug a prior review round found live: an earlier
+implementation resolved `assigneeId` as its own separate, independently
+-capped pre-query *before* the other filters (stateId/dueBefore/etc.) got a
+chance to narrow anything down, so a heavy assignee's real matches could be
+discarded upstream of those filters entirely, then reported back as a
+complete (non-truncated) result even though it wasn't. Cross-check the full
+set against the Work Items board filtered by assignee + state in the real
+UI. Note: this seed dataset's assignees only have up to ~4 tickets each as
+of this writing — if re-seeded with a heavier assignee (dozens of tickets
+across mixed states/due-dates/drafts) in the future, prefer that assignee
+here instead, since a small candidate set can't stress the pre-query-cap
+class of bug as convincingly as the live regression proof did (see the
+service-level regression tests in `workItems.service.test.ts` for the
+synthetic-scale coverage of that specific failure mode).
+
+**15b. Filter combo: `assigneeId` + `dueBefore`**
+Session: fresh.
+Prompt: "Does Lena have anything overdue?"
+Expected: LAUNCH-3 (Lena, due 2026-08-27, overdue as of today's date) —
+Lena's other three tickets (LAUNCH-1, LAUNCH-13, LAUNCH-6) have no due date
+set, so none of them should be reported as overdue.
+Verify: LAUNCH-3 present; no other Lena ticket claimed overdue; Copilot
+doesn't invent a due date for the three that don't have one.
+
+**16. Multi-turn: context carried across the tool-use loop**
 Session: fresh, then continue in the **same** session for turn 2.
 Turn 1 prompt: "Tell me about LAUNCH-7."
 Turn 1 expected: Priority Urgent, state In Progress, due 2026-08-26,
