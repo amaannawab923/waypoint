@@ -58,17 +58,20 @@ describe('POST /mcp/copilot', () => {
 
     expect(workItemsService.listAllWorkItems).toHaveBeenCalled();
     const content = (result.content as { type: string; text: string }[])[0];
-    expect(JSON.parse(content.text)).toEqual([
-      {
-        id: 'wi-1',
-        identifier: 'WI-1',
-        title: 'Fix login bug',
-        stateId: 'state-1',
-        priority: 'high',
-        assigneeIds: [],
-        assigneeNames: [],
-      },
-    ]);
+    expect(JSON.parse(content.text)).toEqual({
+      items: [
+        {
+          id: 'wi-1',
+          identifier: 'WI-1',
+          title: 'Fix login bug',
+          stateId: 'state-1',
+          priority: 'high',
+          assigneeIds: [],
+          assigneeNames: [],
+        },
+      ],
+      truncated: false,
+    });
 
     await client.close();
   });
@@ -83,6 +86,32 @@ describe('POST /mcp/copilot', () => {
     const result = await client.callTool({ name: 'get_work_item', arguments: { id: 'missing' } });
 
     expect(result.isError).toBe(true);
+    await client.close();
+  });
+
+  // Regression test: dueBefore's inputSchema previously accepted any
+  // string, so a malformed value reached workItems.service.ts's
+  // lte(workItems.dueDate, ...) raw and could leak a Postgres error string
+  // back into the chat. It's now a regex-validated ISO date, so the real
+  // MCP protocol layer (zod's own tool-input validation, not this app's
+  // handler code) must reject a bad value before the service is ever
+  // called — surfaced to the client as a tool error result, not a dropped
+  // connection or thrown exception.
+  it('rejects a malformed dueBefore at the protocol layer, before the service is ever called', async () => {
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+    const transport = new StreamableHTTPClientTransport(new URL(baseUrl));
+    await client.connect(transport);
+
+    const result = await client.callTool({
+      name: 'list_work_items',
+      arguments: { dueBefore: 'not-a-date' },
+    });
+
+    expect(result.isError).toBe(true);
+    const content = (result.content as { type: string; text: string }[])[0];
+    expect(content.text).toMatch(/ISO date/i);
+    expect(workItemsService.listAllWorkItems).not.toHaveBeenCalled();
+
     await client.close();
   });
 });
