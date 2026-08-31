@@ -13,7 +13,7 @@ together with [`waypoint-backend`](../waypoint-backend).
 - React Router (`createBrowserRouter`) for real, address-bar-updating routes
 - Tailwind CSS for styling
 - Talks to `waypoint-backend`'s REST API over `WAYPOINT_API_BASE_URL`
-  (defaults to `http://localhost:4000`)
+  (defaults to `http://localhost:14000`)
 
 ## Getting started
 
