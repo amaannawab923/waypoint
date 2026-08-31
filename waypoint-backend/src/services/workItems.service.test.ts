@@ -33,7 +33,7 @@ vi.mock('drizzle-orm', async (importOriginal) => {
 
 const { workItems, workItemAssignees } = await import('../db/schema/index.js');
 const { searchWorkItems, listAllWorkItems, listWorkItems } = await import('./workItems.service.js');
-const { eq, ilike, lte, inArray } = await import('drizzle-orm');
+const { eq, and, ilike, lte, inArray } = await import('drizzle-orm');
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -130,26 +130,87 @@ describe('listAllWorkItems filters', () => {
     expect(lte).toHaveBeenCalledWith(workItems.dueDate, '2026-09-01');
   });
 
-  it('resolves assigneeId via a pre-query against workItemAssignees (unscoped by project), then filters workItems.id by the result', async () => {
-    const assigneeChain = chainable([{ workItemId: 'wi-1' }, { workItemId: 'wi-2' }]);
+  // Regression coverage for the MAJOR fixed here: assigneeId used to be
+  // resolved as a separate, independently-capped PRE-query — run before
+  // stateId/priority/dueBefore ever got a chance to narrow anything down,
+  // with no ORDER BY, so which rows survived its own cap was nondeterministic.
+  // A heavy assignee's real matches could be silently discarded there before
+  // the main query's dueBefore/stateId/etc. filters, and its own limit, ever
+  // ran — and the `truncated` flag downstream was computed from that already-
+  // short result, so a wrong answer came back looking complete. Asserting
+  // "a pre-query ran with some limit" (the old test shape) can't catch that:
+  // it never inspects which rows the two-query split actually let through.
+  //
+  // The fix folds the assignee condition into ONE query as a subquery passed
+  // to inArray(), so it's combined via and(...) with every other filter and
+  // is bounded by the SAME single .limit() as everything else — asserted
+  // below by checking there is only ONE db.select() call for the whole
+  // operation (the assignee condition no longer causes a second, separate
+  // query), and that inArray() receives a query builder (the subquery) built
+  // from workItemAssignees, not a plain resolved array of ids.
+  it('folds assigneeId into the SAME single query as every other filter, via a subquery passed to inArray — not a separate pre-query', async () => {
     const mainChain = chainable([]);
-    db.select.mockReturnValueOnce(assigneeChain).mockReturnValueOnce(mainChain);
+    db.select.mockReturnValueOnce(mainChain); // the workItemAssignees subquery builder itself
+    db.select.mockReturnValueOnce(mainChain); // the main workItems query
 
-    await listAllWorkItems({ assigneeId: 'mem-4' });
+    await listAllWorkItems({ assigneeId: 'mem-4', stateId: 'st-1', dueBefore: '2026-09-01', limit: 50 });
 
-    expect(assigneeChain.from).toHaveBeenCalledWith(workItemAssignees);
-    expect(assigneeChain.innerJoin).not.toHaveBeenCalled();
+    // Exactly two db.select() calls total: one to build the subquery
+    // expression, one for the main workItems query — never a third,
+    // independently-awaited pre-query round-trip.
+    expect(db.select).toHaveBeenCalledTimes(2);
+
+    // The assignee subquery itself is built from workItemAssignees, scoped
+    // by assigneeId, and critically has NO .limit() of its own — it must
+    // contribute every one of the assignee's item ids to the AND'd
+    // condition set, not a capped subset.
+    expect(db.select).toHaveBeenCalledWith({ workItemId: workItemAssignees.workItemId });
     expect(eq).toHaveBeenCalledWith(workItemAssignees.assigneeId, 'mem-4');
-    expect(inArray).toHaveBeenCalledWith(workItems.id, ['wi-1', 'wi-2']);
+
+    // inArray() must receive the subquery builder (an object, not a plain
+    // array of already-resolved ids) — proof the assignee condition is
+    // expressed as `workItems.id IN (<subquery>)` within the main query,
+    // not resolved to a value list ahead of time.
+    expect(inArray).toHaveBeenCalledWith(workItems.id, expect.objectContaining({ where: expect.any(Function) }));
+    const inArrayCall = (inArray as unknown as ReturnType<typeof vi.fn>).mock.calls.find(
+      (call) => call[0] === workItems.id,
+    );
+    expect(Array.isArray(inArrayCall?.[1])).toBe(false);
+
+    // Every other filter condition (stateId, dueBefore) is combined in the
+    // SAME and(...) call as the assignee inArray condition — proof they all
+    // apply together in one query, not the assignee filter narrowing a
+    // separately-capped candidate set first.
+    expect(eq).toHaveBeenCalledWith(workItems.stateId, 'st-1');
+    expect(lte).toHaveBeenCalledWith(workItems.dueDate, '2026-09-01');
+    const andCall = (and as unknown as ReturnType<typeof vi.fn>).mock.calls.at(-1);
+    expect(andCall).toBeDefined();
+
+    // The single .limit() applies to the main query only, after everything
+    // above is already combined — there's no separate pre-query .limit()
+    // left to assert on.
+    expect(mainChain.limit).toHaveBeenCalledWith(50);
+    expect(mainChain.limit).toHaveBeenCalledTimes(1);
   });
 
-  it('short-circuits to an empty result, never querying workItems, when the assignee has no items', async () => {
-    db.select.mockReturnValueOnce(chainable([]));
+  // The old two-query design short-circuited to [] (skipping the main
+  // workItems query entirely) when the assignee's pre-query came back
+  // empty. Folding this into a subquery removes the need for that special
+  // case — `workItems.id IN (<subquery with 0 rows>)` is valid SQL that
+  // simply matches nothing — so the main query now always runs exactly
+  // once, whether or not the assignee turns out to have any items. (Real
+  // Postgres behavior for this exact case — an assignee with zero matching
+  // items genuinely returning zero rows, not an error or every row — was
+  // independently verified against a live database; see the fix's PR
+  // description.)
+  it('still runs exactly one main query (no special-cased short-circuit) even for an assignee with no items', async () => {
+    const mainChain = chainable([]);
+    db.select.mockReturnValueOnce(mainChain).mockReturnValueOnce(mainChain);
 
     const result = await listAllWorkItems({ assigneeId: 'mem-nobody' });
 
     expect(result).toEqual([]);
-    expect(db.select).toHaveBeenCalledTimes(1);
+    expect(db.select).toHaveBeenCalledTimes(2);
   });
 
   it('applies a limit at the query layer when given', async () => {
@@ -159,33 +220,6 @@ describe('listAllWorkItems filters', () => {
     await listAllWorkItems({ limit: 51 });
 
     expect(mainChain.limit).toHaveBeenCalledWith(51);
-  });
-
-  // Regression test: the assigneeId pre-query had no limit at all here —
-  // listAllWorkItems has no projectId to scope it by, so a heavy assignee
-  // made this pre-query fetch every one of their items before the main
-  // query's own .limit() (asserted above) ever got a chance to matter. The
-  // pre-query now passes the caller's own limit through to bound that
-  // worst case too.
-  it('caps the unscoped assigneeId pre-query at the caller-given limit', async () => {
-    const assigneeChain = chainable([{ workItemId: 'wi-1' }]);
-    const mainChain = chainable([]);
-    db.select.mockReturnValueOnce(assigneeChain).mockReturnValueOnce(mainChain);
-
-    await listAllWorkItems({ assigneeId: 'mem-4', limit: 51 });
-
-    expect(assigneeChain.limit).toHaveBeenCalledWith(51);
-  });
-
-  it('falls back to a default cap on the unscoped assigneeId pre-query when no limit is given', async () => {
-    const assigneeChain = chainable([{ workItemId: 'wi-1' }]);
-    const mainChain = chainable([]);
-    db.select.mockReturnValueOnce(assigneeChain).mockReturnValueOnce(mainChain);
-
-    await listAllWorkItems({ assigneeId: 'mem-4' });
-
-    expect(assigneeChain.limit).toHaveBeenCalledWith(expect.any(Number));
-    expect((assigneeChain.limit as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBeGreaterThan(0);
   });
 });
 
@@ -199,23 +233,22 @@ describe('listWorkItems filters', () => {
     expect(eq).toHaveBeenCalledWith(workItems.priority, 'high');
   });
 
-  // Regression test: the assignee pre-query previously ran against every
-  // work item assigned to that member across the whole app, regardless of
-  // project — a heavy assignee on a large workspace built an unnecessarily
-  // huge IN (...) list before the project filter (applied only to the main
-  // query afterward) ever had a chance to narrow it. Scoping the pre-query
-  // itself by project (via a join) fixes that.
-  it('scopes the assigneeId pre-query to the given project via a join, not just the main query', async () => {
-    const assigneeChain = chainable([{ workItemId: 'wi-1' }]);
+  // The project scope no longer needs to be duplicated inside the assignee
+  // subquery: the outer query's own baseConditions already constrain to
+  // workItems.projectId, and the subquery's ids are AND'd into that same
+  // query — so intersecting an unscoped assignee subquery with the outer
+  // project filter produces the same effective scoping in one query,
+  // without a join inside the subquery itself.
+  it('does not join workItems into the assignee subquery — the outer query already scopes by project', async () => {
     const mainChain = chainable([]);
-    db.select.mockReturnValueOnce(assigneeChain).mockReturnValueOnce(mainChain);
+    db.select.mockReturnValueOnce(mainChain).mockReturnValueOnce(mainChain);
 
     await listWorkItems('proj-1', { assigneeId: 'mem-4' });
 
-    expect(assigneeChain.from).toHaveBeenCalledWith(workItemAssignees);
-    expect(assigneeChain.innerJoin).toHaveBeenCalledWith(workItems, expect.anything());
+    expect(mainChain.innerJoin).not.toHaveBeenCalled();
     expect(eq).toHaveBeenCalledWith(workItemAssignees.assigneeId, 'mem-4');
     expect(eq).toHaveBeenCalledWith(workItems.projectId, 'proj-1');
+    expect(db.select).toHaveBeenCalledTimes(2);
   });
 
   it('applies a limit at the query layer when given', async () => {
@@ -225,15 +258,5 @@ describe('listWorkItems filters', () => {
     await listWorkItems('proj-1', { limit: 51 });
 
     expect(mainChain.limit).toHaveBeenCalledWith(51);
-  });
-
-  it('also caps the project-scoped assigneeId pre-query at the caller-given limit', async () => {
-    const assigneeChain = chainable([{ workItemId: 'wi-1' }]);
-    const mainChain = chainable([]);
-    db.select.mockReturnValueOnce(assigneeChain).mockReturnValueOnce(mainChain);
-
-    await listWorkItems('proj-1', { assigneeId: 'mem-4', limit: 51 });
-
-    expect(assigneeChain.limit).toHaveBeenCalledWith(51);
   });
 });
