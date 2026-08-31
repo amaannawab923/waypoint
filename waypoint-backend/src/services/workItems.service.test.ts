@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // not real Postgres filtering behavior.
 function chainable(resolvedValue: unknown) {
   const chain: Record<string, unknown> = {};
-  const methods = ['from', 'where', 'orderBy'];
+  const methods = ['from', 'where', 'orderBy', 'limit', 'innerJoin'];
   for (const method of methods) {
     chain[method] = vi.fn(() => chain);
   }
@@ -70,6 +70,43 @@ describe('searchWorkItems', () => {
 
     expect(eq).not.toHaveBeenCalledWith(workItems.projectId, expect.anything());
   });
+
+  // Regression test: a literal `%` or `_` in the query is a LIKE wildcard,
+  // not a literal character — unescaped, `search_work_items({query: "%"})`
+  // matched every row instead of the literal "%" character.
+  it('escapes LIKE metacharacters (%, _, \\) in the query before building the pattern', async () => {
+    db.select.mockReturnValueOnce(chainable([]));
+
+    await searchWorkItems('100%_off\\sale');
+
+    expect(ilike).toHaveBeenCalledWith(workItems.title, '%100\\%\\_off\\\\sale%');
+  });
+
+  it('does not let a bare "%" query match every row — it is escaped to a literal', async () => {
+    db.select.mockReturnValueOnce(chainable([]));
+
+    await searchWorkItems('%');
+
+    expect(ilike).toHaveBeenCalledWith(workItems.title, '%\\%%');
+  });
+
+  it('applies a limit at the query layer when given, not as a post-fetch slice', async () => {
+    const searchChain = chainable([]);
+    db.select.mockReturnValueOnce(searchChain);
+
+    await searchWorkItems('login', undefined, 51);
+
+    expect(searchChain.limit).toHaveBeenCalledWith(51);
+  });
+
+  it('does not call limit() at all when no limit is given', async () => {
+    const searchChain = chainable([]);
+    db.select.mockReturnValueOnce(searchChain);
+
+    await searchWorkItems('login');
+
+    expect(searchChain.limit).not.toHaveBeenCalled();
+  });
 });
 
 describe('listAllWorkItems filters', () => {
@@ -93,7 +130,7 @@ describe('listAllWorkItems filters', () => {
     expect(lte).toHaveBeenCalledWith(workItems.dueDate, '2026-09-01');
   });
 
-  it('resolves assigneeId via a pre-query against workItemAssignees, then filters workItems.id by the result', async () => {
+  it('resolves assigneeId via a pre-query against workItemAssignees (unscoped by project), then filters workItems.id by the result', async () => {
     const assigneeChain = chainable([{ workItemId: 'wi-1' }, { workItemId: 'wi-2' }]);
     const mainChain = chainable([]);
     db.select.mockReturnValueOnce(assigneeChain).mockReturnValueOnce(mainChain);
@@ -101,6 +138,7 @@ describe('listAllWorkItems filters', () => {
     await listAllWorkItems({ assigneeId: 'mem-4' });
 
     expect(assigneeChain.from).toHaveBeenCalledWith(workItemAssignees);
+    expect(assigneeChain.innerJoin).not.toHaveBeenCalled();
     expect(eq).toHaveBeenCalledWith(workItemAssignees.assigneeId, 'mem-4');
     expect(inArray).toHaveBeenCalledWith(workItems.id, ['wi-1', 'wi-2']);
   });
@@ -113,6 +151,15 @@ describe('listAllWorkItems filters', () => {
     expect(result).toEqual([]);
     expect(db.select).toHaveBeenCalledTimes(1);
   });
+
+  it('applies a limit at the query layer when given', async () => {
+    const mainChain = chainable([]);
+    db.select.mockReturnValueOnce(mainChain);
+
+    await listAllWorkItems({ limit: 51 });
+
+    expect(mainChain.limit).toHaveBeenCalledWith(51);
+  });
 });
 
 describe('listWorkItems filters', () => {
@@ -123,5 +170,33 @@ describe('listWorkItems filters', () => {
 
     expect(eq).toHaveBeenCalledWith(workItems.projectId, 'proj-1');
     expect(eq).toHaveBeenCalledWith(workItems.priority, 'high');
+  });
+
+  // Regression test: the assignee pre-query previously ran against every
+  // work item assigned to that member across the whole app, regardless of
+  // project — a heavy assignee on a large workspace built an unnecessarily
+  // huge IN (...) list before the project filter (applied only to the main
+  // query afterward) ever had a chance to narrow it. Scoping the pre-query
+  // itself by project (via a join) fixes that.
+  it('scopes the assigneeId pre-query to the given project via a join, not just the main query', async () => {
+    const assigneeChain = chainable([{ workItemId: 'wi-1' }]);
+    const mainChain = chainable([]);
+    db.select.mockReturnValueOnce(assigneeChain).mockReturnValueOnce(mainChain);
+
+    await listWorkItems('proj-1', { assigneeId: 'mem-4' });
+
+    expect(assigneeChain.from).toHaveBeenCalledWith(workItemAssignees);
+    expect(assigneeChain.innerJoin).toHaveBeenCalledWith(workItems, expect.anything());
+    expect(eq).toHaveBeenCalledWith(workItemAssignees.assigneeId, 'mem-4');
+    expect(eq).toHaveBeenCalledWith(workItems.projectId, 'proj-1');
+  });
+
+  it('applies a limit at the query layer when given', async () => {
+    const mainChain = chainable([]);
+    db.select.mockReturnValueOnce(mainChain);
+
+    await listWorkItems('proj-1', { limit: 51 });
+
+    expect(mainChain.limit).toHaveBeenCalledWith(51);
   });
 });
