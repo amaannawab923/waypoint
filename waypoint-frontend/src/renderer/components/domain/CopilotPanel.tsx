@@ -763,6 +763,9 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
         .copilot-md pre { margin: 0.6em 0; padding: 0.6em 0.75em; border-radius: var(--radius-sm); background: color-mix(in srgb, currentColor 10%, transparent); font-family: var(--font-mono); font-size: 0.85em; white-space: pre-wrap; overflow-wrap: anywhere; }
         .copilot-md pre code { padding: 0; background: none; overflow-wrap: anywhere; }
         .copilot-md a { text-decoration: underline; }
+        .copilot-md table { margin: 0.6em 0; border-collapse: collapse; width: 100%; font-size: 0.9em; display: block; overflow-x: auto; }
+        .copilot-md th, .copilot-md td { padding: 0.35em 0.6em; border: 1px solid color-mix(in srgb, currentColor 15%, transparent); text-align: left; }
+        .copilot-md th { background: color-mix(in srgb, currentColor 8%, transparent); font-weight: 600; }
 
         .copilot-typing { display: flex; align-items: center; gap: 4px; }
         .copilot-typing-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 0.35; animation: copilot-typing-bounce 1.1s infinite ease-in-out; }
