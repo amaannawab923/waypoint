@@ -22,10 +22,37 @@ describe('renderMarkdown', () => {
     );
   });
 
+  it('renders mailto: links but does not turn other unsafe schemes into a link', () => {
+    expect(renderMarkdown('[mail](mailto:a@b.com)')).toBe(
+      '<p><a href="mailto:a@b.com" target="_blank" rel="noreferrer">mail</a></p>',
+    );
+    // javascript:/data:/vbscript: (and any other non-http(s)/mailto scheme)
+    // must never reach an href — this content comes from LLM chat replies,
+    // not a trusted source, and a clickable javascript: URL executes on click.
+    expect(renderMarkdown('[click me](javascript:alert(1))')).toBe(
+      '<p>[click me](javascript:alert(1))</p>',
+    );
+    expect(
+      renderMarkdown('[x](data:text/html,<script>alert(1)</script>)'),
+    ).toBe('<p>[x](data:text/html,&lt;script&gt;alert(1)&lt;/script&gt;)</p>');
+  });
+
+  it('escapes quotes in the URL so a link cannot break out of the href attribute', () => {
+    // A URL containing a literal `"` must not be able to close the href
+    // attribute early and inject a new one (e.g. an onmouseover handler).
+    const result = renderMarkdown(
+      '[hover me](https://example.com" onmouseover="x)',
+    );
+    expect(result).not.toContain('onmouseover="x"');
+    expect(result).toBe(
+      '<p><a href="https://example.com&quot; onmouseover=&quot;x" target="_blank" rel="noreferrer">hover me</a></p>',
+    );
+  });
+
   it('renders a fenced code block, escaping its contents but not formatting them as inline markdown', () => {
     const result = renderMarkdown('```\nconst x = 1;\n**not bold**\n```');
     expect(result).toBe(
-      '<pre><code>\nconst x = 1;\n\n**not bold**\n\n</code></pre>',
+      '<pre><code>\nconst x = 1;\n**not bold**\n</code></pre>',
     );
     // The load-bearing part of this test: markdown syntax inside a fenced
     // block is escaped as literal text, never turned into <strong>/<em>/etc.
@@ -72,7 +99,7 @@ describe('renderMarkdown', () => {
       '1. first step\n```\nsome command\n```\n2. second step',
     );
     expect(result).toBe(
-      '<ol>\n<li>first step</li>\n</ol>\n<pre><code>\nsome command\n\n</code></pre>\n<ol start="2">\n<li>second step</li>\n</ol>',
+      '<ol>\n<li>first step</li>\n</ol>\n<pre><code>\nsome command\n</code></pre>\n<ol start="2">\n<li>second step</li>\n</ol>',
     );
   });
 
