@@ -95,23 +95,55 @@ function page<T>(rows: T[], effectiveLimit: number): { items: T[]; truncated: bo
 // (e.g. a future assignee filter) would need, the name is what's fit to
 // show. A name that fails to resolve falls back to the raw id rather than
 // dropping the assignee or throwing.
+//
+// projectId and a resolved stateName/stateGroup are included for the same
+// reason: list_states requires a projectId to call, and a summary that
+// carried stateId but neither a name nor the projectId needed to resolve
+// one left the model with no reliable way to ever name a work item's state
+// from a cold start — it could see "st-a3f9k2m" and nothing else. Found in
+// independent review before merge: real (non-seed) state/project ids are
+// opaque nanoids, unlike this app's human-readable dev-seed ids, so this
+// was invisible in manual QA against the seeded data. stateGroup (e.g.
+// "completed"/"cancelled" vs. "started"/"unstarted") is included alongside
+// the name so a caller combining dueBefore with a completed-state result
+// can tell a shipped ticket apart from a genuinely open one, without a
+// second round trip.
 async function toSummaries(items: workItemsService.Enriched[]) {
-  const names = await resolveActorNames(items.flatMap((item) => item.assigneeIds));
-  return items.map(({ id, identifier, title, stateId, priority, dueDate, assigneeIds }) => ({
+  const [assigneeNames, stateNames] = await Promise.all([
+    resolveActorNames(items.flatMap((item) => item.assigneeIds)),
+    statesService.resolveStateNames(items.map((item) => item.stateId)),
+  ]);
+  return items.map(({ id, identifier, title, projectId, stateId, priority, dueDate, assigneeIds }) => ({
     id,
     identifier,
     title,
+    projectId,
     stateId,
+    stateName: stateNames.get(stateId)?.name ?? stateId,
+    stateGroup: stateNames.get(stateId)?.group,
     priority,
     dueDate,
     assigneeIds,
-    assigneeNames: assigneeIds.map((assigneeId) => names.get(assigneeId) ?? assigneeId),
+    assigneeNames: assigneeIds.map((assigneeId) => assigneeNames.get(assigneeId) ?? assigneeId),
   }));
 }
 
-async function withAssigneeNames<T extends { assigneeIds: string[] }>(item: T) {
-  const names = await resolveActorNames(item.assigneeIds);
-  return { ...item, assigneeNames: item.assigneeIds.map((assigneeId) => names.get(assigneeId) ?? assigneeId) };
+// Detail-path sibling of toSummaries — the full enriched record already
+// carries projectId (it's a plain column on work_items), but stateId still
+// needs the same batched resolution to a real name for the same reason
+// described above, so get_work_item(_by_identifier) isn't inconsistent
+// with list_work_items about whether a state is nameable.
+async function withResolvedNames<T extends { assigneeIds: string[]; stateId: string }>(item: T) {
+  const [assigneeNames, stateNames] = await Promise.all([
+    resolveActorNames(item.assigneeIds),
+    statesService.resolveStateNames([item.stateId]),
+  ]);
+  return {
+    ...item,
+    assigneeNames: item.assigneeIds.map((assigneeId) => assigneeNames.get(assigneeId) ?? assigneeId),
+    stateName: stateNames.get(item.stateId)?.name ?? item.stateId,
+    stateGroup: stateNames.get(item.stateId)?.group,
+  };
 }
 
 // The list/search summary path (toSummaries above) already drops
@@ -215,13 +247,13 @@ export async function listWorkItemsHandler({
 export async function getWorkItemHandler({ id }: { id: string }) {
   const item = await workItemsService.getWorkItem(id);
   if (!item || item.isDraft) return notFoundResult('work item');
-  return jsonResult(truncateDescription(await withAssigneeNames(item)));
+  return jsonResult(truncateDescription(await withResolvedNames(item)));
 }
 
 export async function getWorkItemByIdentifierHandler({ identifier }: { identifier: string }) {
   const item = await workItemsService.getWorkItemByIdentifier(identifier);
   if (!item || item.isDraft) return notFoundResult('work item');
-  return jsonResult(truncateDescription(await withAssigneeNames(item)));
+  return jsonResult(truncateDescription(await withResolvedNames(item)));
 }
 
 export async function searchWorkItemsHandler({
@@ -291,7 +323,7 @@ export function registerWorkItemTools(server: McpServer): void {
     'list_work_items',
     {
       description:
-        'List work items (tickets), optionally scoped to one project and/or filtered by assignee, state, priority, or a due-by date. Returns a summary per item (including dueDate and resolved assignee names), not full detail. Results are capped (see limit) — check the truncated flag and narrow the query if it comes back true.',
+        'List work items (tickets), optionally scoped to one project and/or filtered by assignee, state, priority, or a due-by date. Returns a summary per item (including dueDate, projectId, and resolved assignee/state names), not full detail. Results are capped (see limit) — check the truncated flag and narrow the query if it comes back true.',
       inputSchema: {
         projectId: z.string().optional().describe('If given, only list work items in this project.'),
         assigneeId: z.string().optional().describe('If given, only items with this member/agent id as an assignee.'),
