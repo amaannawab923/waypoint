@@ -33,7 +33,7 @@ async function validateAssigneeIds(tx: Tx, ids: string[]): Promise<void> {
   }
 }
 type WorkItemRow = typeof workItems.$inferSelect;
-type Enriched = WorkItemRow & { assigneeIds: string[]; labelIds: string[]; links: (typeof workItemLinks.$inferSelect)[] };
+export type Enriched = WorkItemRow & { assigneeIds: string[]; labelIds: string[]; links: (typeof workItemLinks.$inferSelect)[] };
 
 async function attachRelations(rows: WorkItemRow[], executor: Tx | typeof db = db): Promise<Enriched[]> {
   if (rows.length === 0) return [];
@@ -65,6 +65,23 @@ export interface WorkItemFilters {
   // ISO date (YYYY-MM-DD) — matches items due on or before this date, e.g.
   // "what's overdue" is dueBefore=<today>.
   dueBefore?: string;
+  // Caps how many rows the query itself fetches (not a post-fetch slice —
+  // see the callers below, which request limit + 1 so they can tell a
+  // truncated result apart from one that happened to end exactly at the
+  // limit). Undefined means unlimited, preserving this function's original
+  // behavior for callers (e.g. the REST routes) that never pass one.
+  limit?: number;
+}
+
+// A literal `%` or `_` in a LIKE pattern is a wildcard, not a literal
+// character — Postgres's LIKE (and Drizzle's ilike()) defaults to `\` as
+// the escape character, so escaping the three metacharacters with a
+// backslash here (query text, not the query's own outer `%...%` wrapper) is
+// enough; no explicit ESCAPE clause is needed. Without this, a search for
+// e.g. the literal string "%" or "_" matches every row instead of the
+// literal character.
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, '\\$&');
 }
 
 // assigneeId can't just be pushed into the WHERE alongside the others —
@@ -72,17 +89,28 @@ export interface WorkItemFilters {
 // column on workItems — so it's resolved as its own pre-query. Returns null
 // (not []) as a "no possible matches" sentinel so callers can short-circuit
 // before ever querying workItems, rather than issuing a query they already
-// know returns nothing.
-async function withFilters(baseConditions: SQL[], filters: WorkItemFilters): Promise<SQL[] | null> {
+// know returns nothing. When projectId is given (listWorkItems only —
+// listAllWorkItems has no project to scope by), the pre-query itself is
+// scoped to that project via a join, so a heavy assignee on a large
+// workspace never has to build an unbounded IN (...) list before the
+// project filter would have applied anyway.
+async function withFilters(
+  baseConditions: SQL[],
+  filters: WorkItemFilters,
+  projectId?: string,
+  executor: Tx | typeof db = db,
+): Promise<SQL[] | null> {
   const conditions = [...baseConditions];
   if (filters.stateId) conditions.push(eq(workItems.stateId, filters.stateId));
   if (filters.priority) conditions.push(eq(workItems.priority, filters.priority));
   if (filters.dueBefore) conditions.push(lte(workItems.dueDate, filters.dueBefore));
   if (filters.assigneeId) {
-    const assigneeRows = await db
-      .select({ workItemId: workItemAssignees.workItemId })
-      .from(workItemAssignees)
-      .where(eq(workItemAssignees.assigneeId, filters.assigneeId));
+    const base = executor.select({ workItemId: workItemAssignees.workItemId }).from(workItemAssignees);
+    const assigneeRows = await (projectId
+      ? base
+          .innerJoin(workItems, eq(workItems.id, workItemAssignees.workItemId))
+          .where(and(eq(workItemAssignees.assigneeId, filters.assigneeId), eq(workItems.projectId, projectId)))
+      : base.where(eq(workItemAssignees.assigneeId, filters.assigneeId)));
     if (assigneeRows.length === 0) return null;
     conditions.push(inArray(workItems.id, assigneeRows.map((r) => r.workItemId)));
   }
@@ -90,37 +118,40 @@ async function withFilters(baseConditions: SQL[], filters: WorkItemFilters): Pro
 }
 
 export async function listWorkItems(projectId: string, filters: WorkItemFilters = {}) {
-  const conditions = await withFilters([eq(workItems.projectId, projectId), eq(workItems.isDraft, false)], filters);
+  const conditions = await withFilters([eq(workItems.projectId, projectId), eq(workItems.isDraft, false)], filters, projectId);
   if (!conditions) return [];
-  const rows = await db
+  const query = db
     .select()
     .from(workItems)
     .where(and(...conditions))
     .orderBy(asc(workItems.sortOrder));
+  const rows = filters.limit ? await query.limit(filters.limit) : await query;
   return attachRelations(rows);
 }
 
 export async function listAllWorkItems(filters: WorkItemFilters = {}) {
   const conditions = await withFilters([eq(workItems.isDraft, false)], filters);
   if (!conditions) return [];
-  const rows = await db
+  const query = db
     .select()
     .from(workItems)
     .where(and(...conditions))
     .orderBy(asc(workItems.sortOrder));
+  const rows = filters.limit ? await query.limit(filters.limit) : await query;
   return attachRelations(rows);
 }
 
 // Title-only match for now — description/identifier matching is a
 // reasonable fast-follow, not silently promised here.
-export async function searchWorkItems(query: string, projectId?: string) {
-  const conditions = [eq(workItems.isDraft, false), ilike(workItems.title, `%${query}%`)];
+export async function searchWorkItems(query: string, projectId?: string, limit?: number) {
+  const conditions = [eq(workItems.isDraft, false), ilike(workItems.title, `%${escapeLikePattern(query)}%`)];
   if (projectId) conditions.push(eq(workItems.projectId, projectId));
-  const rows = await db
+  const dbQuery = db
     .select()
     .from(workItems)
     .where(and(...conditions))
     .orderBy(asc(workItems.sortOrder));
+  const rows = limit ? await dbQuery.limit(limit) : await dbQuery;
   return attachRelations(rows);
 }
 
