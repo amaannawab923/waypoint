@@ -43,10 +43,16 @@ export function renderMarkdown(src: string): string {
   // A GFM table's separator row: cells of only dashes (optionally with
   // leading/trailing colons for alignment, which is parsed but ignored —
   // see the file header comment) separated by pipes, e.g. `|---|:--:|---|`
-  // or `--- | ---` without outer pipes.
+  // or `--- | ---` without outer pipes. A bare `---` divider (no pipe at
+  // all) is NOT a separator row — it's markdown's other, unrelated use of
+  // dashes (a divider/hr-shaped line) — so a literal pipe character is
+  // required, not just optional per the pattern below (which would
+  // otherwise match zero-pipe input too, since every `\|` in it is
+  // optional).
   const isSeparatorRow = (line: string) =>
-    /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?$/.test(line.trim()) &&
-    line.includes('-');
+    line.includes('|') &&
+    line.includes('-') &&
+    /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?$/.test(line.trim());
 
   const splitTableRow = (line: string): string[] =>
     line
@@ -90,9 +96,17 @@ export function renderMarkdown(src: string): string {
     }
 
     // A table is a row containing a pipe immediately followed by a
-    // separator row — that lookahead is what distinguishes a real table
-    // header from a paragraph that merely happens to contain a `|`.
-    if (raw.includes('|') && isSeparatorRow(lines[i + 1] ?? '')) {
+    // separator row whose cell count matches the header's — that lookahead
+    // (plus the cell-count check) is what distinguishes a real table header
+    // from a paragraph that merely happens to contain a `|`, or from a
+    // `---` divider that happens to follow one (a real GFM table's
+    // separator row always has exactly as many cells as its header).
+    const nextLine = lines[i + 1] ?? '';
+    const isTableStart =
+      raw.includes('|') &&
+      isSeparatorRow(nextLine) &&
+      splitTableRow(raw).length === splitTableRow(nextLine).length;
+    if (isTableStart) {
       closeList();
       const headerRow = `<tr>${splitTableRow(raw)
         .map((cell) => `<th>${inline(cell)}</th>`)
