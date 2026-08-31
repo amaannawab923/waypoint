@@ -8,16 +8,28 @@
 // both use cases without pulling in a markdown parser.
 export function renderMarkdown(src: string): string {
   const escapeHtml = (s: string) =>
-    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    s
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+
+  // Only these schemes are safe to hand to an <a href>: anything else
+  // (javascript:, data:, vbscript:, a bare quote/attribute breakout, etc.)
+  // renders as plain escaped text instead of a link, since the URL comes
+  // from LLM-generated chat content, not a trusted source.
+  const SAFE_URL = /^(https?:|mailto:)/i;
 
   function inline(text: string): string {
     let out = escapeHtml(text);
     out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
     out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
     out = out.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
-    out = out.replace(
-      /\[([^\]]+)\]\(([^)]+)\)/g,
-      '<a href="$2" target="_blank" rel="noreferrer">$1</a>',
+    out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label, url) =>
+      SAFE_URL.test(url)
+        ? `<a href="${url}" target="_blank" rel="noreferrer">${label}</a>`
+        : match,
     );
     return out;
   }
@@ -50,7 +62,7 @@ export function renderMarkdown(src: string): string {
       continue;
     }
     if (inCode) {
-      html.push(`${escapeHtml(raw)}\n`);
+      html.push(escapeHtml(raw));
       continue;
     }
 
