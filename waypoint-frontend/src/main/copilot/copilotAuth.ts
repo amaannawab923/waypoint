@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { app, ipcMain, safeStorage } from 'electron';
+import { copilotClaudeConfigDir } from './copilotConfigDir';
 
 // Lets a user connect their own Claude subscription without ever opening a
 // terminal to run `claude login` — the thing this exists to fix (issue: the
@@ -38,14 +39,26 @@ function isSubscriptionTokenShape(token: string): boolean {
 
 /**
  * A minimal, isolated env for validating a candidate token — deliberately
- * NOT copilotRunner.ts's buildEnv(). The whole point of this probe is "does
- * THIS token work", which an ambient already-logged-in CLI session would
- * mask if the candidate token were merged into the full process env instead
- * of replacing it.
+ * NOT copilotRunner.ts's full buildEnv() (no ambient process.env merged in
+ * at all). The whole point of this probe is "does THIS token work", which
+ * an ambient already-logged-in CLI session would mask if the candidate
+ * token were merged into the full process env instead of replacing it.
+ *
+ * CLAUDE_CONFIG_DIR is included here too, though, via the same
+ * copilotClaudeConfigDir() helper copilotRunner.ts uses — matching its own
+ * gating: once this candidate token is actually connected and saved, every
+ * real run WILL set CLAUDE_CONFIG_DIR alongside CLAUDE_CODE_OAUTH_TOKEN
+ * (see copilotRunner.ts's buildEnv()), so the probe needs to validate the
+ * token under that same redirected config/credential-lookup namespace,
+ * not a different, more permissive one that could pass here and then
+ * behave differently for real. This is still one more isolated, app-owned
+ * value being added, not a route back to the user's ambient ~/.claude — it
+ * doesn't un-isolate the probe's own design intent above.
  */
 function buildProbeEnv(token: string): Record<string, string> {
   const env: Record<string, string> = {
     CLAUDE_CODE_OAUTH_TOKEN: token.trim(),
+    CLAUDE_CONFIG_DIR: copilotClaudeConfigDir(),
   };
   if (process.env.PATH) env.PATH = process.env.PATH;
   [
