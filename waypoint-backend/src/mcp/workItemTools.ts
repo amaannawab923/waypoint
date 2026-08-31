@@ -9,11 +9,29 @@ import { resolveActorNames } from '../lib/actorNames.js';
 
 const PRIORITY = z.enum(['urgent', 'high', 'medium', 'low', 'none']);
 
-// ISO date (YYYY-MM-DD) shape — enforced at the zod layer so a malformed
-// value fails clean validation here instead of reaching Postgres raw (via
+// ISO date (YYYY-MM-DD) — enforced at the zod layer so a malformed value
+// fails clean validation here instead of reaching Postgres raw (via
 // lte(workItems.dueDate, ...) in workItems.service.ts) and leaking a raw DB
-// error string back into the chat.
-const ISO_DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'must be an ISO date (YYYY-MM-DD)');
+// error string back into the chat. The regex alone only checks the SHAPE,
+// not that the date is real — "2026-13-99" or "2026-02-31" match it fine —
+// so a .refine() below actually parses the string and confirms it
+// round-trips: this repo pins zod@^3.24.1 (see package.json), which has no
+// z.iso.date() (that's a zod v4 API), so real validation has to be done by
+// hand instead of relying on a built-in. `new Date(value + 'T00:00:00Z')`
+// against a calendar-invalid date either produces an Invalid Date (rejected
+// via the NaN check) or, for JS Date's own overflow semantics, a DIFFERENT
+// valid date (e.g. Feb 31 rolling into March) — re-serializing and
+// comparing back to the original string catches that case too. Manually
+// verified against 2026-13-99, 2026-02-31, 2026-04-31 (April has 30 days),
+// 2023-02-29 (not a leap year) — all correctly rejected — and 2026-08-31,
+// 2026-12-31, 2024-02-29 (a real leap day) — all correctly accepted.
+const ISO_DATE = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'must be an ISO date (YYYY-MM-DD)')
+  .refine((value) => {
+    const parsed = new Date(`${value}T00:00:00Z`);
+    return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+  }, 'must be a real calendar date (YYYY-MM-DD)');
 
 // Every list-style tool (list_work_items, search_work_items, list_comments,
 // list_activity) is capped here — an unscoped call can otherwise walk every
@@ -81,6 +99,21 @@ async function withAssigneeNames<T extends { assigneeIds: string[] }>(item: T) {
   return { ...item, assigneeNames: item.assigneeIds.map((assigneeId) => names.get(assigneeId) ?? assigneeId) };
 }
 
+// The list/search summary path (toSummaries above) already drops
+// `description` entirely — it's not needed at list time and would bloat
+// context for every row. The single-item detail path (get_work_item(_by_
+// identifier)) legitimately wants the full description, but had no size
+// guard at all: one pathologically long ticket could still blow out the
+// model's context on a single lookup. A plain length cap with a marker is
+// enough here — this is JSON text handed to the model, not markup rendered
+// anywhere, so there's no HTML-aware truncation to get right.
+const DESCRIPTION_MAX_LENGTH = 20_000;
+function truncateDescription<T extends { description?: string | null }>(item: T): T {
+  const { description } = item;
+  if (typeof description !== 'string' || description.length <= DESCRIPTION_MAX_LENGTH) return item;
+  return { ...item, description: `${description.slice(0, DESCRIPTION_MAX_LENGTH)}… (truncated)` };
+}
+
 // Ticket titles/descriptions/comments are user-authored, semi-trusted
 // content that flows straight into the model's context once a tool result
 // below is serialized — a ticket could contain text crafted to look like an
@@ -100,6 +133,33 @@ function jsonResult(data: unknown) {
 
 function notFoundResult(what: string) {
   return { content: [{ type: 'text' as const, text: `${what} not found` }], isError: true };
+}
+
+const INTERNAL_ERROR_MESSAGE = 'An internal error occurred while processing this request.';
+
+// Safety net around every registered tool handler below (see
+// registerWorkItemTools), not specific to dueBefore/ISO_DATE — any
+// service-layer throw (a DB constraint, a timeout, a bug in a future
+// change) would otherwise reach the MCP SDK's own error serialization with
+// its raw `error.message`, exactly the class of leak ISO_DATE's own
+// validation exists to close for one particular case (see errorHandler.ts's
+// pgErrorCode()/isServerFaultSqlState() for the REST-side equivalent of
+// this concern — raw driver text reaching an untrusted surface). The error
+// is still logged server-side via console.error (matching errorHandler.ts's
+// own convention for genuinely-unexpected failures) — only what reaches the
+// model's context is scrubbed to a generic message.
+function withErrorSafetyNet<Args extends Record<string, unknown>>(
+  toolName: string,
+  handler: (args: Args) => Promise<{ content: { type: 'text'; text: string }[]; isError?: boolean }>,
+) {
+  return async (args: Args) => {
+    try {
+      return await handler(args);
+    } catch (error) {
+      console.error(`MCP tool "${toolName}" failed:`, error);
+      return { content: [{ type: 'text' as const, text: INTERNAL_ERROR_MESSAGE }], isError: true };
+    }
+  };
 }
 
 export async function listWorkItemsHandler({
@@ -140,13 +200,13 @@ export async function listWorkItemsHandler({
 export async function getWorkItemHandler({ id }: { id: string }) {
   const item = await workItemsService.getWorkItem(id);
   if (!item || item.isDraft) return notFoundResult('work item');
-  return jsonResult(await withAssigneeNames(item));
+  return jsonResult(truncateDescription(await withAssigneeNames(item)));
 }
 
 export async function getWorkItemByIdentifierHandler({ identifier }: { identifier: string }) {
   const item = await workItemsService.getWorkItemByIdentifier(identifier);
   if (!item || item.isDraft) return notFoundResult('work item');
-  return jsonResult(await withAssigneeNames(item));
+  return jsonResult(truncateDescription(await withAssigneeNames(item)));
 }
 
 export async function searchWorkItemsHandler({
@@ -164,7 +224,16 @@ export async function searchWorkItemsHandler({
   return jsonResult({ items: await toSummaries(pageItems), truncated });
 }
 
+// Same draft-hiding requirement as getWorkItemHandler/getWorkItemByIdentifierHandler
+// above, reached a different way: a draft is invisible to every list/search
+// tool, but its comments and activity history (including the unconditional
+// "created the work item" entry every item gets — see workItems.service.ts's
+// createWorkItem) were still fully retrievable via the draft's own internal
+// id, since neither of these handlers checked isDraft before fetching. One
+// extra query per call is the accepted cost of closing that.
 export async function listCommentsHandler({ workItemId, limit }: { workItemId: string; limit?: number }) {
+  const workItem = await workItemsService.getWorkItem(workItemId);
+  if (!workItem || workItem.isDraft) return notFoundResult('work item');
   const effectiveLimit = resolveLimit(limit);
   const comments = await commentsService.listComments(workItemId, effectiveLimit + 1);
   const { items: pageItems, truncated } = page(comments, effectiveLimit);
@@ -176,6 +245,8 @@ export async function listCommentsHandler({ workItemId, limit }: { workItemId: s
 }
 
 export async function listActivityHandler({ workItemId, limit }: { workItemId: string; limit?: number }) {
+  const workItem = await workItemsService.getWorkItem(workItemId);
+  if (!workItem || workItem.isDraft) return notFoundResult('work item');
   const effectiveLimit = resolveLimit(limit);
   const activity = await activityService.listActivity(workItemId, effectiveLimit + 1);
   const { items: pageItems, truncated } = page(activity, effectiveLimit);
@@ -216,7 +287,7 @@ export function registerWorkItemTools(server: McpServer): void {
         limit: LIMIT_SCHEMA,
       },
     },
-    listWorkItemsHandler,
+    withErrorSafetyNet('list_work_items', listWorkItemsHandler),
   );
 
   server.registerTool(
@@ -225,7 +296,7 @@ export function registerWorkItemTools(server: McpServer): void {
       description: 'Get the full details of one work item (ticket) by its internal id.',
       inputSchema: { id: z.string() },
     },
-    getWorkItemHandler,
+    withErrorSafetyNet('get_work_item', getWorkItemHandler),
   );
 
   server.registerTool(
@@ -235,7 +306,7 @@ export function registerWorkItemTools(server: McpServer): void {
         'Get the full details of one work item (ticket) by its human-readable identifier, e.g. "WI-42".',
       inputSchema: { identifier: z.string() },
     },
-    getWorkItemByIdentifierHandler,
+    withErrorSafetyNet('get_work_item_by_identifier', getWorkItemByIdentifierHandler),
   );
 
   server.registerTool(
@@ -244,12 +315,15 @@ export function registerWorkItemTools(server: McpServer): void {
       description:
         'Search work items (tickets) by a title keyword, optionally scoped to one project. Returns a summary per match. Results are capped (see limit) — check the truncated flag and narrow the query if it comes back true.',
       inputSchema: {
-        query: z.string(),
+        // .min(1) — an empty query otherwise matches every work item's
+        // title (an unscoped `ilike(title, '%%')` in workItems.service.ts),
+        // effectively turning "search" into "list everything" by accident.
+        query: z.string().min(1),
         projectId: z.string().optional(),
         limit: LIMIT_SCHEMA,
       },
     },
-    searchWorkItemsHandler,
+    withErrorSafetyNet('search_work_items', searchWorkItemsHandler),
   );
 
   server.registerTool(
@@ -259,7 +333,7 @@ export function registerWorkItemTools(server: McpServer): void {
         'List the comments on one work item (ticket), with each comment\'s author name resolved. Results are capped (see limit) — check the truncated flag and narrow the query if it comes back true.',
       inputSchema: { workItemId: z.string(), limit: LIMIT_SCHEMA },
     },
-    listCommentsHandler,
+    withErrorSafetyNet('list_comments', listCommentsHandler),
   );
 
   server.registerTool(
@@ -269,7 +343,7 @@ export function registerWorkItemTools(server: McpServer): void {
         'List the activity history (state/assignee/label/etc. changes) on one work item (ticket), with each entry\'s actor name resolved. Results are capped (see limit) — check the truncated flag and narrow the query if it comes back true.',
       inputSchema: { workItemId: z.string(), limit: LIMIT_SCHEMA },
     },
-    listActivityHandler,
+    withErrorSafetyNet('list_activity', listActivityHandler),
   );
 
   server.registerTool(
@@ -279,7 +353,7 @@ export function registerWorkItemTools(server: McpServer): void {
         'List the workflow states (e.g. Backlog, In Progress, Done) configured for a project, in board order. Use this to resolve a work item\'s stateId to a real name, or to find a stateId to filter list_work_items by.',
       inputSchema: { projectId: z.string() },
     },
-    listStatesHandler,
+    withErrorSafetyNet('list_states', listStatesHandler),
   );
 
   server.registerTool(
@@ -289,6 +363,6 @@ export function registerWorkItemTools(server: McpServer): void {
         "List the workspace's members (id, display name, role). Use this to resolve an assignee id to a name, or to find a member's id to filter list_work_items by.",
       inputSchema: {},
     },
-    listMembersHandler,
+    withErrorSafetyNet('list_members', listMembersHandler),
   );
 }
