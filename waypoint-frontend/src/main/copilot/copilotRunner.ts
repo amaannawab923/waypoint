@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
 import * as os from 'os';
 import * as path from 'path';
-import { ipcMain, type BrowserWindow } from 'electron';
+import { app, ipcMain, type BrowserWindow } from 'electron';
 import { getStoredSubscriptionToken } from './copilotAuth';
 import { parseStreamEventLine } from './parseStreamEvent';
 
@@ -44,9 +44,13 @@ const V1_MCP_TOOLS = [
   'mcp__waypoint__list_members',
 ];
 
-// Same env var waypoint-frontend's own httpClient.ts reads to reach the
-// backend — reused here since copilotRunner.ts is main-process code and
-// doesn't share the renderer's module graph.
+// Same env var name waypoint-frontend's renderer (src/renderer/mock/
+// httpClient.ts) uses to reach the backend — but NOT the same mechanism:
+// the renderer's value is a build-time webpack DefinePlugin constant, not a
+// runtime env read, since renderer code can't see process.env at all. This
+// is a genuine runtime `process.env` read because copilotRunner.ts is
+// main-process code, so there's no shared plumbing between the two, just a
+// coincidentally-matching name chosen for that reason.
 function mcpConfigArg(): string {
   const apiBaseUrl =
     process.env.WAYPOINT_API_BASE_URL || 'http://localhost:14000';
@@ -71,11 +75,26 @@ function mcpConfigArg(): string {
 // tools despite the system prompt telling it otherwise, so it just narrates
 // what it would do ("Let me look that up.") and ends its turn immediately.
 // --setting-sources '' is the replacement: confirmed live it still empties
-// out user-level skills/plugins/custom-agents (the actual leak --safe-mode
-// existed to prevent) while leaving an explicitly-passed --mcp-config
-// server free to connect — `mcp_servers` comes back `connected` and the
-// full tool list is present. Same auth behavior as --safe-mode (this only
-// touches config sources, not credentials).
+// out user-level skills/plugins/custom-agents/CLAUDE.md (the actual leak
+// --safe-mode existed to prevent) while leaving an explicitly-passed
+// --mcp-config server free to connect — `mcp_servers` comes back
+// `connected` and the full tool list is present. Same auth behavior as
+// --safe-mode (this only touches config sources, not credentials).
+//
+// --setting-sources '' does NOT, however, isolate the CLI's *memory/config
+// namespace* the way --safe-mode did — confirmed live: with only
+// --setting-sources '' set, the init event's `memory_paths.auto` still
+// resolves under the real ~/.claude (keyed off cwd's hash). Combined with
+// this file's own cwd: os.tmpdir() below, every Copilot conversation on the
+// machine — and any other /tmp-cwd Claude Code session — would share ONE
+// memory namespace, leaking conversation content across unrelated Copilot
+// sessions. CLAUDE_CONFIG_DIR (set in buildEnv() below) is what actually
+// fixes that: pointed at an app-owned directory, confirmed live it
+// relocates memory_paths.auto (and the rest of the CLI's config home)
+// under that directory instead of the user's real one. So isolation here
+// is two independent mechanisms, each covering a different leak:
+// --setting-sources '' for skills/plugins/custom-agents/CLAUDE.md, and
+// CLAUDE_CONFIG_DIR for the memory/config namespace.
 //
 // --tools '' turns the built-in tool set (Bash/Edit/Write/Task/WebFetch/
 // WebSearch/...) off entirely regardless of setting-sources or safe-mode
@@ -155,12 +174,26 @@ const COMMON_INSTALL_DIRS = [
   path.join(os.homedir(), '.local', 'bin'),
 ];
 
+// Same app.getPath('userData')-relative convention copilotAuth.ts's own
+// tokenFilePath() uses for app-owned data — a subdirectory here rather than
+// userData's root so a future unrelated CLAUDE_CONFIG_DIR-shaped file never
+// collides with anything else this app stores there.
+function copilotClaudeConfigDir(): string {
+  return path.join(app.getPath('userData'), 'copilot-claude-config');
+}
+
 function buildEnv(): Record<string, string | undefined> {
   const existing = (process.env.PATH || '').split(path.delimiter);
   const missing = COMMON_INSTALL_DIRS.filter((dir) => !existing.includes(dir));
   const env: Record<string, string | undefined> = {
     ...process.env,
     PATH: [...existing, ...missing].join(path.delimiter),
+    // Confirmed live (see the --setting-sources comment block above): without
+    // this, every Copilot conversation on the machine shares ONE memory
+    // namespace keyed off cwd: os.tmpdir()'s hash, since --setting-sources ''
+    // alone does not touch memory_paths — only an app-owned CLAUDE_CONFIG_DIR
+    // does.
+    CLAUDE_CONFIG_DIR: copilotClaudeConfigDir(),
   };
   // A user-connected subscription token (Settings → Profile → Copilot,
   // generated via `claude setup-token`) takes priority over whatever's
@@ -266,10 +299,12 @@ export function registerCopilotIpc(
         // (that's #9/#10's job), but the *subprocess's* cwd still defaults
         // to this main process's own cwd unless overridden — which could
         // be an arbitrary user project containing its own project-level
-        // .claude/CLAUDE.md. --safe-mode only suppresses the user's
-        // *global* config, not project-level config discovered via cwd.
-        // Running from a neutral, contentless directory avoids that leak
-        // entirely.
+        // .claude/CLAUDE.md. --setting-sources '' above only suppresses
+        // discovered settings sources (user/project/local), not what cwd
+        // itself is used for elsewhere (e.g. memory namespacing — see
+        // CLAUDE_CONFIG_DIR in buildEnv() for that). Running from a
+        // neutral, contentless directory avoids a project-level CLAUDE.md
+        // leak entirely regardless.
         const child = spawn(binary, buildArgs(effectiveResumeSessionId), {
           cwd: os.tmpdir(),
           env: buildEnv(),
