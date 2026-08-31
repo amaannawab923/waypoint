@@ -1,24 +1,53 @@
-// Minimal markdown → HTML renderer, purpose-built for previewing an agent's
-// instructions file. Deliberately small rather than a full CommonMark
+// Minimal markdown → HTML renderer. Originally purpose-built for previewing
+// an agent's instructions file; now also used for Copilot chat replies (see
+// CopilotPanel.tsx), which is why ordered lists were added — real Claude
+// Code output leans on numbered steps far more than the agent-brief use
+// case ever did. Deliberately small rather than a full CommonMark
 // implementation or a new dependency: headings, bold/italic, inline code,
-// fenced code blocks, bullet lists, links, and paragraphs cover what an
-// agent operating brief actually needs.
+// fenced code blocks, bullet/numbered lists, links, and paragraphs cover
+// both use cases without pulling in a markdown parser.
 export function renderMarkdown(src: string): string {
-  const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const escapeHtml = (s: string) =>
+    s
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+
+  // Only these schemes are safe to hand to an <a href>: anything else
+  // (javascript:, data:, vbscript:, a bare quote/attribute breakout, etc.)
+  // renders as plain escaped text instead of a link, since the URL comes
+  // from LLM-generated chat content, not a trusted source.
+  const SAFE_URL = /^(https?:|mailto:)/i;
 
   function inline(text: string): string {
     let out = escapeHtml(text);
     out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
     out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
     out = out.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
-    out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+    out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label, url) =>
+      SAFE_URL.test(url)
+        ? `<a href="${url}" target="_blank" rel="noreferrer">${label}</a>`
+        : match,
+    );
     return out;
   }
 
   const lines = src.split('\n');
   const html: string[] = [];
   let inCode = false;
-  let listOpen = false;
+  // null when no list is open; otherwise which tag is currently open — a
+  // bullet line while an <ol> is open (or vice versa) closes the old list
+  // and opens the other, rather than nesting or misrendering.
+  let listTag: 'ul' | 'ol' | null = null;
+
+  function closeList() {
+    if (listTag) {
+      html.push(`</${listTag}>`);
+      listTag = null;
+    }
+  }
 
   for (const raw of lines) {
     if (raw.trim().startsWith('```')) {
@@ -26,49 +55,56 @@ export function renderMarkdown(src: string): string {
         html.push('</code></pre>');
         inCode = false;
       } else {
-        if (listOpen) {
-          html.push('</ul>');
-          listOpen = false;
-        }
+        closeList();
         html.push('<pre><code>');
         inCode = true;
       }
       continue;
     }
     if (inCode) {
-      html.push(`${escapeHtml(raw)}\n`);
+      html.push(escapeHtml(raw));
       continue;
     }
 
     const heading = /^(#{1,3})\s+(.*)$/.exec(raw);
     if (heading) {
-      if (listOpen) {
-        html.push('</ul>');
-        listOpen = false;
-      }
+      closeList();
       const level = heading[1].length + 1; // start at h2, matching Pages' preview scale
       html.push(`<h${level}>${inline(heading[2])}</h${level}>`);
       continue;
     }
 
-    const listItem = /^[-*]\s+(.*)$/.exec(raw);
-    if (listItem) {
-      if (!listOpen) {
-        html.push('<ul>');
-        listOpen = true;
+    const bulletItem = /^[-*]\s+(.*)$/.exec(raw);
+    const orderedItem = /^(\d+)[.)]\s+(.*)$/.exec(raw);
+    if (bulletItem || orderedItem) {
+      const tag = bulletItem ? 'ul' : 'ol';
+      if (listTag !== tag) {
+        closeList();
+        // start=N when a *newly opened* <ol> doesn't begin at 1 — most
+        // often a numbered list a fenced code block or other content
+        // splits into two separate <ol> elements in the output (a code
+        // block always closes the list, see above); without this, "step 2"
+        // rendered right after such a block visibly restarts at "1",
+        // undercounting the real step count for the reader.
+        const start =
+          orderedItem && orderedItem[1] !== '1'
+            ? ` start="${orderedItem[1]}"`
+            : '';
+        html.push(`<${tag}${start}>`);
+        listTag = tag;
       }
-      html.push(`<li>${inline(listItem[1])}</li>`);
+      const content = bulletItem
+        ? bulletItem[1]
+        : (orderedItem as RegExpExecArray)[2];
+      html.push(`<li>${inline(content)}</li>`);
       continue;
     }
-    if (listOpen) {
-      html.push('</ul>');
-      listOpen = false;
-    }
+    closeList();
 
     if (raw.trim() === '') continue;
     html.push(`<p>${inline(raw)}</p>`);
   }
-  if (listOpen) html.push('</ul>');
+  closeList();
   if (inCode) html.push('</code></pre>');
 
   return html.join('\n');
