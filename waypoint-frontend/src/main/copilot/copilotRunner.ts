@@ -3,41 +3,133 @@ import * as os from 'os';
 import * as path from 'path';
 import { ipcMain, type BrowserWindow } from 'electron';
 import { getStoredSubscriptionToken } from './copilotAuth';
+import { copilotClaudeConfigDir } from './copilotConfigDir';
 import { parseStreamEventLine } from './parseStreamEvent';
 
 // Copilot's persona (issue #7). Layered on top of Claude Code's own default
-// system prompt via --append-system-prompt, not a full replacement — no tool
-// use to describe yet (that's issues #9/#10), just the identity and the
-// self-disclosure convention this app already uses elsewhere (see
+// system prompt via --append-system-prompt, not a full replacement. Issue
+// #9's read-only MCP tools (see V1_MCP_TOOLS below) have landed — #10's
+// write actions haven't, so the prompt is explicit that ticket lookup works
+// but acting on the user's behalf still doesn't, matching the self-
+// disclosure convention this app already uses elsewhere (see
 // waypoint-frontend's mockSessions.ts) for whenever that capability lands.
 const COPILOT_SYSTEM_PROMPT = [
   'You are Copilot, a personal AI assistant inside Waypoint, a project',
   "management tool. You're having a private conversation with the user about",
-  "their tickets and work. Be concise and direct. You don't yet have access",
-  'to real ticket data or the ability to act on the user’s behalf — if',
-  "asked to do something requiring that, say it's coming soon rather than",
-  'guessing. When a future capability lets you act on the user’s behalf',
-  '(e.g. posting a comment), you must always self-disclose clearly, e.g.',
-  '"Hi, this is Copilot — <name>’s agent — commenting on his behalf: ...",',
-  "matching Waypoint's existing convention.",
+  'their tickets and work. Be concise and direct. You have read-only access',
+  'to the user’s tickets via tools — you can look up, list, and search work',
+  'items, along with their comments and activity history. You still cannot',
+  "make changes on the user's behalf yet — if asked to update something, say",
+  "that's coming soon rather than guessing. When a future capability lets you",
+  'act on the user’s behalf (e.g. posting a comment), you must always',
+  'self-disclose clearly, e.g. "Hi, this is Copilot — <name>’s agent —',
+  'commenting on his behalf: ...", matching Waypoint\'s existing convention.',
 ].join(' ');
+
+// Read-only work-item lookup tools (issue #9) served by waypoint-backend's
+// MCP endpoint (see waypoint-backend/src/routes/mcp.routes.ts and
+// src/mcp/workItemTools.ts) — the "mcp__waypoint__*" naming is Claude Code's
+// own convention for a tool sourced from an MCP server named "waypoint" in
+// --mcp-config below. Write actions (issue #10) aren't listed here on
+// purpose: headless `-p` mode has no TTY, so Claude Code's own interactive
+// tool-approval prompt can never fire — a write tool would execute with
+// nothing to gate it, which is why none exists yet.
+const V1_MCP_TOOLS = [
+  'mcp__waypoint__list_work_items',
+  'mcp__waypoint__get_work_item',
+  'mcp__waypoint__get_work_item_by_identifier',
+  'mcp__waypoint__search_work_items',
+  'mcp__waypoint__list_comments',
+  'mcp__waypoint__list_activity',
+  'mcp__waypoint__list_states',
+  'mcp__waypoint__list_members',
+];
+
+// Same env var name waypoint-frontend's renderer (src/renderer/mock/
+// httpClient.ts) uses to reach the backend — but NOT the same mechanism:
+// the renderer's value is a build-time webpack DefinePlugin constant, not a
+// runtime env read, since renderer code can't see process.env at all. This
+// is a genuine runtime `process.env` read because copilotRunner.ts is
+// main-process code, so there's no shared plumbing between the two, just a
+// coincidentally-matching name chosen for that reason.
+function mcpConfigArg(): string {
+  const apiBaseUrl =
+    process.env.WAYPOINT_API_BASE_URL || 'http://localhost:14000';
+  return JSON.stringify({
+    mcpServers: {
+      waypoint: { type: 'http', url: `${apiBaseUrl}/mcp/copilot` },
+    },
+  });
+}
 
 // --bare would force API-key-only auth and skip the user's own Claude Code
 // subscription login entirely — the whole point of this integration is
-// reusing that login, so --bare is never passed. --safe-mode suppresses the
-// user's global CLAUDE.md/hooks/plugins/skills/auto-memory (which would
-// otherwise leak unrelated personal Claude Code config into Copilot's
-// persona) while still allowing normal (subscription) authentication —
-// verbatim from Anthropic's own docs, confirmed before this was built.
-// --safe-mode's own --help text says explicitly that "built-in tools ...
-// work normally" — confirmed live: without --tools, the spawned process's
-// own init event lists Bash/Edit/Write/Task/WebFetch/WebSearch as available,
-// even though Copilot's system prompt tells it it has none of that. This
-// phase is text-only chat by design (real tool use is issues #9/#10, behind
-// a not-yet-built MCP server) — `--tools ''` turns the built-in set off
-// entirely (confirmed live: the init event's own `tools` list comes back
-// empty), so argv states that intent instead of relying on default
-// permission prompts to deny everything in practice.
+// reusing that login, so --bare is never passed.
+//
+// Isolation from the user's own global Claude Code config used to be
+// --safe-mode, but --safe-mode's own --help text is explicit that it
+// disables "CLAUDE.md, skills, plugins, hooks, MCP servers, custom commands
+// and agents, ..." — MCP SERVERS INCLUDED, with no override, confirmed live:
+// --safe-mode plus a --mcp-config pointing at a real, independently-verified-
+// reachable server still comes back with an empty `mcp_servers`/`tools` list
+// in the init event. That's silent, not an error — the model then has zero
+// tools despite the system prompt telling it otherwise, so it just narrates
+// what it would do ("Let me look that up.") and ends its turn immediately.
+// --setting-sources '' is the replacement: confirmed live it still empties
+// out user-level skills/plugins/custom-agents/CLAUDE.md (the actual leak
+// --safe-mode existed to prevent) while leaving an explicitly-passed
+// --mcp-config server free to connect — `mcp_servers` comes back
+// `connected` and the full tool list is present. Same auth behavior as
+// --safe-mode (this only touches config sources, not credentials).
+//
+// --setting-sources '' does NOT, however, isolate the CLI's *memory/config
+// namespace* the way --safe-mode did — confirmed live: with only
+// --setting-sources '' set, the init event's `memory_paths.auto` still
+// resolves under the real ~/.claude (keyed off cwd's hash). Combined with
+// this file's own cwd: os.tmpdir() below, every Copilot conversation on the
+// machine — and any other /tmp-cwd Claude Code session — would share ONE
+// memory namespace, leaking conversation content across unrelated Copilot
+// sessions. CLAUDE_CONFIG_DIR (set conditionally in buildEnv() below) is
+// what actually fixes that: pointed at an app-owned directory, confirmed
+// live it relocates memory_paths.auto (and the rest of the CLI's config
+// home) under that directory instead of the user's real one.
+//
+// It is NOT, however, safe to set unconditionally. Confirmed live:
+// CLAUDE_CONFIG_DIR also relocates where the CLI looks for CREDENTIALS
+// (~/.claude.json), not just memory. A user who's logged in ambiently via
+// a terminal `claude login` — and never connected a subscription token via
+// this app's own Settings → Profile → Copilot flow (copilotAuth.ts) — would
+// get "Not logged in · Please run /login" on every Copilot message
+// permanently once CLAUDE_CONFIG_DIR is redirected: running `claude login`
+// again doesn't fix it, because it writes to the REAL ~/.claude.json, which
+// the redirected CLAUDE_CONFIG_DIR never looks at, and there's no reliable
+// way to seed the redirected dir with working credentials either (copying
+// the real ~/.claude.json into it did not restore auth, confirmed live —
+// the real oauth token appears to live somewhere more than a portable file,
+// likely OS-keychain-backed). buildEnv() below therefore only sets
+// CLAUDE_CONFIG_DIR in the same branch that sets CLAUDE_CODE_OAUTH_TOKEN —
+// i.e. only when a subscription token is actually connected, since that
+// credential path is honored regardless of CLAUDE_CONFIG_DIR (confirmed
+// live: a bogus token under a redirected CLAUDE_CONFIG_DIR was still read
+// and sent to the server, which rejected it — proving the mechanism works
+// independent of CLAUDE_CONFIG_DIR). Ambient-login users (the majority,
+// with no token connected) get no CLAUDE_CONFIG_DIR at all and keep working
+// exactly as they did before this isolation fix landed — including the
+// shared-memory-namespace exposure described above, which is NOT a
+// regression: ambient-login users had that same exposure before any of
+// this PR's isolation work existed. So isolation here is two independent
+// mechanisms with different reach: --setting-sources '' for
+// skills/plugins/custom-agents/CLAUDE.md (applies unconditionally,
+// credential-independent), and CLAUDE_CONFIG_DIR for the memory/config
+// namespace (applies only when a connected subscription token makes it
+// safe to redirect credential lookup too).
+//
+// --tools '' turns the built-in tool set (Bash/Edit/Write/Task/WebFetch/
+// WebSearch/...) off entirely regardless of setting-sources or safe-mode
+// (confirmed live: the init event's own `tools` list comes back empty of
+// anything but the explicitly --allowedTools-listed MCP tools below) — so
+// argv states that intent directly instead of relying on default permission
+// prompts to deny everything in practice.
 //
 // The prompt is deliberately NOT one of these args (see registerCopilotIpc,
 // which writes it to the child's stdin instead): a prompt starting with `-`
@@ -63,9 +155,15 @@ const SESSION_ID_PATTERN =
 function buildArgs(resumeSessionId: string | undefined): string[] {
   const args = [
     '-p',
-    '--safe-mode',
+    '--setting-sources',
+    '', // no user/project/local settings — global skills/plugins/custom agents stay out (--safe-mode's old job), without also disabling MCP the way --safe-mode does
     '--tools',
-    '',
+    '', // deny every built-in (Bash/Edit/Write/Task/WebFetch/WebSearch/...)
+    '--mcp-config',
+    mcpConfigArg(),
+    '--strict-mcp-config', // ignore any ambient/global MCP config — only ours
+    '--allowedTools',
+    V1_MCP_TOOLS.join(' '),
     '--output-format',
     'stream-json',
     '--verbose',
@@ -116,10 +214,23 @@ function buildEnv(): Record<string, string | undefined> {
   // ambiently logged in via the CLI's own credentials — set here, the CLI
   // itself picks it up automatically and "silently uses it instead of
   // credentials stored in ~/.claude/.credentials.json" (Anthropic's own
-  // docs). Falls through to ambient login (this key simply isn't set) when
-  // no token has been connected, exactly the prior behavior.
+  // docs).
+  //
+  // CLAUDE_CONFIG_DIR is set in this SAME branch, deliberately not
+  // unconditionally — see the comment block above buildArgs for the full
+  // story. Short version: CLAUDE_CONFIG_DIR also relocates where the CLI
+  // looks up credentials, not just memory, so redirecting it is only safe
+  // once a connected subscription token means credential lookup no longer
+  // depends on the user's real ~/.claude.json. When no token is connected,
+  // neither var is set here: Copilot falls through to ambient login exactly
+  // as it did before this feature existed, with the memory-namespace
+  // isolation gap left as-is for that path (a pre-existing exposure, not a
+  // regression — see the comment block above).
   const subscriptionToken = getStoredSubscriptionToken();
-  if (subscriptionToken) env.CLAUDE_CODE_OAUTH_TOKEN = subscriptionToken;
+  if (subscriptionToken) {
+    env.CLAUDE_CODE_OAUTH_TOKEN = subscriptionToken;
+    env.CLAUDE_CONFIG_DIR = copilotClaudeConfigDir();
+  }
   return env;
 }
 
@@ -215,10 +326,12 @@ export function registerCopilotIpc(
         // (that's #9/#10's job), but the *subprocess's* cwd still defaults
         // to this main process's own cwd unless overridden — which could
         // be an arbitrary user project containing its own project-level
-        // .claude/CLAUDE.md. --safe-mode only suppresses the user's
-        // *global* config, not project-level config discovered via cwd.
-        // Running from a neutral, contentless directory avoids that leak
-        // entirely.
+        // .claude/CLAUDE.md. --setting-sources '' above only suppresses
+        // discovered settings sources (user/project/local), not what cwd
+        // itself is used for elsewhere (e.g. memory namespacing — see
+        // CLAUDE_CONFIG_DIR in buildEnv() for that). Running from a
+        // neutral, contentless directory avoids a project-level CLAUDE.md
+        // leak entirely regardless.
         const child = spawn(binary, buildArgs(effectiveResumeSessionId), {
           cwd: os.tmpdir(),
           env: buildEnv(),
@@ -282,6 +395,30 @@ export function registerCopilotIpc(
               // new session id, which the renderer persists over the
               // stale one via postAssistantMessage — self-healing it for
               // every message after this one.
+              //
+              // Known gap, deliberately left as-is: this same retry path
+              // also fires — with the identical STALE_SESSION_PATTERN
+              // message — when a user connects or disconnects a Claude
+              // subscription token mid-conversation. Because
+              // CLAUDE_CONFIG_DIR (buildEnv() above) is set only when a
+              // token is connected, that toggle flips which config/memory
+              // namespace the CLI resolves to (see the CLAUDE_CONFIG_DIR
+              // comment block above buildArgs), so a --resume against the
+              // OLD namespace's session id fails here and silently starts a
+              // fresh one in the NEW namespace instead. The retry still
+              // makes the conversation technically continue working, but
+              // nothing tells the user their conversation's *effective*
+              // memory just reset — the chat transcript in CopilotPanel.tsx
+              // still shows full history, so this is invisible in the UI.
+              // Surfacing it properly would mean plumbing a new, non-error
+              // "notice" signal end-to-end (a new event kind here, an IPC
+              // payload, renderer state, and UI) — the existing runError
+              // channel this file already emits (kind: 'auth_failed' etc.,
+              // see CopilotPanel.tsx) only models failed runs, and this
+              // retry's whole point is that the run does NOT fail from the
+              // user's perspective, so it doesn't fit that channel. Left
+              // unbuilt as a deliberate, lower-priority scope call rather
+              // than added ad hoc here.
               if (
                 allowRetryOnStaleSession &&
                 effectiveResumeSessionId &&

@@ -1,4 +1,4 @@
-import { eq, and, ne, isNull, inArray, asc, desc, sql } from 'drizzle-orm';
+import { eq, and, ne, isNull, inArray, asc, desc, sql, ilike, lte, type SQL } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import {
   workItems,
@@ -33,7 +33,7 @@ async function validateAssigneeIds(tx: Tx, ids: string[]): Promise<void> {
   }
 }
 type WorkItemRow = typeof workItems.$inferSelect;
-type Enriched = WorkItemRow & { assigneeIds: string[]; labelIds: string[]; links: (typeof workItemLinks.$inferSelect)[] };
+export type Enriched = WorkItemRow & { assigneeIds: string[]; labelIds: string[]; links: (typeof workItemLinks.$inferSelect)[] };
 
 async function attachRelations(rows: WorkItemRow[], executor: Tx | typeof db = db): Promise<Enriched[]> {
   if (rows.length === 0) return [];
@@ -58,17 +58,117 @@ async function attachRelations(rows: WorkItemRow[], executor: Tx | typeof db = d
   }));
 }
 
-export async function listWorkItems(projectId: string) {
-  const rows = await db
+export interface WorkItemFilters {
+  assigneeId?: string;
+  stateId?: string;
+  priority?: (typeof workItems.$inferInsert)['priority'];
+  // ISO date (YYYY-MM-DD) — matches items due on or before this date, e.g.
+  // "what's overdue" is dueBefore=<today>.
+  dueBefore?: string;
+  // Caps how many rows the query itself fetches (not a post-fetch slice —
+  // see the callers below, which request limit + 1 so they can tell a
+  // truncated result apart from one that happened to end exactly at the
+  // limit). Undefined means unlimited, preserving this function's original
+  // behavior for callers (e.g. the REST routes) that never pass one.
+  limit?: number;
+}
+
+// A literal `%` or `_` in a LIKE pattern is a wildcard, not a literal
+// character — Postgres's LIKE (and Drizzle's ilike()) defaults to `\` as
+// the escape character, so escaping the three metacharacters with a
+// backslash here (query text, not the query's own outer `%...%` wrapper) is
+// enough; no explicit ESCAPE clause is needed. Without this, a search for
+// e.g. the literal string "%" or "_" matches every row instead of the
+// literal character.
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, '\\$&');
+}
+
+// assigneeId can't just be pushed into the WHERE alongside the others —
+// assignment is a separate many-to-many table (workItemAssignees), not a
+// column on workItems — so it's expressed as a subquery passed directly to
+// inArray(). Critically, this makes it participate in the SAME query as
+// every other filter (stateId, priority, dueBefore) and the SAME single
+// .limit(), applied once by the caller after ALL filters have narrowed the
+// set together.
+//
+// This replaced an earlier version that resolved assigneeId as a separate,
+// independently-limited pre-query run BEFORE the other filters ever got a
+// chance to narrow anything down. That pre-query's own cap (bounded at
+// filters.limit, or a fallback constant) was applied to the assignee's full
+// candidate set — with no ORDER BY, so which rows survived the cap was
+// nondeterministic — and then the main query's `truncated` signal was
+// computed from what was already a short, upstream-truncated set. A caller
+// asking for a heavy assignee's overdue items could get back an EMPTY,
+// confidently-non-truncated result even when real matches existed, because
+// the assignee's true matches were capped away before dueBefore ever ran.
+// Folding this into the main query removes that failure mode entirely: the
+// subquery has no LIMIT of its own, so it always contributes every one of
+// the assignee's work item ids to the AND'd condition set, and only the
+// final, fully-filtered result is capped.
+//
+// No project-scoping is needed inside the subquery: for listWorkItems, the
+// caller's own baseConditions already constrain the outer query to
+// workItems.projectId, so intersecting with the (unscoped) assignee subquery
+// via AND produces the same effective scoping as before, in one query.
+//
+// An assignee with zero items (or an unknown assigneeId) naturally yields
+// zero matching rows — `workItems.id IN (<subquery with no rows>)` is valid
+// SQL that simply never matches — so no separate "no possible matches"
+// short-circuit is needed here; that was only ever an optimization for the
+// old two-query shape, not a correctness requirement.
+function withFilters(baseConditions: SQL[], filters: WorkItemFilters): SQL[] {
+  const conditions = [...baseConditions];
+  if (filters.stateId) conditions.push(eq(workItems.stateId, filters.stateId));
+  if (filters.priority) conditions.push(eq(workItems.priority, filters.priority));
+  if (filters.dueBefore) conditions.push(lte(workItems.dueDate, filters.dueBefore));
+  if (filters.assigneeId) {
+    conditions.push(
+      inArray(
+        workItems.id,
+        db
+          .select({ workItemId: workItemAssignees.workItemId })
+          .from(workItemAssignees)
+          .where(eq(workItemAssignees.assigneeId, filters.assigneeId)),
+      ),
+    );
+  }
+  return conditions;
+}
+
+export async function listWorkItems(projectId: string, filters: WorkItemFilters = {}) {
+  const conditions = withFilters([eq(workItems.projectId, projectId), eq(workItems.isDraft, false)], filters);
+  const query = db
     .select()
     .from(workItems)
-    .where(and(eq(workItems.projectId, projectId), eq(workItems.isDraft, false)))
+    .where(and(...conditions))
     .orderBy(asc(workItems.sortOrder));
+  const rows = filters.limit ? await query.limit(filters.limit) : await query;
   return attachRelations(rows);
 }
 
-export async function listAllWorkItems() {
-  const rows = await db.select().from(workItems).where(eq(workItems.isDraft, false)).orderBy(asc(workItems.sortOrder));
+export async function listAllWorkItems(filters: WorkItemFilters = {}) {
+  const conditions = withFilters([eq(workItems.isDraft, false)], filters);
+  const query = db
+    .select()
+    .from(workItems)
+    .where(and(...conditions))
+    .orderBy(asc(workItems.sortOrder));
+  const rows = filters.limit ? await query.limit(filters.limit) : await query;
+  return attachRelations(rows);
+}
+
+// Title-only match for now — description/identifier matching is a
+// reasonable fast-follow, not silently promised here.
+export async function searchWorkItems(query: string, projectId?: string, limit?: number) {
+  const conditions = [eq(workItems.isDraft, false), ilike(workItems.title, `%${escapeLikePattern(query)}%`)];
+  if (projectId) conditions.push(eq(workItems.projectId, projectId));
+  const dbQuery = db
+    .select()
+    .from(workItems)
+    .where(and(...conditions))
+    .orderBy(asc(workItems.sortOrder));
+  const rows = limit ? await dbQuery.limit(limit) : await dbQuery;
   return attachRelations(rows);
 }
 
@@ -85,6 +185,20 @@ export async function getWorkItem(id: string) {
   if (!row) return undefined;
   const [enriched] = await attachRelations([row]);
   return enriched;
+}
+
+// Cheap draft/existence check for callers (e.g. listCommentsHandler/
+// listActivityHandler in workItemTools.ts) that only need to know whether a
+// work item is missing or a draft before proceeding — not its full enriched
+// record. getWorkItem() does the main select plus three relation joins
+// (labels/assignees/links) via attachRelations(), which is wasted work when
+// all that's needed is one boolean. Returns true for "missing" as well as
+// "draft" so callers can use a single check for both "not found" and
+// "hidden because it's a draft" cases, matching how those callers already
+// treat both as the same not-found result.
+export async function isWorkItemDraftOrMissing(id: string): Promise<boolean> {
+  const [row] = await db.select({ isDraft: workItems.isDraft }).from(workItems).where(eq(workItems.id, id));
+  return !row || row.isDraft;
 }
 
 export async function getWorkItemByIdentifier(identifier: string) {

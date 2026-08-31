@@ -123,4 +123,69 @@ describe('renderMarkdown', () => {
     expect(renderMarkdown('')).toBe('');
     expect(renderMarkdown('   \n  ')).toBe('');
   });
+
+  it('renders a GFM pipe table, applying inline formatting inside cells', () => {
+    const result = renderMarkdown(
+      '| Ticket | Owner |\n|---|---|\n| LAUNCH-3 | **Lena** |\n| LAUNCH-7 | Amaan |',
+    );
+    expect(result).toBe(
+      '<table>\n' +
+        '<thead><tr><th>Ticket</th><th>Owner</th></tr></thead>\n' +
+        '<tbody><tr><td>LAUNCH-3</td><td><strong>Lena</strong></td></tr><tr><td>LAUNCH-7</td><td>Amaan</td></tr></tbody>\n' +
+        '</table>',
+    );
+  });
+
+  it('renders a table with no body rows (header + separator only)', () => {
+    const result = renderMarkdown('| A | B |\n|---|---|');
+    expect(result).toBe(
+      '<table>\n<thead><tr><th>A</th><th>B</th></tr></thead>\n<tbody></tbody>\n</table>',
+    );
+  });
+
+  it('ends a table at the first blank line or non-pipe line, resuming normal parsing after', () => {
+    const result = renderMarkdown(
+      '| A | B |\n|---|---|\n| 1 | 2 |\n\nafter the table',
+    );
+    expect(result).toBe(
+      '<table>\n<thead><tr><th>A</th><th>B</th></tr></thead>\n<tbody><tr><td>1</td><td>2</td></tr></tbody>\n</table>\n<p>after the table</p>',
+    );
+  });
+
+  it('does not treat a plain paragraph containing a pipe as a table — the separator-row lookahead is what triggers it', () => {
+    const result = renderMarkdown('Cost | benefit analysis, not a table.');
+    expect(result).toBe('<p>Cost | benefit analysis, not a table.</p>');
+  });
+
+  it('tolerates a table with no outer pipes on its rows', () => {
+    const result = renderMarkdown('A | B\n--- | ---\n1 | 2');
+    expect(result).toBe(
+      '<table>\n<thead><tr><th>A</th><th>B</th></tr></thead>\n<tbody><tr><td>1</td><td>2</td></tr></tbody>\n</table>',
+    );
+  });
+
+  // Regression test: a `---` divider is NOT a GFM table separator row —
+  // previously the lookahead treated any `---`-shaped next line as one
+  // regardless of whether it had a pipe, so a header line containing `|`
+  // followed by a bare `---` divider rendered as a bogus one-row table,
+  // swallowing the header line's own markup instead of leaving it as a
+  // paragraph.
+  it('does not treat a bare "---" divider (no pipe) as a table separator row', () => {
+    const result = renderMarkdown('Use a | b syntax\n---\nnext para');
+    expect(result).toBe(
+      '<p>Use a | b syntax</p>\n<p>---</p>\n<p>next para</p>',
+    );
+  });
+
+  it('does not treat a header/separator with mismatched cell counts as a table', () => {
+    const result = renderMarkdown('A | B\n---|---|---\nrow');
+    expect(result).toBe('<p>A | B</p>\n<p>---|---|---</p>\n<p>row</p>');
+  });
+
+  it('closes an open list before starting a table', () => {
+    const result = renderMarkdown('- item\n| A |\n|---|\n| 1 |');
+    expect(result).toBe(
+      '<ul>\n<li>item</li>\n</ul>\n<table>\n<thead><tr><th>A</th></tr></thead>\n<tbody><tr><td>1</td></tr></tbody>\n</table>',
+    );
+  });
 });

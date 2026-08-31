@@ -2,10 +2,16 @@
 // an agent's instructions file; now also used for Copilot chat replies (see
 // CopilotPanel.tsx), which is why ordered lists were added — real Claude
 // Code output leans on numbered steps far more than the agent-brief use
-// case ever did. Deliberately small rather than a full CommonMark
-// implementation or a new dependency: headings, bold/italic, inline code,
-// fenced code blocks, bullet/numbered lists, links, and paragraphs cover
-// both use cases without pulling in a markdown parser.
+// case ever did. Tables were added for the same reason: once Copilot could
+// answer questions grounded in real, tabular ticket data (issue #9's MCP
+// tools), it started reaching for GFM pipe tables to present it — which
+// previously rendered as literal `| a | b |` / `|---|---|` text, unreadable.
+// Deliberately small rather than a full CommonMark implementation or a new
+// dependency: headings, bold/italic, inline code, fenced code blocks,
+// bullet/numbered lists, tables, links, and paragraphs cover both use cases
+// without pulling in a markdown parser. Table alignment (`:---:` etc.) is
+// intentionally not supported — parsed and ignored — matching that same
+// "deliberately small" scope.
 export function renderMarkdown(src: string): string {
   const escapeHtml = (s: string) =>
     s
@@ -34,6 +40,28 @@ export function renderMarkdown(src: string): string {
     return out;
   }
 
+  // A GFM table's separator row: cells of only dashes (optionally with
+  // leading/trailing colons for alignment, which is parsed but ignored —
+  // see the file header comment) separated by pipes, e.g. `|---|:--:|---|`
+  // or `--- | ---` without outer pipes. A bare `---` divider (no pipe at
+  // all) is NOT a separator row — it's markdown's other, unrelated use of
+  // dashes (a divider/hr-shaped line) — so a literal pipe character is
+  // required, not just optional per the pattern below (which would
+  // otherwise match zero-pipe input too, since every `\|` in it is
+  // optional).
+  const isSeparatorRow = (line: string) =>
+    line.includes('|') &&
+    line.includes('-') &&
+    /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?$/.test(line.trim());
+
+  const splitTableRow = (line: string): string[] =>
+    line
+      .trim()
+      .replace(/^\|/, '')
+      .replace(/\|$/, '')
+      .split('|')
+      .map((cell) => cell.trim());
+
   const lines = src.split('\n');
   const html: string[] = [];
   let inCode = false;
@@ -49,7 +77,8 @@ export function renderMarkdown(src: string): string {
     }
   }
 
-  for (const raw of lines) {
+  for (let i = 0; i < lines.length; i += 1) {
+    const raw = lines[i];
     if (raw.trim().startsWith('```')) {
       if (inCode) {
         html.push('</code></pre>');
@@ -63,6 +92,43 @@ export function renderMarkdown(src: string): string {
     }
     if (inCode) {
       html.push(escapeHtml(raw));
+      continue;
+    }
+
+    // A table is a row containing a pipe immediately followed by a
+    // separator row whose cell count matches the header's — that lookahead
+    // (plus the cell-count check) is what distinguishes a real table header
+    // from a paragraph that merely happens to contain a `|`, or from a
+    // `---` divider that happens to follow one (a real GFM table's
+    // separator row always has exactly as many cells as its header).
+    const nextLine = lines[i + 1] ?? '';
+    const isTableStart =
+      raw.includes('|') &&
+      isSeparatorRow(nextLine) &&
+      splitTableRow(raw).length === splitTableRow(nextLine).length;
+    if (isTableStart) {
+      closeList();
+      const headerRow = `<tr>${splitTableRow(raw)
+        .map((cell) => `<th>${inline(cell)}</th>`)
+        .join('')}</tr>`;
+      const bodyRows: string[] = [];
+      let j = i + 2; // skip the header row and the separator row
+      while (
+        j < lines.length &&
+        lines[j].trim() !== '' &&
+        lines[j].includes('|')
+      ) {
+        const cells = splitTableRow(lines[j])
+          .map((cell) => `<td>${inline(cell)}</td>`)
+          .join('');
+        bodyRows.push(`<tr>${cells}</tr>`);
+        j += 1;
+      }
+      html.push('<table>');
+      html.push(`<thead>${headerRow}</thead>`);
+      html.push(`<tbody>${bodyRows.join('')}</tbody>`);
+      html.push('</table>');
+      i = j - 1; // the loop's own i += 1 lands on the first line after the table
       continue;
     }
 

@@ -22,10 +22,14 @@ export async function logActivity(
   });
 }
 
-export async function listActivity(workItemId: string) {
-  return db
+// limit caps how many rows the query itself fetches (undefined means
+// unlimited, preserving prior behavior for callers that don't pass one —
+// see the REST route in workItems.routes.ts).
+export async function listActivity(workItemId: string, limit?: number) {
+  const query = db
     .select()
     .from(activityEntries)
     .where(eq(activityEntries.workItemId, workItemId))
     .orderBy(asc(activityEntries.createdAt));
+  return limit ? query.limit(limit) : query;
 }

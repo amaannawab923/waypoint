@@ -3,8 +3,10 @@ import * as os from 'os';
 import type { BrowserWindow } from 'electron';
 
 const ipcMainOnMock = jest.fn();
+const getPathMock = jest.fn(() => '/fake/userData');
 jest.mock('electron', () => ({
   ipcMain: { on: (...args: unknown[]) => ipcMainOnMock(...args) },
+  app: { getPath: getPathMock },
 }));
 
 // Defaults to "no token connected" (null) so every existing test below keeps
@@ -117,10 +119,33 @@ function fakeWindow() {
   return { isDestroyed: () => false, webContents: { send: jest.fn() } };
 }
 
+// buildArgs()/mcpConfigArg() read process.env.WAYPOINT_API_BASE_URL directly,
+// so a test asserting on its default ('http://localhost:14000') would
+// silently pass or fail based on whatever a given developer's shell already
+// has set — explicitly clearing it here (and restoring afterEach) makes that
+// test control the variable itself instead of relying on it being ambiently
+// unset.
+const originalApiBaseUrl = process.env.WAYPOINT_API_BASE_URL;
+
 beforeEach(() => {
   jest.clearAllMocks();
   spawnCalls.length = 0;
   lastChild = null;
+  getPathMock.mockReturnValue('/fake/userData');
+  // jest.clearAllMocks() clears call history but not a prior test's
+  // mockReturnValue — explicitly restore the "no token connected" default
+  // here so test order can never leak a connected-token return value into a
+  // test that assumes the default.
+  getStoredSubscriptionTokenMock.mockReturnValue(null);
+  delete process.env.WAYPOINT_API_BASE_URL;
+});
+
+afterEach(() => {
+  if (originalApiBaseUrl === undefined) {
+    delete process.env.WAYPOINT_API_BASE_URL;
+  } else {
+    process.env.WAYPOINT_API_BASE_URL = originalApiBaseUrl;
+  }
 });
 
 describe('registerCopilotIpc', () => {
@@ -179,15 +204,91 @@ describe('registerCopilotIpc', () => {
     expect(spawnCalls[0].args).not.toContain('--dangerously-skip-permissions');
   });
 
-  it('disables built-in tool access — this phase is text-only chat, not agentic', () => {
+  it('disables built-in tool access — only the read-only work-item MCP tools are allowed', () => {
     const win = fakeWindow();
     registerCopilotIpc(() => win as unknown as BrowserWindow);
 
     run({ requestId: 'req-1', prompt: 'hi' });
 
-    const idx = spawnCalls[0].args.indexOf('--tools');
+    const { args } = spawnCalls[0];
+    const toolsIdx = args.indexOf('--tools');
+    expect(toolsIdx).toBeGreaterThan(-1);
+    expect(args[toolsIdx + 1]).toBe('');
+
+    const allowedIdx = args.indexOf('--allowedTools');
+    expect(allowedIdx).toBeGreaterThan(-1);
+    expect(args[allowedIdx + 1]).toBe(
+      [
+        'mcp__waypoint__list_work_items',
+        'mcp__waypoint__get_work_item',
+        'mcp__waypoint__get_work_item_by_identifier',
+        'mcp__waypoint__search_work_items',
+        'mcp__waypoint__list_comments',
+        'mcp__waypoint__list_activity',
+        'mcp__waypoint__list_states',
+        'mcp__waypoint__list_members',
+      ].join(' '),
+    );
+  });
+
+  it('points the CLI at the waypoint MCP server, in strict mode so no other MCP config leaks in', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi' });
+
+    const { args } = spawnCalls[0];
+    expect(args).toContain('--strict-mcp-config');
+    const configIdx = args.indexOf('--mcp-config');
+    expect(configIdx).toBeGreaterThan(-1);
+    const config = JSON.parse(args[configIdx + 1]);
+    expect(config).toEqual({
+      mcpServers: {
+        waypoint: { type: 'http', url: 'http://localhost:14000/mcp/copilot' },
+      },
+    });
+  });
+
+  it('uses WAYPOINT_API_BASE_URL for the MCP server URL when it is set, instead of the localhost default', () => {
+    process.env.WAYPOINT_API_BASE_URL = 'https://waypoint.example.com';
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi' });
+
+    const { args } = spawnCalls[0];
+    const configIdx = args.indexOf('--mcp-config');
+    const config = JSON.parse(args[configIdx + 1]);
+    expect(config).toEqual({
+      mcpServers: {
+        waypoint: {
+          type: 'http',
+          url: 'https://waypoint.example.com/mcp/copilot',
+        },
+      },
+    });
+  });
+
+  // Regression test: --safe-mode's own --help text lists MCP servers among
+  // what it disables, with no override — confirmed live that --safe-mode
+  // plus this exact --mcp-config still comes back with an empty
+  // mcp_servers/tools list in the init event, so the model has zero tools
+  // and just narrates what it would do instead of actually calling one.
+  // --setting-sources '' is the fix: confirmed live it still empties out
+  // user-level skills/plugins/custom-agents (the leak --safe-mode existed
+  // to prevent) while leaving an explicit --mcp-config server free to
+  // connect.
+  it('uses --setting-sources instead of --safe-mode, so the MCP server can actually connect', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi' });
+
+    const { args } = spawnCalls[0];
+    expect(args).not.toContain('--safe-mode');
+    const idx = args.indexOf('--setting-sources');
     expect(idx).toBeGreaterThan(-1);
-    expect(spawnCalls[0].args[idx + 1]).toBe('');
+    expect(args[idx + 1]).toBe('');
   });
 
   // The bug this exists to catch: a --resume against a session id that's
@@ -312,19 +413,50 @@ describe('registerCopilotIpc', () => {
     expect(String(options.env?.PATH)).toContain('/usr/local/bin');
   });
 
-  it('does not set CLAUDE_CODE_OAUTH_TOKEN when no subscription token is connected', () => {
+  // Regression test for a BLOCKER found in a second review round: setting
+  // CLAUDE_CONFIG_DIR unconditionally (the original fix for the memory-leak-
+  // across-sessions bug below) also relocates where the CLI looks up
+  // CREDENTIALS, not just memory — confirmed live, this permanently broke
+  // ambient `claude login` auth for anyone who hadn't also connected a
+  // subscription token via this app's own Settings → Profile → Copilot
+  // flow, with no in-app recovery (re-running `claude login` writes to the
+  // real ~/.claude.json, which the redirected dir never looks at again).
+  // CLAUDE_CONFIG_DIR must therefore only be set in the same branch that
+  // sets CLAUDE_CODE_OAUTH_TOKEN — i.e. only once a subscription token is
+  // actually connected, since that credential path is honored regardless of
+  // CLAUDE_CONFIG_DIR (confirmed live). With no token connected (the default
+  // state every other test in this file exercises), CLAUDE_CONFIG_DIR must
+  // be absent entirely so ambient-login users keep working exactly as they
+  // did before this isolation fix landed.
+  it("sets CLAUDE_CONFIG_DIR to an app-owned directory, not the user's real ~/.claude, but only when a subscription token is connected", () => {
+    getStoredSubscriptionTokenMock.mockReturnValue(
+      'sk-ant-oat01-connected-token',
+    );
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi' });
+
+    expect(getPathMock).toHaveBeenCalledWith('userData');
+    expect(spawnCalls[0].options.env?.CLAUDE_CONFIG_DIR).toBe(
+      '/fake/userData/copilot-claude-config',
+    );
+  });
+
+  it('does not set CLAUDE_CONFIG_DIR (or CLAUDE_CODE_OAUTH_TOKEN) when no subscription token is connected, so ambient `claude login` auth keeps working', () => {
     const win = fakeWindow();
     registerCopilotIpc(() => win as unknown as BrowserWindow);
 
     run({ requestId: 'req-1', prompt: 'hi' });
 
     expect(spawnCalls[0].options.env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(spawnCalls[0].options.env?.CLAUDE_CONFIG_DIR).toBeUndefined();
   });
 
   // Settings → Profile → Copilot lets a user connect their own subscription
   // via a token generated with `claude setup-token`, so an expired/missing
   // ambient CLI login no longer dead-ends every run.
-  it('passes a connected subscription token as CLAUDE_CODE_OAUTH_TOKEN, taking priority over ambient login', () => {
+  it('passes a connected subscription token as CLAUDE_CODE_OAUTH_TOKEN, taking priority over ambient login, and sets CLAUDE_CONFIG_DIR alongside it', () => {
     getStoredSubscriptionTokenMock.mockReturnValue(
       'sk-ant-oat01-connected-token',
     );
@@ -335,6 +467,9 @@ describe('registerCopilotIpc', () => {
 
     expect(spawnCalls[0].options.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe(
       'sk-ant-oat01-connected-token',
+    );
+    expect(spawnCalls[0].options.env?.CLAUDE_CONFIG_DIR).toBe(
+      '/fake/userData/copilot-claude-config',
     );
   });
 
