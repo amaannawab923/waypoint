@@ -28,7 +28,10 @@ import * as fs from 'fs';
 import * as http from 'http';
 import WebSocket from 'ws';
 
-const DEBUG_PORT = process.env.ELECTRON_QA_DEBUG_PORT || '9222';
+// 19222, not Chrome/CDP's conventional 9222 default — moved to avoid
+// colliding with another project's own CDP debugging session on the same
+// machine. Matches start:qa's ELECTRON_QA_DEBUG_PORT in package.json.
+const DEBUG_PORT = process.env.ELECTRON_QA_DEBUG_PORT || '19222';
 // The dev renderer's <title> — see src/renderer/index.ejs. Overridable in
 // case a differently-titled window (or the packaged app) needs targeting.
 const WINDOW_TITLE = process.env.ELECTRON_QA_WINDOW_TITLE || 'Waypoint';
