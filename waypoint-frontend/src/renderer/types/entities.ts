@@ -381,3 +381,81 @@ export interface CopilotConversationSummary {
 export interface CopilotConversation extends CopilotConversationSummary {
   messages: CopilotMessage[];
 }
+
+export type CopilotProposalKind =
+  | 'comment'
+  | 'state_change'
+  | 'assignee_change'
+  | 'priority_change'
+  | 'create_work_item';
+
+// Mirrors the backend's copilot_proposal_status enum. 'executing' is a
+// transient claim state the renderer rarely observes (approve responds only
+// after execution finishes), but a concurrent-approve echo can surface it.
+export type CopilotProposalStatus =
+  | 'proposed'
+  | 'executing'
+  | 'executed'
+  | 'rejected'
+  | 'stale'
+  | 'expired'
+  | 'superseded';
+
+// The kind-specific execute arguments the model proposed — which fields are
+// present depends on `kind` (see CopilotProposalCard.tsx's per-kind bodies).
+export interface CopilotProposalPayload {
+  body?: string; // comment
+  stateId?: string; // state_change, create_work_item
+  priority?: Priority; // priority_change, create_work_item
+  assigneeId?: string; // assignee_change
+  action?: 'add' | 'remove'; // assignee_change
+  projectId?: string; // create_work_item
+  title?: string; // create_work_item
+  description?: string; // create_work_item
+  assigneeIds?: ID[]; // create_work_item
+  dueDate?: string; // create_work_item
+}
+
+// Display data captured at propose time — names and colors, never bare ids,
+// so the card can render without any follow-up fetches (and keeps showing
+// what was proposed even after reality moves on underneath it).
+export interface CopilotProposalSnapshot {
+  identifier?: string;
+  title?: string;
+  itemUpdatedAt?: string;
+  fromStateId?: string;
+  fromStateName?: string;
+  fromStateColor?: string | null;
+  toStateName?: string;
+  toStateColor?: string | null;
+  fromPriority?: Priority;
+  assigneeName?: string;
+  wasAssigned?: boolean;
+  currentAssigneeNames?: string[];
+  projectName?: string;
+  projectIdentifier?: string;
+  stateName?: string;
+  stateColor?: string | null;
+  assigneeNames?: string[];
+}
+
+// One approval card in the Copilot transcript (issue #10 / Copilot V2) —
+// the backend's ProposalView, JSON-serialized (timestamps as ISO strings).
+export interface CopilotProposal {
+  id: ID;
+  conversationId: ID;
+  kind: CopilotProposalKind;
+  workItemId: ID | null;
+  payload: CopilotProposalPayload;
+  snapshot: CopilotProposalSnapshot;
+  anchorSeq: number;
+  status: CopilotProposalStatus;
+  statusReason: string | null;
+  resultInfo: unknown;
+  /** The exact self-disclosure prefix an approved comment will carry — server-computed from the current user's display name. */
+  disclosureText: string;
+  expiresAt: string;
+  modelNotifiedAt: string | null;
+  resolvedAt: string | null;
+  createdAt: string;
+}
