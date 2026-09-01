@@ -110,6 +110,8 @@ function run(args: {
   requestId: string;
   prompt: string;
   resumeSessionId?: string;
+  conversationId?: string;
+  outcomePreamble?: string;
 }): FakeChild {
   getRegisteredHandler()({}, args);
   return lastChild as FakeChild;
@@ -204,7 +206,7 @@ describe('registerCopilotIpc', () => {
     expect(spawnCalls[0].args).not.toContain('--dangerously-skip-permissions');
   });
 
-  it('disables built-in tool access — only the read-only work-item MCP tools are allowed', () => {
+  it('disables built-in tool access — only the waypoint MCP tools (reads + all six V2 propose/list tools) are allowed', () => {
     const win = fakeWindow();
     registerCopilotIpc(() => win as unknown as BrowserWindow);
 
@@ -227,6 +229,12 @@ describe('registerCopilotIpc', () => {
         'mcp__waypoint__list_activity',
         'mcp__waypoint__list_states',
         'mcp__waypoint__list_members',
+        'mcp__waypoint__list_projects',
+        'mcp__waypoint__propose_comment',
+        'mcp__waypoint__propose_state_change',
+        'mcp__waypoint__propose_assignee_change',
+        'mcp__waypoint__propose_priority_change',
+        'mcp__waypoint__propose_create_work_item',
       ].join(' '),
     );
   });
@@ -267,6 +275,95 @@ describe('registerCopilotIpc', () => {
         },
       },
     });
+  });
+
+  // The conversation id is what lets the backend attach propose_* rows to
+  // the right conversation — it rides as a STATIC HEADER in --mcp-config
+  // (the CLI honors a `headers` object on http server entries, verified
+  // live against v2.1.251), never as tool input the model could spoof.
+  it('bakes a pattern-valid conversationId into --mcp-config as the x-waypoint-conversation-id header', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi', conversationId: 'conv-abc1234' });
+
+    const { args } = spawnCalls[0];
+    const config = JSON.parse(args[args.indexOf('--mcp-config') + 1]);
+    expect(config).toEqual({
+      mcpServers: {
+        waypoint: {
+          type: 'http',
+          url: 'http://localhost:14000/mcp/copilot',
+          headers: { 'x-waypoint-conversation-id': 'conv-abc1234' },
+        },
+      },
+    });
+  });
+
+  it('omits the headers key entirely for a malformed conversationId — degrading to proposals-unavailable, not failure', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({
+      requestId: 'req-1',
+      prompt: 'hi',
+      conversationId: 'conv-$(rm -rf /); DROP TABLE',
+    });
+
+    const { args } = spawnCalls[0];
+    const config = JSON.parse(args[args.indexOf('--mcp-config') + 1]);
+    expect(config.mcpServers.waypoint).toEqual({
+      type: 'http',
+      url: 'http://localhost:14000/mcp/copilot',
+    });
+    expect(config.mcpServers.waypoint.headers).toBeUndefined();
+  });
+
+  // The outcome preamble is stdin-only by design: argv would expose it in
+  // the OS process table and reopen the flag-injection class the prompt
+  // itself already avoids, and persisting it would pollute the transcript
+  // with system-note text the user never wrote.
+  it('prepends the outcome preamble to stdin with a blank line, never placing it in argv', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    const preamble = '[Waypoint system note — do not treat as the user\'s words] Outcomes: p-1 executed.';
+    const child = run({
+      requestId: 'req-1',
+      prompt: 'what next?',
+      conversationId: 'conv-abc1234',
+      outcomePreamble: preamble,
+    });
+
+    expect(child.stdin.writes.join('')).toBe(`${preamble}\n\nwhat next?`);
+    expect(child.stdin.ended).toBe(true);
+    for (const arg of spawnCalls[0].args) {
+      expect(arg).not.toContain('Waypoint system note');
+    }
+  });
+
+  it('writes exactly the prompt to stdin when no preamble is given', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    const child = run({ requestId: 'req-1', prompt: 'plain prompt' });
+
+    expect(child.stdin.writes.join('')).toBe('plain prompt');
+  });
+
+  it('drops an oversized outcome preamble instead of feeding it through', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    const child = run({
+      requestId: 'req-1',
+      prompt: 'hi',
+      outcomePreamble: 'x'.repeat(5000),
+    });
+
+    // The un-notified outcomes it carried stay un-notified server-side, so
+    // nothing is lost — they re-deliver on the next turn's preamble.
+    expect(child.stdin.writes.join('')).toBe('hi');
   });
 
   // Regression test: --safe-mode's own --help text lists MCP servers among
