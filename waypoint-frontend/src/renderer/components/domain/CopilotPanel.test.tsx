@@ -1101,6 +1101,98 @@ describe('CopilotPanel', () => {
       expect(screen.getByText('the CLI died mid-turn')).toBeInTheDocument();
     });
 
+    // Final review finding M1: a failed run may have proposed before dying,
+    // and "Try again" re-runs the SAME prompt against a session with no
+    // memory of proposing — the model proposes again, and comments/creates
+    // never supersede, so the user gets two identical pending cards. The
+    // retry must reject the failed turn's pending proposals first, and mark
+    // them notified WITHOUT putting them in the preamble (they're system
+    // cleanup, not the user saying no).
+    it('rejects the failed turn\'s pending proposals before "Try again" re-runs, without telling the model the user rejected them', async () => {
+      render(<CopilotPanel onClose={jest.fn()} />);
+      await screen.findByText(/No sessions yet/i);
+      await createAndOpenSession();
+
+      await typeAndSend('propose then crash');
+      await act(async () => {});
+      const handlers = await waitForRun('propose then crash');
+      const orphan = addFakeProposal(store[0].id, { anchorSeq: 1 });
+
+      await act(async () => {
+        handlers.onError({ kind: 'generic', message: 'the CLI died mid-turn' });
+      });
+      expect(await screen.findByText('Pending review')).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByText('Try again'));
+      });
+
+      await waitFor(() => expect(copilotIpc.runPrompt).toHaveBeenCalledTimes(2));
+      expect(rejectCopilotProposal).toHaveBeenCalledWith(orphan.id);
+      expect(markCopilotProposalsNotified).toHaveBeenCalledWith(store[0].id, [orphan.id]);
+      // The re-run must not carry a "rejected by the user" outcome for the
+      // orphan — that would steer the model away from re-proposing the very
+      // thing the retried prompt asks for.
+      const retryCall = copilotIpc.runPrompt.mock.calls[1][0];
+      expect(retryCall.prompt).toBe('propose then crash');
+      expect(retryCall.outcomePreamble ?? '').not.toContain(orphan.id);
+    });
+
+    // Final review finding m3: the runner drops an over-length preamble
+    // (~4000 chars) but the panel used to mark EVERY unnotified outcome
+    // delivered after the run — an oversized batch was silently dropped yet
+    // stamped notified, permanently losing those outcomes. The build is now
+    // capped at 20 per turn; the remainder stays unnotified for next turn.
+    it('caps the outcome preamble at 20 outcomes and only marks the included ones notified', async () => {
+      // Module mocks keep their call history across tests in this suite
+      // (only copilotIpc is rebuilt per test) — clear it so calls[…] below
+      // can't pick up a leaked call from an earlier test.
+      jest.mocked(markCopilotProposalsNotified).mockClear();
+      const conv = seedConversation('conv-many-outcomes');
+      const resolved = Array.from({ length: 25 }, () =>
+        addFakeProposal(conv.id, { status: 'executed', anchorSeq: 1 }),
+      );
+
+      render(<CopilotPanel onClose={jest.fn()} />);
+      fireEvent.click(await screen.findByText('seeded session'));
+      await act(async () => {});
+      expect((await screen.findAllByText('Applied ✓')).length).toBe(25);
+
+      await typeAndSend('what changed?');
+      const handlers = await waitForRun('what changed?');
+      const { outcomePreamble } = copilotIpc.runPrompt.mock.calls[0][0];
+      for (const p of resolved.slice(0, 20)) expect(outcomePreamble).toContain(p.id);
+      for (const p of resolved.slice(20)) expect(outcomePreamble).not.toContain(p.id);
+      // Comfortably inside the runner's ~4000-char defensive drop.
+      expect((outcomePreamble ?? '').length).toBeLessThan(4000);
+
+      await act(async () => {
+        handlers.onChunk('done.');
+        handlers.onDone({ fullText: 'done.', sessionId: 'claude-abc' });
+      });
+      await waitFor(() => expect(markCopilotProposalsNotified).toHaveBeenCalled());
+      const notifiedIds = jest.mocked(markCopilotProposalsNotified).mock.calls[0][1];
+      expect(notifiedIds).toEqual(resolved.slice(0, 20).map((p) => p.id));
+    });
+
+    // Companion to backend review finding m5: stale cards are swept by the
+    // bulk reject too, so the button must not vanish when only stale cards
+    // remain.
+    it('keeps "Reject all pending" visible when only STALE cards remain', async () => {
+      const conv = seedConversation('conv-stale-only');
+      addFakeProposal(conv.id, {
+        status: 'stale',
+        statusReason: 'The ticket changed since this was proposed.',
+        anchorSeq: 1,
+      });
+
+      render(<CopilotPanel onClose={jest.fn()} />);
+      fireEvent.click(await screen.findByText('seeded session'));
+      await act(async () => {});
+
+      expect(await screen.findByText('Reject all pending')).toBeInTheDocument();
+    });
+
     it("passes the outcome preamble to runPrompt while persisting ONLY the user's own text (the transcript-pollution regression)", async () => {
       const conv = seedConversation('conv-seeded');
       const resolved = addFakeProposal(conv.id, { status: 'executed', anchorSeq: 1 });
