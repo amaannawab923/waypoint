@@ -212,11 +212,17 @@ export async function listProposals(conversationId: string): Promise<ProposalVie
   // knows is a lie:
   //  - a 'proposed' row past its TTL becomes 'expired' here rather than
   //    waiting for an approve attempt to discover it;
-  //  - an 'executing' row stuck past EXECUTING_STUCK_MS is a crashed
-  //    execute — reverted to 'proposed' so it's approvable again. The claim
-  //    timestamp is resolvedAt (set by approveProposal's claim UPDATE and
-  //    cleared again on revert — an 'executing' row is by definition not
-  //    resolved, so the column is unambiguous while in that state).
+  //  - an 'executing' row stuck past EXECUTING_STUCK_MS is a crashed OR
+  //    still-in-flight execute — and there is no way to tell whether the
+  //    crash happened BEFORE or AFTER the underlying write ran (final
+  //    review finding M2: a process death between execute and finalize
+  //    leaves a comment already posted / a ticket already created). So a
+  //    stuck claim is parked as STALE — visible, non-approvable, with a
+  //    reason telling the user to check the ticket — never back to
+  //    'proposed', where one more Approve click would run the write a
+  //    second time. The claim timestamp is resolvedAt (set by
+  //    approveProposal's claim UPDATE), so the column is unambiguous while
+  //    in the 'executing' state.
   const now = new Date();
   await db
     .update(copilotProposals)
@@ -234,7 +240,12 @@ export async function listProposals(conversationId: string): Promise<ProposalVie
     );
   await db
     .update(copilotProposals)
-    .set({ status: 'proposed', resolvedAt: null })
+    .set({
+      status: 'stale',
+      statusReason:
+        'Approval was interrupted — check the ticket before asking Copilot to propose this again.',
+      resolvedAt: now,
+    })
     .where(
       and(
         eq(copilotProposals.conversationId, conversationId),
@@ -320,12 +331,24 @@ async function finalize(
   id: string,
   patch: { status: ProposalStatus; statusReason?: string | null; resultInfo?: unknown },
 ): Promise<ProposalRow> {
+  // Guarded on status='executing' (final review finding M2): only the
+  // holder of a live claim may finalize. Without this, a slow execute that
+  // outlived the stuck-claim repair (which parks the row as stale) would
+  // stomp that resolution with 'executed' — or worse, overwrite whatever a
+  // second approve produced. A lost claim falls through to the fetch below
+  // and returns the row as the repair left it, rather than rewriting
+  // history.
   const [row] = await db
     .update(copilotProposals)
     .set({ ...patch, resolvedAt: new Date() })
-    .where(eq(copilotProposals.id, id))
+    .where(and(eq(copilotProposals.id, id), eq(copilotProposals.status, 'executing')))
     .returning();
-  return row;
+  if (row) return row;
+  const [current] = await db
+    .select()
+    .from(copilotProposals)
+    .where(eq(copilotProposals.id, id));
+  return current;
 }
 
 async function executeProposal(row: ProposalRow, displayName: string): Promise<unknown> {
@@ -451,10 +474,18 @@ export async function rejectProposal(id: string): Promise<ProposalView> {
 }
 
 export async function rejectAllPending(conversationId: string): Promise<{ rejected: number }> {
+  // 'stale' included alongside 'proposed' (final review finding m5), matching
+  // single-row rejectProposal: a stale card's only affordance is Dismiss, so
+  // "reject all" leaving stale cards behind stranded them with no bulk way out.
   const rows = await db
     .update(copilotProposals)
     .set({ status: 'rejected', resolvedAt: new Date() })
-    .where(and(eq(copilotProposals.conversationId, conversationId), eq(copilotProposals.status, 'proposed')))
+    .where(
+      and(
+        eq(copilotProposals.conversationId, conversationId),
+        inArray(copilotProposals.status, ['proposed', 'stale']),
+      ),
+    )
     .returning({ id: copilotProposals.id });
   return { rejected: rows.length };
 }
