@@ -191,4 +191,43 @@ describe('parseStreamEventLine', () => {
     const line = JSON.stringify({ type: 'system', subtype: 'init' });
     expect(parseStreamEventLine(line)).toEqual({ kind: 'ignored' });
   });
+
+  // Pin for Copilot V2: with the propose_* tools allowed, the stream now
+  // routinely carries assistant tool_use blocks (and their stream_event
+  // deltas). None of that is user-visible text — it must keep parsing as
+  // `ignored`, exactly as before, with NO new parsing added for it (the
+  // proposal flow is pull-based via REST, not stream-parsed, by design).
+  it('still ignores tool_use stream events — proposals are never parsed out of the stream', () => {
+    const toolUseStart = JSON.stringify({
+      type: 'stream_event',
+      event: {
+        type: 'content_block_start',
+        content_block: {
+          type: 'tool_use',
+          id: 'toolu_01',
+          name: 'mcp__waypoint__propose_comment',
+        },
+      },
+    });
+    expect(parseStreamEventLine(toolUseStart)).toEqual({ kind: 'ignored' });
+
+    const inputJsonDelta = JSON.stringify({
+      type: 'stream_event',
+      event: {
+        type: 'content_block_delta',
+        delta: { type: 'input_json_delta', partial_json: '{"workItemId":' },
+      },
+    });
+    expect(parseStreamEventLine(inputJsonDelta)).toEqual({ kind: 'ignored' });
+
+    const assistantToolUse = JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'tool_use', id: 'toolu_01', name: 'mcp__waypoint__propose_comment', input: {} },
+        ],
+      },
+    });
+    expect(parseStreamEventLine(assistantToolUse)).toEqual({ kind: 'ignored' });
+  });
 });

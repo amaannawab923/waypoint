@@ -7,10 +7,13 @@ import {
   postCopilotAssistantMessage,
 } from '@/mock/api';
 import { useCopilotConversations } from '@/lib/useCopilotConversations';
+import { useCopilotProposals } from '@/lib/useCopilotProposals';
+import { interleaveProposals } from '@/lib/copilotTranscript';
 import type { CopilotSessionMessageRole } from '@/lib/copilotSessions';
 import { renderMarkdown } from '@/lib/markdown';
 import { IconButton, Button } from '@/components/ui/Button';
 import { CopilotSessionList } from './CopilotSessionList';
+import { CopilotProposalCard } from './CopilotProposalCard';
 import { CopilotConnectModal } from './CopilotConnectModal';
 
 // Not crypto.randomUUID(): this project's jsdom test environment doesn't
@@ -174,6 +177,11 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
   const activeSession = activeSessionId
     ? (sessions.find((s) => s.id === activeSessionId) ?? null)
     : null;
+  // Proposal cards for the open conversation (issue #10 / Copilot V2) —
+  // fetched on open (the hook refetches whenever activeSessionId changes)
+  // and refetched after every completed OR failed run, since a partial turn
+  // may still have written proposals before dying.
+  const proposalStore = useCopilotProposals(activeSessionId);
   // Set while a just-opened session's messages are still being fetched
   // (useCopilotConversations.ts's openSession) — the list endpoint doesn't
   // include messages, so there's a real gap between "chat view mounted" and
@@ -319,6 +327,12 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     sessionId: string,
     content: string,
     resumeSessionId: string | undefined,
+    // Un-notified proposal outcomes riding along with this run — the text
+    // goes to the model via stdin (never persisted as a message), and the
+    // ids are marked notified ONLY once the run's reply persists, so a
+    // failed run re-delivers the same outcomes next turn (harmless
+    // duplication beats a lost outcome).
+    outcome: { text: string; ids: string[] } | null = null,
   ) {
     const generation = (runGenerationRef.current.get(sessionId) ?? 0) + 1;
     runGenerationRef.current.set(sessionId, generation);
@@ -339,7 +353,16 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
       // get a chance to run. Treated the same as a reported run failure.
       try {
         const unsubscribe = window.electron.copilot.runPrompt(
-          { prompt: content, resumeSessionId },
+          {
+            prompt: content,
+            resumeSessionId,
+            // The conversation id rides to the backend as an MCP header so
+            // propose_* rows land in THIS conversation; the preamble rides
+            // stdin only — postCopilotUserMessage above already persisted
+            // the user's own text and nothing else.
+            conversationId: sessionId,
+            ...(outcome ? { outcomePreamble: outcome.text } : {}),
+          },
           {
             onChunk: (text) => {
               if (isStale()) return;
@@ -352,11 +375,20 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
             onDone: async ({ fullText, sessionId: claudeSessionId }) => {
               if (isStale()) return;
               setStreaming(null);
+              // The turn is over either way — refetch proposal cards even
+              // when the reply is empty or fails to save below, since the
+              // model may have proposed changes before things went sideways.
+              const reloadProposals = () =>
+                proposalStore.reload().catch(() => {
+                  // Non-fatal: the next open/run refetches, and httpClient
+                  // already toasted.
+                });
               // An empty (or whitespace-only) reply isn't a real answer to
               // keep — persisting it would leave a session with a blank
               // assistant bubble and nothing to retry but re-running the
               // whole prompt. "Try again" re-runs the prompt from scratch.
               if (!fullText.trim()) {
+                await reloadProposals();
                 setRunError({
                   sessionId,
                   message: "Copilot didn't return a reply — try again.",
@@ -381,6 +413,7 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
                   role: 'assistant',
                   content: persisted.content,
                   createdAt: persisted.createdAt,
+                  seq: persisted.seq,
                 });
                 // Matches the backend's own never-clobber-with-null rule
                 // (see copilot.service.ts's postAssistantMessage) — omit
@@ -389,11 +422,25 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
                   updatedAt: persisted.createdAt,
                   ...(claudeSessionId !== null ? { claudeSessionId } : {}),
                 });
+                await reloadProposals();
+                // Only now — the run completed AND its reply persisted —
+                // are this run's delivered outcomes marked notified. A
+                // failure anywhere above leaves modelNotifiedAt null so
+                // the same preamble re-delivers next turn.
+                if (outcome) {
+                  await proposalStore.markNotified(outcome.ids).catch(() => {
+                    // Failing to mark is safe: worst case the model hears
+                    // the same outcome twice next turn.
+                  });
+                }
               } catch (err) {
                 if (isStale()) {
                   resolve();
                   return;
                 }
+                // The run itself completed, so its proposals are real even
+                // though saving the reply failed — show the cards.
+                await reloadProposals();
                 // The Claude Code run itself succeeded — don't discard a
                 // real reply just because saving it failed. "Try again"
                 // for this error kind re-POSTs the same text (see
@@ -416,6 +463,11 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
             onError: (err) => {
               if (isStale()) return;
               setStreaming(null);
+              // A failed run can still have proposed before dying —
+              // refetch so those cards appear instead of silently waiting
+              // for the next successful turn. Fire-and-forget: the error
+              // UI shouldn't block on it.
+              proposalStore.reload().catch(() => {});
               setRunError({ sessionId, message: err.message, kind: err.kind });
               setLastFailedPrompt(content);
               resolve();
@@ -447,6 +499,12 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     // the title alone server-side too.
     const isFirstMessage = (activeSession?.messages.length ?? 0) === 0;
 
+    // Built BEFORE the user message posts, from the current proposal list:
+    // the outcome note goes to the model on stdin only, while the POST
+    // below persists nothing but the user's own words — the
+    // transcript-pollution split this whole flow exists to preserve.
+    const outcome = proposalStore.buildOutcomePreamble();
+
     // Optimistic — instant, same feel as the old local-only version — but
     // now backed by a real POST, so a failure needs a real rollback: unlike
     // a plain local append, this one can fail after already being on
@@ -468,7 +526,7 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     // off a message's real id besides React's `key` prop, and the stable
     // local id works fine there too.
     if (isFirstMessage) await sessionStore.reload();
-    await runAndPersist(sessionId, content, resumeSessionId);
+    await runAndPersist(sessionId, content, resumeSessionId, outcome);
   }
 
   async function handleCreateSession() {
@@ -520,6 +578,12 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
         role: 'assistant',
         content: persisted.content,
         createdAt: persisted.createdAt,
+        // Without seq this message is invisible to proposal-card anchoring
+        // (interleaveProposals requires a numeric seq), so the turn's cards
+        // rendered ABOVE the reply that explains them after a save-retry
+        // (final review finding m4 — the sibling call in onDone had this,
+        // this path didn't).
+        seq: persisted.seq,
       });
       sessionStore.patchConversationLocal(sessionId, {
         updatedAt: persisted.createdAt,
@@ -547,7 +611,54 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     if (!lastFailedPrompt) return;
     const resumeSessionId =
       sessions.find((s) => s.id === sessionId)?.claudeSessionId ?? undefined;
-    runAndPersist(sessionId, lastFailedPrompt, resumeSessionId);
+    // The failed attempt may already have proposed before dying, and a
+    // retry re-runs the SAME prompt against a session that (having never
+    // persisted the failed turn's reply) has no memory of proposing — so
+    // it proposes again. Comments and creates never supersede, leaving two
+    // byte-identical pending cards a user could approve twice (final
+    // review finding M1). The failed turn's pending proposals share its
+    // anchorSeq — the seq of the last persisted message, since no
+    // assistant reply landed — so reject exactly those before re-running;
+    // pending cards from EARLIER turns the user hasn't decided on are
+    // untouched. Sequential, fire-and-forget-tolerant: a reject that
+    // fails just leaves the duplicate the retry would have created anyway.
+    const failedTurnAnchor = sessions
+      .find((s) => s.id === sessionId)
+      ?.messages.reduce((max, m) => (typeof m.seq === 'number' && m.seq > max ? m.seq : max), 0);
+    const retryStale = proposalStore.proposals.filter(
+      (p) =>
+        p.status === 'proposed' &&
+        typeof failedTurnAnchor === 'number' &&
+        p.anchorSeq >= failedTurnAnchor,
+    );
+    // Synchronous when there's nothing to reject — the common case, and
+    // the one the existing retry tests exercise.
+    if (retryStale.length === 0) {
+      runAndPersist(
+        sessionId,
+        lastFailedPrompt,
+        resumeSessionId,
+        proposalStore.buildOutcomePreamble(),
+      );
+      return;
+    }
+    Promise.allSettled(retryStale.map((p) => proposalStore.reject(p.id)))
+      .then(() =>
+        // Marked notified immediately, NOT delivered in the preamble: these
+        // rejections are the system clearing duplicates, not the user
+        // saying no — telling the model "the user rejected the comment"
+        // while re-sending the very prompt that asks for it would steer it
+        // away from re-proposing what the user is literally asking for.
+        proposalStore.markNotified(retryStale.map((p) => p.id)).catch(() => {}),
+      )
+      .then(() =>
+        runAndPersist(
+          sessionId,
+          lastFailedPrompt,
+          resumeSessionId,
+          proposalStore.buildOutcomePreamble(),
+        ),
+      );
   }
 
   const isStreamingHere =
@@ -587,6 +698,21 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
           </h2>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
+          {activeSession &&
+            // Stale cards still show Reject on the card and are swept by
+            // the bulk endpoint (review finding m5) — hiding this button
+            // when only stale cards remain would strand them.
+            proposalStore.proposals.some(
+              (p) => p.status === 'proposed' || p.status === 'stale',
+            ) && (
+              <button
+                type="button"
+                onClick={() => proposalStore.rejectAll().catch(() => {})}
+                className="mr-1 text-xs font-medium whitespace-nowrap text-text-secondary hover:text-text hover:underline"
+              >
+                Reject all pending
+              </button>
+            )}
           {!activeSession && (
             <IconButton label="New session" onClick={handleCreateSession}>
               <Plus size={16} />
@@ -667,9 +793,21 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
               </p>
             )}
             <div className="flex flex-col gap-3">
-              {activeSession.messages.map((message) => (
-                <MessageBubble key={message.id} message={message} />
-              ))}
+              {interleaveProposals(
+                activeSession.messages,
+                proposalStore.proposals,
+              ).map((item) =>
+                item.type === 'message' ? (
+                  <MessageBubble key={item.message.id} message={item.message} />
+                ) : (
+                  <CopilotProposalCard
+                    key={item.proposal.id}
+                    proposal={item.proposal}
+                    onApprove={proposalStore.approve}
+                    onReject={proposalStore.reject}
+                  />
+                ),
+              )}
               {isStreamingHere &&
                 (streaming?.text ? (
                   <MessageBubble

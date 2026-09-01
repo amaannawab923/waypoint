@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Copilot Write-Approval Mockup — Waypoint V2</title>
+<style>
+  /* ── Tokens lifted verbatim from waypoint-frontend/src/renderer/index.css (light theme) ── */
+  :root {
+    --font-display: 'Space Grotesk', ui-sans-serif, sans-serif;
+    --font-body: 'Public Sans', ui-sans-serif, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+    --bg: #ffffff;
+    --bg-inset: #f9f9fb;
+    --surface: #ffffff;
+    --surface-2: #f4f4f6;
+    --border: #e4e4e8;
+    --border-strong: #d3d3d9;
+    --text: #0a0a0c;
+    --text-secondary: #53535c;
+    --text-muted: #9a9aa3;
+    --accent: #18181b;
+    --accent-hover: #000000;
+    --on-accent: #ffffff;
+    --success: #157a3d;
+    --success-bg: #eafbf0;
+    --warning: #a4650b;
+    --warning-bg: #fdf3e3;
+    --danger: #c8241a;
+    --danger-bg: #fdeceb;
+    --radius-sm: 6px;
+    --radius: 10px;
+    --radius-lg: 16px;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: var(--font-body);
+    color: var(--text);
+    background: var(--bg-inset);
+    display: flex;
+    overflow: hidden;
+  }
+
+  /* ── Left side: dimmed stand-in for the app, plus the demo legend ── */
+  .app-ghost {
+    flex: 1;
+    padding: 40px 48px;
+    overflow-y: auto;
+    min-width: 0;
+  }
+  .app-ghost h1 { font-family: var(--font-display); font-size: 18px; margin-bottom: 6px; }
+  .app-ghost p.sub { color: var(--text-secondary); font-size: 13px; max-width: 52ch; line-height: 1.55; }
+  .legend { margin-top: 28px; display: grid; gap: 10px; max-width: 480px; }
+  .legend .row {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 10px 14px; font-size: 12.5px; color: var(--text-secondary); line-height: 1.5;
+  }
+  .legend .row b { color: var(--text); }
+  .ghost-board { margin-top: 32px; display: flex; gap: 14px; opacity: 0.45; pointer-events: none; }
+  .ghost-col { width: 180px; }
+  .ghost-col .col-head { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+  .ghost-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; margin-bottom: 8px; }
+  .ghost-card .gid { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); }
+  .ghost-card .gt { font-size: 12px; margin-top: 2px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+  /* ── The Copilot panel — mirrors CopilotPanel.tsx: fixed right, max-w-[400px],
+       border-l, bg-surface, header border-b px-4 py-3.5, composer border-t ── */
+  .copilot-panel {
+    width: 400px; flex-shrink: 0; height: 100%;
+    display: flex; flex-direction: column;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    box-shadow: -8px 0 24px rgba(10,10,12,0.06);
+  }
+  .panel-header {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    border-bottom: 1px solid var(--border); padding: 14px 16px; flex-shrink: 0;
+  }
+  .panel-header .title { display: flex; align-items: center; gap: 8px; font-family: var(--font-display); font-size: 14px; font-weight: 600; }
+  .spark {
+    width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(180deg, #303035 0%, #0a0a0c 100%);
+    color: var(--on-accent); display: inline-flex; align-items: center; justify-content: center; font-size: 12px;
+  }
+  .panel-header .actions { display: flex; gap: 4px; }
+  .icon-btn {
+    width: 26px; height: 26px; border: none; background: transparent; border-radius: var(--radius-sm);
+    color: var(--text-muted); font-size: 14px; cursor: default; display: inline-flex; align-items: center; justify-content: center;
+  }
+
+  .transcript { flex: 1; overflow-y: auto; padding: 16px 16px 8px; display: flex; flex-direction: column; gap: 12px; }
+  .transcript::-webkit-scrollbar { width: 6px; }
+  .transcript::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
+
+  .day-divider { text-align: center; font-size: 10.5px; color: var(--text-muted); letter-spacing: 0.05em; text-transform: uppercase; margin: 4px 0; }
+
+  /* Bubbles — user: accent bg / on-accent text, right-aligned;
+     assistant: border + bg-surface-2 (CopilotPanel.tsx line 51) */
+  .msg { max-width: 85%; padding: 10px 14px; border-radius: var(--radius); font-size: 13.5px; line-height: 1.55; }
+  .msg.user { align-self: flex-end; background: var(--accent); color: var(--on-accent); border-bottom-right-radius: 4px; }
+  .msg.assistant { align-self: flex-start; background: var(--surface-2); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+  .msg.assistant .who { font-size: 10.5px; font-weight: 600; color: var(--text-muted); letter-spacing: 0.04em; text-transform: uppercase; margin-bottom: 4px; }
+  .msg code, .card code.ident {
+    font-family: var(--font-mono); font-size: 0.85em; padding: 0.1em 0.35em; border-radius: 4px;
+    background: color-mix(in srgb, currentColor 12%, transparent);
+  }
+
+  .typing { align-self: flex-start; display: none; padding: 12px 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); border-bottom-left-radius: 4px; }
+  .typing.on { display: flex; gap: 4px; }
+  .typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); animation: bounce 1.1s infinite ease-in-out; }
+  .typing i:nth-child(2) { animation-delay: 0.15s; }
+  .typing i:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes bounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.35; } 30% { transform: translateY(-4px); opacity: 0.9; } }
+
+  /* ── Approval cards ── */
+  .card {
+    align-self: flex-start; width: 100%;
+    /* flex-shrink: 0 is load-bearing: the transcript is a fixed-height flex
+       column, and overflow:hidden zeroes a flex item's automatic minimum
+       size — without this, every card gets crushed to a ~2px sliver once
+       the transcript overflows, while plain text bubbles (visible overflow)
+       survive. */
+    flex-shrink: 0;
+    background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius);
+    overflow: hidden; transition: border-color 0.25s, box-shadow 0.25s;
+  }
+  .msg, .day-divider, .typing { flex-shrink: 0; }
+  .card-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 8px 12px; background: var(--bg-inset); border-bottom: 1px solid var(--border);
+  }
+  .card-kind { font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; }
+  .badge { font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+  .badge.pending { background: var(--surface-2); color: var(--text-secondary); border: 1px solid var(--border-strong); }
+  .badge.applied { background: var(--success-bg); color: var(--success); }
+  .badge.dismissed { background: var(--surface-2); color: var(--text-muted); }
+  .badge.stale { background: var(--warning-bg); color: var(--warning); }
+
+  .card-body { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .ticket-line { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+  .ticket-line .ident { font-family: var(--font-mono); font-size: 11.5px; font-weight: 600; color: var(--text-secondary); background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; }
+  .ticket-line .t-title { font-weight: 600; line-height: 1.35; }
+
+  .chips { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface); }
+  .chip .dot { width: 9px; height: 9px; }
+  .arrow { color: var(--text-muted); font-size: 14px; }
+  .chip.to { border-color: color-mix(in srgb, var(--success) 45%, var(--border-strong)); }
+
+  .comment-preview { background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 13px; line-height: 1.55; }
+  .comment-preview .disclosure { color: var(--text-secondary); font-style: italic; }
+  .pill-postedas { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; font-weight: 600; color: var(--text-secondary); background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; }
+  .avatar { width: 16px; height: 16px; border-radius: 50%; background: var(--accent); color: var(--on-accent); font-size: 8.5px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; letter-spacing: 0; }
+  .avatar.lg { width: 22px; height: 22px; font-size: 10px; }
+  .assign-line { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .prio { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 600; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border-strong); }
+  .prio.urgent { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--border-strong)); }
+
+  .stale-banner {
+    display: flex; gap: 8px; align-items: flex-start;
+    background: var(--warning-bg); color: var(--warning); border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
+    border-radius: var(--radius-sm); padding: 8px 10px; font-size: 12.5px; line-height: 1.45; font-weight: 500;
+  }
+
+  .card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); }
+  .microcopy { font-size: 10.5px; color: var(--text-muted); line-height: 1.4; }
+  .btn-row { display: flex; gap: 8px; flex-shrink: 0; }
+  .btn { font-family: var(--font-body); font-size: 12.5px; font-weight: 600; border-radius: var(--radius-sm); padding: 6px 14px; cursor: pointer; border: 1px solid transparent; transition: background 0.15s, opacity 0.15s; }
+  .btn.approve { background: var(--accent); color: var(--on-accent); }
+  .btn.approve:hover { background: var(--accent-hover); }
+  .btn.approve:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn.reject { background: transparent; color: var(--text-secondary); border-color: var(--border-strong); }
+  .btn.reject:hover { background: var(--surface-2); }
+
+  .resolved-note { font-size: 12px; font-weight: 600; padding: 10px 12px; border-top: 1px solid var(--border); display: none; align-items: center; gap: 6px; }
+  .card.applied { border-color: color-mix(in srgb, var(--success) 40%, var(--border-strong)); }
+  .card.applied .card-foot { display: none; }
+  .card.applied .resolved-note.ok { display: flex; color: var(--success); background: var(--success-bg); }
+  .card.dismissed { opacity: 0.72; }
+  .card.dismissed .card-foot { display: none; }
+  .card.dismissed .resolved-note.no { display: flex; color: var(--text-muted); }
+  .card.stale .btn.approve { pointer-events: none; }
+
+  .composer { border-top: 1px solid var(--border); padding: 12px 16px; display: flex; align-items: flex-end; gap: 8px; flex-shrink: 0; }
+  .composer textarea {
+    flex: 1; resize: none; min-height: 36px; max-height: 112px; font-family: var(--font-body); font-size: 13.5px;
+    border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--bg); padding: 8px 12px; outline: none; color: var(--text);
+  }
+  .composer textarea:focus { border-color: var(--accent); }
+  .composer .send { width: 34px; height: 34px; border-radius: var(--radius-sm); border: none; background: var(--accent); color: var(--on-accent); font-size: 14px; cursor: default; }
+</style>
+</head>
+<body>
+
+  <!-- ── Dimmed app stand-in + demo legend ─────────────────────────────── -->
+  <div class="app-ghost">
+    <h1>Copilot V2 write-approval flow — interactive mockup</h1>
+    <p class="sub">
+      Product mockup for the <code style="font-family:var(--font-mono);font-size:12px;">propose_*</code> MCP tool spec.
+      Nothing here talks to a backend — the point is to verify the invariant visually:
+      <b>no write executes until Approve is clicked</b>, and every card shows exactly what the spec
+      says it must (names, not ids; from → to; the enforced self-disclosure prefix on comments).
+    </p>
+    <div class="legend">
+      <div class="row"><b>Pending cards</b> — the two live ones (state change + comment) have working Approve / Reject buttons. Try both paths.</div>
+      <div class="row"><b>Applied ✓</b> — the priority card earlier in the transcript shows the post-approve state: buttons gone, single-execution done, Copilot confirmed only after execution.</div>
+      <div class="row"><b>Dismissed</b> — the assignee card shows the reject path: nothing ran, Copilot acknowledged without claiming success.</div>
+      <div class="row"><b>Stale</b> — the LAUNCH-9 card shows the staleness guardrail: the ticket changed after the proposal, so Approve is blocked rather than executing against changed reality.</div>
+    </div>
+    <div class="ghost-board" aria-hidden="true">
+      <div class="ghost-col">
+        <div class="col-head"><span class="dot" style="background:#f2c94c"></span> In Progress</div>
+        <div class="ghost-card"><div class="gid">LAUNCH-3</div><div class="gt">Responsive nav breaks on iPad landscape</div></div>
+        <div class="ghost-card"><div class="gid">LAUNCH-5</div><div class="gt">Empty-state copy for the board view</div></div>
+      </div>
+      <div class="ghost-col">
+        <div class="col-head"><span class="dot" style="background:#157a3d"></span> Done</div>
+        <div class="ghost-card"><div class="gid">LAUNCH-9</div><div class="gt">Onboarding checklist flicker</div></div>
+        <div class="ghost-card"><div class="gid">LAUNCH-7</div><div class="gt">Crash reporting for the tray process</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── The Copilot panel ──────────────────────────────────────────────── -->
+  <aside class="copilot-panel" aria-label="Copilot panel">
+    <div class="panel-header">
+      <div class="title"><span class="spark">✦</span> Copilot</div>
+      <div class="actions">
+        <button class="icon-btn" title="New conversation">＋</button>
+        <button class="icon-btn" title="History">☰</button>
+        <button class="icon-btn" title="Close">✕</button>
+      </div>
+    </div>
+
+    <div class="transcript" id="transcript">
+      <div class="day-divider">Just now — try the buttons</div>
+
+      <!-- Live exchange: two PENDING interactive cards -->
+      <div class="msg user">Move LAUNCH-3 to Done and add a comment summarizing the fix</div>
+      <div class="msg assistant"><div class="who">Copilot</div><code>LAUNCH-3</code> · <b>Responsive nav breaks on iPad landscape</b> is <b>In Progress</b>, assigned to Lena Park. I've proposed the two changes below — nothing happens until you approve each one.</div>
+
+      <!-- Pending card: propose_state_change -->
+      <div class="card" id="card-state">
+        <div class="card-head">
+          <span class="card-kind">Proposed change · State</span>
+          <span class="badge pending">Pending review</span>
+        </div>
+        <div class="card-body">
+          <div class="ticket-line"><span class="ident">LAUNCH-3</span><span class="t-title">Responsive nav breaks on iPad landscape</span></div>
+          <div class="chips">
+            <span class="chip"><span class="dot" style="background:#f2c94c"></span> In Progress</span>
+            <span class="arrow">→</span>
+            <span class="chip to"><span class="dot" style="background:#157a3d"></span> Done</span>
+          </div>
+        </div>
+        <div class="card-foot">
+          <span class="microcopy">Executes once on approve · expires in 24h</span>
+          <div class="btn-row">
+            <button class="btn reject" onclick="resolve('card-state','reject')">Reject</button>
+            <button class="btn approve" onclick="resolve('card-state','approve')">Approve</button>
+          </div>
+        </div>
+        <div class="resolved-note ok">✓ Applied — moved to Done</div>
+        <div class="resolved-note no">— Dismissed, nothing changed</div>
+      </div>
+
+      <!-- Pending card: propose_comment -->
+      <div class="card" id="card-comment">
+        <div class="card-head">
+          <span class="card-kind">Proposed change · Comment</span>
+          <span class="badge pending">Pending review</span>
+        </div>
+        <div class="card-body">
+          <div class="ticket-line"><span class="ident">LAUNCH-3</span><span class="t-title">Responsive nav breaks on iPad landscape</span></div>
+          <div class="comment-preview">
+            <span class="disclosure">Hi, this is Copilot — Amaan's agent — commenting on their behalf:</span>
+            Fixed by removing the fixed 768px breakpoint override on the nav container and letting the flex layout wrap on iPad landscape (1024×768). Verified on Safari and Chrome iPadOS simulators; no change to desktop breakpoints.
+          </div>
+          <span class="pill-postedas"><span class="avatar">AN</span> Posted as you</span>
+        </div>
+        <div class="card-foot">
+          <span class="microcopy">Disclosure prefix is added by Waypoint, not the model · executes once on approve</span>
+          <div class="btn-row">
+            <button class="btn reject" onclick="resolve('card-comment','reject')">Reject</button>
+            <button class="btn approve" onclick="resolve('card-comment','approve')">Approve</button>
+          </div>
+        </div>
+        <div class="resolved-note ok">✓ Applied — comment posted</div>
+        <div class="resolved-note no">— Dismissed, nothing posted</div>
+      </div>
+
+      <div class="typing" id="typing"><i></i><i></i><i></i></div>
+
+      <div class="day-divider">Earlier today — resolved examples</div>
+
+      <!-- Prior exchange 1: already APPROVED priority change -->
+      <div class="msg user">Set the priority of LAUNCH-7 to urgent</div>
+      <div class="msg assistant"><div class="who">Copilot</div>Proposed — review below. I won't change anything until you approve.</div>
+
+      <div class="card applied">
+        <div class="card-head">
+          <span class="card-kind">Proposed change · Priority</span>
+          <span class="badge applied">Applied ✓</span>
+        </div>
+        <div class="card-body">
+          <div class="ticket-line"><span class="ident">LAUNCH-7</span><span class="t-title">Crash reporting for the tray process</span></div>
+          <div class="chips">
+            <span class="prio"><span style="color:var(--warning)">▮▮</span> Medium</span>
+            <span class="arrow">→</span>
+            <span class="prio urgent">⚑ Urgent</span>
+          </div>
+        </div>
+        <div class="card-foot">
+          <span class="microcopy">Executes once on approve · expires in 24h</span>
+          <div class="btn-row"><button class="btn reject">Reject</button><button class="btn approve">Approve</button></div>
+        </div>
+        <div class="resolved-note ok">✓ Applied — priority set to Urgent</div>
+      </div>
+      <div class="msg assistant"><div class="who">Copilot</div>Done — <code>LAUNCH-7</code> is now <b>Urgent</b>. The change is in the ticket's activity log.</div>
+
+      <!-- Prior exchange 2: already REJECTED assignee change -->
+      <div class="msg user">Also put Priya on LAUNCH-5</div>
+      <div class="msg assistant"><div class="who">Copilot</div>Here's the assignment proposal:</div>
+
+      <div class="card dismissed">
+        <div class="card-head">
+          <span class="card-kind">Proposed change · Assignee</span>
+          <span class="badge dismissed">Dismissed</span>
+        </div>
+        <div class="card-body">
+          <div class="ticket-line"><span class="ident">LAUNCH-5</span><span class="t-title">Empty-state copy for the board view</span></div>
+          <div class="assign-line"><span class="avatar lg">PS</span> Assign <b>&nbsp;Priya Sharma&nbsp;</b> <span style="color:var(--text-muted);font-size:12px;">· currently unassigned</span></div>
+        </div>
+        <div class="card-foot">
+          <span class="microcopy">Executes once on approve · expires in 24h</span>
+          <div class="btn-row"><button class="btn reject">Reject</button><button class="btn approve">Approve</button></div>
+        </div>
+        <div class="resolved-note no">— Dismissed, nothing changed</div>
+      </div>
+      <div class="msg assistant"><div class="who">Copilot</div>Okay — I didn't assign anyone. <code>LAUNCH-5</code> is unchanged.</div>
+
+      <!-- Prior exchange 3: STALE guardrail -->
+      <div class="msg user">Move LAUNCH-9 back to In Progress</div>
+      <div class="msg assistant"><div class="who">Copilot</div>Proposed the move below.</div>
+
+      <div class="card stale">
+        <div class="card-head">
+          <span class="card-kind">Proposed change · State</span>
+          <span class="badge stale">Stale</span>
+        </div>
+        <div class="card-body">
+          <div class="ticket-line"><span class="ident">LAUNCH-9</span><span class="t-title">Onboarding checklist flicker</span></div>
+          <div class="chips">
+            <span class="chip"><span class="dot" style="background:#157a3d"></span> Done</span>
+            <span class="arrow">→</span>
+            <span class="chip"><span class="dot" style="background:#f2c94c"></span> In Progress</span>
+          </div>
+          <div class="stale-banner">⚠ <span>This ticket changed since Copilot proposed this — Lena moved it to <b>Cancelled</b> 2 min ago. Ask Copilot again to re-check before approving.</span></div>
+        </div>
+        <div class="card-foot">
+          <span class="microcopy">Blocked — the state shown above no longer matches the ticket</span>
+          <div class="btn-row"><button class="btn reject" onclick="dismissStale(this)">Dismiss</button><button class="btn approve" disabled>Approve</button></div>
+        </div>
+        <div class="resolved-note no">— Dismissed, nothing changed</div>
+      </div>
+    </div>
+
+    <div class="composer">
+      <textarea rows="1" placeholder="Ask Copilot…"></textarea>
+      <button class="send" title="Send">↑</button>
+    </div>
+  </aside>
+
+<script>
+  var transcript = document.getElementById('transcript');
+  var typing = document.getElementById('typing');
+
+  var FOLLOW_UPS = {
+    'card-state': {
+      approve: 'Done — <code>LAUNCH-3</code> moved to <b>Done</b>. The state change is logged in its activity history.',
+      reject: "Okay — I left <code>LAUNCH-3</code> in <b>In Progress</b>. Nothing was changed."
+    },
+    'card-comment': {
+      approve: 'Comment posted on <code>LAUNCH-3</code> (as you, with the Copilot disclosure prefix). Anything else?',
+      reject: "Understood — no comment was posted on <code>LAUNCH-3</code>."
+    }
+  };
+
+  function scrollToTyping() { typing.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+
+  function addAssistantMessage(html) {
+    var el = document.createElement('div');
+    el.className = 'msg assistant';
+    el.innerHTML = '<div class="who">Copilot</div>' + html;
+    transcript.insertBefore(el, typing);
+    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  // Approve/Reject a pending card. One click resolves the proposal exactly
+  // once — buttons are removed with the footer, so a proposal can never be
+  // executed twice (mirrors the spec's single-execution guardrail).
+  function resolve(cardId, action) {
+    var card = document.getElementById(cardId);
+    if (!card || card.classList.contains('applied') || card.classList.contains('dismissed')) return;
+    var badge = card.querySelector('.badge');
+    if (action === 'approve') {
+      card.classList.add('applied');
+      badge.className = 'badge applied';
+      badge.textContent = 'Applied ✓';
+    } else {
+      card.classList.add('dismissed');
+      badge.className = 'badge dismissed';
+      badge.textContent = 'Dismissed';
+    }
+    // Copilot only speaks AFTER the outcome — approved => confirms execution,
+    // rejected => acknowledges without claiming anything ran.
+    typing.classList.add('on');
+    scrollToTyping();
+    setTimeout(function () {
+      typing.classList.remove('on');
+      addAssistantMessage(FOLLOW_UPS[cardId][action]);
+    }, 650);
+  }
+
+  // The stale card can only be dismissed — approval is blocked because the
+  // ticket changed between propose and approve.
+  function dismissStale(btn) {
+    var card = btn.closest('.card');
+    card.classList.add('dismissed');
+    var badge = card.querySelector('.badge');
+    badge.className = 'badge dismissed';
+    badge.textContent = 'Dismissed';
+    typing.classList.add('on');
+    scrollToTyping();
+    setTimeout(function () {
+      typing.classList.remove('on');
+      addAssistantMessage("Cleared the stale proposal for <code>LAUNCH-9</code> — it's now <b>Cancelled</b>, so that move no longer applies. Want me to re-check and propose again?");
+    }, 650);
+  }
+
+</script>
+</body>
+</html>

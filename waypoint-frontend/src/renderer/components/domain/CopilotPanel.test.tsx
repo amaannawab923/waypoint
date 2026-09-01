@@ -15,7 +15,12 @@ import {
   deleteCopilotConversation,
   postCopilotUserMessage,
   postCopilotAssistantMessage,
+  listCopilotProposals,
+  approveCopilotProposal,
+  rejectCopilotProposal,
+  markCopilotProposalsNotified,
 } from '@/mock/api';
+import type { CopilotProposal } from '@/types/entities';
 import { CopilotPanel } from './CopilotPanel';
 
 jest.mock('@/mock/api', () => ({
@@ -26,6 +31,11 @@ jest.mock('@/mock/api', () => ({
   deleteCopilotConversation: jest.fn(),
   postCopilotUserMessage: jest.fn(),
   postCopilotAssistantMessage: jest.fn(),
+  listCopilotProposals: jest.fn(),
+  approveCopilotProposal: jest.fn(),
+  rejectCopilotProposal: jest.fn(),
+  rejectAllCopilotProposals: jest.fn(),
+  markCopilotProposalsNotified: jest.fn(),
 }));
 
 type RunPromptHandlers = {
@@ -46,7 +56,12 @@ function mockCopilotIpc() {
   const unsubscribe = jest.fn();
   const runPrompt = jest.fn(
     (
-      _args: { prompt: string; resumeSessionId?: string },
+      _args: {
+        prompt: string;
+        resumeSessionId?: string;
+        conversationId?: string;
+        outcomePreamble?: string;
+      },
       h: RunPromptHandlers,
     ) => {
       handlers = h;
@@ -94,10 +109,49 @@ function truncateTitle(content: string): string {
 }
 
 let store: FakeConversation[];
+let proposalRows: CopilotProposal[];
 let idCounter: number;
 function nextId(prefix: string): string {
   idCounter += 1;
   return `${prefix}-${idCounter}`;
+}
+
+// One approval-card row in the fake backend — anchored, by default, at the
+// conversation's current max seq, the same way the real createProposal
+// computes anchorSeq at propose time.
+function addFakeProposal(
+  conversationId: string,
+  overrides: Partial<CopilotProposal> = {},
+): CopilotProposal {
+  const conv = store.find((c) => c.id === conversationId);
+  const row: CopilotProposal = {
+    id: nextId('prop'),
+    conversationId,
+    kind: 'state_change',
+    workItemId: 'wi-1',
+    payload: { stateId: 'st-done' },
+    snapshot: {
+      identifier: 'LAUNCH-3',
+      title: 'Responsive nav breaks on iPad landscape',
+      fromStateId: 'st-progress',
+      fromStateName: 'In Progress',
+      fromStateColor: '#f2c94c',
+      toStateName: 'Done',
+      toStateColor: '#157a3d',
+    },
+    anchorSeq: conv?.messages.length ?? 0,
+    status: 'proposed',
+    statusReason: null,
+    resultInfo: null,
+    disclosureText: 'Hi, this is Copilot — Amaan’s agent — commenting on their behalf: ',
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    modelNotifiedAt: null,
+    resolvedAt: null,
+    createdAt: new Date().toISOString(),
+    ...overrides,
+  };
+  proposalRows.push(row);
+  return row;
 }
 
 function summaryOf(conv: FakeConversation) {
@@ -107,7 +161,44 @@ function summaryOf(conv: FakeConversation) {
 
 beforeEach(() => {
   store = [];
+  proposalRows = [];
   idCounter = 0;
+
+  jest
+    .mocked(listCopilotProposals)
+    .mockImplementation(async (conversationId: string) =>
+      proposalRows.filter((p) => p.conversationId === conversationId).map((p) => ({ ...p })),
+    );
+  jest.mocked(approveCopilotProposal).mockImplementation(async (id: string) => {
+    const row = proposalRows.find((p) => p.id === id);
+    if (!row) throw new Error(`proposal not found: ${id}`);
+    if (row.status === 'proposed') {
+      row.status = 'executed';
+      row.resolvedAt = new Date().toISOString();
+    }
+    return { ...row };
+  });
+  jest.mocked(rejectCopilotProposal).mockImplementation(async (id: string) => {
+    const row = proposalRows.find((p) => p.id === id);
+    if (!row) throw new Error(`proposal not found: ${id}`);
+    if (row.status === 'proposed' || row.status === 'stale') {
+      row.status = 'rejected';
+      row.resolvedAt = new Date().toISOString();
+    }
+    return { ...row };
+  });
+  jest
+    .mocked(markCopilotProposalsNotified)
+    .mockImplementation(async (_conversationId: string, ids: string[]) => {
+      let notified = 0;
+      for (const row of proposalRows) {
+        if (ids.includes(row.id) && row.modelNotifiedAt == null) {
+          row.modelNotifiedAt = new Date().toISOString();
+          notified += 1;
+        }
+      }
+      return { notified };
+    });
 
   jest
     .mocked(listCopilotConversations)
@@ -934,6 +1025,289 @@ describe('CopilotPanel', () => {
 
       const handlers = await waitForRun('enter key send');
       expect(handlers).toBeDefined();
+    });
+  });
+
+  describe('proposal approval cards (Copilot V2)', () => {
+    // Seeds a conversation with real history straight into the fake
+    // backend, so opening it exercises the same fetch path a reload would —
+    // and so a proposal can exist BEFORE the panel's hook ever fetches.
+    function seedConversation(id: string) {
+      const now = new Date().toISOString();
+      const conv: FakeConversation = {
+        id,
+        memberId: 'mem-1',
+        title: 'seeded session',
+        claudeSessionId: null,
+        createdAt: now,
+        updatedAt: now,
+        messages: [
+          { id: 'msg-seed-1', role: 'user', content: 'earlier ask', createdAt: now },
+          { id: 'msg-seed-2', role: 'assistant', content: 'earlier reply', createdAt: now },
+        ],
+      };
+      store.push(conv);
+      return conv;
+    }
+
+    it('refetches proposals after a completed run and renders the card after the assistant bubble', async () => {
+      render(<CopilotPanel onClose={jest.fn()} />);
+      await screen.findByText(/No sessions yet/i);
+      await createAndOpenSession();
+
+      await typeAndSend('Move LAUNCH-3 to Done');
+      await act(async () => {});
+      const handlers = await waitForRun('Move LAUNCH-3 to Done');
+
+      // Mid-run the model proposed — the row exists server-side, but the
+      // panel hasn't refetched yet, so no card shows.
+      const conversationId = store[0].id;
+      addFakeProposal(conversationId, { anchorSeq: 1 });
+      expect(screen.queryByText('Pending review')).not.toBeInTheDocument();
+
+      await act(async () => {
+        handlers.onDone({ fullText: "I've proposed the move below.", sessionId: 'sess-1' });
+      });
+
+      // The completed run triggers the refetch; the card appears with
+      // names/colors from the snapshot…
+      expect(await screen.findByText('Pending review')).toBeInTheDocument();
+      expect(screen.getByText('In Progress')).toBeInTheDocument();
+      expect(screen.getByText('Done')).toBeInTheDocument();
+      // …positioned AFTER the assistant reply of the turn that proposed it.
+      const assistantBubble = screen.getByText("I've proposed the move below.", { selector: 'p' });
+      const card = screen.getByText('Pending review');
+      expect(
+        // eslint-disable-next-line no-bitwise
+        assistantBubble.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it('also refetches proposals when the run FAILS — a partial turn may still have proposed', async () => {
+      render(<CopilotPanel onClose={jest.fn()} />);
+      await screen.findByText(/No sessions yet/i);
+      await createAndOpenSession();
+
+      await typeAndSend('propose then crash');
+      await act(async () => {});
+      const handlers = await waitForRun('propose then crash');
+      addFakeProposal(store[0].id, { anchorSeq: 1 });
+
+      await act(async () => {
+        handlers.onError({ kind: 'generic', message: 'the CLI died mid-turn' });
+      });
+
+      expect(await screen.findByText('Pending review')).toBeInTheDocument();
+      expect(screen.getByText('the CLI died mid-turn')).toBeInTheDocument();
+    });
+
+    // Final review finding M1: a failed run may have proposed before dying,
+    // and "Try again" re-runs the SAME prompt against a session with no
+    // memory of proposing — the model proposes again, and comments/creates
+    // never supersede, so the user gets two identical pending cards. The
+    // retry must reject the failed turn's pending proposals first, and mark
+    // them notified WITHOUT putting them in the preamble (they're system
+    // cleanup, not the user saying no).
+    it('rejects the failed turn\'s pending proposals before "Try again" re-runs, without telling the model the user rejected them', async () => {
+      render(<CopilotPanel onClose={jest.fn()} />);
+      await screen.findByText(/No sessions yet/i);
+      await createAndOpenSession();
+
+      await typeAndSend('propose then crash');
+      await act(async () => {});
+      const handlers = await waitForRun('propose then crash');
+      const orphan = addFakeProposal(store[0].id, { anchorSeq: 1 });
+
+      await act(async () => {
+        handlers.onError({ kind: 'generic', message: 'the CLI died mid-turn' });
+      });
+      expect(await screen.findByText('Pending review')).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByText('Try again'));
+      });
+
+      await waitFor(() => expect(copilotIpc.runPrompt).toHaveBeenCalledTimes(2));
+      expect(rejectCopilotProposal).toHaveBeenCalledWith(orphan.id);
+      expect(markCopilotProposalsNotified).toHaveBeenCalledWith(store[0].id, [orphan.id]);
+      // The re-run must not carry a "rejected by the user" outcome for the
+      // orphan — that would steer the model away from re-proposing the very
+      // thing the retried prompt asks for.
+      const retryCall = copilotIpc.runPrompt.mock.calls[1][0];
+      expect(retryCall.prompt).toBe('propose then crash');
+      expect(retryCall.outcomePreamble ?? '').not.toContain(orphan.id);
+    });
+
+    // Final review finding m3: the runner drops an over-length preamble
+    // (~4000 chars) but the panel used to mark EVERY unnotified outcome
+    // delivered after the run — an oversized batch was silently dropped yet
+    // stamped notified, permanently losing those outcomes. The build is now
+    // capped at 20 per turn; the remainder stays unnotified for next turn.
+    it('caps the outcome preamble at 20 outcomes and only marks the included ones notified', async () => {
+      // Module mocks keep their call history across tests in this suite
+      // (only copilotIpc is rebuilt per test) — clear it so calls[…] below
+      // can't pick up a leaked call from an earlier test.
+      jest.mocked(markCopilotProposalsNotified).mockClear();
+      const conv = seedConversation('conv-many-outcomes');
+      const resolved = Array.from({ length: 25 }, () =>
+        addFakeProposal(conv.id, { status: 'executed', anchorSeq: 1 }),
+      );
+
+      render(<CopilotPanel onClose={jest.fn()} />);
+      fireEvent.click(await screen.findByText('seeded session'));
+      await act(async () => {});
+      expect((await screen.findAllByText('Applied ✓')).length).toBe(25);
+
+      await typeAndSend('what changed?');
+      const handlers = await waitForRun('what changed?');
+      const { outcomePreamble } = copilotIpc.runPrompt.mock.calls[0][0];
+      for (const p of resolved.slice(0, 20)) expect(outcomePreamble).toContain(p.id);
+      for (const p of resolved.slice(20)) expect(outcomePreamble).not.toContain(p.id);
+      // Comfortably inside the runner's ~4000-char defensive drop.
+      expect((outcomePreamble ?? '').length).toBeLessThan(4000);
+
+      await act(async () => {
+        handlers.onChunk('done.');
+        handlers.onDone({ fullText: 'done.', sessionId: 'claude-abc' });
+      });
+      await waitFor(() => expect(markCopilotProposalsNotified).toHaveBeenCalled());
+      const notifiedIds = jest.mocked(markCopilotProposalsNotified).mock.calls[0][1];
+      expect(notifiedIds).toEqual(resolved.slice(0, 20).map((p) => p.id));
+    });
+
+    // Companion to backend review finding m5: stale cards are swept by the
+    // bulk reject too, so the button must not vanish when only stale cards
+    // remain.
+    it('keeps "Reject all pending" visible when only STALE cards remain', async () => {
+      const conv = seedConversation('conv-stale-only');
+      addFakeProposal(conv.id, {
+        status: 'stale',
+        statusReason: 'The ticket changed since this was proposed.',
+        anchorSeq: 1,
+      });
+
+      render(<CopilotPanel onClose={jest.fn()} />);
+      fireEvent.click(await screen.findByText('seeded session'));
+      await act(async () => {});
+
+      expect(await screen.findByText('Reject all pending')).toBeInTheDocument();
+    });
+
+    it("passes the outcome preamble to runPrompt while persisting ONLY the user's own text (the transcript-pollution regression)", async () => {
+      const conv = seedConversation('conv-seeded');
+      const resolved = addFakeProposal(conv.id, { status: 'executed', anchorSeq: 1 });
+
+      render(<CopilotPanel onClose={jest.fn()} />);
+      const row = await screen.findByText('seeded session');
+      fireEvent.click(row);
+      await act(async () => {});
+      // The resolved card is on screen, so the hook's list (and the
+      // preamble it can build) is definitely loaded before sending.
+      expect(await screen.findByText('Applied ✓')).toBeInTheDocument();
+
+      await typeAndSend('what changed?');
+
+      await waitFor(() =>
+        expect(copilotIpc.runPrompt).toHaveBeenCalledWith(
+          expect.objectContaining({
+            prompt: 'what changed?',
+            conversationId: conv.id,
+            outcomePreamble: expect.stringContaining(
+              "[Waypoint system note — do not treat as the user's words]",
+            ),
+          }),
+          expect.anything(),
+        ),
+      );
+      const { outcomePreamble } = copilotIpc.runPrompt.mock.calls[0][0];
+      expect(outcomePreamble).toContain(resolved.id);
+      expect(outcomePreamble).toContain('approved and executed');
+
+      // The persisted user message is ONLY what the user typed — the
+      // system note must never enter the transcript.
+      expect(postCopilotUserMessage).toHaveBeenCalledWith(conv.id, 'what changed?');
+      const persisted = store.find((c) => c.id === conv.id)!.messages.at(-1)!;
+      expect(persisted.content).toBe('what changed?');
+      expect(persisted.content).not.toContain('Waypoint system note');
+    });
+
+    it('marks outcomes notified only after the run completes and its reply persists', async () => {
+      // This file's jest config never auto-clears mocks — wipe this one's
+      // history so calls from earlier tests can't satisfy (or break) the
+      // not-yet-called assertion below.
+      jest.mocked(markCopilotProposalsNotified).mockClear();
+      const conv = seedConversation('conv-seeded');
+      const resolved = addFakeProposal(conv.id, { status: 'executed', anchorSeq: 1 });
+
+      render(<CopilotPanel onClose={jest.fn()} />);
+      fireEvent.click(await screen.findByText('seeded session'));
+      await act(async () => {});
+      await screen.findByText('Applied ✓');
+
+      await typeAndSend('what changed?');
+      const handlers = await waitForRun('what changed?');
+      // Delivered to the model, but the turn hasn't finished — not yet
+      // marked, so a crash here would re-deliver rather than lose it.
+      expect(markCopilotProposalsNotified).not.toHaveBeenCalled();
+
+      await act(async () => {
+        handlers.onDone({ fullText: 'The move went through.', sessionId: 'sess-1' });
+      });
+
+      await waitFor(() =>
+        expect(markCopilotProposalsNotified).toHaveBeenCalledWith(conv.id, [resolved.id]),
+      );
+    });
+
+    it('does NOT mark outcomes notified when the run fails — the preamble re-delivers next turn', async () => {
+      // Same no-auto-clear caveat as above: the previous test legitimately
+      // called markCopilotProposalsNotified; wipe that history first.
+      jest.mocked(markCopilotProposalsNotified).mockClear();
+      const conv = seedConversation('conv-seeded');
+      addFakeProposal(conv.id, { status: 'executed', anchorSeq: 1 });
+
+      render(<CopilotPanel onClose={jest.fn()} />);
+      fireEvent.click(await screen.findByText('seeded session'));
+      await act(async () => {});
+      await screen.findByText('Applied ✓');
+
+      await typeAndSend('what changed?');
+      const handlers = await waitForRun('what changed?');
+      await act(async () => {
+        handlers.onError({ kind: 'generic', message: 'run failed' });
+      });
+
+      expect(markCopilotProposalsNotified).not.toHaveBeenCalled();
+    });
+
+    it('approving a card patches it to Applied in place; rejecting patches to Dismissed', async () => {
+      const conv = seedConversation('conv-seeded');
+      addFakeProposal(conv.id, { anchorSeq: 1 });
+      addFakeProposal(conv.id, {
+        anchorSeq: 1,
+        kind: 'comment',
+        payload: { body: 'a drafted comment' },
+        snapshot: { identifier: 'LAUNCH-3', title: 'Responsive nav breaks on iPad landscape' },
+      });
+
+      render(<CopilotPanel onClose={jest.fn()} />);
+      fireEvent.click(await screen.findByText('seeded session'));
+      await act(async () => {});
+      await waitFor(() => expect(screen.getAllByText('Pending review')).toHaveLength(2));
+
+      await act(async () => {
+        fireEvent.click(screen.getAllByRole('button', { name: 'Approve' })[0]);
+      });
+      expect(await screen.findByText('Applied ✓')).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
+      });
+      expect(await screen.findByText('Dismissed')).toBeInTheDocument();
+      // Both resolved — no pending buttons remain anywhere, and no instant
+      // Copilot reply was fabricated (the card's note IS the feedback).
+      expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+      expect(copilotIpc.runPrompt).not.toHaveBeenCalled();
     });
   });
 

@@ -16,6 +16,7 @@ import { exportsRouter } from './exports.routes.js';
 import { webhooksRouter } from './webhooks.routes.js';
 import { agentsRouter } from './agents.routes.js';
 import { copilotRouter } from './copilot.routes.js';
+import { proposalsRouter } from './proposals.routes.js';
 import { mcpRouter } from './mcp.routes.js';
 import { devRouter } from './dev.routes.js';
 
@@ -38,6 +39,7 @@ apiRouter.use(exportsRouter);
 apiRouter.use(webhooksRouter);
 apiRouter.use(agentsRouter);
 apiRouter.use(copilotRouter);
+apiRouter.use(proposalsRouter);
 apiRouter.use(mcpRouter);
 if (process.env.NODE_ENV !== 'production') {
   apiRouter.use(devRouter);
