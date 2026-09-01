@@ -621,6 +621,31 @@ describe('approveProposal', () => {
     expect(finalizeSet.resultInfo).toEqual({ workItemId: 'wi-new', identifier: 'PROJ-9' });
   });
 
+  // Final review M2: finalize is guarded on status='executing' — only the
+  // holder of a live claim may finalize. A claim lost to the stuck-claim
+  // repair (execute outlived EXECUTING_STUCK_MS) must NOT stomp the
+  // repaired row with 'executed'; the caller gets the row as the repair
+  // left it instead.
+  it('does not overwrite a lost claim: a guarded finalize that matches no row returns the repaired row as-is', async () => {
+    const lostFinalizeChain = chainable([]); // UPDATE ... WHERE status='executing' matched nothing
+    db.update
+      .mockReturnValueOnce(chainable([proposalRow({ kind: 'priority_change', payload: { priority: 'urgent' }, snapshot: { fromPriority: 'medium' } })]))
+      .mockReturnValueOnce(lostFinalizeChain);
+    // finalize's fallback fetch returns the row as the repair parked it.
+    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(workItem({ priority: 'medium' }) as never);
+    vi.mocked(workItemsService.updateWorkItem).mockResolvedValue({} as never);
+    db.select.mockReturnValueOnce(
+      chainable([proposalRow({ status: 'stale', statusReason: 'Approval was interrupted' })]),
+    );
+
+    const view = await approveProposal('prop-abc1234');
+
+    const finalizeAnd = (lostFinalizeChain.where as Vfn).mock.calls.length;
+    expect(finalizeAnd).toBe(1);
+    expect(eq).toHaveBeenCalledWith(copilotProposals.status, 'executing');
+    expect(view.status).toBe('stale');
+  });
+
   it('reverts the claim (executing → proposed) and rethrows when execution itself throws', async () => {
     const revertChain = chainable([]);
     db.update.mockReturnValueOnce(chainable([proposalRow()])).mockReturnValueOnce(revertChain);
@@ -671,7 +696,7 @@ describe('rejectProposal', () => {
 });
 
 describe('rejectAllPending', () => {
-  it('rejects only proposed rows in the conversation, in one UPDATE, returning the count', async () => {
+  it('rejects proposed AND stale rows in the conversation, in one UPDATE, returning the count', async () => {
     const chain = chainable([{ id: 'prop-1' }, { id: 'prop-2' }]);
     db.update.mockReturnValueOnce(chain);
 
@@ -679,7 +704,9 @@ describe('rejectAllPending', () => {
 
     expect(db.update).toHaveBeenCalledTimes(1);
     expect(eq).toHaveBeenCalledWith(copilotProposals.conversationId, 'conv-abc1234');
-    expect(eq).toHaveBeenCalledWith(copilotProposals.status, 'proposed');
+    // stale included (final review m5): a stale card's only affordance is
+    // Dismiss, so reject-all leaving them behind stranded them.
+    expect(inArray).toHaveBeenCalledWith(copilotProposals.status, ['proposed', 'stale']);
     expect(result).toEqual({ rejected: 2 });
   });
 });
@@ -712,10 +739,15 @@ describe('listProposals', () => {
     // Repair pass 1: proposed + past expiry → expired.
     const expireSet = (expireChain.set as Vfn).mock.calls[0][0];
     expect(expireSet.status).toBe('expired');
-    // Repair pass 2: a crashed execute's stuck claim → back to proposed,
-    // claim marker cleared, so the card is approvable again.
+    // Repair pass 2 (final review M2): a stuck claim is parked as STALE —
+    // NOT reverted to proposed — because there is no way to tell whether
+    // the crash happened before or after the underlying write ran, and a
+    // re-approvable card would run the write a second time (a duplicated
+    // comment or ticket, silently).
     const reviveSet = (reviveChain.set as Vfn).mock.calls[0][0];
-    expect(reviveSet).toEqual({ status: 'proposed', resolvedAt: null });
+    expect(reviveSet.status).toBe('stale');
+    expect(reviveSet.resolvedAt).toBeInstanceOf(Date);
+    expect(reviveSet.statusReason).toMatch(/interrupted/i);
     expect(eq).toHaveBeenCalledWith(copilotProposals.status, 'executing');
     // The view carries the server-computed disclosure for the card preview.
     expect(views).toHaveLength(1);
