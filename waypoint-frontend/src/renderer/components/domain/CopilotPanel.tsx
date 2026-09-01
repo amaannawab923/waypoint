@@ -578,6 +578,12 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
         role: 'assistant',
         content: persisted.content,
         createdAt: persisted.createdAt,
+        // Without seq this message is invisible to proposal-card anchoring
+        // (interleaveProposals requires a numeric seq), so the turn's cards
+        // rendered ABOVE the reply that explains them after a save-retry
+        // (final review finding m4 — the sibling call in onDone had this,
+        // this path didn't).
+        seq: persisted.seq,
       });
       sessionStore.patchConversationLocal(sessionId, {
         updatedAt: persisted.createdAt,
@@ -605,15 +611,54 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     if (!lastFailedPrompt) return;
     const resumeSessionId =
       sessions.find((s) => s.id === sessionId)?.claudeSessionId ?? undefined;
-    // Rebuilt rather than reusing the failed run's preamble — the failed
-    // run never marked anything notified, so the same outcomes (plus any
-    // resolved since) come back fresh here.
-    runAndPersist(
-      sessionId,
-      lastFailedPrompt,
-      resumeSessionId,
-      proposalStore.buildOutcomePreamble(),
+    // The failed attempt may already have proposed before dying, and a
+    // retry re-runs the SAME prompt against a session that (having never
+    // persisted the failed turn's reply) has no memory of proposing — so
+    // it proposes again. Comments and creates never supersede, leaving two
+    // byte-identical pending cards a user could approve twice (final
+    // review finding M1). The failed turn's pending proposals share its
+    // anchorSeq — the seq of the last persisted message, since no
+    // assistant reply landed — so reject exactly those before re-running;
+    // pending cards from EARLIER turns the user hasn't decided on are
+    // untouched. Sequential, fire-and-forget-tolerant: a reject that
+    // fails just leaves the duplicate the retry would have created anyway.
+    const failedTurnAnchor = sessions
+      .find((s) => s.id === sessionId)
+      ?.messages.reduce((max, m) => (typeof m.seq === 'number' && m.seq > max ? m.seq : max), 0);
+    const retryStale = proposalStore.proposals.filter(
+      (p) =>
+        p.status === 'proposed' &&
+        typeof failedTurnAnchor === 'number' &&
+        p.anchorSeq >= failedTurnAnchor,
     );
+    // Synchronous when there's nothing to reject — the common case, and
+    // the one the existing retry tests exercise.
+    if (retryStale.length === 0) {
+      runAndPersist(
+        sessionId,
+        lastFailedPrompt,
+        resumeSessionId,
+        proposalStore.buildOutcomePreamble(),
+      );
+      return;
+    }
+    Promise.allSettled(retryStale.map((p) => proposalStore.reject(p.id)))
+      .then(() =>
+        // Marked notified immediately, NOT delivered in the preamble: these
+        // rejections are the system clearing duplicates, not the user
+        // saying no — telling the model "the user rejected the comment"
+        // while re-sending the very prompt that asks for it would steer it
+        // away from re-proposing what the user is literally asking for.
+        proposalStore.markNotified(retryStale.map((p) => p.id)).catch(() => {}),
+      )
+      .then(() =>
+        runAndPersist(
+          sessionId,
+          lastFailedPrompt,
+          resumeSessionId,
+          proposalStore.buildOutcomePreamble(),
+        ),
+      );
   }
 
   const isStreamingHere =
@@ -654,7 +699,12 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
           {activeSession &&
-            proposalStore.proposals.some((p) => p.status === 'proposed') && (
+            // Stale cards still show Reject on the card and are swept by
+            // the bulk endpoint (review finding m5) — hiding this button
+            // when only stale cards remain would strand them.
+            proposalStore.proposals.some(
+              (p) => p.status === 'proposed' || p.status === 'stale',
+            ) && (
               <button
                 type="button"
                 onClick={() => proposalStore.rejectAll().catch(() => {})}
