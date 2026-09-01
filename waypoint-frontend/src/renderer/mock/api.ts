@@ -41,6 +41,7 @@ import type {
   CopilotConversation,
   CopilotConversationSummary,
   CopilotMessage,
+  CopilotProposal,
 } from '@/types/entities';
 
 // Server-side `numeric` columns come back over JSON as strings (to avoid
@@ -856,6 +857,50 @@ export async function postCopilotAssistantMessage(
       content,
       claudeSessionId,
     },
+  );
+}
+
+// Copilot V2 write proposals (issue #10) — see lib/useCopilotProposals.ts
+// for the hook that owns this data, and CopilotProposalCard.tsx for the
+// card each row renders as. Approve/reject return the finalized row (200
+// even for stale/expired outcomes — the status field IS the result), so
+// callers patch their local list from the response instead of refetching.
+export async function listCopilotProposals(
+  conversationId: string,
+): Promise<CopilotProposal[]> {
+  return http.get<CopilotProposal[]>(
+    `/copilot/conversations/${conversationId}/proposals`,
+  );
+}
+
+export async function approveCopilotProposal(
+  id: string,
+): Promise<CopilotProposal> {
+  return http.post<CopilotProposal>(`/copilot/proposals/${id}/approve`, {});
+}
+
+export async function rejectCopilotProposal(
+  id: string,
+): Promise<CopilotProposal> {
+  return http.post<CopilotProposal>(`/copilot/proposals/${id}/reject`, {});
+}
+
+export async function rejectAllCopilotProposals(
+  conversationId: string,
+): Promise<{ rejected: number }> {
+  return http.post<{ rejected: number }>(
+    `/copilot/conversations/${conversationId}/proposals/reject-all`,
+    {},
+  );
+}
+
+export async function markCopilotProposalsNotified(
+  conversationId: string,
+  ids: string[],
+): Promise<{ notified: number }> {
+  return http.post<{ notified: number }>(
+    `/copilot/conversations/${conversationId}/proposals/notified`,
+    { ids },
   );
 }
 
