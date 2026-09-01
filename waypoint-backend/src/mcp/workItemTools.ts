@@ -7,7 +7,7 @@ import * as statesService from '../services/states.service.js';
 import * as membersService from '../services/members.service.js';
 import { resolveActorNames } from '../lib/actorNames.js';
 
-const PRIORITY = z.enum(['urgent', 'high', 'medium', 'low', 'none']);
+export const PRIORITY = z.enum(['urgent', 'high', 'medium', 'low', 'none']);
 
 // ISO date (YYYY-MM-DD) — enforced at the zod layer so a malformed value
 // fails clean validation here instead of reaching Postgres raw (via
@@ -36,7 +36,7 @@ const PRIORITY = z.enum(['urgent', 'high', 'medium', 'low', 'none']);
 // years from reaching Postgres at all.
 const MIN_YEAR = 1000;
 const MAX_YEAR = 9999;
-const ISO_DATE = z
+export const ISO_DATE = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'must be an ISO date (YYYY-MM-DD)')
   .refine((value) => {
@@ -174,15 +174,19 @@ function truncateDescription<T extends { description?: string | null }>(item: T)
 // further sanitize against, since there's no reliable way to distinguish
 // "ticket content that happens to look like an instruction" from prose
 // without breaking legitimate ticket content.
-function jsonResult(data: unknown) {
+//
+// jsonResult/notFoundResult/withErrorSafetyNet/PRIORITY/ISO_DATE are
+// exported (rather than duplicated) so proposalTools.ts keeps exactly the
+// same result/error conventions as this file — one definition per concern.
+export function jsonResult(data: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(data) }] };
 }
 
-function notFoundResult(what: string) {
+export function notFoundResult(what: string) {
   return { content: [{ type: 'text' as const, text: `${what} not found` }], isError: true };
 }
 
-const INTERNAL_ERROR_MESSAGE = 'An internal error occurred while processing this request.';
+export const INTERNAL_ERROR_MESSAGE = 'An internal error occurred while processing this request.';
 
 // Safety net around every registered tool handler below (see
 // registerWorkItemTools), not specific to dueBefore/ISO_DATE — any
@@ -195,7 +199,7 @@ const INTERNAL_ERROR_MESSAGE = 'An internal error occurred while processing this
 // is still logged server-side via console.error (matching errorHandler.ts's
 // own convention for genuinely-unexpected failures) — only what reaches the
 // model's context is scrubbed to a generic message.
-function withErrorSafetyNet<Args extends Record<string, unknown>>(
+export function withErrorSafetyNet<Args extends Record<string, unknown>>(
   toolName: string,
   handler: (args: Args) => Promise<{ content: { type: 'text'; text: string }[]; isError?: boolean }>,
 ) {
