@@ -14,6 +14,12 @@ export interface CopilotSessionMessage {
   role: CopilotSessionMessageRole;
   content: string;
   createdAt: string;
+  // Present on backend-fetched messages (the DB's authoritative ordering —
+  // see CopilotMessage in types/entities.ts); absent on optimistic local
+  // appends until the next fetch. Proposal-card interleaving
+  // (lib/copilotTranscript.ts) anchors on it, so it's surfaced here rather
+  // than silently carried along untyped.
+  seq?: number;
 }
 
 export interface CopilotSession {
