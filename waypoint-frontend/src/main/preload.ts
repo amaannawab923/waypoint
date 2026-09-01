@@ -57,7 +57,17 @@ const electronHandler = {
   // it once, here.
   copilot: {
     runPrompt(
-      args: { prompt: string; resumeSessionId?: string },
+      // conversationId lets the main process bake the proposal-targeting
+      // header into --mcp-config; outcomePreamble is prepended to the
+      // prompt on the subprocess's stdin only (never persisted as a
+      // message) — both validated again in copilotRunner.ts, so this stays
+      // a pass-through with no new channels.
+      args: {
+        prompt: string;
+        resumeSessionId?: string;
+        conversationId?: string;
+        outcomePreamble?: string;
+      },
       handlers: {
         onChunk: (text: string) => void;
         onDone: (result: {
