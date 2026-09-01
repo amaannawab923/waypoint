@@ -6,35 +6,48 @@ import { getStoredSubscriptionToken } from './copilotAuth';
 import { copilotClaudeConfigDir } from './copilotConfigDir';
 import { parseStreamEventLine } from './parseStreamEvent';
 
-// Copilot's persona (issue #7). Layered on top of Claude Code's own default
-// system prompt via --append-system-prompt, not a full replacement. Issue
-// #9's read-only MCP tools (see V1_MCP_TOOLS below) have landed — #10's
-// write actions haven't, so the prompt is explicit that ticket lookup works
-// but acting on the user's behalf still doesn't, matching the self-
-// disclosure convention this app already uses elsewhere (see
-// waypoint-frontend's mockSessions.ts) for whenever that capability lands.
+// Copilot's persona (issues #7/#9/#10). Layered on top of Claude Code's own
+// default system prompt via --append-system-prompt, not a full replacement.
+// V2's core contract lives here: the propose_* tools NEVER execute anything
+// themselves — they write proposal rows the user approves or rejects as
+// cards in the Waypoint panel — so the prompt has to keep the model from
+// ever claiming a change happened before an executed outcome is reported
+// back to it (at the start of a later turn, via the bracketed system note
+// CopilotPanel.tsx prepends to the next prompt).
 const COPILOT_SYSTEM_PROMPT = [
   'You are Copilot, a personal AI assistant inside Waypoint, a project',
   "management tool. You're having a private conversation with the user about",
-  'their tickets and work. Be concise and direct. You have read-only access',
-  'to the user’s tickets via tools — you can look up, list, and search work',
-  'items, along with their comments and activity history. You still cannot',
-  "make changes on the user's behalf yet — if asked to update something, say",
-  "that's coming soon rather than guessing. When a future capability lets you",
-  'act on the user’s behalf (e.g. posting a comment), you must always',
-  'self-disclose clearly, e.g. "Hi, this is Copilot — <name>’s agent —',
-  'commenting on his behalf: ...", matching Waypoint\'s existing convention.',
+  'their tickets and work. Be concise and direct. You can look up, list, and',
+  'search work items (tickets), their comments, and their activity history',
+  'via tools, and you can PROPOSE changes — commenting, moving state,',
+  'changing priority, adding or removing an assignee, and creating a new',
+  'ticket — via the propose_* tools. A proposal NEVER executes by itself:',
+  'a status of pending_user_approval means exactly that, and the user must',
+  'approve the card shown in the Waypoint panel before anything happens.',
+  'After proposing, never say you changed, posted, created, moved, or',
+  "assigned anything — say you've proposed it and the user must approve the",
+  'card in the panel. Outcomes of your proposals arrive at the start of a',
+  'later turn as a bracketed system note; only after that note reports a',
+  'proposal as approved and executed may you state the change happened.',
+  'Rejected means nothing ran — do not re-propose a rejected change unless',
+  'the user asks again. Waypoint automatically adds a self-disclosure prefix',
+  '("Hi, this is Copilot — <name>’s agent — commenting on their behalf: ...")',
+  'to comments you propose — do not write it yourself. Make at most 10',
+  'proposals per reply, and when a request is ambiguous, confirm the user’s',
+  'intent before proposing.',
 ].join(' ');
 
-// Read-only work-item lookup tools (issue #9) served by waypoint-backend's
-// MCP endpoint (see waypoint-backend/src/routes/mcp.routes.ts and
-// src/mcp/workItemTools.ts) — the "mcp__waypoint__*" naming is Claude Code's
+// Tools served by waypoint-backend's MCP endpoint (see
+// waypoint-backend/src/routes/mcp.routes.ts, src/mcp/workItemTools.ts, and
+// src/mcp/proposalTools.ts) — the "mcp__waypoint__*" naming is Claude Code's
 // own convention for a tool sourced from an MCP server named "waypoint" in
-// --mcp-config below. Write actions (issue #10) aren't listed here on
-// purpose: headless `-p` mode has no TTY, so Claude Code's own interactive
-// tool-approval prompt can never fire — a write tool would execute with
-// nothing to gate it, which is why none exists yet.
-const V1_MCP_TOOLS = [
+// --mcp-config below. The propose_* entries are safe to allow in headless
+// `-p` mode (no TTY means no interactive tool-approval prompt) precisely
+// because they aren't write tools: each one only inserts a proposal row the
+// user must approve in the Waypoint UI before the backend executes anything.
+// The approval gate that used to be "don't ship write tools at all" now
+// lives in the product itself, per proposal, instead of in the CLI's TTY.
+const MCP_TOOLS = [
   'mcp__waypoint__list_work_items',
   'mcp__waypoint__get_work_item',
   'mcp__waypoint__get_work_item_by_identifier',
@@ -43,7 +56,27 @@ const V1_MCP_TOOLS = [
   'mcp__waypoint__list_activity',
   'mcp__waypoint__list_states',
   'mcp__waypoint__list_members',
+  'mcp__waypoint__list_projects',
+  'mcp__waypoint__propose_comment',
+  'mcp__waypoint__propose_state_change',
+  'mcp__waypoint__propose_assignee_change',
+  'mcp__waypoint__propose_priority_change',
+  'mcp__waypoint__propose_create_work_item',
 ];
+
+// Matches waypoint-backend's newId('conv') shape (and is re-validated
+// server-side in mcp.routes.ts). Checked before the id is ever placed into
+// the --mcp-config JSON: the conversation id reaches the backend as an HTTP
+// header baked into that config, and only a value this tightly shaped is
+// safe to embed — anything else (including undefined) simply omits the
+// header, which degrades to "proposals unavailable" on the backend rather
+// than any kind of failure.
+const CONVERSATION_ID_PATTERN = /^conv-[a-z0-9]{4,32}$/i;
+
+// Generous ceiling for the renderer-built outcome preamble (a few one-line
+// outcome sentences) — a cap, not a format check, so a runaway/buggy caller
+// can't stuff arbitrary content ahead of every prompt.
+const OUTCOME_PREAMBLE_MAX_LENGTH = 4000;
 
 // Same env var name waypoint-frontend's renderer (src/renderer/mock/
 // httpClient.ts) uses to reach the backend — but NOT the same mechanism:
@@ -52,12 +85,28 @@ const V1_MCP_TOOLS = [
 // is a genuine runtime `process.env` read because copilotRunner.ts is
 // main-process code, so there's no shared plumbing between the two, just a
 // coincidentally-matching name chosen for that reason.
-function mcpConfigArg(): string {
+// The conversation id travels as a static header on every MCP POST (the
+// CLI honors a `headers` object in an http server entry — verified live
+// against v2.1.251), NOT as any tool's input: the model can therefore never
+// choose or spoof which conversation its proposals land in. The header is
+// only included for a pattern-valid id — otherwise the config is identical
+// to V1's and the backend's propose tools refuse cleanly.
+function mcpConfigArg(conversationId: string | undefined): string {
   const apiBaseUrl =
     process.env.WAYPOINT_API_BASE_URL || 'http://localhost:14000';
+  const validConversationId =
+    conversationId && CONVERSATION_ID_PATTERN.test(conversationId)
+      ? conversationId
+      : undefined;
   return JSON.stringify({
     mcpServers: {
-      waypoint: { type: 'http', url: `${apiBaseUrl}/mcp/copilot` },
+      waypoint: {
+        type: 'http',
+        url: `${apiBaseUrl}/mcp/copilot`,
+        ...(validConversationId
+          ? { headers: { 'x-waypoint-conversation-id': validConversationId } }
+          : {}),
+      },
     },
   });
 }
@@ -152,7 +201,10 @@ function mcpConfigArg(): string {
 const SESSION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function buildArgs(resumeSessionId: string | undefined): string[] {
+function buildArgs(
+  resumeSessionId: string | undefined,
+  conversationId: string | undefined,
+): string[] {
   const args = [
     '-p',
     '--setting-sources',
@@ -160,10 +212,10 @@ function buildArgs(resumeSessionId: string | undefined): string[] {
     '--tools',
     '', // deny every built-in (Bash/Edit/Write/Task/WebFetch/WebSearch/...)
     '--mcp-config',
-    mcpConfigArg(),
+    mcpConfigArg(conversationId),
     '--strict-mcp-config', // ignore any ambient/global MCP config — only ours
     '--allowedTools',
-    V1_MCP_TOOLS.join(' '),
+    MCP_TOOLS.join(' '),
     '--output-format',
     'stream-json',
     '--verbose',
@@ -269,7 +321,13 @@ export function registerCopilotIpc(
     'copilot:run',
     (
       _event,
-      args: { requestId: string; prompt: string; resumeSessionId?: string },
+      args: {
+        requestId: string;
+        prompt: string;
+        resumeSessionId?: string;
+        conversationId?: string;
+        outcomePreamble?: string;
+      },
     ) => {
       // Defensive only — the sole caller is this app's own preload bridge,
       // which always sends a well-formed payload. But ipcMain handlers run
@@ -286,6 +344,23 @@ export function registerCopilotIpc(
         return;
       }
       const { requestId, prompt, resumeSessionId } = args;
+      // Both optional fields degrade rather than fail: a malformed
+      // conversationId just means no header (the backend then refuses
+      // proposals cleanly), and a malformed/oversized outcomePreamble is
+      // dropped rather than fed to the model — the un-notified outcomes it
+      // carried stay un-notified server-side (modelNotifiedAt only advances
+      // after a successful run), so they re-deliver next turn.
+      const conversationId =
+        typeof args.conversationId === 'string' &&
+        CONVERSATION_ID_PATTERN.test(args.conversationId)
+          ? args.conversationId
+          : undefined;
+      const outcomePreamble =
+        typeof args.outcomePreamble === 'string' &&
+        args.outcomePreamble.trim() &&
+        args.outcomePreamble.length <= OUTCOME_PREAMBLE_MAX_LENGTH
+          ? args.outcomePreamble
+          : undefined;
 
       const send = (payload: StreamPayload) => {
         const win = getWindow();
@@ -332,10 +407,14 @@ export function registerCopilotIpc(
         // CLAUDE_CONFIG_DIR in buildEnv() for that). Running from a
         // neutral, contentless directory avoids a project-level CLAUDE.md
         // leak entirely regardless.
-        const child = spawn(binary, buildArgs(effectiveResumeSessionId), {
-          cwd: os.tmpdir(),
-          env: buildEnv(),
-        });
+        const child = spawn(
+          binary,
+          buildArgs(effectiveResumeSessionId, conversationId),
+          {
+            cwd: os.tmpdir(),
+            env: buildEnv(),
+          },
+        );
         inFlight.set(requestId, child);
 
         // Writing the prompt is the one thing that can make this process
@@ -350,7 +429,15 @@ export function registerCopilotIpc(
           // here beyond not letting an unhandled EPIPE crash the main
           // process.
         });
-        child.stdin.write(prompt, 'utf8');
+        // The outcome preamble (proposal outcomes from earlier turns, built
+        // renderer-side) rides stdin ONLY — never argv (same flag-injection
+        // and process-table reasoning as the prompt itself), and never any
+        // persisted message: the transcript keeps only what the user
+        // actually typed, while the model still hears the outcomes.
+        child.stdin.write(
+          outcomePreamble ? `${outcomePreamble}\n\n${prompt}` : prompt,
+          'utf8',
+        );
         child.stdin.end();
 
         let stdoutBuffer = '';
