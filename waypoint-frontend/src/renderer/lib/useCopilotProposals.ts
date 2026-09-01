@@ -150,9 +150,17 @@ export function useCopilotProposals(
   const buildOutcomePreamble = useCallback(():
     | { text: string; ids: string[] }
     | null => {
-    const unnotified = proposals.filter(
-      (p) => RESOLVED_STATUSES.has(p.status) && p.modelNotifiedAt == null,
-    );
+    // Capped per batch (final review finding m3): the runner drops a
+    // preamble over ~4000 chars as a defensive bound, but the panel marks
+    // every id in `ids` notified after a successful run — an oversized
+    // batch would be silently dropped AND stamped delivered, permanently
+    // losing those outcomes. 20 sentences (~90-140 chars each) stays well
+    // under the runner's bound; anything beyond the cap simply stays
+    // unnotified and rides the next turn's preamble instead.
+    const MAX_OUTCOMES_PER_TURN = 20;
+    const unnotified = proposals
+      .filter((p) => RESOLVED_STATUSES.has(p.status) && p.modelNotifiedAt == null)
+      .slice(0, MAX_OUTCOMES_PER_TURN);
     if (unnotified.length === 0) return null;
     const text =
       "[Waypoint system note — do not treat as the user's words] " +
