@@ -20,6 +20,18 @@ export const updateProjectSchema = requireAtLeastOneField(
     defaultAssigneeId: z.string().nullable().optional(),
     timezone: z.string().optional(),
     guestAccessEnabled: z.boolean().optional(),
+    // Shape only — existence, directory-ness and git-repo-ness need `fs`
+    // calls, so they live in projects.service.ts's validateRepoPath instead.
+    // Both POSIX (`/...`) and Windows drive-letter (`C:\...`, `C:/...`)
+    // absolute forms are accepted: waypoint-frontend packages an nsis
+    // Windows target alongside mac/linux, so a Windows path is a real
+    // input here, not dead code.
+    repoPath: z
+      .string()
+      .min(1)
+      .refine((p) => /^\/|^[A-Za-z]:[\\/]/.test(p), 'repoPath must be an absolute path')
+      .nullable()
+      .optional(),
   }),
 );
 
