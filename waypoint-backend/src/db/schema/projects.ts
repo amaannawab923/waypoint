@@ -35,6 +35,10 @@ export const projects = pgTable('projects', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   archivedAt: timestamp('archived_at', { withTimezone: true }),
   guestAccessEnabled: boolean('guest_access_enabled').notNull().default(false),
+  // Absolute path to the project's local git checkout, so Copilot can read
+  // real code (Copilot V3). Null means "not linked" — the same
+  // absent-is-unset convention leadId/defaultAssigneeId/estimate use.
+  repoPath: text('repo_path'),
 });
 
 export const projectMembers = pgTable(
