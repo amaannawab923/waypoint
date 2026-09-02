@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { eq, and, isNull, isNotNull, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import {
@@ -12,7 +14,7 @@ import {
   workItems,
   workItemAssignees,
 } from '../db/schema/index.js';
-import { NotFoundError } from '../middleware/errors.js';
+import { NotFoundError, ValidationError } from '../middleware/errors.js';
 import { newId } from '../lib/ids.js';
 import { WORKSPACE_ID, CURRENT_USER_ID } from '../lib/currentUser.js';
 
@@ -141,7 +143,34 @@ export async function createProject(input: CreateProjectInput) {
   });
 }
 
+// The rules zod can't check in projects.schema.ts, because each needs a real
+// `fs` call. That assumes this process runs on the same machine as the
+// user's checkout — true for this app's local-first setup (the desktop
+// client talks to localhost:14000, see the frontend's httpClient.ts), but
+// observed rather than enforced anywhere, so a future remote-backend
+// deployment has to revisit this.
+export function validateRepoPath(repoPath: string): void {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(repoPath);
+  } catch {
+    throw new ValidationError(`repoPath does not exist: ${repoPath}`);
+  }
+  if (!stat.isDirectory()) {
+    throw new ValidationError(`repoPath is not a directory: ${repoPath}`);
+  }
+  // existsSync, not statSync().isDirectory(): a worktree's ".git" is a
+  // pointer FILE, not a directory, and both shapes are valid checkouts.
+  if (!fs.existsSync(path.join(repoPath, '.git'))) {
+    throw new ValidationError(`repoPath is not a git repository: ${repoPath}`);
+  }
+}
+
 export async function updateProject(id: string, patch: Partial<typeof projects.$inferInsert>) {
+  // An explicit `null` (unlink) skips validation entirely — clearing is
+  // always safe, and a checkout that has since been deleted must still be
+  // unlinkable.
+  if (patch.repoPath) validateRepoPath(patch.repoPath);
   const [row] = await db.update(projects).set(patch).where(eq(projects.id, id)).returning();
   if (!row) throw new NotFoundError('project');
   return attachMemberIdsOne(row);
