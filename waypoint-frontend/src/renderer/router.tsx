@@ -45,6 +45,7 @@ import ProjectSettingsLayout from '@/pages/project-settings/ProjectSettingsLayou
 import ProjectSettingsGeneral from '@/pages/project-settings/General';
 import ProjectSettingsMembers from '@/pages/project-settings/Members';
 import ProjectSettingsFeatures from '@/pages/project-settings/Features';
+import ProjectSettingsCodebase from '@/pages/project-settings/Codebase';
 import ProjectSettingsStates from '@/pages/project-settings/States';
 import ProjectSettingsLabels from '@/pages/project-settings/Labels';
 import ProjectSettingsEstimates from '@/pages/project-settings/Estimates';
@@ -134,6 +135,7 @@ export const router = createBrowserRouter([
                   { path: 'general', element: <ProjectSettingsGeneral /> },
                   { path: 'members', element: <ProjectSettingsMembers /> },
                   { path: 'features', element: <ProjectSettingsFeatures /> },
+                  { path: 'codebase', element: <ProjectSettingsCodebase /> },
                   { path: 'states', element: <ProjectSettingsStates /> },
                   { path: 'labels', element: <ProjectSettingsLabels /> },
                   { path: 'estimates', element: <ProjectSettingsEstimates /> },
