@@ -1,9 +1,10 @@
-import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { app, ipcMain, safeStorage } from 'electron';
+import { runCopilotQuery, type Query } from './claudeSdkClient';
 import { copilotClaudeConfigDir } from './copilotConfigDir';
+import { parseSdkMessage } from './parseSdkMessage';
 
 // Lets a user connect their own Claude subscription without ever opening a
 // terminal to run `claude login` — the thing this exists to fix (issue: the
@@ -78,86 +79,80 @@ function buildProbeEnv(token: string): Record<string, string> {
 type ProbeResult = { ok: true } | { ok: false; message: string };
 
 /**
- * Spawns a single, minimal, non-streaming request with the candidate token
- * as the *only* credential available — a real API round trip, not just a
- * format check, so a saved token is proven to actually work before this app
- * ever depends on it. --tools '' matches copilotRunner.ts's own posture
- * (this app doesn't grant Copilot tool access); --output-format json (not
- * stream-json) because a one-shot probe has no reason to consume it
- * incrementally.
+ * Runs a single, minimal request with the candidate token as the *only*
+ * credential available — a real API round trip, not just a format check, so a
+ * saved token is proven to actually work before this app ever depends on it.
+ * `tools: []` matches copilotRunner.ts's own posture (this app doesn't grant
+ * Copilot tool access for a "reply with OK" check), and `settingSources: []`
+ * matches its isolation posture too — the CLI-era `--safe-mode` this probe
+ * used to pass was never the isolation mechanism of record (see
+ * copilotRunner.ts on why it silently empties MCP as well), and there's no
+ * reason for the probe to hold a weaker posture than the real runner.
+ *
+ * query() always streams, so this consumes the generator until a terminal
+ * result rather than reading a one-shot JSON document. PROBE_TIMEOUT_MS is
+ * still enforced by hand: query() has no wall-clock timeout of its own.
  */
-function probeToken(token: string): Promise<ProbeResult> {
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (result: ProbeResult) => {
-      if (settled) return;
-      settled = true;
-      resolve(result);
-    };
+async function probeToken(token: string): Promise<ProbeResult> {
+  let query: Query | null = null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
 
-    const binary = process.env.CLAUDE_CLI_PATH || 'claude';
-    const child = spawn(
-      binary,
-      ['-p', '--safe-mode', '--tools', '', '--output-format', 'json'],
-      { cwd: os.tmpdir(), env: buildProbeEnv(token) },
-    );
-
-    const timer = setTimeout(() => {
-      child.kill();
-      finish({ ok: false, message: 'Timed out validating the token.' });
-    }, PROBE_TIMEOUT_MS);
-
-    child.stdin.on('error', () => {});
-    child.stdin.write('Reply with exactly: OK', 'utf8');
-    child.stdin.end();
-
-    let stdout = '';
-    child.stdout.setEncoding('utf8');
-    child.stdout.on('data', (chunk: string) => {
-      stdout += chunk;
-    });
-    // Drained, not read — the probe only needs stdout, but an unread stderr
-    // pipe can still fill its OS buffer and stall the process, exactly the
-    // failure mode copilotRunner.ts's own stderr handling exists to avoid.
-    child.stderr.resume();
-
-    child.on('error', (err: Error & { code?: string }) => {
-      clearTimeout(timer);
-      finish({
+  const run = async (): Promise<ProbeResult> => {
+    try {
+      query = await runCopilotQuery({
+        prompt: 'Reply with exactly: OK',
+        options: {
+          settingSources: [],
+          tools: [],
+          // Already a full replacement object rather than a merge, which is
+          // exactly the SDK's own `env` semantics.
+          env: buildProbeEnv(token),
+          cwd: os.tmpdir(),
+        },
+      });
+      // eslint-disable-next-line no-restricted-syntax
+      for await (const message of query) {
+        const parsed = parseSdkMessage(message);
+        // query.close() explicitly, not left to for-await's implicit
+        // iterator close: Query's [Symbol.asyncIterator] returns an inner
+        // generator, not itself, so returning out of this loop bypasses
+        // Query's own close() — the thing that actually tears down the
+        // subprocess — same reasoning as copilotRunner.ts's retry path.
+        if (parsed.kind === 'result') {
+          query.close();
+          return { ok: true };
+        }
+        if (parsed.kind === 'result_error' || parsed.kind === 'auth_error') {
+          query.close();
+          return { ok: false, message: parsed.message };
+        }
+      }
+      // The stream ended with no terminal result at all — nothing proved the
+      // token works, so it must not be saved.
+      return { ok: false, message: "Couldn't validate the token — try again." };
+    } catch (err) {
+      return {
         ok: false,
         message:
-          err.code === 'ENOENT'
-            ? "Claude Code isn't installed (or not on PATH)."
-            : err.message,
-      });
-    });
+          err instanceof Error ? err.message : 'Failed to validate the token.',
+      };
+    }
+  };
 
-    child.on('close', () => {
-      clearTimeout(timer);
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(stdout.trim());
-      } catch {
-        finish({
-          ok: false,
-          message: "Couldn't validate the token — try again.",
-        });
-        return;
-      }
-      const result = parsed as Record<string, unknown>;
-      if (result.is_error === true) {
-        finish({
-          ok: false,
-          message:
-            typeof result.result === 'string'
-              ? result.result
-              : 'The token was rejected.',
-        });
-        return;
-      }
-      finish({ ok: true });
-    });
+  const timeout = new Promise<ProbeResult>((resolve) => {
+    timer = setTimeout(() => {
+      // Closes the underlying subprocess too, so a hung probe can't outlive
+      // the answer this function already returned.
+      query?.close();
+      resolve({ ok: false, message: 'Timed out validating the token.' });
+    }, PROBE_TIMEOUT_MS);
   });
+
+  try {
+    return await Promise.race([run(), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function readStoredToken(): string | null {
