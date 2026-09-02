@@ -1,20 +1,33 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { clsx } from 'clsx';
-import { ArrowLeft, Plus, Send, Sparkles, X } from 'lucide-react';
+import { ArrowLeft, FolderGit2, Plus, Send, Sparkles, X } from 'lucide-react';
 import {
   postCopilotUserMessage,
   postCopilotAssistantMessage,
+  updateProject,
 } from '@/mock/api';
 import { useCopilotConversations } from '@/lib/useCopilotConversations';
 import { useCopilotProposals } from '@/lib/useCopilotProposals';
+import { useCurrentRouteProject } from '@/lib/useCurrentRouteProject';
 import { interleaveProposals } from '@/lib/copilotTranscript';
-import type { CopilotSessionMessageRole } from '@/lib/copilotSessions';
+import type { TranscriptItem } from '@/lib/copilotTranscript';
+import type {
+  CopilotSessionMessage,
+  CopilotSessionMessageRole,
+} from '@/lib/copilotSessions';
 import { renderMarkdown } from '@/lib/markdown';
 import { IconButton, Button } from '@/components/ui/Button';
 import { CopilotSessionList } from './CopilotSessionList';
 import { CopilotProposalCard } from './CopilotProposalCard';
 import { CopilotConnectModal } from './CopilotConnectModal';
+
+// One rendered row of the transcript: everything interleaveProposals already
+// produces, plus V3's "link a repo" card, which is positioned the same way a
+// proposal card is (anchored to a turn) but isn't a proposal row.
+type TranscriptEntry =
+  | TranscriptItem<CopilotSessionMessage>
+  | { type: 'repo_link'; projectId: string };
 
 // Not crypto.randomUUID(): this project's jsdom test environment doesn't
 // reliably provide it (see main/preload.test.ts's identical note) and the
@@ -73,6 +86,80 @@ function TypingIndicator() {
         <span className="copilot-typing-dot" />
         <span className="copilot-typing-dot" />
         <span className="copilot-typing-dot" />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The "link a repo" card (Copilot V3), rendered inline in the transcript
+ * under the reply whose run reported needsRepoLink — same card chrome as
+ * CopilotProposalCard, but deliberately NOT a copilot_proposals row: that
+ * table models ticket-mutation proposals with an approve/reject lifecycle,
+ * and this is neither. It's local state that stops rendering the moment the
+ * project has a repoPath, which is also why it needs no dismiss or
+ * don't-ask-again flag.
+ *
+ * Writes through the identical updateProject(id, { repoPath }) call the
+ * project-settings Codebase page uses — one persistence path, two entry
+ * points into it.
+ */
+function CopilotRepoLinkCard({
+  projectId,
+  onLinked,
+}: {
+  projectId: string;
+  onLinked: () => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function handleChoose() {
+    if (saving) return;
+    const picked = await window.electron.repo.chooseFolder();
+    if (picked.canceled) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await updateProject(projectId, { repoPath: picked.path });
+      onLinked();
+    } catch (err) {
+      // The backend owns "is this a real git checkout" (projects.service.ts's
+      // validateRepoPath), so its message is what's shown rather than a
+      // second, drift-prone copy of that rule here.
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="w-full shrink-0 self-start overflow-hidden rounded-[var(--radius)] border border-border-strong bg-surface">
+      <div className="flex items-center gap-2 border-b border-border bg-bg-inset px-3 py-2">
+        <FolderGit2 size={13} className="shrink-0 text-text-secondary" />
+        <span className="text-[10.5px] font-bold tracking-wider text-text-secondary uppercase">
+          Codebase not linked
+        </span>
+      </div>
+
+      <div className="flex flex-col gap-2.5 p-3">
+        <p className="text-[13px] leading-snug text-text-secondary">
+          Copilot needed to read this project's code to answer that properly.
+          Link the local git checkout and it can open, list and search files —
+          read-only, never editing or running anything.
+        </p>
+        {error && <p className="text-[12.5px] text-danger">{error}</p>}
+      </div>
+
+      <div className="flex items-center justify-end gap-2 border-t border-border px-3 py-2.5">
+        <Button
+          size="xs"
+          variant="primary"
+          disabled={saving}
+          onClick={handleChoose}
+        >
+          {saving ? 'Saving…' : 'Choose folder…'}
+        </Button>
       </div>
     </div>
   );
@@ -168,6 +255,10 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const sessionStore = useCopilotConversations();
   const { sessions, loading: listLoading, error: listError } = sessionStore;
+  // Which project's repo (if any) grounds the NEXT message — read from the
+  // open route, not from the conversation, which has no project at all. See
+  // useCurrentRouteProject.ts for why.
+  const routeProject = useCurrentRouteProject();
 
   // null = session-list view. Always starts on the list on open — this
   // panel is conditionally (un)mounted by AppShell, so "closing and
@@ -229,6 +320,17 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     sessionId: string;
     content: string;
     claudeSessionId: string | null;
+  } | null>(null);
+  // Set when a run came back with needsRepoLink (the [[NEEDS_REPO]] sentinel,
+  // stripped in parseSdkMessage.ts), tagged with the turn it belongs to so
+  // the card renders under that reply rather than as a floating banner. The
+  // project id is captured at send time: a user who navigates elsewhere
+  // mid-run shouldn't be offered a folder picker that writes to whatever
+  // project they happen to be looking at now.
+  const [repoLinkPrompt, setRepoLinkPrompt] = useState<{
+    sessionId: string;
+    projectId: string;
+    afterMessageId: string;
   } | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
   const unsubscribeStreamRef = useRef<(() => void) | null>(null);
@@ -339,10 +441,17 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     const isStale = () =>
       runGenerationRef.current.get(sessionId) !== generation;
 
+    // Resolved here rather than passed in, so every entry point into a run
+    // (a fresh send, a retry, the post-connect auto-retry) grounds in
+    // whatever project is open at that moment — the per-message resolution
+    // §4 of the V3 design settled on, not a value pinned to the conversation.
+    const groundingProject = routeProject.project;
+
     setStreaming({ sessionId, text: '' });
     setRunError(null);
     setLastFailedPrompt(null);
     setPendingAssistantReply(null);
+    setRepoLinkPrompt(null);
 
     await new Promise<void>((resolve) => {
       // Guarded explicitly, not left to throw past this function: a throw
@@ -362,6 +471,12 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
             // the user's own text and nothing else.
             conversationId: sessionId,
             ...(outcome ? { outcomePreamble: outcome.text } : {}),
+            // Omitted entirely when nothing project-scoped is open or the
+            // open project has no checkout linked — the runner treats an
+            // absent repoPath as its normal unlinked state, not an error.
+            ...(groundingProject?.repoPath
+              ? { repoPath: groundingProject.repoPath }
+              : {}),
           },
           {
             onChunk: (text) => {
@@ -372,7 +487,11 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
                   : prev,
               );
             },
-            onDone: async ({ fullText, sessionId: claudeSessionId }) => {
+            onDone: async ({
+              fullText,
+              sessionId: claudeSessionId,
+              needsRepoLink,
+            }) => {
               if (isStale()) return;
               setStreaming(null);
               // The turn is over either way — refetch proposal cards even
@@ -422,6 +541,18 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
                   updatedAt: persisted.createdAt,
                   ...(claudeSessionId !== null ? { claudeSessionId } : {}),
                 });
+                // Anchored to the reply that asked for it. Only offered when
+                // there's actually a project to link it to and it isn't
+                // already linked — the model is only ever told about the
+                // sentinel in the unlinked prompt, so a `true` in any other
+                // state is stale and ignored rather than trusted.
+                if (needsRepoLink && groundingProject && !groundingProject.repoPath) {
+                  setRepoLinkPrompt({
+                    sessionId,
+                    projectId: groundingProject.projectId,
+                    afterMessageId: persisted.id,
+                  });
+                }
                 await reloadProposals();
                 // Only now — the run completed AND its reply persisted —
                 // are this run's delivered outcomes marked notified. A
@@ -669,6 +800,41 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     messagesLoadError && messagesLoadError.sessionId === activeSessionId
       ? messagesLoadError
       : null;
+  // Re-checked against the CURRENT route project on every render, not just
+  // when the signal arrived: linking from either entry point reloads that
+  // project, repoPath goes non-null, and the card disappears for good — no
+  // separate dismiss state. Navigating to a different project hides it too,
+  // since its "Choose folder…" would otherwise write to a project the user
+  // is no longer looking at.
+  const repoLinkPromptHere =
+    repoLinkPrompt &&
+    repoLinkPrompt.sessionId === activeSessionId &&
+    routeProject.project &&
+    routeProject.project.projectId === repoLinkPrompt.projectId &&
+    !routeProject.project.repoPath
+      ? repoLinkPrompt
+      : null;
+  // The card is spliced in as its own transcript ENTRY rather than wrapped
+  // around the message it follows, so every message and proposal stays a
+  // direct, one-element-per-entry child of the list below exactly as it was
+  // before V3 — anchoring the card costs the transcript no extra nesting.
+  const transcriptEntries: TranscriptEntry[] = activeSession
+    ? interleaveProposals(
+        activeSession.messages,
+        proposalStore.proposals,
+      ).flatMap((item): TranscriptEntry[] =>
+        item.type === 'message' &&
+        repoLinkPromptHere?.afterMessageId === item.message.id
+          ? [
+              item,
+              {
+                type: 'repo_link' as const,
+                projectId: repoLinkPromptHere.projectId,
+              },
+            ]
+          : [item],
+      )
+    : [];
   const isEmpty =
     !!activeSession &&
     activeSession.messages.length === 0 &&
@@ -793,18 +959,24 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
               </p>
             )}
             <div className="flex flex-col gap-3">
-              {interleaveProposals(
-                activeSession.messages,
-                proposalStore.proposals,
-              ).map((item) =>
-                item.type === 'message' ? (
-                  <MessageBubble key={item.message.id} message={item.message} />
-                ) : (
+              {transcriptEntries.map((entry) =>
+                entry.type === 'message' ? (
+                  <MessageBubble
+                    key={entry.message.id}
+                    message={entry.message}
+                  />
+                ) : entry.type === 'proposal' ? (
                   <CopilotProposalCard
-                    key={item.proposal.id}
-                    proposal={item.proposal}
+                    key={entry.proposal.id}
+                    proposal={entry.proposal}
                     onApprove={proposalStore.approve}
                     onReject={proposalStore.reject}
+                  />
+                ) : (
+                  <CopilotRepoLinkCard
+                    key="repo-link"
+                    projectId={entry.projectId}
+                    onLinked={routeProject.reload}
                   />
                 ),
               )}
