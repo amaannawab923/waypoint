@@ -1,6 +1,8 @@
-import { EventEmitter } from 'events';
+import * as fs from 'fs';
 import * as os from 'os';
+import * as path from 'path';
 import type { BrowserWindow } from 'electron';
+import type { Options, Query, SDKMessage } from './claudeSdkClient';
 
 const ipcMainOnMock = jest.fn();
 const getPathMock = jest.fn(() => '/fake/userData');
@@ -10,95 +12,150 @@ jest.mock('electron', () => ({
 }));
 
 // Defaults to "no token connected" (null) so every existing test below keeps
-// exercising the ambient-CLI-login path unchanged; individual tests override
+// exercising the ambient-login path unchanged; individual tests override
 // this to cover the connected-subscription-token path.
 const getStoredSubscriptionTokenMock = jest.fn<string | null, []>(() => null);
 jest.mock('./copilotAuth', () => ({
   getStoredSubscriptionToken: () => getStoredSubscriptionTokenMock(),
 }));
 
-type FakeStdin = EventEmitter & {
-  writes: string[];
-  ended: boolean;
-  write: (chunk: string) => boolean;
+// The mocking seam for the whole SDK. claudeSdkClient.ts is the only module
+// in the app that touches @anthropic-ai/claude-agent-sdk, so mocking it
+// wholesale keeps the real (pure-ESM) package out of every test — the same
+// role jest.mock('child_process') played for the old spawn-based runner.
+type FakeQuery = {
+  query: Query;
+  emit: (message: SDKMessage) => void;
   end: () => void;
+  fail: (err: unknown) => void;
+  closeMock: jest.Mock;
 };
 
-function makeFakeStdin(): FakeStdin {
-  const emitter = new EventEmitter() as FakeStdin;
-  emitter.writes = [];
-  emitter.ended = false;
-  emitter.write = (chunk: string) => {
-    emitter.writes.push(chunk);
-    return true;
+function makeFakeQuery(): FakeQuery {
+  const queue: SDKMessage[] = [];
+  let finished = false;
+  let failure: unknown = null;
+  let notify: (() => void) | null = null;
+  const wake = () => {
+    const resume = notify;
+    notify = null;
+    resume?.();
   };
-  emitter.end = () => {
-    emitter.ended = true;
+
+  const closeMock = jest.fn(() => {
+    finished = true;
+    wake();
+  });
+
+  const waitForWake = () =>
+    new Promise<void>((resolve) => {
+      notify = resolve;
+    });
+
+  const query = {
+    close: closeMock,
+    async next(): Promise<IteratorResult<SDKMessage, void>> {
+      while (!queue.length && !failure && !finished) {
+        // eslint-disable-next-line no-await-in-loop
+        await waitForWake();
+      }
+      if (queue.length) {
+        return { value: queue.shift() as SDKMessage, done: false };
+      }
+      if (failure) {
+        const err = failure;
+        failure = null;
+        finished = true;
+        throw err;
+      }
+      return { value: undefined, done: true };
+    },
+    async return(): Promise<IteratorResult<SDKMessage, void>> {
+      finished = true;
+      return { value: undefined, done: true };
+    },
+    async throw(err: unknown): Promise<IteratorResult<SDKMessage, void>> {
+      throw err;
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+  } as unknown as Query;
+
+  return {
+    query,
+    closeMock,
+    emit: (message: SDKMessage) => {
+      queue.push(message);
+      wake();
+    },
+    end: () => {
+      finished = true;
+      wake();
+    },
+    fail: (err: unknown) => {
+      failure = err;
+      wake();
+    },
   };
-  return emitter;
 }
 
-type FakeStream = EventEmitter & { setEncoding: jest.Mock };
-
-function makeFakeStream(): FakeStream {
-  return Object.assign(new EventEmitter(), { setEncoding: jest.fn() });
-}
-
-type FakeChild = EventEmitter & {
-  stdin: FakeStdin;
-  stdout: FakeStream;
-  stderr: FakeStream;
-  killed: boolean;
-  kill: () => void;
-};
-
-function makeFakeChild(): FakeChild {
-  const child = new EventEmitter() as FakeChild;
-  child.stdin = makeFakeStdin();
-  child.stdout = makeFakeStream();
-  child.stderr = makeFakeStream();
-  child.killed = false;
-  child.kill = () => {
-    child.killed = true;
-  };
-  return child;
-}
-
-let lastChild: FakeChild | null = null;
-const spawnCalls: Array<{
-  binary: string;
-  args: string[];
-  options: { cwd?: string; env?: Record<string, string | undefined> };
-}> = [];
-const spawnMock = jest.fn(
-  (
-    binary: string,
-    args: string[],
-    options: { cwd?: string; env?: Record<string, string | undefined> },
-  ) => {
-    lastChild = makeFakeChild();
-    spawnCalls.push({ binary, args, options });
-    return lastChild;
-  },
-);
-jest.mock('child_process', () => ({
-  spawn: (
-    ...args: [
-      string,
-      string[],
-      { cwd?: string; env?: Record<string, string | undefined> },
-    ]
-  ) => spawnMock(...args),
+const queries: FakeQuery[] = [];
+const runCopilotQueryMock = jest.fn<
+  Promise<Query>,
+  [{ prompt: string; options: Options }]
+>(async () => {
+  const fake = makeFakeQuery();
+  queries.push(fake);
+  return fake.query;
+});
+jest.mock('./claudeSdkClient', () => ({
+  runCopilotQuery: (args: { prompt: string; options: Options }) =>
+    runCopilotQueryMock(args),
 }));
 
 // Same hazard hit (and fixed) in preload.test.ts: copilotRunner.ts's own
-// `import { spawn } from 'child_process'` / `import { ipcMain } from
-// 'electron'` must run only after the mocks and helpers above exist — an
-// import hoisted above them (e.g. by an eslint autofix) would hit the mock
-// factories before spawnMock/ipcMainOnMock are initialized, throwing a TDZ
-// ReferenceError.
+// `import { ipcMain } from 'electron'` and its claudeSdkClient/copilotAuth
+// imports must run only after the mocks and helpers above exist — an import
+// hoisted above them (e.g. by an eslint autofix) would hit the mock factories
+// before the mocks are initialized, throwing a TDZ ReferenceError.
 // eslint-disable-next-line import/order, import/first
 import { registerCopilotIpc, killAllCopilotProcesses } from './copilotRunner';
+
+// Fixtures name only the fields parseSdkMessage discriminates on; see
+// parseSdkMessage.test.ts for why the cast is the local escape hatch.
+function sdkMessage(fields: Record<string, unknown>): SDKMessage {
+  return fields as unknown as SDKMessage;
+}
+
+function successResult(result: string, sessionId?: string): SDKMessage {
+  return sdkMessage({
+    type: 'result',
+    subtype: 'success',
+    is_error: false,
+    result,
+    ...(sessionId ? { session_id: sessionId } : {}),
+  });
+}
+
+function errorResult(errors: string[], sessionId?: string): SDKMessage {
+  return sdkMessage({
+    type: 'result',
+    subtype: 'error_during_execution',
+    is_error: true,
+    errors,
+    ...(sessionId ? { session_id: sessionId } : {}),
+  });
+}
+
+// The runner drives an async generator, so every assertion about what it did
+// with a message has to let the microtask queue drain first. A real macrotask
+// turn is enough for any number of awaits chained inside one loop iteration.
+function flush(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
 
 function getRegisteredHandler() {
   const call = ipcMainOnMock.mock.calls.find((c) => c[0] === 'copilot:run');
@@ -112,27 +169,42 @@ function run(args: {
   resumeSessionId?: string;
   conversationId?: string;
   outcomePreamble?: string;
-}): FakeChild {
+  repoPath?: string;
+}) {
   getRegisteredHandler()({}, args);
-  return lastChild as FakeChild;
+}
+
+function callAt(index: number): { prompt: string; options: Options } {
+  return runCopilotQueryMock.mock.calls[index][0];
+}
+
+function optionsAt(index: number): Options {
+  return callAt(index).options;
+}
+
+// `stderr` is a fresh closure per attempt, so two structurally identical
+// option sets never compare equal with it included — it carries no
+// per-attempt meaning of its own, only a diagnostic sink.
+function comparableOptions(index: number): Omit<Options, 'stderr'> {
+  const copy = { ...optionsAt(index) };
+  delete copy.stderr;
+  return copy;
 }
 
 function fakeWindow() {
   return { isDestroyed: () => false, webContents: { send: jest.fn() } };
 }
 
-// buildArgs()/mcpConfigArg() read process.env.WAYPOINT_API_BASE_URL directly,
-// so a test asserting on its default ('http://localhost:14000') would
-// silently pass or fail based on whatever a given developer's shell already
-// has set — explicitly clearing it here (and restoring afterEach) makes that
-// test control the variable itself instead of relying on it being ambiently
-// unset.
+// mcpServersConfig() reads process.env.WAYPOINT_API_BASE_URL directly, so a
+// test asserting on its default ('http://localhost:14000') would silently
+// pass or fail based on whatever a given developer's shell already has set —
+// explicitly clearing it here (and restoring afterEach) makes that test
+// control the variable itself instead of relying on it being ambiently unset.
 const originalApiBaseUrl = process.env.WAYPOINT_API_BASE_URL;
 
 beforeEach(() => {
   jest.clearAllMocks();
-  spawnCalls.length = 0;
-  lastChild = null;
+  queries.length = 0;
   getPathMock.mockReturnValue('/fake/userData');
   // jest.clearAllMocks() clears call history but not a prior test's
   // mockReturnValue — explicitly restore the "no token connected" default
@@ -150,49 +222,55 @@ afterEach(() => {
   }
 });
 
+const ALL_MCP_TOOLS = [
+  'mcp__waypoint__list_work_items',
+  'mcp__waypoint__get_work_item',
+  'mcp__waypoint__get_work_item_by_identifier',
+  'mcp__waypoint__search_work_items',
+  'mcp__waypoint__list_comments',
+  'mcp__waypoint__list_activity',
+  'mcp__waypoint__list_states',
+  'mcp__waypoint__list_members',
+  'mcp__waypoint__list_projects',
+  'mcp__waypoint__propose_comment',
+  'mcp__waypoint__propose_state_change',
+  'mcp__waypoint__propose_assignee_change',
+  'mcp__waypoint__propose_priority_change',
+  'mcp__waypoint__propose_create_work_item',
+];
+
 describe('registerCopilotIpc', () => {
-  it('writes the prompt to stdin instead of argv, then closes stdin', () => {
+  it('passes the user message as the query prompt, never as an option', () => {
     const win = fakeWindow();
     registerCopilotIpc(() => win as unknown as BrowserWindow);
 
-    const child = run({ requestId: 'req-1', prompt: 'hello there' });
+    run({ requestId: 'req-1', prompt: 'hello there' });
 
-    // Not in argv at all — a prompt starting with `-` (or containing shell
-    // metacharacters) must never be interpretable as a CLI flag, and the
-    // prompt must not be visible in the OS process table via argv.
-    expect(spawnCalls[0].args).not.toContain('hello there');
-    expect(child.stdin.writes.join('')).toBe('hello there');
-    expect(child.stdin.ended).toBe(true);
+    expect(callAt(0).prompt).toBe('hello there');
+    expect(JSON.stringify(optionsAt(0))).not.toContain('hello there');
   });
 
-  it('passes --resume only when a UUID-shaped resumeSessionId is given', () => {
+  it('passes resume only when a UUID-shaped resumeSessionId is given', () => {
     const win = fakeWindow();
     registerCopilotIpc(() => win as unknown as BrowserWindow);
 
     run({ requestId: 'req-1', prompt: 'hi' });
-    expect(spawnCalls[0].args).not.toContain('--resume');
+    expect(optionsAt(0).resume).toBeUndefined();
 
     run({
       requestId: 'req-2',
       prompt: 'hi',
       resumeSessionId: '6b16ad5b-1e3f-4a2c-8f9d-2c7e5a9b3d10',
     });
-    const idx = spawnCalls[1].args.indexOf('--resume');
-    expect(idx).toBeGreaterThan(-1);
-    expect(spawnCalls[1].args[idx + 1]).toBe(
-      '6b16ad5b-1e3f-4a2c-8f9d-2c7e5a9b3d10',
-    );
+    expect(optionsAt(1).resume).toBe('6b16ad5b-1e3f-4a2c-8f9d-2c7e5a9b3d10');
   });
 
-  // Defense in depth: the backend's own zod schema already requires a UUID,
-  // but --resume takes an *optional* value, so a flag-shaped resumeSessionId
-  // (e.g. one starting with `-`) isn't consumed as --resume's argument —
-  // it's parsed as a separate flag of its own (confirmed live against the
-  // real CLI: `claude -p --resume --help` prints help instead of erring).
-  // This must never reach argv regardless of what validated the value on
-  // its way into the database, including anything written before the
-  // schema was tightened.
-  it('does not pass a non-UUID resumeSessionId to argv, even a flag-shaped one', () => {
+  // Defense in depth kept from the CLI era for a reason that outlives argv:
+  // `resume` is now a typed option with no flag-injection risk, but a
+  // malformed value can still reach here from a database row written before
+  // the backend's own schema was tightened. Nothing arriving over IPC is
+  // trusted, no matter what validated it upstream.
+  it('does not pass a non-UUID resumeSessionId as resume, even a flag-shaped one', () => {
     const win = fakeWindow();
     registerCopilotIpc(() => win as unknown as BrowserWindow);
 
@@ -202,8 +280,10 @@ describe('registerCopilotIpc', () => {
       resumeSessionId: '--dangerously-skip-permissions',
     });
 
-    expect(spawnCalls[0].args).not.toContain('--resume');
-    expect(spawnCalls[0].args).not.toContain('--dangerously-skip-permissions');
+    expect(optionsAt(0).resume).toBeUndefined();
+    expect(JSON.stringify(optionsAt(0))).not.toContain(
+      'dangerously-skip-permissions',
+    );
   });
 
   it('disables built-in tool access — only the waypoint MCP tools (reads + all six V2 propose/list tools) are allowed', () => {
@@ -212,48 +292,34 @@ describe('registerCopilotIpc', () => {
 
     run({ requestId: 'req-1', prompt: 'hi' });
 
-    const { args } = spawnCalls[0];
-    const toolsIdx = args.indexOf('--tools');
-    expect(toolsIdx).toBeGreaterThan(-1);
-    expect(args[toolsIdx + 1]).toBe('');
-
-    const allowedIdx = args.indexOf('--allowedTools');
-    expect(allowedIdx).toBeGreaterThan(-1);
-    expect(args[allowedIdx + 1]).toBe(
-      [
-        'mcp__waypoint__list_work_items',
-        'mcp__waypoint__get_work_item',
-        'mcp__waypoint__get_work_item_by_identifier',
-        'mcp__waypoint__search_work_items',
-        'mcp__waypoint__list_comments',
-        'mcp__waypoint__list_activity',
-        'mcp__waypoint__list_states',
-        'mcp__waypoint__list_members',
-        'mcp__waypoint__list_projects',
-        'mcp__waypoint__propose_comment',
-        'mcp__waypoint__propose_state_change',
-        'mcp__waypoint__propose_assignee_change',
-        'mcp__waypoint__propose_priority_change',
-        'mcp__waypoint__propose_create_work_item',
-      ].join(' '),
-    );
+    // `tools` is the base set; `allowedTools` only skips the approval prompt
+    // and does NOT restrict availability on its own, so both must be set.
+    expect(optionsAt(0).tools).toEqual([]);
+    expect(optionsAt(0).allowedTools).toEqual(ALL_MCP_TOOLS);
   });
 
-  it('points the CLI at the waypoint MCP server, in strict mode so no other MCP config leaks in', () => {
+  // V2's zero-friction propose_* behavior is preserved by construction, not
+  // by adding anything: with no permission callback there is nothing to gate
+  // an allowed tool, matching the old headless CLI where no TTY meant no
+  // prompt could appear anyway.
+  it('never installs a canUseTool permission callback', () => {
     const win = fakeWindow();
     registerCopilotIpc(() => win as unknown as BrowserWindow);
 
     run({ requestId: 'req-1', prompt: 'hi' });
 
-    const { args } = spawnCalls[0];
-    expect(args).toContain('--strict-mcp-config');
-    const configIdx = args.indexOf('--mcp-config');
-    expect(configIdx).toBeGreaterThan(-1);
-    const config = JSON.parse(args[configIdx + 1]);
-    expect(config).toEqual({
-      mcpServers: {
-        waypoint: { type: 'http', url: 'http://localhost:14000/mcp/copilot' },
-      },
+    expect(optionsAt(0).canUseTool).toBeUndefined();
+  });
+
+  it('points at the waypoint MCP server, in strict mode so no other MCP config leaks in', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi' });
+
+    expect(optionsAt(0).strictMcpConfig).toBe(true);
+    expect(optionsAt(0).mcpServers).toEqual({
+      waypoint: { type: 'http', url: 'http://localhost:14000/mcp/copilot' },
     });
   });
 
@@ -264,38 +330,28 @@ describe('registerCopilotIpc', () => {
 
     run({ requestId: 'req-1', prompt: 'hi' });
 
-    const { args } = spawnCalls[0];
-    const configIdx = args.indexOf('--mcp-config');
-    const config = JSON.parse(args[configIdx + 1]);
-    expect(config).toEqual({
-      mcpServers: {
-        waypoint: {
-          type: 'http',
-          url: 'https://waypoint.example.com/mcp/copilot',
-        },
+    expect(optionsAt(0).mcpServers).toEqual({
+      waypoint: {
+        type: 'http',
+        url: 'https://waypoint.example.com/mcp/copilot',
       },
     });
   });
 
   // The conversation id is what lets the backend attach propose_* rows to
-  // the right conversation — it rides as a STATIC HEADER in --mcp-config
-  // (the CLI honors a `headers` object on http server entries, verified
-  // live against v2.1.251), never as tool input the model could spoof.
-  it('bakes a pattern-valid conversationId into --mcp-config as the x-waypoint-conversation-id header', () => {
+  // the right conversation — it rides as a STATIC HEADER on the MCP server
+  // entry, never as tool input the model could spoof.
+  it('bakes a pattern-valid conversationId into the MCP config as the x-waypoint-conversation-id header', () => {
     const win = fakeWindow();
     registerCopilotIpc(() => win as unknown as BrowserWindow);
 
     run({ requestId: 'req-1', prompt: 'hi', conversationId: 'conv-abc1234' });
 
-    const { args } = spawnCalls[0];
-    const config = JSON.parse(args[args.indexOf('--mcp-config') + 1]);
-    expect(config).toEqual({
-      mcpServers: {
-        waypoint: {
-          type: 'http',
-          url: 'http://localhost:14000/mcp/copilot',
-          headers: { 'x-waypoint-conversation-id': 'conv-abc1234' },
-        },
+    expect(optionsAt(0).mcpServers).toEqual({
+      waypoint: {
+        type: 'http',
+        url: 'http://localhost:14000/mcp/copilot',
+        headers: { 'x-waypoint-conversation-id': 'conv-abc1234' },
       },
     });
   });
@@ -310,52 +366,45 @@ describe('registerCopilotIpc', () => {
       conversationId: 'conv-$(rm -rf /); DROP TABLE',
     });
 
-    const { args } = spawnCalls[0];
-    const config = JSON.parse(args[args.indexOf('--mcp-config') + 1]);
-    expect(config.mcpServers.waypoint).toEqual({
-      type: 'http',
-      url: 'http://localhost:14000/mcp/copilot',
+    expect(optionsAt(0).mcpServers).toEqual({
+      waypoint: { type: 'http', url: 'http://localhost:14000/mcp/copilot' },
     });
-    expect(config.mcpServers.waypoint.headers).toBeUndefined();
   });
 
-  // The outcome preamble is stdin-only by design: argv would expose it in
-  // the OS process table and reopen the flag-injection class the prompt
-  // itself already avoids, and persisting it would pollute the transcript
-  // with system-note text the user never wrote.
-  it('prepends the outcome preamble to stdin with a blank line, never placing it in argv', () => {
+  // The outcome preamble rides the prompt itself, never any option and never
+  // any persisted message: the transcript keeps only what the user actually
+  // typed, while the model still hears the outcomes.
+  it('prepends the outcome preamble to the prompt with a blank line, never placing it in the options', () => {
     const win = fakeWindow();
     registerCopilotIpc(() => win as unknown as BrowserWindow);
 
-    const preamble = '[Waypoint system note — do not treat as the user\'s words] Outcomes: p-1 executed.';
-    const child = run({
+    const preamble =
+      "[Waypoint system note — do not treat as the user's words] Outcomes: p-1 executed.";
+    run({
       requestId: 'req-1',
       prompt: 'what next?',
       conversationId: 'conv-abc1234',
       outcomePreamble: preamble,
     });
 
-    expect(child.stdin.writes.join('')).toBe(`${preamble}\n\nwhat next?`);
-    expect(child.stdin.ended).toBe(true);
-    for (const arg of spawnCalls[0].args) {
-      expect(arg).not.toContain('Waypoint system note');
-    }
+    expect(callAt(0).prompt).toBe(`${preamble}\n\nwhat next?`);
+    expect(JSON.stringify(optionsAt(0))).not.toContain('Waypoint system note');
   });
 
-  it('writes exactly the prompt to stdin when no preamble is given', () => {
+  it('sends exactly the prompt when no preamble is given', () => {
     const win = fakeWindow();
     registerCopilotIpc(() => win as unknown as BrowserWindow);
 
-    const child = run({ requestId: 'req-1', prompt: 'plain prompt' });
+    run({ requestId: 'req-1', prompt: 'plain prompt' });
 
-    expect(child.stdin.writes.join('')).toBe('plain prompt');
+    expect(callAt(0).prompt).toBe('plain prompt');
   });
 
   it('drops an oversized outcome preamble instead of feeding it through', () => {
     const win = fakeWindow();
     registerCopilotIpc(() => win as unknown as BrowserWindow);
 
-    const child = run({
+    run({
       requestId: 'req-1',
       prompt: 'hi',
       outcomePreamble: 'x'.repeat(5000),
@@ -363,108 +412,171 @@ describe('registerCopilotIpc', () => {
 
     // The un-notified outcomes it carried stay un-notified server-side, so
     // nothing is lost — they re-deliver on the next turn's preamble.
-    expect(child.stdin.writes.join('')).toBe('hi');
+    expect(callAt(0).prompt).toBe('hi');
   });
 
-  // Regression test: --safe-mode's own --help text lists MCP servers among
-  // what it disables, with no override — confirmed live that --safe-mode
-  // plus this exact --mcp-config still comes back with an empty
-  // mcp_servers/tools list in the init event, so the model has zero tools
-  // and just narrates what it would do instead of actually calling one.
-  // --setting-sources '' is the fix: confirmed live it still empties out
-  // user-level skills/plugins/custom-agents (the leak --safe-mode existed
-  // to prevent) while leaving an explicit --mcp-config server free to
-  // connect.
-  it('uses --setting-sources instead of --safe-mode, so the MCP server can actually connect', () => {
+  // Regression test carried over from the CLI era: --safe-mode's own --help
+  // text lists MCP servers among what it disables, with no override —
+  // confirmed live that --safe-mode plus this exact MCP config still came
+  // back with an empty mcp_servers/tools list, so the model had zero tools
+  // and just narrated what it would do. `settingSources: []` is the fix, and
+  // it is opt-IN: the SDK's default when the field is OMITTED is "load all
+  // sources", so it must be present on every single call.
+  it('sets settingSources to an empty list on every call, so the MCP server can still connect', () => {
     const win = fakeWindow();
     registerCopilotIpc(() => win as unknown as BrowserWindow);
 
     run({ requestId: 'req-1', prompt: 'hi' });
 
-    const { args } = spawnCalls[0];
-    expect(args).not.toContain('--safe-mode');
-    const idx = args.indexOf('--setting-sources');
-    expect(idx).toBeGreaterThan(-1);
-    expect(args[idx + 1]).toBe('');
+    expect(optionsAt(0).settingSources).toEqual([]);
   });
 
-  // The bug this exists to catch: a --resume against a session id that's
-  // aged out of Claude Code's retention window failed identically on every
-  // retry, with no code path anywhere that ever cleared the stored id —
-  // permanently bricking the conversation.
-  it('retries once without --resume when a stale session id causes a result_error, transparently', () => {
+  // A bare string REPLACES the system prompt. An object form would either
+  // layer Claude Code's own agentic-coding default underneath Copilot's
+  // persona (preset+append) or, with snapshot: true, record turn 1's prompt
+  // and replay it across resumes — which would let a conversation that gets
+  // a repo linked mid-flight hold real Read/Glob/Grep grants while its
+  // system prompt still insisted it had none and still asked for
+  // [[NEEDS_REPO]].
+  it('passes the system prompt as a bare string, never a preset or a recorded custom prompt', () => {
     const win = fakeWindow();
     registerCopilotIpc(() => win as unknown as BrowserWindow);
-    const firstChild = run({
+
+    run({ requestId: 'req-1', prompt: 'hi' });
+
+    expect(typeof optionsAt(0).systemPrompt).toBe('string');
+    expect(optionsAt(0).systemPrompt).toContain('You are Copilot');
+  });
+
+  it('streams text deltas to the renderer as chunks', async () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+    run({ requestId: 'req-1', prompt: 'hi' });
+    await flush();
+
+    queries[0].emit(
+      sdkMessage({
+        type: 'stream_event',
+        event: {
+          type: 'content_block_delta',
+          delta: { type: 'text_delta', text: 'hello' },
+        },
+      }),
+    );
+    await flush();
+
+    expect(win.webContents.send).toHaveBeenCalledWith('copilot:stream', {
+      requestId: 'req-1',
+      type: 'chunk',
+      text: 'hello',
+    });
+  });
+
+  it('reports the session id from the init message when the result carries none', async () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+    run({ requestId: 'req-1', prompt: 'hi' });
+    await flush();
+
+    queries[0].emit(
+      sdkMessage({ type: 'system', subtype: 'init', session_id: 'sess-init' }),
+    );
+    queries[0].emit(successResult('the full reply'));
+    await flush();
+
+    expect(win.webContents.send).toHaveBeenCalledWith('copilot:stream', {
+      requestId: 'req-1',
+      type: 'done',
+      fullText: 'the full reply',
+      sessionId: 'sess-init',
+      needsRepoLink: false,
+    });
+  });
+
+  // The bug this exists to catch: resuming a session id that's aged out of
+  // Claude Code's retention window failed identically on every retry, with no
+  // code path anywhere that ever cleared the stored id — permanently bricking
+  // the conversation.
+  it('retries once without resume when a stale session id causes a result_error, transparently', async () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+    run({
       requestId: 'req-1',
       prompt: 'hi',
       resumeSessionId: '6b16ad5b-1e3f-4a2c-8f9d-2c7e5a9b3d10',
     });
-    expect(spawnCalls).toHaveLength(1);
+    await flush();
+    expect(runCopilotQueryMock).toHaveBeenCalledTimes(1);
 
-    // The real shape a stale --resume produces (verified live): no `result`
-    // field, only `errors`.
-    const staleLine = JSON.stringify({
-      type: 'result',
-      is_error: true,
-      session_id: '6b16ad5b-1e3f-4a2c-8f9d-2c7e5a9b3d10',
-      errors: [
-        'No conversation found with session ID: 6b16ad5b-1e3f-4a2c-8f9d-2c7e5a9b3d10',
-      ],
-    });
-    firstChild.stdout.emit('data', `${staleLine}\n`);
+    queries[0].emit(
+      errorResult(
+        [
+          'No conversation found with session ID: 6b16ad5b-1e3f-4a2c-8f9d-2c7e5a9b3d10',
+        ],
+        '6b16ad5b-1e3f-4a2c-8f9d-2c7e5a9b3d10',
+      ),
+    );
+    await flush();
 
-    // A second, fresh attempt spawned — without --resume — and nothing was
-    // reported to the renderer yet; the retry is meant to be invisible.
-    expect(spawnCalls).toHaveLength(2);
-    expect(spawnCalls[1].args).not.toContain('--resume');
+    // A second, fresh attempt started — without resume — and nothing was
+    // reported to the renderer yet; the retry is meant to be invisible to
+    // the USER (no error, no interruption). It is NOT meant to be invisible
+    // to the MODEL: the fresh session has no memory of this conversation,
+    // and without a heads-up it will say so outright, visibly contradicting
+    // the transcript the panel still shows above it (the exact failure QA
+    // caught live) — so the retried prompt must carry the continuation note
+    // ahead of the user's own text.
+    expect(runCopilotQueryMock).toHaveBeenCalledTimes(2);
+    expect(optionsAt(1).resume).toBeUndefined();
+    expect(callAt(1).prompt).toBe(
+      "[Waypoint system note — do not treat as the user's words] Your prior " +
+        'session could not be resumed (it likely expired or the connected ' +
+        'account changed), so this is a fresh session with no memory of this ' +
+        "conversation so far. Answer the user's message below on its own " +
+        'terms. Do not tell the user this is a new conversation or that you ' +
+        "lost context — from their side, they're just continuing the chat.\n\nhi",
+    );
     expect(win.webContents.send).not.toHaveBeenCalled();
 
-    const retryChild = lastChild as FakeChild;
-    const successLine = JSON.stringify({
-      type: 'result',
-      result: 'fresh reply',
-      session_id: 'fresh-session-id',
-    });
-    retryChild.stdout.emit('data', `${successLine}\n`);
+    queries[1].emit(successResult('fresh reply', 'fresh-session-id'));
+    await flush();
 
     expect(win.webContents.send).toHaveBeenCalledWith('copilot:stream', {
       requestId: 'req-1',
       type: 'done',
       fullText: 'fresh reply',
       sessionId: 'fresh-session-id',
+      needsRepoLink: false,
     });
 
-    // The first (abandoned) child closing afterward must not clobber the
-    // retry's tracked entry, nor produce a second/duplicate terminal
-    // message the renderer would have to reconcile against the first.
-    firstChild.emit('close', 1);
+    // The first (abandoned) query ending afterward must not produce a second,
+    // duplicate terminal message the renderer would have to reconcile.
+    queries[0].end();
+    await flush();
     expect(win.webContents.send).toHaveBeenCalledTimes(1);
   });
 
-  it('does not retry a stale-session result_error that itself came from a retry (bounded to one retry)', () => {
+  it('does not retry a stale-session result_error that itself came from a retry (bounded to one retry)', async () => {
     const win = fakeWindow();
     registerCopilotIpc(() => win as unknown as BrowserWindow);
-    const firstChild = run({
+    run({
       requestId: 'req-1',
       prompt: 'hi',
       resumeSessionId: '6b16ad5b-1e3f-4a2c-8f9d-2c7e5a9b3d10',
     });
+    await flush();
 
-    const staleLine = JSON.stringify({
-      type: 'result',
-      is_error: true,
-      errors: ['No conversation found with session ID: whatever'],
-    });
-    firstChild.stdout.emit('data', `${staleLine}\n`);
-    expect(spawnCalls).toHaveLength(2);
+    const stale = ['No conversation found with session ID: whatever'];
+    queries[0].emit(errorResult(stale));
+    await flush();
+    expect(runCopilotQueryMock).toHaveBeenCalledTimes(2);
 
-    // The retry attempt (which used no --resume) somehow still reports the
-    // same stale-session-shaped message — pathological, but must not loop.
-    const retryChild = lastChild as FakeChild;
-    retryChild.stdout.emit('data', `${staleLine}\n`);
+    // The retry attempt (which used no resume) somehow still reports the same
+    // stale-session-shaped message — pathological, but must not loop.
+    queries[1].emit(errorResult(stale));
+    await flush();
 
-    expect(spawnCalls).toHaveLength(2);
+    expect(runCopilotQueryMock).toHaveBeenCalledTimes(2);
     expect(win.webContents.send).toHaveBeenCalledWith('copilot:stream', {
       requestId: 'req-1',
       type: 'error',
@@ -473,23 +585,20 @@ describe('registerCopilotIpc', () => {
     });
   });
 
-  it('does not retry a result_error whose message does not match the stale-session pattern', () => {
+  it('does not retry a result_error whose message does not match the stale-session pattern', async () => {
     const win = fakeWindow();
     registerCopilotIpc(() => win as unknown as BrowserWindow);
-    const child = run({
+    run({
       requestId: 'req-1',
       prompt: 'hi',
       resumeSessionId: '6b16ad5b-1e3f-4a2c-8f9d-2c7e5a9b3d10',
     });
+    await flush();
 
-    const line = JSON.stringify({
-      type: 'result',
-      is_error: true,
-      result: 'some unrelated failure',
-    });
-    child.stdout.emit('data', `${line}\n`);
+    queries[0].emit(errorResult(['some unrelated failure']));
+    await flush();
 
-    expect(spawnCalls).toHaveLength(1);
+    expect(runCopilotQueryMock).toHaveBeenCalledTimes(1);
     expect(win.webContents.send).toHaveBeenCalledWith('copilot:stream', {
       requestId: 'req-1',
       type: 'error',
@@ -498,33 +607,29 @@ describe('registerCopilotIpc', () => {
     });
   });
 
-  it('spawns with an isolated cwd and a PATH extended with common install locations', () => {
+  // The SDK spawns its own vendored binary by absolute path, so the old
+  // COMMON_INSTALL_DIRS PATH append has nothing left to help find — but the
+  // rest of the environment must still be inherited, since `env` REPLACES
+  // the subprocess environment rather than merging with it.
+  it('runs from an isolated cwd and inherits process.env verbatim, with no PATH augmentation', () => {
     const win = fakeWindow();
     registerCopilotIpc(() => win as unknown as BrowserWindow);
 
     run({ requestId: 'req-1', prompt: 'hi' });
 
-    const { options } = spawnCalls[0];
-    expect(options.cwd).toBe(os.tmpdir());
-    expect(String(options.env?.PATH)).toContain('/opt/homebrew/bin');
-    expect(String(options.env?.PATH)).toContain('/usr/local/bin');
+    expect(optionsAt(0).cwd).toBe(os.tmpdir());
+    expect(optionsAt(0).env?.PATH).toBe(process.env.PATH);
   });
 
   // Regression test for a BLOCKER found in a second review round: setting
   // CLAUDE_CONFIG_DIR unconditionally (the original fix for the memory-leak-
-  // across-sessions bug below) also relocates where the CLI looks up
-  // CREDENTIALS, not just memory — confirmed live, this permanently broke
-  // ambient `claude login` auth for anyone who hadn't also connected a
-  // subscription token via this app's own Settings → Profile → Copilot
-  // flow, with no in-app recovery (re-running `claude login` writes to the
-  // real ~/.claude.json, which the redirected dir never looks at again).
-  // CLAUDE_CONFIG_DIR must therefore only be set in the same branch that
-  // sets CLAUDE_CODE_OAUTH_TOKEN — i.e. only once a subscription token is
-  // actually connected, since that credential path is honored regardless of
-  // CLAUDE_CONFIG_DIR (confirmed live). With no token connected (the default
-  // state every other test in this file exercises), CLAUDE_CONFIG_DIR must
-  // be absent entirely so ambient-login users keep working exactly as they
-  // did before this isolation fix landed.
+  // across-sessions bug) also relocates where CREDENTIALS are looked up, not
+  // just memory — confirmed live, this permanently broke ambient `claude
+  // login` auth for anyone who hadn't also connected a subscription token via
+  // this app's own Settings → Profile → Copilot flow, with no in-app recovery
+  // (re-running `claude login` writes to the real ~/.claude.json, which the
+  // redirected dir never looks at again). CLAUDE_CONFIG_DIR must therefore
+  // only be set in the same branch that sets CLAUDE_CODE_OAUTH_TOKEN.
   it("sets CLAUDE_CONFIG_DIR to an app-owned directory, not the user's real ~/.claude, but only when a subscription token is connected", () => {
     getStoredSubscriptionTokenMock.mockReturnValue(
       'sk-ant-oat01-connected-token',
@@ -535,7 +640,7 @@ describe('registerCopilotIpc', () => {
     run({ requestId: 'req-1', prompt: 'hi' });
 
     expect(getPathMock).toHaveBeenCalledWith('userData');
-    expect(spawnCalls[0].options.env?.CLAUDE_CONFIG_DIR).toBe(
+    expect(optionsAt(0).env?.CLAUDE_CONFIG_DIR).toBe(
       '/fake/userData/copilot-claude-config',
     );
   });
@@ -546,13 +651,13 @@ describe('registerCopilotIpc', () => {
 
     run({ requestId: 'req-1', prompt: 'hi' });
 
-    expect(spawnCalls[0].options.env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
-    expect(spawnCalls[0].options.env?.CLAUDE_CONFIG_DIR).toBeUndefined();
+    expect(optionsAt(0).env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(optionsAt(0).env?.CLAUDE_CONFIG_DIR).toBeUndefined();
   });
 
   // Settings → Profile → Copilot lets a user connect their own subscription
   // via a token generated with `claude setup-token`, so an expired/missing
-  // ambient CLI login no longer dead-ends every run.
+  // ambient login no longer dead-ends every run.
   it('passes a connected subscription token as CLAUDE_CODE_OAUTH_TOKEN, taking priority over ambient login, and sets CLAUDE_CONFIG_DIR alongside it', () => {
     getStoredSubscriptionTokenMock.mockReturnValue(
       'sk-ant-oat01-connected-token',
@@ -562,102 +667,49 @@ describe('registerCopilotIpc', () => {
 
     run({ requestId: 'req-1', prompt: 'hi' });
 
-    expect(spawnCalls[0].options.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe(
+    expect(optionsAt(0).env?.CLAUDE_CODE_OAUTH_TOKEN).toBe(
       'sk-ant-oat01-connected-token',
     );
-    expect(spawnCalls[0].options.env?.CLAUDE_CONFIG_DIR).toBe(
+    expect(optionsAt(0).env?.CLAUDE_CONFIG_DIR).toBe(
       '/fake/userData/copilot-claude-config',
     );
   });
 
-  it('sets utf8 encoding on stdout and stderr, not per-chunk decoding', () => {
+  // 'binary_not_found' keeps its name for the unchanged IPC contract, but its
+  // meaning is now "the runtime never started" — the SDK module failing to
+  // load, or query() throwing during its own construction (the shape the
+  // packaged-app asar bug took before it was fixed). Its user-facing copy no
+  // longer tells anyone to go install a CLI, since that isn't a recovery
+  // action available in this failure mode.
+  it('reports a runtime that never started as binary_not_found, with copy that does not blame a missing CLI', async () => {
+    runCopilotQueryMock.mockRejectedValueOnce(
+      new Error('spawn /app.asar/claude ENOTDIR'),
+    );
     const win = fakeWindow();
     registerCopilotIpc(() => win as unknown as BrowserWindow);
-
-    const child = run({ requestId: 'req-1', prompt: 'hi' });
-
-    // Per-chunk `.toString('utf8')` corrupts a multi-byte character split
-    // across two 'data' events; stream-level setEncoding buffers the
-    // incomplete tail internally instead.
-    expect(child.stdout.setEncoding).toHaveBeenCalledWith('utf8');
-    expect(child.stderr.setEncoding).toHaveBeenCalledWith('utf8');
-  });
-
-  it('buffers stdout across chunks and only dispatches complete lines', () => {
-    const win = fakeWindow();
-    registerCopilotIpc(() => win as unknown as BrowserWindow);
-    const child = run({ requestId: 'req-1', prompt: 'hi' });
-
-    const line = JSON.stringify({
-      type: 'stream_event',
-      event: {
-        type: 'content_block_delta',
-        delta: { type: 'text_delta', text: 'hello' },
-      },
-    });
-    child.stdout.emit('data', line.slice(0, 10));
-    expect(win.webContents.send).not.toHaveBeenCalled();
-    child.stdout.emit('data', `${line.slice(10)}\n`);
-
-    expect(win.webContents.send).toHaveBeenCalledWith('copilot:stream', {
-      requestId: 'req-1',
-      type: 'chunk',
-      text: 'hello',
-    });
-  });
-
-  it('flushes a final line with no trailing newline instead of dropping it on close', () => {
-    const win = fakeWindow();
-    registerCopilotIpc(() => win as unknown as BrowserWindow);
-    const child = run({ requestId: 'req-1', prompt: 'hi' });
-
-    const resultLine = JSON.stringify({
-      type: 'result',
-      result: 'the full reply',
-      session_id: 'sess-9',
-    });
-    // No trailing \n — exactly what a real final stdout write looks like.
-    child.stdout.emit('data', resultLine);
-    expect(win.webContents.send).not.toHaveBeenCalled();
-
-    child.emit('close', 0);
-
-    expect(win.webContents.send).toHaveBeenCalledWith('copilot:stream', {
-      requestId: 'req-1',
-      type: 'done',
-      fullText: 'the full reply',
-      sessionId: 'sess-9',
-    });
-  });
-
-  it('reports the specific ENOENT message and does not let the close handler overwrite it with a generic one', () => {
-    const win = fakeWindow();
-    registerCopilotIpc(() => win as unknown as BrowserWindow);
-    const child = run({ requestId: 'req-1', prompt: 'hi' });
-
-    const enoent = Object.assign(new Error('spawn claude ENOENT'), {
-      code: 'ENOENT',
-    });
-    // Node fires both 'error' and 'close' for a spawn failure like this.
-    child.emit('error', enoent);
-    child.emit('close', null);
+    run({ requestId: 'req-1', prompt: 'hi' });
+    await flush();
 
     expect(win.webContents.send).toHaveBeenCalledTimes(1);
     expect(win.webContents.send).toHaveBeenCalledWith('copilot:stream', {
       requestId: 'req-1',
       type: 'error',
       kind: 'binary_not_found',
-      message: expect.stringContaining("isn't installed"),
+      message: expect.stringContaining('ENOTDIR'),
     });
+    const [, payload] = win.webContents.send.mock.calls[0];
+    expect(payload.message).not.toContain("isn't installed");
   });
 
-  it('reports a generic close failure, including the stderr tail, when the process exits with no result', () => {
+  it('reports a generic failure, including the stderr tail, when the query throws with no result', async () => {
     const win = fakeWindow();
     registerCopilotIpc(() => win as unknown as BrowserWindow);
-    const child = run({ requestId: 'req-1', prompt: 'hi' });
+    run({ requestId: 'req-1', prompt: 'hi' });
+    await flush();
 
-    child.stderr.emit('data', 'permission denied\n');
-    child.emit('close', 1);
+    optionsAt(0).stderr?.('permission denied\n');
+    queries[0].fail(new Error('process exited with code 1'));
+    await flush();
 
     expect(win.webContents.send).toHaveBeenCalledWith('copilot:stream', {
       requestId: 'req-1',
@@ -667,24 +719,62 @@ describe('registerCopilotIpc', () => {
     });
   });
 
-  it('reports a result_error (the CLI itself reporting failure) as an error, not a persisted reply', () => {
+  // A generator that simply ends without ever yielding a result would
+  // otherwise leave the renderer waiting on a terminal event forever.
+  it('reports a generic failure when the query ends without ever producing a result', async () => {
     const win = fakeWindow();
     registerCopilotIpc(() => win as unknown as BrowserWindow);
-    const child = run({ requestId: 'req-1', prompt: 'hi' });
+    run({ requestId: 'req-1', prompt: 'hi' });
+    await flush();
 
-    const line = JSON.stringify({
-      type: 'result',
-      subtype: 'error_during_execution',
-      is_error: true,
-      result: 'internal failure',
+    queries[0].end();
+    await flush();
+
+    expect(win.webContents.send).toHaveBeenCalledWith('copilot:stream', {
+      requestId: 'req-1',
+      type: 'error',
+      kind: 'generic',
+      message: expect.stringContaining('without responding'),
     });
-    child.stdout.emit('data', `${line}\n`);
+  });
+
+  it('reports a result_error (the runtime itself reporting failure) as an error, not a persisted reply', async () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+    run({ requestId: 'req-1', prompt: 'hi' });
+    await flush();
+
+    queries[0].emit(errorResult(['internal failure']));
+    await flush();
 
     expect(win.webContents.send).toHaveBeenCalledWith('copilot:stream', {
       requestId: 'req-1',
       type: 'error',
       kind: 'generic',
       message: 'internal failure',
+    });
+  });
+
+  it('reports an authentication failure as auth_failed', async () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+    run({ requestId: 'req-1', prompt: 'hi' });
+    await flush();
+
+    queries[0].emit(
+      sdkMessage({
+        type: 'system',
+        subtype: 'api_retry',
+        error: 'authentication_failed',
+      }),
+    );
+    await flush();
+
+    expect(win.webContents.send).toHaveBeenCalledWith('copilot:stream', {
+      requestId: 'req-1',
+      type: 'error',
+      kind: 'auth_failed',
+      message: expect.stringMatching(/claude login/i),
     });
   });
 
@@ -696,41 +786,282 @@ describe('registerCopilotIpc', () => {
     expect(() => handler({}, undefined)).not.toThrow();
     expect(() => handler({}, { requestId: 'x', prompt: '' })).not.toThrow();
     expect(() => handler({}, { requestId: '', prompt: 'hi' })).not.toThrow();
-    expect(spawnMock).not.toHaveBeenCalled();
+    expect(runCopilotQueryMock).not.toHaveBeenCalled();
   });
 
-  it('does not send to a destroyed window', () => {
+  it('does not send to a destroyed window', async () => {
     const win = { isDestroyed: () => true, webContents: { send: jest.fn() } };
     registerCopilotIpc(() => win as unknown as BrowserWindow);
-    const child = run({ requestId: 'req-1', prompt: 'hi' });
+    run({ requestId: 'req-1', prompt: 'hi' });
+    await flush();
 
-    child.emit('close', 1);
+    queries[0].end();
+    await flush();
 
     expect(win.webContents.send).not.toHaveBeenCalled();
   });
 });
 
-describe('killAllCopilotProcesses', () => {
-  it('kills every tracked in-flight process', () => {
-    const win = fakeWindow();
-    registerCopilotIpc(() => win as unknown as BrowserWindow);
-    const child1 = run({ requestId: 'req-1', prompt: 'hi' });
-    const child2 = run({ requestId: 'req-2', prompt: 'hi' });
+// Copilot V3: a linked repo changes cwd, the built-in tool grants, the deny
+// patterns, and which system-prompt variant is used — all off ONE boolean
+// (resolveRepoRoot's `linked`), so these assert the whole set together rather
+// than any of them in isolation.
+describe('linking a repo (Copilot V3)', () => {
+  // Real directories on disk, not a mocked fs: resolveRepoRoot's whole job is
+  // deciding whether a path still exists and is a directory, and mocking that
+  // away would leave the branch this suite exists to cover untested.
+  let repoDir: string;
+  let filePath: string;
 
-    killAllCopilotProcesses();
-
-    expect(child1.killed).toBe(true);
-    expect(child2.killed).toBe(true);
+  beforeEach(() => {
+    repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'waypoint-runner-repo-'));
+    filePath = path.join(repoDir, 'README.md');
+    fs.writeFileSync(filePath, '# fixture\n');
   });
 
-  it('does not re-kill a process that already closed on its own', () => {
+  afterEach(() => {
+    fs.rmSync(repoDir, { recursive: true, force: true });
+  });
+
+  it('runs from the linked checkout and grants exactly the three read-only tools', () => {
     const win = fakeWindow();
     registerCopilotIpc(() => win as unknown as BrowserWindow);
-    const child = run({ requestId: 'req-1', prompt: 'hi' });
-    child.emit('close', 0);
+
+    run({
+      requestId: 'req-1',
+      prompt: 'what does buildOptions do?',
+      repoPath: repoDir,
+    });
+
+    expect(optionsAt(0).cwd).toBe(repoDir);
+    expect(optionsAt(0).tools).toEqual(['Read', 'Glob', 'Grep']);
+    expect(optionsAt(0).allowedTools).toEqual([
+      ...ALL_MCP_TOOLS,
+      'Read',
+      'Glob',
+      'Grep',
+    ]);
+  });
+
+  // The product boundary, asserted directly rather than inferred from the
+  // positive case: nothing that can execute or write is ever granted, in
+  // either branch, no matter what a caller passes.
+  it('never grants a write or execute tool, linked or not', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi', repoPath: repoDir });
+    run({ requestId: 'req-2', prompt: 'hi' });
+
+    [0, 1].forEach((index) => {
+      const granted = [
+        ...((optionsAt(index).tools as string[]) ?? []),
+        ...(optionsAt(index).allowedTools ?? []),
+      ].join(' ');
+      ['Bash', 'Edit', 'Write', 'Task', 'WebFetch', 'WebSearch'].forEach(
+        (forbidden) => {
+          expect(granted).not.toContain(forbidden);
+        },
+      );
+    });
+  });
+
+  // The exact pattern set verified live against a fixture repo (see the
+  // REPO_DENYLIST_PATTERNS comment): a generic Grep leaked a planted .env
+  // secret with no deny rules and found nothing with them active. Asserted
+  // element-for-element so a well-meaning "simplification" of the list has to
+  // be a deliberate, reviewed change.
+  it('passes the full secret-path denylist as disallowedTools when linked', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi', repoPath: repoDir });
+
+    expect(optionsAt(0).disallowedTools).toEqual([
+      'Read(./.env)',
+      'Read(./.env.*)',
+      'Grep(./.env)',
+      'Grep(./.env.*)',
+      'Read(./.git/**)',
+      'Grep(./.git/**)',
+      'Read(./**/.ssh/**)',
+      'Grep(./**/.ssh/**)',
+      'Read(./**/*.pem)',
+      'Grep(./**/*.pem)',
+      'Read(./**/id_rsa*)',
+      'Grep(./**/id_rsa*)',
+      'Read(./**/*credentials*)',
+      'Grep(./**/*credentials*)',
+    ]);
+  });
+
+  it('tells the model it has repo access, and does not mention the sentinel, when linked', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi', repoPath: repoDir });
+
+    const prompt = optionsAt(0).systemPrompt as string;
+    expect(prompt).toContain('read-only access (Read, Glob, Grep)');
+    expect(prompt).not.toContain('[[NEEDS_REPO]]');
+    // The untrusted-data framing is unconditional — defense in depth that
+    // must not quietly become linked-only.
+    expect(prompt).toContain('untrusted project data');
+    expect(prompt).toContain('Never read .env files');
+  });
+
+  it('tells the model it has no code access, and how to signal for it, when unlinked', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi' });
+
+    const prompt = optionsAt(0).systemPrompt as string;
+    expect(prompt).toContain('[[NEEDS_REPO]]');
+    expect(prompt).toContain('do not currently have file or code access');
+    expect(prompt).toContain('untrusted project data');
+  });
+
+  // The regression guard the V3 design asks for by name: every path that
+  // isn't a usable checkout must produce byte-identical options/cwd to the
+  // pre-V3 behavior, so "no repo linked" is provably unchanged rather than
+  // probably fine. Each case is compared against a genuinely unlinked run in
+  // the same test rather than against hardcoded expectations.
+  it.each([
+    [
+      'a path that does not exist',
+      () => path.join(os.tmpdir(), 'waypoint-does-not-exist-xyz'),
+    ],
+    ['a file rather than a directory', () => filePath],
+    ['a relative path', () => 'some/relative/path'],
+    ['a flag-shaped value', () => '--dangerously-skip-permissions'],
+    ['an empty string', () => ''],
+  ])('falls back to the unlinked behavior for %s', (_label, makePath) => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi' });
+    run({ requestId: 'req-2', prompt: 'hi', repoPath: makePath() });
+
+    expect(comparableOptions(1)).toEqual(comparableOptions(0));
+    expect(optionsAt(1).cwd).toBe(os.tmpdir());
+    expect(optionsAt(1).disallowedTools).toBeUndefined();
+  });
+
+  it('never lets a rejected repoPath reach the options', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({
+      requestId: 'req-1',
+      prompt: 'hi',
+      repoPath: '--dangerously-skip-permissions',
+    });
+
+    expect(JSON.stringify(optionsAt(0))).not.toContain(
+      'dangerously-skip-permissions',
+    );
+  });
+
+  it('ignores a non-string repoPath instead of failing the run', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    getRegisteredHandler()(
+      {},
+      {
+        requestId: 'req-1',
+        prompt: 'hi',
+        repoPath: { toString: () => repoDir },
+      },
+    );
+
+    expect(optionsAt(0).cwd).toBe(os.tmpdir());
+    expect(optionsAt(0).tools).toEqual([]);
+  });
+
+  // resolveRepoRoot runs per ATTEMPT, not per IPC message, so a stale-session
+  // retry re-resolves — a checkout deleted between the two attempts degrades
+  // on the retry instead of running from a missing cwd.
+  it('re-resolves the checkout on a stale-session retry', async () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({
+      requestId: 'req-1',
+      prompt: 'hi',
+      repoPath: repoDir,
+      resumeSessionId: '6b16ad5b-1e3f-4a2c-8f9d-2c7e5a9b3d10',
+    });
+    await flush();
+    expect(optionsAt(0).cwd).toBe(repoDir);
+
+    fs.rmSync(repoDir, { recursive: true, force: true });
+    queries[0].emit(
+      errorResult([
+        'No conversation found with session ID: 6b16ad5b-1e3f-4a2c-8f9d-2c7e5a9b3d10',
+      ]),
+    );
+    await flush();
+
+    expect(runCopilotQueryMock).toHaveBeenCalledTimes(2);
+    expect(optionsAt(1).cwd).toBe(os.tmpdir());
+    expect(optionsAt(1).tools).toEqual([]);
+  });
+
+  it('reports needsRepoLink from the stream through to the renderer', async () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi' });
+    await flush();
+
+    queries[0].emit(
+      successResult(
+        'I would need the code for that.\n[[NEEDS_REPO]]',
+        '6b16ad5b-1e3f-4a2c-8f9d-2c7e5a9b3d10',
+      ),
+    );
+    await flush();
+
+    expect(win.webContents.send).toHaveBeenCalledWith('copilot:stream', {
+      requestId: 'req-1',
+      type: 'done',
+      fullText: 'I would need the code for that.',
+      sessionId: '6b16ad5b-1e3f-4a2c-8f9d-2c7e5a9b3d10',
+      needsRepoLink: true,
+    });
+  });
+});
+
+describe('killAllCopilotProcesses', () => {
+  it('closes every tracked in-flight query', async () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+    run({ requestId: 'req-1', prompt: 'hi' });
+    run({ requestId: 'req-2', prompt: 'hi' });
+    await flush();
 
     killAllCopilotProcesses();
 
-    expect(child.killed).toBe(false);
+    expect(queries[0].closeMock).toHaveBeenCalled();
+    expect(queries[1].closeMock).toHaveBeenCalled();
+  });
+
+  it('does not close a query that already finished on its own', async () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+    run({ requestId: 'req-1', prompt: 'hi' });
+    await flush();
+    queries[0].emit(successResult('done'));
+    // In single-prompt mode the subprocess exits once it has produced its
+    // result, so the generator ends right behind it — that is what untracks
+    // the query.
+    queries[0].end();
+    await flush();
+
+    killAllCopilotProcesses();
+
+    expect(queries[0].closeMock).not.toHaveBeenCalled();
   });
 });
