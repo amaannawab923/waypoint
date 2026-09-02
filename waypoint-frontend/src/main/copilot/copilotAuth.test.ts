@@ -1,4 +1,5 @@
-import { EventEmitter } from 'events';
+import * as os from 'os';
+import type { Options, Query, SDKMessage } from './claudeSdkClient';
 
 const ipcMainHandleMock = jest.fn();
 const getPathMock = jest.fn(() => '/fake/userData');
@@ -18,77 +19,86 @@ jest.mock('electron', () => ({
   },
 }));
 
-type FakeStdin = EventEmitter & {
-  writes: string[];
-  ended: boolean;
-  write: (chunk: string) => boolean;
+// The probe now runs through the same SDK seam the runner does, so it mocks
+// the same one module — the real (pure-ESM) package is never loaded by a
+// test. See copilotRunner.test.ts for the same fake-generator shape.
+type FakeQuery = {
+  query: Query;
+  emit: (message: SDKMessage) => void;
   end: () => void;
+  closeMock: jest.Mock;
 };
 
-function makeFakeStdin(): FakeStdin {
-  const emitter = new EventEmitter() as FakeStdin;
-  emitter.writes = [];
-  emitter.ended = false;
-  emitter.write = (chunk: string) => {
-    emitter.writes.push(chunk);
-    return true;
+function makeFakeQuery(): FakeQuery {
+  const queue: SDKMessage[] = [];
+  let finished = false;
+  let notify: (() => void) | null = null;
+  const wake = () => {
+    const resume = notify;
+    notify = null;
+    resume?.();
   };
-  emitter.end = () => {
-    emitter.ended = true;
-  };
-  return emitter;
-}
 
-type FakeStream = EventEmitter & { setEncoding: jest.Mock; resume: jest.Mock };
-
-function makeFakeStream(): FakeStream {
-  return Object.assign(new EventEmitter(), {
-    setEncoding: jest.fn(),
-    resume: jest.fn(),
+  const closeMock = jest.fn(() => {
+    finished = true;
+    wake();
   });
+
+  const waitForWake = () =>
+    new Promise<void>((resolve) => {
+      notify = resolve;
+    });
+
+  const query = {
+    close: closeMock,
+    async next(): Promise<IteratorResult<SDKMessage, void>> {
+      while (!queue.length && !finished) {
+        // eslint-disable-next-line no-await-in-loop
+        await waitForWake();
+      }
+      if (queue.length) {
+        return { value: queue.shift() as SDKMessage, done: false };
+      }
+      return { value: undefined, done: true };
+    },
+    async return(): Promise<IteratorResult<SDKMessage, void>> {
+      finished = true;
+      return { value: undefined, done: true };
+    },
+    async throw(err: unknown): Promise<IteratorResult<SDKMessage, void>> {
+      throw err;
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+  } as unknown as Query;
+
+  return {
+    query,
+    closeMock,
+    emit: (message: SDKMessage) => {
+      queue.push(message);
+      wake();
+    },
+    end: () => {
+      finished = true;
+      wake();
+    },
+  };
 }
 
-type FakeChild = EventEmitter & {
-  stdin: FakeStdin;
-  stdout: FakeStream;
-  stderr: FakeStream;
-  kill: jest.Mock;
-};
-
-function makeFakeChild(): FakeChild {
-  const child = new EventEmitter() as FakeChild;
-  child.stdin = makeFakeStdin();
-  child.stdout = makeFakeStream();
-  child.stderr = makeFakeStream();
-  child.kill = jest.fn();
-  return child;
-}
-
-let lastChild: FakeChild | null = null;
-const spawnCalls: Array<{
-  binary: string;
-  args: string[];
-  options: { cwd?: string; env?: Record<string, string | undefined> };
-}> = [];
-const spawnMock = jest.fn(
-  (
-    binary: string,
-    args: string[],
-    options: { cwd?: string; env?: Record<string, string | undefined> },
-  ) => {
-    lastChild = makeFakeChild();
-    spawnCalls.push({ binary, args, options });
-    return lastChild;
-  },
-);
-jest.mock('child_process', () => ({
-  spawn: (
-    ...args: [
-      string,
-      string[],
-      { cwd?: string; env?: Record<string, string | undefined> },
-    ]
-  ) => spawnMock(...args),
+const queries: FakeQuery[] = [];
+const runCopilotQueryMock = jest.fn<
+  Promise<Query>,
+  [{ prompt: string; options: Options }]
+>(async () => {
+  const fake = makeFakeQuery();
+  queries.push(fake);
+  return fake.query;
+});
+jest.mock('./claudeSdkClient', () => ({
+  runCopilotQuery: (args: { prompt: string; options: Options }) =>
+    runCopilotQueryMock(args),
 }));
 
 const readFileSyncMock = jest.fn();
@@ -118,19 +128,41 @@ function getHandler(channel: string) {
   return call[1] as (event: unknown, ...args: unknown[]) => unknown;
 }
 
-function successJsonOutput() {
-  return `${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'OK' })}\n`;
+// Fixtures name only the fields parseSdkMessage discriminates on; see
+// parseSdkMessage.test.ts for why the cast is the local escape hatch.
+function sdkMessage(fields: Record<string, unknown>): SDKMessage {
+  return fields as unknown as SDKMessage;
 }
 
-function rejectedJsonOutput() {
-  return `${JSON.stringify({
+function successResult() {
+  return sdkMessage({
+    type: 'result',
+    subtype: 'success',
+    is_error: false,
+    result: 'OK',
+  });
+}
+
+// A rejected token comes back as the SUCCESS subtype with is_error set — the
+// real shape, verified live, and the reason parseSdkMessage checks is_error
+// before the subtype.
+function rejectedResult() {
+  return sdkMessage({
     type: 'result',
     subtype: 'success',
     is_error: true,
     api_error_status: 401,
     result:
       'Failed to authenticate. API Error: 401 OAuth access token has expired.',
-  })}\n`;
+  });
+}
+
+// The probe drives an async generator, so assertions about what it did with a
+// message have to let the microtask queue drain first.
+function flush(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
 }
 
 beforeEach(() => {
@@ -141,8 +173,7 @@ beforeEach(() => {
   decryptStringMock.mockImplementation((b: Buffer) =>
     b.toString().replace(/^enc:/, ''),
   );
-  spawnCalls.length = 0;
-  lastChild = null;
+  queries.length = 0;
   registerCopilotAuthIpc();
 });
 
@@ -200,55 +231,57 @@ describe('copilot:auth:status', () => {
 });
 
 describe('copilot:auth:save', () => {
-  it('rejects a blank token without spawning anything', async () => {
+  it('rejects a blank token without running anything', async () => {
     const result = await getHandler('copilot:auth:save')({}, '   ');
     expect(result).toEqual({ ok: false, message: 'Paste a token first.' });
-    expect(spawnMock).not.toHaveBeenCalled();
+    expect(runCopilotQueryMock).not.toHaveBeenCalled();
   });
 
-  it('rejects a non-subscription-token shape without spawning anything', async () => {
+  it('rejects a non-subscription-token shape without running anything', async () => {
     const result = await getHandler('copilot:auth:save')(
       {},
       'sk-ant-api03-not-a-subscription-token',
     );
     expect((result as { ok: boolean }).ok).toBe(false);
-    expect(spawnMock).not.toHaveBeenCalled();
+    expect(runCopilotQueryMock).not.toHaveBeenCalled();
   });
 
   it('refuses to save when secure storage is unavailable', async () => {
     isEncryptionAvailableMock.mockReturnValue(false);
     const result = await getHandler('copilot:auth:save')({}, VALID_TOKEN);
     expect((result as { ok: boolean }).ok).toBe(false);
-    expect(spawnMock).not.toHaveBeenCalled();
+    expect(runCopilotQueryMock).not.toHaveBeenCalled();
     expect(writeFileSyncMock).not.toHaveBeenCalled();
   });
 
   it('validates the token via a real isolated probe before saving, and saves on success', async () => {
     const promise = getHandler('copilot:auth:save')({}, VALID_TOKEN);
-    await Promise.resolve();
-    await Promise.resolve();
+    await flush();
 
-    expect(spawnCalls).toHaveLength(1);
+    expect(runCopilotQueryMock).toHaveBeenCalledTimes(1);
+    const { options } = runCopilotQueryMock.mock.calls[0][0];
     // The probe env is isolated — only the candidate token, CLAUDE_CONFIG_DIR,
     // PATH, and proxy vars — not the full ambient environment, so it can't be
-    // masked by an already-logged-in CLI session.
-    expect(spawnCalls[0].options.env).toEqual(
+    // masked by an already-logged-in session.
+    expect(options.env).toEqual(
       expect.objectContaining({ CLAUDE_CODE_OAUTH_TOKEN: VALID_TOKEN }),
     );
     // Matches copilotRunner.ts's own gating: once this token is connected,
     // every real run sets CLAUDE_CONFIG_DIR alongside CLAUDE_CODE_OAUTH_TOKEN
     // (see copilotRunner.test.ts), so the probe must validate the token
     // under that same redirected config/credential namespace.
-    expect(spawnCalls[0].options.env?.CLAUDE_CONFIG_DIR).toBe(
+    expect(options.env?.CLAUDE_CONFIG_DIR).toBe(
       '/fake/userData/copilot-claude-config',
     );
-    expect(spawnCalls[0].args).toEqual(
-      expect.arrayContaining(['--tools', '', '--output-format', 'json']),
-    );
+    // No tool access is needed for a "reply with OK" round trip, and the
+    // probe holds the same settings isolation the real runner does rather
+    // than the weaker CLI --safe-mode posture it used to pass.
+    expect(options.tools).toEqual([]);
+    expect(options.settingSources).toEqual([]);
+    expect(options.cwd).toBe(os.tmpdir());
 
-    const child = lastChild as FakeChild;
-    child.stdout.emit('data', successJsonOutput());
-    child.emit('close', 0);
+    queries[0].emit(successResult());
+    queries[0].end();
 
     const result = await promise;
     expect(result).toEqual({ ok: true, last4: VALID_TOKEN.slice(-4) });
@@ -267,12 +300,10 @@ describe('copilot:auth:save', () => {
 
   it('does not save a token the probe rejects, and surfaces the real rejection reason', async () => {
     const promise = getHandler('copilot:auth:save')({}, VALID_TOKEN);
-    await Promise.resolve();
-    await Promise.resolve();
+    await flush();
 
-    const child = lastChild as FakeChild;
-    child.stdout.emit('data', rejectedJsonOutput());
-    child.emit('close', 0);
+    queries[0].emit(rejectedResult());
+    queries[0].end();
 
     const result = await promise;
     expect(result).toEqual({
@@ -282,23 +313,86 @@ describe('copilot:auth:save', () => {
     expect(writeFileSyncMock).not.toHaveBeenCalled();
   });
 
-  it('reports a clear message when the CLI is not installed (ENOENT)', async () => {
+  it('surfaces an authentication failure reported mid-stream rather than waiting for a result', async () => {
     const promise = getHandler('copilot:auth:save')({}, VALID_TOKEN);
-    await Promise.resolve();
-    await Promise.resolve();
+    await flush();
 
-    const child = lastChild as FakeChild;
-    const enoent = Object.assign(new Error('spawn claude ENOENT'), {
-      code: 'ENOENT',
+    queries[0].emit(
+      sdkMessage({
+        type: 'system',
+        subtype: 'api_retry',
+        error: 'authentication_failed',
+      }),
+    );
+
+    await expect(promise).resolves.toEqual({
+      ok: false,
+      message: expect.stringMatching(/claude login/i),
     });
-    child.emit('error', enoent);
+    expect(writeFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  // The runtime failing to start at all no longer means "the CLI isn't
+  // installed" — nothing looks a binary up on PATH any more — so the probe
+  // simply reports whatever the failure actually was.
+  it('reports the underlying reason when the runtime cannot start at all', async () => {
+    runCopilotQueryMock.mockRejectedValueOnce(
+      new Error('spawn /app.asar/claude ENOTDIR'),
+    );
+    const promise = getHandler('copilot:auth:save')({}, VALID_TOKEN);
 
     const result = await promise;
     expect(result).toEqual({
       ok: false,
-      message: expect.stringContaining("isn't installed"),
+      message: expect.stringContaining('ENOTDIR'),
     });
     expect(writeFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  // A stream that ends with no terminal result proves nothing about the
+  // token, so it must not be saved on the strength of "nothing went wrong".
+  it('does not save a token when the probe stream ends without a result', async () => {
+    const promise = getHandler('copilot:auth:save')({}, VALID_TOKEN);
+    await flush();
+
+    queries[0].end();
+
+    const result = await promise;
+    expect(result).toEqual({
+      ok: false,
+      message: expect.stringContaining("Couldn't validate the token"),
+    });
+    expect(writeFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  // The rewritten Promise.race/query?.close()/finally{clearTimeout} shape is
+  // new in this migration (the old version was a plain setTimeout +
+  // child.kill() inside a promise executor) and has a real closure-capture
+  // hazard worth covering directly: `query` is declared before run() starts
+  // and assigned only once runCopilotQuery resolves, so the timeout callback
+  // reads whatever `query` holds AT THE MOMENT it fires, not a snapshot from
+  // when the timer was set.
+  it('times out and closes the probe query when it never produces a result', async () => {
+    jest.useFakeTimers();
+    try {
+      const promise = getHandler('copilot:auth:save')({}, VALID_TOKEN);
+      // Let runCopilotQuery's own promise resolve so `query` is actually
+      // assigned before the timeout fires — otherwise this would only prove
+      // the timeout resolves, not that it closes the right thing.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      await jest.advanceTimersByTimeAsync(20_000);
+
+      const result = await promise;
+      expect(result).toEqual({
+        ok: false,
+        message: 'Timed out validating the token.',
+      });
+      expect(queries[0].closeMock).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   // A locked keychain or a full disk previously rejected this invoke
@@ -311,12 +405,10 @@ describe('copilot:auth:save', () => {
       throw new Error('ENOSPC: no space left on device');
     });
     const promise = getHandler('copilot:auth:save')({}, VALID_TOKEN);
-    await Promise.resolve();
-    await Promise.resolve();
+    await flush();
 
-    const child = lastChild as FakeChild;
-    child.stdout.emit('data', successJsonOutput());
-    child.emit('close', 0);
+    queries[0].emit(successResult());
+    queries[0].end();
 
     await expect(promise).resolves.toEqual({
       ok: false,
@@ -324,18 +416,16 @@ describe('copilot:auth:save', () => {
     });
   });
 
-  it("writes the prompt to stdin, not argv, matching copilotRunner.ts's own injection guard", async () => {
+  it('sends the probe question as the query prompt, never as an option', async () => {
     const promise = getHandler('copilot:auth:save')({}, VALID_TOKEN);
-    await Promise.resolve();
-    await Promise.resolve();
+    await flush();
 
-    const child = lastChild as FakeChild;
-    expect(child.stdin.writes.join('')).not.toBe('');
-    expect(child.stdin.ended).toBe(true);
-    expect(spawnCalls[0].args).not.toContain(child.stdin.writes.join(''));
+    const { prompt, options } = runCopilotQueryMock.mock.calls[0][0];
+    expect(prompt).not.toBe('');
+    expect(JSON.stringify(options)).not.toContain(prompt);
 
-    child.stdout.emit('data', successJsonOutput());
-    child.emit('close', 0);
+    queries[0].emit(successResult());
+    queries[0].end();
     await promise;
   });
 });
