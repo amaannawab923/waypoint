@@ -1,0 +1,662 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Waypoint — Codebase linking, proposed flow</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --font-display:'Space Grotesk',ui-sans-serif,system-ui,sans-serif;
+  --font-body:'Public Sans',ui-sans-serif,system-ui,sans-serif;
+  --font-mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+
+  --bg:#ffffff; --bg-inset:#f9f9fb; --surface:#ffffff; --surface-2:#f4f4f6;
+  --border:#e4e4e8; --border-strong:#d3d3d9;
+  --text:#0a0a0c; --text-secondary:#53535c; --text-muted:#9a9aa3;
+  --accent:#18181b; --accent-hover:#000; --accent-gradient:linear-gradient(180deg,#303035 0%,#0a0a0c 100%);
+  --accent-soft-bg:#f1f1f3; --accent-soft-text:#0a0a0c; --on-accent:#fff;
+  --success:#157a3d; --success-bg:#eafbf0;
+  --warning:#a4650b; --warning-bg:#fdf3e3;
+  --danger:#c8241a; --danger-bg:#fdeceb;
+  --info:#1c5fc4; --info-bg:#eaf1fd;
+  --radius-sm:6px; --radius:10px; --radius-lg:16px;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg-inset);color:var(--text);font-family:var(--font-body);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+h1,h2,h3,h4{font-family:var(--font-display);letter-spacing:-.01em;margin:0}
+button{font-family:inherit;font-size:inherit}
+
+/* ---------- demo scaffolding (not part of the product) ---------- */
+.demo-bar{position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;align-items:center;gap:10px;
+  padding:10px 20px;background:#0a0a0c;color:#f2f2f4;font-size:12px}
+.demo-bar strong{font-family:var(--font-display);font-weight:600;letter-spacing:.01em}
+.demo-bar .sep{opacity:.35}
+.demo-bar button{background:#232328;color:#f2f2f4;border:1px solid #3a3a42;border-radius:var(--radius-sm);
+  padding:4px 10px;cursor:pointer;font-size:12px}
+.demo-bar button:hover{background:#303035}
+.demo-bar button[data-on="true"]{background:#f2f2f4;color:#0a0a0c;border-color:#f2f2f4}
+.demo-note{color:#a8a8b3}
+.wrap{max-width:1180px;margin:0 auto;padding:26px 20px 60px;display:flex;flex-direction:column;gap:26px}
+.section-label{display:flex;align-items:baseline;gap:10px;font-family:var(--font-display);font-size:12px;
+  font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--text-muted)}
+.section-label span{font-family:var(--font-body);font-weight:400;letter-spacing:0;text-transform:none;font-size:12.5px}
+
+/* ---------- app chrome ---------- */
+.app{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;
+  box-shadow:0 1px 2px rgba(10,10,12,.04),0 8px 28px rgba(10,10,12,.06)}
+.titlebar{display:flex;align-items:center;gap:8px;padding:9px 14px;border-bottom:1px solid var(--border);background:var(--bg-inset)}
+.dot{width:10px;height:10px;border-radius:99px;background:var(--border-strong)}
+.titlebar .crumb{margin-left:8px;font-size:12px;color:var(--text-muted)}
+.titlebar .crumb b{color:var(--text-secondary);font-weight:500}
+
+/* project header + badge (G5) */
+.projhead{display:flex;align-items:center;gap:10px;padding:14px 20px;border-bottom:1px solid var(--border)}
+.projhead .icon{font-size:19px;line-height:1}
+.projhead h2{font-size:15px;font-weight:500}
+.projhead .spacer{flex:1}
+.badge{position:relative;display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;
+  border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--surface);
+  font-size:12px;color:var(--text-secondary);cursor:default;transition:background .12s,border-color .12s}
+.badge:hover{background:var(--surface-2);border-color:var(--border-strong)}
+.badge.linked{color:var(--text)}
+.badge.linked .pip{background:var(--success)}
+.badge.unlinked{color:var(--text-muted);border-style:dashed;cursor:pointer}
+.badge.unlinked:hover{color:var(--text-secondary)}
+.badge.stale{color:var(--warning);background:var(--warning-bg);border-color:#f0dcb6}
+.badge.stale .pip{background:var(--warning)}
+.pip{width:6px;height:6px;border-radius:99px;background:var(--text-muted);flex:none}
+.badge .pop{position:absolute;top:calc(100% + 7px);right:0;width:290px;padding:11px 12px;
+  background:var(--surface);border:1px solid var(--border-strong);border-radius:var(--radius);
+  box-shadow:0 10px 30px rgba(10,10,12,.12);opacity:0;visibility:hidden;transform:translateY(-3px);
+  transition:.14s;text-align:left;z-index:10}
+.badge:hover .pop{opacity:1;visibility:visible;transform:translateY(0)}
+.pop .p-title{font-size:12.5px;font-weight:600;color:var(--text);margin-bottom:3px}
+.pop .p-path{font-family:var(--font-mono);font-size:11.5px;color:var(--text-secondary);word-break:break-all;margin-bottom:8px}
+.pop .p-meta{display:flex;gap:12px;font-size:11.5px;color:var(--text-muted);margin-bottom:9px}
+.pop .p-actions{display:flex;gap:6px;border-top:1px solid var(--border);padding-top:8px}
+
+/* settings split */
+.split{display:flex;min-height:520px}
+.sidenav{width:212px;flex:none;border-right:1px solid var(--border);padding:20px 14px;display:flex;flex-direction:column;gap:18px}
+.sidenav .proj{display:flex;align-items:center;gap:8px;padding:0 8px}
+.sidenav .proj span:last-child{font-family:var(--font-display);font-size:13.5px;font-weight:500}
+.navgroup{display:flex;flex-direction:column;gap:2px}
+.navgroup .glabel{padding:0 8px 4px;font-size:11px;font-weight:500;letter-spacing:.04em;text-transform:uppercase;color:var(--text-muted)}
+.navitem{display:flex;align-items:center;gap:7px;padding:6px 8px;border-radius:var(--radius-sm);
+  font-size:13.5px;color:var(--text-secondary);cursor:pointer;transition:background .12s,color .12s}
+.navitem:hover{background:var(--surface-2);color:var(--text)}
+.navitem.active{background:var(--accent-soft-bg);color:var(--accent-soft-text);font-weight:500}
+.navitem .nav-pip{margin-left:auto;width:6px;height:6px;border-radius:99px}
+.pane{flex:1;min-width:0;padding:30px 34px 40px}
+.pane-inner{max-width:600px;display:flex;flex-direction:column;gap:26px}
+
+/* buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:32px;padding:0 12px;
+  border-radius:var(--radius-sm);font-weight:500;white-space:nowrap;cursor:pointer;border:1px solid transparent;
+  transition:background .12s,filter .12s,border-color .12s;font-size:13.5px}
+.btn-primary{background:var(--accent);background-image:var(--accent-gradient);color:var(--on-accent);box-shadow:0 1px 2px rgba(10,10,12,.14)}
+.btn-primary:hover{filter:brightness(1.35)}
+.btn-secondary{background:var(--surface);border-color:var(--border-strong);color:var(--text)}
+.btn-secondary:hover{background:var(--surface-2)}
+.btn-ghost{background:transparent;color:var(--text-secondary)}
+.btn-ghost:hover{background:var(--surface-2);color:var(--text)}
+.btn-xs{height:25px;padding:0 8px;font-size:12px;gap:5px}
+.btn-danger-ghost{background:transparent;color:var(--danger)}
+.btn-danger-ghost:hover{background:var(--danger-bg)}
+
+/* headings + copy */
+.field-head{display:flex;flex-direction:column;gap:5px}
+.field-head .lbl{font-size:13.5px;font-weight:500}
+.field-head p{margin:0;font-size:13.5px;color:var(--text-secondary)}
+
+/* suggestions (G2) */
+.suggest{display:flex;flex-direction:column;gap:8px}
+.suggest .shead{display:flex;align-items:center;gap:8px;font-size:11.5px;font-weight:600;
+  letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted)}
+.suggest .shead::after{content:"";flex:1;height:1px;background:var(--border)}
+.sugg{display:flex;align-items:center;gap:11px;width:100%;text-align:left;padding:11px 12px;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;
+  transition:border-color .12s,background .12s,transform .12s}
+.sugg:hover{border-color:var(--border-strong);background:var(--bg-inset)}
+.sugg:active{transform:translateY(1px)}
+.sugg .g{width:28px;height:28px;flex:none;display:flex;align-items:center;justify-content:center;
+  border-radius:var(--radius-sm);background:var(--surface-2);color:var(--text-secondary)}
+.sugg .body{min-width:0;flex:1;display:flex;flex-direction:column;gap:2px}
+.sugg .name{font-size:13.5px;font-weight:500;display:flex;align-items:center;gap:7px}
+.sugg .why{font-size:11.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:99px;
+  padding:1px 7px;font-weight:400}
+.sugg .why.match{color:var(--info);border-color:#c9dcf8;background:var(--info-bg)}
+.sugg .path{font-family:var(--font-mono);font-size:11.5px;color:var(--text-secondary);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sugg .go{font-size:12px;color:var(--text-muted);flex:none}
+.sugg:hover .go{color:var(--text)}
+.browse-row{display:flex;align-items:center;gap:10px}
+.browse-row .hint{font-size:12.5px;color:var(--text-muted)}
+
+/* linked confirmation (G3) */
+.linked-card{border:1px solid var(--border-strong);border-radius:var(--radius);overflow:hidden;background:var(--surface)}
+.linked-top{display:flex;align-items:flex-start;gap:11px;padding:15px 16px}
+.linked-top .repoicon{width:34px;height:34px;flex:none;display:flex;align-items:center;justify-content:center;
+  border-radius:var(--radius-sm);background:var(--surface-2);color:var(--text)}
+.linked-top .info{min-width:0;flex:1;display:flex;flex-direction:column;gap:5px}
+.repo-name{display:flex;align-items:center;gap:8px;font-family:var(--font-display);font-size:14.5px;font-weight:500}
+.ok{display:inline-flex;align-items:center;gap:4px;height:19px;padding:0 7px;border-radius:99px;
+  background:var(--success-bg);color:var(--success);font-size:11px;font-weight:600;font-family:var(--font-body);letter-spacing:.01em}
+.repo-path{font-family:var(--font-mono);font-size:12px;color:var(--text-secondary);word-break:break-all}
+.repo-meta{display:flex;flex-wrap:wrap;gap:7px;margin-top:3px}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:var(--radius-sm);
+  background:var(--bg-inset);border:1px solid var(--border);font-size:11.5px;color:var(--text-secondary)}
+.chip b{font-weight:500;color:var(--text);font-family:var(--font-mono);font-size:11px}
+.linked-foot{display:flex;align-items:center;gap:8px;padding:10px 16px;border-top:1px solid var(--border);background:var(--bg-inset)}
+.linked-foot .spacer{flex:1}
+.scope-note{display:flex;gap:8px;padding:11px 16px;border-top:1px solid var(--border);
+  font-size:12.5px;color:var(--text-secondary);background:var(--surface)}
+.scope-note .ic{color:var(--text-muted);flex:none;margin-top:1px}
+
+/* toast-on-link */
+.flash{display:flex;align-items:center;gap:8px;padding:9px 12px;border-radius:var(--radius);
+  background:var(--success-bg);border:1px solid #bfe7cd;color:var(--success);font-size:13px;font-weight:500}
+
+/* errors (G4) */
+.err{border:1px solid #f0c4c0;background:var(--danger-bg);border-radius:var(--radius);padding:12px 13px;
+  display:flex;flex-direction:column;gap:7px}
+.err .etop{display:flex;gap:9px}
+.err .ic{color:var(--danger);flex:none;margin-top:1px}
+.err .etitle{font-size:13.5px;font-weight:600;color:#8e1a13}
+.err .ebody{font-size:13px;color:#8e1a13;opacity:.92;margin-top:2px}
+.err .ebody code{font-family:var(--font-mono);font-size:12px;background:rgba(200,36,26,.09);padding:1px 4px;border-radius:4px}
+.err details{margin-left:25px}
+.err summary{cursor:pointer;font-size:12px;color:#a3392f;opacity:.85;list-style:none}
+.err summary::-webkit-details-marker{display:none}
+.err summary::before{content:"▸ ";font-size:10px}
+.err details[open] summary::before{content:"▾ "}
+.err pre{margin:6px 0 0;font-family:var(--font-mono);font-size:11.5px;color:#8e1a13;
+  background:rgba(200,36,26,.07);padding:7px 9px;border-radius:var(--radius-sm);white-space:pre-wrap;word-break:break-all}
+.err .eactions{margin-left:25px;display:flex;gap:7px}
+
+/* stale (G6) */
+.warn{border:1px solid #f0dcb6;background:var(--warning-bg);border-radius:var(--radius);padding:12px 13px;
+  display:flex;gap:9px;align-items:flex-start}
+.warn .ic{color:var(--warning);flex:none;margin-top:1px}
+.warn .wtitle{font-size:13.5px;font-weight:600;color:#7c4c06}
+.warn .wbody{font-size:13px;color:#7c4c06;opacity:.92;margin-top:2px}
+.warn .wactions{display:flex;gap:7px;margin-top:9px}
+
+/* ---------- copilot panel ---------- */
+.copilot{width:390px;flex:none;border-left:1px solid var(--border);display:flex;flex-direction:column;background:var(--bg)}
+.cop-head{display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid var(--border)}
+.cop-head .t{font-family:var(--font-display);font-size:13px;font-weight:500}
+.cop-head .spacer{flex:1}
+.cop-body{flex:1;padding:14px;display:flex;flex-direction:column;gap:12px;background:var(--bg)}
+.msg{max-width:86%;padding:9px 12px;border-radius:var(--radius);font-size:13px;line-height:1.5}
+.msg.user{align-self:flex-end;background:var(--accent);background-image:var(--accent-gradient);color:var(--on-accent)}
+.msg.bot{align-self:flex-start;background:var(--surface-2);color:var(--text)}
+.card{border:1px solid var(--border-strong);border-radius:var(--radius);overflow:hidden;background:var(--surface)}
+.card-head{display:flex;align-items:center;gap:7px;padding:8px 12px;border-bottom:1px solid var(--border);background:var(--bg-inset)}
+.card-head .k{font-size:10.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--text-secondary)}
+.card-head .proj{margin-left:auto;display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--text-muted)}
+.card-body{padding:11px 12px;display:flex;flex-direction:column;gap:10px}
+.card-body p{margin:0;font-size:12.5px;line-height:1.5;color:var(--text-secondary)}
+.card-body p b{color:var(--text);font-weight:600}
+.mini-sugg{display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:8px 10px;
+  border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);cursor:pointer;transition:.12s}
+.mini-sugg:hover{border-color:var(--border-strong);background:var(--bg-inset)}
+.mini-sugg .n{font-size:12.5px;font-weight:500}
+.mini-sugg .p{font-family:var(--font-mono);font-size:11px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mini-sugg .col{min-width:0;flex:1;display:flex;flex-direction:column;gap:1px}
+.card-foot{display:flex;align-items:center;gap:7px;padding:9px 12px;border-top:1px solid var(--border)}
+.card-foot .spacer{flex:1}
+.cop-composer{border-top:1px solid var(--border);padding:11px 14px}
+.cop-composer .box{border:1px solid var(--border-strong);border-radius:var(--radius);padding:9px 11px;
+  font-size:13px;color:var(--text-muted);background:var(--surface)}
+.linked-inline{display:flex;align-items:center;gap:9px;padding:10px 12px;border:1px solid #bfe7cd;
+  background:var(--success-bg);border-radius:var(--radius)}
+.linked-inline .col{min-width:0;flex:1;display:flex;flex-direction:column;gap:1px}
+.linked-inline .n{font-size:12.5px;font-weight:600;color:var(--success)}
+.linked-inline .p{font-family:var(--font-mono);font-size:11px;color:#2c6b45;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hidden{display:none!important}
+.footnote{font-size:12px;color:var(--text-muted);padding:0 2px}
+.footnote b{color:var(--text-secondary);font-weight:500}
+svg{display:block}
+</style>
+</head>
+<body>
+
+<div class="demo-bar">
+  <strong>Mockup</strong><span class="sep">|</span>
+  <span class="demo-note">Proposed repo-linking flow. Click a suggestion to link.</span>
+  <span class="sep">|</span>
+  <button id="btn-reset">Reset to unlinked</button>
+  <button id="btn-err">Show validation error</button>
+  <button id="btn-stale">Show stale link</button>
+</div>
+
+<div class="wrap">
+
+  <!-- ============ SETTINGS PAGE ============ -->
+  <div class="section-label">Project settings → Codebase <span>the deliberate entry point, with suggestions (G2), rich confirmation (G3), human errors (G4), stale state (G6)</span></div>
+
+  <div class="app">
+    <div class="titlebar">
+      <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+      <div class="crumb">Waypoint <b>› Settings › Codebase</b></div>
+    </div>
+
+    <!-- project header with the linked badge (G5) -->
+    <div class="projhead">
+      <span class="icon">◆</span>
+      <h2>Waypoint</h2>
+      <div class="spacer"></div>
+
+      <div class="badge unlinked" id="badge-unlinked" title="Link a repository">
+        <span class="pip"></span> Code not linked
+      </div>
+
+      <div class="badge linked hidden" id="badge-linked">
+        <span class="pip"></span>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20V7a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v3"/><circle cx="12" cy="17" r="2"/><path d="M12 15v-2m0 6v2"/></svg>
+        <span id="badge-repo-name">waypoint</span>
+        <div class="pop">
+          <div class="p-title">Linked repository</div>
+          <div class="p-path" id="pop-path">~/code/waypoint</div>
+          <div class="p-meta"><span>⌥ main</span><span>updated 2 hours ago</span></div>
+          <div class="p-actions">
+            <button class="btn btn-secondary btn-xs">Change folder…</button>
+            <button class="btn btn-ghost btn-xs">Open in settings</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="badge stale hidden" id="badge-stale">
+        <span class="pip"></span> Repo folder missing
+      </div>
+    </div>
+
+    <div class="split">
+      <!-- settings nav -->
+      <div class="sidenav">
+        <div class="proj"><span class="icon">◆</span><span>Waypoint</span></div>
+        <div class="navgroup">
+          <div class="navitem">General</div>
+          <div class="navitem">Members</div>
+          <div class="navitem">Features</div>
+          <div class="navitem active">
+            Codebase
+            <span class="nav-pip" id="nav-pip" style="background:var(--text-muted)"></span>
+          </div>
+        </div>
+        <div class="navgroup">
+          <div class="glabel">Work Structure</div>
+          <div class="navitem">States</div>
+          <div class="navitem">Labels</div>
+          <div class="navitem">Estimates</div>
+        </div>
+        <div class="navgroup">
+          <div class="glabel">Execution</div>
+          <div class="navitem">Automations</div>
+        </div>
+      </div>
+
+      <!-- settings pane -->
+      <div class="pane">
+        <div class="pane-inner">
+          <h1 style="font-size:18px;font-weight:500">Codebase</h1>
+
+          <div class="field-head">
+            <span class="lbl">Linked repository</span>
+            <p>Link this project to its local git checkout so Copilot can read the code behind your
+               tickets. Copilot gets read-only access — it can open, list and search files, and can
+               never edit, write, or run anything.</p>
+          </div>
+
+          <!-- ---------- UNLINKED STATE ---------- -->
+          <div id="state-unlinked" style="display:flex;flex-direction:column;gap:22px">
+
+            <div class="suggest">
+              <div class="shead">Suggestions</div>
+
+              <button class="sugg" data-name="waypoint" data-path="~/code/waypoint" data-branch="main" data-commit="2 hours ago" data-files="1,284">
+                <div class="g">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20V7a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v3"/><circle cx="12" cy="17" r="2"/><path d="M12 15v-2m0 6v2"/></svg>
+                </div>
+                <div class="body">
+                  <div class="name">waypoint <span class="why match">name matches project</span></div>
+                  <div class="path">~/code/waypoint</div>
+                </div>
+                <div class="go">Link →</div>
+              </button>
+
+              <button class="sugg" data-name="waypoint-electron-v3" data-path="~/code/waypoint-electron-v3" data-branch="feat/copilot-codebase-grounding" data-commit="11 minutes ago" data-files="1,301">
+                <div class="g">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20V7a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v3"/><circle cx="12" cy="17" r="2"/><path d="M12 15v-2m0 6v2"/></svg>
+                </div>
+                <div class="body">
+                  <div class="name">waypoint-electron-v3 <span class="why match">name matches project</span></div>
+                  <div class="path">~/code/waypoint-electron-v3</div>
+                </div>
+                <div class="go">Link →</div>
+              </button>
+
+              <button class="sugg" data-name="atlas-api" data-path="~/code/atlas-api" data-branch="develop" data-commit="3 days ago" data-files="642">
+                <div class="g">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20V7a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v3"/><circle cx="12" cy="17" r="2"/><path d="M12 15v-2m0 6v2"/></svg>
+                </div>
+                <div class="body">
+                  <div class="name">atlas-api <span class="why">linked to Atlas</span></div>
+                  <div class="path">~/code/atlas-api</div>
+                </div>
+                <div class="go">Link →</div>
+              </button>
+            </div>
+
+            <div class="browse-row">
+              <button class="btn btn-secondary" id="btn-browse">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20V7a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2z"/></svg>
+                Browse…
+              </button>
+              <span class="hint">Opens at <span style="font-family:var(--font-mono);font-size:12px">~/code</span>, titled for this project.</span>
+            </div>
+
+            <div class="err hidden" id="err-block">
+              <div class="etop">
+                <span class="ic">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5m0 3v.01"/></svg>
+                </span>
+                <div>
+                  <div class="etitle">That folder isn't a git repository</div>
+                  <div class="ebody">
+                    <code>~/code/waypoint/src</code> has no <code>.git</code> in it. Pick the folder that
+                    <em>contains</em> <code>.git</code> — usually the top level of your checkout, one or two
+                    levels up from here.
+                  </div>
+                </div>
+              </div>
+              <details>
+                <summary>Technical details</summary>
+                <pre>repoPath is not a git repository: /Users/amaan/code/waypoint/src</pre>
+              </details>
+              <div class="eactions">
+                <button class="btn btn-secondary btn-xs" id="err-up">Try ~/code/waypoint instead</button>
+                <button class="btn btn-ghost btn-xs" id="err-dismiss">Choose a different folder</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- ---------- LINKED STATE ---------- -->
+          <div id="state-linked" class="hidden" style="display:none;flex-direction:column;gap:14px">
+            <div class="flash" id="flash">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+              Linked — Copilot can now read this project's code.
+            </div>
+
+            <div class="linked-card">
+              <div class="linked-top">
+                <div class="repoicon">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20V7a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v3"/><circle cx="12" cy="17" r="2"/><path d="M12 15v-2m0 6v2"/></svg>
+                </div>
+                <div class="info">
+                  <div class="repo-name"><span id="lk-name">waypoint</span> <span class="ok">✓ VERIFIED</span></div>
+                  <div class="repo-path" id="lk-path">~/code/waypoint</div>
+                  <div class="repo-meta">
+                    <span class="chip">⌥ branch <b id="lk-branch">main</b></span>
+                    <span class="chip">last commit <b id="lk-commit">2 hours ago</b></span>
+                    <span class="chip">tracked files <b id="lk-files">1,284</b></span>
+                  </div>
+                </div>
+              </div>
+              <div class="scope-note">
+                <span class="ic">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+                </span>
+                <span>Read-only: <b style="font-weight:500;color:var(--text)">Read, Glob, Grep</b>. Never edits, writes or runs anything. Secret-shaped paths (<code style="font-family:var(--font-mono);font-size:11.5px">.env</code>, keys, <code style="font-family:var(--font-mono);font-size:11.5px">.git/</code>) are blocked.</span>
+              </div>
+              <div class="linked-foot">
+                <button class="btn btn-secondary btn-xs" id="btn-change">Change folder…</button>
+                <div class="spacer"></div>
+                <button class="btn btn-danger-ghost btn-xs" id="btn-unlink">Unlink</button>
+              </div>
+            </div>
+
+            <!-- unlink confirm (G8) -->
+            <div class="err hidden" id="unlink-confirm" style="background:var(--bg-inset);border-color:var(--border-strong)">
+              <div class="etop">
+                <div>
+                  <div class="etitle" style="color:var(--text)">Unlink this repository?</div>
+                  <div class="ebody" style="color:var(--text-secondary)">Copilot will stop reading this project's code. You can re-link it at any time.</div>
+                </div>
+              </div>
+              <div class="eactions" style="margin-left:0">
+                <button class="btn btn-secondary btn-xs" id="unlink-yes">Unlink</button>
+                <button class="btn btn-ghost btn-xs" id="unlink-no">Keep it</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- ---------- STALE STATE (G6) ---------- -->
+          <div id="state-stale" class="hidden" style="display:none;flex-direction:column;gap:14px">
+            <div class="warn">
+              <span class="ic">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 4 2.5 20h19z"/><path d="M12 10v4m0 3v.01"/></svg>
+              </span>
+              <div>
+                <div class="wtitle">The linked folder no longer exists</div>
+                <div class="wbody">
+                  <code style="font-family:var(--font-mono);font-size:12px">~/code/waypoint</code> was moved or deleted.
+                  Copilot is still answering questions about this project, but <b>without code access</b> — answers
+                  won't be grounded in the repo until this is fixed.
+                </div>
+                <div class="wactions">
+                  <button class="btn btn-secondary btn-xs" id="btn-relocate">Relocate…</button>
+                  <button class="btn btn-ghost btn-xs" id="btn-stale-unlink">Unlink</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footnote">
+    <b>What changed vs. today:</b> suggestions built from repo roots already stored on other projects plus
+    name-matched siblings (no new backend capability); the OS dialog becomes the escape hatch, not the only
+    door; the confirmation shows a recognisable repo rather than a path string; errors lead with the fix and
+    keep the raw backend message under “Technical details”; a stale path is stated instead of silently
+    degrading; the header badge makes “grounded / not grounded” visible before anyone asks Copilot anything.
+  </div>
+
+  <!-- ============ IN-CHAT CARD ============ -->
+  <div class="section-label">Copilot panel → in-chat link card <span>the reactive entry point, made the same feature (G7)</span></div>
+
+  <div class="app" style="display:flex">
+    <div style="flex:1;min-width:0;padding:26px 30px;border-right:1px solid var(--border);background:var(--bg-inset)">
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">WPT-418 · Ticket view</div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px">
+        <div style="display:flex;align-items:center;gap:9px;margin-bottom:12px">
+          <h2 style="font-size:16px;font-weight:500">Session resume drops the last reply</h2>
+          <div class="spacer" style="flex:1"></div>
+          <div class="badge unlinked" style="cursor:pointer"><span class="pip"></span> Code not linked</div>
+        </div>
+        <p style="margin:0;font-size:13.5px;color:var(--text-secondary)">
+          When a Copilot run is resumed after the app restarts, the final assistant message is
+          occasionally missing from the transcript…
+        </p>
+      </div>
+      <div class="footnote" style="margin-top:14px">
+        The badge is the same component as the project header — one glance answers “can Copilot see the code
+        behind this ticket?”, and it's the shortcut into the settings page.
+      </div>
+    </div>
+
+    <!-- copilot panel -->
+    <div class="copilot">
+      <div class="cop-head">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v3m0 12v3M3 12h3m12 0h3M6 6l2 2m8 8 2 2m0-12-2 2m-8 8-2 2"/></svg>
+        <span class="t">Copilot</span>
+        <div class="spacer"></div>
+        <span style="font-size:11px;color:var(--text-muted)">Waypoint</span>
+      </div>
+
+      <div class="cop-body">
+        <div class="msg user">Why would resuming a session drop the last reply?</div>
+        <div class="msg bot">
+          Based on the ticket and its comments, this looks like a persistence-ordering issue — but I
+          can't confirm it without reading the session code itself.
+        </div>
+
+        <!-- the improved card -->
+        <div class="card" id="chat-card">
+          <div class="card-head">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="color:var(--text-secondary)"><path d="M4 20V7a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v3"/><circle cx="12" cy="17" r="2"/><path d="M12 15v-2m0 6v2"/></svg>
+            <span class="k">Codebase not linked</span>
+            <span class="proj">◆ Waypoint</span>
+          </div>
+          <div class="card-body">
+            <p>To answer that properly I need to read <b>Waypoint</b>'s code. Link its local checkout and
+               I can open, list and search files — read-only, never editing or running anything.</p>
+
+            <button class="mini-sugg" data-chat-name="waypoint" data-chat-path="~/code/waypoint">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="color:var(--text-secondary);flex:none"><path d="M4 20V7a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v3"/><circle cx="12" cy="17" r="2"/><path d="M12 15v-2m0 6v2"/></svg>
+              <span class="col"><span class="n">waypoint</span><span class="p">~/code/waypoint</span></span>
+              <span style="font-size:11px;color:var(--text-muted);flex:none">Link →</span>
+            </button>
+
+            <button class="mini-sugg" data-chat-name="waypoint-electron-v3" data-chat-path="~/code/waypoint-electron-v3">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="color:var(--text-secondary);flex:none"><path d="M4 20V7a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v3"/><circle cx="12" cy="17" r="2"/><path d="M12 15v-2m0 6v2"/></svg>
+              <span class="col"><span class="n">waypoint-electron-v3</span><span class="p">~/code/waypoint-electron-v3</span></span>
+              <span style="font-size:11px;color:var(--text-muted);flex:none">Link →</span>
+            </button>
+          </div>
+          <div class="card-foot">
+            <button class="btn btn-secondary btn-xs">Browse…</button>
+            <div class="spacer"></div>
+            <button class="btn btn-ghost btn-xs">Manage in settings</button>
+          </div>
+        </div>
+
+        <!-- what the card becomes on success -->
+        <div class="card hidden" id="chat-card-done">
+          <div class="card-head" style="background:var(--success-bg);border-color:#bfe7cd">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--success)"><path d="M20 6 9 17l-5-5"/></svg>
+            <span class="k" style="color:var(--success)">Codebase linked</span>
+            <span class="proj">◆ Waypoint</span>
+          </div>
+          <div class="card-body">
+            <div class="linked-inline">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="color:var(--success);flex:none"><path d="M4 20V7a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v3"/><circle cx="12" cy="17" r="2"/><path d="M12 15v-2m0 6v2"/></svg>
+              <span class="col">
+                <span class="n" id="chat-lk-name">waypoint</span>
+                <span class="p" id="chat-lk-path">~/code/waypoint · main · updated 2 hours ago</span>
+              </span>
+            </div>
+            <p>I can read this project's code from now on. Want me to take another look at your question?</p>
+          </div>
+          <div class="card-foot">
+            <button class="btn btn-primary btn-xs">Ask again with code access</button>
+            <div class="spacer"></div>
+            <button class="btn btn-ghost btn-xs">Manage in settings</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="cop-composer">
+        <div class="box">Ask about this ticket…</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footnote">
+    <b>Why this closes the loop:</b> the card names the project it will write to, offers the same one-click
+    suggestions as settings (so most links never open an OS dialog), and on success turns into the same
+    confirmation — plus <b>“Ask again with code access”</b>, the step that today leaves the user staring at
+    the ungrounded reply that triggered the card in the first place.
+  </div>
+
+</div>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const show = (el, on, disp) => {
+    if (!el) return;
+    el.classList.toggle('hidden', !on);
+    if (disp) el.style.display = on ? disp : 'none';
+  };
+
+  const unlinked = $('state-unlinked');
+  const linked   = $('state-linked');
+  const stale    = $('state-stale');
+  const navPip   = $('nav-pip');
+
+  function setState(kind, repo) {
+    show(unlinked, kind === 'unlinked', 'flex');
+    show(linked,   kind === 'linked',   'flex');
+    show(stale,    kind === 'stale',    'flex');
+
+    show($('badge-unlinked'), kind === 'unlinked');
+    show($('badge-linked'),   kind === 'linked');
+    show($('badge-stale'),    kind === 'stale');
+
+    navPip.style.background =
+      kind === 'linked' ? 'var(--success)' :
+      kind === 'stale'  ? 'var(--warning)' : 'var(--text-muted)';
+
+    if (kind === 'linked' && repo) {
+      $('lk-name').textContent   = repo.name;
+      $('lk-path').textContent   = repo.path;
+      $('lk-branch').textContent = repo.branch;
+      $('lk-commit').textContent = repo.commit;
+      $('lk-files').textContent  = repo.files;
+      $('pop-path').textContent  = repo.path;
+      $('badge-repo-name').textContent = repo.name;
+    }
+    if (kind !== 'linked') show($('unlink-confirm'), false);
+    if (kind !== 'unlinked') show($('err-block'), false);
+  }
+
+  document.querySelectorAll('.sugg').forEach((b) => {
+    b.addEventListener('click', () => setState('linked', {
+      name: b.dataset.name, path: b.dataset.path,
+      branch: b.dataset.branch, commit: b.dataset.commit, files: b.dataset.files,
+    }));
+  });
+
+  // "Browse…" in the mockup demonstrates the friendly validation error
+  $('btn-browse').addEventListener('click', () => show($('err-block'), true));
+  $('err-dismiss').addEventListener('click', () => show($('err-block'), false));
+  $('err-up').addEventListener('click', () => setState('linked', {
+    name: 'waypoint', path: '~/code/waypoint', branch: 'main', commit: '2 hours ago', files: '1,284',
+  }));
+
+  $('btn-change').addEventListener('click', () => setState('unlinked'));
+  $('btn-unlink').addEventListener('click', () => show($('unlink-confirm'), true));
+  $('unlink-no').addEventListener('click',  () => show($('unlink-confirm'), false));
+  $('unlink-yes').addEventListener('click', () => setState('unlinked'));
+
+  $('btn-relocate').addEventListener('click',     () => setState('unlinked'));
+  $('btn-stale-unlink').addEventListener('click', () => setState('unlinked'));
+
+  $('btn-reset').addEventListener('click', () => setState('unlinked'));
+  $('btn-err').addEventListener('click',   () => { setState('unlinked'); show($('err-block'), true); });
+  $('btn-stale').addEventListener('click', () => setState('stale'));
+
+  // in-chat card
+  document.querySelectorAll('.mini-sugg').forEach((b) => {
+    b.addEventListener('click', () => {
+      $('chat-lk-name').textContent = b.dataset.chatName;
+      $('chat-lk-path').textContent = b.dataset.chatPath + ' · main · updated 2 hours ago';
+      show($('chat-card'), false);
+      show($('chat-card-done'), true);
+    });
+  });
+
+  setState('unlinked');
+})();
+</script>
+</body>
+</html>
