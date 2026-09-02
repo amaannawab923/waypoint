@@ -18,6 +18,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: 'general', label: 'General' },
       { to: 'members', label: 'Members' },
       { to: 'features', label: 'Features' },
+      { to: 'codebase', label: 'Codebase' },
     ],
   },
   {
