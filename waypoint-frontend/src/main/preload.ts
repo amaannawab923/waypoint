@@ -27,6 +27,7 @@ interface CopilotStreamPayload {
   text?: string;
   fullText?: string;
   sessionId?: string | null;
+  needsRepoLink?: boolean;
   kind?: CopilotErrorKind;
   message?: string;
 }
@@ -62,17 +63,23 @@ const electronHandler = {
       // prompt on the subprocess's stdin only (never persisted as a
       // message) — both validated again in copilotRunner.ts, so this stays
       // a pass-through with no new channels.
+      // repoPath is the project-settings-linked checkout for whichever
+      // project's page is open at send time (Copilot V3) — resolved fresh
+      // per message by the renderer, re-validated in copilotRunner.ts, and
+      // absent whenever no project route is open or none is linked.
       args: {
         prompt: string;
         resumeSessionId?: string;
         conversationId?: string;
         outcomePreamble?: string;
+        repoPath?: string;
       },
       handlers: {
         onChunk: (text: string) => void;
         onDone: (result: {
           fullText: string;
           sessionId: string | null;
+          needsRepoLink: boolean;
         }) => void;
         onError: (err: { kind: CopilotErrorKind; message: string }) => void;
       },
@@ -102,6 +109,7 @@ const electronHandler = {
           handlers.onDone({
             fullText: payload.fullText ?? '',
             sessionId: payload.sessionId ?? null,
+            needsRepoLink: payload.needsRepoLink === true,
           });
         } else if (payload.type === 'error') {
           ipcRenderer.removeListener('copilot:stream', subscription);
@@ -214,6 +222,16 @@ const electronHandler = {
       openExternal(url: string): Promise<{ ok: boolean }> {
         return ipcRenderer.invoke('copilot:auth:open-external', url);
       },
+    },
+  },
+  // Top-level, not nested under `copilot`: "point me at a local folder" is
+  // a general filesystem concern, and the same channel is what any future
+  // feature needing a directory from the user would reuse.
+  repo: {
+    chooseFolder(): Promise<
+      { canceled: true } | { canceled: false; path: string }
+    > {
+      return ipcRenderer.invoke('repo:choose-folder');
     },
   },
 };

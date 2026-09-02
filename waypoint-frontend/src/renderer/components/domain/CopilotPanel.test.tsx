@@ -7,6 +7,7 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import {
   listCopilotConversations,
   createCopilotConversation,
@@ -19,8 +20,10 @@ import {
   approveCopilotProposal,
   rejectCopilotProposal,
   markCopilotProposalsNotified,
+  getProject,
+  updateProject,
 } from '@/mock/api';
-import type { CopilotProposal } from '@/types/entities';
+import type { CopilotProposal, Project } from '@/types/entities';
 import { CopilotPanel } from './CopilotPanel';
 
 jest.mock('@/mock/api', () => ({
@@ -36,11 +39,21 @@ jest.mock('@/mock/api', () => ({
   rejectCopilotProposal: jest.fn(),
   rejectAllCopilotProposals: jest.fn(),
   markCopilotProposalsNotified: jest.fn(),
+  getProject: jest.fn(),
+  updateProject: jest.fn(),
 }));
 
 type RunPromptHandlers = {
   onChunk: (text: string) => void;
-  onDone: (result: { fullText: string; sessionId: string | null }) => void;
+  // needsRepoLink is optional HERE only — the real preload bridge always
+  // sends a boolean (it normalizes with `=== true`), but the vast majority
+  // of these tests predate V3 and have nothing to say about it, so omitting
+  // it reads as "this test doesn't exercise that" rather than noise.
+  onDone: (result: {
+    fullText: string;
+    sessionId: string | null;
+    needsRepoLink?: boolean;
+  }) => void;
   onError: (err: { kind: string; message: string }) => void;
 };
 
@@ -61,6 +74,7 @@ function mockCopilotIpc() {
         resumeSessionId?: string;
         conversationId?: string;
         outcomePreamble?: string;
+        repoPath?: string;
       },
       h: RunPromptHandlers,
     ) => {
@@ -335,6 +349,7 @@ async function createAndOpenSession() {
 }
 
 let copilotIpc: ReturnType<typeof mockCopilotIpc>;
+const chooseFolderMock = jest.fn();
 
 async function waitForRun(prompt: string) {
   await waitFor(() =>
@@ -355,6 +370,7 @@ beforeEach(() => {
   // test's mock. Plain assignment doesn't have that problem.
   (window as unknown as { electron: typeof window.electron }).electron = {
     copilot: { runPrompt: copilotIpc.runPrompt },
+    repo: { chooseFolder: chooseFolderMock },
   } as unknown as typeof window.electron;
 });
 
@@ -493,12 +509,23 @@ describe('CopilotPanel', () => {
           screen.queryByText(/Failed to load the conversation history/i),
         ).not.toBeInTheDocument(),
       );
-      expect(
-        await screen.findByText('has real history', { selector: 'p' }),
-      ).toBeInTheDocument();
-      expect(
-        await screen.findByText('a reply', { selector: 'p' }),
-      ).toBeInTheDocument();
+      // waitFor + getByText rather than findByText: several independent
+      // async settles land around this point, and React can legitimately
+      // replace these nodes between findByText resolving and the assertion
+      // running — which then fails on a stale node reference even though the
+      // text was on screen the whole time. Re-querying on each attempt
+      // asserts the thing that actually matters (the real history rendered)
+      // without depending on DOM node identity.
+      await waitFor(() =>
+        expect(
+          screen.getByText('has real history', { selector: 'p' }),
+        ).toBeInTheDocument(),
+      );
+      await waitFor(() =>
+        expect(
+          screen.getByText('a reply', { selector: 'p' }),
+        ).toBeInTheDocument(),
+      );
     });
   });
 
@@ -1374,6 +1401,262 @@ describe('CopilotPanel', () => {
 
       expect(document.activeElement).toBe(toggleButton);
       document.body.removeChild(toggleButton);
+    });
+  });
+});
+
+// Copilot V3. Conversations have no project of their own, so repo context
+// comes from whatever /projects/:projectId route is open — which is why
+// every test here renders the panel inside a router, unlike every test
+// above (those exercise the no-project-open path by simply not having one).
+describe('CopilotPanel codebase grounding (Copilot V3)', () => {
+  const PROJECT: Project = {
+    id: 'proj-1',
+    workspaceId: 'ws-1',
+    name: 'Launch',
+    identifier: 'LAUNCH',
+    description: '',
+    icon: '📦',
+    coverGradient: ['#c2542a', '#3a2314'],
+    network: 'public',
+    leadId: null,
+    defaultAssigneeId: null,
+    timezone: 'UTC',
+    features: {
+      cycles: true,
+      modules: true,
+      views: true,
+      pages: true,
+      intake: true,
+    },
+    estimate: null,
+    automations: {
+      autoArchiveEnabled: false,
+      autoArchiveAfterDays: 30,
+      autoCloseEnabled: false,
+      autoCloseAfterDays: 30,
+    },
+    createdAt: new Date().toISOString(),
+    archivedAt: null,
+    memberIds: [],
+    guestAccessEnabled: false,
+    repoPath: null,
+  };
+
+  // Mutable so a test can simulate the project gaining a repoPath after a
+  // successful link, the way a real reload of the route project would.
+  let projectRow: Project;
+
+  beforeEach(() => {
+    projectRow = { ...PROJECT };
+    chooseFolderMock.mockReset();
+    jest.mocked(updateProject).mockReset();
+    jest.mocked(getProject).mockReset();
+    jest.mocked(getProject).mockImplementation(async () => ({ ...projectRow }));
+  });
+
+  function renderInProjectRoute() {
+    return render(
+      <MemoryRouter initialEntries={['/projects/proj-1/issues']}>
+        <Routes>
+          <Route
+            path="/projects/:projectId/*"
+            element={<CopilotPanel onClose={jest.fn()} />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+  }
+
+  async function openChatInProject() {
+    renderInProjectRoute();
+    await screen.findByText(/No sessions yet/i);
+    await waitFor(() => expect(getProject).toHaveBeenCalledWith('proj-1'));
+    await createAndOpenSession();
+  }
+
+  async function sendAndFinish(
+    prompt: string,
+    done: { fullText: string; needsRepoLink: boolean },
+  ) {
+    await typeAndSend(prompt);
+    await act(async () => {});
+    const handlers = await waitForRun(prompt);
+    await act(async () => {
+      handlers.onDone({
+        fullText: done.fullText,
+        sessionId: 'sess-1',
+        needsRepoLink: done.needsRepoLink,
+      });
+    });
+  }
+
+  describe('repo scope for a run', () => {
+    it("forwards the open project's linked repoPath with the message", async () => {
+      projectRow.repoPath = '/Users/amaan/code/waypoint';
+      await openChatInProject();
+
+      await typeAndSend('where is buildArgs defined?');
+      await act(async () => {});
+
+      await waitFor(() =>
+        expect(copilotIpc.runPrompt).toHaveBeenCalledWith(
+          expect.objectContaining({ repoPath: '/Users/amaan/code/waypoint' }),
+          expect.anything(),
+        ),
+      );
+    });
+
+    it('omits repoPath entirely when the open project has none linked', async () => {
+      await openChatInProject();
+
+      await typeAndSend('what is my sprint status?');
+      await act(async () => {});
+
+      await waitFor(() => expect(copilotIpc.runPrompt).toHaveBeenCalled());
+      expect(copilotIpc.runPrompt.mock.calls[0][0]).not.toHaveProperty('repoPath');
+    });
+  });
+
+  describe('the in-chat "link a repo" card', () => {
+    it('renders under the reply whose run reported needsRepoLink', async () => {
+      await openChatInProject();
+
+      await sendAndFinish('why does the parser drop that line?', {
+        fullText: "I'd need to read the code to say.",
+        needsRepoLink: true,
+      });
+
+      expect(await screen.findByText(/Codebase not linked/i)).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: /choose folder/i }),
+      ).toBeInTheDocument();
+    });
+
+    it('does not render for a run that did not ask for it', async () => {
+      await openChatInProject();
+
+      await sendAndFinish('what is my sprint status?', {
+        fullText: 'Three tickets left.',
+        needsRepoLink: false,
+      });
+
+      expect(screen.queryByText(/Codebase not linked/i)).not.toBeInTheDocument();
+    });
+
+    // §6 gates the sentinel to the unlinked prompt, so this shouldn't
+    // normally happen — but a UI that offers to link an already-linked repo
+    // on a stale signal is worse than one that just ignores it.
+    it('ignores a stale needsRepoLink when the project is already linked', async () => {
+      projectRow.repoPath = '/Users/amaan/code/waypoint';
+      await openChatInProject();
+
+      await sendAndFinish('why does the parser drop that line?', {
+        fullText: 'Because of the trailing newline.',
+        needsRepoLink: true,
+      });
+
+      expect(screen.queryByText(/Codebase not linked/i)).not.toBeInTheDocument();
+    });
+
+    it('links through the same chooseFolder → updateProject path as the settings page, then disappears', async () => {
+      chooseFolderMock.mockResolvedValue({
+        canceled: false,
+        path: '/Users/amaan/code/waypoint',
+      });
+      jest.mocked(updateProject).mockImplementation(async (_id, patch) => {
+        // Stands in for the real backend write; the card's gating reads the
+        // reloaded project, so the fake row has to actually change.
+        projectRow = { ...projectRow, ...patch } as Project;
+        return { ...projectRow };
+      });
+      await openChatInProject();
+
+      await sendAndFinish('why does the parser drop that line?', {
+        fullText: "I'd need to read the code to say.",
+        needsRepoLink: true,
+      });
+      await screen.findByText(/Codebase not linked/i);
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /choose folder/i }));
+      });
+
+      await waitFor(() =>
+        expect(updateProject).toHaveBeenCalledWith('proj-1', {
+          repoPath: '/Users/amaan/code/waypoint',
+        }),
+      );
+      // Gated on the project's own repoPath, so linking retires the card for
+      // good — there is deliberately no separate dismiss state.
+      await waitFor(() =>
+        expect(screen.queryByText(/Codebase not linked/i)).not.toBeInTheDocument(),
+      );
+    });
+
+    it('shows a backend validation failure on the card instead of throwing', async () => {
+      chooseFolderMock.mockResolvedValue({
+        canceled: false,
+        path: '/Users/amaan/not-a-repo',
+      });
+      jest
+        .mocked(updateProject)
+        .mockRejectedValue(
+          new Error('repoPath is not a git repository: /Users/amaan/not-a-repo'),
+        );
+      await openChatInProject();
+
+      await sendAndFinish('why does the parser drop that line?', {
+        fullText: "I'd need to read the code to say.",
+        needsRepoLink: true,
+      });
+      await screen.findByText(/Codebase not linked/i);
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /choose folder/i }));
+      });
+
+      expect(
+        await screen.findByText(
+          'repoPath is not a git repository: /Users/amaan/not-a-repo',
+        ),
+      ).toBeInTheDocument();
+      expect(screen.getByText(/Codebase not linked/i)).toBeInTheDocument();
+    });
+
+    it('does not link anything when the folder dialog is canceled', async () => {
+      chooseFolderMock.mockResolvedValue({ canceled: true });
+      await openChatInProject();
+
+      await sendAndFinish('why does the parser drop that line?', {
+        fullText: "I'd need to read the code to say.",
+        needsRepoLink: true,
+      });
+      await screen.findByText(/Codebase not linked/i);
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /choose folder/i }));
+      });
+
+      expect(updateProject).not.toHaveBeenCalled();
+      expect(screen.getByText(/Codebase not linked/i)).toBeInTheDocument();
+    });
+
+    it('clears a previous turn\'s card when a new run starts', async () => {
+      await openChatInProject();
+
+      await sendAndFinish('why does the parser drop that line?', {
+        fullText: "I'd need to read the code to say.",
+        needsRepoLink: true,
+      });
+      await screen.findByText(/Codebase not linked/i);
+
+      await typeAndSend('never mind, what is my sprint status?');
+      await act(async () => {});
+
+      await waitFor(() =>
+        expect(screen.queryByText(/Codebase not linked/i)).not.toBeInTheDocument(),
+      );
     });
   });
 });

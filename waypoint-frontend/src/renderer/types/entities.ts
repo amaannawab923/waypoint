@@ -75,6 +75,8 @@ export interface Project {
   archivedAt: string | null;
   memberIds: ID[];
   guestAccessEnabled: boolean;
+  /** Absolute path to the linked local git checkout; null when not linked. */
+  repoPath: string | null;
 }
 
 export interface WorkItemState {

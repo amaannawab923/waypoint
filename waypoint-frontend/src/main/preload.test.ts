@@ -3,6 +3,7 @@ const ipcRendererMock = {
   on: jest.fn(),
   once: jest.fn(),
   removeListener: jest.fn(),
+  invoke: jest.fn(),
 };
 
 const exposeInMainWorldMock = jest.fn();
@@ -57,7 +58,11 @@ import './preload';
 
 type RunPromptHandlers = {
   onChunk: (text: string) => void;
-  onDone: (result: { fullText: string; sessionId: string | null }) => void;
+  onDone: (result: {
+    fullText: string;
+    sessionId: string | null;
+    needsRepoLink: boolean;
+  }) => void;
   onError: (err: { kind: string; message: string }) => void;
 };
 
@@ -83,9 +88,14 @@ function getElectronHandler() {
     };
     copilot: {
       runPrompt: (
-        args: { prompt: string; resumeSessionId?: string },
+        args: { prompt: string; resumeSessionId?: string; repoPath?: string },
         handlers: RunPromptHandlers,
       ) => () => void;
+    };
+    repo: {
+      chooseFolder: () => Promise<
+        { canceled: true } | { canceled: false; path: string }
+      >;
     };
   };
 }
@@ -181,7 +191,58 @@ describe('electronHandler.copilot.runPrompt', () => {
     expect(onDone).toHaveBeenCalledWith({
       fullText: 'the full reply',
       sessionId: null,
+      needsRepoLink: false,
     });
+  });
+
+  // needsRepoLink drives UI (the in-chat "link a repo" card), so a payload
+  // that omits it — or carries anything other than a literal true — must
+  // normalize to false rather than reaching the renderer as undefined.
+  it('normalizes needsRepoLink to a strict boolean on the done payload', () => {
+    const onDone = jest.fn();
+
+    electronHandler.copilot.runPrompt(
+      { prompt: 'hi' },
+      { onChunk: jest.fn(), onDone, onError: jest.fn() },
+    );
+    const listener = getRegisteredStreamListener();
+
+    listener(
+      {},
+      {
+        requestId: 'mock-uuid-1',
+        type: 'done',
+        fullText: 'reply',
+        sessionId: 'sess-1',
+        needsRepoLink: true,
+      },
+    );
+
+    expect(onDone).toHaveBeenCalledWith({
+      fullText: 'reply',
+      sessionId: 'sess-1',
+      needsRepoLink: true,
+    });
+  });
+
+  it('forwards repoPath on copilot:run when the caller supplies one, and omits it otherwise', () => {
+    electronHandler.copilot.runPrompt(
+      { prompt: 'hi', repoPath: '/Users/amaan/code/waypoint' },
+      { onChunk: jest.fn(), onDone: jest.fn(), onError: jest.fn() },
+    );
+
+    expect(ipcRendererMock.send).toHaveBeenCalledWith(
+      'copilot:run',
+      expect.objectContaining({ repoPath: '/Users/amaan/code/waypoint' }),
+    );
+
+    ipcRendererMock.send.mockClear();
+    electronHandler.copilot.runPrompt(
+      { prompt: 'hi' },
+      { onChunk: jest.fn(), onDone: jest.fn(), onError: jest.fn() },
+    );
+
+    expect(ipcRendererMock.send.mock.calls[0][1]).not.toHaveProperty('repoPath');
   });
 
   it('routes a matching error event to onError, defaulting kind and message when absent', () => {
@@ -316,5 +377,33 @@ describe('electronHandler.ipcRenderer (generic bridge)', () => {
       'ipc-example',
       registeredListener,
     );
+  });
+});
+
+// A one-method invoke/handle bridge (Copilot V3), deliberately top-level
+// rather than nested under `copilot`: the main-process side (repoLink.ts) is
+// a general "pick me a folder" channel, not a Copilot-specific one.
+describe('electronHandler.repo.chooseFolder', () => {
+  it('invokes the repo:choose-folder channel and returns the picked path', async () => {
+    ipcRendererMock.invoke.mockResolvedValue({
+      canceled: false,
+      path: '/Users/amaan/code/waypoint',
+    });
+
+    const result = await electronHandler.repo.chooseFolder();
+
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith('repo:choose-folder');
+    expect(result).toEqual({
+      canceled: false,
+      path: '/Users/amaan/code/waypoint',
+    });
+  });
+
+  it('passes a canceled result straight through', async () => {
+    ipcRendererMock.invoke.mockResolvedValue({ canceled: true });
+
+    await expect(electronHandler.repo.chooseFolder()).resolves.toEqual({
+      canceled: true,
+    });
   });
 });

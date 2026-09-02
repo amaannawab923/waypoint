@@ -25,6 +25,7 @@ import {
   registerCopilotConnectIpc,
   killAllCopilotConnectProcesses,
 } from './copilot/copilotConnect';
+import { registerRepoLinkIpc } from './repoLink';
 
 // Opt-in remote debugging for scripted/agent-driven QA (docs/qa-electron.md)
 // — off unless ELECTRON_QA_DEBUG_PORT is set, so normal dev/prod runs are
@@ -105,6 +106,7 @@ ipcMain.on('ipc-example', async (event, arg) => {
 registerCopilotIpc(() => mainWindow);
 registerCopilotAuthIpc();
 registerCopilotConnectIpc(() => mainWindow);
+registerRepoLinkIpc(() => mainWindow);
 
 if (process.env.NODE_ENV === 'production') {
   const sourceMapSupport = require('source-map-support');
