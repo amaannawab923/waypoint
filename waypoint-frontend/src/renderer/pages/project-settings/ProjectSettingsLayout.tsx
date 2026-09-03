@@ -1,10 +1,13 @@
 import { NavLink, Outlet } from 'react-router-dom';
 import { clsx } from 'clsx';
 import { useProject, type ProjectOutletContext } from '@/layouts/ProjectLayout';
+import { useRepoLinkStatus, type RepoLinkStatus } from '@/lib/useRepoLinkStatus';
 
 interface NavItem {
   to: string;
   label: string;
+  /** Mirrors the header badge's state onto the nav item that fixes it. */
+  showRepoStatus?: boolean;
 }
 
 interface NavGroup {
@@ -18,7 +21,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: 'general', label: 'General' },
       { to: 'members', label: 'Members' },
       { to: 'features', label: 'Features' },
-      { to: 'codebase', label: 'Codebase' },
+      { to: 'codebase', label: 'Codebase', showRepoStatus: true },
     ],
   },
   {
@@ -35,9 +38,16 @@ const NAV_GROUPS: NavGroup[] = [
   },
 ];
 
+function repoStatusDotClass(status: RepoLinkStatus): string {
+  if (status.kind === 'linked') return 'bg-success';
+  if (status.kind === 'stale') return 'bg-warning';
+  return 'bg-text-muted';
+}
+
 export default function ProjectSettingsLayout() {
   const ctx = useProject();
   const { project } = ctx;
+  const { status: repoStatus } = useRepoLinkStatus(project.repoPath);
 
   return (
     <div className="flex h-full min-h-0">
@@ -60,7 +70,7 @@ export default function ProjectSettingsLayout() {
                   to={item.to}
                   className={({ isActive }) =>
                     clsx(
-                      'rounded-[var(--radius-sm)] px-2 py-1.5 text-sm transition-colors',
+                      'flex items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-sm transition-colors',
                       isActive
                         ? 'bg-accent-soft-bg text-accent-soft-text font-medium'
                         : 'text-text-secondary hover:bg-surface-2 hover:text-text',
@@ -68,6 +78,14 @@ export default function ProjectSettingsLayout() {
                   }
                 >
                   {item.label}
+                  {item.showRepoStatus && (
+                    <span
+                      className={clsx(
+                        'ml-auto size-1.5 rounded-full',
+                        repoStatusDotClass(repoStatus),
+                      )}
+                    />
+                  )}
                 </NavLink>
               ))}
             </div>
