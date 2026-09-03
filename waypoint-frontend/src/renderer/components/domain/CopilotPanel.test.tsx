@@ -23,7 +23,8 @@ import {
   getProject,
   updateProject,
 } from '@/data/api';
-import type { CopilotProposal, Project } from '@/types/entities';
+import type { ProposalView, Project } from '@/types/entities';
+import { resetProposalStoreForTests } from '@/lib/proposalStore';
 import { CopilotPanel } from './CopilotPanel';
 
 jest.mock('@/data/api', () => ({
@@ -123,7 +124,7 @@ function truncateTitle(content: string): string {
 }
 
 let store: FakeConversation[];
-let proposalRows: CopilotProposal[];
+let proposalRows: ProposalView[];
 let idCounter: number;
 function nextId(prefix: string): string {
   idCounter += 1;
@@ -135,10 +136,10 @@ function nextId(prefix: string): string {
 // computes anchorSeq at propose time.
 function addFakeProposal(
   conversationId: string,
-  overrides: Partial<CopilotProposal> = {},
-): CopilotProposal {
+  overrides: Partial<ProposalView> = {},
+): ProposalView {
   const conv = store.find((c) => c.id === conversationId);
-  const row: CopilotProposal = {
+  const row: ProposalView = {
     id: nextId('prop'),
     conversationId,
     kind: 'state_change',
@@ -157,11 +158,20 @@ function addFakeProposal(
     status: 'proposed',
     statusReason: null,
     resultInfo: null,
-    disclosureText: 'Hi, this is Copilot — Amaan’s agent — commenting on their behalf: ',
+    disclosureText:
+      'Hi, this is Copilot — Amaan’s agent — commenting on their behalf: ',
     expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
     modelNotifiedAt: null,
     resolvedAt: null,
     createdAt: new Date().toISOString(),
+    origin: 'copilot',
+    projectId: 'proj-1',
+    agentId: null,
+    agentRunId: null,
+    sourceRequestId: null,
+    decidedBy: null,
+    trustGrantId: null,
+    decisionLatencyMs: null,
     ...overrides,
   };
   proposalRows.push(row);
@@ -177,11 +187,18 @@ beforeEach(() => {
   store = [];
   proposalRows = [];
   idCounter = 0;
+  // proposalStore.ts is a module-level singleton (W4.1, architecture §1.8);
+  // its Map outlives any single `it()` here, and this file's fixture ids
+  // (nextId('conv') etc.) reset every test, so a proposal from a previous
+  // test can otherwise collide under a reused id.
+  resetProposalStoreForTests();
 
   jest
     .mocked(listCopilotProposals)
     .mockImplementation(async (conversationId: string) =>
-      proposalRows.filter((p) => p.conversationId === conversationId).map((p) => ({ ...p })),
+      proposalRows
+        .filter((p) => p.conversationId === conversationId)
+        .map((p) => ({ ...p })),
     );
   jest.mocked(approveCopilotProposal).mockImplementation(async (id: string) => {
     const row = proposalRows.find((p) => p.id === id);
@@ -1069,8 +1086,18 @@ describe('CopilotPanel', () => {
         createdAt: now,
         updatedAt: now,
         messages: [
-          { id: 'msg-seed-1', role: 'user', content: 'earlier ask', createdAt: now },
-          { id: 'msg-seed-2', role: 'assistant', content: 'earlier reply', createdAt: now },
+          {
+            id: 'msg-seed-1',
+            role: 'user',
+            content: 'earlier ask',
+            createdAt: now,
+          },
+          {
+            id: 'msg-seed-2',
+            role: 'assistant',
+            content: 'earlier reply',
+            createdAt: now,
+          },
         ],
       };
       store.push(conv);
@@ -1093,7 +1120,10 @@ describe('CopilotPanel', () => {
       expect(screen.queryByText('Pending review')).not.toBeInTheDocument();
 
       await act(async () => {
-        handlers.onDone({ fullText: "I've proposed the move below.", sessionId: 'sess-1' });
+        handlers.onDone({
+          fullText: "I've proposed the move below.",
+          sessionId: 'sess-1',
+        });
       });
 
       // The completed run triggers the refetch; the card appears with
@@ -1102,11 +1132,15 @@ describe('CopilotPanel', () => {
       expect(screen.getByText('In Progress')).toBeInTheDocument();
       expect(screen.getByText('Done')).toBeInTheDocument();
       // …positioned AFTER the assistant reply of the turn that proposed it.
-      const assistantBubble = screen.getByText("I've proposed the move below.", { selector: 'p' });
+      const assistantBubble = screen.getByText(
+        "I've proposed the move below.",
+        { selector: 'p' },
+      );
       const card = screen.getByText('Pending review');
       expect(
         // eslint-disable-next-line no-bitwise
-        assistantBubble.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING,
+        assistantBubble.compareDocumentPosition(card) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy();
     });
 
@@ -1154,9 +1188,13 @@ describe('CopilotPanel', () => {
         fireEvent.click(screen.getByText('Try again'));
       });
 
-      await waitFor(() => expect(copilotIpc.runPrompt).toHaveBeenCalledTimes(2));
+      await waitFor(() =>
+        expect(copilotIpc.runPrompt).toHaveBeenCalledTimes(2),
+      );
       expect(rejectCopilotProposal).toHaveBeenCalledWith(orphan.id);
-      expect(markCopilotProposalsNotified).toHaveBeenCalledWith(store[0].id, [orphan.id]);
+      expect(markCopilotProposalsNotified).toHaveBeenCalledWith(store[0].id, [
+        orphan.id,
+      ]);
       // The re-run must not carry a "rejected by the user" outcome for the
       // orphan — that would steer the model away from re-proposing the very
       // thing the retried prompt asks for.
@@ -1188,8 +1226,10 @@ describe('CopilotPanel', () => {
       await typeAndSend('what changed?');
       const handlers = await waitForRun('what changed?');
       const { outcomePreamble } = copilotIpc.runPrompt.mock.calls[0][0];
-      for (const p of resolved.slice(0, 20)) expect(outcomePreamble).toContain(p.id);
-      for (const p of resolved.slice(20)) expect(outcomePreamble).not.toContain(p.id);
+      for (const p of resolved.slice(0, 20))
+        expect(outcomePreamble).toContain(p.id);
+      for (const p of resolved.slice(20))
+        expect(outcomePreamble).not.toContain(p.id);
       // Comfortably inside the runner's ~4000-char defensive drop.
       expect((outcomePreamble ?? '').length).toBeLessThan(4000);
 
@@ -1197,8 +1237,11 @@ describe('CopilotPanel', () => {
         handlers.onChunk('done.');
         handlers.onDone({ fullText: 'done.', sessionId: 'claude-abc' });
       });
-      await waitFor(() => expect(markCopilotProposalsNotified).toHaveBeenCalled());
-      const notifiedIds = jest.mocked(markCopilotProposalsNotified).mock.calls[0][1];
+      await waitFor(() =>
+        expect(markCopilotProposalsNotified).toHaveBeenCalled(),
+      );
+      const notifiedIds = jest.mocked(markCopilotProposalsNotified).mock
+        .calls[0][1];
       expect(notifiedIds).toEqual(resolved.slice(0, 20).map((p) => p.id));
     });
 
@@ -1222,7 +1265,10 @@ describe('CopilotPanel', () => {
 
     it("passes the outcome preamble to runPrompt while persisting ONLY the user's own text (the transcript-pollution regression)", async () => {
       const conv = seedConversation('conv-seeded');
-      const resolved = addFakeProposal(conv.id, { status: 'executed', anchorSeq: 1 });
+      const resolved = addFakeProposal(conv.id, {
+        status: 'executed',
+        anchorSeq: 1,
+      });
 
       render(<CopilotPanel onClose={jest.fn()} />);
       const row = await screen.findByText('seeded session');
@@ -1252,7 +1298,10 @@ describe('CopilotPanel', () => {
 
       // The persisted user message is ONLY what the user typed — the
       // system note must never enter the transcript.
-      expect(postCopilotUserMessage).toHaveBeenCalledWith(conv.id, 'what changed?');
+      expect(postCopilotUserMessage).toHaveBeenCalledWith(
+        conv.id,
+        'what changed?',
+      );
       const persisted = store.find((c) => c.id === conv.id)!.messages.at(-1)!;
       expect(persisted.content).toBe('what changed?');
       expect(persisted.content).not.toContain('Waypoint system note');
@@ -1264,7 +1313,10 @@ describe('CopilotPanel', () => {
       // not-yet-called assertion below.
       jest.mocked(markCopilotProposalsNotified).mockClear();
       const conv = seedConversation('conv-seeded');
-      const resolved = addFakeProposal(conv.id, { status: 'executed', anchorSeq: 1 });
+      const resolved = addFakeProposal(conv.id, {
+        status: 'executed',
+        anchorSeq: 1,
+      });
 
       render(<CopilotPanel onClose={jest.fn()} />);
       fireEvent.click(await screen.findByText('seeded session'));
@@ -1278,11 +1330,16 @@ describe('CopilotPanel', () => {
       expect(markCopilotProposalsNotified).not.toHaveBeenCalled();
 
       await act(async () => {
-        handlers.onDone({ fullText: 'The move went through.', sessionId: 'sess-1' });
+        handlers.onDone({
+          fullText: 'The move went through.',
+          sessionId: 'sess-1',
+        });
       });
 
       await waitFor(() =>
-        expect(markCopilotProposalsNotified).toHaveBeenCalledWith(conv.id, [resolved.id]),
+        expect(markCopilotProposalsNotified).toHaveBeenCalledWith(conv.id, [
+          resolved.id,
+        ]),
       );
     });
 
@@ -1314,13 +1371,18 @@ describe('CopilotPanel', () => {
         anchorSeq: 1,
         kind: 'comment',
         payload: { body: 'a drafted comment' },
-        snapshot: { identifier: 'LAUNCH-3', title: 'Responsive nav breaks on iPad landscape' },
+        snapshot: {
+          identifier: 'LAUNCH-3',
+          title: 'Responsive nav breaks on iPad landscape',
+        },
       });
 
       render(<CopilotPanel onClose={jest.fn()} />);
       fireEvent.click(await screen.findByText('seeded session'));
       await act(async () => {});
-      await waitFor(() => expect(screen.getAllByText('Pending review')).toHaveLength(2));
+      await waitFor(() =>
+        expect(screen.getAllByText('Pending review')).toHaveLength(2),
+      );
 
       await act(async () => {
         fireEvent.click(screen.getAllByRole('button', { name: 'Approve' })[0]);
@@ -1333,7 +1395,9 @@ describe('CopilotPanel', () => {
       expect(await screen.findByText('Dismissed')).toBeInTheDocument();
       // Both resolved — no pending buttons remain anywhere, and no instant
       // Copilot reply was fabricated (the card's note IS the feedback).
-      expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: 'Approve' }),
+      ).not.toBeInTheDocument();
       expect(copilotIpc.runPrompt).not.toHaveBeenCalled();
     });
   });
@@ -1514,7 +1578,9 @@ describe('CopilotPanel codebase grounding (Copilot V3)', () => {
       await act(async () => {});
 
       await waitFor(() => expect(copilotIpc.runPrompt).toHaveBeenCalled());
-      expect(copilotIpc.runPrompt.mock.calls[0][0]).not.toHaveProperty('repoPath');
+      expect(copilotIpc.runPrompt.mock.calls[0][0]).not.toHaveProperty(
+        'repoPath',
+      );
     });
   });
 
@@ -1527,7 +1593,9 @@ describe('CopilotPanel codebase grounding (Copilot V3)', () => {
         needsRepoLink: true,
       });
 
-      expect(await screen.findByText(/Codebase not linked/i)).toBeInTheDocument();
+      expect(
+        await screen.findByText(/Codebase not linked/i),
+      ).toBeInTheDocument();
       expect(
         screen.getByRole('button', { name: /choose folder/i }),
       ).toBeInTheDocument();
@@ -1541,7 +1609,9 @@ describe('CopilotPanel codebase grounding (Copilot V3)', () => {
         needsRepoLink: false,
       });
 
-      expect(screen.queryByText(/Codebase not linked/i)).not.toBeInTheDocument();
+      expect(
+        screen.queryByText(/Codebase not linked/i),
+      ).not.toBeInTheDocument();
     });
 
     // §6 gates the sentinel to the unlinked prompt, so this shouldn't
@@ -1556,7 +1626,9 @@ describe('CopilotPanel codebase grounding (Copilot V3)', () => {
         needsRepoLink: true,
       });
 
-      expect(screen.queryByText(/Codebase not linked/i)).not.toBeInTheDocument();
+      expect(
+        screen.queryByText(/Codebase not linked/i),
+      ).not.toBeInTheDocument();
     });
 
     it('links through the same chooseFolder → updateProject path as the settings page, then disappears', async () => {
@@ -1590,7 +1662,9 @@ describe('CopilotPanel codebase grounding (Copilot V3)', () => {
       // Gated on the project's own repoPath, so linking retires the card for
       // good — there is deliberately no separate dismiss state.
       await waitFor(() =>
-        expect(screen.queryByText(/Codebase not linked/i)).not.toBeInTheDocument(),
+        expect(
+          screen.queryByText(/Codebase not linked/i),
+        ).not.toBeInTheDocument(),
       );
     });
 
@@ -1602,7 +1676,9 @@ describe('CopilotPanel codebase grounding (Copilot V3)', () => {
       jest
         .mocked(updateProject)
         .mockRejectedValue(
-          new Error('repoPath is not a git repository: /Users/amaan/not-a-repo'),
+          new Error(
+            'repoPath is not a git repository: /Users/amaan/not-a-repo',
+          ),
         );
       await openChatInProject();
 
@@ -1642,7 +1718,7 @@ describe('CopilotPanel codebase grounding (Copilot V3)', () => {
       expect(screen.getByText(/Codebase not linked/i)).toBeInTheDocument();
     });
 
-    it('clears a previous turn\'s card when a new run starts', async () => {
+    it("clears a previous turn's card when a new run starts", async () => {
       await openChatInProject();
 
       await sendAndFinish('why does the parser drop that line?', {
@@ -1655,7 +1731,9 @@ describe('CopilotPanel codebase grounding (Copilot V3)', () => {
       await act(async () => {});
 
       await waitFor(() =>
-        expect(screen.queryByText(/Codebase not linked/i)).not.toBeInTheDocument(),
+        expect(
+          screen.queryByText(/Codebase not linked/i),
+        ).not.toBeInTheDocument(),
       );
     });
   });

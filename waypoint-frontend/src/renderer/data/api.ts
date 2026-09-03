@@ -43,7 +43,8 @@ import type {
   CopilotConversation,
   CopilotConversationSummary,
   CopilotMessage,
-  CopilotProposal,
+  ProposalView,
+  ProposalStatus,
 } from '@/types/entities';
 
 // Server-side `numeric` columns come back over JSON as strings (to avoid
@@ -58,9 +59,7 @@ function normalizeTicket(raw: Ticket & { sortOrder?: string }): Ticket {
       rest.estimatePoints == null ? null : Number(rest.estimatePoints),
   };
 }
-function normalizeTickets(
-  raw: (Ticket & { sortOrder?: string })[],
-): Ticket[] {
+function normalizeTickets(raw: (Ticket & { sortOrder?: string })[]): Ticket[] {
   return raw.map(normalizeTicket);
 }
 function normalizeTicketMaybe(
@@ -453,7 +452,9 @@ export async function deleteLabel(id: string): Promise<void> {
 // Workstreams & sprints
 // ---------------------------------------------------------------------------
 
-export async function listWorkstreams(projectId: string): Promise<Workstream[]> {
+export async function listWorkstreams(
+  projectId: string,
+): Promise<Workstream[]> {
   return http.get<Workstream[]>(`/projects/${projectId}/workstreams`);
 }
 
@@ -523,7 +524,9 @@ export async function listTickets(
   );
 }
 
-export async function listAllTickets(filter?: TicketFilterQuery): Promise<Ticket[]> {
+export async function listAllTickets(
+  filter?: TicketFilterQuery,
+): Promise<Ticket[]> {
   const query = filter ? `?filter=${encodeTicketFilterParam(filter)}` : '';
   return normalizeTickets(
     await http.get<(Ticket & { sortOrder?: string })[]>(`/tickets${query}`),
@@ -572,9 +575,7 @@ export interface CreateTicketInput {
   isDraft?: boolean;
 }
 
-export async function createTicket(
-  input: CreateTicketInput,
-): Promise<Ticket> {
+export async function createTicket(input: CreateTicketInput): Promise<Ticket> {
   return normalizeTicket(
     await http.post<Ticket & { sortOrder?: string }>('/tickets', input),
   );
@@ -585,10 +586,7 @@ export async function updateTicket(
   patch: Partial<Ticket>,
 ): Promise<Ticket> {
   return normalizeTicket(
-    await http.patch<Ticket & { sortOrder?: string }>(
-      `/tickets/${id}`,
-      patch,
-    ),
+    await http.patch<Ticket & { sortOrder?: string }>(`/tickets/${id}`, patch),
   );
 }
 
@@ -626,10 +624,10 @@ export async function reorderTicket(
   position: 'before' | 'after',
 ): Promise<Ticket> {
   return normalizeTicket(
-    await http.post<Ticket & { sortOrder?: string }>(
-      `/tickets/${id}/reorder`,
-      { targetId, position },
-    ),
+    await http.post<Ticket & { sortOrder?: string }>(`/tickets/${id}/reorder`, {
+      targetId,
+      position,
+    }),
   );
 }
 
@@ -683,9 +681,7 @@ export async function addComment(
   return http.post<Comment>(`/tickets/${ticketId}/comments`, { bodyHtml });
 }
 
-export async function listActivity(
-  ticketId: string,
-): Promise<ActivityEntry[]> {
+export async function listActivity(ticketId: string): Promise<ActivityEntry[]> {
   return http.get<ActivityEntry[]>(`/tickets/${ticketId}/activity`);
 }
 
@@ -718,10 +714,7 @@ export async function createDoc(
   });
 }
 
-export async function updateDoc(
-  id: string,
-  patch: Partial<Doc>,
-): Promise<Doc> {
+export async function updateDoc(id: string, patch: Partial<Doc>): Promise<Doc> {
   return http.patch<Doc>(`/docs/${id}`, patch);
 }
 
@@ -903,22 +896,20 @@ export async function postCopilotAssistantMessage(
 // callers patch their local list from the response instead of refetching.
 export async function listCopilotProposals(
   conversationId: string,
-): Promise<CopilotProposal[]> {
-  return http.get<CopilotProposal[]>(
+): Promise<ProposalView[]> {
+  return http.get<ProposalView[]>(
     `/copilot/conversations/${conversationId}/proposals`,
   );
 }
 
 export async function approveCopilotProposal(
   id: string,
-): Promise<CopilotProposal> {
-  return http.post<CopilotProposal>(`/copilot/proposals/${id}/approve`, {});
+): Promise<ProposalView> {
+  return http.post<ProposalView>(`/copilot/proposals/${id}/approve`, {});
 }
 
-export async function rejectCopilotProposal(
-  id: string,
-): Promise<CopilotProposal> {
-  return http.post<CopilotProposal>(`/copilot/proposals/${id}/reject`, {});
+export async function rejectCopilotProposal(id: string): Promise<ProposalView> {
+  return http.post<ProposalView>(`/copilot/proposals/${id}/reject`, {});
 }
 
 export async function rejectAllCopilotProposals(
@@ -953,6 +944,39 @@ export interface ApprovedPerActiveDayStats {
 
 export async function getApprovedPerActiveDayStats(): Promise<ApprovedPerActiveDayStats> {
   return http.get<ApprovedPerActiveDayStats>('/proposals/stats/approved-per-day');
+}
+
+// The workspace-scoped review-queue aggregate (architecture §4.4,
+// reviewQueue.routes.ts) — NOT yet consumed anywhere in this unit (W4.1
+// only needs the two conversation-scoped POSTs above). Added now, ahead of
+// need, so W4.3's Review screen doesn't have to touch this file again: it
+// reuses the same single-row approve/reject state machine as the endpoints
+// above, just batched, id-per-row rather than one transaction (a stale id
+// resolves on its own; the rest of the batch still runs).
+export interface BulkProposalResult {
+  id: string;
+  status: ProposalStatus | 'not_found';
+  statusReason: string | null;
+}
+
+export async function bulkApproveProposals(
+  ids: string[],
+): Promise<BulkProposalResult[]> {
+  const { results } = await http.post<{ results: BulkProposalResult[] }>(
+    '/proposals/bulk-approve',
+    { ids },
+  );
+  return results;
+}
+
+export async function bulkRejectProposals(
+  ids: string[],
+): Promise<BulkProposalResult[]> {
+  const { results } = await http.post<{ results: BulkProposalResult[] }>(
+    '/proposals/bulk-reject',
+    { ids },
+  );
+  return results;
 }
 
 // ---------------------------------------------------------------------------

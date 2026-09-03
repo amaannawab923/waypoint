@@ -1,15 +1,31 @@
+import type { ProposalView } from '@/types/entities';
 import { interleaveProposals } from './copilotTranscript';
-import type { CopilotProposal } from '@/types/entities';
 
 function msg(
   id: string,
   role: 'user' | 'assistant',
   seq?: number,
-): { id: string; role: 'user' | 'assistant'; content: string; createdAt: string; seq?: number } {
-  return { id, role, content: `content-${id}`, createdAt: '2026-01-01T00:00:00.000Z', seq };
+): {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+  seq?: number;
+} {
+  return {
+    id,
+    role,
+    content: `content-${id}`,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    seq,
+  };
 }
 
-function proposal(id: string, anchorSeq: number, createdAt: string): CopilotProposal {
+function proposal(
+  id: string,
+  anchorSeq: number,
+  createdAt: string,
+): ProposalView {
   return {
     id,
     conversationId: 'conv-1',
@@ -26,11 +42,21 @@ function proposal(id: string, anchorSeq: number, createdAt: string): CopilotProp
     modelNotifiedAt: null,
     resolvedAt: null,
     createdAt,
+    origin: 'copilot',
+    projectId: 'proj-1',
+    agentId: null,
+    agentRunId: null,
+    sourceRequestId: null,
+    decidedBy: null,
+    trustGrantId: null,
+    decisionLatencyMs: null,
   };
 }
 
 function shape(items: ReturnType<typeof interleaveProposals>) {
-  return items.map((i) => (i.type === 'message' ? `m:${i.message.id}` : `p:${i.proposal.id}`));
+  return items.map((i) =>
+    i.type === 'message' ? `m:${i.message.id}` : `p:${i.proposal.id}`,
+  );
 }
 
 describe('interleaveProposals', () => {
@@ -44,7 +70,9 @@ describe('interleaveProposals', () => {
       msg('u2', 'user', 3),
       msg('a2', 'assistant', 4),
     ];
-    const items = interleaveProposals(messages, [proposal('p1', 1, '2026-01-01T00:01:00.000Z')]);
+    const items = interleaveProposals(messages, [
+      proposal('p1', 1, '2026-01-01T00:01:00.000Z'),
+    ]);
 
     expect(shape(items)).toEqual(['m:u1', 'm:a1', 'p:p1', 'm:u2', 'm:a2']);
   });
@@ -53,8 +81,14 @@ describe('interleaveProposals', () => {
     // Mid-run (or the run died after proposing): the assistant reply for
     // this turn is not persisted, so the card sits at the transcript tail —
     // after the user message that triggered it — instead of vanishing.
-    const messages = [msg('u1', 'user', 1), msg('a1', 'assistant', 2), msg('u2', 'user', 3)];
-    const items = interleaveProposals(messages, [proposal('p1', 3, '2026-01-01T00:01:00.000Z')]);
+    const messages = [
+      msg('u1', 'user', 1),
+      msg('a1', 'assistant', 2),
+      msg('u2', 'user', 3),
+    ];
+    const items = interleaveProposals(messages, [
+      proposal('p1', 3, '2026-01-01T00:01:00.000Z'),
+    ]);
 
     expect(shape(items)).toEqual(['m:u1', 'm:a1', 'm:u2', 'p:p1']);
   });
@@ -89,11 +123,21 @@ describe('interleaveProposals', () => {
     const reloaded = interleaveProposals(messages, [...proposals].reverse());
 
     expect(shape(reloaded)).toEqual(shape(live));
-    expect(shape(live)).toEqual(['m:u1', 'm:a1', 'p:p1', 'm:u2', 'm:a2', 'p:p2']);
+    expect(shape(live)).toEqual([
+      'm:u1',
+      'm:a1',
+      'p:p1',
+      'm:u2',
+      'm:a2',
+      'p:p2',
+    ]);
   });
 
   it('appends a proposal to the very end when nothing matches its anchor (empty transcript)', () => {
-    const items = interleaveProposals([], [proposal('p1', 0, '2026-01-01T00:01:00.000Z')]);
+    const items = interleaveProposals(
+      [],
+      [proposal('p1', 0, '2026-01-01T00:01:00.000Z')],
+    );
     expect(shape(items)).toEqual(['p:p1']);
   });
 
@@ -104,7 +148,12 @@ describe('interleaveProposals', () => {
     // message BELOW the reply it caused.
     const optimistic = msg('local1', 'user');
     const items = interleaveProposals(
-      [msg('u1', 'user', 1), msg('a1', 'assistant', 2), optimistic, msg('a2', 'assistant', 4)],
+      [
+        msg('u1', 'user', 1),
+        msg('a1', 'assistant', 2),
+        optimistic,
+        msg('a2', 'assistant', 4),
+      ],
       [],
     );
     expect(shape(items)).toEqual(['m:u1', 'm:a1', 'm:local1', 'm:a2']);

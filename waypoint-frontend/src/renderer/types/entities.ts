@@ -131,11 +131,7 @@ export interface Label {
 // 'in-progress'/'completed'/'cancelled' became 'active'/'done'/'dropped'
 // (architecture §3.2 item 19).
 export type WorkstreamStatus =
-  | 'planned'
-  | 'active'
-  | 'paused'
-  | 'done'
-  | 'dropped';
+  'planned' | 'active' | 'paused' | 'done' | 'dropped';
 
 export interface Workstream {
   id: ID;
@@ -427,28 +423,45 @@ export interface CopilotConversation extends CopilotConversationSummary {
   messages: CopilotMessage[];
 }
 
-export type CopilotProposalKind =
+// UNCHANGED from the pre-widening set, plus 'add_label' — the mockup's most
+// common trust candidate (architecture §4.2). Nothing produces this kind
+// yet (no propose_add_label MCP tool exists on the backend either); it's
+// here so the type matches the widened backend proposal_kind enum and the
+// card (CopilotProposalCard.tsx) can render one defensively once something
+// does.
+export type ProposalKind =
   | 'comment'
   | 'state_change'
   | 'assignee_change'
   | 'priority_change'
-  | 'create_ticket';
+  | 'create_ticket'
+  | 'add_label';
 
-// Mirrors the backend's copilot_proposal_status enum. 'executing' is a
-// transient claim state the renderer rarely observes (approve responds only
-// after execution finishes), but a concurrent-approve echo can surface it.
-export type CopilotProposalStatus =
+// Mirrors the backend's proposal_status enum. 'executing' is a transient
+// claim state the renderer rarely observes (approve responds only after
+// execution finishes), but a concurrent-approve echo can surface it.
+// 'reverted' is the Undo path's terminal state (architecture §4.5) — no
+// code produces it yet, but the type matches the enum.
+export type ProposalStatus =
   | 'proposed'
   | 'executing'
   | 'executed'
   | 'rejected'
   | 'stale'
   | 'expired'
-  | 'superseded';
+  | 'superseded'
+  | 'reverted';
+
+// Where a proposal came from — a Copilot conversation turn, or an
+// autonomous agent run (architecture §4.2's workspace-scoped widening).
+export type ProposalOrigin = 'copilot' | 'agent_run';
+
+// Who/what resolved a proposal. Null while still 'proposed'.
+export type ProposalDecidedBy = 'user' | 'trust_grant' | 'system';
 
 // The kind-specific execute arguments the model proposed — which fields are
 // present depends on `kind` (see CopilotProposalCard.tsx's per-kind bodies).
-export interface CopilotProposalPayload {
+export interface ProposalPayload {
   body?: string; // comment
   stateId?: string; // state_change, create_ticket
   priority?: Priority; // priority_change, create_ticket
@@ -459,12 +472,13 @@ export interface CopilotProposalPayload {
   description?: string; // create_ticket
   assigneeIds?: ID[]; // create_ticket
   dueDate?: string; // create_ticket
+  labelId?: string; // add_label — no real producer yet, shape is best-effort
 }
 
 // Display data captured at propose time — names and colors, never bare ids,
 // so the card can render without any follow-up fetches (and keeps showing
 // what was proposed even after reality moves on underneath it).
-export interface CopilotProposalSnapshot {
+export interface ProposalSnapshot {
   identifier?: string;
   title?: string;
   itemUpdatedAt?: string;
@@ -482,19 +496,24 @@ export interface CopilotProposalSnapshot {
   stateName?: string;
   stateColor?: string | null;
   assigneeNames?: string[];
+  labelName?: string; // add_label — best-effort, see ProposalPayload.labelId
+  labelColor?: string | null; // add_label
 }
 
-// One approval card in the Copilot transcript (issue #10 / Copilot V2) —
-// the backend's ProposalView, JSON-serialized (timestamps as ISO strings).
-export interface CopilotProposal {
+// One proposal card, wherever it renders (the Copilot panel transcript, and
+// — architecture §1.8/W4.2 — the Review queue, a ticket drawer, or
+// Requests) — the backend's ProposalView, JSON-serialized (timestamps as
+// ISO strings). No longer Copilot-conversation-specific: `conversationId`
+// is non-null only for `origin === 'copilot'`.
+export interface ProposalView {
   id: ID;
-  conversationId: ID;
-  kind: CopilotProposalKind;
+  conversationId: ID | null;
+  kind: ProposalKind;
   ticketId: ID | null;
-  payload: CopilotProposalPayload;
-  snapshot: CopilotProposalSnapshot;
-  anchorSeq: number;
-  status: CopilotProposalStatus;
+  payload: ProposalPayload;
+  snapshot: ProposalSnapshot;
+  anchorSeq: number | null;
+  status: ProposalStatus;
   statusReason: string | null;
   resultInfo: unknown;
   /** The exact self-disclosure prefix an approved comment will carry — server-computed from the current user's display name. */
@@ -503,4 +522,13 @@ export interface CopilotProposal {
   modelNotifiedAt: string | null;
   resolvedAt: string | null;
   createdAt: string;
+  // --- workspace-scoped widening (architecture §4.2) --------------------
+  origin: ProposalOrigin;
+  projectId: ID;
+  agentId: ID | null;
+  agentRunId: ID | null;
+  sourceRequestId: ID | null;
+  decidedBy: ProposalDecidedBy | null;
+  trustGrantId: ID | null;
+  decisionLatencyMs: number | null;
 }
