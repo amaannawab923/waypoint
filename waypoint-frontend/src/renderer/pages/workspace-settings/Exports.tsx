@@ -6,6 +6,7 @@ import { Button, IconButton } from '@/components/ui/Button';
 import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { SkeletonTableRows } from '@/components/ui/Skeleton';
+import { NotWired } from '@/components/ui/NotWired';
 import type { ExportStatus } from '@/types/entities';
 import { clsx } from 'clsx';
 
@@ -57,9 +58,13 @@ export default function Exports() {
   return (
     <div>
       <h2 className="mb-1 font-display text-lg font-medium text-text">Exports</h2>
-      <p className="mb-6 text-sm text-text-secondary">
+      <p className="mb-3 text-sm text-text-secondary">
         Export your workspace data as a downloadable file.
       </p>
+
+      <div className="mb-6">
+        <NotWired capability="exports.download" />
+      </div>
 
       <div className="mb-8 flex flex-wrap items-end gap-3 rounded-[var(--radius-lg)] border border-border bg-surface-2 p-4">
         <div className="min-w-[200px]">
