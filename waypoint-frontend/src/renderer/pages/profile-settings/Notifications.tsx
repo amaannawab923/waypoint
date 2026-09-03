@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { clsx } from 'clsx';
+import { NotWired } from '@/components/ui/NotWired';
 
 interface ToggleRow {
   key: string;
@@ -64,7 +65,11 @@ export default function Notifications() {
   return (
     <div className="max-w-lg">
       <h2 className="mb-1 font-display text-lg font-medium text-text">Notifications</h2>
-      <p className="mb-6 text-sm text-text-secondary">Choose what you get notified about.</p>
+      <p className="mb-3 text-sm text-text-secondary">Choose what you get notified about.</p>
+
+      <div className="mb-4">
+        <NotWired capability="profile.notificationPrefs" />
+      </div>
 
       <div className="flex flex-col divide-y divide-border rounded-[var(--radius-lg)] border border-border bg-surface">
         {ROWS.map((row) => (
