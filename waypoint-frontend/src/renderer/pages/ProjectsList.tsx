@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Link2, Settings, Plus, ArrowUpDown, Archive } from 'lucide-react';
+import { Settings, Plus, ArrowUpDown, Archive } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
 import { listProjects, listMembers, archiveProject } from '@/mock/api';
 import type { Project } from '@/types/entities';
@@ -167,15 +167,6 @@ function ProjectCard({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-            <IconButton
-              label="Copy link"
-              onClick={(e) => {
-                e.stopPropagation();
-                navigator.clipboard?.writeText(`${window.location.origin}/projects/${project.id}`);
-              }}
-            >
-              <Link2 size={14} />
-            </IconButton>
             <IconButton
               label="Archive project"
               onClick={(e) => {
