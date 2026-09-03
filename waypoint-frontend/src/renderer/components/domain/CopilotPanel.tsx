@@ -546,7 +546,11 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
                 // already linked — the model is only ever told about the
                 // sentinel in the unlinked prompt, so a `true` in any other
                 // state is stale and ignored rather than trusted.
-                if (needsRepoLink && groundingProject && !groundingProject.repoPath) {
+                if (
+                  needsRepoLink &&
+                  groundingProject &&
+                  !groundingProject.repoPath
+                ) {
                   setRepoLinkPrompt({
                     sessionId,
                     projectId: groundingProject.projectId,
@@ -755,11 +759,19 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     // fails just leaves the duplicate the retry would have created anyway.
     const failedTurnAnchor = sessions
       .find((s) => s.id === sessionId)
-      ?.messages.reduce((max, m) => (typeof m.seq === 'number' && m.seq > max ? m.seq : max), 0);
+      ?.messages.reduce(
+        (max, m) => (typeof m.seq === 'number' && m.seq > max ? m.seq : max),
+        0,
+      );
     const retryStale = proposalStore.proposals.filter(
       (p) =>
         p.status === 'proposed' &&
         typeof failedTurnAnchor === 'number' &&
+        // anchorSeq is only null for a non-copilot origin (architecture
+        // §4.2's widening) — every proposal this conversation-scoped hook
+        // returns is origin='copilot', but the type is now shared with
+        // non-transcript surfaces, so guard rather than assume.
+        p.anchorSeq != null &&
         p.anchorSeq >= failedTurnAnchor,
     );
     // Synchronous when there's nothing to reject — the common case, and
