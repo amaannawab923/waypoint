@@ -1,11 +1,12 @@
 import '@testing-library/jest-dom';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { CopilotProposal } from '@/types/entities';
+import type { ProposalView } from '@/types/entities';
 import { CopilotProposalCard } from './CopilotProposalCard';
 
-const DISCLOSURE = 'Hi, this is Copilot — Amaan’s agent — commenting on their behalf: ';
+const DISCLOSURE =
+  'Hi, this is Copilot — Amaan’s agent — commenting on their behalf: ';
 
-function proposal(overrides: Partial<CopilotProposal> = {}): CopilotProposal {
+function proposal(overrides: Partial<ProposalView> = {}): ProposalView {
   return {
     id: 'prop-abc1234',
     conversationId: 'conv-abc1234',
@@ -30,15 +31,28 @@ function proposal(overrides: Partial<CopilotProposal> = {}): CopilotProposal {
     modelNotifiedAt: null,
     resolvedAt: null,
     createdAt: '2026-01-01T00:00:00.000Z',
+    origin: 'copilot',
+    projectId: 'proj-1',
+    agentId: null,
+    agentRunId: null,
+    sourceRequestId: null,
+    decidedBy: null,
+    trustGrantId: null,
+    decisionLatencyMs: null,
     ...overrides,
   };
 }
 
-function renderCard(p: CopilotProposal) {
+function renderCard(p: ProposalView, agentName?: string) {
   const onApprove = jest.fn().mockResolvedValue(undefined);
   const onReject = jest.fn().mockResolvedValue(undefined);
   const utils = render(
-    <CopilotProposalCard proposal={p} onApprove={onApprove} onReject={onReject} />,
+    <CopilotProposalCard
+      proposal={p}
+      onApprove={onApprove}
+      onReject={onReject}
+      agentName={agentName}
+    />,
   );
   return { onApprove, onReject, ...utils };
 }
@@ -48,7 +62,9 @@ describe('CopilotProposalCard', () => {
     renderCard(proposal());
 
     expect(screen.getByText('LAUNCH-3')).toBeInTheDocument();
-    expect(screen.getByText('Responsive nav breaks on iPad landscape')).toBeInTheDocument();
+    expect(
+      screen.getByText('Responsive nav breaks on iPad landscape'),
+    ).toBeInTheDocument();
     expect(screen.getByText('In Progress')).toBeInTheDocument();
     expect(screen.getByText('Done')).toBeInTheDocument();
     // Ids from the payload/snapshot must never leak into the card.
@@ -58,7 +74,9 @@ describe('CopilotProposalCard', () => {
   it('shows the single-execution microcopy and live Approve/Reject buttons while pending', () => {
     renderCard(proposal());
 
-    expect(screen.getByText(/Executes once on approve · expires in 24h/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Executes once on approve · expires in 24h/),
+    ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Reject' })).toBeEnabled();
     expect(screen.getByText('Pending review')).toBeInTheDocument();
@@ -91,13 +109,19 @@ describe('CopilotProposalCard', () => {
   });
 
   it('an executed card shows Applied ✓ with the buttons UNMOUNTED, not merely disabled', () => {
-    renderCard(proposal({ status: 'executed', resolvedAt: '2026-01-01T01:00:00.000Z' }));
+    renderCard(
+      proposal({ status: 'executed', resolvedAt: '2026-01-01T01:00:00.000Z' }),
+    );
 
     expect(screen.getByText('Applied ✓')).toBeInTheDocument();
     // Unmounted is the invariant: a disabled button could be re-enabled by
     // CSS/devtools; an absent one cannot re-execute anything.
-    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Reject' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Approve' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Reject' }),
+    ).not.toBeInTheDocument();
     expect(screen.getByText(/Applied — moved to Done/)).toBeInTheDocument();
   });
 
@@ -105,15 +129,20 @@ describe('CopilotProposalCard', () => {
     const { onReject } = renderCard(
       proposal({
         status: 'stale',
-        statusReason: 'This ticket changed since Copilot proposed this — ask again',
+        statusReason:
+          'This ticket changed since Copilot proposed this — ask again',
       }),
     );
 
     expect(screen.getByText('Stale')).toBeInTheDocument();
     expect(
-      screen.getByText('This ticket changed since Copilot proposed this — ask again'),
+      screen.getByText(
+        'This ticket changed since Copilot proposed this — ask again',
+      ),
     ).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Approve' }),
+    ).not.toBeInTheDocument();
     const dismiss = screen.getByRole('button', { name: 'Dismiss' });
     fireEvent.click(dismiss);
     expect(onReject).toHaveBeenCalledWith('prop-abc1234');
@@ -131,15 +160,22 @@ describe('CopilotProposalCard', () => {
     );
     rerender(
       <CopilotProposalCard
-        proposal={proposal({ status: 'stale', statusReason: 'This ticket is no longer available' })}
+        proposal={proposal({
+          status: 'stale',
+          statusReason: 'This ticket is no longer available',
+        })}
         onApprove={jest.fn().mockResolvedValue(undefined)}
         onReject={jest.fn().mockResolvedValue(undefined)}
       />,
     );
 
     expect(screen.getByText('Stale')).toBeInTheDocument();
-    expect(screen.getByText('This ticket is no longer available')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+    expect(
+      screen.getByText('This ticket is no longer available'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Approve' }),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument();
   });
 
@@ -154,14 +190,19 @@ describe('CopilotProposalCard', () => {
       proposal({
         kind: 'comment',
         payload: { body: 'Fixed by removing the breakpoint override.' },
-        snapshot: { identifier: 'LAUNCH-3', title: 'Responsive nav breaks on iPad landscape' },
+        snapshot: {
+          identifier: 'LAUNCH-3',
+          title: 'Responsive nav breaks on iPad landscape',
+        },
       }),
     );
 
     // getByText normalizes whitespace, so match the trimmed disclosure —
     // the trailing space lives in the string but not the rendered match.
     expect(screen.getByText(DISCLOSURE.trim())).toBeInTheDocument();
-    expect(screen.getByText(/Fixed by removing the breakpoint override\./)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Fixed by removing the breakpoint override\./),
+    ).toBeInTheDocument();
     expect(screen.getByText('Posted as you')).toBeInTheDocument();
   });
 
@@ -175,7 +216,9 @@ describe('CopilotProposalCard', () => {
     );
 
     // The literal characters render as text (React text nodes)…
-    expect(screen.getByText(/<img src=x onerror="window\.pwned=1"> hello/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/<img src=x onerror="window\.pwned=1"> hello/),
+    ).toBeInTheDocument();
     // …and no actual <img> element ever enters the DOM.
     expect(container.querySelector('img')).toBeNull();
   });
@@ -205,7 +248,7 @@ describe('CopilotProposalCard', () => {
   // reflected only the PROPOSED person's own assignment status, but read as
   // a statement about the whole ticket, misleading exactly the person
   // deciding whether to approve.
-  it('assignee card shows the ticket\'s actual current assignees as context', () => {
+  it("assignee card shows the ticket's actual current assignees as context", () => {
     renderCard(
       proposal({
         kind: 'assignee_change',
@@ -221,7 +264,9 @@ describe('CopilotProposalCard', () => {
     );
 
     expect(screen.getByText('· currently: Lena Park')).toBeInTheDocument();
-    expect(screen.queryByText('· currently unassigned')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('· currently unassigned'),
+    ).not.toBeInTheDocument();
   });
 
   it('assignee card omits the context line entirely for a pre-upgrade proposal without the field', () => {
@@ -266,11 +311,112 @@ describe('CopilotProposalCard', () => {
 
     expect(screen.getByText('LAUNCH')).toBeInTheDocument();
     expect(screen.getByText('New ticket in Launch')).toBeInTheDocument();
-    expect(screen.getByText('Crash reporting for the tray process')).toBeInTheDocument();
+    expect(
+      screen.getByText('Crash reporting for the tray process'),
+    ).toBeInTheDocument();
     expect(screen.getByText('Wire up the reporter.')).toBeInTheDocument();
     expect(screen.getByText('Backlog')).toBeInTheDocument();
     expect(screen.getByText('High')).toBeInTheDocument();
     expect(screen.getByText('Due 2026-02-01')).toBeInTheDocument();
     expect(screen.getByText('Priya Sharma')).toBeInTheDocument();
+  });
+
+  // W4.2 (architecture §4.2) — 'add_label' has no real producer yet; this
+  // proves the card renders it defensively from the schema-implied shape
+  // (a label id in the payload, name/color in the snapshot) rather than
+  // crashing on an unhandled kind.
+  it('add_label card renders the label chip from the snapshot, never the bare id', () => {
+    renderCard(
+      proposal({
+        kind: 'add_label',
+        payload: { labelId: 'lbl-9' },
+        snapshot: {
+          identifier: 'LAUNCH-7',
+          title: 'Flaky upload retry',
+          labelName: 'needs-triage',
+          labelColor: '#9b51e0',
+        },
+      }),
+    );
+
+    expect(screen.getByText('Proposed change · Label')).toBeInTheDocument();
+    expect(screen.getByText('Add label:')).toBeInTheDocument();
+    expect(screen.getByText('needs-triage')).toBeInTheDocument();
+    expect(screen.queryByText(/lbl-9/)).not.toBeInTheDocument();
+  });
+
+  it('an executed add_label card reports the label that was added', () => {
+    renderCard(
+      proposal({
+        kind: 'add_label',
+        status: 'executed',
+        resolvedAt: '2026-01-01T01:00:00.000Z',
+        payload: { labelId: 'lbl-9' },
+        snapshot: {
+          identifier: 'LAUNCH-7',
+          title: 'Flaky upload retry',
+          labelName: 'needs-triage',
+        },
+      }),
+    );
+
+    expect(
+      screen.getByText(/Applied — needs-triage added/),
+    ).toBeInTheDocument();
+  });
+
+  // W4.2 (architecture §1.8) — the same card must render correctly for a
+  // proposal that came from an autonomous agent run, not just a Copilot
+  // conversation turn. The comment kind is the one branch that used to
+  // assume Copilot-conversation origin (parsing the poster's name out of
+  // server-computed disclosure text); for origin === 'agent_run' it must
+  // credit the agent instead, via the caller-supplied `agentName` prop.
+  it('an agent_run-origin comment card credits the agent, not "you"', () => {
+    renderCard(
+      proposal({
+        kind: 'comment',
+        origin: 'agent_run',
+        agentId: 'agent-1',
+        agentRunId: 'run-1',
+        payload: { body: 'Reproduced on staging; filing details below.' },
+        snapshot: {
+          identifier: 'LAUNCH-3',
+          title: 'Responsive nav breaks on iPad landscape',
+        },
+      }),
+      'Triage Bot',
+    );
+
+    expect(screen.getByText(/Proposed by Triage Bot/)).toBeInTheDocument();
+    expect(screen.queryByText('Posted as you')).not.toBeInTheDocument();
+  });
+
+  it('an agent_run-origin card without an agentName prop falls back to the agent id, not "You"', () => {
+    renderCard(
+      proposal({
+        kind: 'comment',
+        origin: 'agent_run',
+        agentId: 'agent-1',
+        payload: { body: 'hi' },
+        snapshot: { identifier: 'LAUNCH-3', title: 'T' },
+      }),
+    );
+
+    expect(screen.getByText(/Proposed by agent-1/)).toBeInTheDocument();
+  });
+
+  it('a copilot-origin comment card keeps the exact prior "Posted as you" behavior unaffected by the agentName prop', () => {
+    renderCard(
+      proposal({
+        kind: 'comment',
+        payload: { body: 'Fixed by removing the breakpoint override.' },
+        snapshot: {
+          identifier: 'LAUNCH-3',
+          title: 'Responsive nav breaks on iPad landscape',
+        },
+      }),
+    );
+
+    expect(screen.getByText('Posted as you')).toBeInTheDocument();
   });
 });
