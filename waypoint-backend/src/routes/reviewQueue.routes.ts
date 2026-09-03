@@ -72,3 +72,15 @@ reviewQueueRouter.get(
     res.json({ proposals: await proposalsService.listProposalsForTicket(req.params.id, status) });
   }),
 );
+
+// Requests page's inline "pending proposals" section (W4.4, architecture
+// §4.4). Mirrors GET /tickets/:id/proposals exactly, swapping the filtered
+// column to source_request_id — reuses ticketProposalsQuerySchema since its
+// shape (an optional status) fits this endpoint unchanged.
+reviewQueueRouter.get(
+  '/requests/:id/proposals',
+  asyncHandler(async (req, res) => {
+    const { status } = ticketProposalsQuerySchema.parse(req.query);
+    res.json({ proposals: await proposalsService.listProposalsForRequest(req.params.id, status) });
+  }),
+);
