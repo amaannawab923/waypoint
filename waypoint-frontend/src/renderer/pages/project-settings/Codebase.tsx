@@ -25,7 +25,12 @@ import type { Project } from '@/types/entities';
  */
 export default function Codebase() {
   const { project, reloadProject } = useProject();
-  const { status, recheck } = useRepoLinkStatus(project.repoPath);
+  // recheck() is deliberately not called from onLinked/onChanged below: it
+  // would be bound (by useCallback) to the repoPath THIS render still has,
+  // one render behind reloadProject()'s own update — a redundant check
+  // against the path being replaced, racing the one useRepoLinkStatus's own
+  // effect already starts once repoPath actually changes.
+  const { status } = useRepoLinkStatus(project.repoPath);
   // Set only by a link that happened on this page, in this session — the
   // difference between "it's linked" (the card, always) and "you just linked
   // it" (this, once).
@@ -33,13 +38,11 @@ export default function Codebase() {
 
   function onLinked() {
     setJustLinked(true);
-    recheck();
     reloadProject();
   }
 
   function onChanged() {
     setJustLinked(false);
-    recheck();
     reloadProject();
   }
 
@@ -109,6 +112,7 @@ function CodebaseState({
         projectName={project.name}
         projectIdentifier={project.identifier}
         repoPath={project.repoPath}
+        onRelocated={onLinked}
         onChanged={onChanged}
       />
     );
