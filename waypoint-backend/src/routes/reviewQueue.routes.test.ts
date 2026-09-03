@@ -189,6 +189,34 @@ describe('GET /proposals/stats/approved-per-day', () => {
   });
 });
 
+describe('GET /proposals/stats/health', () => {
+  it('returns the health-strip aggregate', async () => {
+    vi.mocked(proposalsService.getReviewHealthStats).mockResolvedValue({
+      decisionCount: 14,
+      approvalRate: 0.86,
+      medianDecisionMs: 5200,
+    });
+
+    const res = await request(buildTestApp()).get('/proposals/stats/health');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ decisionCount: 14, approvalRate: 0.86, medianDecisionMs: 5200 });
+  });
+
+  it('passes through the below-floor "not enough data" shape unmodified', async () => {
+    vi.mocked(proposalsService.getReviewHealthStats).mockResolvedValue({
+      decisionCount: 3,
+      approvalRate: null,
+      medianDecisionMs: null,
+    });
+
+    const res = await request(buildTestApp()).get('/proposals/stats/health');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ decisionCount: 3, approvalRate: null, medianDecisionMs: null });
+  });
+});
+
 describe('GET /tickets/:id/proposals', () => {
   it('returns the proposals for the ticket', async () => {
     vi.mocked(proposalsService.listProposalsForTicket).mockResolvedValue([proposalView()]);
