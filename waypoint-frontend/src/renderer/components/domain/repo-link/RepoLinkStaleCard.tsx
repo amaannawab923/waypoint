@@ -9,6 +9,8 @@ interface RepoLinkStaleCardProps {
   projectName: string;
   projectIdentifier?: string;
   repoPath: string;
+  /** A successful Relocate — distinct from onChanged, which also covers Unlink, so only this one triggers the "just linked" success banner. */
+  onRelocated: () => void;
   onChanged: () => void;
 }
 
@@ -28,12 +30,21 @@ function parentOf(repoPath: string): string | null {
  * Unlink here skips the confirm step the linked card shows — there is
  * nothing left to talk the user out of for a link that is already broken —
  * but keeps the same undo window.
+ *
+ * The suggestions strip below is told `hideBrowse`: this card's own
+ * Relocate… is already the one dialog trigger for "pick a folder to fix
+ * this", so a second Browse… button offering the identical dialog used to
+ * sit right underneath it, each with its own independently-styled error
+ * surface depending on which one you'd clicked. Suggestion clicks still go
+ * through the picker's own hook, since a one-click link is a genuinely
+ * different action from opening a dialog, not a duplicate of Relocate….
  */
 export function RepoLinkStaleCard({
   projectId,
   projectName,
   projectIdentifier,
   repoPath,
+  onRelocated,
   onChanged,
 }: RepoLinkStaleCardProps) {
   const {
@@ -41,7 +52,7 @@ export function RepoLinkStaleCard({
     saving,
     error: linkError,
     dismissError,
-  } = useRepoLink(projectId, onChanged);
+  } = useRepoLink(projectId, onRelocated);
   const unlinking = useRepoUnlink(projectId, repoPath, onChanged);
 
   if (unlinking.phase === 'undoable') {
@@ -114,14 +125,16 @@ export function RepoLinkStaleCard({
       </div>
 
       {/* The same suggestions strip the unlinked state offers: a checkout that
-          moved is usually now sitting next to another project's known root. */}
+          moved is usually now sitting next to another project's known root.
+          hideBrowse: Relocate… above is already this card's one dialog
+          trigger — see the component doc comment. */}
       <RepoLinkPicker
         projectId={projectId}
         projectName={projectName}
         projectIdentifier={projectIdentifier}
         browseDefaultPath={parentOf(repoPath)}
-        browseLabel="Browse…"
-        onLinked={onChanged}
+        hideBrowse
+        onLinked={onRelocated}
       />
     </div>
   );
