@@ -41,6 +41,7 @@ import {
   listWorkstreams,
   listStates,
   listSubItems,
+  listTicketProposals,
   removeTicketLink,
   takeBackOverFromAgent,
   toggleTicketAgent,
@@ -55,11 +56,18 @@ import { Button, IconButton } from '@/components/ui/Button';
 import { DatePicker } from '@/components/ui/DatePicker';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { CopilotProposalCard } from '@/components/domain/CopilotProposalCard';
 import { CreateTicketModal } from '@/components/domain/CreateTicketModal';
 import { agentLabel } from '@/lib/agentLabel';
 import { AGENT_STATUS_CONFIG, AgentStatusBadge } from '@/components/domain/AgentStatusBadge';
 import { PRIORITY_LABEL, PRIORITY_ORDER, PriorityIcon } from '@/components/domain/PriorityIcon';
 import { StateIcon } from '@/components/domain/StateIcon';
+import {
+  approveProposal,
+  rejectProposal,
+  upsertProposals,
+  useAllProposals,
+} from '@/lib/proposalStore';
 
 const TRIGGER_CLASS =
   'flex h-8 w-full items-center gap-1.5 rounded-[var(--radius-sm)] px-2 text-sm text-text hover:bg-surface-2';
@@ -284,6 +292,26 @@ export function TicketDetailContent({
   const { data: parentItem } = useAsync(
     () => (item?.parentId ? getTicket(item.parentId) : Promise.resolve(undefined)),
     [item?.parentId],
+  );
+
+  // Pending proposals (W4.4, architecture §4.4) — fetched into the shared
+  // proposalStore rather than kept as page-local state, so approving here
+  // updates the same underlying row a future Review screen or the Copilot
+  // panel would also see, with no refetch anywhere. Only ever fetches
+  // status='proposed' rows; a resolved one lingers in the store (and this
+  // section) just long enough to show its resolution note, same as the
+  // Copilot panel — see lib/useCopilotProposals.ts.
+  const { data: fetchedTicketProposals } = useAsync(
+    () => (item ? listTicketProposals(item.id, 'proposed') : Promise.resolve([])),
+    [item?.id],
+  );
+  useEffect(() => {
+    if (fetchedTicketProposals) upsertProposals(fetchedTicketProposals);
+  }, [fetchedTicketProposals]);
+  const allProposals = useAllProposals();
+  const ticketProposals = useMemo(
+    () => (item ? allProposals.filter((p) => p.ticketId === item.id) : []),
+    [allProposals, item?.id],
   );
 
   useRecordRecent(
@@ -828,6 +856,27 @@ export function TicketDetailContent({
             })}
           </div>
         </div>
+
+        {/* Pending proposals — no empty state: a ticket with nothing pending
+            shows no section at all (honesty-lint: don't imply agent activity
+            that isn't there). */}
+        {ticketProposals.length > 0 && (
+          <div className="mt-6 px-6 md:px-8">
+            <h3 className="mb-2 font-display text-sm font-medium text-text">
+              Pending proposals ({ticketProposals.length})
+            </h3>
+            <div className="flex flex-col gap-3">
+              {ticketProposals.map((p) => (
+                <CopilotProposalCard
+                  key={p.id}
+                  proposal={p}
+                  onApprove={approveProposal}
+                  onReject={rejectProposal}
+                />
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Comments */}
         <div className="mt-6 mb-8 px-6 md:px-8">
