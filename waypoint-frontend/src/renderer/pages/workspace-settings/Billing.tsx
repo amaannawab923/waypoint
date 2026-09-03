@@ -100,7 +100,12 @@ export default function Billing() {
                     </li>
                   ))}
                 </ul>
-                <Button variant={plan.variant} className="mt-5 w-full">
+                <Button
+                  variant={plan.variant}
+                  className="mt-5 w-full"
+                  disabled
+                  title="Billing isn't connected to a payment processor yet."
+                >
                   {plan.cta}
                 </Button>
               </div>
