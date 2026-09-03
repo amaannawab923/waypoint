@@ -48,13 +48,6 @@ const PROJECT: Project = {
   leadId: null,
   defaultAssigneeId: null,
   timezone: 'UTC',
-  features: {
-    sprints: true,
-    workstreams: true,
-    views: true,
-    docs: true,
-    requests: true,
-  },
   estimate: null,
   automations: {
     autoArchiveEnabled: false,
@@ -67,6 +60,8 @@ const PROJECT: Project = {
   memberIds: ['mem-1'],
   guestAccessEnabled: false,
   repoPath: null,
+  primitiveCounts: { sprints: 0, workstreams: 0, views: 0, docs: 0, requests: 0 },
+  acceptsRequests: true,
 };
 
 const MEMBER: Member = {

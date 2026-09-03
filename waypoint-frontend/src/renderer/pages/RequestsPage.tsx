@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { formatDistanceToNow } from 'date-fns';
 import { Check, Copy, Globe2, Inbox, Link2, Plus, X } from 'lucide-react';
 import { useProject } from '@/layouts/ProjectLayout';
@@ -14,6 +14,7 @@ import {
   listTickets,
   updateRequestStatus,
 } from '@/data/api';
+import { refreshProjectInStore } from '@/lib/projectsStore';
 import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -71,7 +72,6 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
 
 export default function RequestsPage() {
   const { project } = useProject();
-  const navigate = useNavigate();
   const [tab, setTab] = useState<RequestStatus>('pending');
   const [workingId, setWorkingId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
@@ -230,6 +230,11 @@ export default function RequestsPage() {
       setCreateOpen(false);
       setTab('pending');
       reload();
+      // This may be the project's first request — refresh the shared
+      // projects store so the sidebar's Requests entry (driven by
+      // acceptsRequests || primitiveCounts.requests > 0) appears without a
+      // page reload.
+      refreshProjectInStore(project.id);
     } finally {
       setCreating(false);
     }
@@ -244,21 +249,6 @@ export default function RequestsPage() {
       // Clipboard access can fail (unsupported browser, no permission) —
       // the URL is still shown in the input for manual copy.
     }
-  }
-
-  if (!project.features.requests) {
-    return (
-      <EmptyState
-        icon={<Inbox size={28} />}
-        title="Requests is disabled for this project"
-        description="Turn Requests back on in project settings to let people file requests again."
-        action={
-          <Button variant="primary" onClick={() => navigate(`/projects/${project.id}/settings/features`)}>
-            Go to features
-          </Button>
-        }
-      />
-    );
   }
 
   return (
