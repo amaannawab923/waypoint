@@ -56,9 +56,9 @@ webhook event values are renamed now (§3.5).
 ## Standing constraints
 
 - **Do not merge C1–C5 to `main` individually.** Merge the set or none (§6.4.2).
-- **Regenerate `drizzle/meta` only once**, at the end of C3, and read the emitted
-  SQL by hand for `DROP TABLE`/`DROP COLUMN` before running `db:migrate`
-  (§6.4.4).
+- ~~**Regenerate `drizzle/meta` only once**, at the end of C3~~ — **done.** The
+  migration history is now a single `drizzle/0000_baseline.sql`; see "The
+  squash" below for what that cost and how to recover a local database.
 - **Copilot's engine is frozen** — `copilotRunner.ts`, the MCP server, and the
   propose→approve→execute state machine are not to be functionally modified
   (§11). C4 renames the vocabulary that flows through them; nothing else.
@@ -264,6 +264,38 @@ a sidebar that says "Sprints" is exactly the half-rename the tripwire exists to
 prevent. That needed the jsonb `UPDATE` above. §3.4 deletes the column outright
 in P5a, so this is throwaway work; it is still the right state to leave the
 tree in between here and there.
+
+### The squash
+
+Landed as its own commit, immediately after the rename, per §3.1 and §11 F5.
+The eight migrations `0000_tough_dark_phoenix` … `0007_nervous_sabretooth` and
+every file in `drizzle/meta/` were deleted and replaced by one
+`drizzle/0000_baseline.sql`, regenerated from the schema files. It is 388 lines
+of 19 `CREATE TYPE`, 29 `CREATE TABLE`, 3 `CREATE INDEX` and 49
+`ALTER TABLE … ADD CONSTRAINT` — read by hand, and containing no `DROP` of any
+kind, which is what you would expect once there is no prior history to diff
+against. drizzle-kit names its output randomly (`0000_thick_donald_blake`); the
+file and its `_journal.json` tag were renamed to `0000_baseline`, since a
+baseline should say so.
+
+**This is destructive and irreversible for local data.** Anyone with a local
+database has to recreate it:
+
+```bash
+cd waypoint-backend
+docker compose down -v && npm run db:migrate && npm run db:seed
+```
+
+That was run here from an empty volume: 29 tables, five state groups with no
+`triage`, `wi-10` seeded with `source = 'request'` and linked from the accepted
+request `in-2`, and workstream statuses `planned`/`active` only. `npm run build`
+and the full suite are green in both halves after it — 224 backend tests, 399
+frontend tests — and `lint:honesty` is clean.
+
+The C3 migration itself (`0007`) is gone with the rest of the history, so its
+`ALTER … RENAME` statements no longer exist anywhere. Its two destructive
+blocks are described above and in the commit message that landed it; the
+squash commit is the last point at which they can be read from `git show`.
 
 ### Notes for later commits
 

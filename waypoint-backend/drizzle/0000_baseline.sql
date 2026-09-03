@@ -2,17 +2,21 @@ CREATE TYPE "public"."auth_method" AS ENUM('email', 'google', 'github', 'gitlab'
 CREATE TYPE "public"."member_role" AS ENUM('admin', 'member', 'guest');--> statement-breakpoint
 CREATE TYPE "public"."plan_tier" AS ENUM('community', 'pro', 'business', 'enterprise');--> statement-breakpoint
 CREATE TYPE "public"."network" AS ENUM('public', 'private');--> statement-breakpoint
-CREATE TYPE "public"."state_group" AS ENUM('backlog', 'unstarted', 'started', 'completed', 'cancelled', 'triage');--> statement-breakpoint
-CREATE TYPE "public"."module_status" AS ENUM('backlog', 'planned', 'in-progress', 'paused', 'completed', 'cancelled');--> statement-breakpoint
+CREATE TYPE "public"."state_group" AS ENUM('backlog', 'unstarted', 'started', 'completed', 'cancelled');--> statement-breakpoint
+CREATE TYPE "public"."workstream_status" AS ENUM('planned', 'active', 'paused', 'done', 'dropped');--> statement-breakpoint
 CREATE TYPE "public"."assignee_kind" AS ENUM('member', 'agent');--> statement-breakpoint
 CREATE TYPE "public"."priority" AS ENUM('urgent', 'high', 'medium', 'low', 'none');--> statement-breakpoint
-CREATE TYPE "public"."page_visibility" AS ENUM('public', 'private', 'archived');--> statement-breakpoint
-CREATE TYPE "public"."intake_status" AS ENUM('pending', 'accepted', 'declined', 'duplicate');--> statement-breakpoint
+CREATE TYPE "public"."ticket_source" AS ENUM('manual', 'request', 'agent', 'import');--> statement-breakpoint
+CREATE TYPE "public"."doc_visibility" AS ENUM('public', 'private', 'archived');--> statement-breakpoint
+CREATE TYPE "public"."request_status" AS ENUM('pending', 'accepted', 'declined', 'duplicate');--> statement-breakpoint
 CREATE TYPE "public"."export_status" AS ENUM('completed', 'processing', 'failed');--> statement-breakpoint
 CREATE TYPE "public"."notification_kind" AS ENUM('mention', 'assigned', 'comment', 'state_change', 'agent_needs_review', 'agent_blocked');--> statement-breakpoint
 CREATE TYPE "public"."agent_autonomy" AS ENUM('plan-only', 'ask-before-write', 'ask-before-pr', 'full-auto');--> statement-breakpoint
 CREATE TYPE "public"."agent_run_status" AS ENUM('queued', 'running', 'needs-review', 'blocked', 'done', 'failed');--> statement-breakpoint
 CREATE TYPE "public"."execution_method" AS ENUM('local-claude-subscription', 'local-codex-subscription', 'local-gemini-subscription', 'hosted-api-key');--> statement-breakpoint
+CREATE TYPE "public"."copilot_message_role" AS ENUM('user', 'assistant');--> statement-breakpoint
+CREATE TYPE "public"."copilot_proposal_kind" AS ENUM('comment', 'state_change', 'assignee_change', 'priority_change', 'create_work_item');--> statement-breakpoint
+CREATE TYPE "public"."copilot_proposal_status" AS ENUM('proposed', 'executing', 'executed', 'rejected', 'stale', 'expired', 'superseded');--> statement-breakpoint
 CREATE TABLE "members" (
 	"id" text PRIMARY KEY NOT NULL,
 	"workspace_id" text NOT NULL,
@@ -69,10 +73,11 @@ CREATE TABLE "projects" (
 	"automations" jsonb NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"archived_at" timestamp with time zone,
-	"guest_access_enabled" boolean DEFAULT false NOT NULL
+	"guest_access_enabled" boolean DEFAULT false NOT NULL,
+	"repo_path" text
 );
 --> statement-breakpoint
-CREATE TABLE "work_item_states" (
+CREATE TABLE "ticket_states" (
 	"id" text PRIMARY KEY NOT NULL,
 	"project_id" text NOT NULL,
 	"name" text NOT NULL,
@@ -82,13 +87,13 @@ CREATE TABLE "work_item_states" (
 	"sort_order" integer DEFAULT 0 NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "cycle_members" (
-	"cycle_id" text NOT NULL,
+CREATE TABLE "sprint_members" (
+	"sprint_id" text NOT NULL,
 	"member_id" text NOT NULL,
-	CONSTRAINT "cycle_members_cycle_id_member_id_pk" PRIMARY KEY("cycle_id","member_id")
+	CONSTRAINT "sprint_members_sprint_id_member_id_pk" PRIMARY KEY("sprint_id","member_id")
 );
 --> statement-breakpoint
-CREATE TABLE "cycles" (
+CREATE TABLE "sprints" (
 	"id" text PRIMARY KEY NOT NULL,
 	"project_id" text NOT NULL,
 	"name" text NOT NULL,
@@ -98,26 +103,26 @@ CREATE TABLE "cycles" (
 	"lead_id" text
 );
 --> statement-breakpoint
-CREATE TABLE "module_members" (
-	"module_id" text NOT NULL,
+CREATE TABLE "workstream_members" (
+	"workstream_id" text NOT NULL,
 	"member_id" text NOT NULL,
-	CONSTRAINT "module_members_module_id_member_id_pk" PRIMARY KEY("module_id","member_id")
+	CONSTRAINT "workstream_members_workstream_id_member_id_pk" PRIMARY KEY("workstream_id","member_id")
 );
 --> statement-breakpoint
-CREATE TABLE "work_modules" (
+CREATE TABLE "workstreams" (
 	"id" text PRIMARY KEY NOT NULL,
 	"project_id" text NOT NULL,
 	"name" text NOT NULL,
 	"description" text DEFAULT '' NOT NULL,
 	"lead_id" text,
-	"status" "module_status" DEFAULT 'planned' NOT NULL,
+	"status" "workstream_status" DEFAULT 'planned' NOT NULL,
 	"start_date" date,
 	"target_date" date
 );
 --> statement-breakpoint
 CREATE TABLE "activity_entries" (
 	"id" text PRIMARY KEY NOT NULL,
-	"work_item_id" text NOT NULL,
+	"ticket_id" text NOT NULL,
 	"actor_id" text NOT NULL,
 	"verb" text NOT NULL,
 	"detail" text NOT NULL,
@@ -126,34 +131,34 @@ CREATE TABLE "activity_entries" (
 --> statement-breakpoint
 CREATE TABLE "comments" (
 	"id" text PRIMARY KEY NOT NULL,
-	"work_item_id" text NOT NULL,
+	"ticket_id" text NOT NULL,
 	"author_id" text NOT NULL,
 	"body_html" text NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "work_item_assignees" (
-	"work_item_id" text NOT NULL,
+CREATE TABLE "ticket_assignees" (
+	"ticket_id" text NOT NULL,
 	"assignee_id" text NOT NULL,
 	"assignee_kind" "assignee_kind" NOT NULL,
-	CONSTRAINT "work_item_assignees_work_item_id_assignee_id_unique" UNIQUE("work_item_id","assignee_id")
+	CONSTRAINT "ticket_assignees_ticket_id_assignee_id_unique" UNIQUE("ticket_id","assignee_id")
 );
 --> statement-breakpoint
-CREATE TABLE "work_item_labels" (
-	"work_item_id" text NOT NULL,
+CREATE TABLE "ticket_labels" (
+	"ticket_id" text NOT NULL,
 	"label_id" text NOT NULL,
-	CONSTRAINT "work_item_labels_work_item_id_label_id_pk" PRIMARY KEY("work_item_id","label_id")
+	CONSTRAINT "ticket_labels_ticket_id_label_id_pk" PRIMARY KEY("ticket_id","label_id")
 );
 --> statement-breakpoint
-CREATE TABLE "work_item_links" (
+CREATE TABLE "ticket_links" (
 	"id" text PRIMARY KEY NOT NULL,
-	"work_item_id" text NOT NULL,
+	"ticket_id" text NOT NULL,
 	"url" text NOT NULL,
 	"label" text NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "work_items" (
+CREATE TABLE "tickets" (
 	"id" text PRIMARY KEY NOT NULL,
 	"project_id" text NOT NULL,
 	"identifier" text NOT NULL,
@@ -162,8 +167,9 @@ CREATE TABLE "work_items" (
 	"description" text DEFAULT '' NOT NULL,
 	"state_id" text NOT NULL,
 	"priority" "priority" DEFAULT 'none' NOT NULL,
-	"module_id" text,
-	"cycle_id" text,
+	"source" "ticket_source" DEFAULT 'manual' NOT NULL,
+	"workstream_id" text,
+	"sprint_id" text,
 	"parent_id" text,
 	"estimate_points" numeric,
 	"estimate_value" text,
@@ -176,21 +182,21 @@ CREATE TABLE "work_items" (
 	"link_count" integer DEFAULT 0 NOT NULL,
 	"is_draft" boolean DEFAULT false NOT NULL,
 	"sort_order" numeric(30, 10) DEFAULT '0' NOT NULL,
-	CONSTRAINT "work_items_identifier_unique" UNIQUE("identifier"),
-	CONSTRAINT "work_items_project_id_sequence_id_unique" UNIQUE("project_id","sequence_id")
+	CONSTRAINT "tickets_identifier_unique" UNIQUE("identifier"),
+	CONSTRAINT "tickets_project_id_sequence_id_unique" UNIQUE("project_id","sequence_id")
 );
 --> statement-breakpoint
-CREATE TABLE "pages" (
+CREATE TABLE "docs" (
 	"id" text PRIMARY KEY NOT NULL,
 	"project_id" text NOT NULL,
 	"title" text NOT NULL,
 	"icon" text NOT NULL,
 	"content_html" text DEFAULT '<p></p>' NOT NULL,
-	"visibility" "page_visibility" DEFAULT 'private' NOT NULL,
+	"visibility" "doc_visibility" DEFAULT 'private' NOT NULL,
 	"owner_id" text NOT NULL,
 	"is_favorite" boolean DEFAULT false NOT NULL,
 	"is_locked" boolean DEFAULT false NOT NULL,
-	"parent_page_id" text,
+	"parent_doc_id" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -206,31 +212,31 @@ CREATE TABLE "saved_views" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "intake_requests" (
+CREATE TABLE "requests" (
 	"id" text PRIMARY KEY NOT NULL,
 	"project_id" text NOT NULL,
 	"title" text NOT NULL,
 	"description" text DEFAULT '' NOT NULL,
-	"status" "intake_status" DEFAULT 'pending' NOT NULL,
+	"status" "request_status" DEFAULT 'pending' NOT NULL,
 	"priority" "priority",
 	"source_name" text NOT NULL,
 	"source_email" text NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	"linked_work_item_id" text
+	"linked_ticket_id" text
 );
 --> statement-breakpoint
 CREATE TABLE "notifications" (
 	"id" text PRIMARY KEY NOT NULL,
 	"recipient_id" text NOT NULL,
 	"actor_id" text NOT NULL,
-	"work_item_id" text,
+	"ticket_id" text,
 	"message" text NOT NULL,
 	"read" boolean DEFAULT false NOT NULL,
 	"kind" "notification_kind" NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "stickies" (
+CREATE TABLE "scratch_notes" (
 	"id" text PRIMARY KEY NOT NULL,
 	"author_id" text NOT NULL,
 	"title" text NOT NULL,
@@ -259,13 +265,13 @@ CREATE TABLE "workspace_exports" (
 --> statement-breakpoint
 CREATE TABLE "agent_assignments" (
 	"id" text PRIMARY KEY NOT NULL,
-	"work_item_id" text NOT NULL,
+	"ticket_id" text NOT NULL,
 	"agent_id" text NOT NULL,
 	"status" "agent_run_status" DEFAULT 'queued' NOT NULL,
 	"summary" text,
 	"started_at" timestamp with time zone,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "agent_assignments_work_item_id_agent_id_unique" UNIQUE("work_item_id","agent_id")
+	CONSTRAINT "agent_assignments_ticket_id_agent_id_unique" UNIQUE("ticket_id","agent_id")
 );
 --> statement-breakpoint
 CREATE TABLE "agent_project_scopes" (
@@ -293,6 +299,41 @@ CREATE TABLE "agents" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "copilot_conversations" (
+	"id" text PRIMARY KEY NOT NULL,
+	"member_id" text NOT NULL,
+	"title" text DEFAULT 'New session' NOT NULL,
+	"claude_session_id" text,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "copilot_messages" (
+	"id" text PRIMARY KEY NOT NULL,
+	"conversation_id" text NOT NULL,
+	"role" "copilot_message_role" NOT NULL,
+	"content" text NOT NULL,
+	"seq" bigserial NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "copilot_proposals" (
+	"id" text PRIMARY KEY NOT NULL,
+	"conversation_id" text NOT NULL,
+	"kind" "copilot_proposal_kind" NOT NULL,
+	"ticket_id" text,
+	"payload" jsonb NOT NULL,
+	"snapshot" jsonb NOT NULL,
+	"anchor_seq" bigint NOT NULL,
+	"status" "copilot_proposal_status" DEFAULT 'proposed' NOT NULL,
+	"status_reason" text,
+	"result_info" jsonb,
+	"expires_at" timestamp with time zone NOT NULL,
+	"model_notified_at" timestamp with time zone,
+	"resolved_at" timestamp with time zone,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
 ALTER TABLE "members" ADD CONSTRAINT "members_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "labels" ADD CONSTRAINT "labels_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "project_members" ADD CONSTRAINT "project_members_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -300,42 +341,48 @@ ALTER TABLE "project_members" ADD CONSTRAINT "project_members_member_id_members_
 ALTER TABLE "projects" ADD CONSTRAINT "projects_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "projects" ADD CONSTRAINT "projects_lead_id_members_id_fk" FOREIGN KEY ("lead_id") REFERENCES "public"."members"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "projects" ADD CONSTRAINT "projects_default_assignee_id_members_id_fk" FOREIGN KEY ("default_assignee_id") REFERENCES "public"."members"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "work_item_states" ADD CONSTRAINT "work_item_states_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "cycle_members" ADD CONSTRAINT "cycle_members_cycle_id_cycles_id_fk" FOREIGN KEY ("cycle_id") REFERENCES "public"."cycles"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "cycle_members" ADD CONSTRAINT "cycle_members_member_id_members_id_fk" FOREIGN KEY ("member_id") REFERENCES "public"."members"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "cycles" ADD CONSTRAINT "cycles_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "cycles" ADD CONSTRAINT "cycles_lead_id_members_id_fk" FOREIGN KEY ("lead_id") REFERENCES "public"."members"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "module_members" ADD CONSTRAINT "module_members_module_id_work_modules_id_fk" FOREIGN KEY ("module_id") REFERENCES "public"."work_modules"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "module_members" ADD CONSTRAINT "module_members_member_id_members_id_fk" FOREIGN KEY ("member_id") REFERENCES "public"."members"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "work_modules" ADD CONSTRAINT "work_modules_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "work_modules" ADD CONSTRAINT "work_modules_lead_id_members_id_fk" FOREIGN KEY ("lead_id") REFERENCES "public"."members"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "activity_entries" ADD CONSTRAINT "activity_entries_work_item_id_work_items_id_fk" FOREIGN KEY ("work_item_id") REFERENCES "public"."work_items"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "comments" ADD CONSTRAINT "comments_work_item_id_work_items_id_fk" FOREIGN KEY ("work_item_id") REFERENCES "public"."work_items"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "work_item_assignees" ADD CONSTRAINT "work_item_assignees_work_item_id_work_items_id_fk" FOREIGN KEY ("work_item_id") REFERENCES "public"."work_items"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "work_item_labels" ADD CONSTRAINT "work_item_labels_work_item_id_work_items_id_fk" FOREIGN KEY ("work_item_id") REFERENCES "public"."work_items"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "work_item_labels" ADD CONSTRAINT "work_item_labels_label_id_labels_id_fk" FOREIGN KEY ("label_id") REFERENCES "public"."labels"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "work_item_links" ADD CONSTRAINT "work_item_links_work_item_id_work_items_id_fk" FOREIGN KEY ("work_item_id") REFERENCES "public"."work_items"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "work_items" ADD CONSTRAINT "work_items_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "work_items" ADD CONSTRAINT "work_items_state_id_work_item_states_id_fk" FOREIGN KEY ("state_id") REFERENCES "public"."work_item_states"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "work_items" ADD CONSTRAINT "work_items_module_id_work_modules_id_fk" FOREIGN KEY ("module_id") REFERENCES "public"."work_modules"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "work_items" ADD CONSTRAINT "work_items_cycle_id_cycles_id_fk" FOREIGN KEY ("cycle_id") REFERENCES "public"."cycles"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "work_items" ADD CONSTRAINT "work_items_parent_id_work_items_id_fk" FOREIGN KEY ("parent_id") REFERENCES "public"."work_items"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "work_items" ADD CONSTRAINT "work_items_created_by_id_members_id_fk" FOREIGN KEY ("created_by_id") REFERENCES "public"."members"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "pages" ADD CONSTRAINT "pages_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "pages" ADD CONSTRAINT "pages_owner_id_members_id_fk" FOREIGN KEY ("owner_id") REFERENCES "public"."members"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "pages" ADD CONSTRAINT "pages_parent_page_id_pages_id_fk" FOREIGN KEY ("parent_page_id") REFERENCES "public"."pages"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "ticket_states" ADD CONSTRAINT "ticket_states_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "sprint_members" ADD CONSTRAINT "sprint_members_sprint_id_sprints_id_fk" FOREIGN KEY ("sprint_id") REFERENCES "public"."sprints"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "sprint_members" ADD CONSTRAINT "sprint_members_member_id_members_id_fk" FOREIGN KEY ("member_id") REFERENCES "public"."members"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "sprints" ADD CONSTRAINT "sprints_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "sprints" ADD CONSTRAINT "sprints_lead_id_members_id_fk" FOREIGN KEY ("lead_id") REFERENCES "public"."members"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "workstream_members" ADD CONSTRAINT "workstream_members_workstream_id_workstreams_id_fk" FOREIGN KEY ("workstream_id") REFERENCES "public"."workstreams"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "workstream_members" ADD CONSTRAINT "workstream_members_member_id_members_id_fk" FOREIGN KEY ("member_id") REFERENCES "public"."members"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "workstreams" ADD CONSTRAINT "workstreams_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "workstreams" ADD CONSTRAINT "workstreams_lead_id_members_id_fk" FOREIGN KEY ("lead_id") REFERENCES "public"."members"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "activity_entries" ADD CONSTRAINT "activity_entries_ticket_id_tickets_id_fk" FOREIGN KEY ("ticket_id") REFERENCES "public"."tickets"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "comments" ADD CONSTRAINT "comments_ticket_id_tickets_id_fk" FOREIGN KEY ("ticket_id") REFERENCES "public"."tickets"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "ticket_assignees" ADD CONSTRAINT "ticket_assignees_ticket_id_tickets_id_fk" FOREIGN KEY ("ticket_id") REFERENCES "public"."tickets"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "ticket_labels" ADD CONSTRAINT "ticket_labels_ticket_id_tickets_id_fk" FOREIGN KEY ("ticket_id") REFERENCES "public"."tickets"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "ticket_labels" ADD CONSTRAINT "ticket_labels_label_id_labels_id_fk" FOREIGN KEY ("label_id") REFERENCES "public"."labels"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "ticket_links" ADD CONSTRAINT "ticket_links_ticket_id_tickets_id_fk" FOREIGN KEY ("ticket_id") REFERENCES "public"."tickets"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "tickets" ADD CONSTRAINT "tickets_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "tickets" ADD CONSTRAINT "tickets_state_id_ticket_states_id_fk" FOREIGN KEY ("state_id") REFERENCES "public"."ticket_states"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "tickets" ADD CONSTRAINT "tickets_workstream_id_workstreams_id_fk" FOREIGN KEY ("workstream_id") REFERENCES "public"."workstreams"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "tickets" ADD CONSTRAINT "tickets_sprint_id_sprints_id_fk" FOREIGN KEY ("sprint_id") REFERENCES "public"."sprints"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "tickets" ADD CONSTRAINT "tickets_parent_id_tickets_id_fk" FOREIGN KEY ("parent_id") REFERENCES "public"."tickets"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "tickets" ADD CONSTRAINT "tickets_created_by_id_members_id_fk" FOREIGN KEY ("created_by_id") REFERENCES "public"."members"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "docs" ADD CONSTRAINT "docs_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "docs" ADD CONSTRAINT "docs_owner_id_members_id_fk" FOREIGN KEY ("owner_id") REFERENCES "public"."members"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "docs" ADD CONSTRAINT "docs_parent_doc_id_docs_id_fk" FOREIGN KEY ("parent_doc_id") REFERENCES "public"."docs"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "saved_views" ADD CONSTRAINT "saved_views_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "saved_views" ADD CONSTRAINT "saved_views_owner_id_members_id_fk" FOREIGN KEY ("owner_id") REFERENCES "public"."members"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "intake_requests" ADD CONSTRAINT "intake_requests_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "intake_requests" ADD CONSTRAINT "intake_requests_linked_work_item_id_work_items_id_fk" FOREIGN KEY ("linked_work_item_id") REFERENCES "public"."work_items"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "requests" ADD CONSTRAINT "requests_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "requests" ADD CONSTRAINT "requests_linked_ticket_id_tickets_id_fk" FOREIGN KEY ("linked_ticket_id") REFERENCES "public"."tickets"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "notifications" ADD CONSTRAINT "notifications_recipient_id_members_id_fk" FOREIGN KEY ("recipient_id") REFERENCES "public"."members"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "notifications" ADD CONSTRAINT "notifications_work_item_id_work_items_id_fk" FOREIGN KEY ("work_item_id") REFERENCES "public"."work_items"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "stickies" ADD CONSTRAINT "stickies_author_id_members_id_fk" FOREIGN KEY ("author_id") REFERENCES "public"."members"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "notifications" ADD CONSTRAINT "notifications_ticket_id_tickets_id_fk" FOREIGN KEY ("ticket_id") REFERENCES "public"."tickets"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "scratch_notes" ADD CONSTRAINT "scratch_notes_author_id_members_id_fk" FOREIGN KEY ("author_id") REFERENCES "public"."members"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "webhooks" ADD CONSTRAINT "webhooks_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "workspace_exports" ADD CONSTRAINT "workspace_exports_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "agent_assignments" ADD CONSTRAINT "agent_assignments_work_item_id_work_items_id_fk" FOREIGN KEY ("work_item_id") REFERENCES "public"."work_items"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "agent_assignments" ADD CONSTRAINT "agent_assignments_ticket_id_tickets_id_fk" FOREIGN KEY ("ticket_id") REFERENCES "public"."tickets"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "agent_assignments" ADD CONSTRAINT "agent_assignments_agent_id_agents_id_fk" FOREIGN KEY ("agent_id") REFERENCES "public"."agents"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "agent_project_scopes" ADD CONSTRAINT "agent_project_scopes_agent_id_agents_id_fk" FOREIGN KEY ("agent_id") REFERENCES "public"."agents"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "agent_project_scopes" ADD CONSTRAINT "agent_project_scopes_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "agents" ADD CONSTRAINT "agents_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "agents" ADD CONSTRAINT "agents_created_by_id_members_id_fk" FOREIGN KEY ("created_by_id") REFERENCES "public"."members"("id") ON DELETE restrict ON UPDATE no action;
+ALTER TABLE "agents" ADD CONSTRAINT "agents_created_by_id_members_id_fk" FOREIGN KEY ("created_by_id") REFERENCES "public"."members"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "copilot_conversations" ADD CONSTRAINT "copilot_conversations_member_id_members_id_fk" FOREIGN KEY ("member_id") REFERENCES "public"."members"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "copilot_messages" ADD CONSTRAINT "copilot_messages_conversation_id_copilot_conversations_id_fk" FOREIGN KEY ("conversation_id") REFERENCES "public"."copilot_conversations"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "copilot_proposals" ADD CONSTRAINT "copilot_proposals_conversation_id_copilot_conversations_id_fk" FOREIGN KEY ("conversation_id") REFERENCES "public"."copilot_conversations"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "copilot_conversations_member_id_updated_at_idx" ON "copilot_conversations" USING btree ("member_id","updated_at");--> statement-breakpoint
+CREATE INDEX "copilot_messages_conversation_id_seq_idx" ON "copilot_messages" USING btree ("conversation_id","seq");--> statement-breakpoint
+CREATE INDEX "copilot_proposals_conversation_id_created_at_idx" ON "copilot_proposals" USING btree ("conversation_id","created_at");
