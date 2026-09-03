@@ -119,15 +119,6 @@ export default function Profile() {
             </Button>
             {saved && <span className="text-sm text-success">Saved</span>}
           </div>
-
-          <div className="mt-6 rounded-[var(--radius-lg)] border border-danger/30 bg-danger-bg p-5">
-            <h3 className="mb-1 font-display text-sm font-medium text-danger">Deactivate account</h3>
-            <p className="mb-4 text-sm text-text-secondary">
-              Deactivating your account removes your access to every workspace and project you're a
-              member of. This action cannot be undone.
-            </p>
-            <Button variant="danger">Deactivate account</Button>
-          </div>
         </div>
       )}
     </div>
