@@ -9,6 +9,7 @@ import { Button, IconButton } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Avatar } from '@/components/ui/Avatar';
 import { renderMarkdown } from '@/lib/markdown';
+import { ClaudeCodeStatus } from '@/components/domain/ClaudeCodeStatus';
 import {
   AGENT_TEMPLATES,
   CLAUDE_MODELS,
@@ -477,19 +478,15 @@ export default function AgentDetailPage() {
                     <Check size={14} className="text-success" />
                     {method.label}
                   </div>
-                  <p className="text-xs text-success">
-                    {!detection && 'Detecting Claude Code CLI…'}
-                    {detection?.status === 'connected' &&
-                      `● Connected — Claude Code CLI v${detection.version}, signed in as ${detection.account}`}
-                    {detection?.status === 'not-found' && (
-                      <span className="text-warning">Claude Code CLI not found on this machine.</span>
-                    )}
-                  </p>
+                  <ClaudeCodeStatus
+                    probe={detection ?? { state: 'checking' }}
+                    className="mt-0.5"
+                  />
                 </div>
               );
             })}
           </div>
-          {detection?.status === 'not-found' && (
+          {detection?.state === 'absent' && (
             <p className="mt-2 text-xs text-text-muted">
               You can still save this agent, but it won't run until Claude Code is detected.
             </p>
