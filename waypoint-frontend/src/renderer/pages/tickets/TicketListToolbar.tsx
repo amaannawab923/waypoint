@@ -1,13 +1,16 @@
+import { useState } from 'react';
 import {
   SlidersHorizontal,
   ListFilter,
   ChevronDown,
   Check,
   Search,
+  BookmarkPlus,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
+import { NamePromptModal } from '@/components/ui/NamePromptModal';
 import {
   PriorityIcon,
   PRIORITY_LABEL,
@@ -15,11 +18,40 @@ import {
 } from '@/components/domain/PriorityIcon';
 import { StateIcon } from '@/components/domain/StateIcon';
 import { Popover } from '@/pages/tickets/Popover';
+import { createView } from '@/data/api';
+import { refreshProjectInStore } from '@/lib/projectsStore';
 import {
   EMPTY_FILTERS,
+  toFilterQuery,
   type GroupBy,
+  type TicketFilters,
   type TicketsView,
 } from '@/pages/tickets/useTicketsView';
+import type { TicketFilterQuery } from '@/types/entities';
+
+/**
+ * Captures a TicketsView's current live filters into the typed shape a
+ * saved view's `filters` column requires (§4.6), guaranteeing a real,
+ * non-empty result — W5.3's accept criterion is that `createView` never
+ * saves `{}` or an equivalent meaningless filter. `toFilterQuery` alone
+ * collapses an all-empty TicketFilters to `undefined` (by design — that's
+ * the right behavior for the unfiltered ticket-list fetch it's also used
+ * for), so this always folds in `projectIds: [projectId]` on top: even a
+ * "no extra filters set" save still captures a real, meaningful predicate
+ * ("every ticket in this project"), the same baseline
+ * `{ v: 1, projectIds: [project.id] }` ProjectViewsPage's blank "Add view"
+ * flow has used since W5.1.
+ *
+ * Exported so ProjectViewsPage's saved-view filter EDITOR (the "Save
+ * changes" flow on an existing view, also W5.3) can capture an edited
+ * TicketsView's filters the same way, rather than a second implementation.
+ */
+export function captureSavedViewFilter(
+  filters: TicketFilters,
+  projectId: string,
+): TicketFilterQuery {
+  return { ...(toFilterQuery(filters) ?? { v: 1 }), projectIds: [projectId] };
+}
 
 export const PROJECT_GROUP_BY_OPTIONS: { key: GroupBy; label: string }[] = [
   { key: 'state', label: 'State' },
@@ -51,10 +83,28 @@ function toggleInArray<T>(arr: T[], value: T): T[] {
  * wired to the same `TicketsView` shape, rather than three near-duplicates.
  *
  * Deliberately excludes "Add ticket" (TicketsLayout still owns that — it's
- * identical across all five of a project's view tabs, not List-specific) and
- * "Save as view" (W5.3's saved-view filter editor owns that; building even a
- * stub here risks landing a `createView({})` shape that unit is explicitly
- * meant to prevent).
+ * identical across all five of a project's view tabs, not List-specific).
+ *
+ * "Save as view" (W5.3) lives here, gated on `view.projectId` being set —
+ * i.e. it only renders in project scope (TicketsLayout), not workspace scope
+ * (AllTicketsPage) or YourWork's Assigned/Created tabs, even though those are
+ * the same shared toolbar. Two independent reasons, either one sufficient on
+ * its own:
+ *   1. Saved views only have a home once created: the sole create endpoint
+ *      is `POST /projects/:projectId/views`, and the only place to browse,
+ *      rename, favorite, or delete one afterward is ProjectViewsPage
+ *      (`/projects/:id/views`). Workspace scope has neither — W5.2 removed
+ *      the old WorkspaceViewsPage outright (see AllTicketsPage.tsx's own
+ *      comment) — so a view "saved" from there would be uneditable and
+ *      unlistable the moment the dialog closed.
+ *   2. Even setting that aside, YourWork's Assigned/Created tabs start from
+ *      a fixed `@me`-scoped base filter (assigneeId/creatorId) that isn't
+ *      the signed-in user's own choice the way every other filter in this
+ *      toolbar is — captured into a saved view, "Assigned to me" bakes in
+ *      whoever happened to save it (view ownership doesn't rebind `@me` the
+ *      way it does when the toolbar itself renders it live), which is a
+ *      meaningfully different, more confusing object than every other
+ *      saved view this feature produces.
  */
 export default function TicketListToolbar({
   view,
@@ -65,6 +115,29 @@ export default function TicketListToolbar({
 }) {
   const activeFilterCount =
     view.filters.priority.length + view.filters.stateId.length;
+  const [saveAsViewOpen, setSaveAsViewOpen] = useState(false);
+  const [savingView, setSavingView] = useState(false);
+  const { projectId } = view;
+
+  async function submitSaveAsView(name: string) {
+    if (!projectId) return;
+    setSaveAsViewOpen(false);
+    setSavingView(true);
+    try {
+      await createView(
+        projectId,
+        name,
+        captureSavedViewFilter(view.filters, projectId),
+      );
+      // This may be the project's first view — refresh the shared projects
+      // store so the sidebar's Views entry (driven by
+      // primitiveCounts.views > 0) appears without a page reload, mirroring
+      // ProjectViewsPage's own submitAddView.
+      refreshProjectInStore(projectId);
+    } finally {
+      setSavingView(false);
+    }
+  }
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -199,6 +272,28 @@ export default function TicketListToolbar({
           className="h-8 w-44 rounded-[var(--radius-sm)] border border-border-strong bg-bg pr-2 pl-8 text-sm text-text outline-none placeholder:text-text-muted focus:border-accent"
         />
       </span>
+
+      {projectId && (
+        <>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setSaveAsViewOpen(true)}
+            disabled={savingView}
+          >
+            <BookmarkPlus size={14} />
+            {savingView ? 'Saving…' : 'Save as view'}
+          </Button>
+          <NamePromptModal
+            open={saveAsViewOpen}
+            title="Save as view"
+            initialValue=""
+            confirmLabel="Save"
+            onCancel={() => setSaveAsViewOpen(false)}
+            onSubmit={submitSaveAsView}
+          />
+        </>
+      )}
     </div>
   );
 }
