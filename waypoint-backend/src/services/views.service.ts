@@ -4,12 +4,13 @@ import { savedViews } from '../db/schema/index.js';
 import { NotFoundError } from '../middleware/errors.js';
 import { newId } from '../lib/ids.js';
 import { CURRENT_USER_ID } from '../lib/currentUser.js';
+import type { TicketFilterQuery } from '../validation/ticketFilter.schema.js';
 
 export async function listViews(projectId: string) {
   return db.select().from(savedViews).where(eq(savedViews.projectId, projectId));
 }
 
-export async function createView(projectId: string, name: string, filters: Record<string, unknown>) {
+export async function createView(projectId: string, name: string, filters: TicketFilterQuery) {
   const [row] = await db
     .insert(savedViews)
     .values({ id: newId('view'), projectId, name, ownerId: CURRENT_USER_ID, filters, visibility: 'public', isFavorite: false })

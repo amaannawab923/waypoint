@@ -36,6 +36,13 @@
       "when": 1788447294154,
       "tag": "0004_proposals_widen_scope",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1788448952541,
+      "tag": "0005_views_project_id_nullable",
+      "breakpoints": true
     }
   ]
 }

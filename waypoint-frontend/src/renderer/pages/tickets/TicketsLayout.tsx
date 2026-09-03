@@ -229,9 +229,9 @@ export default function TicketsLayout() {
       <div className="min-h-0 flex-1 overflow-y-auto">
         {currentView === 'list' && <ListView view={view} projectId={project.id} onOpenItem={openPeek} />}
         {currentView === 'board' && <BoardView view={view} projectId={project.id} onOpenItem={openPeek} />}
-        {currentView === 'calendar' && <CalendarView onOpenItem={openPeek} />}
-        {currentView === 'spreadsheet' && <SpreadsheetView onOpenItem={openPeek} />}
-        {currentView === 'gantt' && <GanttView onOpenItem={openPeek} />}
+        {currentView === 'calendar' && <CalendarView view={view} onOpenItem={openPeek} />}
+        {currentView === 'spreadsheet' && <SpreadsheetView view={view} onOpenItem={openPeek} />}
+        {currentView === 'gantt' && <GanttView view={view} onOpenItem={openPeek} />}
       </div>
 
       <CreateTicketModal

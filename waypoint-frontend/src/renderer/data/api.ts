@@ -30,6 +30,7 @@ import type {
   ProjectEstimateSystem,
   ProjectAutomations,
   Priority,
+  TicketFilterQuery,
   WorkspaceExport,
   Webhook,
   WebhookEventType,
@@ -66,6 +67,20 @@ function normalizeTicketMaybe(
   raw: (Ticket & { sortOrder?: string }) | undefined,
 ): Ticket | undefined {
   return raw ? normalizeTicket(raw) : undefined;
+}
+
+// Wire encoding for GET /tickets?filter=<base64url> and its project-scoped
+// sibling (docs/design/waypoint-revamp-architecture.md §4.6) — mirrors the
+// backend's `Buffer.from(json, 'utf8').toString('base64url')` convention
+// (waypoint-backend/src/services/proposals.service.ts's list cursors) as
+// closely as the renderer's Buffer-less environment allows: standard
+// base64 via btoa (the encodeURIComponent/unescape pair makes it UTF-8
+// safe for non-ASCII filter text), then remapped to the URL-safe alphabet
+// with padding stripped.
+function encodeTicketFilterParam(filter: TicketFilterQuery): string {
+  const json = JSON.stringify(filter);
+  const standard = btoa(unescape(encodeURIComponent(json)));
+  return standard.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 // ---------------------------------------------------------------------------
@@ -496,17 +511,22 @@ export async function deleteSprint(id: string): Promise<void> {
 // Tickets
 // ---------------------------------------------------------------------------
 
-export async function listTickets(projectId: string): Promise<Ticket[]> {
+export async function listTickets(
+  projectId: string,
+  filter?: TicketFilterQuery,
+): Promise<Ticket[]> {
+  const query = filter ? `?filter=${encodeTicketFilterParam(filter)}` : '';
   return normalizeTickets(
     await http.get<(Ticket & { sortOrder?: string })[]>(
-      `/projects/${projectId}/tickets`,
+      `/projects/${projectId}/tickets${query}`,
     ),
   );
 }
 
-export async function listAllTickets(): Promise<Ticket[]> {
+export async function listAllTickets(filter?: TicketFilterQuery): Promise<Ticket[]> {
+  const query = filter ? `?filter=${encodeTicketFilterParam(filter)}` : '';
   return normalizeTickets(
-    await http.get<(Ticket & { sortOrder?: string })[]>('/tickets'),
+    await http.get<(Ticket & { sortOrder?: string })[]>(`/tickets${query}`),
   );
 }
 
@@ -720,7 +740,7 @@ export async function listViews(projectId: string): Promise<SavedView[]> {
 export async function createView(
   projectId: string,
   name: string,
-  filters: Record<string, unknown>,
+  filters: TicketFilterQuery,
 ): Promise<SavedView> {
   return http.post<SavedView>(`/projects/${projectId}/views`, {
     name,

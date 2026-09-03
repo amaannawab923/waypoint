@@ -2,72 +2,59 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { formatDistanceToNow } from 'date-fns';
 import { clsx } from 'clsx';
-import { ArrowLeft, Copy, Globe2, Layers3, Lock, MoreHorizontal, Pencil, Plus, Star, Trash2 } from 'lucide-react';
+import {
+  ArrowLeft,
+  Copy,
+  Globe2,
+  Layers3,
+  Lock,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  Star,
+  Trash2,
+} from 'lucide-react';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
-import { createView, deleteView, getCurrentUser, listMembers, listViews, updateView } from '@/data/api';
+import {
+  createView,
+  deleteView,
+  listMembers,
+  listViews,
+  updateView,
+} from '@/data/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Modal } from '@/components/ui/Modal';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
 import ListView from '@/pages/tickets/ListView';
-import { EMPTY_FILTERS, useTicketsView, type TicketFilters } from '@/pages/tickets/useTicketsView';
-import { PRIORITY_ORDER } from '@/components/domain/PriorityIcon';
-import type { Priority, SavedView } from '@/types/entities';
+import {
+  EMPTY_FILTERS,
+  useTicketsView,
+  type TicketFilters,
+} from '@/pages/tickets/useTicketsView';
+import type { SavedView, TicketFilterQuery } from '@/types/entities';
 
 /**
- * A saved view's `filters` is a loosely-typed `Record<string, unknown>` (see
- * createView call sites and src/mock/seed.ts). Normalize it into the strict
- * TicketFilters shape the tickets list actually filters on, tolerating
- * both array and single-value entries.
- *
- * Assignee criteria get special handling because they can't all be expressed
- * as a positive `assigneeId` match: `assignee: 'none'` means "zero
- * assignees", an empty-set condition useTicketsView's filter can't express
- * (an empty `assigneeId` array is treated as "no filter", not "must be
- * empty"). So `unassignedOnly` is returned separately and applied as a
- * client-side post-filter by the caller. `assignee: 'me'` resolves to the
- * current user id; any other string/array is treated as specific member
- * id(s) and folds into `assigneeId`, which useTicketsView already filters
- * on correctly.
+ * A saved view's `filters` is now the typed ticketFilterSchema shape
+ * (§4.6) — translate it into useTicketsView's local TicketFilters shape,
+ * the same translation toFilterQuery() in useTicketsView.ts does in
+ * reverse. '@me' and '@unassigned' inside assigneeIds are no longer
+ * special-cased here at all: they ride straight through to the server,
+ * which resolves them at query time (buildAssigneeCondition in
+ * tickets.service.ts), so a saved view means "my open tickets" for
+ * whoever opens it and "no assignee" is a real filter condition instead
+ * of a client-side post-filter.
  */
-function filtersFromSavedView(
-  raw: Record<string, unknown>,
-  currentUserId: string | undefined,
-): { filters: TicketFilters; unassignedOnly: boolean } {
-  function toStringArray(value: unknown): string[] {
-    if (Array.isArray(value)) return value.filter((v): v is string => typeof v === 'string');
-    if (typeof value === 'string') return [value];
-    return [];
-  }
-
-  const priority = toStringArray(raw.priority).filter((p): p is Priority =>
-    (PRIORITY_ORDER as string[]).includes(p),
-  );
-
-  const rawAssignee = raw.assignee;
-  let unassignedOnly = false;
-  let assigneeId = toStringArray(raw.assigneeId);
-  if (rawAssignee === 'none') {
-    unassignedOnly = true;
-  } else if (rawAssignee === 'me') {
-    if (currentUserId) assigneeId = [...assigneeId, currentUserId];
-  } else {
-    assigneeId = [...assigneeId, ...toStringArray(rawAssignee)];
-  }
-
+function filtersFromSavedView(raw: TicketFilterQuery): TicketFilters {
   return {
-    unassignedOnly,
-    filters: {
-      ...EMPTY_FILTERS,
-      priority,
-      stateId: toStringArray(raw.stateId),
-      labelId: toStringArray(raw.labelId),
-      assigneeId,
-      workstreamId: toStringArray(raw.workstreamId),
-      sprintId: toStringArray(raw.sprintId),
-    },
+    priority: raw.priorities ?? [],
+    stateId: raw.stateIds ?? [],
+    labelId: raw.labelIds ?? [],
+    assigneeId: raw.assigneeIds ?? [],
+    workstreamId: raw.workstreamIds ?? [],
+    sprintId: raw.sprintIds ?? [],
   };
 }
 
@@ -89,7 +76,8 @@ function Dropdown({
   useEffect(() => {
     if (!open) return;
     function onDown(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      if (ref.current && !ref.current.contains(e.target as Node))
+        setOpen(false);
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') setOpen(false);
@@ -106,7 +94,12 @@ function Dropdown({
     <div className="relative shrink-0" ref={ref}>
       {trigger(() => setOpen((o) => !o), open)}
       {open && (
-        <div className={clsx('absolute z-30 mt-1', align === 'right' ? 'right-0' : 'left-0')}>
+        <div
+          className={clsx(
+            'absolute z-30 mt-1',
+            align === 'right' ? 'right-0' : 'left-0',
+          )}
+        >
           {children(() => setOpen(false))}
         </div>
       )}
@@ -154,7 +147,12 @@ function NamePromptModal({
           <Button variant="secondary" size="sm" onClick={onCancel}>
             Cancel
           </Button>
-          <Button variant="primary" size="sm" onClick={submit} disabled={!value.trim()}>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={submit}
+            disabled={!value.trim()}
+          >
             {confirmLabel}
           </Button>
         </>
@@ -173,7 +171,17 @@ function NamePromptModal({
   );
 }
 
-function MenuItem({ icon, label, onClick, danger }: { icon: ReactNode; label: string; onClick: () => void; danger?: boolean }) {
+function MenuItem({
+  icon,
+  label,
+  onClick,
+  danger,
+}: {
+  icon: ReactNode;
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+}) {
   return (
     <button
       type="button"
@@ -197,35 +205,26 @@ export default function ProjectViewsPage() {
   const [addPromptOpen, setAddPromptOpen] = useState(false);
   const [renamingView, setRenamingView] = useState<SavedView | null>(null);
 
-  const { data: views, loading, reload } = useAsync(() => listViews(project.id), [project.id]);
+  const {
+    data: views,
+    loading,
+    reload,
+  } = useAsync(() => listViews(project.id), [project.id]);
   const { data: members } = useAsync(() => listMembers(), []);
-  const { data: currentUser } = useAsync(() => getCurrentUser(), []);
   const ticketsView = useTicketsView(project.id);
 
-  const normalized = useMemo(
-    () => filtersFromSavedView(activeView ? activeView.filters : {}, currentUser?.id),
-    [activeView, currentUser?.id],
+  const normalizedFilters = useMemo(
+    () =>
+      activeView ? filtersFromSavedView(activeView.filters) : EMPTY_FILTERS,
+    [activeView],
   );
 
   useEffect(() => {
-    ticketsView.setFilters(activeView ? normalized.filters : EMPTY_FILTERS);
+    ticketsView.setFilters(normalizedFilters);
     // Only re-run when the normalized filters change, not on every
     // ticketsView identity change (setFilters is stable per render).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeView, normalized.filters]);
-
-  // `unassignedOnly` (the "no assignee" / empty-set case) can't be expressed
-  // through useTicketsView's filters, so it's applied here as a post-filter
-  // on top of the already-filtered items/groups.
-  const activeViewItems = normalized.unassignedOnly
-    ? ticketsView.items.filter((item) => item.assigneeIds.length === 0)
-    : ticketsView.items;
-  const activeViewGroupedItems = normalized.unassignedOnly
-    ? ticketsView.groupedItems.map((group) => ({
-        ...group,
-        items: group.items.filter((item) => item.assigneeIds.length === 0),
-      }))
-    : ticketsView.groupedItems;
+  }, [normalizedFilters]);
 
   function handleAddView() {
     if (creating) return;
@@ -236,7 +235,7 @@ export default function ProjectViewsPage() {
     setAddPromptOpen(false);
     setCreating(true);
     try {
-      await createView(project.id, name, {});
+      await createView(project.id, name, { v: 1, projectIds: [project.id] });
       reload();
     } finally {
       setCreating(false);
@@ -268,7 +267,9 @@ export default function ProjectViewsPage() {
   }
 
   async function handleToggleVisibility(view: SavedView) {
-    await updateView(view.id, { visibility: view.visibility === 'public' ? 'private' : 'public' });
+    await updateView(view.id, {
+      visibility: view.visibility === 'public' ? 'private' : 'public',
+    });
     reload();
   }
 
@@ -284,7 +285,12 @@ export default function ProjectViewsPage() {
         title="Views is disabled for this project"
         description="Turn Views back on in project settings to save filters again."
         action={
-          <Button variant="primary" onClick={() => navigate(`/projects/${project.id}/settings/features`)}>
+          <Button
+            variant="primary"
+            onClick={() =>
+              navigate(`/projects/${project.id}/settings/features`)
+            }
+          >
             Go to features
           </Button>
         }
@@ -297,23 +303,27 @@ export default function ProjectViewsPage() {
       <div className="flex h-full flex-col">
         <div className="flex items-center justify-between border-b border-border px-6 py-4">
           <div className="flex items-center gap-3">
-            <Button variant="ghost" size="sm" onClick={() => setActiveView(null)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setActiveView(null)}
+            >
               <ArrowLeft size={15} />
               Views
             </Button>
             <div>
-              <h1 className="font-display text-lg font-medium text-text">{activeView.name}</h1>
+              <h1 className="font-display text-lg font-medium text-text">
+                {activeView.name}
+              </h1>
               <p className="text-sm text-text-secondary">
-                {activeViewItems.length} ticket{activeViewItems.length === 1 ? '' : 's'} matching this view
+                {ticketsView.items.length} ticket
+                {ticketsView.items.length === 1 ? '' : 's'} matching this view
               </p>
             </div>
           </div>
         </div>
         <div className="thin-scroll min-h-0 flex-1 overflow-y-auto">
-          <ListView
-            view={{ ...ticketsView, items: activeViewItems, groupedItems: activeViewGroupedItems }}
-            projectId={project.id}
-          />
+          <ListView view={ticketsView} projectId={project.id} />
         </div>
       </div>
     );
@@ -324,7 +334,9 @@ export default function ProjectViewsPage() {
       <div className="flex items-center justify-between border-b border-border px-6 py-4">
         <div>
           <h1 className="font-display text-lg font-medium text-text">Views</h1>
-          <p className="text-sm text-text-secondary">Saved filters for {project.name}</p>
+          <p className="text-sm text-text-secondary">
+            Saved filters for {project.name}
+          </p>
         </div>
         <Button variant="primary" onClick={handleAddView} disabled={creating}>
           <Plus size={15} />
@@ -341,7 +353,11 @@ export default function ProjectViewsPage() {
             title="No views yet"
             description="Save the current filter, sort, and grouping as a view you can jump back to."
             action={
-              <Button variant="primary" onClick={handleAddView} disabled={creating}>
+              <Button
+                variant="primary"
+                onClick={handleAddView}
+                disabled={creating}
+              >
                 <Plus size={15} />
                 Add view
               </Button>
@@ -354,46 +370,77 @@ export default function ProjectViewsPage() {
               const visibility = view.visibility ?? 'public';
               const isFavorite = view.isFavorite ?? false;
               return (
-                <li key={view.id} className="group flex items-center gap-1 px-6 py-3 hover:bg-surface-2">
+                <li
+                  key={view.id}
+                  className="group flex items-center gap-1 px-6 py-3 hover:bg-surface-2"
+                >
                   <button
                     type="button"
                     onClick={() => setActiveView(view)}
                     className="flex min-w-0 flex-1 items-center gap-3 text-left"
                   >
                     <Layers3 size={15} className="shrink-0 text-text-muted" />
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-text">{view.name}</span>
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-text">
+                      {view.name}
+                    </span>
                     {owner && (
                       <span className="flex shrink-0 items-center gap-1.5 text-xs text-text-secondary">
-                        <Avatar name={owner.displayName} color={owner.avatarColor} size={18} />
+                        <Avatar
+                          name={owner.displayName}
+                          color={owner.avatarColor}
+                          size={18}
+                        />
                         {owner.displayName}
                       </span>
                     )}
                     <span className="w-32 shrink-0 text-right text-xs text-text-muted">
-                      Updated {formatDistanceToNow(new Date(view.updatedAt), { addSuffix: true })}
+                      Updated{' '}
+                      {formatDistanceToNow(new Date(view.updatedAt), {
+                        addSuffix: true,
+                      })}
                     </span>
                   </button>
 
                   <div className="flex shrink-0 items-center gap-0.5">
                     <button
                       type="button"
-                      aria-label={visibility === 'public' ? 'Make private' : 'Make public'}
-                      title={visibility === 'public' ? 'Public — visible to everyone' : 'Private — only visible to you'}
+                      aria-label={
+                        visibility === 'public' ? 'Make private' : 'Make public'
+                      }
+                      title={
+                        visibility === 'public'
+                          ? 'Public — visible to everyone'
+                          : 'Private — only visible to you'
+                      }
                       onClick={() => handleToggleVisibility(view)}
                       className="inline-flex size-7 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary transition-colors hover:bg-surface hover:text-text"
                     >
-                      {visibility === 'public' ? <Globe2 size={14} /> : <Lock size={14} />}
+                      {visibility === 'public' ? (
+                        <Globe2 size={14} />
+                      ) : (
+                        <Lock size={14} />
+                      )}
                     </button>
                     <button
                       type="button"
-                      aria-label={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+                      aria-label={
+                        isFavorite
+                          ? 'Remove from favorites'
+                          : 'Add to favorites'
+                      }
                       aria-pressed={isFavorite}
                       onClick={() => handleToggleFavorite(view)}
                       className={clsx(
                         'inline-flex size-7 items-center justify-center rounded-[var(--radius-sm)] opacity-0 transition-opacity hover:bg-surface group-hover:opacity-100 group-focus-within:opacity-100',
-                        isFavorite ? 'text-warning opacity-100' : 'text-text-secondary hover:text-text',
+                        isFavorite
+                          ? 'text-warning opacity-100'
+                          : 'text-text-secondary hover:text-text',
                       )}
                     >
-                      <Star size={14} fill={isFavorite ? 'currentColor' : 'none'} />
+                      <Star
+                        size={14}
+                        fill={isFavorite ? 'currentColor' : 'none'}
+                      />
                     </button>
                     <div className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                       <Dropdown
