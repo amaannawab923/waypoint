@@ -2,7 +2,15 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { clsx } from 'clsx';
-import { ArrowLeft, Check, FolderGit2, Plus, Send, Sparkles, X } from 'lucide-react';
+import {
+  ArrowLeft,
+  Check,
+  FolderGit2,
+  Plus,
+  Send,
+  Sparkles,
+  X,
+} from 'lucide-react';
 import {
   postCopilotUserMessage,
   postCopilotAssistantMessage,
@@ -119,6 +127,7 @@ function CopilotRepoLinkCard({
   projectId,
   projectName,
   linkedPath,
+  askAgainReady,
   onLinked,
   onAskAgain,
 }: {
@@ -126,6 +135,17 @@ function CopilotRepoLinkCard({
   projectName: string;
   /** Non-null once this card's own link succeeded — see the gate above. */
   linkedPath: string | null;
+  /**
+   * True once routeProject.project has actually caught up to `linkedPath` —
+   * distinct from `linkedPath` itself being set, which only means the write
+   * succeeded. onAskAgain reads routeProject.project synchronously to decide
+   * what repoPath to send, and that reload is fired-and-forgotten from
+   * onLinked below rather than awaited (awaiting it would gate the success
+   * state on it too, which isn't the tradeoff wanted). Without this gate, a
+   * click landing in that window re-runs the question that got it here
+   * still ungrounded — exactly what this button exists to prevent.
+   */
+  askAgainReady: boolean;
   onLinked: (path: string) => void;
   onAskAgain: () => void;
 }) {
@@ -145,11 +165,17 @@ function CopilotRepoLinkCard({
     return (
       <div className="w-full shrink-0 self-start overflow-hidden rounded-[var(--radius)] border border-border-strong bg-surface">
         <div className="flex items-center gap-2 border-b border-success/40 bg-success-bg px-3 py-2">
-          <Check size={13} strokeWidth={2.2} className="shrink-0 text-success" />
+          <Check
+            size={13}
+            strokeWidth={2.2}
+            className="shrink-0 text-success"
+          />
           <span className="text-[10.5px] font-bold tracking-wider text-success uppercase">
             Codebase linked
           </span>
-          <span className="ml-auto truncate text-[11px] text-text-muted">{projectName}</span>
+          <span className="ml-auto truncate text-[11px] text-text-muted">
+            {projectName}
+          </span>
         </div>
 
         <div className="flex flex-col gap-2.5 p-3">
@@ -161,14 +187,19 @@ function CopilotRepoLinkCard({
             onChanged={() => onLinked(linkedPath)}
           />
           <p className="text-[12.5px] leading-snug text-text-secondary">
-            I can read this project&apos;s code from now on. Want me to take another look at your
-            question?
+            I can read this project&apos;s code from now on. Want me to take
+            another look at your question?
           </p>
         </div>
 
         <div className="flex items-center gap-2 border-t border-border px-3 py-2.5">
-          <Button variant="primary" size="xs" onClick={onAskAgain}>
-            Ask again with code access
+          <Button
+            variant="primary"
+            size="xs"
+            disabled={!askAgainReady}
+            onClick={onAskAgain}
+          >
+            {askAgainReady ? 'Ask again with code access' : 'Preparing…'}
           </Button>
           <span className="flex-1" />
           {manageInSettings}
@@ -184,16 +215,17 @@ function CopilotRepoLinkCard({
         <span className="text-[10.5px] font-bold tracking-wider text-text-secondary uppercase">
           Codebase not linked
         </span>
-        <span className="ml-auto truncate text-[11px] text-text-muted">{projectName}</span>
+        <span className="ml-auto truncate text-[11px] text-text-muted">
+          {projectName}
+        </span>
       </div>
 
       <div className="flex flex-col gap-2.5 p-3">
         <p className="text-[13px] leading-snug text-text-secondary">
-          To answer that properly I need to read <b className="font-semibold text-text">
-            {projectName}
-          </b>
-          &apos;s code. Link its local checkout and I can open, list and search files — read-only,
-          never editing or running anything.
+          To answer that properly I need to read{' '}
+          <b className="font-semibold text-text">{projectName}</b>
+          &apos;s code. Link its local checkout and I can open, list and search
+          files — read-only, never editing or running anything.
         </p>
         <RepoLinkPicker
           projectId={projectId}
@@ -820,7 +852,10 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     // fails just leaves the duplicate the retry would have created anyway.
     const failedTurnAnchor = sessions
       .find((s) => s.id === sessionId)
-      ?.messages.reduce((max, m) => (typeof m.seq === 'number' && m.seq > max ? m.seq : max), 0);
+      ?.messages.reduce(
+        (max, m) => (typeof m.seq === 'number' && m.seq > max ? m.seq : max),
+        0,
+      );
     const retryStale = proposalStore.proposals.filter(
       (p) =>
         p.status === 'proposed' &&
@@ -1072,6 +1107,11 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
                     projectId={entry.projectId}
                     projectName={entry.projectName}
                     linkedPath={entry.linkedPath}
+                    askAgainReady={
+                      entry.linkedPath !== null &&
+                      routeProject.project?.repoPath === entry.linkedPath &&
+                      !routeProject.project?.stale
+                    }
                     onLinked={(path) => {
                       setRepoLinkPrompt((prev) =>
                         prev ? { ...prev, linkedPath: path } : prev,
