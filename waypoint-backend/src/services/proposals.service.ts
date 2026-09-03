@@ -913,3 +913,21 @@ export async function listProposalsForTicket(ticketId: string, status?: Proposal
   const { displayName } = await membersService.getCurrentUser();
   return rows.map((row) => toView(row, displayName));
 }
+
+// Requests page's inline section (W4.4, architecture §4.4) — same shape as
+// listProposalsForTicket above, scoped by source_request_id instead of
+// ticket_id. Set when a proposal originated from triaging an incoming
+// request (schema note on proposals.sourceRequestId); nothing populates it
+// yet, so this returns [] until a later unit (a triage agent, or Copilot
+// proposing against a request) sets it.
+export async function listProposalsForRequest(requestId: string, status?: ProposalStatus): Promise<ProposalView[]> {
+  const conditions = [eq(proposals.sourceRequestId, requestId)];
+  if (status) conditions.push(eq(proposals.status, status));
+  const rows = await db
+    .select()
+    .from(proposals)
+    .where(and(...conditions))
+    .orderBy(desc(proposals.createdAt));
+  const { displayName } = await membersService.getCurrentUser();
+  return rows.map((row) => toView(row, displayName));
+}
