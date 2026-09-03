@@ -855,13 +855,28 @@ export function WorkItemDetailContent({
                       )}
                       <span className="text-xs text-text-muted">{formatRelativeTime(c.createdAt)}</span>
                     </div>
-                    {/* The textarea below only ever collects plain text, so this
-                        renders bodyHtml as plain text too — no HTML parsing, no
-                        script/img/onerror execution. React escapes {c.bodyHtml} as
-                        a text node the same way it would any other JSX child. */}
-                    <div className="whitespace-pre-wrap text-sm text-text-secondary">
-                      {c.bodyHtml}
-                    </div>
+                    {author.model ? (
+                      // Agent-authored comments are the one case where bodyHtml
+                      // genuinely is HTML: proposals.service.ts builds it with
+                      // buildCopilotCommentHtml, which escapes the display name
+                      // and the model's body first and only ever wraps them in a
+                      // fixed <p>/<em> template (waypoint-backend/src/lib/commentHtml.ts)
+                      // — no path from model output to an unescaped tag. Human
+                      // comments below never go through that builder, which is
+                      // why they render as plain text instead of trusting this.
+                      <div
+                        className="prose-comment text-sm text-text-secondary [&_p]:m-0"
+                        dangerouslySetInnerHTML={{ __html: c.bodyHtml }}
+                      />
+                    ) : (
+                      // The textarea only ever collects plain text, so this
+                      // renders bodyHtml as plain text too — no HTML parsing, no
+                      // script/img/onerror execution. React escapes {c.bodyHtml}
+                      // as a text node the same way it would any other JSX child.
+                      <div className="whitespace-pre-wrap text-sm text-text-secondary">
+                        {c.bodyHtml}
+                      </div>
+                    )}
                   </div>
                 </div>
               );

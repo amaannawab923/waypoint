@@ -26,7 +26,7 @@ import {
   updateWorkItem,
 } from '@/mock/api';
 import { useProject } from '@/layouts/ProjectLayout';
-import type { Comment, Member, Project, WorkItem } from '@/types/entities';
+import type { Agent, Comment, Member, Project, WorkItem } from '@/types/entities';
 import { WorkItemDetailContent } from './WorkItemDetailPage';
 
 jest.mock('@/mock/api', () => ({
@@ -129,17 +129,35 @@ const ITEM: WorkItem = {
 
 const XSS_PAYLOAD = '<img src=x onerror=alert(1)>';
 
-function commentWith(bodyHtml: string): Comment {
+const AGENT: Agent = {
+  id: 'agent-1',
+  workspaceId: 'ws-1',
+  name: 'Triage Agent',
+  avatarColor: '#654321',
+  instructionsFile: { filename: 'agent.md', contentMarkdown: '' },
+  scopeAllProjects: true,
+  scopeProjectIds: [],
+  executionMethod: 'local-claude-subscription',
+  model: 'Claude Opus',
+  autonomy: 'ask-before-write',
+  triggers: ['manual'],
+  isActive: true,
+  createdById: 'mem-1',
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+};
+
+function commentWith(bodyHtml: string, authorId = 'mem-1'): Comment {
   return {
     id: 'cm-1',
     workItemId: 'wi-1',
-    authorId: 'mem-1',
+    authorId,
     bodyHtml,
     createdAt: new Date().toISOString(),
   };
 }
 
-function mount(comments: Comment[]) {
+function mount(comments: Comment[], agents: Agent[] = []) {
   jest
     .mocked(useProject)
     .mockReturnValue({ project: PROJECT, reloadProject: jest.fn() });
@@ -150,7 +168,7 @@ function mount(comments: Comment[]) {
   jest.mocked(listCycles).mockResolvedValue([]);
   jest.mocked(listMembers).mockResolvedValue([MEMBER]);
   jest.mocked(getCurrentUser).mockResolvedValue(MEMBER);
-  jest.mocked(listAgents).mockResolvedValue([]);
+  jest.mocked(listAgents).mockResolvedValue(agents);
   jest.mocked(listAgentAssignments).mockResolvedValue([]);
   jest.mocked(listSubItems).mockResolvedValue([]);
   jest.mocked(listActivity).mockResolvedValue([]);
@@ -213,5 +231,29 @@ describe('WorkItemDetailPage → comment rendering (stored XSS fix)', () => {
     expect(
       screen.queryByText('not bold', { selector: 'b' }),
     ).not.toBeInTheDocument();
+  });
+
+  // Agent-authored comments are the one case where bodyHtml genuinely is
+  // HTML — built server-side by buildCopilotCommentHtml, which escapes the
+  // display name and body before wrapping them in a fixed <p>/<em> template.
+  // That path never touches human input, so it should still render as real
+  // markup instead of falling back to the plain-text guard above.
+  it('still renders trusted, backend-escaped HTML for an agent-authored comment', async () => {
+    const html =
+      '<p><em>Hi, this is Copilot — Priya’s agent — commenting on their behalf: </em>Repro’d on Safari 17.</p>';
+    mount([commentWith(html, 'agent-1')], [AGENT]);
+
+    const disclosure = await screen.findByText(
+      (_, el) => el?.tagName === 'EM' && el.textContent === 'Hi, this is Copilot — Priya’s agent — commenting on their behalf: ',
+    );
+    expect(disclosure.tagName).toBe('EM');
+    expect(screen.getByText('Repro’d on Safari 17.')).toBeInTheDocument();
+  });
+
+  it('still renders a human comment as plain text even when an agent exists elsewhere', async () => {
+    mount([commentWith(XSS_PAYLOAD, 'mem-1')], [AGENT]);
+
+    expect(await screen.findByText(XSS_PAYLOAD)).toBeInTheDocument();
+    expect(document.querySelector('img[onerror]')).toBeNull();
   });
 });
