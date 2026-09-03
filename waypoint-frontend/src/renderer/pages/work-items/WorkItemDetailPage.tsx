@@ -855,10 +855,13 @@ export function WorkItemDetailContent({
                       )}
                       <span className="text-xs text-text-muted">{formatRelativeTime(c.createdAt)}</span>
                     </div>
-                    <div
-                      className="prose-comment text-sm text-text-secondary [&_p]:m-0"
-                      dangerouslySetInnerHTML={{ __html: c.bodyHtml }}
-                    />
+                    {/* The textarea below only ever collects plain text, so this
+                        renders bodyHtml as plain text too — no HTML parsing, no
+                        script/img/onerror execution. React escapes {c.bodyHtml} as
+                        a text node the same way it would any other JSX child. */}
+                    <div className="whitespace-pre-wrap text-sm text-text-secondary">
+                      {c.bodyHtml}
+                    </div>
                   </div>
                 </div>
               );
