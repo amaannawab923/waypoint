@@ -7,14 +7,7 @@ import {
   type ReactNode,
 } from 'react';
 import { clsx } from 'clsx';
-import {
-  Bot,
-  Folder,
-  Filter as FilterIcon,
-  ChevronDown,
-  Check,
-  ClipboardCheck,
-} from 'lucide-react';
+import { IconBot, IconFolder, IconFilter, IconChevron, IconCheck, IconReview } from '@/components/icons';
 import { useAsync } from '@/lib/useAsync';
 import { useReviewQueue } from '@/lib/useReviewQueue';
 import {
@@ -120,7 +113,7 @@ function PopoverOption({
       )}
     >
       <span className="truncate">{label}</span>
-      {selected && <Check size={14} className="shrink-0" />}
+      {selected && <IconCheck size={14} className="shrink-0" />}
     </button>
   );
 }
@@ -154,7 +147,7 @@ function FilterPopover({
           >
             {icon}
             {label}: {selectedName}
-            <ChevronDown size={13} />
+            <IconChevron size={13} />
           </Button>
         );
       }}
@@ -445,7 +438,7 @@ export default function ReviewPage() {
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <FilterPopover
-          icon={<Bot size={14} />}
+          icon={<IconBot size={14} />}
           label="Agent"
           selectedId={agentId}
           selectedName={selectedAgentName}
@@ -453,7 +446,7 @@ export default function ReviewPage() {
           options={agentOptions}
         />
         <FilterPopover
-          icon={<Folder size={14} />}
+          icon={<IconFolder size={14} />}
           label="Project"
           selectedId={projectId}
           selectedName={selectedProjectName}
@@ -461,7 +454,7 @@ export default function ReviewPage() {
           options={projectOptions}
         />
         <FilterPopover
-          icon={<FilterIcon size={14} />}
+          icon={<IconFilter size={14} />}
           label="Kind"
           selectedId={kind}
           selectedName={selectedKindName}
@@ -501,7 +494,7 @@ export default function ReviewPage() {
         if (queue.proposals.length === 0) {
           return (
             <EmptyState
-              icon={<ClipboardCheck size={28} />}
+              icon={<IconReview size={28} />}
               title={empty.title}
               description={empty.description}
             />
