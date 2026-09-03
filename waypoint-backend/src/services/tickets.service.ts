@@ -1,10 +1,11 @@
-import { eq, and, ne, isNull, inArray, asc, desc, sql, ilike, lte, type SQL } from 'drizzle-orm';
+import { eq, and, or, ne, isNull, inArray, notInArray, asc, desc, sql, ilike, lte, gte, type SQL } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import {
   tickets,
   ticketLabels,
   ticketAssignees,
   ticketLinks,
+  ticketStates,
   labels,
   projects,
   members,
@@ -155,6 +156,146 @@ export async function listAllTickets(filters: TicketFilters = {}) {
     .where(and(...conditions))
     .orderBy(asc(tickets.sortOrder));
   const rows = filters.limit ? await query.limit(filters.limit) : await query;
+  return attachRelations(rows);
+}
+
+// The typed filter's domain-side shape (docs/design/waypoint-revamp-
+// architecture.md §4.6). Deliberately a plain interface here rather than a
+// re-export of validation/ticketFilter.schema.ts's zod-inferred type — this
+// service layer never imports from validation/ anywhere else in this file
+// (createTicket/updateTicket take their own CreateTicketInput/
+// UpdateTicketPatch shapes too), so the route layer parses the wire filter
+// with ticketFilterSchema and passes the resulting plain object in here.
+// The array-element types are pulled from the Drizzle column types
+// themselves so this can never drift out of sync with the actual enums.
+export interface TicketFilterQuery {
+  projectIds?: string[];
+  stateIds?: string[];
+  stateGroups?: (typeof ticketStates.$inferSelect)['group'][];
+  // $inferSelect, not $inferInsert — the insert-side type of an enum
+  // column with a default includes `| undefined` (fine for `eq()`, which
+  // the untyped TicketFilters.priority above uses, but inArray() rejects
+  // `undefined` array elements at the type level).
+  priorities?: (typeof tickets.$inferSelect)['priority'][];
+  // May contain literal member/agent ids plus the '@me' and '@unassigned'
+  // sentinels — see buildAssigneeCondition.
+  assigneeIds?: string[];
+  labelIds?: string[];
+  sprintIds?: string[];
+  workstreamIds?: string[];
+  sources?: (typeof tickets.$inferSelect)['source'][];
+  // Absolute ISO date, or a relative day token like '-30d' — see
+  // resolveFilterDate. Already shape-validated by ticketFilterSchema at the
+  // route boundary; a token that fails to parse here is dropped rather than
+  // thrown, matching this file's general "bad optional input degrades
+  // instead of 500s" posture (see escapeLikePattern's comment for the same
+  // idea applied to search).
+  updatedBefore?: string;
+  createdAfter?: string;
+  text?: string;
+  // Drafts are excluded by default, matching listDraftTickets'
+  // CURRENT_USER_ID-scoped listing and the MCP list tools' own
+  // exclude-drafts-by-default convention. Set true to include them.
+  includeDrafts?: boolean;
+}
+
+const RELATIVE_DAY_TOKEN_RE = /^-(\d+)d$/;
+
+function resolveFilterDate(token: string): Date | undefined {
+  const relative = RELATIVE_DAY_TOKEN_RE.exec(token);
+  if (relative) return new Date(Date.now() - Number(relative[1]) * 86_400_000);
+  const parsed = new Date(token);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+}
+
+// assigneeIds is OR'd within itself like every other multi-value filter
+// field (array-contains semantics), but two of its possible entries aren't
+// plain ids: '@me' resolves to the current user (so a saved view means "my
+// tickets" for whoever opens it, not whoever saved it) and '@unassigned'
+// means "has zero assignees" — an empty-set condition that can't be
+// expressed as a positive id match, so it gets its own NOT IN subquery,
+// OR'd together with the specific-id condition when both are present.
+function buildAssigneeCondition(rawIds: string[]): SQL | undefined {
+  const ids = new Set(rawIds);
+  const wantsUnassigned = ids.delete('@unassigned');
+  if (ids.delete('@me')) ids.add(CURRENT_USER_ID);
+  const specificIds = [...ids];
+
+  const specificCondition = specificIds.length
+    ? inArray(
+        tickets.id,
+        db.select({ ticketId: ticketAssignees.ticketId }).from(ticketAssignees).where(inArray(ticketAssignees.assigneeId, specificIds)),
+      )
+    : undefined;
+  const unassignedCondition = wantsUnassigned
+    ? notInArray(tickets.id, db.select({ ticketId: ticketAssignees.ticketId }).from(ticketAssignees))
+    : undefined;
+
+  if (specificCondition && unassignedCondition) return or(specificCondition, unassignedCondition);
+  return specificCondition ?? unassignedCondition;
+}
+
+function buildLabelCondition(labelIds: string[]): SQL {
+  return inArray(
+    tickets.id,
+    db.select({ ticketId: ticketLabels.ticketId }).from(ticketLabels).where(inArray(ticketLabels.labelId, labelIds)),
+  );
+}
+
+// stateGroup lives on ticket_states, not tickets itself, so it's expressed
+// the same way assigneeId/labelId are: a subquery passed to inArray()
+// rather than a join, keeping this condition combinable with everything
+// else in one and(...) via the same pattern withFilters/buildAssigneeCondition
+// already use.
+function buildStateGroupCondition(groups: (typeof ticketStates.$inferSelect)['group'][]): SQL {
+  return inArray(
+    tickets.stateId,
+    db.select({ id: ticketStates.id }).from(ticketStates).where(inArray(ticketStates.group, groups)),
+  );
+}
+
+export function buildTypedFilterConditions(query: TicketFilterQuery): SQL[] {
+  const conditions: SQL[] = [];
+  if (!query.includeDrafts) conditions.push(eq(tickets.isDraft, false));
+  if (query.projectIds?.length) conditions.push(inArray(tickets.projectId, query.projectIds));
+  if (query.stateIds?.length) conditions.push(inArray(tickets.stateId, query.stateIds));
+  if (query.stateGroups?.length) conditions.push(buildStateGroupCondition(query.stateGroups));
+  if (query.priorities?.length) conditions.push(inArray(tickets.priority, query.priorities));
+  if (query.sources?.length) conditions.push(inArray(tickets.source, query.sources));
+  if (query.workstreamIds?.length) conditions.push(inArray(tickets.workstreamId, query.workstreamIds));
+  if (query.sprintIds?.length) conditions.push(inArray(tickets.sprintId, query.sprintIds));
+  if (query.labelIds?.length) conditions.push(buildLabelCondition(query.labelIds));
+  if (query.assigneeIds?.length) {
+    const condition = buildAssigneeCondition(query.assigneeIds);
+    if (condition) conditions.push(condition);
+  }
+  if (query.updatedBefore) {
+    const date = resolveFilterDate(query.updatedBefore);
+    if (date) conditions.push(lte(tickets.updatedAt, date));
+  }
+  if (query.createdAfter) {
+    const date = resolveFilterDate(query.createdAfter);
+    if (date) conditions.push(gte(tickets.createdAt, date));
+  }
+  if (query.text) conditions.push(ilike(tickets.title, `%${escapeLikePattern(query.text)}%`));
+  return conditions;
+}
+
+// The single read path behind GET /tickets?filter=<base64url> and
+// GET /projects/:projectId/tickets?filter=<base64url> (routes/tickets.routes.ts
+// decodes and validates the wire filter, then narrows projectIds to the
+// path param for the project-scoped route). This is deliberately the only
+// place typed-filter conditions turn into a query — useTicketsView.ts no
+// longer filters client-side, and Calendar/Spreadsheet/Gantt share the same
+// hook instance as List/Board, so there is exactly one place filtering can
+// (or can fail to) happen.
+export async function listTicketsByFilter(query: TicketFilterQuery) {
+  const conditions = buildTypedFilterConditions(query);
+  const rows = await db
+    .select()
+    .from(tickets)
+    .where(and(...conditions))
+    .orderBy(asc(tickets.sortOrder));
   return attachRelations(rows);
 }
 

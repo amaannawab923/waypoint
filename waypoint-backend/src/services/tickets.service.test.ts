@@ -25,15 +25,19 @@ vi.mock('drizzle-orm', async (importOriginal) => {
     ...actual,
     eq: vi.fn(actual.eq),
     and: vi.fn(actual.and),
+    or: vi.fn(actual.or),
     ilike: vi.fn(actual.ilike),
     lte: vi.fn(actual.lte),
+    gte: vi.fn(actual.gte),
     inArray: vi.fn(actual.inArray),
+    notInArray: vi.fn(actual.notInArray),
   };
 });
 
-const { tickets, ticketAssignees } = await import('../db/schema/index.js');
-const { searchTickets, listAllTickets, listTickets } = await import('./tickets.service.js');
-const { eq, and, ilike, lte, inArray } = await import('drizzle-orm');
+const { tickets, ticketAssignees, ticketLabels, ticketStates } = await import('../db/schema/index.js');
+const { searchTickets, listAllTickets, listTickets, listTicketsByFilter, buildTypedFilterConditions } =
+  await import('./tickets.service.js');
+const { eq, and, or, ilike, lte, gte, inArray, notInArray } = await import('drizzle-orm');
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -258,5 +262,132 @@ describe('listTickets filters', () => {
     await listTickets('proj-1', { limit: 51 });
 
     expect(mainChain.limit).toHaveBeenCalledWith(51);
+  });
+});
+
+// The typed filter (docs/design/waypoint-revamp-architecture.md §4.6) —
+// the single query-building path behind GET /tickets?filter=<base64url>
+// and its project-scoped sibling.
+describe('buildTypedFilterConditions', () => {
+  it('excludes drafts by default, matching the MCP list tools convention', () => {
+    buildTypedFilterConditions({});
+
+    expect(eq).toHaveBeenCalledWith(tickets.isDraft, false);
+  });
+
+  it('does not filter on isDraft at all when includeDrafts is true', () => {
+    buildTypedFilterConditions({ includeDrafts: true });
+
+    expect(eq).not.toHaveBeenCalledWith(tickets.isDraft, expect.anything());
+  });
+
+  it('applies projectIds, stateIds, priorities, sources, workstreamIds and sprintIds as plain inArray conditions', () => {
+    buildTypedFilterConditions({
+      projectIds: ['proj-1'],
+      stateIds: ['st-1', 'st-2'],
+      priorities: ['urgent'],
+      sources: ['agent'],
+      workstreamIds: ['ws-1'],
+      sprintIds: ['spr-1'],
+    });
+
+    expect(inArray).toHaveBeenCalledWith(tickets.projectId, ['proj-1']);
+    expect(inArray).toHaveBeenCalledWith(tickets.stateId, ['st-1', 'st-2']);
+    expect(inArray).toHaveBeenCalledWith(tickets.priority, ['urgent']);
+    expect(inArray).toHaveBeenCalledWith(tickets.source, ['agent']);
+    expect(inArray).toHaveBeenCalledWith(tickets.workstreamId, ['ws-1']);
+    expect(inArray).toHaveBeenCalledWith(tickets.sprintId, ['spr-1']);
+  });
+
+  it('expresses labelIds as a ticketLabels subquery passed to inArray(tickets.id, ...), not a join', () => {
+    buildTypedFilterConditions({ labelIds: ['lbl-1', 'lbl-2'] });
+
+    expect(db.select).toHaveBeenCalledWith({ ticketId: ticketLabels.ticketId });
+    expect(inArray).toHaveBeenCalledWith(ticketLabels.labelId, ['lbl-1', 'lbl-2']);
+    const idCall = (inArray as unknown as ReturnType<typeof vi.fn>).mock.calls.find((c) => c[0] === tickets.id);
+    expect(idCall).toBeDefined();
+    expect(Array.isArray(idCall?.[1])).toBe(false);
+  });
+
+  it('expresses stateGroups as a ticketStates subquery passed to inArray(tickets.stateId, ...)', () => {
+    buildTypedFilterConditions({ stateGroups: ['backlog', 'started'] });
+
+    expect(db.select).toHaveBeenCalledWith({ id: ticketStates.id });
+    expect(inArray).toHaveBeenCalledWith(ticketStates.group, ['backlog', 'started']);
+  });
+
+  it('applies specific assigneeIds as a ticketAssignees subquery, same shape as the untyped filter', () => {
+    buildTypedFilterConditions({ assigneeIds: ['mem-4'] });
+
+    expect(db.select).toHaveBeenCalledWith({ ticketId: ticketAssignees.ticketId });
+    expect(inArray).toHaveBeenCalledWith(ticketAssignees.assigneeId, ['mem-4']);
+    expect(or).not.toHaveBeenCalled();
+  });
+
+  it("resolves '@me' to CURRENT_USER_ID (mem-1) so a saved view means the viewer's own tickets", () => {
+    buildTypedFilterConditions({ assigneeIds: ['@me'] });
+
+    expect(inArray).toHaveBeenCalledWith(ticketAssignees.assigneeId, ['mem-1']);
+  });
+
+  it("resolves '@unassigned' alone to a NOT IN subquery over every assignee row", () => {
+    buildTypedFilterConditions({ assigneeIds: ['@unassigned'] });
+
+    expect(notInArray).toHaveBeenCalledWith(tickets.id, expect.anything());
+    expect(inArray).not.toHaveBeenCalledWith(ticketAssignees.assigneeId, expect.anything());
+  });
+
+  it("ORs the specific-id condition with the unassigned condition when both are present — array-contains semantics extend to the sentinel", () => {
+    buildTypedFilterConditions({ assigneeIds: ['mem-4', '@unassigned'] });
+
+    expect(inArray).toHaveBeenCalledWith(ticketAssignees.assigneeId, ['mem-4']);
+    expect(notInArray).toHaveBeenCalledWith(tickets.id, expect.anything());
+    expect(or).toHaveBeenCalled();
+  });
+
+  it('resolves a relative updatedBefore token to a Date roughly N days ago and applies it with lte', () => {
+    const before = Date.now();
+    buildTypedFilterConditions({ updatedBefore: '-30d' });
+    const after = Date.now();
+
+    expect(lte).toHaveBeenCalledTimes(1);
+    const [[column, value]] = (lte as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    expect(column).toBe(tickets.updatedAt);
+    expect(value).toBeInstanceOf(Date);
+    const expectedMs = 30 * 24 * 60 * 60 * 1000;
+    expect((value as Date).getTime()).toBeGreaterThanOrEqual(before - expectedMs - 1000);
+    expect((value as Date).getTime()).toBeLessThanOrEqual(after - expectedMs + 1000);
+  });
+
+  it('resolves an absolute createdAfter token to that exact Date and applies it with gte', () => {
+    buildTypedFilterConditions({ createdAfter: '2026-01-01' });
+
+    expect(gte).toHaveBeenCalledWith(tickets.createdAt, new Date('2026-01-01'));
+  });
+
+  it('silently drops an unparseable date token rather than throwing (defense in depth — the route layer already validates this shape)', () => {
+    expect(() => buildTypedFilterConditions({ updatedBefore: 'not-a-date' })).not.toThrow();
+    expect(lte).not.toHaveBeenCalled();
+  });
+
+  it('applies text as an escaped ilike on the title, same pattern as searchTickets', () => {
+    buildTypedFilterConditions({ text: '100%_off' });
+
+    expect(ilike).toHaveBeenCalledWith(tickets.title, '%100\\%\\_off%');
+  });
+});
+
+describe('listTicketsByFilter', () => {
+  it('runs a single query combining every condition with AND and orders by sortOrder', async () => {
+    const mainChain = chainable([{ id: 'wi-1' }]);
+    db.select.mockReturnValueOnce(mainChain);
+
+    const result = await listTicketsByFilter({ priorities: ['urgent'], stateIds: ['st-1'] });
+
+    expect(eq).toHaveBeenCalledWith(tickets.isDraft, false);
+    expect(inArray).toHaveBeenCalledWith(tickets.priority, ['urgent']);
+    expect(inArray).toHaveBeenCalledWith(tickets.stateId, ['st-1']);
+    expect(mainChain.orderBy).toHaveBeenCalled();
+    expect(result).toEqual([{ id: 'wi-1', assigneeIds: [], labelIds: [], links: [] }]);
   });
 });
