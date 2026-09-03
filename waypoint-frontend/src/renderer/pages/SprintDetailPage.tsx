@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { clsx } from 'clsx';
-import { ArrowLeft, CalendarRange, Check, ChevronDown, MoreHorizontal, Pencil, RefreshCw, Trash2, UserPlus, Users } from 'lucide-react';
+import { ArrowLeft, CalendarRange, Check, ChevronDown, MoreHorizontal, Pencil, Trash2, UserPlus, Users } from 'lucide-react';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import { useRecordRecent } from '@/lib/recents';
@@ -140,24 +140,6 @@ export default function SprintDetailPage() {
         }
       : null,
   );
-
-  if (!project.features.sprints) {
-    return (
-      <EmptyState
-        icon={<RefreshCw size={28} />}
-        title="Sprints isn't enabled for this project"
-        description="Turn Sprints back on in project settings to run work in fixed date ranges again."
-        action={
-          <Link
-            to={`/projects/${project.id}/settings/features`}
-            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border border-border-strong bg-surface px-3 text-sm font-medium text-text transition-colors hover:bg-surface-2"
-          >
-            Go to feature settings
-          </Link>
-        }
-      />
-    );
-  }
 
   if (loading && (!sprint || !states)) {
     return (
