@@ -174,6 +174,21 @@ describe('POST /proposals/bulk-reject', () => {
   });
 });
 
+describe('GET /proposals/stats/approved-per-day', () => {
+  it('returns the aggregate stats', async () => {
+    vi.mocked(proposalsService.getApprovedPerActiveDayStats).mockResolvedValue({
+      approvedCount: 12,
+      activeDays: 4,
+      averagePerActiveDay: 3,
+    });
+
+    const res = await request(buildTestApp()).get('/proposals/stats/approved-per-day');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ approvedCount: 12, activeDays: 4, averagePerActiveDay: 3 });
+  });
+});
+
 describe('GET /tickets/:id/proposals', () => {
   it('returns the proposals for the ticket', async () => {
     vi.mocked(proposalsService.listProposalsForTicket).mockResolvedValue([proposalView()]);
