@@ -855,8 +855,15 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     !messagesLoadErrorHere;
 
   return createPortal(
+    // data-copilot-panel: a presence marker, not a style hook — the W5.4
+    // global Escape cascade (useGlobalKeyboardShortcuts.ts) reads it via
+    // closest() to mirror this component's OWN "is focus inside the panel"
+    // check above, so its own fallback doesn't also clear an unrelated
+    // selection on the same Escape keystroke this panel is already
+    // consuming.
     <div
       ref={panelRef}
+      data-copilot-panel
       className="fixed top-12 right-0 bottom-0 z-40 flex w-full max-w-[400px] flex-col border-l border-border bg-surface shadow-2xl transition-transform duration-200 ease-out"
       style={{ transform: visible ? 'translateX(0)' : 'translateX(100%)' }}
     >
