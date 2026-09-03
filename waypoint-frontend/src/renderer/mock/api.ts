@@ -306,8 +306,12 @@ export async function createProject(
 export async function updateProject(
   id: string,
   patch: Partial<Project>,
+  // Additive: every existing caller passes nothing and keeps the global
+  // error toast. The repo-link flow opts out because it renders the same
+  // failure inline, next to the action that caused it.
+  opts?: { silent?: boolean },
 ): Promise<Project> {
-  return http.patch<Project>(`/projects/${id}`, patch);
+  return http.patch<Project>(`/projects/${id}`, patch, opts);
 }
 
 export async function addProjectMember(
