@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   List,
@@ -7,10 +7,6 @@ import {
   Table,
   GanttChart,
   Plus,
-  SlidersHorizontal,
-  ListFilter,
-  ChevronDown,
-  Check,
   type LucideIcon,
 } from 'lucide-react';
 import { clsx } from 'clsx';
@@ -20,11 +16,11 @@ import { Button } from '@/components/ui/Button';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { CreateTicketModal } from '@/components/domain/CreateTicketModal';
 import { TicketDrawer } from '@/components/domain/TicketDrawer';
-import { PriorityIcon, PRIORITY_LABEL, PRIORITY_ORDER } from '@/components/domain/PriorityIcon';
-import { StateIcon } from '@/components/domain/StateIcon';
-import { Popover } from '@/pages/tickets/Popover';
-import { useTicketsView, EMPTY_FILTERS, type GroupBy, type ViewKind } from '@/pages/tickets/useTicketsView';
-import ListView from '@/pages/tickets/ListView';
+import { useTicketsView, type ViewKind } from '@/pages/tickets/useTicketsView';
+import TicketListToolbar, {
+  PROJECT_GROUP_BY_OPTIONS,
+} from '@/pages/tickets/TicketListToolbar';
+import TicketList from '@/pages/tickets/TicketList';
 import BoardView from '@/pages/tickets/BoardView';
 import CalendarView from '@/pages/tickets/CalendarView';
 import SpreadsheetView from '@/pages/tickets/SpreadsheetView';
@@ -38,27 +34,39 @@ const VIEW_TABS: { key: ViewKind; label: string; Icon: LucideIcon }[] = [
   { key: 'gantt', label: 'Gantt', Icon: GanttChart },
 ];
 
-const GROUP_BY_OPTIONS: { key: GroupBy; label: string }[] = [
-  { key: 'state', label: 'State' },
-  { key: 'priority', label: 'Priority' },
-  { key: 'workstream', label: 'Workstream' },
-  { key: 'sprint', label: 'Sprint' },
-  { key: 'assignee', label: 'Assignee' },
-  { key: 'none', label: 'None' },
-];
-
-function toggleInArray<T>(arr: T[], value: T): T[] {
-  return arr.includes(value) ? arr.filter((v) => v !== value) : [...arr, value];
-}
-
 export default function TicketsLayout() {
   const { project } = useProject();
-  const view = useTicketsView(project.id);
+  const view = useTicketsView({ projectId: project.id });
   const [searchParams, setSearchParams] = useSearchParams();
   const [createOpen, setCreateOpen] = useState(false);
 
-  const currentView: ViewKind = (searchParams.get('view') as ViewKind | null) ?? 'list';
+  const currentView: ViewKind =
+    (searchParams.get('view') as ViewKind | null) ?? 'list';
   const peekIdentifier = searchParams.get('peek');
+
+  // Sparse-project behavior (architecture §P5's own section title, "Sparse
+  // projects and the ticket list" — the mockup's third buildTicketView
+  // instantiation is literally a sparse project rendered through this same
+  // component with no config difference at all, see TicketList.tsx's own
+  // comment). The one concrete adjustment made here: don't offer "Group by
+  // Sprint"/"Group by Workstream" for a project with zero rows in that
+  // primitive — grouping by a dimension that produces one giant "No
+  // sprint"/"No workstream" bucket for every ticket is pure noise, and it's
+  // the same "derive presence from real rows" rule W5.1's primitiveCounts
+  // already applies to the sidebar (§3.4). This is a judgment call beyond
+  // what the mockup itself shows (its demo data assigns a sprint/workstream
+  // to every ticket unconditionally, including the sparse project's) — see
+  // the W5.2 handoff notes for the reasoning.
+  const groupByOptions = useMemo(
+    () =>
+      PROJECT_GROUP_BY_OPTIONS.filter((opt) => {
+        if (opt.key === 'sprint') return project.primitiveCounts.sprints > 0;
+        if (opt.key === 'workstream')
+          return project.primitiveCounts.workstreams > 0;
+        return true;
+      }),
+    [project.primitiveCounts.sprints, project.primitiveCounts.workstreams],
+  );
 
   function setView(next: ViewKind) {
     setSearchParams(
@@ -93,15 +101,17 @@ export default function TicketsLayout() {
     );
   }
 
-  const activeFilterCount = view.filters.priority.length + view.filters.stateId.length;
-
   return (
     <div className="flex h-full flex-col">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-3">
         <div className="flex items-center gap-2">
-          <span className="font-display text-sm text-text-secondary">{project.name}</span>
+          <span className="font-display text-sm text-text-secondary">
+            {project.name}
+          </span>
           <span className="text-sm text-text-muted">/</span>
-          <span className="font-display text-sm font-medium text-text">Tickets</span>
+          <span className="font-display text-sm font-medium text-text">
+            Tickets
+          </span>
           <Badge tone="neutral">{view.items.length}</Badge>
         </div>
 
@@ -127,99 +137,13 @@ export default function TicketsLayout() {
             ))}
           </div>
 
-          <Popover
-            trigger={({ open, toggle }) => (
-              <Button variant={open ? 'secondary' : 'ghost'} size="sm" onClick={toggle}>
-                <SlidersHorizontal size={14} />
-                Display
-                <ChevronDown size={13} />
-              </Button>
-            )}
-          >
-            <div className="flex w-48 flex-col">
-              <p className="mb-1 px-2 pt-1 text-xs font-medium tracking-wide text-text-muted uppercase">Group by</p>
-              {GROUP_BY_OPTIONS.map((opt) => (
-                <button
-                  key={opt.key}
-                  type="button"
-                  onClick={() => view.setGroupBy(opt.key)}
-                  className={clsx(
-                    'flex cursor-pointer items-center justify-between rounded-[var(--radius-sm)] px-2 py-1.5 text-sm hover:bg-surface-2',
-                    view.groupBy === opt.key ? 'text-accent' : 'text-text',
-                  )}
-                >
-                  {opt.label}
-                  {view.groupBy === opt.key && <Check size={14} />}
-                </button>
-              ))}
-            </div>
-          </Popover>
+          <TicketListToolbar view={view} groupByOptions={groupByOptions} />
 
-          <Popover
-            align="end"
-            trigger={({ open, toggle }) => (
-              <Button variant={open ? 'secondary' : 'ghost'} size="sm" onClick={toggle}>
-                <ListFilter size={14} />
-                Filters
-                {activeFilterCount > 0 && <Badge tone="accent">{activeFilterCount}</Badge>}
-                <ChevronDown size={13} />
-              </Button>
-            )}
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => setCreateOpen(true)}
           >
-            <div className="flex w-64 flex-col gap-3">
-              <div>
-                <p className="mb-1 px-2 text-xs font-medium tracking-wide text-text-muted uppercase">Priority</p>
-                {PRIORITY_ORDER.map((p) => (
-                  <label
-                    key={p}
-                    className="flex cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-sm hover:bg-surface-2"
-                  >
-                    <input
-                      type="checkbox"
-                      className="accent-[var(--accent)]"
-                      checked={view.filters.priority.includes(p)}
-                      onChange={() =>
-                        view.setFilters((f) => ({ ...f, priority: toggleInArray(f.priority, p) }))
-                      }
-                    />
-                    <PriorityIcon priority={p} size={13} />
-                    {PRIORITY_LABEL[p]}
-                  </label>
-                ))}
-              </div>
-              <div>
-                <p className="mb-1 px-2 text-xs font-medium tracking-wide text-text-muted uppercase">State</p>
-                {view.states.map((s) => (
-                  <label
-                    key={s.id}
-                    className="flex cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-sm hover:bg-surface-2"
-                  >
-                    <input
-                      type="checkbox"
-                      className="accent-[var(--accent)]"
-                      checked={view.filters.stateId.includes(s.id)}
-                      onChange={() =>
-                        view.setFilters((f) => ({ ...f, stateId: toggleInArray(f.stateId, s.id) }))
-                      }
-                    />
-                    <StateIcon state={s} size={13} />
-                    {s.name}
-                  </label>
-                ))}
-              </div>
-              {activeFilterCount > 0 && (
-                <button
-                  type="button"
-                  onClick={() => view.setFilters(EMPTY_FILTERS)}
-                  className="cursor-pointer self-start px-2 text-xs text-accent hover:underline"
-                >
-                  Clear filters
-                </button>
-              )}
-            </div>
-          </Popover>
-
-          <Button variant="primary" size="sm" onClick={() => setCreateOpen(true)}>
             <Plus size={14} />
             Add ticket
           </Button>
@@ -227,11 +151,25 @@ export default function TicketsLayout() {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {currentView === 'list' && <ListView view={view} projectId={project.id} onOpenItem={openPeek} />}
-        {currentView === 'board' && <BoardView view={view} projectId={project.id} onOpenItem={openPeek} />}
-        {currentView === 'calendar' && <CalendarView view={view} onOpenItem={openPeek} />}
-        {currentView === 'spreadsheet' && <SpreadsheetView view={view} onOpenItem={openPeek} />}
-        {currentView === 'gantt' && <GanttView view={view} onOpenItem={openPeek} />}
+        {currentView === 'list' && (
+          <TicketList
+            view={view}
+            projectId={project.id}
+            onOpenItem={openPeek}
+          />
+        )}
+        {currentView === 'board' && (
+          <BoardView view={view} projectId={project.id} onOpenItem={openPeek} />
+        )}
+        {currentView === 'calendar' && (
+          <CalendarView view={view} onOpenItem={openPeek} />
+        )}
+        {currentView === 'spreadsheet' && (
+          <SpreadsheetView view={view} onOpenItem={openPeek} />
+        )}
+        {currentView === 'gantt' && (
+          <GanttView view={view} onOpenItem={openPeek} />
+        )}
       </div>
 
       <CreateTicketModal
@@ -242,7 +180,11 @@ export default function TicketsLayout() {
       />
 
       {peekIdentifier && (
-        <TicketDrawer projectId={project.id} identifier={peekIdentifier} onClose={closePeek} />
+        <TicketDrawer
+          projectId={project.id}
+          identifier={peekIdentifier}
+          onClose={closePeek}
+        />
       )}
     </div>
   );
