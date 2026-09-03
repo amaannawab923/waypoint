@@ -1,15 +1,28 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ListTodo, UserCheck2, Bell, Activity as ActivityIcon } from 'lucide-react';
+import {
+  ListTodo,
+  UserCheck2,
+  Bell,
+  Activity as ActivityIcon,
+} from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
-import { getCurrentUser, listAllTickets, listProjects, listStates } from '@/data/api';
-import type { Member, Project, Ticket, TicketState } from '@/types/entities';
+import { getCurrentUser } from '@/data/api';
+import type { Member, StateGroup } from '@/types/entities';
 import { Avatar } from '@/components/ui/Avatar';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { PriorityIcon, PRIORITY_ORDER, PRIORITY_LABEL } from '@/components/domain/PriorityIcon';
-import { StateIcon, STATE_GROUP_LABEL } from '@/components/domain/StateIcon';
-import type { StateGroup } from '@/types/entities';
+import {
+  PriorityIcon,
+  PRIORITY_ORDER,
+  PRIORITY_LABEL,
+} from '@/components/domain/PriorityIcon';
+import { STATE_GROUP_LABEL } from '@/components/domain/StateIcon';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
+import { useTicketsView } from '@/pages/tickets/useTicketsView';
+import TicketListToolbar, {
+  WORKSPACE_GROUP_BY_OPTIONS,
+} from '@/pages/tickets/TicketListToolbar';
+import TicketList from '@/pages/tickets/TicketList';
 
 type TabKey = 'summary' | 'assigned' | 'created' | 'subscribed' | 'activity';
 
@@ -21,83 +34,68 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'activity', label: 'Activity' },
 ];
 
-const WORKLOAD_GROUPS: StateGroup[] = ['backlog', 'unstarted', 'started', 'completed', 'cancelled'];
+const WORKLOAD_GROUPS: StateGroup[] = [
+  'backlog',
+  'unstarted',
+  'started',
+  'completed',
+  'cancelled',
+];
 
-interface YourWorkData {
-  user: Member;
-  projects: Project[];
-  assigned: Ticket[];
-  created: Ticket[];
-  states: TicketState[];
-}
-
-async function loadYourWork(): Promise<YourWorkData> {
-  const [user, allItems, projects] = await Promise.all([getCurrentUser(), listAllTickets(), listProjects()]);
-  const assigned = allItems.filter((w) => w.assigneeIds.includes(user.id));
-  const created = allItems.filter((w) => w.createdById === user.id);
-  const relevantProjectIds = Array.from(new Set([...assigned, ...created].map((w) => w.projectId)));
-  const stateLists = await Promise.all(relevantProjectIds.map((pid) => listStates(pid)));
-  return { user, projects, assigned, created, states: stateLists.flat() };
-}
-
-function projectName(projects: Project[], projectId: string): string {
-  return projects.find((p) => p.id === projectId)?.name ?? 'Unknown project';
-}
-
-function TicketRow({
-  item,
-  projects,
-  states,
-}: {
-  item: Ticket;
-  projects: Project[];
-  states: TicketState[];
-}) {
-  const state = states.find((s) => s.id === item.stateId);
-  return (
-    <Link
-      to={`/projects/${item.projectId}/tickets/${item.identifier}`}
-      className="flex items-center gap-3 rounded-[var(--radius-sm)] px-2 py-2 text-sm transition-colors hover:bg-surface-2"
-    >
-      <PriorityIcon priority={item.priority} />
-      {state && <StateIcon state={state} />}
-      <span className="font-mono text-xs text-text-muted">{item.identifier}</span>
-      <span className="min-w-0 flex-1 truncate text-text">{item.title}</span>
-      <span className="shrink-0 truncate text-xs text-text-muted">{projectName(projects, item.projectId)}</span>
-    </Link>
-  );
-}
-
+/**
+ * "My work" — the personal-scoped instance of W5.2's unified TicketList
+ * (architecture §P5): same component as the project and workspace scopes,
+ * default filter narrowed to the current user instead of narrowed to no
+ * project. Assigned uses `{ assigneeId: ['@me'] }`, Created uses
+ * `{ creatorId: ['@me'] }` — both server-side (§4.6's '@me' sentinel,
+ * resolved in tickets.service.ts). Before W5.2 this page had its own
+ * hand-rolled `TicketRow` and fetched every ticket in the workspace via
+ * `listAllTickets()` just to filter it client-side down to two arrays; that
+ * duplicate implementation (and the O(all tickets) fetch) is gone now that
+ * this can just point the shared component at a different default filter.
+ */
 export default function YourWork() {
   const [tab, setTab] = useState<TabKey>('summary');
-  const { data, loading } = useAsync(() => loadYourWork(), []);
+  const { data: user, loading: userLoading } = useAsync(
+    () => getCurrentUser(),
+    [],
+  );
 
-  const byPriority = useMemo(() => {
-    if (!data) return [] as { priority: (typeof PRIORITY_ORDER)[number]; items: Ticket[] }[];
-    return PRIORITY_ORDER.map((priority) => ({
-      priority,
-      items: data.assigned.filter((w) => w.priority === priority),
-    })).filter((g) => g.items.length > 0);
-  }, [data]);
+  const assignedView = useTicketsView({
+    defaultFilters: { assigneeId: ['@me'] },
+  });
+  const createdView = useTicketsView({
+    defaultFilters: { creatorId: ['@me'] },
+  });
 
-  const workload = useMemo(() => {
-    if (!data) return [] as { group: StateGroup; count: number }[];
-    return WORKLOAD_GROUPS.map((group) => ({
-      group,
-      count: data.assigned.filter((w) => data.states.find((s) => s.id === w.stateId)?.group === group).length,
-    }));
-  }, [data]);
+  const byPriority = useMemo(
+    () =>
+      PRIORITY_ORDER.map((priority) => ({
+        priority,
+        items: assignedView.items.filter((w) => w.priority === priority),
+      })).filter((g) => g.items.length > 0),
+    [assignedView.items],
+  );
 
-  if (loading && !data) {
+  const workload = useMemo(
+    () =>
+      WORKLOAD_GROUPS.map((group) => ({
+        group,
+        count: assignedView.items.filter(
+          (w) => assignedView.stateFor(w)?.group === group,
+        ).length,
+      })),
+    [assignedView],
+  );
+
+  if (userLoading && !user) {
     return (
       <div className="mx-auto max-w-6xl p-6 md:p-8">
         <SkeletonListRows />
       </div>
     );
   }
-  if (!data) return null;
-
-  const { user, projects, assigned, created } = data;
+  if (!user) return null;
 
   return (
     <div className="mx-auto max-w-6xl p-6 md:p-8">
@@ -109,12 +107,11 @@ export default function YourWork() {
             key={t.key}
             type="button"
             onClick={() => setTab(t.key)}
-            className={
-              'cursor-pointer border-b-2 px-3 py-2 text-sm font-medium transition-colors ' +
-              (tab === t.key
+            className={`cursor-pointer border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
+              tab === t.key
                 ? 'border-accent text-text'
-                : 'border-transparent text-text-secondary hover:text-text')
-            }
+                : 'border-transparent text-text-secondary hover:text-text'
+            }`}
           >
             {t.label}
           </button>
@@ -129,43 +126,83 @@ export default function YourWork() {
                 <div className="rounded-[var(--radius-lg)] border border-border bg-surface p-4">
                   <div className="flex items-center gap-2 text-text-secondary">
                     <ListTodo size={16} />
-                    <span className="text-xs font-medium tracking-wide uppercase">Created by you</span>
+                    <span className="text-xs font-medium tracking-wide uppercase">
+                      Created by you
+                    </span>
                   </div>
-                  <p className="mt-2 font-display text-2xl font-medium text-text">{created.length}</p>
+                  <p className="mt-2 font-display text-2xl font-medium text-text">
+                    {createdView.items.length}
+                  </p>
                 </div>
                 <div className="rounded-[var(--radius-lg)] border border-border bg-surface p-4">
                   <div className="flex items-center gap-2 text-text-secondary">
                     <UserCheck2 size={16} />
-                    <span className="text-xs font-medium tracking-wide uppercase">Assigned to you</span>
+                    <span className="text-xs font-medium tracking-wide uppercase">
+                      Assigned to you
+                    </span>
                   </div>
-                  <p className="mt-2 font-display text-2xl font-medium text-text">{assigned.length}</p>
+                  <p className="mt-2 font-display text-2xl font-medium text-text">
+                    {assignedView.items.length}
+                  </p>
                 </div>
               </div>
 
               <div className="rounded-[var(--radius-lg)] border border-border bg-surface p-4">
-                <h2 className="font-display text-sm font-medium text-text">Workload by state</h2>
+                <h2 className="font-display text-sm font-medium text-text">
+                  Workload by state
+                </h2>
                 <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-5">
                   {workload.map((w) => (
-                    <div key={w.group} className="rounded-[var(--radius)] bg-surface-2 p-3 text-center">
-                      <p className="font-display text-lg font-medium text-text">{w.count}</p>
-                      <p className="mt-0.5 text-xs text-text-secondary">{STATE_GROUP_LABEL[w.group]}</p>
+                    <div
+                      key={w.group}
+                      className="rounded-[var(--radius)] bg-surface-2 p-3 text-center"
+                    >
+                      <p className="font-display text-lg font-medium text-text">
+                        {w.count}
+                      </p>
+                      <p className="mt-0.5 text-xs text-text-secondary">
+                        {STATE_GROUP_LABEL[w.group]}
+                      </p>
                     </div>
                   ))}
                 </div>
               </div>
 
               <div className="rounded-[var(--radius-lg)] border border-border bg-surface p-4">
-                <h2 className="font-display text-sm font-medium text-text">Assigned to you, by priority</h2>
+                <h2 className="font-display text-sm font-medium text-text">
+                  Assigned to you, by priority
+                </h2>
                 {byPriority.length === 0 ? (
-                  <EmptyState title="Nothing assigned" description="Tickets assigned to you will show up here." />
+                  <EmptyState
+                    title="Nothing assigned"
+                    description="Tickets assigned to you will show up here."
+                  />
                 ) : (
                   <div className="mt-2 space-y-4">
                     {byPriority.map((g) => (
                       <div key={g.priority}>
-                        <p className="mb-1 text-xs font-medium text-text-secondary">{PRIORITY_LABEL[g.priority]}</p>
+                        <p className="mb-1 text-xs font-medium text-text-secondary">
+                          {PRIORITY_LABEL[g.priority]}
+                        </p>
                         <div className="divide-y divide-border">
                           {g.items.map((item) => (
-                            <TicketRow key={item.id} item={item} projects={projects} states={data.states} />
+                            <Link
+                              key={item.id}
+                              to={`/projects/${item.projectId}/tickets/${item.identifier}`}
+                              className="flex items-center gap-3 rounded-[var(--radius-sm)] px-2 py-2 text-sm transition-colors hover:bg-surface-2"
+                            >
+                              <PriorityIcon priority={item.priority} />
+                              <span className="font-mono text-xs text-text-muted">
+                                {item.identifier}
+                              </span>
+                              <span className="min-w-0 flex-1 truncate text-text">
+                                {item.title}
+                              </span>
+                              <span className="shrink-0 truncate text-xs text-text-muted">
+                                {assignedView.projectFor(item)?.name ??
+                                  'Unknown project'}
+                              </span>
+                            </Link>
                           ))}
                         </div>
                       </div>
@@ -177,30 +214,26 @@ export default function YourWork() {
           )}
 
           {tab === 'assigned' && (
-            <div className="rounded-[var(--radius-lg)] border border-border bg-surface p-4">
-              {assigned.length === 0 ? (
-                <EmptyState title="Nothing assigned" description="Tickets assigned to you will show up here." />
-              ) : (
-                <div className="divide-y divide-border">
-                  {assigned.map((item) => (
-                    <TicketRow key={item.id} item={item} projects={projects} states={data.states} />
-                  ))}
-                </div>
-              )}
+            <div className="rounded-[var(--radius-lg)] border border-border bg-surface">
+              <div className="border-b border-border px-4 py-3">
+                <TicketListToolbar
+                  view={assignedView}
+                  groupByOptions={WORKSPACE_GROUP_BY_OPTIONS}
+                />
+              </div>
+              <TicketList view={assignedView} showProjectColumn />
             </div>
           )}
 
           {tab === 'created' && (
-            <div className="rounded-[var(--radius-lg)] border border-border bg-surface p-4">
-              {created.length === 0 ? (
-                <EmptyState title="Nothing created yet" description="Tickets you create will show up here." />
-              ) : (
-                <div className="divide-y divide-border">
-                  {created.map((item) => (
-                    <TicketRow key={item.id} item={item} projects={projects} states={data.states} />
-                  ))}
-                </div>
-              )}
+            <div className="rounded-[var(--radius-lg)] border border-border bg-surface">
+              <div className="border-b border-border px-4 py-3">
+                <TicketListToolbar
+                  view={createdView}
+                  groupByOptions={WORKSPACE_GROUP_BY_OPTIONS}
+                />
+              </div>
+              <TicketList view={createdView} showProjectColumn />
             </div>
           )}
 
@@ -222,16 +255,33 @@ export default function YourWork() {
         </div>
 
         <aside className="w-full shrink-0 lg:w-64">
-          <div className="rounded-[var(--radius-lg)] border border-border bg-surface p-5 text-center">
-            <Avatar name={user.fullName} color={user.avatarColor} size={56} className="mx-auto text-base" />
-            <p className="mt-3 font-display text-sm font-medium text-text">{user.fullName}</p>
-            <p className="text-xs text-text-secondary capitalize">{user.role}</p>
-            <p className="mt-3 border-t border-border pt-3 text-xs text-text-muted">
-              Joined {new Date(user.joinedAt).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
-            </p>
-          </div>
+          <UserCard user={user} />
         </aside>
       </div>
+    </div>
+  );
+}
+
+function UserCard({ user }: { user: Member }) {
+  return (
+    <div className="rounded-[var(--radius-lg)] border border-border bg-surface p-5 text-center">
+      <Avatar
+        name={user.fullName}
+        color={user.avatarColor}
+        size={56}
+        className="mx-auto text-base"
+      />
+      <p className="mt-3 font-display text-sm font-medium text-text">
+        {user.fullName}
+      </p>
+      <p className="text-xs text-text-secondary capitalize">{user.role}</p>
+      <p className="mt-3 border-t border-border pt-3 text-xs text-text-muted">
+        Joined{' '}
+        {new Date(user.joinedAt).toLocaleDateString(undefined, {
+          month: 'long',
+          year: 'numeric',
+        })}
+      </p>
     </div>
   );
 }

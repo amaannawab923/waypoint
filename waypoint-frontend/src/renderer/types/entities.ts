@@ -26,6 +26,7 @@ export interface TicketFilterQuery {
   stateGroups?: StateGroup[];
   priorities?: Priority[];
   assigneeIds?: string[];
+  creatorIds?: string[];
   labelIds?: string[];
   sprintIds?: string[];
   workstreamIds?: string[];

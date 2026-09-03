@@ -2,22 +2,33 @@ import { useMemo, useState } from 'react';
 import { useAsync } from '@/lib/useAsync';
 import {
   listTickets,
+  listAllTickets,
   listStates,
   listLabels,
   listWorkstreams,
+  listAllWorkstreams,
   listSprints,
+  listAllSprints,
+  listProjects,
 } from '@/data/api';
 import type {
   Ticket,
   TicketState,
   Priority,
+  Project,
   TicketFilterQuery,
 } from '@/types/entities';
 import { STATE_GROUP_ORDER } from '@/components/domain/StateIcon';
 import { PRIORITY_ORDER } from '@/components/domain/PriorityIcon';
 
 export type GroupBy =
-  'state' | 'priority' | 'workstream' | 'sprint' | 'assignee' | 'none';
+  | 'state'
+  | 'priority'
+  | 'workstream'
+  | 'sprint'
+  | 'assignee'
+  | 'project'
+  | 'none';
 export type ViewKind = 'list' | 'board' | 'calendar' | 'spreadsheet' | 'gantt';
 
 export interface TicketFilters {
@@ -27,6 +38,19 @@ export interface TicketFilters {
   assigneeId: string[];
   workstreamId: string[];
   sprintId: string[];
+  /**
+   * '@me' resolves server-side (buildCreatorCondition, mirroring
+   * assigneeId's own '@me'/'@unassigned' sentinels) — added for W5.2's
+   * workspace scope so "tickets I created" (YourWork's Created tab) is a
+   * real server-side filter instead of a client-side predicate over every
+   * ticket in the workspace.
+   */
+  creatorId: string[];
+  /** Free-text title search — the typed filter's `text` field (§4.6),
+   * added for W5.2. Already ilike-matched server-side (tickets.service.ts's
+   * buildTypedFilterConditions); this hook only needed to start collecting
+   * it and passing it through. */
+  text: string;
 }
 
 export const EMPTY_FILTERS: TicketFilters = {
@@ -36,6 +60,8 @@ export const EMPTY_FILTERS: TicketFilters = {
   assigneeId: [],
   workstreamId: [],
   sprintId: [],
+  creatorId: [],
+  text: '',
 };
 
 export interface TicketGroup {
@@ -61,60 +87,161 @@ function toFilterQuery(filters: TicketFilters): TicketFilterQuery | undefined {
   if (filters.assigneeId.length) query.assigneeIds = filters.assigneeId;
   if (filters.workstreamId.length) query.workstreamIds = filters.workstreamId;
   if (filters.sprintId.length) query.sprintIds = filters.sprintId;
+  if (filters.creatorId.length) query.creatorIds = filters.creatorId;
+  if (filters.text.trim()) query.text = filters.text.trim();
   return Object.keys(query).length > 1 ? query : undefined;
+}
+
+export interface TicketsViewOptions {
+  /**
+   * Omitted (or undefined) means workspace-wide — every ticket across every
+   * project, via `GET /tickets?filter=`. This is what makes the project
+   * scope and the workspace scope (W5.2, architecture §P5) the same
+   * component with a different default filter rather than two
+   * implementations: TicketsLayout passes its project's id, the new
+   * workspace-wide screens (AllTicketsPage, YourWork's Assigned/Created
+   * tabs) pass none.
+   */
+  projectId?: string;
+  /**
+   * Seeds the initial filter state — e.g. `{ assigneeId: ['@me'] }` for
+   * YourWork's Assigned tab, `{ creatorId: ['@me'] }` for its Created tab.
+   * Applied once, on mount, the same way EMPTY_FILTERS is; the user can
+   * still change or clear it afterward like any other filter.
+   */
+  defaultFilters?: Partial<TicketFilters>;
+  /** Defaults to 'state', matching every project-scoped caller today. The
+   * workspace scope passes 'project' (mockup: buildTicketView's atView). */
+  defaultGroupBy?: GroupBy;
 }
 
 /**
  * Shared state + data for every ticket view (List, Board, Calendar,
- * Spreadsheet, Gantt) on a single project. All five views should be built
- * on top of ONE instance of this hook (passed down as a prop, the way
- * ListView/BoardView already receive `view`) rather than each mounting
- * its own — otherwise the toolbar's filter state has nothing to reach.
+ * Spreadsheet, Gantt) across all three W5.2 scopes — a single project, the
+ * whole workspace, or a sparse project (which is just the project scope
+ * applied to a project with few/no sprints or workstreams; see TicketList's
+ * own comment for why that needs no separate code path here). All views for
+ * a given scope should be built on top of ONE instance of this hook (passed
+ * down as a prop, the way ListView/BoardView already receive `view`) rather
+ * than each mounting its own — otherwise the toolbar's filter state has
+ * nothing to reach.
  *
  * Filtering itself happens server-side (§4.6): changing `filters` triggers
- * a refetch of `listTickets(projectId, filter)` with the filter encoded
- * into `?filter=`, rather than a client-side predicate over an
- * always-fully-fetched list. There is exactly one fetched set — `items`
- * and `allItems` are the same array; the latter name is kept only so
- * existing consumers (e.g. ListView's/BoardView's sub-item stats) don't
- * need to change, though it no longer means "every ticket regardless of
- * the active filter" the way it did before filtering moved server-side.
+ * a refetch of `listTickets(projectId, filter)` / `listAllTickets(filter)`
+ * with the filter encoded into `?filter=`, rather than a client-side
+ * predicate over an always-fully-fetched list. There is exactly one fetched
+ * set — `items` and `allItems` are the same array; the latter name is kept
+ * only so existing consumers (e.g. ListView's/BoardView's sub-item stats)
+ * don't need to change, though it no longer means "every ticket regardless
+ * of the active filter" the way it did before filtering moved server-side.
+ * groupedItems partitions `items` exhaustively (every group set, including
+ * 'none'/'unassigned' buckets, is a total predicate over `items`), which is
+ * what keeps a rendered ticket-list's count line equal to its rendered row
+ * count (W5.2's accept criterion) — nothing here or in TicketList ever
+ * re-filters `items` client-side on top of the server-side result.
  */
-export function useTicketsView(projectId: string) {
-  const [filters, setFilters] = useState<TicketFilters>(EMPTY_FILTERS);
+export function useTicketsView(options: TicketsViewOptions = {}) {
+  const { projectId, defaultFilters, defaultGroupBy = 'state' } = options;
+  const [filters, setFilters] = useState<TicketFilters>(() => ({
+    ...EMPTY_FILTERS,
+    ...defaultFilters,
+  }));
   const filterQuery = useMemo(() => toFilterQuery(filters), [filters]);
 
   const {
     data: items,
-    loading,
+    loading: itemsLoading,
     reload,
     setData: setItems,
   } = useAsync(
-    () => listTickets(projectId, filterQuery),
+    () =>
+      projectId
+        ? listTickets(projectId, filterQuery)
+        : listAllTickets(filterQuery),
     [projectId, filterQuery],
   );
-  const { data: states } = useAsync(() => listStates(projectId), [projectId]);
-  const { data: labels } = useAsync(() => listLabels(projectId), [projectId]);
-  const { data: workstreams } = useAsync(
-    () => listWorkstreams(projectId),
-    [projectId],
-  );
-  const { data: sprints } = useAsync(() => listSprints(projectId), [projectId]);
-
-  const [groupBy, setGroupBy] = useState<GroupBy>('state');
-  const [showEmptyGroups, setShowEmptyGroups] = useState(true);
 
   // Memoized so an undefined `items` (still loading) doesn't hand
   // groupedItems' useMemo below a fresh [] reference on every render.
   const resolvedItems = useMemo(() => items ?? [], [items]);
+
+  // The set of projects actually represented in the current result —
+  // exactly [projectId] in project scope (so this degrades to the original
+  // single-project fetches below with no behavior change), or every
+  // distinct project the loaded tickets span in workspace scope. Bounded by
+  // what's on screen, not every project in the workspace: states/labels are
+  // per-project-customizable with no workspace-wide list endpoint, so this
+  // mirrors the same bounded Promise.all shape YourWork.tsx's loadYourWork
+  // already used for exactly this problem before W5.2.
+  const distinctProjectIds = useMemo(() => {
+    if (projectId) return [projectId];
+    return Array.from(new Set(resolvedItems.map((i) => i.projectId))).sort();
+  }, [projectId, resolvedItems]);
+  const projectIdsKey = distinctProjectIds.join(',');
+
+  const { data: statesLists, loading: statesLoading } = useAsync(
+    () => Promise.all(distinctProjectIds.map((pid) => listStates(pid))),
+    [projectIdsKey],
+  );
+  // Deduped by id defensively — real state/label rows are project-owned
+  // with server-generated ids so two different real projects can never
+  // collide, but a duplicate id here (stale data, a test double, a future
+  // caller reusing this hook in some odd way) must not silently double-count
+  // a group's rows the way an un-deduped `states` array would under 'state'
+  // grouping — that's exactly the count-line invariant this hook exists to
+  // protect.
+  const states = useMemo(
+    () => Array.from(new Map((statesLists ?? []).flat().map((s) => [s.id, s])).values()),
+    [statesLists],
+  );
+
+  const { data: labelsLists } = useAsync(
+    () => Promise.all(distinctProjectIds.map((pid) => listLabels(pid))),
+    [projectIdsKey],
+  );
+  const labels = useMemo(
+    () => Array.from(new Map((labelsLists ?? []).flat().map((l) => [l.id, l])).values()),
+    [labelsLists],
+  );
+
+  // Workstreams/sprints DO have workspace-wide list endpoints already
+  // (listAllWorkstreams/listAllSprints — pre-existing, used by Topbar's
+  // command palette), so workspace scope uses those directly instead of
+  // the bounded-per-project approach states/labels need above.
+  const { data: workstreams } = useAsync(
+    () => (projectId ? listWorkstreams(projectId) : listAllWorkstreams()),
+    [projectId],
+  );
+  const { data: sprints } = useAsync(
+    () => (projectId ? listSprints(projectId) : listAllSprints()),
+    [projectId],
+  );
+
+  // Only fetched in workspace scope — used for the 'project' groupBy option
+  // and TicketList's project column/badge (showProjectColumn). Project
+  // scope already knows its one project from context (useProject()), so
+  // this stays empty there rather than firing a redundant fetch.
+  const { data: projectsData } = useAsync(
+    () => (projectId ? Promise.resolve([] as Project[]) : listProjects()),
+    [projectId],
+  );
+  const projects = projectsData ?? [];
+
+  const loading = itemsLoading || statesLoading;
+
+  const [groupBy, setGroupBy] = useState<GroupBy>(defaultGroupBy);
+  const [showEmptyGroups, setShowEmptyGroups] = useState(true);
+
   const stateById = useMemo(
-    () => new Map((states ?? []).map((s) => [s.id, s])),
+    () => new Map(states.map((s) => [s.id, s])),
     [states],
+  );
+  const projectById = useMemo(
+    () => new Map(projects.map((p) => [p.id, p])),
+    [projects],
   );
 
   const groupedItems: TicketGroup[] = useMemo(() => {
-    if (!states) return [];
-
     function build(
       key: string,
       label: string,
@@ -174,15 +301,38 @@ export function useTicketsView(projectId: string) {
           ),
         ];
         break;
+      case 'project':
+        groups = distinctProjectIds.map((pid) =>
+          build(
+            pid,
+            projectById.get(pid)?.name ?? 'Unknown project',
+            undefined,
+            (i) => i.projectId === pid,
+          ),
+        );
+        break;
       default:
         groups = [build('all', 'All tickets', undefined, () => true)];
     }
 
     return showEmptyGroups ? groups : groups.filter((g) => g.items.length > 0);
-  }, [resolvedItems, groupBy, states, workstreams, sprints, showEmptyGroups]);
+  }, [
+    resolvedItems,
+    groupBy,
+    states,
+    workstreams,
+    sprints,
+    showEmptyGroups,
+    distinctProjectIds,
+    projectById,
+  ]);
 
   function stateFor(item: Ticket): TicketState | undefined {
     return stateById.get(item.stateId);
+  }
+
+  function projectFor(item: Ticket): Project | undefined {
+    return projectById.get(item.projectId);
   }
 
   /**
@@ -233,16 +383,18 @@ export function useTicketsView(projectId: string) {
   }
 
   return {
+    projectId,
     items: resolvedItems,
     allItems: resolvedItems,
     loading,
     reload,
     patchItemLocally,
     reorderItemLocally,
-    states: states ?? [],
-    labels: labels ?? [],
+    states,
+    labels,
     workstreams: workstreams ?? [],
     sprints: sprints ?? [],
+    projects,
     filters,
     setFilters,
     groupBy,
@@ -251,6 +403,7 @@ export function useTicketsView(projectId: string) {
     showEmptyGroups,
     setShowEmptyGroups,
     stateFor,
+    projectFor,
   };
 }
 

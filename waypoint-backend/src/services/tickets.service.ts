@@ -180,6 +180,10 @@ export interface TicketFilterQuery {
   // May contain literal member/agent ids plus the '@me' and '@unassigned'
   // sentinels — see buildAssigneeCondition.
   assigneeIds?: string[];
+  // May contain literal member ids plus the '@me' sentinel — see
+  // buildCreatorCondition. No '@unassigned' equivalent: createdById is
+  // NOT NULL on every ticket.
+  creatorIds?: string[];
   labelIds?: string[];
   sprintIds?: string[];
   workstreamIds?: string[];
@@ -235,6 +239,16 @@ function buildAssigneeCondition(rawIds: string[]): SQL | undefined {
   return specificCondition ?? unassignedCondition;
 }
 
+// Simpler sibling of buildAssigneeCondition: creatorIds is a single-value
+// column (tickets.createdById, NOT NULL), not a join table, so this is
+// just an inArray() after resolving '@me' — no unassigned branch needed.
+function buildCreatorCondition(rawIds: string[]): SQL | undefined {
+  const ids = new Set(rawIds);
+  if (ids.delete('@me')) ids.add(CURRENT_USER_ID);
+  const specificIds = [...ids];
+  return specificIds.length ? inArray(tickets.createdById, specificIds) : undefined;
+}
+
 function buildLabelCondition(labelIds: string[]): SQL {
   return inArray(
     tickets.id,
@@ -267,6 +281,10 @@ export function buildTypedFilterConditions(query: TicketFilterQuery): SQL[] {
   if (query.labelIds?.length) conditions.push(buildLabelCondition(query.labelIds));
   if (query.assigneeIds?.length) {
     const condition = buildAssigneeCondition(query.assigneeIds);
+    if (condition) conditions.push(condition);
+  }
+  if (query.creatorIds?.length) {
+    const condition = buildCreatorCondition(query.creatorIds);
     if (condition) conditions.push(condition);
   }
   if (query.updatedBefore) {
