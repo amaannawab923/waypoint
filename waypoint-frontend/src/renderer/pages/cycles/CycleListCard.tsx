@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { clsx } from 'clsx';
-import { CalendarRange, MoreHorizontal, Pencil, Star, Trash2 } from 'lucide-react';
+import { CalendarRange, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
 import { deleteCycle, updateCycle } from '@/mock/api';
 import type { Cycle, WorkItem, WorkItemState } from '@/types/entities';
 import { Button } from '@/components/ui/Button';
@@ -95,7 +95,6 @@ export function CycleListCard({
   onChanged: () => void;
 }) {
   const progress = computeProgress(items, states);
-  const [favorite, setFavorite] = useState(false);
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(cycle.name);
   const [startDate, setStartDate] = useState(cycle.startDate);
@@ -200,18 +199,6 @@ export function CycleListCard({
       </Link>
 
       <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-        <button
-          type="button"
-          aria-label={favorite ? 'Remove from favorites' : 'Add to favorites'}
-          aria-pressed={favorite}
-          onClick={() => setFavorite((f) => !f)}
-          className={clsx(
-            'inline-flex size-7 items-center justify-center rounded-[var(--radius-sm)] transition-colors hover:bg-surface',
-            favorite ? 'text-warning' : 'text-text-secondary hover:text-text',
-          )}
-        >
-          <Star size={14} fill={favorite ? 'currentColor' : 'none'} />
-        </button>
         <Dropdown
           trigger={(toggle) => (
             <button
