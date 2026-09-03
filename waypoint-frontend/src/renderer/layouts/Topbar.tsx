@@ -67,7 +67,10 @@ function AccountMenu({
   return (
     <div className="relative shrink-0" ref={ref}>
       {trigger(() => setOpen((o) => !o))}
-      {open && <div className="absolute right-0 z-30 mt-1">{children(() => setOpen(false))}</div>}
+      {/* z-[45]: above the Copilot panel (z-40, see CopilotPanel.tsx) so this
+          popover isn't hidden underneath it when Copilot is open, but still
+          below modals/drawers (z-50) so those still win over this. */}
+      {open && <div className="absolute right-0 z-[45] mt-1">{children(() => setOpen(false))}</div>}
     </div>
   );
 }
