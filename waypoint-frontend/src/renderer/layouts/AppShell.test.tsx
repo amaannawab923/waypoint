@@ -13,10 +13,12 @@ jest.mock('@/layouts/Topbar', () => ({
     copilotEnabled,
     copilotOpen,
     onToggleCopilot,
+    onOpenShortcuts,
   }: {
     copilotEnabled: boolean;
     copilotOpen: boolean;
     onToggleCopilot: () => void;
+    onOpenShortcuts: () => void;
   }) => {
     onToggleCopilotSpy(onToggleCopilot);
     return (
@@ -30,6 +32,9 @@ jest.mock('@/layouts/Topbar', () => ({
             Toggle Copilot
           </button>
         )}
+        <button type="button" onClick={onOpenShortcuts}>
+          Open shortcuts
+        </button>
       </div>
     );
   },
@@ -129,6 +134,45 @@ describe('AppShell', () => {
         onCloseSpy.mock.calls[onCloseSpy.mock.calls.length - 1][0];
 
       expect(reopenedOnClose).toBe(openedOnClose);
+    });
+  });
+
+  // W5.4: the real (unmocked) KeyboardShortcutsModal + useGlobalKeyboardShortcuts
+  // are mounted here — this is the integration point that proves `?`, the
+  // topbar's discoverability button (Topbar.tsx's new "Keyboard shortcuts"
+  // icon — mocked above as "Open shortcuts"), and Escape all drive the same
+  // modal instance.
+  describe('keyboard shortcuts modal (W5.4)', () => {
+    it('is closed by default and opens on "?"', () => {
+      renderAppShell();
+
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+      fireEvent.keyDown(document, { key: '?' });
+
+      expect(
+        screen.getByRole('dialog', { name: 'Keyboard shortcuts' }),
+      ).toBeInTheDocument();
+    });
+
+    it("opens via the topbar's discoverability button", () => {
+      renderAppShell();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open shortcuts' }));
+
+      expect(
+        screen.getByRole('dialog', { name: 'Keyboard shortcuts' }),
+      ).toBeInTheDocument();
+    });
+
+    it("closes on Escape (Modal.tsx's own listener)", () => {
+      renderAppShell();
+      fireEvent.keyDown(document, { key: '?' });
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
   });
 });
