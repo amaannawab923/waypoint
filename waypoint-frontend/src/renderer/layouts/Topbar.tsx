@@ -1,23 +1,22 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
+import { LogOut } from 'lucide-react';
 import {
-  Search,
-  Bell,
-  Plus,
-  X,
-  LayoutList,
-  FileText,
-  FolderKanban,
-  RefreshCw,
-  Boxes,
-  Settings,
-  LogOut,
-  Sun,
-  Moon,
-  Sparkles,
-  Keyboard,
-} from 'lucide-react';
+  IconSearch,
+  IconPlus,
+  IconSun,
+  IconKeyboard,
+  IconBell,
+  IconSparkles,
+  IconX,
+  IconList,
+  IconFile,
+  IconFolder,
+  IconRefresh,
+  IconTrack,
+  IconSettings,
+} from '@/components/icons';
 import { clsx } from 'clsx';
 import { useAsync } from '@/lib/useAsync';
 import {
@@ -109,7 +108,7 @@ interface SearchResult {
 
 interface SearchGroup {
   label: string;
-  icon: typeof LayoutList;
+  icon: typeof IconList;
   results: SearchResult[];
 }
 
@@ -206,11 +205,11 @@ function SearchPalette({
       }));
 
     return [
-      { label: 'Tickets', icon: LayoutList, results: ticketResults },
-      { label: 'Docs', icon: FileText, results: docResults },
-      { label: 'Projects', icon: FolderKanban, results: projectResults },
-      { label: 'Sprints', icon: RefreshCw, results: sprintResults },
-      { label: 'Workstreams', icon: Boxes, results: workstreamResults },
+      { label: 'Tickets', icon: IconList, results: ticketResults },
+      { label: 'Docs', icon: IconFile, results: docResults },
+      { label: 'Projects', icon: IconFolder, results: projectResults },
+      { label: 'Sprints', icon: IconRefresh, results: sprintResults },
+      { label: 'Workstreams', icon: IconTrack, results: workstreamResults },
     ].filter((g) => g.results.length > 0);
   }, [query, projects, tickets, docs, sprints, workstreams, projectNameById]);
 
@@ -234,7 +233,7 @@ function SearchPalette({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2.5 border-b border-border px-4 py-3">
-          <Search size={16} className="shrink-0 text-text-muted" />
+          <IconSearch size={16} className="shrink-0 text-text-muted" />
           <input
             autoFocus
             value={query}
@@ -254,7 +253,7 @@ function SearchPalette({
             aria-label="Close search"
             className="flex size-6 shrink-0 items-center justify-center rounded text-text-muted hover:bg-surface-2 hover:text-text"
           >
-            <X size={14} />
+            <IconX size={14} />
           </button>
         </div>
 
@@ -354,7 +353,7 @@ export function Topbar({
         onClick={() => setSearchOpen(true)}
         className="flex h-8 w-72 max-w-[40vw] items-center gap-2 rounded-[var(--radius-sm)] border border-border-strong bg-bg-inset px-3 text-sm text-text-muted hover:border-text-muted"
       >
-        <Search size={14} />
+        <IconSearch size={14} />
         Search…
         <span className="ml-auto text-xs text-text-muted">⌘K</span>
       </button>
@@ -366,7 +365,7 @@ export function Topbar({
           onClick={() => setQuickCreateOpen(true)}
           className="flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] bg-accent px-3 text-sm font-medium text-on-accent hover:bg-accent-hover disabled:opacity-50"
         >
-          <Plus size={14} />
+          <IconPlus size={14} />
           New ticket
         </button>
 
@@ -377,7 +376,11 @@ export function Topbar({
             aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
             className="flex size-8 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary hover:bg-surface-2 hover:text-text"
           >
-            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+            {/* The mockup's theme button is icon-only and always shows the
+                sun glyph regardless of state (no moon icon exists in its
+                icon set) — matched literally rather than adding a
+                mockup-absent moon icon for a dynamic sun/moon toggle. */}
+            <IconSun size={16} />
           </button>
         </Tooltip>
 
@@ -388,7 +391,7 @@ export function Topbar({
             aria-label="Keyboard shortcuts"
             className="flex size-8 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary hover:bg-surface-2 hover:text-text"
           >
-            <Keyboard size={16} />
+            <IconKeyboard size={16} />
           </button>
         </Tooltip>
 
@@ -398,7 +401,7 @@ export function Topbar({
           aria-label="Notifications"
           className="relative flex size-8 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary hover:bg-surface-2 hover:text-text"
         >
-          <Bell size={16} />
+          <IconBell size={16} />
           {unread > 0 && (
             <span className="absolute top-1 right-1.5 size-1.5 rounded-full bg-danger" />
           )}
@@ -415,7 +418,7 @@ export function Topbar({
               copilotOpen && 'bg-accent-soft-bg text-accent-soft-text hover:bg-accent-soft-bg',
             )}
           >
-            <Sparkles size={16} />
+            <IconSparkles size={16} />
           </button>
         )}
 
@@ -429,7 +432,7 @@ export function Topbar({
           {(close) => (
             <div className="w-48 rounded-[var(--radius-sm)] border border-border bg-surface p-1 shadow-lg">
               <AccountMenuItem
-                icon={<Settings size={14} />}
+                icon={<IconSettings size={14} />}
                 label="Profile settings"
                 onClick={() => {
                   close();
