@@ -1,14 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  ChevronDown,
-  ChevronRight,
-  Plus,
-  ListTodo,
-  ListChecks,
-  Link2,
-  Terminal,
-} from 'lucide-react';
+import { ListTodo, ListChecks, Link2, Terminal } from 'lucide-react';
+import { IconChevron, IconChevronRight, IconPlus } from '@/components/icons';
 import { clsx } from 'clsx';
 import { useAsync } from '@/lib/useAsync';
 import {
@@ -347,7 +340,7 @@ export default function TicketList({
                 disabled={bulkBusy}
               >
                 Set state
-                <ChevronDown size={12} />
+                <IconChevron size={12} />
               </Button>
             )}
           >
@@ -375,7 +368,7 @@ export default function TicketList({
                 disabled={bulkBusy}
               >
                 Set priority
-                <ChevronDown size={12} />
+                <IconChevron size={12} />
               </Button>
             )}
           >
@@ -403,7 +396,7 @@ export default function TicketList({
                 disabled={bulkBusy}
               >
                 Assign
-                <ChevronDown size={12} />
+                <IconChevron size={12} />
               </Button>
             )}
           >
@@ -448,9 +441,9 @@ export default function TicketList({
                 aria-label={isCollapsed ? 'Expand group' : 'Collapse group'}
               >
                 {isCollapsed ? (
-                  <ChevronRight size={14} />
+                  <IconChevronRight size={14} />
                 ) : (
-                  <ChevronDown size={14} />
+                  <IconChevron size={14} />
                 )}
               </button>
               {group.color && <Dot color={group.color} />}
@@ -466,7 +459,7 @@ export default function TicketList({
                   onClick={() => setCreateForGroup(group.key)}
                   className="ml-auto flex cursor-pointer items-center gap-1 rounded-[var(--radius-sm)] px-2 py-1 text-xs text-text-secondary hover:bg-surface hover:text-accent"
                 >
-                  <Plus size={12} />
+                  <IconPlus size={12} />
                   New ticket
                 </button>
               )}
