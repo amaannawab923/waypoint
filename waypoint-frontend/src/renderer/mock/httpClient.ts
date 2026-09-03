@@ -6,7 +6,8 @@ import { showErrorToast } from '@/lib/toast';
 
 // 14000, not Express's conventional 4000 — matches waypoint-backend's
 // moved default (see its docker-compose.yml/.env.example).
-const API_BASE_URL = process.env.WAYPOINT_API_BASE_URL || 'http://localhost:14000';
+const API_BASE_URL =
+  process.env.WAYPOINT_API_BASE_URL || 'http://localhost:14000';
 
 /**
  * Carries the backend's structured failure detail (see errorHandler.ts's
@@ -40,9 +41,17 @@ async function request<T>(
     });
   } catch {
     // Network-level failure (server unreachable, etc.) — fetch() itself
-    // throws here, never reaches the status-code handling below.
-    showErrorToast("Couldn't reach the server. Check your connection and try again.");
-    throw new Error(`Network error: ${path}`);
+    // throws here, never reaches the status-code handling below. Still
+    // honors `silent` and still throws the same ApiError shape as the
+    // status-code branch: a caller that renders this inline (e.g. a repo
+    // link attempt while the server happens to be down) must get exactly
+    // one error, not this toast plus its own.
+    if (!opts?.silent) {
+      showErrorToast(
+        "Couldn't reach the server. Check your connection and try again.",
+      );
+    }
+    throw new ApiError(`Network error: ${path}`);
   }
 
   // A 404 the caller explicitly expects as a valid "not found" outcome
@@ -57,7 +66,11 @@ async function request<T>(
     let errorPath: string | undefined;
     try {
       const body = await res.json();
-      if (body?.error) message = typeof body.error === 'string' ? body.error : JSON.stringify(body.error);
+      if (body?.error)
+        message =
+          typeof body.error === 'string'
+            ? body.error
+            : JSON.stringify(body.error);
       code = typeof body?.code === 'string' ? body.code : undefined;
       errorPath = typeof body?.path === 'string' ? body.path : undefined;
     } catch {
@@ -74,11 +87,16 @@ async function request<T>(
 }
 
 export const http = {
-  get: <T>(path: string, opts?: { notFoundAsUndefined?: boolean }) => request<T>(path, undefined, opts),
+  get: <T>(path: string, opts?: { notFoundAsUndefined?: boolean }) =>
+    request<T>(path, undefined, opts),
   post: <T>(path: string, body?: unknown) =>
-    request<T>(path, { method: 'POST', body: body !== undefined ? JSON.stringify(body) : undefined }),
+    request<T>(path, {
+      method: 'POST',
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    }),
   patch: <T>(path: string, body?: unknown, opts?: { silent?: boolean }) =>
     request<T>(path, { method: 'PATCH', body: JSON.stringify(body) }, opts),
-  put: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PUT', body: JSON.stringify(body) }),
+  put: <T>(path: string, body?: unknown) =>
+    request<T>(path, { method: 'PUT', body: JSON.stringify(body) }),
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
 };
