@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Boxes, CheckCircle2, Loader, Plus, Users } from 'lucide-react';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
-import { createModule, listMembers, listModules, listStates, listWorkItems } from '@/mock/api';
+import { createModule, listMembers, listModules, listStates, listWorkItems } from '@/data/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';

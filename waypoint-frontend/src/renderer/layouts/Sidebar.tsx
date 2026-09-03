@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useAsync } from '@/lib/useAsync';
-import { getWorkspace, listProjects } from '@/mock/api';
+import { getWorkspace, listProjects } from '@/data/api';
 import type { Project } from '@/types/entities';
 import { CreateProjectModal } from '@/components/domain/CreateProjectModal';
 

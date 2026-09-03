@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useProject } from '@/layouts/ProjectLayout';
-import { updateProjectAutomations } from '@/mock/api';
+import { updateProjectAutomations } from '@/data/api';
 import type { ProjectAutomations } from '@/types/entities';
 import { NotWired } from '@/components/ui/NotWired';
 import type { CapabilityKey } from '@/capabilities';

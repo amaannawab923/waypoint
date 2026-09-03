@@ -50,8 +50,7 @@ src/
                     workspace-settings, profile-settings, admin, …)
     layouts/        AppShell, ProjectLayout — the chrome each page renders inside
     lib/            Small focused helpers (toast, recents, markdown, …)
-    mock/           The HTTP client that talks to waypoint-backend, plus
-                     shared types/current-user constants (despite the name,
-                     this is not a mock anymore — it's the real API client)
+    data/           The HTTP client that talks to waypoint-backend, plus
+                     shared types/current-user constants
     router.tsx      The full route table
 ```

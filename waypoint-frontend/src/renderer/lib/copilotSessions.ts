@@ -1,6 +1,6 @@
 // Session list view-model + pure grouping/formatting helpers for the
 // Copilot panel (issue #11). Session identity, messages, and titles are now
-// backend-persisted (see mock/api.ts's Copilot functions and
+// backend-persisted (see data/api.ts's Copilot functions and
 // useCopilotConversations.ts, the hook that fetches them and merges in
 // local-only pin/order metadata from copilotSessionMeta.ts). What remains
 // here is the pure, storage-agnostic logic for grouping/formatting a

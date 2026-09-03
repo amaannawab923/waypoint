@@ -6,7 +6,7 @@ import {
   postCopilotUserMessage,
   postCopilotAssistantMessage,
   updateProject,
-} from '@/mock/api';
+} from '@/data/api';
 import { useCopilotConversations } from '@/lib/useCopilotConversations';
 import { useCopilotProposals } from '@/lib/useCopilotProposals';
 import { useCurrentRouteProject } from '@/lib/useCurrentRouteProject';

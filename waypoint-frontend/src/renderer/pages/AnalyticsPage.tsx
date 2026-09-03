@@ -10,7 +10,7 @@ import {
   listPages,
   listMembers,
   listStates,
-} from '@/mock/api';
+} from '@/data/api';
 import type { Project, WorkItem, WorkItemState } from '@/types/entities';
 import { Skeleton, SkeletonTableRows } from '@/components/ui/Skeleton';
 

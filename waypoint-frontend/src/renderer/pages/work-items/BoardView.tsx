@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Plus, Kanban, ListChecks, Link2, Terminal } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useAsync } from '@/lib/useAsync';
-import { listAgentAssignments, listAgents, listMembers, updateWorkItem, reorderWorkItem } from '@/mock/api';
+import { listAgentAssignments, listAgents, listMembers, updateWorkItem, reorderWorkItem } from '@/data/api';
 import { Badge, Dot } from '@/components/ui/Badge';
 import { AvatarStack } from '@/components/ui/Avatar';
 import { EmptyState } from '@/components/ui/EmptyState';

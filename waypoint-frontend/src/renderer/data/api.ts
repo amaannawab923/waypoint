@@ -5,8 +5,8 @@
 // UI code must never talk to `http`/fetch directly; it only ever imports
 // from this file.
 
-import { http } from '@/mock/httpClient';
-import { CURRENT_USER_ID } from '@/mock/currentUser';
+import { http } from '@/data/httpClient';
+import { CURRENT_USER_ID } from '@/data/currentUser';
 import type { Probe } from '@/types/probe';
 import type {
   Workspace,

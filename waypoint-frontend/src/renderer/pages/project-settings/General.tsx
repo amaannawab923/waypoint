@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
 import { useProject } from '@/layouts/ProjectLayout';
-import { archiveProject, deleteProject, updateProject } from '@/mock/api';
+import { archiveProject, deleteProject, updateProject } from '@/data/api';
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });

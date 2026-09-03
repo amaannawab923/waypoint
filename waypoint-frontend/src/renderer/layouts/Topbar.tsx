@@ -27,7 +27,7 @@ import {
   listAllPages,
   listAllCycles,
   listAllModules,
-} from '@/mock/api';
+} from '@/data/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { CreateWorkItemModal } from '@/components/domain/CreateWorkItemModal';
 import { Tooltip } from '@/components/ui/Tooltip';

@@ -1,6 +1,6 @@
 import { Check } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
-import { getWorkspace } from '@/mock/api';
+import { getWorkspace } from '@/data/api';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';

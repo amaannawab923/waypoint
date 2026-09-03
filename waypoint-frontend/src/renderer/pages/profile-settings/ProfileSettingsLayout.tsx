@@ -9,7 +9,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
-import { getCurrentUser } from '@/mock/api';
+import { getCurrentUser } from '@/data/api';
 import { Avatar } from '@/components/ui/Avatar';
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>

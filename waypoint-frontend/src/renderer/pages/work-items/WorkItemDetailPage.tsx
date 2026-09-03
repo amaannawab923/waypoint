@@ -47,7 +47,7 @@ import {
   toggleWorkItemAssignee,
   toggleWorkItemLabel,
   updateWorkItem,
-} from '@/mock/api';
+} from '@/data/api';
 import type { WorkItem } from '@/types/entities';
 import { Avatar, AvatarStack } from '@/components/ui/Avatar';
 import { Badge, Dot } from '@/components/ui/Badge';

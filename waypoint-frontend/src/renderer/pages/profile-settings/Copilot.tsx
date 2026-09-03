@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/Badge';
 import { CopilotConnectModal } from '@/components/domain/CopilotConnectModal';
 import { ClaudeCodeStatus } from '@/components/domain/ClaudeCodeStatus';
 import { useAsync } from '@/lib/useAsync';
-import { detectLocalClaudeCode } from '@/mock/api';
+import { detectLocalClaudeCode } from '@/data/api';
 
 const inputClass =
   'h-9 w-full rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 font-mono text-sm text-text outline-none focus:border-accent';

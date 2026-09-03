@@ -6,7 +6,7 @@ import { Avatar, AvatarStack } from '@/components/ui/Avatar';
 import { Dot } from '@/components/ui/Badge';
 import { PRIORITY_LABEL, PRIORITY_ORDER, PriorityIcon } from '@/components/domain/PriorityIcon';
 import { StateIcon } from '@/components/domain/StateIcon';
-import { createWorkItem, ensureAgentAssignments, listAgents, listLabels, listMembers, listStates } from '@/mock/api';
+import { createWorkItem, ensureAgentAssignments, listAgents, listLabels, listMembers, listStates } from '@/data/api';
 import { useAsync } from '@/lib/useAsync';
 import { agentLabel } from '@/lib/agentLabel';
 import type { Priority, WorkItem } from '@/types/entities';

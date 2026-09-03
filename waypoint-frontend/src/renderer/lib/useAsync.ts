@@ -23,7 +23,7 @@ export interface AsyncState<T> {
 /**
  * Calls an async mock-API function on mount and whenever `deps` change.
  * Every page in this app should load data through this (or a thin wrapper
- * around it) rather than calling `mock/api` functions ad hoc, so loading and
+ * around it) rather than calling `data/api` functions ad hoc, so loading and
  * error states look and behave consistently everywhere.
  */
 export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []): AsyncState<T> {

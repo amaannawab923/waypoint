@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { Bot, Plus, Trash2 } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
-import { deleteAgent, detectLocalClaudeCode, listAgents } from '@/mock/api';
+import { deleteAgent, detectLocalClaudeCode, listAgents } from '@/data/api';
 import { Badge } from '@/components/ui/Badge';
 import { Button, IconButton } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';

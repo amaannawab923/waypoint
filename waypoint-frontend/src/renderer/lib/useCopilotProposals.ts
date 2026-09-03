@@ -5,7 +5,7 @@ import {
   rejectCopilotProposal,
   rejectAllCopilotProposals,
   markCopilotProposalsNotified,
-} from '@/mock/api';
+} from '@/data/api';
 import type {
   CopilotProposal,
   CopilotProposalKind,

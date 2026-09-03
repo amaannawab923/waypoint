@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
-import { createProject, updateProjectFeatures } from '@/mock/api';
+import { createProject, updateProjectFeatures } from '@/data/api';
 import type { Project, ProjectFeatures } from '@/types/entities';
 
 function slugify(name: string): string {

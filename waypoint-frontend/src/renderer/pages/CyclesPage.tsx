@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { Plus, RefreshCw } from 'lucide-react';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
-import { listCycles, listStates, listWorkItems } from '@/mock/api';
+import { listCycles, listStates, listWorkItems } from '@/data/api';
 import type { Cycle, WorkItem } from '@/types/entities';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';

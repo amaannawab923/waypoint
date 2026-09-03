@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/Button';
-import { createCycle } from '@/mock/api';
+import { createCycle } from '@/data/api';
 import type { Cycle } from '@/types/entities';
 import { findOverlappingCycle, formatDateRange } from './cycle-utils';
 

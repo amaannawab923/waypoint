@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
-import { getWorkspace, updateWorkspace } from '@/mock/api';
+import { getWorkspace, updateWorkspace } from '@/data/api';
 import { markOnboarding } from '@/lib/onboarding';
 
 /**

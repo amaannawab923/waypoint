@@ -5,7 +5,7 @@ import {
   getCopilotConversation,
   renameCopilotConversation,
   deleteCopilotConversation,
-} from '@/mock/api';
+} from '@/data/api';
 import type { CopilotConversationSummary } from '@/types/entities';
 import { useAsync } from './useAsync';
 import type {
@@ -63,7 +63,7 @@ export interface UseCopilotConversationsResult {
  * sources combine; neither component needs to know two sources exist.
  *
  * Messages aren't part of the list response (kept light — see
- * mock/api.ts's listCopilotConversations) — they're fetched lazily per
+ * data/api.ts's listCopilotConversations) — they're fetched lazily per
  * conversation via openSession() into a local cache, since the list view
  * never needs them and the chat view only ever needs the one conversation
  * that's open.

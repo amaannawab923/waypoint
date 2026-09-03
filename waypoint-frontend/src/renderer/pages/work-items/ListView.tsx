@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChevronDown, ChevronRight, Plus, ListTodo, ListChecks, Link2, Terminal } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
-import { listAgentAssignments, listAgents, listMembers } from '@/mock/api';
+import { listAgentAssignments, listAgents, listMembers } from '@/data/api';
 import { Badge, Dot } from '@/components/ui/Badge';
 import { AvatarStack } from '@/components/ui/Avatar';
 import { EmptyState } from '@/components/ui/EmptyState';

@@ -196,7 +196,7 @@ const CONVERSATION_ID_PATTERN = /^conv-[a-z0-9]{4,32}$/i;
 // can't stuff arbitrary content ahead of every prompt.
 const OUTCOME_PREAMBLE_MAX_LENGTH = 4000;
 
-// Same env var name waypoint-frontend's renderer (src/renderer/mock/
+// Same env var name waypoint-frontend's renderer (src/renderer/data/
 // httpClient.ts) uses to reach the backend — but NOT the same mechanism:
 // the renderer's value is a build-time webpack DefinePlugin constant, not a
 // runtime env read, since renderer code can't see process.env at all. This

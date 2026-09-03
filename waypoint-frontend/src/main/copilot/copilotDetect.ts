@@ -5,7 +5,7 @@ import { ipcMain } from 'electron';
 import { buildEnv } from './copilotConnect';
 
 // The Tier 0 fix for `detectLocalClaudeCode()` in
-// waypoint-frontend/src/renderer/mock/api.ts, which used to unconditionally
+// waypoint-frontend/src/renderer/data/api.ts, which used to unconditionally
 // resolve `{status:'connected', version:'2.4.1'}` regardless of the actual
 // machine — a fabricated version number rendered next to the real signed-in
 // user's email, on any machine including one with no Claude Code installed

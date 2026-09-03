@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArchiveRestore, Trash2, PartyPopper } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
-import { listArchivedProjects, listMembers, updateProject, deleteProject } from '@/mock/api';
+import { listArchivedProjects, listMembers, updateProject, deleteProject } from '@/data/api';
 import type { Project } from '@/types/entities';
 import { Badge } from '@/components/ui/Badge';
 import { AvatarStack } from '@/components/ui/Avatar';

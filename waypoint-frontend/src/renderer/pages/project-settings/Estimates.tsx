@@ -5,7 +5,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Modal } from '@/components/ui/Modal';
 import { Badge } from '@/components/ui/Badge';
 import { useProject } from '@/layouts/ProjectLayout';
-import { updateProjectEstimate } from '@/mock/api';
+import { updateProjectEstimate } from '@/data/api';
 import type { EstimateType } from '@/types/entities';
 
 const ESTIMATE_PRESETS: Record<EstimateType, { label: string; description: string; values: string[] }> = {

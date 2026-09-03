@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
-import { createPage, deletePage, listMembers, listPages, updatePage } from '@/mock/api';
+import { createPage, deletePage, listMembers, listPages, updatePage } from '@/data/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button, IconButton } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';

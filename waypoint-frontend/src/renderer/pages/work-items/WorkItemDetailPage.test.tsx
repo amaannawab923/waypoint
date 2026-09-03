@@ -24,12 +24,12 @@ import {
   toggleWorkItemAssignee,
   toggleWorkItemLabel,
   updateWorkItem,
-} from '@/mock/api';
+} from '@/data/api';
 import { useProject } from '@/layouts/ProjectLayout';
 import type { Agent, Comment, Member, Project, WorkItem } from '@/types/entities';
 import { WorkItemDetailContent } from './WorkItemDetailPage';
 
-jest.mock('@/mock/api', () => ({
+jest.mock('@/data/api', () => ({
   addComment: jest.fn(),
   addWorkItemLink: jest.fn(),
   deleteWorkItem: jest.fn(),

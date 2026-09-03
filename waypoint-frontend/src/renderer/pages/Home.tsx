@@ -16,7 +16,7 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
-import { getCurrentUser, listProjects, listStickies } from '@/mock/api';
+import { getCurrentUser, listProjects, listStickies } from '@/data/api';
 import { listRecents, type RecentEntry, type RecentType } from '@/lib/recents';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';

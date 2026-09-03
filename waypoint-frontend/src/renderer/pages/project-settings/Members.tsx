@@ -7,7 +7,7 @@ import { Modal } from '@/components/ui/Modal';
 import { SkeletonTableRows } from '@/components/ui/Skeleton';
 import { useAsync } from '@/lib/useAsync';
 import { useProject } from '@/layouts/ProjectLayout';
-import { addProjectMember, listMembers, removeProjectMember, updateProject } from '@/mock/api';
+import { addProjectMember, listMembers, removeProjectMember, updateProject } from '@/data/api';
 import { Plus, Search, Trash2, Users } from 'lucide-react';
 import type { Member, MemberRole } from '@/types/entities';
 

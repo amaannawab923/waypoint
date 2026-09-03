@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Plus, Pencil, Trash2, StickyNote } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
-import { listStickies, createSticky, deleteSticky } from '@/mock/api';
+import { listStickies, createSticky, deleteSticky } from '@/data/api';
 import type { Sticky } from '@/types/entities';
 import { Button, IconButton } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';

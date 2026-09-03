@@ -2,7 +2,7 @@ import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { clsx } from 'clsx';
 import { CalendarRange, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
-import { deleteCycle, updateCycle } from '@/mock/api';
+import { deleteCycle, updateCycle } from '@/data/api';
 import type { Cycle, WorkItem, WorkItemState } from '@/types/entities';
 import { Button } from '@/components/ui/Button';
 import { computeProgress, findOverlappingCycle, formatDateRange } from './cycle-utils';

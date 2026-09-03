@@ -3,7 +3,7 @@ import { clsx } from 'clsx';
 import { ChevronUp, ChevronDown, ChevronsUpDown, Columns3 } from 'lucide-react';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
-import { listMembers } from '@/mock/api';
+import { listMembers } from '@/data/api';
 import { useWorkItemsView } from './useWorkItemsView';
 import { Popover } from '@/pages/work-items/Popover';
 import { Button } from '@/components/ui/Button';

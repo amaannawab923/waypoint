@@ -1,4 +1,4 @@
-// Shared fetch wrapper for mock/api.ts's HTTP-backed implementation — talks
+// Shared fetch wrapper for data/api.ts's HTTP-backed implementation — talks
 // to waypoint-server (see /Users/amaannawab/waypoint-server). WAYPOINT_API_BASE_URL
 // is inlined at build time via webpack.EnvironmentPlugin (see
 // .erb/configs/webpack.config.renderer.{dev,prod}.ts).
@@ -27,7 +27,7 @@ async function request<T>(
   }
 
   // A 404 the caller explicitly expects as a valid "not found" outcome
-  // (see the *AsUndefined-tagged calls in mock/api.ts) isn't a real failure
+  // (see the *AsUndefined-tagged calls in data/api.ts) isn't a real failure
   // — no toast for it, it's normal control flow.
   if (res.status === 404 && opts?.notFoundAsUndefined) return undefined as T;
   if (res.status === 204) return undefined as T;

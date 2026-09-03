@@ -2,7 +2,7 @@ import { NavLink, Outlet, useOutletContext } from 'react-router-dom';
 import { clsx } from 'clsx';
 import { Building2, Users, Bot, CreditCard, Download, Webhook } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
-import { getWorkspace } from '@/mock/api';
+import { getWorkspace } from '@/data/api';
 import type { Workspace } from '@/types/entities';
 
 export interface WorkspaceOutletContext {

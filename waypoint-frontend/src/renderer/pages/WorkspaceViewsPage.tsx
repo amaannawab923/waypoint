@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ListChecks } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
-import { listAllWorkItems, listProjects, listMembers, listStates } from '@/mock/api';
+import { listAllWorkItems, listProjects, listMembers, listStates } from '@/data/api';
 import type { Project, WorkItem, WorkItemState, Member } from '@/types/entities';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { AvatarStack } from '@/components/ui/Avatar';

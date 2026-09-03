@@ -5,7 +5,7 @@ import { clsx } from 'clsx';
 import { ArrowLeft, Copy, Globe2, Layers3, Lock, MoreHorizontal, Pencil, Plus, Star, Trash2 } from 'lucide-react';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
-import { createView, deleteView, getCurrentUser, listMembers, listViews, updateView } from '@/mock/api';
+import { createView, deleteView, getCurrentUser, listMembers, listViews, updateView } from '@/data/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';

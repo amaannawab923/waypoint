@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Modal } from '@/components/ui/Modal';
 import { ListChecks, Plus, Search } from 'lucide-react';
-import { updateWorkItem } from '@/mock/api';
+import { updateWorkItem } from '@/data/api';
 
 /**
  * Searchable picker for assigning an existing, not-yet-in-this-cycle project work item to the

@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { FileEdit } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
-import { listDraftWorkItems, listProjects } from '@/mock/api';
+import { listDraftWorkItems, listProjects } from '@/data/api';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PriorityIcon } from '@/components/domain/PriorityIcon';
 import { SkeletonListRows } from '@/components/ui/Skeleton';

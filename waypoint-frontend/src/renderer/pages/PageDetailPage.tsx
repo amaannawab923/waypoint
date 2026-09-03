@@ -34,7 +34,7 @@ import {
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import { useRecordRecent } from '@/lib/recents';
-import { deletePage, getPage, updatePage } from '@/mock/api';
+import { deletePage, getPage, updatePage } from '@/data/api';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { IconButton } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';

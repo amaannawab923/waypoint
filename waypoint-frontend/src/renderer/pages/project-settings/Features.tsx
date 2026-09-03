@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useProject } from '@/layouts/ProjectLayout';
-import { updateProjectFeatures } from '@/mock/api';
+import { updateProjectFeatures } from '@/data/api';
 import type { ProjectFeatures } from '@/types/entities';
 
 interface FeatureRow {

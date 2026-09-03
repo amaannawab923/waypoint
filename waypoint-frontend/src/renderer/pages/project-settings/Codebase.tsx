@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/Button';
 import { useProject } from '@/layouts/ProjectLayout';
-import { updateProject } from '@/mock/api';
+import { updateProject } from '@/data/api';
 
 /**
  * Links this project to a local git checkout, which is what lets Copilot

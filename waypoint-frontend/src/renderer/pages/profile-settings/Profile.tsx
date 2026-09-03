@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useAsync } from '@/lib/useAsync';
-import { getCurrentUser, updateCurrentUser } from '@/mock/api';
+import { getCurrentUser, updateCurrentUser } from '@/data/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';

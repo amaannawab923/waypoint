@@ -6,7 +6,7 @@ import { SkeletonListRows } from '@/components/ui/Skeleton';
 import { STATE_GROUP_LABEL, STATE_GROUP_ORDER } from '@/components/domain/StateIcon';
 import { useAsync } from '@/lib/useAsync';
 import { useProject } from '@/layouts/ProjectLayout';
-import { createState, updateState, deleteState, countWorkItemsInState, listStates } from '@/mock/api';
+import { createState, updateState, deleteState, countWorkItemsInState, listStates } from '@/data/api';
 import type { StateGroup, WorkItemState } from '@/types/entities';
 
 const PRESET_COLORS = [

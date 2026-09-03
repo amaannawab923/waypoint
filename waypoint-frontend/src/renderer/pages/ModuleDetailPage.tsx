@@ -4,7 +4,7 @@ import { Boxes, Check, ChevronDown, ChevronLeft, Plus, Search, UserPlus, Users }
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import { useRecordRecent } from '@/lib/recents';
-import { listMembers, listModules, listStates, listWorkItems, updateModule, updateWorkItem } from '@/mock/api';
+import { listMembers, listModules, listStates, listWorkItems, updateModule, updateWorkItem } from '@/data/api';
 import { Avatar, AvatarStack } from '@/components/ui/Avatar';
 import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';

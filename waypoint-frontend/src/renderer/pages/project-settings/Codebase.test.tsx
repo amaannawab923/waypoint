@@ -1,11 +1,11 @@
 import '@testing-library/jest-dom';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { updateProject } from '@/mock/api';
+import { updateProject } from '@/data/api';
 import { useProject } from '@/layouts/ProjectLayout';
 import type { Project } from '@/types/entities';
 import Codebase from './Codebase';
 
-jest.mock('@/mock/api', () => ({ updateProject: jest.fn() }));
+jest.mock('@/data/api', () => ({ updateProject: jest.fn() }));
 jest.mock('@/layouts/ProjectLayout', () => ({ useProject: jest.fn() }));
 
 const PROJECT: Project = {

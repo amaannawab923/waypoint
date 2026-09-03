@@ -19,7 +19,7 @@ const mockDetect = jest.fn();
 beforeEach(() => {
   jest.resetAllMocks();
   // Never resolves unless a test overrides it — matches detectLocalClaudeCode's
-  // real behavior of never rejecting (see mock/api.ts), and keeps ClaudeCodeStatus
+  // real behavior of never rejecting (see data/api.ts), and keeps ClaudeCodeStatus
   // parked on `checking` for tests that don't care about it.
   mockDetect.mockImplementation(() => new Promise(() => {}));
   (window as unknown as { electron: typeof window.electron }).electron = {
@@ -232,7 +232,7 @@ describe('Copilot settings page', () => {
 
   // W1.2: the Claude Code CLI detection badge on this page reads real
   // main-process output (copilot:detect), never a fabricated status — see
-  // mock/api.ts's detectLocalClaudeCode and components/domain/ClaudeCodeStatus.
+  // data/api.ts's detectLocalClaudeCode and components/domain/ClaudeCodeStatus.
   describe('Claude Code CLI detection', () => {
     it('shows the real version once the CLI is actually detected', async () => {
       mockStatus.mockResolvedValueOnce({ connected: false, last4: null });

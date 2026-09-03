@@ -6,7 +6,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
 import { useAsync } from '@/lib/useAsync';
 import { useProject } from '@/layouts/ProjectLayout';
-import { createLabel, updateLabel, deleteLabel, listLabels } from '@/mock/api';
+import { createLabel, updateLabel, deleteLabel, listLabels } from '@/data/api';
 import type { Label } from '@/types/entities';
 
 const PRESET_COLORS = [

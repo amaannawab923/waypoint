@@ -1,6 +1,6 @@
 import { Outlet, useOutletContext, useParams } from 'react-router-dom';
 import { useAsync } from '@/lib/useAsync';
-import { getProject } from '@/mock/api';
+import { getProject } from '@/data/api';
 import type { Project } from '@/types/entities';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';

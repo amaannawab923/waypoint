@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Plus, Trash2, Webhook as WebhookIcon } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
-import { listWebhooks, createWebhook, deleteWebhook } from '@/mock/api';
+import { listWebhooks, createWebhook, deleteWebhook } from '@/data/api';
 import type { WebhookEventType } from '@/types/entities';
 import { Button, IconButton } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';

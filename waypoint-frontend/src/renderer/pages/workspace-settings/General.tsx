@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { updateWorkspace } from '@/mock/api';
+import { updateWorkspace } from '@/data/api';
 import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useWorkspaceSettings } from '@/pages/workspace-settings/WorkspaceSettingsLayout';

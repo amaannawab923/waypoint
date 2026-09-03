@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ListTodo, UserCheck2, Bell, Activity as ActivityIcon } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
-import { getCurrentUser, listAllWorkItems, listProjects, listStates } from '@/mock/api';
+import { getCurrentUser, listAllWorkItems, listProjects, listStates } from '@/data/api';
 import type { Member, Project, WorkItem, WorkItemState } from '@/types/entities';
 import { Avatar } from '@/components/ui/Avatar';
 import { EmptyState } from '@/components/ui/EmptyState';

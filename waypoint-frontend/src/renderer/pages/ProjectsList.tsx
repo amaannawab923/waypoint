@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Settings, Plus, ArrowUpDown, Archive } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
-import { listProjects, listMembers, archiveProject } from '@/mock/api';
+import { listProjects, listMembers, archiveProject } from '@/data/api';
 import type { Project } from '@/types/entities';
 import { Button, IconButton } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';

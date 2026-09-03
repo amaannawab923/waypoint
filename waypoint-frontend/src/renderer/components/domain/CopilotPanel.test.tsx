@@ -22,11 +22,11 @@ import {
   markCopilotProposalsNotified,
   getProject,
   updateProject,
-} from '@/mock/api';
+} from '@/data/api';
 import type { CopilotProposal, Project } from '@/types/entities';
 import { CopilotPanel } from './CopilotPanel';
 
-jest.mock('@/mock/api', () => ({
+jest.mock('@/data/api', () => ({
   listCopilotConversations: jest.fn(),
   createCopilotConversation: jest.fn(),
   getCopilotConversation: jest.fn(),

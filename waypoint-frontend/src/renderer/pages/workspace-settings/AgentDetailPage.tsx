@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { clsx } from 'clsx';
 import { ArrowLeft, Check, Trash2 } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
-import { createAgent, deleteAgent, detectLocalClaudeCode, getAgent, listProjects, updateAgent } from '@/mock/api';
+import { createAgent, deleteAgent, detectLocalClaudeCode, getAgent, listProjects, updateAgent } from '@/data/api';
 import type { Agent, AgentAutonomy, AgentTrigger } from '@/types/entities';
 import { Button, IconButton } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';

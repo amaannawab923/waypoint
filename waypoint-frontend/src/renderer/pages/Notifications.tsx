@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bell, AtSign } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
-import { listNotifications, listMembers, listAgents, markNotificationRead, getWorkItem } from '@/mock/api';
+import { listNotifications, listMembers, listAgents, markNotificationRead, getWorkItem } from '@/data/api';
 import type { Agent, Member, NotificationItem } from '@/types/entities';
 import { Avatar } from '@/components/ui/Avatar';
 import { agentLabel } from '@/lib/agentLabel';

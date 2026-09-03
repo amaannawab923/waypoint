@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Check, ChevronDown, ListFilter, Plus, Search, Users } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
-import { listMembers, inviteMember } from '@/mock/api';
+import { listMembers, inviteMember } from '@/data/api';
 import type { Member } from '@/types/entities';
 import { Button } from '@/components/ui/Button';
 import { Badge, type BadgeTone } from '@/components/ui/Badge';

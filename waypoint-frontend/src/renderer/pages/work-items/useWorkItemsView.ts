@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useAsync } from '@/lib/useAsync';
-import { listWorkItems, listStates, listLabels, listModules, listCycles } from '@/mock/api';
+import { listWorkItems, listStates, listLabels, listModules, listCycles } from '@/data/api';
 import type { WorkItem, WorkItemState, Priority } from '@/types/entities';
 import { STATE_GROUP_ORDER } from '@/components/domain/StateIcon';
 import { PRIORITY_ORDER } from '@/components/domain/PriorityIcon';
@@ -133,7 +133,7 @@ export function useWorkItemsView(projectId: string) {
 
   /**
    * Move `id` to sit directly before/after `targetId`, optimistically —
-   * mirrors mock/api.ts's reorderWorkItem so dragging a card to a specific
+   * mirrors data/api.ts's reorderWorkItem so dragging a card to a specific
    * spot (not just onto a column) reflects instantly instead of waiting on
    * a reload. Adopts the target's state too, matching the server behavior.
    */
