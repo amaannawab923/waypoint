@@ -209,3 +209,26 @@ describe('GET /tickets/:id/proposals', () => {
     expect(proposalsService.listProposalsForTicket).toHaveBeenCalledWith('wi-1', undefined);
   });
 });
+
+describe('GET /requests/:id/proposals', () => {
+  it('returns the proposals for the request', async () => {
+    vi.mocked(proposalsService.listProposalsForRequest).mockResolvedValue([
+      proposalView({ sourceRequestId: 'req-1', ticketId: null }),
+    ]);
+
+    const res = await request(buildTestApp()).get('/requests/req-1/proposals?status=proposed');
+
+    expect(res.status).toBe(200);
+    expect(res.body.proposals).toHaveLength(1);
+    expect(proposalsService.listProposalsForRequest).toHaveBeenCalledWith('req-1', 'proposed');
+  });
+
+  it('works with no status filter', async () => {
+    vi.mocked(proposalsService.listProposalsForRequest).mockResolvedValue([]);
+
+    const res = await request(buildTestApp()).get('/requests/req-1/proposals');
+
+    expect(res.status).toBe(200);
+    expect(proposalsService.listProposalsForRequest).toHaveBeenCalledWith('req-1', undefined);
+  });
+});

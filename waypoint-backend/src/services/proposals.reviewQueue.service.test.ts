@@ -60,6 +60,7 @@ const {
   bulkApproveProposals,
   bulkRejectProposals,
   listProposalsForTicket,
+  listProposalsForRequest,
 } = await import('./proposals.service.js');
 const { eq, and } = await import('drizzle-orm');
 
@@ -372,6 +373,32 @@ describe('listProposalsForTicket', () => {
     await listProposalsForTicket('wi-1');
 
     expect(eq).toHaveBeenCalledWith(proposals.ticketId, 'wi-1');
+    expect(eq).not.toHaveBeenCalledWith(proposals.status, expect.anything());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// listProposalsForRequest (W4.4, architecture §4.4) — same shape as
+// listProposalsForTicket above, scoped by source_request_id instead.
+// ---------------------------------------------------------------------------
+
+describe('listProposalsForRequest', () => {
+  it('scopes to the request, optionally filtered by status', async () => {
+    db.select.mockReturnValueOnce(chainable([proposalRow({ sourceRequestId: 'req-1', ticketId: null })]));
+
+    const views = await listProposalsForRequest('req-1', 'proposed');
+
+    expect(views).toHaveLength(1);
+    expect(eq).toHaveBeenCalledWith(proposals.sourceRequestId, 'req-1');
+    expect(eq).toHaveBeenCalledWith(proposals.status, 'proposed');
+  });
+
+  it('with no status filter, only scopes to the request', async () => {
+    db.select.mockReturnValueOnce(chainable([]));
+
+    await listProposalsForRequest('req-1');
+
+    expect(eq).toHaveBeenCalledWith(proposals.sourceRequestId, 'req-1');
     expect(eq).not.toHaveBeenCalledWith(proposals.status, expect.anything());
   });
 });
