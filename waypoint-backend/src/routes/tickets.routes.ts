@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import { NotFoundError } from '../middleware/errors.js';
+import { NotFoundError, ValidationError } from '../middleware/errors.js';
 import * as ticketsService from '../services/tickets.service.js';
 import * as commentsService from '../services/comments.service.js';
 import * as activityService from '../services/activity.service.js';
@@ -11,19 +11,52 @@ import {
   addTicketLinkSchema,
   addCommentSchema,
 } from '../validation/tickets.schema.js';
+import { ticketFilterSchema } from '../validation/ticketFilter.schema.js';
+import type { TicketFilterQuery } from '../services/tickets.service.js';
 
 export const ticketsRouter = Router();
+
+// GET /tickets and GET /projects/:projectId/tickets both accept an
+// optional `?filter=<base64url-encoded-JSON>` query param — the single
+// typed-filter read path (docs/design/waypoint-revamp-architecture.md
+// §4.6). Absent, both routes keep their original unfiltered behavior so no
+// existing caller (MCP tools, etc.) is forced to pass one. The base64url
+// encoding matches the convention already used for proposal list cursors
+// (services/proposals.service.ts).
+function decodeTicketFilterParam(raw: string): TicketFilterQuery {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
+  } catch {
+    throw new ValidationError('invalid filter parameter');
+  }
+  const { v: _v, ...query } = ticketFilterSchema.parse(parsed);
+  return query;
+}
 
 ticketsRouter.get(
   '/projects/:projectId/tickets',
   asyncHandler(async (req, res) => {
+    const { filter } = req.query;
+    if (typeof filter === 'string') {
+      const query = decodeTicketFilterParam(filter);
+      // Project-scoped route always wins over whatever projectIds the
+      // filter itself carried — the path param is the source of truth here.
+      res.json(await ticketsService.listTicketsByFilter({ ...query, projectIds: [req.params.projectId] }));
+      return;
+    }
     res.json(await ticketsService.listTickets(req.params.projectId));
   }),
 );
 
 ticketsRouter.get(
   '/tickets',
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
+    const { filter } = req.query;
+    if (typeof filter === 'string') {
+      res.json(await ticketsService.listTicketsByFilter(decodeTicketFilterParam(filter)));
+      return;
+    }
     res.json(await ticketsService.listAllTickets());
   }),
 );
