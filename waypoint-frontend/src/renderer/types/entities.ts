@@ -12,6 +12,30 @@ export type TicketSource = 'manual' | 'request' | 'agent' | 'import';
 
 export type Priority = 'urgent' | 'high' | 'medium' | 'low' | 'none';
 
+// The typed ticket filter (docs/design/waypoint-revamp-architecture.md
+// §4.6) — a copied type mirroring waypoint-backend's
+// validation/ticketFilter.schema.ts verbatim (field-for-field, same
+// literal unions), since the two packages don't share a types package.
+// `v` is versioned from day one. Every array field is OR'd within itself
+// and AND'd against every other field; `assigneeIds` may additionally
+// carry the '@me' and '@unassigned' sentinels, resolved server-side.
+export interface TicketFilterQuery {
+  v: 1;
+  projectIds?: string[];
+  stateIds?: string[];
+  stateGroups?: StateGroup[];
+  priorities?: Priority[];
+  assigneeIds?: string[];
+  labelIds?: string[];
+  sprintIds?: string[];
+  workstreamIds?: string[];
+  sources?: TicketSource[];
+  updatedBefore?: string;
+  createdAfter?: string;
+  text?: string;
+  includeDrafts?: boolean;
+}
+
 export type Visibility = 'public' | 'private';
 
 export type MemberRole = 'admin' | 'member' | 'guest';
@@ -223,10 +247,14 @@ export interface Doc {
 
 export interface SavedView {
   id: ID;
-  projectId: ID;
+  // Nullable as of §4.6 (P3b): project scope moved into filters.projectIds,
+  // so a view is no longer required to name exactly one project. Still
+  // populated for views that do name exactly one (denormalized for
+  // listing), null for cross-project ones.
+  projectId: ID | null;
   name: string;
   ownerId: ID;
-  filters: Record<string, unknown>;
+  filters: TicketFilterQuery;
   visibility: Visibility;
   isFavorite: boolean;
   updatedAt: string;
