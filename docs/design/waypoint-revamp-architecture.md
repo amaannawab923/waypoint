@@ -1772,3 +1772,43 @@ This narrows P3–P7 to: proposals model work that *wraps* the existing `copilot
 rather than replacing it, the typed filter, the unified ticket list, sparse projects, the Review
 queue as a new consumer of existing data, and the rename. The agent-runtime estimate (5–6 weeks) is
 removed from the critical path.
+
+---
+
+## 12. Timeline, recalibrated against observed execution
+
+§9's estimates are one-developer-day units, calibrated to a human's pace
+(context-switching, meetings, PR-review latency). That's not the execution
+model this is actually running under, and the gap is large enough to record
+with evidence rather than adjust by feel.
+
+**P1 (estimated 6 developer-days) landed in ~21 minutes of wall-clock time.**
+Architecture doc committed 16:38:59; P1 Wave 1's last commit (the honesty lint
+gate, unit W1.7) landed 17:00:12 — six units, ~20 commits, running in parallel
+across isolated worktrees. Wave 2 (the two units gated on Wave 1's output)
+launched immediately after and was already landing commits by 17:13.
+
+That ~400x figure is real but phase-specific, not a constant to multiply
+everything by: P1's units happened to touch disjoint files, so 6–8 agents ran
+in genuine parallel. That multiplier does not apply uniformly:
+
+- **P2 (rename) cannot use it.** §2.1 Constraint A is unchanged by execution
+  speed — it's a global-touch change (~40 frontend files, the DB schema, MCP
+  tool names, the Copilot system prompt, all touched by the same change) and
+  must run as one continuous pass, not fanned out. It will still be far faster
+  than a human's 6 days — no context-switching, mechanical rename work,
+  test-verified at each atomic commit — but the compression comes from *speed*
+  on a serial task, not *fan-out*, so it won't reproduce P1's ratio. Real
+  number pending — P2 hasn't run yet.
+- **P3–P5 have internal parallel tracks** (three in P3, per §2.1 Constraint B/C)
+  and should compress similarly to P1 for the parallelizable portions — but
+  P3 specifically includes real Postgres migrations, which take actual
+  wall-clock seconds to run and verify, not zero, and that floor doesn't move
+  no matter how fast the agent reasons.
+
+**Revised expectation:** the original ~56-developer-day / ~11-week estimate for
+P1–P5+P8 (P6/P7 deferred per §11) is not the right scale to plan against. The
+realistic remaining scope is **hours of wall-clock time across a handful more
+waves**, not weeks — but P2's actual duration is the next real data point, not
+yet observed, and this section should be updated with it once P2 lands rather
+than left as a projection.
