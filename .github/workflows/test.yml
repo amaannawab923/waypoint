@@ -29,6 +29,16 @@ jobs:
       # separate follow-up once that debt is paid down.
       - run: npm run lint
         continue-on-error: true
+      # A separate, REQUIRED step — not folded into the `npm run lint` step
+      # above, and not continue-on-error. That step's own violations are
+      # unrelated legacy debt this PR isn't gating on; honesty violations
+      # (`eslint-rules/no-inert-control.js`, `eslint-rules/no-actionless-button.js`)
+      # are a narrower, different kind of problem — a control that lies about
+      # doing something — and are meant to block merges once caught, not be
+      # reported alongside a debt backlog. As of this PR it has exactly the
+      # handful of known hits that a following PR resolves; it should read
+      # clean after that. See docs/design/waypoint-revamp-architecture.md §7.3.
+      - run: npm run lint:honesty
       # jest's own setupFiles check (.erb/scripts/check-build-exists.ts)
       # refuses to run any suite at all without both halves built —
       # confirmed live setting up this branch locally.
