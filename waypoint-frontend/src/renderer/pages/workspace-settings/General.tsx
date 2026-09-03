@@ -148,7 +148,9 @@ export default function General() {
               When you delete a workspace, all of the data in it — projects, work items, cycles,
               modules, pages, and members — is permanently removed. This action cannot be undone.
             </p>
-            <Button variant="danger">Delete workspace</Button>
+            <Button variant="danger" disabled title="There's no way to delete a workspace's data yet.">
+              Delete workspace
+            </Button>
           </div>
         </div>
       )}
