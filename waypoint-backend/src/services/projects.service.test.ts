@@ -102,6 +102,36 @@ describe('validateRepoPath', () => {
     expect(() => validateRepoPath(dir)).toThrow(ValidationError);
     expect(() => validateRepoPath(dir)).toThrow(/is not a git repository/);
   });
+
+  // The client renders its own copy per failure and interpolates the path
+  // into it, keyed on `code` — so these are part of the contract, not
+  // incidental detail on the way to a message string.
+  it.each([
+    ['repo_path_not_found', (root: string) => path.join(root, 'definitely-not-here')],
+    [
+      'repo_path_not_directory',
+      (root: string) => {
+        const file = path.join(root, `a-file-${caseCounter}.md`);
+        fs.writeFileSync(file, '# hi\n');
+        return file;
+      },
+    ],
+    ['repo_path_not_git_repo', () => makeDir()],
+  ])('tags a %s failure with its code and the offending path', (code, makeTarget) => {
+    const target = makeTarget(tmpRoot);
+
+    try {
+      validateRepoPath(target);
+      expect.unreachable('validateRepoPath should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ValidationError);
+      expect((err as ValidationError).code).toBe(code);
+      expect((err as ValidationError).path).toBe(target);
+      // The human message is still populated — the client falls back to it
+      // whenever it has no copy for a code.
+      expect((err as ValidationError).message).toContain(target);
+    }
+  });
 });
 
 describe('updateProject repoPath validation', () => {

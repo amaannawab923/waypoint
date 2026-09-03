@@ -21,8 +21,10 @@ import {
   rejectCopilotProposal,
   markCopilotProposalsNotified,
   getProject,
+  listProjects,
   updateProject,
 } from '@/mock/api';
+import { ApiError } from '@/mock/httpClient';
 import type { CopilotProposal, Project } from '@/types/entities';
 import { CopilotPanel } from './CopilotPanel';
 
@@ -40,6 +42,9 @@ jest.mock('@/mock/api', () => ({
   rejectAllCopilotProposals: jest.fn(),
   markCopilotProposalsNotified: jest.fn(),
   getProject: jest.fn(),
+  // Backs the in-chat card's suggestions strip, which is the same
+  // RepoLinkPicker the settings page renders.
+  listProjects: jest.fn(),
   updateProject: jest.fn(),
 }));
 
@@ -157,7 +162,8 @@ function addFakeProposal(
     status: 'proposed',
     statusReason: null,
     resultInfo: null,
-    disclosureText: 'Hi, this is Copilot — Amaan’s agent — commenting on their behalf: ',
+    disclosureText:
+      'Hi, this is Copilot — Amaan’s agent — commenting on their behalf: ',
     expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
     modelNotifiedAt: null,
     resolvedAt: null,
@@ -181,7 +187,9 @@ beforeEach(() => {
   jest
     .mocked(listCopilotProposals)
     .mockImplementation(async (conversationId: string) =>
-      proposalRows.filter((p) => p.conversationId === conversationId).map((p) => ({ ...p })),
+      proposalRows
+        .filter((p) => p.conversationId === conversationId)
+        .map((p) => ({ ...p })),
     );
   jest.mocked(approveCopilotProposal).mockImplementation(async (id: string) => {
     const row = proposalRows.find((p) => p.id === id);
@@ -350,6 +358,10 @@ async function createAndOpenSession() {
 
 let copilotIpc: ReturnType<typeof mockCopilotIpc>;
 const chooseFolderMock = jest.fn();
+// A single fs.stat in the main process; here it decides linked vs. stale.
+const checkPathMock = jest.fn();
+// git plumbing in the main process; here it just feeds the confirmation chips.
+const describeRepoMock = jest.fn();
 
 async function waitForRun(prompt: string) {
   await waitFor(() =>
@@ -368,9 +380,21 @@ beforeEach(() => {
   // call silently failed to take effect in this jsdom environment across
   // tests — window.electron.copilot.runPrompt kept pointing at the *first*
   // test's mock. Plain assignment doesn't have that problem.
+  checkPathMock.mockResolvedValue({ exists: true });
+  describeRepoMock.mockResolvedValue({
+    name: 'waypoint',
+    displayPath: '~/code/waypoint',
+    branch: 'main',
+    lastCommitAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    trackedFileCount: 12,
+  });
   (window as unknown as { electron: typeof window.electron }).electron = {
     copilot: { runPrompt: copilotIpc.runPrompt },
-    repo: { chooseFolder: chooseFolderMock },
+    repo: {
+      chooseFolder: chooseFolderMock,
+      checkPath: checkPathMock,
+      describe: describeRepoMock,
+    },
   } as unknown as typeof window.electron;
 });
 
@@ -1069,8 +1093,18 @@ describe('CopilotPanel', () => {
         createdAt: now,
         updatedAt: now,
         messages: [
-          { id: 'msg-seed-1', role: 'user', content: 'earlier ask', createdAt: now },
-          { id: 'msg-seed-2', role: 'assistant', content: 'earlier reply', createdAt: now },
+          {
+            id: 'msg-seed-1',
+            role: 'user',
+            content: 'earlier ask',
+            createdAt: now,
+          },
+          {
+            id: 'msg-seed-2',
+            role: 'assistant',
+            content: 'earlier reply',
+            createdAt: now,
+          },
         ],
       };
       store.push(conv);
@@ -1093,7 +1127,10 @@ describe('CopilotPanel', () => {
       expect(screen.queryByText('Pending review')).not.toBeInTheDocument();
 
       await act(async () => {
-        handlers.onDone({ fullText: "I've proposed the move below.", sessionId: 'sess-1' });
+        handlers.onDone({
+          fullText: "I've proposed the move below.",
+          sessionId: 'sess-1',
+        });
       });
 
       // The completed run triggers the refetch; the card appears with
@@ -1102,11 +1139,15 @@ describe('CopilotPanel', () => {
       expect(screen.getByText('In Progress')).toBeInTheDocument();
       expect(screen.getByText('Done')).toBeInTheDocument();
       // …positioned AFTER the assistant reply of the turn that proposed it.
-      const assistantBubble = screen.getByText("I've proposed the move below.", { selector: 'p' });
+      const assistantBubble = screen.getByText(
+        "I've proposed the move below.",
+        { selector: 'p' },
+      );
       const card = screen.getByText('Pending review');
       expect(
         // eslint-disable-next-line no-bitwise
-        assistantBubble.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING,
+        assistantBubble.compareDocumentPosition(card) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy();
     });
 
@@ -1154,9 +1195,13 @@ describe('CopilotPanel', () => {
         fireEvent.click(screen.getByText('Try again'));
       });
 
-      await waitFor(() => expect(copilotIpc.runPrompt).toHaveBeenCalledTimes(2));
+      await waitFor(() =>
+        expect(copilotIpc.runPrompt).toHaveBeenCalledTimes(2),
+      );
       expect(rejectCopilotProposal).toHaveBeenCalledWith(orphan.id);
-      expect(markCopilotProposalsNotified).toHaveBeenCalledWith(store[0].id, [orphan.id]);
+      expect(markCopilotProposalsNotified).toHaveBeenCalledWith(store[0].id, [
+        orphan.id,
+      ]);
       // The re-run must not carry a "rejected by the user" outcome for the
       // orphan — that would steer the model away from re-proposing the very
       // thing the retried prompt asks for.
@@ -1188,8 +1233,10 @@ describe('CopilotPanel', () => {
       await typeAndSend('what changed?');
       const handlers = await waitForRun('what changed?');
       const { outcomePreamble } = copilotIpc.runPrompt.mock.calls[0][0];
-      for (const p of resolved.slice(0, 20)) expect(outcomePreamble).toContain(p.id);
-      for (const p of resolved.slice(20)) expect(outcomePreamble).not.toContain(p.id);
+      for (const p of resolved.slice(0, 20))
+        expect(outcomePreamble).toContain(p.id);
+      for (const p of resolved.slice(20))
+        expect(outcomePreamble).not.toContain(p.id);
       // Comfortably inside the runner's ~4000-char defensive drop.
       expect((outcomePreamble ?? '').length).toBeLessThan(4000);
 
@@ -1197,8 +1244,11 @@ describe('CopilotPanel', () => {
         handlers.onChunk('done.');
         handlers.onDone({ fullText: 'done.', sessionId: 'claude-abc' });
       });
-      await waitFor(() => expect(markCopilotProposalsNotified).toHaveBeenCalled());
-      const notifiedIds = jest.mocked(markCopilotProposalsNotified).mock.calls[0][1];
+      await waitFor(() =>
+        expect(markCopilotProposalsNotified).toHaveBeenCalled(),
+      );
+      const notifiedIds = jest.mocked(markCopilotProposalsNotified).mock
+        .calls[0][1];
       expect(notifiedIds).toEqual(resolved.slice(0, 20).map((p) => p.id));
     });
 
@@ -1222,7 +1272,10 @@ describe('CopilotPanel', () => {
 
     it("passes the outcome preamble to runPrompt while persisting ONLY the user's own text (the transcript-pollution regression)", async () => {
       const conv = seedConversation('conv-seeded');
-      const resolved = addFakeProposal(conv.id, { status: 'executed', anchorSeq: 1 });
+      const resolved = addFakeProposal(conv.id, {
+        status: 'executed',
+        anchorSeq: 1,
+      });
 
       render(<CopilotPanel onClose={jest.fn()} />);
       const row = await screen.findByText('seeded session');
@@ -1252,7 +1305,10 @@ describe('CopilotPanel', () => {
 
       // The persisted user message is ONLY what the user typed — the
       // system note must never enter the transcript.
-      expect(postCopilotUserMessage).toHaveBeenCalledWith(conv.id, 'what changed?');
+      expect(postCopilotUserMessage).toHaveBeenCalledWith(
+        conv.id,
+        'what changed?',
+      );
       const persisted = store.find((c) => c.id === conv.id)!.messages.at(-1)!;
       expect(persisted.content).toBe('what changed?');
       expect(persisted.content).not.toContain('Waypoint system note');
@@ -1264,7 +1320,10 @@ describe('CopilotPanel', () => {
       // not-yet-called assertion below.
       jest.mocked(markCopilotProposalsNotified).mockClear();
       const conv = seedConversation('conv-seeded');
-      const resolved = addFakeProposal(conv.id, { status: 'executed', anchorSeq: 1 });
+      const resolved = addFakeProposal(conv.id, {
+        status: 'executed',
+        anchorSeq: 1,
+      });
 
       render(<CopilotPanel onClose={jest.fn()} />);
       fireEvent.click(await screen.findByText('seeded session'));
@@ -1278,11 +1337,16 @@ describe('CopilotPanel', () => {
       expect(markCopilotProposalsNotified).not.toHaveBeenCalled();
 
       await act(async () => {
-        handlers.onDone({ fullText: 'The move went through.', sessionId: 'sess-1' });
+        handlers.onDone({
+          fullText: 'The move went through.',
+          sessionId: 'sess-1',
+        });
       });
 
       await waitFor(() =>
-        expect(markCopilotProposalsNotified).toHaveBeenCalledWith(conv.id, [resolved.id]),
+        expect(markCopilotProposalsNotified).toHaveBeenCalledWith(conv.id, [
+          resolved.id,
+        ]),
       );
     });
 
@@ -1314,13 +1378,18 @@ describe('CopilotPanel', () => {
         anchorSeq: 1,
         kind: 'comment',
         payload: { body: 'a drafted comment' },
-        snapshot: { identifier: 'LAUNCH-3', title: 'Responsive nav breaks on iPad landscape' },
+        snapshot: {
+          identifier: 'LAUNCH-3',
+          title: 'Responsive nav breaks on iPad landscape',
+        },
       });
 
       render(<CopilotPanel onClose={jest.fn()} />);
       fireEvent.click(await screen.findByText('seeded session'));
       await act(async () => {});
-      await waitFor(() => expect(screen.getAllByText('Pending review')).toHaveLength(2));
+      await waitFor(() =>
+        expect(screen.getAllByText('Pending review')).toHaveLength(2),
+      );
 
       await act(async () => {
         fireEvent.click(screen.getAllByRole('button', { name: 'Approve' })[0]);
@@ -1333,7 +1402,9 @@ describe('CopilotPanel', () => {
       expect(await screen.findByText('Dismissed')).toBeInTheDocument();
       // Both resolved — no pending buttons remain anywhere, and no instant
       // Copilot reply was fabricated (the card's note IS the feedback).
-      expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: 'Approve' }),
+      ).not.toBeInTheDocument();
       expect(copilotIpc.runPrompt).not.toHaveBeenCalled();
     });
   });
@@ -1453,7 +1524,17 @@ describe('CopilotPanel codebase grounding (Copilot V3)', () => {
     jest.mocked(updateProject).mockReset();
     jest.mocked(getProject).mockReset();
     jest.mocked(getProject).mockImplementation(async () => ({ ...projectRow }));
+    jest.mocked(listProjects).mockReset();
+    jest.mocked(listProjects).mockResolvedValue([]);
   });
+
+  /** Stands in for the real backend write plus the route project's reload. */
+  function persistPatches() {
+    jest.mocked(updateProject).mockImplementation(async (_id, patch) => {
+      projectRow = { ...projectRow, ...patch } as Project;
+      return { ...projectRow };
+    });
+  }
 
   function renderInProjectRoute() {
     return render(
@@ -1514,7 +1595,9 @@ describe('CopilotPanel codebase grounding (Copilot V3)', () => {
       await act(async () => {});
 
       await waitFor(() => expect(copilotIpc.runPrompt).toHaveBeenCalled());
-      expect(copilotIpc.runPrompt.mock.calls[0][0]).not.toHaveProperty('repoPath');
+      expect(copilotIpc.runPrompt.mock.calls[0][0]).not.toHaveProperty(
+        'repoPath',
+      );
     });
   });
 
@@ -1527,10 +1610,58 @@ describe('CopilotPanel codebase grounding (Copilot V3)', () => {
         needsRepoLink: true,
       });
 
-      expect(await screen.findByText(/Codebase not linked/i)).toBeInTheDocument();
       expect(
-        screen.getByRole('button', { name: /choose folder/i }),
+        await screen.findByText(/Codebase not linked/i),
       ).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: /browse/i }),
+      ).toBeInTheDocument();
+    });
+
+    // The sharpest specific complaint in the gaps doc: the card wrote to a
+    // projectId captured at send time but never said which project that was.
+    it('names the project it will write to', async () => {
+      await openChatInProject();
+
+      await sendAndFinish('why does the parser drop that line?', {
+        fullText: "I'd need to read the code to say.",
+        needsRepoLink: true,
+      });
+
+      await screen.findByText(/Codebase not linked/i);
+      expect(screen.getAllByText('Launch').length).toBeGreaterThan(0);
+    });
+
+    it('offers the same one-click suggestions the settings page does', async () => {
+      jest
+        .mocked(listProjects)
+        .mockResolvedValue([
+          {
+            ...PROJECT,
+            id: 'proj-2',
+            name: 'Atlas',
+            repoPath: '/Users/amaan/code/atlas',
+          },
+        ]);
+      persistPatches();
+      await openChatInProject();
+
+      await sendAndFinish('why does the parser drop that line?', {
+        fullText: "I'd need to read the code to say.",
+        needsRepoLink: true,
+      });
+      const suggestion = (await screen.findByText('atlas')).closest('button')!;
+
+      await act(async () => {
+        fireEvent.click(suggestion);
+      });
+
+      expect(updateProject).toHaveBeenCalledWith(
+        'proj-1',
+        { repoPath: '/Users/amaan/code/atlas' },
+        { silent: true },
+      );
+      expect(chooseFolderMock).not.toHaveBeenCalled();
     });
 
     it('does not render for a run that did not ask for it', async () => {
@@ -1541,7 +1672,9 @@ describe('CopilotPanel codebase grounding (Copilot V3)', () => {
         needsRepoLink: false,
       });
 
-      expect(screen.queryByText(/Codebase not linked/i)).not.toBeInTheDocument();
+      expect(
+        screen.queryByText(/Codebase not linked/i),
+      ).not.toBeInTheDocument();
     });
 
     // §6 gates the sentinel to the unlinked prompt, so this shouldn't
@@ -1556,20 +1689,18 @@ describe('CopilotPanel codebase grounding (Copilot V3)', () => {
         needsRepoLink: true,
       });
 
-      expect(screen.queryByText(/Codebase not linked/i)).not.toBeInTheDocument();
+      expect(
+        screen.queryByText(/Codebase not linked/i),
+      ).not.toBeInTheDocument();
     });
 
-    it('links through the same chooseFolder → updateProject path as the settings page, then disappears', async () => {
+    it('links through the same updateProject path as the settings page, then confirms in place', async () => {
       chooseFolderMock.mockResolvedValue({
         canceled: false,
         path: '/Users/amaan/code/waypoint',
+        looksLikeGitRepo: true,
       });
-      jest.mocked(updateProject).mockImplementation(async (_id, patch) => {
-        // Stands in for the real backend write; the card's gating reads the
-        // reloaded project, so the fake row has to actually change.
-        projectRow = { ...projectRow, ...patch } as Project;
-        return { ...projectRow };
-      });
+      persistPatches();
       await openChatInProject();
 
       await sendAndFinish('why does the parser drop that line?', {
@@ -1579,30 +1710,52 @@ describe('CopilotPanel codebase grounding (Copilot V3)', () => {
       await screen.findByText(/Codebase not linked/i);
 
       await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: /choose folder/i }));
+        fireEvent.click(screen.getByRole('button', { name: /browse/i }));
       });
 
       await waitFor(() =>
-        expect(updateProject).toHaveBeenCalledWith('proj-1', {
-          repoPath: '/Users/amaan/code/waypoint',
-        }),
+        expect(updateProject).toHaveBeenCalledWith(
+          'proj-1',
+          { repoPath: '/Users/amaan/code/waypoint' },
+          { silent: true },
+        ),
       );
-      // Gated on the project's own repoPath, so linking retires the card for
-      // good — there is deliberately no separate dismiss state.
-      await waitFor(() =>
-        expect(screen.queryByText(/Codebase not linked/i)).not.toBeInTheDocument(),
-      );
+      // The card no longer just vanishes: it becomes the same confirmation
+      // the settings page shows, so the user is told what got linked.
+      expect(await screen.findByText(/Codebase linked/i)).toBeInTheDocument();
+      expect(
+        screen.queryByText(/Codebase not linked/i),
+      ).not.toBeInTheDocument();
+    });
+
+    it('points at the durable control in project settings', async () => {
+      await openChatInProject();
+
+      await sendAndFinish('why does the parser drop that line?', {
+        fullText: "I'd need to read the code to say.",
+        needsRepoLink: true,
+      });
+
+      await screen.findByText(/Codebase not linked/i);
+      expect(
+        screen.getByRole('button', { name: /manage in settings/i }),
+      ).toBeInTheDocument();
     });
 
     it('shows a backend validation failure on the card instead of throwing', async () => {
       chooseFolderMock.mockResolvedValue({
         canceled: false,
         path: '/Users/amaan/not-a-repo',
+        looksLikeGitRepo: false,
       });
       jest
         .mocked(updateProject)
         .mockRejectedValue(
-          new Error('repoPath is not a git repository: /Users/amaan/not-a-repo'),
+          new ApiError(
+            'repoPath is not a git repository: /Users/amaan/not-a-repo',
+            'repo_path_not_git_repo',
+            '/Users/amaan/not-a-repo',
+          ),
         );
       await openChatInProject();
 
@@ -1613,11 +1766,16 @@ describe('CopilotPanel codebase grounding (Copilot V3)', () => {
       await screen.findByText(/Codebase not linked/i);
 
       await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: /choose folder/i }));
+        fireEvent.click(screen.getByRole('button', { name: /browse/i }));
       });
 
+      // Leads with the fix; the raw backend message stays available under the
+      // Technical details disclosure.
       expect(
-        await screen.findByText(
+        await screen.findByText("That folder isn't a git repository"),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(
           'repoPath is not a git repository: /Users/amaan/not-a-repo',
         ),
       ).toBeInTheDocument();
@@ -1635,14 +1793,14 @@ describe('CopilotPanel codebase grounding (Copilot V3)', () => {
       await screen.findByText(/Codebase not linked/i);
 
       await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: /choose folder/i }));
+        fireEvent.click(screen.getByRole('button', { name: /browse/i }));
       });
 
       expect(updateProject).not.toHaveBeenCalled();
       expect(screen.getByText(/Codebase not linked/i)).toBeInTheDocument();
     });
 
-    it('clears a previous turn\'s card when a new run starts', async () => {
+    it("clears a previous turn's card when a new run starts", async () => {
       await openChatInProject();
 
       await sendAndFinish('why does the parser drop that line?', {
@@ -1655,8 +1813,198 @@ describe('CopilotPanel codebase grounding (Copilot V3)', () => {
       await act(async () => {});
 
       await waitFor(() =>
-        expect(screen.queryByText(/Codebase not linked/i)).not.toBeInTheDocument(),
+        expect(
+          screen.queryByText(/Codebase not linked/i),
+        ).not.toBeInTheDocument(),
       );
+    });
+  });
+
+  // Closes the loop the shipped feature left dangling: after linking, the
+  // reply that triggered the card is still the ungrounded one.
+  describe('"Ask again with code access"', () => {
+    async function linkFromCard(prompt: string) {
+      chooseFolderMock.mockResolvedValue({
+        canceled: false,
+        path: '/Users/amaan/code/waypoint',
+        looksLikeGitRepo: true,
+      });
+      persistPatches();
+      await openChatInProject();
+      await sendAndFinish(prompt, {
+        fullText: "I'd need to read the code to say.",
+        needsRepoLink: true,
+      });
+      await screen.findByText(/Codebase not linked/i);
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /browse/i }));
+      });
+      await screen.findByText(/Codebase linked/i);
+      // routeProject.reload() is fired-and-forgotten from onLinked, not
+      // awaited — wait for it to actually land before treating the button as
+      // clickable, the same gate the component itself now applies.
+      await waitFor(() =>
+        expect(
+          screen.getByRole('button', { name: /ask again with code access/i }),
+        ).not.toBeDisabled(),
+      );
+    }
+
+    // Regression test: onAskAgain reads routeProject.project synchronously,
+    // and routeProject.reload() is fired-and-forgotten from onLinked, not
+    // awaited — a click landing before that reload actually resolves used
+    // to resubmit the triggering question still ungrounded, even though the
+    // card had already flipped to its "linked" success state.
+    it('keeps "Ask again" disabled until the route project actually reflects the new link', async () => {
+      const prompt = 'why does the parser drop that line?';
+      chooseFolderMock.mockResolvedValue({
+        canceled: false,
+        path: '/Users/amaan/code/waypoint',
+        looksLikeGitRepo: true,
+      });
+      persistPatches();
+      await openChatInProject();
+      await sendAndFinish(prompt, {
+        fullText: "I'd need to read the code to say.",
+        needsRepoLink: true,
+      });
+      await screen.findByText(/Codebase not linked/i);
+
+      // Holds reload() open at will, independent of the write below
+      // succeeding — proves the gate, not just the write's own timing.
+      let resolveReload!: (project: Project) => void;
+      jest.mocked(getProject).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveReload = resolve;
+          }),
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /browse/i }));
+      });
+      await screen.findByText(/Codebase linked/i);
+
+      const preparing = screen.getByRole('button', { name: /preparing/i });
+      expect(preparing).toBeDisabled();
+      copilotIpc.runPrompt.mockClear();
+      fireEvent.click(preparing);
+      expect(copilotIpc.runPrompt).not.toHaveBeenCalled();
+
+      await act(async () => {
+        resolveReload({ ...projectRow });
+      });
+
+      const readyButton = await screen.findByRole('button', {
+        name: /ask again with code access/i,
+      });
+      await act(async () => {
+        fireEvent.click(readyButton);
+      });
+
+      await waitFor(() =>
+        expect(copilotIpc.runPrompt).toHaveBeenCalledWith(
+          expect.objectContaining({
+            prompt,
+            repoPath: '/Users/amaan/code/waypoint',
+          }),
+          expect.anything(),
+        ),
+      );
+    });
+
+    it('re-runs the exact question that triggered the card, now with the repo attached', async () => {
+      const prompt = 'why does the parser drop that line?';
+      await linkFromCard(prompt);
+      copilotIpc.runPrompt.mockClear();
+
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole('button', { name: /ask again with code access/i }),
+        );
+      });
+
+      await waitFor(() =>
+        expect(copilotIpc.runPrompt).toHaveBeenCalledWith(
+          expect.objectContaining({
+            prompt,
+            repoPath: '/Users/amaan/code/waypoint',
+          }),
+          expect.anything(),
+        ),
+      );
+    });
+
+    it('resumes the same Claude Code session rather than starting a fresh one', async () => {
+      await linkFromCard('why does the parser drop that line?');
+      copilotIpc.runPrompt.mockClear();
+
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole('button', { name: /ask again with code access/i }),
+        );
+      });
+
+      await waitFor(() =>
+        expect(copilotIpc.runPrompt).toHaveBeenCalledWith(
+          expect.objectContaining({ resumeSessionId: 'sess-1' }),
+          expect.anything(),
+        ),
+      );
+    });
+
+    // Deliberately not retryRun(): the triggering turn was a successful,
+    // persisted reply, so nothing may leak into the failure-retry state.
+    it('never touches the run-error state a real retry owns', async () => {
+      await linkFromCard('why does the parser drop that line?');
+
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole('button', { name: /ask again with code access/i }),
+        );
+      });
+
+      expect(
+        screen.queryByRole('button', { name: /try again/i }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByText(/Copilot didn't return a reply/i),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  // The silent-degradation bug: repoPath stayed non-null for a moved
+  // checkout, so the card stayed hidden while the runner quietly fell back to
+  // os.tmpdir() and answered ungrounded.
+  describe('a linked folder that has since moved', () => {
+    beforeEach(() => {
+      projectRow.repoPath = '/Users/amaan/code/gone';
+      checkPathMock.mockResolvedValue({ exists: false });
+    });
+
+    it('stops sending the dead path with a run', async () => {
+      await openChatInProject();
+
+      await typeAndSend('where is buildArgs defined?');
+      await act(async () => {});
+
+      await waitFor(() => expect(copilotIpc.runPrompt).toHaveBeenCalled());
+      expect(copilotIpc.runPrompt.mock.calls[0][0]).not.toHaveProperty(
+        'repoPath',
+      );
+    });
+
+    it('re-offers the card even though repoPath is non-null', async () => {
+      await openChatInProject();
+
+      await sendAndFinish('why does the parser drop that line?', {
+        fullText: "I'd need to read the code to say.",
+        needsRepoLink: true,
+      });
+
+      expect(
+        await screen.findByText(/Codebase not linked/i),
+      ).toBeInTheDocument();
     });
   });
 });

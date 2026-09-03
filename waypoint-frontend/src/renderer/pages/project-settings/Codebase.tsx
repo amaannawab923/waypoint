@@ -1,7 +1,11 @@
 import { useState } from 'react';
-import { Button } from '@/components/ui/Button';
+import { Check } from 'lucide-react';
+import { RepoLinkPicker } from '@/components/domain/repo-link/RepoLinkPicker';
+import { RepoLinkStaleCard } from '@/components/domain/repo-link/RepoLinkStaleCard';
+import { RepoLinkedCard } from '@/components/domain/repo-link/RepoLinkedCard';
+import { useRepoLinkStatus } from '@/lib/useRepoLinkStatus';
 import { useProject } from '@/layouts/ProjectLayout';
-import { updateProject } from '@/mock/api';
+import type { Project } from '@/types/entities';
 
 /**
  * Links this project to a local git checkout, which is what lets Copilot
@@ -9,48 +13,37 @@ import { updateProject } from '@/mock/api';
  * or Write).
  *
  * Its own page rather than a field in General.tsx because the flow doesn't
- * fit General's shape: the action is a native folder dialog, it saves the
- * moment a folder is picked instead of waiting on a shared dirty/Save
- * state machine, and a picked folder can fail backend validation (not a
- * git repo, deleted since it was linked) — an error surface that doesn't
- * belong mixed into General's.
+ * fit General's shape: it saves the moment a folder is picked instead of
+ * waiting on a shared dirty/Save state machine, and a picked folder can fail
+ * backend validation — an error surface that doesn't belong mixed into
+ * General's.
+ *
+ * A dispatcher over the three shared repo-link components rather than its own
+ * implementation of any of them: the in-chat card renders the same picker and
+ * the same linked card in compact form, so the two entry points are literally
+ * one render tree, not two lookalikes that drift.
  */
 export default function Codebase() {
   const { project, reloadProject } = useProject();
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  // recheck() is deliberately not called from onLinked/onChanged below: it
+  // would be bound (by useCallback) to the repoPath THIS render still has,
+  // one render behind reloadProject()'s own update — a redundant check
+  // against the path being replaced, racing the one useRepoLinkStatus's own
+  // effect already starts once repoPath actually changes.
+  const { status } = useRepoLinkStatus(project.repoPath);
+  // Set only by a link that happened on this page, in this session — the
+  // difference between "it's linked" (the card, always) and "you just linked
+  // it" (this, once).
+  const [justLinked, setJustLinked] = useState(false);
 
-  async function handleChoose() {
-    if (saving) return;
-    const picked = await window.electron.repo.chooseFolder();
-    if (picked.canceled) return;
-    setSaving(true);
-    setError(null);
-    try {
-      // No local "is this a repo?" check first — the backend owns that rule
-      // (projects.service.ts's validateRepoPath) so there's exactly one
-      // implementation of it, and its message is what renders below.
-      await updateProject(project.id, { repoPath: picked.path });
-      reloadProject();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSaving(false);
-    }
+  function onLinked() {
+    setJustLinked(true);
+    reloadProject();
   }
 
-  async function handleUnlink() {
-    if (saving) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await updateProject(project.id, { repoPath: null });
-      reloadProject();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSaving(false);
-    }
+  function onChanged() {
+    setJustLinked(false);
+    reloadProject();
   }
 
   return (
@@ -72,39 +65,65 @@ export default function Codebase() {
           </p>
         </div>
 
-        {project.repoPath ? (
-          <div className="flex flex-col gap-3 rounded-[var(--radius)] border border-border-strong p-5">
-            <div className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium text-text">
-                Repository path
-              </span>
-              <p className="font-mono text-sm break-all text-text-secondary">
-                {project.repoPath}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="secondary"
-                onClick={handleChoose}
-                disabled={saving}
-              >
-                {saving ? 'Saving…' : 'Change folder…'}
-              </Button>
-              <Button variant="ghost" onClick={handleUnlink} disabled={saving}>
-                Unlink
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <div>
-            <Button variant="primary" onClick={handleChoose} disabled={saving}>
-              {saving ? 'Saving…' : 'Choose folder…'}
-            </Button>
+        {justLinked && status.kind === 'linked' && (
+          <div className="flex items-center gap-2 rounded-[var(--radius)] border border-success/40 bg-success-bg px-3 py-2.5 text-[13px] font-medium text-success">
+            <Check size={15} strokeWidth={2.2} />
+            Linked — Copilot can now read this project&apos;s code.
           </div>
         )}
 
-        {error && <p className="text-sm text-danger">{error}</p>}
+        <CodebaseState
+          project={project}
+          stale={status.kind === 'stale'}
+          onLinked={onLinked}
+          onChanged={onChanged}
+        />
       </div>
     </div>
+  );
+}
+
+/** Unlinked, linked, or linked-but-moved — the three states, in that order. */
+function CodebaseState({
+  project,
+  stale,
+  onLinked,
+  onChanged,
+}: {
+  project: Project;
+  stale: boolean;
+  onLinked: () => void;
+  onChanged: () => void;
+}) {
+  if (!project.repoPath) {
+    return (
+      <RepoLinkPicker
+        projectId={project.id}
+        projectName={project.name}
+        projectIdentifier={project.identifier}
+        onLinked={onLinked}
+      />
+    );
+  }
+  if (stale) {
+    return (
+      <RepoLinkStaleCard
+        projectId={project.id}
+        projectName={project.name}
+        projectIdentifier={project.identifier}
+        repoPath={project.repoPath}
+        onRelocated={onLinked}
+        onChanged={onChanged}
+      />
+    );
+  }
+  return (
+    <RepoLinkedCard
+      projectId={project.id}
+      projectName={project.name}
+      repoPath={project.repoPath}
+      onChanged={onChanged}
+      showUnlink
+    />
   );
 }

@@ -93,9 +93,16 @@ function getElectronHandler() {
       ) => () => void;
     };
     repo: {
-      chooseFolder: () => Promise<
-        { canceled: true } | { canceled: false; path: string }
+      chooseFolder: (opts?: {
+        defaultPath?: string;
+        title?: string;
+        message?: string;
+      }) => Promise<
+        | { canceled: true }
+        | { canceled: false; path: string; looksLikeGitRepo: boolean }
       >;
+      checkPath: (repoPath: string) => Promise<{ exists: boolean }>;
+      describe: (repoPath: string) => Promise<unknown>;
     };
   };
 }
@@ -380,23 +387,50 @@ describe('electronHandler.ipcRenderer (generic bridge)', () => {
   });
 });
 
-// A one-method invoke/handle bridge (Copilot V3), deliberately top-level
-// rather than nested under `copilot`: the main-process side (repoLink.ts) is
-// a general "pick me a folder" channel, not a Copilot-specific one.
-describe('electronHandler.repo.chooseFolder', () => {
+// An invoke/handle bridge (Copilot V3), deliberately top-level rather than
+// nested under `copilot`: the main-process side (repoLink.ts) is general
+// local-repo introspection, not a Copilot-specific concern.
+describe('electronHandler.repo', () => {
+  beforeEach(() => {
+    ipcRendererMock.invoke.mockReset();
+  });
+
   it('invokes the repo:choose-folder channel and returns the picked path', async () => {
     ipcRendererMock.invoke.mockResolvedValue({
       canceled: false,
       path: '/Users/amaan/code/waypoint',
+      looksLikeGitRepo: true,
     });
 
     const result = await electronHandler.repo.chooseFolder();
 
-    expect(ipcRendererMock.invoke).toHaveBeenCalledWith('repo:choose-folder');
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith(
+      'repo:choose-folder',
+      undefined,
+    );
     expect(result).toEqual({
       canceled: false,
       path: '/Users/amaan/code/waypoint',
+      looksLikeGitRepo: true,
     });
+  });
+
+  // The dialog's context (which project, where to start) is the caller's to
+  // decide, so the bridge forwards it verbatim rather than shaping it.
+  it('forwards chooseFolder options verbatim to the channel', async () => {
+    ipcRendererMock.invoke.mockResolvedValue({ canceled: true });
+    const opts = {
+      defaultPath: '/Users/amaan/code',
+      title: 'Link Launch to its local checkout',
+      message: 'Pick the folder that contains .git.',
+    };
+
+    await electronHandler.repo.chooseFolder(opts);
+
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith(
+      'repo:choose-folder',
+      opts,
+    );
   });
 
   it('passes a canceled result straight through', async () => {
@@ -405,5 +439,36 @@ describe('electronHandler.repo.chooseFolder', () => {
     await expect(electronHandler.repo.chooseFolder()).resolves.toEqual({
       canceled: true,
     });
+  });
+
+  it('invokes repo:check-path with the path and returns its answer', async () => {
+    ipcRendererMock.invoke.mockResolvedValue({ exists: false });
+
+    await expect(
+      electronHandler.repo.checkPath('/Users/amaan/code/gone'),
+    ).resolves.toEqual({ exists: false });
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith(
+      'repo:check-path',
+      '/Users/amaan/code/gone',
+    );
+  });
+
+  it('invokes repo:describe with the path and returns the description', async () => {
+    const described = {
+      name: 'waypoint',
+      displayPath: '~/code/waypoint',
+      branch: 'main',
+      lastCommitAt: '2026-08-30T10:00:00.000Z',
+      trackedFileCount: 1284,
+    };
+    ipcRendererMock.invoke.mockResolvedValue(described);
+
+    await expect(
+      electronHandler.repo.describe('/Users/amaan/code/waypoint'),
+    ).resolves.toEqual(described);
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith(
+      'repo:describe',
+      '/Users/amaan/code/waypoint',
+    );
   });
 });

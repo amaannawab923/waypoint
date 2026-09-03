@@ -1,6 +1,14 @@
 // Disable no-unused-vars, broken for spread args
 /* eslint no-unused-vars: off */
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
+// Type-only, so repoLink.ts's `electron`/`child_process` imports are erased
+// rather than pulled into the sandboxed preload bundle — the channel
+// payloads stay defined in exactly one place either way.
+import type {
+  ChooseFolderOptions,
+  ChooseFolderResult,
+  RepoDescribeResult,
+} from './repoLink';
 
 // The global Web Crypto API, not Node's `crypto` module: this preload script
 // runs in Electron's sandboxed renderer context by default (Electron 20+),
@@ -228,10 +236,14 @@ const electronHandler = {
   // a general filesystem concern, and the same channel is what any future
   // feature needing a directory from the user would reuse.
   repo: {
-    chooseFolder(): Promise<
-      { canceled: true } | { canceled: false; path: string }
-    > {
-      return ipcRenderer.invoke('repo:choose-folder');
+    chooseFolder(opts?: ChooseFolderOptions): Promise<ChooseFolderResult> {
+      return ipcRenderer.invoke('repo:choose-folder', opts);
+    },
+    checkPath(repoPath: string): Promise<{ exists: boolean }> {
+      return ipcRenderer.invoke('repo:check-path', repoPath);
+    },
+    describe(repoPath: string): Promise<RepoDescribeResult> {
+      return ipcRenderer.invoke('repo:describe', repoPath);
     },
   },
 };

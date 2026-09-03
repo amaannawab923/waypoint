@@ -26,6 +26,21 @@ describe('errorHandler', () => {
     expect(json).toHaveBeenCalledWith({ error: 'repoPath is not a git repository: /tmp/x' });
   });
 
+  // Additive to the case above, which stays unmodified on purpose: a
+  // ValidationError with neither field still produces the original body.
+  it('carries a ValidationError\'s code and path into the 400 body when it has them', () => {
+    const { status, json } = handle(
+      new ValidationError('repoPath is not a git repository: /tmp/x', 'repo_path_not_git_repo', '/tmp/x'),
+    );
+
+    expect(status).toHaveBeenCalledWith(400);
+    expect(json).toHaveBeenCalledWith({
+      error: 'repoPath is not a git repository: /tmp/x',
+      code: 'repo_path_not_git_repo',
+      path: '/tmp/x',
+    });
+  });
+
   it('still maps NotFoundError to 404 and ConflictError to 409', () => {
     expect(handle(new NotFoundError('project')).status).toHaveBeenCalledWith(404);
     expect(handle(new ConflictError('already exists')).status).toHaveBeenCalledWith(409);

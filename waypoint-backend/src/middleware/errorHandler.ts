@@ -71,7 +71,14 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     return;
   }
   if (err instanceof ValidationError) {
-    res.status(400).json({ error: err.message });
+    // Spread rather than always-present keys: a ValidationError constructed
+    // without them produces a body byte-identical to the one this branch
+    // has always returned.
+    res.status(400).json({
+      error: err.message,
+      ...(err.code ? { code: err.code } : {}),
+      ...(err.path ? { path: err.path } : {}),
+    });
     return;
   }
   const trustedStatus = trustedHttpStatus(err);

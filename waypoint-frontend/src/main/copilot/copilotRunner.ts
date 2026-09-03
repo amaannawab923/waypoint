@@ -1,6 +1,6 @@
-import * as fs from 'fs';
 import * as os from 'os';
 import { ipcMain, type BrowserWindow } from 'electron';
+import { isUsableRepoDirectory } from '../repoPathStatus';
 import {
   runCopilotQuery,
   type McpServerConfig,
@@ -355,23 +355,13 @@ function resolveRepoRoot(repoPath: string | undefined): {
   cwd: string;
   linked: boolean;
 } {
-  if (repoPath && REPO_PATH_PATTERN.test(repoPath)) {
-    try {
-      // A single statSync, not existsSync-then-statSync: the two-call form
-      // has a real TOCTOU gap (the directory can vanish between them — an
-      // unmounted drive, a deleted checkout), and statSync alone already
-      // answers both "does it exist" and "is it a directory" via one throw
-      // vs. one boolean, with no window in between.
-      if (fs.statSync(repoPath).isDirectory()) {
-        return { cwd: repoPath, linked: true };
-      }
-    } catch {
-      // Missing, unreadable, or raced out of existence — a repo directory
-      // that isn't there is a normal, expected state here (unlinked), never
-      // a reason to fail the whole run. See resolveRepoRoot's other call
-      // site for why an uncaught throw here would be worse than that: it'd
-      // hang the renderer, not just fall back.
-    }
+  // Shared with repoLink.ts's repo:check-path channel (repoPathStatus.ts) so
+  // the badge the user sees and the decision actually made here can never
+  // disagree about what "still usable" means. A missing, unreadable, or
+  // raced-out-of-existence directory is a normal state (unlinked), never a
+  // reason to fail the whole run.
+  if (repoPath && REPO_PATH_PATTERN.test(repoPath) && isUsableRepoDirectory(repoPath)) {
+    return { cwd: repoPath, linked: true };
   }
   return { cwd: os.tmpdir(), linked: false };
 }
