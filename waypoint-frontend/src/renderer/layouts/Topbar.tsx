@@ -33,6 +33,7 @@ import { CreateWorkItemModal } from '@/components/domain/CreateWorkItemModal';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { markOnboarding } from '@/lib/onboarding';
 import { useTheme } from '@/lib/theme';
+import { useCurrentRouteProject } from '@/lib/useCurrentRouteProject';
 import type { Project, WorkItem, Page, Cycle, WorkModule } from '@/types/entities';
 
 /** Small self-contained popover, mirrors the local Dropdown pattern used in
@@ -318,9 +319,14 @@ export function Topbar({
   const [quickCreateOpen, setQuickCreateOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [theme, toggleTheme] = useTheme();
+  const { project: routeProject } = useCurrentRouteProject();
 
   const unread = notifications?.filter((n) => !n.read).length ?? 0;
-  const firstProjectId = projects?.[0]?.id;
+  // Prefer whatever project route is currently open, so "New work item" lands
+  // where the user is actually looking instead of always the first project in
+  // the list. Falls back to the first project when there's no project route
+  // open (e.g. Home, a workspace settings page).
+  const firstProjectId = routeProject?.projectId ?? projects?.[0]?.id;
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
