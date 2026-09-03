@@ -12,8 +12,8 @@ export interface ProjectOutletContext {
 
 /**
  * Resolves `:projectId` from the URL and provides the Project to every child
- * route via `useProject()`. Every project-scoped page (tickets, cycles,
- * modules, views, pages, intake, settings) is nested under this layout in
+ * route via `useProject()`. Every project-scoped page (tickets, sprints,
+ * workstreams, views, docs, requests, settings) is nested under this layout in
  * router.tsx — build against `useProject()` rather than re-fetching the
  * project yourself.
  */

@@ -11,12 +11,12 @@ import { SkeletonListRows } from '@/components/ui/Skeleton';
 import { NotWired } from '@/components/ui/NotWired';
 
 const EVENT_TYPES: { value: WebhookEventType; label: string }[] = [
-  { value: 'work_item.created', label: 'Work item created' },
-  { value: 'work_item.updated', label: 'Work item updated' },
-  { value: 'work_item.deleted', label: 'Work item deleted' },
+  { value: 'ticket.created', label: 'Ticket created' },
+  { value: 'ticket.updated', label: 'Ticket updated' },
+  { value: 'ticket.deleted', label: 'Ticket deleted' },
   { value: 'project.created', label: 'Project created' },
-  { value: 'cycle.created', label: 'Cycle created' },
-  { value: 'module.created', label: 'Module created' },
+  { value: 'sprint.created', label: 'Sprint created' },
+  { value: 'workstream.created', label: 'Workstream created' },
 ];
 
 function toggleInArray<T>(arr: T[], value: T): T[] {
@@ -82,7 +82,7 @@ export default function Webhooks() {
         <EmptyState
           icon={<WebhookIcon size={28} />}
           title="No webhooks yet"
-          description="Add a webhook to notify an external service when tickets, projects, cycles, or modules change."
+          description="Add a webhook to notify an external service when tickets, projects, sprints, or workstreams change."
           action={
             <Button variant="primary" onClick={() => setAddOpen(true)}>
               <Plus size={15} />

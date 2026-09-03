@@ -12,11 +12,16 @@ import {
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { projects, ticketStates, labels } from './projects.js';
-import { workModules, cycles } from './modules-cycles.js';
+import { workstreams, sprints } from './workstreams-sprints.js';
 import { members } from './workspace.js';
 
 export const priorityEnum = pgEnum('priority', ['urgent', 'high', 'medium', 'low', 'none']);
 export const assigneeKindEnum = pgEnum('assignee_kind', ['member', 'agent']);
+// Where a ticket came from. Replaces the dropped 'triage' state group
+// (§3.3): provenance is a fact about the ticket, not a position in the
+// project's workflow, so it belongs on the ticket rather than in a state
+// every project had to carry.
+export const ticketSourceEnum = pgEnum('ticket_source', ['manual', 'request', 'agent', 'import']);
 
 export const tickets = pgTable(
   'tickets',
@@ -33,8 +38,9 @@ export const tickets = pgTable(
       .notNull()
       .references(() => ticketStates.id, { onDelete: 'restrict' }),
     priority: priorityEnum('priority').notNull().default('none'),
-    moduleId: text('module_id').references(() => workModules.id, { onDelete: 'set null' }),
-    cycleId: text('cycle_id').references(() => cycles.id, { onDelete: 'set null' }),
+    source: ticketSourceEnum('source').notNull().default('manual'),
+    workstreamId: text('workstream_id').references(() => workstreams.id, { onDelete: 'set null' }),
+    sprintId: text('sprint_id').references(() => sprints.id, { onDelete: 'set null' }),
     parentId: text('parent_id').references((): AnyPgColumn => tickets.id, { onDelete: 'set null' }),
     estimatePoints: numeric('estimate_points'),
     estimateValue: text('estimate_value'),

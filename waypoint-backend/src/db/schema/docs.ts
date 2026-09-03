@@ -2,9 +2,9 @@ import { pgTable, text, boolean, timestamp, pgEnum, type AnyPgColumn } from 'dri
 import { projects } from './projects.js';
 import { members } from './workspace.js';
 
-export const pageVisibilityEnum = pgEnum('page_visibility', ['public', 'private', 'archived']);
+export const docVisibilityEnum = pgEnum('doc_visibility', ['public', 'private', 'archived']);
 
-export const pages = pgTable('pages', {
+export const docs = pgTable('docs', {
   id: text('id').primaryKey(),
   projectId: text('project_id')
     .notNull()
@@ -12,13 +12,13 @@ export const pages = pgTable('pages', {
   title: text('title').notNull(),
   icon: text('icon').notNull(),
   contentHtml: text('content_html').notNull().default('<p></p>'),
-  visibility: pageVisibilityEnum('visibility').notNull().default('private'),
+  visibility: docVisibilityEnum('visibility').notNull().default('private'),
   ownerId: text('owner_id')
     .notNull()
     .references(() => members.id, { onDelete: 'restrict' }),
   isFavorite: boolean('is_favorite').notNull().default(false),
   isLocked: boolean('is_locked').notNull().default(false),
-  parentPageId: text('parent_page_id').references((): AnyPgColumn => pages.id, { onDelete: 'set null' }),
+  parentDocId: text('parent_doc_id').references((): AnyPgColumn => docs.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

@@ -11,8 +11,8 @@ import { ListChecks, Plus, Search } from 'lucide-react';
 import { updateTicket } from '@/data/api';
 
 /**
- * Searchable picker for assigning an existing, not-yet-in-this-cycle project ticket to the
- * current cycle. Mirrors the modal-based picker pattern used elsewhere in the app (e.g.
+ * Searchable picker for assigning an existing, not-yet-in-this-sprint project ticket to the
+ * current sprint. Mirrors the modal-based picker pattern used elsewhere in the app (e.g.
  * src/pages/project-settings/Estimates.tsx's EstimatePickerModal).
  */
 function AddTicketModal({
@@ -53,7 +53,7 @@ function AddTicketModal({
   }
 
   return (
-    <Modal open={open} onClose={handleClose} title="Add ticket to cycle">
+    <Modal open={open} onClose={handleClose} title="Add ticket to sprint">
       <div className="flex flex-col gap-3">
         <div className="relative">
           <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
@@ -94,13 +94,13 @@ function AddTicketModal({
 }
 
 /**
- * Lightweight grouped-by-state ticket list for a single, already-known cycleId.
+ * Lightweight grouped-by-state ticket list for a single, already-known sprintId.
  * Intentionally simpler than the shared ListView — no filter/sort/group-by controls,
- * since this list only ever shows one fixed cycle's items.
+ * since this list only ever shows one fixed sprint's items.
  */
-export function CycleTicketList({
+export function SprintTicketList({
   projectId,
-  cycleId,
+  sprintId,
   items,
   allItems,
   states,
@@ -108,22 +108,22 @@ export function CycleTicketList({
   onItemAdded,
 }: {
   projectId: string;
-  cycleId: string;
-  /** Tickets already assigned to this cycle. */
+  sprintId: string;
+  /** Tickets already assigned to this sprint. */
   items: Ticket[];
   /** Every ticket in the project (unfiltered), used to build the "add ticket" candidate list. */
   allItems: Ticket[];
   states: TicketState[];
   members: Member[];
-  /** Called after a ticket is assigned to this cycle so the caller can reload. */
+  /** Called after a ticket is assigned to this sprint so the caller can reload. */
   onItemAdded: () => void;
 }) {
   const [addOpen, setAddOpen] = useState(false);
 
-  const candidates = useMemo(() => allItems.filter((i) => i.cycleId !== cycleId), [allItems, cycleId]);
+  const candidates = useMemo(() => allItems.filter((i) => i.sprintId !== sprintId), [allItems, sprintId]);
 
   async function handleAdd(item: Ticket) {
-    await updateTicket(item.id, { cycleId });
+    await updateTicket(item.id, { sprintId });
     setAddOpen(false);
     onItemAdded();
   }
@@ -149,8 +149,8 @@ export function CycleTicketList({
       {items.length === 0 ? (
         <EmptyState
           icon={<ListChecks size={28} />}
-          title="No tickets in this cycle"
-          description="Assign an existing ticket to this cycle, or add one from the tickets list."
+          title="No tickets in this sprint"
+          description="Assign an existing ticket to this sprint, or add one from the tickets list."
           action={
             <Button variant="secondary" size="sm" onClick={() => setAddOpen(true)}>
               <Plus size={14} />

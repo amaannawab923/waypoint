@@ -2,10 +2,10 @@ import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { clsx } from 'clsx';
 import { CalendarRange, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
-import { deleteCycle, updateCycle } from '@/data/api';
-import type { Cycle, Ticket, TicketState } from '@/types/entities';
+import { deleteSprint, updateSprint } from '@/data/api';
+import type { Sprint, Ticket, TicketState } from '@/types/entities';
 import { Button } from '@/components/ui/Button';
-import { computeProgress, findOverlappingCycle, formatDateRange } from './cycle-utils';
+import { computeProgress, findOverlappingSprint, formatDateRange } from './sprint-utils';
 
 /** Small self-contained popover: caller renders the trigger and the panel content. Mirrors the
  * pattern used in TicketDetailPage — there's no shared Dropdown/Menu primitive in
@@ -51,9 +51,9 @@ function Dropdown({
 }
 
 /**
- * Cycle dates are persisted as full ISO timestamps (see src/mock/seed.ts), but
+ * Sprint dates are persisted as full ISO timestamps (see src/mock/seed.ts), but
  * `<input type="date">` only accepts/displays `yyyy-MM-dd`. Truncate before handing the
- * stored value to a date input so the edit form shows the cycle's actual dates instead of
+ * stored value to a date input so the edit form shows the sprint's actual dates instead of
  * rendering empty.
  */
 function toDateInputValue(value: string): string {
@@ -76,47 +76,47 @@ function MenuItem({ icon, label, onClick, danger }: { icon: ReactNode; label: st
   );
 }
 
-/** Compact row card for a single cycle, used in the Upcoming and Completed sections. */
-export function CycleListCard({
+/** Compact row card for a single sprint, used in the Upcoming and Completed sections. */
+export function SprintListCard({
   projectId,
-  cycle,
+  sprint,
   items,
   states,
-  allCycles,
+  allSprints,
   onChanged,
 }: {
   projectId: string;
-  cycle: Cycle;
+  sprint: Sprint;
   items: Ticket[];
   states: TicketState[];
-  /** Every cycle in the project, used to block overlapping date edits. */
-  allCycles: Cycle[];
-  /** Called after an edit or delete so the caller can reload its cycle list. */
+  /** Every sprint in the project, used to block overlapping date edits. */
+  allSprints: Sprint[];
+  /** Called after an edit or delete so the caller can reload its sprint list. */
   onChanged: () => void;
 }) {
   const progress = computeProgress(items, states);
   const [editing, setEditing] = useState(false);
-  const [name, setName] = useState(cycle.name);
-  const [startDate, setStartDate] = useState(cycle.startDate);
-  const [endDate, setEndDate] = useState(cycle.endDate);
+  const [name, setName] = useState(sprint.name);
+  const [startDate, setStartDate] = useState(sprint.startDate);
+  const [endDate, setEndDate] = useState(sprint.endDate);
   const [saving, setSaving] = useState(false);
 
   function startEdit() {
-    setName(cycle.name);
-    setStartDate(toDateInputValue(cycle.startDate));
-    setEndDate(toDateInputValue(cycle.endDate));
+    setName(sprint.name);
+    setStartDate(toDateInputValue(sprint.startDate));
+    setEndDate(toDateInputValue(sprint.endDate));
     setEditing(true);
   }
 
   const dateOrderValid = Boolean(startDate && endDate && startDate <= endDate);
-  const overlapping = dateOrderValid ? findOverlappingCycle(allCycles, startDate, endDate, cycle.id) : null;
+  const overlapping = dateOrderValid ? findOverlappingSprint(allSprints, startDate, endDate, sprint.id) : null;
   const editValid = name.trim().length > 0 && dateOrderValid && !overlapping;
 
   async function handleSave() {
     if (!editValid || saving) return;
     setSaving(true);
     try {
-      await updateCycle(cycle.id, { name: name.trim(), startDate, endDate });
+      await updateSprint(sprint.id, { name: name.trim(), startDate, endDate });
       setEditing(false);
       onChanged();
     } finally {
@@ -125,15 +125,15 @@ export function CycleListCard({
   }
 
   function handleDelete() {
-    if (!window.confirm(`Delete "${cycle.name}"? This can't be undone.`)) return;
-    deleteCycle(cycle.id).then(onChanged);
+    if (!window.confirm(`Delete "${sprint.name}"? This can't be undone.`)) return;
+    deleteSprint(sprint.id).then(onChanged);
   }
 
   if (editing) {
     return (
       <div className="flex flex-col gap-3 rounded-[var(--radius)] border border-border-strong bg-surface p-4">
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-medium text-text-secondary">Cycle name</label>
+          <label className="text-xs font-medium text-text-secondary">Sprint name</label>
           <input
             autoFocus
             value={name}
@@ -182,12 +182,12 @@ export function CycleListCard({
 
   return (
     <div className="group flex items-center gap-2 rounded-[var(--radius)] border border-border bg-surface px-4 py-3 transition-colors hover:border-border-strong hover:bg-surface-2">
-      <Link to={`/projects/${projectId}/cycles/${cycle.id}`} className="flex min-w-0 flex-1 items-center gap-4">
+      <Link to={`/projects/${projectId}/sprints/${sprint.id}`} className="flex min-w-0 flex-1 items-center gap-4">
         <div className="min-w-0 flex-1">
-          <p className="truncate font-display text-sm font-medium text-text">{cycle.name}</p>
+          <p className="truncate font-display text-sm font-medium text-text">{sprint.name}</p>
           <p className="mt-0.5 flex items-center gap-1.5 text-xs text-text-muted">
             <CalendarRange size={12} />
-            {formatDateRange(cycle.startDate, cycle.endDate)}
+            {formatDateRange(sprint.startDate, sprint.endDate)}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -203,7 +203,7 @@ export function CycleListCard({
           trigger={(toggle) => (
             <button
               type="button"
-              aria-label="Cycle actions"
+              aria-label="Sprint actions"
               onClick={toggle}
               className="inline-flex size-7 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary transition-colors hover:bg-surface hover:text-text"
             >

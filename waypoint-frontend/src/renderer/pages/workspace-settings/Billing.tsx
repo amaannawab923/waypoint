@@ -79,7 +79,7 @@ export default function Billing() {
               <Badge tone="accent">{PLAN_LABEL[workspace.plan] ?? workspace.plan}</Badge>
             </div>
             <p className="text-sm text-text-secondary">
-              Unlimited projects, issues, cycles, modules, pages, and storage.
+              Unlimited projects, issues, sprints, workstreams, docs, and storage.
             </p>
           </div>
 

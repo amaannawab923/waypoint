@@ -41,11 +41,11 @@ export const addProjectMemberSchema = z.object({
 });
 
 export const projectFeaturesSchema = z.object({
-  cycles: z.boolean().optional(),
-  modules: z.boolean().optional(),
+  sprints: z.boolean().optional(),
+  workstreams: z.boolean().optional(),
   views: z.boolean().optional(),
-  pages: z.boolean().optional(),
-  intake: z.boolean().optional(),
+  docs: z.boolean().optional(),
+  requests: z.boolean().optional(),
 });
 
 export const projectEstimateSchema = z
@@ -64,14 +64,14 @@ export const projectAutomationsSchema = z.object({
 
 export const createStateSchema = z.object({
   name: z.string().min(1),
-  group: z.enum(['backlog', 'unstarted', 'started', 'completed', 'cancelled', 'triage']),
+  group: z.enum(['backlog', 'unstarted', 'started', 'completed', 'cancelled']),
   color: z.string(),
 });
 
 export const updateStateSchema = requireAtLeastOneField(
   z.object({
     name: z.string().min(1).optional(),
-    group: z.enum(['backlog', 'unstarted', 'started', 'completed', 'cancelled', 'triage']).optional(),
+    group: z.enum(['backlog', 'unstarted', 'started', 'completed', 'cancelled']).optional(),
     color: z.string().optional(),
   }),
 );

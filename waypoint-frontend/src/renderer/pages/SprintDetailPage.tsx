@@ -5,23 +5,23 @@ import { ArrowLeft, CalendarRange, Check, ChevronDown, MoreHorizontal, Pencil, R
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import { useRecordRecent } from '@/lib/recents';
-import { deleteCycle, listCycles, listMembers, listStates, listTickets, updateCycle } from '@/data/api';
+import { deleteSprint, listSprints, listMembers, listStates, listTickets, updateSprint } from '@/data/api';
 import { Avatar, AvatarStack } from '@/components/ui/Avatar';
 import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { IconButton } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { CycleStatsPanel } from '@/pages/cycles/CycleStatsPanel';
-import { CycleTicketList } from '@/pages/cycles/CycleTicketList';
-import { findOverlappingCycle, formatDateRange, getCycleStatus, type CycleStatus } from '@/pages/cycles/cycle-utils';
+import { SprintStatsPanel } from '@/pages/sprints/SprintStatsPanel';
+import { SprintTicketList } from '@/pages/sprints/SprintTicketList';
+import { findOverlappingSprint, formatDateRange, getSprintStatus, type SprintStatus } from '@/pages/sprints/sprint-utils';
 import { Skeleton } from '@/components/ui/Skeleton';
 
-const STATUS_LABEL: Record<CycleStatus, string> = {
+const STATUS_LABEL: Record<SprintStatus, string> = {
   active: 'Active',
   upcoming: 'Upcoming',
   completed: 'Completed',
 };
 
-const STATUS_TONE: Record<CycleStatus, BadgeTone> = {
+const STATUS_TONE: Record<SprintStatus, BadgeTone> = {
   active: 'accent',
   upcoming: 'info',
   completed: 'success',
@@ -34,7 +34,7 @@ const PANEL_CLASS =
 const OPTION_CLASS =
   'flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-sm text-text hover:bg-surface-2';
 
-/** Self-contained popover, mirrors the pattern in CycleListCard/ModuleDetailPage — there's no
+/** Self-contained popover, mirrors the pattern in SprintListCard/WorkstreamDetailPage — there's no
  * shared Dropdown/Menu primitive in src/components/ui/ yet. */
 function Dropdown({
   trigger,
@@ -96,31 +96,31 @@ function toDateInputValue(value: string): string {
   return value ? value.slice(0, 10) : '';
 }
 
-export default function CycleDetailPage() {
+export default function SprintDetailPage() {
   const { project } = useProject();
-  const { cycleId = '' } = useParams();
+  const { sprintId = '' } = useParams();
   const navigate = useNavigate();
 
-  const { data: cycles, loading: cyclesLoading, reload: reloadCycles } = useAsync(() => listCycles(project.id), [project.id]);
+  const { data: sprints, loading: sprintsLoading, reload: reloadSprints } = useAsync(() => listSprints(project.id), [project.id]);
   const { data: items, loading: itemsLoading, reload: reloadItems } = useAsync(() => listTickets(project.id), [project.id]);
   const { data: states, loading: statesLoading } = useAsync(() => listStates(project.id), [project.id]);
   const { data: allMembers } = useAsync(() => listMembers(), []);
 
-  const loading = cyclesLoading || itemsLoading || statesLoading;
-  const cycle = cycles?.find((c) => c.id === cycleId);
-  const cycleItems = useMemo(() => (items ?? []).filter((i) => i.cycleId === cycleId), [items, cycleId]);
+  const loading = sprintsLoading || itemsLoading || statesLoading;
+  const sprint = sprints?.find((c) => c.id === sprintId);
+  const sprintItems = useMemo(() => (items ?? []).filter((i) => i.sprintId === sprintId), [items, sprintId]);
 
   const projectMembers = useMemo(
     () => (allMembers ?? []).filter((m) => project.memberIds.includes(m.id)),
     [allMembers, project.memberIds],
   );
   const lead = useMemo(
-    () => (allMembers ?? []).find((m) => m.id === cycle?.leadId) ?? null,
-    [allMembers, cycle?.leadId],
+    () => (allMembers ?? []).find((m) => m.id === sprint?.leadId) ?? null,
+    [allMembers, sprint?.leadId],
   );
-  const cycleMembers = useMemo(
-    () => (allMembers ?? []).filter((m) => (cycle?.memberIds ?? []).includes(m.id)),
-    [allMembers, cycle?.memberIds],
+  const sprintMembers = useMemo(
+    () => (allMembers ?? []).filter((m) => (sprint?.memberIds ?? []).includes(m.id)),
+    [allMembers, sprint?.memberIds],
   );
 
   const [editing, setEditing] = useState(false);
@@ -130,23 +130,23 @@ export default function CycleDetailPage() {
   const [saving, setSaving] = useState(false);
 
   useRecordRecent(
-    cycle
+    sprint
       ? {
-          type: 'cycle',
-          id: cycle.id,
-          title: cycle.name,
-          projectId: cycle.projectId,
-          path: `/projects/${cycle.projectId}/cycles/${cycle.id}`,
+          type: 'sprint',
+          id: sprint.id,
+          title: sprint.name,
+          projectId: sprint.projectId,
+          path: `/projects/${sprint.projectId}/sprints/${sprint.id}`,
         }
       : null,
   );
 
-  if (!project.features.cycles) {
+  if (!project.features.sprints) {
     return (
       <EmptyState
         icon={<RefreshCw size={28} />}
-        title="Cycles isn't enabled for this project"
-        description="Turn Cycles back on in project settings to run work in fixed date ranges again."
+        title="Sprints isn't enabled for this project"
+        description="Turn Sprints back on in project settings to run work in fixed date ranges again."
         action={
           <Link
             to={`/projects/${project.id}/settings/features`}
@@ -159,7 +159,7 @@ export default function CycleDetailPage() {
     );
   }
 
-  if (loading && (!cycle || !states)) {
+  if (loading && (!sprint || !states)) {
     return (
       <Skeleton className="mx-auto flex max-w-5xl flex-col gap-6 p-6">
         <div>
@@ -199,53 +199,53 @@ export default function CycleDetailPage() {
     );
   }
 
-  if (!cycle) {
+  if (!sprint) {
     return (
       <EmptyState
-        title="Cycle not found"
+        title="Sprint not found"
         description="It may have been deleted."
         action={
           <Link
-            to={`/projects/${project.id}/cycles`}
+            to={`/projects/${project.id}/sprints`}
             className="inline-flex h-8 items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border border-border-strong bg-surface px-3 text-sm font-medium text-text transition-colors hover:bg-surface-2"
           >
-            Back to cycles
+            Back to sprints
           </Link>
         }
       />
     );
   }
 
-  const status = getCycleStatus(cycle);
-  const allCycles = cycles ?? [];
+  const status = getSprintStatus(sprint);
+  const allSprints = sprints ?? [];
 
-  async function patchCycle(fields: Parameters<typeof updateCycle>[1]) {
-    await updateCycle(cycle!.id, fields);
-    reloadCycles();
+  async function patchSprint(fields: Parameters<typeof updateSprint>[1]) {
+    await updateSprint(sprint!.id, fields);
+    reloadSprints();
   }
 
   function toggleMember(memberId: string) {
-    const current = cycle!.memberIds ?? [];
+    const current = sprint!.memberIds ?? [];
     const next = current.includes(memberId) ? current.filter((id) => id !== memberId) : [...current, memberId];
-    patchCycle({ memberIds: next });
+    patchSprint({ memberIds: next });
   }
 
   function startEdit() {
-    setName(cycle!.name);
-    setStartDate(toDateInputValue(cycle!.startDate));
-    setEndDate(toDateInputValue(cycle!.endDate));
+    setName(sprint!.name);
+    setStartDate(toDateInputValue(sprint!.startDate));
+    setEndDate(toDateInputValue(sprint!.endDate));
     setEditing(true);
   }
 
   const dateOrderValid = Boolean(startDate && endDate && startDate <= endDate);
-  const overlapping = editing && dateOrderValid ? findOverlappingCycle(allCycles, startDate, endDate, cycle.id) : null;
+  const overlapping = editing && dateOrderValid ? findOverlappingSprint(allSprints, startDate, endDate, sprint.id) : null;
   const editValid = name.trim().length > 0 && dateOrderValid && !overlapping;
 
   async function handleSaveEdit() {
     if (!editValid || saving) return;
     setSaving(true);
     try {
-      await patchCycle({ name: name.trim(), startDate, endDate });
+      await patchSprint({ name: name.trim(), startDate, endDate });
       setEditing(false);
     } finally {
       setSaving(false);
@@ -253,25 +253,25 @@ export default function CycleDetailPage() {
   }
 
   function handleDelete() {
-    if (!window.confirm(`Delete "${cycle!.name}"? This can't be undone.`)) return;
-    deleteCycle(cycle!.id).then(() => navigate(`/projects/${project.id}/cycles`));
+    if (!window.confirm(`Delete "${sprint!.name}"? This can't be undone.`)) return;
+    deleteSprint(sprint!.id).then(() => navigate(`/projects/${project.id}/sprints`));
   }
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6 p-6">
       <div>
         <Link
-          to={`/projects/${project.id}/cycles`}
+          to={`/projects/${project.id}/sprints`}
           className="mb-3 inline-flex items-center gap-1.5 text-xs font-medium text-text-muted transition-colors hover:text-text"
         >
           <ArrowLeft size={13} />
-          Cycles
+          Sprints
         </Link>
 
         {editing ? (
           <div className="flex flex-col gap-3 rounded-[var(--radius)] border border-border-strong bg-surface p-4">
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-text-secondary">Cycle name</label>
+              <label className="text-xs font-medium text-text-secondary">Sprint name</label>
               <input
                 autoFocus
                 value={name}
@@ -328,20 +328,20 @@ export default function CycleDetailPage() {
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h1 className="font-display text-lg font-medium text-text">{cycle.name}</h1>
+                <h1 className="font-display text-lg font-medium text-text">{sprint.name}</h1>
                 <Badge tone={STATUS_TONE[status]}>{STATUS_LABEL[status]}</Badge>
               </div>
               <p className="mt-1 flex items-center gap-1.5 text-sm text-text-muted">
                 <CalendarRange size={13} />
-                {formatDateRange(cycle.startDate, cycle.endDate)}
+                {formatDateRange(sprint.startDate, sprint.endDate)}
               </p>
-              {cycle.description && <p className="mt-2 max-w-2xl text-sm text-text-secondary">{cycle.description}</p>}
+              {sprint.description && <p className="mt-2 max-w-2xl text-sm text-text-secondary">{sprint.description}</p>}
             </div>
             <div className="flex shrink-0 items-center gap-0.5">
               <Dropdown
                 align="right"
                 trigger={(toggle) => (
-                  <IconButton label="Cycle actions" onClick={toggle}>
+                  <IconButton label="Sprint actions" onClick={toggle}>
                     <MoreHorizontal size={16} />
                   </IconButton>
                 )}
@@ -375,16 +375,16 @@ export default function CycleDetailPage() {
       </div>
 
       <div className="rounded-[var(--radius-lg)] border border-border bg-surface p-5">
-        <CycleStatsPanel cycle={cycle} items={cycleItems} states={states ?? []} chartHeight={240} />
+        <SprintStatsPanel sprint={sprint} items={sprintItems} states={states ?? []} chartHeight={240} />
       </div>
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-[1fr_260px]">
         <div>
           <h2 className="mb-3 text-xs font-medium tracking-wide text-text-muted uppercase">Tickets</h2>
-          <CycleTicketList
+          <SprintTicketList
             projectId={project.id}
-            cycleId={cycle.id}
-            items={cycleItems}
+            sprintId={sprint.id}
+            items={sprintItems}
             allItems={items ?? []}
             states={states ?? []}
             members={allMembers ?? []}
@@ -417,27 +417,27 @@ export default function CycleDetailPage() {
                   <button
                     type="button"
                     onClick={() => {
-                      patchCycle({ leadId: undefined });
+                      patchSprint({ leadId: undefined });
                       close();
                     }}
                     className={OPTION_CLASS}
                   >
                     <span className="text-text-muted">No lead</span>
-                    {!cycle.leadId && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                    {!sprint.leadId && <Check size={14} className="ml-auto shrink-0 text-accent" />}
                   </button>
                   {projectMembers.map((m) => (
                     <button
                       key={m.id}
                       type="button"
                       onClick={() => {
-                        patchCycle({ leadId: m.id });
+                        patchSprint({ leadId: m.id });
                         close();
                       }}
                       className={OPTION_CLASS}
                     >
                       <Avatar name={m.displayName} color={m.avatarColor} size={20} />
                       <span className="truncate">{m.displayName}</span>
-                      {m.id === cycle.leadId && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                      {m.id === sprint.leadId && <Check size={14} className="ml-auto shrink-0 text-accent" />}
                     </button>
                   ))}
                 </div>
@@ -450,8 +450,8 @@ export default function CycleDetailPage() {
             <Dropdown
               trigger={(toggle) => (
                 <button type="button" onClick={toggle} className={TRIGGER_CLASS}>
-                  {cycleMembers.length > 0 ? (
-                    <AvatarStack people={cycleMembers.map((m) => ({ name: m.displayName, color: m.avatarColor }))} size={20} />
+                  {sprintMembers.length > 0 ? (
+                    <AvatarStack people={sprintMembers.map((m) => ({ name: m.displayName, color: m.avatarColor }))} size={20} />
                   ) : (
                     <span className="flex items-center gap-1.5 text-text-muted">
                       <Users size={14} /> No members
@@ -467,7 +467,7 @@ export default function CycleDetailPage() {
                     <p className="px-2 py-1.5 text-xs text-text-muted">No project members.</p>
                   )}
                   {projectMembers.map((m) => {
-                    const checked = (cycle.memberIds ?? []).includes(m.id);
+                    const checked = (sprint.memberIds ?? []).includes(m.id);
                     return (
                       <button key={m.id} type="button" onClick={() => toggleMember(m.id)} className={OPTION_CLASS}>
                         <Avatar name={m.displayName} color={m.avatarColor} size={20} />

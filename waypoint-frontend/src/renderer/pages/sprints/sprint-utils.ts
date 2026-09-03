@@ -1,6 +1,6 @@
-import type { Cycle, StateGroup, Ticket, TicketState } from '@/types/entities';
+import type { Sprint, StateGroup, Ticket, TicketState } from '@/types/entities';
 
-export type CycleStatus = 'active' | 'upcoming' | 'completed';
+export type SprintStatus = 'active' | 'upcoming' | 'completed';
 
 function startOfDay(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -11,29 +11,29 @@ function endOfDay(d: Date): Date {
 }
 
 /** Active = today falls between start and end date (inclusive), Upcoming = starts later, Completed = already ended. */
-export function getCycleStatus(cycle: Cycle, today: Date = new Date()): CycleStatus {
-  const start = startOfDay(new Date(cycle.startDate));
-  const end = endOfDay(new Date(cycle.endDate));
+export function getSprintStatus(sprint: Sprint, today: Date = new Date()): SprintStatus {
+  const start = startOfDay(new Date(sprint.startDate));
+  const end = endOfDay(new Date(sprint.endDate));
   if (today < start) return 'upcoming';
   if (today > end) return 'completed';
   return 'active';
 }
 
 /**
- * Returns the first existing cycle whose date range overlaps the given [startDate, endDate]
+ * Returns the first existing sprint whose date range overlaps the given [startDate, endDate]
  * range (inclusive), or null if there's no conflict. Pass `excludeId` when checking an edit to
- * an existing cycle so it doesn't overlap-check against itself.
+ * an existing sprint so it doesn't overlap-check against itself.
  */
-export function findOverlappingCycle(
-  cycles: Cycle[],
+export function findOverlappingSprint(
+  sprints: Sprint[],
   startDate: string,
   endDate: string,
   excludeId?: string,
-): Cycle | null {
+): Sprint | null {
   if (!startDate || !endDate) return null;
-  for (const cycle of cycles) {
-    if (cycle.id === excludeId) continue;
-    if (startDate <= cycle.endDate && cycle.startDate <= endDate) return cycle;
+  for (const sprint of sprints) {
+    if (sprint.id === excludeId) continue;
+    if (startDate <= sprint.endDate && sprint.startDate <= endDate) return sprint;
   }
   return null;
 }
@@ -54,7 +54,7 @@ export type Breakdown = Record<StateGroup, number>;
 
 export function computeBreakdown(items: Ticket[], states: TicketState[]): Breakdown {
   const stateById = new Map(states.map((s) => [s.id, s]));
-  const counts: Breakdown = { backlog: 0, unstarted: 0, started: 0, completed: 0, cancelled: 0, triage: 0 };
+  const counts: Breakdown = { backlog: 0, unstarted: 0, started: 0, completed: 0, cancelled: 0 };
   for (const item of items) {
     const state = stateById.get(item.stateId);
     if (state) counts[state.group] += 1;
@@ -62,13 +62,13 @@ export function computeBreakdown(items: Ticket[], states: TicketState[]): Breakd
   return counts;
 }
 
-export interface CycleProgress {
+export interface SprintProgress {
   completed: number;
   total: number;
   percent: number;
 }
 
-export function computeProgress(items: Ticket[], states: TicketState[]): CycleProgress {
+export function computeProgress(items: Ticket[], states: TicketState[]): SprintProgress {
   const breakdown = computeBreakdown(items, states);
   const total = items.length;
   const completed = breakdown.completed;
@@ -88,24 +88,24 @@ export interface BurndownPoint {
 }
 
 /**
- * Ideal line: linear decrease from total item count on day 0 to 0 on the cycle's last day.
- * Current: exactly two real, unconnected data points — the cycle's starting total on day 0,
+ * Ideal line: linear decrease from total item count on day 0 to 0 on the sprint's last day.
+ * Current: exactly two real, unconnected data points — the sprint's starting total on day 0,
  * and today's actual remaining/non-completed count on today's index. There is no per-day
- * history recorded, so the chart (CycleStatsPanel) must render these as isolated markers,
+ * history recorded, so the chart (SprintStatsPanel) must render these as isolated markers,
  * never joined into a line — a joined line would read as daily tracking that doesn't exist.
  * See CAPABILITIES['sprints.burndown'].
  */
-export function buildBurndownData(cycle: Cycle, items: Ticket[], states: TicketState[], today: Date = new Date()): BurndownPoint[] {
+export function buildBurndownData(sprint: Sprint, items: Ticket[], states: TicketState[], today: Date = new Date()): BurndownPoint[] {
   const stateById = new Map(states.map((s) => [s.id, s]));
   const dayMs = 24 * 60 * 60 * 1000;
-  const startDay = startOfDay(new Date(cycle.startDate));
-  const endDay = startOfDay(new Date(cycle.endDate));
+  const startDay = startOfDay(new Date(sprint.startDate));
+  const endDay = startOfDay(new Date(sprint.endDate));
   const todayDay = startOfDay(today);
   const totalDays = Math.max(1, Math.round((endDay.getTime() - startDay.getTime()) / dayMs));
   const total = items.length;
 
   const remainingNow = items.filter((item) => stateById.get(item.stateId)?.group !== 'completed').length;
-  // Clamp "today" onto the cycle's own timeline so upcoming/completed cycles still render sensibly.
+  // Clamp "today" onto the sprint's own timeline so upcoming/completed sprints still render sensibly.
   const clampedToday = new Date(Math.min(Math.max(todayDay.getTime(), startDay.getTime()), endDay.getTime()));
   const todayIndex = Math.round((clampedToday.getTime() - startDay.getTime()) / dayMs);
 

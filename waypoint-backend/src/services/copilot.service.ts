@@ -37,7 +37,8 @@ export async function getConversation(id: string) {
 
 // Bare delete, no existence pre-check — idempotent, matches this backend's
 // existing delete convention (see states.service.ts's deleteState,
-// stickies.service.ts's deleteSticky). Messages cascade via the existing FK.
+// scratchNotes.service.ts's deleteScratchNote). Messages cascade via the
+// existing FK.
 export async function deleteConversation(id: string) {
   await db.delete(copilotConversations).where(eq(copilotConversations.id, id));
 }

@@ -41,8 +41,8 @@ const VIEW_TABS: { key: ViewKind; label: string; Icon: LucideIcon }[] = [
 const GROUP_BY_OPTIONS: { key: GroupBy; label: string }[] = [
   { key: 'state', label: 'State' },
   { key: 'priority', label: 'Priority' },
-  { key: 'module', label: 'Module' },
-  { key: 'cycle', label: 'Cycle' },
+  { key: 'workstream', label: 'Workstream' },
+  { key: 'sprint', label: 'Sprint' },
   { key: 'assignee', label: 'Assignee' },
   { key: 'none', label: 'None' },
 ];

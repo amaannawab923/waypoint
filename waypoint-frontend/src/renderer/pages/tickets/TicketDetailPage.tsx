@@ -35,10 +35,10 @@ import {
   listAgentAssignments,
   listAgents,
   listComments,
-  listCycles,
+  listSprints,
   listLabels,
   listMembers,
-  listModules,
+  listWorkstreams,
   listStates,
   listSubItems,
   removeTicketLink,
@@ -240,7 +240,7 @@ export function TicketDetailContent({
 
   // `item` loads asynchronously — on the very first render, before it
   // resolves, itemProjectId is '' and these would otherwise fire against
-  // /projects//modules etc. (a malformed path segment, 404) a beat before
+  // /projects//workstreams etc. (a malformed path segment, 404) a beat before
   // immediately re-firing correctly once the real id arrives. Skip the
   // fetch entirely while there's no real id yet, same end state, no
   // spurious failed request or error toast along the way.
@@ -253,12 +253,12 @@ export function TicketDetailContent({
     () => (itemProjectId ? listLabels(itemProjectId) : Promise.resolve([])),
     [itemProjectId],
   );
-  const { data: modules } = useAsync(
-    () => (itemProjectId ? listModules(itemProjectId) : Promise.resolve([])),
+  const { data: workstreams } = useAsync(
+    () => (itemProjectId ? listWorkstreams(itemProjectId) : Promise.resolve([])),
     [itemProjectId],
   );
-  const { data: cycles } = useAsync(
-    () => (itemProjectId ? listCycles(itemProjectId) : Promise.resolve([])),
+  const { data: sprints } = useAsync(
+    () => (itemProjectId ? listSprints(itemProjectId) : Promise.resolve([])),
     [itemProjectId],
   );
   const { data: allMembers } = useAsync(() => listMembers(), []);
@@ -382,8 +382,8 @@ export function TicketDetailContent({
       'Created by',
       'Start date',
       'Due date',
-      'Modules',
-      'Cycle',
+      'Workstreams',
+      'Sprint',
       'Parent',
       'Labels',
     ];
@@ -477,8 +477,8 @@ export function TicketDetailContent({
   }
 
   const currentState = statesById.get(item.stateId);
-  const currentModule = (modules ?? []).find((m) => m.id === item.moduleId);
-  const currentCycle = (cycles ?? []).find((c) => c.id === item.cycleId);
+  const currentWorkstream = (workstreams ?? []).find((m) => m.id === item.workstreamId);
+  const currentSprint = (sprints ?? []).find((c) => c.id === item.sprintId);
   const creator = membersById.get(item.createdById);
   const assignedActors = item.assigneeIds
     .map((id) => (membersById.has(id) || agentsById.has(id) ? resolveActor(id) : null))
@@ -604,8 +604,8 @@ export function TicketDetailContent({
       priority: item.priority,
       assigneeIds: item.assigneeIds,
       labelIds: item.labelIds,
-      moduleId: item.moduleId,
-      cycleId: item.cycleId,
+      workstreamId: item.workstreamId,
+      sprintId: item.sprintId,
     });
     onClose?.();
     navigate(`/projects/${item.projectId}/tickets/${copy.identifier}`);
@@ -1132,12 +1132,12 @@ export function TicketDetailContent({
           />
         </PropertyRow>
 
-        <PropertyRow label="Modules">
+        <PropertyRow label="Workstreams">
           <Dropdown
             trigger={(toggle) => (
               <button type="button" onClick={toggle} className={TRIGGER_CLASS}>
                 <Layers size={14} className="shrink-0 text-text-muted" />
-                <span className="truncate">{currentModule?.name ?? 'No module'}</span>
+                <span className="truncate">{currentWorkstream?.name ?? 'No workstream'}</span>
                 <ChevronDown size={13} className="ml-auto shrink-0 text-text-muted" />
               </button>
             )}
@@ -1147,26 +1147,26 @@ export function TicketDetailContent({
                 <button
                   type="button"
                   onClick={() => {
-                    patchItem({ moduleId: null });
+                    patchItem({ workstreamId: null });
                     close();
                   }}
                   className={OPTION_CLASS}
                 >
-                  <span className="truncate text-text-secondary">No module</span>
-                  {!item.moduleId && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                  <span className="truncate text-text-secondary">No workstream</span>
+                  {!item.workstreamId && <Check size={14} className="ml-auto shrink-0 text-accent" />}
                 </button>
-                {(modules ?? []).map((m) => (
+                {(workstreams ?? []).map((m) => (
                   <button
                     key={m.id}
                     type="button"
                     onClick={() => {
-                      patchItem({ moduleId: m.id });
+                      patchItem({ workstreamId: m.id });
                       close();
                     }}
                     className={OPTION_CLASS}
                   >
                     <span className="truncate">{m.name}</span>
-                    {item.moduleId === m.id && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                    {item.workstreamId === m.id && <Check size={14} className="ml-auto shrink-0 text-accent" />}
                   </button>
                 ))}
               </div>
@@ -1174,12 +1174,12 @@ export function TicketDetailContent({
           </Dropdown>
         </PropertyRow>
 
-        <PropertyRow label="Cycle">
+        <PropertyRow label="Sprint">
           <Dropdown
             trigger={(toggle) => (
               <button type="button" onClick={toggle} className={TRIGGER_CLASS}>
                 <Repeat size={14} className="shrink-0 text-text-muted" />
-                <span className="truncate">{currentCycle?.name ?? 'No cycle'}</span>
+                <span className="truncate">{currentSprint?.name ?? 'No sprint'}</span>
                 <ChevronDown size={13} className="ml-auto shrink-0 text-text-muted" />
               </button>
             )}
@@ -1189,26 +1189,26 @@ export function TicketDetailContent({
                 <button
                   type="button"
                   onClick={() => {
-                    patchItem({ cycleId: null });
+                    patchItem({ sprintId: null });
                     close();
                   }}
                   className={OPTION_CLASS}
                 >
-                  <span className="truncate text-text-secondary">No cycle</span>
-                  {!item.cycleId && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                  <span className="truncate text-text-secondary">No sprint</span>
+                  {!item.sprintId && <Check size={14} className="ml-auto shrink-0 text-accent" />}
                 </button>
-                {(cycles ?? []).map((c) => (
+                {(sprints ?? []).map((c) => (
                   <button
                     key={c.id}
                     type="button"
                     onClick={() => {
-                      patchItem({ cycleId: c.id });
+                      patchItem({ sprintId: c.id });
                       close();
                     }}
                     className={OPTION_CLASS}
                   >
                     <span className="truncate">{c.name}</span>
-                    {item.cycleId === c.id && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                    {item.sprintId === c.id && <Check size={14} className="ml-auto shrink-0 text-accent" />}
                   </button>
                 ))}
               </div>

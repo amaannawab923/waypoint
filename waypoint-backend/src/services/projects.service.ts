@@ -7,10 +7,10 @@ import {
   projectMembers,
   ticketStates,
   members,
-  workModules,
-  moduleMembers,
-  cycles,
-  cycleMembers,
+  workstreams,
+  workstreamMembers,
+  sprints,
+  sprintMembers,
   tickets,
   ticketAssignees,
 } from '../db/schema/index.js';
@@ -28,7 +28,7 @@ type ProjectEntity = Omit<ProjectRow, 'coverGradientStart' | 'coverGradientEnd'>
 // Two things every project response needs that the raw DB row doesn't
 // provide on its own:
 //   - memberIds: required on the client entity (entities.ts), read unguarded
-//     by several pages (ticket detail, project lists, module detail) —
+//     by several pages (ticket detail, project lists, workstream detail) —
 //     omitting it crashes those pages with `undefined.includes(...)`.
 //   - coverGradient: the client entity declares this as a `[string,string]`
 //     tuple; the DB stores it as two separate columns
@@ -65,7 +65,6 @@ const DEFAULT_STATE_TEMPLATE = [
   { name: 'In Progress', group: 'started' as const, color: '#c99a2e', sortOrder: 2 },
   { name: 'Done', group: 'completed' as const, color: '#2f7a4f', sortOrder: 3 },
   { name: 'Cancelled', group: 'cancelled' as const, color: '#b7332a', sortOrder: 4 },
-  { name: 'Triage', group: 'triage' as const, color: '#6b6050', sortOrder: -1 },
 ];
 
 export async function listProjects() {
@@ -111,7 +110,7 @@ export async function createProject(input: CreateProjectInput) {
         leadId: input.leadId ?? null,
         defaultAssigneeId: null,
         timezone: 'UTC',
-        features: { cycles: false, modules: false, views: false, pages: true, intake: false },
+        features: { sprints: false, workstreams: false, views: false, docs: true, requests: false },
         estimate: null,
         automations: {
           autoArchiveEnabled: false,
@@ -212,34 +211,34 @@ export async function removeProjectMember(projectId: string, memberId: string) {
     }
 
     // Same dangling-reference problem exists one level down: this project's
-    // own modules/cycles/tickets can still reference the removed member
+    // own workstreams/sprints/tickets can still reference the removed member
     // as a lead or assignee. Scope every cleanup to this project only —
     // the member may still legitimately lead/be-assigned-in other projects.
     await tx
-      .update(workModules)
+      .update(workstreams)
       .set({ leadId: null })
-      .where(and(eq(workModules.projectId, projectId), eq(workModules.leadId, memberId)));
+      .where(and(eq(workstreams.projectId, projectId), eq(workstreams.leadId, memberId)));
     await tx
-      .delete(moduleMembers)
+      .delete(workstreamMembers)
       .where(
         and(
-          eq(moduleMembers.memberId, memberId),
+          eq(workstreamMembers.memberId, memberId),
           inArray(
-            moduleMembers.moduleId,
-            tx.select({ id: workModules.id }).from(workModules).where(eq(workModules.projectId, projectId)),
+            workstreamMembers.workstreamId,
+            tx.select({ id: workstreams.id }).from(workstreams).where(eq(workstreams.projectId, projectId)),
           ),
         ),
       );
     await tx
-      .update(cycles)
+      .update(sprints)
       .set({ leadId: null })
-      .where(and(eq(cycles.projectId, projectId), eq(cycles.leadId, memberId)));
+      .where(and(eq(sprints.projectId, projectId), eq(sprints.leadId, memberId)));
     await tx
-      .delete(cycleMembers)
+      .delete(sprintMembers)
       .where(
         and(
-          eq(cycleMembers.memberId, memberId),
-          inArray(cycleMembers.cycleId, tx.select({ id: cycles.id }).from(cycles).where(eq(cycles.projectId, projectId))),
+          eq(sprintMembers.memberId, memberId),
+          inArray(sprintMembers.sprintId, tx.select({ id: sprints.id }).from(sprints).where(eq(sprints.projectId, projectId))),
         ),
       );
     await tx

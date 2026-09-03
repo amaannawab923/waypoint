@@ -21,11 +21,11 @@ const PROJECT: Project = {
   defaultAssigneeId: null,
   timezone: 'UTC',
   features: {
-    cycles: true,
-    modules: true,
+    sprints: true,
+    workstreams: true,
     views: true,
-    pages: true,
-    intake: true,
+    docs: true,
+    requests: true,
   },
   estimate: null,
   automations: {

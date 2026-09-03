@@ -6,7 +6,7 @@ import {
   Settings2,
   Sparkles,
   X,
-  StickyNote as StickyNoteIcon,
+  NotepadText,
   Clock,
   LayoutList,
   FileText,
@@ -16,7 +16,7 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
-import { getCurrentUser, listProjects, listStickies } from '@/data/api';
+import { getCurrentUser, listProjects, listScratchNotes } from '@/data/api';
 import { listRecents, type RecentEntry, type RecentType } from '@/lib/recents';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -29,9 +29,9 @@ type RecentsFilter = RecentType | 'all';
 const RECENTS_FILTER_OPTIONS: { value: RecentsFilter; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'ticket', label: 'Tickets' },
-  { value: 'page', label: 'Pages' },
-  { value: 'cycle', label: 'Cycles' },
-  { value: 'module', label: 'Modules' },
+  { value: 'doc', label: 'Docs' },
+  { value: 'sprint', label: 'Sprints' },
+  { value: 'workstream', label: 'Workstreams' },
 ];
 
 function RecentsFilterDropdown({
@@ -120,16 +120,16 @@ function formatRelativeTime(iso: string): string {
 
 const RECENT_TYPE_ICON: Record<RecentType, typeof LayoutList> = {
   ticket: LayoutList,
-  page: FileText,
-  cycle: RefreshCw,
-  module: Boxes,
+  doc: FileText,
+  sprint: RefreshCw,
+  workstream: Boxes,
 };
 
 const QUICKSTART_CARDS = [
   {
     icon: FolderPlus,
     title: 'Create a project',
-    description: 'Spin up a project to start tracking tickets, cycles, and modules.',
+    description: 'Spin up a project to start tracking tickets, sprints, and workstreams.',
     to: '/projects',
   },
   {
@@ -154,7 +154,7 @@ const QUICKSTART_CARDS = [
 
 export default function Home() {
   const { data: user } = useAsync(() => getCurrentUser(), []);
-  const { data: stickies } = useAsync(() => listStickies(), []);
+  const { data: notes } = useAsync(() => listScratchNotes(), []);
   const { data: projects } = useAsync(() => listProjects(), []);
   const navigate = useNavigate();
 
@@ -238,32 +238,32 @@ export default function Home() {
 
       <section className="rounded-[var(--radius-lg)] border border-border bg-surface p-5">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="font-display text-sm font-medium text-text">Your stickies</h2>
-          <Button size="xs" variant="secondary" onClick={() => navigate('/stickies')}>
-            Add sticky
+          <h2 className="font-display text-sm font-medium text-text">Your scratchpad</h2>
+          <Button size="xs" variant="secondary" onClick={() => navigate('/scratchpad')}>
+            New note
           </Button>
         </div>
-        {stickies && stickies.length > 0 ? (
+        {notes && notes.length > 0 ? (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            {stickies.slice(0, 3).map((sticky) => (
+            {notes.slice(0, 3).map((note) => (
               <div
-                key={sticky.id}
+                key={note.id}
                 className="flex min-h-[110px] flex-col gap-1.5 rounded-[var(--radius)] border border-border bg-bg p-3"
-                style={{ borderLeft: `3px solid ${sticky.color}` }}
+                style={{ borderLeft: `3px solid ${note.color}` }}
               >
-                <p className="line-clamp-2 text-sm font-medium text-text">{sticky.title || 'Untitled'}</p>
-                <p className="line-clamp-4 text-xs whitespace-pre-wrap text-text-secondary">{sticky.body}</p>
+                <p className="line-clamp-2 text-sm font-medium text-text">{note.title || 'Untitled'}</p>
+                <p className="line-clamp-4 text-xs whitespace-pre-wrap text-text-secondary">{note.body}</p>
               </div>
             ))}
           </div>
         ) : (
           <EmptyState
-            icon={<StickyNoteIcon size={28} />}
-            title="No stickies yet"
+            icon={<NotepadText size={28} />}
+            title="Nothing on the scratchpad yet"
             description="Jot down quick notes for yourself."
             action={
-              <Button size="sm" variant="secondary" onClick={() => navigate('/stickies')}>
-                Add sticky
+              <Button size="sm" variant="secondary" onClick={() => navigate('/scratchpad')}>
+                New note
               </Button>
             }
           />
@@ -312,7 +312,7 @@ export default function Home() {
             <EmptyState
               icon={<Clock size={28} />}
               title="Nothing here yet"
-              description="Tickets, pages, cycles, and modules you open will show up here."
+              description="Tickets, docs, sprints, and workstreams you open will show up here."
             />
           )}
         </div>

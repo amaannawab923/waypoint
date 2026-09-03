@@ -18,7 +18,7 @@ const PANEL_CLASS =
 const OPTION_CLASS =
   'flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-sm text-text hover:bg-surface-2';
 
-/** Small self-contained popover, mirrors the pattern in TicketDetailPage/ModuleDetailPage — there's
+/** Small self-contained popover, mirrors the pattern in TicketDetailPage/WorkstreamDetailPage — there's
  * no shared Dropdown/Menu primitive in src/components/ui/ yet. */
 function Dropdown({
   trigger,

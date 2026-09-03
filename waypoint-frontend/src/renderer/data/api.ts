@@ -15,16 +15,16 @@ import type {
   Project,
   TicketState,
   Label,
-  WorkModule,
-  Cycle,
+  Workstream,
+  Sprint,
   Ticket,
   Comment,
   ActivityEntry,
-  Page,
+  Doc,
   SavedView,
-  IntakeRequest,
-  IntakeStatus,
-  Sticky,
+  Request,
+  RequestStatus,
+  ScratchNote,
   NotificationItem,
   ProjectFeatures,
   ProjectEstimateSystem,
@@ -435,61 +435,61 @@ export async function deleteLabel(id: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Modules & cycles
+// Workstreams & sprints
 // ---------------------------------------------------------------------------
 
-export async function listModules(projectId: string): Promise<WorkModule[]> {
-  return http.get<WorkModule[]>(`/projects/${projectId}/modules`);
+export async function listWorkstreams(projectId: string): Promise<Workstream[]> {
+  return http.get<Workstream[]>(`/projects/${projectId}/workstreams`);
 }
 
-export async function listAllModules(): Promise<WorkModule[]> {
-  return http.get<WorkModule[]>('/modules');
+export async function listAllWorkstreams(): Promise<Workstream[]> {
+  return http.get<Workstream[]>('/workstreams');
 }
 
-export async function createModule(
+export async function createWorkstream(
   projectId: string,
-  input: Partial<WorkModule> & { name: string },
-): Promise<WorkModule> {
-  return http.post<WorkModule>(`/projects/${projectId}/modules`, input);
+  input: Partial<Workstream> & { name: string },
+): Promise<Workstream> {
+  return http.post<Workstream>(`/projects/${projectId}/workstreams`, input);
 }
 
-export async function updateModule(
+export async function updateWorkstream(
   id: string,
-  patch: Partial<WorkModule>,
-): Promise<WorkModule> {
-  return http.patch<WorkModule>(`/modules/${id}`, patch);
+  patch: Partial<Workstream>,
+): Promise<Workstream> {
+  return http.patch<Workstream>(`/workstreams/${id}`, patch);
 }
 
-export async function listCycles(projectId: string): Promise<Cycle[]> {
-  return http.get<Cycle[]>(`/projects/${projectId}/cycles`);
+export async function listSprints(projectId: string): Promise<Sprint[]> {
+  return http.get<Sprint[]>(`/projects/${projectId}/sprints`);
 }
 
-export async function listAllCycles(): Promise<Cycle[]> {
-  return http.get<Cycle[]>('/cycles');
+export async function listAllSprints(): Promise<Sprint[]> {
+  return http.get<Sprint[]>('/sprints');
 }
 
-export async function createCycle(
+export async function createSprint(
   projectId: string,
-  input: Pick<Cycle, 'name' | 'description' | 'startDate' | 'endDate'> &
-    Partial<Pick<Cycle, 'leadId' | 'memberIds'>>,
-): Promise<Cycle> {
-  return http.post<Cycle>(`/projects/${projectId}/cycles`, input);
+  input: Pick<Sprint, 'name' | 'description' | 'startDate' | 'endDate'> &
+    Partial<Pick<Sprint, 'leadId' | 'memberIds'>>,
+): Promise<Sprint> {
+  return http.post<Sprint>(`/projects/${projectId}/sprints`, input);
 }
 
-export async function updateCycle(
+export async function updateSprint(
   id: string,
   patch: Partial<
     Pick<
-      Cycle,
+      Sprint,
       'name' | 'description' | 'startDate' | 'endDate' | 'leadId' | 'memberIds'
     >
   >,
-): Promise<Cycle> {
-  return http.patch<Cycle>(`/cycles/${id}`, patch);
+): Promise<Sprint> {
+  return http.patch<Sprint>(`/sprints/${id}`, patch);
 }
 
-export async function deleteCycle(id: string): Promise<void> {
-  return http.del<void>(`/cycles/${id}`);
+export async function deleteSprint(id: string): Promise<void> {
+  return http.del<void>(`/sprints/${id}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -546,8 +546,8 @@ export interface CreateTicketInput {
   priority?: Ticket['priority'];
   assigneeIds?: string[];
   labelIds?: string[];
-  moduleId?: string | null;
-  cycleId?: string | null;
+  workstreamId?: string | null;
+  sprintId?: string | null;
   parentId?: string | null;
   isDraft?: boolean;
 }
@@ -670,43 +670,43 @@ export async function listActivity(
 }
 
 // ---------------------------------------------------------------------------
-// Pages
+// Docs
 // ---------------------------------------------------------------------------
 
-export async function listPages(projectId: string): Promise<Page[]> {
-  return http.get<Page[]>(`/projects/${projectId}/pages`);
+export async function listDocs(projectId: string): Promise<Doc[]> {
+  return http.get<Doc[]>(`/projects/${projectId}/docs`);
 }
 
-export async function listAllPages(): Promise<Page[]> {
-  return http.get<Page[]>('/pages');
+export async function listAllDocs(): Promise<Doc[]> {
+  return http.get<Doc[]>('/docs');
 }
 
-export async function getPage(id: string): Promise<Page | undefined> {
-  return http.get<Page | undefined>(`/pages/${id}`, {
+export async function getDoc(id: string): Promise<Doc | undefined> {
+  return http.get<Doc | undefined>(`/docs/${id}`, {
     notFoundAsUndefined: true,
   });
 }
 
-export async function createPage(
+export async function createDoc(
   projectId: string,
   title = 'Untitled',
-  parentPageId: string | null = null,
-): Promise<Page> {
-  return http.post<Page>(`/projects/${projectId}/pages`, {
+  parentDocId: string | null = null,
+): Promise<Doc> {
+  return http.post<Doc>(`/projects/${projectId}/docs`, {
     title,
-    parentPageId,
+    parentDocId,
   });
 }
 
-export async function updatePage(
+export async function updateDoc(
   id: string,
-  patch: Partial<Page>,
-): Promise<Page> {
-  return http.patch<Page>(`/pages/${id}`, patch);
+  patch: Partial<Doc>,
+): Promise<Doc> {
+  return http.patch<Doc>(`/docs/${id}`, patch);
 }
 
-export async function deletePage(id: string): Promise<void> {
-  return http.del<void>(`/pages/${id}`);
+export async function deleteDoc(id: string): Promise<void> {
+  return http.del<void>(`/docs/${id}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -742,14 +742,14 @@ export async function deleteView(id: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Intake
+// Requests
 // ---------------------------------------------------------------------------
 
-export async function listIntake(projectId: string): Promise<IntakeRequest[]> {
-  return http.get<IntakeRequest[]>(`/projects/${projectId}/intake`);
+export async function listRequests(projectId: string): Promise<Request[]> {
+  return http.get<Request[]>(`/projects/${projectId}/requests`);
 }
 
-export interface CreateIntakeRequestInput {
+export interface CreateRequestInput {
   projectId: string;
   title: string;
   description?: string;
@@ -758,49 +758,49 @@ export interface CreateIntakeRequestInput {
   sourceEmail: string;
 }
 
-export async function createIntakeRequest(
-  input: CreateIntakeRequestInput,
-): Promise<IntakeRequest> {
-  return http.post<IntakeRequest>('/intake', input);
+export async function createRequest(
+  input: CreateRequestInput,
+): Promise<Request> {
+  return http.post<Request>('/requests', input);
 }
 
-export async function updateIntakeStatus(
+export async function updateRequestStatus(
   id: string,
-  status: IntakeStatus,
-): Promise<IntakeRequest> {
-  return http.patch<IntakeRequest>(`/intake/${id}/status`, { status });
+  status: RequestStatus,
+): Promise<Request> {
+  return http.patch<Request>(`/requests/${id}/status`, { status });
 }
 
-export async function convertIntakeToTicket(
+export async function convertRequestToTicket(
   id: string,
   stateId: string,
   overrides?: Partial<Pick<Ticket, 'title' | 'description' | 'priority'>>,
 ): Promise<Ticket> {
   return normalizeTicket(
     await http.post<Ticket & { sortOrder?: string }>(
-      `/intake/${id}/convert`,
+      `/requests/${id}/convert`,
       { stateId, ...overrides },
     ),
   );
 }
 
 // ---------------------------------------------------------------------------
-// Stickies & notifications
+// Scratch notes & notifications
 // ---------------------------------------------------------------------------
 
-export async function listStickies(): Promise<Sticky[]> {
-  return http.get<Sticky[]>('/stickies');
+export async function listScratchNotes(): Promise<ScratchNote[]> {
+  return http.get<ScratchNote[]>('/scratch-notes');
 }
 
-export async function createSticky(
+export async function createScratchNote(
   title: string,
   body: string,
-): Promise<Sticky> {
-  return http.post<Sticky>('/stickies', { title, body });
+): Promise<ScratchNote> {
+  return http.post<ScratchNote>('/scratch-notes', { title, body });
 }
 
-export async function deleteSticky(id: string): Promise<void> {
-  return http.del<void>(`/stickies/${id}`);
+export async function deleteScratchNote(id: string): Promise<void> {
+  return http.del<void>(`/scratch-notes/${id}`);
 }
 
 export async function listNotifications(): Promise<NotificationItem[]> {

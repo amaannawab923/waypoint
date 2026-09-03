@@ -189,8 +189,8 @@ export default function General() {
         <div>
           <h2 className="font-display text-sm font-medium text-danger">Delete project</h2>
           <p className="mt-1 text-sm text-text-secondary">
-            When you delete a project, all of the data associated with that project, including tickets, cycles,
-            modules, and pages, will be permanently removed. This action cannot be undone.
+            When you delete a project, all of the data associated with that project, including tickets, sprints,
+            workstreams, and docs, will be permanently removed. This action cannot be undone.
           </p>
         </div>
         <div className="flex items-center gap-2">

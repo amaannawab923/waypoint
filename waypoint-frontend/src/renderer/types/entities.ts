@@ -1,7 +1,14 @@
 export type ID = string;
 
+// No 'triage' — dropping it is C3's, see
+// docs/design/waypoint-revamp-architecture.md §3.3. A ticket that arrived
+// from outside now says so through Ticket.source, which is a fact about the
+// ticket rather than a workflow position every project had to carry.
 export type StateGroup =
-  'backlog' | 'unstarted' | 'started' | 'completed' | 'cancelled' | 'triage';
+  'backlog' | 'unstarted' | 'started' | 'completed' | 'cancelled';
+
+/** Where a ticket came from. Replaces what the 'triage' state group implied. */
+export type TicketSource = 'manual' | 'request' | 'agent' | 'import';
 
 export type Priority = 'urgent' | 'high' | 'medium' | 'low' | 'none';
 
@@ -35,11 +42,11 @@ export interface Member {
 }
 
 export interface ProjectFeatures {
-  cycles: boolean;
-  modules: boolean;
+  sprints: boolean;
+  workstreams: boolean;
   views: boolean;
-  pages: boolean;
-  intake: boolean;
+  docs: boolean;
+  requests: boolean;
 }
 
 export type EstimateType = 'points' | 'categories';
@@ -96,25 +103,29 @@ export interface Label {
   color: string;
 }
 
-export interface WorkModule {
+// Five values, not six: 'backlog' collapsed into 'planned', and
+// 'in-progress'/'completed'/'cancelled' became 'active'/'done'/'dropped'
+// (architecture §3.2 item 19).
+export type WorkstreamStatus =
+  | 'planned'
+  | 'active'
+  | 'paused'
+  | 'done'
+  | 'dropped';
+
+export interface Workstream {
   id: ID;
   projectId: ID;
   name: string;
   description: string;
   leadId: ID | null;
-  status:
-    | 'backlog'
-    | 'planned'
-    | 'in-progress'
-    | 'paused'
-    | 'completed'
-    | 'cancelled';
+  status: WorkstreamStatus;
   startDate: string | null;
   targetDate: string | null;
   memberIds: ID[];
 }
 
-export interface Cycle {
+export interface Sprint {
   id: ID;
   projectId: ID;
   name: string;
@@ -141,10 +152,11 @@ export interface Ticket {
   description: string;
   stateId: ID;
   priority: Priority;
+  source: TicketSource;
   assigneeIds: ID[];
   labelIds: ID[];
-  moduleId: ID | null;
-  cycleId: ID | null;
+  workstreamId: ID | null;
+  sprintId: ID | null;
   parentId: ID | null;
   estimatePoints: number | null;
   estimateValue: string | null;
@@ -178,9 +190,9 @@ export type ActivityVerb =
   | 'commented'
   | 'start_date_set'
   | 'due_date_set'
-  | 'module_added'
-  | 'cycle_added'
-  | 'sub_item_added'
+  | 'workstream_added'
+  | 'sprint_added'
+  | 'subtask_added'
   | 'link_added'
   | 'agent_assigned'
   | 'agent_status_changed';
@@ -194,7 +206,7 @@ export interface ActivityEntry {
   createdAt: string;
 }
 
-export interface Page {
+export interface Doc {
   id: ID;
   projectId: ID;
   title: string;
@@ -204,7 +216,7 @@ export interface Page {
   ownerId: ID;
   isFavorite: boolean;
   isLocked: boolean;
-  parentPageId: ID | null;
+  parentDocId: ID | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -220,14 +232,17 @@ export interface SavedView {
   updatedAt: string;
 }
 
-export type IntakeStatus = 'pending' | 'accepted' | 'declined' | 'duplicate';
+export type RequestStatus = 'pending' | 'accepted' | 'declined' | 'duplicate';
 
-export interface IntakeRequest {
+// Shadows the DOM's global `Request` inside every module that imports it.
+// That is deliberate: nothing in this app constructs a fetch Request, and
+// the product calls these Requests, so the entity gets the plain name.
+export interface Request {
   id: ID;
   projectId: ID;
   title: string;
   description: string;
-  status: IntakeStatus;
+  status: RequestStatus;
   priority?: Priority;
   sourceName: string;
   sourceEmail: string;
@@ -235,7 +250,7 @@ export interface IntakeRequest {
   linkedTicketId: ID | null;
 }
 
-export interface Sticky {
+export interface ScratchNote {
   id: ID;
   authorId: ID;
   title: string;
@@ -273,12 +288,12 @@ export interface WorkspaceExport {
 }
 
 export type WebhookEventType =
-  | 'work_item.created'
-  | 'work_item.updated'
-  | 'work_item.deleted'
+  | 'ticket.created'
+  | 'ticket.updated'
+  | 'ticket.deleted'
   | 'project.created'
-  | 'cycle.created'
-  | 'module.created';
+  | 'sprint.created'
+  | 'workstream.created';
 
 export interface Webhook {
   id: ID;

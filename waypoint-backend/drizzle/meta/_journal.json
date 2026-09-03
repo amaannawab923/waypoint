@@ -50,6 +50,13 @@
       "when": 1788438233706,
       "tag": "0006_sudden_james_howlett",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788441063527,
+      "tag": "0007_nervous_sabretooth",
+      "breakpoints": true
     }
   ]
 }

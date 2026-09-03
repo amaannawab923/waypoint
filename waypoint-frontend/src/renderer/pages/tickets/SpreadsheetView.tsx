@@ -24,8 +24,8 @@ type SortKey =
   | 'updatedAt'
   | 'labels'
   | 'dueDate'
-  | 'modules'
-  | 'cycle'
+  | 'workstreams'
+  | 'sprint'
   | 'estimate';
 
 type SortDir = 'asc' | 'desc';
@@ -43,8 +43,8 @@ const OPTIONAL_COLUMNS: { key: Exclude<SortKey, 'title'>; label: string }[] = [
   { key: 'updatedAt', label: 'Updated on' },
   { key: 'labels', label: 'Labels' },
   { key: 'dueDate', label: 'Due date' },
-  { key: 'modules', label: 'Modules' },
-  { key: 'cycle', label: 'Cycle' },
+  { key: 'workstreams', label: 'Workstreams' },
+  { key: 'sprint', label: 'Sprint' },
 ];
 
 const DEFAULT_VISIBLE: Exclude<SortKey, 'title'>[] = ['state', 'priority', 'assignees', 'createdAt'];
@@ -62,7 +62,7 @@ function toggleInArray<T>(arr: T[], value: T): T[] {
  */
 export default function SpreadsheetView({ onOpenItem }: { onOpenItem: (identifier: string) => void }) {
   const { project } = useProject();
-  const { items, loading, stateFor, labels, modules, cycles } = useTicketsView(project.id);
+  const { items, loading, stateFor, labels, workstreams, sprints } = useTicketsView(project.id);
   const { data: members } = useAsync(() => listMembers(), []);
   const [sortKey, setSortKey] = useState<SortKey>('createdAt');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
@@ -70,8 +70,8 @@ export default function SpreadsheetView({ onOpenItem }: { onOpenItem: (identifie
 
   const memberById = useMemo(() => new Map((members ?? []).map((m) => [m.id, m])), [members]);
   const labelById = useMemo(() => new Map(labels.map((l) => [l.id, l])), [labels]);
-  const moduleById = useMemo(() => new Map(modules.map((m) => [m.id, m])), [modules]);
-  const cycleById = useMemo(() => new Map(cycles.map((c) => [c.id, c])), [cycles]);
+  const workstreamById = useMemo(() => new Map(workstreams.map((m) => [m.id, m])), [workstreams]);
+  const sprintById = useMemo(() => new Map(sprints.map((c) => [c.id, c])), [sprints]);
 
   const hasEstimates = !!project.estimate;
   const columns = useMemo(() => {
@@ -110,14 +110,14 @@ export default function SpreadsheetView({ onOpenItem }: { onOpenItem: (identifie
           return a.labelIds.length - b.labelIds.length;
         case 'dueDate':
           return (a.dueDate ? new Date(a.dueDate).getTime() : Infinity) - (b.dueDate ? new Date(b.dueDate).getTime() : Infinity);
-        case 'modules': {
-          const an = a.moduleId ? (moduleById.get(a.moduleId)?.name ?? '') : '';
-          const bn = b.moduleId ? (moduleById.get(b.moduleId)?.name ?? '') : '';
+        case 'workstreams': {
+          const an = a.workstreamId ? (workstreamById.get(a.workstreamId)?.name ?? '') : '';
+          const bn = b.workstreamId ? (workstreamById.get(b.workstreamId)?.name ?? '') : '';
           return an.localeCompare(bn);
         }
-        case 'cycle': {
-          const an = a.cycleId ? (cycleById.get(a.cycleId)?.name ?? '') : '';
-          const bn = b.cycleId ? (cycleById.get(b.cycleId)?.name ?? '') : '';
+        case 'sprint': {
+          const an = a.sprintId ? (sprintById.get(a.sprintId)?.name ?? '') : '';
+          const bn = b.sprintId ? (sprintById.get(b.sprintId)?.name ?? '') : '';
           return an.localeCompare(bn);
         }
         case 'estimate':
@@ -129,7 +129,7 @@ export default function SpreadsheetView({ onOpenItem }: { onOpenItem: (identifie
     }
     const sorted = [...items].sort(compare);
     return sortDir === 'asc' ? sorted : sorted.reverse();
-  }, [items, sortKey, sortDir, stateFor, moduleById, cycleById]);
+  }, [items, sortKey, sortDir, stateFor, workstreamById, sprintById]);
 
   if (loading) {
     return (
@@ -225,8 +225,8 @@ export default function SpreadsheetView({ onOpenItem }: { onOpenItem: (identifie
               const itemLabels = item.labelIds
                 .map((id) => labelById.get(id))
                 .filter((l): l is NonNullable<typeof l> => !!l);
-              const module = item.moduleId ? moduleById.get(item.moduleId) : undefined;
-              const cycle = item.cycleId ? cycleById.get(item.cycleId) : undefined;
+              const workstream = item.workstreamId ? workstreamById.get(item.workstreamId) : undefined;
+              const sprint = item.sprintId ? sprintById.get(item.sprintId) : undefined;
               return (
                 <tr
                   key={item.id}
@@ -297,14 +297,14 @@ export default function SpreadsheetView({ onOpenItem }: { onOpenItem: (identifie
                       {item.dueDate ? DATE_FORMAT.format(new Date(item.dueDate)) : <span className="text-text-muted">—</span>}
                     </td>
                   )}
-                  {visible.has('modules') && (
+                  {visible.has('workstreams') && (
                     <td className="whitespace-nowrap px-4 py-2.5 text-text-secondary">
-                      {module ? module.name : <span className="text-text-muted">—</span>}
+                      {workstream ? workstream.name : <span className="text-text-muted">—</span>}
                     </td>
                   )}
-                  {visible.has('cycle') && (
+                  {visible.has('sprint') && (
                     <td className="whitespace-nowrap px-4 py-2.5 text-text-secondary">
-                      {cycle ? cycle.name : <span className="text-text-muted">—</span>}
+                      {sprint ? sprint.name : <span className="text-text-muted">—</span>}
                     </td>
                   )}
                   {hasEstimates && visible.has('estimate') && (

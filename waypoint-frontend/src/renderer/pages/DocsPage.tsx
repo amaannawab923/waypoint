@@ -19,12 +19,12 @@ import {
 } from 'lucide-react';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
-import { createPage, deletePage, listMembers, listPages, updatePage } from '@/data/api';
+import { createDoc, deleteDoc, listMembers, listDocs, updateDoc } from '@/data/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button, IconButton } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
-import type { Page } from '@/types/entities';
+import type { Doc } from '@/types/entities';
 
 type Tab = 'public' | 'private' | 'archived';
 type SortKey = 'updated' | 'title';
@@ -40,13 +40,13 @@ const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: 'title', label: 'Title A–Z' },
 ];
 
-interface PageRow {
-  page: Page;
+interface DocRow {
+  doc: Doc;
   depth: 0 | 1;
 }
 
 /** Small self-contained popover: caller renders the trigger and the panel content. Mirrors the
- * pattern used in CycleListCard — there's no shared Dropdown/Menu primitive in
+ * pattern used in SprintListCard — there's no shared Dropdown/Menu primitive in
  * src/components/ui/ yet, so this stays local. */
 function Dropdown({
   trigger,
@@ -114,7 +114,7 @@ function MenuItem({
   );
 }
 
-export default function PagesPage() {
+export default function DocsPage() {
   const { project } = useProject();
   const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>('public');
@@ -124,90 +124,90 @@ export default function PagesPage() {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
 
-  const { data: pages, loading, reload } = useAsync(() => listPages(project.id), [project.id]);
+  const { data: docs, loading, reload } = useAsync(() => listDocs(project.id), [project.id]);
   const { data: members } = useAsync(() => listMembers(), []);
 
   const filtered = useMemo(() => {
-    if (!pages) return [];
+    if (!docs) return [];
     const q = query.trim().toLowerCase();
-    let list = pages.filter((p) => p.visibility === tab);
+    let list = docs.filter((p) => p.visibility === tab);
     if (q) list = list.filter((p) => (p.title || 'Untitled').toLowerCase().includes(q));
     return [...list].sort((a, b) =>
       sortBy === 'title'
         ? (a.title || 'Untitled').localeCompare(b.title || 'Untitled')
         : b.updatedAt.localeCompare(a.updatedAt),
     );
-  }, [pages, tab, query, sortBy]);
+  }, [docs, tab, query, sortBy]);
 
-  // One-level tree: top-level pages (no parent, or a parent that isn't in
+  // One-level tree: top-level docs (no parent, or a parent that isn't in
   // this tab) followed immediately by their direct children, indented.
   const rows = useMemo(() => {
     const idsInTab = new Set(filtered.map((p) => p.id));
-    const childrenByParent = new Map<string, Page[]>();
+    const childrenByParent = new Map<string, Doc[]>();
     for (const p of filtered) {
-      if (p.parentPageId && idsInTab.has(p.parentPageId)) {
-        const list = childrenByParent.get(p.parentPageId) ?? [];
+      if (p.parentDocId && idsInTab.has(p.parentDocId)) {
+        const list = childrenByParent.get(p.parentDocId) ?? [];
         list.push(p);
-        childrenByParent.set(p.parentPageId, list);
+        childrenByParent.set(p.parentDocId, list);
       }
     }
-    const roots = filtered.filter((p) => !p.parentPageId || !idsInTab.has(p.parentPageId));
-    const out: PageRow[] = [];
+    const roots = filtered.filter((p) => !p.parentDocId || !idsInTab.has(p.parentDocId));
+    const out: DocRow[] = [];
     for (const root of roots) {
-      out.push({ page: root, depth: 0 });
+      out.push({ doc: root, depth: 0 });
       for (const child of childrenByParent.get(root.id) ?? []) {
-        out.push({ page: child, depth: 1 });
+        out.push({ doc: child, depth: 1 });
       }
     }
     return out;
   }, [filtered]);
 
-  function ownerFor(page: Page) {
-    return members?.find((m) => m.id === page.ownerId);
+  function ownerFor(doc: Doc) {
+    return members?.find((m) => m.id === doc.ownerId);
   }
 
-  async function handleAddPage(parentPageId: string | null = null) {
+  async function handleAddDoc(parentDocId: string | null = null) {
     if (creating) return;
     setCreating(true);
     try {
-      const page = await createPage(project.id, '', parentPageId);
+      const doc = await createDoc(project.id, '', parentDocId);
       reload();
-      navigate(`/projects/${project.id}/pages/${page.id}`);
+      navigate(`/projects/${project.id}/docs/${doc.id}`);
     } finally {
       setCreating(false);
     }
   }
 
-  async function handleToggleFavorite(page: Page) {
-    await updatePage(page.id, { isFavorite: !page.isFavorite });
+  async function handleToggleFavorite(doc: Doc) {
+    await updateDoc(doc.id, { isFavorite: !doc.isFavorite });
     reload();
   }
 
-  function startRename(page: Page) {
-    setRenamingId(page.id);
-    setRenameValue(page.title);
+  function startRename(doc: Doc) {
+    setRenamingId(doc.id);
+    setRenameValue(doc.title);
   }
 
-  async function commitRename(page: Page) {
+  async function commitRename(doc: Doc) {
     setRenamingId(null);
     const trimmed = renameValue.trim() || 'Untitled';
-    if (trimmed === page.title) return;
-    await updatePage(page.id, { title: trimmed });
+    if (trimmed === doc.title) return;
+    await updateDoc(doc.id, { title: trimmed });
     reload();
   }
 
-  async function handleDeletePage(page: Page) {
-    if (!window.confirm(`Delete "${page.title || 'Untitled'}"? This can't be undone.`)) return;
-    await deletePage(page.id);
+  async function handleDeleteDoc(doc: Doc) {
+    if (!window.confirm(`Delete "${doc.title || 'Untitled'}"? This can't be undone.`)) return;
+    await deleteDoc(doc.id);
     reload();
   }
 
-  if (!project.features.pages) {
+  if (!project.features.docs) {
     return (
       <EmptyState
         icon={<FileText size={28} />}
-        title="Pages is disabled for this project"
-        description="Turn Pages back on in project settings to write and browse docs again."
+        title="Docs is disabled for this project"
+        description="Turn Docs back on in project settings to write and browse them again."
         action={
           <Button variant="primary" onClick={() => navigate(`/projects/${project.id}/settings/features`)}>
             Go to features
@@ -221,12 +221,12 @@ export default function PagesPage() {
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-border px-6 py-4">
         <div>
-          <h1 className="font-display text-lg font-medium text-text">Pages</h1>
-          <p className="text-sm text-text-secondary">Notes and docs for {project.name}</p>
+          <h1 className="font-display text-lg font-medium text-text">Docs</h1>
+          <p className="text-sm text-text-secondary">Specs, runbooks, and notes for {project.name}</p>
         </div>
-        <Button variant="primary" onClick={() => handleAddPage()} disabled={creating}>
+        <Button variant="primary" onClick={() => handleAddDoc()} disabled={creating}>
           <Plus size={15} />
-          {creating ? 'Creating…' : 'Add page'}
+          {creating ? 'Creating…' : 'Add doc'}
         </Button>
       </div>
 
@@ -253,7 +253,7 @@ export default function PagesPage() {
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-muted" />
           <input
             type="text"
-            placeholder="Search pages…"
+            placeholder="Search docs…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="h-8 w-full rounded-[var(--radius-sm)] border border-border-strong bg-surface pl-8 pr-3 text-sm outline-none focus:border-accent"
@@ -292,50 +292,50 @@ export default function PagesPage() {
       </div>
 
       <div className="flex-1 overflow-y-auto thin-scroll">
-        {loading && !pages ? (
+        {loading && !docs ? (
           <SkeletonListRows rows={6} />
         ) : rows.length === 0 ? (
           <EmptyState
             icon={<FileText size={28} />}
-            title={query ? 'No pages match your search' : `No ${tab} pages yet`}
+            title={query ? 'No docs match your search' : `No ${tab} docs yet`}
             description={
               query
                 ? 'Try a different search term.'
                 : tab === 'archived'
-                  ? 'Pages you archive will show up here.'
-                  : 'Create a page to start writing specs, runbooks, or notes for this project.'
+                  ? 'Docs you archive will show up here.'
+                  : 'Create a doc to start writing specs, runbooks, or notes for this project.'
             }
             action={
               !query && tab !== 'archived' ? (
-                <Button variant="primary" onClick={() => handleAddPage()} disabled={creating}>
+                <Button variant="primary" onClick={() => handleAddDoc()} disabled={creating}>
                   <Plus size={15} />
-                  Add page
+                  Add doc
                 </Button>
               ) : undefined
             }
           />
         ) : (
           <ul className="divide-y divide-border">
-            {rows.map(({ page, depth }) => {
-              const owner = ownerFor(page);
-              const isRenaming = renamingId === page.id;
+            {rows.map(({ doc, depth }) => {
+              const owner = ownerFor(doc);
+              const isRenaming = renamingId === doc.id;
               return (
-                <li key={page.id} className="group flex w-full items-center gap-3 py-3 pr-3 transition-colors hover:bg-surface-2">
+                <li key={doc.id} className="group flex w-full items-center gap-3 py-3 pr-3 transition-colors hover:bg-surface-2">
                   <button
                     type="button"
-                    onClick={() => !isRenaming && navigate(`/projects/${project.id}/pages/${page.id}`)}
+                    onClick={() => !isRenaming && navigate(`/projects/${project.id}/docs/${doc.id}`)}
                     className={`flex min-w-0 flex-1 items-center gap-3 text-left ${
                       depth === 1 ? 'pl-14' : 'pl-6'
                     }`}
                   >
-                    <span className="text-base leading-none">{page.icon || '📄'}</span>
+                    <span className="text-base leading-none">{doc.icon || '📄'}</span>
                     {isRenaming ? (
                       <input
                         autoFocus
                         value={renameValue}
                         onChange={(e) => setRenameValue(e.target.value)}
                         onClick={(e) => e.stopPropagation()}
-                        onBlur={() => commitRename(page)}
+                        onBlur={() => commitRename(doc)}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') {
                             e.preventDefault();
@@ -348,35 +348,35 @@ export default function PagesPage() {
                       />
                     ) : (
                       <span className="flex-1 truncate text-sm font-medium text-text">
-                        {page.title || 'Untitled'}
+                        {doc.title || 'Untitled'}
                       </span>
                     )}
                     {owner && <Avatar name={owner.displayName} color={owner.avatarColor} size={20} />}
                     <span className="w-32 shrink-0 text-right text-xs text-text-muted">
-                      Updated {formatDistanceToNow(new Date(page.updatedAt), { addSuffix: true })}
+                      Updated {formatDistanceToNow(new Date(doc.updatedAt), { addSuffix: true })}
                     </span>
                   </button>
 
                   <div className="flex shrink-0 items-center gap-0.5">
                     <button
                       type="button"
-                      aria-label={page.isFavorite ? 'Remove from favorites' : 'Add to favorites'}
-                      aria-pressed={!!page.isFavorite}
-                      onClick={() => handleToggleFavorite(page)}
+                      aria-label={doc.isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+                      aria-pressed={!!doc.isFavorite}
+                      onClick={() => handleToggleFavorite(doc)}
                       className={clsx(
                         'inline-flex size-7 items-center justify-center rounded-[var(--radius-sm)] transition-colors hover:bg-surface',
-                        page.isFavorite
+                        doc.isFavorite
                           ? 'text-warning opacity-100'
                           : 'text-text-secondary opacity-0 group-hover:opacity-100 hover:text-text',
                       )}
                     >
-                      <Star size={14} fill={page.isFavorite ? 'currentColor' : 'none'} />
+                      <Star size={14} fill={doc.isFavorite ? 'currentColor' : 'none'} />
                     </button>
 
                     {depth === 0 && tab !== 'archived' && (
                       <IconButton
-                        label="Add sub-page"
-                        onClick={() => handleAddPage(page.id)}
+                        label="Add sub-doc"
+                        onClick={() => handleAddDoc(doc.id)}
                         className="opacity-0 transition-opacity group-hover:opacity-100"
                       >
                         <Plus size={14} />
@@ -387,7 +387,7 @@ export default function PagesPage() {
                       trigger={(toggle) => (
                         <button
                           type="button"
-                          aria-label="Page actions"
+                          aria-label="Doc actions"
                           onClick={toggle}
                           className="inline-flex size-7 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary opacity-0 transition-colors hover:bg-surface hover:text-text group-hover:opacity-100"
                         >
@@ -402,15 +402,15 @@ export default function PagesPage() {
                             label="Rename"
                             onClick={() => {
                               close();
-                              startRename(page);
+                              startRename(doc);
                             }}
                           />
                           <MenuItem
                             icon={<Star size={14} />}
-                            label={page.isFavorite ? 'Unfavorite' : 'Favorite'}
+                            label={doc.isFavorite ? 'Unfavorite' : 'Favorite'}
                             onClick={() => {
                               close();
-                              handleToggleFavorite(page);
+                              handleToggleFavorite(doc);
                             }}
                           />
                           <div className="my-1 h-px bg-border" />
@@ -420,7 +420,7 @@ export default function PagesPage() {
                             danger
                             onClick={() => {
                               close();
-                              handleDeletePage(page);
+                              handleDeleteDoc(doc);
                             }}
                           />
                         </div>

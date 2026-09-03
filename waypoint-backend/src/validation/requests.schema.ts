@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 const priority = z.enum(['urgent', 'high', 'medium', 'low', 'none']);
 
-export const createIntakeRequestSchema = z.object({
+export const createRequestSchema = z.object({
   projectId: z.string(),
   title: z.string().min(1),
   description: z.string().optional(),
@@ -11,11 +11,11 @@ export const createIntakeRequestSchema = z.object({
   sourceEmail: z.string(),
 });
 
-export const updateIntakeStatusSchema = z.object({
+export const updateRequestStatusSchema = z.object({
   status: z.enum(['pending', 'accepted', 'declined', 'duplicate']),
 });
 
-export const convertIntakeSchema = z.object({
+export const convertRequestSchema = z.object({
   stateId: z.string(),
   title: z.string().optional(),
   description: z.string().optional(),

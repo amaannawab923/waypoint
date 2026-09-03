@@ -36,20 +36,20 @@ async function truncateAll(tx: Tx) {
     'workspace_exports',
     'webhooks',
     'notifications',
-    'stickies',
-    'intake_requests',
+    'scratch_notes',
+    'requests',
     'saved_views',
-    'pages',
+    'docs',
     'activity_entries',
     'comments',
     'ticket_assignees',
     'ticket_labels',
     'ticket_links',
     'tickets',
-    'cycle_members',
-    'cycles',
-    'module_members',
-    'work_modules',
+    'sprint_members',
+    'sprints',
+    'workstream_members',
+    'workstreams',
     'labels',
     'ticket_states',
     'project_members',
@@ -148,7 +148,7 @@ export async function seed() {
       leadId: 'mem-1',
       defaultAssigneeId: 'mem-1',
       timezone: 'UTC',
-      features: { cycles: true, modules: true, views: true, pages: true, intake: true },
+      features: { sprints: true, workstreams: true, views: true, docs: true, requests: true },
       estimate: { type: 'points', values: ['0', '1', '2', '3', '5', '8', '13', '21'] },
       automations: {
         autoArchiveEnabled: false,
@@ -173,7 +173,7 @@ export async function seed() {
       leadId: 'mem-2',
       defaultAssigneeId: null,
       timezone: 'UTC',
-      features: { cycles: false, modules: false, views: false, pages: true, intake: false },
+      features: { sprints: false, workstreams: false, views: false, docs: true, requests: false },
       estimate: null,
       automations: {
         autoArchiveEnabled: false,
@@ -201,7 +201,6 @@ export async function seed() {
       { id: `st-${p}-review`, name: 'In Review', group: 'started' as const, color: '#a86fe0', isDefault: false, sortOrder: 3 },
       { id: `st-${p}-done`, name: 'Done', group: 'completed' as const, color: '#2f7a4f', isDefault: true, sortOrder: 4 },
       { id: `st-${p}-cancelled`, name: 'Cancelled', group: 'cancelled' as const, color: '#b7332a', isDefault: true, sortOrder: 5 },
-      { id: `st-${p}-triage`, name: 'Triage', group: 'triage' as const, color: '#6b6050', isDefault: true, sortOrder: -1 },
     ];
     return base.map((s) => ({ ...s, projectId }));
   }
@@ -216,14 +215,14 @@ export async function seed() {
     { id: 'lbl-6', projectId: 'proj-tools', name: 'bug', color: '#b7332a' },
   ]);
 
-  await tx.insert(schema.workModules).values([
+  await tx.insert(schema.workstreams).values([
     {
       id: 'mod-1',
       projectId: 'proj-launch',
       name: 'Marketing Site',
       description: 'Public-facing site, pricing page, and waitlist capture.',
       leadId: 'mem-4',
-      status: 'in-progress',
+      status: 'active',
       startDate: dateOnly(daysAgo(20)),
       targetDate: dateOnly(daysFromNow(10)),
     },
@@ -243,25 +242,25 @@ export async function seed() {
       name: 'Release Infrastructure',
       description: 'CI/CD, changelog automation, and rollback tooling for the launch train.',
       leadId: 'mem-1',
-      status: 'in-progress',
+      status: 'active',
       startDate: dateOnly(daysAgo(30)),
       targetDate: dateOnly(daysFromNow(5)),
     },
   ]);
 
-  await tx.insert(schema.moduleMembers).values([
-    { moduleId: 'mod-1', memberId: 'mem-4' },
-    { moduleId: 'mod-1', memberId: 'mem-2' },
-    { moduleId: 'mod-2', memberId: 'mem-3' },
-    { moduleId: 'mod-3', memberId: 'mem-1' },
-    { moduleId: 'mod-3', memberId: 'mem-3' },
+  await tx.insert(schema.workstreamMembers).values([
+    { workstreamId: 'mod-1', memberId: 'mem-4' },
+    { workstreamId: 'mod-1', memberId: 'mem-2' },
+    { workstreamId: 'mod-2', memberId: 'mem-3' },
+    { workstreamId: 'mod-3', memberId: 'mem-1' },
+    { workstreamId: 'mod-3', memberId: 'mem-3' },
   ]);
 
-  await tx.insert(schema.cycles).values([
+  await tx.insert(schema.sprints).values([
     {
       id: 'cyc-1',
       projectId: 'proj-launch',
-      name: 'Cycle 4 — Launch Week',
+      name: 'Sprint 4 — Launch Week',
       description: 'Final push before the public announcement.',
       startDate: dateOnly(daysAgo(3)),
       endDate: dateOnly(daysFromNow(11)),
@@ -269,7 +268,7 @@ export async function seed() {
     {
       id: 'cyc-2',
       projectId: 'proj-launch',
-      name: 'Cycle 5 — Post-launch Hardening',
+      name: 'Sprint 5 — Post-launch Hardening',
       description: 'Bug fixes and polish once real users are in.',
       startDate: dateOnly(daysFromNow(12)),
       endDate: dateOnly(daysFromNow(26)),
@@ -277,8 +276,8 @@ export async function seed() {
     {
       id: 'cyc-0',
       projectId: 'proj-launch',
-      name: 'Cycle 3 — Beta Feedback',
-      description: 'Closed beta feedback triage.',
+      name: 'Sprint 3 — Beta Feedback',
+      description: 'Closed beta feedback, reviewed and sorted.',
       startDate: dateOnly(daysAgo(17)),
       endDate: dateOnly(daysAgo(4)),
     },
@@ -291,10 +290,11 @@ export async function seed() {
     title: string;
     stateId: string;
     priority: (typeof schema.priorityEnum.enumValues)[number];
+    source?: (typeof schema.ticketSourceEnum.enumValues)[number];
     assigneeIds?: string[];
     labelIds?: string[];
-    moduleId?: string | null;
-    cycleId?: string | null;
+    workstreamId?: string | null;
+    sprintId?: string | null;
     parentId?: string | null;
     dueDate?: Date | null;
     estimatePoints?: number | null;
@@ -309,7 +309,6 @@ export async function seed() {
     review: 'st-l-review',
     done: 'st-l-done',
     cancelled: 'st-l-cancelled',
-    triage: 'st-l-triage',
   };
   const T = {
     backlog: 'st-t-backlog',
@@ -332,8 +331,8 @@ export async function seed() {
     priority: 'high',
     assigneeIds: ['mem-4'],
     labelIds: ['lbl-2', 'lbl-3'],
-    moduleId: 'mod-1',
-    cycleId: 'cyc-0',
+    workstreamId: 'mod-1',
+    sprintId: 'cyc-0',
     estimatePoints: 3,
   });
   wi('proj-launch', 'Set up waitlist capture form + email confirmation', {
@@ -341,8 +340,8 @@ export async function seed() {
     priority: 'high',
     assigneeIds: ['mem-3'],
     labelIds: ['lbl-3'],
-    moduleId: 'mod-1',
-    cycleId: 'cyc-0',
+    workstreamId: 'mod-1',
+    sprintId: 'cyc-0',
     estimatePoints: 2,
   });
   const navBreaks = wi('proj-launch', 'Responsive nav breaks on iPad landscape', {
@@ -350,8 +349,8 @@ export async function seed() {
     priority: 'urgent',
     assigneeIds: ['mem-4', 'agent-claude'],
     labelIds: ['lbl-1', 'lbl-2'],
-    moduleId: 'mod-1',
-    cycleId: 'cyc-1',
+    workstreamId: 'mod-1',
+    sprintId: 'cyc-1',
     dueDate: daysFromNow(2),
     estimatePoints: 1,
   });
@@ -360,22 +359,22 @@ export async function seed() {
     priority: 'high',
     assigneeIds: ['mem-2'],
     labelIds: ['lbl-3'],
-    cycleId: 'cyc-1',
+    sprintId: 'cyc-1',
     dueDate: daysFromNow(4),
   });
   wi('proj-launch', 'Wire onboarding checklist to first-run state', {
     stateId: L.todo,
     priority: 'medium',
     assigneeIds: ['mem-3'],
-    moduleId: 'mod-2',
-    cycleId: 'cyc-1',
+    workstreamId: 'mod-2',
+    sprintId: 'cyc-1',
     estimatePoints: 5,
   });
   wi('proj-launch', 'Draft empty states for onboarding steps 1-4', {
     stateId: L.todo,
     priority: 'medium',
     assigneeIds: ['mem-4'],
-    moduleId: 'mod-2',
+    workstreamId: 'mod-2',
     labelIds: ['lbl-2'],
   });
   const pipeline = wi('proj-launch', 'Set up staging → production promotion pipeline', {
@@ -383,8 +382,8 @@ export async function seed() {
     priority: 'urgent',
     assigneeIds: ['mem-1', 'agent-codex'],
     labelIds: ['lbl-4'],
-    moduleId: 'mod-3',
-    cycleId: 'cyc-1',
+    workstreamId: 'mod-3',
+    sprintId: 'cyc-1',
     dueDate: daysFromNow(1),
     estimatePoints: 8,
   });
@@ -393,15 +392,19 @@ export async function seed() {
     priority: 'low',
     assigneeIds: ['agent-release-notes'],
     labelIds: ['lbl-4'],
-    moduleId: 'mod-3',
+    workstreamId: 'mod-3',
   });
   wi('proj-launch', 'Rollback script fails silently on partial deploy', {
     stateId: L.backlog,
     priority: 'high',
     labelIds: ['lbl-1', 'lbl-4'],
-    moduleId: 'mod-3',
+    workstreamId: 'mod-3',
   });
-  wi('proj-launch', 'Evaluate self-serve trial vs. waitlist-only launch', { stateId: L.triage, priority: 'medium' });
+  const selfServe = wi('proj-launch', 'Evaluate self-serve trial vs. waitlist-only launch', {
+    stateId: L.backlog,
+    priority: 'medium',
+    source: 'request',
+  });
   wi('proj-launch', 'Old pricing experiment branch — abandoned', {
     stateId: L.cancelled,
     priority: 'none',
@@ -441,13 +444,13 @@ export async function seed() {
     priority: 'high',
     assigneeIds: ['mem-4'],
     parentId: navBreaks.id,
-    cycleId: 'cyc-1',
+    sprintId: 'cyc-1',
   });
   wi('proj-launch', 'Add Playwright regression test for tablet nav', {
     stateId: L.todo,
     priority: 'medium',
     parentId: navBreaks.id,
-    cycleId: 'cyc-1',
+    sprintId: 'cyc-1',
   });
 
   // Resolve each item's createdAt/updatedAt once, up front, so the ticket
@@ -472,8 +475,9 @@ export async function seed() {
         title: w.title,
         stateId: w.stateId,
         priority: w.priority,
-        moduleId: w.moduleId ?? null,
-        cycleId: w.cycleId ?? null,
+        source: w.source ?? 'manual',
+        workstreamId: w.workstreamId ?? null,
+        sprintId: w.sprintId ?? null,
         parentId: w.parentId ?? null,
         estimatePoints: w.estimatePoints != null ? String(w.estimatePoints) : null,
         estimateValue: w.estimatePoints != null ? String(w.estimatePoints) : null,
@@ -716,7 +720,7 @@ export async function seed() {
   ];
   await tx.insert(schema.activityEntries).values([...baseActivity, ...agentActivity]);
 
-  await tx.insert(schema.pages).values([
+  await tx.insert(schema.docs).values([
     {
       id: 'pg-1',
       projectId: 'proj-launch',
@@ -727,7 +731,7 @@ export async function seed() {
       ownerId: 'mem-1',
       isFavorite: true,
       isLocked: false,
-      parentPageId: null,
+      parentDocId: null,
       createdAt: daysAgo(25),
       updatedAt: daysAgo(1),
     },
@@ -741,7 +745,7 @@ export async function seed() {
       ownerId: 'mem-2',
       isFavorite: false,
       isLocked: false,
-      parentPageId: null,
+      parentDocId: null,
       createdAt: daysAgo(18),
       updatedAt: daysAgo(3),
     },
@@ -755,7 +759,7 @@ export async function seed() {
       ownerId: 'mem-2',
       isFavorite: false,
       isLocked: false,
-      parentPageId: null,
+      parentDocId: null,
       createdAt: daysAgo(40),
       updatedAt: daysAgo(10),
     },
@@ -775,16 +779,16 @@ export async function seed() {
     {
       id: 'view-2',
       projectId: 'proj-launch',
-      name: 'This cycle, no assignee',
+      name: 'This sprint, no assignee',
       ownerId: 'mem-2',
-      filters: { cycleId: 'cyc-1', assignee: 'none' },
+      filters: { sprintId: 'cyc-1', assignee: 'none' },
       visibility: 'public',
       isFavorite: false,
       updatedAt: daysAgo(5),
     },
   ]);
 
-  await tx.insert(schema.intakeRequests).values([
+  await tx.insert(schema.requests).values([
     {
       id: 'in-1',
       projectId: 'proj-launch',
@@ -805,7 +809,7 @@ export async function seed() {
       sourceName: 'Beta user (external)',
       sourceEmail: 'other@example.com',
       createdAt: daysAgo(6),
-      linkedTicketId: null,
+      linkedTicketId: selfServe.id,
     },
     {
       id: 'in-3',
@@ -820,7 +824,7 @@ export async function seed() {
     },
   ]);
 
-  await tx.insert(schema.stickies).values([
+  await tx.insert(schema.scratchNotes).values([
     {
       id: 'sk-1',
       authorId: CURRENT_USER_ID,
@@ -833,7 +837,7 @@ export async function seed() {
       id: 'sk-2',
       authorId: CURRENT_USER_ID,
       title: 'Demo script for investor call',
-      body: 'Walk through: create project → board → cycle burndown → page.',
+      body: 'Walk through: create project → board → sprint burndown → doc.',
       color: '#2f6fa8',
       updatedAt: daysAgo(5),
     },

@@ -1171,7 +1171,7 @@ describe('CopilotPanel', () => {
     // stamped notified, permanently losing those outcomes. The build is now
     // capped at 20 per turn; the remainder stays unnotified for next turn.
     it('caps the outcome preamble at 20 outcomes and only marks the included ones notified', async () => {
-      // Module mocks keep their call history across tests in this suite
+      // Mocked modules keep their call history across tests in this suite
       // (only copilotIpc is rebuilt per test) — clear it so calls[…] below
       // can't pick up a leaked call from an earlier test.
       jest.mocked(markCopilotProposalsNotified).mockClear();
@@ -1423,11 +1423,11 @@ describe('CopilotPanel codebase grounding (Copilot V3)', () => {
     defaultAssigneeId: null,
     timezone: 'UTC',
     features: {
-      cycles: true,
-      modules: true,
+      sprints: true,
+      workstreams: true,
       views: true,
-      pages: true,
-      intake: true,
+      docs: true,
+      requests: true,
     },
     estimate: null,
     automations: {

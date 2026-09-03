@@ -5,9 +5,9 @@ import { useAsync } from '@/lib/useAsync';
 import {
   listProjects,
   listAllTickets,
-  listModules,
-  listCycles,
-  listPages,
+  listWorkstreams,
+  listSprints,
+  listDocs,
   listMembers,
   listStates,
 } from '@/data/api';
@@ -25,19 +25,19 @@ async function loadAnalytics() {
 
   const perProject = await Promise.all(
     projects.map(async (project) => {
-      const [modules, cycles, pages, states] = await Promise.all([
-        listModules(project.id),
-        listCycles(project.id),
-        listPages(project.id),
+      const [workstreams, sprints, docs, states] = await Promise.all([
+        listWorkstreams(project.id),
+        listSprints(project.id),
+        listDocs(project.id),
         listStates(project.id),
       ]);
-      return { project, modules, cycles, pages, states };
+      return { project, workstreams, sprints, docs, states };
     }),
   );
 
-  const totalModules = perProject.reduce((sum, p) => sum + p.modules.length, 0);
-  const totalCycles = perProject.reduce((sum, p) => sum + p.cycles.length, 0);
-  const totalPages = perProject.reduce((sum, p) => sum + p.pages.length, 0);
+  const totalWorkstreams = perProject.reduce((sum, p) => sum + p.workstreams.length, 0);
+  const totalSprints = perProject.reduce((sum, p) => sum + p.sprints.length, 0);
+  const totalDocs = perProject.reduce((sum, p) => sum + p.docs.length, 0);
 
   const stateById = new Map<string, TicketState>();
   for (const p of perProject) {
@@ -65,9 +65,9 @@ async function loadAnalytics() {
     totals: {
       projects: projects.length,
       tickets: tickets.length,
-      cycles: totalCycles,
-      modules: totalModules,
-      pages: totalPages,
+      sprints: totalSprints,
+      workstreams: totalWorkstreams,
+      docs: totalDocs,
       members: members.length,
     },
     projectRows,
@@ -82,9 +82,9 @@ export default function AnalyticsPage() {
     () => [
       { label: 'Projects', value: data?.totals.projects, icon: FolderKanban },
       { label: 'Tickets', value: data?.totals.tickets, icon: ListTodo },
-      { label: 'Cycles', value: data?.totals.cycles, icon: RefreshCw },
-      { label: 'Modules', value: data?.totals.modules, icon: Boxes },
-      { label: 'Pages', value: data?.totals.pages, icon: FileText },
+      { label: 'Sprints', value: data?.totals.sprints, icon: RefreshCw },
+      { label: 'Workstreams', value: data?.totals.workstreams, icon: Boxes },
+      { label: 'Docs', value: data?.totals.docs, icon: FileText },
       { label: 'Members', value: data?.totals.members, icon: Users },
     ],
     [data],

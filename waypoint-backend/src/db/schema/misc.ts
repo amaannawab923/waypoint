@@ -12,7 +12,7 @@ export const notificationKindEnum = pgEnum('notification_kind', [
   'agent_blocked',
 ]);
 
-export const stickies = pgTable('stickies', {
+export const scratchNotes = pgTable('scratch_notes', {
   id: text('id').primaryKey(),
   authorId: text('author_id')
     .notNull()

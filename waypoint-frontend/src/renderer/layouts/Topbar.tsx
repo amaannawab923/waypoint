@@ -24,9 +24,9 @@ import {
   listNotifications,
   listProjects,
   listAllTickets,
-  listAllPages,
-  listAllCycles,
-  listAllModules,
+  listAllDocs,
+  listAllSprints,
+  listAllWorkstreams,
 } from '@/data/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { CreateTicketModal } from '@/components/domain/CreateTicketModal';
@@ -34,10 +34,10 @@ import { Tooltip } from '@/components/ui/Tooltip';
 import { markOnboarding } from '@/lib/onboarding';
 import { useTheme } from '@/lib/theme';
 import { useCurrentRouteProject } from '@/lib/useCurrentRouteProject';
-import type { Project, Ticket, Page, Cycle, WorkModule } from '@/types/entities';
+import type { Project, Ticket, Doc, Sprint, Workstream } from '@/types/entities';
 
 /** Small self-contained popover, mirrors the local Dropdown pattern used in
- * CycleListCard.tsx — there's no shared Dropdown/Menu primitive in
+ * SprintListCard.tsx — there's no shared Dropdown/Menu primitive in
  * src/components/ui/ yet. */
 function AccountMenu({
   trigger,
@@ -123,17 +123,17 @@ function SearchPalette({
   onClose,
   projects,
   tickets,
-  pages,
-  cycles,
-  modules,
+  docs,
+  sprints,
+  workstreams,
 }: {
   open: boolean;
   onClose: () => void;
   projects: Project[];
   tickets: Ticket[];
-  pages: Page[];
-  cycles: Cycle[];
-  modules: WorkModule[];
+  docs: Doc[];
+  sprints: Sprint[];
+  workstreams: Workstream[];
 }) {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
@@ -164,14 +164,14 @@ function SearchPalette({
         path: `/projects/${w.projectId}/tickets/${w.identifier}`,
       }));
 
-    const pageResults: SearchResult[] = pages
-      .filter((p) => matches(p.title || 'Untitled', q))
+    const docResults: SearchResult[] = docs
+      .filter((d) => matches(d.title || 'Untitled', q))
       .slice(0, RESULT_LIMIT)
-      .map((p) => ({
-        key: `page:${p.id}`,
-        title: p.title || 'Untitled',
-        subtitle: projectNameById.get(p.projectId) ?? '',
-        path: `/projects/${p.projectId}/pages/${p.id}`,
+      .map((d) => ({
+        key: `doc:${d.id}`,
+        title: d.title || 'Untitled',
+        subtitle: projectNameById.get(d.projectId) ?? '',
+        path: `/projects/${d.projectId}/docs/${d.id}`,
       }));
 
     const projectResults: SearchResult[] = projects
@@ -184,34 +184,34 @@ function SearchPalette({
         path: `/projects/${p.id}/tickets`,
       }));
 
-    const cycleResults: SearchResult[] = cycles
+    const sprintResults: SearchResult[] = sprints
       .filter((c) => matches(c.name, q))
       .slice(0, RESULT_LIMIT)
       .map((c) => ({
-        key: `cycle:${c.id}`,
+        key: `sprint:${c.id}`,
         title: c.name,
         subtitle: projectNameById.get(c.projectId) ?? '',
-        path: `/projects/${c.projectId}/cycles/${c.id}`,
+        path: `/projects/${c.projectId}/sprints/${c.id}`,
       }));
 
-    const moduleResults: SearchResult[] = modules
+    const workstreamResults: SearchResult[] = workstreams
       .filter((m) => matches(m.name, q))
       .slice(0, RESULT_LIMIT)
       .map((m) => ({
-        key: `module:${m.id}`,
+        key: `workstream:${m.id}`,
         title: m.name,
         subtitle: projectNameById.get(m.projectId) ?? '',
-        path: `/projects/${m.projectId}/modules/${m.id}`,
+        path: `/projects/${m.projectId}/workstreams/${m.id}`,
       }));
 
     return [
       { label: 'Tickets', icon: LayoutList, results: ticketResults },
-      { label: 'Pages', icon: FileText, results: pageResults },
+      { label: 'Docs', icon: FileText, results: docResults },
       { label: 'Projects', icon: FolderKanban, results: projectResults },
-      { label: 'Cycles', icon: RefreshCw, results: cycleResults },
-      { label: 'Modules', icon: Boxes, results: moduleResults },
+      { label: 'Sprints', icon: RefreshCw, results: sprintResults },
+      { label: 'Workstreams', icon: Boxes, results: workstreamResults },
     ].filter((g) => g.results.length > 0);
-  }, [query, projects, tickets, pages, cycles, modules, projectNameById]);
+  }, [query, projects, tickets, docs, sprints, workstreams, projectNameById]);
 
   if (!open) return null;
 
@@ -244,7 +244,7 @@ function SearchPalette({
                 if (first) go(first.path);
               }
             }}
-            placeholder="Search tickets, pages, projects, cycles, modules…"
+            placeholder="Search tickets, docs, projects, sprints, workstreams…"
             className="h-6 flex-1 bg-transparent text-sm text-text outline-none placeholder:text-text-muted"
           />
           <button
@@ -260,7 +260,7 @@ function SearchPalette({
         <div className="p-2">
           {!hasQuery && (
             <p className="px-2 py-6 text-center text-sm text-text-muted">
-              Search across tickets, pages, projects, cycles, and modules.
+              Search across tickets, docs, projects, sprints, and workstreams.
             </p>
           )}
           {hasQuery && !hasResults && (
@@ -313,9 +313,9 @@ export function Topbar({
   const { data: notifications } = useAsync(() => listNotifications(), []);
   const { data: projects } = useAsync(() => listProjects(), []);
   const { data: tickets } = useAsync(() => listAllTickets(), []);
-  const { data: pages } = useAsync(() => listAllPages(), []);
-  const { data: cycles } = useAsync(() => listAllCycles(), []);
-  const { data: modules } = useAsync(() => listAllModules(), []);
+  const { data: docs } = useAsync(() => listAllDocs(), []);
+  const { data: sprints } = useAsync(() => listAllSprints(), []);
+  const { data: workstreams } = useAsync(() => listAllWorkstreams(), []);
   const [quickCreateOpen, setQuickCreateOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [theme, toggleTheme] = useTheme();
@@ -447,9 +447,9 @@ export function Topbar({
         onClose={() => setSearchOpen(false)}
         projects={projects ?? []}
         tickets={tickets ?? []}
-        pages={pages ?? []}
-        cycles={cycles ?? []}
-        modules={modules ?? []}
+        docs={docs ?? []}
+        sprints={sprints ?? []}
+        workstreams={workstreams ?? []}
       />
     </header>
   );

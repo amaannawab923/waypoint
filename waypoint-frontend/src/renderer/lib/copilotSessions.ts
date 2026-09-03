@@ -95,7 +95,7 @@ export function groupKeyForSession(
 /**
  * Compact relative-time label for a session row (e.g. "35m", "2h", "6d").
  * Deliberately not date-fns's formatDistanceToNow (used elsewhere in this
- * app, e.g. IntakePage.tsx) — that produces "about 2 hours ago", far too
+ * app, e.g. RequestsPage.tsx) — that produces "about 2 hours ago", far too
  * wide for the mockup's single-token, tabular-nums time chip.
  */
 export function formatRelativeTime(

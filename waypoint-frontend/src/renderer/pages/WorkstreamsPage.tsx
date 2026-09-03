@@ -3,31 +3,29 @@ import { useNavigate } from 'react-router-dom';
 import { Boxes, CheckCircle2, Loader, Plus, Users } from 'lucide-react';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
-import { createModule, listMembers, listModules, listStates, listTickets } from '@/data/api';
+import { createWorkstream, listMembers, listWorkstreams, listStates, listTickets } from '@/data/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Modal } from '@/components/ui/Modal';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
-import type { WorkModule } from '@/types/entities';
+import type { Workstream } from '@/types/entities';
 
-const STATUS_LABEL: Record<WorkModule['status'], string> = {
-  backlog: 'Backlog',
+const STATUS_LABEL: Record<Workstream['status'], string> = {
   planned: 'Planned',
-  'in-progress': 'In Progress',
+  active: 'Active',
   paused: 'Paused',
-  completed: 'Completed',
-  cancelled: 'Cancelled',
+  done: 'Done',
+  dropped: 'Dropped',
 };
 
-const STATUS_TONE: Record<WorkModule['status'], BadgeTone> = {
-  backlog: 'neutral',
+const STATUS_TONE: Record<Workstream['status'], BadgeTone> = {
   paused: 'neutral',
   planned: 'info',
-  'in-progress': 'warning',
-  completed: 'success',
-  cancelled: 'danger',
+  active: 'warning',
+  done: 'success',
+  dropped: 'danger',
 };
 
 function formatDate(value: string | null): string | null {
@@ -35,18 +33,18 @@ function formatDate(value: string | null): string | null {
   return new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
-function dateRangeLabel(module: WorkModule): string {
-  const start = formatDate(module.startDate);
-  const target = formatDate(module.targetDate);
+function dateRangeLabel(workstream: Workstream): string {
+  const start = formatDate(workstream.startDate);
+  const target = formatDate(workstream.targetDate);
   if (!start && !target) return 'No dates set';
   if (start && target) return `${start} – ${target}`;
   return start ? `From ${start}` : `Due ${target}`;
 }
 
-export default function ModulesPage() {
+export default function WorkstreamsPage() {
   const { project } = useProject();
   const navigate = useNavigate();
-  const { data: modules, loading, reload } = useAsync(() => listModules(project.id), [project.id]);
+  const { data: workstreams, loading, reload } = useAsync(() => listWorkstreams(project.id), [project.id]);
   const { data: tickets } = useAsync(() => listTickets(project.id), [project.id]);
   const { data: states } = useAsync(() => listStates(project.id), [project.id]);
   const { data: allMembers } = useAsync(() => listMembers(), []);
@@ -63,8 +61,8 @@ export default function ModulesPage() {
   );
 
   const progressFor = useMemo(() => {
-    return (moduleId: string) => {
-      const items = (tickets ?? []).filter((i) => i.moduleId === moduleId);
+    return (workstreamId: string) => {
+      const items = (tickets ?? []).filter((i) => i.workstreamId === workstreamId);
       if (items.length === 0) return null;
       const done = items.filter((i) => completedStateIds.has(i.stateId)).length;
       return Math.round((done / items.length) * 100);
@@ -72,19 +70,19 @@ export default function ModulesPage() {
   }, [tickets, completedStateIds]);
 
   const stats = useMemo(() => {
-    const list = modules ?? [];
+    const list = workstreams ?? [];
     return {
       total: list.length,
-      completed: list.filter((m) => m.status === 'completed').length,
-      inProgress: list.filter((m) => m.status === 'in-progress').length,
+      done: list.filter((m) => m.status === 'done').length,
+      active: list.filter((m) => m.status === 'active').length,
     };
-  }, [modules]);
+  }, [workstreams]);
 
   async function handleCreate() {
     if (!name.trim() || submitting) return;
     setSubmitting(true);
     try {
-      await createModule(project.id, { name: name.trim() });
+      await createWorkstream(project.id, { name: name.trim() });
       setName('');
       setCreating(false);
       reload();
@@ -93,12 +91,12 @@ export default function ModulesPage() {
     }
   }
 
-  if (!project.features.modules) {
+  if (!project.features.workstreams) {
     return (
       <EmptyState
         icon={<Boxes size={28} />}
-        title="Modules is disabled for this project"
-        description="Turn Modules back on in project settings to group work under a lead and a status of its own."
+        title="Workstreams is disabled for this project"
+        description="Turn Workstreams back on in project settings to group work under a lead and a status of its own."
         action={
           <Button variant="primary" onClick={() => navigate(`/projects/${project.id}/settings/features`)}>
             Go to features
@@ -112,65 +110,65 @@ export default function ModulesPage() {
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-border px-6 py-4">
         <div>
-          <h1 className="font-display text-lg font-medium text-text">Modules</h1>
+          <h1 className="font-display text-lg font-medium text-text">Workstreams</h1>
           <p className="text-sm text-text-secondary">Group work into shippable pieces for {project.name}</p>
         </div>
         <Button variant="primary" onClick={() => setCreating(true)}>
           <Plus size={15} />
-          Add Module
+          Add Workstream
         </Button>
       </div>
 
-      {!!modules?.length && (
+      {!!workstreams?.length && (
         <div className="grid grid-cols-3 gap-3 border-b border-border px-6 py-4">
           <div className="rounded-[var(--radius)] border border-border bg-surface p-4">
             <Boxes size={16} className="mb-3 text-text-muted" strokeWidth={2} />
             <p className="font-display text-2xl font-medium text-text">{stats.total}</p>
-            <p className="text-xs text-text-secondary">Total modules</p>
+            <p className="text-xs text-text-secondary">Total workstreams</p>
           </div>
           <div className="rounded-[var(--radius)] border border-border bg-surface p-4">
             <CheckCircle2 size={16} className="mb-3 text-text-muted" strokeWidth={2} />
-            <p className="font-display text-2xl font-medium text-text">{stats.completed}</p>
-            <p className="text-xs text-text-secondary">Completed</p>
+            <p className="font-display text-2xl font-medium text-text">{stats.done}</p>
+            <p className="text-xs text-text-secondary">Done</p>
           </div>
           <div className="rounded-[var(--radius)] border border-border bg-surface p-4">
             <Loader size={16} className="mb-3 text-text-muted" strokeWidth={2} />
-            <p className="font-display text-2xl font-medium text-text">{stats.inProgress}</p>
-            <p className="text-xs text-text-secondary">In progress</p>
+            <p className="font-display text-2xl font-medium text-text">{stats.active}</p>
+            <p className="text-xs text-text-secondary">Active</p>
           </div>
         </div>
       )}
 
       <div className="flex-1 overflow-y-auto thin-scroll">
-        {loading && !modules ? (
+        {loading && !workstreams ? (
           <SkeletonListRows rows={6} />
-        ) : !modules || modules.length === 0 ? (
+        ) : !workstreams || workstreams.length === 0 ? (
           <EmptyState
             icon={<Boxes size={28} />}
-            title="No modules yet"
-            description="Create a module to give a slice of work — a migration, a redesign — its own lead and status."
+            title="No workstreams yet"
+            description="Create a workstream to give a slice of work — a migration, a redesign — its own lead and status."
             action={
               <Button variant="primary" onClick={() => setCreating(true)}>
                 <Plus size={15} />
-                Add Module
+                Add Workstream
               </Button>
             }
           />
         ) : (
           <ul className="divide-y divide-border">
-            {modules.map((module) => {
-              const progress = progressFor(module.id);
-              const lead = module.leadId ? membersById.get(module.leadId) : undefined;
+            {workstreams.map((workstream) => {
+              const progress = progressFor(workstream.id);
+              const lead = workstream.leadId ? membersById.get(workstream.leadId) : undefined;
               return (
-                <li key={module.id}>
+                <li key={workstream.id}>
                   <button
                     type="button"
-                    onClick={() => navigate(`/projects/${project.id}/modules/${module.id}`)}
+                    onClick={() => navigate(`/projects/${project.id}/workstreams/${workstream.id}`)}
                     className="flex w-full items-center gap-4 px-6 py-3.5 text-left transition-colors hover:bg-surface-2"
                   >
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-text">{module.name}</span>
-                    <Badge tone={STATUS_TONE[module.status]}>{STATUS_LABEL[module.status]}</Badge>
-                    <span className="w-36 shrink-0 text-xs text-text-muted">{dateRangeLabel(module)}</span>
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-text">{workstream.name}</span>
+                    <Badge tone={STATUS_TONE[workstream.status]}>{STATUS_LABEL[workstream.status]}</Badge>
+                    <span className="w-36 shrink-0 text-xs text-text-muted">{dateRangeLabel(workstream)}</span>
                     {lead ? (
                       <Avatar name={lead.displayName} color={lead.avatarColor} size={20} className="shrink-0" />
                     ) : (
@@ -178,7 +176,7 @@ export default function ModulesPage() {
                     )}
                     <span className="flex w-14 shrink-0 items-center gap-1 text-xs text-text-muted">
                       <Users size={12} />
-                      {module.memberIds.length}
+                      {workstream.memberIds.length}
                     </span>
                     <div className="flex w-32 shrink-0 items-center gap-2">
                       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-2">
@@ -205,21 +203,21 @@ export default function ModulesPage() {
           setCreating(false);
           setName('');
         }}
-        title="New module"
+        title="New workstream"
         footer={
           <>
             <Button variant="ghost" onClick={() => setCreating(false)}>
               Cancel
             </Button>
             <Button variant="primary" disabled={!name.trim() || submitting} onClick={handleCreate}>
-              {submitting ? 'Creating…' : 'Create module'}
+              {submitting ? 'Creating…' : 'Create workstream'}
             </Button>
           </>
         }
       >
         <input
           autoFocus
-          placeholder="Module name"
+          placeholder="Workstream name"
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {

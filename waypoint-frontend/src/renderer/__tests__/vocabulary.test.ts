@@ -16,17 +16,22 @@ import path from 'path';
  * rather than as a plausible-looking half-rename.
  *
  * Bans are added cluster by cluster, in the same commit that abolishes them —
- * see docs/design/RENAME-STATE.md for which commits have landed. As of C2 the
- * bans are the old `mock/` import path and the ticket cluster. C3 adds the
- * cycles/modules/intake/pages/stickies cluster. Do not add a ban ahead of the
- * commit that makes it true; the point of the tripwire is that it is green
- * exactly when the tree is consistent.
+ * see docs/design/RENAME-STATE.md for which commits have landed. As of C3 the
+ * bans are the old `mock/` import path, the ticket cluster, and the
+ * sprints/workstreams/requests/docs/scratchpad cluster. Do not add a ban ahead
+ * of the commit that makes it true; the point of the tripwire is that it is
+ * green exactly when the tree is consistent.
  *
  * A ban may carry `allowed` literals: strings that contain the banned pattern
- * but belong to a cluster a *later* commit owns, so they are legitimately
- * still present. Each one names the commit that removes it. An allowance is a
- * dated exception, not a permanent carve-out — deleting the last allowance is
- * part of the commit it names.
+ * and are legitimately still in the tree. There are two kinds, and each entry
+ * says which it is:
+ *
+ *   - **Dated** — the literal belongs to a cluster a *later* commit owns.
+ *     It names that commit, and deleting the allowance is part of it.
+ *   - **Permanent** — the literal is a third-party identifier that merely
+ *     contains the banned string (a library export, a test-runner API). It
+ *     names its owner. Without these the ban would silently forbid writing a
+ *     real API's name, which is a rule nobody would guess from a failure.
  */
 
 const RENDERER_ROOT = path.resolve(__dirname, '..');
@@ -59,9 +64,9 @@ type Ban = {
   /** Shown on failure: what to do instead. */
   reason: string;
   /**
-   * Literals that contain `pattern` but are owned by a later commit, and so
-   * are legitimately still in the tree. Removed from a line before the line is
-   * tested. Each entry names the commit that deletes it.
+   * Literals that contain `pattern` but are legitimately still in the tree.
+   * Removed from a line before the line is tested. Each entry names either
+   * the commit that deletes it or the third party that owns it.
    */
   allowed?: string[];
 };
@@ -89,20 +94,40 @@ const BANS: Ban[] = [
     reason:
       'C2 renamed the work-item entity to ticket. Use ticket_id, ticket_states, … instead.',
     allowed: [
-      // C4 owns the copilot_proposal_kind enum value, which moves atomically
-      // with the MCP tool names and the Copilot system prompt (§6.1).
+      // Dated — C4 owns the copilot_proposal_kind enum value, which moves
+      // atomically with the MCP tool names and the Copilot prompt (§6.1).
       `create_work${'_item'}`,
-      // C3 owns the webhooks.event_types remap (§3.2 item 20 / §3.5), which
-      // flips these values alongside cycle.* and module.* in one data UPDATE.
-      `work${'_item'}.created`,
-      `work${'_item'}.updated`,
-      `work${'_item'}.deleted`,
     ],
   },
   {
     pattern: `work${'-items'}`,
     reason:
       "C2 renamed the ticket list's route segment and its pages/ directory. Use '/tickets' and '@/pages/tickets/…' instead.",
+  },
+  {
+    pattern: `${'Cyc'}le`,
+    reason:
+      'C3 renamed the cycle entity to Sprint. Use Sprint, listSprints, SprintsPage, /sprints, … instead.',
+  },
+  {
+    pattern: `${'Mod'}ule`,
+    reason:
+      'C3 renamed the work-module entity to Workstream. Use Workstream, listWorkstreams, WorkstreamsPage, /workstreams, … instead.',
+    allowed: [
+      // Permanent — Jest's own API, named in a comment that explains why
+      // AppShell's flag-disabled case needs its own file. Not the entity.
+      `jest.reset${'Mod'}ules`,
+    ],
+  },
+  {
+    pattern: `${'Int'}ake`,
+    reason:
+      'C3 renamed the intake entity to Request. Use Request, listRequests, RequestsPage, /requests, … instead.',
+  },
+  {
+    pattern: `${'Stic'}ky`,
+    reason:
+      'C3 renamed the sticky entity to ScratchNote, and the page to Scratchpad. Use ScratchNote, listScratchNotes, /scratchpad, … instead.',
   },
 ];
 

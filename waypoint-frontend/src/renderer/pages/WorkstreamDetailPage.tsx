@@ -4,7 +4,7 @@ import { Boxes, Check, ChevronDown, ChevronLeft, Plus, Search, UserPlus, Users }
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import { useRecordRecent } from '@/lib/recents';
-import { listMembers, listModules, listStates, listTickets, updateModule, updateTicket } from '@/data/api';
+import { listMembers, listWorkstreams, listStates, listTickets, updateWorkstream, updateTicket } from '@/data/api';
 import { Avatar, AvatarStack } from '@/components/ui/Avatar';
 import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -13,7 +13,7 @@ import { Modal } from '@/components/ui/Modal';
 import { PriorityIcon } from '@/components/domain/PriorityIcon';
 import { StateIcon, STATE_GROUP_ORDER } from '@/components/domain/StateIcon';
 import { Skeleton } from '@/components/ui/Skeleton';
-import type { Ticket, WorkModule } from '@/types/entities';
+import type { Ticket, Workstream } from '@/types/entities';
 
 const TRIGGER_CLASS =
   'flex h-9 w-full items-center gap-1.5 rounded-[var(--radius-sm)] border border-border-strong bg-bg px-2.5 text-sm text-text outline-none hover:bg-surface-2';
@@ -56,31 +56,28 @@ function Dropdown({
   );
 }
 
-const STATUS_OPTIONS: WorkModule['status'][] = [
-  'backlog',
+const STATUS_OPTIONS: Workstream['status'][] = [
   'planned',
-  'in-progress',
+  'active',
   'paused',
-  'completed',
-  'cancelled',
+  'done',
+  'dropped',
 ];
 
-const STATUS_LABEL: Record<WorkModule['status'], string> = {
-  backlog: 'Backlog',
+const STATUS_LABEL: Record<Workstream['status'], string> = {
   planned: 'Planned',
-  'in-progress': 'In Progress',
+  active: 'Active',
   paused: 'Paused',
-  completed: 'Completed',
-  cancelled: 'Cancelled',
+  done: 'Done',
+  dropped: 'Dropped',
 };
 
-const STATUS_TONE: Record<WorkModule['status'], BadgeTone> = {
-  backlog: 'neutral',
+const STATUS_TONE: Record<Workstream['status'], BadgeTone> = {
   paused: 'neutral',
   planned: 'info',
-  'in-progress': 'warning',
-  completed: 'success',
-  cancelled: 'danger',
+  active: 'warning',
+  done: 'success',
+  dropped: 'danger',
 };
 
 function toDateInput(value: string | null): string {
@@ -88,8 +85,8 @@ function toDateInput(value: string | null): string {
 }
 
 /**
- * Searchable picker for assigning an existing, not-yet-in-this-module project ticket to
- * the current module. Mirrors the pattern used in CycleTicketList's own add-ticket modal.
+ * Searchable picker for assigning an existing, not-yet-in-this-workstream project ticket to
+ * the current workstream. Mirrors the pattern used in SprintTicketList's own add-ticket modal.
  */
 function AddTicketModal({
   open,
@@ -129,7 +126,7 @@ function AddTicketModal({
   }
 
   return (
-    <Modal open={open} onClose={handleClose} title="Add ticket to module">
+    <Modal open={open} onClose={handleClose} title="Add ticket to workstream">
       <div className="flex flex-col gap-3">
         <div className="relative">
           <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
@@ -169,41 +166,41 @@ function AddTicketModal({
   );
 }
 
-export default function ModuleDetailPage() {
+export default function WorkstreamDetailPage() {
   const { project } = useProject();
-  const { moduleId = '' } = useParams();
+  const { workstreamId = '' } = useParams();
   const navigate = useNavigate();
 
-  const { data: modules, loading, reload } = useAsync(() => listModules(project.id), [project.id]);
+  const { data: workstreams, loading, reload } = useAsync(() => listWorkstreams(project.id), [project.id]);
   const { data: tickets, reload: reloadTickets } = useAsync(() => listTickets(project.id), [project.id]);
   const { data: states } = useAsync(() => listStates(project.id), [project.id]);
   const { data: allMembers } = useAsync(() => listMembers(), []);
 
   const [addItemOpen, setAddItemOpen] = useState(false);
 
-  const module = modules?.find((m) => m.id === moduleId);
+  const workstream = workstreams?.find((m) => m.id === workstreamId);
 
   const projectMembers = useMemo(
     () => (allMembers ?? []).filter((m) => project.memberIds.includes(m.id)),
     [allMembers, project.memberIds],
   );
   const lead = useMemo(
-    () => (allMembers ?? []).find((m) => m.id === module?.leadId) ?? null,
-    [allMembers, module?.leadId],
+    () => (allMembers ?? []).find((m) => m.id === workstream?.leadId) ?? null,
+    [allMembers, workstream?.leadId],
   );
-  const moduleMembers = useMemo(
-    () => (allMembers ?? []).filter((m) => (module?.memberIds ?? []).includes(m.id)),
-    [allMembers, module?.memberIds],
+  const workstreamMembers = useMemo(
+    () => (allMembers ?? []).filter((m) => (workstream?.memberIds ?? []).includes(m.id)),
+    [allMembers, workstream?.memberIds],
   );
 
   useRecordRecent(
-    module
+    workstream
       ? {
-          type: 'module',
-          id: module.id,
-          title: module.name,
-          projectId: module.projectId,
-          path: `/projects/${module.projectId}/modules/${module.id}`,
+          type: 'workstream',
+          id: workstream.id,
+          title: workstream.name,
+          projectId: workstream.projectId,
+          path: `/projects/${workstream.projectId}/workstreams/${workstream.id}`,
         }
       : null,
   );
@@ -212,24 +209,24 @@ export default function ModuleDetailPage() {
   const [description, setDescription] = useState('');
 
   useEffect(() => {
-    if (module) {
-      setName(module.name);
-      setDescription(module.description);
+    if (workstream) {
+      setName(workstream.name);
+      setDescription(workstream.description);
     }
-  }, [module]);
+  }, [workstream]);
 
   const items = useMemo(
-    () => (tickets ?? []).filter((i) => i.moduleId === moduleId),
-    [tickets, moduleId],
+    () => (tickets ?? []).filter((i) => i.workstreamId === workstreamId),
+    [tickets, workstreamId],
   );
 
   const addItemCandidates = useMemo(
-    () => (tickets ?? []).filter((i) => i.moduleId !== moduleId),
-    [tickets, moduleId],
+    () => (tickets ?? []).filter((i) => i.workstreamId !== workstreamId),
+    [tickets, workstreamId],
   );
 
   async function handleAddItem(item: Ticket) {
-    await updateTicket(item.id, { moduleId });
+    await updateTicket(item.id, { workstreamId });
     setAddItemOpen(false);
     reloadTickets();
   }
@@ -253,26 +250,26 @@ export default function ModuleDetailPage() {
       .filter((g) => g.items.length > 0);
   }, [states, items]);
 
-  async function patch(fields: Partial<WorkModule>) {
-    if (!module) return;
-    await updateModule(module.id, fields);
+  async function patch(fields: Partial<Workstream>) {
+    if (!workstream) return;
+    await updateWorkstream(workstream.id, fields);
     reload();
   }
 
   function toggleMember(memberId: string) {
-    if (!module) return;
-    const next = module.memberIds.includes(memberId)
-      ? module.memberIds.filter((id) => id !== memberId)
-      : [...module.memberIds, memberId];
+    if (!workstream) return;
+    const next = workstream.memberIds.includes(memberId)
+      ? workstream.memberIds.filter((id) => id !== memberId)
+      : [...workstream.memberIds, memberId];
     patch({ memberIds: next });
   }
 
-  if (!project.features.modules) {
+  if (!project.features.workstreams) {
     return (
       <EmptyState
         icon={<Boxes size={28} />}
-        title="Modules is disabled for this project"
-        description="Turn Modules back on in project settings to see it again."
+        title="Workstreams is disabled for this project"
+        description="Turn Workstreams back on in project settings to see it again."
         action={
           <Button variant="primary" onClick={() => navigate(`/projects/${project.id}/settings/features`)}>
             Go to features
@@ -282,7 +279,7 @@ export default function ModuleDetailPage() {
     );
   }
 
-  if (loading && !modules) {
+  if (loading && !workstreams) {
     return (
       <Skeleton className="flex h-full flex-col overflow-y-auto thin-scroll">
         <div className="border-b border-border px-6 py-4">
@@ -324,15 +321,15 @@ export default function ModuleDetailPage() {
     );
   }
 
-  if (!module) {
+  if (!workstream) {
     return (
       <EmptyState
-        title="Module not found"
+        title="Workstream not found"
         description="It may have been deleted."
         action={
-          <Button variant="secondary" onClick={() => navigate(`/projects/${project.id}/modules`)}>
+          <Button variant="secondary" onClick={() => navigate(`/projects/${project.id}/workstreams`)}>
             <ChevronLeft size={15} />
-            Back to modules
+            Back to workstreams
           </Button>
         }
       />
@@ -344,18 +341,18 @@ export default function ModuleDetailPage() {
       <div className="border-b border-border px-6 py-4">
         <button
           type="button"
-          onClick={() => navigate(`/projects/${project.id}/modules`)}
+          onClick={() => navigate(`/projects/${project.id}/workstreams`)}
           className="mb-3 flex items-center gap-1 text-xs font-medium text-text-secondary transition-colors hover:text-text"
         >
           <ChevronLeft size={14} />
-          Modules
+          Workstreams
         </button>
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
-          onBlur={() => name.trim() && name !== module.name && patch({ name: name.trim() })}
+          onBlur={() => name.trim() && name !== workstream.name && patch({ name: name.trim() })}
           className="w-full border-none bg-transparent p-0 font-display text-xl font-medium text-text outline-none"
-          placeholder="Module name"
+          placeholder="Workstream name"
         />
       </div>
 
@@ -366,9 +363,9 @@ export default function ModuleDetailPage() {
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              onBlur={() => description !== module.description && patch({ description })}
+              onBlur={() => description !== workstream.description && patch({ description })}
               rows={3}
-              placeholder="What is this module about?"
+              placeholder="What is this workstream about?"
               className="w-full resize-none rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
             />
           </div>
@@ -383,7 +380,7 @@ export default function ModuleDetailPage() {
             </div>
             {items.length === 0 ? (
               <EmptyState
-                title="No tickets in this module yet"
+                title="No tickets in this workstream yet"
                 action={
                   <Button variant="secondary" size="sm" onClick={() => setAddItemOpen(true)}>
                     <Plus size={14} />
@@ -426,8 +423,8 @@ export default function ModuleDetailPage() {
           <div>
             <label className="mb-1.5 block text-xs font-medium text-text-muted">Status</label>
             <select
-              value={module.status}
-              onChange={(e) => patch({ status: e.target.value as WorkModule['status'] })}
+              value={workstream.status}
+              onChange={(e) => patch({ status: e.target.value as Workstream['status'] })}
               className="h-9 w-full rounded-[var(--radius-sm)] border border-border-strong bg-bg px-2.5 text-sm outline-none focus:border-accent"
             >
               {STATUS_OPTIONS.map((opt) => (
@@ -437,7 +434,7 @@ export default function ModuleDetailPage() {
               ))}
             </select>
             <div className="mt-2">
-              <Badge tone={STATUS_TONE[module.status]}>{STATUS_LABEL[module.status]}</Badge>
+              <Badge tone={STATUS_TONE[workstream.status]}>{STATUS_LABEL[workstream.status]}</Badge>
             </div>
           </div>
 
@@ -471,7 +468,7 @@ export default function ModuleDetailPage() {
                     className={OPTION_CLASS}
                   >
                     <span className="text-text-muted">No lead</span>
-                    {!module.leadId && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                    {!workstream.leadId && <Check size={14} className="ml-auto shrink-0 text-accent" />}
                   </button>
                   {projectMembers.map((m) => (
                     <button
@@ -485,7 +482,7 @@ export default function ModuleDetailPage() {
                     >
                       <Avatar name={m.displayName} color={m.avatarColor} size={20} />
                       <span className="truncate">{m.displayName}</span>
-                      {m.id === module.leadId && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                      {m.id === workstream.leadId && <Check size={14} className="ml-auto shrink-0 text-accent" />}
                     </button>
                   ))}
                 </div>
@@ -498,8 +495,8 @@ export default function ModuleDetailPage() {
             <Dropdown
               trigger={(toggle) => (
                 <button type="button" onClick={toggle} className={TRIGGER_CLASS}>
-                  {moduleMembers.length > 0 ? (
-                    <AvatarStack people={moduleMembers.map((m) => ({ name: m.displayName, color: m.avatarColor }))} size={20} />
+                  {workstreamMembers.length > 0 ? (
+                    <AvatarStack people={workstreamMembers.map((m) => ({ name: m.displayName, color: m.avatarColor }))} size={20} />
                   ) : (
                     <span className="flex items-center gap-1.5 text-text-muted">
                       <Users size={14} /> No members
@@ -515,7 +512,7 @@ export default function ModuleDetailPage() {
                     <p className="px-2 py-1.5 text-xs text-text-muted">No project members.</p>
                   )}
                   {projectMembers.map((m) => {
-                    const checked = module.memberIds.includes(m.id);
+                    const checked = workstream.memberIds.includes(m.id);
                     return (
                       <button key={m.id} type="button" onClick={() => toggleMember(m.id)} className={OPTION_CLASS}>
                         <Avatar name={m.displayName} color={m.avatarColor} size={20} />
@@ -545,7 +542,7 @@ export default function ModuleDetailPage() {
             <label className="mb-1.5 block text-xs font-medium text-text-muted">Start date</label>
             <input
               type="date"
-              defaultValue={toDateInput(module.startDate)}
+              defaultValue={toDateInput(workstream.startDate)}
               onBlur={(e) => patch({ startDate: e.target.value ? new Date(e.target.value).toISOString() : null })}
               className="h-9 w-full rounded-[var(--radius-sm)] border border-border-strong bg-bg px-2.5 text-sm outline-none focus:border-accent"
             />
@@ -555,7 +552,7 @@ export default function ModuleDetailPage() {
             <label className="mb-1.5 block text-xs font-medium text-text-muted">Target date</label>
             <input
               type="date"
-              defaultValue={toDateInput(module.targetDate)}
+              defaultValue={toDateInput(workstream.targetDate)}
               onBlur={(e) => patch({ targetDate: e.target.value ? new Date(e.target.value).toISOString() : null })}
               className="h-9 w-full rounded-[var(--radius-sm)] border border-border-strong bg-bg px-2.5 text-sm outline-none focus:border-accent"
             />

@@ -1,4 +1,4 @@
-import { Circle, CircleDot, CircleCheck, CircleX, CircleDashed, Inbox } from 'lucide-react';
+import { Circle, CircleDot, CircleCheck, CircleX, CircleDashed } from 'lucide-react';
 import type { StateGroup, TicketState } from '@/types/entities';
 
 export const STATE_GROUP_LABEL: Record<StateGroup, string> = {
@@ -7,17 +7,14 @@ export const STATE_GROUP_LABEL: Record<StateGroup, string> = {
   started: 'Started',
   completed: 'Completed',
   cancelled: 'Cancelled',
-  triage: 'Triage',
 };
 
 /** Fixed ordering for grouped board/list columns — mirrors the backend's state-group taxonomy. */
-export const STATE_GROUP_ORDER: StateGroup[] = ['triage', 'backlog', 'unstarted', 'started', 'completed', 'cancelled'];
+export const STATE_GROUP_ORDER: StateGroup[] = ['backlog', 'unstarted', 'started', 'completed', 'cancelled'];
 
 export function StateIcon({ state, size = 14 }: { state: Pick<TicketState, 'group' | 'color'>; size?: number }) {
   const props = { size, color: state.color, strokeWidth: 2.2 };
   switch (state.group) {
-    case 'triage':
-      return <Inbox {...props} />;
     case 'backlog':
       return <CircleDashed {...props} />;
     case 'unstarted':

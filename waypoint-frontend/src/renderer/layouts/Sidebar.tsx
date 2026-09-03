@@ -4,7 +4,7 @@ import {
   Home as HomeIcon,
   FileEdit,
   UserRound,
-  StickyNote,
+  NotepadText,
   FolderKanban,
   ChevronDown,
   ChevronRight,
@@ -37,11 +37,11 @@ function ProjectRow({ project }: { project: Project }) {
   const subNav: { to: string; label: string; icon: typeof LayoutList }[] = [
     { to: 'tickets', label: 'Tickets', icon: LayoutList },
   ];
-  if (project.features.cycles) subNav.push({ to: 'cycles', label: 'Cycles', icon: RefreshCw });
-  if (project.features.modules) subNav.push({ to: 'modules', label: 'Modules', icon: Boxes });
+  if (project.features.sprints) subNav.push({ to: 'sprints', label: 'Sprints', icon: RefreshCw });
+  if (project.features.workstreams) subNav.push({ to: 'workstreams', label: 'Workstreams', icon: Boxes });
   if (project.features.views) subNav.push({ to: 'views', label: 'Views', icon: Layers });
-  if (project.features.pages) subNav.push({ to: 'pages', label: 'Pages', icon: FileText });
-  if (project.features.intake) subNav.push({ to: 'intake', label: 'Intake', icon: Inbox });
+  if (project.features.docs) subNav.push({ to: 'docs', label: 'Docs', icon: FileText });
+  if (project.features.requests) subNav.push({ to: 'requests', label: 'Requests', icon: Inbox });
 
   return (
     <div>
@@ -100,9 +100,9 @@ export function Sidebar() {
           <FileEdit size={15} />
           Drafts
         </NavLink>
-        <NavLink to="/stickies" className={navLinkClass}>
-          <StickyNote size={15} />
-          Stickies
+        <NavLink to="/scratchpad" className={navLinkClass}>
+          <NotepadText size={15} />
+          Scratchpad
         </NavLink>
       </nav>
 

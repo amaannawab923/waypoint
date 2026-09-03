@@ -20,7 +20,7 @@ import CreateWorkspace from '@/pages/auth/CreateWorkspace';
 import Home from '@/pages/Home';
 import YourWork from '@/pages/YourWork';
 import Drafts from '@/pages/Drafts';
-import Stickies from '@/pages/Stickies';
+import Scratchpad from '@/pages/Scratchpad';
 import Notifications from '@/pages/Notifications';
 import ProjectsList from '@/pages/ProjectsList';
 import ArchivedProjects from '@/pages/ArchivedProjects';
@@ -30,14 +30,14 @@ import WorkspaceViewsPage from '@/pages/WorkspaceViewsPage';
 import TicketsLayout from '@/pages/tickets/TicketsLayout';
 import TicketDetailPage from '@/pages/tickets/TicketDetailPage';
 
-import CyclesPage from '@/pages/CyclesPage';
-import CycleDetailPage from '@/pages/CycleDetailPage';
-import ModulesPage from '@/pages/ModulesPage';
-import ModuleDetailPage from '@/pages/ModuleDetailPage';
+import SprintsPage from '@/pages/SprintsPage';
+import SprintDetailPage from '@/pages/SprintDetailPage';
+import WorkstreamsPage from '@/pages/WorkstreamsPage';
+import WorkstreamDetailPage from '@/pages/WorkstreamDetailPage';
 import ProjectViewsPage from '@/pages/ProjectViewsPage';
-import IntakePage from '@/pages/IntakePage';
-import PagesPage from '@/pages/PagesPage';
-import PageDetailPage from '@/pages/PageDetailPage';
+import RequestsPage from '@/pages/RequestsPage';
+import DocsPage from '@/pages/DocsPage';
+import DocDetailPage from '@/pages/DocDetailPage';
 
 import ProjectSettingsLayout from '@/pages/project-settings/ProjectSettingsLayout';
 import ProjectSettingsGeneral from '@/pages/project-settings/General';
@@ -92,7 +92,7 @@ export const router = createBrowserRouter([
           { path: '/', element: <Home /> },
           { path: '/your-work', element: <YourWork /> },
           { path: '/drafts', element: <Drafts /> },
-          { path: '/stickies', element: <Stickies /> },
+          { path: '/scratchpad', element: <Scratchpad /> },
           { path: '/notifications', element: <Notifications /> },
           { path: '/projects', element: <ProjectsList /> },
           { path: '/projects/archived', element: <ArchivedProjects /> },
@@ -109,14 +109,17 @@ export const router = createBrowserRouter([
                 path: 'tickets/:identifier',
                 element: <TicketDetailPage />,
               },
-              { path: 'cycles', element: <CyclesPage /> },
-              { path: 'cycles/:cycleId', element: <CycleDetailPage /> },
-              { path: 'modules', element: <ModulesPage /> },
-              { path: 'modules/:moduleId', element: <ModuleDetailPage /> },
+              { path: 'sprints', element: <SprintsPage /> },
+              { path: 'sprints/:sprintId', element: <SprintDetailPage /> },
+              { path: 'workstreams', element: <WorkstreamsPage /> },
+              {
+                path: 'workstreams/:workstreamId',
+                element: <WorkstreamDetailPage />,
+              },
               { path: 'views', element: <ProjectViewsPage /> },
-              { path: 'pages', element: <PagesPage /> },
-              { path: 'pages/:pageId', element: <PageDetailPage /> },
-              { path: 'intake', element: <IntakePage /> },
+              { path: 'docs', element: <DocsPage /> },
+              { path: 'docs/:docId', element: <DocDetailPage /> },
+              { path: 'requests', element: <RequestsPage /> },
               {
                 path: 'settings',
                 element: <ProjectSettingsLayout />,

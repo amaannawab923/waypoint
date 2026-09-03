@@ -1,20 +1,20 @@
 import { z } from 'zod';
 
-export const createModuleSchema = z.object({
+export const createWorkstreamSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
   leadId: z.string().nullable().optional(),
-  status: z.enum(['backlog', 'planned', 'in-progress', 'paused', 'completed', 'cancelled']).optional(),
+  status: z.enum(['planned', 'active', 'paused', 'done', 'dropped']).optional(),
   startDate: z.string().nullable().optional(),
   targetDate: z.string().nullable().optional(),
   memberIds: z.array(z.string()).optional(),
 });
 
-export const updateModuleSchema = createModuleSchema.partial();
+export const updateWorkstreamSchema = createWorkstreamSchema.partial();
 
-const cycleDateOrderMessage = { message: 'endDate must not be before startDate' };
+const sprintDateOrderMessage = { message: 'endDate must not be before startDate' };
 
-const cycleFieldsSchema = z.object({
+const sprintFieldsSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
   startDate: z.string(),
@@ -23,15 +23,15 @@ const cycleFieldsSchema = z.object({
   memberIds: z.array(z.string()).optional(),
 });
 
-export const createCycleSchema = cycleFieldsSchema.refine((c) => c.endDate >= c.startDate, cycleDateOrderMessage);
+export const createSprintSchema = sprintFieldsSchema.refine((c) => c.endDate >= c.startDate, sprintDateOrderMessage);
 
-// Built from cycleFieldsSchema.partial() rather than createCycleSchema —
+// Built from sprintFieldsSchema.partial() rather than createSprintSchema —
 // .refine() wraps a schema in ZodEffects, which drops .partial(). A PATCH
 // may legitimately touch only one of startDate/endDate, so the pair is only
 // checked here when both arrive together in the same patch; a patch that
 // changes just one date against an already-stored other date isn't
 // re-validated (that needs a DB read the schema layer can't do) — a
 // narrower gap than having no check at all.
-export const updateCycleSchema = cycleFieldsSchema
+export const updateSprintSchema = sprintFieldsSchema
   .partial()
-  .refine((c) => c.startDate === undefined || c.endDate === undefined || c.endDate >= c.startDate, cycleDateOrderMessage);
+  .refine((c) => c.startDate === undefined || c.endDate === undefined || c.endDate >= c.startDate, sprintDateOrderMessage);

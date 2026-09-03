@@ -65,14 +65,14 @@ function filtersFromSavedView(
       stateId: toStringArray(raw.stateId),
       labelId: toStringArray(raw.labelId),
       assigneeId,
-      moduleId: toStringArray(raw.moduleId),
-      cycleId: toStringArray(raw.cycleId),
+      workstreamId: toStringArray(raw.workstreamId),
+      sprintId: toStringArray(raw.sprintId),
     },
   };
 }
 
 /** Small self-contained popover: caller renders the trigger and the panel content. Mirrors the
- * pattern used in CycleListCard/TicketDetailPage — there's no shared Dropdown/Menu primitive in
+ * pattern used in SprintListCard/TicketDetailPage — there's no shared Dropdown/Menu primitive in
  * src/components/ui/ yet, so this stays local. */
 function Dropdown({
   trigger,

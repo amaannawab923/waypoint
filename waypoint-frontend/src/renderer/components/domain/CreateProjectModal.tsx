@@ -10,11 +10,11 @@ function slugify(name: string): string {
 }
 
 const DEFAULT_FEATURES: ProjectFeatures = {
-  cycles: false,
-  modules: false,
+  sprints: false,
+  workstreams: false,
   views: false,
-  pages: true,
-  intake: false,
+  docs: true,
+  requests: false,
 };
 
 interface FeatureRow {
@@ -25,16 +25,16 @@ interface FeatureRow {
 
 const FEATURE_ROWS: FeatureRow[] = [
   {
-    key: 'cycles',
-    label: 'Cycles',
+    key: 'sprints',
+    label: 'Sprints',
     description:
-      'Run work in fixed date ranges, each with its own status, lead, and tickets. They don’t have to match — a two-week cycle, then a one-week one.',
+      'Run work in fixed date ranges, each with its own status, lead, and tickets. They don’t have to match — a two-week sprint, then a one-week one.',
   },
   {
-    key: 'modules',
-    label: 'Modules',
+    key: 'workstreams',
+    label: 'Workstreams',
     description:
-      'Group tickets under one lead and status — for the payments migration, the redesign, anything that spans more than one cycle.',
+      'Group tickets under one lead and status — for the payments migration, the redesign, anything that spans more than one sprint.',
   },
   {
     key: 'views',
@@ -43,14 +43,14 @@ const FEATURE_ROWS: FeatureRow[] = [
       'Save a filter, sort, and grouping of the ticket list, then share it or keep it to yourself.',
   },
   {
-    key: 'pages',
-    label: 'Pages',
+    key: 'docs',
+    label: 'Docs',
     description:
       'Write long-form docs for the project — specs, runbooks, meeting notes — nested and organized however you like.',
   },
   {
-    key: 'intake',
-    label: 'Intake',
+    key: 'requests',
+    label: 'Requests',
     description:
       'Give people outside the project a form to file requests. They land as pending items for your team to accept or decline.',
   },

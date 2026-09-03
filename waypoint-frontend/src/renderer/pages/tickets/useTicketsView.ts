@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react';
 import { useAsync } from '@/lib/useAsync';
-import { listTickets, listStates, listLabels, listModules, listCycles } from '@/data/api';
+import { listTickets, listStates, listLabels, listWorkstreams, listSprints } from '@/data/api';
 import type { Ticket, TicketState, Priority } from '@/types/entities';
 import { STATE_GROUP_ORDER } from '@/components/domain/StateIcon';
 import { PRIORITY_ORDER } from '@/components/domain/PriorityIcon';
 
-export type GroupBy = 'state' | 'priority' | 'module' | 'cycle' | 'assignee' | 'none';
+export type GroupBy = 'state' | 'priority' | 'workstream' | 'sprint' | 'assignee' | 'none';
 export type ViewKind = 'list' | 'board' | 'calendar' | 'spreadsheet' | 'gantt';
 
 export interface TicketFilters {
@@ -13,8 +13,8 @@ export interface TicketFilters {
   stateId: string[];
   labelId: string[];
   assigneeId: string[];
-  moduleId: string[];
-  cycleId: string[];
+  workstreamId: string[];
+  sprintId: string[];
 }
 
 export const EMPTY_FILTERS: TicketFilters = {
@@ -22,8 +22,8 @@ export const EMPTY_FILTERS: TicketFilters = {
   stateId: [],
   labelId: [],
   assigneeId: [],
-  moduleId: [],
-  cycleId: [],
+  workstreamId: [],
+  sprintId: [],
 };
 
 export interface TicketGroup {
@@ -43,8 +43,8 @@ export function useTicketsView(projectId: string) {
   const { data: items, loading, reload, setData: setItems } = useAsync(() => listTickets(projectId), [projectId]);
   const { data: states } = useAsync(() => listStates(projectId), [projectId]);
   const { data: labels } = useAsync(() => listLabels(projectId), [projectId]);
-  const { data: modules } = useAsync(() => listModules(projectId), [projectId]);
-  const { data: cycles } = useAsync(() => listCycles(projectId), [projectId]);
+  const { data: workstreams } = useAsync(() => listWorkstreams(projectId), [projectId]);
+  const { data: sprints } = useAsync(() => listSprints(projectId), [projectId]);
 
   const [filters, setFilters] = useState<TicketFilters>(EMPTY_FILTERS);
   const [groupBy, setGroupBy] = useState<GroupBy>('state');
@@ -57,8 +57,8 @@ export function useTicketsView(projectId: string) {
       if (filters.stateId.length && !filters.stateId.includes(item.stateId)) return false;
       if (filters.labelId.length && !item.labelIds.some((id) => filters.labelId.includes(id))) return false;
       if (filters.assigneeId.length && !item.assigneeIds.some((id) => filters.assigneeId.includes(id))) return false;
-      if (filters.moduleId.length && (!item.moduleId || !filters.moduleId.includes(item.moduleId))) return false;
-      if (filters.cycleId.length && (!item.cycleId || !filters.cycleId.includes(item.cycleId))) return false;
+      if (filters.workstreamId.length && (!item.workstreamId || !filters.workstreamId.includes(item.workstreamId))) return false;
+      if (filters.sprintId.length && (!item.sprintId || !filters.sprintId.includes(item.sprintId))) return false;
       return true;
     });
   }, [items, filters]);
@@ -84,16 +84,16 @@ export function useTicketsView(projectId: string) {
       case 'priority':
         groups = PRIORITY_ORDER.map((p) => build(p, p, undefined, (i) => i.priority === p));
         break;
-      case 'module':
+      case 'workstream':
         groups = [
-          ...(modules ?? []).map((m) => build(m.id, m.name, undefined, (i) => i.moduleId === m.id)),
-          build('none', 'No module', undefined, (i) => !i.moduleId),
+          ...(workstreams ?? []).map((m) => build(m.id, m.name, undefined, (i) => i.workstreamId === m.id)),
+          build('none', 'No workstream', undefined, (i) => !i.workstreamId),
         ];
         break;
-      case 'cycle':
+      case 'sprint':
         groups = [
-          ...(cycles ?? []).map((c) => build(c.id, c.name, undefined, (i) => i.cycleId === c.id)),
-          build('none', 'No cycle', undefined, (i) => !i.cycleId),
+          ...(sprints ?? []).map((c) => build(c.id, c.name, undefined, (i) => i.sprintId === c.id)),
+          build('none', 'No sprint', undefined, (i) => !i.sprintId),
         ];
         break;
       case 'assignee':
@@ -104,7 +104,7 @@ export function useTicketsView(projectId: string) {
     }
 
     return showEmptyGroups ? groups : groups.filter((g) => g.items.length > 0);
-  }, [filteredItems, groupBy, states, modules, cycles, showEmptyGroups]);
+  }, [filteredItems, groupBy, states, workstreams, sprints, showEmptyGroups]);
 
   function stateFor(item: Ticket): TicketState | undefined {
     return stateById.get(item.stateId);
@@ -160,8 +160,8 @@ export function useTicketsView(projectId: string) {
     reorderItemLocally,
     states: states ?? [],
     labels: labels ?? [],
-    modules: modules ?? [],
-    cycles: cycles ?? [],
+    workstreams: workstreams ?? [],
+    sprints: sprints ?? [],
     filters,
     setFilters,
     groupBy,

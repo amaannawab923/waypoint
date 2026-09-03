@@ -6,7 +6,7 @@ const MAX_RECENTS = 20;
 // Runtime list, not just a union: these values are persisted to localStorage,
 // so a read has to be able to check them (see readRecents). Deriving the type
 // from the array keeps the two from drifting apart.
-export const RECENT_TYPES = ['ticket', 'page', 'cycle', 'module'] as const;
+export const RECENT_TYPES = ['ticket', 'doc', 'sprint', 'workstream'] as const;
 
 export type RecentType = (typeof RECENT_TYPES)[number];
 
@@ -27,8 +27,8 @@ function readRecents(): RecentEntry[] {
     if (!Array.isArray(parsed)) return [];
     // Drop entries whose type this build no longer knows. The vocabulary
     // rename (docs/design/RENAME-STATE.md) changes these persisted values —
-    // C2 'work-item' -> 'ticket', C3 'cycle'/'module' -> 'sprint'/'workstream'
-    // — and a stale entry read back verbatim reaches Home's
+    // C2 renamed 'work-item' to 'ticket', C3 renamed the other three — and a
+    // stale entry read back verbatim reaches Home's
     // RECENT_TYPE_ICON[type] lookup as undefined, which renders <undefined />
     // and takes the page down. Recents are a best-effort cache; forgetting a
     // superseded row is the right failure.

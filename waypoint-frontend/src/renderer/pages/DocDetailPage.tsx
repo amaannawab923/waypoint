@@ -34,11 +34,11 @@ import {
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import { useRecordRecent } from '@/lib/recents';
-import { deletePage, getPage, updatePage } from '@/data/api';
+import { deleteDoc, getDoc, updateDoc } from '@/data/api';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { IconButton } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
-import type { Page } from '@/types/entities';
+import type { Doc } from '@/types/entities';
 
 type SaveStatus = 'idle' | 'saving' | 'saved';
 
@@ -155,28 +155,28 @@ function computeSlashMenuState(editor: Editor): SlashMenuState | null {
   return { query: match[1], from, to, top: coords.bottom + 6, left: coords.left };
 }
 
-export default function PageDetailPage() {
+export default function DocDetailPage() {
   const { project } = useProject();
-  const { pageId = '' } = useParams();
+  const { docId = '' } = useParams();
   const navigate = useNavigate();
 
-  const { data: page, loading } = useAsync(() => getPage(pageId), [pageId]);
+  const { data: doc, loading } = useAsync(() => getDoc(docId), [docId]);
 
   useRecordRecent(
-    page
+    doc
       ? {
-          type: 'page',
-          id: page.id,
-          title: page.title || 'Untitled',
-          projectId: page.projectId,
-          path: `/projects/${page.projectId}/pages/${page.id}`,
+          type: 'doc',
+          id: doc.id,
+          title: doc.title || 'Untitled',
+          projectId: doc.projectId,
+          path: `/projects/${doc.projectId}/docs/${doc.id}`,
         }
       : null,
   );
 
   const [title, setTitle] = useState('');
   const [icon, setIcon] = useState('📄');
-  const [visibility, setVisibility] = useState<Page['visibility']>('private');
+  const [visibility, setVisibility] = useState<Doc['visibility']>('private');
   const [isFavorite, setIsFavorite] = useState(false);
   const [isLocked, setIsLocked] = useState(false);
   const [status, setStatus] = useState<SaveStatus>('idle');
@@ -185,7 +185,7 @@ export default function PageDetailPage() {
   const [slashMenu, setSlashMenu] = useState<SlashMenuState | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const loadedPageId = useRef<string | null>(null);
+  const loadedDocId = useRef<string | null>(null);
   const prevVisibilityRef = useRef<'public' | 'private'>('private');
   const iconPickerRef = useRef<HTMLDivElement | null>(null);
 
@@ -205,7 +205,7 @@ export default function PageDetailPage() {
       setStatus('saving');
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => {
-        void updatePage(pageId, { contentHtml: e.getHTML() }).then(() => setStatus('saved'));
+        void updateDoc(docId, { contentHtml: e.getHTML() }).then(() => setStatus('saved'));
       }, 800);
       setSlashMenu(computeSlashMenuState(e));
     },
@@ -250,23 +250,23 @@ export default function PageDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slashMenu, editor, filteredSlashItems]);
 
-  // Load page content into the editor once, whenever we navigate to a new page.
+  // Load doc content into the editor once, whenever we navigate to a new doc.
   useEffect(() => {
-    if (!page || !editor) return;
-    if (loadedPageId.current === page.id) return;
-    loadedPageId.current = page.id;
-    editor.commands.setContent(page.contentHtml || '<p></p>');
-    setTitle(page.title);
-    setIcon(page.icon || '📄');
-    setVisibility(page.visibility);
-    // Seed the "restore on unarchive" ref per-page so it never carries over a
-    // previously-viewed page's value. If this page is already archived, there's
+    if (!doc || !editor) return;
+    if (loadedDocId.current === doc.id) return;
+    loadedDocId.current = doc.id;
+    editor.commands.setContent(doc.contentHtml || '<p></p>');
+    setTitle(doc.title);
+    setIcon(doc.icon || '📄');
+    setVisibility(doc.visibility);
+    // Seed the "restore on unarchive" ref per-doc so it never carries over a
+    // previously-viewed doc's value. If this doc is already archived, there's
     // no persisted record of what it was before, so fall back to 'private'.
-    prevVisibilityRef.current = page.visibility === 'archived' ? 'private' : page.visibility;
-    setIsFavorite(!!page.isFavorite);
-    setIsLocked(!!page.isLocked);
+    prevVisibilityRef.current = doc.visibility === 'archived' ? 'private' : doc.visibility;
+    setIsFavorite(!!doc.isFavorite);
+    setIsLocked(!!doc.isLocked);
     setStatus('idle');
-  }, [page, editor]);
+  }, [doc, editor]);
 
   useEffect(() => {
     editor?.setEditable(!isLocked);
@@ -291,63 +291,63 @@ export default function PageDetailPage() {
   }, []);
 
   async function handleTitleBlur() {
-    if (!page) return;
+    if (!doc) return;
     const trimmed = title.trim() || 'Untitled';
-    if (trimmed === page.title) return;
+    if (trimmed === doc.title) return;
     setStatus('saving');
-    await updatePage(page.id, { title: trimmed });
+    await updateDoc(doc.id, { title: trimmed });
     setStatus('saved');
   }
 
   async function handleIconSelect(next: string) {
-    if (!page) return;
+    if (!doc) return;
     setIcon(next);
     setIconPickerOpen(false);
     setStatus('saving');
-    await updatePage(page.id, { icon: next });
+    await updateDoc(doc.id, { icon: next });
     setStatus('saved');
   }
 
   async function handleToggleFavorite() {
-    if (!page) return;
+    if (!doc) return;
     const next = !isFavorite;
     setIsFavorite(next);
     setStatus('saving');
-    await updatePage(page.id, { isFavorite: next });
+    await updateDoc(doc.id, { isFavorite: next });
     setStatus('saved');
   }
 
   async function handleToggleLocked() {
-    if (!page) return;
+    if (!doc) return;
     const next = !isLocked;
     setIsLocked(next);
     setStatus('saving');
-    await updatePage(page.id, { isLocked: next });
+    await updateDoc(doc.id, { isLocked: next });
     setStatus('saved');
   }
 
   async function handleToggleArchived() {
-    if (!page) return;
+    if (!doc) return;
     const isCurrentlyArchived = visibility === 'archived';
     // Capture the visibility that's actually in effect right now, at the exact
     // moment Archive fires, so Unarchive always restores it — not via a
     // reactive effect keyed on `visibility`, which can miss or misattribute
-    // the transition (e.g. across page navigations or a fresh page load).
+    // the transition (e.g. across doc navigations or a fresh page load).
     if (!isCurrentlyArchived) {
       prevVisibilityRef.current = visibility;
     }
-    const next: Page['visibility'] = isCurrentlyArchived ? prevVisibilityRef.current : 'archived';
+    const next: Doc['visibility'] = isCurrentlyArchived ? prevVisibilityRef.current : 'archived';
     setVisibility(next);
     setStatus('saving');
-    await updatePage(page.id, { visibility: next });
+    await updateDoc(doc.id, { visibility: next });
     setStatus('saved');
   }
 
-  async function handleDeletePage() {
-    if (!page) return;
-    if (!window.confirm(`Delete "${page.title || 'Untitled'}"? This can't be undone.`)) return;
-    await deletePage(page.id);
-    navigate(`/projects/${project.id}/pages`);
+  async function handleDeleteDoc() {
+    if (!doc) return;
+    if (!window.confirm(`Delete "${doc.title || 'Untitled'}"? This can't be undone.`)) return;
+    await deleteDoc(doc.id);
+    navigate(`/projects/${project.id}/docs`);
   }
 
   async function handleCopyLink() {
@@ -361,7 +361,7 @@ export default function PageDetailPage() {
     }
   }
 
-  if (loading && !page) {
+  if (loading && !doc) {
     const lineWidths = ['100%', '92%', '96%', '70%', '100%', '85%', '60%'];
     return (
       <div className="flex h-full flex-col">
@@ -386,8 +386,8 @@ export default function PageDetailPage() {
     );
   }
 
-  if (!page) {
-    return <EmptyState title="Page not found" description="It may have been deleted." />;
+  if (!doc) {
+    return <EmptyState title="Doc not found" description="It may have been deleted." />;
   }
 
   const isArchived = visibility === 'archived';
@@ -395,7 +395,7 @@ export default function PageDetailPage() {
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-3 border-b border-border px-6 py-3">
-        <IconButton label="Back to pages" onClick={() => navigate(`/projects/${project.id}/pages`)}>
+        <IconButton label="Back to docs" onClick={() => navigate(`/projects/${project.id}/docs`)}>
           <ArrowLeft size={16} />
         </IconButton>
         <span className="text-xs text-text-muted">
@@ -412,7 +412,7 @@ export default function PageDetailPage() {
             <Star size={15} fill={isFavorite ? 'currentColor' : 'none'} />
           </IconButton>
           <IconButton
-            label={isLocked ? 'Unlock page' : 'Lock page'}
+            label={isLocked ? 'Unlock doc' : 'Lock doc'}
             onClick={handleToggleLocked}
             className={isLocked ? 'text-accent' : undefined}
           >
@@ -422,13 +422,13 @@ export default function PageDetailPage() {
             {copied ? <Check size={15} /> : <Link2 size={15} />}
           </IconButton>
           <IconButton
-            label={isArchived ? 'Unarchive page' : 'Archive page'}
+            label={isArchived ? 'Unarchive doc' : 'Archive doc'}
             onClick={handleToggleArchived}
             className={isArchived ? 'text-accent' : undefined}
           >
             {isArchived ? <ArchiveRestore size={15} /> : <Archive size={15} />}
           </IconButton>
-          <IconButton label="Delete page" onClick={handleDeletePage} className="hover:text-danger">
+          <IconButton label="Delete doc" onClick={handleDeleteDoc} className="hover:text-danger">
             <Trash2 size={15} />
           </IconButton>
         </div>
@@ -440,7 +440,7 @@ export default function PageDetailPage() {
             type="button"
             onClick={() => setIconPickerOpen((v) => !v)}
             className="cursor-pointer rounded-[var(--radius-sm)] p-1 leading-none transition-colors hover:bg-surface-2"
-            aria-label="Change page icon"
+            aria-label="Change doc icon"
           >
             {icon}
           </button>

@@ -1,29 +1,29 @@
 import { useMemo } from 'react';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import type { Cycle, Ticket, TicketState } from '@/types/entities';
+import type { Sprint, Ticket, TicketState } from '@/types/entities';
 import { STATE_GROUP_LABEL } from '@/components/domain/StateIcon';
 import { Dot } from '@/components/ui/Badge';
 import { NotWired } from '@/components/ui/NotWired';
-import { BREAKDOWN_ORDER, buildBurndownData, computeBreakdown, computeProgress, stateGroupColor } from './cycle-utils';
+import { BREAKDOWN_ORDER, buildBurndownData, computeBreakdown, computeProgress, stateGroupColor } from './sprint-utils';
 
 /**
- * Progress ring + state-group breakdown + burndown chart for a single cycle's tickets.
- * Shared between the featured "active cycle" card on CyclesPage and the full CycleDetailPage.
+ * Progress ring + state-group breakdown + burndown chart for a single sprint's tickets.
+ * Shared between the featured "active sprint" card on SprintsPage and the full SprintDetailPage.
  */
-export function CycleStatsPanel({
-  cycle,
+export function SprintStatsPanel({
+  sprint,
   items,
   states,
   chartHeight = 200,
 }: {
-  cycle: Cycle;
+  sprint: Sprint;
   items: Ticket[];
   states: TicketState[];
   chartHeight?: number;
 }) {
   const progress = useMemo(() => computeProgress(items, states), [items, states]);
   const breakdown = useMemo(() => computeBreakdown(items, states), [items, states]);
-  const burndown = useMemo(() => buildBurndownData(cycle, items, states), [cycle, items, states]);
+  const burndown = useMemo(() => buildBurndownData(sprint, items, states), [sprint, items, states]);
   const total = items.length;
 
   return (
@@ -41,12 +41,12 @@ export function CycleStatsPanel({
           <p className="text-sm font-medium text-text">
             {progress.completed} of {total} done
           </p>
-          <p className="text-xs text-text-muted">Tickets completed in this cycle</p>
+          <p className="text-xs text-text-muted">Tickets completed in this sprint</p>
         </div>
       </div>
 
       {total === 0 ? (
-        <p className="text-xs text-text-muted">No tickets assigned to this cycle yet.</p>
+        <p className="text-xs text-text-muted">No tickets assigned to this sprint yet.</p>
       ) : (
         <>
           <div className="space-y-2">

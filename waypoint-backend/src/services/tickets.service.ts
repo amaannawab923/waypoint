@@ -221,10 +221,13 @@ export interface CreateTicketInput {
   priority?: (typeof tickets.$inferInsert)['priority'];
   assigneeIds?: string[];
   labelIds?: string[];
-  moduleId?: string | null;
-  cycleId?: string | null;
+  workstreamId?: string | null;
+  sprintId?: string | null;
   parentId?: string | null;
   isDraft?: boolean;
+  // Provenance (§3.3). Defaults to 'manual' — only callers that know
+  // otherwise, like a converted request, pass anything else.
+  source?: (typeof tickets.$inferInsert)['source'];
 }
 
 export async function createTicket(input: CreateTicketInput) {
@@ -255,8 +258,9 @@ export async function createTicket(input: CreateTicketInput) {
         description: input.description ?? '',
         stateId: input.stateId,
         priority: input.priority ?? 'none',
-        moduleId: input.moduleId ?? null,
-        cycleId: input.cycleId ?? null,
+        source: input.source ?? 'manual',
+        workstreamId: input.workstreamId ?? null,
+        sprintId: input.sprintId ?? null,
         parentId: input.parentId ?? null,
         createdById: CURRENT_USER_ID,
         isDraft: input.isDraft ?? false,
@@ -349,8 +353,8 @@ export interface UpdateTicketPatch {
   priority?: (typeof tickets.$inferInsert)['priority'];
   assigneeIds?: string[];
   labelIds?: string[];
-  moduleId?: string | null;
-  cycleId?: string | null;
+  workstreamId?: string | null;
+  sprintId?: string | null;
   parentId?: string | null;
   estimatePoints?: number | null;
   estimateValue?: string | null;

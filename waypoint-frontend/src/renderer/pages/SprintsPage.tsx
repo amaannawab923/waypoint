@@ -3,58 +3,58 @@ import { Link } from 'react-router-dom';
 import { Plus, RefreshCw } from 'lucide-react';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
-import { listCycles, listStates, listTickets } from '@/data/api';
-import type { Cycle, Ticket } from '@/types/entities';
+import { listSprints, listStates, listTickets } from '@/data/api';
+import type { Sprint, Ticket } from '@/types/entities';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Badge } from '@/components/ui/Badge';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
-import { CycleStatsPanel } from '@/pages/cycles/CycleStatsPanel';
-import { CycleListCard } from '@/pages/cycles/CycleListCard';
-import { NewCycleForm } from '@/pages/cycles/NewCycleForm';
-import { formatDateRange, getCycleStatus } from '@/pages/cycles/cycle-utils';
+import { SprintStatsPanel } from '@/pages/sprints/SprintStatsPanel';
+import { SprintListCard } from '@/pages/sprints/SprintListCard';
+import { NewSprintForm } from '@/pages/sprints/NewSprintForm';
+import { formatDateRange, getSprintStatus } from '@/pages/sprints/sprint-utils';
 
-export default function CyclesPage() {
+export default function SprintsPage() {
   const { project } = useProject();
   const [showForm, setShowForm] = useState(false);
 
   const {
-    data: cycles,
-    loading: cyclesLoading,
-    reload: reloadCycles,
-  } = useAsync(() => listCycles(project.id), [project.id]);
+    data: sprints,
+    loading: sprintsLoading,
+    reload: reloadSprints,
+  } = useAsync(() => listSprints(project.id), [project.id]);
   const { data: items, loading: itemsLoading } = useAsync(() => listTickets(project.id), [project.id]);
   const { data: states, loading: statesLoading } = useAsync(() => listStates(project.id), [project.id]);
 
-  const loading = cyclesLoading || itemsLoading || statesLoading;
+  const loading = sprintsLoading || itemsLoading || statesLoading;
 
-  const itemsByCycle = useMemo(() => {
+  const itemsBySprint = useMemo(() => {
     const map = new Map<string, Ticket[]>();
     for (const item of items ?? []) {
-      if (!item.cycleId) continue;
-      const bucket = map.get(item.cycleId) ?? [];
+      if (!item.sprintId) continue;
+      const bucket = map.get(item.sprintId) ?? [];
       bucket.push(item);
-      map.set(item.cycleId, bucket);
+      map.set(item.sprintId, bucket);
     }
     return map;
   }, [items]);
 
   const { active, upcoming, completed } = useMemo(() => {
-    const buckets = { active: [] as Cycle[], upcoming: [] as Cycle[], completed: [] as Cycle[] };
-    for (const cycle of cycles ?? []) {
-      buckets[getCycleStatus(cycle)].push(cycle);
+    const buckets = { active: [] as Sprint[], upcoming: [] as Sprint[], completed: [] as Sprint[] };
+    for (const sprint of sprints ?? []) {
+      buckets[getSprintStatus(sprint)].push(sprint);
     }
     buckets.upcoming.sort((a, b) => a.startDate.localeCompare(b.startDate));
     buckets.completed.sort((a, b) => b.endDate.localeCompare(a.endDate));
     return buckets;
-  }, [cycles]);
+  }, [sprints]);
 
-  if (!project.features.cycles) {
+  if (!project.features.sprints) {
     return (
       <EmptyState
         icon={<RefreshCw size={28} />}
-        title="Cycles isn't enabled for this project"
-        description="Turn Cycles back on in project settings to run work in fixed date ranges again."
+        title="Sprints isn't enabled for this project"
+        description="Turn Sprints back on in project settings to run work in fixed date ranges again."
         action={
           <Link
             to={`/projects/${project.id}/settings/features`}
@@ -71,38 +71,38 @@ export default function CyclesPage() {
     <div className="mx-auto flex max-w-4xl flex-col gap-6 p-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="font-display text-lg font-medium text-text">Cycles</h1>
+          <h1 className="font-display text-lg font-medium text-text">Sprints</h1>
           <p className="text-sm text-text-muted">Time-boxed iterations for planning and tracking work.</p>
         </div>
         {!showForm && (
           <Button variant="primary" size="sm" onClick={() => setShowForm(true)}>
             <Plus size={14} />
-            Add cycle
+            Add sprint
           </Button>
         )}
       </div>
 
       {showForm && (
-        <NewCycleForm
+        <NewSprintForm
           projectId={project.id}
-          existingCycles={cycles ?? []}
+          existingSprints={sprints ?? []}
           onCancel={() => setShowForm(false)}
           onCreated={() => {
             setShowForm(false);
-            reloadCycles();
+            reloadSprints();
           }}
         />
       )}
 
-      {loading && (!cycles || !states) ? (
+      {loading && (!sprints || !states) ? (
         <div className="rounded-[var(--radius-lg)] border border-border bg-surface px-3">
           <SkeletonListRows rows={5} />
         </div>
-      ) : (cycles ?? []).length === 0 ? (
+      ) : (sprints ?? []).length === 0 ? (
         <EmptyState
           icon={<RefreshCw size={28} />}
-          title="No cycles yet"
-          description="Create a cycle to give a slice of work its own dates, lead, and status."
+          title="No sprints yet"
+          description="Create a sprint to give a slice of work its own dates, lead, and status."
         />
       ) : (
         <div className="flex flex-col gap-8">
@@ -110,22 +110,22 @@ export default function CyclesPage() {
             <section className="flex flex-col gap-3">
               <h2 className="text-xs font-medium tracking-wide text-text-muted uppercase">Active</h2>
               <div className="flex flex-col gap-4">
-                {active.map((cycle) => (
+                {active.map((sprint) => (
                   <Link
-                    key={cycle.id}
-                    to={`/projects/${project.id}/cycles/${cycle.id}`}
+                    key={sprint.id}
+                    to={`/projects/${project.id}/sprints/${sprint.id}`}
                     className="block rounded-[var(--radius-lg)] border border-border-strong bg-surface p-5 transition-colors hover:bg-surface-2"
                   >
                     <div className="mb-4 flex items-center justify-between">
                       <div>
                         <div className="flex items-center gap-2">
-                          <h3 className="font-display text-base font-medium text-text">{cycle.name}</h3>
+                          <h3 className="font-display text-base font-medium text-text">{sprint.name}</h3>
                           <Badge tone="accent">Active</Badge>
                         </div>
-                        <p className="mt-0.5 text-xs text-text-muted">{formatDateRange(cycle.startDate, cycle.endDate)}</p>
+                        <p className="mt-0.5 text-xs text-text-muted">{formatDateRange(sprint.startDate, sprint.endDate)}</p>
                       </div>
                     </div>
-                    <CycleStatsPanel cycle={cycle} items={itemsByCycle.get(cycle.id) ?? []} states={states ?? []} />
+                    <SprintStatsPanel sprint={sprint} items={itemsBySprint.get(sprint.id) ?? []} states={states ?? []} />
                   </Link>
                 ))}
               </div>
@@ -136,15 +136,15 @@ export default function CyclesPage() {
             <section className="flex flex-col gap-3">
               <h2 className="text-xs font-medium tracking-wide text-text-muted uppercase">Upcoming</h2>
               <div className="flex flex-col gap-2">
-                {upcoming.map((cycle) => (
-                  <CycleListCard
-                    key={cycle.id}
+                {upcoming.map((sprint) => (
+                  <SprintListCard
+                    key={sprint.id}
                     projectId={project.id}
-                    cycle={cycle}
-                    items={itemsByCycle.get(cycle.id) ?? []}
+                    sprint={sprint}
+                    items={itemsBySprint.get(sprint.id) ?? []}
                     states={states ?? []}
-                    allCycles={cycles ?? []}
-                    onChanged={reloadCycles}
+                    allSprints={sprints ?? []}
+                    onChanged={reloadSprints}
                   />
                 ))}
               </div>
@@ -155,15 +155,15 @@ export default function CyclesPage() {
             <section className="flex flex-col gap-3">
               <h2 className="text-xs font-medium tracking-wide text-text-muted uppercase">Completed</h2>
               <div className="flex flex-col gap-2">
-                {completed.map((cycle) => (
-                  <CycleListCard
-                    key={cycle.id}
+                {completed.map((sprint) => (
+                  <SprintListCard
+                    key={sprint.id}
                     projectId={project.id}
-                    cycle={cycle}
-                    items={itemsByCycle.get(cycle.id) ?? []}
+                    sprint={sprint}
+                    items={itemsBySprint.get(sprint.id) ?? []}
                     states={states ?? []}
-                    allCycles={cycles ?? []}
-                    onChanged={reloadCycles}
+                    allSprints={sprints ?? []}
+                    onChanged={reloadSprints}
                   />
                 ))}
               </div>

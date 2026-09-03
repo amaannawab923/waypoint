@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/Button';
-import { createCycle } from '@/data/api';
-import type { Cycle } from '@/types/entities';
-import { findOverlappingCycle, formatDateRange } from './cycle-utils';
+import { createSprint } from '@/data/api';
+import type { Sprint } from '@/types/entities';
+import { findOverlappingSprint, formatDateRange } from './sprint-utils';
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
@@ -14,17 +14,17 @@ function inTwoWeeks(): string {
   return d.toISOString().slice(0, 10);
 }
 
-/** Small inline form (not a modal) for creating a cycle: name plus a start/end date range. */
-export function NewCycleForm({
+/** Small inline form (not a modal) for creating a sprint: name plus a start/end date range. */
+export function NewSprintForm({
   projectId,
-  existingCycles,
+  existingSprints,
   onCancel,
   onCreated,
 }: {
   projectId: string;
-  existingCycles: Cycle[];
+  existingSprints: Sprint[];
   onCancel: () => void;
-  onCreated: (cycle: Cycle) => void;
+  onCreated: (sprint: Sprint) => void;
 }) {
   const [name, setName] = useState('');
   const [startDate, setStartDate] = useState(today());
@@ -32,15 +32,15 @@ export function NewCycleForm({
   const [submitting, setSubmitting] = useState(false);
 
   const dateOrderValid = Boolean(startDate && endDate && startDate <= endDate);
-  const overlapping = dateOrderValid ? findOverlappingCycle(existingCycles, startDate, endDate) : null;
+  const overlapping = dateOrderValid ? findOverlappingSprint(existingSprints, startDate, endDate) : null;
   const valid = name.trim().length > 0 && dateOrderValid && !overlapping;
 
   async function handleSubmit() {
     if (!valid || submitting) return;
     setSubmitting(true);
     try {
-      const cycle = await createCycle(projectId, { name: name.trim(), description: '', startDate, endDate });
-      onCreated(cycle);
+      const sprint = await createSprint(projectId, { name: name.trim(), description: '', startDate, endDate });
+      onCreated(sprint);
     } finally {
       setSubmitting(false);
     }
@@ -49,7 +49,7 @@ export function NewCycleForm({
   return (
     <div className="flex flex-col gap-3 rounded-[var(--radius)] border border-border-strong bg-surface p-4">
       <div className="flex flex-col gap-1.5">
-        <label className="text-xs font-medium text-text-secondary">Cycle name</label>
+        <label className="text-xs font-medium text-text-secondary">Sprint name</label>
         <input
           autoFocus
           placeholder="e.g. Sprint 12"
@@ -90,7 +90,7 @@ export function NewCycleForm({
           Cancel
         </Button>
         <Button variant="primary" size="sm" disabled={!valid || submitting} onClick={handleSubmit}>
-          {submitting ? 'Creating…' : 'Create cycle'}
+          {submitting ? 'Creating…' : 'Create sprint'}
         </Button>
       </div>
     </div>

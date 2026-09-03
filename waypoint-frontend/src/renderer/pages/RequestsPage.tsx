@@ -5,13 +5,13 @@ import { Check, Copy, Globe2, Inbox, Link2, Plus, X } from 'lucide-react';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import {
-  convertIntakeToTicket,
-  createIntakeRequest,
+  convertRequestToTicket,
+  createRequest,
   getCurrentUser,
-  listIntake,
+  listRequests,
   listStates,
   listTickets,
-  updateIntakeStatus,
+  updateRequestStatus,
 } from '@/data/api';
 import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -21,16 +21,16 @@ import { Skeleton, SkeletonListRows } from '@/components/ui/Skeleton';
 import { NotWired } from '@/components/ui/NotWired';
 import { STATE_GROUP_ORDER } from '@/components/domain/StateIcon';
 import { PRIORITY_LABEL, PRIORITY_ORDER } from '@/components/domain/PriorityIcon';
-import type { IntakeRequest, IntakeStatus, Priority, Ticket } from '@/types/entities';
+import type { Request, RequestStatus, Priority, Ticket } from '@/types/entities';
 
-const STATUS_TABS: { key: IntakeStatus; label: string }[] = [
+const STATUS_TABS: { key: RequestStatus; label: string }[] = [
   { key: 'pending', label: 'Pending' },
   { key: 'accepted', label: 'Accepted' },
   { key: 'declined', label: 'Declined' },
   { key: 'duplicate', label: 'Duplicate' },
 ];
 
-const STATUS_TONE: Record<IntakeStatus, BadgeTone> = {
+const STATUS_TONE: Record<RequestStatus, BadgeTone> = {
   pending: 'warning',
   accepted: 'success',
   declined: 'danger',
@@ -61,10 +61,10 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
   );
 }
 
-export default function IntakePage() {
+export default function RequestsPage() {
   const { project } = useProject();
   const navigate = useNavigate();
-  const [tab, setTab] = useState<IntakeStatus>('pending');
+  const [tab, setTab] = useState<RequestStatus>('pending');
   const [workingId, setWorkingId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [newTitle, setNewTitle] = useState('');
@@ -75,14 +75,14 @@ export default function IntakePage() {
   const [publicFormEnabled, setPublicFormEnabled] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
 
-  const [reviewRequest, setReviewRequest] = useState<IntakeRequest | null>(null);
+  const [reviewRequest, setReviewRequest] = useState<Request | null>(null);
   const [reviewTitle, setReviewTitle] = useState('');
   const [reviewDescription, setReviewDescription] = useState('');
   const [reviewPriority, setReviewPriority] = useState<Priority>('none');
   const [reviewStateId, setReviewStateId] = useState('');
   const [converting, setConverting] = useState(false);
 
-  const { data: requests, loading, reload } = useAsync(() => listIntake(project.id), [project.id]);
+  const { data: requests, loading, reload } = useAsync(() => listRequests(project.id), [project.id]);
   const { data: states } = useAsync(() => listStates(project.id), [project.id]);
   const { data: tickets, reload: reloadTickets } = useAsync(() => listTickets(project.id), [project.id]);
   const { data: currentUser } = useAsync(() => getCurrentUser(), []);
@@ -104,7 +104,7 @@ export default function IntakePage() {
   const publicFormUrl = `https://waypoint.app/i/${project.identifier.toLowerCase()}`;
 
   const counts = useMemo(() => {
-    const map: Record<IntakeStatus, number> = { pending: 0, accepted: 0, declined: 0, duplicate: 0 };
+    const map: Record<RequestStatus, number> = { pending: 0, accepted: 0, declined: 0, duplicate: 0 };
     for (const r of requests ?? []) map[r.status] += 1;
     return map;
   }, [requests]);
@@ -114,7 +114,7 @@ export default function IntakePage() {
     [requests, tab],
   );
 
-  function openReview(request: IntakeRequest) {
+  function openReview(request: Request) {
     if (workingId) return;
     const defaultState = orderedStates.find((s) => s.group === 'unstarted') ?? orderedStates[0];
     setReviewRequest(request);
@@ -132,13 +132,13 @@ export default function IntakePage() {
     if (!reviewRequest || !reviewStateId || !reviewTitle.trim() || converting) return;
     setConverting(true);
     try {
-      await convertIntakeToTicket(reviewRequest.id, reviewStateId, {
+      await convertRequestToTicket(reviewRequest.id, reviewStateId, {
         title: reviewTitle.trim(),
         description: reviewDescription.trim(),
         priority: reviewPriority,
       });
       setReviewRequest(null);
-      // Both the intake list (status flips to accepted) and the tickets
+      // Both the requests list (status flips to accepted) and the tickets
       // list (the newly created linked item) need refetching — otherwise
       // ticketById can't resolve the badge until an unrelated reload.
       reload();
@@ -148,11 +148,11 @@ export default function IntakePage() {
     }
   }
 
-  async function handleDecline(request: IntakeRequest) {
+  async function handleDecline(request: Request) {
     if (workingId) return;
     setWorkingId(request.id);
     try {
-      await updateIntakeStatus(request.id, 'declined');
+      await updateRequestStatus(request.id, 'declined');
       reload();
     } finally {
       setWorkingId(null);
@@ -174,7 +174,7 @@ export default function IntakePage() {
     if (!newTitle.trim() || creating) return;
     setCreating(true);
     try {
-      await createIntakeRequest({
+      await createRequest({
         projectId: project.id,
         title: newTitle.trim(),
         description: newDescription.trim(),
@@ -202,12 +202,12 @@ export default function IntakePage() {
     }
   }
 
-  if (!project.features.intake) {
+  if (!project.features.requests) {
     return (
       <EmptyState
         icon={<Inbox size={28} />}
-        title="Intake is disabled for this project"
-        description="Turn Intake back on in project settings to let people file requests again."
+        title="Requests is disabled for this project"
+        description="Turn Requests back on in project settings to let people file requests again."
         action={
           <Button variant="primary" onClick={() => navigate(`/projects/${project.id}/settings/features`)}>
             Go to features
@@ -221,12 +221,12 @@ export default function IntakePage() {
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between gap-3 border-b border-border px-6 py-4">
         <div>
-          <h1 className="font-display text-lg font-medium text-text">Intake</h1>
+          <h1 className="font-display text-lg font-medium text-text">Requests</h1>
           <p className="text-sm text-text-secondary">Triage requests submitted for {project.name}</p>
         </div>
         <Button variant="primary" size="sm" onClick={() => setCreateOpen(true)}>
           <Plus size={14} />
-          New intake request
+          New request
         </Button>
       </div>
 
@@ -235,7 +235,7 @@ export default function IntakePage() {
           <div className="flex items-center gap-2">
             <Globe2 size={14} className="text-text-muted" />
             <div>
-              <p className="text-sm font-medium text-text">Public intake form</p>
+              <p className="text-sm font-medium text-text">Public request form</p>
               <p className="text-xs text-text-secondary">Let anyone with the link submit a request without an account.</p>
             </div>
           </div>
@@ -280,8 +280,8 @@ export default function IntakePage() {
         ) : !requests || requests.length === 0 ? (
           <EmptyState
             icon={<Inbox size={28} />}
-            title="No intake requests"
-            description="Requests submitted to this project's intake form will show up here."
+            title="No requests yet"
+            description="Requests submitted to this project's request form will show up here."
           />
         ) : filtered.length === 0 ? (
           <EmptyState title={`No ${tab} requests`} />
@@ -350,7 +350,7 @@ export default function IntakePage() {
       <Modal
         open={createOpen}
         onClose={closeCreateModal}
-        title="New intake request"
+        title="New request"
         footer={
           <>
             <Button variant="ghost" onClick={closeCreateModal}>

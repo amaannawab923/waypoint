@@ -312,8 +312,9 @@ describe('proposeCreateTicketHandler', () => {
   const STATES = [
     // Deliberately unsorted-looking groups: listStates returns board order
     // (sortOrder asc), so the FIRST backlog/unstarted entry in the returned
-    // array is the default — Triage (group 'triage') must be skipped.
-    { id: 'st-triage', name: 'Triage', color: '#6b6050', group: 'triage' },
+    // array is the default — a leading state in any other group (here
+    // 'cancelled') must be skipped rather than picked for being first.
+    { id: 'st-cancelled', name: 'Cancelled', color: '#b7332a', group: 'cancelled' },
     { id: 'st-backlog', name: 'Backlog', color: '#9c9280', group: 'backlog' },
     { id: 'st-todo', name: 'Todo', color: '#7d8a9c', group: 'unstarted' },
     { id: 'st-done', name: 'Done', color: '#157a3d', group: 'completed' },

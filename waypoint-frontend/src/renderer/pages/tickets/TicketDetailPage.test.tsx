@@ -12,10 +12,10 @@ import {
   listAgentAssignments,
   listAgents,
   listComments,
-  listCycles,
+  listSprints,
   listLabels,
   listMembers,
-  listModules,
+  listWorkstreams,
   listStates,
   listSubItems,
   removeTicketLink,
@@ -40,10 +40,10 @@ jest.mock('@/data/api', () => ({
   listAgentAssignments: jest.fn(),
   listAgents: jest.fn(),
   listComments: jest.fn(),
-  listCycles: jest.fn(),
+  listSprints: jest.fn(),
   listLabels: jest.fn(),
   listMembers: jest.fn(),
-  listModules: jest.fn(),
+  listWorkstreams: jest.fn(),
   listStates: jest.fn(),
   listSubItems: jest.fn(),
   removeTicketLink: jest.fn(),
@@ -68,11 +68,11 @@ const PROJECT: Project = {
   defaultAssigneeId: null,
   timezone: 'UTC',
   features: {
-    cycles: true,
-    modules: true,
+    sprints: true,
+    workstreams: true,
     views: true,
-    pages: true,
-    intake: true,
+    docs: true,
+    requests: true,
   },
   estimate: null,
   automations: {
@@ -109,10 +109,11 @@ const ITEM: Ticket = {
   description: '',
   stateId: 'st-1',
   priority: 'none',
+  source: 'manual',
   assigneeIds: [],
   labelIds: [],
-  moduleId: null,
-  cycleId: null,
+  workstreamId: null,
+  sprintId: null,
   parentId: null,
   estimatePoints: null,
   estimateValue: null,
@@ -164,8 +165,8 @@ function mount(comments: Comment[], agents: Agent[] = []) {
   jest.mocked(getTicketByIdentifier).mockResolvedValue(ITEM);
   jest.mocked(listStates).mockResolvedValue([]);
   jest.mocked(listLabels).mockResolvedValue([]);
-  jest.mocked(listModules).mockResolvedValue([]);
-  jest.mocked(listCycles).mockResolvedValue([]);
+  jest.mocked(listWorkstreams).mockResolvedValue([]);
+  jest.mocked(listSprints).mockResolvedValue([]);
   jest.mocked(listMembers).mockResolvedValue([MEMBER]);
   jest.mocked(getCurrentUser).mockResolvedValue(MEMBER);
   jest.mocked(listAgents).mockResolvedValue(agents);
