@@ -12,16 +12,19 @@
 // ~33-icon set — it shares the same outline aesthetic (24x24, ~2px stroke,
 // rounded caps), so a mixed icon set doesn't read as inconsistent.
 
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 
 export interface IconProps {
   size?: number;
   className?: string;
   strokeWidth?: number;
+  /** Per-instance color override (e.g. a ticket state's own color) — the
+   * glyph otherwise inherits `currentColor` from surrounding text. */
+  style?: CSSProperties;
 }
 
 function makeIcon(path: ReactNode, defaultSize = 18, defaultStrokeWidth = 2) {
-  return function Icon({ size = defaultSize, className, strokeWidth = defaultStrokeWidth }: IconProps) {
+  return function Icon({ size = defaultSize, className, strokeWidth = defaultStrokeWidth, style }: IconProps) {
     return (
       <svg
         width={size}
@@ -33,6 +36,7 @@ function makeIcon(path: ReactNode, defaultSize = 18, defaultStrokeWidth = 2) {
         strokeLinecap="round"
         strokeLinejoin="round"
         className={className}
+        style={style}
         aria-hidden="true"
       >
         {path}
