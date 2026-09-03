@@ -4,6 +4,7 @@ import { Boxes, CheckCircle2, Loader, Plus, Users } from 'lucide-react';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import { createWorkstream, listMembers, listWorkstreams, listStates, listTickets } from '@/data/api';
+import { refreshProjectInStore } from '@/lib/projectsStore';
 import { Avatar } from '@/components/ui/Avatar';
 import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -86,24 +87,13 @@ export default function WorkstreamsPage() {
       setName('');
       setCreating(false);
       reload();
+      // This may be the project's first workstream — refresh the shared
+      // projects store so the sidebar's Workstreams entry (driven by
+      // primitiveCounts.workstreams > 0) appears without a page reload.
+      refreshProjectInStore(project.id);
     } finally {
       setSubmitting(false);
     }
-  }
-
-  if (!project.features.workstreams) {
-    return (
-      <EmptyState
-        icon={<Boxes size={28} />}
-        title="Workstreams is disabled for this project"
-        description="Turn Workstreams back on in project settings to group work under a lead and a status of its own."
-        action={
-          <Button variant="primary" onClick={() => navigate(`/projects/${project.id}/settings/features`)}>
-            Go to features
-          </Button>
-        }
-      />
-    );
   }
 
   return (
