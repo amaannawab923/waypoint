@@ -7,6 +7,7 @@ import { Button, IconButton } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
 import { Avatar } from '@/components/ui/Avatar';
+import { StatusBadge } from '@/components/ui/StatusBadge';
 
 export default function Agents() {
   const { data: agents, loading, reload } = useAsync(() => listAgents(), []);
@@ -54,8 +55,8 @@ export default function Agents() {
       {agents && agents.length > 0 && (
         <div className="flex flex-col gap-3">
           {agents.map((agent) => {
-            const notDetected =
-              agent.executionMethod === 'local-claude-subscription' && detection?.status === 'not-found';
+            const claudeCliAbsent =
+              agent.executionMethod === 'local-claude-subscription' && detection?.state === 'absent';
             return (
               <button
                 key={agent.id}
@@ -68,7 +69,9 @@ export default function Agents() {
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="truncate text-sm font-medium text-text">{agent.name}</span>
                     <Badge tone="info">{agent.model}</Badge>
-                    {notDetected && <Badge tone="warning">Not detected</Badge>}
+                    {claudeCliAbsent && detection && (
+                      <StatusBadge probe={detection} />
+                    )}
                   </div>
                   <p className="mt-0.5 truncate text-xs text-text-muted">
                     {agent.instructionsFile.filename} ·{' '}
