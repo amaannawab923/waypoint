@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { NotWired } from '@/components/ui/NotWired';
 
 const selectClass =
   'h-9 w-full rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 text-sm text-text outline-none focus:border-accent';
@@ -40,6 +41,9 @@ export default function Preferences() {
             <option value="Sunday">Sunday</option>
             <option value="Monday">Monday</option>
           </select>
+          <div className="mt-2">
+            <NotWired capability="preferences.firstDayOfWeek" />
+          </div>
         </div>
       </div>
     </div>
