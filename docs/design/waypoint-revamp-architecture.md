@@ -1738,3 +1738,37 @@ overnight" with Undo; Undo reverses the change **and** flips the grant back to
 | Ticket view logic | `waypoint-frontend/src/renderer/pages/work-items/useWorkItemsView.ts` |
 | Honesty sites | `pages/profile-settings/Security.tsx:17-20,36-43,133`; `mock/api.ts:213-225`; `pages/work-items/WorkItemDetailPage.tsx:644,652,660,858-861,871-877`; `pages/cycles/cycle-utils.ts:84-124` |
 | Copy-purge sites | `pages/project-settings/Features.tsx:14-36`; `pages/project-settings/Automations.tsx:122-131`; `components/domain/CreateProjectModal.tsx:26-52` |
+
+---
+
+## 11. Founder decisions, recorded
+
+| # | Decision | Recorded answer |
+|---|---|---|
+| F0 | Did Plane source enter this repo? | **No — inspiration only, not copied code.** Renames proceed as hygiene, not concealment. |
+| F1 | Where does the data live? | **Docker + Postgres, kept.** Local-first means the Postgres instance runs on the user's own machine inside the Electron app's own Docker setup, never on the web — not literally embedded/single-file. The mockup's `~/Library/…/waypoint.db` framing and any copy implying a single embedded DB file must be corrected to describe the actual architecture (local Postgres container, not shipped to any server). PGlite/SQLite migration is out of scope. |
+| F2 | Cut `ask-before-pr` autonomy? | **Yes — cut.** Nothing implements it and the product has no PR flow. |
+| F3 | Allow narrow `duplicate_of_id` as an exception to the relations freeze? | **No — freeze stays intact.** Duplicate-detection proposals describe the duplicate in the proposal text; no new relation column. |
+| F4 | Workstreams or Areas? | **Workstreams.** |
+| F5 | Squash migrations to one baseline? | **Yes.** Local databases are expendable; no production data exists. |
+
+**Additional scope decision, from the founder directly (not in the original F-list):**
+Copilot's existing engine — `copilotRunner.ts`, the MCP tool server, session management, and the
+propose→approve→execute state machine — is proven, tested, and satisfactory. **It is not to be
+functionally modified.** Renaming vocabulary that flows through it (MCP tool names, system-prompt
+text) still happens per §6's atomicity constraint, but its behavior, security posture, and session
+model are frozen as-is.
+
+Consequence for §5 (agent runtime): **P6 as originally scoped (a second, parallel execution engine
+for `agent.md`/`autonomy`/`triggers`/`AgentAssignment`) is deferred, not built in this pass.** The
+Review queue, the unified proposal card, and Requests triage are built against the *existing*
+`copilot_proposals` system — they read and surface it under new UI, they do not replace it with a
+new backend. The Agents configuration page (workspace settings) remains present but unwired, exactly
+as it is today, until a separate decision is made to build real agent execution. Earned trust (§4.7)
+is deferred with it, since it has nothing to compute over without a second runtime producing
+per-kind decision history beyond what Copilot itself already produces.
+
+This narrows P3–P7 to: proposals model work that *wraps* the existing `copilot_proposals` table
+rather than replacing it, the typed filter, the unified ticket list, sparse projects, the Review
+queue as a new consumer of existing data, and the rename. The agent-runtime estimate (5–6 weeks) is
+removed from the critical path.
