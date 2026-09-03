@@ -3,12 +3,12 @@ import { Link } from 'react-router-dom';
 import { clsx } from 'clsx';
 import { CalendarRange, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
 import { deleteCycle, updateCycle } from '@/data/api';
-import type { Cycle, WorkItem, WorkItemState } from '@/types/entities';
+import type { Cycle, Ticket, TicketState } from '@/types/entities';
 import { Button } from '@/components/ui/Button';
 import { computeProgress, findOverlappingCycle, formatDateRange } from './cycle-utils';
 
 /** Small self-contained popover: caller renders the trigger and the panel content. Mirrors the
- * pattern used in WorkItemDetailPage — there's no shared Dropdown/Menu primitive in
+ * pattern used in TicketDetailPage — there's no shared Dropdown/Menu primitive in
  * src/components/ui/ yet, so this stays local. */
 function Dropdown({
   trigger,
@@ -87,8 +87,8 @@ export function CycleListCard({
 }: {
   projectId: string;
   cycle: Cycle;
-  items: WorkItem[];
-  states: WorkItemState[];
+  items: Ticket[];
+  states: TicketState[];
   /** Every cycle in the project, used to block overlapping date edits. */
   allCycles: Cycle[];
   /** Called after an edit or delete so the caller can reload its cycle list. */

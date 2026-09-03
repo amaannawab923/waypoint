@@ -49,7 +49,7 @@ export default function ArchivedProjects() {
               key={project.id}
               project={project}
               memberById={memberById}
-              onOpen={() => navigate(`/projects/${project.id}/work-items`)}
+              onOpen={() => navigate(`/projects/${project.id}/tickets`)}
               onRestore={async () => {
                 await updateProject(project.id, { archivedAt: null });
                 reload();

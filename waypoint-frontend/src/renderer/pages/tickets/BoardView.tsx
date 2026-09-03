@@ -2,16 +2,16 @@ import { useMemo, useState } from 'react';
 import { Plus, Kanban, ListChecks, Link2, Terminal } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useAsync } from '@/lib/useAsync';
-import { listAgentAssignments, listAgents, listMembers, updateWorkItem, reorderWorkItem } from '@/data/api';
+import { listAgentAssignments, listAgents, listMembers, updateTicket, reorderTicket } from '@/data/api';
 import { Badge, Dot } from '@/components/ui/Badge';
 import { AvatarStack } from '@/components/ui/Avatar';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { StateIcon } from '@/components/domain/StateIcon';
 import { PriorityIcon } from '@/components/domain/PriorityIcon';
 import { AGENT_STATUS_CONFIG } from '@/components/domain/AgentStatusBadge';
-import { CreateWorkItemModal } from '@/components/domain/CreateWorkItemModal';
-import type { WorkItemsView } from '@/pages/work-items/useWorkItemsView';
-import type { WorkItem } from '@/types/entities';
+import { CreateTicketModal } from '@/components/domain/CreateTicketModal';
+import type { TicketsView } from '@/pages/tickets/useTicketsView';
+import type { Ticket } from '@/types/entities';
 import { Skeleton } from '@/components/ui/Skeleton';
 
 export default function BoardView({
@@ -19,7 +19,7 @@ export default function BoardView({
   projectId,
   onOpenItem,
 }: {
-  view: WorkItemsView;
+  view: TicketsView;
   projectId: string;
   onOpenItem: (identifier: string) => void;
 }) {
@@ -34,7 +34,7 @@ export default function BoardView({
   const memberById = useMemo(() => new Map((members ?? []).map((m) => [m.id, m])), [members]);
   const agentById = useMemo(() => new Map((agents ?? []).map((a) => [a.id, a])), [agents]);
   const assignmentByKey = useMemo(
-    () => new Map((agentAssignments ?? []).map((a) => [`${a.workItemId}:${a.agentId}`, a])),
+    () => new Map((agentAssignments ?? []).map((a) => [`${a.ticketId}:${a.agentId}`, a])),
     [agentAssignments],
   );
   const labelById = useMemo(() => new Map(view.labels.map((l) => [l.id, l])), [view.labels]);
@@ -42,7 +42,7 @@ export default function BoardView({
   // A ticket's first agent id (if any) drives the board badge — the seed
   // data only ever pairs one agent per ticket, and a single status chip per
   // card keeps the badge row from overflowing.
-  function primaryAgentAssignment(item: WorkItem) {
+  function primaryAgentAssignment(item: Ticket) {
     const agentId = item.assigneeIds.find((id) => agentById.has(id));
     if (!agentId) return null;
     const agent = agentById.get(agentId);
@@ -52,7 +52,7 @@ export default function BoardView({
   const canReorderPersist = view.groupBy === 'state';
 
   const subItemsByParent = useMemo(() => {
-    const map = new Map<string, WorkItem[]>();
+    const map = new Map<string, Ticket[]>();
     for (const wi of view.allItems) {
       if (!wi.parentId) continue;
       const list = map.get(wi.parentId) ?? [];
@@ -62,13 +62,13 @@ export default function BoardView({
     return map;
   }, [view.allItems]);
 
-  function subItemStats(item: WorkItem) {
+  function subItemStats(item: Ticket) {
     const children = subItemsByParent.get(item.id) ?? [];
     const done = children.filter((c) => view.stateFor(c)?.group === 'completed').length;
     return { total: children.length, done };
   }
 
-  function assigneesFor(item: WorkItem) {
+  function assigneesFor(item: Ticket) {
     return item.assigneeIds
       .map((id) => {
         const m = memberById.get(id);
@@ -90,7 +90,7 @@ export default function BoardView({
     // Optimistic: update local state immediately so the board doesn't flash
     // back to its loading skeleton, then persist in the background.
     view.patchItemLocally(item.id, { stateId: groupKey });
-    void updateWorkItem(item.id, { stateId: groupKey });
+    void updateTicket(item.id, { stateId: groupKey });
   }
 
   function handleCardDrop(targetId: string) {
@@ -103,7 +103,7 @@ export default function BoardView({
     // Optimistic: reposition locally first so the card lands immediately,
     // then persist the same move in the background.
     view.reorderItemLocally(itemId, targetId, position);
-    void reorderWorkItem(itemId, targetId, position);
+    void reorderTicket(itemId, targetId, position);
   }
 
   if (view.loading) {
@@ -132,15 +132,15 @@ export default function BoardView({
     return (
       <EmptyState
         icon={<Kanban size={28} />}
-        title="No work items"
-        description="Create your first work item to start tracking work in this project."
+        title="No tickets"
+        description="Create your first ticket to start tracking work in this project."
         action={
           <button
             type="button"
             onClick={() => setCreateForGroup('none')}
             className="cursor-pointer text-sm font-medium text-accent hover:underline"
           >
-            + New work item
+            + New ticket
           </button>
         }
       />
@@ -174,7 +174,7 @@ export default function BoardView({
             <button
               type="button"
               onClick={() => setCreateForGroup(group.key)}
-              aria-label="New work item"
+              aria-label="New ticket"
               className="ml-auto cursor-pointer rounded-[var(--radius-sm)] p-1 text-text-muted hover:bg-surface hover:text-accent"
             >
               <Plus size={14} />
@@ -281,13 +281,13 @@ export default function BoardView({
               className="flex cursor-pointer items-center gap-1.5 rounded-[var(--radius-sm)] px-2 py-2 text-left text-sm text-text-secondary hover:bg-surface hover:text-accent"
             >
               <Plus size={14} />
-              New work item
+              New ticket
             </button>
           </div>
         </div>
       ))}
 
-      <CreateWorkItemModal
+      <CreateTicketModal
         open={createForGroup !== null}
         onClose={() => setCreateForGroup(null)}
         projectId={projectId}

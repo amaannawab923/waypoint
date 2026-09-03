@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import * as workItemsService from '../services/workItems.service.js';
+import * as ticketsService from '../services/tickets.service.js';
 import * as commentsService from '../services/comments.service.js';
 import * as activityService from '../services/activity.service.js';
 import * as statesService from '../services/states.service.js';
@@ -11,7 +11,7 @@ export const PRIORITY = z.enum(['urgent', 'high', 'medium', 'low', 'none']);
 
 // ISO date (YYYY-MM-DD) — enforced at the zod layer so a malformed value
 // fails clean validation here instead of reaching Postgres raw (via
-// lte(workItems.dueDate, ...) in workItems.service.ts) and leaking a raw DB
+// lte(tickets.dueDate, ...) in tickets.service.ts) and leaking a raw DB
 // error string back into the chat. The regex alone only checks the SHAPE,
 // not that the date is real — "2026-13-99" or "2026-02-31" match it fine —
 // so a .refine() below actually parses the string and confirms it
@@ -50,9 +50,9 @@ export const ISO_DATE = z
 
 // Every list-style tool (list_work_items, search_work_items, list_comments,
 // list_activity) is capped here — an unscoped call can otherwise walk every
-// work item / every comment in the app (there's no workspaceId concept, see
+// ticket / every comment in the app (there's no workspaceId concept, see
 // currentUser.ts) and blow the model's context. The cap is applied at the
-// service-layer query itself (see the `limit` passed to workItemsService/
+// service-layer query itself (see the `limit` passed to ticketsService/
 // commentsService/activityService below), not sliced off after fetching
 // everything — a post-fetch slice would still pay the cost (and the
 // context-window risk of ever materializing) the limit exists to avoid.
@@ -79,8 +79,8 @@ function page<T>(rows: T[], effectiveLimit: number): { items: T[]; truncated: bo
   return { items: truncated ? rows.slice(0, effectiveLimit) : rows, truncated };
 }
 
-// Work items returned from list/search are projected down to this summary
-// shape — an unscoped list_work_items call walks every work item in the
+// Tickets returned from list/search are projected down to this summary
+// shape — an unscoped list_work_items call walks every ticket in the
 // app (there's no workspaceId concept, see currentUser.ts), and returning
 // full `description` HTML for every row would bloat the model's context for
 // no benefit at list time. get_work_item(_by_identifier) return the full
@@ -99,7 +99,7 @@ function page<T>(rows: T[], effectiveLimit: number): { items: T[]; truncated: bo
 // projectId and a resolved stateName/stateGroup are included for the same
 // reason: list_states requires a projectId to call, and a summary that
 // carried stateId but neither a name nor the projectId needed to resolve
-// one left the model with no reliable way to ever name a work item's state
+// one left the model with no reliable way to ever name a ticket's state
 // from a cold start — it could see "st-a3f9k2m" and nothing else. Found in
 // independent review before merge: real (non-seed) state/project ids are
 // opaque nanoids, unlike this app's human-readable dev-seed ids, so this
@@ -108,7 +108,7 @@ function page<T>(rows: T[], effectiveLimit: number): { items: T[]; truncated: bo
 // the name so a caller combining dueBefore with a completed-state result
 // can tell a shipped ticket apart from a genuinely open one, without a
 // second round trip.
-async function toSummaries(items: workItemsService.Enriched[]) {
+async function toSummaries(items: ticketsService.Enriched[]) {
   const [assigneeNames, stateNames] = await Promise.all([
     resolveActorNames(items.flatMap((item) => item.assigneeIds)),
     statesService.resolveStateNames(items.map((item) => item.stateId)),
@@ -129,7 +129,7 @@ async function toSummaries(items: workItemsService.Enriched[]) {
 }
 
 // Detail-path sibling of toSummaries — the full enriched record already
-// carries projectId (it's a plain column on work_items), but stateId still
+// carries projectId (it's a plain column on tickets), but stateId still
 // needs the same batched resolution to a real name for the same reason
 // described above, so get_work_item(_by_identifier) isn't inconsistent
 // with list_work_items about whether a state is nameable.
@@ -213,7 +213,7 @@ export function withErrorSafetyNet<Args extends Record<string, unknown>>(
   };
 }
 
-export async function listWorkItemsHandler({
+export async function listTicketsHandler({
   projectId,
   assigneeId,
   stateId,
@@ -231,14 +231,14 @@ export async function listWorkItemsHandler({
   const effectiveLimit = resolveLimit(limit);
   const filters = { assigneeId, stateId, priority, dueBefore, limit: effectiveLimit + 1 };
   const items = projectId
-    ? await workItemsService.listWorkItems(projectId, filters)
-    : await workItemsService.listAllWorkItems(filters);
+    ? await ticketsService.listTickets(projectId, filters)
+    : await ticketsService.listAllTickets(filters);
   const { items: pageItems, truncated } = page(items, effectiveLimit);
   return jsonResult({ items: await toSummaries(pageItems), truncated });
 }
 
-// Drafts are excluded from listWorkItems/listAllWorkItems/searchWorkItems
-// at the service layer (isDraft filter), but getWorkItem(_ByIdentifier)
+// Drafts are excluded from listTickets/listAllTickets/searchTickets
+// at the service layer (isDraft filter), but getTicket(_ByIdentifier)
 // have no such filter — they're the REST detail-view fetch, which is
 // reached only via a draft's own owner navigating to it directly. Sequential
 // identifiers (WI-42, WI-43, ...) are guessable, so without this check a
@@ -248,19 +248,19 @@ export async function listWorkItemsHandler({
 // exist at all, rather than changing the underlying service functions'
 // REST-facing behavior (which other, non-MCP callers may depend on
 // including drafts).
-export async function getWorkItemHandler({ id }: { id: string }) {
-  const item = await workItemsService.getWorkItem(id);
-  if (!item || item.isDraft) return notFoundResult('work item');
+export async function getTicketHandler({ id }: { id: string }) {
+  const item = await ticketsService.getTicket(id);
+  if (!item || item.isDraft) return notFoundResult('ticket');
   return jsonResult(truncateDescription(await withResolvedNames(item)));
 }
 
-export async function getWorkItemByIdentifierHandler({ identifier }: { identifier: string }) {
-  const item = await workItemsService.getWorkItemByIdentifier(identifier);
-  if (!item || item.isDraft) return notFoundResult('work item');
+export async function getTicketByIdentifierHandler({ identifier }: { identifier: string }) {
+  const item = await ticketsService.getTicketByIdentifier(identifier);
+  if (!item || item.isDraft) return notFoundResult('ticket');
   return jsonResult(truncateDescription(await withResolvedNames(item)));
 }
 
-export async function searchWorkItemsHandler({
+export async function searchTicketsHandler({
   query,
   projectId,
   limit,
@@ -270,25 +270,25 @@ export async function searchWorkItemsHandler({
   limit?: number;
 }) {
   const effectiveLimit = resolveLimit(limit);
-  const items = await workItemsService.searchWorkItems(query, projectId, effectiveLimit + 1);
+  const items = await ticketsService.searchTickets(query, projectId, effectiveLimit + 1);
   const { items: pageItems, truncated } = page(items, effectiveLimit);
   return jsonResult({ items: await toSummaries(pageItems), truncated });
 }
 
-// Same draft-hiding requirement as getWorkItemHandler/getWorkItemByIdentifierHandler
+// Same draft-hiding requirement as getTicketHandler/getTicketByIdentifierHandler
 // above, reached a different way: a draft is invisible to every list/search
 // tool, but its comments and activity history (including the unconditional
-// "created the work item" entry every item gets — see workItems.service.ts's
-// createWorkItem) were still fully retrievable via the draft's own internal
+// "created the ticket" entry every item gets — see tickets.service.ts's
+// createTicket) were still fully retrievable via the draft's own internal
 // id, since neither of these handlers checked isDraft before fetching. One
 // extra query per call is the accepted cost of closing that — but it only
 // needs to be a cheap existence/isDraft check, not the full enriched fetch
-// (getWorkItem() also joins labels/assignees/links, none of which either
-// handler below uses), hence isWorkItemDraftOrMissing() instead of getWorkItem().
-export async function listCommentsHandler({ workItemId, limit }: { workItemId: string; limit?: number }) {
-  if (await workItemsService.isWorkItemDraftOrMissing(workItemId)) return notFoundResult('work item');
+// (getTicket() also joins labels/assignees/links, none of which either
+// handler below uses), hence isTicketDraftOrMissing() instead of getTicket().
+export async function listCommentsHandler({ ticketId, limit }: { ticketId: string; limit?: number }) {
+  if (await ticketsService.isTicketDraftOrMissing(ticketId)) return notFoundResult('ticket');
   const effectiveLimit = resolveLimit(limit);
-  const comments = await commentsService.listComments(workItemId, effectiveLimit + 1);
+  const comments = await commentsService.listComments(ticketId, effectiveLimit + 1);
   const { items: pageItems, truncated } = page(comments, effectiveLimit);
   const names = await resolveActorNames(pageItems.map((c) => c.authorId));
   return jsonResult({
@@ -297,10 +297,10 @@ export async function listCommentsHandler({ workItemId, limit }: { workItemId: s
   });
 }
 
-export async function listActivityHandler({ workItemId, limit }: { workItemId: string; limit?: number }) {
-  if (await workItemsService.isWorkItemDraftOrMissing(workItemId)) return notFoundResult('work item');
+export async function listActivityHandler({ ticketId, limit }: { ticketId: string; limit?: number }) {
+  if (await ticketsService.isTicketDraftOrMissing(ticketId)) return notFoundResult('ticket');
   const effectiveLimit = resolveLimit(limit);
-  const activity = await activityService.listActivity(workItemId, effectiveLimit + 1);
+  const activity = await activityService.listActivity(ticketId, effectiveLimit + 1);
   const { items: pageItems, truncated } = page(activity, effectiveLimit);
   const names = await resolveActorNames(pageItems.map((a) => a.actorId));
   return jsonResult({
@@ -329,7 +329,7 @@ export function registerWorkItemTools(server: McpServer): void {
       description:
         'List work items (tickets), optionally scoped to one project and/or filtered by assignee, state, priority, or a due-by date. Returns a summary per item (including dueDate, projectId, and resolved assignee/state names), not full detail. Results are capped (see limit) — check the truncated flag and narrow the query if it comes back true.',
       inputSchema: {
-        projectId: z.string().optional().describe('If given, only list work items in this project.'),
+        projectId: z.string().optional().describe('If given, only list tickets in this project.'),
         assigneeId: z.string().optional().describe('If given, only items with this member/agent id as an assignee.'),
         stateId: z.string().optional().describe('If given, only items in this state — get state ids via list_states.'),
         priority: PRIORITY.optional().describe('If given, only items with this priority.'),
@@ -339,7 +339,7 @@ export function registerWorkItemTools(server: McpServer): void {
         limit: LIMIT_SCHEMA,
       },
     },
-    withErrorSafetyNet('list_work_items', listWorkItemsHandler),
+    withErrorSafetyNet('list_work_items', listTicketsHandler),
   );
 
   server.registerTool(
@@ -348,7 +348,7 @@ export function registerWorkItemTools(server: McpServer): void {
       description: 'Get the full details of one work item (ticket) by its internal id.',
       inputSchema: { id: z.string() },
     },
-    withErrorSafetyNet('get_work_item', getWorkItemHandler),
+    withErrorSafetyNet('get_work_item', getTicketHandler),
   );
 
   server.registerTool(
@@ -358,7 +358,7 @@ export function registerWorkItemTools(server: McpServer): void {
         'Get the full details of one work item (ticket) by its human-readable identifier, e.g. "WI-42".',
       inputSchema: { identifier: z.string() },
     },
-    withErrorSafetyNet('get_work_item_by_identifier', getWorkItemByIdentifierHandler),
+    withErrorSafetyNet('get_work_item_by_identifier', getTicketByIdentifierHandler),
   );
 
   server.registerTool(
@@ -368,11 +368,11 @@ export function registerWorkItemTools(server: McpServer): void {
         'Search work items (tickets) by a title keyword, optionally scoped to one project. Returns a summary per match. Results are capped (see limit) — check the truncated flag and narrow the query if it comes back true.',
       inputSchema: {
         // .trim().min(1) — an empty (or whitespace-only, e.g. " ") query
-        // otherwise matches every work item's title (an unscoped
-        // `ilike('%<query>%', title)` in workItems.service.ts), effectively
+        // otherwise matches every ticket's title (an unscoped
+        // `ilike('%<query>%', title)` in tickets.service.ts), effectively
         // turning "search" into "list everything" by accident. `.trim()` is
         // a zod transform, so the value the MCP SDK hands to
-        // searchWorkItemsHandler below (parsed via safeParseAsync before the
+        // searchTicketsHandler below (parsed via safeParseAsync before the
         // handler is called) is already the trimmed string — not the raw
         // input — so the trimmed value is what actually reaches the ilike
         // pattern too, not just what min(1) validates against.
@@ -381,7 +381,7 @@ export function registerWorkItemTools(server: McpServer): void {
         limit: LIMIT_SCHEMA,
       },
     },
-    withErrorSafetyNet('search_work_items', searchWorkItemsHandler),
+    withErrorSafetyNet('search_work_items', searchTicketsHandler),
   );
 
   server.registerTool(
@@ -389,7 +389,7 @@ export function registerWorkItemTools(server: McpServer): void {
     {
       description:
         'List the comments on one work item (ticket), with each comment\'s author name resolved. Results are capped (see limit) — check the truncated flag and narrow the query if it comes back true.',
-      inputSchema: { workItemId: z.string(), limit: LIMIT_SCHEMA },
+      inputSchema: { ticketId: z.string(), limit: LIMIT_SCHEMA },
     },
     withErrorSafetyNet('list_comments', listCommentsHandler),
   );
@@ -399,7 +399,7 @@ export function registerWorkItemTools(server: McpServer): void {
     {
       description:
         'List the activity history (state/assignee/label/etc. changes) on one work item (ticket), with each entry\'s actor name resolved. Results are capped (see limit) — check the truncated flag and narrow the query if it comes back true.',
-      inputSchema: { workItemId: z.string(), limit: LIMIT_SCHEMA },
+      inputSchema: { ticketId: z.string(), limit: LIMIT_SCHEMA },
     },
     withErrorSafetyNet('list_activity', listActivityHandler),
   );
@@ -408,7 +408,7 @@ export function registerWorkItemTools(server: McpServer): void {
     'list_states',
     {
       description:
-        'List the workflow states (e.g. Backlog, In Progress, Done) configured for a project, in board order. Use this to resolve a work item\'s stateId to a real name, or to find a stateId to filter list_work_items by.',
+        'List the workflow states (e.g. Backlog, In Progress, Done) configured for a project, in board order. Use this to resolve a ticket\'s stateId to a real name, or to find a stateId to filter list_work_items by.',
       inputSchema: { projectId: z.string() },
     },
     withErrorSafetyNet('list_states', listStatesHandler),

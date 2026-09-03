@@ -124,8 +124,8 @@ export default function Automations() {
 
       <div className="flex flex-col divide-y divide-border rounded-[var(--radius)] border border-border">
         <AutomationRow
-          title="Auto-archive closed work items"
-          description="Send a work item to the archive once it's sat completed or cancelled for this many days."
+          title="Auto-archive closed tickets"
+          description="Send a ticket to the archive once it's sat completed or cancelled for this many days."
           enabled={autoArchive}
           afterDays={autoArchiveAfterDays}
           onToggle={handleAutoArchiveToggle}
@@ -133,8 +133,8 @@ export default function Automations() {
           capability="automations.autoArchive"
         />
         <AutomationRow
-          title="Auto-close work items"
-          description="Close a work item that's sat untouched — never completed, never cancelled — for this many days."
+          title="Auto-close tickets"
+          description="Close a ticket that's sat untouched — never completed, never cancelled — for this many days."
           enabled={autoClose}
           afterDays={autoCloseAfterDays}
           onToggle={handleAutoCloseToggle}

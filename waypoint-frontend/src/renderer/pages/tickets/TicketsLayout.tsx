@@ -18,17 +18,17 @@ import { useProject } from '@/layouts/ProjectLayout';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Tooltip } from '@/components/ui/Tooltip';
-import { CreateWorkItemModal } from '@/components/domain/CreateWorkItemModal';
-import { WorkItemDrawer } from '@/components/domain/WorkItemDrawer';
+import { CreateTicketModal } from '@/components/domain/CreateTicketModal';
+import { TicketDrawer } from '@/components/domain/TicketDrawer';
 import { PriorityIcon, PRIORITY_LABEL, PRIORITY_ORDER } from '@/components/domain/PriorityIcon';
 import { StateIcon } from '@/components/domain/StateIcon';
-import { Popover } from '@/pages/work-items/Popover';
-import { useWorkItemsView, EMPTY_FILTERS, type GroupBy, type ViewKind } from '@/pages/work-items/useWorkItemsView';
-import ListView from '@/pages/work-items/ListView';
-import BoardView from '@/pages/work-items/BoardView';
-import CalendarView from '@/pages/work-items/CalendarView';
-import SpreadsheetView from '@/pages/work-items/SpreadsheetView';
-import GanttView from '@/pages/work-items/GanttView';
+import { Popover } from '@/pages/tickets/Popover';
+import { useTicketsView, EMPTY_FILTERS, type GroupBy, type ViewKind } from '@/pages/tickets/useTicketsView';
+import ListView from '@/pages/tickets/ListView';
+import BoardView from '@/pages/tickets/BoardView';
+import CalendarView from '@/pages/tickets/CalendarView';
+import SpreadsheetView from '@/pages/tickets/SpreadsheetView';
+import GanttView from '@/pages/tickets/GanttView';
 
 const VIEW_TABS: { key: ViewKind; label: string; Icon: LucideIcon }[] = [
   { key: 'list', label: 'List', Icon: List },
@@ -51,9 +51,9 @@ function toggleInArray<T>(arr: T[], value: T): T[] {
   return arr.includes(value) ? arr.filter((v) => v !== value) : [...arr, value];
 }
 
-export default function WorkItemsLayout() {
+export default function TicketsLayout() {
   const { project } = useProject();
-  const view = useWorkItemsView(project.id);
+  const view = useTicketsView(project.id);
   const [searchParams, setSearchParams] = useSearchParams();
   const [createOpen, setCreateOpen] = useState(false);
 
@@ -101,7 +101,7 @@ export default function WorkItemsLayout() {
         <div className="flex items-center gap-2">
           <span className="font-display text-sm text-text-secondary">{project.name}</span>
           <span className="text-sm text-text-muted">/</span>
-          <span className="font-display text-sm font-medium text-text">Work Items</span>
+          <span className="font-display text-sm font-medium text-text">Tickets</span>
           <Badge tone="neutral">{view.items.length}</Badge>
         </div>
 
@@ -221,7 +221,7 @@ export default function WorkItemsLayout() {
 
           <Button variant="primary" size="sm" onClick={() => setCreateOpen(true)}>
             <Plus size={14} />
-            Add work item
+            Add ticket
           </Button>
         </div>
       </div>
@@ -234,7 +234,7 @@ export default function WorkItemsLayout() {
         {currentView === 'gantt' && <GanttView onOpenItem={openPeek} />}
       </div>
 
-      <CreateWorkItemModal
+      <CreateTicketModal
         open={createOpen}
         onClose={() => setCreateOpen(false)}
         projectId={project.id}
@@ -242,7 +242,7 @@ export default function WorkItemsLayout() {
       />
 
       {peekIdentifier && (
-        <WorkItemDrawer projectId={project.id} identifier={peekIdentifier} onClose={closePeek} />
+        <TicketDrawer projectId={project.id} identifier={peekIdentifier} onClose={closePeek} />
       )}
     </div>
   );

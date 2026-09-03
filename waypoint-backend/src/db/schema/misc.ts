@@ -1,6 +1,6 @@
 import { pgTable, text, boolean, timestamp, pgEnum } from 'drizzle-orm/pg-core';
 import { workspaces, members } from './workspace.js';
-import { workItems } from './work-items.js';
+import { tickets } from './tickets.js';
 
 export const exportStatusEnum = pgEnum('export_status', ['completed', 'processing', 'failed']);
 export const notificationKindEnum = pgEnum('notification_kind', [
@@ -32,7 +32,7 @@ export const notifications = pgTable('notifications', {
   // polymorphic reasoning as activity_entries.actorId/comments.authorId.
   // recipientId stays FK'd: only members ever receive notifications.
   actorId: text('actor_id').notNull(),
-  workItemId: text('work_item_id').references(() => workItems.id, { onDelete: 'cascade' }),
+  ticketId: text('ticket_id').references(() => tickets.id, { onDelete: 'cascade' }),
   message: text('message').notNull(),
   read: boolean('read').notNull().default(false),
   kind: notificationKindEnum('kind').notNull(),

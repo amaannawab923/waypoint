@@ -69,7 +69,7 @@ src/
   app.ts           Express app assembly: CORS, body parsing, route mounting
   db/
     client.ts       Drizzle/Postgres client
-    schema/          One file per resource group (projects, work-items, …)
+    schema/          One file per resource group (projects, tickets, …)
     seed.ts          Demo data used by npm run db:seed and POST /dev/reset
   lib/              Small shared helpers (id generation, …)
   middleware/        Request validation wiring, centralized error handling

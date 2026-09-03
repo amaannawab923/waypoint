@@ -2,11 +2,11 @@ import { inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { members, agents } from '../db/schema/index.js';
 
-// Resolves member/agent ids — the polymorphic "actor" ids used for work-item
-// assignees, comment authors, and activity actors (see work-items.ts's own
+// Resolves member/agent ids — the polymorphic "actor" ids used for ticket
+// assignees, comment authors, and activity actors (see tickets.ts's own
 // schema comments on why there's no single FK target) — to display names in
 // one batched pair of queries, not one query per id. A ticket with several
-// comments/assignees would otherwise be N+1. Mirrors workItems.service.ts's
+// comments/assignees would otherwise be N+1. Mirrors tickets.service.ts's
 // own nameForActor(), which does the same member-then-agent lookup one id at
 // a time for activity-log write-time text; this is the batched read-path
 // sibling of that, not a replacement for it.

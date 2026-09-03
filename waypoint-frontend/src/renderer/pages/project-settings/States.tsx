@@ -6,8 +6,8 @@ import { SkeletonListRows } from '@/components/ui/Skeleton';
 import { STATE_GROUP_LABEL, STATE_GROUP_ORDER } from '@/components/domain/StateIcon';
 import { useAsync } from '@/lib/useAsync';
 import { useProject } from '@/layouts/ProjectLayout';
-import { createState, updateState, deleteState, countWorkItemsInState, listStates } from '@/data/api';
-import type { StateGroup, WorkItemState } from '@/types/entities';
+import { createState, updateState, deleteState, countTicketsInState, listStates } from '@/data/api';
+import type { StateGroup, TicketState } from '@/types/entities';
 
 const PRESET_COLORS = [
   '#c2542a',
@@ -26,7 +26,7 @@ function StateEditor({
   onDeleted,
   onCancel,
 }: {
-  state: WorkItemState;
+  state: TicketState;
   onSaved: () => void;
   onDeleted: () => void;
   onCancel: () => void;
@@ -36,12 +36,12 @@ function StateEditor({
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  // The server rejects deleting a state that any work item still
-  // references (work_items.state_id is `onDelete: 'restrict'`, no
+  // The server rejects deleting a state that any ticket still
+  // references (tickets.state_id is `onDelete: 'restrict'`, no
   // reassignment happens) — fetched upfront so the delete control can
   // reflect that up front rather than let the user reach a confirm step
   // for a delete that's guaranteed to fail.
-  const { data: usageCount } = useAsync(() => countWorkItemsInState(state.id), [state.id]);
+  const { data: usageCount } = useAsync(() => countTicketsInState(state.id), [state.id]);
 
   async function handleSave() {
     if (!name.trim() || saving) return;
@@ -99,7 +99,7 @@ function StateEditor({
       </div>
       {!!usageCount && (
         <p className="text-xs text-text-muted">
-          {usageCount} work item{usageCount === 1 ? '' : 's'} use this state, so it can't be deleted. Move them
+          {usageCount} ticket{usageCount === 1 ? '' : 's'} use this state, so it can't be deleted. Move them
           to another state first.
         </p>
       )}
@@ -116,7 +116,7 @@ function StateEditor({
             state.isDefault
               ? 'Default states cannot be deleted'
               : usageCount
-                ? `${usageCount} work item${usageCount === 1 ? '' : 's'} still use this state`
+                ? `${usageCount} ticket${usageCount === 1 ? '' : 's'} still use this state`
                 : undefined
           }
         >
@@ -170,7 +170,7 @@ export default function States() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-lg font-medium text-text">States</h1>
-          <p className="mt-1 text-sm text-text-secondary">Manage the workflow states work items move through.</p>
+          <p className="mt-1 text-sm text-text-secondary">Manage the workflow states tickets move through.</p>
         </div>
         <Button variant="primary" size="sm" onClick={() => setShowForm((v) => !v)}>
           <Plus size={14} />

@@ -14,19 +14,19 @@ const FEATURE_ROWS: FeatureRow[] = [
     key: 'cycles',
     label: 'Cycles',
     description:
-      'Run work in fixed date ranges — each cycle has its own status, lead, and work items.',
+      'Run work in fixed date ranges — each cycle has its own status, lead, and tickets.',
   },
   {
     key: 'modules',
     label: 'Modules',
     description:
-      'Group work items under one lead and status — for the payments migration, the redesign, anything that spans more than one cycle.',
+      'Group tickets under one lead and status — for the payments migration, the redesign, anything that spans more than one cycle.',
   },
   {
     key: 'views',
     label: 'Views',
     description:
-      'Save a filter, sort, and grouping of the work item list, then share it or keep it to yourself.',
+      'Save a filter, sort, and grouping of the ticket list, then share it or keep it to yourself.',
   },
   {
     key: 'pages',

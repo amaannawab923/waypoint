@@ -145,7 +145,7 @@ export default function General() {
           <div className="mt-6 rounded-[var(--radius-lg)] border border-danger/30 bg-danger-bg p-5">
             <h3 className="mb-1 font-display text-sm font-medium text-danger">Delete workspace</h3>
             <p className="mb-4 text-sm text-text-secondary">
-              When you delete a workspace, all of the data in it — projects, work items, cycles,
+              When you delete a workspace, all of the data in it — projects, tickets, cycles,
               modules, pages, and members — is permanently removed. This action cannot be undone.
             </p>
             <Button variant="danger" disabled title="There's no way to delete a workspace's data yet.">

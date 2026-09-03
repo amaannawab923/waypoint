@@ -5,14 +5,14 @@ import { db } from '../db/client.js';
 import {
   projects,
   projectMembers,
-  workItemStates,
+  ticketStates,
   members,
   workModules,
   moduleMembers,
   cycles,
   cycleMembers,
-  workItems,
-  workItemAssignees,
+  tickets,
+  ticketAssignees,
 } from '../db/schema/index.js';
 import { NotFoundError, ValidationError } from '../middleware/errors.js';
 import { newId } from '../lib/ids.js';
@@ -28,7 +28,7 @@ type ProjectEntity = Omit<ProjectRow, 'coverGradientStart' | 'coverGradientEnd'>
 // Two things every project response needs that the raw DB row doesn't
 // provide on its own:
 //   - memberIds: required on the client entity (entities.ts), read unguarded
-//     by several pages (work item detail, project lists, module detail) —
+//     by several pages (ticket detail, project lists, module detail) —
 //     omitting it crashes those pages with `undefined.includes(...)`.
 //   - coverGradient: the client entity declares this as a `[string,string]`
 //     tuple; the DB stores it as two separate columns
@@ -123,7 +123,7 @@ export async function createProject(input: CreateProjectInput) {
       })
       .returning();
 
-    await tx.insert(workItemStates).values(
+    await tx.insert(ticketStates).values(
       DEFAULT_STATE_TEMPLATE.map((t) => ({
         id: newId('st'),
         projectId: project.id,
@@ -212,7 +212,7 @@ export async function removeProjectMember(projectId: string, memberId: string) {
     }
 
     // Same dangling-reference problem exists one level down: this project's
-    // own modules/cycles/work-items can still reference the removed member
+    // own modules/cycles/tickets can still reference the removed member
     // as a lead or assignee. Scope every cleanup to this project only —
     // the member may still legitimately lead/be-assigned-in other projects.
     await tx
@@ -243,11 +243,11 @@ export async function removeProjectMember(projectId: string, memberId: string) {
         ),
       );
     await tx
-      .delete(workItemAssignees)
+      .delete(ticketAssignees)
       .where(
         and(
-          eq(workItemAssignees.assigneeId, memberId),
-          inArray(workItemAssignees.workItemId, tx.select({ id: workItems.id }).from(workItems).where(eq(workItems.projectId, projectId))),
+          eq(ticketAssignees.assigneeId, memberId),
+          inArray(ticketAssignees.ticketId, tx.select({ id: tickets.id }).from(tickets).where(eq(tickets.projectId, projectId))),
         ),
       );
 

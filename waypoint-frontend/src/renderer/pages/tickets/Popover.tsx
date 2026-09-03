@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { clsx } from 'clsx';
 
 /**
- * Small local dropdown helper shared by the work-items toolbar (Display,
+ * Small local dropdown helper shared by the tickets toolbar (Display,
  * Filters). Not a app-wide primitive — kept local to this page directory
  * since no shared Popover exists in src/components/ui.
  */

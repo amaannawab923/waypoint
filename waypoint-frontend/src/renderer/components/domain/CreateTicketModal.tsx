@@ -6,10 +6,10 @@ import { Avatar, AvatarStack } from '@/components/ui/Avatar';
 import { Dot } from '@/components/ui/Badge';
 import { PRIORITY_LABEL, PRIORITY_ORDER, PriorityIcon } from '@/components/domain/PriorityIcon';
 import { StateIcon } from '@/components/domain/StateIcon';
-import { createWorkItem, ensureAgentAssignments, listAgents, listLabels, listMembers, listStates } from '@/data/api';
+import { createTicket, ensureAgentAssignments, listAgents, listLabels, listMembers, listStates } from '@/data/api';
 import { useAsync } from '@/lib/useAsync';
 import { agentLabel } from '@/lib/agentLabel';
-import type { Priority, WorkItem } from '@/types/entities';
+import type { Priority, Ticket } from '@/types/entities';
 
 const CHIP_CLASS =
   'flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] border border-border-strong bg-bg px-2.5 text-sm text-text outline-none hover:bg-surface-2';
@@ -18,7 +18,7 @@ const PANEL_CLASS =
 const OPTION_CLASS =
   'flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-sm text-text hover:bg-surface-2';
 
-/** Small self-contained popover, mirrors the pattern in WorkItemDetailPage/ModuleDetailPage — there's
+/** Small self-contained popover, mirrors the pattern in TicketDetailPage/ModuleDetailPage — there's
  * no shared Dropdown/Menu primitive in src/components/ui/ yet. */
 function Dropdown({
   trigger,
@@ -60,7 +60,7 @@ function Dropdown({
   );
 }
 
-export function CreateWorkItemModal({
+export function CreateTicketModal({
   open,
   onClose,
   projectId,
@@ -71,7 +71,7 @@ export function CreateWorkItemModal({
   onClose: () => void;
   projectId: string;
   defaultStateId?: string;
-  onCreated: (item: WorkItem) => void;
+  onCreated: (item: Ticket) => void;
 }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -124,7 +124,7 @@ export function CreateWorkItemModal({
     if (!title.trim() || !resolvedStateId || submitting) return;
     setSubmitting(true);
     try {
-      const item = await createWorkItem({
+      const item = await createTicket({
         projectId,
         title: title.trim(),
         description: description.trim(),
@@ -150,14 +150,14 @@ export function CreateWorkItemModal({
         reset();
         onClose();
       }}
-      title="New work item"
+      title="New ticket"
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
           <Button variant="primary" disabled={!title.trim() || submitting} onClick={handleSubmit}>
-            {submitting ? 'Creating…' : 'Create work item'}
+            {submitting ? 'Creating…' : 'Create ticket'}
           </Button>
         </>
       }
@@ -165,7 +165,7 @@ export function CreateWorkItemModal({
       <div className="flex flex-col gap-3">
         <input
           autoFocus
-          placeholder="Work item title"
+          placeholder="Ticket title"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           onKeyDown={(e) => {

@@ -10,7 +10,7 @@ function proposal(overrides: Partial<CopilotProposal> = {}): CopilotProposal {
     id: 'prop-abc1234',
     conversationId: 'conv-abc1234',
     kind: 'state_change',
-    workItemId: 'wi-1',
+    ticketId: 'wi-1',
     payload: { stateId: 'st-done' },
     snapshot: {
       identifier: 'LAUNCH-3',
@@ -245,7 +245,7 @@ describe('CopilotProposalCard', () => {
     renderCard(
       proposal({
         kind: 'create_work_item',
-        workItemId: null,
+        ticketId: null,
         payload: {
           projectId: 'proj-1',
           title: 'Crash reporting for the tray process',

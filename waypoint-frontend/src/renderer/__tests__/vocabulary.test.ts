@@ -16,11 +16,17 @@ import path from 'path';
  * rather than as a plausible-looking half-rename.
  *
  * Bans are added cluster by cluster, in the same commit that abolishes them —
- * see docs/design/RENAME-STATE.md for which commits have landed. As of C1 the
- * only ban is the old `mock/` import path. C2 adds the work-item cluster, C3
- * the cycles/modules/intake/pages/stickies cluster. Do not add a ban ahead of
- * the commit that makes it true; the point of the tripwire is that it is green
+ * see docs/design/RENAME-STATE.md for which commits have landed. As of C2 the
+ * bans are the old `mock/` import path and the ticket cluster. C3 adds the
+ * cycles/modules/intake/pages/stickies cluster. Do not add a ban ahead of the
+ * commit that makes it true; the point of the tripwire is that it is green
  * exactly when the tree is consistent.
+ *
+ * A ban may carry `allowed` literals: strings that contain the banned pattern
+ * but belong to a cluster a *later* commit owns, so they are legitimately
+ * still present. Each one names the commit that removes it. An allowance is a
+ * dated exception, not a permanent carve-out — deleting the last allowance is
+ * part of the commit it names.
  */
 
 const RENDERER_ROOT = path.resolve(__dirname, '..');
@@ -52,16 +58,51 @@ type Ban = {
   pattern: string;
   /** Shown on failure: what to do instead. */
   reason: string;
+  /**
+   * Literals that contain `pattern` but are owned by a later commit, and so
+   * are legitimately still in the tree. Removed from a line before the line is
+   * tested. Each entry names the commit that deletes it.
+   */
+  allowed?: string[];
 };
 
+/**
+ * Every pattern and allowance below is assembled from fragments, so that
+ * grepping the tree for a banned identifier — the check each commit is
+ * verified by, and that later commits re-run — comes back genuinely empty
+ * rather than matching this file's own source. No fragment may itself contain
+ * a banned string.
+ */
 const BANS: Ban[] = [
   {
-    // Assembled from fragments so that grepping the tree for the banned import
-    // prefix — the check C1 is verified by, and that later commits will re-run
-    // — comes back genuinely empty rather than matching this file's own source.
     pattern: `@/${'mock'}`,
     reason:
       "C1 renamed src/renderer/mock/ to src/renderer/data/. Import from '@/data/…' instead.",
+  },
+  {
+    pattern: `Work${'Item'}`,
+    reason:
+      'C2 renamed the work-item entity to Ticket. Use Ticket, TicketState, TicketFilters, … instead.',
+  },
+  {
+    pattern: `work${'_item'}`,
+    reason:
+      'C2 renamed the work-item entity to ticket. Use ticket_id, ticket_states, … instead.',
+    allowed: [
+      // C4 owns the copilot_proposal_kind enum value, which moves atomically
+      // with the MCP tool names and the Copilot system prompt (§6.1).
+      `create_work${'_item'}`,
+      // C3 owns the webhooks.event_types remap (§3.2 item 20 / §3.5), which
+      // flips these values alongside cycle.* and module.* in one data UPDATE.
+      `work${'_item'}.created`,
+      `work${'_item'}.updated`,
+      `work${'_item'}.deleted`,
+    ],
+  },
+  {
+    pattern: `work${'-items'}`,
+    reason:
+      "C2 renamed the ticket list's route segment and its pages/ directory. Use '/tickets' and '@/pages/tickets/…' instead.",
   },
 ];
 
@@ -77,6 +118,14 @@ function collectFiles(directory: string): string[] {
   });
 }
 
+/** The line as the ban sees it: allowed literals removed, everything else intact. */
+function withoutAllowances(line: string, ban: Ban): string {
+  return (ban.allowed ?? []).reduce(
+    (rest, allowance) => rest.split(allowance).join(''),
+    line,
+  );
+}
+
 function findHits(ban: Ban): string[] {
   return collectFiles(RENDERER_ROOT)
     .filter((file) => !EXEMPT_FILES.has(file))
@@ -85,7 +134,7 @@ function findHits(ban: Ban): string[] {
         .readFileSync(file, 'utf8')
         .split('\n')
         .flatMap((line, index) =>
-          line.includes(ban.pattern)
+          withoutAllowances(line, ban).includes(ban.pattern)
             ? [
                 `${path.relative(RENDERER_ROOT, file)}:${index + 1}: ${line.trim()}`,
               ]

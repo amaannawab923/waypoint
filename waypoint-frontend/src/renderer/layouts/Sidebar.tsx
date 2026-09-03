@@ -35,7 +35,7 @@ const navLinkClass = ({ isActive }: { isActive: boolean }) =>
 function ProjectRow({ project }: { project: Project }) {
   const [open, setOpen] = useState(false);
   const subNav: { to: string; label: string; icon: typeof LayoutList }[] = [
-    { to: 'work-items', label: 'Work items', icon: LayoutList },
+    { to: 'tickets', label: 'Tickets', icon: LayoutList },
   ];
   if (project.features.cycles) subNav.push({ to: 'cycles', label: 'Cycles', icon: RefreshCw });
   if (project.features.modules) subNav.push({ to: 'modules', label: 'Modules', icon: Boxes });
@@ -147,7 +147,7 @@ export function Sidebar() {
       <CreateProjectModal
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        onCreated={(project) => navigate(`/projects/${project.id}/work-items`)}
+        onCreated={(project) => navigate(`/projects/${project.id}/tickets`)}
       />
     </aside>
   );

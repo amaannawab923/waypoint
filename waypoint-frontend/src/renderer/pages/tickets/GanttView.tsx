@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { clsx } from 'clsx';
 import { useProject } from '@/layouts/ProjectLayout';
-import { useWorkItemsView } from './useWorkItemsView';
+import { useTicketsView } from './useTicketsView';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
@@ -41,13 +41,13 @@ const MONTH_FORMAT = new Intl.DateTimeFormat('en-US', { month: 'short', year: 'n
 
 /**
  * Week/Month/Quarter zoom toggle plus a "Today" button. Left column lists
- * every work item's identifier and title; the right side renders a
+ * every ticket's identifier and title; the right side renders a
  * horizontal timeline with a colored bar spanning each item's start → due
  * date. Items with neither date have no bar and only appear in the list.
  */
 export default function GanttView({ onOpenItem }: { onOpenItem: (identifier: string) => void }) {
   const { project } = useProject();
-  const { items, loading, stateFor } = useWorkItemsView(project.id);
+  const { items, loading, stateFor } = useTicketsView(project.id);
   const [zoom, setZoom] = useState<Zoom>('month');
   const scrollRef = useRef<HTMLDivElement>(null);
   const today = startOfDay(new Date());
@@ -123,7 +123,7 @@ export default function GanttView({ onOpenItem }: { onOpenItem: (identifier: str
   }
 
   if (items.length === 0) {
-    return <EmptyState title="No work items" description="Work items will show up here on the timeline." />;
+    return <EmptyState title="No tickets" description="Tickets will show up here on the timeline." />;
   }
 
   return (
@@ -176,7 +176,7 @@ export default function GanttView({ onOpenItem }: { onOpenItem: (identifier: str
                 style={{ width: LEFT_WIDTH }}
               >
                 <span className="flex-1 truncate px-3 text-[10px] font-medium tracking-wide text-text-muted uppercase">
-                  Work item
+                  Ticket
                 </span>
                 <span
                   className="shrink-0 border-l border-border px-2 text-[10px] font-medium tracking-wide text-text-muted uppercase"

@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import { WorkItemDetailContent } from '@/pages/work-items/WorkItemDetailPage';
+import { TicketDetailContent } from '@/pages/tickets/TicketDetailPage';
 
 /**
- * Controlled "peek" panel: slides in from the right edge showing a work item's
+ * Controlled "peek" panel: slides in from the right edge showing a ticket's
  * full detail without navigating away. Mirrors Modal.tsx's portal/backdrop/
  * ESC-to-close convention, docked to the right instead of centered.
  *
@@ -12,7 +12,7 @@ import { WorkItemDetailContent } from '@/pages/work-items/WorkItemDetailPage';
  * is peeked; the caller mounts it with a `projectId`/`identifier` pair and
  * unmounts (or swaps) it to change what's shown.
  */
-export function WorkItemDrawer({
+export function TicketDrawer({
   projectId,
   identifier,
   onClose,
@@ -46,7 +46,7 @@ export function WorkItemDrawer({
     // list entry would keep peek=identifier — back from the full page would
     // land on "list with drawer open" instead of the plain list.
     onClose();
-    navigate(`/projects/${projectId}/work-items/${identifier}`);
+    navigate(`/projects/${projectId}/tickets/${identifier}`);
   }
 
   return createPortal(
@@ -56,7 +56,7 @@ export function WorkItemDrawer({
         style={{ transform: visible ? 'translateX(0)' : 'translateX(100%)' }}
         onClick={(e) => e.stopPropagation()}
       >
-        <WorkItemDetailContent
+        <TicketDetailContent
           projectId={projectId}
           identifier={identifier}
           variant="drawer"

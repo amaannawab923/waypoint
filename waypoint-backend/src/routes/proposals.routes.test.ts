@@ -28,7 +28,7 @@ function proposalView(overrides: Record<string, unknown> = {}) {
     id: 'prop-abc1234',
     conversationId: 'conv-abc1234',
     kind: 'comment',
-    workItemId: 'wi-1',
+    ticketId: 'wi-1',
     payload: { body: 'hi' },
     snapshot: { identifier: 'WI-1', title: 'A ticket' },
     anchorSeq: 7,

@@ -45,8 +45,8 @@ src/
   entry/      main.ts / preload.ts entry points
   renderer/
     components/   Shared UI primitives (Button, Modal, Avatar, DatePicker, …)
-                   and domain components (WorkItemDrawer, CreateWorkItemModal, …)
-    pages/         One folder per top-level view (work-items, project-settings,
+                   and domain components (TicketDrawer, CreateTicketModal, …)
+    pages/         One folder per top-level view (tickets, project-settings,
                     workspace-settings, profile-settings, admin, …)
     layouts/        AppShell, ProjectLayout — the chrome each page renders inside
     lib/            Small focused helpers (toast, recents, markdown, …)

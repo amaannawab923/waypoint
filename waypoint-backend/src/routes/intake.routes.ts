@@ -32,6 +32,6 @@ intakeRouter.post(
   '/intake/:id/convert',
   asyncHandler(async (req, res) => {
     const { stateId, ...overrides } = convertIntakeSchema.parse(req.body);
-    res.status(201).json(await intakeService.convertIntakeToWorkItem(req.params.id, stateId, overrides));
+    res.status(201).json(await intakeService.convertIntakeToTicket(req.params.id, stateId, overrides));
   }),
 );

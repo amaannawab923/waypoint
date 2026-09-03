@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // modules construct a db client at import time (see copilot.routes.test.ts
 // for the history).
 vi.mock('../db/client.js', () => ({ db: {} }));
-vi.mock('../services/workItems.service.js');
+vi.mock('../services/tickets.service.js');
 vi.mock('../services/comments.service.js');
 vi.mock('../services/activity.service.js');
 vi.mock('../services/states.service.js');
@@ -23,7 +23,7 @@ vi.mock('../services/proposals.service.js', async (importOriginal) => {
   };
 });
 
-const workItemsService = await import('../services/workItems.service.js');
+const ticketsService = await import('../services/tickets.service.js');
 const statesService = await import('../services/states.service.js');
 const projectsService = await import('../services/projects.service.js');
 const proposalsService = await import('../services/proposals.service.js');
@@ -33,13 +33,13 @@ const {
   proposeStateChangeHandler,
   proposeAssigneeChangeHandler,
   proposePriorityChangeHandler,
-  proposeCreateWorkItemHandler,
+  proposeCreateTicketHandler,
   listProjectsHandler,
 } = await import('./proposalTools.js');
 
 const CONV = 'conv-abc1234';
 
-function workItem(overrides: Record<string, unknown> = {}) {
+function ticket(overrides: Record<string, unknown> = {}) {
   return {
     id: 'wi-1',
     projectId: 'proj-1',
@@ -62,42 +62,42 @@ beforeEach(() => {
 describe('conversation gating', () => {
   it('every propose handler refuses cleanly with no conversation id — read tools unaffected by design', async () => {
     const results = await Promise.all([
-      proposeCommentHandler(null, { workItemId: 'wi-1', body: 'hi' }),
-      proposeStateChangeHandler(null, { workItemId: 'wi-1', stateId: 'st-1' }),
-      proposeAssigneeChangeHandler(null, { workItemId: 'wi-1', assigneeId: 'mem-2', action: 'add' }),
-      proposePriorityChangeHandler(null, { workItemId: 'wi-1', priority: 'high' }),
-      proposeCreateWorkItemHandler(null, { projectId: 'proj-1', title: 'x' }),
+      proposeCommentHandler(null, { ticketId: 'wi-1', body: 'hi' }),
+      proposeStateChangeHandler(null, { ticketId: 'wi-1', stateId: 'st-1' }),
+      proposeAssigneeChangeHandler(null, { ticketId: 'wi-1', assigneeId: 'mem-2', action: 'add' }),
+      proposePriorityChangeHandler(null, { ticketId: 'wi-1', priority: 'high' }),
+      proposeCreateTicketHandler(null, { projectId: 'proj-1', title: 'x' }),
     ]);
     for (const result of results) {
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toBe('Proposals are unavailable in this session.');
     }
     // Refused before any fetch — the gate is the first thing checked.
-    expect(workItemsService.getWorkItem).not.toHaveBeenCalled();
+    expect(ticketsService.getTicket).not.toHaveBeenCalled();
     expect(proposalsService.createProposal).not.toHaveBeenCalled();
   });
 });
 
 describe('proposeCommentHandler', () => {
-  it('treats a draft work item as not found, same as the read tools hide drafts', async () => {
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(workItem({ isDraft: true }) as never);
+  it('treats a draft ticket as not found, same as the read tools hide drafts', async () => {
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket({ isDraft: true }) as never);
 
-    const result = await proposeCommentHandler(CONV, { workItemId: 'wi-1', body: 'hi' });
+    const result = await proposeCommentHandler(CONV, { ticketId: 'wi-1', body: 'hi' });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toBe('work item not found');
+    expect(result.content[0].text).toBe('ticket not found');
     expect(proposalsService.createProposal).not.toHaveBeenCalled();
   });
 
   it('creates the proposal with the plain-text body and the display snapshot, returning the pending shape', async () => {
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(workItem() as never);
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
 
-    const result = await proposeCommentHandler(CONV, { workItemId: 'wi-1', body: 'plain text' });
+    const result = await proposeCommentHandler(CONV, { ticketId: 'wi-1', body: 'plain text' });
 
     expect(proposalsService.createProposal).toHaveBeenCalledWith({
       conversationId: CONV,
       kind: 'comment',
-      workItemId: 'wi-1',
+      ticketId: 'wi-1',
       payload: { body: 'plain text' },
       snapshot: { identifier: 'WI-1', title: 'A ticket', itemUpdatedAt: '2026-01-02T03:04:05.000Z' },
     });
@@ -111,38 +111,38 @@ describe('proposeCommentHandler', () => {
   });
 
   it("surfaces the cap's own ProposalValidationError message, not the generic scrub", async () => {
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(workItem() as never);
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
     vi.mocked(proposalsService.createProposal).mockRejectedValue(
       new proposalsService.ProposalValidationError(
         'Too many proposals this turn (max 10) — ask the user to act on the pending ones first.',
       ),
     );
 
-    const result = await proposeCommentHandler(CONV, { workItemId: 'wi-1', body: 'hi' });
+    const result = await proposeCommentHandler(CONV, { ticketId: 'wi-1', body: 'hi' });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/Too many proposals this turn/);
   });
 
   it('rethrows a non-validation createProposal failure for withErrorSafetyNet to scrub', async () => {
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(workItem() as never);
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
     vi.mocked(proposalsService.createProposal).mockRejectedValue(new Error('pg exploded'));
 
-    await expect(proposeCommentHandler(CONV, { workItemId: 'wi-1', body: 'hi' })).rejects.toThrow(
+    await expect(proposeCommentHandler(CONV, { ticketId: 'wi-1', body: 'hi' })).rejects.toThrow(
       'pg exploded',
     );
   });
 });
 
 describe('proposeStateChangeHandler', () => {
-  it("rejects a stateId from a different project with a named validation error — the check updateWorkItem lacks", async () => {
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(workItem() as never);
+  it("rejects a stateId from a different project with a named validation error — the check updateTicket lacks", async () => {
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
     vi.mocked(statesService.listStates).mockResolvedValue([
       { id: 'st-progress', name: 'In Progress', color: '#f2c94c' },
     ] as never);
 
     const result = await proposeStateChangeHandler(CONV, {
-      workItemId: 'wi-1',
+      ticketId: 'wi-1',
       stateId: 'st-other-project',
     });
 
@@ -152,12 +152,12 @@ describe('proposeStateChangeHandler', () => {
   });
 
   it('rejects a no-op move to the state the ticket is already in', async () => {
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(workItem() as never);
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
     vi.mocked(statesService.listStates).mockResolvedValue([
       { id: 'st-progress', name: 'In Progress', color: '#f2c94c' },
     ] as never);
 
-    const result = await proposeStateChangeHandler(CONV, { workItemId: 'wi-1', stateId: 'st-progress' });
+    const result = await proposeStateChangeHandler(CONV, { ticketId: 'wi-1', stateId: 'st-progress' });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/already in In Progress/);
@@ -165,13 +165,13 @@ describe('proposeStateChangeHandler', () => {
   });
 
   it('snapshots from/to names AND colors — the card must render names, never ids', async () => {
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(workItem() as never);
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
     vi.mocked(statesService.listStates).mockResolvedValue([
       { id: 'st-progress', name: 'In Progress', color: '#f2c94c' },
       { id: 'st-done', name: 'Done', color: '#157a3d' },
     ] as never);
 
-    const result = await proposeStateChangeHandler(CONV, { workItemId: 'wi-1', stateId: 'st-done' });
+    const result = await proposeStateChangeHandler(CONV, { ticketId: 'wi-1', stateId: 'st-done' });
 
     expect(proposalsService.createProposal).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -193,11 +193,11 @@ describe('proposeStateChangeHandler', () => {
 
 describe('proposeAssigneeChangeHandler', () => {
   it('treats an unresolvable assignee as not found', async () => {
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(workItem() as never);
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
     vi.mocked(resolveActorNames).mockResolvedValue(new Map());
 
     const result = await proposeAssigneeChangeHandler(CONV, {
-      workItemId: 'wi-1',
+      ticketId: 'wi-1',
       assigneeId: 'mem-ghost',
       action: 'add',
     });
@@ -207,13 +207,13 @@ describe('proposeAssigneeChangeHandler', () => {
   });
 
   it('pre-checks direction: adding an already-assigned person is rejected at propose time', async () => {
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(
-      workItem({ assigneeIds: ['mem-2'] }) as never,
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(
+      ticket({ assigneeIds: ['mem-2'] }) as never,
     );
     vi.mocked(resolveActorNames).mockResolvedValue(new Map([['mem-2', 'Priya Sharma']]));
 
     const result = await proposeAssigneeChangeHandler(CONV, {
-      workItemId: 'wi-1',
+      ticketId: 'wi-1',
       assigneeId: 'mem-2',
       action: 'add',
     });
@@ -224,11 +224,11 @@ describe('proposeAssigneeChangeHandler', () => {
   });
 
   it('pre-checks direction: removing someone not assigned is rejected at propose time', async () => {
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(workItem() as never);
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
     vi.mocked(resolveActorNames).mockResolvedValue(new Map([['mem-2', 'Priya Sharma']]));
 
     const result = await proposeAssigneeChangeHandler(CONV, {
-      workItemId: 'wi-1',
+      ticketId: 'wi-1',
       assigneeId: 'mem-2',
       action: 'remove',
     });
@@ -238,10 +238,10 @@ describe('proposeAssigneeChangeHandler', () => {
   });
 
   it('snapshots the resolved name, wasAssigned, and the (empty) current-assignee context', async () => {
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(workItem() as never);
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
     vi.mocked(resolveActorNames).mockResolvedValue(new Map([['mem-2', 'Priya Sharma']]));
 
-    await proposeAssigneeChangeHandler(CONV, { workItemId: 'wi-1', assigneeId: 'mem-2', action: 'add' });
+    await proposeAssigneeChangeHandler(CONV, { ticketId: 'wi-1', assigneeId: 'mem-2', action: 'add' });
 
     expect(proposalsService.createProposal).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -262,8 +262,8 @@ describe('proposeAssigneeChangeHandler', () => {
   // had a different assignee. The snapshot now carries the ticket's actual
   // current assignees, resolved to names at propose time.
   it('snapshots the ticket\'s current assignees as resolved names, not ids', async () => {
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(
-      workItem({ assigneeIds: ['mem-4'] }) as never,
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(
+      ticket({ assigneeIds: ['mem-4'] }) as never,
     );
     vi.mocked(resolveActorNames).mockResolvedValue(
       new Map([
@@ -272,7 +272,7 @@ describe('proposeAssigneeChangeHandler', () => {
       ]),
     );
 
-    await proposeAssigneeChangeHandler(CONV, { workItemId: 'wi-1', assigneeId: 'mem-2', action: 'add' });
+    await proposeAssigneeChangeHandler(CONV, { ticketId: 'wi-1', assigneeId: 'mem-2', action: 'add' });
 
     expect(resolveActorNames).toHaveBeenCalledWith(['mem-2', 'mem-4']);
     expect(proposalsService.createProposal).toHaveBeenCalledWith(
@@ -285,9 +285,9 @@ describe('proposeAssigneeChangeHandler', () => {
 
 describe('proposePriorityChangeHandler', () => {
   it('rejects a no-op priority proposal', async () => {
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(workItem({ priority: 'high' }) as never);
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket({ priority: 'high' }) as never);
 
-    const result = await proposePriorityChangeHandler(CONV, { workItemId: 'wi-1', priority: 'high' });
+    const result = await proposePriorityChangeHandler(CONV, { ticketId: 'wi-1', priority: 'high' });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/already high/);
@@ -295,9 +295,9 @@ describe('proposePriorityChangeHandler', () => {
   });
 
   it('snapshots fromPriority for the from→to chips', async () => {
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(workItem({ priority: 'medium' }) as never);
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket({ priority: 'medium' }) as never);
 
-    await proposePriorityChangeHandler(CONV, { workItemId: 'wi-1', priority: 'urgent' });
+    await proposePriorityChangeHandler(CONV, { ticketId: 'wi-1', priority: 'urgent' });
 
     expect(proposalsService.createProposal).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -308,7 +308,7 @@ describe('proposePriorityChangeHandler', () => {
   });
 });
 
-describe('proposeCreateWorkItemHandler', () => {
+describe('proposeCreateTicketHandler', () => {
   const STATES = [
     // Deliberately unsorted-looking groups: listStates returns board order
     // (sortOrder asc), so the FIRST backlog/unstarted entry in the returned
@@ -322,7 +322,7 @@ describe('proposeCreateWorkItemHandler', () => {
   it('404s a missing project', async () => {
     vi.mocked(projectsService.getProject).mockResolvedValue(undefined as never);
 
-    const result = await proposeCreateWorkItemHandler(CONV, { projectId: 'proj-x', title: 'New' });
+    const result = await proposeCreateTicketHandler(CONV, { projectId: 'proj-x', title: 'New' });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toBe('project not found');
@@ -334,12 +334,12 @@ describe('proposeCreateWorkItemHandler', () => {
     );
     vi.mocked(statesService.listStates).mockResolvedValue(STATES as never);
 
-    await proposeCreateWorkItemHandler(CONV, { projectId: 'proj-1', title: 'New ticket' });
+    await proposeCreateTicketHandler(CONV, { projectId: 'proj-1', title: 'New ticket' });
 
     expect(proposalsService.createProposal).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: 'create_work_item',
-        workItemId: null,
+        ticketId: null,
         payload: expect.objectContaining({ stateId: 'st-backlog' }),
         snapshot: expect.objectContaining({
           projectName: 'Launch',
@@ -358,7 +358,7 @@ describe('proposeCreateWorkItemHandler', () => {
       [{ id: 'st-done', name: 'Done', color: '#157a3d', group: 'completed' }] as never,
     );
 
-    const result = await proposeCreateWorkItemHandler(CONV, { projectId: 'proj-1', title: 'New' });
+    const result = await proposeCreateTicketHandler(CONV, { projectId: 'proj-1', title: 'New' });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/no backlog or unstarted state/);
@@ -368,7 +368,7 @@ describe('proposeCreateWorkItemHandler', () => {
     vi.mocked(projectsService.getProject).mockResolvedValue({ id: 'proj-1', name: 'P', identifier: 'P' } as never);
     vi.mocked(statesService.listStates).mockResolvedValue(STATES as never);
 
-    const result = await proposeCreateWorkItemHandler(CONV, {
+    const result = await proposeCreateTicketHandler(CONV, {
       projectId: 'proj-1',
       title: 'New',
       stateId: 'st-foreign',
@@ -383,7 +383,7 @@ describe('proposeCreateWorkItemHandler', () => {
     vi.mocked(statesService.listStates).mockResolvedValue(STATES as never);
     vi.mocked(resolveActorNames).mockResolvedValue(new Map([['mem-2', 'Priya Sharma']]));
 
-    const bad = await proposeCreateWorkItemHandler(CONV, {
+    const bad = await proposeCreateTicketHandler(CONV, {
       projectId: 'proj-1',
       title: 'New',
       assigneeIds: ['mem-2', 'mem-ghost'],
@@ -391,7 +391,7 @@ describe('proposeCreateWorkItemHandler', () => {
     expect(bad.isError).toBe(true);
     expect(bad.content[0].text).toMatch(/unknown assignee id\(s\): mem-ghost/);
 
-    await proposeCreateWorkItemHandler(CONV, {
+    await proposeCreateTicketHandler(CONV, {
       projectId: 'proj-1',
       title: 'New',
       assigneeIds: ['mem-2'],

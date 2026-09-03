@@ -4,7 +4,7 @@ import { Boxes, Check, ChevronDown, ChevronLeft, Plus, Search, UserPlus, Users }
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import { useRecordRecent } from '@/lib/recents';
-import { listMembers, listModules, listStates, listWorkItems, updateModule, updateWorkItem } from '@/data/api';
+import { listMembers, listModules, listStates, listTickets, updateModule, updateTicket } from '@/data/api';
 import { Avatar, AvatarStack } from '@/components/ui/Avatar';
 import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -13,7 +13,7 @@ import { Modal } from '@/components/ui/Modal';
 import { PriorityIcon } from '@/components/domain/PriorityIcon';
 import { StateIcon, STATE_GROUP_ORDER } from '@/components/domain/StateIcon';
 import { Skeleton } from '@/components/ui/Skeleton';
-import type { WorkItem, WorkModule } from '@/types/entities';
+import type { Ticket, WorkModule } from '@/types/entities';
 
 const TRIGGER_CLASS =
   'flex h-9 w-full items-center gap-1.5 rounded-[var(--radius-sm)] border border-border-strong bg-bg px-2.5 text-sm text-text outline-none hover:bg-surface-2';
@@ -88,10 +88,10 @@ function toDateInput(value: string | null): string {
 }
 
 /**
- * Searchable picker for assigning an existing, not-yet-in-this-module project work item to
- * the current module. Mirrors the pattern used in CycleWorkItemList's own add-work-item modal.
+ * Searchable picker for assigning an existing, not-yet-in-this-module project ticket to
+ * the current module. Mirrors the pattern used in CycleTicketList's own add-ticket modal.
  */
-function AddWorkItemModal({
+function AddTicketModal({
   open,
   onClose,
   candidates,
@@ -99,8 +99,8 @@ function AddWorkItemModal({
 }: {
   open: boolean;
   onClose: () => void;
-  candidates: WorkItem[];
-  onAdd: (item: WorkItem) => void;
+  candidates: Ticket[];
+  onAdd: (item: Ticket) => void;
 }) {
   const [query, setQuery] = useState('');
   const [addingId, setAddingId] = useState<string | null>(null);
@@ -113,7 +113,7 @@ function AddWorkItemModal({
     );
   }, [candidates, query]);
 
-  async function handlePick(item: WorkItem) {
+  async function handlePick(item: Ticket) {
     if (addingId) return;
     setAddingId(item.id);
     try {
@@ -129,7 +129,7 @@ function AddWorkItemModal({
   }
 
   return (
-    <Modal open={open} onClose={handleClose} title="Add work item to module">
+    <Modal open={open} onClose={handleClose} title="Add ticket to module">
       <div className="flex flex-col gap-3">
         <div className="relative">
           <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
@@ -137,14 +137,14 @@ function AddWorkItemModal({
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search work items…"
+            placeholder="Search tickets…"
             className="h-9 w-full rounded-[var(--radius-sm)] border border-border-strong bg-bg pl-8 pr-3 text-sm outline-none focus:border-accent"
           />
         </div>
         <div className="thin-scroll max-h-72 overflow-y-auto">
           {filtered.length === 0 ? (
             <p className="px-1 py-4 text-center text-xs text-text-muted">
-              {candidates.length === 0 ? 'No unassigned work items in this project.' : 'No matches.'}
+              {candidates.length === 0 ? 'No unassigned tickets in this project.' : 'No matches.'}
             </p>
           ) : (
             <div className="flex flex-col gap-0.5">
@@ -175,7 +175,7 @@ export default function ModuleDetailPage() {
   const navigate = useNavigate();
 
   const { data: modules, loading, reload } = useAsync(() => listModules(project.id), [project.id]);
-  const { data: workItems, reload: reloadWorkItems } = useAsync(() => listWorkItems(project.id), [project.id]);
+  const { data: tickets, reload: reloadTickets } = useAsync(() => listTickets(project.id), [project.id]);
   const { data: states } = useAsync(() => listStates(project.id), [project.id]);
   const { data: allMembers } = useAsync(() => listMembers(), []);
 
@@ -219,19 +219,19 @@ export default function ModuleDetailPage() {
   }, [module]);
 
   const items = useMemo(
-    () => (workItems ?? []).filter((i) => i.moduleId === moduleId),
-    [workItems, moduleId],
+    () => (tickets ?? []).filter((i) => i.moduleId === moduleId),
+    [tickets, moduleId],
   );
 
   const addItemCandidates = useMemo(
-    () => (workItems ?? []).filter((i) => i.moduleId !== moduleId),
-    [workItems, moduleId],
+    () => (tickets ?? []).filter((i) => i.moduleId !== moduleId),
+    [tickets, moduleId],
   );
 
-  async function handleAddItem(item: WorkItem) {
-    await updateWorkItem(item.id, { moduleId });
+  async function handleAddItem(item: Ticket) {
+    await updateTicket(item.id, { moduleId });
     setAddItemOpen(false);
-    reloadWorkItems();
+    reloadTickets();
   }
 
   const completedStateIds = useMemo(
@@ -375,19 +375,19 @@ export default function ModuleDetailPage() {
 
           <div>
             <div className="mb-2 flex items-center justify-between">
-              <label className="text-xs font-medium text-text-muted">Work items ({items.length})</label>
+              <label className="text-xs font-medium text-text-muted">Tickets ({items.length})</label>
               <Button variant="secondary" size="sm" onClick={() => setAddItemOpen(true)}>
                 <Plus size={14} />
-                Add work item
+                Add ticket
               </Button>
             </div>
             {items.length === 0 ? (
               <EmptyState
-                title="No work items in this module yet"
+                title="No tickets in this module yet"
                 action={
                   <Button variant="secondary" size="sm" onClick={() => setAddItemOpen(true)}>
                     <Plus size={14} />
-                    Add work item
+                    Add ticket
                   </Button>
                 }
               />
@@ -405,7 +405,7 @@ export default function ModuleDetailPage() {
                         <li key={item.id}>
                           <button
                             type="button"
-                            onClick={() => navigate(`/projects/${project.id}/work-items/${item.identifier}`)}
+                            onClick={() => navigate(`/projects/${project.id}/tickets/${item.identifier}`)}
                             className="flex w-full items-center gap-2.5 bg-surface px-3 py-2 text-left transition-colors hover:bg-surface-2"
                           >
                             <PriorityIcon priority={item.priority} size={13} />
@@ -563,7 +563,7 @@ export default function ModuleDetailPage() {
         </div>
       </div>
 
-      <AddWorkItemModal
+      <AddTicketModal
         open={addItemOpen}
         onClose={() => setAddItemOpen(false)}
         candidates={addItemCandidates}

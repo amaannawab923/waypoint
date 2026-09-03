@@ -91,11 +91,11 @@ export const copilotProposals = pgTable(
       .notNull()
       .references(() => copilotConversations.id, { onDelete: 'cascade' }),
     kind: copilotProposalKindEnum('kind').notNull(),
-    // Deliberately NOT an FK to work_items: a proposal against a
+    // Deliberately NOT an FK to tickets: a proposal against a
     // since-deleted ticket must survive as a row so approve can report it
     // STALE ("no longer available") rather than the card silently vanishing
     // from the transcript via a cascade. Null only for create_work_item.
-    workItemId: text('work_item_id'),
+    ticketId: text('ticket_id'),
     // The kind-specific execute arguments (e.g. { stateId } for a state
     // change) — what approve actually passes to the service layer.
     payload: jsonb('payload').notNull(),
@@ -111,7 +111,7 @@ export const copilotProposals = pgTable(
     // Human-readable reason for a terminal non-executed status (stale/
     // expired), surfaced verbatim on the card.
     statusReason: text('status_reason'),
-    // What execution produced (a commentId, a created work item's id and
+    // What execution produced (a commentId, a created ticket's id and
     // identifier) — null until executed.
     resultInfo: jsonb('result_info'),
     // createdAt + 24h, computed in the service (not a DB default) so the

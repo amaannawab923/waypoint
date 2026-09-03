@@ -42,16 +42,16 @@ async function truncateAll(tx: Tx) {
     'pages',
     'activity_entries',
     'comments',
-    'work_item_assignees',
-    'work_item_labels',
-    'work_item_links',
-    'work_items',
+    'ticket_assignees',
+    'ticket_labels',
+    'ticket_links',
+    'tickets',
     'cycle_members',
     'cycles',
     'module_members',
     'work_modules',
     'labels',
-    'work_item_states',
+    'ticket_states',
     'project_members',
     'projects',
     'members',
@@ -205,7 +205,7 @@ export async function seed() {
     ];
     return base.map((s) => ({ ...s, projectId }));
   }
-  await tx.insert(schema.workItemStates).values([...statesFor('proj-launch'), ...statesFor('proj-tools')]);
+  await tx.insert(schema.ticketStates).values([...statesFor('proj-launch'), ...statesFor('proj-tools')]);
 
   await tx.insert(schema.labels).values([
     { id: 'lbl-1', projectId: 'proj-launch', name: 'bug', color: '#b7332a' },
@@ -231,7 +231,7 @@ export async function seed() {
       id: 'mod-2',
       projectId: 'proj-launch',
       name: 'Onboarding Flow',
-      description: 'First-run experience from signup to first created work item.',
+      description: 'First-run experience from signup to first created ticket.',
       leadId: 'mem-3',
       status: 'planned',
       startDate: dateOnly(daysFromNow(2)),
@@ -284,7 +284,7 @@ export async function seed() {
     },
   ]);
 
-  // --- Work items -----------------------------------------------------
+  // --- Tickets -----------------------------------------------------
   type WiSeed = {
     id: string;
     projectId: string;
@@ -450,7 +450,7 @@ export async function seed() {
     cycleId: 'cyc-1',
   });
 
-  // Resolve each item's createdAt/updatedAt once, up front, so the work_item
+  // Resolve each item's createdAt/updatedAt once, up front, so the ticket
   // row and its 'created' activity entry below agree on the same timestamp
   // instead of each independently rolling their own random date.
   for (const w of wiSeeds) {
@@ -460,7 +460,7 @@ export async function seed() {
 
   const prefixFor = (projectId: string) => (projectId === 'proj-launch' ? 'LAUNCH' : 'TOOLS');
   const wiByProjectSeq = new Map<string, number>();
-  await tx.insert(schema.workItems).values(
+  await tx.insert(schema.tickets).values(
     wiSeeds.map((w, i) => {
       const count = (wiByProjectSeq.get(w.projectId) ?? 0) + 1;
       wiByProjectSeq.set(w.projectId, count);
@@ -487,17 +487,17 @@ export async function seed() {
     }),
   );
 
-  const labelRows = wiSeeds.flatMap((w) => (w.labelIds ?? []).map((labelId) => ({ workItemId: w.id, labelId })));
-  if (labelRows.length) await tx.insert(schema.workItemLabels).values(labelRows);
+  const labelRows = wiSeeds.flatMap((w) => (w.labelIds ?? []).map((labelId) => ({ ticketId: w.id, labelId })));
+  if (labelRows.length) await tx.insert(schema.ticketLabels).values(labelRows);
 
   const assigneeRows = wiSeeds.flatMap((w) =>
     (w.assigneeIds ?? []).map((assigneeId) => ({
-      workItemId: w.id,
+      ticketId: w.id,
       assigneeId,
       assigneeKind: (assigneeId.startsWith('agent-') ? 'agent' : 'member') as 'agent' | 'member',
     })),
   );
-  if (assigneeRows.length) await tx.insert(schema.workItemAssignees).values(assigneeRows);
+  if (assigneeRows.length) await tx.insert(schema.ticketAssignees).values(assigneeRows);
 
   // --- Agents -----------------------------------------------------------
   await tx.insert(schema.agents).values([
@@ -585,7 +585,7 @@ export async function seed() {
   await tx.insert(schema.agentAssignments).values([
     {
       id: 'aa-1',
-      workItemId: navBreaks.id,
+      ticketId: navBreaks.id,
       agentId: 'agent-claude',
       status: 'needs-review',
       summary: 'Opened PR #123 — adds a min-width guard to the flex container.',
@@ -594,7 +594,7 @@ export async function seed() {
     },
     {
       id: 'aa-2',
-      workItemId: pipeline.id,
+      ticketId: pipeline.id,
       agentId: 'agent-codex',
       status: 'running',
       summary: 'Running the staging → production promotion pipeline.',
@@ -603,7 +603,7 @@ export async function seed() {
     },
     {
       id: 'aa-3',
-      workItemId: changelog.id,
+      ticketId: changelog.id,
       agentId: 'agent-release-notes',
       status: 'blocked',
       summary: 'Blocked — needs the target CI provider confirmed before continuing.',
@@ -612,7 +612,7 @@ export async function seed() {
     },
     {
       id: 'aa-4',
-      workItemId: darkMode.id,
+      ticketId: darkMode.id,
       agentId: 'agent-gemini',
       status: 'done',
       summary: 'Opened PR #58 to special-case public holidays — merged and deployed.',
@@ -624,21 +624,21 @@ export async function seed() {
   await tx.insert(schema.comments).values([
     {
       id: 'cm-1',
-      workItemId: navBreaks.id,
+      ticketId: navBreaks.id,
       authorId: 'mem-2',
       bodyHtml: '<p>Repro on iPad Air (1024×768) in Safari — the nav items wrap under the logo.</p>',
       createdAt: daysAgo(1),
     },
     {
       id: 'cm-2',
-      workItemId: navBreaks.id,
+      ticketId: navBreaks.id,
       authorId: 'mem-4',
       bodyHtml: '<p>Found it — the flex container is missing a min-width guard. Fix incoming.</p>',
       createdAt: daysAgo(0),
     },
     {
       id: 'cm-3',
-      workItemId: pipeline.id,
+      ticketId: pipeline.id,
       authorId: 'mem-1',
       bodyHtml: '<p>Pipeline works end to end in staging. Doing one more dry run before I mark this done.</p>',
       createdAt: daysAgo(0),
@@ -650,17 +650,17 @@ export async function seed() {
     const entries: (typeof schema.activityEntries.$inferInsert)[] = [
       {
         id: `act-${w.id}-created`,
-        workItemId: w.id,
+        ticketId: w.id,
         actorId: 'mem-1',
         verb: 'created',
-        detail: 'created the work item',
+        detail: 'created the ticket',
         createdAt,
       },
     ];
     if (w.priority !== 'none') {
       entries.push({
         id: `act-${w.id}-priority`,
-        workItemId: w.id,
+        ticketId: w.id,
         actorId: 'mem-1',
         verb: 'priority_changed',
         detail: `set priority to ${w.priority}`,
@@ -670,7 +670,7 @@ export async function seed() {
     if ((w.assigneeIds ?? []).length > 0) {
       entries.push({
         id: `act-${w.id}-assignee`,
-        workItemId: w.id,
+        ticketId: w.id,
         actorId: 'mem-1',
         verb: 'assignee_added',
         detail: 'added an assignee',
@@ -683,7 +683,7 @@ export async function seed() {
   const agentActivity: (typeof schema.activityEntries.$inferInsert)[] = [
     {
       id: 'act-agent-1a',
-      workItemId: navBreaks.id,
+      ticketId: navBreaks.id,
       actorId: CURRENT_USER_ID,
       verb: 'agent_assigned',
       detail: 'assigned Ethan (agent) to this ticket',
@@ -691,7 +691,7 @@ export async function seed() {
     },
     {
       id: 'act-agent-1b',
-      workItemId: navBreaks.id,
+      ticketId: navBreaks.id,
       actorId: 'agent-claude',
       verb: 'agent_status_changed',
       detail: 'opened PR #123 and marked this needs review',
@@ -699,7 +699,7 @@ export async function seed() {
     },
     {
       id: 'act-agent-2a',
-      workItemId: pipeline.id,
+      ticketId: pipeline.id,
       actorId: CURRENT_USER_ID,
       verb: 'agent_assigned',
       detail: 'assigned Dan (agent) to this ticket',
@@ -707,7 +707,7 @@ export async function seed() {
     },
     {
       id: 'act-agent-2b',
-      workItemId: pipeline.id,
+      ticketId: pipeline.id,
       actorId: 'agent-codex',
       verb: 'agent_status_changed',
       detail: 'started running the staging promotion pipeline',
@@ -794,7 +794,7 @@ export async function seed() {
       sourceName: 'Beta user (external)',
       sourceEmail: 'user@example.com',
       createdAt: daysAgo(1),
-      linkedWorkItemId: null,
+      linkedTicketId: null,
     },
     {
       id: 'in-2',
@@ -805,7 +805,7 @@ export async function seed() {
       sourceName: 'Beta user (external)',
       sourceEmail: 'other@example.com',
       createdAt: daysAgo(6),
-      linkedWorkItemId: null,
+      linkedTicketId: null,
     },
     {
       id: 'in-3',
@@ -816,7 +816,7 @@ export async function seed() {
       sourceName: 'Anonymous',
       sourceEmail: '',
       createdAt: daysAgo(8),
-      linkedWorkItemId: null,
+      linkedTicketId: null,
     },
   ]);
 
@@ -844,7 +844,7 @@ export async function seed() {
       id: 'nt-1',
       recipientId: CURRENT_USER_ID,
       actorId: 'mem-2',
-      workItemId: navBreaks.id,
+      ticketId: navBreaks.id,
       message: 'mentioned you on "Responsive nav breaks on iPad landscape"',
       read: false,
       kind: 'mention',
@@ -854,7 +854,7 @@ export async function seed() {
       id: 'nt-2',
       recipientId: CURRENT_USER_ID,
       actorId: 'mem-4',
-      workItemId: navBreaks.id,
+      ticketId: navBreaks.id,
       message: 'commented on "Responsive nav breaks on iPad landscape"',
       read: false,
       kind: 'comment',
@@ -864,7 +864,7 @@ export async function seed() {
       id: 'nt-4',
       recipientId: CURRENT_USER_ID,
       actorId: 'agent-claude',
-      workItemId: navBreaks.id,
+      ticketId: navBreaks.id,
       message: 'needs your input on "Responsive nav breaks on iPad landscape"',
       read: false,
       kind: 'agent_needs_review',
@@ -872,7 +872,7 @@ export async function seed() {
     },
   ]);
 
-  console.log(`Seeded ${wiSeeds.length} work items across 2 projects.`);
+  console.log(`Seeded ${wiSeeds.length} tickets across 2 projects.`);
   });
 }
 

@@ -105,7 +105,7 @@ export default function ProjectsList() {
               key={project.id}
               project={project}
               memberById={memberById}
-              onOpen={() => navigate(`/projects/${project.id}/work-items`)}
+              onOpen={() => navigate(`/projects/${project.id}/tickets`)}
               onSettings={() => navigate(`/projects/${project.id}/settings`)}
               onArchive={async () => {
                 await archiveProject(project.id);

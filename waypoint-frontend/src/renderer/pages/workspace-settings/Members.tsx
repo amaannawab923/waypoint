@@ -8,7 +8,7 @@ import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { Avatar } from '@/components/ui/Avatar';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton, SkeletonTableRows } from '@/components/ui/Skeleton';
-import { Popover } from '@/pages/work-items/Popover';
+import { Popover } from '@/pages/tickets/Popover';
 
 const ROLE_TONE: Record<Member['role'], BadgeTone> = {
   admin: 'accent',

@@ -35,7 +35,7 @@ const KIND_LABELS: Record<CopilotProposalKind, string> = {
 // model-authored text beyond the ticket identifier ever flows back into
 // the next prompt, so a proposal can't be used to smuggle instructions.
 function outcomeSentence(p: CopilotProposal): string {
-  const target = p.snapshot.identifier ?? p.snapshot.projectIdentifier ?? p.workItemId ?? 'unknown';
+  const target = p.snapshot.identifier ?? p.snapshot.projectIdentifier ?? p.ticketId ?? 'unknown';
   const label = `${p.id} (${KIND_LABELS[p.kind]} on ${target})`;
   switch (p.status) {
     case 'executed':

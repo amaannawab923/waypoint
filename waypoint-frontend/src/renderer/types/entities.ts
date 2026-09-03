@@ -79,7 +79,7 @@ export interface Project {
   repoPath: string | null;
 }
 
-export interface WorkItemState {
+export interface TicketState {
   id: ID;
   projectId: ID;
   name: string;
@@ -125,14 +125,14 @@ export interface Cycle {
   memberIds?: ID[];
 }
 
-export interface WorkItemLink {
+export interface TicketLink {
   id: ID;
   url: string;
   label: string;
   createdAt: string;
 }
 
-export interface WorkItem {
+export interface Ticket {
   id: ID;
   projectId: ID;
   identifier: string; // e.g. WAY-12
@@ -155,13 +155,13 @@ export interface WorkItem {
   updatedAt: string;
   attachmentCount: number;
   linkCount: number;
-  links: WorkItemLink[];
+  links: TicketLink[];
   isDraft: boolean;
 }
 
 export interface Comment {
   id: ID;
-  workItemId: ID;
+  ticketId: ID;
   authorId: ID;
   bodyHtml: string;
   createdAt: string;
@@ -187,7 +187,7 @@ export type ActivityVerb =
 
 export interface ActivityEntry {
   id: ID;
-  workItemId: ID;
+  ticketId: ID;
   actorId: ID;
   verb: ActivityVerb;
   detail: string;
@@ -232,7 +232,7 @@ export interface IntakeRequest {
   sourceName: string;
   sourceEmail: string;
   createdAt: string;
-  linkedWorkItemId: ID | null;
+  linkedTicketId: ID | null;
 }
 
 export interface Sticky {
@@ -248,7 +248,7 @@ export interface NotificationItem {
   id: ID;
   recipientId: ID;
   actorId: ID;
-  workItemId: ID | null;
+  ticketId: ID | null;
   message: string;
   read: boolean;
   kind:
@@ -314,7 +314,7 @@ export interface AgentInstructionsFile {
 }
 
 // An Agent is a sibling of Member in the assignee id space — its `id` can
-// appear in WorkItem.assigneeIds right alongside human member ids, so a
+// appear in Ticket.assigneeIds right alongside human member ids, so a
 // ticket can have a human co-assignee and an agent doer at once. Every
 // Agent row is the same shape with the same editing rights — there is no
 // "built-in vs. custom" distinction; every agent is one a user defined.
@@ -343,13 +343,13 @@ export interface Agent {
 export type AgentRunStatus =
   'queued' | 'running' | 'needs-review' | 'blocked' | 'done' | 'failed';
 
-// Tracks one agent's run against one ticket. Kept separate from WorkItem
+// Tracks one agent's run against one ticket. Kept separate from Ticket
 // itself (rather than a column on it) so a ticket's own `stateId` keeps
 // meaning exactly what it always has, and so re-assigning to a different
 // agent later doesn't lose the previous run's history.
 export interface AgentAssignment {
   id: ID;
-  workItemId: ID;
+  ticketId: ID;
   agentId: ID;
   status: AgentRunStatus;
   summary: string | null;
@@ -447,7 +447,7 @@ export interface CopilotProposal {
   id: ID;
   conversationId: ID;
   kind: CopilotProposalKind;
-  workItemId: ID | null;
+  ticketId: ID | null;
   payload: CopilotProposalPayload;
   snapshot: CopilotProposalSnapshot;
   anchorSeq: number;

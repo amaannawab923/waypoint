@@ -4,24 +4,24 @@ import { FolderKanban, ListTodo, RefreshCw, Boxes, FileText, Users } from 'lucid
 import { useAsync } from '@/lib/useAsync';
 import {
   listProjects,
-  listAllWorkItems,
+  listAllTickets,
   listModules,
   listCycles,
   listPages,
   listMembers,
   listStates,
 } from '@/data/api';
-import type { Project, WorkItem, WorkItemState } from '@/types/entities';
+import type { Project, Ticket, TicketState } from '@/types/entities';
 import { Skeleton, SkeletonTableRows } from '@/components/ui/Skeleton';
 
 interface ProjectAnalytics {
   project: Project;
-  workItemCount: number;
+  ticketCount: number;
   percentComplete: number;
 }
 
 async function loadAnalytics() {
-  const [projects, workItems, members] = await Promise.all([listProjects(), listAllWorkItems(), listMembers()]);
+  const [projects, tickets, members] = await Promise.all([listProjects(), listAllTickets(), listMembers()]);
 
   const perProject = await Promise.all(
     projects.map(async (project) => {
@@ -39,13 +39,13 @@ async function loadAnalytics() {
   const totalCycles = perProject.reduce((sum, p) => sum + p.cycles.length, 0);
   const totalPages = perProject.reduce((sum, p) => sum + p.pages.length, 0);
 
-  const stateById = new Map<string, WorkItemState>();
+  const stateById = new Map<string, TicketState>();
   for (const p of perProject) {
     for (const s of p.states) stateById.set(s.id, s);
   }
 
-  const itemsByProject = new Map<string, WorkItem[]>();
-  for (const item of workItems) {
+  const itemsByProject = new Map<string, Ticket[]>();
+  for (const item of tickets) {
     const list = itemsByProject.get(item.projectId) ?? [];
     list.push(item);
     itemsByProject.set(item.projectId, list);
@@ -56,7 +56,7 @@ async function loadAnalytics() {
     const completed = items.filter((i) => stateById.get(i.stateId)?.group === 'completed').length;
     return {
       project,
-      workItemCount: items.length,
+      ticketCount: items.length,
       percentComplete: items.length === 0 ? 0 : Math.round((completed / items.length) * 100),
     };
   });
@@ -64,7 +64,7 @@ async function loadAnalytics() {
   return {
     totals: {
       projects: projects.length,
-      workItems: workItems.length,
+      tickets: tickets.length,
       cycles: totalCycles,
       modules: totalModules,
       pages: totalPages,
@@ -81,7 +81,7 @@ export default function AnalyticsPage() {
   const metrics = useMemo(
     () => [
       { label: 'Projects', value: data?.totals.projects, icon: FolderKanban },
-      { label: 'Work items', value: data?.totals.workItems, icon: ListTodo },
+      { label: 'Tickets', value: data?.totals.tickets, icon: ListTodo },
       { label: 'Cycles', value: data?.totals.cycles, icon: RefreshCw },
       { label: 'Modules', value: data?.totals.modules, icon: Boxes },
       { label: 'Pages', value: data?.totals.pages, icon: FileText },
@@ -141,15 +141,15 @@ export default function AnalyticsPage() {
                 <thead>
                   <tr className="border-b border-border text-left text-xs text-text-muted">
                     <th className="px-4 py-2 font-medium">Project</th>
-                    <th className="px-4 py-2 font-medium">Work items</th>
+                    <th className="px-4 py-2 font-medium">Tickets</th>
                     <th className="px-4 py-2 font-medium">Progress</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {data.projectRows.map(({ project, workItemCount, percentComplete }) => (
+                  {data.projectRows.map(({ project, ticketCount, percentComplete }) => (
                     <tr
                       key={project.id}
-                      onClick={() => navigate(`/projects/${project.id}/work-items`)}
+                      onClick={() => navigate(`/projects/${project.id}/tickets`)}
                       className="cursor-pointer border-b border-border last:border-0 hover:bg-surface-2"
                     >
                       <td className="px-4 py-3">
@@ -159,7 +159,7 @@ export default function AnalyticsPage() {
                           <span className="font-mono text-xs text-text-muted">{project.identifier}</span>
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-text-secondary">{workItemCount}</td>
+                      <td className="px-4 py-3 text-text-secondary">{ticketCount}</td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
                           <div className="h-1.5 w-32 overflow-hidden rounded-full bg-surface-2">

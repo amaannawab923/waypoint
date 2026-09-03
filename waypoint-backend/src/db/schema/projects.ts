@@ -54,7 +54,7 @@ export const projectMembers = pgTable(
   (t) => [primaryKey({ columns: [t.projectId, t.memberId] })],
 );
 
-export const workItemStates = pgTable('work_item_states', {
+export const ticketStates = pgTable('ticket_states', {
   id: text('id').primaryKey(),
   projectId: text('project_id')
     .notNull()

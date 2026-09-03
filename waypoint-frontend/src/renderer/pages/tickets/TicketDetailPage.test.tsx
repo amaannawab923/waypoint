@@ -3,11 +3,11 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import {
   addComment,
-  addWorkItemLink,
-  deleteWorkItem,
+  addTicketLink,
+  deleteTicket,
   getCurrentUser,
-  getWorkItem,
-  getWorkItemByIdentifier,
+  getTicket,
+  getTicketByIdentifier,
   listActivity,
   listAgentAssignments,
   listAgents,
@@ -18,24 +18,24 @@ import {
   listModules,
   listStates,
   listSubItems,
-  removeWorkItemLink,
+  removeTicketLink,
   takeBackOverFromAgent,
-  toggleWorkItemAgent,
-  toggleWorkItemAssignee,
-  toggleWorkItemLabel,
-  updateWorkItem,
+  toggleTicketAgent,
+  toggleTicketAssignee,
+  toggleTicketLabel,
+  updateTicket,
 } from '@/data/api';
 import { useProject } from '@/layouts/ProjectLayout';
-import type { Agent, Comment, Member, Project, WorkItem } from '@/types/entities';
-import { WorkItemDetailContent } from './WorkItemDetailPage';
+import type { Agent, Comment, Member, Project, Ticket } from '@/types/entities';
+import { TicketDetailContent } from './TicketDetailPage';
 
 jest.mock('@/data/api', () => ({
   addComment: jest.fn(),
-  addWorkItemLink: jest.fn(),
-  deleteWorkItem: jest.fn(),
+  addTicketLink: jest.fn(),
+  deleteTicket: jest.fn(),
   getCurrentUser: jest.fn(),
-  getWorkItem: jest.fn(),
-  getWorkItemByIdentifier: jest.fn(),
+  getTicket: jest.fn(),
+  getTicketByIdentifier: jest.fn(),
   listActivity: jest.fn(),
   listAgentAssignments: jest.fn(),
   listAgents: jest.fn(),
@@ -46,12 +46,12 @@ jest.mock('@/data/api', () => ({
   listModules: jest.fn(),
   listStates: jest.fn(),
   listSubItems: jest.fn(),
-  removeWorkItemLink: jest.fn(),
+  removeTicketLink: jest.fn(),
   takeBackOverFromAgent: jest.fn(),
-  toggleWorkItemAgent: jest.fn(),
-  toggleWorkItemAssignee: jest.fn(),
-  toggleWorkItemLabel: jest.fn(),
-  updateWorkItem: jest.fn(),
+  toggleTicketAgent: jest.fn(),
+  toggleTicketAssignee: jest.fn(),
+  toggleTicketLabel: jest.fn(),
+  updateTicket: jest.fn(),
 }));
 jest.mock('@/layouts/ProjectLayout', () => ({ useProject: jest.fn() }));
 
@@ -100,7 +100,7 @@ const MEMBER: Member = {
   joinedAt: new Date().toISOString(),
 };
 
-const ITEM: WorkItem = {
+const ITEM: Ticket = {
   id: 'wi-1',
   projectId: 'proj-1',
   identifier: 'LAUNCH-3',
@@ -150,7 +150,7 @@ const AGENT: Agent = {
 function commentWith(bodyHtml: string, authorId = 'mem-1'): Comment {
   return {
     id: 'cm-1',
-    workItemId: 'wi-1',
+    ticketId: 'wi-1',
     authorId,
     bodyHtml,
     createdAt: new Date().toISOString(),
@@ -161,7 +161,7 @@ function mount(comments: Comment[], agents: Agent[] = []) {
   jest
     .mocked(useProject)
     .mockReturnValue({ project: PROJECT, reloadProject: jest.fn() });
-  jest.mocked(getWorkItemByIdentifier).mockResolvedValue(ITEM);
+  jest.mocked(getTicketByIdentifier).mockResolvedValue(ITEM);
   jest.mocked(listStates).mockResolvedValue([]);
   jest.mocked(listLabels).mockResolvedValue([]);
   jest.mocked(listModules).mockResolvedValue([]);
@@ -173,20 +173,20 @@ function mount(comments: Comment[], agents: Agent[] = []) {
   jest.mocked(listSubItems).mockResolvedValue([]);
   jest.mocked(listActivity).mockResolvedValue([]);
   jest.mocked(listComments).mockResolvedValue(comments);
-  jest.mocked(getWorkItem).mockResolvedValue(ITEM);
+  jest.mocked(getTicket).mockResolvedValue(ITEM);
   jest.mocked(addComment).mockResolvedValue(commentWith(''));
-  jest.mocked(addWorkItemLink).mockResolvedValue(ITEM);
-  jest.mocked(removeWorkItemLink).mockResolvedValue(ITEM);
-  jest.mocked(deleteWorkItem).mockResolvedValue(undefined);
+  jest.mocked(addTicketLink).mockResolvedValue(ITEM);
+  jest.mocked(removeTicketLink).mockResolvedValue(ITEM);
+  jest.mocked(deleteTicket).mockResolvedValue(undefined);
   jest.mocked(takeBackOverFromAgent).mockResolvedValue(undefined as never);
-  jest.mocked(toggleWorkItemAgent).mockResolvedValue(undefined as never);
-  jest.mocked(toggleWorkItemAssignee).mockResolvedValue(undefined as never);
-  jest.mocked(toggleWorkItemLabel).mockResolvedValue(undefined as never);
-  jest.mocked(updateWorkItem).mockResolvedValue(ITEM);
+  jest.mocked(toggleTicketAgent).mockResolvedValue(undefined as never);
+  jest.mocked(toggleTicketAssignee).mockResolvedValue(undefined as never);
+  jest.mocked(toggleTicketLabel).mockResolvedValue(undefined as never);
+  jest.mocked(updateTicket).mockResolvedValue(ITEM);
 
   return render(
     <MemoryRouter>
-      <WorkItemDetailContent projectId="proj-1" identifier="LAUNCH-3" />
+      <TicketDetailContent projectId="proj-1" identifier="LAUNCH-3" />
     </MemoryRouter>,
   );
 }
@@ -199,7 +199,7 @@ afterEach(() => {
   cleanup();
 });
 
-describe('WorkItemDetailPage → comment rendering (stored XSS fix)', () => {
+describe('TicketDetailPage → comment rendering (stored XSS fix)', () => {
   it('renders a comment containing an <img onerror> payload as visible text, not a live element', async () => {
     mount([commentWith(XSS_PAYLOAD)]);
 

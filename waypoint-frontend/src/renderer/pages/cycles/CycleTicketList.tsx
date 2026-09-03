@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { Member, WorkItem, WorkItemState } from '@/types/entities';
+import type { Member, Ticket, TicketState } from '@/types/entities';
 import { StateIcon, STATE_GROUP_ORDER } from '@/components/domain/StateIcon';
 import { PriorityIcon } from '@/components/domain/PriorityIcon';
 import { AvatarStack } from '@/components/ui/Avatar';
@@ -8,14 +8,14 @@ import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Modal } from '@/components/ui/Modal';
 import { ListChecks, Plus, Search } from 'lucide-react';
-import { updateWorkItem } from '@/data/api';
+import { updateTicket } from '@/data/api';
 
 /**
- * Searchable picker for assigning an existing, not-yet-in-this-cycle project work item to the
+ * Searchable picker for assigning an existing, not-yet-in-this-cycle project ticket to the
  * current cycle. Mirrors the modal-based picker pattern used elsewhere in the app (e.g.
  * src/pages/project-settings/Estimates.tsx's EstimatePickerModal).
  */
-function AddWorkItemModal({
+function AddTicketModal({
   open,
   onClose,
   candidates,
@@ -23,8 +23,8 @@ function AddWorkItemModal({
 }: {
   open: boolean;
   onClose: () => void;
-  candidates: WorkItem[];
-  onAdd: (item: WorkItem) => void;
+  candidates: Ticket[];
+  onAdd: (item: Ticket) => void;
 }) {
   const [query, setQuery] = useState('');
   const [addingId, setAddingId] = useState<string | null>(null);
@@ -37,7 +37,7 @@ function AddWorkItemModal({
     );
   }, [candidates, query]);
 
-  async function handlePick(item: WorkItem) {
+  async function handlePick(item: Ticket) {
     if (addingId) return;
     setAddingId(item.id);
     try {
@@ -53,7 +53,7 @@ function AddWorkItemModal({
   }
 
   return (
-    <Modal open={open} onClose={handleClose} title="Add work item to cycle">
+    <Modal open={open} onClose={handleClose} title="Add ticket to cycle">
       <div className="flex flex-col gap-3">
         <div className="relative">
           <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
@@ -61,14 +61,14 @@ function AddWorkItemModal({
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search work items…"
+            placeholder="Search tickets…"
             className="h-9 w-full rounded-[var(--radius-sm)] border border-border-strong bg-bg pl-8 pr-3 text-sm outline-none focus:border-accent"
           />
         </div>
         <div className="thin-scroll max-h-72 overflow-y-auto">
           {filtered.length === 0 ? (
             <p className="px-1 py-4 text-center text-xs text-text-muted">
-              {candidates.length === 0 ? 'No unassigned work items in this project.' : 'No matches.'}
+              {candidates.length === 0 ? 'No unassigned tickets in this project.' : 'No matches.'}
             </p>
           ) : (
             <div className="flex flex-col gap-0.5">
@@ -94,11 +94,11 @@ function AddWorkItemModal({
 }
 
 /**
- * Lightweight grouped-by-state work item list for a single, already-known cycleId.
+ * Lightweight grouped-by-state ticket list for a single, already-known cycleId.
  * Intentionally simpler than the shared ListView — no filter/sort/group-by controls,
  * since this list only ever shows one fixed cycle's items.
  */
-export function CycleWorkItemList({
+export function CycleTicketList({
   projectId,
   cycleId,
   items,
@@ -109,21 +109,21 @@ export function CycleWorkItemList({
 }: {
   projectId: string;
   cycleId: string;
-  /** Work items already assigned to this cycle. */
-  items: WorkItem[];
-  /** Every work item in the project (unfiltered), used to build the "add work item" candidate list. */
-  allItems: WorkItem[];
-  states: WorkItemState[];
+  /** Tickets already assigned to this cycle. */
+  items: Ticket[];
+  /** Every ticket in the project (unfiltered), used to build the "add ticket" candidate list. */
+  allItems: Ticket[];
+  states: TicketState[];
   members: Member[];
-  /** Called after a work item is assigned to this cycle so the caller can reload. */
+  /** Called after a ticket is assigned to this cycle so the caller can reload. */
   onItemAdded: () => void;
 }) {
   const [addOpen, setAddOpen] = useState(false);
 
   const candidates = useMemo(() => allItems.filter((i) => i.cycleId !== cycleId), [allItems, cycleId]);
 
-  async function handleAdd(item: WorkItem) {
-    await updateWorkItem(item.id, { cycleId });
+  async function handleAdd(item: Ticket) {
+    await updateTicket(item.id, { cycleId });
     setAddOpen(false);
     onItemAdded();
   }
@@ -142,19 +142,19 @@ export function CycleWorkItemList({
       <div className="flex justify-end">
         <Button variant="secondary" size="sm" onClick={() => setAddOpen(true)}>
           <Plus size={14} />
-          Add work item
+          Add ticket
         </Button>
       </div>
 
       {items.length === 0 ? (
         <EmptyState
           icon={<ListChecks size={28} />}
-          title="No work items in this cycle"
-          description="Assign an existing work item to this cycle, or add one from the work items list."
+          title="No tickets in this cycle"
+          description="Assign an existing ticket to this cycle, or add one from the tickets list."
           action={
             <Button variant="secondary" size="sm" onClick={() => setAddOpen(true)}>
               <Plus size={14} />
-              Add work item
+              Add ticket
             </Button>
           }
         />
@@ -175,7 +175,7 @@ export function CycleWorkItemList({
                 return (
                   <Link
                     key={item.id}
-                    to={`/projects/${projectId}/work-items/${item.identifier}`}
+                    to={`/projects/${projectId}/tickets/${item.identifier}`}
                     className={`flex items-center gap-3 bg-surface px-3 py-2.5 transition-colors hover:bg-surface-2 ${i > 0 ? 'border-t border-border' : ''}`}
                   >
                     <span className="shrink-0 font-mono text-xs text-text-muted">{item.identifier}</span>
@@ -190,7 +190,7 @@ export function CycleWorkItemList({
         ))
       )}
 
-      <AddWorkItemModal open={addOpen} onClose={() => setAddOpen(false)} candidates={candidates} onAdd={handleAdd} />
+      <AddTicketModal open={addOpen} onClose={() => setAddOpen(false)} candidates={candidates} onAdd={handleAdd} />
     </div>
   );
 }

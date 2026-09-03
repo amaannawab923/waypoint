@@ -5,13 +5,13 @@ import { ArrowLeft, CalendarRange, Check, ChevronDown, MoreHorizontal, Pencil, R
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import { useRecordRecent } from '@/lib/recents';
-import { deleteCycle, listCycles, listMembers, listStates, listWorkItems, updateCycle } from '@/data/api';
+import { deleteCycle, listCycles, listMembers, listStates, listTickets, updateCycle } from '@/data/api';
 import { Avatar, AvatarStack } from '@/components/ui/Avatar';
 import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { IconButton } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { CycleStatsPanel } from '@/pages/cycles/CycleStatsPanel';
-import { CycleWorkItemList } from '@/pages/cycles/CycleWorkItemList';
+import { CycleTicketList } from '@/pages/cycles/CycleTicketList';
 import { findOverlappingCycle, formatDateRange, getCycleStatus, type CycleStatus } from '@/pages/cycles/cycle-utils';
 import { Skeleton } from '@/components/ui/Skeleton';
 
@@ -102,7 +102,7 @@ export default function CycleDetailPage() {
   const navigate = useNavigate();
 
   const { data: cycles, loading: cyclesLoading, reload: reloadCycles } = useAsync(() => listCycles(project.id), [project.id]);
-  const { data: items, loading: itemsLoading, reload: reloadItems } = useAsync(() => listWorkItems(project.id), [project.id]);
+  const { data: items, loading: itemsLoading, reload: reloadItems } = useAsync(() => listTickets(project.id), [project.id]);
   const { data: states, loading: statesLoading } = useAsync(() => listStates(project.id), [project.id]);
   const { data: allMembers } = useAsync(() => listMembers(), []);
 
@@ -380,8 +380,8 @@ export default function CycleDetailPage() {
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-[1fr_260px]">
         <div>
-          <h2 className="mb-3 text-xs font-medium tracking-wide text-text-muted uppercase">Work items</h2>
-          <CycleWorkItemList
+          <h2 className="mb-3 text-xs font-medium tracking-wide text-text-muted uppercase">Tickets</h2>
+          <CycleTicketList
             projectId={project.id}
             cycleId={cycle.id}
             items={cycleItems}

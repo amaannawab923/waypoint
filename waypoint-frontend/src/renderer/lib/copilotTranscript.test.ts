@@ -14,7 +14,7 @@ function proposal(id: string, anchorSeq: number, createdAt: string): CopilotProp
     id,
     conversationId: 'conv-1',
     kind: 'comment',
-    workItemId: 'wi-1',
+    ticketId: 'wi-1',
     payload: { body: 'hi' },
     snapshot: { identifier: 'WI-1', title: 'T' },
     anchorSeq,

@@ -2,11 +2,11 @@ import { useMemo, useState } from 'react';
 import { clsx } from 'clsx';
 import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import { useProject } from '@/layouts/ProjectLayout';
-import { useWorkItemsView } from './useWorkItemsView';
+import { useTicketsView } from './useTicketsView';
 import { Button, IconButton } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { CreateWorkItemModal } from '@/components/domain/CreateWorkItemModal';
+import { CreateTicketModal } from '@/components/domain/CreateTicketModal';
 
 const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 
@@ -40,12 +40,12 @@ function isSameDay(a: Date, b: Date): boolean {
 
 /**
  * Month grid, Monday–Friday columns (matches Plane's real calendar view).
- * Work items render as small chips on their due-date cell; days without a
+ * Tickets render as small chips on their due-date cell; days without a
  * due-dated item stay empty.
  */
 export default function CalendarView({ onOpenItem }: { onOpenItem: (identifier: string) => void }) {
   const { project } = useProject();
-  const { items, loading, reload } = useWorkItemsView(project.id);
+  const { items, loading, reload } = useTicketsView(project.id);
   const [cursor, setCursor] = useState<Date>(() => startOfMonth(new Date()));
   const [createOpen, setCreateOpen] = useState(false);
   const today = new Date();
@@ -106,8 +106,8 @@ export default function CalendarView({ onOpenItem }: { onOpenItem: (identifier: 
   if (items.length === 0) {
     return (
       <EmptyState
-        title="No work items"
-        description="Work items with a due date will show up on the calendar."
+        title="No tickets"
+        description="Tickets with a due date will show up on the calendar."
       />
     );
   }
@@ -168,7 +168,7 @@ export default function CalendarView({ onOpenItem }: { onOpenItem: (identifier: 
                   <button
                     type="button"
                     onClick={() => setCreateOpen(true)}
-                    aria-label="New work item"
+                    aria-label="New ticket"
                     className="cursor-pointer rounded-[var(--radius-sm)] p-1 text-text-muted opacity-0 hover:bg-surface hover:text-accent group-hover:opacity-100"
                   >
                     <Plus size={13} />
@@ -193,7 +193,7 @@ export default function CalendarView({ onOpenItem }: { onOpenItem: (identifier: 
         )}
       </div>
 
-      <CreateWorkItemModal
+      <CreateTicketModal
         open={createOpen}
         onClose={() => setCreateOpen(false)}
         projectId={project.id}

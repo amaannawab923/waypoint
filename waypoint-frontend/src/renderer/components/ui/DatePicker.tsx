@@ -67,13 +67,13 @@ function computeCoords(triggerRect: DOMRect, panelHeight: number): Coords {
 /**
  * A small popover month calendar, replacing the browser's native
  * `<input type="date">` — whose picker affordance is invisible under a
- * dark-mode OS/browser preference (see WorkItemDetailPage.tsx) and whose
+ * dark-mode OS/browser preference (see TicketDetailPage.tsx) and whose
  * look otherwise can't be styled to match the rest of the app.
  *
  * The panel is portaled to `document.body` and positioned with real
  * viewport coordinates (`position: fixed`) rather than rendered as a plain
  * `absolute` sibling of the trigger. A sibling gets silently clipped by any
- * scrollable ancestor — e.g. the work-item drawer's own `overflow-y-auto`
+ * scrollable ancestor — e.g. the ticket drawer's own `overflow-y-auto`
  * content column — even when there's plenty of room in the actual browser
  * window. Position is recomputed every time the panel opens, flipping above
  * the trigger when there isn't room below (and vice versa), and clamping
@@ -127,7 +127,7 @@ export function DatePicker({
     function onKey(e: KeyboardEvent) {
       if (e.key !== 'Escape') return;
       // Capture phase + stopPropagation, not just closing the picker: the
-      // work-item drawer (WorkItemDrawer.tsx) has its own bubble-phase
+      // ticket drawer (TicketDrawer.tsx) has its own bubble-phase
       // Escape listener on `document` that closes the whole drawer. Without
       // this, one Escape press while the picker is open closed both —
       // dismissing the calendar took the user's whole drawer with it.
@@ -184,7 +184,7 @@ export function DatePicker({
           <div
             ref={panelRef}
             // Portaled to <body>, so this sits as a sibling of things like
-            // the work-item drawer's own z-50 backdrop (WorkItemDrawer.tsx)
+            // the ticket drawer's own z-50 backdrop (TicketDrawer.tsx)
             // rather than nested inside it — z-30 would render invisibly
             // *behind* that backdrop there. z-[60] clears every modal/drawer
             // backdrop (z-50) while staying below ToastHost's z-[200], which

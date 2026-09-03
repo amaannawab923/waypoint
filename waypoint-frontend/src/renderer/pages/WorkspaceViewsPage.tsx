@@ -2,8 +2,8 @@ import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ListChecks } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
-import { listAllWorkItems, listProjects, listMembers, listStates } from '@/data/api';
-import type { Project, WorkItem, WorkItemState, Member } from '@/types/entities';
+import { listAllTickets, listProjects, listMembers, listStates } from '@/data/api';
+import type { Project, Ticket, TicketState, Member } from '@/types/entities';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { AvatarStack } from '@/components/ui/Avatar';
 import { PriorityIcon, PRIORITY_LABEL } from '@/components/domain/PriorityIcon';
@@ -11,15 +11,15 @@ import { StateIcon } from '@/components/domain/StateIcon';
 import { Skeleton, SkeletonTableRows } from '@/components/ui/Skeleton';
 
 interface Row {
-  item: WorkItem;
+  item: Ticket;
   project: Project | undefined;
-  state: WorkItemState | undefined;
+  state: TicketState | undefined;
 }
 
 async function loadAll() {
-  const [items, projects, members] = await Promise.all([listAllWorkItems(), listProjects(), listMembers()]);
+  const [items, projects, members] = await Promise.all([listAllTickets(), listProjects(), listMembers()]);
   const statesByProject = await Promise.all(projects.map((p) => listStates(p.id)));
-  const stateById = new Map<string, WorkItemState>();
+  const stateById = new Map<string, TicketState>();
   statesByProject.flat().forEach((s) => stateById.set(s.id, s));
   const projectById = new Map(projects.map((p) => [p.id, p]));
 
@@ -43,10 +43,10 @@ export default function WorkspaceViewsPage() {
   return (
     <div className="mx-auto max-w-6xl px-6 py-6">
       <div className="mb-6">
-        <h1 className="font-display text-xl font-medium text-text">All work items</h1>
+        <h1 className="font-display text-xl font-medium text-text">All tickets</h1>
         <p className="text-sm text-text-secondary">
           {data ? (
-            `${data.rows.length} work item${data.rows.length === 1 ? '' : 's'} across every project`
+            `${data.rows.length} ticket${data.rows.length === 1 ? '' : 's'} across every project`
           ) : (
             <Skeleton className="inline-flex">
               <Skeleton.Block height="1rem" width="12rem" />
@@ -64,8 +64,8 @@ export default function WorkspaceViewsPage() {
       {data && data.rows.length === 0 && (
         <EmptyState
           icon={<ListChecks size={32} strokeWidth={1.5} />}
-          title="No work items yet"
-          description="Work items you create across projects will show up here."
+          title="No tickets yet"
+          description="Tickets you create across projects will show up here."
         />
       )}
 
@@ -86,7 +86,7 @@ export default function WorkspaceViewsPage() {
               {data.rows.map(({ item, project, state }) => (
                 <tr
                   key={item.id}
-                  onClick={() => project && navigate(`/projects/${project.id}/work-items/${item.identifier}`)}
+                  onClick={() => project && navigate(`/projects/${project.id}/tickets/${item.identifier}`)}
                   className="cursor-pointer border-b border-border last:border-0 hover:bg-surface-2"
                 >
                   <td className="px-4 py-3 font-mono text-xs text-text-muted">{item.identifier}</td>

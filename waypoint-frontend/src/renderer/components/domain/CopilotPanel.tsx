@@ -226,7 +226,7 @@ function Composer({
 /**
  * Persistent right-hand chat panel — conditionally mounted by AppShell.tsx
  * (only while `copilotOpen`), with NO backdrop, unlike Modal.tsx/
- * WorkItemDrawer.tsx's portal convention this otherwise mirrors — the rest
+ * TicketDrawer.tsx's portal convention this otherwise mirrors — the rest
  * of the app stays interactive while this is open. Positioned below the
  * topbar (not inset-y-0, which would run under it) so the topbar —
  * including the toggle that opened this panel — stays visible and

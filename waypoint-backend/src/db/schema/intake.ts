@@ -1,6 +1,6 @@
 import { pgTable, text, timestamp, pgEnum } from 'drizzle-orm/pg-core';
 import { projects } from './projects.js';
-import { priorityEnum, workItems } from './work-items.js';
+import { priorityEnum, tickets } from './tickets.js';
 
 export const intakeStatusEnum = pgEnum('intake_status', ['pending', 'accepted', 'declined', 'duplicate']);
 
@@ -16,5 +16,5 @@ export const intakeRequests = pgTable('intake_requests', {
   sourceName: text('source_name').notNull(),
   sourceEmail: text('source_email').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  linkedWorkItemId: text('linked_work_item_id').references(() => workItems.id, { onDelete: 'set null' }),
+  linkedTicketId: text('linked_ticket_id').references(() => tickets.id, { onDelete: 'set null' }),
 });

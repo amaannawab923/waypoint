@@ -1,10 +1,10 @@
 import { eq, and, lt, count, inArray, asc, isNull, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { copilotProposals, copilotConversations, copilotMessages, workItems } from '../db/schema/index.js';
+import { copilotProposals, copilotConversations, copilotMessages, tickets } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
 import { NotFoundError } from '../middleware/errors.js';
 import { buildCopilotCommentHtml, COPILOT_DISCLOSURE } from '../lib/commentHtml.js';
-import * as workItemsService from './workItems.service.js';
+import * as ticketsService from './tickets.service.js';
 import * as commentsService from './comments.service.js';
 import * as statesService from './states.service.js';
 import * as membersService from './members.service.js';
@@ -43,9 +43,9 @@ export class ProposalValidationError extends Error {
 export type ProposalKind = 'comment' | 'state_change' | 'assignee_change' | 'priority_change' | 'create_work_item';
 export type ProposalStatus = 'proposed' | 'executing' | 'executed' | 'rejected' | 'stale' | 'expired' | 'superseded';
 
-type Priority = NonNullable<(typeof workItems.$inferInsert)['priority']>;
+type Priority = NonNullable<(typeof tickets.$inferInsert)['priority']>;
 
-export interface CreateWorkItemProposalPayload {
+export interface CreateTicketProposalPayload {
   projectId: string;
   title: string;
   description?: string;
@@ -62,7 +62,7 @@ export type ProposalPayload =
   | { stateId: string } // state_change
   | { priority: Priority } // priority_change
   | { assigneeId: string; action: 'add' | 'remove' } // assignee_change
-  | CreateWorkItemProposalPayload; // create_work_item
+  | CreateTicketProposalPayload; // create_work_item
 
 // Everything the card needs to render (names/colors, never bare ids) plus
 // the from-values approve re-checks the live row against. Captured at
@@ -73,7 +73,7 @@ export type ProposalSnapshot = Record<string, unknown>;
 export interface CreateProposalInput {
   conversationId: string;
   kind: ProposalKind;
-  workItemId: string | null;
+  ticketId: string | null;
   payload: ProposalPayload;
   snapshot: ProposalSnapshot;
 }
@@ -84,7 +84,7 @@ export interface ProposalView {
   id: string;
   conversationId: string;
   kind: ProposalKind;
-  workItemId: string | null;
+  ticketId: string | null;
   payload: ProposalPayload;
   snapshot: ProposalSnapshot;
   anchorSeq: number;
@@ -106,7 +106,7 @@ function toView(row: ProposalRow, displayName: string): ProposalView {
     id: row.id,
     conversationId: row.conversationId,
     kind: row.kind as ProposalKind,
-    workItemId: row.workItemId,
+    ticketId: row.ticketId,
     payload: row.payload as ProposalPayload,
     snapshot: row.snapshot as ProposalSnapshot,
     anchorSeq: Number(row.anchorSeq),
@@ -122,7 +122,7 @@ function toView(row: ProposalRow, displayName: string): ProposalView {
 }
 
 export async function createProposal(input: CreateProposalInput): Promise<ProposalRow> {
-  const { conversationId, kind, workItemId, payload, snapshot } = input;
+  const { conversationId, kind, ticketId, payload, snapshot } = input;
   return db.transaction(async (tx) => {
     // Existence check inside the same transaction — a bogus conversationId
     // (the header is attacker-influencable in principle) must 404-shape
@@ -175,7 +175,7 @@ export async function createProposal(input: CreateProposalInput): Promise<Propos
     if (kind === 'state_change' || kind === 'priority_change' || kind === 'assignee_change') {
       const conditions = [
         eq(copilotProposals.conversationId, conversationId),
-        eq(copilotProposals.workItemId, workItemId as string),
+        eq(copilotProposals.ticketId, ticketId as string),
         eq(copilotProposals.kind, kind),
         eq(copilotProposals.status, 'proposed'),
       ];
@@ -196,7 +196,7 @@ export async function createProposal(input: CreateProposalInput): Promise<Propos
         id: newId('prop'),
         conversationId,
         kind,
-        workItemId,
+        ticketId,
         payload,
         snapshot,
         anchorSeq,
@@ -279,19 +279,19 @@ async function checkStaleness(row: ProposalRow): Promise<StaleResult | null> {
   const snapshot = row.snapshot as Record<string, unknown>;
 
   if (kind === 'create_work_item') {
-    const payload = row.payload as CreateWorkItemProposalPayload;
+    const payload = row.payload as CreateTicketProposalPayload;
     const project = await projectsService.getProject(payload.projectId);
     if (!project) return { stale: true, reason: 'This project is no longer available' };
     const states = await statesService.listStates(payload.projectId);
     if (!states.some((s) => s.id === payload.stateId)) {
       return { stale: true, reason: 'The proposed state no longer exists in this project' };
     }
-    // Assignee resolvability is left to createWorkItem's own
+    // Assignee resolvability is left to createTicket's own
     // validateAssigneeIds — the final authority either way.
     return null;
   }
 
-  const item = row.workItemId ? await workItemsService.getWorkItem(row.workItemId) : undefined;
+  const item = row.ticketId ? await ticketsService.getTicket(row.ticketId) : undefined;
   if (!item || item.isDraft) return { stale: true, reason: 'This ticket is no longer available' };
 
   if (kind === 'state_change') {
@@ -310,7 +310,7 @@ async function checkStaleness(row: ProposalRow): Promise<StaleResult | null> {
   }
 
   if (kind === 'assignee_change') {
-    // Direction guard, not just a changed-check: toggleWorkItemAssignee
+    // Direction guard, not just a changed-check: toggleTicketAssignee
     // flips whatever the current state is, so approving an "add" once the
     // person is already assigned would silently REMOVE them. The guard
     // makes the toggle semantically a checked add/remove.
@@ -357,29 +357,29 @@ async function executeProposal(row: ProposalRow, displayName: string): Promise<u
     case 'comment': {
       const { body } = row.payload as { body: string };
       const comment = await commentsService.addComment(
-        row.workItemId as string,
+        row.ticketId as string,
         buildCopilotCommentHtml(displayName, body),
       );
       return { commentId: comment.id };
     }
     case 'state_change': {
       const { stateId } = row.payload as { stateId: string };
-      await workItemsService.updateWorkItem(row.workItemId as string, { stateId });
+      await ticketsService.updateTicket(row.ticketId as string, { stateId });
       return null;
     }
     case 'priority_change': {
       const { priority } = row.payload as { priority: Priority };
-      await workItemsService.updateWorkItem(row.workItemId as string, { priority });
+      await ticketsService.updateTicket(row.ticketId as string, { priority });
       return null;
     }
     case 'assignee_change': {
       const { assigneeId } = row.payload as { assigneeId: string };
-      await workItemsService.toggleWorkItemAssignee(row.workItemId as string, assigneeId);
+      await ticketsService.toggleTicketAssignee(row.ticketId as string, assigneeId);
       return null;
     }
     case 'create_work_item': {
-      const payload = row.payload as CreateWorkItemProposalPayload;
-      const created = await workItemsService.createWorkItem({
+      const payload = row.payload as CreateTicketProposalPayload;
+      const created = await ticketsService.createTicket({
         projectId: payload.projectId,
         title: payload.title,
         description: payload.description,
@@ -389,9 +389,9 @@ async function executeProposal(row: ProposalRow, displayName: string): Promise<u
         isDraft: false,
       });
       if (payload.dueDate) {
-        await workItemsService.updateWorkItem(created.id, { dueDate: payload.dueDate });
+        await ticketsService.updateTicket(created.id, { dueDate: payload.dueDate });
       }
-      return { workItemId: created.id, identifier: created.identifier };
+      return { ticketId: created.id, identifier: created.identifier };
     }
     default:
       throw new Error(`unknown proposal kind: ${String(kind)}`);

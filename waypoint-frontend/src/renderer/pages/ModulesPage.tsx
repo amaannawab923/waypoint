@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Boxes, CheckCircle2, Loader, Plus, Users } from 'lucide-react';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
-import { createModule, listMembers, listModules, listStates, listWorkItems } from '@/data/api';
+import { createModule, listMembers, listModules, listStates, listTickets } from '@/data/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -47,7 +47,7 @@ export default function ModulesPage() {
   const { project } = useProject();
   const navigate = useNavigate();
   const { data: modules, loading, reload } = useAsync(() => listModules(project.id), [project.id]);
-  const { data: workItems } = useAsync(() => listWorkItems(project.id), [project.id]);
+  const { data: tickets } = useAsync(() => listTickets(project.id), [project.id]);
   const { data: states } = useAsync(() => listStates(project.id), [project.id]);
   const { data: allMembers } = useAsync(() => listMembers(), []);
 
@@ -64,12 +64,12 @@ export default function ModulesPage() {
 
   const progressFor = useMemo(() => {
     return (moduleId: string) => {
-      const items = (workItems ?? []).filter((i) => i.moduleId === moduleId);
+      const items = (tickets ?? []).filter((i) => i.moduleId === moduleId);
       if (items.length === 0) return null;
       const done = items.filter((i) => completedStateIds.has(i.stateId)).length;
       return Math.round((done / items.length) * 100);
     };
-  }, [workItems, completedStateIds]);
+  }, [tickets, completedStateIds]);
 
   const stats = useMemo(() => {
     const list = modules ?? [];

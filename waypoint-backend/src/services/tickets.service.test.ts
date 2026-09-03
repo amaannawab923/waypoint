@@ -31,8 +31,8 @@ vi.mock('drizzle-orm', async (importOriginal) => {
   };
 });
 
-const { workItems, workItemAssignees } = await import('../db/schema/index.js');
-const { searchWorkItems, listAllWorkItems, listWorkItems } = await import('./workItems.service.js');
+const { tickets, ticketAssignees } = await import('../db/schema/index.js');
+const { searchTickets, listAllTickets, listTickets } = await import('./tickets.service.js');
 const { eq, and, ilike, lte, inArray } = await import('drizzle-orm');
 
 beforeEach(() => {
@@ -43,32 +43,32 @@ beforeEach(() => {
   db.select.mockReturnValue(chainable([]));
 });
 
-describe('searchWorkItems', () => {
+describe('searchTickets', () => {
   it('matches on title (case-insensitively) and excludes drafts, with no project filter by default', async () => {
     const rows = [{ id: 'wi-1', title: 'Fix login bug', isDraft: false }];
     db.select.mockReturnValueOnce(chainable(rows));
 
-    const result = await searchWorkItems('login');
+    const result = await searchTickets('login');
 
-    expect(ilike).toHaveBeenCalledWith(workItems.title, '%login%');
-    expect(eq).toHaveBeenCalledWith(workItems.isDraft, false);
+    expect(ilike).toHaveBeenCalledWith(tickets.title, '%login%');
+    expect(eq).toHaveBeenCalledWith(tickets.isDraft, false);
     expect(result).toEqual([{ ...rows[0], assigneeIds: [], labelIds: [], links: [] }]);
   });
 
   it('filters to one project when projectId is given', async () => {
     db.select.mockReturnValueOnce(chainable([]));
 
-    await searchWorkItems('login', 'proj-1');
+    await searchTickets('login', 'proj-1');
 
-    expect(eq).toHaveBeenCalledWith(workItems.projectId, 'proj-1');
+    expect(eq).toHaveBeenCalledWith(tickets.projectId, 'proj-1');
   });
 
   it('does not filter by projectId when it is omitted', async () => {
     db.select.mockReturnValueOnce(chainable([]));
 
-    await searchWorkItems('login');
+    await searchTickets('login');
 
-    expect(eq).not.toHaveBeenCalledWith(workItems.projectId, expect.anything());
+    expect(eq).not.toHaveBeenCalledWith(tickets.projectId, expect.anything());
   });
 
   // Regression test: a literal `%` or `_` in the query is a LIKE wildcard,
@@ -77,24 +77,24 @@ describe('searchWorkItems', () => {
   it('escapes LIKE metacharacters (%, _, \\) in the query before building the pattern', async () => {
     db.select.mockReturnValueOnce(chainable([]));
 
-    await searchWorkItems('100%_off\\sale');
+    await searchTickets('100%_off\\sale');
 
-    expect(ilike).toHaveBeenCalledWith(workItems.title, '%100\\%\\_off\\\\sale%');
+    expect(ilike).toHaveBeenCalledWith(tickets.title, '%100\\%\\_off\\\\sale%');
   });
 
   it('does not let a bare "%" query match every row — it is escaped to a literal', async () => {
     db.select.mockReturnValueOnce(chainable([]));
 
-    await searchWorkItems('%');
+    await searchTickets('%');
 
-    expect(ilike).toHaveBeenCalledWith(workItems.title, '%\\%%');
+    expect(ilike).toHaveBeenCalledWith(tickets.title, '%\\%%');
   });
 
   it('applies a limit at the query layer when given, not as a post-fetch slice', async () => {
     const searchChain = chainable([]);
     db.select.mockReturnValueOnce(searchChain);
 
-    await searchWorkItems('login', undefined, 51);
+    await searchTickets('login', undefined, 51);
 
     expect(searchChain.limit).toHaveBeenCalledWith(51);
   });
@@ -103,31 +103,31 @@ describe('searchWorkItems', () => {
     const searchChain = chainable([]);
     db.select.mockReturnValueOnce(searchChain);
 
-    await searchWorkItems('login');
+    await searchTickets('login');
 
     expect(searchChain.limit).not.toHaveBeenCalled();
   });
 });
 
-describe('listAllWorkItems filters', () => {
+describe('listAllTickets filters', () => {
   it('applies no extra conditions when no filters are given', async () => {
     db.select.mockReturnValueOnce(chainable([]));
 
-    await listAllWorkItems();
+    await listAllTickets();
 
-    expect(eq).toHaveBeenCalledWith(workItems.isDraft, false);
-    expect(eq).not.toHaveBeenCalledWith(workItems.stateId, expect.anything());
+    expect(eq).toHaveBeenCalledWith(tickets.isDraft, false);
+    expect(eq).not.toHaveBeenCalledWith(tickets.stateId, expect.anything());
     expect(lte).not.toHaveBeenCalled();
   });
 
   it('filters by stateId, priority, and dueBefore', async () => {
     db.select.mockReturnValueOnce(chainable([]));
 
-    await listAllWorkItems({ stateId: 'st-1', priority: 'urgent', dueBefore: '2026-09-01' });
+    await listAllTickets({ stateId: 'st-1', priority: 'urgent', dueBefore: '2026-09-01' });
 
-    expect(eq).toHaveBeenCalledWith(workItems.stateId, 'st-1');
-    expect(eq).toHaveBeenCalledWith(workItems.priority, 'urgent');
-    expect(lte).toHaveBeenCalledWith(workItems.dueDate, '2026-09-01');
+    expect(eq).toHaveBeenCalledWith(tickets.stateId, 'st-1');
+    expect(eq).toHaveBeenCalledWith(tickets.priority, 'urgent');
+    expect(lte).toHaveBeenCalledWith(tickets.dueDate, '2026-09-01');
   });
 
   // Regression coverage for the MAJOR fixed here: assigneeId used to be
@@ -147,33 +147,33 @@ describe('listAllWorkItems filters', () => {
   // below by checking there is only ONE db.select() call for the whole
   // operation (the assignee condition no longer causes a second, separate
   // query), and that inArray() receives a query builder (the subquery) built
-  // from workItemAssignees, not a plain resolved array of ids.
+  // from ticketAssignees, not a plain resolved array of ids.
   it('folds assigneeId into the SAME single query as every other filter, via a subquery passed to inArray — not a separate pre-query', async () => {
     const mainChain = chainable([]);
-    db.select.mockReturnValueOnce(mainChain); // the workItemAssignees subquery builder itself
-    db.select.mockReturnValueOnce(mainChain); // the main workItems query
+    db.select.mockReturnValueOnce(mainChain); // the ticketAssignees subquery builder itself
+    db.select.mockReturnValueOnce(mainChain); // the main tickets query
 
-    await listAllWorkItems({ assigneeId: 'mem-4', stateId: 'st-1', dueBefore: '2026-09-01', limit: 50 });
+    await listAllTickets({ assigneeId: 'mem-4', stateId: 'st-1', dueBefore: '2026-09-01', limit: 50 });
 
     // Exactly two db.select() calls total: one to build the subquery
-    // expression, one for the main workItems query — never a third,
+    // expression, one for the main tickets query — never a third,
     // independently-awaited pre-query round-trip.
     expect(db.select).toHaveBeenCalledTimes(2);
 
-    // The assignee subquery itself is built from workItemAssignees, scoped
+    // The assignee subquery itself is built from ticketAssignees, scoped
     // by assigneeId, and critically has NO .limit() of its own — it must
     // contribute every one of the assignee's item ids to the AND'd
     // condition set, not a capped subset.
-    expect(db.select).toHaveBeenCalledWith({ workItemId: workItemAssignees.workItemId });
-    expect(eq).toHaveBeenCalledWith(workItemAssignees.assigneeId, 'mem-4');
+    expect(db.select).toHaveBeenCalledWith({ ticketId: ticketAssignees.ticketId });
+    expect(eq).toHaveBeenCalledWith(ticketAssignees.assigneeId, 'mem-4');
 
     // inArray() must receive the subquery builder (an object, not a plain
     // array of already-resolved ids) — proof the assignee condition is
-    // expressed as `workItems.id IN (<subquery>)` within the main query,
+    // expressed as `tickets.id IN (<subquery>)` within the main query,
     // not resolved to a value list ahead of time.
-    expect(inArray).toHaveBeenCalledWith(workItems.id, expect.objectContaining({ where: expect.any(Function) }));
+    expect(inArray).toHaveBeenCalledWith(tickets.id, expect.objectContaining({ where: expect.any(Function) }));
     const inArrayCall = (inArray as unknown as ReturnType<typeof vi.fn>).mock.calls.find(
-      (call) => call[0] === workItems.id,
+      (call) => call[0] === tickets.id,
     );
     expect(Array.isArray(inArrayCall?.[1])).toBe(false);
 
@@ -181,8 +181,8 @@ describe('listAllWorkItems filters', () => {
     // SAME and(...) call as the assignee inArray condition — proof they all
     // apply together in one query, not the assignee filter narrowing a
     // separately-capped candidate set first.
-    expect(eq).toHaveBeenCalledWith(workItems.stateId, 'st-1');
-    expect(lte).toHaveBeenCalledWith(workItems.dueDate, '2026-09-01');
+    expect(eq).toHaveBeenCalledWith(tickets.stateId, 'st-1');
+    expect(lte).toHaveBeenCalledWith(tickets.dueDate, '2026-09-01');
     const andCall = (and as unknown as ReturnType<typeof vi.fn>).mock.calls.at(-1);
     expect(andCall).toBeDefined();
 
@@ -194,9 +194,9 @@ describe('listAllWorkItems filters', () => {
   });
 
   // The old two-query design short-circuited to [] (skipping the main
-  // workItems query entirely) when the assignee's pre-query came back
+  // tickets query entirely) when the assignee's pre-query came back
   // empty. Folding this into a subquery removes the need for that special
-  // case — `workItems.id IN (<subquery with 0 rows>)` is valid SQL that
+  // case — `tickets.id IN (<subquery with 0 rows>)` is valid SQL that
   // simply matches nothing — so the main query now always runs exactly
   // once, whether or not the assignee turns out to have any items. (Real
   // Postgres behavior for this exact case — an assignee with zero matching
@@ -207,7 +207,7 @@ describe('listAllWorkItems filters', () => {
     const mainChain = chainable([]);
     db.select.mockReturnValueOnce(mainChain).mockReturnValueOnce(mainChain);
 
-    const result = await listAllWorkItems({ assigneeId: 'mem-nobody' });
+    const result = await listAllTickets({ assigneeId: 'mem-nobody' });
 
     expect(result).toEqual([]);
     expect(db.select).toHaveBeenCalledTimes(2);
@@ -217,37 +217,37 @@ describe('listAllWorkItems filters', () => {
     const mainChain = chainable([]);
     db.select.mockReturnValueOnce(mainChain);
 
-    await listAllWorkItems({ limit: 51 });
+    await listAllTickets({ limit: 51 });
 
     expect(mainChain.limit).toHaveBeenCalledWith(51);
   });
 });
 
-describe('listWorkItems filters', () => {
+describe('listTickets filters', () => {
   it('combines the project scope with the given filters', async () => {
     db.select.mockReturnValueOnce(chainable([]));
 
-    await listWorkItems('proj-1', { priority: 'high' });
+    await listTickets('proj-1', { priority: 'high' });
 
-    expect(eq).toHaveBeenCalledWith(workItems.projectId, 'proj-1');
-    expect(eq).toHaveBeenCalledWith(workItems.priority, 'high');
+    expect(eq).toHaveBeenCalledWith(tickets.projectId, 'proj-1');
+    expect(eq).toHaveBeenCalledWith(tickets.priority, 'high');
   });
 
   // The project scope no longer needs to be duplicated inside the assignee
   // subquery: the outer query's own baseConditions already constrain to
-  // workItems.projectId, and the subquery's ids are AND'd into that same
+  // tickets.projectId, and the subquery's ids are AND'd into that same
   // query — so intersecting an unscoped assignee subquery with the outer
   // project filter produces the same effective scoping in one query,
   // without a join inside the subquery itself.
-  it('does not join workItems into the assignee subquery — the outer query already scopes by project', async () => {
+  it('does not join tickets into the assignee subquery — the outer query already scopes by project', async () => {
     const mainChain = chainable([]);
     db.select.mockReturnValueOnce(mainChain).mockReturnValueOnce(mainChain);
 
-    await listWorkItems('proj-1', { assigneeId: 'mem-4' });
+    await listTickets('proj-1', { assigneeId: 'mem-4' });
 
     expect(mainChain.innerJoin).not.toHaveBeenCalled();
-    expect(eq).toHaveBeenCalledWith(workItemAssignees.assigneeId, 'mem-4');
-    expect(eq).toHaveBeenCalledWith(workItems.projectId, 'proj-1');
+    expect(eq).toHaveBeenCalledWith(ticketAssignees.assigneeId, 'mem-4');
+    expect(eq).toHaveBeenCalledWith(tickets.projectId, 'proj-1');
     expect(db.select).toHaveBeenCalledTimes(2);
   });
 
@@ -255,7 +255,7 @@ describe('listWorkItems filters', () => {
     const mainChain = chainable([]);
     db.select.mockReturnValueOnce(mainChain);
 
-    await listWorkItems('proj-1', { limit: 51 });
+    await listTickets('proj-1', { limit: 51 });
 
     expect(mainChain.limit).toHaveBeenCalledWith(51);
   });

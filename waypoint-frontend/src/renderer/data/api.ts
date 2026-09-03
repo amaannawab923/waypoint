@@ -13,11 +13,11 @@ import type {
   Member,
   MemberRole,
   Project,
-  WorkItemState,
+  TicketState,
   Label,
   WorkModule,
   Cycle,
-  WorkItem,
+  Ticket,
   Comment,
   ActivityEntry,
   Page,
@@ -46,10 +46,10 @@ import type {
 } from '@/types/entities';
 
 // Server-side `numeric` columns come back over JSON as strings (to avoid
-// float precision loss) — WorkItem.estimatePoints is `number | null` on the
+// float precision loss) — Ticket.estimatePoints is `number | null` on the
 // client, so this is the one field that needs normalizing after every fetch.
-// Also strips `sortOrder`, a server-only field not in the WorkItem type.
-function normalizeWorkItem(raw: WorkItem & { sortOrder?: string }): WorkItem {
+// Also strips `sortOrder`, a server-only field not in the Ticket type.
+function normalizeTicket(raw: Ticket & { sortOrder?: string }): Ticket {
   const { sortOrder: _sortOrder, ...rest } = raw;
   return {
     ...rest,
@@ -57,15 +57,15 @@ function normalizeWorkItem(raw: WorkItem & { sortOrder?: string }): WorkItem {
       rest.estimatePoints == null ? null : Number(rest.estimatePoints),
   };
 }
-function normalizeWorkItems(
-  raw: (WorkItem & { sortOrder?: string })[],
-): WorkItem[] {
-  return raw.map(normalizeWorkItem);
+function normalizeTickets(
+  raw: (Ticket & { sortOrder?: string })[],
+): Ticket[] {
+  return raw.map(normalizeTicket);
 }
-function normalizeWorkItemMaybe(
-  raw: (WorkItem & { sortOrder?: string }) | undefined,
-): WorkItem | undefined {
-  return raw ? normalizeWorkItem(raw) : undefined;
+function normalizeTicketMaybe(
+  raw: (Ticket & { sortOrder?: string }) | undefined,
+): Ticket | undefined {
+  return raw ? normalizeTicket(raw) : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -244,32 +244,32 @@ export async function listAgentAssignments(): Promise<AgentAssignment[]> {
   return http.get<AgentAssignment[]>('/agent-assignments');
 }
 
-// Used right after createWorkItem when a brand-new ticket is born pre-assigned
-// to one or more agents (e.g. from the New Work Item modal) — createWorkItem
+// Used right after createTicket when a brand-new ticket is born pre-assigned
+// to one or more agents (e.g. from the New Ticket modal) — createTicket
 // itself only knows about assigneeIds, not the agent-run bookkeeping.
 export async function ensureAgentAssignments(
-  workItemId: string,
+  ticketId: string,
   agentIds: string[],
 ): Promise<void> {
-  return http.post<void>(`/work-items/${workItemId}/agent-assignments`, {
+  return http.post<void>(`/tickets/${ticketId}/agent-assignments`, {
     agentIds,
   });
 }
 
-// Assigns/unassigns an agent the same way toggleWorkItemAssignee handles a
+// Assigns/unassigns an agent the same way toggleTicketAssignee handles a
 // human — reuses the same assigneeIds array (agent and member ids are both
 // opaque strings) but also maintains the agent's own AgentAssignment run
 // record, which a human assignee doesn't need. Unassigning through this path
 // leaves the AgentAssignment row in place (with its history); use
 // takeBackOverFromAgent instead when the removal should read as a hand-off.
-export async function toggleWorkItemAgent(
-  workItemId: string,
+export async function toggleTicketAgent(
+  ticketId: string,
   agentId: string,
-): Promise<WorkItem> {
-  const item = await http.post<WorkItem & { sortOrder?: string }>(
-    `/work-items/${workItemId}/agents/${agentId}/toggle`,
+): Promise<Ticket> {
+  const item = await http.post<Ticket & { sortOrder?: string }>(
+    `/tickets/${ticketId}/agents/${agentId}/toggle`,
   );
-  return normalizeWorkItem(item);
+  return normalizeTicket(item);
 }
 
 // Removes the agent from assigneeIds (same mechanics as a human unassign),
@@ -277,13 +277,13 @@ export async function toggleWorkItemAgent(
 // current user — so a hand-off reads the same as everything else in the
 // Activity/Comments feed instead of the agent silently vanishing.
 export async function takeBackOverFromAgent(
-  workItemId: string,
+  ticketId: string,
   agentId: string,
-): Promise<WorkItem> {
-  const item = await http.post<WorkItem & { sortOrder?: string }>(
-    `/work-items/${workItemId}/agents/${agentId}/take-back`,
+): Promise<Ticket> {
+  const item = await http.post<Ticket & { sortOrder?: string }>(
+    `/tickets/${ticketId}/agents/${agentId}/take-back`,
   );
-  return normalizeWorkItem(item);
+  return normalizeTicket(item);
 }
 
 // ---------------------------------------------------------------------------
@@ -383,27 +383,27 @@ export async function deleteProject(id: string): Promise<void> {
 // States & labels
 // ---------------------------------------------------------------------------
 
-export async function listStates(projectId: string): Promise<WorkItemState[]> {
-  return http.get<WorkItemState[]>(`/states?projectId=${projectId}`);
+export async function listStates(projectId: string): Promise<TicketState[]> {
+  return http.get<TicketState[]>(`/states?projectId=${projectId}`);
 }
 
 export async function createState(
   projectId: string,
-  input: Pick<WorkItemState, 'name' | 'group' | 'color'>,
-): Promise<WorkItemState> {
-  return http.post<WorkItemState>(`/projects/${projectId}/states`, input);
+  input: Pick<TicketState, 'name' | 'group' | 'color'>,
+): Promise<TicketState> {
+  return http.post<TicketState>(`/projects/${projectId}/states`, input);
 }
 
 export async function updateState(
   id: string,
-  patch: Partial<Pick<WorkItemState, 'name' | 'group' | 'color'>>,
-): Promise<WorkItemState> {
-  return http.patch<WorkItemState>(`/states/${id}`, patch);
+  patch: Partial<Pick<TicketState, 'name' | 'group' | 'color'>>,
+): Promise<TicketState> {
+  return http.patch<TicketState>(`/states/${id}`, patch);
 }
 
-export async function countWorkItemsInState(stateId: string): Promise<number> {
+export async function countTicketsInState(stateId: string): Promise<number> {
   const { count } = await http.get<{ count: number }>(
-    `/states/${stateId}/work-item-count`,
+    `/states/${stateId}/ticket-count`,
   );
   return count;
 }
@@ -493,44 +493,44 @@ export async function deleteCycle(id: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Work items
+// Tickets
 // ---------------------------------------------------------------------------
 
-export async function listWorkItems(projectId: string): Promise<WorkItem[]> {
-  return normalizeWorkItems(
-    await http.get<(WorkItem & { sortOrder?: string })[]>(
-      `/projects/${projectId}/work-items`,
+export async function listTickets(projectId: string): Promise<Ticket[]> {
+  return normalizeTickets(
+    await http.get<(Ticket & { sortOrder?: string })[]>(
+      `/projects/${projectId}/tickets`,
     ),
   );
 }
 
-export async function listAllWorkItems(): Promise<WorkItem[]> {
-  return normalizeWorkItems(
-    await http.get<(WorkItem & { sortOrder?: string })[]>('/work-items'),
+export async function listAllTickets(): Promise<Ticket[]> {
+  return normalizeTickets(
+    await http.get<(Ticket & { sortOrder?: string })[]>('/tickets'),
   );
 }
 
-export async function listDraftWorkItems(): Promise<WorkItem[]> {
-  return normalizeWorkItems(
-    await http.get<(WorkItem & { sortOrder?: string })[]>('/work-items/drafts'),
+export async function listDraftTickets(): Promise<Ticket[]> {
+  return normalizeTickets(
+    await http.get<(Ticket & { sortOrder?: string })[]>('/tickets/drafts'),
   );
 }
 
-export async function getWorkItem(id: string): Promise<WorkItem | undefined> {
-  return normalizeWorkItemMaybe(
-    await http.get<(WorkItem & { sortOrder?: string }) | undefined>(
-      `/work-items/${id}`,
+export async function getTicket(id: string): Promise<Ticket | undefined> {
+  return normalizeTicketMaybe(
+    await http.get<(Ticket & { sortOrder?: string }) | undefined>(
+      `/tickets/${id}`,
       { notFoundAsUndefined: true },
     ),
   );
 }
 
-export async function getWorkItemByIdentifier(
+export async function getTicketByIdentifier(
   identifier: string,
-): Promise<WorkItem | undefined> {
-  return normalizeWorkItemMaybe(
-    await http.get<(WorkItem & { sortOrder?: string }) | undefined>(
-      `/work-items/by-identifier/${identifier}`,
+): Promise<Ticket | undefined> {
+  return normalizeTicketMaybe(
+    await http.get<(Ticket & { sortOrder?: string }) | undefined>(
+      `/tickets/by-identifier/${identifier}`,
       {
         notFoundAsUndefined: true,
       },
@@ -538,12 +538,12 @@ export async function getWorkItemByIdentifier(
   );
 }
 
-export interface CreateWorkItemInput {
+export interface CreateTicketInput {
   projectId: string;
   title: string;
   description?: string;
   stateId: string;
-  priority?: WorkItem['priority'];
+  priority?: Ticket['priority'];
   assigneeIds?: string[];
   labelIds?: string[];
   moduleId?: string | null;
@@ -552,21 +552,21 @@ export interface CreateWorkItemInput {
   isDraft?: boolean;
 }
 
-export async function createWorkItem(
-  input: CreateWorkItemInput,
-): Promise<WorkItem> {
-  return normalizeWorkItem(
-    await http.post<WorkItem & { sortOrder?: string }>('/work-items', input),
+export async function createTicket(
+  input: CreateTicketInput,
+): Promise<Ticket> {
+  return normalizeTicket(
+    await http.post<Ticket & { sortOrder?: string }>('/tickets', input),
   );
 }
 
-export async function updateWorkItem(
+export async function updateTicket(
   id: string,
-  patch: Partial<WorkItem>,
-): Promise<WorkItem> {
-  return normalizeWorkItem(
-    await http.patch<WorkItem & { sortOrder?: string }>(
-      `/work-items/${id}`,
+  patch: Partial<Ticket>,
+): Promise<Ticket> {
+  return normalizeTicket(
+    await http.patch<Ticket & { sortOrder?: string }>(
+      `/tickets/${id}`,
       patch,
     ),
   );
@@ -574,24 +574,24 @@ export async function updateWorkItem(
 
 // Toggles `memberId` in the item's assigneeIds — the server reads the
 // current persisted value itself, same race-avoidance as before.
-export async function toggleWorkItemAssignee(
+export async function toggleTicketAssignee(
   id: string,
   memberId: string,
-): Promise<WorkItem> {
-  return normalizeWorkItem(
-    await http.post<WorkItem & { sortOrder?: string }>(
-      `/work-items/${id}/assignees/${memberId}/toggle`,
+): Promise<Ticket> {
+  return normalizeTicket(
+    await http.post<Ticket & { sortOrder?: string }>(
+      `/tickets/${id}/assignees/${memberId}/toggle`,
     ),
   );
 }
 
-export async function toggleWorkItemLabel(
+export async function toggleTicketLabel(
   id: string,
   labelId: string,
-): Promise<WorkItem> {
-  return normalizeWorkItem(
-    await http.post<WorkItem & { sortOrder?: string }>(
-      `/work-items/${id}/labels/${labelId}/toggle`,
+): Promise<Ticket> {
+  return normalizeTicket(
+    await http.post<Ticket & { sortOrder?: string }>(
+      `/tickets/${id}/labels/${labelId}/toggle`,
     ),
   );
 }
@@ -600,50 +600,50 @@ export async function toggleWorkItemLabel(
 // render in the server's `sortOrder`, so this is what makes manual
 // drag-to-reorder stick. If the target is in a different state, adopts that
 // state too (matching dropping a card into a column at a specific position).
-export async function reorderWorkItem(
+export async function reorderTicket(
   id: string,
   targetId: string,
   position: 'before' | 'after',
-): Promise<WorkItem> {
-  return normalizeWorkItem(
-    await http.post<WorkItem & { sortOrder?: string }>(
-      `/work-items/${id}/reorder`,
+): Promise<Ticket> {
+  return normalizeTicket(
+    await http.post<Ticket & { sortOrder?: string }>(
+      `/tickets/${id}/reorder`,
       { targetId, position },
     ),
   );
 }
 
-export async function deleteWorkItem(id: string): Promise<void> {
-  return http.del<void>(`/work-items/${id}`);
+export async function deleteTicket(id: string): Promise<void> {
+  return http.del<void>(`/tickets/${id}`);
 }
 
-export async function listSubItems(parentId: string): Promise<WorkItem[]> {
-  return normalizeWorkItems(
-    await http.get<(WorkItem & { sortOrder?: string })[]>(
-      `/work-items/${parentId}/sub-items`,
+export async function listSubItems(parentId: string): Promise<Ticket[]> {
+  return normalizeTickets(
+    await http.get<(Ticket & { sortOrder?: string })[]>(
+      `/tickets/${parentId}/sub-items`,
     ),
   );
 }
 
-export async function addWorkItemLink(
-  workItemId: string,
+export async function addTicketLink(
+  ticketId: string,
   input: { url: string; label: string },
-): Promise<WorkItem> {
-  return normalizeWorkItem(
-    await http.post<WorkItem & { sortOrder?: string }>(
-      `/work-items/${workItemId}/links`,
+): Promise<Ticket> {
+  return normalizeTicket(
+    await http.post<Ticket & { sortOrder?: string }>(
+      `/tickets/${ticketId}/links`,
       input,
     ),
   );
 }
 
-export async function removeWorkItemLink(
-  workItemId: string,
+export async function removeTicketLink(
+  ticketId: string,
   linkId: string,
-): Promise<WorkItem> {
-  return normalizeWorkItem(
-    await http.del<WorkItem & { sortOrder?: string }>(
-      `/work-items/${workItemId}/links/${linkId}`,
+): Promise<Ticket> {
+  return normalizeTicket(
+    await http.del<Ticket & { sortOrder?: string }>(
+      `/tickets/${ticketId}/links/${linkId}`,
     ),
   );
 }
@@ -652,21 +652,21 @@ export async function removeWorkItemLink(
 // Comments & activity
 // ---------------------------------------------------------------------------
 
-export async function listComments(workItemId: string): Promise<Comment[]> {
-  return http.get<Comment[]>(`/work-items/${workItemId}/comments`);
+export async function listComments(ticketId: string): Promise<Comment[]> {
+  return http.get<Comment[]>(`/tickets/${ticketId}/comments`);
 }
 
 export async function addComment(
-  workItemId: string,
+  ticketId: string,
   bodyHtml: string,
 ): Promise<Comment> {
-  return http.post<Comment>(`/work-items/${workItemId}/comments`, { bodyHtml });
+  return http.post<Comment>(`/tickets/${ticketId}/comments`, { bodyHtml });
 }
 
 export async function listActivity(
-  workItemId: string,
+  ticketId: string,
 ): Promise<ActivityEntry[]> {
-  return http.get<ActivityEntry[]>(`/work-items/${workItemId}/activity`);
+  return http.get<ActivityEntry[]>(`/tickets/${ticketId}/activity`);
 }
 
 // ---------------------------------------------------------------------------
@@ -771,13 +771,13 @@ export async function updateIntakeStatus(
   return http.patch<IntakeRequest>(`/intake/${id}/status`, { status });
 }
 
-export async function convertIntakeToWorkItem(
+export async function convertIntakeToTicket(
   id: string,
   stateId: string,
-  overrides?: Partial<Pick<WorkItem, 'title' | 'description' | 'priority'>>,
-): Promise<WorkItem> {
-  return normalizeWorkItem(
-    await http.post<WorkItem & { sortOrder?: string }>(
+  overrides?: Partial<Pick<Ticket, 'title' | 'description' | 'priority'>>,
+): Promise<Ticket> {
+  return normalizeTicket(
+    await http.post<Ticket & { sortOrder?: string }>(
       `/intake/${id}/convert`,
       { stateId, ...overrides },
     ),

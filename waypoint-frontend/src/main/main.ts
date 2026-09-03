@@ -43,7 +43,7 @@ if (qaDebugPort) {
 
 // The packaged app loads the renderer from disk with no server behind it —
 // a bare `file://` load can't support createBrowserRouter (a hard
-// refresh/deep-link at e.g. /projects/proj-launch/work-items has no file at
+// refresh/deep-link at e.g. /projects/proj-launch/tickets has no file at
 // that path to find). This registers a custom `app://` scheme that serves
 // the built renderer directory and falls back to index.html for any path
 // that isn't a real file on disk, mirroring what webpack-dev-server's
@@ -71,7 +71,7 @@ function registerAppProtocol() {
     );
     // Path-traversal guard, and the actual SPA-fallback: any request that
     // doesn't resolve to a real file under rendererDist — including every
-    // client-side route like /projects/proj-launch/work-items — serves
+    // client-side route like /projects/proj-launch/tickets — serves
     // index.html instead, exactly like a server's `try_files` rewrite would.
     if (
       !filePath.startsWith(rendererDist) ||

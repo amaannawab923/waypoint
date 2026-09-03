@@ -1,13 +1,13 @@
 import { useMemo } from 'react';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import type { Cycle, WorkItem, WorkItemState } from '@/types/entities';
+import type { Cycle, Ticket, TicketState } from '@/types/entities';
 import { STATE_GROUP_LABEL } from '@/components/domain/StateIcon';
 import { Dot } from '@/components/ui/Badge';
 import { NotWired } from '@/components/ui/NotWired';
 import { BREAKDOWN_ORDER, buildBurndownData, computeBreakdown, computeProgress, stateGroupColor } from './cycle-utils';
 
 /**
- * Progress ring + state-group breakdown + burndown chart for a single cycle's work items.
+ * Progress ring + state-group breakdown + burndown chart for a single cycle's tickets.
  * Shared between the featured "active cycle" card on CyclesPage and the full CycleDetailPage.
  */
 export function CycleStatsPanel({
@@ -17,8 +17,8 @@ export function CycleStatsPanel({
   chartHeight = 200,
 }: {
   cycle: Cycle;
-  items: WorkItem[];
-  states: WorkItemState[];
+  items: Ticket[];
+  states: TicketState[];
   chartHeight?: number;
 }) {
   const progress = useMemo(() => computeProgress(items, states), [items, states]);
@@ -41,12 +41,12 @@ export function CycleStatsPanel({
           <p className="text-sm font-medium text-text">
             {progress.completed} of {total} done
           </p>
-          <p className="text-xs text-text-muted">Work items completed in this cycle</p>
+          <p className="text-xs text-text-muted">Tickets completed in this cycle</p>
         </div>
       </div>
 
       {total === 0 ? (
-        <p className="text-xs text-text-muted">No work items assigned to this cycle yet.</p>
+        <p className="text-xs text-text-muted">No tickets assigned to this cycle yet.</p>
       ) : (
         <>
           <div className="space-y-2">

@@ -11,31 +11,31 @@ import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Modal } from '@/components/ui/Modal';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
-import ListView from '@/pages/work-items/ListView';
-import { EMPTY_FILTERS, useWorkItemsView, type WorkItemFilters } from '@/pages/work-items/useWorkItemsView';
+import ListView from '@/pages/tickets/ListView';
+import { EMPTY_FILTERS, useTicketsView, type TicketFilters } from '@/pages/tickets/useTicketsView';
 import { PRIORITY_ORDER } from '@/components/domain/PriorityIcon';
 import type { Priority, SavedView } from '@/types/entities';
 
 /**
  * A saved view's `filters` is a loosely-typed `Record<string, unknown>` (see
  * createView call sites and src/mock/seed.ts). Normalize it into the strict
- * WorkItemFilters shape the work-items list actually filters on, tolerating
+ * TicketFilters shape the tickets list actually filters on, tolerating
  * both array and single-value entries.
  *
  * Assignee criteria get special handling because they can't all be expressed
  * as a positive `assigneeId` match: `assignee: 'none'` means "zero
- * assignees", an empty-set condition useWorkItemsView's filter can't express
+ * assignees", an empty-set condition useTicketsView's filter can't express
  * (an empty `assigneeId` array is treated as "no filter", not "must be
  * empty"). So `unassignedOnly` is returned separately and applied as a
  * client-side post-filter by the caller. `assignee: 'me'` resolves to the
  * current user id; any other string/array is treated as specific member
- * id(s) and folds into `assigneeId`, which useWorkItemsView already filters
+ * id(s) and folds into `assigneeId`, which useTicketsView already filters
  * on correctly.
  */
 function filtersFromSavedView(
   raw: Record<string, unknown>,
   currentUserId: string | undefined,
-): { filters: WorkItemFilters; unassignedOnly: boolean } {
+): { filters: TicketFilters; unassignedOnly: boolean } {
   function toStringArray(value: unknown): string[] {
     if (Array.isArray(value)) return value.filter((v): v is string => typeof v === 'string');
     if (typeof value === 'string') return [value];
@@ -72,7 +72,7 @@ function filtersFromSavedView(
 }
 
 /** Small self-contained popover: caller renders the trigger and the panel content. Mirrors the
- * pattern used in CycleListCard/WorkItemDetailPage — there's no shared Dropdown/Menu primitive in
+ * pattern used in CycleListCard/TicketDetailPage — there's no shared Dropdown/Menu primitive in
  * src/components/ui/ yet, so this stays local. */
 function Dropdown({
   trigger,
@@ -200,7 +200,7 @@ export default function ProjectViewsPage() {
   const { data: views, loading, reload } = useAsync(() => listViews(project.id), [project.id]);
   const { data: members } = useAsync(() => listMembers(), []);
   const { data: currentUser } = useAsync(() => getCurrentUser(), []);
-  const workItemsView = useWorkItemsView(project.id);
+  const ticketsView = useTicketsView(project.id);
 
   const normalized = useMemo(
     () => filtersFromSavedView(activeView ? activeView.filters : {}, currentUser?.id),
@@ -208,24 +208,24 @@ export default function ProjectViewsPage() {
   );
 
   useEffect(() => {
-    workItemsView.setFilters(activeView ? normalized.filters : EMPTY_FILTERS);
+    ticketsView.setFilters(activeView ? normalized.filters : EMPTY_FILTERS);
     // Only re-run when the normalized filters change, not on every
-    // workItemsView identity change (setFilters is stable per render).
+    // ticketsView identity change (setFilters is stable per render).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeView, normalized.filters]);
 
   // `unassignedOnly` (the "no assignee" / empty-set case) can't be expressed
-  // through useWorkItemsView's filters, so it's applied here as a post-filter
+  // through useTicketsView's filters, so it's applied here as a post-filter
   // on top of the already-filtered items/groups.
   const activeViewItems = normalized.unassignedOnly
-    ? workItemsView.items.filter((item) => item.assigneeIds.length === 0)
-    : workItemsView.items;
+    ? ticketsView.items.filter((item) => item.assigneeIds.length === 0)
+    : ticketsView.items;
   const activeViewGroupedItems = normalized.unassignedOnly
-    ? workItemsView.groupedItems.map((group) => ({
+    ? ticketsView.groupedItems.map((group) => ({
         ...group,
         items: group.items.filter((item) => item.assigneeIds.length === 0),
       }))
-    : workItemsView.groupedItems;
+    : ticketsView.groupedItems;
 
   function handleAddView() {
     if (creating) return;
@@ -304,14 +304,14 @@ export default function ProjectViewsPage() {
             <div>
               <h1 className="font-display text-lg font-medium text-text">{activeView.name}</h1>
               <p className="text-sm text-text-secondary">
-                {activeViewItems.length} work item{activeViewItems.length === 1 ? '' : 's'} matching this view
+                {activeViewItems.length} ticket{activeViewItems.length === 1 ? '' : 's'} matching this view
               </p>
             </div>
           </div>
         </div>
         <div className="thin-scroll min-h-0 flex-1 overflow-y-auto">
           <ListView
-            view={{ ...workItemsView, items: activeViewItems, groupedItems: activeViewGroupedItems }}
+            view={{ ...ticketsView, items: activeViewItems, groupedItems: activeViewGroupedItems }}
             projectId={project.id}
           />
         </div>

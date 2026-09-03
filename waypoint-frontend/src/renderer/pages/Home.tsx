@@ -28,7 +28,7 @@ type RecentsFilter = RecentType | 'all';
 
 const RECENTS_FILTER_OPTIONS: { value: RecentsFilter; label: string }[] = [
   { value: 'all', label: 'All' },
-  { value: 'work-item', label: 'Work items' },
+  { value: 'ticket', label: 'Tickets' },
   { value: 'page', label: 'Pages' },
   { value: 'cycle', label: 'Cycles' },
   { value: 'module', label: 'Modules' },
@@ -119,7 +119,7 @@ function formatRelativeTime(iso: string): string {
 }
 
 const RECENT_TYPE_ICON: Record<RecentType, typeof LayoutList> = {
-  'work-item': LayoutList,
+  ticket: LayoutList,
   page: FileText,
   cycle: RefreshCw,
   module: Boxes,
@@ -129,7 +129,7 @@ const QUICKSTART_CARDS = [
   {
     icon: FolderPlus,
     title: 'Create a project',
-    description: 'Spin up a project to start tracking work items, cycles, and modules.',
+    description: 'Spin up a project to start tracking tickets, cycles, and modules.',
     to: '/projects',
   },
   {
@@ -312,7 +312,7 @@ export default function Home() {
             <EmptyState
               icon={<Clock size={28} />}
               title="Nothing here yet"
-              description="Work items, pages, cycles, and modules you open will show up here."
+              description="Tickets, pages, cycles, and modules you open will show up here."
             />
           )}
         </div>

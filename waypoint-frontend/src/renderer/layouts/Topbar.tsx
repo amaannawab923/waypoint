@@ -23,18 +23,18 @@ import {
   getCurrentUser,
   listNotifications,
   listProjects,
-  listAllWorkItems,
+  listAllTickets,
   listAllPages,
   listAllCycles,
   listAllModules,
 } from '@/data/api';
 import { Avatar } from '@/components/ui/Avatar';
-import { CreateWorkItemModal } from '@/components/domain/CreateWorkItemModal';
+import { CreateTicketModal } from '@/components/domain/CreateTicketModal';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { markOnboarding } from '@/lib/onboarding';
 import { useTheme } from '@/lib/theme';
 import { useCurrentRouteProject } from '@/lib/useCurrentRouteProject';
-import type { Project, WorkItem, Page, Cycle, WorkModule } from '@/types/entities';
+import type { Project, Ticket, Page, Cycle, WorkModule } from '@/types/entities';
 
 /** Small self-contained popover, mirrors the local Dropdown pattern used in
  * CycleListCard.tsx — there's no shared Dropdown/Menu primitive in
@@ -122,7 +122,7 @@ function SearchPalette({
   open,
   onClose,
   projects,
-  workItems,
+  tickets,
   pages,
   cycles,
   modules,
@@ -130,7 +130,7 @@ function SearchPalette({
   open: boolean;
   onClose: () => void;
   projects: Project[];
-  workItems: WorkItem[];
+  tickets: Ticket[];
   pages: Page[];
   cycles: Cycle[];
   modules: WorkModule[];
@@ -154,14 +154,14 @@ function SearchPalette({
     const q = query.trim();
     if (!q) return [];
 
-    const workItemResults: SearchResult[] = workItems
+    const ticketResults: SearchResult[] = tickets
       .filter((w) => matches(w.title, q) || matches(w.identifier, q))
       .slice(0, RESULT_LIMIT)
       .map((w) => ({
-        key: `work-item:${w.id}`,
+        key: `ticket:${w.id}`,
         title: w.title,
         subtitle: `${w.identifier} · ${projectNameById.get(w.projectId) ?? ''}`,
-        path: `/projects/${w.projectId}/work-items/${w.identifier}`,
+        path: `/projects/${w.projectId}/tickets/${w.identifier}`,
       }));
 
     const pageResults: SearchResult[] = pages
@@ -181,7 +181,7 @@ function SearchPalette({
         key: `project:${p.id}`,
         title: p.name,
         subtitle: p.identifier,
-        path: `/projects/${p.id}/work-items`,
+        path: `/projects/${p.id}/tickets`,
       }));
 
     const cycleResults: SearchResult[] = cycles
@@ -205,13 +205,13 @@ function SearchPalette({
       }));
 
     return [
-      { label: 'Work items', icon: LayoutList, results: workItemResults },
+      { label: 'Tickets', icon: LayoutList, results: ticketResults },
       { label: 'Pages', icon: FileText, results: pageResults },
       { label: 'Projects', icon: FolderKanban, results: projectResults },
       { label: 'Cycles', icon: RefreshCw, results: cycleResults },
       { label: 'Modules', icon: Boxes, results: moduleResults },
     ].filter((g) => g.results.length > 0);
-  }, [query, projects, workItems, pages, cycles, modules, projectNameById]);
+  }, [query, projects, tickets, pages, cycles, modules, projectNameById]);
 
   if (!open) return null;
 
@@ -244,7 +244,7 @@ function SearchPalette({
                 if (first) go(first.path);
               }
             }}
-            placeholder="Search work items, pages, projects, cycles, modules…"
+            placeholder="Search tickets, pages, projects, cycles, modules…"
             className="h-6 flex-1 bg-transparent text-sm text-text outline-none placeholder:text-text-muted"
           />
           <button
@@ -260,7 +260,7 @@ function SearchPalette({
         <div className="p-2">
           {!hasQuery && (
             <p className="px-2 py-6 text-center text-sm text-text-muted">
-              Search across work items, pages, projects, cycles, and modules.
+              Search across tickets, pages, projects, cycles, and modules.
             </p>
           )}
           {hasQuery && !hasResults && (
@@ -312,7 +312,7 @@ export function Topbar({
   const { data: user } = useAsync(() => getCurrentUser(), []);
   const { data: notifications } = useAsync(() => listNotifications(), []);
   const { data: projects } = useAsync(() => listProjects(), []);
-  const { data: workItems } = useAsync(() => listAllWorkItems(), []);
+  const { data: tickets } = useAsync(() => listAllTickets(), []);
   const { data: pages } = useAsync(() => listAllPages(), []);
   const { data: cycles } = useAsync(() => listAllCycles(), []);
   const { data: modules } = useAsync(() => listAllModules(), []);
@@ -322,7 +322,7 @@ export function Topbar({
   const { project: routeProject } = useCurrentRouteProject();
 
   const unread = notifications?.filter((n) => !n.read).length ?? 0;
-  // Prefer whatever project route is currently open, so "New work item" lands
+  // Prefer whatever project route is currently open, so "New ticket" lands
   // where the user is actually looking instead of always the first project in
   // the list. Falls back to the first project when there's no project route
   // open (e.g. Home, a workspace settings page).
@@ -359,7 +359,7 @@ export function Topbar({
           className="flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] bg-accent px-3 text-sm font-medium text-on-accent hover:bg-accent-hover disabled:opacity-50"
         >
           <Plus size={14} />
-          New work item
+          New ticket
         </button>
 
         <Tooltip label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}>
@@ -434,11 +434,11 @@ export function Topbar({
       </div>
 
       {firstProjectId && (
-        <CreateWorkItemModal
+        <CreateTicketModal
           open={quickCreateOpen}
           onClose={() => setQuickCreateOpen(false)}
           projectId={firstProjectId}
-          onCreated={(item) => navigate(`/projects/${item.projectId}/work-items/${item.identifier}`)}
+          onCreated={(item) => navigate(`/projects/${item.projectId}/tickets/${item.identifier}`)}
         />
       )}
 
@@ -446,7 +446,7 @@ export function Topbar({
         open={searchOpen}
         onClose={() => setSearchOpen(false)}
         projects={projects ?? []}
-        workItems={workItems ?? []}
+        tickets={tickets ?? []}
         pages={pages ?? []}
         cycles={cycles ?? []}
         modules={modules ?? []}

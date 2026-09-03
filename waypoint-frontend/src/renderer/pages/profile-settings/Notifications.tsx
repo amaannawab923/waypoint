@@ -27,7 +27,7 @@ const ROWS: ToggleRow[] = [
   {
     key: 'comments',
     label: 'Notify on comments',
-    description: 'Alert me when someone comments on a work item I created or am assigned to.',
+    description: 'Alert me when someone comments on a ticket I created or am assigned to.',
   },
 ];
 

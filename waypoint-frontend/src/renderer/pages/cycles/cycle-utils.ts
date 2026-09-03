@@ -1,4 +1,4 @@
-import type { Cycle, StateGroup, WorkItem, WorkItemState } from '@/types/entities';
+import type { Cycle, StateGroup, Ticket, TicketState } from '@/types/entities';
 
 export type CycleStatus = 'active' | 'upcoming' | 'completed';
 
@@ -52,7 +52,7 @@ export { BREAKDOWN_ORDER };
 
 export type Breakdown = Record<StateGroup, number>;
 
-export function computeBreakdown(items: WorkItem[], states: WorkItemState[]): Breakdown {
+export function computeBreakdown(items: Ticket[], states: TicketState[]): Breakdown {
   const stateById = new Map(states.map((s) => [s.id, s]));
   const counts: Breakdown = { backlog: 0, unstarted: 0, started: 0, completed: 0, cancelled: 0, triage: 0 };
   for (const item of items) {
@@ -68,7 +68,7 @@ export interface CycleProgress {
   percent: number;
 }
 
-export function computeProgress(items: WorkItem[], states: WorkItemState[]): CycleProgress {
+export function computeProgress(items: Ticket[], states: TicketState[]): CycleProgress {
   const breakdown = computeBreakdown(items, states);
   const total = items.length;
   const completed = breakdown.completed;
@@ -77,7 +77,7 @@ export function computeProgress(items: WorkItem[], states: WorkItemState[]): Cyc
 }
 
 /** The color representing a state group, taken from the first matching state configured on the project. */
-export function stateGroupColor(states: WorkItemState[], group: StateGroup): string {
+export function stateGroupColor(states: TicketState[], group: StateGroup): string {
   return states.find((s) => s.group === group)?.color ?? 'var(--text-muted)';
 }
 
@@ -95,7 +95,7 @@ export interface BurndownPoint {
  * never joined into a line — a joined line would read as daily tracking that doesn't exist.
  * See CAPABILITIES['sprints.burndown'].
  */
-export function buildBurndownData(cycle: Cycle, items: WorkItem[], states: WorkItemState[], today: Date = new Date()): BurndownPoint[] {
+export function buildBurndownData(cycle: Cycle, items: Ticket[], states: TicketState[], today: Date = new Date()): BurndownPoint[] {
   const stateById = new Map(states.map((s) => [s.id, s]));
   const dayMs = 24 * 60 * 60 * 1000;
   const startDay = startOfDay(new Date(cycle.startDate));

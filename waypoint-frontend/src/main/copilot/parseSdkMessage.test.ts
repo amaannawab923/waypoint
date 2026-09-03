@@ -359,7 +359,7 @@ describe('parseSdkMessage', () => {
           type: 'stream_event',
           event: {
             type: 'content_block_delta',
-            delta: { type: 'input_json_delta', partial_json: '{"workItemId":' },
+            delta: { type: 'input_json_delta', partial_json: '{"ticketId":' },
           },
         }),
       ),

@@ -1,14 +1,14 @@
 import { useMemo, useState } from 'react';
 import { useAsync } from '@/lib/useAsync';
-import { listWorkItems, listStates, listLabels, listModules, listCycles } from '@/data/api';
-import type { WorkItem, WorkItemState, Priority } from '@/types/entities';
+import { listTickets, listStates, listLabels, listModules, listCycles } from '@/data/api';
+import type { Ticket, TicketState, Priority } from '@/types/entities';
 import { STATE_GROUP_ORDER } from '@/components/domain/StateIcon';
 import { PRIORITY_ORDER } from '@/components/domain/PriorityIcon';
 
 export type GroupBy = 'state' | 'priority' | 'module' | 'cycle' | 'assignee' | 'none';
 export type ViewKind = 'list' | 'board' | 'calendar' | 'spreadsheet' | 'gantt';
 
-export interface WorkItemFilters {
+export interface TicketFilters {
   priority: Priority[];
   stateId: string[];
   labelId: string[];
@@ -17,7 +17,7 @@ export interface WorkItemFilters {
   cycleId: string[];
 }
 
-export const EMPTY_FILTERS: WorkItemFilters = {
+export const EMPTY_FILTERS: TicketFilters = {
   priority: [],
   stateId: [],
   labelId: [],
@@ -26,27 +26,27 @@ export const EMPTY_FILTERS: WorkItemFilters = {
   cycleId: [],
 };
 
-export interface WorkItemGroup {
+export interface TicketGroup {
   key: string;
   label: string;
   color?: string;
-  items: WorkItem[];
+  items: Ticket[];
 }
 
 /**
- * Shared state + data for every work-item view (List, Board, Calendar,
+ * Shared state + data for every ticket view (List, Board, Calendar,
  * Spreadsheet, Gantt) on a single project. All five views should be built on
  * top of this hook rather than re-fetching or re-deriving filter/group logic
  * independently, so switching views never loses filter/sort state.
  */
-export function useWorkItemsView(projectId: string) {
-  const { data: items, loading, reload, setData: setItems } = useAsync(() => listWorkItems(projectId), [projectId]);
+export function useTicketsView(projectId: string) {
+  const { data: items, loading, reload, setData: setItems } = useAsync(() => listTickets(projectId), [projectId]);
   const { data: states } = useAsync(() => listStates(projectId), [projectId]);
   const { data: labels } = useAsync(() => listLabels(projectId), [projectId]);
   const { data: modules } = useAsync(() => listModules(projectId), [projectId]);
   const { data: cycles } = useAsync(() => listCycles(projectId), [projectId]);
 
-  const [filters, setFilters] = useState<WorkItemFilters>(EMPTY_FILTERS);
+  const [filters, setFilters] = useState<TicketFilters>(EMPTY_FILTERS);
   const [groupBy, setGroupBy] = useState<GroupBy>('state');
   const [showEmptyGroups, setShowEmptyGroups] = useState(true);
 
@@ -65,14 +65,14 @@ export function useWorkItemsView(projectId: string) {
 
   const stateById = useMemo(() => new Map((states ?? []).map((s) => [s.id, s])), [states]);
 
-  const groupedItems: WorkItemGroup[] = useMemo(() => {
+  const groupedItems: TicketGroup[] = useMemo(() => {
     if (!states) return [];
 
-    function build(key: string, label: string, color: string | undefined, predicate: (i: WorkItem) => boolean): WorkItemGroup {
+    function build(key: string, label: string, color: string | undefined, predicate: (i: Ticket) => boolean): TicketGroup {
       return { key, label, color, items: filteredItems.filter(predicate) };
     }
 
-    let groups: WorkItemGroup[];
+    let groups: TicketGroup[];
     switch (groupBy) {
       case 'state': {
         const orderedStates = [...states].sort(
@@ -100,13 +100,13 @@ export function useWorkItemsView(projectId: string) {
         groups = [build('assigned', 'Assigned', undefined, (i) => i.assigneeIds.length > 0), build('unassigned', 'Unassigned', undefined, (i) => i.assigneeIds.length === 0)];
         break;
       default:
-        groups = [build('all', 'All work items', undefined, () => true)];
+        groups = [build('all', 'All tickets', undefined, () => true)];
     }
 
     return showEmptyGroups ? groups : groups.filter((g) => g.items.length > 0);
   }, [filteredItems, groupBy, states, modules, cycles, showEmptyGroups]);
 
-  function stateFor(item: WorkItem): WorkItemState | undefined {
+  function stateFor(item: Ticket): TicketState | undefined {
     return stateById.get(item.stateId);
   }
 
@@ -118,9 +118,9 @@ export function useWorkItemsView(projectId: string) {
    * API's own behavior of moving an item to the end of the list when its
    * state changes, so it sorts to the bottom of its new group here too.
    */
-  function patchItemLocally(id: string, patch: Partial<WorkItem>) {
+  function patchItemLocally(id: string, patch: Partial<Ticket>) {
     setItems((prev) => {
-      if (!prev) return prev as unknown as WorkItem[];
+      if (!prev) return prev as unknown as Ticket[];
       const index = prev.findIndex((i) => i.id === id);
       if (index === -1) return prev;
       const updated = { ...prev[index], ...patch };
@@ -133,13 +133,13 @@ export function useWorkItemsView(projectId: string) {
 
   /**
    * Move `id` to sit directly before/after `targetId`, optimistically —
-   * mirrors data/api.ts's reorderWorkItem so dragging a card to a specific
+   * mirrors data/api.ts's reorderTicket so dragging a card to a specific
    * spot (not just onto a column) reflects instantly instead of waiting on
    * a reload. Adopts the target's state too, matching the server behavior.
    */
   function reorderItemLocally(id: string, targetId: string, position: 'before' | 'after') {
     setItems((prev) => {
-      if (!prev || id === targetId) return prev as unknown as WorkItem[];
+      if (!prev || id === targetId) return prev as unknown as Ticket[];
       const from = prev.find((i) => i.id === id);
       const target = prev.find((i) => i.id === targetId);
       if (!from || !target) return prev;
@@ -173,4 +173,4 @@ export function useWorkItemsView(projectId: string) {
   };
 }
 
-export type WorkItemsView = ReturnType<typeof useWorkItemsView>;
+export type TicketsView = ReturnType<typeof useTicketsView>;

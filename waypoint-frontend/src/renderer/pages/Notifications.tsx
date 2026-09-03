@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bell, AtSign } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
-import { listNotifications, listMembers, listAgents, markNotificationRead, getWorkItem } from '@/data/api';
+import { listNotifications, listMembers, listAgents, markNotificationRead, getTicket } from '@/data/api';
 import type { Agent, Member, NotificationItem } from '@/types/entities';
 import { Avatar } from '@/components/ui/Avatar';
 import { agentLabel } from '@/lib/agentLabel';
@@ -44,7 +44,7 @@ export default function Notifications() {
   }, [data, tab]);
 
   // A notification's actor may be a human member or an agent — both live in
-  // the same actorId space (see resolveActor in WorkItemDetailPage for the
+  // the same actorId space (see resolveActor in TicketDetailPage for the
   // same pattern applied to activity/comment authorship).
   function actor(
     members: Member[],
@@ -63,10 +63,10 @@ export default function Notifications() {
       await markNotificationRead(n.id);
       reload();
     }
-    if (n.workItemId) {
-      const item = await getWorkItem(n.workItemId);
+    if (n.ticketId) {
+      const item = await getTicket(n.ticketId);
       if (item) {
-        navigate(`/projects/${item.projectId}/work-items/${item.identifier}`);
+        navigate(`/projects/${item.projectId}/tickets/${item.identifier}`);
       }
     }
   }

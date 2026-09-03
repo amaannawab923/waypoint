@@ -9,9 +9,9 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { StateIcon } from '@/components/domain/StateIcon';
 import { PriorityIcon } from '@/components/domain/PriorityIcon';
 import { AGENT_STATUS_CONFIG } from '@/components/domain/AgentStatusBadge';
-import { CreateWorkItemModal } from '@/components/domain/CreateWorkItemModal';
-import type { WorkItemsView } from '@/pages/work-items/useWorkItemsView';
-import type { WorkItem } from '@/types/entities';
+import { CreateTicketModal } from '@/components/domain/CreateTicketModal';
+import type { TicketsView } from '@/pages/tickets/useTicketsView';
+import type { Ticket } from '@/types/entities';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
 
 export default function ListView({
@@ -19,10 +19,10 @@ export default function ListView({
   projectId,
   onOpenItem,
 }: {
-  view: WorkItemsView;
+  view: TicketsView;
   projectId: string;
   /**
-   * Opens the peek drawer for a work item. Optional so this view can still
+   * Opens the peek drawer for a ticket. Optional so this view can still
    * be reused by callers (e.g. ProjectViewsPage) that haven't wired up the
    * peek drawer yet — falls back to a full-page navigation in that case.
    */
@@ -38,12 +38,12 @@ export default function ListView({
   const memberById = useMemo(() => new Map((members ?? []).map((m) => [m.id, m])), [members]);
   const agentById = useMemo(() => new Map((agents ?? []).map((a) => [a.id, a])), [agents]);
   const assignmentByKey = useMemo(
-    () => new Map((agentAssignments ?? []).map((a) => [`${a.workItemId}:${a.agentId}`, a])),
+    () => new Map((agentAssignments ?? []).map((a) => [`${a.ticketId}:${a.agentId}`, a])),
     [agentAssignments],
   );
   const labelById = useMemo(() => new Map(view.labels.map((l) => [l.id, l])), [view.labels]);
 
-  function primaryAgentAssignment(item: WorkItem) {
+  function primaryAgentAssignment(item: Ticket) {
     const agentId = item.assigneeIds.find((id) => agentById.has(id));
     if (!agentId) return null;
     const agent = agentById.get(agentId);
@@ -52,7 +52,7 @@ export default function ListView({
   }
 
   const subItemsByParent = useMemo(() => {
-    const map = new Map<string, WorkItem[]>();
+    const map = new Map<string, Ticket[]>();
     for (const wi of view.allItems) {
       if (!wi.parentId) continue;
       const list = map.get(wi.parentId) ?? [];
@@ -62,7 +62,7 @@ export default function ListView({
     return map;
   }, [view.allItems]);
 
-  function subItemStats(item: WorkItem) {
+  function subItemStats(item: Ticket) {
     const children = subItemsByParent.get(item.id) ?? [];
     const done = children.filter((c) => view.stateFor(c)?.group === 'completed').length;
     return { total: children.length, done };
@@ -77,7 +77,7 @@ export default function ListView({
     });
   }
 
-  function assigneesFor(item: WorkItem) {
+  function assigneesFor(item: Ticket) {
     return item.assigneeIds
       .map((id) => {
         const m = memberById.get(id);
@@ -101,15 +101,15 @@ export default function ListView({
     return (
       <EmptyState
         icon={<ListTodo size={28} />}
-        title="No work items"
-        description="Create your first work item to start tracking work in this project."
+        title="No tickets"
+        description="Create your first ticket to start tracking work in this project."
         action={
           <button
             type="button"
             onClick={() => setCreateForGroup('none')}
             className="cursor-pointer text-sm font-medium text-accent hover:underline"
           >
-            + New work item
+            + New ticket
           </button>
         }
       />
@@ -140,7 +140,7 @@ export default function ListView({
                 className="ml-auto flex cursor-pointer items-center gap-1 rounded-[var(--radius-sm)] px-2 py-1 text-xs text-text-secondary hover:bg-surface hover:text-accent"
               >
                 <Plus size={12} />
-                New work item
+                New ticket
               </button>
             </div>
 
@@ -157,7 +157,7 @@ export default function ListView({
                     onClick={() =>
                       onOpenItem
                         ? onOpenItem(item.identifier)
-                        : navigate(`/projects/${projectId}/work-items/${item.identifier}`)
+                        : navigate(`/projects/${projectId}/tickets/${item.identifier}`)
                     }
                     className="flex w-full items-center gap-3 border-b border-border px-6 py-2.5 text-left text-sm hover:bg-surface-2"
                   >
@@ -201,13 +201,13 @@ export default function ListView({
               })}
 
             {!isCollapsed && group.items.length === 0 && (
-              <div className="px-6 py-3 text-xs text-text-muted">No work items</div>
+              <div className="px-6 py-3 text-xs text-text-muted">No tickets</div>
             )}
           </div>
         );
       })}
 
-      <CreateWorkItemModal
+      <CreateTicketModal
         open={createForGroup !== null}
         onClose={() => setCreateForGroup(null)}
         projectId={projectId}

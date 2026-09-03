@@ -1,10 +1,10 @@
 import { eq, and, ne, isNull, inArray, asc, desc, sql, ilike, lte, type SQL } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import {
-  workItems,
-  workItemLabels,
-  workItemAssignees,
-  workItemLinks,
+  tickets,
+  ticketLabels,
+  ticketAssignees,
+  ticketLinks,
   labels,
   projects,
   members,
@@ -17,7 +17,7 @@ import { logActivity } from './activity.service.js';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-// assigneeId is polymorphic (member OR agent, see work-items.ts schema
+// assigneeId is polymorphic (member OR agent, see tickets.ts schema
 // comment) — no DB-level FK is possible, so existence is checked here
 // instead. Without this, toggling a garbage id silently persists it.
 async function validateAssigneeIds(tx: Tx, ids: string[]): Promise<void> {
@@ -32,24 +32,24 @@ async function validateAssigneeIds(tx: Tx, ids: string[]): Promise<void> {
     throw new ConflictError(`unknown assignee id(s): ${unknown.join(', ')}`);
   }
 }
-type WorkItemRow = typeof workItems.$inferSelect;
-export type Enriched = WorkItemRow & { assigneeIds: string[]; labelIds: string[]; links: (typeof workItemLinks.$inferSelect)[] };
+type TicketRow = typeof tickets.$inferSelect;
+export type Enriched = TicketRow & { assigneeIds: string[]; labelIds: string[]; links: (typeof ticketLinks.$inferSelect)[] };
 
-async function attachRelations(rows: WorkItemRow[], executor: Tx | typeof db = db): Promise<Enriched[]> {
+async function attachRelations(rows: TicketRow[], executor: Tx | typeof db = db): Promise<Enriched[]> {
   if (rows.length === 0) return [];
   const ids = rows.map((r) => r.id);
   const [labelRows, assigneeRows, linkRows] = await Promise.all([
-    executor.select().from(workItemLabels).where(inArray(workItemLabels.workItemId, ids)),
-    executor.select().from(workItemAssignees).where(inArray(workItemAssignees.workItemId, ids)),
-    executor.select().from(workItemLinks).where(inArray(workItemLinks.workItemId, ids)),
+    executor.select().from(ticketLabels).where(inArray(ticketLabels.ticketId, ids)),
+    executor.select().from(ticketAssignees).where(inArray(ticketAssignees.ticketId, ids)),
+    executor.select().from(ticketLinks).where(inArray(ticketLinks.ticketId, ids)),
   ]);
   const labelsByItem = new Map<string, string[]>();
-  for (const l of labelRows) labelsByItem.set(l.workItemId, [...(labelsByItem.get(l.workItemId) ?? []), l.labelId]);
+  for (const l of labelRows) labelsByItem.set(l.ticketId, [...(labelsByItem.get(l.ticketId) ?? []), l.labelId]);
   const assigneesByItem = new Map<string, string[]>();
   for (const a of assigneeRows)
-    assigneesByItem.set(a.workItemId, [...(assigneesByItem.get(a.workItemId) ?? []), a.assigneeId]);
-  const linksByItem = new Map<string, (typeof workItemLinks.$inferSelect)[]>();
-  for (const l of linkRows) linksByItem.set(l.workItemId, [...(linksByItem.get(l.workItemId) ?? []), l]);
+    assigneesByItem.set(a.ticketId, [...(assigneesByItem.get(a.ticketId) ?? []), a.assigneeId]);
+  const linksByItem = new Map<string, (typeof ticketLinks.$inferSelect)[]>();
+  for (const l of linkRows) linksByItem.set(l.ticketId, [...(linksByItem.get(l.ticketId) ?? []), l]);
   return rows.map((r) => ({
     ...r,
     assigneeIds: assigneesByItem.get(r.id) ?? [],
@@ -58,10 +58,10 @@ async function attachRelations(rows: WorkItemRow[], executor: Tx | typeof db = d
   }));
 }
 
-export interface WorkItemFilters {
+export interface TicketFilters {
   assigneeId?: string;
   stateId?: string;
-  priority?: (typeof workItems.$inferInsert)['priority'];
+  priority?: (typeof tickets.$inferInsert)['priority'];
   // ISO date (YYYY-MM-DD) — matches items due on or before this date, e.g.
   // "what's overdue" is dueBefore=<today>.
   dueBefore?: string;
@@ -85,8 +85,8 @@ function escapeLikePattern(value: string): string {
 }
 
 // assigneeId can't just be pushed into the WHERE alongside the others —
-// assignment is a separate many-to-many table (workItemAssignees), not a
-// column on workItems — so it's expressed as a subquery passed directly to
+// assignment is a separate many-to-many table (ticketAssignees), not a
+// column on tickets — so it's expressed as a subquery passed directly to
 // inArray(). Critically, this makes it participate in the SAME query as
 // every other filter (stateId, priority, dueBefore) and the SAME single
 // .limit(), applied once by the caller after ALL filters have narrowed the
@@ -104,84 +104,84 @@ function escapeLikePattern(value: string): string {
 // the assignee's true matches were capped away before dueBefore ever ran.
 // Folding this into the main query removes that failure mode entirely: the
 // subquery has no LIMIT of its own, so it always contributes every one of
-// the assignee's work item ids to the AND'd condition set, and only the
+// the assignee's ticket ids to the AND'd condition set, and only the
 // final, fully-filtered result is capped.
 //
-// No project-scoping is needed inside the subquery: for listWorkItems, the
+// No project-scoping is needed inside the subquery: for listTickets, the
 // caller's own baseConditions already constrain the outer query to
-// workItems.projectId, so intersecting with the (unscoped) assignee subquery
+// tickets.projectId, so intersecting with the (unscoped) assignee subquery
 // via AND produces the same effective scoping as before, in one query.
 //
 // An assignee with zero items (or an unknown assigneeId) naturally yields
-// zero matching rows — `workItems.id IN (<subquery with no rows>)` is valid
+// zero matching rows — `tickets.id IN (<subquery with no rows>)` is valid
 // SQL that simply never matches — so no separate "no possible matches"
 // short-circuit is needed here; that was only ever an optimization for the
 // old two-query shape, not a correctness requirement.
-function withFilters(baseConditions: SQL[], filters: WorkItemFilters): SQL[] {
+function withFilters(baseConditions: SQL[], filters: TicketFilters): SQL[] {
   const conditions = [...baseConditions];
-  if (filters.stateId) conditions.push(eq(workItems.stateId, filters.stateId));
-  if (filters.priority) conditions.push(eq(workItems.priority, filters.priority));
-  if (filters.dueBefore) conditions.push(lte(workItems.dueDate, filters.dueBefore));
+  if (filters.stateId) conditions.push(eq(tickets.stateId, filters.stateId));
+  if (filters.priority) conditions.push(eq(tickets.priority, filters.priority));
+  if (filters.dueBefore) conditions.push(lte(tickets.dueDate, filters.dueBefore));
   if (filters.assigneeId) {
     conditions.push(
       inArray(
-        workItems.id,
+        tickets.id,
         db
-          .select({ workItemId: workItemAssignees.workItemId })
-          .from(workItemAssignees)
-          .where(eq(workItemAssignees.assigneeId, filters.assigneeId)),
+          .select({ ticketId: ticketAssignees.ticketId })
+          .from(ticketAssignees)
+          .where(eq(ticketAssignees.assigneeId, filters.assigneeId)),
       ),
     );
   }
   return conditions;
 }
 
-export async function listWorkItems(projectId: string, filters: WorkItemFilters = {}) {
-  const conditions = withFilters([eq(workItems.projectId, projectId), eq(workItems.isDraft, false)], filters);
+export async function listTickets(projectId: string, filters: TicketFilters = {}) {
+  const conditions = withFilters([eq(tickets.projectId, projectId), eq(tickets.isDraft, false)], filters);
   const query = db
     .select()
-    .from(workItems)
+    .from(tickets)
     .where(and(...conditions))
-    .orderBy(asc(workItems.sortOrder));
+    .orderBy(asc(tickets.sortOrder));
   const rows = filters.limit ? await query.limit(filters.limit) : await query;
   return attachRelations(rows);
 }
 
-export async function listAllWorkItems(filters: WorkItemFilters = {}) {
-  const conditions = withFilters([eq(workItems.isDraft, false)], filters);
+export async function listAllTickets(filters: TicketFilters = {}) {
+  const conditions = withFilters([eq(tickets.isDraft, false)], filters);
   const query = db
     .select()
-    .from(workItems)
+    .from(tickets)
     .where(and(...conditions))
-    .orderBy(asc(workItems.sortOrder));
+    .orderBy(asc(tickets.sortOrder));
   const rows = filters.limit ? await query.limit(filters.limit) : await query;
   return attachRelations(rows);
 }
 
 // Title-only match for now — description/identifier matching is a
 // reasonable fast-follow, not silently promised here.
-export async function searchWorkItems(query: string, projectId?: string, limit?: number) {
-  const conditions = [eq(workItems.isDraft, false), ilike(workItems.title, `%${escapeLikePattern(query)}%`)];
-  if (projectId) conditions.push(eq(workItems.projectId, projectId));
+export async function searchTickets(query: string, projectId?: string, limit?: number) {
+  const conditions = [eq(tickets.isDraft, false), ilike(tickets.title, `%${escapeLikePattern(query)}%`)];
+  if (projectId) conditions.push(eq(tickets.projectId, projectId));
   const dbQuery = db
     .select()
-    .from(workItems)
+    .from(tickets)
     .where(and(...conditions))
-    .orderBy(asc(workItems.sortOrder));
+    .orderBy(asc(tickets.sortOrder));
   const rows = limit ? await dbQuery.limit(limit) : await dbQuery;
   return attachRelations(rows);
 }
 
-export async function listDraftWorkItems() {
+export async function listDraftTickets() {
   const rows = await db
     .select()
-    .from(workItems)
-    .where(and(eq(workItems.isDraft, true), eq(workItems.createdById, CURRENT_USER_ID)));
+    .from(tickets)
+    .where(and(eq(tickets.isDraft, true), eq(tickets.createdById, CURRENT_USER_ID)));
   return attachRelations(rows);
 }
 
-export async function getWorkItem(id: string) {
-  const [row] = await db.select().from(workItems).where(eq(workItems.id, id));
+export async function getTicket(id: string) {
+  const [row] = await db.select().from(tickets).where(eq(tickets.id, id));
   if (!row) return undefined;
   const [enriched] = await attachRelations([row]);
   return enriched;
@@ -189,36 +189,36 @@ export async function getWorkItem(id: string) {
 
 // Cheap draft/existence check for callers (e.g. listCommentsHandler/
 // listActivityHandler in workItemTools.ts) that only need to know whether a
-// work item is missing or a draft before proceeding — not its full enriched
-// record. getWorkItem() does the main select plus three relation joins
+// ticket is missing or a draft before proceeding — not its full enriched
+// record. getTicket() does the main select plus three relation joins
 // (labels/assignees/links) via attachRelations(), which is wasted work when
 // all that's needed is one boolean. Returns true for "missing" as well as
 // "draft" so callers can use a single check for both "not found" and
 // "hidden because it's a draft" cases, matching how those callers already
 // treat both as the same not-found result.
-export async function isWorkItemDraftOrMissing(id: string): Promise<boolean> {
-  const [row] = await db.select({ isDraft: workItems.isDraft }).from(workItems).where(eq(workItems.id, id));
+export async function isTicketDraftOrMissing(id: string): Promise<boolean> {
+  const [row] = await db.select({ isDraft: tickets.isDraft }).from(tickets).where(eq(tickets.id, id));
   return !row || row.isDraft;
 }
 
-export async function getWorkItemByIdentifier(identifier: string) {
-  const [row] = await db.select().from(workItems).where(eq(workItems.identifier, identifier));
+export async function getTicketByIdentifier(identifier: string) {
+  const [row] = await db.select().from(tickets).where(eq(tickets.identifier, identifier));
   if (!row) return undefined;
   const [enriched] = await attachRelations([row]);
   return enriched;
 }
 
 export async function listSubItems(parentId: string) {
-  const rows = await db.select().from(workItems).where(eq(workItems.parentId, parentId));
+  const rows = await db.select().from(tickets).where(eq(tickets.parentId, parentId));
   return attachRelations(rows);
 }
 
-export interface CreateWorkItemInput {
+export interface CreateTicketInput {
   projectId: string;
   title: string;
   description?: string;
   stateId: string;
-  priority?: (typeof workItems.$inferInsert)['priority'];
+  priority?: (typeof tickets.$inferInsert)['priority'];
   assigneeIds?: string[];
   labelIds?: string[];
   moduleId?: string | null;
@@ -227,7 +227,7 @@ export interface CreateWorkItemInput {
   isDraft?: boolean;
 }
 
-export async function createWorkItem(input: CreateWorkItemInput) {
+export async function createTicket(input: CreateTicketInput) {
   return db.transaction(async (tx) => {
     const [project] = await tx.select().from(projects).where(eq(projects.id, input.projectId));
     // Lock the project's existing rows to serialize sequenceId allocation
@@ -235,17 +235,17 @@ export async function createWorkItem(input: CreateWorkItemInput) {
     // single-threaded; a unique(project_id, sequence_id) constraint backs
     // this up if two requests still race.
     const existing = await tx
-      .select({ sequenceId: workItems.sequenceId, sortOrder: workItems.sortOrder })
-      .from(workItems)
-      .where(eq(workItems.projectId, input.projectId))
-      .orderBy(desc(workItems.sequenceId))
+      .select({ sequenceId: tickets.sequenceId, sortOrder: tickets.sortOrder })
+      .from(tickets)
+      .where(eq(tickets.projectId, input.projectId))
+      .orderBy(desc(tickets.sequenceId))
       .limit(1)
       .for('update');
     const nextSeq = (existing[0]?.sequenceId ?? 0) + 1;
     const maxSortOrder = existing[0]?.sortOrder ? Number(existing[0].sortOrder) : 0;
 
     const [row] = await tx
-      .insert(workItems)
+      .insert(tickets)
       .values({
         id: newId('wi'),
         projectId: input.projectId,
@@ -266,23 +266,23 @@ export async function createWorkItem(input: CreateWorkItemInput) {
 
     if (input.assigneeIds?.length) {
       await validateAssigneeIds(tx, input.assigneeIds);
-      await tx.insert(workItemAssignees).values(
+      await tx.insert(ticketAssignees).values(
         input.assigneeIds.map((assigneeId) => ({
-          workItemId: row.id,
+          ticketId: row.id,
           assigneeId,
           assigneeKind: (assigneeId.startsWith('agent-') ? 'agent' : 'member') as 'agent' | 'member',
         })),
       );
     }
     if (input.labelIds?.length) {
-      await tx.insert(workItemLabels).values(input.labelIds.map((labelId) => ({ workItemId: row.id, labelId })));
+      await tx.insert(ticketLabels).values(input.labelIds.map((labelId) => ({ ticketId: row.id, labelId })));
     }
 
     await logActivity(tx, {
-      workItemId: row.id,
+      ticketId: row.id,
       actorId: CURRENT_USER_ID,
       verb: 'created',
-      detail: 'created the work item',
+      detail: 'created the ticket',
       createdAt: row.createdAt,
     });
 
@@ -298,12 +298,12 @@ async function nameForActor(tx: Tx, id: string): Promise<string | undefined> {
   return agent ? `${agent.name} (agent)` : undefined;
 }
 
-async function logAssigneeChanges(tx: Tx, workItemId: string, beforeIds: string[], afterIds: string[]) {
+async function logAssigneeChanges(tx: Tx, ticketId: string, beforeIds: string[], afterIds: string[]) {
   const before = new Set(beforeIds);
   const after = new Set(afterIds);
   for (const id of afterIds.filter((a) => !before.has(a))) {
     await logActivity(tx, {
-      workItemId,
+      ticketId,
       actorId: CURRENT_USER_ID,
       verb: 'assignee_added',
       detail: `added ${(await nameForActor(tx, id)) ?? 'an assignee'} as assignee`,
@@ -311,7 +311,7 @@ async function logAssigneeChanges(tx: Tx, workItemId: string, beforeIds: string[
   }
   for (const id of beforeIds.filter((b) => !after.has(b))) {
     await logActivity(tx, {
-      workItemId,
+      ticketId,
       actorId: CURRENT_USER_ID,
       verb: 'assignee_removed',
       detail: `removed ${(await nameForActor(tx, id)) ?? 'an assignee'} as assignee`,
@@ -319,13 +319,13 @@ async function logAssigneeChanges(tx: Tx, workItemId: string, beforeIds: string[
   }
 }
 
-async function logLabelChanges(tx: Tx, workItemId: string, beforeIds: string[], afterIds: string[]) {
+async function logLabelChanges(tx: Tx, ticketId: string, beforeIds: string[], afterIds: string[]) {
   const before = new Set(beforeIds);
   const after = new Set(afterIds);
   for (const id of afterIds.filter((l) => !before.has(l))) {
     const [label] = await tx.select().from(labels).where(eq(labels.id, id));
     await logActivity(tx, {
-      workItemId,
+      ticketId,
       actorId: CURRENT_USER_ID,
       verb: 'label_added',
       detail: `added ${label?.name ?? 'a label'} as a label`,
@@ -334,7 +334,7 @@ async function logLabelChanges(tx: Tx, workItemId: string, beforeIds: string[], 
   for (const id of beforeIds.filter((b) => !after.has(b))) {
     const [label] = await tx.select().from(labels).where(eq(labels.id, id));
     await logActivity(tx, {
-      workItemId,
+      ticketId,
       actorId: CURRENT_USER_ID,
       verb: 'label_removed',
       detail: `removed ${label?.name ?? 'a label'} as a label`,
@@ -342,11 +342,11 @@ async function logLabelChanges(tx: Tx, workItemId: string, beforeIds: string[], 
   }
 }
 
-export interface UpdateWorkItemPatch {
+export interface UpdateTicketPatch {
   title?: string;
   description?: string;
   stateId?: string;
-  priority?: (typeof workItems.$inferInsert)['priority'];
+  priority?: (typeof tickets.$inferInsert)['priority'];
   assigneeIds?: string[];
   labelIds?: string[];
   moduleId?: string | null;
@@ -359,19 +359,19 @@ export interface UpdateWorkItemPatch {
   isDraft?: boolean;
 }
 
-export async function updateWorkItem(id: string, patch: UpdateWorkItemPatch) {
+export async function updateTicket(id: string, patch: UpdateTicketPatch) {
   return db.transaction(async (tx) => {
-    const [current] = await tx.select().from(workItems).where(eq(workItems.id, id));
-    if (!current) throw new NotFoundError('work item');
+    const [current] = await tx.select().from(tickets).where(eq(tickets.id, id));
+    if (!current) throw new NotFoundError('ticket');
     const [currentEnriched] = await attachRelations([current], tx);
 
     const stateChanged = Boolean(patch.stateId && patch.stateId !== current.stateId);
     if (stateChanged) {
-      await logActivity(tx, { workItemId: id, actorId: CURRENT_USER_ID, verb: 'state_changed', detail: 'changed state' });
+      await logActivity(tx, { ticketId: id, actorId: CURRENT_USER_ID, verb: 'state_changed', detail: 'changed state' });
     }
     if (patch.priority && patch.priority !== current.priority) {
       await logActivity(tx, {
-        workItemId: id,
+        ticketId: id,
         actorId: CURRENT_USER_ID,
         verb: 'priority_changed',
         detail: `set priority to ${patch.priority}`,
@@ -380,11 +380,11 @@ export async function updateWorkItem(id: string, patch: UpdateWorkItemPatch) {
     if (patch.assigneeIds) {
       await validateAssigneeIds(tx, patch.assigneeIds);
       await logAssigneeChanges(tx, id, currentEnriched.assigneeIds, patch.assigneeIds);
-      await tx.delete(workItemAssignees).where(eq(workItemAssignees.workItemId, id));
+      await tx.delete(ticketAssignees).where(eq(ticketAssignees.ticketId, id));
       if (patch.assigneeIds.length) {
-        await tx.insert(workItemAssignees).values(
+        await tx.insert(ticketAssignees).values(
           patch.assigneeIds.map((assigneeId) => ({
-            workItemId: id,
+            ticketId: id,
             assigneeId,
             assigneeKind: (assigneeId.startsWith('agent-') ? 'agent' : 'member') as 'agent' | 'member',
           })),
@@ -393,14 +393,14 @@ export async function updateWorkItem(id: string, patch: UpdateWorkItemPatch) {
     }
     if (patch.labelIds) {
       await logLabelChanges(tx, id, currentEnriched.labelIds, patch.labelIds);
-      await tx.delete(workItemLabels).where(eq(workItemLabels.workItemId, id));
+      await tx.delete(ticketLabels).where(eq(ticketLabels.ticketId, id));
       if (patch.labelIds.length) {
-        await tx.insert(workItemLabels).values(patch.labelIds.map((labelId) => ({ workItemId: id, labelId })));
+        await tx.insert(ticketLabels).values(patch.labelIds.map((labelId) => ({ ticketId: id, labelId })));
       }
     }
     if (patch.startDate !== undefined && patch.startDate && patch.startDate !== current.startDate) {
       await logActivity(tx, {
-        workItemId: id,
+        ticketId: id,
         actorId: CURRENT_USER_ID,
         verb: 'start_date_set',
         detail: `set start date to ${patch.startDate}`,
@@ -408,7 +408,7 @@ export async function updateWorkItem(id: string, patch: UpdateWorkItemPatch) {
     }
     if (patch.dueDate !== undefined && patch.dueDate && patch.dueDate !== current.dueDate) {
       await logActivity(tx, {
-        workItemId: id,
+        ticketId: id,
         actorId: CURRENT_USER_ID,
         verb: 'due_date_set',
         detail: `set due date to ${patch.dueDate}`,
@@ -416,7 +416,7 @@ export async function updateWorkItem(id: string, patch: UpdateWorkItemPatch) {
     }
     if (patch.parentId && patch.parentId !== current.parentId) {
       await logActivity(tx, {
-        workItemId: patch.parentId,
+        ticketId: patch.parentId,
         actorId: CURRENT_USER_ID,
         verb: 'sub_item_added',
         detail: `added ${current.identifier} as a sub-item`,
@@ -425,13 +425,13 @@ export async function updateWorkItem(id: string, patch: UpdateWorkItemPatch) {
 
     const { assigneeIds, labelIds, estimatePoints, ...scalarPatch } = patch;
     const [row] = await tx
-      .update(workItems)
+      .update(tickets)
       .set({
         ...scalarPatch,
         ...(estimatePoints !== undefined ? { estimatePoints: estimatePoints == null ? null : String(estimatePoints) } : {}),
         updatedAt: new Date(),
       })
-      .where(eq(workItems.id, id))
+      .where(eq(tickets.id, id))
       .returning();
 
     const [enriched] = await attachRelations([row], tx);
@@ -439,45 +439,45 @@ export async function updateWorkItem(id: string, patch: UpdateWorkItemPatch) {
   });
 }
 
-export async function toggleWorkItemAssignee(id: string, memberId: string) {
+export async function toggleTicketAssignee(id: string, memberId: string) {
   return db.transaction(async (tx) => {
-    const [current] = await tx.select().from(workItems).where(eq(workItems.id, id));
-    if (!current) throw new NotFoundError('work item');
+    const [current] = await tx.select().from(tickets).where(eq(tickets.id, id));
+    if (!current) throw new NotFoundError('ticket');
     const [{ assigneeIds: before }] = await attachRelations([current], tx);
     const adding = !before.includes(memberId);
     if (adding) await validateAssigneeIds(tx, [memberId]);
     const after = adding ? [...before, memberId] : before.filter((m) => m !== memberId);
     await logAssigneeChanges(tx, id, before, after);
-    await tx.delete(workItemAssignees).where(eq(workItemAssignees.workItemId, id));
+    await tx.delete(ticketAssignees).where(eq(ticketAssignees.ticketId, id));
     if (after.length) {
-      await tx.insert(workItemAssignees).values(
+      await tx.insert(ticketAssignees).values(
         after.map((assigneeId) => ({
-          workItemId: id,
+          ticketId: id,
           assigneeId,
           assigneeKind: (assigneeId.startsWith('agent-') ? 'agent' : 'member') as 'agent' | 'member',
         })),
       );
     }
-    await tx.update(workItems).set({ updatedAt: new Date() }).where(eq(workItems.id, id));
-    const [row] = await tx.select().from(workItems).where(eq(workItems.id, id));
+    await tx.update(tickets).set({ updatedAt: new Date() }).where(eq(tickets.id, id));
+    const [row] = await tx.select().from(tickets).where(eq(tickets.id, id));
     const [enriched] = await attachRelations([row], tx);
     return enriched;
   });
 }
 
-export async function toggleWorkItemLabel(id: string, labelId: string) {
+export async function toggleTicketLabel(id: string, labelId: string) {
   return db.transaction(async (tx) => {
-    const [current] = await tx.select().from(workItems).where(eq(workItems.id, id));
-    if (!current) throw new NotFoundError('work item');
+    const [current] = await tx.select().from(tickets).where(eq(tickets.id, id));
+    if (!current) throw new NotFoundError('ticket');
     const [{ labelIds: before }] = await attachRelations([current], tx);
     const after = before.includes(labelId) ? before.filter((l) => l !== labelId) : [...before, labelId];
     await logLabelChanges(tx, id, before, after);
-    await tx.delete(workItemLabels).where(eq(workItemLabels.workItemId, id));
+    await tx.delete(ticketLabels).where(eq(ticketLabels.ticketId, id));
     if (after.length) {
-      await tx.insert(workItemLabels).values(after.map((lId) => ({ workItemId: id, labelId: lId })));
+      await tx.insert(ticketLabels).values(after.map((lId) => ({ ticketId: id, labelId: lId })));
     }
-    await tx.update(workItems).set({ updatedAt: new Date() }).where(eq(workItems.id, id));
-    const [row] = await tx.select().from(workItems).where(eq(workItems.id, id));
+    await tx.update(tickets).set({ updatedAt: new Date() }).where(eq(tickets.id, id));
+    const [row] = await tx.select().from(tickets).where(eq(tickets.id, id));
     const [enriched] = await attachRelations([row], tx);
     return enriched;
   });
@@ -487,28 +487,28 @@ export async function toggleWorkItemLabel(id: string, labelId: string) {
 // reorder. Computes the midpoint between the target row and its neighbor in
 // its (possibly new) state, so list/board `ORDER BY sort_order` reproduces
 // the drop position without touching every other row.
-export async function reorderWorkItem(id: string, targetId: string, position: 'before' | 'after') {
+export async function reorderTicket(id: string, targetId: string, position: 'before' | 'after') {
   return db.transaction(async (tx) => {
-    const [item] = await tx.select().from(workItems).where(eq(workItems.id, id));
-    const [target] = await tx.select().from(workItems).where(eq(workItems.id, targetId));
-    if (!item || !target) throw new NotFoundError('work item');
+    const [item] = await tx.select().from(tickets).where(eq(tickets.id, id));
+    const [target] = await tx.select().from(tickets).where(eq(tickets.id, targetId));
+    if (!item || !target) throw new NotFoundError('ticket');
     if (item.id === target.id) {
       const [enriched] = await attachRelations([item], tx);
       return enriched;
     }
 
     if (item.stateId !== target.stateId) {
-      await logActivity(tx, { workItemId: id, actorId: CURRENT_USER_ID, verb: 'state_changed', detail: 'changed state' });
-      await tx.update(workItems).set({ stateId: target.stateId, updatedAt: new Date() }).where(eq(workItems.id, id));
+      await logActivity(tx, { ticketId: id, actorId: CURRENT_USER_ID, verb: 'state_changed', detail: 'changed state' });
+      await tx.update(tickets).set({ stateId: target.stateId, updatedAt: new Date() }).where(eq(tickets.id, id));
     }
 
     // target's own row/sortOrder never changes here — only item's does — so
     // target's state is still the right one to order siblings by.
     const siblings = await tx
-      .select({ id: workItems.id, sortOrder: workItems.sortOrder })
-      .from(workItems)
-      .where(and(eq(workItems.stateId, target.stateId), ne(workItems.id, id)))
-      .orderBy(asc(workItems.sortOrder));
+      .select({ id: tickets.id, sortOrder: tickets.sortOrder })
+      .from(tickets)
+      .where(and(eq(tickets.stateId, target.stateId), ne(tickets.id, id)))
+      .orderBy(asc(tickets.sortOrder));
 
     const targetIndex = siblings.findIndex((s) => s.id === targetId);
     const targetSort = Number(target.sortOrder);
@@ -523,52 +523,52 @@ export async function reorderWorkItem(id: string, targetId: string, position: 'b
     }
 
     const [row] = await tx
-      .update(workItems)
+      .update(tickets)
       .set({ sortOrder: String(newSort) })
-      .where(eq(workItems.id, id))
+      .where(eq(tickets.id, id))
       .returning();
     const [enriched] = await attachRelations([row], tx);
     return enriched;
   });
 }
 
-export async function deleteWorkItem(id: string) {
-  await db.delete(workItems).where(eq(workItems.id, id));
+export async function deleteTicket(id: string) {
+  await db.delete(tickets).where(eq(tickets.id, id));
 }
 
-export async function addWorkItemLink(workItemId: string, input: { url: string; label: string }) {
+export async function addTicketLink(ticketId: string, input: { url: string; label: string }) {
   return db.transaction(async (tx) => {
-    const [item] = await tx.select().from(workItems).where(eq(workItems.id, workItemId));
-    if (!item) throw new NotFoundError('work item');
-    await tx.insert(workItemLinks).values({ id: newId('link'), workItemId, url: input.url, label: input.label });
-    const [{ n }] = await tx.select({ n: sql<number>`count(*)::int` }).from(workItemLinks).where(eq(workItemLinks.workItemId, workItemId));
-    await tx.update(workItems).set({ linkCount: n, updatedAt: new Date() }).where(eq(workItems.id, workItemId));
+    const [item] = await tx.select().from(tickets).where(eq(tickets.id, ticketId));
+    if (!item) throw new NotFoundError('ticket');
+    await tx.insert(ticketLinks).values({ id: newId('link'), ticketId, url: input.url, label: input.label });
+    const [{ n }] = await tx.select({ n: sql<number>`count(*)::int` }).from(ticketLinks).where(eq(ticketLinks.ticketId, ticketId));
+    await tx.update(tickets).set({ linkCount: n, updatedAt: new Date() }).where(eq(tickets.id, ticketId));
     await logActivity(tx, {
-      workItemId,
+      ticketId,
       actorId: CURRENT_USER_ID,
       verb: 'link_added',
       detail: `added ${input.label || input.url} as a link`,
     });
-    const [row] = await tx.select().from(workItems).where(eq(workItems.id, workItemId));
+    const [row] = await tx.select().from(tickets).where(eq(tickets.id, ticketId));
     const [enriched] = await attachRelations([row], tx);
     return enriched;
   });
 }
 
-export async function removeWorkItemLink(workItemId: string, linkId: string) {
+export async function removeTicketLink(ticketId: string, linkId: string) {
   return db.transaction(async (tx) => {
-    const [link] = await tx.select().from(workItemLinks).where(eq(workItemLinks.id, linkId));
-    await tx.delete(workItemLinks).where(eq(workItemLinks.id, linkId));
-    const [{ n }] = await tx.select({ n: sql<number>`count(*)::int` }).from(workItemLinks).where(eq(workItemLinks.workItemId, workItemId));
+    const [link] = await tx.select().from(ticketLinks).where(eq(ticketLinks.id, linkId));
+    await tx.delete(ticketLinks).where(eq(ticketLinks.id, linkId));
+    const [{ n }] = await tx.select({ n: sql<number>`count(*)::int` }).from(ticketLinks).where(eq(ticketLinks.ticketId, ticketId));
     const [row] = await tx
-      .update(workItems)
+      .update(tickets)
       .set({ linkCount: n, updatedAt: new Date() })
-      .where(eq(workItems.id, workItemId))
+      .where(eq(tickets.id, ticketId))
       .returning();
-    if (!row) throw new NotFoundError('work item');
+    if (!row) throw new NotFoundError('ticket');
     if (link) {
       await logActivity(tx, {
-        workItemId,
+        ticketId,
         actorId: CURRENT_USER_ID,
         verb: 'link_removed',
         detail: `removed ${link.label || link.url} as a link`,

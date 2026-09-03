@@ -142,7 +142,7 @@ function addFakeProposal(
     id: nextId('prop'),
     conversationId,
     kind: 'state_change',
-    workItemId: 'wi-1',
+    ticketId: 'wi-1',
     payload: { stateId: 'st-done' },
     snapshot: {
       identifier: 'LAUNCH-3',

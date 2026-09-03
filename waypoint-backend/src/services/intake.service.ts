@@ -3,7 +3,7 @@ import { db } from '../db/client.js';
 import { intakeRequests } from '../db/schema/index.js';
 import { NotFoundError, ConflictError } from '../middleware/errors.js';
 import { newId } from '../lib/ids.js';
-import { createWorkItem } from './workItems.service.js';
+import { createTicket } from './tickets.service.js';
 
 export async function listIntake(projectId: string) {
   return db.select().from(intakeRequests).where(eq(intakeRequests.projectId, projectId));
@@ -41,18 +41,18 @@ export async function updateIntakeStatus(id: string, status: (typeof intakeReque
   return row;
 }
 
-export async function convertIntakeToWorkItem(
+export async function convertIntakeToTicket(
   id: string,
   stateId: string,
   overrides?: { title?: string; description?: string; priority?: (typeof intakeRequests.$inferInsert)['priority'] },
 ) {
   const [request] = await db.select().from(intakeRequests).where(eq(intakeRequests.id, id));
   if (!request) throw new NotFoundError('intake request');
-  if (request.linkedWorkItemId) {
-    throw new ConflictError(`intake request already converted to ${request.linkedWorkItemId}`);
+  if (request.linkedTicketId) {
+    throw new ConflictError(`intake request already converted to ${request.linkedTicketId}`);
   }
 
-  const item = await createWorkItem({
+  const item = await createTicket({
     projectId: request.projectId,
     title: overrides?.title?.trim() || request.title,
     description: overrides?.description ?? request.description,
@@ -62,7 +62,7 @@ export async function convertIntakeToWorkItem(
 
   await db
     .update(intakeRequests)
-    .set({ status: 'accepted', linkedWorkItemId: item.id })
+    .set({ status: 'accepted', linkedTicketId: item.id })
     .where(eq(intakeRequests.id, id));
 
   return item;

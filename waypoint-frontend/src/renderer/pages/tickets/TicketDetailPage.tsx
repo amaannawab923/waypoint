@@ -25,12 +25,12 @@ import { useAsync } from '@/lib/useAsync';
 import { useRecordRecent } from '@/lib/recents';
 import {
   addComment,
-  addWorkItemLink,
-  createWorkItem,
-  deleteWorkItem,
+  addTicketLink,
+  createTicket,
+  deleteTicket,
   getCurrentUser,
-  getWorkItem,
-  getWorkItemByIdentifier,
+  getTicket,
+  getTicketByIdentifier,
   listActivity,
   listAgentAssignments,
   listAgents,
@@ -41,21 +41,21 @@ import {
   listModules,
   listStates,
   listSubItems,
-  removeWorkItemLink,
+  removeTicketLink,
   takeBackOverFromAgent,
-  toggleWorkItemAgent,
-  toggleWorkItemAssignee,
-  toggleWorkItemLabel,
-  updateWorkItem,
+  toggleTicketAgent,
+  toggleTicketAssignee,
+  toggleTicketLabel,
+  updateTicket,
 } from '@/data/api';
-import type { WorkItem } from '@/types/entities';
+import type { Ticket } from '@/types/entities';
 import { Avatar, AvatarStack } from '@/components/ui/Avatar';
 import { Badge, Dot } from '@/components/ui/Badge';
 import { Button, IconButton } from '@/components/ui/Button';
 import { DatePicker } from '@/components/ui/DatePicker';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { CreateWorkItemModal } from '@/components/domain/CreateWorkItemModal';
+import { CreateTicketModal } from '@/components/domain/CreateTicketModal';
 import { agentLabel } from '@/lib/agentLabel';
 import { AGENT_STATUS_CONFIG, AgentStatusBadge } from '@/components/domain/AgentStatusBadge';
 import { PRIORITY_LABEL, PRIORITY_ORDER, PriorityIcon } from '@/components/domain/PriorityIcon';
@@ -208,7 +208,7 @@ function AddLinkForm({
   );
 }
 
-export function WorkItemDetailContent({
+export function TicketDetailContent({
   projectId,
   identifier,
   variant = 'page',
@@ -236,7 +236,7 @@ export function WorkItemDetailContent({
     data: item,
     loading: itemLoading,
     reload: reloadItem,
-  } = useAsync(() => getWorkItemByIdentifier(identifier), [identifier]);
+  } = useAsync(() => getTicketByIdentifier(identifier), [identifier]);
 
   // `item` loads asynchronously — on the very first render, before it
   // resolves, itemProjectId is '' and these would otherwise fire against
@@ -282,18 +282,18 @@ export function WorkItemDetailContent({
     reload: reloadComments,
   } = useAsync(() => (item ? listComments(item.id) : Promise.resolve([])), [item?.id]);
   const { data: parentItem } = useAsync(
-    () => (item?.parentId ? getWorkItem(item.parentId) : Promise.resolve(undefined)),
+    () => (item?.parentId ? getTicket(item.parentId) : Promise.resolve(undefined)),
     [item?.parentId],
   );
 
   useRecordRecent(
     item
       ? {
-          type: 'work-item',
+          type: 'ticket',
           id: item.id,
           title: `${item.identifier} ${item.title}`,
           projectId: item.projectId,
-          path: `/projects/${item.projectId}/work-items/${item.identifier}`,
+          path: `/projects/${item.projectId}/tickets/${item.identifier}`,
         }
       : null,
   );
@@ -324,7 +324,7 @@ export function WorkItemDetailContent({
     }
     let cancelled = false;
     (async () => {
-      await toggleWorkItemAgent(item.id, autoAssignAgentId);
+      await toggleTicketAgent(item.id, autoAssignAgentId);
       if (cancelled) return;
       reloadItem();
       reloadActivity();
@@ -459,17 +459,17 @@ export function WorkItemDetailContent({
   if (!item) {
     return (
       <EmptyState
-        title="Work item not found"
-        description={`We couldn't find a work item with identifier "${identifier}".`}
+        title="Ticket not found"
+        description={`We couldn't find a ticket with identifier "${identifier}".`}
         action={
           <Button
             variant="secondary"
             onClick={() => {
               onClose?.();
-              navigate(`/projects/${projectId}/work-items`);
+              navigate(`/projects/${projectId}/tickets`);
             }}
           >
-            Back to work items
+            Back to tickets
           </Button>
         }
       />
@@ -484,7 +484,7 @@ export function WorkItemDetailContent({
     .map((id) => (membersById.has(id) || agentsById.has(id) ? resolveActor(id) : null))
     .filter((x): x is NonNullable<typeof x> => Boolean(x));
   const itemAgentAssignments = (allAgentAssignments ?? []).filter(
-    (a) => a.workItemId === item.id && item.assigneeIds.includes(a.agentId),
+    (a) => a.ticketId === item.id && item.assigneeIds.includes(a.agentId),
   );
   const itemLabels = (labels ?? []).filter((l) => item.labelIds.includes(l.id));
   const itemLinks = item.links ?? [];
@@ -493,9 +493,9 @@ export function WorkItemDetailContent({
   const doneSubItems = subItemsList.filter((c) => statesById.get(c.stateId)?.group === 'completed').length;
   const subItemsProgress = subItemsList.length > 0 ? Math.round((doneSubItems / subItemsList.length) * 100) : 0;
 
-  async function patchItem(patch: Partial<WorkItem>) {
+  async function patchItem(patch: Partial<Ticket>) {
     if (!item) return;
-    await updateWorkItem(item.id, patch);
+    await updateTicket(item.id, patch);
     reloadItem();
     reloadActivity();
   }
@@ -503,10 +503,10 @@ export function WorkItemDetailContent({
   async function toggleAssignee(memberId: string) {
     if (!item) return;
     // Toggles against the current persisted assigneeIds server-side (see
-    // toggleWorkItemAssignee) rather than computing the next array from this
+    // toggleTicketAssignee) rather than computing the next array from this
     // component's possibly-stale `item` state, so two toggles fired in quick
     // succession can't race and silently revert each other.
-    await toggleWorkItemAssignee(item.id, memberId);
+    await toggleTicketAssignee(item.id, memberId);
     reloadItem();
     reloadActivity();
   }
@@ -521,7 +521,7 @@ export function WorkItemDetailContent({
       await takeBackOverFromAgent(item.id, agentId);
       reloadComments();
     } else {
-      await toggleWorkItemAgent(item.id, agentId);
+      await toggleTicketAgent(item.id, agentId);
     }
     reloadItem();
     reloadActivity();
@@ -530,7 +530,7 @@ export function WorkItemDetailContent({
 
   async function toggleLabel(labelId: string) {
     if (!item) return;
-    await toggleWorkItemLabel(item.id, labelId);
+    await toggleTicketLabel(item.id, labelId);
     reloadItem();
     reloadActivity();
   }
@@ -543,32 +543,32 @@ export function WorkItemDetailContent({
       return;
     }
     if (trimmed === item.title) return;
-    await updateWorkItem(item.id, { title: trimmed });
+    await updateTicket(item.id, { title: trimmed });
     reloadItem();
   }
 
   async function saveDescription() {
     if (!item) return;
     if (descDraft === item.description) return;
-    await updateWorkItem(item.id, { description: descDraft });
+    await updateTicket(item.id, { description: descDraft });
     reloadItem();
   }
 
-  async function handleSubItemCreated(newItem: WorkItem) {
+  async function handleSubItemCreated(newItem: Ticket) {
     if (!item) return;
-    await updateWorkItem(newItem.id, { parentId: item.id });
+    await updateTicket(newItem.id, { parentId: item.id });
     reloadSubItems();
   }
 
   async function handleAddLink(url: string, label: string) {
     if (!item) return;
-    await addWorkItemLink(item.id, { url, label });
+    await addTicketLink(item.id, { url, label });
     reloadItem();
   }
 
   async function handleRemoveLink(linkId: string) {
     if (!item) return;
-    await removeWorkItemLink(item.id, linkId);
+    await removeTicketLink(item.id, linkId);
     reloadItem();
   }
 
@@ -588,15 +588,15 @@ export function WorkItemDetailContent({
   function handleDelete() {
     if (!item) return;
     if (!window.confirm(`Delete ${item.identifier}? This can't be undone.`)) return;
-    deleteWorkItem(item.id).then(() => {
+    deleteTicket(item.id).then(() => {
       onClose?.();
-      navigate(`/projects/${projectId}/work-items`);
+      navigate(`/projects/${projectId}/tickets`);
     });
   }
 
   async function handleDuplicate() {
     if (!item) return;
-    const copy = await createWorkItem({
+    const copy = await createTicket({
       projectId: item.projectId,
       title: `Copy of ${item.title}`,
       description: item.description,
@@ -608,7 +608,7 @@ export function WorkItemDetailContent({
       cycleId: item.cycleId,
     });
     onClose?.();
-    navigate(`/projects/${item.projectId}/work-items/${copy.identifier}`);
+    navigate(`/projects/${item.projectId}/tickets/${copy.identifier}`);
   }
 
   return (
@@ -626,12 +626,12 @@ export function WorkItemDetailContent({
             </div>
           ) : (
             <div className="flex min-w-0 items-center gap-1.5 text-sm text-text-secondary">
-              <Link to={`/projects/${projectId}/work-items`} className="truncate hover:text-text">
+              <Link to={`/projects/${projectId}/tickets`} className="truncate hover:text-text">
                 {project.name}
               </Link>
               <ChevronRight size={14} className="shrink-0 text-text-muted" />
-              <Link to={`/projects/${projectId}/work-items`} className="shrink-0 hover:text-text">
-                Work Items
+              <Link to={`/projects/${projectId}/tickets`} className="shrink-0 hover:text-text">
+                Tickets
               </Link>
               <ChevronRight size={14} className="shrink-0 text-text-muted" />
               <span className="shrink-0 font-mono text-text">{item.identifier}</span>
@@ -646,7 +646,7 @@ export function WorkItemDetailContent({
             <Dropdown
               align="right"
               trigger={(toggle) => (
-                <IconButton label="Work item actions" onClick={toggle}>
+                <IconButton label="Ticket actions" onClick={toggle}>
                   <MoreHorizontal size={16} />
                 </IconButton>
               )}
@@ -691,7 +691,7 @@ export function WorkItemDetailContent({
             onKeyDown={(e) => {
               if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
             }}
-            placeholder="Work item title"
+            placeholder="Ticket title"
             className="-mx-2 w-full rounded-[var(--radius-sm)] border border-transparent bg-transparent px-2 py-1 font-display text-xl font-semibold text-text outline-none focus:border-border-strong focus:bg-surface-2"
           />
         </div>
@@ -711,7 +711,7 @@ export function WorkItemDetailContent({
         {/* Action row */}
         <div className="mt-4 flex flex-wrap items-center gap-2 px-6 md:px-8">
           <Button variant="secondary" size="sm" onClick={() => setCreateSubOpen(true)}>
-            <Plus size={14} /> Add sub-work item
+            <Plus size={14} /> Add subtask
           </Button>
           <Button variant="secondary" size="sm" disabled title="Coming soon">
             <GitMerge size={14} /> Add relation
@@ -769,11 +769,11 @@ export function WorkItemDetailContent({
           </div>
         )}
 
-        {/* Sub-work items */}
+        {/* Subtasks */}
         {subItems && subItems.length > 0 && (
           <div className="mt-6 px-6 md:px-8">
             <h3 className="mb-2 font-display text-sm font-medium text-text">
-              Sub-work items ({subItems.length})
+              Subtasks ({subItems.length})
             </h3>
             <div className="mb-2 flex items-center gap-2">
               <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-2">
@@ -792,7 +792,7 @@ export function WorkItemDetailContent({
                 return (
                   <Link
                     key={child.id}
-                    to={`/projects/${projectId}/work-items/${child.identifier}`}
+                    to={`/projects/${projectId}/tickets/${child.identifier}`}
                     className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-surface-2"
                   >
                     {childState && <StateIcon state={childState} />}
@@ -1021,7 +1021,7 @@ export function WorkItemDetailContent({
                   onClick={() =>
                     navigate(
                       `/settings/agents/new?returnTo=${encodeURIComponent(
-                        `/projects/${projectId}/work-items/${item.identifier}`,
+                        `/projects/${projectId}/tickets/${item.identifier}`,
                       )}&projectId=${item.projectId}`,
                     )
                   }
@@ -1220,7 +1220,7 @@ export function WorkItemDetailContent({
           {item.parentId && parentItem ? (
             <div className="flex h-8 items-center gap-1.5 px-2">
               <Link
-                to={`/projects/${projectId}/work-items/${parentItem.identifier}`}
+                to={`/projects/${projectId}/tickets/${parentItem.identifier}`}
                 className="flex min-w-0 items-center gap-1.5 truncate text-sm text-text hover:text-accent"
               >
                 <span className="shrink-0 font-mono text-xs text-text-muted">{parentItem.identifier}</span>
@@ -1284,7 +1284,7 @@ export function WorkItemDetailContent({
         </PropertyRow>
       </aside>
 
-      <CreateWorkItemModal
+      <CreateTicketModal
         open={createSubOpen}
         onClose={() => setCreateSubOpen(false)}
         projectId={item.projectId}
@@ -1295,12 +1295,12 @@ export function WorkItemDetailContent({
 }
 
 /** Route entry: resolves `:projectId`/`:identifier` from the URL and renders the full page. */
-export default function WorkItemDetailPage() {
+export default function TicketDetailPage() {
   const { projectId = '', identifier = '' } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const newAgentId = searchParams.get('newAgentId') ?? undefined;
   return (
-    <WorkItemDetailContent
+    <TicketDetailContent
       projectId={projectId}
       identifier={identifier}
       variant="page"

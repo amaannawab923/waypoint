@@ -2,8 +2,8 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ListTodo, UserCheck2, Bell, Activity as ActivityIcon } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
-import { getCurrentUser, listAllWorkItems, listProjects, listStates } from '@/data/api';
-import type { Member, Project, WorkItem, WorkItemState } from '@/types/entities';
+import { getCurrentUser, listAllTickets, listProjects, listStates } from '@/data/api';
+import type { Member, Project, Ticket, TicketState } from '@/types/entities';
 import { Avatar } from '@/components/ui/Avatar';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PriorityIcon, PRIORITY_ORDER, PRIORITY_LABEL } from '@/components/domain/PriorityIcon';
@@ -26,13 +26,13 @@ const WORKLOAD_GROUPS: StateGroup[] = ['backlog', 'unstarted', 'started', 'compl
 interface YourWorkData {
   user: Member;
   projects: Project[];
-  assigned: WorkItem[];
-  created: WorkItem[];
-  states: WorkItemState[];
+  assigned: Ticket[];
+  created: Ticket[];
+  states: TicketState[];
 }
 
 async function loadYourWork(): Promise<YourWorkData> {
-  const [user, allItems, projects] = await Promise.all([getCurrentUser(), listAllWorkItems(), listProjects()]);
+  const [user, allItems, projects] = await Promise.all([getCurrentUser(), listAllTickets(), listProjects()]);
   const assigned = allItems.filter((w) => w.assigneeIds.includes(user.id));
   const created = allItems.filter((w) => w.createdById === user.id);
   const relevantProjectIds = Array.from(new Set([...assigned, ...created].map((w) => w.projectId)));
@@ -44,19 +44,19 @@ function projectName(projects: Project[], projectId: string): string {
   return projects.find((p) => p.id === projectId)?.name ?? 'Unknown project';
 }
 
-function WorkItemRow({
+function TicketRow({
   item,
   projects,
   states,
 }: {
-  item: WorkItem;
+  item: Ticket;
   projects: Project[];
-  states: WorkItemState[];
+  states: TicketState[];
 }) {
   const state = states.find((s) => s.id === item.stateId);
   return (
     <Link
-      to={`/projects/${item.projectId}/work-items/${item.identifier}`}
+      to={`/projects/${item.projectId}/tickets/${item.identifier}`}
       className="flex items-center gap-3 rounded-[var(--radius-sm)] px-2 py-2 text-sm transition-colors hover:bg-surface-2"
     >
       <PriorityIcon priority={item.priority} />
@@ -73,7 +73,7 @@ export default function YourWork() {
   const { data, loading } = useAsync(() => loadYourWork(), []);
 
   const byPriority = useMemo(() => {
-    if (!data) return [] as { priority: (typeof PRIORITY_ORDER)[number]; items: WorkItem[] }[];
+    if (!data) return [] as { priority: (typeof PRIORITY_ORDER)[number]; items: Ticket[] }[];
     return PRIORITY_ORDER.map((priority) => ({
       priority,
       items: data.assigned.filter((w) => w.priority === priority),
@@ -157,7 +157,7 @@ export default function YourWork() {
               <div className="rounded-[var(--radius-lg)] border border-border bg-surface p-4">
                 <h2 className="font-display text-sm font-medium text-text">Assigned to you, by priority</h2>
                 {byPriority.length === 0 ? (
-                  <EmptyState title="Nothing assigned" description="Work items assigned to you will show up here." />
+                  <EmptyState title="Nothing assigned" description="Tickets assigned to you will show up here." />
                 ) : (
                   <div className="mt-2 space-y-4">
                     {byPriority.map((g) => (
@@ -165,7 +165,7 @@ export default function YourWork() {
                         <p className="mb-1 text-xs font-medium text-text-secondary">{PRIORITY_LABEL[g.priority]}</p>
                         <div className="divide-y divide-border">
                           {g.items.map((item) => (
-                            <WorkItemRow key={item.id} item={item} projects={projects} states={data.states} />
+                            <TicketRow key={item.id} item={item} projects={projects} states={data.states} />
                           ))}
                         </div>
                       </div>
@@ -179,11 +179,11 @@ export default function YourWork() {
           {tab === 'assigned' && (
             <div className="rounded-[var(--radius-lg)] border border-border bg-surface p-4">
               {assigned.length === 0 ? (
-                <EmptyState title="Nothing assigned" description="Work items assigned to you will show up here." />
+                <EmptyState title="Nothing assigned" description="Tickets assigned to you will show up here." />
               ) : (
                 <div className="divide-y divide-border">
                   {assigned.map((item) => (
-                    <WorkItemRow key={item.id} item={item} projects={projects} states={data.states} />
+                    <TicketRow key={item.id} item={item} projects={projects} states={data.states} />
                   ))}
                 </div>
               )}
@@ -193,11 +193,11 @@ export default function YourWork() {
           {tab === 'created' && (
             <div className="rounded-[var(--radius-lg)] border border-border bg-surface p-4">
               {created.length === 0 ? (
-                <EmptyState title="Nothing created yet" description="Work items you create will show up here." />
+                <EmptyState title="Nothing created yet" description="Tickets you create will show up here." />
               ) : (
                 <div className="divide-y divide-border">
                   {created.map((item) => (
-                    <WorkItemRow key={item.id} item={item} projects={projects} states={data.states} />
+                    <TicketRow key={item.id} item={item} projects={projects} states={data.states} />
                   ))}
                 </div>
               )}
@@ -208,7 +208,7 @@ export default function YourWork() {
             <EmptyState
               icon={<Bell size={28} />}
               title="No subscriptions"
-              description="Work items you subscribe to will show up here."
+              description="Tickets you subscribe to will show up here."
             />
           )}
 

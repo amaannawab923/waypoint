@@ -3,8 +3,8 @@ import { Link } from 'react-router-dom';
 import { Plus, RefreshCw } from 'lucide-react';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
-import { listCycles, listStates, listWorkItems } from '@/data/api';
-import type { Cycle, WorkItem } from '@/types/entities';
+import { listCycles, listStates, listTickets } from '@/data/api';
+import type { Cycle, Ticket } from '@/types/entities';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Badge } from '@/components/ui/Badge';
@@ -23,13 +23,13 @@ export default function CyclesPage() {
     loading: cyclesLoading,
     reload: reloadCycles,
   } = useAsync(() => listCycles(project.id), [project.id]);
-  const { data: items, loading: itemsLoading } = useAsync(() => listWorkItems(project.id), [project.id]);
+  const { data: items, loading: itemsLoading } = useAsync(() => listTickets(project.id), [project.id]);
   const { data: states, loading: statesLoading } = useAsync(() => listStates(project.id), [project.id]);
 
   const loading = cyclesLoading || itemsLoading || statesLoading;
 
   const itemsByCycle = useMemo(() => {
-    const map = new Map<string, WorkItem[]>();
+    const map = new Map<string, Ticket[]>();
     for (const item of items ?? []) {
       if (!item.cycleId) continue;
       const bucket = map.get(item.cycleId) ?? [];

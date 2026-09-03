@@ -114,7 +114,7 @@ export default function Labels() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-lg font-medium text-text">Labels</h1>
-          <p className="mt-1 text-sm text-text-secondary">Manage labels used to categorize work items.</p>
+          <p className="mt-1 text-sm text-text-secondary">Manage labels used to categorize tickets.</p>
         </div>
         <Button variant="primary" size="sm" onClick={() => setShowForm((v) => !v)}>
           <Plus size={14} />
@@ -162,7 +162,7 @@ export default function Labels() {
           <SkeletonListRows rows={4} />
         </div>
       ) : (labels ?? []).length === 0 ? (
-        <EmptyState icon={<Tag size={28} />} title="No labels yet" description="Add labels to categorize work items." />
+        <EmptyState icon={<Tag size={28} />} title="No labels yet" description="Add labels to categorize tickets." />
       ) : (
         <div className="flex flex-col gap-2">
           {(labels ?? []).map((label) =>

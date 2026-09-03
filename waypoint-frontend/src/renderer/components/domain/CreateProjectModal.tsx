@@ -28,19 +28,19 @@ const FEATURE_ROWS: FeatureRow[] = [
     key: 'cycles',
     label: 'Cycles',
     description:
-      'Run work in fixed date ranges, each with its own status, lead, and work items. They don’t have to match — a two-week cycle, then a one-week one.',
+      'Run work in fixed date ranges, each with its own status, lead, and tickets. They don’t have to match — a two-week cycle, then a one-week one.',
   },
   {
     key: 'modules',
     label: 'Modules',
     description:
-      'Group work items under one lead and status — for the payments migration, the redesign, anything that spans more than one cycle.',
+      'Group tickets under one lead and status — for the payments migration, the redesign, anything that spans more than one cycle.',
   },
   {
     key: 'views',
     label: 'Views',
     description:
-      'Save a filter, sort, and grouping of the work item list, then share it or keep it to yourself.',
+      'Save a filter, sort, and grouping of the ticket list, then share it or keep it to yourself.',
   },
   {
     key: 'pages',
@@ -150,11 +150,11 @@ export function CreateProjectModal({
     const project = createdProject;
     reset();
     onClose();
-    if (project) navigate(`/projects/${project.id}/work-items`);
+    if (project) navigate(`/projects/${project.id}/tickets`);
   }
 
   const title =
-    step === 1 ? 'New project' : step === 2 ? 'Projects and work items' : 'Project created';
+    step === 1 ? 'New project' : step === 2 ? 'Projects and tickets' : 'Project created';
 
   return (
     <Modal

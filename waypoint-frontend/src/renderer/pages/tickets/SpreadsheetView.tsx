@@ -4,11 +4,11 @@ import { ChevronUp, ChevronDown, ChevronsUpDown, Columns3 } from 'lucide-react';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import { listMembers } from '@/data/api';
-import { useWorkItemsView } from './useWorkItemsView';
-import { Popover } from '@/pages/work-items/Popover';
+import { useTicketsView } from './useTicketsView';
+import { Popover } from '@/pages/tickets/Popover';
 import { Button } from '@/components/ui/Button';
 import { Badge, Dot } from '@/components/ui/Badge';
-import type { WorkItem } from '@/types/entities';
+import type { Ticket } from '@/types/entities';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton, SkeletonTableRows } from '@/components/ui/Skeleton';
 import { StateIcon } from '@/components/domain/StateIcon';
@@ -32,9 +32,9 @@ type SortDir = 'asc' | 'desc';
 
 const DATE_FORMAT = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
-const TITLE_COLUMN = { key: 'title' as const, label: 'Work item' };
+const TITLE_COLUMN = { key: 'title' as const, label: 'Ticket' };
 
-/** Columns available through the "Columns" toggle, beyond the always-shown "Work item" column. */
+/** Columns available through the "Columns" toggle, beyond the always-shown "Ticket" column. */
 const OPTIONAL_COLUMNS: { key: Exclude<SortKey, 'title'>; label: string }[] = [
   { key: 'state', label: 'State' },
   { key: 'priority', label: 'Priority' },
@@ -54,15 +54,15 @@ function toggleInArray<T>(arr: T[], value: T): T[] {
 }
 
 /**
- * Dense sortable table of work items. Every header is client-side sortable
+ * Dense sortable table of tickets. Every header is client-side sortable
  * (ascending/descending on click); "Created on" always shows the absolute
- * creation date, never relative time. Columns beyond "Work item" can be
+ * creation date, never relative time. Columns beyond "Ticket" can be
  * shown/hidden via the "Columns" dropdown; the selection lives in local
  * component state only (does not persist across reloads).
  */
 export default function SpreadsheetView({ onOpenItem }: { onOpenItem: (identifier: string) => void }) {
   const { project } = useProject();
-  const { items, loading, stateFor, labels, modules, cycles } = useWorkItemsView(project.id);
+  const { items, loading, stateFor, labels, modules, cycles } = useTicketsView(project.id);
   const { data: members } = useAsync(() => listMembers(), []);
   const [sortKey, setSortKey] = useState<SortKey>('createdAt');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
@@ -91,7 +91,7 @@ export default function SpreadsheetView({ onOpenItem }: { onOpenItem: (identifie
   }
 
   const sortedItems = useMemo(() => {
-    function compare(a: WorkItem, b: WorkItem): number {
+    function compare(a: Ticket, b: Ticket): number {
       switch (sortKey) {
         case 'title':
           return a.title.localeCompare(b.title);
@@ -147,7 +147,7 @@ export default function SpreadsheetView({ onOpenItem }: { onOpenItem: (identifie
   }
 
   if (items.length === 0) {
-    return <EmptyState title="No work items" description="Work items matching the current filters will show up here." />;
+    return <EmptyState title="No tickets" description="Tickets matching the current filters will show up here." />;
   }
 
   return (

@@ -11,15 +11,15 @@ import {
   unique,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
-import { projects, workItemStates, labels } from './projects.js';
+import { projects, ticketStates, labels } from './projects.js';
 import { workModules, cycles } from './modules-cycles.js';
 import { members } from './workspace.js';
 
 export const priorityEnum = pgEnum('priority', ['urgent', 'high', 'medium', 'low', 'none']);
 export const assigneeKindEnum = pgEnum('assignee_kind', ['member', 'agent']);
 
-export const workItems = pgTable(
-  'work_items',
+export const tickets = pgTable(
+  'tickets',
   {
     id: text('id').primaryKey(),
     projectId: text('project_id')
@@ -31,11 +31,11 @@ export const workItems = pgTable(
     description: text('description').notNull().default(''),
     stateId: text('state_id')
       .notNull()
-      .references(() => workItemStates.id, { onDelete: 'restrict' }),
+      .references(() => ticketStates.id, { onDelete: 'restrict' }),
     priority: priorityEnum('priority').notNull().default('none'),
     moduleId: text('module_id').references(() => workModules.id, { onDelete: 'set null' }),
     cycleId: text('cycle_id').references(() => cycles.id, { onDelete: 'set null' }),
-    parentId: text('parent_id').references((): AnyPgColumn => workItems.id, { onDelete: 'set null' }),
+    parentId: text('parent_id').references((): AnyPgColumn => tickets.id, { onDelete: 'set null' }),
     estimatePoints: numeric('estimate_points'),
     estimateValue: text('estimate_value'),
     startDate: date('start_date'),
@@ -56,53 +56,53 @@ export const workItems = pgTable(
   (t) => [unique().on(t.projectId, t.sequenceId)],
 );
 
-export const workItemLinks = pgTable('work_item_links', {
+export const ticketLinks = pgTable('ticket_links', {
   id: text('id').primaryKey(),
-  workItemId: text('work_item_id')
+  ticketId: text('ticket_id')
     .notNull()
-    .references(() => workItems.id, { onDelete: 'cascade' }),
+    .references(() => tickets.id, { onDelete: 'cascade' }),
   url: text('url').notNull(),
   label: text('label').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const workItemLabels = pgTable(
-  'work_item_labels',
+export const ticketLabels = pgTable(
+  'ticket_labels',
   {
-    workItemId: text('work_item_id')
+    ticketId: text('ticket_id')
       .notNull()
-      .references(() => workItems.id, { onDelete: 'cascade' }),
+      .references(() => tickets.id, { onDelete: 'cascade' }),
     labelId: text('label_id')
       .notNull()
       .references(() => labels.id, { onDelete: 'cascade' }),
   },
-  (t) => [primaryKey({ columns: [t.workItemId, t.labelId] })],
+  (t) => [primaryKey({ columns: [t.ticketId, t.labelId] })],
 );
 
 // No FK on assigneeId — an assignee id is polymorphic (member OR agent, per
 // entities.ts), so no single FK target is possible. Integrity is enforced in
 // the service layer, same as the mock's logAssigneeChanges/nameFor() do by
 // checking both lists.
-export const workItemAssignees = pgTable(
-  'work_item_assignees',
+export const ticketAssignees = pgTable(
+  'ticket_assignees',
   {
-    workItemId: text('work_item_id')
+    ticketId: text('ticket_id')
       .notNull()
-      .references(() => workItems.id, { onDelete: 'cascade' }),
+      .references(() => tickets.id, { onDelete: 'cascade' }),
     assigneeId: text('assignee_id').notNull(),
     assigneeKind: assigneeKindEnum('assignee_kind').notNull(),
   },
-  (t) => [unique().on(t.workItemId, t.assigneeId)],
+  (t) => [unique().on(t.ticketId, t.assigneeId)],
 );
 
-// authorId has no FK — same polymorphic reasoning as workItemAssignees:
+// authorId has no FK — same polymorphic reasoning as ticketAssignees:
 // agents post comments too (see mock/seed.ts's agent-authored comments), so
 // no single FK target is possible. Validated in the service layer.
 export const comments = pgTable('comments', {
   id: text('id').primaryKey(),
-  workItemId: text('work_item_id')
+  ticketId: text('ticket_id')
     .notNull()
-    .references(() => workItems.id, { onDelete: 'cascade' }),
+    .references(() => tickets.id, { onDelete: 'cascade' }),
   authorId: text('author_id').notNull(),
   bodyHtml: text('body_html').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -115,9 +115,9 @@ export const comments = pgTable('comments', {
 // (activity entries like 'agent_status_changed' are actored by an agent).
 export const activityEntries = pgTable('activity_entries', {
   id: text('id').primaryKey(),
-  workItemId: text('work_item_id')
+  ticketId: text('ticket_id')
     .notNull()
-    .references(() => workItems.id, { onDelete: 'cascade' }),
+    .references(() => tickets.id, { onDelete: 'cascade' }),
   actorId: text('actor_id').notNull(),
   verb: text('verb').notNull(),
   detail: text('detail').notNull(),

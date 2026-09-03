@@ -117,7 +117,7 @@ export default function Estimates() {
         <EmptyState
           icon={<Ruler size={28} />}
           title="No estimates yet"
-          description="Define how your team measures effort and track it consistently across all work items."
+          description="Define how your team measures effort and track it consistently across all tickets."
           action={
             <Button variant="primary" onClick={() => setPickerOpen(true)}>
               Add estimate system

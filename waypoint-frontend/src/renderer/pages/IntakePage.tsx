@@ -5,12 +5,12 @@ import { Check, Copy, Globe2, Inbox, Link2, Plus, X } from 'lucide-react';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import {
-  convertIntakeToWorkItem,
+  convertIntakeToTicket,
   createIntakeRequest,
   getCurrentUser,
   listIntake,
   listStates,
-  listWorkItems,
+  listTickets,
   updateIntakeStatus,
 } from '@/data/api';
 import { Badge, type BadgeTone } from '@/components/ui/Badge';
@@ -21,7 +21,7 @@ import { Skeleton, SkeletonListRows } from '@/components/ui/Skeleton';
 import { NotWired } from '@/components/ui/NotWired';
 import { STATE_GROUP_ORDER } from '@/components/domain/StateIcon';
 import { PRIORITY_LABEL, PRIORITY_ORDER } from '@/components/domain/PriorityIcon';
-import type { IntakeRequest, IntakeStatus, Priority, WorkItem } from '@/types/entities';
+import type { IntakeRequest, IntakeStatus, Priority, Ticket } from '@/types/entities';
 
 const STATUS_TABS: { key: IntakeStatus; label: string }[] = [
   { key: 'pending', label: 'Pending' },
@@ -84,14 +84,14 @@ export default function IntakePage() {
 
   const { data: requests, loading, reload } = useAsync(() => listIntake(project.id), [project.id]);
   const { data: states } = useAsync(() => listStates(project.id), [project.id]);
-  const { data: workItems, reload: reloadWorkItems } = useAsync(() => listWorkItems(project.id), [project.id]);
+  const { data: tickets, reload: reloadTickets } = useAsync(() => listTickets(project.id), [project.id]);
   const { data: currentUser } = useAsync(() => getCurrentUser(), []);
 
-  const workItemById = useMemo(() => {
-    const map = new Map<string, WorkItem>();
-    for (const item of workItems ?? []) map.set(item.id, item);
+  const ticketById = useMemo(() => {
+    const map = new Map<string, Ticket>();
+    for (const item of tickets ?? []) map.set(item.id, item);
     return map;
-  }, [workItems]);
+  }, [tickets]);
 
   const orderedStates = useMemo(
     () =>
@@ -132,17 +132,17 @@ export default function IntakePage() {
     if (!reviewRequest || !reviewStateId || !reviewTitle.trim() || converting) return;
     setConverting(true);
     try {
-      await convertIntakeToWorkItem(reviewRequest.id, reviewStateId, {
+      await convertIntakeToTicket(reviewRequest.id, reviewStateId, {
         title: reviewTitle.trim(),
         description: reviewDescription.trim(),
         priority: reviewPriority,
       });
       setReviewRequest(null);
-      // Both the intake list (status flips to accepted) and the work items
+      // Both the intake list (status flips to accepted) and the tickets
       // list (the newly created linked item) need refetching — otherwise
-      // workItemById can't resolve the badge until an unrelated reload.
+      // ticketById can't resolve the badge until an unrelated reload.
       reload();
-      reloadWorkItems();
+      reloadTickets();
     } finally {
       setConverting(false);
     }
@@ -288,7 +288,7 @@ export default function IntakePage() {
         ) : (
           <ul className="divide-y divide-border">
             {filtered.map((request) => {
-              const linkedItem = request.linkedWorkItemId ? workItemById.get(request.linkedWorkItemId) : undefined;
+              const linkedItem = request.linkedTicketId ? ticketById.get(request.linkedTicketId) : undefined;
               return (
                 <li key={request.id} className="flex items-start gap-4 px-6 py-4">
                   <div className="min-w-0 flex-1">
@@ -303,14 +303,14 @@ export default function IntakePage() {
                       </span>
                       <span>{formatDistanceToNow(new Date(request.createdAt), { addSuffix: true })}</span>
                     </div>
-                    {request.linkedWorkItemId && !linkedItem && (
+                    {request.linkedTicketId && !linkedItem && (
                       <Skeleton className="mt-2 inline-flex">
                         <Skeleton.Block height="1rem" width="8rem" />
                       </Skeleton>
                     )}
                     {linkedItem && (
                       <Link
-                        to={`/projects/${project.id}/work-items/${linkedItem.identifier}`}
+                        to={`/projects/${project.id}/tickets/${linkedItem.identifier}`}
                         className="mt-2 inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-border-strong bg-surface-2 px-2 py-1 text-xs font-medium text-text-secondary hover:border-accent hover:text-accent"
                       >
                         <Link2 size={12} />
@@ -417,14 +417,14 @@ export default function IntakePage() {
               disabled={!reviewTitle.trim() || !reviewStateId || converting}
               onClick={handleConfirmAccept}
             >
-              {converting ? 'Creating…' : 'Create work item'}
+              {converting ? 'Creating…' : 'Create ticket'}
             </Button>
           </>
         }
       >
         <div className="flex flex-col gap-3">
           <p className="text-xs text-text-secondary">
-            Adjust the details below before this request becomes a work item.
+            Adjust the details below before this request becomes a ticket.
           </p>
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-text-secondary">Title</label>

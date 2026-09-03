@@ -27,8 +27,8 @@ import ArchivedProjects from '@/pages/ArchivedProjects';
 import AnalyticsPage from '@/pages/AnalyticsPage';
 import WorkspaceViewsPage from '@/pages/WorkspaceViewsPage';
 
-import WorkItemsLayout from '@/pages/work-items/WorkItemsLayout';
-import WorkItemDetailPage from '@/pages/work-items/WorkItemDetailPage';
+import TicketsLayout from '@/pages/tickets/TicketsLayout';
+import TicketDetailPage from '@/pages/tickets/TicketDetailPage';
 
 import CyclesPage from '@/pages/CyclesPage';
 import CycleDetailPage from '@/pages/CycleDetailPage';
@@ -103,11 +103,11 @@ export const router = createBrowserRouter([
             path: '/projects/:projectId',
             element: <ProjectLayout />,
             children: [
-              { index: true, element: <Navigate to="work-items" replace /> },
-              { path: 'work-items', element: <WorkItemsLayout /> },
+              { index: true, element: <Navigate to="tickets" replace /> },
+              { path: 'tickets', element: <TicketsLayout /> },
               {
-                path: 'work-items/:identifier',
-                element: <WorkItemDetailPage />,
+                path: 'tickets/:identifier',
+                element: <TicketDetailPage />,
               },
               { path: 'cycles', element: <CyclesPage /> },
               { path: 'cycles/:cycleId', element: <CycleDetailPage /> },

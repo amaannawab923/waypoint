@@ -14,7 +14,7 @@ export const COPILOT_DISCLOSURE = (displayName: string) =>
 
 // Mirrors waypoint-frontend/src/renderer/lib/markdown.ts's escapeHtml (same
 // five characters, same order) — comment bodies render as stored HTML in the
-// work-item drawer, so both the model-authored body AND the display name
+// ticket drawer, so both the model-authored body AND the display name
 // (which a user can set to something containing < or ') must be escaped
 // before being wrapped in tags here.
 export function escapeHtml(s: string): string {

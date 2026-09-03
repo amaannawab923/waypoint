@@ -82,7 +82,7 @@ export default function Webhooks() {
         <EmptyState
           icon={<WebhookIcon size={28} />}
           title="No webhooks yet"
-          description="Add a webhook to notify an external service when work items, projects, cycles, or modules change."
+          description="Add a webhook to notify an external service when tickets, projects, cycles, or modules change."
           action={
             <Button variant="primary" onClick={() => setAddOpen(true)}>
               <Plus size={15} />

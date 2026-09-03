@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 const priority = z.enum(['urgent', 'high', 'medium', 'low', 'none']);
 
-export const createWorkItemSchema = z.object({
+export const createTicketSchema = z.object({
   projectId: z.string(),
   title: z.string().min(1),
   description: z.string().optional(),
@@ -16,7 +16,7 @@ export const createWorkItemSchema = z.object({
   isDraft: z.boolean().optional(),
 });
 
-export const updateWorkItemSchema = z.object({
+export const updateTicketSchema = z.object({
   title: z.string().min(1).optional(),
   description: z.string().optional(),
   stateId: z.string().optional(),
@@ -33,12 +33,12 @@ export const updateWorkItemSchema = z.object({
   isDraft: z.boolean().optional(),
 });
 
-export const reorderWorkItemSchema = z.object({
+export const reorderTicketSchema = z.object({
   targetId: z.string(),
   position: z.enum(['before', 'after']),
 });
 
-export const addWorkItemLinkSchema = z.object({
+export const addTicketLinkSchema = z.object({
   url: z.string(),
   label: z.string(),
 });
