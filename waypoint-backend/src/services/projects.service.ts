@@ -149,20 +149,25 @@ export async function createProject(input: CreateProjectInput) {
 // client talks to localhost:14000, see the frontend's httpClient.ts), but
 // observed rather than enforced anywhere, so a future remote-backend
 // deployment has to revisit this.
+//
+// Each failure carries a stable code and the offending path alongside the
+// message, so the client can render its own actionable copy without parsing
+// prose. The message stays the source of truth and is still what a caller
+// with no per-code copy shows.
 export function validateRepoPath(repoPath: string): void {
   let stat: fs.Stats;
   try {
     stat = fs.statSync(repoPath);
   } catch {
-    throw new ValidationError(`repoPath does not exist: ${repoPath}`);
+    throw new ValidationError(`repoPath does not exist: ${repoPath}`, 'repo_path_not_found', repoPath);
   }
   if (!stat.isDirectory()) {
-    throw new ValidationError(`repoPath is not a directory: ${repoPath}`);
+    throw new ValidationError(`repoPath is not a directory: ${repoPath}`, 'repo_path_not_directory', repoPath);
   }
   // existsSync, not statSync().isDirectory(): a worktree's ".git" is a
   // pointer FILE, not a directory, and both shapes are valid checkouts.
   if (!fs.existsSync(path.join(repoPath, '.git'))) {
-    throw new ValidationError(`repoPath is not a git repository: ${repoPath}`);
+    throw new ValidationError(`repoPath is not a git repository: ${repoPath}`, 'repo_path_not_git_repo', repoPath);
   }
 }
 
