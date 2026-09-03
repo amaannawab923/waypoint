@@ -64,6 +64,17 @@ reviewQueueRouter.get(
   }),
 );
 
+// W4.3 (architecture §4.4/§4.5) — the review screen's health-strip data
+// source. Same lightweight-endpoint pattern as /proposals/counts and
+// /proposals/stats/approved-per-day above: its own poll, not derived from a
+// page of /proposals results client-side.
+reviewQueueRouter.get(
+  '/proposals/stats/health',
+  asyncHandler(async (_req, res) => {
+    res.json(await proposalsService.getReviewHealthStats());
+  }),
+);
+
 // Ticket-detail's inline "pending proposals" section.
 reviewQueueRouter.get(
   '/tickets/:id/proposals',

@@ -57,12 +57,13 @@ const {
   listReviewQueue,
   getProposalCounts,
   getApprovedPerActiveDayStats,
+  getReviewHealthStats,
   bulkApproveProposals,
   bulkRejectProposals,
   listProposalsForTicket,
   listProposalsForRequest,
 } = await import('./proposals.service.js');
-const { eq, and } = await import('drizzle-orm');
+const { eq, and, inArray } = await import('drizzle-orm');
 
 type Vfn = ReturnType<typeof vi.fn>;
 
@@ -211,6 +212,46 @@ describe('getApprovedPerActiveDayStats', () => {
     const stats = await getApprovedPerActiveDayStats();
 
     expect(stats).toEqual({ approvedCount: 0, activeDays: 0, averagePerActiveDay: null });
+  });
+});
+
+// W4.3 (architecture §4.4/§4.5) — the review screen's health-strip data
+// source. Accept criterion, verbatim: "the health strip shows 'not enough
+// decisions yet' below 10 decisions; above it, both the rate and the median
+// come from stored decision_latency_ms."
+describe('getReviewHealthStats', () => {
+  it('returns null rate/median below the 10-decision floor', async () => {
+    db.select.mockReturnValueOnce(chainable([{ executed: 6, rejected: 3, medianMs: 9000 }]));
+
+    const stats = await getReviewHealthStats();
+
+    expect(stats).toEqual({ decisionCount: 9, approvalRate: null, medianDecisionMs: null });
+  });
+
+  it('computes the approval rate and rounds the median at exactly 10 decisions', async () => {
+    db.select.mockReturnValueOnce(chainable([{ executed: 9, rejected: 1, medianMs: 4500.6 }]));
+
+    const stats = await getReviewHealthStats();
+
+    expect(stats).toEqual({ decisionCount: 10, approvalRate: 0.9, medianDecisionMs: 4501 });
+    expect(eq).toHaveBeenCalledWith(proposals.decidedBy, 'user');
+    expect(inArray).toHaveBeenCalledWith(proposals.status, ['executed', 'rejected']);
+  });
+
+  it('treats a completely empty result row as zero decisions, not enough data', async () => {
+    db.select.mockReturnValueOnce(chainable([]));
+
+    const stats = await getReviewHealthStats();
+
+    expect(stats).toEqual({ decisionCount: 0, approvalRate: null, medianDecisionMs: null });
+  });
+
+  it('handles a well-above-floor rejection-heavy queue', async () => {
+    db.select.mockReturnValueOnce(chainable([{ executed: 2, rejected: 18, medianMs: 30000 }]));
+
+    const stats = await getReviewHealthStats();
+
+    expect(stats).toEqual({ decisionCount: 20, approvalRate: 0.1, medianDecisionMs: 30000 });
   });
 });
 

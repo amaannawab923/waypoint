@@ -45,6 +45,7 @@ import type {
   CopilotMessage,
   ProposalView,
   ProposalStatus,
+  ProposalKind,
 } from '@/types/entities';
 
 // Server-side `numeric` columns come back over JSON as strings (to avoid
@@ -1005,6 +1006,64 @@ export async function listRequestProposals(
     `/requests/${requestId}/proposals${query}`,
   );
   return proposals;
+}
+
+// W4.3 — the Review screen's own data source: segments, agent/project/kind
+// filters, and keyset pagination (architecture §4.4). Counts are
+// workspace-wide and unfiltered by the caller's filters (they back the
+// segment tabs themselves, which stay stable while a filter narrows what's
+// listed inside the selected tab — see reviewQueue.routes.ts's own comment).
+export type ReviewQueueSegment = 'proposed' | 'blocked' | 'recent';
+
+export interface ReviewQueueCounts {
+  proposed: number;
+  blocked: number;
+  recent: number;
+}
+
+export interface ReviewQueueParams {
+  status: ReviewQueueSegment;
+  agentId?: string;
+  projectId?: string;
+  kind?: ProposalKind;
+  limit?: number;
+  cursor?: string;
+}
+
+export interface ReviewQueueResult {
+  proposals: ProposalView[];
+  counts: ReviewQueueCounts;
+  nextCursor: string | null;
+}
+
+export async function listReviewQueue(
+  params: ReviewQueueParams,
+): Promise<ReviewQueueResult> {
+  const search = new URLSearchParams({ status: params.status });
+  if (params.agentId) search.set('agentId', params.agentId);
+  if (params.projectId) search.set('projectId', params.projectId);
+  if (params.kind) search.set('kind', params.kind);
+  if (params.limit != null) search.set('limit', String(params.limit));
+  if (params.cursor) search.set('cursor', params.cursor);
+  return http.get<ReviewQueueResult>(`/proposals?${search.toString()}`);
+}
+
+export async function getProposalCounts(): Promise<ReviewQueueCounts> {
+  return http.get<ReviewQueueCounts>('/proposals/counts');
+}
+
+// W4.3 (architecture §4.4/§4.5) — the review screen's health-strip data
+// source. approvalRate/medianDecisionMs are null (not 0/NaN), the same
+// "honest null" shape as ApprovedPerActiveDayStats.averagePerActiveDay
+// above, until decisionCount reaches the accept criterion's floor of 10.
+export interface ReviewHealthStats {
+  decisionCount: number;
+  approvalRate: number | null;
+  medianDecisionMs: number | null;
+}
+
+export async function getReviewHealthStats(): Promise<ReviewHealthStats> {
+  return http.get<ReviewHealthStats>('/proposals/stats/health');
 }
 
 // ---------------------------------------------------------------------------
