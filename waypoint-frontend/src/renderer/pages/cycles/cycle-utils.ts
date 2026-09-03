@@ -89,9 +89,11 @@ export interface BurndownPoint {
 
 /**
  * Ideal line: linear decrease from total item count on day 0 to 0 on the cycle's last day.
- * Current line: a single real data point (today's actual remaining/non-completed count) connected
- * back to the cycle's starting total, so the chart shows a partial real line ending at today —
- * there is no per-day history to reconstruct in this mock dataset.
+ * Current: exactly two real, unconnected data points — the cycle's starting total on day 0,
+ * and today's actual remaining/non-completed count on today's index. There is no per-day
+ * history recorded, so the chart (CycleStatsPanel) must render these as isolated markers,
+ * never joined into a line — a joined line would read as daily tracking that doesn't exist.
+ * See CAPABILITIES['sprints.burndown'].
  */
 export function buildBurndownData(cycle: Cycle, items: WorkItem[], states: WorkItemState[], today: Date = new Date()): BurndownPoint[] {
   const stateById = new Map(states.map((s) => [s.id, s]));
