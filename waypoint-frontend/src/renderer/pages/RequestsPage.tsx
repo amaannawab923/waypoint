@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { formatDistanceToNow } from 'date-fns';
 import { Check, Copy, Globe2, Inbox, Link2, Plus, X } from 'lucide-react';
@@ -8,6 +8,7 @@ import {
   convertRequestToTicket,
   createRequest,
   getCurrentUser,
+  listRequestProposals,
   listRequests,
   listStates,
   listTickets,
@@ -19,8 +20,15 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Modal } from '@/components/ui/Modal';
 import { Skeleton, SkeletonListRows } from '@/components/ui/Skeleton';
 import { NotWired } from '@/components/ui/NotWired';
+import { CopilotProposalCard } from '@/components/domain/CopilotProposalCard';
 import { STATE_GROUP_ORDER } from '@/components/domain/StateIcon';
 import { PRIORITY_LABEL, PRIORITY_ORDER } from '@/components/domain/PriorityIcon';
+import {
+  approveProposal,
+  rejectProposal,
+  upsertProposals,
+  useAllProposals,
+} from '@/lib/proposalStore';
 import type { Request, RequestStatus, Priority, Ticket } from '@/types/entities';
 
 const STATUS_TABS: { key: RequestStatus; label: string }[] = [
@@ -113,6 +121,42 @@ export default function RequestsPage() {
     () => (requests ?? []).filter((r) => r.status === tab).sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     [requests, tab],
   );
+
+  // Pending proposals inline on each request's row (W4.4, architecture
+  // §4.4) — same shared proposalStore as the ticket-detail integration, so
+  // approving here (or from a future Review screen) stays in sync
+  // everywhere with no refetch.
+  //
+  // N+1-vs-batched: fetched per row rather than through one batched
+  // endpoint. `sourceRequestId` is only ever set while a request is still
+  // being triaged (schema note: "Set when the proposal originated from
+  // triaging an incoming request") — once a request is accepted, declined,
+  // or marked a duplicate, triage is done and a still-pending proposal
+  // against it would be stale, so the rows worth checking are effectively
+  // bounded to the currently active tab's `filtered` list, not this page's
+  // full (unpaginated) per-project request history. That tab is usually the
+  // 'pending' queue, which teams keep small by actively triaging it — a
+  // handful of rows, not dozens — so one GET per visible row (mirroring the
+  // ticket-detail integration's simplicity) is proportionate. If usage ever
+  // shows a tab routinely rendering dozens of rows, revisit this as a single
+  // batched call (e.g. `GET /requests/proposals?ids=...`) grouped by
+  // request id.
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all(filtered.map((r) => listRequestProposals(r.id, 'proposed').catch(() => [])))
+      .then((rows) => {
+        if (!cancelled) upsertProposals(rows.flat());
+        return undefined;
+      })
+      .catch(() => {
+        // A failed inline-proposals fetch shouldn't block the requests list
+        // itself — httpClient already toasted per failed call above.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [filtered]);
+  const allProposals = useAllProposals();
 
   function openReview(request: Request) {
     if (workingId) return;
@@ -289,6 +333,7 @@ export default function RequestsPage() {
           <ul className="divide-y divide-border">
             {filtered.map((request) => {
               const linkedItem = request.linkedTicketId ? ticketById.get(request.linkedTicketId) : undefined;
+              const requestProposals = allProposals.filter((p) => p.sourceRequestId === request.id);
               return (
                 <li key={request.id} className="flex items-start gap-4 px-6 py-4">
                   <div className="min-w-0 flex-1">
@@ -316,6 +361,20 @@ export default function RequestsPage() {
                         <Link2 size={12} />
                         {linkedItem.identifier} · {linkedItem.title}
                       </Link>
+                    )}
+                    {/* Pending proposals — no empty state: a request with
+                        nothing pending renders no card at all. */}
+                    {requestProposals.length > 0 && (
+                      <div className="mt-3 flex flex-col gap-2">
+                        {requestProposals.map((p) => (
+                          <CopilotProposalCard
+                            key={p.id}
+                            proposal={p}
+                            onApprove={approveProposal}
+                            onReject={rejectProposal}
+                          />
+                        ))}
+                      </div>
                     )}
                   </div>
                   {request.status === 'pending' && (
