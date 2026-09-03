@@ -25,8 +25,8 @@ const COPILOT_SYSTEM_PROMPT_BASE = [
   'You are Copilot, a personal AI assistant inside Waypoint, a project',
   "management tool. You're having a private conversation with the user about",
   'their tickets and work. Be concise and direct. You can look up, list, and',
-  'search work items (tickets), their comments, and their activity history',
-  'via tools, and you can PROPOSE changes — commenting, moving state,',
+  'search tickets, their comments, and their activity history via tools,',
+  'and you can PROPOSE changes — commenting, moving state,',
   'changing priority, adding or removing an assignee, and creating a new',
   'ticket — via the propose_* tools. A proposal NEVER executes by itself:',
   'a status of pending_user_approval means exactly that, and the user must',
@@ -157,7 +157,7 @@ const REPO_READ_TOOLS = ['Read', 'Glob', 'Grep'];
 const REPO_PATH_PATTERN = /^\/|^[A-Za-z]:[\\/]/;
 
 // Tools served by waypoint-backend's MCP endpoint (see
-// waypoint-backend/src/routes/mcp.routes.ts, src/mcp/workItemTools.ts, and
+// waypoint-backend/src/routes/mcp.routes.ts, src/mcp/ticketTools.ts, and
 // src/mcp/proposalTools.ts) — the "mcp__waypoint__*" naming is Claude Code's
 // own convention for a tool sourced from an MCP server named "waypoint" in
 // `mcpServers` below. The propose_* entries are safe to allow with no
@@ -166,10 +166,10 @@ const REPO_PATH_PATTERN = /^\/|^[A-Za-z]:[\\/]/;
 // before the backend executes anything. The approval gate that used to be
 // "don't ship write tools at all" lives in the product itself, per proposal.
 const MCP_TOOLS = [
-  'mcp__waypoint__list_work_items',
-  'mcp__waypoint__get_work_item',
-  'mcp__waypoint__get_work_item_by_identifier',
-  'mcp__waypoint__search_work_items',
+  'mcp__waypoint__list_tickets',
+  'mcp__waypoint__get_ticket',
+  'mcp__waypoint__get_ticket_by_identifier',
+  'mcp__waypoint__search_tickets',
   'mcp__waypoint__list_comments',
   'mcp__waypoint__list_activity',
   'mcp__waypoint__list_states',
@@ -179,7 +179,7 @@ const MCP_TOOLS = [
   'mcp__waypoint__propose_state_change',
   'mcp__waypoint__propose_assignee_change',
   'mcp__waypoint__propose_priority_change',
-  'mcp__waypoint__propose_create_work_item',
+  'mcp__waypoint__propose_create_ticket',
 ];
 
 // Matches waypoint-backend's newId('conv') shape (and is re-validated

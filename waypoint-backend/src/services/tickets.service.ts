@@ -188,7 +188,7 @@ export async function getTicket(id: string) {
 }
 
 // Cheap draft/existence check for callers (e.g. listCommentsHandler/
-// listActivityHandler in workItemTools.ts) that only need to know whether a
+// listActivityHandler in ticketTools.ts) that only need to know whether a
 // ticket is missing or a draft before proceeding — not its full enriched
 // record. getTicket() does the main select plus three relation joins
 // (labels/assignees/links) via attachRelations(), which is wasted work when

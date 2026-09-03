@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Bare-handler tests against mocked services — the same split
-// workItemTools.test.ts uses: handler logic here, real-protocol wiring in
+// ticketTools.test.ts uses: handler logic here, real-protocol wiring in
 // mcp.routes.test.ts. The db mock exists only because imported service
 // modules construct a db client at import time (see copilot.routes.test.ts
 // for the history).
@@ -339,7 +339,7 @@ describe('proposeCreateTicketHandler', () => {
 
     expect(proposalsService.createProposal).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: 'create_work_item',
+        kind: 'create_ticket',
         ticketId: null,
         payload: expect.objectContaining({ stateId: 'st-backlog' }),
         snapshot: expect.objectContaining({

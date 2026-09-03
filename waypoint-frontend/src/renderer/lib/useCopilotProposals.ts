@@ -27,7 +27,7 @@ const KIND_LABELS: Record<CopilotProposalKind, string> = {
   state_change: 'state change',
   assignee_change: 'assignee change',
   priority_change: 'priority change',
-  create_work_item: 'new ticket',
+  create_ticket: 'new ticket',
 };
 
 // One outcome sentence per resolved proposal. Deliberately built from

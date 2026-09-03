@@ -72,7 +72,7 @@ describe('searchTickets', () => {
   });
 
   // Regression test: a literal `%` or `_` in the query is a LIKE wildcard,
-  // not a literal character — unescaped, `search_work_items({query: "%"})`
+  // not a literal character — unescaped, `search_tickets({query: "%"})`
   // matched every row instead of the literal "%" character.
   it('escapes LIKE metacharacters (%, _, \\) in the query before building the pattern', async () => {
     db.select.mockReturnValueOnce(chainable([]));

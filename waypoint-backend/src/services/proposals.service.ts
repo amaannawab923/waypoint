@@ -40,7 +40,7 @@ export class ProposalValidationError extends Error {
   }
 }
 
-export type ProposalKind = 'comment' | 'state_change' | 'assignee_change' | 'priority_change' | 'create_work_item';
+export type ProposalKind = 'comment' | 'state_change' | 'assignee_change' | 'priority_change' | 'create_ticket';
 export type ProposalStatus = 'proposed' | 'executing' | 'executed' | 'rejected' | 'stale' | 'expired' | 'superseded';
 
 type Priority = NonNullable<(typeof tickets.$inferInsert)['priority']>;
@@ -62,7 +62,7 @@ export type ProposalPayload =
   | { stateId: string } // state_change
   | { priority: Priority } // priority_change
   | { assigneeId: string; action: 'add' | 'remove' } // assignee_change
-  | CreateTicketProposalPayload; // create_work_item
+  | CreateTicketProposalPayload; // create_ticket
 
 // Everything the card needs to render (names/colors, never bare ids) plus
 // the from-values approve re-checks the live row against. Captured at
@@ -278,7 +278,7 @@ async function checkStaleness(row: ProposalRow): Promise<StaleResult | null> {
   const kind = row.kind as ProposalKind;
   const snapshot = row.snapshot as Record<string, unknown>;
 
-  if (kind === 'create_work_item') {
+  if (kind === 'create_ticket') {
     const payload = row.payload as CreateTicketProposalPayload;
     const project = await projectsService.getProject(payload.projectId);
     if (!project) return { stale: true, reason: 'This project is no longer available' };
@@ -377,7 +377,7 @@ async function executeProposal(row: ProposalRow, displayName: string): Promise<u
       await ticketsService.toggleTicketAssignee(row.ticketId as string, assigneeId);
       return null;
     }
-    case 'create_work_item': {
+    case 'create_ticket': {
       const payload = row.payload as CreateTicketProposalPayload;
       const created = await ticketsService.createTicket({
         projectId: payload.projectId,

@@ -238,12 +238,12 @@ describe('createProposal', () => {
     expect(tx.update).not.toHaveBeenCalled();
   });
 
-  it('never supersedes for create_work_item proposals', async () => {
+  it('never supersedes for create_ticket proposals', async () => {
     const tx = makeCreateTx();
 
     await createProposal({
       conversationId: 'conv-abc1234',
-      kind: 'create_work_item',
+      kind: 'create_ticket',
       ticketId: null,
       payload: { projectId: 'proj-1', title: 'New', stateId: 'st-1' },
       snapshot: {},
@@ -460,9 +460,9 @@ describe('approveProposal', () => {
       expectFinalizedStale(finalize, /not currently assigned/);
     });
 
-    it('create_work_item: a deleted project is stale', async () => {
+    it('create_ticket: a deleted project is stale', async () => {
       const finalize = claimThenFinalize({
-        kind: 'create_work_item',
+        kind: 'create_ticket',
         ticketId: null,
         payload: { projectId: 'proj-1', title: 'New', stateId: 'st-1' },
         snapshot: {},
@@ -475,9 +475,9 @@ describe('approveProposal', () => {
       expectFinalizedStale(finalize, /project is no longer available/);
     });
 
-    it('create_work_item: the resolved default state having been deleted is stale', async () => {
+    it('create_ticket: the resolved default state having been deleted is stale', async () => {
       const finalize = claimThenFinalize({
-        kind: 'create_work_item',
+        kind: 'create_ticket',
         ticketId: null,
         payload: { projectId: 'proj-1', title: 'New', stateId: 'st-gone' },
         snapshot: {},
@@ -579,13 +579,13 @@ describe('approveProposal', () => {
     expect(ticketsService.toggleTicketAssignee).toHaveBeenCalledWith('wi-1', 'mem-2');
   });
 
-  it('executes create_work_item with isDraft forced false and finalizes with the created identifier', async () => {
+  it('executes create_ticket with isDraft forced false and finalizes with the created identifier', async () => {
     const finalizeChain = chainable([proposalRow({ status: 'executed' })]);
     db.update
       .mockReturnValueOnce(
         chainable([
           proposalRow({
-            kind: 'create_work_item',
+            kind: 'create_ticket',
             ticketId: null,
             payload: {
               projectId: 'proj-1',

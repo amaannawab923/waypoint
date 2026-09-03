@@ -223,10 +223,10 @@ afterEach(() => {
 });
 
 const ALL_MCP_TOOLS = [
-  'mcp__waypoint__list_work_items',
-  'mcp__waypoint__get_work_item',
-  'mcp__waypoint__get_work_item_by_identifier',
-  'mcp__waypoint__search_work_items',
+  'mcp__waypoint__list_tickets',
+  'mcp__waypoint__get_ticket',
+  'mcp__waypoint__get_ticket_by_identifier',
+  'mcp__waypoint__search_tickets',
   'mcp__waypoint__list_comments',
   'mcp__waypoint__list_activity',
   'mcp__waypoint__list_states',
@@ -236,7 +236,7 @@ const ALL_MCP_TOOLS = [
   'mcp__waypoint__propose_state_change',
   'mcp__waypoint__propose_assignee_change',
   'mcp__waypoint__propose_priority_change',
-  'mcp__waypoint__propose_create_work_item',
+  'mcp__waypoint__propose_create_ticket',
 ];
 
 describe('registerCopilotIpc', () => {

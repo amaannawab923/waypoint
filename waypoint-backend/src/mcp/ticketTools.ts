@@ -48,7 +48,7 @@ export const ISO_DATE = z
     return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
   }, 'must be a real calendar date (YYYY-MM-DD)');
 
-// Every list-style tool (list_work_items, search_work_items, list_comments,
+// Every list-style tool (list_tickets, search_tickets, list_comments,
 // list_activity) is capped here — an unscoped call can otherwise walk every
 // ticket / every comment in the app (there's no workspaceId concept, see
 // currentUser.ts) and blow the model's context. The cap is applied at the
@@ -80,10 +80,10 @@ function page<T>(rows: T[], effectiveLimit: number): { items: T[]; truncated: bo
 }
 
 // Tickets returned from list/search are projected down to this summary
-// shape — an unscoped list_work_items call walks every ticket in the
+// shape — an unscoped list_tickets call walks every ticket in the
 // app (there's no workspaceId concept, see currentUser.ts), and returning
 // full `description` HTML for every row would bloat the model's context for
-// no benefit at list time. get_work_item(_by_identifier) return the full
+// no benefit at list time. get_ticket(_by_identifier) return the full
 // enriched record, since a single-item lookup is exactly where the detail
 // is wanted. dueDate is included here (unlike description) specifically
 // because "what's overdue" needs it at list time, not just on drill-down.
@@ -131,8 +131,8 @@ async function toSummaries(items: ticketsService.Enriched[]) {
 // Detail-path sibling of toSummaries — the full enriched record already
 // carries projectId (it's a plain column on tickets), but stateId still
 // needs the same batched resolution to a real name for the same reason
-// described above, so get_work_item(_by_identifier) isn't inconsistent
-// with list_work_items about whether a state is nameable.
+// described above, so get_ticket(_by_identifier) isn't inconsistent
+// with list_tickets about whether a state is nameable.
 async function withResolvedNames<T extends { assigneeIds: string[]; stateId: string }>(item: T) {
   const [assigneeNames, stateNames] = await Promise.all([
     resolveActorNames(item.assigneeIds),
@@ -148,7 +148,7 @@ async function withResolvedNames<T extends { assigneeIds: string[]; stateId: str
 
 // The list/search summary path (toSummaries above) already drops
 // `description` entirely — it's not needed at list time and would bloat
-// context for every row. The single-item detail path (get_work_item(_by_
+// context for every row. The single-item detail path (get_ticket(_by_
 // identifier)) legitimately wants the full description, but had no size
 // guard at all: one pathologically long ticket could still blow out the
 // model's context on a single lookup. A plain length cap with a marker is
@@ -189,7 +189,7 @@ export function notFoundResult(what: string) {
 export const INTERNAL_ERROR_MESSAGE = 'An internal error occurred while processing this request.';
 
 // Safety net around every registered tool handler below (see
-// registerWorkItemTools), not specific to dueBefore/ISO_DATE — any
+// registerTicketTools), not specific to dueBefore/ISO_DATE — any
 // service-layer throw (a DB constraint, a timeout, a bug in a future
 // change) would otherwise reach the MCP SDK's own error serialization with
 // its raw `error.message`, exactly the class of leak ISO_DATE's own
@@ -244,7 +244,7 @@ export async function listTicketsHandler({
 // identifiers (WI-42, WI-43, ...) are guessable, so without this check a
 // draft (including its full description) would otherwise be retrievable
 // through this tool despite being invisible to every list/search tool —
-// treated as a real miss here, same as get_work_item on an id that doesn't
+// treated as a real miss here, same as get_ticket on an id that doesn't
 // exist at all, rather than changing the underlying service functions'
 // REST-facing behavior (which other, non-MCP callers may depend on
 // including drafts).
@@ -317,17 +317,17 @@ export async function listMembersHandler() {
   const members = await membersService.listMembers();
   // email is deliberately dropped: this tool exists to resolve an assignee
   // id to a display name, or to find a member's id to filter
-  // list_work_items by — neither use needs a member's email address, so it
+  // list_tickets by — neither use needs a member's email address, so it
   // isn't put in front of the model.
   return jsonResult(members.map(({ id, displayName, role }) => ({ id, displayName, role })));
 }
 
-export function registerWorkItemTools(server: McpServer): void {
+export function registerTicketTools(server: McpServer): void {
   server.registerTool(
-    'list_work_items',
+    'list_tickets',
     {
       description:
-        'List work items (tickets), optionally scoped to one project and/or filtered by assignee, state, priority, or a due-by date. Returns a summary per item (including dueDate, projectId, and resolved assignee/state names), not full detail. Results are capped (see limit) — check the truncated flag and narrow the query if it comes back true.',
+        'List tickets, optionally scoped to one project and/or filtered by assignee, state, priority, or a due-by date. Returns a summary per item (including dueDate, projectId, and resolved assignee/state names), not full detail. Results are capped (see limit) — check the truncated flag and narrow the query if it comes back true.',
       inputSchema: {
         projectId: z.string().optional().describe('If given, only list tickets in this project.'),
         assigneeId: z.string().optional().describe('If given, only items with this member/agent id as an assignee.'),
@@ -339,33 +339,32 @@ export function registerWorkItemTools(server: McpServer): void {
         limit: LIMIT_SCHEMA,
       },
     },
-    withErrorSafetyNet('list_work_items', listTicketsHandler),
+    withErrorSafetyNet('list_tickets', listTicketsHandler),
   );
 
   server.registerTool(
-    'get_work_item',
+    'get_ticket',
     {
-      description: 'Get the full details of one work item (ticket) by its internal id.',
+      description: 'Get the full details of one ticket by its internal id.',
       inputSchema: { id: z.string() },
     },
-    withErrorSafetyNet('get_work_item', getTicketHandler),
+    withErrorSafetyNet('get_ticket', getTicketHandler),
   );
 
   server.registerTool(
-    'get_work_item_by_identifier',
+    'get_ticket_by_identifier',
     {
-      description:
-        'Get the full details of one work item (ticket) by its human-readable identifier, e.g. "WI-42".',
+      description: 'Get the full details of one ticket by its human-readable identifier, e.g. "WI-42".',
       inputSchema: { identifier: z.string() },
     },
-    withErrorSafetyNet('get_work_item_by_identifier', getTicketByIdentifierHandler),
+    withErrorSafetyNet('get_ticket_by_identifier', getTicketByIdentifierHandler),
   );
 
   server.registerTool(
-    'search_work_items',
+    'search_tickets',
     {
       description:
-        'Search work items (tickets) by a title keyword, optionally scoped to one project. Returns a summary per match. Results are capped (see limit) — check the truncated flag and narrow the query if it comes back true.',
+        'Search tickets by a title keyword, optionally scoped to one project. Returns a summary per match. Results are capped (see limit) — check the truncated flag and narrow the query if it comes back true.',
       inputSchema: {
         // .trim().min(1) — an empty (or whitespace-only, e.g. " ") query
         // otherwise matches every ticket's title (an unscoped
@@ -381,14 +380,14 @@ export function registerWorkItemTools(server: McpServer): void {
         limit: LIMIT_SCHEMA,
       },
     },
-    withErrorSafetyNet('search_work_items', searchTicketsHandler),
+    withErrorSafetyNet('search_tickets', searchTicketsHandler),
   );
 
   server.registerTool(
     'list_comments',
     {
       description:
-        'List the comments on one work item (ticket), with each comment\'s author name resolved. Results are capped (see limit) — check the truncated flag and narrow the query if it comes back true.',
+        "List the comments on one ticket, with each comment's author name resolved. Results are capped (see limit) — check the truncated flag and narrow the query if it comes back true.",
       inputSchema: { ticketId: z.string(), limit: LIMIT_SCHEMA },
     },
     withErrorSafetyNet('list_comments', listCommentsHandler),
@@ -398,7 +397,7 @@ export function registerWorkItemTools(server: McpServer): void {
     'list_activity',
     {
       description:
-        'List the activity history (state/assignee/label/etc. changes) on one work item (ticket), with each entry\'s actor name resolved. Results are capped (see limit) — check the truncated flag and narrow the query if it comes back true.',
+        "List the activity history (state/assignee/label/etc. changes) on one ticket, with each entry's actor name resolved. Results are capped (see limit) — check the truncated flag and narrow the query if it comes back true.",
       inputSchema: { ticketId: z.string(), limit: LIMIT_SCHEMA },
     },
     withErrorSafetyNet('list_activity', listActivityHandler),
@@ -408,7 +407,7 @@ export function registerWorkItemTools(server: McpServer): void {
     'list_states',
     {
       description:
-        'List the workflow states (e.g. Backlog, In Progress, Done) configured for a project, in board order. Use this to resolve a ticket\'s stateId to a real name, or to find a stateId to filter list_work_items by.',
+        'List the workflow states (e.g. Backlog, In Progress, Done) configured for a project, in board order. Use this to resolve a ticket\'s stateId to a real name, or to find a stateId to filter list_tickets by.',
       inputSchema: { projectId: z.string() },
     },
     withErrorSafetyNet('list_states', listStatesHandler),
@@ -418,7 +417,7 @@ export function registerWorkItemTools(server: McpServer): void {
     'list_members',
     {
       description:
-        "List the workspace's members (id, display name, role). Use this to resolve an assignee id to a name, or to find a member's id to filter list_work_items by.",
+        "List the workspace's members (id, display name, role). Use this to resolve an assignee id to a name, or to find a member's id to filter list_tickets by.",
       inputSchema: {},
     },
     withErrorSafetyNet('list_members', listMembersHandler),

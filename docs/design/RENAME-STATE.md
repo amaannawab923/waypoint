@@ -13,7 +13,7 @@ this file is the one-read answer to "how far has it got?".
 | C1 | `refactor: rename mock/ to data/` — path only, zero semantic change. `git mv src/renderer/mock src/renderer/data`, rewrite `@/mock/…` → `@/data/…`. | `[x]` |
 | C2 | `refactor(db): rename work items to tickets` — backend schema + migration + routes + services + validation, **and** the renderer types/pages/routes that consume them. `WorkItem`→`Ticket`, `WorkItemState`→`TicketState`, `work-items` routes, `/work-items` URL, "Sub-work items"→"Subtasks". | `[x]` |
 | C3 | `refactor(db): rename cycles/modules/intake/pages/stickies` — Sprints, Workstreams, Requests, Docs, Scratchpad. Same both-halves shape. Includes the `WorkModule.status` collapse, the `triage` state-group drop, and the `webhooks.event_types` remap. | `[x]` |
-| C4 | `refactor(mcp): rename tool surface and the Copilot prompt` — `workItemTools.ts`, `proposalTools.ts`, `MCP_TOOLS`, `COPILOT_SYSTEM_PROMPT_BASE`, `copilot_proposal_kind.create_work_item`→`create_ticket`. **Atomic — see §6.1 constraint 1.** | `[ ]` |
+| C4 | `refactor(mcp): rename tool surface and the Copilot prompt` — `workItemTools.ts`, `proposalTools.ts`, `MCP_TOOLS`, `COPILOT_SYSTEM_PROMPT_BASE`, `copilot_proposal_kind.create_work_item`→`create_ticket`. **Atomic — see §6.1 constraint 1.** | `[x]` |
 | C5 | `refactor: labels, visibility, and copy` — `Network`→`Visibility`, `Categories`→`Sizes`, `Archives`→`Archive`, `Billing and plans`→`Billing`, `Your work`→`My work`, Notifications heading, `Work Structure`→`Ticket setup`, README. | `[ ]` |
 
 ## The tripwire
@@ -47,11 +47,16 @@ says which it is:
 
 | Allowance | Kind | Owned by | Delete it in |
 |---|---|---|---|
-| `create_work_item` | dated | the `copilot_proposal_kind` enum value | C4 |
 | `jest.resetModules` | permanent | Jest's own API, named in a comment in `AppShell.flag-disabled.test.tsx` | never |
 
 C3 removed C2's `work_item.created` / `.updated` / `.deleted` allowance: those
 webhook event values are renamed now (§3.5).
+
+C4 removed the `create_work_item` allowance C2 added: `copilot_proposal_kind`'s
+enum value is `create_ticket` now, and so is every consumer, so the literal has
+no legitimate occurrence left in the renderer tree. Verified by planting
+`// planted violation: create_work_item` in a renderer file — the `work_item`
+ban fired — then reverting it.
 
 ## Standing constraints
 
@@ -309,3 +314,132 @@ squash commit is the last point at which they can be read from `git show`.
 - Test fixture ids (`'wi-1'`) and the `WI-42` identifier example in an MCP tool
   description were left alone — those are per-project identifier prefixes, not
   the entity name.
+
+## What C4 actually did
+
+Renamed the MCP tool surface, the Copilot system prompt, and the
+`copilot_proposal_kind.create_work_item` enum value, per §6.1 constraint 1 and
+§6.2's C4 row — the three atomicity-critical surfaces landed in one commit.
+
+| From (`registerTool` / `withErrorSafetyNet`) | To |
+|---|---|
+| `list_work_items` | `list_tickets` |
+| `get_work_item` | `get_ticket` |
+| `get_work_item_by_identifier` | `get_ticket_by_identifier` |
+| `search_work_items` | `search_tickets` |
+| `propose_create_work_item` | `propose_create_ticket` |
+
+`list_comments`, `list_activity`, `list_states`, `list_members`,
+`list_projects`, `propose_comment`, `propose_state_change`,
+`propose_assignee_change`, and `propose_priority_change` did not contain
+"work_item" and were unaffected — their cross-references to the renamed tools
+(e.g. `list_states`'s description pointing at `list_work_items`) were updated
+anyway, since a stale cross-reference in model-facing prose is exactly the
+"ticket (ticket)" class of tell §6.3 warns about.
+
+### The tool-name set comparison
+
+Extracted independently from three sources and diffed — see the commit's own
+handoff for the exact commands. All three agree, 14 tools, no drift:
+
+```
+get_ticket
+get_ticket_by_identifier
+list_activity
+list_comments
+list_members
+list_projects
+list_states
+list_tickets
+propose_assignee_change
+propose_comment
+propose_create_ticket
+propose_priority_change
+propose_state_change
+search_tickets
+```
+
+`registerTool(...)` names, `withErrorSafetyNet(...)` names, and `MCP_TOOLS` in
+`copilotRunner.ts` (stripped of the `mcp__waypoint__` prefix) are all
+byte-identical sets. Also verified live: a real `@modelcontextprotocol/sdk`
+`Client` against the running backend (`docker compose`'s Postgres, the built
+server on a scratch port) returned exactly this same 14-name list from
+`tools/list`, and a live `list_tickets` call returned real seeded rows —
+proving the registered names, not just the source text, agree with what
+`MCP_TOOLS` grants.
+
+### The prompt rewrite
+
+`COPILOT_SYSTEM_PROMPT_BASE`'s only vocabulary-bearing clause was "You can
+look up, list, and search work items (tickets), their comments, and their
+activity history via tools" — now "You can look up, list, and search
+tickets, their comments, and their activity history via tools". The
+parenthetical gloss existed only because the model-facing name and the
+registered tool name disagreed (C2 left tools literally named
+`get_work_item` calling `ticketsService.getTicket`); now that both say
+"ticket", the gloss has nothing left to reconcile and is gone rather than
+mechanically becoming "tickets (tickets)". No other clause in the base prompt
+named the old entity. The two MCP files' tool `description` strings got the
+same treatment — every `work item (ticket)` / `work items (tickets)` gloss
+dropped to plain `ticket` / `tickets` — since these are the same model-facing
+prose the architecture doc treats as one rewrite with the prompt.
+
+### The enum migration
+
+`drizzle-kit generate`'s default output for this one-value enum rename was
+destructive — `DROP TYPE` + `CREATE TYPE` with a `USING "kind"::"..."` cast
+that fails for any existing row still holding the text `create_work_item`,
+since that label no longer exists in the rebuilt type. Hand-written instead,
+per §3.2 item 18 and the founder's decisions: `drizzle/0001_needy_tomorrow_man.sql`
+contains one statement, `ALTER TYPE "copilot_proposal_kind" RENAME VALUE
+'create_work_item' TO 'create_ticket';`, which relabels the enum without
+touching any row's data. `meta/0001_snapshot.json` (generated normally, then
+left alone — only the SQL needed hand-editing) diffs against `0000_snapshot.json`
+in exactly two places: the id/prevId pair drizzle-kit stamps on every
+snapshot, and the one enum label. Applied to the existing dev database in
+place via `npm run db:migrate` — no `docker compose down -v` and no reseed
+needed, since there were zero `copilot_proposals` rows to migrate on this
+checkout; `pg_enum` was verified post-migration to carry `create_ticket` and
+not `create_work_item`.
+
+### File identity
+
+`waypoint-backend/src/mcp/workItemTools.ts` (+ `.test.ts`) → `ticketTools.ts`
+via `git mv`; `registerWorkItemTools` → `registerTicketTools`. Every import,
+call site, and comment naming either was updated — `proposalTools.ts`,
+`server.ts`, `tickets.service.ts`, and both test files.
+
+### Deliberately left alone
+
+| Left as-is | Why | Lands in |
+|---|---|---|
+| `function page<T>` in `ticketTools.ts` (formerly `workItemTools.ts:77`) | §6.3 trap — pagination, not Docs | never |
+| `docs/qa/copilot-mcp-manual-test-plan.md`'s tool-name references (`list_work_items`, `get_work_item`, `search_work_items`, `propose_create_work_item`) | a QA runbook, not source or a design doc; C2/C3 left it untouched despite renaming the entities it describes elsewhere, so it was already out of the established rename scope before C4 — flagged separately rather than folded in here | unscheduled |
+| `docs/design/waypoint-differentiation-audit.md`, `waypoint-defingerprinting-plan.md`, `copilot-v3-codebase-grounding.md` | historical planning/audit docs, same treatment as this file's own past-tense sections — frozen record, not live reference | never |
+| Test fixture ids (`'wi-1'`) in the MCP test files | per-project identifier prefixes, not the entity name — same call C2/C3 made | never |
+
+### Verification
+
+`npm run build && npm test` green in both halves (224 backend tests, 399
+frontend tests — one `CopilotConnectModal.test.tsx` timing flake under
+full-suite load, same class as C3's noted `CopilotPanel.test.tsx` flake;
+passed in isolation and on a full re-run). `lint:honesty` clean. The
+vocabulary tripwire is green with the `create_work_item` allowance removed,
+and was verified to actually fire: planting `create_work_item` in a renderer
+file failed the `work_item` ban with the expected message, then passed again
+once reverted.
+
+## Deferred to C5
+
+- `<PropertyRow label="Workstreams">` copy defect (C3's finding).
+- "cycles, modules, pages, intake"/"work items" entity-list prose in the root
+  `README.md` and `waypoint-backend/README.md:4` (C2/C3's finding).
+- The label/visibility/copy cluster itself: `Network`→`Visibility`,
+  `Categories`→`Sizes`, `Archives`→`Archive`, `Billing and plans`→`Billing`,
+  `Your work`→`My work`, the Notifications heading, `Work Structure`→`Ticket
+  setup`.
+- Delete `vocabulary.test.ts` once C5 lands (§6.4's tripwire is scoped to
+  land through C5, not survive it).
+
+Nothing from C4's own cluster was deferred — see "Deliberately left alone"
+above for the (non-rename) exceptions.

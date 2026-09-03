@@ -18,7 +18,7 @@ const KIND_LABELS: Record<CopilotProposalKind, string> = {
   state_change: 'Proposed change · State',
   assignee_change: 'Proposed change · Assignee',
   priority_change: 'Proposed change · Priority',
-  create_work_item: 'Proposed change · New ticket',
+  create_ticket: 'Proposed change · New ticket',
 };
 
 function StatusBadge({ status }: { status: CopilotProposal['status'] }) {
@@ -102,7 +102,7 @@ function displayNameFromDisclosure(disclosureText: string): string {
 function ProposalBody({ proposal }: { proposal: CopilotProposal }) {
   const { kind, payload, snapshot, disclosureText } = proposal;
 
-  if (kind === 'create_work_item') {
+  if (kind === 'create_ticket') {
     return (
       <>
         <div className="flex items-baseline gap-2 text-[13px]">
@@ -218,7 +218,7 @@ function resolutionNote(proposal: CopilotProposal): { ok: boolean; text: string 
               ? `Applied — ${proposal.snapshot.assigneeName ?? 'assignee'} removed`
               : `Applied — ${proposal.snapshot.assigneeName ?? 'assignee'} assigned`,
         };
-      case 'create_work_item':
+      case 'create_ticket':
       default:
         return { ok: true, text: 'Applied — ticket created' };
     }

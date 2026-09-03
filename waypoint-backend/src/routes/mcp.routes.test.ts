@@ -11,7 +11,7 @@ import { errorHandler } from '../middleware/errorHandler.js';
 // @modelcontextprotocol/sdk Client (the same client machinery the spawned
 // `claude` CLI itself uses) drives the initialize handshake and tool call
 // over a real HTTP connection, rather than hand-authoring raw JSON-RPC
-// bodies that could get the handshake details wrong. workItemTools.test.ts
+// bodies that could get the handshake details wrong. ticketTools.test.ts
 // covers the tool handlers' own logic against mocked services; this test
 // only needs one tool exercised to prove the wiring works.
 // db carries callable fns (not just {}) because the V2 proposal tests below
@@ -76,7 +76,7 @@ describe('POST /mcp/copilot', () => {
     const transport = new StreamableHTTPClientTransport(new URL(baseUrl));
     await client.connect(transport);
 
-    const result = await client.callTool({ name: 'list_work_items', arguments: {} });
+    const result = await client.callTool({ name: 'list_tickets', arguments: {} });
 
     expect(ticketsService.listAllTickets).toHaveBeenCalled();
     const content = (result.content as { type: string; text: string }[])[0];
@@ -107,7 +107,7 @@ describe('POST /mcp/copilot', () => {
     const transport = new StreamableHTTPClientTransport(new URL(baseUrl));
     await client.connect(transport);
 
-    const result = await client.callTool({ name: 'get_work_item', arguments: { id: 'missing' } });
+    const result = await client.callTool({ name: 'get_ticket', arguments: { id: 'missing' } });
 
     expect(result.isError).toBe(true);
     await client.close();
@@ -127,7 +127,7 @@ describe('POST /mcp/copilot', () => {
     await client.connect(transport);
 
     const result = await client.callTool({
-      name: 'list_work_items',
+      name: 'list_tickets',
       arguments: { dueBefore: 'not-a-date' },
     });
 
@@ -155,7 +155,7 @@ describe('POST /mcp/copilot', () => {
     await client.connect(transport);
 
     const result = await client.callTool({
-      name: 'list_work_items',
+      name: 'list_tickets',
       arguments: { dueBefore: '2026-13-99' },
     });
 
@@ -167,16 +167,16 @@ describe('POST /mcp/copilot', () => {
     await client.close();
   });
 
-  // MINOR regression test: search_work_items's query param previously had
+  // MINOR regression test: search_tickets's query param previously had
   // no .min(1), so an empty string matched every ticket's title (an
   // unscoped ilike(title, '%%') in tickets.service.ts) — effectively
   // turning "search" into "list everything" by accident.
-  it('rejects an empty search_work_items query at the protocol layer', async () => {
+  it('rejects an empty search_tickets query at the protocol layer', async () => {
     const client = new Client({ name: 'test-client', version: '1.0.0' });
     const transport = new StreamableHTTPClientTransport(new URL(baseUrl));
     await client.connect(transport);
 
-    const result = await client.callTool({ name: 'search_work_items', arguments: { query: '' } });
+    const result = await client.callTool({ name: 'search_tickets', arguments: { query: '' } });
 
     expect(result.isError).toBe(true);
     expect(ticketsService.searchTickets).not.toHaveBeenCalled();
@@ -190,12 +190,12 @@ describe('POST /mcp/copilot', () => {
   // the underlying ilike('%<query>%', title). query is now .trim().min(1),
   // so a whitespace-only value must be rejected here too, not just a
   // literally empty one.
-  it('rejects a whitespace-only search_work_items query at the protocol layer', async () => {
+  it('rejects a whitespace-only search_tickets query at the protocol layer', async () => {
     const client = new Client({ name: 'test-client', version: '1.0.0' });
     const transport = new StreamableHTTPClientTransport(new URL(baseUrl));
     await client.connect(transport);
 
-    const result = await client.callTool({ name: 'search_work_items', arguments: { query: '   ' } });
+    const result = await client.callTool({ name: 'search_tickets', arguments: { query: '   ' } });
 
     expect(result.isError).toBe(true);
     expect(ticketsService.searchTickets).not.toHaveBeenCalled();
@@ -209,14 +209,14 @@ describe('POST /mcp/copilot', () => {
   // the raw untrimmed string — proving zod's .trim() transform flows through
   // to the handler (see safeParseAsync in the MCP SDK, which hands the
   // handler parseResult.data, not the raw request arguments).
-  it('trims surrounding whitespace from a search_work_items query before it reaches the service', async () => {
+  it('trims surrounding whitespace from a search_tickets query before it reaches the service', async () => {
     vi.mocked(ticketsService.searchTickets).mockResolvedValue([]);
 
     const client = new Client({ name: 'test-client', version: '1.0.0' });
     const transport = new StreamableHTTPClientTransport(new URL(baseUrl));
     await client.connect(transport);
 
-    const result = await client.callTool({ name: 'search_work_items', arguments: { query: '  login  ' } });
+    const result = await client.callTool({ name: 'search_tickets', arguments: { query: '  login  ' } });
 
     expect(result.isError).toBeFalsy();
     expect(ticketsService.searchTickets).toHaveBeenCalledWith('login', undefined, expect.any(Number));
@@ -238,7 +238,7 @@ describe('POST /mcp/copilot', () => {
     await client.connect(transport);
 
     const result = await client.callTool({
-      name: 'list_work_items',
+      name: 'list_tickets',
       arguments: { dueBefore: '0000-01-01' },
     });
 
@@ -255,10 +255,10 @@ describe('POST /mcp/copilot', () => {
   // previously reached the MCP SDK's own error serialization with its raw
   // `error.message`, which could contain arbitrary internal detail (driver
   // text, SQL, etc). Every registered tool handler is now wrapped
-  // (withErrorSafetyNet in workItemTools.ts) so a thrown error becomes a
+  // (withErrorSafetyNet in ticketTools.ts) so a thrown error becomes a
   // generic message instead — verified here through the real protocol
   // layer, not just by calling the handler function directly, so it proves
-  // the wrapping is actually wired into registerWorkItemTools and not just
+  // the wrapping is actually wired into registerTicketTools and not just
   // defined and unused.
   it('turns a thrown service-layer error into a generic message instead of leaking it to the client', async () => {
     vi.mocked(ticketsService.getTicket).mockRejectedValue(
@@ -269,7 +269,7 @@ describe('POST /mcp/copilot', () => {
     const transport = new StreamableHTTPClientTransport(new URL(baseUrl));
     await client.connect(transport);
 
-    const result = await client.callTool({ name: 'get_work_item', arguments: { id: 'wi-1' } });
+    const result = await client.callTool({ name: 'get_ticket', arguments: { id: 'wi-1' } });
 
     expect(result.isError).toBe(true);
     const content = (result.content as { type: string; text: string }[])[0];
@@ -422,7 +422,7 @@ describe('POST /mcp/copilot — V2 write proposals', () => {
     );
     expect(db.transaction).not.toHaveBeenCalled();
 
-    const read = await client.callTool({ name: 'list_work_items', arguments: {} });
+    const read = await client.callTool({ name: 'list_tickets', arguments: {} });
     expect(read.isError).toBeFalsy();
 
     await client.close();

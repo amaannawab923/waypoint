@@ -62,7 +62,7 @@ export const copilotProposalKindEnum = pgEnum('copilot_proposal_kind', [
   'state_change',
   'assignee_change',
   'priority_change',
-  'create_work_item',
+  'create_ticket',
 ]);
 
 // The full lifecycle a proposal row can move through. 'executing' is a
@@ -94,7 +94,7 @@ export const copilotProposals = pgTable(
     // Deliberately NOT an FK to tickets: a proposal against a
     // since-deleted ticket must survive as a row so approve can report it
     // STALE ("no longer available") rather than the card silently vanishing
-    // from the transcript via a cascade. Null only for create_work_item.
+    // from the transcript via a cascade. Null only for create_ticket.
     ticketId: text('ticket_id'),
     // The kind-specific execute arguments (e.g. { stateId } for a state
     // change) — what approve actually passes to the service layer.

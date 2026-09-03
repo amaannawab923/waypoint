@@ -93,11 +93,6 @@ const BANS: Ban[] = [
     pattern: `work${'_item'}`,
     reason:
       'C2 renamed the work-item entity to ticket. Use ticket_id, ticket_states, … instead.',
-    allowed: [
-      // Dated — C4 owns the copilot_proposal_kind enum value, which moves
-      // atomically with the MCP tool names and the Copilot prompt (§6.1).
-      `create_work${'_item'}`,
-    ],
   },
   {
     pattern: `work${'-items'}`,

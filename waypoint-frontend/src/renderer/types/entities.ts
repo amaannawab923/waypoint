@@ -404,7 +404,7 @@ export type CopilotProposalKind =
   | 'state_change'
   | 'assignee_change'
   | 'priority_change'
-  | 'create_work_item';
+  | 'create_ticket';
 
 // Mirrors the backend's copilot_proposal_status enum. 'executing' is a
 // transient claim state the renderer rarely observes (approve responds only
@@ -422,15 +422,15 @@ export type CopilotProposalStatus =
 // present depends on `kind` (see CopilotProposalCard.tsx's per-kind bodies).
 export interface CopilotProposalPayload {
   body?: string; // comment
-  stateId?: string; // state_change, create_work_item
-  priority?: Priority; // priority_change, create_work_item
+  stateId?: string; // state_change, create_ticket
+  priority?: Priority; // priority_change, create_ticket
   assigneeId?: string; // assignee_change
   action?: 'add' | 'remove'; // assignee_change
-  projectId?: string; // create_work_item
-  title?: string; // create_work_item
-  description?: string; // create_work_item
-  assigneeIds?: ID[]; // create_work_item
-  dueDate?: string; // create_work_item
+  projectId?: string; // create_ticket
+  title?: string; // create_ticket
+  description?: string; // create_ticket
+  assigneeIds?: ID[]; // create_ticket
+  dueDate?: string; // create_ticket
 }
 
 // Display data captured at propose time — names and colors, never bare ids,

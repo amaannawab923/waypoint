@@ -244,7 +244,7 @@ describe('CopilotProposalCard', () => {
   it('create card renders the full draft preview from the snapshot', () => {
     renderCard(
       proposal({
-        kind: 'create_work_item',
+        kind: 'create_ticket',
         ticketId: null,
         payload: {
           projectId: 'proj-1',

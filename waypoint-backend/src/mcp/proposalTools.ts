@@ -11,7 +11,7 @@ import {
   type ProposalSnapshot,
 } from '../services/proposals.service.js';
 import { resolveActorNames } from '../lib/actorNames.js';
-import { PRIORITY, ISO_DATE, jsonResult, notFoundResult, withErrorSafetyNet } from './workItemTools.js';
+import { PRIORITY, ISO_DATE, jsonResult, notFoundResult, withErrorSafetyNet } from './ticketTools.js';
 
 // Model-actionable validation failure — same result shape as
 // notFoundResult, but with a message specific enough for the model to
@@ -59,7 +59,7 @@ async function submitProposal(input: {
   }
 }
 
-// Same draft-hiding requirement as workItemTools's get/list handlers: a
+// Same draft-hiding requirement as ticketTools's get/list handlers: a
 // draft is invisible to every read tool, so proposing against one must read
 // as a plain miss, not confirm its existence.
 async function getVisibleTicket(ticketId: string) {
@@ -253,7 +253,7 @@ export async function proposeCreateTicketHandler(
   }
   return submitProposal({
     conversationId,
-    kind: 'create_work_item',
+    kind: 'create_ticket',
     ticketId: null,
     payload: {
       projectId,
@@ -275,8 +275,8 @@ export async function proposeCreateTicketHandler(
   });
 }
 
-// Read tool, but registered here rather than workItemTools: it only exists
-// to serve propose_create_work_item (the model needs a projectId, and V1's
+// Read tool, but registered here rather than ticketTools: it only exists
+// to serve propose_create_ticket (the model needs a projectId, and V1's
 // read set had no way to list projects). Projected to id/name/identifier —
 // a project row carries config (automations, gradients, lead) that's noise
 // in the model's context.
@@ -299,7 +299,7 @@ export function registerProposalTools(server: McpServer, conversationId: string 
     'propose_comment',
     {
       description:
-        `Propose posting a comment on a work item (ticket) on the user's behalf. ${PROPOSAL_CONTRACT} ` +
+        `Propose posting a comment on a ticket on the user's behalf. ${PROPOSAL_CONTRACT} ` +
         'Write the body as plain text (no markdown/HTML — it is escaped, not rendered). Waypoint automatically prefixes ' +
         'the posted comment with a Copilot self-disclosure line — do not write one yourself.',
       inputSchema: {
@@ -315,7 +315,7 @@ export function registerProposalTools(server: McpServer, conversationId: string 
   server.registerTool(
     'propose_state_change',
     {
-      description: `Propose moving a work item (ticket) to a different workflow state. ${PROPOSAL_CONTRACT} Use list_states with the ticket's projectId to find valid state ids.`,
+      description: `Propose moving a ticket to a different workflow state. ${PROPOSAL_CONTRACT} Use list_states with the ticket's projectId to find valid state ids.`,
       inputSchema: {
         ticketId: z.string(),
         stateId: z.string().describe("The target state's id — must belong to the ticket's own project."),
@@ -329,7 +329,7 @@ export function registerProposalTools(server: McpServer, conversationId: string 
   server.registerTool(
     'propose_assignee_change',
     {
-      description: `Propose adding or removing one assignee on a work item (ticket). ${PROPOSAL_CONTRACT} Use list_members to find assignee ids.`,
+      description: `Propose adding or removing one assignee on a ticket. ${PROPOSAL_CONTRACT} Use list_members to find assignee ids.`,
       inputSchema: {
         ticketId: z.string(),
         assigneeId: z.string(),
@@ -346,7 +346,7 @@ export function registerProposalTools(server: McpServer, conversationId: string 
   server.registerTool(
     'propose_priority_change',
     {
-      description: `Propose changing a work item (ticket)'s priority. ${PROPOSAL_CONTRACT}`,
+      description: `Propose changing a ticket's priority. ${PROPOSAL_CONTRACT}`,
       inputSchema: {
         ticketId: z.string(),
         priority: PRIORITY,
@@ -360,10 +360,10 @@ export function registerProposalTools(server: McpServer, conversationId: string 
   );
 
   server.registerTool(
-    'propose_create_work_item',
+    'propose_create_ticket',
     {
       description:
-        `Propose creating a new work item (ticket) in a project. ${PROPOSAL_CONTRACT} ` +
+        `Propose creating a new ticket in a project. ${PROPOSAL_CONTRACT} ` +
         'Use list_projects to find a projectId. If stateId is omitted, the project\'s first backlog/unstarted state is used.',
       inputSchema: {
         projectId: z.string(),
@@ -376,7 +376,7 @@ export function registerProposalTools(server: McpServer, conversationId: string 
       },
     },
     withErrorSafetyNet(
-      'propose_create_work_item',
+      'propose_create_ticket',
       (args: {
         projectId: string;
         title: string;
@@ -393,7 +393,7 @@ export function registerProposalTools(server: McpServer, conversationId: string 
     'list_projects',
     {
       description:
-        'List the projects in the workspace (id, name, identifier). Use this to find a projectId for propose_create_work_item or to scope other tools.',
+        'List the projects in the workspace (id, name, identifier). Use this to find a projectId for propose_create_ticket or to scope other tools.',
       inputSchema: {},
     },
     withErrorSafetyNet('list_projects', listProjectsHandler),

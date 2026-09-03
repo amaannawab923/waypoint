@@ -30,11 +30,11 @@ const {
   listActivityHandler,
   listStatesHandler,
   listMembersHandler,
-} = await import('./workItemTools.js');
+} = await import('./ticketTools.js');
 
 // DEFAULT_LIST_LIMIT + 1 — every list-style handler asks the service for one
 // row past its effective limit so it can tell a truncated result apart from
-// one that just happened to end exactly at the limit (see workItemTools.ts's
+// one that just happened to end exactly at the limit (see ticketTools.ts's
 // page() helper).
 const DEFAULT_LIMIT_PLUS_ONE = 51;
 
@@ -198,7 +198,7 @@ describe('getTicketHandler', () => {
     expect(result.content[0].text).toMatch(/not found/i);
   });
 
-  // Regression test: get_work_item had no isDraft filter while
+  // Regression test: get_ticket had no isDraft filter while
   // list/search do, so a draft ticket (including its full description) was
   // fully retrievable by id despite being invisible to every listing tool.
   it('treats a draft item as not found, even though the service returned it', async () => {
