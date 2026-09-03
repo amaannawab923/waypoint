@@ -979,6 +979,34 @@ export async function bulkRejectProposals(
   return results;
 }
 
+// W4.4 (architecture §4.4) — ticket-detail's and the Requests page's inline
+// "pending proposals" sections. Both endpoints live on reviewQueue.routes.ts
+// (bare /tickets/:id/proposals, /requests/:id/proposals — NOT the
+// conversation-scoped /copilot/... paths above) and return the same
+// `{ proposals: ProposalView[] }` envelope; callers feed the result straight
+// into lib/proposalStore.ts's upsertProposals, same as listCopilotProposals.
+export async function listTicketProposals(
+  ticketId: string,
+  status?: ProposalStatus,
+): Promise<ProposalView[]> {
+  const query = status ? `?status=${status}` : '';
+  const { proposals } = await http.get<{ proposals: ProposalView[] }>(
+    `/tickets/${ticketId}/proposals${query}`,
+  );
+  return proposals;
+}
+
+export async function listRequestProposals(
+  requestId: string,
+  status?: ProposalStatus,
+): Promise<ProposalView[]> {
+  const query = status ? `?status=${status}` : '';
+  const { proposals } = await http.get<{ proposals: ProposalView[] }>(
+    `/requests/${requestId}/proposals${query}`,
+  );
+  return proposals;
+}
+
 // ---------------------------------------------------------------------------
 // Dev/demo utility
 // ---------------------------------------------------------------------------
