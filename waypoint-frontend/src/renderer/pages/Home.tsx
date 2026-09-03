@@ -6,7 +6,6 @@ import {
   Settings2,
   Sparkles,
   X,
-  Link2,
   StickyNote as StickyNoteIcon,
   Clock,
   LayoutList,
@@ -237,52 +236,39 @@ export default function Home() {
         </section>
       )}
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <section className="rounded-[var(--radius-lg)] border border-border bg-surface p-5">
-          <h2 className="font-display text-sm font-medium text-text">Quicklinks</h2>
-          <div className="mt-2">
-            <EmptyState
-              icon={<Link2 size={28} />}
-              title="No quicklinks yet"
-              description="Pin projects, pages, or views here for fast access."
-            />
+      <section className="rounded-[var(--radius-lg)] border border-border bg-surface p-5">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="font-display text-sm font-medium text-text">Your stickies</h2>
+          <Button size="xs" variant="secondary" onClick={() => navigate('/stickies')}>
+            Add sticky
+          </Button>
+        </div>
+        {stickies && stickies.length > 0 ? (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            {stickies.slice(0, 3).map((sticky) => (
+              <div
+                key={sticky.id}
+                className="flex min-h-[110px] flex-col gap-1.5 rounded-[var(--radius)] border border-border bg-bg p-3"
+                style={{ borderLeft: `3px solid ${sticky.color}` }}
+              >
+                <p className="line-clamp-2 text-sm font-medium text-text">{sticky.title || 'Untitled'}</p>
+                <p className="line-clamp-4 text-xs whitespace-pre-wrap text-text-secondary">{sticky.body}</p>
+              </div>
+            ))}
           </div>
-        </section>
-
-        <section className="rounded-[var(--radius-lg)] border border-border bg-surface p-5">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="font-display text-sm font-medium text-text">Your stickies</h2>
-            <Button size="xs" variant="secondary" onClick={() => navigate('/stickies')}>
-              Add sticky
-            </Button>
-          </div>
-          {stickies && stickies.length > 0 ? (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              {stickies.slice(0, 3).map((sticky) => (
-                <div
-                  key={sticky.id}
-                  className="flex min-h-[110px] flex-col gap-1.5 rounded-[var(--radius)] border border-border bg-bg p-3"
-                  style={{ borderLeft: `3px solid ${sticky.color}` }}
-                >
-                  <p className="line-clamp-2 text-sm font-medium text-text">{sticky.title || 'Untitled'}</p>
-                  <p className="line-clamp-4 text-xs whitespace-pre-wrap text-text-secondary">{sticky.body}</p>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <EmptyState
-              icon={<StickyNoteIcon size={28} />}
-              title="No stickies yet"
-              description="Jot down quick notes for yourself."
-              action={
-                <Button size="sm" variant="secondary" onClick={() => navigate('/stickies')}>
-                  Add sticky
-                </Button>
-              }
-            />
-          )}
-        </section>
-      </div>
+        ) : (
+          <EmptyState
+            icon={<StickyNoteIcon size={28} />}
+            title="No stickies yet"
+            description="Jot down quick notes for yourself."
+            action={
+              <Button size="sm" variant="secondary" onClick={() => navigate('/stickies')}>
+                Add sticky
+              </Button>
+            }
+          />
+        )}
+      </section>
 
       <section className="rounded-[var(--radius-lg)] border border-border bg-surface p-5">
         <div className="flex items-center justify-between">
