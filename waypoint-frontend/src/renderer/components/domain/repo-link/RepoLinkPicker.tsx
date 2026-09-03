@@ -1,7 +1,10 @@
 import { AlertCircle, FolderGit2, FolderOpen } from 'lucide-react';
 import { clsx } from 'clsx';
 import { Button } from '@/components/ui/Button';
-import { useRepoSuggestions, type RepoSuggestion } from '@/lib/useRepoSuggestions';
+import {
+  useRepoSuggestions,
+  type RepoSuggestion,
+} from '@/lib/useRepoSuggestions';
 import { useRepoLink } from './useRepoLink';
 
 interface RepoLinkPickerProps {
@@ -13,6 +16,14 @@ interface RepoLinkPickerProps {
   /** Overrides the dialog's starting directory (Relocate… opens at the dead path's parent). */
   browseDefaultPath?: string | null;
   browseLabel?: string;
+  /**
+   * Suggestions only, no Browse… button or hint text — for a caller that
+   * already offers its own, differently-labeled dialog trigger (RepoLinkStaleCard's
+   * prominent Relocate…) and would otherwise duplicate it: two buttons opening
+   * the same picker, with two independent error surfaces depending on which
+   * one was clicked.
+   */
+  hideBrowse?: boolean;
   /** The in-chat card's tighter variant — same component, denser rows. */
   compact?: boolean;
   onLinked: (path: string) => void;
@@ -31,14 +42,17 @@ export function RepoLinkPicker({
   currentRepoPath = null,
   browseDefaultPath,
   browseLabel = 'Browse…',
+  hideBrowse = false,
   compact = false,
   onLinked,
 }: RepoLinkPickerProps) {
-  const { suggestions } = useRepoSuggestions(projectId, projectName, projectIdentifier);
-  const { saving, error, checkingNonRepo, link, browse, dismissError } = useRepoLink(
+  const { suggestions } = useRepoSuggestions(
     projectId,
-    onLinked,
+    projectName,
+    projectIdentifier,
   );
+  const { saving, error, checkingNonRepo, link, browse, dismissError } =
+    useRepoLink(projectId, onLinked);
 
   const defaultPath = browseDefaultPath ?? currentRepoPath ?? undefined;
   const openDialog = () =>
@@ -79,29 +93,42 @@ export function RepoLinkPicker({
           </div>
         ))}
 
-      <div className={clsx('flex items-center gap-2.5', compact && 'justify-end')}>
-        <Button
-          variant={suggestions.length > 0 || compact ? 'secondary' : 'primary'}
-          size={compact ? 'xs' : 'sm'}
-          disabled={saving}
-          onClick={openDialog}
+      {!hideBrowse && (
+        <div
+          className={clsx(
+            'flex items-center gap-2.5',
+            compact && 'justify-end',
+          )}
         >
-          <FolderOpen size={compact ? 12 : 14} />
-          {saving ? 'Saving…' : browseLabel}
-        </Button>
-        {!compact && (
-          <span className="text-[12.5px] text-text-muted">
-            {defaultPath ? (
-              <>
-                Opens at <span className="font-mono text-xs">{defaultPath}</span>, titled for
-                this project.
-              </>
-            ) : (
-              <>Titled for this project, so you can tell which one you&apos;re linking.</>
-            )}
-          </span>
-        )}
-      </div>
+          <Button
+            variant={
+              suggestions.length > 0 || compact ? 'secondary' : 'primary'
+            }
+            size={compact ? 'xs' : 'sm'}
+            disabled={saving}
+            onClick={openDialog}
+          >
+            <FolderOpen size={compact ? 12 : 14} />
+            {saving ? 'Saving…' : browseLabel}
+          </Button>
+          {!compact && (
+            <span className="text-[12.5px] text-text-muted">
+              {defaultPath ? (
+                <>
+                  Opens at{' '}
+                  <span className="font-mono text-xs">{defaultPath}</span>,
+                  titled for this project.
+                </>
+              ) : (
+                <>
+                  Titled for this project, so you can tell which one you&apos;re
+                  linking.
+                </>
+              )}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Fast local hint while the real request is in flight — the backend
           still decides, and this disappears either way. */}
@@ -116,7 +143,9 @@ export function RepoLinkPicker({
           <div className="flex gap-2.5">
             <AlertCircle size={16} className="mt-0.5 shrink-0 text-danger" />
             <div className="min-w-0">
-              <div className="text-[13.5px] font-semibold text-danger">{error.title}</div>
+              <div className="text-[13.5px] font-semibold text-danger">
+                {error.title}
+              </div>
               <div className="mt-0.5 text-[13px] break-words text-danger opacity-90">
                 {error.body}
               </div>
@@ -133,9 +162,16 @@ export function RepoLinkPicker({
             </pre>
           </details>
           <div className="ml-[26px] flex gap-2">
-            <Button variant="secondary" size="xs" disabled={saving} onClick={openDialog}>
-              Choose a different folder
-            </Button>
+            {!hideBrowse && (
+              <Button
+                variant="secondary"
+                size="xs"
+                disabled={saving}
+                onClick={openDialog}
+              >
+                Choose a different folder
+              </Button>
+            )}
             <Button variant="ghost" size="xs" onClick={dismissError}>
               Dismiss
             </Button>
@@ -189,7 +225,9 @@ function SuggestionRow({
           {suggestion.path}
         </span>
       </span>
-      <span className="shrink-0 text-xs text-text-muted group-hover:text-text">Link →</span>
+      <span className="shrink-0 text-xs text-text-muted group-hover:text-text">
+        Link →
+      </span>
     </button>
   );
 }
@@ -212,8 +250,12 @@ function CompactSuggestionRow({
     >
       <FolderGit2 size={13} className="shrink-0 text-text-secondary" />
       <span className="flex min-w-0 flex-1 flex-col">
-        <span className="text-[12.5px] font-medium text-text">{suggestion.name}</span>
-        <span className="truncate font-mono text-[11px] text-text-muted">{suggestion.path}</span>
+        <span className="text-[12.5px] font-medium text-text">
+          {suggestion.name}
+        </span>
+        <span className="truncate font-mono text-[11px] text-text-muted">
+          {suggestion.path}
+        </span>
       </span>
       <span className="shrink-0 text-[11px] text-text-muted">Link →</span>
     </button>
