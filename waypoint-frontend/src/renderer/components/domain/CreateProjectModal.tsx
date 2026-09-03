@@ -2,89 +2,11 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
-import { createProject, updateProjectFeatures } from '@/data/api';
-import type { Project, ProjectFeatures } from '@/types/entities';
+import { createProject } from '@/data/api';
+import type { Project } from '@/types/entities';
 
 function slugify(name: string): string {
   return name.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
-}
-
-const DEFAULT_FEATURES: ProjectFeatures = {
-  sprints: false,
-  workstreams: false,
-  views: false,
-  docs: true,
-  requests: false,
-};
-
-interface FeatureRow {
-  key: keyof ProjectFeatures;
-  label: string;
-  description: string;
-}
-
-const FEATURE_ROWS: FeatureRow[] = [
-  {
-    key: 'sprints',
-    label: 'Sprints',
-    description:
-      'Run work in fixed date ranges, each with its own status, lead, and tickets. They don’t have to match — a two-week sprint, then a one-week one.',
-  },
-  {
-    key: 'workstreams',
-    label: 'Workstreams',
-    description:
-      'Group tickets under one lead and status — for the payments migration, the redesign, anything that spans more than one sprint.',
-  },
-  {
-    key: 'views',
-    label: 'Views',
-    description:
-      'Save a filter, sort, and grouping of the ticket list, then share it or keep it to yourself.',
-  },
-  {
-    key: 'docs',
-    label: 'Docs',
-    description:
-      'Write long-form docs for the project — specs, runbooks, meeting notes — nested and organized however you like.',
-  },
-  {
-    key: 'requests',
-    label: 'Requests',
-    description:
-      'Give people outside the project a form to file requests. They land as pending items for your team to accept or decline.',
-  },
-];
-
-function Toggle({
-  checked,
-  onChange,
-  disabled,
-}: {
-  checked: boolean;
-  onChange: (v: boolean) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={
-        'relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-50 ' +
-        (checked ? 'bg-accent' : 'bg-surface-2 border border-border-strong')
-      }
-    >
-      <span
-        className={
-          'absolute top-0.5 size-4 rounded-full shadow transition-transform ' +
-          (checked ? 'translate-x-[18px] bg-on-accent' : 'translate-x-0.5 bg-text-muted')
-        }
-      />
-    </button>
-  );
 }
 
 export function CreateProjectModal({
@@ -97,12 +19,16 @@ export function CreateProjectModal({
   onCreated: (project: Project) => void;
 }) {
   const navigate = useNavigate();
-  const [step, setStep] = useState<1 | 2 | 3>(1);
+  // Two steps only — the form step and a confirmation. There used to be a
+  // middle feature-toggle step here; sparse projects (docs/design/waypoint-
+  // revamp-architecture.md §3.4) removed it entirely: a new project simply
+  // starts with zero sprints/workstreams/views/docs/requests, and the
+  // sidebar shows nothing for it until something real is created.
+  const [step, setStep] = useState<1 | 2>(1);
   const [name, setName] = useState('');
   const [identifier, setIdentifier] = useState('');
   const [description, setDescription] = useState('');
   const [visibility, setVisibility] = useState<Project['visibility']>('public');
-  const [features, setFeatures] = useState<ProjectFeatures>(DEFAULT_FEATURES);
   const [submitting, setSubmitting] = useState(false);
   const [createdProject, setCreatedProject] = useState<Project | null>(null);
 
@@ -112,7 +38,6 @@ export function CreateProjectModal({
     setIdentifier('');
     setDescription('');
     setVisibility('public');
-    setFeatures(DEFAULT_FEATURES);
     setCreatedProject(null);
   }
 
@@ -131,9 +56,8 @@ export function CreateProjectModal({
         description: description.trim(),
         visibility,
       });
-      const updated = await updateProjectFeatures(project.id, features);
-      setCreatedProject(updated);
-      setStep(3);
+      setCreatedProject(project);
+      setStep(2);
     } finally {
       setSubmitting(false);
     }
@@ -153,8 +77,7 @@ export function CreateProjectModal({
     if (project) navigate(`/projects/${project.id}/tickets`);
   }
 
-  const title =
-    step === 1 ? 'New project' : step === 2 ? 'Projects and tickets' : 'Project created';
+  const title = step === 1 ? 'New project' : 'Project created';
 
   return (
     <Modal
@@ -167,21 +90,8 @@ export function CreateProjectModal({
             <Button variant="ghost" onClick={onClose}>
               Cancel
             </Button>
-            <Button variant="primary" disabled={!name.trim()} onClick={() => setStep(2)}>
-              Continue
-            </Button>
-          </>
-        ) : step === 2 ? (
-          <>
-            <Button variant="ghost" onClick={() => setStep(1)}>
-              Back
-            </Button>
-            <Button
-              variant="primary"
-              disabled={!name.trim() || submitting}
-              onClick={handleCreate}
-            >
-              {submitting ? 'Creating…' : 'Continue'}
+            <Button variant="primary" disabled={!name.trim() || submitting} onClick={handleCreate}>
+              {submitting ? 'Creating…' : 'Create project'}
             </Button>
           </>
         ) : (
@@ -244,24 +154,7 @@ export function CreateProjectModal({
         </div>
       )}
 
-      {step === 2 && (
-        <div className="flex flex-col divide-y divide-border rounded-[var(--radius)] border border-border">
-          {FEATURE_ROWS.map((row) => (
-            <div key={row.key} className="flex items-center justify-between gap-4 px-4 py-3">
-              <div>
-                <p className="text-sm font-medium text-text">{row.label}</p>
-                <p className="mt-0.5 text-sm text-text-secondary">{row.description}</p>
-              </div>
-              <Toggle
-                checked={features[row.key]}
-                onChange={(v) => setFeatures((f) => ({ ...f, [row.key]: v }))}
-              />
-            </div>
-          ))}
-        </div>
-      )}
-
-      {step === 3 && createdProject && (
+      {step === 2 && createdProject && (
         <div className="flex flex-col items-center gap-2 py-6 text-center">
           <p className="text-base text-text">
             🎉 Congrats! <em className="font-medium not-italic text-accent">{createdProject.name}</em> created.
