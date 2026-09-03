@@ -797,6 +797,72 @@ export async function getApprovedPerActiveDayStats(): Promise<ApprovedPerActiveD
   };
 }
 
+// ---------------------------------------------------------------------------
+// W4.3 (architecture §4.4/§4.5, accept criterion): the review-health strip's
+// data source. "A review queue only works in a narrow band: approve
+// everything without reading and human-in-the-loop is theatre; reject
+// everything and it's a chore" — so the strip instruments the DECISION
+// (approval rate + time-to-decide), not just throughput.
+//
+// All-time, not a rolling window — same reasoning as
+// getApprovedPerActiveDayStats just above: neither §4.4/§4.5 nor the W4.3
+// accept criterion names a window (the mockup's "this week" label is
+// explicitly flagged elsewhere in this codebase as unverified placeholder
+// text), and inventing one here would be exactly the kind of unverified
+// specificity the honesty rule (decision 9) exists to catch. If the founder
+// wants a rolling window later, that is a deliberate, named decision, not a
+// default this function should guess at.
+//
+// decided_by='user' only, same filter as the per-active-day stats: an
+// auto-applied (trust_grant) decision must never count as evidence that a
+// human is doing real review. status IN ('executed','rejected') rather than
+// "decisionLatencyMs IS NOT NULL" — the column comment already guarantees
+// every decided_by='user' row in those two statuses has it set; being
+// explicit about the statuses keeps this function's own field readable
+// without relying on that guarantee silently.
+// ---------------------------------------------------------------------------
+
+// Accept criterion, verbatim: "the health strip shows 'not enough decisions
+// yet' below 10 decisions; above it, both the rate and the median come from
+// stored decision_latency_ms."
+const MIN_HEALTH_DECISIONS = 10;
+
+export interface ReviewHealthStats {
+  decisionCount: number;
+  // null (not 0/NaN) below MIN_HEALTH_DECISIONS — the same "honest null"
+  // shape as ApprovedPerActiveDayStats.averagePerActiveDay above.
+  approvalRate: number | null;
+  medianDecisionMs: number | null;
+}
+
+export async function getReviewHealthStats(): Promise<ReviewHealthStats> {
+  const [row] = await db
+    .select({
+      executed: sql<string | number>`count(*) filter (where ${proposals.status} = 'executed')`,
+      rejected: sql<string | number>`count(*) filter (where ${proposals.status} = 'rejected')`,
+      // percentile_cont interpolates between the two middle values on an
+      // even-sized set — the standard definition of median, and one Postgres
+      // computes for us rather than requiring a fetch-all-and-sort in JS.
+      medianMs: sql<string | number | null>`percentile_cont(0.5) within group (order by ${proposals.decisionLatencyMs})`,
+    })
+    .from(proposals)
+    .where(and(eq(proposals.decidedBy, 'user'), inArray(proposals.status, ['executed', 'rejected'])));
+
+  const executed = Number(row?.executed ?? 0);
+  const rejected = Number(row?.rejected ?? 0);
+  const decisionCount = executed + rejected;
+
+  if (decisionCount < MIN_HEALTH_DECISIONS) {
+    return { decisionCount, approvalRate: null, medianDecisionMs: null };
+  }
+
+  return {
+    decisionCount,
+    approvalRate: executed / decisionCount,
+    medianDecisionMs: row?.medianMs == null ? null : Math.round(Number(row.medianMs)),
+  };
+}
+
 export async function listReviewQueue(params: ReviewQueueParams): Promise<ReviewQueueResult> {
   await maybeRepairProposals();
   const counts = await computeReviewQueueCounts();
