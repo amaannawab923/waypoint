@@ -207,7 +207,7 @@ export default function PagesPage() {
       <EmptyState
         icon={<FileText size={28} />}
         title="Pages is disabled for this project"
-        description="Turn it back on in project settings to create and browse pages."
+        description="Turn Pages back on in project settings to write and browse docs again."
         action={
           <Button variant="primary" onClick={() => navigate(`/projects/${project.id}/settings/features`)}>
             Go to features
@@ -303,7 +303,7 @@ export default function PagesPage() {
                 ? 'Try a different search term.'
                 : tab === 'archived'
                   ? 'Pages you archive will show up here.'
-                  : 'Create a page to start writing notes and docs for this project.'
+                  : 'Create a page to start writing specs, runbooks, or notes for this project.'
             }
             action={
               !query && tab !== 'archived' ? (

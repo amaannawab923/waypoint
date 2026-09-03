@@ -282,7 +282,7 @@ export default function ProjectViewsPage() {
       <EmptyState
         icon={<Layers3 size={28} />}
         title="Views is disabled for this project"
-        description="Turn it back on in project settings to save and browse custom views."
+        description="Turn Views back on in project settings to save filters again."
         action={
           <Button variant="primary" onClick={() => navigate(`/projects/${project.id}/settings/features`)}>
             Go to features
@@ -339,7 +339,7 @@ export default function ProjectViewsPage() {
           <EmptyState
             icon={<Layers3 size={28} />}
             title="No views yet"
-            description="Save a filtered work item view to quickly get back to it later."
+            description="Save the current filter, sort, and grouping as a view you can jump back to."
             action={
               <Button variant="primary" onClick={handleAddView} disabled={creating}>
                 <Plus size={15} />

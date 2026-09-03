@@ -98,7 +98,7 @@ export default function ModulesPage() {
       <EmptyState
         icon={<Boxes size={28} />}
         title="Modules is disabled for this project"
-        description="Turn it back on in project settings to plan and track modules."
+        description="Turn Modules back on in project settings to group work under a lead and a status of its own."
         action={
           <Button variant="primary" onClick={() => navigate(`/projects/${project.id}/settings/features`)}>
             Go to features
@@ -148,7 +148,7 @@ export default function ModulesPage() {
           <EmptyState
             icon={<Boxes size={28} />}
             title="No modules yet"
-            description="Create a module to group related work items toward a shared outcome."
+            description="Create a module to give a slice of work — a migration, a redesign — its own lead and status."
             action={
               <Button variant="primary" onClick={() => setCreating(true)}>
                 <Plus size={15} />

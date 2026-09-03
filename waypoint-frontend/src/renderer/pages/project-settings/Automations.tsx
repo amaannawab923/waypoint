@@ -120,7 +120,7 @@ export default function Automations() {
       <div className="flex flex-col divide-y divide-border rounded-[var(--radius)] border border-border">
         <AutomationRow
           title="Auto-archive closed work items"
-          description="Waypoint will auto archive work items that have been completed or canceled."
+          description="Send a work item to the archive once it's sat completed or cancelled for this many days."
           enabled={autoArchive}
           afterDays={autoArchiveAfterDays}
           onToggle={handleAutoArchiveToggle}
@@ -128,7 +128,7 @@ export default function Automations() {
         />
         <AutomationRow
           title="Auto-close work items"
-          description="Waypoint will automatically close work items that haven't been completed or canceled."
+          description="Close a work item that's sat untouched — never completed, never cancelled — for this many days."
           enabled={autoClose}
           afterDays={autoCloseAfterDays}
           onToggle={handleAutoCloseToggle}

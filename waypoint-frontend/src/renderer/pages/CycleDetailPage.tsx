@@ -147,7 +147,7 @@ export default function CycleDetailPage() {
       <EmptyState
         icon={<RefreshCw size={28} />}
         title="Cycles isn't enabled for this project"
-        description="Turn on the Cycles feature in project settings to plan work in time-boxed iterations."
+        description="Turn Cycles back on in project settings to run work in fixed date ranges again."
         action={
           <Link
             to={`/projects/${project.id}/settings/features`}

@@ -54,7 +54,7 @@ export default function CyclesPage() {
       <EmptyState
         icon={<RefreshCw size={28} />}
         title="Cycles isn't enabled for this project"
-        description="Turn on the Cycles feature in project settings to plan work in time-boxed iterations."
+        description="Turn Cycles back on in project settings to run work in fixed date ranges again."
         action={
           <Link
             to={`/projects/${project.id}/settings/features`}
@@ -102,7 +102,7 @@ export default function CyclesPage() {
         <EmptyState
           icon={<RefreshCw size={28} />}
           title="No cycles yet"
-          description="Create your first cycle to start planning work in fixed time boxes."
+          description="Create a cycle to give a slice of work its own dates, lead, and status."
         />
       ) : (
         <div className="flex flex-col gap-8">

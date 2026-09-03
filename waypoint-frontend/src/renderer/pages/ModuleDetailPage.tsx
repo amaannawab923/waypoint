@@ -272,7 +272,7 @@ export default function ModuleDetailPage() {
       <EmptyState
         icon={<Boxes size={28} />}
         title="Modules is disabled for this project"
-        description="Turn it back on in project settings to view this module."
+        description="Turn Modules back on in project settings to see it again."
         action={
           <Button variant="primary" onClick={() => navigate(`/projects/${project.id}/settings/features`)}>
             Go to features

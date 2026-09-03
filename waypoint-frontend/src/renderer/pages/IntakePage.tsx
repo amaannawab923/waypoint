@@ -206,7 +206,7 @@ export default function IntakePage() {
       <EmptyState
         icon={<Inbox size={28} />}
         title="Intake is disabled for this project"
-        description="Turn it back on in project settings to triage incoming requests."
+        description="Turn Intake back on in project settings to let people file requests again."
         action={
           <Button variant="primary" onClick={() => navigate(`/projects/${project.id}/settings/features`)}>
             Go to features

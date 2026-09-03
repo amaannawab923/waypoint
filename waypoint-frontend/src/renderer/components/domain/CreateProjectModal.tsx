@@ -28,28 +28,31 @@ const FEATURE_ROWS: FeatureRow[] = [
     key: 'cycles',
     label: 'Cycles',
     description:
-      'Timebox work per project and adjust the time period as needed. One cycle can be 2 weeks, the next 1 week.',
+      'Run work in fixed date ranges, each with its own status, lead, and work items. They don’t have to match — a two-week cycle, then a one-week one.',
   },
   {
     key: 'modules',
     label: 'Modules',
-    description: 'Organize work into sub-projects with dedicated leads and assignees.',
+    description:
+      'Group work items under one lead and status — for the payments migration, the redesign, anything that spans more than one cycle.',
   },
   {
     key: 'views',
     label: 'Views',
-    description: 'Save custom sorts, filters, and display options or share them with your team.',
+    description:
+      'Save a filter, sort, and grouping of the work item list, then share it or keep it to yourself.',
   },
   {
     key: 'pages',
     label: 'Pages',
-    description: 'Create and edit free-form content; notes, docs, anything.',
+    description:
+      'Write long-form docs for the project — specs, runbooks, meeting notes — nested and organized however you like.',
   },
   {
     key: 'intake',
     label: 'Intake',
     description:
-      'Let non-members share bugs, feedback, and suggestions; without disrupting your workflow.',
+      'Give people outside the project a form to file requests. They land as pending items for your team to accept or decline.',
   },
 ];
 
