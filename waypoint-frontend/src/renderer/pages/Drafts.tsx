@@ -5,6 +5,7 @@ import { listDraftWorkItems, listProjects } from '@/mock/api';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PriorityIcon } from '@/components/domain/PriorityIcon';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
+import { NotWired } from '@/components/ui/NotWired';
 
 async function loadDrafts() {
   const [drafts, projects] = await Promise.all([listDraftWorkItems(), listProjects()]);
@@ -31,6 +32,10 @@ export default function Drafts() {
     <div className="mx-auto max-w-4xl p-6 md:p-8">
       <h1 className="font-display text-2xl font-medium text-text">Drafts</h1>
       <p className="mt-1 text-sm text-text-secondary">Work items you started but haven't published yet.</p>
+
+      <div className="mt-4">
+        <NotWired capability="tickets.drafts" />
+      </div>
 
       <div className="mt-6">
         {drafts.length === 0 ? (
