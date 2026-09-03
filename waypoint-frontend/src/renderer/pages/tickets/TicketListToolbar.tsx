@@ -1,12 +1,6 @@
 import { useState } from 'react';
-import {
-  SlidersHorizontal,
-  ListFilter,
-  ChevronDown,
-  Check,
-  Search,
-  BookmarkPlus,
-} from 'lucide-react';
+import { SlidersHorizontal, BookmarkPlus } from 'lucide-react';
+import { IconFilter, IconChevron, IconCheck, IconSearch } from '@/components/icons';
 import { clsx } from 'clsx';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -150,7 +144,7 @@ export default function TicketListToolbar({
           >
             <SlidersHorizontal size={14} />
             Group by
-            <ChevronDown size={13} />
+            <IconChevron size={13} />
           </Button>
         )}
       >
@@ -169,7 +163,7 @@ export default function TicketListToolbar({
               )}
             >
               {opt.label}
-              {view.groupBy === opt.key && <Check size={14} />}
+              {view.groupBy === opt.key && <IconCheck size={14} />}
             </button>
           ))}
         </div>
@@ -182,12 +176,12 @@ export default function TicketListToolbar({
             size="sm"
             onClick={toggle}
           >
-            <ListFilter size={14} />
+            <IconFilter size={14} />
             Filters
             {activeFilterCount > 0 && (
               <Badge tone="accent">{activeFilterCount}</Badge>
             )}
-            <ChevronDown size={13} />
+            <IconChevron size={13} />
           </Button>
         )}
       >
@@ -257,7 +251,7 @@ export default function TicketListToolbar({
       </Popover>
 
       <span className="relative flex h-8 items-center">
-        <Search
+        <IconSearch
           size={13}
           className="pointer-events-none absolute left-2.5 text-text-muted"
         />
