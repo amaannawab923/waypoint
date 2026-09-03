@@ -24,14 +24,20 @@ import {
 import { clsx } from 'clsx';
 import { useAsync } from '@/lib/useAsync';
 import { getWorkspace, listProjects } from '@/data/api';
-import { setProjects, upsertProjects, useAllProjects } from '@/lib/projectsStore';
+import {
+  setProjects,
+  upsertProjects,
+  useAllProjects,
+} from '@/lib/projectsStore';
 import type { Project } from '@/types/entities';
 import { CreateProjectModal } from '@/components/domain/CreateProjectModal';
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   clsx(
     'flex h-8 items-center gap-2.5 rounded-[var(--radius-sm)] px-2.5 text-sm transition-colors',
-    isActive ? 'bg-accent-soft-bg text-accent-soft-text font-medium' : 'text-text-secondary hover:bg-surface-2 hover:text-text',
+    isActive
+      ? 'bg-accent-soft-bg text-accent-soft-text font-medium'
+      : 'text-text-secondary hover:bg-surface-2 hover:text-text',
   );
 
 function ProjectRow({ project }: { project: Project }) {
@@ -47,10 +53,14 @@ function ProjectRow({ project }: { project: Project }) {
   // owner has turned on the request form, even before the first submission
   // arrives, since a project can accept requests before it has any.
   const { primitiveCounts } = project;
-  if (primitiveCounts.sprints > 0) subNav.push({ to: 'sprints', label: 'Sprints', icon: RefreshCw });
-  if (primitiveCounts.workstreams > 0) subNav.push({ to: 'workstreams', label: 'Workstreams', icon: Boxes });
-  if (primitiveCounts.views > 0) subNav.push({ to: 'views', label: 'Views', icon: Layers });
-  if (primitiveCounts.docs > 0) subNav.push({ to: 'docs', label: 'Docs', icon: FileText });
+  if (primitiveCounts.sprints > 0)
+    subNav.push({ to: 'sprints', label: 'Sprints', icon: RefreshCw });
+  if (primitiveCounts.workstreams > 0)
+    subNav.push({ to: 'workstreams', label: 'Workstreams', icon: Boxes });
+  if (primitiveCounts.views > 0)
+    subNav.push({ to: 'views', label: 'Views', icon: Layers });
+  if (primitiveCounts.docs > 0)
+    subNav.push({ to: 'docs', label: 'Docs', icon: FileText });
   if (project.acceptsRequests || primitiveCounts.requests > 0) {
     subNav.push({ to: 'requests', label: 'Requests', icon: Inbox });
   }
@@ -62,14 +72,22 @@ function ProjectRow({ project }: { project: Project }) {
         onClick={() => setOpen((v) => !v)}
         className="flex h-8 w-full items-center gap-1.5 rounded-[var(--radius-sm)] px-1.5 text-sm text-text-secondary hover:bg-surface-2 hover:text-text"
       >
-        {open ? <ChevronDown size={13} className="shrink-0 text-text-muted" /> : <ChevronRight size={13} className="shrink-0 text-text-muted" />}
+        {open ? (
+          <ChevronDown size={13} className="shrink-0 text-text-muted" />
+        ) : (
+          <ChevronRight size={13} className="shrink-0 text-text-muted" />
+        )}
         <span className="text-sm">{project.icon}</span>
         <span className="truncate font-medium text-text">{project.name}</span>
       </button>
       {open && (
         <div className="ml-4 flex flex-col gap-0.5 border-l border-border pl-2 py-0.5">
           {subNav.map((item) => (
-            <NavLink key={item.to} to={`/projects/${project.id}/${item.to}`} className={navLinkClass}>
+            <NavLink
+              key={item.to}
+              to={`/projects/${project.id}/${item.to}`}
+              className={navLinkClass}
+            >
               <item.icon size={14} className="shrink-0" />
               <span className="truncate">{item.label}</span>
             </NavLink>
@@ -104,7 +122,9 @@ export function Sidebar() {
           <Compass size={14} />
         </div>
         {workspace ? (
-          <span className="font-display text-sm font-semibold tracking-tight truncate">{workspace.name}</span>
+          <span className="font-display text-sm font-semibold tracking-tight truncate">
+            {workspace.name}
+          </span>
         ) : (
           <span className="h-3.5 w-20 animate-pulse rounded bg-surface-2" />
         )}
@@ -139,7 +159,9 @@ export function Sidebar() {
       </nav>
 
       <div className="mt-5 flex items-center justify-between px-4">
-        <span className="text-xs font-semibold tracking-wide text-text-muted uppercase">Projects</span>
+        <span className="text-xs font-semibold tracking-wide text-text-muted uppercase">
+          Projects
+        </span>
         <button
           type="button"
           onClick={() => setCreateOpen(true)}
@@ -154,13 +176,19 @@ export function Sidebar() {
           <FolderKanban size={15} />
           All projects
         </NavLink>
-        {projects?.map((p) => <ProjectRow key={p.id} project={p} />)}
+        {projects?.map((p) => (
+          <ProjectRow key={p.id} project={p} />
+        ))}
       </div>
 
       <div className="mt-auto flex flex-col gap-0.5 px-2 py-3">
+        {/* Was "Views" (opened a plain, unfiltered "All work items" table) —
+            now the workspace scope of W5.2's unified TicketList: the same
+            filter/group/search/bulk surface as a project's list, just with
+            no project restriction (docs/design/waypoint-revamp-mockup.html:610). */}
         <NavLink to="/views" className={navLinkClass}>
           <Layers size={15} />
-          Views
+          All tickets
         </NavLink>
         <NavLink to="/projects/archived" className={navLinkClass}>
           <Archive size={15} />
