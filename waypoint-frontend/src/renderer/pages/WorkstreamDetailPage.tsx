@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Boxes, Check, ChevronDown, ChevronLeft, Plus, Search, UserPlus, Users } from 'lucide-react';
+import { Check, ChevronDown, ChevronLeft, Plus, Search, UserPlus, Users } from 'lucide-react';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import { useRecordRecent } from '@/lib/recents';
@@ -262,21 +262,6 @@ export default function WorkstreamDetailPage() {
       ? workstream.memberIds.filter((id) => id !== memberId)
       : [...workstream.memberIds, memberId];
     patch({ memberIds: next });
-  }
-
-  if (!project.features.workstreams) {
-    return (
-      <EmptyState
-        icon={<Boxes size={28} />}
-        title="Workstreams is disabled for this project"
-        description="Turn Workstreams back on in project settings to see it again."
-        action={
-          <Button variant="primary" onClick={() => navigate(`/projects/${project.id}/settings/features`)}>
-            Go to features
-          </Button>
-        }
-      />
-    );
   }
 
   if (loading && !workstreams) {

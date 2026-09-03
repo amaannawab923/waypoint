@@ -24,6 +24,7 @@ import {
 import { clsx } from 'clsx';
 import { useAsync } from '@/lib/useAsync';
 import { getWorkspace, listProjects } from '@/data/api';
+import { setProjects, upsertProjects, useAllProjects } from '@/lib/projectsStore';
 import type { Project } from '@/types/entities';
 import { CreateProjectModal } from '@/components/domain/CreateProjectModal';
 
@@ -38,11 +39,21 @@ function ProjectRow({ project }: { project: Project }) {
   const subNav: { to: string; label: string; icon: typeof LayoutList }[] = [
     { to: 'tickets', label: 'Tickets', icon: LayoutList },
   ];
-  if (project.features.sprints) subNav.push({ to: 'sprints', label: 'Sprints', icon: RefreshCw });
-  if (project.features.workstreams) subNav.push({ to: 'workstreams', label: 'Workstreams', icon: Boxes });
-  if (project.features.views) subNav.push({ to: 'views', label: 'Views', icon: Layers });
-  if (project.features.docs) subNav.push({ to: 'docs', label: 'Docs', icon: FileText });
-  if (project.features.requests) subNav.push({ to: 'requests', label: 'Requests', icon: Inbox });
+  // Nav presence is derived from whether the primitive actually has rows,
+  // not a stored feature flag (docs/design/waypoint-revamp-architecture.md
+  // §3.4) — a project with zero sprint rows shows no Sprints entry even if
+  // it once did, and one with real rows shows it regardless of any past
+  // toggle state. Requests is the one exception: it also shows when the
+  // owner has turned on the request form, even before the first submission
+  // arrives, since a project can accept requests before it has any.
+  const { primitiveCounts } = project;
+  if (primitiveCounts.sprints > 0) subNav.push({ to: 'sprints', label: 'Sprints', icon: RefreshCw });
+  if (primitiveCounts.workstreams > 0) subNav.push({ to: 'workstreams', label: 'Workstreams', icon: Boxes });
+  if (primitiveCounts.views > 0) subNav.push({ to: 'views', label: 'Views', icon: Layers });
+  if (primitiveCounts.docs > 0) subNav.push({ to: 'docs', label: 'Docs', icon: FileText });
+  if (project.acceptsRequests || primitiveCounts.requests > 0) {
+    subNav.push({ to: 'requests', label: 'Requests', icon: Inbox });
+  }
 
   return (
     <div>
@@ -70,7 +81,18 @@ function ProjectRow({ project }: { project: Project }) {
 }
 
 export function Sidebar() {
-  const { data: projects } = useAsync(() => listProjects(), []);
+  // The initial fetch (for loading state) stays a plain useAsync — the
+  // result seeds the shared projectsStore, and every render below reads
+  // live from that store instead of this hook's own `data`, so a project
+  // gaining its first sprint/workstream/view/doc/request from any other
+  // mounted page (see lib/projectsStore.ts) updates this sidebar with no
+  // reload of its own.
+  useAsync(async () => {
+    const rows = await listProjects();
+    setProjects(rows);
+    return rows;
+  }, []);
+  const projects = useAllProjects();
   const { data: workspace } = useAsync(() => getWorkspace(), []);
   const [createOpen, setCreateOpen] = useState(false);
   const navigate = useNavigate();
@@ -157,7 +179,10 @@ export function Sidebar() {
       <CreateProjectModal
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        onCreated={(project) => navigate(`/projects/${project.id}/tickets`)}
+        onCreated={(project) => {
+          upsertProjects([project]);
+          navigate(`/projects/${project.id}/tickets`);
+        }}
       />
     </aside>
   );

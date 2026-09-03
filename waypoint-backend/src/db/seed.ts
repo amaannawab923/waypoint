@@ -148,7 +148,6 @@ export async function seed() {
       leadId: 'mem-1',
       defaultAssigneeId: 'mem-1',
       timezone: 'UTC',
-      features: { sprints: true, workstreams: true, views: true, docs: true, requests: true },
       estimate: { type: 'points', values: ['0', '1', '2', '3', '5', '8', '13', '21'] },
       automations: {
         autoArchiveEnabled: false,
@@ -159,6 +158,9 @@ export async function seed() {
       createdAt: daysAgo(90),
       archivedAt: null,
       guestAccessEnabled: false,
+      // Seeded requests below (in-1, in-2, ...) come from external beta
+      // users — the public form is on for this project.
+      acceptsRequests: true,
     },
     {
       id: 'proj-tools',
@@ -173,7 +175,6 @@ export async function seed() {
       leadId: 'mem-2',
       defaultAssigneeId: null,
       timezone: 'UTC',
-      features: { sprints: false, workstreams: false, views: false, docs: true, requests: false },
       estimate: null,
       automations: {
         autoArchiveEnabled: false,

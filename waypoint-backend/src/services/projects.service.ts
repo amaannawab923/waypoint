@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { eq, and, isNull, isNotNull, inArray } from 'drizzle-orm';
+import { eq, and, isNull, isNotNull, inArray, sql, getTableColumns, type SQL } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import {
   projects,
@@ -13,6 +13,9 @@ import {
   sprintMembers,
   tickets,
   ticketAssignees,
+  savedViews,
+  docs,
+  requests,
 } from '../db/schema/index.js';
 import { NotFoundError, ValidationError } from '../middleware/errors.js';
 import { newId } from '../lib/ids.js';
@@ -24,6 +27,18 @@ type ProjectEntity = Omit<ProjectRow, 'coverGradientStart' | 'coverGradientEnd'>
   memberIds: string[];
   coverGradient: [string, string];
 };
+
+// docs/design/waypoint-revamp-architecture.md §3.4 — nav presence is now
+// derived from whether a primitive actually has rows, not a stored
+// features flag. Keys are the primitive names post-rename.
+export interface PrimitiveCounts {
+  sprints: number;
+  workstreams: number;
+  views: number;
+  docs: number;
+  requests: number;
+}
+type ProjectWithCounts = ProjectEntity & { primitiveCounts: PrimitiveCounts };
 
 // Two things every project response needs that the raw DB row doesn't
 // provide on its own:
@@ -59,6 +74,114 @@ function toProjectEntity(row: ProjectRow, memberIds: string[]): ProjectEntity {
   return { ...rest, memberIds, coverGradient: [coverGradientStart, coverGradientEnd] };
 }
 
+// Used by the single-project mutation return paths (create/update/member
+// changes) — one project, so five small counts here is not the N+1 the list
+// endpoint has to avoid. Tx-aware like attachMemberIds, for the same reason:
+// a caller inside db.transaction() must read through `tx`, not a fresh `db`
+// connection that can't see its own uncommitted writes yet. Each count is
+// cast to int4 so the `postgres` driver hands back a real JS number rather
+// than the string it uses for bigint/numeric (same reasoning as
+// normalizeTicket's estimatePoints on the client side).
+async function getPrimitiveCounts(projectId: string, executor: Tx | typeof db = db): Promise<PrimitiveCounts> {
+  const [[sprintsRow], [workstreamsRow], [viewsRow], [docsRow], [requestsRow]] = await Promise.all([
+    executor.select({ n: sql<number>`count(*)::int` }).from(sprints).where(eq(sprints.projectId, projectId)),
+    executor.select({ n: sql<number>`count(*)::int` }).from(workstreams).where(eq(workstreams.projectId, projectId)),
+    executor.select({ n: sql<number>`count(*)::int` }).from(savedViews).where(eq(savedViews.projectId, projectId)),
+    executor.select({ n: sql<number>`count(*)::int` }).from(docs).where(eq(docs.projectId, projectId)),
+    executor.select({ n: sql<number>`count(*)::int` }).from(requests).where(eq(requests.projectId, projectId)),
+  ]);
+  return {
+    sprints: sprintsRow?.n ?? 0,
+    workstreams: workstreamsRow?.n ?? 0,
+    views: viewsRow?.n ?? 0,
+    docs: docsRow?.n ?? 0,
+    requests: requestsRow?.n ?? 0,
+  };
+}
+async function withPrimitiveCounts(entity: ProjectEntity, executor: Tx | typeof db = db): Promise<ProjectWithCounts> {
+  return { ...entity, primitiveCounts: await getPrimitiveCounts(entity.id, executor) };
+}
+
+// GET /projects (and friends) need every project's five primitive counts in
+// one query, not one query per project per primitive — the sidebar renders
+// every project. LEFT JOINing a GROUP BY subquery per primitive is the
+// non-correlated equivalent of the LATERAL-join SQL in
+// docs/design/waypoint-revamp-architecture.md §3.4 (a plain "count of rows
+// per project" doesn't need LATERAL's per-outer-row correlation), expressed
+// in this file's existing Drizzle query-builder style rather than a raw SQL
+// escape hatch — there is no existing multi-join precedent elsewhere in
+// this file or tickets.service.ts to match instead.
+async function selectProjectsWithCounts(where: SQL | undefined): Promise<ProjectWithCounts[]> {
+  // Each subquery's count column gets its own name (not a shared "n") —
+  // Drizzle's outer SELECT list doesn't qualify these with their subquery
+  // alias, so five identically-named columns from five joined subqueries
+  // come out as an ambiguous bare "n" reference once Postgres parses it.
+  const sprintsSub = db
+    .select({ projectId: sprints.projectId, n: sql<number>`count(*)::int`.as('sprints_n') })
+    .from(sprints)
+    .groupBy(sprints.projectId)
+    .as('sprint_counts');
+  const workstreamsSub = db
+    .select({ projectId: workstreams.projectId, n: sql<number>`count(*)::int`.as('workstreams_n') })
+    .from(workstreams)
+    .groupBy(workstreams.projectId)
+    .as('workstream_counts');
+  const viewsSub = db
+    .select({ projectId: savedViews.projectId, n: sql<number>`count(*)::int`.as('views_n') })
+    .from(savedViews)
+    .groupBy(savedViews.projectId)
+    .as('view_counts');
+  const docsSub = db
+    .select({ projectId: docs.projectId, n: sql<number>`count(*)::int`.as('docs_n') })
+    .from(docs)
+    .groupBy(docs.projectId)
+    .as('doc_counts');
+  const requestsSub = db
+    .select({ projectId: requests.projectId, n: sql<number>`count(*)::int`.as('requests_n') })
+    .from(requests)
+    .groupBy(requests.projectId)
+    .as('request_counts');
+
+  // Plain column references, not a raw `coalesce(...)` sql fragment — a
+  // LEFT JOIN with no matching group already leaves these NULL for a
+  // project with zero rows in that primitive, which is exactly what "?? 0"
+  // below handles; wrapping in sql`coalesce(...)` doesn't carry the
+  // subquery's alias into the fragment, which is its own path to the same
+  // ambiguous-column error.
+  const rows = await db
+    .select({
+      ...getTableColumns(projects),
+      sprintsCount: sprintsSub.n,
+      workstreamsCount: workstreamsSub.n,
+      viewsCount: viewsSub.n,
+      docsCount: docsSub.n,
+      requestsCount: requestsSub.n,
+    })
+    .from(projects)
+    .leftJoin(sprintsSub, eq(sprintsSub.projectId, projects.id))
+    .leftJoin(workstreamsSub, eq(workstreamsSub.projectId, projects.id))
+    .leftJoin(viewsSub, eq(viewsSub.projectId, projects.id))
+    .leftJoin(docsSub, eq(docsSub.projectId, projects.id))
+    .leftJoin(requestsSub, eq(requestsSub.projectId, projects.id))
+    .where(where);
+
+  const bareRows: ProjectRow[] = rows.map(
+    ({ sprintsCount: _s, workstreamsCount: _w, viewsCount: _v, docsCount: _d, requestsCount: _r, ...row }) =>
+      row as ProjectRow,
+  );
+  const entities = await attachMemberIds(bareRows);
+  return entities.map((entity, i) => ({
+    ...entity,
+    primitiveCounts: {
+      sprints: rows[i].sprintsCount ?? 0,
+      workstreams: rows[i].workstreamsCount ?? 0,
+      views: rows[i].viewsCount ?? 0,
+      docs: rows[i].docsCount ?? 0,
+      requests: rows[i].requestsCount ?? 0,
+    },
+  }));
+}
+
 const DEFAULT_STATE_TEMPLATE = [
   { name: 'Backlog', group: 'backlog' as const, color: '#9c9280', sortOrder: 0 },
   { name: 'Todo', group: 'unstarted' as const, color: '#7d8a9c', sortOrder: 1 },
@@ -67,20 +190,17 @@ const DEFAULT_STATE_TEMPLATE = [
   { name: 'Cancelled', group: 'cancelled' as const, color: '#b7332a', sortOrder: 4 },
 ];
 
-export async function listProjects() {
-  const rows = await db.select().from(projects).where(isNull(projects.archivedAt));
-  return attachMemberIds(rows);
+export async function listProjects(): Promise<ProjectWithCounts[]> {
+  return selectProjectsWithCounts(isNull(projects.archivedAt));
 }
 
-export async function listArchivedProjects() {
-  const rows = await db.select().from(projects).where(isNotNull(projects.archivedAt));
-  return attachMemberIds(rows);
+export async function listArchivedProjects(): Promise<ProjectWithCounts[]> {
+  return selectProjectsWithCounts(isNotNull(projects.archivedAt));
 }
 
-export async function getProject(id: string) {
-  const [row] = await db.select().from(projects).where(eq(projects.id, id));
-  if (!row) return undefined;
-  return attachMemberIdsOne(row);
+export async function getProject(id: string): Promise<ProjectWithCounts | undefined> {
+  const [row] = await selectProjectsWithCounts(eq(projects.id, id));
+  return row;
 }
 
 export interface CreateProjectInput {
@@ -92,7 +212,7 @@ export interface CreateProjectInput {
   leadId?: string | null;
 }
 
-export async function createProject(input: CreateProjectInput) {
+export async function createProject(input: CreateProjectInput): Promise<ProjectWithCounts> {
   const identifier = input.identifier.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) || 'PROJ';
   return db.transaction(async (tx) => {
     const [project] = await tx
@@ -110,7 +230,6 @@ export async function createProject(input: CreateProjectInput) {
         leadId: input.leadId ?? null,
         defaultAssigneeId: null,
         timezone: 'UTC',
-        features: { sprints: false, workstreams: false, views: false, docs: true, requests: false },
         estimate: null,
         automations: {
           autoArchiveEnabled: false,
@@ -138,7 +257,13 @@ export async function createProject(input: CreateProjectInput) {
     // `memberIds: [d.currentUserId]` on creation.
     await tx.insert(projectMembers).values({ projectId: project.id, memberId: CURRENT_USER_ID });
 
-    return toProjectEntity(project, [CURRENT_USER_ID]);
+    // A brand new project has no sprints/workstreams/views/docs/requests yet
+    // (docs/design/waypoint-revamp-architecture.md §3.4) — no need to query
+    // for what is necessarily all zero.
+    return {
+      ...toProjectEntity(project, [CURRENT_USER_ID]),
+      primitiveCounts: { sprints: 0, workstreams: 0, views: 0, docs: 0, requests: 0 },
+    };
   });
 }
 
@@ -165,14 +290,17 @@ export function validateRepoPath(repoPath: string): void {
   }
 }
 
-export async function updateProject(id: string, patch: Partial<typeof projects.$inferInsert>) {
+export async function updateProject(
+  id: string,
+  patch: Partial<typeof projects.$inferInsert>,
+): Promise<ProjectWithCounts> {
   // An explicit `null` (unlink) skips validation entirely — clearing is
   // always safe, and a checkout that has since been deleted must still be
   // unlinkable.
   if (patch.repoPath) validateRepoPath(patch.repoPath);
   const [row] = await db.update(projects).set(patch).where(eq(projects.id, id)).returning();
   if (!row) throw new NotFoundError('project');
-  return attachMemberIdsOne(row);
+  return withPrimitiveCounts(await attachMemberIdsOne(row));
 }
 
 // Preserves the original mock's behavior exactly: this mutates the member's
@@ -251,22 +379,14 @@ export async function removeProjectMember(projectId: string, memberId: string) {
       );
 
     const [row] = await tx.select().from(projects).where(eq(projects.id, projectId));
-    return attachMemberIdsOne(row, tx);
+    return withPrimitiveCounts(await attachMemberIdsOne(row, tx), tx);
   });
-}
-
-export async function updateProjectFeatures(id: string, patch: Record<string, boolean>) {
-  const project = await getProject(id);
-  if (!project) throw new NotFoundError('project');
-  const features = { ...(project.features as object), ...patch };
-  const [row] = await db.update(projects).set({ features }).where(eq(projects.id, id)).returning();
-  return attachMemberIdsOne(row);
 }
 
 export async function updateProjectEstimate(id: string, estimate: { type: string; values: string[] } | null) {
   const [row] = await db.update(projects).set({ estimate }).where(eq(projects.id, id)).returning();
   if (!row) throw new NotFoundError('project');
-  return attachMemberIdsOne(row);
+  return withPrimitiveCounts(await attachMemberIdsOne(row));
 }
 
 export async function getProjectAutomations(projectId: string) {
@@ -280,7 +400,7 @@ export async function updateProjectAutomations(id: string, patch: Record<string,
   if (!project) throw new NotFoundError('project');
   const automations = { ...(project.automations as object), ...patch };
   const [row] = await db.update(projects).set({ automations }).where(eq(projects.id, id)).returning();
-  return attachMemberIdsOne(row);
+  return withPrimitiveCounts(await attachMemberIdsOne(row));
 }
 
 export async function archiveProject(id: string) {

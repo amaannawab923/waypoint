@@ -4,6 +4,7 @@ import { Plus, RefreshCw } from 'lucide-react';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import { listSprints, listStates, listTickets } from '@/data/api';
+import { refreshProjectInStore } from '@/lib/projectsStore';
 import type { Sprint, Ticket } from '@/types/entities';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -49,24 +50,6 @@ export default function SprintsPage() {
     return buckets;
   }, [sprints]);
 
-  if (!project.features.sprints) {
-    return (
-      <EmptyState
-        icon={<RefreshCw size={28} />}
-        title="Sprints isn't enabled for this project"
-        description="Turn Sprints back on in project settings to run work in fixed date ranges again."
-        action={
-          <Link
-            to={`/projects/${project.id}/settings/features`}
-            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border border-border-strong bg-surface px-3 text-sm font-medium text-text transition-colors hover:bg-surface-2"
-          >
-            Go to feature settings
-          </Link>
-        }
-      />
-    );
-  }
-
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6 p-6">
       <div className="flex items-center justify-between">
@@ -90,6 +73,10 @@ export default function SprintsPage() {
           onCreated={() => {
             setShowForm(false);
             reloadSprints();
+            // This may be the project's first sprint — refresh the shared
+            // projects store so the sidebar's Sprints entry (driven by
+            // primitiveCounts.sprints > 0) appears without a page reload.
+            refreshProjectInStore(project.id);
           }}
         />
       )}

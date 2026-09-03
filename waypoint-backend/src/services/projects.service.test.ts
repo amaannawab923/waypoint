@@ -53,12 +53,12 @@ const PROJECT_ROW = {
   leadId: null,
   defaultAssigneeId: null,
   timezone: 'UTC',
-  features: {},
   estimate: null,
   automations: {},
   createdAt: new Date(),
   archivedAt: null,
   guestAccessEnabled: false,
+  acceptsRequests: false,
   repoPath: null,
 };
 

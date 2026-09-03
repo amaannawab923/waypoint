@@ -6,7 +6,6 @@ import {
   createProjectSchema,
   updateProjectSchema,
   addProjectMemberSchema,
-  projectFeaturesSchema,
   projectEstimateSchema,
   projectAutomationsSchema,
 } from '../validation/projects.schema.js';
@@ -64,14 +63,6 @@ projectsRouter.delete(
   '/projects/:id/members/:memberId',
   asyncHandler(async (req, res) => {
     res.json(await projectsService.removeProjectMember(req.params.id, req.params.memberId));
-  }),
-);
-
-projectsRouter.patch(
-  '/projects/:id/features',
-  asyncHandler(async (req, res) => {
-    const patch = projectFeaturesSchema.parse(req.body);
-    res.json(await projectsService.updateProjectFeatures(req.params.id, patch));
   }),
 );
 

@@ -43,6 +43,13 @@
       "when": 1788448952541,
       "tag": "0005_views_project_id_nullable",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788454174368,
+      "tag": "0006_projects_sparse",
+      "breakpoints": true
     }
   ]
 }

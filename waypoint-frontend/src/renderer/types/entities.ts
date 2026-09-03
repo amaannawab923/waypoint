@@ -65,12 +65,15 @@ export interface Member {
   joinedAt: string;
 }
 
-export interface ProjectFeatures {
-  sprints: boolean;
-  workstreams: boolean;
-  views: boolean;
-  docs: boolean;
-  requests: boolean;
+// Replaces ProjectFeatures (docs/design/waypoint-revamp-architecture.md
+// §3.4) — nav presence is derived from whether a primitive actually has
+// rows, not a stored per-project flag. Keys are the primitive names.
+export interface PrimitiveCounts {
+  sprints: number;
+  workstreams: number;
+  views: number;
+  docs: number;
+  requests: number;
 }
 
 export type EstimateType = 'points' | 'categories';
@@ -99,7 +102,6 @@ export interface Project {
   leadId: ID | null;
   defaultAssigneeId: ID | null;
   timezone: string;
-  features: ProjectFeatures;
   estimate: ProjectEstimateSystem | null;
   automations: ProjectAutomations;
   createdAt: string;
@@ -108,6 +110,10 @@ export interface Project {
   guestAccessEnabled: boolean;
   /** Absolute path to the linked local git checkout; null when not linked. */
   repoPath: string | null;
+  /** Row counts per primitive — drives which sidebar sub-nav entries show (§3.4). */
+  primitiveCounts: PrimitiveCounts;
+  /** Capability: "accept submissions from outside" — distinct from a feature toggle (§3.4). */
+  acceptsRequests: boolean;
 }
 
 export interface TicketState {

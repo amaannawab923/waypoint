@@ -20,6 +20,11 @@ export const updateProjectSchema = requireAtLeastOneField(
     defaultAssigneeId: z.string().nullable().optional(),
     timezone: z.string().optional(),
     guestAccessEnabled: z.boolean().optional(),
+    // A capability ("accept submissions from outside"), not a feature
+    // toggle — see docs/design/waypoint-revamp-architecture.md §3.4. No
+    // dedicated route: it's set through the same generic project PATCH as
+    // guestAccessEnabled.
+    acceptsRequests: z.boolean().optional(),
     // Shape only — existence, directory-ness and git-repo-ness need `fs`
     // calls, so they live in projects.service.ts's validateRepoPath instead.
     // Both POSIX (`/...`) and Windows drive-letter (`C:\...`, `C:/...`)
@@ -38,14 +43,6 @@ export const updateProjectSchema = requireAtLeastOneField(
 export const addProjectMemberSchema = z.object({
   memberId: z.string(),
   role: z.enum(['admin', 'member', 'guest']).optional(),
-});
-
-export const projectFeaturesSchema = z.object({
-  sprints: z.boolean().optional(),
-  workstreams: z.boolean().optional(),
-  views: z.boolean().optional(),
-  docs: z.boolean().optional(),
-  requests: z.boolean().optional(),
 });
 
 export const projectEstimateSchema = z
