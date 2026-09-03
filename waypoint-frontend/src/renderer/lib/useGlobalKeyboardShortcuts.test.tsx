@@ -218,12 +218,12 @@ describe('useGlobalKeyboardShortcuts — g-then-key navigation', () => {
     expect(currentPath()).toBe('/your-work');
   });
 
-  it('"l" ("this machine") is intentionally unbound — no current-app equivalent', () => {
+  it('"l" opens "This machine"', () => {
     renderShortcuts({}, '/your-work');
     fireEvent.keyDown(document, { key: 'g' });
     fireEvent.keyDown(document, { key: 'l' });
 
-    expect(currentPath()).toBe('/your-work');
+    expect(currentPath()).toBe('/machine');
   });
 
   describe('project-scoped targets (t/d/s)', () => {

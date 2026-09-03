@@ -26,6 +26,7 @@ import ProjectsList from '@/pages/ProjectsList';
 import ArchivedProjects from '@/pages/ArchivedProjects';
 import AnalyticsPage from '@/pages/AnalyticsPage';
 import ReviewPage from '@/pages/ReviewPage';
+import MachinePage from '@/pages/MachinePage';
 import AllTicketsPage from '@/pages/AllTicketsPage';
 
 import TicketsLayout from '@/pages/tickets/TicketsLayout';
@@ -98,6 +99,7 @@ export const router = createBrowserRouter([
           { path: '/projects/archived', element: <ArchivedProjects /> },
           { path: '/analytics', element: <AnalyticsPage /> },
           { path: '/review', element: <ReviewPage /> },
+          { path: '/machine', element: <MachinePage /> },
           { path: '/views', element: <AllTicketsPage /> },
 
           {

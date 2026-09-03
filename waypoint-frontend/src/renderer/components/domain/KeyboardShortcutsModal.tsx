@@ -40,12 +40,11 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
  * `?` (or the topbar's keyboard icon) — the real, current keybinding set
  * this app implements (useGlobalKeyboardShortcuts.ts, plus TicketList.tsx's
  * and ReviewPage.tsx's own local `j`/`k`/`x`/`e`/`r`), not the mockup's
- * fictional ones where they don't apply. Two differences from the mockup's
+ * fictional ones where they don't apply. One difference from the mockup's
  * own cheatsheet (docs/design/waypoint-revamp-mockup.html's `ksBackdrop`):
- * "This machine" (`g` `l`) is omitted — this app has no equivalent screen
- * yet — and "Docs"/"Sprints" are added, since this app's `g`-nav supports
- * them even though the mockup's own visual cheatsheet never listed them
- * (its underlying JS map did).
+ * "Docs"/"Sprints" are added, since this app's `g`-nav supports them even
+ * though the mockup's own visual cheatsheet never listed them (its
+ * underlying JS map did).
  */
 export function KeyboardShortcutsModal({
   open,
@@ -66,6 +65,7 @@ export function KeyboardShortcutsModal({
             <Row label="All tickets" keys={['g', 'a']} />
             <Row label="Docs" keys={['g', 'd']} />
             <Row label="Sprints" keys={['g', 's']} />
+            <Row label="This machine" keys={['g', 'l']} />
           </Section>
           <p className="text-[11px] leading-snug text-text-muted">
             Docs and Sprints only navigate while a project is open.

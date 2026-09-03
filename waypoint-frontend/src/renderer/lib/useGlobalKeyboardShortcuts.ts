@@ -20,17 +20,16 @@ import { getActiveSelectableView } from '@/lib/useActiveSelectableView';
 //   d -> the open project's Docs tab — no-ops with no project route open,
 //        since a workspace-wide docs screen doesn't exist.
 //   s -> the open project's Sprints tab — same caveat as `d`.
-//   l -> UNBOUND. The mockup's "This machine" (line 1088, "local-first
-//        machine strip") is a local-first status/settings screen this app
-//        has no equivalent of yet (grep for "machine" in the mockup finds
-//        no current-app route it maps to). Left unbound rather than
-//        invented.
+//   l -> '/machine' — the sidebar's "Local" status strip now has a real
+//        destination page (MachinePage.tsx), added during the UX-parity
+//        pass; wired here to match.
 const GO_TO: Record<string, (projectId: string | undefined) => string | null> =
   {
     h: () => '/',
     r: () => '/review',
     m: () => '/your-work',
     a: () => '/views',
+    l: () => '/machine',
     t: (projectId) => (projectId ? `/projects/${projectId}/tickets` : '/views'),
     d: (projectId) => (projectId ? `/projects/${projectId}/docs` : null),
     s: (projectId) => (projectId ? `/projects/${projectId}/sprints` : null),
