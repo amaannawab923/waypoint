@@ -2,12 +2,10 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { clsx } from 'clsx';
 import {
-  Archive,
   Check,
   ChevronDown,
   ChevronRight,
   Copy,
-  ExternalLink,
   GitMerge,
   Layers,
   Link as LinkIcon,
@@ -28,6 +26,7 @@ import { useRecordRecent } from '@/lib/recents';
 import {
   addComment,
   addWorkItemLink,
+  createWorkItem,
   deleteWorkItem,
   getCurrentUser,
   getWorkItem,
@@ -595,6 +594,23 @@ export function WorkItemDetailContent({
     });
   }
 
+  async function handleDuplicate() {
+    if (!item) return;
+    const copy = await createWorkItem({
+      projectId: item.projectId,
+      title: `Copy of ${item.title}`,
+      description: item.description,
+      stateId: item.stateId,
+      priority: item.priority,
+      assigneeIds: item.assigneeIds,
+      labelIds: item.labelIds,
+      moduleId: item.moduleId,
+      cycleId: item.cycleId,
+    });
+    onClose?.();
+    navigate(`/projects/${item.projectId}/work-items/${copy.identifier}`);
+  }
+
   return (
     <div
       className={
@@ -641,24 +657,8 @@ export function WorkItemDetailContent({
                     icon={<Copy size={14} />}
                     label="Make a copy"
                     onClick={() => {
-                      console.log('Make a copy', item.id);
                       close();
-                    }}
-                  />
-                  <MenuItem
-                    icon={<ExternalLink size={14} />}
-                    label="Open in new tab"
-                    onClick={() => {
-                      console.log('Open in new tab', item.id);
-                      close();
-                    }}
-                  />
-                  <MenuItem
-                    icon={<Archive size={14} />}
-                    label="Archive"
-                    onClick={() => {
-                      console.log('Archive', item.id);
-                      close();
+                      handleDuplicate();
                     }}
                   />
                   <div className="my-1 h-px bg-border" />
