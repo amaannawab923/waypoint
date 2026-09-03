@@ -1,9 +1,10 @@
 import '@testing-library/jest-dom';
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import {
   addComment,
   addTicketLink,
+  approveCopilotProposal,
   deleteTicket,
   getCurrentUser,
   getTicket,
@@ -18,6 +19,8 @@ import {
   listWorkstreams,
   listStates,
   listSubItems,
+  listTicketProposals,
+  rejectCopilotProposal,
   removeTicketLink,
   takeBackOverFromAgent,
   toggleTicketAgent,
@@ -26,12 +29,19 @@ import {
   updateTicket,
 } from '@/data/api';
 import { useProject } from '@/layouts/ProjectLayout';
-import type { Agent, Comment, Member, Project, Ticket } from '@/types/entities';
+import { resetProposalStoreForTests } from '@/lib/proposalStore';
+import type { Agent, Comment, Member, Project, ProposalView, Ticket } from '@/types/entities';
 import { TicketDetailContent } from './TicketDetailPage';
 
 jest.mock('@/data/api', () => ({
   addComment: jest.fn(),
   addTicketLink: jest.fn(),
+  // approveCopilotProposal/rejectCopilotProposal aren't called directly by
+  // this page — they're what lib/proposalStore.ts's approveProposal/
+  // rejectProposal call underneath — but that module also imports them from
+  // '@/data/api', so this mock factory needs to cover them too.
+  approveCopilotProposal: jest.fn(),
+  rejectCopilotProposal: jest.fn(),
   deleteTicket: jest.fn(),
   getCurrentUser: jest.fn(),
   getTicket: jest.fn(),
@@ -46,6 +56,7 @@ jest.mock('@/data/api', () => ({
   listWorkstreams: jest.fn(),
   listStates: jest.fn(),
   listSubItems: jest.fn(),
+  listTicketProposals: jest.fn(),
   removeTicketLink: jest.fn(),
   takeBackOverFromAgent: jest.fn(),
   toggleTicketAgent: jest.fn(),
@@ -158,7 +169,36 @@ function commentWith(bodyHtml: string, authorId = 'mem-1'): Comment {
   };
 }
 
-function mount(comments: Comment[], agents: Agent[] = []) {
+function proposal(overrides: Partial<ProposalView> = {}): ProposalView {
+  return {
+    id: 'prop-1',
+    conversationId: 'conv-1',
+    kind: 'state_change',
+    ticketId: 'wi-1',
+    payload: { stateId: 'st-done' },
+    snapshot: { identifier: 'LAUNCH-3', title: 'T', toStateName: 'Done' },
+    anchorSeq: 1,
+    status: 'proposed',
+    statusReason: null,
+    resultInfo: null,
+    disclosureText: 'disclosure ',
+    expiresAt: '2026-01-02T00:00:00.000Z',
+    modelNotifiedAt: null,
+    resolvedAt: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    origin: 'copilot',
+    projectId: 'proj-1',
+    agentId: null,
+    agentRunId: null,
+    sourceRequestId: null,
+    decidedBy: null,
+    trustGrantId: null,
+    decisionLatencyMs: null,
+    ...overrides,
+  };
+}
+
+function mount(comments: Comment[], agents: Agent[] = [], proposals: ProposalView[] = []) {
   jest
     .mocked(useProject)
     .mockReturnValue({ project: PROJECT, reloadProject: jest.fn() });
@@ -175,6 +215,7 @@ function mount(comments: Comment[], agents: Agent[] = []) {
   jest.mocked(listActivity).mockResolvedValue([]);
   jest.mocked(listComments).mockResolvedValue(comments);
   jest.mocked(getTicket).mockResolvedValue(ITEM);
+  jest.mocked(listTicketProposals).mockResolvedValue(proposals);
   jest.mocked(addComment).mockResolvedValue(commentWith(''));
   jest.mocked(addTicketLink).mockResolvedValue(ITEM);
   jest.mocked(removeTicketLink).mockResolvedValue(ITEM);
@@ -194,6 +235,7 @@ function mount(comments: Comment[], agents: Agent[] = []) {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  resetProposalStoreForTests();
 });
 
 afterEach(() => {
@@ -256,5 +298,58 @@ describe('TicketDetailPage → comment rendering (stored XSS fix)', () => {
 
     expect(await screen.findByText(XSS_PAYLOAD)).toBeInTheDocument();
     expect(document.querySelector('img[onerror]')).toBeNull();
+  });
+});
+
+// W4.4 (architecture §4.4) — the ticket-detail inline "Pending proposals"
+// section, fetched via listTicketProposals and rendered through the same
+// CopilotProposalCard as the Copilot panel, wired through the shared
+// proposalStore so approve/reject stay in sync with any other mounted
+// surface reading the same store.
+describe('TicketDetailPage → pending proposals section', () => {
+  it('shows no section at all when the ticket has zero pending proposals', async () => {
+    mount([], [], []);
+
+    await waitFor(() => expect(listTicketProposals).toHaveBeenCalledWith('wi-1', 'proposed'));
+    expect(screen.queryByText(/Pending proposals/)).not.toBeInTheDocument();
+  });
+
+  it('renders a card for each pending proposal returned for this ticket', async () => {
+    mount([], [], [proposal({ id: 'prop-1' })]);
+
+    expect(await screen.findByText('Pending proposals (1)')).toBeInTheDocument();
+    // The card's own kind label — from CopilotProposalCard.tsx — confirms
+    // the shared card component rendered, not a bespoke one.
+    expect(screen.getByText('Proposed change · State')).toBeInTheDocument();
+  });
+
+  it('approving from this card resolves through the shared proposalStore and updates the card in place', async () => {
+    mount([], [], [proposal({ id: 'prop-1', status: 'proposed' })]);
+    jest
+      .mocked(approveCopilotProposal)
+      .mockResolvedValue(proposal({ id: 'prop-1', status: 'executed' }));
+
+    expect(await screen.findByText('Pending proposals (1)')).toBeInTheDocument();
+    await act(async () => {
+      screen.getByRole('button', { name: 'Approve' }).click();
+    });
+
+    expect(approveCopilotProposal).toHaveBeenCalledWith('prop-1');
+    expect(await screen.findByText('Applied — moved to Done')).toBeInTheDocument();
+  });
+
+  it('rejecting from this card resolves through the shared proposalStore', async () => {
+    mount([], [], [proposal({ id: 'prop-1', status: 'proposed' })]);
+    jest
+      .mocked(rejectCopilotProposal)
+      .mockResolvedValue(proposal({ id: 'prop-1', status: 'rejected' }));
+
+    expect(await screen.findByText('Pending proposals (1)')).toBeInTheDocument();
+    await act(async () => {
+      screen.getByRole('button', { name: 'Reject' }).click();
+    });
+
+    expect(rejectCopilotProposal).toHaveBeenCalledWith('prop-1');
+    expect(await screen.findByText('Dismissed, nothing changed')).toBeInTheDocument();
   });
 });
