@@ -15,3 +15,55 @@ export const rejectAllProposalsSchema = z.object({}).strict();
 export const markProposalsNotifiedSchema = z.object({
   ids: z.array(z.string()).min(1).max(100),
 });
+
+// ---------------------------------------------------------------------------
+// Review queue (W3.2, architecture §4.4) — the workspace-scoped aggregate
+// surface's request validation.
+// ---------------------------------------------------------------------------
+
+const proposalKindQuerySchema = z.enum([
+  'comment',
+  'state_change',
+  'assignee_change',
+  'priority_change',
+  'create_ticket',
+  'add_label',
+]);
+
+const proposalStatusQuerySchema = z.enum([
+  'proposed',
+  'executing',
+  'executed',
+  'rejected',
+  'stale',
+  'expired',
+  'superseded',
+  'reverted',
+]);
+
+export const listReviewQueueQuerySchema = z
+  .object({
+    status: z.enum(['proposed', 'blocked', 'recent']),
+    agentId: z.string().min(1).optional(),
+    projectId: z.string().min(1).optional(),
+    kind: proposalKindQuerySchema.optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+    cursor: z.string().min(1).optional(),
+  })
+  .strict();
+
+// Cap at 50 (architecture §4.4): "Cap the batch at 50 ids (reject the whole
+// request with a 400 above that, don't silently truncate)" — zod's .max(50)
+// is exactly that: an over-cap array fails validation before the route
+// handler (and the service loop underneath it) ever sees the request.
+export const bulkProposalIdsSchema = z
+  .object({
+    ids: z.array(z.string().min(1)).min(1).max(50),
+  })
+  .strict();
+
+export const ticketProposalsQuerySchema = z
+  .object({
+    status: proposalStatusQuerySchema.optional(),
+  })
+  .strict();

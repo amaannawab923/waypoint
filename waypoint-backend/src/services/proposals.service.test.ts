@@ -50,7 +50,7 @@ vi.mock('./states.service.js');
 vi.mock('./members.service.js');
 vi.mock('./projects.service.js');
 
-const { copilotProposals, copilotConversations } = await import('../db/schema/index.js');
+const { proposals, copilotConversations } = await import('../db/schema/index.js');
 const ticketsService = await import('./tickets.service.js');
 const commentsService = await import('./comments.service.js');
 const statesService = await import('./states.service.js');
@@ -125,7 +125,7 @@ describe('createProposal', () => {
 
     const result = await createProposal(COMMENT_INPUT);
 
-    expect(tx.insert).toHaveBeenCalledWith(copilotProposals);
+    expect(tx.insert).toHaveBeenCalledWith(proposals);
     const values = (tx.insert.mock.results[0].value.values as Vfn).mock.calls[0][0];
     expect(values.id).toMatch(/^prop-/);
     expect(values).toMatchObject({
@@ -175,7 +175,7 @@ describe('createProposal', () => {
     expect(eleventh.insert).not.toHaveBeenCalled();
     // The turn cap counts rows sharing this proposal's own (conversation,
     // anchorSeq) — i.e. this turn, not the whole conversation.
-    expect(eq).toHaveBeenCalledWith(copilotProposals.anchorSeq, 7);
+    expect(eq).toHaveBeenCalledWith(proposals.anchorSeq, 7);
   });
 
   it('rejects the 21st pending proposal in a conversation, counting only proposed rows', async () => {
@@ -185,7 +185,7 @@ describe('createProposal', () => {
       createProposal(COMMENT_INPUT).catch((e) => Promise.reject(e.message)),
     ).rejects.toMatch(/Too many pending proposals in this conversation \(max 20\)/);
     expect(tx.insert).not.toHaveBeenCalled();
-    expect(eq).toHaveBeenCalledWith(copilotProposals.status, 'proposed');
+    expect(eq).toHaveBeenCalledWith(proposals.status, 'proposed');
   });
 
   it('supersedes a pending state_change on the same (conversation, ticket, kind) — and only proposed rows', async () => {
@@ -200,16 +200,16 @@ describe('createProposal', () => {
     });
 
     expect(tx.update).toHaveBeenCalledTimes(1);
-    expect(tx.update).toHaveBeenCalledWith(copilotProposals);
+    expect(tx.update).toHaveBeenCalledWith(proposals);
     const setArgs = (tx.update.mock.results[0].value.set as Vfn).mock.calls[0][0];
     expect(setArgs).toMatchObject({ status: 'superseded' });
     expect(setArgs.resolvedAt).toBeInstanceOf(Date);
     // Row-level condition assertions: exactly the four columns that define
     // "the same pending proposal", nothing broader.
-    expect(eq).toHaveBeenCalledWith(copilotProposals.conversationId, 'conv-abc1234');
-    expect(eq).toHaveBeenCalledWith(copilotProposals.ticketId, 'wi-1');
-    expect(eq).toHaveBeenCalledWith(copilotProposals.kind, 'state_change');
-    expect(eq).toHaveBeenCalledWith(copilotProposals.status, 'proposed');
+    expect(eq).toHaveBeenCalledWith(proposals.conversationId, 'conv-abc1234');
+    expect(eq).toHaveBeenCalledWith(proposals.ticketId, 'wi-1');
+    expect(eq).toHaveBeenCalledWith(proposals.kind, 'state_change');
+    expect(eq).toHaveBeenCalledWith(proposals.status, 'proposed');
   });
 
   it('supersede for assignee_change additionally matches the payload assigneeId (five conditions, not four)', async () => {
@@ -305,8 +305,8 @@ describe('approveProposal', () => {
     const claimSet = (claimChain.set as Vfn).mock.calls[0][0];
     expect(claimSet.status).toBe('executing');
     // The claim's WHERE is the whole single-execution guarantee.
-    expect(eq).toHaveBeenCalledWith(copilotProposals.id, 'prop-abc1234');
-    expect(eq).toHaveBeenCalledWith(copilotProposals.status, 'proposed');
+    expect(eq).toHaveBeenCalledWith(proposals.id, 'prop-abc1234');
+    expect(eq).toHaveBeenCalledWith(proposals.status, 'proposed');
     expect(and).toHaveBeenCalled();
   });
 
@@ -642,7 +642,7 @@ describe('approveProposal', () => {
 
     const finalizeAnd = (lostFinalizeChain.where as Vfn).mock.calls.length;
     expect(finalizeAnd).toBe(1);
-    expect(eq).toHaveBeenCalledWith(copilotProposals.status, 'executing');
+    expect(eq).toHaveBeenCalledWith(proposals.status, 'executing');
     expect(view.status).toBe('stale');
   });
 
@@ -658,7 +658,7 @@ describe('approveProposal', () => {
     // claim marker cleared, conditioned on still holding the claim.
     const revertSet = (revertChain.set as Vfn).mock.calls[0][0];
     expect(revertSet).toEqual({ status: 'proposed', resolvedAt: null });
-    expect(eq).toHaveBeenCalledWith(copilotProposals.status, 'executing');
+    expect(eq).toHaveBeenCalledWith(proposals.status, 'executing');
   });
 });
 
@@ -678,7 +678,7 @@ describe('rejectProposal', () => {
     // survives its dismissal.
     expect(Object.keys(setArgs).sort()).toEqual(['resolvedAt', 'status']);
     expect(setArgs.status).toBe('rejected');
-    expect(inArray).toHaveBeenCalledWith(copilotProposals.status, ['proposed', 'stale']);
+    expect(inArray).toHaveBeenCalledWith(proposals.status, ['proposed', 'stale']);
     expect(view.status).toBe('rejected');
     expect(view.statusReason).toBe('was stale');
   });
@@ -703,10 +703,10 @@ describe('rejectAllPending', () => {
     const result = await rejectAllPending('conv-abc1234');
 
     expect(db.update).toHaveBeenCalledTimes(1);
-    expect(eq).toHaveBeenCalledWith(copilotProposals.conversationId, 'conv-abc1234');
+    expect(eq).toHaveBeenCalledWith(proposals.conversationId, 'conv-abc1234');
     // stale included (final review m5): a stale card's only affordance is
     // Dismiss, so reject-all leaving them behind stranded them.
-    expect(inArray).toHaveBeenCalledWith(copilotProposals.status, ['proposed', 'stale']);
+    expect(inArray).toHaveBeenCalledWith(proposals.status, ['proposed', 'stale']);
     expect(result).toEqual({ rejected: 2 });
   });
 });
@@ -720,9 +720,9 @@ describe('markProposalsNotified', () => {
 
     const setArgs = (chain.set as Vfn).mock.calls[0][0];
     expect(Object.keys(setArgs)).toEqual(['modelNotifiedAt']);
-    expect(inArray).toHaveBeenCalledWith(copilotProposals.id, ['prop-1', 'prop-2']);
-    expect(eq).toHaveBeenCalledWith(copilotProposals.conversationId, 'conv-abc1234');
-    expect(isNull).toHaveBeenCalledWith(copilotProposals.modelNotifiedAt);
+    expect(inArray).toHaveBeenCalledWith(proposals.id, ['prop-1', 'prop-2']);
+    expect(eq).toHaveBeenCalledWith(proposals.conversationId, 'conv-abc1234');
+    expect(isNull).toHaveBeenCalledWith(proposals.modelNotifiedAt);
     expect(result).toEqual({ notified: 1 });
   });
 });
@@ -748,7 +748,7 @@ describe('listProposals', () => {
     expect(reviveSet.status).toBe('stale');
     expect(reviveSet.resolvedAt).toBeInstanceOf(Date);
     expect(reviveSet.statusReason).toMatch(/interrupted/i);
-    expect(eq).toHaveBeenCalledWith(copilotProposals.status, 'executing');
+    expect(eq).toHaveBeenCalledWith(proposals.status, 'executing');
     // The view carries the server-computed disclosure for the card preview.
     expect(views).toHaveLength(1);
     expect(views[0].disclosureText).toBe(
