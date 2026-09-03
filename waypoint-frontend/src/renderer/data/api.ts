@@ -26,7 +26,6 @@ import type {
   RequestStatus,
   ScratchNote,
   NotificationItem,
-  ProjectFeatures,
   ProjectEstimateSystem,
   ProjectAutomations,
   Priority,
@@ -357,13 +356,6 @@ export async function removeProjectMember(
   memberId: string,
 ): Promise<Project> {
   return http.del<Project>(`/projects/${projectId}/members/${memberId}`);
-}
-
-export async function updateProjectFeatures(
-  id: string,
-  patch: Partial<ProjectFeatures>,
-): Promise<Project> {
-  return http.patch<Project>(`/projects/${id}/features`, patch);
 }
 
 export async function updateProjectEstimate(
