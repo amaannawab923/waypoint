@@ -1,6 +1,9 @@
 import { z } from 'zod';
 
-const priority = z.enum(['urgent', 'high', 'medium', 'low', 'none']);
+// Exported so other validation modules (e.g. ticketFilter.schema.ts) reuse
+// the same literal set instead of redeclaring it.
+export const prioritySchema = z.enum(['urgent', 'high', 'medium', 'low', 'none']);
+const priority = prioritySchema;
 
 export const createTicketSchema = z.object({
   projectId: z.string(),
