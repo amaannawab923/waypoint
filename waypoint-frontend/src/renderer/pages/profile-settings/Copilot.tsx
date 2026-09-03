@@ -3,6 +3,9 @@ import { CheckCircle2, KeySquare, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { CopilotConnectModal } from '@/components/domain/CopilotConnectModal';
+import { ClaudeCodeStatus } from '@/components/domain/ClaudeCodeStatus';
+import { useAsync } from '@/lib/useAsync';
+import { detectLocalClaudeCode } from '@/mock/api';
 
 const inputClass =
   'h-9 w-full rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 font-mono text-sm text-text outline-none focus:border-accent';
@@ -28,6 +31,7 @@ type Status = { connected: boolean; last4: string | null };
  * when that automated flow doesn't work.
  */
 export default function Copilot() {
+  const { data: detection } = useAsync(() => detectLocalClaudeCode(), []);
   const [status, setStatus] = useState<Status | null>(null);
   const [statusError, setStatusError] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
@@ -122,6 +126,12 @@ export default function Copilot() {
         Connect your own Claude subscription so Copilot keeps working without
         needing a terminal every time your login lapses.
       </p>
+
+      <ClaudeCodeStatus
+        probe={detection ?? { state: 'checking' }}
+        className="mb-6"
+        showSetupLink={false}
+      />
 
       {statusError && (
         <Badge tone="danger" outline className="mb-6">
