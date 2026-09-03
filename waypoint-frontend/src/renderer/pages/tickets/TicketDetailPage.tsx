@@ -2,24 +2,19 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { clsx } from 'clsx';
 import {
-  Check,
-  ChevronDown,
-  ChevronRight,
   Copy,
   GitMerge,
-  Layers,
   Link as LinkIcon,
   Maximize2,
   MoreHorizontal,
   Paperclip,
-  Plus,
   Repeat,
   Ruler,
   Tag,
   Trash2,
   UserPlus,
-  X,
 } from 'lucide-react';
+import { IconCheck, IconChevron, IconChevronRight, IconLayers, IconPlus, IconX } from '@/components/icons';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import { useRecordRecent } from '@/lib/recents';
@@ -657,11 +652,11 @@ export function TicketDetailContent({
               <Link to={`/projects/${projectId}/tickets`} className="truncate hover:text-text">
                 {project.name}
               </Link>
-              <ChevronRight size={14} className="shrink-0 text-text-muted" />
+              <IconChevronRight size={14} className="shrink-0 text-text-muted" />
               <Link to={`/projects/${projectId}/tickets`} className="shrink-0 hover:text-text">
                 Tickets
               </Link>
-              <ChevronRight size={14} className="shrink-0 text-text-muted" />
+              <IconChevronRight size={14} className="shrink-0 text-text-muted" />
               <span className="shrink-0 font-mono text-text">{item.identifier}</span>
             </div>
           )}
@@ -704,7 +699,7 @@ export function TicketDetailContent({
             </Dropdown>
             {onClose && (
               <IconButton label="Close" onClick={onClose}>
-                <X size={16} />
+                <IconX size={16} />
               </IconButton>
             )}
           </div>
@@ -739,7 +734,7 @@ export function TicketDetailContent({
         {/* Action row */}
         <div className="mt-4 flex flex-wrap items-center gap-2 px-6 md:px-8">
           <Button variant="secondary" size="sm" onClick={() => setCreateSubOpen(true)}>
-            <Plus size={14} /> Add subtask
+            <IconPlus size={14} /> Add subtask
           </Button>
           <Button variant="secondary" size="sm" disabled title="Coming soon">
             <GitMerge size={14} /> Add relation
@@ -790,7 +785,7 @@ export function TicketDetailContent({
                   {link.label}
                 </a>
                 <IconButton label={`Remove link ${link.label}`} onClick={() => handleRemoveLink(link.id)}>
-                  <X size={13} />
+                  <IconX size={13} />
                 </IconButton>
               </div>
             ))}
@@ -970,7 +965,7 @@ export function TicketDetailContent({
               <button type="button" onClick={toggle} className={TRIGGER_CLASS}>
                 {currentState && <StateIcon state={currentState} />}
                 <span className="truncate">{currentState?.name ?? 'No state'}</span>
-                <ChevronDown size={13} className="ml-auto shrink-0 text-text-muted" />
+                <IconChevron size={13} className="ml-auto shrink-0 text-text-muted" />
               </button>
             )}
           >
@@ -988,7 +983,7 @@ export function TicketDetailContent({
                   >
                     <StateIcon state={s} />
                     <span className="truncate">{s.name}</span>
-                    {s.id === item.stateId && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                    {s.id === item.stateId && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
                   </button>
                 ))}
               </div>
@@ -1025,7 +1020,7 @@ export function TicketDetailContent({
                     <UserPlus size={14} /> Add assignees
                   </span>
                 )}
-                <ChevronDown size={13} className="ml-auto shrink-0 text-text-muted" />
+                <IconChevron size={13} className="ml-auto shrink-0 text-text-muted" />
               </button>
             )}
           >
@@ -1040,7 +1035,7 @@ export function TicketDetailContent({
                     <button key={m.id} type="button" onClick={() => toggleAssignee(m.id)} className={OPTION_CLASS}>
                       <Avatar name={m.displayName} color={m.avatarColor} size={20} />
                       <span className="truncate">{m.displayName}</span>
-                      {checked && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                      {checked && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
                     </button>
                   );
                 })}
@@ -1061,7 +1056,7 @@ export function TicketDetailContent({
                           className={clsx('ml-auto', assignment.status === 'running' && 'animate-pulse')}
                         />
                       )}
-                      {checked && <Check size={14} className="shrink-0 text-accent" />}
+                      {checked && <IconCheck size={14} className="shrink-0 text-accent" />}
                     </button>
                   );
                 })}
@@ -1076,7 +1071,7 @@ export function TicketDetailContent({
                   }
                   className={clsx(OPTION_CLASS, 'text-text-muted')}
                 >
-                  <Plus size={14} className="shrink-0" />
+                  <IconPlus size={14} className="shrink-0" />
                   Create new agent
                 </button>
               </div>
@@ -1090,7 +1085,7 @@ export function TicketDetailContent({
               <button type="button" onClick={toggle} className={TRIGGER_CLASS}>
                 <PriorityIcon priority={item.priority} />
                 <span className="truncate">{PRIORITY_LABEL[item.priority]}</span>
-                <ChevronDown size={13} className="ml-auto shrink-0 text-text-muted" />
+                <IconChevron size={13} className="ml-auto shrink-0 text-text-muted" />
               </button>
             )}
           >
@@ -1108,7 +1103,7 @@ export function TicketDetailContent({
                   >
                     <PriorityIcon priority={p} />
                     <span className="truncate">{PRIORITY_LABEL[p]}</span>
-                    {p === item.priority && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                    {p === item.priority && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
                   </button>
                 ))}
               </div>
@@ -1123,7 +1118,7 @@ export function TicketDetailContent({
                 <button type="button" onClick={toggle} className={TRIGGER_CLASS}>
                   <Ruler size={14} className="shrink-0 text-text-muted" />
                   <span className="truncate">{item.estimateValue ?? 'No estimate'}</span>
-                  <ChevronDown size={13} className="ml-auto shrink-0 text-text-muted" />
+                  <IconChevron size={13} className="ml-auto shrink-0 text-text-muted" />
                 </button>
               )}
             >
@@ -1138,7 +1133,7 @@ export function TicketDetailContent({
                     className={OPTION_CLASS}
                   >
                     <span className="truncate text-text-secondary">No estimate</span>
-                    {!item.estimateValue && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                    {!item.estimateValue && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
                   </button>
                   {estimateSystem.values.map((v) => (
                     <button
@@ -1151,7 +1146,7 @@ export function TicketDetailContent({
                       className={OPTION_CLASS}
                     >
                       <span className="truncate">{v}</span>
-                      {item.estimateValue === v && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                      {item.estimateValue === v && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
                     </button>
                   ))}
                 </div>
@@ -1185,9 +1180,9 @@ export function TicketDetailContent({
           <Dropdown
             trigger={(toggle) => (
               <button type="button" onClick={toggle} className={TRIGGER_CLASS}>
-                <Layers size={14} className="shrink-0 text-text-muted" />
+                <IconLayers size={14} className="shrink-0 text-text-muted" />
                 <span className="truncate">{currentWorkstream?.name ?? 'No workstream'}</span>
-                <ChevronDown size={13} className="ml-auto shrink-0 text-text-muted" />
+                <IconChevron size={13} className="ml-auto shrink-0 text-text-muted" />
               </button>
             )}
           >
@@ -1202,7 +1197,7 @@ export function TicketDetailContent({
                   className={OPTION_CLASS}
                 >
                   <span className="truncate text-text-secondary">No workstream</span>
-                  {!item.workstreamId && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                  {!item.workstreamId && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
                 </button>
                 {(workstreams ?? []).map((m) => (
                   <button
@@ -1215,7 +1210,7 @@ export function TicketDetailContent({
                     className={OPTION_CLASS}
                   >
                     <span className="truncate">{m.name}</span>
-                    {item.workstreamId === m.id && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                    {item.workstreamId === m.id && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
                   </button>
                 ))}
               </div>
@@ -1229,7 +1224,7 @@ export function TicketDetailContent({
               <button type="button" onClick={toggle} className={TRIGGER_CLASS}>
                 <Repeat size={14} className="shrink-0 text-text-muted" />
                 <span className="truncate">{currentSprint?.name ?? 'No sprint'}</span>
-                <ChevronDown size={13} className="ml-auto shrink-0 text-text-muted" />
+                <IconChevron size={13} className="ml-auto shrink-0 text-text-muted" />
               </button>
             )}
           >
@@ -1244,7 +1239,7 @@ export function TicketDetailContent({
                   className={OPTION_CLASS}
                 >
                   <span className="truncate text-text-secondary">No sprint</span>
-                  {!item.sprintId && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                  {!item.sprintId && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
                 </button>
                 {(sprints ?? []).map((c) => (
                   <button
@@ -1257,7 +1252,7 @@ export function TicketDetailContent({
                     className={OPTION_CLASS}
                   >
                     <span className="truncate">{c.name}</span>
-                    {item.sprintId === c.id && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                    {item.sprintId === c.id && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
                   </button>
                 ))}
               </div>
@@ -1276,7 +1271,7 @@ export function TicketDetailContent({
                 <span className="truncate">{parentItem.title}</span>
               </Link>
               <IconButton label="Clear parent" onClick={() => patchItem({ parentId: null })} className="ml-auto">
-                <X size={13} />
+                <IconX size={13} />
               </IconButton>
             </div>
           ) : (
@@ -1308,7 +1303,7 @@ export function TicketDetailContent({
                     <Tag size={14} /> Add labels
                   </span>
                 )}
-                <ChevronDown size={13} className="ml-auto shrink-0 text-text-muted" />
+                <IconChevron size={13} className="ml-auto shrink-0 text-text-muted" />
               </button>
             )}
           >
@@ -1323,7 +1318,7 @@ export function TicketDetailContent({
                     <button key={l.id} type="button" onClick={() => toggleLabel(l.id)} className={OPTION_CLASS}>
                       <Dot color={l.color} />
                       <span className="truncate">{l.name}</span>
-                      {checked && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                      {checked && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
                     </button>
                   );
                 })}
