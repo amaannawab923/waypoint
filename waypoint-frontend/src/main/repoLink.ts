@@ -36,9 +36,28 @@ export interface RepoDescribeResult {
 // HEAD are both real states a freshly-init'd or tag-cloned checkout can be
 // in, and none of them should block showing a recognizable confirmation —
 // showing SOMETHING recognizable is the entire point of describing a repo.
+//
+// - maxBuffer: Node's 1MB default overflows on `ls-files` in a large
+//   monorepo, which would silently drop the tracked-file chip on exactly the
+//   repos where it's most informative. 16MB comfortably covers a file list
+//   even in the thousands.
+// - core.fsmonitor=false / GIT_CONFIG_NOSYSTEM: repoPath is always a
+//   user-chosen folder (never untrusted input over the wire), so this is
+//   defense in depth rather than a response to a live risk — but git reading
+//   a checkout's own config can still run an fsmonitor hook or a system-wide
+//   config the user never chose, and both are free to close off.
 async function tryGit(cwd: string, args: string[]): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync('git', args, { cwd, timeout: 2000 });
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-c', 'core.fsmonitor=false', ...args],
+      {
+        cwd,
+        timeout: 2000,
+        maxBuffer: 16 * 1024 * 1024,
+        env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1' },
+      },
+    );
     return stdout.trim() || null;
   } catch {
     return null;
@@ -68,7 +87,10 @@ export function registerRepoLinkIpc(
 ): void {
   ipcMain.handle(
     'repo:choose-folder',
-    async (_event, opts: ChooseFolderOptions = {}): Promise<ChooseFolderResult> => {
+    async (
+      _event,
+      opts: ChooseFolderOptions = {},
+    ): Promise<ChooseFolderResult> => {
       const win = getWindow();
       const dialogOpts = {
         properties: ['openDirectory' as const],
@@ -92,7 +114,8 @@ export function registerRepoLinkIpc(
         // existsSync, not a directory check: a worktree's .git is a pointer
         // FILE, and the backend's own rule accepts both shapes.
         looksLikeGitRepo:
-          isUsableRepoDirectory(picked) && fs.existsSync(path.join(picked, '.git')),
+          isUsableRepoDirectory(picked) &&
+          fs.existsSync(path.join(picked, '.git')),
       };
     },
   );
