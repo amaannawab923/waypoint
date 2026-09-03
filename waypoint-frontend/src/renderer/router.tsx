@@ -12,8 +12,6 @@ import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom';
 import { AppShell } from '@/layouts/AppShell';
 import { ProjectLayout } from '@/layouts/ProjectLayout';
 import { isOnboarded } from '@/lib/onboarding';
-import { AGENT_SESSIONS_ENABLED } from '@/lib/featureFlags';
-import SessionsScreen from '@/pages/sessions/SessionsScreen';
 
 import Login from '@/pages/auth/Login';
 import Signup from '@/pages/auth/Signup';
@@ -67,14 +65,6 @@ import ProfileSettingsNotifications from '@/pages/profile-settings/Notifications
 import ProfileSettingsSecurity from '@/pages/profile-settings/Security';
 import ProfileSettingsTokens from '@/pages/profile-settings/Tokens';
 import ProfileSettingsCopilot from '@/pages/profile-settings/Copilot';
-
-import AdminLayout from '@/pages/admin/AdminLayout';
-import AdminGeneral from '@/pages/admin/General';
-import AdminEmail from '@/pages/admin/Email';
-import AdminAuth from '@/pages/admin/Auth';
-import AdminWorkspaces from '@/pages/admin/Workspaces';
-import AdminAI from '@/pages/admin/AI';
-import AdminImages from '@/pages/admin/Images';
 
 /**
  * Guards every route nested under AppShell. There's no real backend/session
@@ -181,31 +171,9 @@ export const router = createBrowserRouter([
             ],
           },
 
-          {
-            path: '/admin',
-            element: <AdminLayout />,
-            children: [
-              { index: true, element: <Navigate to="general" replace /> },
-              { path: 'general', element: <AdminGeneral /> },
-              { path: 'email', element: <AdminEmail /> },
-              { path: 'authentication', element: <AdminAuth /> },
-              { path: 'workspaces', element: <AdminWorkspaces /> },
-              { path: 'ai', element: <AdminAI /> },
-              { path: 'images', element: <AdminImages /> },
-            ],
-          },
-
           { path: '*', element: <Navigate to="/" replace /> },
         ],
       },
-
-      // Sibling of the AppShell-wrapped tree, not nested inside it — Sessions
-      // is a genuine full-viewport takeover with no sidebar/topbar, not a
-      // panel within the normal app chrome. Flag-gated: mock frontend only,
-      // no real backend runtime behind it yet (see lib/featureFlags.ts).
-      ...(AGENT_SESSIONS_ENABLED
-        ? [{ path: '/sessions', element: <SessionsScreen /> }]
-        : []),
     ],
   },
 ]);

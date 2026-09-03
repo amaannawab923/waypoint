@@ -154,10 +154,6 @@ const configuration: webpack.Configuration = {
       // 14000, not Express's conventional 4000 — matches waypoint-backend's
       // moved default (see its docker-compose.yml/.env.example).
       WAYPOINT_API_BASE_URL: 'http://localhost:14000',
-      // Feature flag for the in-progress agent-sessions UI (mock frontend,
-      // no real backend runtime yet) — see lib/featureFlags.ts. Off by
-      // default; run with WAYPOINT_FEATURE_AGENT_SESSIONS=true to see it.
-      WAYPOINT_FEATURE_AGENT_SESSIONS: 'false',
       // Feature flag for the in-progress Copilot chat panel — see
       // lib/featureFlags.ts. Off by default; run with
       // WAYPOINT_FEATURE_COPILOT=true to see it.

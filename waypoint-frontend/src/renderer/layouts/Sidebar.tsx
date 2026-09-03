@@ -19,14 +19,12 @@ import {
   Archive,
   BarChart2,
   Settings,
-  Bot,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useAsync } from '@/lib/useAsync';
 import { getWorkspace, listProjects } from '@/mock/api';
 import type { Project } from '@/types/entities';
 import { CreateProjectModal } from '@/components/domain/CreateProjectModal';
-import { AGENT_SESSIONS_ENABLED } from '@/lib/featureFlags';
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   clsx(
@@ -106,12 +104,6 @@ export function Sidebar() {
           <StickyNote size={15} />
           Stickies
         </NavLink>
-        {AGENT_SESSIONS_ENABLED && (
-          <NavLink to="/sessions" className={navLinkClass}>
-            <Bot size={15} />
-            Sessions
-          </NavLink>
-        )}
       </nav>
 
       <div className="mt-5 flex items-center justify-between px-4">
