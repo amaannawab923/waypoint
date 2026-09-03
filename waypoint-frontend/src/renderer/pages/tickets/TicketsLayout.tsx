@@ -1,19 +1,9 @@
 import { useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import {
-  List,
-  Kanban,
-  Calendar,
-  Table,
-  GanttChart,
-  Plus,
-  type LucideIcon,
-} from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useProject } from '@/layouts/ProjectLayout';
-import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
-import { Tooltip } from '@/components/ui/Tooltip';
 import { CreateTicketModal } from '@/components/domain/CreateTicketModal';
 import { TicketDrawer } from '@/components/domain/TicketDrawer';
 import { useTicketsView, type ViewKind } from '@/pages/tickets/useTicketsView';
@@ -26,12 +16,12 @@ import CalendarView from '@/pages/tickets/CalendarView';
 import SpreadsheetView from '@/pages/tickets/SpreadsheetView';
 import GanttView from '@/pages/tickets/GanttView';
 
-const VIEW_TABS: { key: ViewKind; label: string; Icon: LucideIcon }[] = [
-  { key: 'list', label: 'List', Icon: List },
-  { key: 'board', label: 'Board', Icon: Kanban },
-  { key: 'calendar', label: 'Calendar', Icon: Calendar },
-  { key: 'spreadsheet', label: 'Spreadsheet', Icon: Table },
-  { key: 'gantt', label: 'Gantt', Icon: GanttChart },
+const VIEW_TABS: { key: ViewKind; label: string }[] = [
+  { key: 'list', label: 'List' },
+  { key: 'board', label: 'Board' },
+  { key: 'calendar', label: 'Calendar' },
+  { key: 'spreadsheet', label: 'Spreadsheet' },
+  { key: 'gantt', label: 'Gantt' },
 ];
 
 export default function TicketsLayout() {
@@ -103,40 +93,34 @@ export default function TicketsLayout() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-3">
-        <div className="flex items-center gap-2">
-          <span className="font-display text-sm text-text-secondary">
-            {project.name}
-          </span>
-          <span className="text-sm text-text-muted">/</span>
-          <span className="font-display text-sm font-medium text-text">
-            Tickets
-          </span>
-          <Badge tone="neutral">{view.items.length}</Badge>
-        </div>
+      {/* docs/design/waypoint-revamp-mockup.html:798-803's `.proj-tabs` — plain
+          text tabs with an active underline, not the icon-only segmented
+          control this used to be (the mockup has no icon for Board/
+          Calendar/Spreadsheet/Gantt, and List's own icon duplicates the tab
+          label right next to it). Project identity now lives in
+          ProjectLayout's header above this, so this strip carries only the
+          view tabs themselves. */}
+      <div className="flex items-center gap-1 border-b border-border px-6 pt-2">
+        {VIEW_TABS.map(({ key, label }) => (
+          <button
+            key={key}
+            type="button"
+            aria-pressed={currentView === key}
+            onClick={() => setView(key)}
+            className={clsx(
+              'mb-[-1px] cursor-pointer border-b-2 px-3 py-2 text-[13px] transition-colors',
+              currentView === key
+                ? 'border-accent font-medium text-text'
+                : 'border-transparent text-text-secondary hover:text-text',
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
+      <div className="flex flex-wrap items-center justify-end gap-3 border-b border-border px-6 py-3">
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-0.5 rounded-[var(--radius-sm)] border border-border-strong p-0.5">
-            {VIEW_TABS.map(({ key, label, Icon }) => (
-              <Tooltip key={key} label={label}>
-                <button
-                  type="button"
-                  aria-label={label}
-                  aria-pressed={currentView === key}
-                  onClick={() => setView(key)}
-                  className={clsx(
-                    'flex size-7 cursor-pointer items-center justify-center rounded-[var(--radius-sm)] transition-colors',
-                    currentView === key
-                      ? 'bg-accent text-on-accent'
-                      : 'text-text-secondary hover:bg-surface-2 hover:text-text',
-                  )}
-                >
-                  <Icon size={15} />
-                </button>
-              </Tooltip>
-            ))}
-          </div>
-
           <TicketListToolbar view={view} groupByOptions={groupByOptions} />
 
           <Button
