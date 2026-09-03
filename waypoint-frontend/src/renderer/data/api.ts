@@ -940,6 +940,21 @@ export async function markCopilotProposalsNotified(
   );
 }
 
+// W4.5 (architecture §4.2/§4.4, waypoint-product-strategy.md decision 10) —
+// the Analytics tile's data source, backed by the workspace-scoped review
+// queue's aggregate surface (bare /proposals/..., NOT /copilot/proposals/...
+// above — see reviewQueue.routes.ts). averagePerActiveDay is null, not 0,
+// when there is no data yet — the honest "not enough data" state.
+export interface ApprovedPerActiveDayStats {
+  approvedCount: number;
+  activeDays: number;
+  averagePerActiveDay: number | null;
+}
+
+export async function getApprovedPerActiveDayStats(): Promise<ApprovedPerActiveDayStats> {
+  return http.get<ApprovedPerActiveDayStats>('/proposals/stats/approved-per-day');
+}
+
 // ---------------------------------------------------------------------------
 // Dev/demo utility
 // ---------------------------------------------------------------------------

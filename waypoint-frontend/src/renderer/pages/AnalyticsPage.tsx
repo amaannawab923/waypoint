@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FolderKanban, ListTodo, RefreshCw, Boxes, FileText, Users } from 'lucide-react';
+import { FolderKanban, ListTodo, RefreshCw, Boxes, FileText, Users, CheckCircle2 } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
 import {
   listProjects,
@@ -10,6 +10,7 @@ import {
   listDocs,
   listMembers,
   listStates,
+  getApprovedPerActiveDayStats,
 } from '@/data/api';
 import type { Project, Ticket, TicketState } from '@/types/entities';
 import { Skeleton, SkeletonTableRows } from '@/components/ui/Skeleton';
@@ -21,7 +22,16 @@ interface ProjectAnalytics {
 }
 
 async function loadAnalytics() {
-  const [projects, tickets, members] = await Promise.all([listProjects(), listAllTickets(), listMembers()]);
+  const [projects, tickets, members, approvedPerActiveDay] = await Promise.all([
+    listProjects(),
+    listAllTickets(),
+    listMembers(),
+    // W4.5 (architecture §4.2/§4.4, decision 10) — "proposals approved per
+    // active day" is the metric that decides whether the whole
+    // propose->approve thesis is real; independent of the per-project loop
+    // below, so it loads alongside the other workspace-wide totals.
+    getApprovedPerActiveDayStats(),
+  ]);
 
   const perProject = await Promise.all(
     projects.map(async (project) => {
@@ -70,6 +80,7 @@ async function loadAnalytics() {
       docs: totalDocs,
       members: members.length,
     },
+    approvedPerActiveDay,
     projectRows,
   };
 }
@@ -109,6 +120,12 @@ export default function AnalyticsPage() {
             ))}
           </Skeleton>
 
+          <Skeleton className="mb-6 rounded-[var(--radius)] border border-border bg-surface p-4">
+            <Skeleton.Block height="1rem" width="1rem" className="mb-3" />
+            <Skeleton.Block height="1.5rem" width="3rem" className="mb-1.5" />
+            <Skeleton.Block height="0.75rem" width="10rem" />
+          </Skeleton>
+
           <div className="overflow-hidden rounded-[var(--radius)] border border-border bg-surface">
             <div className="border-b border-border px-4 py-3">
               <h2 className="font-display text-sm font-medium text-text">Per-project breakdown</h2>
@@ -128,6 +145,34 @@ export default function AnalyticsPage() {
                 <p className="text-xs text-text-secondary">{m.label}</p>
               </div>
             ))}
+          </div>
+
+          {/* Decision 10 (waypoint-product-strategy.md §11): "proposals
+              approved per active day" is the metric that decides whether the
+              propose->approve thesis is real — everything else on this page
+              measures whether someone is using a tracker. All-time, not a
+              rolling window (see getApprovedPerActiveDayStats's own comment
+              for why), and honestly null — not 0 — until there is at least
+              one active day of data. */}
+          <div className="mb-6 rounded-[var(--radius)] border border-border bg-surface p-4">
+            <CheckCircle2 size={16} className="mb-3 text-text-muted" strokeWidth={2} />
+            {data.approvedPerActiveDay.averagePerActiveDay == null ? (
+              <>
+                <p className="font-display text-2xl font-medium text-text-muted">Not enough data yet</p>
+                <p className="text-xs text-text-secondary">Proposals approved / active day</p>
+              </>
+            ) : (
+              <>
+                <p className="font-display text-2xl font-medium text-text">
+                  {data.approvedPerActiveDay.averagePerActiveDay.toFixed(1)}
+                </p>
+                <p className="text-xs text-text-secondary">
+                  Proposals approved / active day · {data.approvedPerActiveDay.approvedCount} approved over{' '}
+                  {data.approvedPerActiveDay.activeDays} active{' '}
+                  {data.approvedPerActiveDay.activeDays === 1 ? 'day' : 'days'}
+                </p>
+              </>
+            )}
           </div>
 
           <div className="overflow-hidden rounded-[var(--radius)] border border-border bg-surface">

@@ -53,6 +53,17 @@ reviewQueueRouter.post(
   }),
 );
 
+// W4.5 (architecture §4.2/§4.4, decision 10) — the Analytics tile's data
+// source. Deliberately its own lightweight endpoint, same pattern as
+// /proposals/counts above: the tile polls this alone rather than paging
+// through proposals to compute it client-side.
+reviewQueueRouter.get(
+  '/proposals/stats/approved-per-day',
+  asyncHandler(async (_req, res) => {
+    res.json(await proposalsService.getApprovedPerActiveDayStats());
+  }),
+);
+
 // Ticket-detail's inline "pending proposals" section.
 reviewQueueRouter.get(
   '/tickets/:id/proposals',

@@ -1,4 +1,4 @@
-import { eq, and, or, lt, gte, desc, count, inArray, asc, isNull, sql } from 'drizzle-orm';
+import { eq, and, or, lt, gte, desc, count, countDistinct, inArray, asc, isNull, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { proposals, copilotConversations, copilotMessages, tickets } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
@@ -237,9 +237,14 @@ export async function createProposal(input: CreateProposalInput): Promise<Propos
           sql`${proposals.payload}->>'assigneeId' = ${(payload as { assigneeId: string }).assigneeId}`,
         );
       }
+      // decidedBy='system' (not null): the enum's own comment lists
+      // 'superseded' under 'system' alongside expired/stale — nobody
+      // clicked anything, a newer proposal for the same target replaced
+      // this one automatically. decisionLatencyMs stays unset (NULL),
+      // matching "NULL for system resolutions".
       await tx
         .update(proposals)
-        .set({ status: 'superseded', resolvedAt: new Date() })
+        .set({ status: 'superseded', resolvedAt: new Date(), decidedBy: 'system' })
         .where(and(...conditions));
     }
 
@@ -302,12 +307,16 @@ export async function createProposal(input: CreateProposalInput): Promise<Propos
 //    the column is unambiguous while in the 'executing' state.
 export async function repairProposals(): Promise<void> {
   const now = new Date();
+  // Both resolutions here are system-driven — no person acted — so
+  // decidedBy='system' (never 'user'), and decisionLatencyMs is left unset
+  // (NULL), per the column's own "NULL for system resolutions" comment.
   await db
     .update(proposals)
     .set({
       status: 'expired',
       statusReason: 'This proposal expired before it was reviewed',
       resolvedAt: now,
+      decidedBy: 'system',
     })
     .where(and(eq(proposals.status, 'proposed'), lt(proposals.expiresAt, now)));
   await db
@@ -317,6 +326,7 @@ export async function repairProposals(): Promise<void> {
       statusReason:
         'Approval was interrupted — check the ticket before asking Copilot to propose this again.',
       resolvedAt: now,
+      decidedBy: 'system',
     })
     .where(
       and(
@@ -421,7 +431,17 @@ async function checkStaleness(row: ProposalRow): Promise<StaleResult | null> {
 
 async function finalize(
   id: string,
-  patch: { status: ProposalStatus; statusReason?: string | null; resultInfo?: unknown },
+  patch: {
+    status: ProposalStatus;
+    statusReason?: string | null;
+    resultInfo?: unknown;
+    // W4.5 (architecture §4.2, decision 10): decision provenance, stamped
+    // by every caller below — 'user' only for a genuine executed outcome,
+    // 'system' for expired/stale (decisionLatencyMs omitted so it stays
+    // NULL, per the column's own comment).
+    decidedBy?: ProposalDecidedBy;
+    decisionLatencyMs?: number;
+  },
 ): Promise<ProposalRow> {
   // Guarded on status='executing' (final review finding M2): only the
   // holder of a live claim may finalize. Without this, a slow execute that
@@ -514,11 +534,14 @@ export async function approveProposal(id: string): Promise<ProposalView> {
   }
 
   // TTL, checked on the claimed row so an expired proposal finalizes as
-  // 'expired' rather than executing a day-old intent.
+  // 'expired' rather than executing a day-old intent. Nobody decided this —
+  // the clock did — so decidedBy='system', not 'user', and no
+  // decisionLatencyMs (see the enum/column comments in db/schema/proposals.ts).
   if (claimed.expiresAt.getTime() < Date.now()) {
     const finalized = await finalize(id, {
       status: 'expired',
       statusReason: 'This proposal expired before it was approved',
+      decidedBy: 'system',
     });
     return toView(finalized, displayName);
   }
@@ -527,9 +550,24 @@ export async function approveProposal(id: string): Promise<ProposalView> {
   if (staleness) {
     // HTTP 200 with status 'stale' — the status field IS the result; the
     // card re-renders it as a blocked/stale banner, not an error toast.
-    const finalized = await finalize(id, { status: 'stale', statusReason: staleness.reason });
+    // Same reasoning as the TTL branch above: staleness is reality having
+    // changed, not a person's decision, so decidedBy='system'.
+    const finalized = await finalize(id, {
+      status: 'stale',
+      statusReason: staleness.reason,
+      decidedBy: 'system',
+    });
     return toView(finalized, displayName);
   }
+
+  // This IS a genuine user decision — the row survived the TTL and
+  // staleness checks above, so the click that got us here is what's about
+  // to execute. Captured now (right after the claim, before execution runs)
+  // so decisionLatencyMs measures time-to-decision, not time-to-decision-
+  // plus-execution (architecture §4.2: "wall-clock ms between the row
+  // becoming visible [createdAt — modelNotifiedAt is a different marker,
+  // stamped for the MODEL's benefit, not the reviewer's] and the decision").
+  const decisionLatencyMs = Date.now() - claimed.createdAt.getTime();
 
   let resultInfo: unknown;
   try {
@@ -544,7 +582,13 @@ export async function approveProposal(id: string): Promise<ProposalView> {
     throw error;
   }
 
-  const finalized = await finalize(id, { status: 'executed', statusReason: null, resultInfo });
+  const finalized = await finalize(id, {
+    status: 'executed',
+    statusReason: null,
+    resultInfo,
+    decidedBy: 'user',
+    decisionLatencyMs,
+  });
   return toView(finalized, displayName);
 }
 
@@ -553,9 +597,19 @@ export async function rejectProposal(id: string): Promise<ProposalView> {
   // 'stale' is rejectable too — dismissing a stale card finalizes it as
   // rejected. statusReason is deliberately not touched, so a stale card's
   // reason survives into the rejected row (and the model's outcome note).
+  // A person clicked Reject either way (a stale card's only affordance IS
+  // dismiss), so decidedBy='user' regardless of the prior status.
+  // decisionLatencyMs is computed in SQL against this row's OWN createdAt
+  // rather than a JS Date.now() - <pre-fetched row>.createdAt, so this stays
+  // one UPDATE with no read-before-write.
   const [updated] = await db
     .update(proposals)
-    .set({ status: 'rejected', resolvedAt: new Date() })
+    .set({
+      status: 'rejected',
+      resolvedAt: new Date(),
+      decidedBy: 'user',
+      decisionLatencyMs: sql`(extract(epoch from (now() - ${proposals.createdAt})) * 1000)::int`,
+    })
     .where(and(eq(proposals.id, id), inArray(proposals.status, ['proposed', 'stale'])))
     .returning();
   if (updated) return toView(updated, displayName);
@@ -569,9 +623,18 @@ export async function rejectAllPending(conversationId: string): Promise<{ reject
   // 'stale' included alongside 'proposed' (final review finding m5), matching
   // single-row rejectProposal: a stale card's only affordance is Dismiss, so
   // "reject all" leaving stale cards behind stranded them with no bulk way out.
+  // Same decision-provenance stamping as rejectProposal, and for the same
+  // reason: "Reject all" is still a person clicking one button, a genuine
+  // decision for every row it touches — decidedBy='user',
+  // decisionLatencyMs per-row from that row's own createdAt.
   const rows = await db
     .update(proposals)
-    .set({ status: 'rejected', resolvedAt: new Date() })
+    .set({
+      status: 'rejected',
+      resolvedAt: new Date(),
+      decidedBy: 'user',
+      decisionLatencyMs: sql`(extract(epoch from (now() - ${proposals.createdAt})) * 1000)::int`,
+    })
     .where(
       and(
         eq(proposals.conversationId, conversationId),
@@ -693,6 +756,45 @@ async function computeReviewQueueCounts(): Promise<ReviewQueueCounts> {
 
 export async function getProposalCounts(): Promise<ReviewQueueCounts> {
   return computeReviewQueueCounts();
+}
+
+// ---------------------------------------------------------------------------
+// W4.5 (architecture §4.2/§4.4, waypoint-product-strategy.md decision 10):
+// "Proposals approved per active day" is the metric that decides whether
+// the whole propose->approve thesis is real. All-time, not a rolling
+// window — neither decision 10's text nor the Analytics tile in the mockup
+// (which is explicitly captioned "Counts only... nothing here interpolates
+// history it does not have") names a window, and inventing one here would
+// be exactly the kind of unverified specificity decision 9's honesty rule
+// exists to catch. Filtered to decided_by='user' rather than just
+// status='executed': the metric is about a PERSON approving something
+// ("if a person approves several times a day, the product is real"), so a
+// future trust-grant auto-apply must not silently inflate it.
+// ---------------------------------------------------------------------------
+
+export interface ApprovedPerActiveDayStats {
+  approvedCount: number;
+  activeDays: number;
+  // null (not 0/NaN) when there is no data yet — the honest "not enough
+  // data" state, same principle as the review-health strip's own floor.
+  averagePerActiveDay: number | null;
+}
+
+export async function getApprovedPerActiveDayStats(): Promise<ApprovedPerActiveDayStats> {
+  const [row] = await db
+    .select({
+      approvedCount: count(),
+      activeDays: countDistinct(sql`date_trunc('day', ${proposals.resolvedAt})`),
+    })
+    .from(proposals)
+    .where(and(eq(proposals.status, 'executed'), eq(proposals.decidedBy, 'user')));
+  const approvedCount = row?.approvedCount ?? 0;
+  const activeDays = row?.activeDays ?? 0;
+  return {
+    approvedCount,
+    activeDays,
+    averagePerActiveDay: activeDays > 0 ? approvedCount / activeDays : null,
+  };
 }
 
 export async function listReviewQueue(params: ReviewQueueParams): Promise<ReviewQueueResult> {

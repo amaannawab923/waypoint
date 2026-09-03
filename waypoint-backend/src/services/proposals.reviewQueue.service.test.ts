@@ -56,6 +56,7 @@ const {
   maybeRepairProposals,
   listReviewQueue,
   getProposalCounts,
+  getApprovedPerActiveDayStats,
   bulkApproveProposals,
   bulkRejectProposals,
   listProposalsForTicket,
@@ -138,6 +139,13 @@ describe('repairProposals', () => {
     // conversationId condition, unlike the old per-call repair.
     const expireAnd = (and as unknown as Vfn).mock.calls.find((c) => c.length === 2);
     expect(expireAnd).toBeDefined();
+    // W4.5 (decision 10): these are system resolutions, not user decisions
+    // — decidedBy='system' on both, never 'user', and decisionLatencyMs
+    // left unset (NULL for system resolutions, per the column comment).
+    expect(expireSet.decidedBy).toBe('system');
+    expect(expireSet.decisionLatencyMs).toBeUndefined();
+    expect(reviveSet.decidedBy).toBe('system');
+    expect(reviveSet.decisionLatencyMs).toBeUndefined();
   });
 });
 
@@ -172,6 +180,36 @@ describe('getProposalCounts', () => {
     const counts = await getProposalCounts();
 
     expect(counts).toEqual({ proposed: 4, blocked: 0, recent: 9 });
+  });
+});
+
+// W4.5 (architecture §4.2/§4.4, waypoint-product-strategy.md decision 10) —
+// the Analytics tile's data source.
+describe('getApprovedPerActiveDayStats', () => {
+  it('divides approved count by distinct active days, scoped to executed + decided_by=user', async () => {
+    db.select.mockReturnValueOnce(chainable([{ approvedCount: 8, activeDays: 4 }]));
+
+    const stats = await getApprovedPerActiveDayStats();
+
+    expect(stats).toEqual({ approvedCount: 8, activeDays: 4, averagePerActiveDay: 2 });
+    expect(eq).toHaveBeenCalledWith(proposals.status, 'executed');
+    expect(eq).toHaveBeenCalledWith(proposals.decidedBy, 'user');
+  });
+
+  it('returns null (not NaN/0) for averagePerActiveDay when there is no data yet', async () => {
+    db.select.mockReturnValueOnce(chainable([{ approvedCount: 0, activeDays: 0 }]));
+
+    const stats = await getApprovedPerActiveDayStats();
+
+    expect(stats).toEqual({ approvedCount: 0, activeDays: 0, averagePerActiveDay: null });
+  });
+
+  it('handles a completely empty result row the same as zero counts', async () => {
+    db.select.mockReturnValueOnce(chainable([]));
+
+    const stats = await getApprovedPerActiveDayStats();
+
+    expect(stats).toEqual({ approvedCount: 0, activeDays: 0, averagePerActiveDay: null });
   });
 });
 
