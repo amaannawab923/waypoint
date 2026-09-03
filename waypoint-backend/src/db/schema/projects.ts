@@ -29,10 +29,6 @@ export const projects = pgTable('projects', {
   leadId: text('lead_id').references(() => members.id, { onDelete: 'set null' }),
   defaultAssigneeId: text('default_assignee_id').references(() => members.id, { onDelete: 'set null' }),
   timezone: text('timezone').notNull(),
-  // ProjectFeatures — small fixed shape, no need to query individual flags in
-  // SQL. Its keys are the primitive names, so they moved with the rename:
-  // sprints, workstreams, views, docs, requests.
-  features: jsonb('features').notNull(),
   // ProjectEstimateSystem | null
   estimate: jsonb('estimate'),
   // ProjectAutomations
@@ -40,6 +36,14 @@ export const projects = pgTable('projects', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   archivedAt: timestamp('archived_at', { withTimezone: true }),
   guestAccessEnabled: boolean('guest_access_enabled').notNull().default(false),
+  // A capability the project owner sets ("accept submissions from outside"),
+  // distinct from the removed per-primitive feature toggles
+  // (docs/design/waypoint-revamp-architecture.md §3.4). The sidebar shows
+  // Requests when this is true OR primitiveCounts.requests > 0 — a project
+  // can have real inbound requests even with the form never explicitly
+  // enabled, and a project with the form enabled but nothing submitted yet
+  // should still show the entry so the owner can find it.
+  acceptsRequests: boolean('accepts_requests').notNull().default(false),
   // Absolute path to the project's local git checkout, so Copilot can read
   // real code (Copilot V3). Null means "not linked" — the same
   // absent-is-unset convention leadId/defaultAssigneeId/estimate use.
