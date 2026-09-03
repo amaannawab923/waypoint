@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Modal } from '@/components/ui/Modal';
 import { Skeleton, SkeletonListRows } from '@/components/ui/Skeleton';
+import { NotWired } from '@/components/ui/NotWired';
 import { STATE_GROUP_ORDER } from '@/components/domain/StateIcon';
 import { PRIORITY_LABEL, PRIORITY_ORDER } from '@/components/domain/PriorityIcon';
 import type { IntakeRequest, IntakeStatus, Priority, WorkItem } from '@/types/entities';
@@ -240,6 +241,7 @@ export default function IntakePage() {
           </div>
           <Toggle checked={publicFormEnabled} onChange={setPublicFormEnabled} />
         </div>
+        {publicFormEnabled && <NotWired capability="requests.publicForm" />}
         {publicFormEnabled && (
           <div className="flex items-center gap-2">
             <input
