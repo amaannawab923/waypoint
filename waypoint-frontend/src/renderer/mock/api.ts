@@ -7,6 +7,7 @@
 
 import { http } from '@/mock/httpClient';
 import { CURRENT_USER_ID } from '@/mock/currentUser';
+import type { Probe } from '@/types/probe';
 import type {
   Workspace,
   Member,
@@ -196,32 +197,47 @@ export async function deleteAgent(id: string): Promise<void> {
   return http.del<void>(`/agents/${id}`);
 }
 
-export type LocalClaudeDetectionStatus = 'connected' | 'not-found';
-
-export interface LocalClaudeDetection {
-  status: LocalClaudeDetectionStatus;
-  version?: string;
-  account?: string;
-}
-
-// Stands in for exactly what a real backend needs to do for real: resolve
-// whether the Claude Code CLI is installed on this machine and currently
-// logged in. This is deliberately NOT an HTTP call — it's a local-machine
-// check that belongs in the Electron main process, not waypoint-server, so
-// it stays mocked here exactly as before until that wiring exists.
-export async function detectLocalClaudeCode(): Promise<LocalClaudeDetection> {
-  const me = await getCurrentUser().catch(() => undefined);
-  return new Promise((resolve) =>
-    setTimeout(
-      () =>
-        resolve({
-          status: 'connected',
-          version: '2.4.1',
-          account: me?.email ?? me?.displayName ?? 'you',
-        }),
-      500 + Math.random() * 400,
-    ),
-  );
+// Resolves whether the real Claude Code CLI is installed on this machine —
+// via the Electron main process's `copilot:detect` handler
+// (src/main/copilot/copilotDetect.ts), which actually runs `claude
+// --version` with the augmented PATH. This used to unconditionally resolve
+// `{status:'connected', version:'2.4.1'}` after a fake delay, regardless of
+// the real machine state — see
+// docs/design/waypoint-revamp-architecture.md §1.4 and work breakdown
+// W1.2. Deliberately NOT an HTTP call: this is a local-machine check that
+// belongs in the Electron main process, not waypoint-server.
+//
+// Returns a `Probe<T>` rather than a bare status so a "connected" claim can
+// only ever be constructed from what was actually read — see
+// types/probe.ts and components/ui/StatusBadge.tsx.
+export async function detectLocalClaudeCode(): Promise<
+  Probe<{ version: string; path: string }>
+> {
+  const via = 'claude --version';
+  try {
+    const result = await window.electron.copilot.detect();
+    const observedAt = new Date().toISOString();
+    if (result.ok) {
+      return {
+        state: 'present',
+        value: { version: result.version, path: result.path },
+        observedAt,
+        via,
+      };
+    }
+    if (result.reason === 'not-found') {
+      return { state: 'absent', reason: result.message, observedAt, via };
+    }
+    return { state: 'error', reason: result.message, observedAt, via };
+  } catch (err) {
+    return {
+      state: 'error',
+      reason:
+        err instanceof Error ? err.message : "Couldn't check for Claude Code.",
+      observedAt: new Date().toISOString(),
+      via,
+    };
+  }
 }
 
 export async function listAgentAssignments(): Promise<AgentAssignment[]> {
