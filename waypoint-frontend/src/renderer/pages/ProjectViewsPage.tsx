@@ -28,7 +28,7 @@ import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Modal } from '@/components/ui/Modal';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
-import ListView from '@/pages/tickets/ListView';
+import TicketList from '@/pages/tickets/TicketList';
 import {
   EMPTY_FILTERS,
   useTicketsView,
@@ -55,6 +55,8 @@ function filtersFromSavedView(raw: TicketFilterQuery): TicketFilters {
     assigneeId: raw.assigneeIds ?? [],
     workstreamId: raw.workstreamIds ?? [],
     sprintId: raw.sprintIds ?? [],
+    creatorId: raw.creatorIds ?? [],
+    text: raw.text ?? '',
   };
 }
 
@@ -210,7 +212,7 @@ export default function ProjectViewsPage() {
     reload,
   } = useAsync(() => listViews(project.id), [project.id]);
   const { data: members } = useAsync(() => listMembers(), []);
-  const ticketsView = useTicketsView(project.id);
+  const ticketsView = useTicketsView({ projectId: project.id });
 
   const normalizedFilters = useMemo(
     () =>
@@ -306,7 +308,7 @@ export default function ProjectViewsPage() {
           </div>
         </div>
         <div className="thin-scroll min-h-0 flex-1 overflow-y-auto">
-          <ListView view={ticketsView} projectId={project.id} />
+          <TicketList view={ticketsView} projectId={project.id} />
         </div>
       </div>
     );
