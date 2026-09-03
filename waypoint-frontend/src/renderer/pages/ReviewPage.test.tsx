@@ -19,6 +19,10 @@ import {
 } from '@/data/api';
 import type { Agent, Project, ProposalView } from '@/types/entities';
 import { resetProposalStoreForTests } from '@/lib/proposalStore';
+import {
+  getActiveSelectableView,
+  __resetActiveSelectableViewForTests,
+} from '@/lib/useActiveSelectableView';
 import ReviewPage from './ReviewPage';
 
 // W4.3 — ReviewPage's own accept-criterion coverage: the health strip's
@@ -90,6 +94,7 @@ const NOT_ENOUGH_DATA = {
 beforeEach(() => {
   jest.clearAllMocks();
   resetProposalStoreForTests();
+  __resetActiveSelectableViewForTests();
   jest.mocked(listAgents).mockResolvedValue([agent()]);
   jest.mocked(listProjects).mockResolvedValue([project()]);
   jest.mocked(getReviewHealthStats).mockResolvedValue(NOT_ENOUGH_DATA);
@@ -337,6 +342,83 @@ describe('ReviewPage', () => {
       fireEvent.keyDown(document, { key: 'e' });
 
       expect(bulkApproveProposals).not.toHaveBeenCalled();
+    });
+  });
+
+  // W5.4: ReviewPage registers itself as the app-shell keyboard layer's
+  // "active selectable view" (useActiveSelectableView.ts) so ⌘A can reach
+  // it — additive to the e/r listener above, exercised through the
+  // registry directly rather than mounting the whole global hook (see
+  // useGlobalKeyboardShortcuts.test.tsx for that hook's own ⌘A dispatch
+  // coverage).
+  describe('active-view registration (W5.4)', () => {
+    beforeEach(() => {
+      jest.mocked(listReviewQueue).mockResolvedValue({
+        proposals: [proposal({ id: 'a' }), proposal({ id: 'b' })],
+        counts: { proposed: 2, blocked: 0, recent: 0 },
+        nextCursor: null,
+      });
+    });
+
+    it("registers a view whose selectAll selects every proposal in the 'proposed' segment", async () => {
+      render(<ReviewPage />);
+      await waitFor(() =>
+        expect(screen.getByLabelText('Select proposal a')).toBeInTheDocument(),
+      );
+
+      const view = getActiveSelectableView();
+      expect(view).not.toBeNull();
+
+      act(() => {
+        view?.selectAll();
+      });
+
+      expect(screen.getByText('2 selected')).toBeInTheDocument();
+    });
+
+    it('selectAll no-ops on segments with no checkboxes (e.g. Blocked)', async () => {
+      render(<ReviewPage />);
+      await waitFor(() => expect(listReviewQueue).toHaveBeenCalledTimes(1));
+
+      fireEvent.click(screen.getByRole('tab', { name: /Blocked/ }));
+      await waitFor(() =>
+        expect(listReviewQueue).toHaveBeenLastCalledWith(
+          expect.objectContaining({ status: 'blocked' }),
+        ),
+      );
+
+      act(() => {
+        getActiveSelectableView()?.selectAll();
+      });
+
+      expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+    });
+
+    it("the registered view's clear() empties the selection", async () => {
+      render(<ReviewPage />);
+      await waitFor(() =>
+        expect(screen.getByLabelText('Select proposal a')).toBeInTheDocument(),
+      );
+      fireEvent.click(screen.getByLabelText('Select proposal a'));
+      expect(screen.getByText('1 selected')).toBeInTheDocument();
+
+      act(() => {
+        getActiveSelectableView()?.clear();
+      });
+
+      expect(screen.queryByText('1 selected')).not.toBeInTheDocument();
+    });
+
+    it('unregisters on unmount, leaving no active view behind', async () => {
+      const { unmount } = render(<ReviewPage />);
+      await waitFor(() =>
+        expect(screen.getByLabelText('Select proposal a')).toBeInTheDocument(),
+      );
+      expect(getActiveSelectableView()).not.toBeNull();
+
+      unmount();
+
+      expect(getActiveSelectableView()).toBeNull();
     });
   });
 });

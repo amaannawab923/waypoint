@@ -16,6 +16,7 @@ import {
   Sun,
   Moon,
   Sparkles,
+  Keyboard,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useAsync } from '@/lib/useAsync';
@@ -303,10 +304,17 @@ export function Topbar({
   copilotEnabled,
   copilotOpen,
   onToggleCopilot,
+  onOpenShortcuts,
 }: {
   copilotEnabled: boolean;
   copilotOpen: boolean;
   onToggleCopilot: () => void;
+  /** W5.4: opens the same keyboard-shortcuts modal `?` does — the mockup's
+   * topbar `shortcutsBtn` (docs/design/waypoint-revamp-mockup.html:666) had
+   * no equivalent in this app at all (unlike several other pre-revamp dead
+   * controls W1.8 found already present-but-unwired), so this is a new
+   * button rather than a rewire of an existing one. */
+  onOpenShortcuts: () => void;
 }) {
   const navigate = useNavigate();
   const { data: user } = useAsync(() => getCurrentUser(), []);
@@ -370,6 +378,17 @@ export function Topbar({
             className="flex size-8 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary hover:bg-surface-2 hover:text-text"
           >
             {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+        </Tooltip>
+
+        <Tooltip label="Keyboard shortcuts (?)">
+          <button
+            type="button"
+            onClick={onOpenShortcuts}
+            aria-label="Keyboard shortcuts"
+            className="flex size-8 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary hover:bg-surface-2 hover:text-text"
+          >
+            <Keyboard size={16} />
           </button>
         </Tooltip>
 

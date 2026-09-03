@@ -33,6 +33,7 @@ import { Popover } from '@/pages/tickets/Popover';
 import type { TicketsView } from '@/pages/tickets/useTicketsView';
 import type { Ticket } from '@/types/entities';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
+import { registerActiveSelectableView } from '@/lib/useActiveSelectableView';
 
 /**
  * The one TicketList component behind all three W5.2 scopes (architecture
@@ -250,6 +251,26 @@ export default function TicketList({
     return () => document.removeEventListener('keydown', onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flatVisible, focusId]);
+
+  // W5.4: registers this list as the app-shell keyboard layer's "active
+  // selectable view" so ⌘A (useGlobalKeyboardShortcuts.ts) can reach it
+  // without this component knowing anything about the global keyboard
+  // layer itself — purely additive, doesn't touch the j/k/x effect above.
+  // "Select all" means all VISIBLE rows (mirrors the mockup's own "Select
+  // all visible" label), i.e. `flatVisible` — the same on-screen sequence
+  // j/k already move focus through, respecting collapsed groups.
+  const selectAllVisible = useCallback(() => {
+    setSelected(new Set(flatVisible.map((item) => item.id)));
+  }, [flatVisible]);
+  const clearSelection = useCallback(() => {
+    setSelected(new Set());
+  }, []);
+  useEffect(() => {
+    return registerActiveSelectableView({
+      selectAll: selectAllVisible,
+      clear: clearSelection,
+    });
+  }, [selectAllVisible, clearSelection]);
 
   const applyBulkPatch = useCallback(
     async (patch: Partial<Ticket>) => {

@@ -37,6 +37,7 @@ import { Popover } from '@/pages/tickets/Popover';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
+import { registerActiveSelectableView } from '@/lib/useActiveSelectableView';
 import type { ProposalKind } from '@/types/entities';
 
 // W4.3 (architecture §4.4) — three segments, tab-style, each a different
@@ -358,6 +359,26 @@ export default function ReviewPage() {
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [selected, bulkApprove, bulkReject]);
+
+  // W5.4: registers this screen as the app-shell keyboard layer's "active
+  // selectable view" so ⌘A (useGlobalKeyboardShortcuts.ts) can reach it —
+  // purely additive, doesn't touch the e/r effect above. Only the
+  // 'proposed' segment renders checkboxes at all (see `showCheckboxes`
+  // below), so selectAll no-ops on the other two segments rather than
+  // selecting proposals with no checkbox on screen to reflect it.
+  const selectAllVisible = useCallback(() => {
+    if (segment !== 'proposed') return;
+    setSelected(new Set(queue.proposals.map((p) => p.id)));
+  }, [segment, queue.proposals]);
+  const clearSelection = useCallback(() => {
+    setSelected(new Set());
+  }, []);
+  useEffect(() => {
+    return registerActiveSelectableView({
+      selectAll: selectAllVisible,
+      clear: clearSelection,
+    });
+  }, [selectAllVisible, clearSelection]);
 
   const agentOptions = useMemo(
     () => (agents ?? []).map((a) => ({ id: a.id, name: a.name })),
