@@ -25,6 +25,7 @@ import Notifications from '@/pages/Notifications';
 import ProjectsList from '@/pages/ProjectsList';
 import ArchivedProjects from '@/pages/ArchivedProjects';
 import AnalyticsPage from '@/pages/AnalyticsPage';
+import ReviewPage from '@/pages/ReviewPage';
 import WorkspaceViewsPage from '@/pages/WorkspaceViewsPage';
 
 import TicketsLayout from '@/pages/tickets/TicketsLayout';
@@ -97,6 +98,7 @@ export const router = createBrowserRouter([
           { path: '/projects', element: <ProjectsList /> },
           { path: '/projects/archived', element: <ArchivedProjects /> },
           { path: '/analytics', element: <AnalyticsPage /> },
+          { path: '/review', element: <ReviewPage /> },
           { path: '/views', element: <WorkspaceViewsPage /> },
 
           {
