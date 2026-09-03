@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { clsx } from 'clsx';
 import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import { useProject } from '@/layouts/ProjectLayout';
-import { useTicketsView } from './useTicketsView';
+import type { TicketsView } from './useTicketsView';
 import { Button, IconButton } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
@@ -43,9 +43,15 @@ function isSameDay(a: Date, b: Date): boolean {
  * Tickets render as small chips on their due-date cell; days without a
  * due-dated item stay empty.
  */
-export default function CalendarView({ onOpenItem }: { onOpenItem: (identifier: string) => void }) {
+export default function CalendarView({
+  view,
+  onOpenItem,
+}: {
+  view: TicketsView;
+  onOpenItem: (identifier: string) => void;
+}) {
   const { project } = useProject();
-  const { items, loading, reload } = useTicketsView(project.id);
+  const { items, loading, reload } = view;
   const [cursor, setCursor] = useState<Date>(() => startOfMonth(new Date()));
   const [createOpen, setCreateOpen] = useState(false);
   const today = new Date();

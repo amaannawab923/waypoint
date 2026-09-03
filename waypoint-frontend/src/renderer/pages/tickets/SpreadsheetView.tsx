@@ -4,7 +4,7 @@ import { ChevronUp, ChevronDown, ChevronsUpDown, Columns3 } from 'lucide-react';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import { listMembers } from '@/data/api';
-import { useTicketsView } from './useTicketsView';
+import type { TicketsView } from './useTicketsView';
 import { Popover } from '@/pages/tickets/Popover';
 import { Button } from '@/components/ui/Button';
 import { Badge, Dot } from '@/components/ui/Badge';
@@ -60,9 +60,15 @@ function toggleInArray<T>(arr: T[], value: T): T[] {
  * shown/hidden via the "Columns" dropdown; the selection lives in local
  * component state only (does not persist across reloads).
  */
-export default function SpreadsheetView({ onOpenItem }: { onOpenItem: (identifier: string) => void }) {
+export default function SpreadsheetView({
+  view,
+  onOpenItem,
+}: {
+  view: TicketsView;
+  onOpenItem: (identifier: string) => void;
+}) {
   const { project } = useProject();
-  const { items, loading, stateFor, labels, workstreams, sprints } = useTicketsView(project.id);
+  const { items, loading, stateFor, labels, workstreams, sprints } = view;
   const { data: members } = useAsync(() => listMembers(), []);
   const [sortKey, setSortKey] = useState<SortKey>('createdAt');
   const [sortDir, setSortDir] = useState<SortDir>('desc');

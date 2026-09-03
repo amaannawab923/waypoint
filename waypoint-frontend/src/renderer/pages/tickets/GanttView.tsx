@@ -1,7 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { clsx } from 'clsx';
-import { useProject } from '@/layouts/ProjectLayout';
-import { useTicketsView } from './useTicketsView';
+import type { TicketsView } from './useTicketsView';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
@@ -45,9 +44,14 @@ const MONTH_FORMAT = new Intl.DateTimeFormat('en-US', { month: 'short', year: 'n
  * horizontal timeline with a colored bar spanning each item's start → due
  * date. Items with neither date have no bar and only appear in the list.
  */
-export default function GanttView({ onOpenItem }: { onOpenItem: (identifier: string) => void }) {
-  const { project } = useProject();
-  const { items, loading, stateFor } = useTicketsView(project.id);
+export default function GanttView({
+  view,
+  onOpenItem,
+}: {
+  view: TicketsView;
+  onOpenItem: (identifier: string) => void;
+}) {
+  const { items, loading, stateFor } = view;
   const [zoom, setZoom] = useState<Zoom>('month');
   const scrollRef = useRef<HTMLDivElement>(null);
   const today = startOfDay(new Date());
