@@ -3,6 +3,7 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 import type { Cycle, WorkItem, WorkItemState } from '@/types/entities';
 import { STATE_GROUP_LABEL } from '@/components/domain/StateIcon';
 import { Dot } from '@/components/ui/Badge';
+import { NotWired } from '@/components/ui/NotWired';
 import { BREAKDOWN_ORDER, buildBurndownData, computeBreakdown, computeProgress, stateGroupColor } from './cycle-utils';
 
 /**
@@ -99,9 +100,24 @@ export function CycleStatsPanel({
                     labelStyle={{ color: 'var(--text)' }}
                   />
                   <Line type="monotone" dataKey="ideal" name="Ideal" stroke="var(--text-muted)" strokeDasharray="4 3" strokeWidth={2} dot={false} isAnimationActive={false} />
-                  <Line type="monotone" dataKey="current" name="Current" stroke="var(--accent)" strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+                  {/* No `connectNulls`: only the sprint-start and today counts are real, and
+                      joining them into a line would read as daily tracking that was never
+                      recorded. `dot` marks just those two points; `strokeWidth={0}` keeps
+                      recharts from drawing any segment between them. */}
+                  <Line
+                    type="monotone"
+                    dataKey="current"
+                    name="Current"
+                    stroke="var(--accent)"
+                    strokeWidth={0}
+                    dot={{ r: 4, fill: 'var(--accent)', strokeWidth: 0 }}
+                    isAnimationActive={false}
+                  />
                 </LineChart>
               </ResponsiveContainer>
+            </div>
+            <div className="mt-3">
+              <NotWired capability="sprints.burndown" />
             </div>
           </div>
         </>
