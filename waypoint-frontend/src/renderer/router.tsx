@@ -26,7 +26,7 @@ import ProjectsList from '@/pages/ProjectsList';
 import ArchivedProjects from '@/pages/ArchivedProjects';
 import AnalyticsPage from '@/pages/AnalyticsPage';
 import ReviewPage from '@/pages/ReviewPage';
-import WorkspaceViewsPage from '@/pages/WorkspaceViewsPage';
+import AllTicketsPage from '@/pages/AllTicketsPage';
 
 import TicketsLayout from '@/pages/tickets/TicketsLayout';
 import TicketDetailPage from '@/pages/tickets/TicketDetailPage';
@@ -98,7 +98,7 @@ export const router = createBrowserRouter([
           { path: '/projects/archived', element: <ArchivedProjects /> },
           { path: '/analytics', element: <AnalyticsPage /> },
           { path: '/review', element: <ReviewPage /> },
-          { path: '/views', element: <WorkspaceViewsPage /> },
+          { path: '/views', element: <AllTicketsPage /> },
 
           {
             path: '/projects/:projectId',
