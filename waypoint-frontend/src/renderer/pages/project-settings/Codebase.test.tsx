@@ -211,16 +211,14 @@ describe('project settings → Codebase', () => {
   // The suggestions strip is the whole point of G2: a second repo on a
   // machine that already has one should never need a file dialog.
   it('links a suggested folder in one click, without opening the dialog', async () => {
-    jest
-      .mocked(listProjects)
-      .mockResolvedValue([
-        {
-          ...PROJECT,
-          id: 'proj-2',
-          name: 'Atlas',
-          repoPath: '/Users/amaan/code/atlas',
-        },
-      ]);
+    jest.mocked(listProjects).mockResolvedValue([
+      {
+        ...PROJECT,
+        id: 'proj-2',
+        name: 'Atlas',
+        repoPath: '/Users/amaan/code/atlas',
+      },
+    ]);
     persistPatches();
     mountWith(null);
     // Resolved outside act(): a findBy* poll cannot settle inside one.
@@ -428,6 +426,49 @@ describe('project settings → Codebase', () => {
       expect(chooseFolder).toHaveBeenCalledWith(
         expect.objectContaining({ defaultPath: '/Users/amaan/code' }),
       );
+    });
+
+    // Regression test: this card used to mount two independent useRepoLink
+    // instances — its own Relocate… plus the suggestions strip's own
+    // Browse… — both opening the same kind of dialog, with two
+    // independently-styled error surfaces depending on which was clicked.
+    it('offers exactly one way to open the picker, not a second Browse… next to Relocate…', async () => {
+      checkPath.mockResolvedValue({ exists: false });
+      mountWith('/Users/amaan/code/gone');
+      await screen.findByText('The linked folder no longer exists');
+
+      expect(
+        screen.getByRole('button', { name: /relocate/i }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: /browse/i }),
+      ).not.toBeInTheDocument();
+    });
+
+    // Regression test: a successful Relocate used to call the plain
+    // onChanged callback (the same one Unlink uses), which never sets
+    // justLinked — so recovering from a stale link, unlike an initial link,
+    // never confirmed anything happened.
+    it('shows the success banner once Relocate actually lands a working path', async () => {
+      checkPath
+        .mockResolvedValueOnce({ exists: false })
+        .mockResolvedValue({ exists: true });
+      chooseFolder.mockResolvedValue({
+        canceled: false,
+        path: '/Users/amaan/code/waypoint-moved',
+        looksLikeGitRepo: true,
+      });
+      persistPatches();
+      mountWith('/Users/amaan/code/gone');
+      await screen.findByText('The linked folder no longer exists');
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /relocate/i }));
+      });
+
+      expect(
+        await screen.findByText(/Copilot can now read this project's code/),
+      ).toBeInTheDocument();
     });
 
     // Same bug as Change folder…, on the other component: RepoLinkStaleCard
