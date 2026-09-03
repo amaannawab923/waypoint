@@ -1,5 +1,4 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { formatDistanceToNow } from 'date-fns';
 import { clsx } from 'clsx';
 import {
@@ -23,6 +22,7 @@ import {
   listViews,
   updateView,
 } from '@/data/api';
+import { refreshProjectInStore } from '@/lib/projectsStore';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -199,7 +199,6 @@ function MenuItem({
 
 export default function ProjectViewsPage() {
   const { project } = useProject();
-  const navigate = useNavigate();
   const [creating, setCreating] = useState(false);
   const [activeView, setActiveView] = useState<SavedView | null>(null);
   const [addPromptOpen, setAddPromptOpen] = useState(false);
@@ -237,6 +236,10 @@ export default function ProjectViewsPage() {
     try {
       await createView(project.id, name, { v: 1, projectIds: [project.id] });
       reload();
+      // This may be the project's first view — refresh the shared projects
+      // store so the sidebar's Views entry (driven by
+      // primitiveCounts.views > 0) appears without a page reload.
+      refreshProjectInStore(project.id);
     } finally {
       setCreating(false);
     }
@@ -276,26 +279,6 @@ export default function ProjectViewsPage() {
   async function handleToggleFavorite(view: SavedView) {
     await updateView(view.id, { isFavorite: !view.isFavorite });
     reload();
-  }
-
-  if (!project.features.views) {
-    return (
-      <EmptyState
-        icon={<Layers3 size={28} />}
-        title="Views is disabled for this project"
-        description="Turn Views back on in project settings to save filters again."
-        action={
-          <Button
-            variant="primary"
-            onClick={() =>
-              navigate(`/projects/${project.id}/settings/features`)
-            }
-          >
-            Go to features
-          </Button>
-        }
-      />
-    );
   }
 
   if (activeView) {
