@@ -14,6 +14,7 @@ describe('ticketFilterSchema', () => {
       stateGroups: ['backlog', 'started'],
       priorities: ['urgent', 'none'],
       assigneeIds: ['mem-1', '@me', '@unassigned'],
+      creatorIds: ['mem-1', '@me'],
       labelIds: ['lbl-1'],
       sprintIds: ['spr-1'],
       workstreamIds: ['ws-1'],

@@ -42,6 +42,13 @@ export const ticketFilterSchema = z
     // "my open tickets" for whoever opens it, and "no assignee" is a real
     // filterable condition rather than a client-side post-filter.
     assigneeIds: z.array(z.string()).optional(),
+    // Added for W5.2 (the unified TicketList's workspace scope) so "tickets
+    // I created" — YourWork's Created tab — can be a server-side filter
+    // instead of a client-side predicate over every ticket in the
+    // workspace. '@me' resolves the same way it does for assigneeIds (see
+    // buildCreatorCondition); there is no '@unassigned' equivalent since
+    // every ticket has exactly one creator.
+    creatorIds: z.array(z.string()).optional(),
     labelIds: z.array(z.string()).optional(),
     sprintIds: z.array(z.string()).optional(),
     workstreamIds: z.array(z.string()).optional(),
