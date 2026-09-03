@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { clsx } from 'clsx';
-import { ArrowLeft, CalendarRange, Check, ChevronDown, MoreHorizontal, Pencil, RefreshCw, Star, Trash2, UserPlus, Users } from 'lucide-react';
+import { ArrowLeft, CalendarRange, Check, ChevronDown, MoreHorizontal, Pencil, RefreshCw, Trash2, UserPlus, Users } from 'lucide-react';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import { useRecordRecent } from '@/lib/recents';
@@ -123,7 +123,6 @@ export default function CycleDetailPage() {
     [allMembers, cycle?.memberIds],
   );
 
-  const [favorite, setFavorite] = useState(false);
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState('');
   const [startDate, setStartDate] = useState('');
@@ -339,18 +338,6 @@ export default function CycleDetailPage() {
               {cycle.description && <p className="mt-2 max-w-2xl text-sm text-text-secondary">{cycle.description}</p>}
             </div>
             <div className="flex shrink-0 items-center gap-0.5">
-              <button
-                type="button"
-                aria-label={favorite ? 'Remove from favorites' : 'Add to favorites'}
-                aria-pressed={favorite}
-                onClick={() => setFavorite((f) => !f)}
-                className={clsx(
-                  'inline-flex size-7 items-center justify-center rounded-[var(--radius-sm)] transition-colors hover:bg-surface-2',
-                  favorite ? 'text-warning' : 'text-text-secondary hover:text-text',
-                )}
-              >
-                <Star size={15} fill={favorite ? 'currentColor' : 'none'} />
-              </button>
               <Dropdown
                 align="right"
                 trigger={(toggle) => (
