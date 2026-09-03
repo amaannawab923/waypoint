@@ -345,6 +345,24 @@ describe('buildTypedFilterConditions', () => {
     expect(or).toHaveBeenCalled();
   });
 
+  it('applies specific creatorIds as a plain inArray(tickets.createdById, ...) condition', () => {
+    buildTypedFilterConditions({ creatorIds: ['mem-4'] });
+
+    expect(inArray).toHaveBeenCalledWith(tickets.createdById, ['mem-4']);
+  });
+
+  it("resolves creatorIds' '@me' to CURRENT_USER_ID (mem-1), same as assigneeIds", () => {
+    buildTypedFilterConditions({ creatorIds: ['@me'] });
+
+    expect(inArray).toHaveBeenCalledWith(tickets.createdById, ['mem-1']);
+  });
+
+  it('omits a creatorIds condition entirely when the only entry is an unresolvable sentinel-free empty set', () => {
+    buildTypedFilterConditions({ creatorIds: [] });
+
+    expect(inArray).not.toHaveBeenCalledWith(tickets.createdById, expect.anything());
+  });
+
   it('resolves a relative updatedBefore token to a Date roughly N days ago and applies it with lte', () => {
     const before = Date.now();
     buildTypedFilterConditions({ updatedBefore: '-30d' });
