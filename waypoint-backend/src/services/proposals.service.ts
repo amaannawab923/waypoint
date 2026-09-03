@@ -603,3 +603,211 @@ export async function markProposalsNotified(
     .returning({ id: proposals.id });
   return { notified: rows.length };
 }
+
+// ---------------------------------------------------------------------------
+// Review queue (W3.2, architecture §4.4) — the workspace-scoped aggregate
+// surface. Everything below is purely additive: it reads the same table and
+// reuses approveProposal/rejectProposal verbatim, and never reimplements
+// any state-machine logic above this line.
+// ---------------------------------------------------------------------------
+
+export type ReviewQueueSegment = 'proposed' | 'blocked' | 'recent';
+
+export interface ReviewQueueParams {
+  status: ReviewQueueSegment;
+  agentId?: string;
+  projectId?: string;
+  kind?: ProposalKind;
+  limit?: number;
+  cursor?: string;
+}
+
+export interface ReviewQueueCounts {
+  proposed: number;
+  blocked: number;
+  recent: number;
+}
+
+export interface ReviewQueueResult {
+  proposals: ProposalView[];
+  counts: ReviewQueueCounts;
+  // Opaque keyset token for the next page, or null when this page is the
+  // last one. Not in the architecture doc's response sketch verbatim, but
+  // "keyset pagination on (created_at, id)" needs some way to hand the next
+  // key back to the caller.
+  nextCursor: string | null;
+}
+
+const DEFAULT_REVIEW_QUEUE_LIMIT = 25;
+const MAX_REVIEW_QUEUE_LIMIT = 100;
+// "recent" segment = resolved in the last 24h (architecture §4.4).
+const RECENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+interface Cursor {
+  createdAt: Date;
+  id: string;
+}
+
+function encodeCursor(row: { createdAt: Date; id: string }): string {
+  return Buffer.from(JSON.stringify({ c: row.createdAt.toISOString(), i: row.id }), 'utf8').toString('base64url');
+}
+
+function decodeCursor(raw: string): Cursor {
+  try {
+    const parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')) as { c: string; i: string };
+    const createdAt = new Date(parsed.c);
+    if (Number.isNaN(createdAt.getTime()) || typeof parsed.i !== 'string' || !parsed.i) {
+      throw new Error('malformed');
+    }
+    return { createdAt, id: parsed.i };
+  } catch {
+    throw new ValidationError('invalid cursor');
+  }
+}
+
+// Counts are workspace-wide and unfiltered by the caller's agentId/
+// projectId/kind — these back the segment tabs themselves (proposed /
+// blocked / recent), which stay stable while a filter narrows what's
+// listed inside the selected tab.
+async function computeReviewQueueCounts(): Promise<ReviewQueueCounts> {
+  const cutoff = new Date(Date.now() - RECENT_WINDOW_MS);
+  const [{ n: proposedCount }] = await db
+    .select({ n: count() })
+    .from(proposals)
+    .where(eq(proposals.status, 'proposed'));
+  const [{ n: recentCount }] = await db
+    .select({ n: count() })
+    .from(proposals)
+    .where(and(inArray(proposals.status, TERMINAL_PROPOSAL_STATUSES), gte(proposals.resolvedAt, cutoff)));
+  return {
+    proposed: proposedCount,
+    // "Blocked" projects agent_runs.status='blocked' into the same card
+    // shape (architecture §4.4) — agent_runs doesn't exist as a table yet
+    // (agent-run infrastructure is deferred per the founder's
+    // Copilot-freeze scope decision), so this is 0 rather than a query
+    // against a table that isn't there.
+    blocked: 0,
+    recent: recentCount,
+  };
+}
+
+export async function getProposalCounts(): Promise<ReviewQueueCounts> {
+  return computeReviewQueueCounts();
+}
+
+export async function listReviewQueue(params: ReviewQueueParams): Promise<ReviewQueueResult> {
+  await maybeRepairProposals();
+  const counts = await computeReviewQueueCounts();
+
+  if (params.status === 'blocked') {
+    // See computeReviewQueueCounts's comment: the Blocked segment has
+    // nothing to project from until agent_runs exists. The query-param/
+    // segment shape stays real (this branch exists and is reachable) —
+    // it just has no rows to return today.
+    return { proposals: [], counts, nextCursor: null };
+  }
+
+  const limit = Math.min(params.limit ?? DEFAULT_REVIEW_QUEUE_LIMIT, MAX_REVIEW_QUEUE_LIMIT);
+
+  const conditions =
+    params.status === 'proposed'
+      ? [eq(proposals.status, 'proposed')]
+      : [
+          // 'recent': resolved in the last 24h. Explicitly the terminal
+          // statuses, not "resolvedAt set" — 'executing' also stamps
+          // resolvedAt (it doubles as the claim timestamp), and a row
+          // mid-claim is not "recent", it's still pending.
+          inArray(proposals.status, TERMINAL_PROPOSAL_STATUSES),
+          gte(proposals.resolvedAt, new Date(Date.now() - RECENT_WINDOW_MS)),
+        ];
+
+  if (params.agentId) conditions.push(eq(proposals.agentId, params.agentId));
+  if (params.projectId) conditions.push(eq(proposals.projectId, params.projectId));
+  if (params.kind) conditions.push(eq(proposals.kind, params.kind));
+
+  if (params.cursor) {
+    const c = decodeCursor(params.cursor);
+    // Keyset on (created_at, id) DESC: strictly older createdAt, OR the
+    // same createdAt with a strictly smaller id as the tiebreaker.
+    // or()'s general signature returns `SQL | undefined` (undefined only
+    // when called with zero conditions) — always 2 non-undefined conditions
+    // here, so this is genuinely never undefined at runtime.
+    conditions.push(
+      or(lt(proposals.createdAt, c.createdAt), and(eq(proposals.createdAt, c.createdAt), lt(proposals.id, c.id)))!,
+    );
+  }
+
+  const rows = await db
+    .select()
+    .from(proposals)
+    .where(and(...conditions))
+    .orderBy(desc(proposals.createdAt), desc(proposals.id))
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  const { displayName } = await membersService.getCurrentUser();
+  return {
+    proposals: page.map((row) => toView(row, displayName)),
+    counts,
+    nextCursor: hasMore ? encodeCursor(page[page.length - 1]) : null,
+  };
+}
+
+export interface BulkProposalResult {
+  id: string;
+  status: ProposalStatus | 'not_found';
+  statusReason: string | null;
+}
+
+// Sequential, not Promise.all — deliberately not one transaction
+// (architecture §4.4): a stale/already-resolved id must resolve on its own
+// and the rest of the batch must still run. Each id runs the EXISTING
+// single-row approveProposal, unmodified — this never reimplements the
+// claim/staleness/execute logic above.
+export async function bulkApproveProposals(ids: string[]): Promise<BulkProposalResult[]> {
+  const results: BulkProposalResult[] = [];
+  for (const id of ids) {
+    try {
+      const view = await approveProposal(id);
+      results.push({ id, status: view.status, statusReason: view.statusReason });
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        results.push({ id, status: 'not_found', statusReason: 'proposal not found' });
+        continue;
+      }
+      throw error;
+    }
+  }
+  return results;
+}
+
+export async function bulkRejectProposals(ids: string[]): Promise<BulkProposalResult[]> {
+  const results: BulkProposalResult[] = [];
+  for (const id of ids) {
+    try {
+      const view = await rejectProposal(id);
+      results.push({ id, status: view.status, statusReason: view.statusReason });
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        results.push({ id, status: 'not_found', statusReason: 'proposal not found' });
+        continue;
+      }
+      throw error;
+    }
+  }
+  return results;
+}
+
+// Ticket-detail's inline section (architecture §4.4).
+export async function listProposalsForTicket(ticketId: string, status?: ProposalStatus): Promise<ProposalView[]> {
+  const conditions = [eq(proposals.ticketId, ticketId)];
+  if (status) conditions.push(eq(proposals.status, status));
+  const rows = await db
+    .select()
+    .from(proposals)
+    .where(and(...conditions))
+    .orderBy(desc(proposals.createdAt));
+  const { displayName } = await membersService.getCurrentUser();
+  return rows.map((row) => toView(row, displayName));
+}
