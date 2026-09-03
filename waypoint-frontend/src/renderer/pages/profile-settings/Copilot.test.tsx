@@ -14,9 +14,14 @@ const mockClear = jest.fn();
 const mockConnect = jest.fn();
 const mockCancel = jest.fn();
 const mockOpenExternal = jest.fn();
+const mockDetect = jest.fn();
 
 beforeEach(() => {
   jest.resetAllMocks();
+  // Never resolves unless a test overrides it — matches detectLocalClaudeCode's
+  // real behavior of never rejecting (see mock/api.ts), and keeps ClaudeCodeStatus
+  // parked on `checking` for tests that don't care about it.
+  mockDetect.mockImplementation(() => new Promise(() => {}));
   (window as unknown as { electron: typeof window.electron }).electron = {
     copilot: {
       auth: {
@@ -27,6 +32,7 @@ beforeEach(() => {
         cancel: mockCancel,
         openExternal: mockOpenExternal,
       },
+      detect: mockDetect,
     },
   } as unknown as typeof window.electron;
 });
@@ -222,5 +228,51 @@ describe('Copilot settings page', () => {
     expect(
       screen.getByRole('button', { name: 'Continue in browser' }),
     ).toBeInTheDocument();
+  });
+
+  // W1.2: the Claude Code CLI detection badge on this page reads real
+  // main-process output (copilot:detect), never a fabricated status — see
+  // mock/api.ts's detectLocalClaudeCode and components/domain/ClaudeCodeStatus.
+  describe('Claude Code CLI detection', () => {
+    it('shows the real version once the CLI is actually detected', async () => {
+      mockStatus.mockResolvedValueOnce({ connected: false, last4: null });
+      mockDetect.mockResolvedValueOnce({
+        ok: true,
+        version: '1.2.3',
+        path: '/opt/homebrew/bin/claude',
+      });
+      render(<Copilot />);
+
+      expect(await screen.findByText('Detected')).toBeInTheDocument();
+      expect(screen.getByText('v1.2.3')).toBeInTheDocument();
+    });
+
+    it('shows "Not found" with no setup link on this page when the CLI is absent', async () => {
+      mockStatus.mockResolvedValueOnce({ connected: false, last4: null });
+      mockDetect.mockResolvedValueOnce({
+        ok: false,
+        reason: 'not-found',
+        message: '"claude" was not found on PATH.',
+      });
+      render(<Copilot />);
+
+      expect(await screen.findByText('Not found')).toBeInTheDocument();
+      // This page IS the setup surface — ClaudeCodeStatus is rendered here
+      // with showSetupLink={false}, so it must not link back to itself.
+      expect(screen.queryByText('Set up Claude Code')).not.toBeInTheDocument();
+    });
+
+    it("never shows a version string the probe didn't actually report", async () => {
+      mockStatus.mockResolvedValueOnce({ connected: false, last4: null });
+      mockDetect.mockResolvedValueOnce({
+        ok: false,
+        reason: 'error',
+        message: 'Timed out waiting for "claude --version" after 5s.',
+      });
+      render(<Copilot />);
+
+      expect(await screen.findByText('Error')).toBeInTheDocument();
+      expect(screen.queryByText(/^v\d/)).not.toBeInTheDocument();
+    });
   });
 });
