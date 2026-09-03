@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { useProject } from '@/layouts/ProjectLayout';
 import { updateProjectAutomations } from '@/mock/api';
 import type { ProjectAutomations } from '@/types/entities';
+import { NotWired } from '@/components/ui/NotWired';
+import type { CapabilityKey } from '@/capabilities';
 
 // Defensive fallback for project records persisted before `automations`
 // existed on the Project shape (db.ts backfills this on load, but this page
@@ -42,6 +44,7 @@ function AutomationRow({
   afterDays,
   onToggle,
   onAfterDaysChange,
+  capability,
 }: {
   title: string;
   description: string;
@@ -49,6 +52,7 @@ function AutomationRow({
   afterDays: number;
   onToggle: (v: boolean) => void;
   onAfterDaysChange: (n: number) => void;
+  capability: CapabilityKey;
 }) {
   return (
     <div className="flex flex-col gap-3 px-5 py-4">
@@ -72,6 +76,7 @@ function AutomationRow({
         />
         <span className="text-sm text-text-secondary">days</span>
       </div>
+      <NotWired capability={capability} />
     </div>
   );
 }
@@ -125,6 +130,7 @@ export default function Automations() {
           afterDays={autoArchiveAfterDays}
           onToggle={handleAutoArchiveToggle}
           onAfterDaysChange={handleAutoArchiveAfterDays}
+          capability="automations.autoArchive"
         />
         <AutomationRow
           title="Auto-close work items"
@@ -133,6 +139,7 @@ export default function Automations() {
           afterDays={autoCloseAfterDays}
           onToggle={handleAutoCloseToggle}
           onAfterDaysChange={handleAutoCloseAfterDays}
+          capability="automations.autoClose"
         />
       </div>
     </div>
