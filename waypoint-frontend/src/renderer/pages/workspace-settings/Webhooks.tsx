@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Modal } from '@/components/ui/Modal';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
+import { NotWired } from '@/components/ui/NotWired';
 
 const EVENT_TYPES: { value: WebhookEventType; label: string }[] = [
   { value: 'work_item.created', label: 'Work item created' },
@@ -69,6 +70,10 @@ export default function Webhooks() {
           <Plus size={15} />
           Add webhook
         </Button>
+      </div>
+
+      <div className="mb-6">
+        <NotWired capability="webhooks.delivery" />
       </div>
 
       {loading && !webhooks && <SkeletonListRows rows={3} />}
