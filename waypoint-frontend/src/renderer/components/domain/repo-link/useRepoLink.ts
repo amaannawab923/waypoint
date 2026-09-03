@@ -89,6 +89,18 @@ const UNDO_SECONDS = 5;
  * it — the badge and header can lag a few seconds on an in-flight unlink the
  * same way they already do on window focus, which is fine for UX, not a
  * safety boundary.
+ *
+ * `onChanged` is read through a ref inside the countdown effect, not listed
+ * as an effect dependency: every caller today happens to pass a fresh
+ * function identity on every render (Codebase.tsx's onChanged is a plain
+ * function declaration, not useCallback'd), and an effect keyed on that
+ * identity would tear down and restart its pending setTimeout on ANY
+ * re-render of the host during the window — including one caused by nothing
+ * more than a window-focus recheck elsewhere on the page. Under sustained
+ * re-rendering the countdown would never reach zero, leaving the backend
+ * already unlinked while the UI still showed the pre-unlink state
+ * indefinitely. The ref makes the countdown correct regardless of whether a
+ * caller remembers to memoize its callback.
  */
 export function useRepoUnlink(
   projectId: string,
@@ -102,17 +114,19 @@ export function useRepoUnlink(
   // Captured at commit time rather than read from props, which are already
   // null by the time Undo is clickable.
   const previousPathRef = useRef(repoPath);
+  const onChangedRef = useRef(onChanged);
+  onChangedRef.current = onChanged;
 
   useEffect(() => {
     if (phase !== 'undoable') return undefined;
     if (secondsLeft === 0) {
       setPhase('idle');
-      onChanged();
+      onChangedRef.current();
       return undefined;
     }
     const timer = setTimeout(() => setSecondsLeft((s) => s - 1), 1000);
     return () => clearTimeout(timer);
-  }, [phase, secondsLeft, onChanged]);
+  }, [phase, secondsLeft]);
 
   async function unlink() {
     if (busy) return;
@@ -132,7 +146,14 @@ export function useRepoUnlink(
   }
 
   async function undo() {
-    if (busy) return;
+    // Guards the race against expiry: if the countdown's zero-second render
+    // already fired (moving phase to 'idle' and calling onChanged to reload
+    // the owning project as unlinked) in the same tick Undo was clicked, the
+    // PATCH below would still succeed — backend linked, UI already showing
+    // the unlinked picker, nothing left to correct it. Bailing out here means
+    // a click that loses this race is simply too late, the same as it would
+    // be a moment after the strip itself had already unmounted.
+    if (busy || phase !== 'undoable') return;
     setBusy(true);
     setError(null);
     try {
