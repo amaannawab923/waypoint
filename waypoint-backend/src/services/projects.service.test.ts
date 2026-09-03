@@ -49,7 +49,7 @@ const PROJECT_ROW = {
   icon: '📦',
   coverGradientStart: '#c2542a',
   coverGradientEnd: '#3a2314',
-  network: 'public',
+  visibility: 'public',
   leadId: null,
   defaultAssigneeId: null,
   timezone: 'UTC',

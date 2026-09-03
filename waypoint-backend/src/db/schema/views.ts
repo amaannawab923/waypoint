@@ -1,5 +1,5 @@
 import { pgTable, text, boolean, timestamp, jsonb } from 'drizzle-orm/pg-core';
-import { projects, networkEnum } from './projects.js';
+import { projects, visibilityEnum } from './projects.js';
 import { members } from './workspace.js';
 
 export const savedViews = pgTable('saved_views', {
@@ -13,7 +13,7 @@ export const savedViews = pgTable('saved_views', {
     .references(() => members.id, { onDelete: 'cascade' }),
   // Record<string, unknown> — genuinely arbitrary shape, jsonb is the only sane choice
   filters: jsonb('filters').notNull(),
-  visibility: networkEnum('visibility').notNull().default('public'),
+  visibility: visibilityEnum('visibility').notNull().default('public'),
   isFavorite: boolean('is_favorite').notNull().default(false),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

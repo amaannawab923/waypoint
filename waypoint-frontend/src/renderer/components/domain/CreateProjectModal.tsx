@@ -101,7 +101,7 @@ export function CreateProjectModal({
   const [name, setName] = useState('');
   const [identifier, setIdentifier] = useState('');
   const [description, setDescription] = useState('');
-  const [network, setNetwork] = useState<Project['network']>('public');
+  const [visibility, setVisibility] = useState<Project['visibility']>('public');
   const [features, setFeatures] = useState<ProjectFeatures>(DEFAULT_FEATURES);
   const [submitting, setSubmitting] = useState(false);
   const [createdProject, setCreatedProject] = useState<Project | null>(null);
@@ -111,7 +111,7 @@ export function CreateProjectModal({
     setName('');
     setIdentifier('');
     setDescription('');
-    setNetwork('public');
+    setVisibility('public');
     setFeatures(DEFAULT_FEATURES);
     setCreatedProject(null);
   }
@@ -129,7 +129,7 @@ export function CreateProjectModal({
         name: name.trim(),
         identifier: identifier.trim() || slugify(name),
         description: description.trim(),
-        network,
+        visibility,
       });
       const updated = await updateProjectFeatures(project.id, features);
       setCreatedProject(updated);
@@ -229,10 +229,10 @@ export function CreateProjectModal({
               <button
                 key={n}
                 type="button"
-                onClick={() => setNetwork(n)}
+                onClick={() => setVisibility(n)}
                 className={
                   'h-8 flex-1 rounded-[var(--radius-sm)] border text-sm capitalize transition-colors ' +
-                  (network === n
+                  (visibility === n
                     ? 'border-accent bg-accent-soft-bg text-accent-soft-text'
                     : 'border-border-strong text-text-secondary hover:bg-surface-2')
                 }

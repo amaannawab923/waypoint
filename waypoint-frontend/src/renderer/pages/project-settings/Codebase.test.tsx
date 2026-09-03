@@ -16,7 +16,7 @@ const PROJECT: Project = {
   description: '',
   icon: '📦',
   coverGradient: ['#c2542a', '#3a2314'],
-  network: 'public',
+  visibility: 'public',
   leadId: null,
   defaultAssigneeId: null,
   timezone: 'UTC',

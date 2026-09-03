@@ -15,6 +15,13 @@
       "when": 1788443232619,
       "tag": "0001_needy_tomorrow_man",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788444566266,
+      "tag": "0002_nappy_ultimo",
+      "breakpoints": true
     }
   ]
 }

@@ -88,7 +88,7 @@ export interface CreateProjectInput {
   identifier: string;
   description?: string;
   icon?: string;
-  network?: 'public' | 'private';
+  visibility?: 'public' | 'private';
   leadId?: string | null;
 }
 
@@ -106,7 +106,7 @@ export async function createProject(input: CreateProjectInput) {
         icon: input.icon ?? '📦',
         coverGradientStart: '#c2542a',
         coverGradientEnd: '#3a2314',
-        network: input.network ?? 'public',
+        visibility: input.visibility ?? 'public',
         leadId: input.leadId ?? null,
         defaultAssigneeId: null,
         timezone: 'UTC',

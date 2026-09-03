@@ -309,7 +309,7 @@ export interface CreateProjectInput {
   identifier: string;
   description?: string;
   icon?: string;
-  network?: Project['network'];
+  visibility?: Project['visibility'];
   leadId?: string | null;
 }
 

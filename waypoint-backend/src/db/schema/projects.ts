@@ -1,7 +1,7 @@
 import { pgTable, text, boolean, timestamp, integer, jsonb, pgEnum, primaryKey } from 'drizzle-orm/pg-core';
 import { workspaces, members } from './workspace.js';
 
-export const networkEnum = pgEnum('network', ['public', 'private']);
+export const visibilityEnum = pgEnum('visibility', ['public', 'private']);
 // No 'triage' group (docs/design/waypoint-revamp-architecture.md §3.3). The
 // only fact a triage state carried — that a ticket arrived from outside —
 // is now tickets.source, which records it directly instead of encoding it in
@@ -25,7 +25,7 @@ export const projects = pgTable('projects', {
   icon: text('icon').notNull(),
   coverGradientStart: text('cover_gradient_start').notNull(),
   coverGradientEnd: text('cover_gradient_end').notNull(),
-  network: networkEnum('network').notNull().default('public'),
+  visibility: visibilityEnum('visibility').notNull().default('public'),
   leadId: text('lead_id').references(() => members.id, { onDelete: 'set null' }),
   defaultAssigneeId: text('default_assignee_id').references(() => members.id, { onDelete: 'set null' }),
   timezone: text('timezone').notNull(),

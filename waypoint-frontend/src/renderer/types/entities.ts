@@ -12,7 +12,7 @@ export type TicketSource = 'manual' | 'request' | 'agent' | 'import';
 
 export type Priority = 'urgent' | 'high' | 'medium' | 'low' | 'none';
 
-export type Network = 'public' | 'private';
+export type Visibility = 'public' | 'private';
 
 export type MemberRole = 'admin' | 'member' | 'guest';
 
@@ -71,7 +71,7 @@ export interface Project {
   description: string;
   icon: string;
   coverGradient: [string, string];
-  network: Network;
+  visibility: Visibility;
   leadId: ID | null;
   defaultAssigneeId: ID | null;
   timezone: string;
@@ -227,7 +227,7 @@ export interface SavedView {
   name: string;
   ownerId: ID;
   filters: Record<string, unknown>;
-  visibility: Network;
+  visibility: Visibility;
   isFavorite: boolean;
   updatedAt: string;
 }

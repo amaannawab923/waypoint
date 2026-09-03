@@ -139,7 +139,7 @@ function ArchivedProjectCard({
         <div className="mt-auto flex items-center justify-between pt-1">
           <AvatarStack people={people} size={22} max={4} />
           <Badge tone="neutral" outline>
-            {project.network}
+            {project.visibility}
           </Badge>
         </div>
       </div>

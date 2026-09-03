@@ -13,26 +13,27 @@ import { FolderKanban } from 'lucide-react';
 import { Skeleton, SkeletonCardGrid } from '@/components/ui/Skeleton';
 
 type SortKey = 'name' | 'created';
-type NetworkFilter = 'all' | 'public' | 'private';
+type VisibilityFilter = 'all' | 'public' | 'private';
 
 export default function ProjectsList() {
   const { data: projects, loading, reload } = useAsync(() => listProjects(), []);
   const { data: members } = useAsync(() => listMembers(), []);
   const [createOpen, setCreateOpen] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>('name');
-  const [networkFilter, setNetworkFilter] = useState<NetworkFilter>('all');
+  const [visibilityFilter, setVisibilityFilter] = useState<VisibilityFilter>('all');
   const navigate = useNavigate();
 
   const memberById = useMemo(() => new Map((members ?? []).map((m) => [m.id, m])), [members]);
 
   const visibleProjects = useMemo(() => {
     if (!projects) return [];
-    const filtered = networkFilter === 'all' ? projects : projects.filter((p) => p.network === networkFilter);
+    const filtered =
+      visibilityFilter === 'all' ? projects : projects.filter((p) => p.visibility === visibilityFilter);
     return [...filtered].sort((a, b) => {
       if (sortKey === 'name') return a.name.localeCompare(b.name);
       return b.createdAt.localeCompare(a.createdAt);
     });
-  }, [projects, networkFilter, sortKey]);
+  }, [projects, visibilityFilter, sortKey]);
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-6">
@@ -61,10 +62,10 @@ export default function ProjectsList() {
             <button
               key={n}
               type="button"
-              onClick={() => setNetworkFilter(n)}
+              onClick={() => setVisibilityFilter(n)}
               className={
                 'h-7 rounded-[calc(var(--radius-sm)-2px)] px-3 text-xs font-medium capitalize transition-colors ' +
-                (networkFilter === n ? 'bg-accent text-on-accent' : 'text-text-secondary hover:text-text')
+                (visibilityFilter === n ? 'bg-accent text-on-accent' : 'text-text-secondary hover:text-text')
               }
             >
               {n}
@@ -88,7 +89,7 @@ export default function ProjectsList() {
         <EmptyState
           icon={<FolderKanban size={32} strokeWidth={1.5} />}
           title="No projects match this filter"
-          description="Try a different network filter, or create a new project."
+          description="Try a different visibility filter, or create a new project."
           action={
             <Button variant="primary" onClick={() => setCreateOpen(true)}>
               <Plus size={15} />
@@ -194,8 +195,8 @@ function ProjectCard({
 
         <div className="mt-auto flex items-center justify-between pt-1">
           <AvatarStack people={people} size={22} max={4} />
-          <Badge tone={project.network === 'private' ? 'neutral' : 'accent'} outline>
-            {project.network}
+          <Badge tone={project.visibility === 'private' ? 'neutral' : 'accent'} outline>
+            {project.visibility}
           </Badge>
         </div>
       </div>

@@ -6,7 +6,7 @@ export const createProjectSchema = z.object({
   identifier: z.string().min(1),
   description: z.string().optional(),
   icon: z.string().optional(),
-  network: z.enum(['public', 'private']).optional(),
+  visibility: z.enum(['public', 'private']).optional(),
   leadId: z.string().nullable().optional(),
 });
 
@@ -15,7 +15,7 @@ export const updateProjectSchema = requireAtLeastOneField(
     name: z.string().min(1).optional(),
     description: z.string().optional(),
     icon: z.string().optional(),
-    network: z.enum(['public', 'private']).optional(),
+    visibility: z.enum(['public', 'private']).optional(),
     leadId: z.string().nullable().optional(),
     defaultAssigneeId: z.string().nullable().optional(),
     timezone: z.string().optional(),
