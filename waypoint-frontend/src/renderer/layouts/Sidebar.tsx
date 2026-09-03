@@ -18,6 +18,7 @@ import {
   Compass,
   Archive,
   BarChart2,
+  ClipboardCheck,
   Settings,
 } from 'lucide-react';
 import { clsx } from 'clsx';
@@ -91,6 +92,15 @@ export function Sidebar() {
         <NavLink to="/" end className={navLinkClass}>
           <HomeIcon size={15} />
           Home
+        </NavLink>
+        {/* Propose->approve is the product's organising model (product
+            strategy decision 2) — Review is the workspace-wide "spine"
+            screen every proposal from every agent funnels through, so it
+            sits right under Home rather than down with the other
+            workspace-wide dashboards. */}
+        <NavLink to="/review" className={navLinkClass}>
+          <ClipboardCheck size={15} />
+          Review
         </NavLink>
         <NavLink to="/your-work" className={navLinkClass}>
           <UserRound size={15} />
