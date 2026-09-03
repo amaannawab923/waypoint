@@ -1,6 +1,7 @@
 // Disable no-unused-vars, broken for spread args
 /* eslint no-unused-vars: off */
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
+import type { CopilotDetectResult } from './copilot/copilotDetect';
 
 // The global Web Crypto API, not Node's `crypto` module: this preload script
 // runs in Electron's sandboxed renderer context by default (Electron 20+),
@@ -222,6 +223,13 @@ const electronHandler = {
       openExternal(url: string): Promise<{ ok: boolean }> {
         return ipcRenderer.invoke('copilot:auth:open-external', url);
       },
+    },
+    // Backs the real Claude Code CLI probe (W1.2) — request/response, like
+    // `auth` above, since a single `claude --version` run produces exactly
+    // one settled answer, never a stream. See copilotDetect.ts's own
+    // handler for what each case actually means.
+    detect(): Promise<CopilotDetectResult> {
+      return ipcRenderer.invoke('copilot:detect');
     },
   },
   // Top-level, not nested under `copilot`: "point me at a local folder" is
