@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import {
   listAllTickets,
@@ -17,6 +17,10 @@ import {
   updateTicket,
 } from '@/data/api';
 import type { Member, Project, Ticket, TicketState } from '@/types/entities';
+import {
+  getActiveSelectableView,
+  __resetActiveSelectableViewForTests,
+} from '@/lib/useActiveSelectableView';
 import { useTicketsView } from './useTicketsView';
 import TicketList from './TicketList';
 
@@ -114,6 +118,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  __resetActiveSelectableViewForTests();
   jest.mocked(listStates).mockResolvedValue([state()]);
   jest.mocked(listLabels).mockResolvedValue([]);
   jest.mocked(listWorkstreams).mockResolvedValue([]);
@@ -231,5 +236,52 @@ describe('TicketList j/k/x keyboard', () => {
 
     // Should not throw / should be a no-op now that TicketList is gone.
     expect(() => fireEvent.keyDown(document, { key: 'j' })).not.toThrow();
+  });
+});
+
+// W5.4: TicketList registers itself as the app-shell keyboard layer's
+// "active selectable view" (useActiveSelectableView.ts) on mount so ⌘A can
+// reach it — additive to the j/k/x listener above, not a replacement for
+// it. Exercised here through the registry directly (the same way
+// useGlobalKeyboardShortcuts.test.tsx exercises ⌘A's dispatch), rather than
+// mounting the whole global hook, to keep this file's own accept criteria
+// isolated from that hook's.
+describe('TicketList active-view registration (W5.4)', () => {
+  it('registers a view whose selectAll selects every visible row', async () => {
+    const fixture = [ticket({ id: 'a', identifier: 'CW-1' }), ticket({ id: 'b', identifier: 'CW-2' })];
+    await renderList(fixture);
+
+    const view = getActiveSelectableView();
+    expect(view).not.toBeNull();
+
+    act(() => {
+      view?.selectAll();
+    });
+
+    await waitFor(() => expect(screen.getByText('2 selected')).toBeInTheDocument());
+  });
+
+  it('the registered view\'s clear() empties the selection', async () => {
+    const fixture = [ticket({ id: 'a', identifier: 'CW-1' })];
+    await renderList(fixture);
+
+    fireEvent.click(screen.getAllByRole('checkbox')[0]);
+    expect(screen.getByText('1 selected')).toBeInTheDocument();
+
+    act(() => {
+      getActiveSelectableView()?.clear();
+    });
+
+    expect(screen.queryByText('1 selected')).not.toBeInTheDocument();
+  });
+
+  it('unregisters on unmount, leaving no active view behind', async () => {
+    const fixture = [ticket({ id: 'a', identifier: 'CW-1' })];
+    const { unmount } = await renderList(fixture);
+    expect(getActiveSelectableView()).not.toBeNull();
+
+    unmount();
+
+    expect(getActiveSelectableView()).toBeNull();
   });
 });
