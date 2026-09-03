@@ -204,6 +204,10 @@ describe('createProposal', () => {
     const setArgs = (tx.update.mock.results[0].value.set as Vfn).mock.calls[0][0];
     expect(setArgs).toMatchObject({ status: 'superseded' });
     expect(setArgs.resolvedAt).toBeInstanceOf(Date);
+    // W4.5 (decision 10): nobody decided this, a newer proposal replaced it
+    // automatically — decidedBy='system', no decisionLatencyMs.
+    expect(setArgs.decidedBy).toBe('system');
+    expect(setArgs.decisionLatencyMs).toBeUndefined();
     // Row-level condition assertions: exactly the four columns that define
     // "the same pending proposal", nothing broader.
     expect(eq).toHaveBeenCalledWith(proposals.conversationId, 'conv-abc1234');
@@ -346,6 +350,10 @@ describe('approveProposal', () => {
       .mock.calls[0][0];
     expect(finalizeSet).toMatchObject({ status: 'expired' });
     expect(finalizeSet.statusReason).toMatch(/expired/i);
+    // Nobody decided this — the TTL did — so decidedBy is 'system', never
+    // 'user', and decisionLatencyMs is left unset (W4.5, decision 10).
+    expect(finalizeSet.decidedBy).toBe('system');
+    expect(finalizeSet.decisionLatencyMs).toBeUndefined();
   });
 
   // Staleness matrix — every branch must finalize as stale WITH a reason
@@ -362,6 +370,10 @@ describe('approveProposal', () => {
       expect(setArgs.status).toBe('stale');
       expect(setArgs.statusReason).toMatch(reasonPattern);
       expect(setArgs.resolvedAt).toBeInstanceOf(Date);
+      // Reality changed, not a person deciding — decidedBy='system' (W4.5,
+      // decision 10), same as the TTL-expiry branch above.
+      expect(setArgs.decidedBy).toBe('system');
+      expect(setArgs.decisionLatencyMs).toBeUndefined();
     }
 
     it('comment: a deleted ticket is stale', async () => {
@@ -515,6 +527,34 @@ describe('approveProposal', () => {
     const finalizeSet = (finalizeChain.set as Vfn).mock.calls[0][0];
     expect(finalizeSet).toMatchObject({ status: 'executed', resultInfo: { commentId: 'cm-1' } });
     expect(view.status).toBe('executed');
+    // A real user decision — decidedBy='user' with a computed latency
+    // (W4.5, decision 10).
+    expect(finalizeSet.decidedBy).toBe('user');
+    expect(typeof finalizeSet.decisionLatencyMs).toBe('number');
+    expect(finalizeSet.decisionLatencyMs).toBeGreaterThanOrEqual(0);
+  });
+
+  // W4.5 (decision 10): decisionLatencyMs must measure createdAt -> the
+  // decision, not createdAt -> whenever finalize happens to run.
+  it('stamps decisionLatencyMs as roughly createdAt -> now, not createdAt -> execution finish', async () => {
+    vi.useFakeTimers();
+    try {
+      const createdAt = new Date('2026-01-01T00:00:00.000Z');
+      vi.setSystemTime(new Date(createdAt.getTime() + 5_000)); // 5s "later"
+      const finalizeChain = chainable([proposalRow({ status: 'executed' })]);
+      db.update
+        .mockReturnValueOnce(chainable([proposalRow({ createdAt })]))
+        .mockReturnValueOnce(finalizeChain);
+      vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
+      vi.mocked(commentsService.addComment).mockResolvedValue({ id: 'cm-1' } as never);
+
+      await approveProposal('prop-abc1234');
+
+      const finalizeSet = (finalizeChain.set as Vfn).mock.calls[0][0];
+      expect(finalizeSet.decisionLatencyMs).toBe(5_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('executes a state change with EXACTLY one patch key — stateId — nothing else touched', async () => {
@@ -676,11 +716,34 @@ describe('rejectProposal', () => {
     const setArgs = (rejectChain.set as Vfn).mock.calls[0][0];
     // statusReason deliberately NOT in the set — a stale card's reason
     // survives its dismissal.
-    expect(Object.keys(setArgs).sort()).toEqual(['resolvedAt', 'status']);
+    expect(Object.keys(setArgs).sort()).toEqual([
+      'decidedBy',
+      'decisionLatencyMs',
+      'resolvedAt',
+      'status',
+    ]);
     expect(setArgs.status).toBe('rejected');
     expect(inArray).toHaveBeenCalledWith(proposals.status, ['proposed', 'stale']);
     expect(view.status).toBe('rejected');
     expect(view.statusReason).toBe('was stale');
+  });
+
+  // W4.5 (decision 10): a real user reject must stamp decision provenance
+  // so it counts toward the review-health strip and, later, trust
+  // computation — regardless of whether the row was 'proposed' or 'stale'
+  // when Reject was clicked (dismissing a stale card is still a decision).
+  it('stamps decidedBy=user and a computed decisionLatencyMs on every reject', async () => {
+    const rejectChain = chainable([proposalRow({ status: 'rejected' })]);
+    db.update.mockReturnValueOnce(rejectChain);
+
+    await rejectProposal('prop-abc1234');
+
+    const setArgs = (rejectChain.set as Vfn).mock.calls[0][0];
+    expect(setArgs.decidedBy).toBe('user');
+    // A SQL fragment computed against this row's own createdAt, not a
+    // plain JS number — see the function's own comment for why.
+    expect(setArgs.decisionLatencyMs).toBeDefined();
+    expect(typeof setArgs.decisionLatencyMs).toBe('object');
   });
 
   it('echoes an already-resolved row idempotently and 404s a missing one', async () => {
@@ -708,6 +771,19 @@ describe('rejectAllPending', () => {
     // Dismiss, so reject-all leaving them behind stranded them.
     expect(inArray).toHaveBeenCalledWith(proposals.status, ['proposed', 'stale']);
     expect(result).toEqual({ rejected: 2 });
+  });
+
+  // W4.5 (decision 10): "reject all" is still a person's decision for
+  // every row it touches.
+  it('stamps decidedBy=user on every row the bulk reject touches', async () => {
+    const chain = chainable([{ id: 'prop-1' }, { id: 'prop-2' }]);
+    db.update.mockReturnValueOnce(chain);
+
+    await rejectAllPending('conv-abc1234');
+
+    const setArgs = (chain.set as Vfn).mock.calls[0][0];
+    expect(setArgs.decidedBy).toBe('user');
+    expect(setArgs.decisionLatencyMs).toBeDefined();
   });
 });
 
