@@ -4,7 +4,16 @@ import { getProject } from '@/mock/api';
 
 export interface CurrentRouteProject {
   projectId: string;
+  /** Named on the in-chat card, which otherwise never says which project it writes to. */
+  name: string;
   repoPath: string | null;
+  /**
+   * repoPath is set but no longer resolves to a usable directory. Sent-time
+   * grounding and the in-chat card's gate both read this, so a moved checkout
+   * stops silently degrading a run to an ungrounded one that still looks
+   * grounded from here.
+   */
+  stale: boolean;
 }
 
 export interface UseCurrentRouteProjectResult {
@@ -12,6 +21,21 @@ export interface UseCurrentRouteProjectResult {
   project: CurrentRouteProject | null;
   /** Never rejects — a failed refetch leaves the last known value in place. */
   reload: () => Promise<void>;
+}
+
+/**
+ * An unavailable or failing check resolves to "still there": refusing to
+ * falsely accuse a link that may well be fine matters more here than
+ * catching every stale one, since copilotRunner.ts re-checks independently
+ * at the moment a message is actually sent.
+ */
+async function pathStillResolves(repoPath: string): Promise<boolean> {
+  try {
+    const result = await window.electron.repo.checkPath(repoPath);
+    return result.exists;
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -51,7 +75,14 @@ export function useCurrentRouteProject(): UseCurrentRouteProjectResult {
     try {
       const project = await getProject(projectId);
       if (generationRef.current !== generation) return;
-      setLoaded({ projectId, repoPath: project?.repoPath ?? null });
+      const repoPath = project?.repoPath ?? null;
+      // Folded into this same fetch rather than a second independent effect:
+      // this hook already re-runs on projectId change and on CopilotPanel's
+      // explicit reload() calls, which is the right cadence for staleness
+      // too — per navigation and per link, never per message.
+      const stale = repoPath ? !(await pathStillResolves(repoPath)) : false;
+      if (generationRef.current !== generation) return;
+      setLoaded({ projectId, name: project?.name ?? '', repoPath, stale });
     } catch {
       // Keep the last known value: a failed refetch must not read as "this
       // project has no repo linked", which would offer to link one that
