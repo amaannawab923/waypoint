@@ -15,7 +15,11 @@ export default function Tokens() {
         title="No Personal token yet"
         description="Create a new personal access token to use the API."
         action={
-          <Button variant="primary">
+          <Button
+            variant="primary"
+            disabled
+            title="Waypoint has no API authentication yet, so a token would have nothing to grant."
+          >
             <Plus size={15} />
             Add access token
           </Button>
