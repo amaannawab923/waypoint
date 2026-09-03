@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FolderGit2 } from 'lucide-react';
+import { AlertCircle, FolderGit2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { Button } from '@/components/ui/Button';
 import { useRepoLinkStatus } from '@/lib/useRepoLinkStatus';
@@ -28,7 +28,8 @@ export function RepoLinkBadge({
 }) {
   const navigate = useNavigate();
   const { status } = useRepoLinkStatus(project.repoPath);
-  const goToSettings = () => navigate(`/projects/${project.id}/settings/codebase`);
+  const goToSettings = () =>
+    navigate(`/projects/${project.id}/settings/codebase`);
 
   if (status.kind === 'stale') {
     return (
@@ -83,9 +84,22 @@ function LinkedRepoBadgePopover({
   // unless a user asks for the detail.
   const [open, setOpen] = useState(false);
   const described = useRepoDescribe(repoPath, open);
-  const { saving, browse } = useRepoLink(project.id, onChanged);
+  const { saving, error, browse, dismissError } = useRepoLink(
+    project.id,
+    onChanged,
+  );
   const commitAgo = relativeCommitTime(described?.lastCommitAt);
-  const name = described?.name ?? repoPath.split(/[\\/]/).filter(Boolean).pop() ?? repoPath;
+  const name =
+    described?.name ??
+    repoPath.split(/[\\/]/).filter(Boolean).pop() ??
+    repoPath;
+
+  const changeFolder = () =>
+    browse({
+      defaultPath: repoPath,
+      title: `Link ${project.name} to its local checkout`,
+      message: `Pick the top level of ${project.name}'s git checkout — the folder that contains .git.`,
+    });
 
   return (
     <div
@@ -94,7 +108,8 @@ function LinkedRepoBadgePopover({
       onMouseLeave={() => setOpen(false)}
       onFocus={() => setOpen(true)}
       onBlur={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOpen(false);
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null))
+          setOpen(false);
       }}
     >
       <button
@@ -114,7 +129,9 @@ function LinkedRepoBadgePopover({
         )}
         aria-hidden={!open}
       >
-        <div className="text-[12.5px] font-semibold text-text">Linked repository</div>
+        <div className="text-[12.5px] font-semibold text-text">
+          Linked repository
+        </div>
         <div className="mt-0.5 font-mono text-[11.5px] break-all text-text-secondary">
           {described?.displayPath ?? repoPath}
         </div>
@@ -129,12 +146,7 @@ function LinkedRepoBadgePopover({
             variant="secondary"
             size="xs"
             disabled={saving}
-            onClick={() =>
-              browse({
-                defaultPath: repoPath,
-                title: `Link ${project.name} to its local checkout`,
-              })
-            }
+            onClick={changeFolder}
           >
             {saving ? 'Saving…' : 'Change folder…'}
           </Button>
@@ -142,6 +154,35 @@ function LinkedRepoBadgePopover({
             Open in settings
           </Button>
         </div>
+
+        {error && (
+          <div className="mt-2 flex flex-col gap-1.5 border-t border-border pt-2">
+            <div className="flex gap-1.5">
+              <AlertCircle size={13} className="mt-0.5 shrink-0 text-danger" />
+              <div className="min-w-0">
+                <div className="text-[11.5px] font-semibold text-danger">
+                  {error.title}
+                </div>
+                <div className="mt-0.5 text-[11px] break-words text-danger opacity-90">
+                  {error.body}
+                </div>
+              </div>
+            </div>
+            <div className="ml-[19px] flex gap-1.5">
+              <Button
+                variant="secondary"
+                size="xs"
+                disabled={saving}
+                onClick={changeFolder}
+              >
+                Choose a different folder
+              </Button>
+              <Button variant="ghost" size="xs" onClick={dismissError}>
+                Dismiss
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
