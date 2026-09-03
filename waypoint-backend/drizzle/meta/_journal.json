@@ -22,6 +22,20 @@
       "when": 1788444566266,
       "tag": "0002_nappy_ultimo",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788447261191,
+      "tag": "0003_proposals_rename",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788447294154,
+      "tag": "0004_proposals_widen_scope",
+      "breakpoints": true
     }
   ]
 }

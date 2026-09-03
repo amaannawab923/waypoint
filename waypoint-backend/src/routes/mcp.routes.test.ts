@@ -342,6 +342,7 @@ function installProposalStore() {
         const chain = chainable(undefined);
         const capture = chain.values as ReturnType<typeof vi.fn>;
         chain.returning = vi.fn(() => {
+          const values = capture.mock.calls[0][0] as Record<string, unknown>;
           store.row = {
             status: 'proposed',
             statusReason: null,
@@ -349,7 +350,14 @@ function installProposalStore() {
             modelNotifiedAt: null,
             resolvedAt: null,
             createdAt: new Date(),
-            ...capture.mock.calls[0][0],
+            ...values,
+            // createProposal resolves projectId via a correlated SQL
+            // subquery against the target ticket (see proposals.service.ts)
+            // rather than a plain JS value — this fake doesn't run real
+            // SQL, so stand in with the fixed project id every ticket in
+            // this file's tests belongs to (see visibleTicket()) instead of
+            // storing the raw (circular, unserializable) SQL fragment.
+            projectId: typeof values.projectId === 'string' ? values.projectId : 'proj-1',
           };
           return Promise.resolve([{ ...store.row }]);
         });

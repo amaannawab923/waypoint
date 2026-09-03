@@ -1,8 +1,8 @@
-import { eq, and, lt, count, inArray, asc, isNull, sql } from 'drizzle-orm';
+import { eq, and, or, lt, gte, desc, count, inArray, asc, isNull, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { copilotProposals, copilotConversations, copilotMessages, tickets } from '../db/schema/index.js';
+import { proposals, copilotConversations, copilotMessages, tickets } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
-import { NotFoundError } from '../middleware/errors.js';
+import { NotFoundError, ValidationError } from '../middleware/errors.js';
 import { buildCopilotCommentHtml, COPILOT_DISCLOSURE } from '../lib/commentHtml.js';
 import * as ticketsService from './tickets.service.js';
 import * as commentsService from './comments.service.js';
@@ -40,8 +40,42 @@ export class ProposalValidationError extends Error {
   }
 }
 
-export type ProposalKind = 'comment' | 'state_change' | 'assignee_change' | 'priority_change' | 'create_ticket';
-export type ProposalStatus = 'proposed' | 'executing' | 'executed' | 'rejected' | 'stale' | 'expired' | 'superseded';
+// 'add_label' added for W3.1 (architecture §4.2) — no propose_add_label MCP
+// tool exists yet, so nothing currently produces this kind; it's here so
+// the type matches the widened proposal_kind enum.
+export type ProposalKind =
+  | 'comment'
+  | 'state_change'
+  | 'assignee_change'
+  | 'priority_change'
+  | 'create_ticket'
+  | 'add_label';
+// 'reverted' added for W3.1 — the Undo path (architecture §4.5) that
+// produces it is a later P4 unit, not built here.
+export type ProposalStatus =
+  | 'proposed'
+  | 'executing'
+  | 'executed'
+  | 'rejected'
+  | 'stale'
+  | 'expired'
+  | 'superseded'
+  | 'reverted';
+// Terminal statuses only — used by the review queue's "recent" segment and
+// the sidebar's resolved-in-24h count. 'executing' is deliberately
+// excluded: resolvedAt doubles as its claim timestamp (see EXECUTING_STUCK_MS
+// above), so a row mid-claim must never be counted as "resolved".
+const TERMINAL_PROPOSAL_STATUSES: ProposalStatus[] = [
+  'executed',
+  'rejected',
+  'stale',
+  'expired',
+  'superseded',
+  'reverted',
+];
+
+export type ProposalOrigin = 'copilot' | 'agent_run';
+export type ProposalDecidedBy = 'user' | 'trust_grant' | 'system';
 
 type Priority = NonNullable<(typeof tickets.$inferInsert)['priority']>;
 
@@ -78,16 +112,18 @@ export interface CreateProposalInput {
   snapshot: ProposalSnapshot;
 }
 
-type ProposalRow = typeof copilotProposals.$inferSelect;
+type ProposalRow = typeof proposals.$inferSelect;
 
 export interface ProposalView {
   id: string;
-  conversationId: string;
+  // NOW NULLABLE — non-null only for origin='copilot' (see schema note).
+  conversationId: string | null;
   kind: ProposalKind;
   ticketId: string | null;
   payload: ProposalPayload;
   snapshot: ProposalSnapshot;
-  anchorSeq: number;
+  // NOW NULLABLE — non-null only for origin='copilot'.
+  anchorSeq: number | null;
   status: ProposalStatus;
   statusReason: string | null;
   resultInfo: unknown;
@@ -99,6 +135,15 @@ export interface ProposalView {
   modelNotifiedAt: Date | null;
   resolvedAt: Date | null;
   createdAt: Date;
+  // --- new for W3.1's workspace-scoped widening -------------------------
+  origin: ProposalOrigin;
+  projectId: string;
+  agentId: string | null;
+  agentRunId: string | null;
+  sourceRequestId: string | null;
+  decidedBy: ProposalDecidedBy | null;
+  trustGrantId: string | null;
+  decisionLatencyMs: number | null;
 }
 
 function toView(row: ProposalRow, displayName: string): ProposalView {
@@ -109,7 +154,7 @@ function toView(row: ProposalRow, displayName: string): ProposalView {
     ticketId: row.ticketId,
     payload: row.payload as ProposalPayload,
     snapshot: row.snapshot as ProposalSnapshot,
-    anchorSeq: Number(row.anchorSeq),
+    anchorSeq: row.anchorSeq == null ? null : Number(row.anchorSeq),
     status: row.status as ProposalStatus,
     statusReason: row.statusReason,
     resultInfo: row.resultInfo,
@@ -118,6 +163,14 @@ function toView(row: ProposalRow, displayName: string): ProposalView {
     modelNotifiedAt: row.modelNotifiedAt,
     resolvedAt: row.resolvedAt,
     createdAt: row.createdAt,
+    origin: row.origin as ProposalOrigin,
+    projectId: row.projectId,
+    agentId: row.agentId,
+    agentRunId: row.agentRunId,
+    sourceRequestId: row.sourceRequestId,
+    decidedBy: row.decidedBy as ProposalDecidedBy | null,
+    trustGrantId: row.trustGrantId,
+    decisionLatencyMs: row.decisionLatencyMs,
   };
 }
 
@@ -148,8 +201,8 @@ export async function createProposal(input: CreateProposalInput): Promise<Propos
     // can't slip under the turn cap by first freeing its predecessor.
     const [{ n: turnCount }] = await tx
       .select({ n: count() })
-      .from(copilotProposals)
-      .where(and(eq(copilotProposals.conversationId, conversationId), eq(copilotProposals.anchorSeq, anchorSeq)));
+      .from(proposals)
+      .where(and(eq(proposals.conversationId, conversationId), eq(proposals.anchorSeq, anchorSeq)));
     if (turnCount >= MAX_PROPOSALS_PER_TURN) {
       throw new ProposalValidationError(
         `Too many proposals this turn (max ${MAX_PROPOSALS_PER_TURN}) — ask the user to act on the pending ones first.`,
@@ -157,8 +210,8 @@ export async function createProposal(input: CreateProposalInput): Promise<Propos
     }
     const [{ n: pendingCount }] = await tx
       .select({ n: count() })
-      .from(copilotProposals)
-      .where(and(eq(copilotProposals.conversationId, conversationId), eq(copilotProposals.status, 'proposed')));
+      .from(proposals)
+      .where(and(eq(proposals.conversationId, conversationId), eq(proposals.status, 'proposed')));
     if (pendingCount >= MAX_PENDING_PER_CONVERSATION) {
       throw new ProposalValidationError(
         `Too many pending proposals in this conversation (max ${MAX_PENDING_PER_CONVERSATION}) — ask the user to approve or reject the pending ones first.`,
@@ -174,32 +227,52 @@ export async function createProposal(input: CreateProposalInput): Promise<Propos
     // legitimately coexist — so they never supersede.
     if (kind === 'state_change' || kind === 'priority_change' || kind === 'assignee_change') {
       const conditions = [
-        eq(copilotProposals.conversationId, conversationId),
-        eq(copilotProposals.ticketId, ticketId as string),
-        eq(copilotProposals.kind, kind),
-        eq(copilotProposals.status, 'proposed'),
+        eq(proposals.conversationId, conversationId),
+        eq(proposals.ticketId, ticketId as string),
+        eq(proposals.kind, kind),
+        eq(proposals.status, 'proposed'),
       ];
       if (kind === 'assignee_change') {
         conditions.push(
-          sql`${copilotProposals.payload}->>'assigneeId' = ${(payload as { assigneeId: string }).assigneeId}`,
+          sql`${proposals.payload}->>'assigneeId' = ${(payload as { assigneeId: string }).assigneeId}`,
         );
       }
       await tx
-        .update(copilotProposals)
+        .update(proposals)
         .set({ status: 'superseded', resolvedAt: new Date() })
         .where(and(...conditions));
     }
 
+    // projectId is denormalised (architecture §4.2) so the review queue's
+    // project filter is one index scan with no join. Every proposal this
+    // function creates is origin='copilot', so this is the only place that
+    // needs to resolve it: for create_ticket it's already in the payload
+    // (there's no ticket yet); for everything else it comes from the
+    // target ticket's own project. Resolved as a correlated subquery
+    // inside the same INSERT — not a separate tx.select — so this doesn't
+    // add a round trip or change the transaction's query shape.
+    const projectId =
+      kind === 'create_ticket'
+        ? (payload as CreateTicketProposalPayload).projectId
+        : sql`(select ${tickets.projectId} from ${tickets} where ${tickets.id} = ${ticketId})`;
+
     const [row] = await tx
-      .insert(copilotProposals)
+      .insert(proposals)
       .values({
         id: newId('prop'),
+        origin: 'copilot',
         conversationId,
         kind,
         ticketId,
         payload,
         snapshot,
         anchorSeq,
+        // Narrow, documented escape (not `any`): drizzle accepts a raw SQL
+        // fragment as a column value at runtime for a correlated-subquery
+        // insert, but the generated insert type only has room for the
+        // plain column type (string), so TypeScript needs this cast told
+        // explicitly rather than the column's declared type being widened.
+        projectId: projectId as unknown as string,
         expiresAt: new Date(Date.now() + PROPOSAL_TTL_MS),
       })
       .returning();
@@ -207,39 +280,38 @@ export async function createProposal(input: CreateProposalInput): Promise<Propos
   });
 }
 
-export async function listProposals(conversationId: string): Promise<ProposalView[]> {
-  // Lazy repair pass, so the list never renders a card whose status the DB
-  // knows is a lie:
-  //  - a 'proposed' row past its TTL becomes 'expired' here rather than
-  //    waiting for an approve attempt to discover it;
-  //  - an 'executing' row stuck past EXECUTING_STUCK_MS is a crashed OR
-  //    still-in-flight execute — and there is no way to tell whether the
-  //    crash happened BEFORE or AFTER the underlying write ran (final
-  //    review finding M2: a process death between execute and finalize
-  //    leaves a comment already posted / a ticket already created). So a
-  //    stuck claim is parked as STALE — visible, non-approvable, with a
-  //    reason telling the user to check the ticket — never back to
-  //    'proposed', where one more Approve click would run the write a
-  //    second time. The claim timestamp is resolvedAt (set by
-  //    approveProposal's claim UPDATE), so the column is unambiguous while
-  //    in the 'executing' state.
+// W3.3 (architecture §4.2, "the repair pass has to change shape"): this
+// used to run inline inside listProposals, scoped by conversation_id. The
+// aggregate review queue has no conversation id to scope a repair scan by,
+// so the pass is now workspace-wide — kept cheap by the two partial
+// indexes on the proposals table (proposals_pending_expiry_idx,
+// proposals_stuck_claim_idx — see db/schema/proposals.ts) rather than by a
+// conversation filter. Exactly the same two UPDATEs as before, just
+// unscoped:
+//  - a 'proposed' row past its TTL becomes 'expired' rather than waiting
+//    for an approve attempt to discover it;
+//  - an 'executing' row stuck past EXECUTING_STUCK_MS is a crashed OR
+//    still-in-flight execute — and there is no way to tell whether the
+//    crash happened BEFORE or AFTER the underlying write ran (final review
+//    finding M2: a process death between execute and finalize leaves a
+//    comment already posted / a ticket already created). So a stuck claim
+//    is parked as STALE — visible, non-approvable, with a reason telling
+//    the user to check the ticket — never back to 'proposed', where one
+//    more Approve click would run the write a second time. The claim
+//    timestamp is resolvedAt (set by approveProposal's claim UPDATE), so
+//    the column is unambiguous while in the 'executing' state.
+export async function repairProposals(): Promise<void> {
   const now = new Date();
   await db
-    .update(copilotProposals)
+    .update(proposals)
     .set({
       status: 'expired',
       statusReason: 'This proposal expired before it was reviewed',
       resolvedAt: now,
     })
-    .where(
-      and(
-        eq(copilotProposals.conversationId, conversationId),
-        eq(copilotProposals.status, 'proposed'),
-        lt(copilotProposals.expiresAt, now),
-      ),
-    );
+    .where(and(eq(proposals.status, 'proposed'), lt(proposals.expiresAt, now)));
   await db
-    .update(copilotProposals)
+    .update(proposals)
     .set({
       status: 'stale',
       statusReason:
@@ -248,17 +320,37 @@ export async function listProposals(conversationId: string): Promise<ProposalVie
     })
     .where(
       and(
-        eq(copilotProposals.conversationId, conversationId),
-        eq(copilotProposals.status, 'executing'),
-        lt(copilotProposals.resolvedAt, new Date(now.getTime() - EXECUTING_STUCK_MS)),
+        eq(proposals.status, 'executing'),
+        lt(proposals.resolvedAt, new Date(now.getTime() - EXECUTING_STUCK_MS)),
       ),
     );
+}
+
+// The primary schedule for repairProposals is a 60-second setInterval in
+// index.ts. This is the belt-and-braces fallback for callers (listProposals
+// below) between ticks — guarded by a module-level "last repaired at" so a
+// burst of calls inside the same minute runs the repair query pair at most
+// once, rather than once per call.
+const REPAIR_INTERVAL_MS = 60 * 1000;
+let lastRepairedAt = 0;
+
+export async function maybeRepairProposals(): Promise<void> {
+  const now = Date.now();
+  if (now - lastRepairedAt < REPAIR_INTERVAL_MS) return;
+  lastRepairedAt = now;
+  await repairProposals();
+}
+
+export async function listProposals(conversationId: string): Promise<ProposalView[]> {
+  // See maybeRepairProposals/repairProposals above — this used to be two
+  // inline, conversation-scoped UPDATEs run on every call.
+  await maybeRepairProposals();
 
   const rows = await db
     .select()
-    .from(copilotProposals)
-    .where(eq(copilotProposals.conversationId, conversationId))
-    .orderBy(asc(copilotProposals.createdAt));
+    .from(proposals)
+    .where(eq(proposals.conversationId, conversationId))
+    .orderBy(asc(proposals.createdAt));
   // No live staleness checks here — the card renders the propose-time
   // snapshot, and only approve (the moment that matters) re-checks reality.
   const { displayName } = await membersService.getCurrentUser();
@@ -339,15 +431,15 @@ async function finalize(
   // and returns the row as the repair left it, rather than rewriting
   // history.
   const [row] = await db
-    .update(copilotProposals)
+    .update(proposals)
     .set({ ...patch, resolvedAt: new Date() })
-    .where(and(eq(copilotProposals.id, id), eq(copilotProposals.status, 'executing')))
+    .where(and(eq(proposals.id, id), eq(proposals.status, 'executing')))
     .returning();
   if (row) return row;
   const [current] = await db
     .select()
-    .from(copilotProposals)
-    .where(eq(copilotProposals.id, id));
+    .from(proposals)
+    .where(eq(proposals.id, id));
   return current;
 }
 
@@ -407,16 +499,16 @@ export async function approveProposal(id: string): Promise<ProposalView> {
   // resolvedAt doubles as the claim timestamp while status='executing' (see
   // listProposals's stuck-claim recovery).
   const [claimed] = await db
-    .update(copilotProposals)
+    .update(proposals)
     .set({ status: 'executing', resolvedAt: new Date() })
-    .where(and(eq(copilotProposals.id, id), eq(copilotProposals.status, 'proposed')))
+    .where(and(eq(proposals.id, id), eq(proposals.status, 'proposed')))
     .returning();
 
   if (!claimed) {
     // Not claimable: either the row doesn't exist (404) or it's already
     // resolved / being executed — echo it as-is with HTTP 200 and ZERO
     // re-execution, so a double-click or a retried request is harmless.
-    const [existing] = await db.select().from(copilotProposals).where(eq(copilotProposals.id, id)).limit(1);
+    const [existing] = await db.select().from(proposals).where(eq(proposals.id, id)).limit(1);
     if (!existing) throw new NotFoundError('proposal');
     return toView(existing, displayName);
   }
@@ -446,9 +538,9 @@ export async function approveProposal(id: string): Promise<ProposalView> {
     // Execution failed — release the claim so the card stays pending and
     // approve is retryable, then let errorHandler shape the HTTP response.
     await db
-      .update(copilotProposals)
+      .update(proposals)
       .set({ status: 'proposed', resolvedAt: null })
-      .where(and(eq(copilotProposals.id, id), eq(copilotProposals.status, 'executing')));
+      .where(and(eq(proposals.id, id), eq(proposals.status, 'executing')));
     throw error;
   }
 
@@ -462,12 +554,12 @@ export async function rejectProposal(id: string): Promise<ProposalView> {
   // rejected. statusReason is deliberately not touched, so a stale card's
   // reason survives into the rejected row (and the model's outcome note).
   const [updated] = await db
-    .update(copilotProposals)
+    .update(proposals)
     .set({ status: 'rejected', resolvedAt: new Date() })
-    .where(and(eq(copilotProposals.id, id), inArray(copilotProposals.status, ['proposed', 'stale'])))
+    .where(and(eq(proposals.id, id), inArray(proposals.status, ['proposed', 'stale'])))
     .returning();
   if (updated) return toView(updated, displayName);
-  const [existing] = await db.select().from(copilotProposals).where(eq(copilotProposals.id, id)).limit(1);
+  const [existing] = await db.select().from(proposals).where(eq(proposals.id, id)).limit(1);
   if (!existing) throw new NotFoundError('proposal');
   // Already resolved — idempotent echo, same contract as approve.
   return toView(existing, displayName);
@@ -478,15 +570,15 @@ export async function rejectAllPending(conversationId: string): Promise<{ reject
   // single-row rejectProposal: a stale card's only affordance is Dismiss, so
   // "reject all" leaving stale cards behind stranded them with no bulk way out.
   const rows = await db
-    .update(copilotProposals)
+    .update(proposals)
     .set({ status: 'rejected', resolvedAt: new Date() })
     .where(
       and(
-        eq(copilotProposals.conversationId, conversationId),
-        inArray(copilotProposals.status, ['proposed', 'stale']),
+        eq(proposals.conversationId, conversationId),
+        inArray(proposals.status, ['proposed', 'stale']),
       ),
     )
-    .returning({ id: copilotProposals.id });
+    .returning({ id: proposals.id });
   return { rejected: rows.length };
 }
 
@@ -499,15 +591,15 @@ export async function markProposalsNotified(
   // silent no-op, not a cross-conversation write. modelNotifiedAt IS NULL
   // keeps the first delivery timestamp authoritative under re-delivery.
   const rows = await db
-    .update(copilotProposals)
+    .update(proposals)
     .set({ modelNotifiedAt: new Date() })
     .where(
       and(
-        inArray(copilotProposals.id, ids),
-        eq(copilotProposals.conversationId, conversationId),
-        isNull(copilotProposals.modelNotifiedAt),
+        inArray(proposals.id, ids),
+        eq(proposals.conversationId, conversationId),
+        isNull(proposals.modelNotifiedAt),
       ),
     )
-    .returning({ id: copilotProposals.id });
+    .returning({ id: proposals.id });
   return { notified: rows.length };
 }
