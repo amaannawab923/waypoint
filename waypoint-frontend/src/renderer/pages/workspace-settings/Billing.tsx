@@ -53,7 +53,7 @@ export default function Billing() {
 
   return (
     <div>
-      <h2 className="mb-6 font-display text-lg font-medium text-text">Billing and plans</h2>
+      <h2 className="mb-6 font-display text-lg font-medium text-text">Billing</h2>
 
       {loading && !workspace && (
         <Skeleton>

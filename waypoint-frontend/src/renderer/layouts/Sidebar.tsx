@@ -94,7 +94,7 @@ export function Sidebar() {
         </NavLink>
         <NavLink to="/your-work" className={navLinkClass}>
           <UserRound size={15} />
-          Your work
+          My work
         </NavLink>
         <NavLink to="/drafts" className={navLinkClass}>
           <FileEdit size={15} />
@@ -132,7 +132,7 @@ export function Sidebar() {
         </NavLink>
         <NavLink to="/projects/archived" className={navLinkClass}>
           <Archive size={15} />
-          Archives
+          Archive
         </NavLink>
         <NavLink to="/analytics" className={navLinkClass}>
           <BarChart2 size={15} />

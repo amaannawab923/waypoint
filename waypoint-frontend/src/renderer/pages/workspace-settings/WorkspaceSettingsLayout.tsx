@@ -23,7 +23,7 @@ const ADMINISTRATION_ITEMS = [
   { to: 'general', label: 'General', icon: Building2 },
   { to: 'members', label: 'Members', icon: Users },
   { to: 'agents', label: 'Agents', icon: Bot },
-  { to: 'billing', label: 'Billing and plans', icon: CreditCard },
+  { to: 'billing', label: 'Billing', icon: CreditCard },
   { to: 'exports', label: 'Exports', icon: Download },
 ];
 

@@ -15,7 +15,7 @@ const ESTIMATE_PRESETS: Record<EstimateType, { label: string; description: strin
     values: ['0', '1', '2', '3', '5', '8', '13', '21'],
   },
   categories: {
-    label: 'Categories',
+    label: 'Sizes',
     description: 'T-shirt sizes for a lightweight, relative estimate.',
     values: ['XS', 'S', 'M', 'L', 'XL', 'XXL'],
   },

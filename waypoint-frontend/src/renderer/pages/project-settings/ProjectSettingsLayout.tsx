@@ -22,7 +22,7 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    label: 'Work Structure',
+    label: 'Ticket setup',
     items: [
       { to: 'states', label: 'States' },
       { to: 'labels', label: 'Labels' },

@@ -2,11 +2,11 @@
 
 **The world's first project management tool that actually ships as a native
 desktop app.** Not a web page in a browser tab pretending to be an app —
-Waypoint is a real Electron application: projects, cycles, modules, work
-items, pages, intake, and AI agent assignments, all running natively on your
-machine and talking to a real backend, not local-storage.
+Waypoint is a real Electron application: projects, sprints, workstreams,
+tickets, docs, requests, and AI agent assignments, all running natively on
+your machine and talking to a real backend, not local-storage.
 
-![Waypoint — work item detail](./docs/screenshots/work-item-detail.png)
+![Waypoint — ticket detail](./docs/screenshots/work-item-detail.png)
 
 This repo holds the entire product — frontend and backend — in one place.
 
@@ -17,17 +17,17 @@ This repo holds the entire product — frontend and backend — in one place.
 
 ## What's in the box
 
-- **Work item tracking** — boards, lists, a calendar view, a Gantt view, and a
+- **Ticket tracking** — boards, lists, a calendar view, a Gantt view, and a
   spreadsheet view over the same underlying data, with states, priorities,
-  estimates, labels, assignees, sub-items, and full activity history.
-- **Cycles & modules** — sprint-style cycles with burndown charts, and modules
-  for grouping work items outside the cycle timeline.
-- **Pages & saved views** — freeform docs per project, and shareable filtered
-  views of your work items.
-- **Intake** — a triage queue for incoming requests before they become real
-  work items.
-- **AI agents** — assign an agent to a work item, hand work back and forth,
-  and track agent-driven activity alongside human activity in the same log.
+  estimates, labels, assignees, subtasks, and full activity history.
+- **Sprints & workstreams** — sprint-style iterations with burndown charts, and
+  workstreams for grouping tickets outside the sprint timeline.
+- **Docs & saved views** — freeform docs per project, and shareable filtered
+  views of your tickets.
+- **Requests** — an incoming queue that turns outside requests into real
+  tickets.
+- **AI agents** — assign an agent to a ticket, hand work back and forth, and
+  track agent-driven activity alongside human activity in the same log.
 - **Real, address-bar-updating routes** — deep links, hard-refresh, and
   browser back/forward all work correctly, in the dev server, in the packaged
   desktop app, and (by construction) if this ever ships as a plain website too.
@@ -38,14 +38,14 @@ This repo holds the entire product — frontend and backend — in one place.
 
 ![Home](./docs/screenshots/home.png)
 
-**Work items** — states, priorities, labels, assignees, and sub-item
-progress at a glance.
+**Tickets** — states, priorities, labels, assignees, and subtask progress
+at a glance.
 
-![Work items](./docs/screenshots/work-items.png)
+![Tickets](./docs/screenshots/work-items.png)
 
-**Cycles** — sprint-style iterations with a live burndown chart.
+**Sprints** — sprint-style iterations with a live burndown chart.
 
-![Cycles](./docs/screenshots/cycles.png)
+![Sprints](./docs/screenshots/cycles.png)
 
 ## Getting started
 

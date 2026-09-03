@@ -1132,7 +1132,7 @@ export function TicketDetailContent({
           />
         </PropertyRow>
 
-        <PropertyRow label="Workstreams">
+        <PropertyRow label="Workstream">
           <Dropdown
             trigger={(toggle) => (
               <button type="button" onClick={toggle} className={TRIGGER_CLASS}>

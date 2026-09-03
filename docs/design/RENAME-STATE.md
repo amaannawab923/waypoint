@@ -14,22 +14,25 @@ this file is the one-read answer to "how far has it got?".
 | C2 | `refactor(db): rename work items to tickets` — backend schema + migration + routes + services + validation, **and** the renderer types/pages/routes that consume them. `WorkItem`→`Ticket`, `WorkItemState`→`TicketState`, `work-items` routes, `/work-items` URL, "Sub-work items"→"Subtasks". | `[x]` |
 | C3 | `refactor(db): rename cycles/modules/intake/pages/stickies` — Sprints, Workstreams, Requests, Docs, Scratchpad. Same both-halves shape. Includes the `WorkModule.status` collapse, the `triage` state-group drop, and the `webhooks.event_types` remap. | `[x]` |
 | C4 | `refactor(mcp): rename tool surface and the Copilot prompt` — `workItemTools.ts`, `proposalTools.ts`, `MCP_TOOLS`, `COPILOT_SYSTEM_PROMPT_BASE`, `copilot_proposal_kind.create_work_item`→`create_ticket`. **Atomic — see §6.1 constraint 1.** | `[x]` |
-| C5 | `refactor: labels, visibility, and copy` — `Network`→`Visibility`, `Categories`→`Sizes`, `Archives`→`Archive`, `Billing and plans`→`Billing`, `Your work`→`My work`, Notifications heading, `Work Structure`→`Ticket setup`, README. | `[ ]` |
+| C5 | `refactor: labels, visibility, and copy` — `Network`→`Visibility`, `Categories`→`Sizes`, `Archives`→`Archive`, `Billing and plans`→`Billing`, `Your work`→`My work`, Notifications heading, `Work Structure`→`Ticket setup`, README. | `[x]` |
 
-## The tripwire
+## The tripwire (retired in C5)
 
-`waypoint-frontend/src/renderer/__tests__/vocabulary.test.ts` greps the renderer
-tree for abolished identifiers and fails the suite on any hit. It exists so a
-session that stops mid-cluster leaves a red build rather than a plausible-looking
-half-rename.
+`waypoint-frontend/src/renderer/__tests__/vocabulary.test.ts` greped the
+renderer tree for abolished identifiers and failed the suite on any hit. It
+existed so a session that stopped mid-cluster left a red build rather than a
+plausible-looking half-rename.
 
-Bans are added in the same commit that abolishes them, and the whole file is
-deleted in C5:
+Bans were added in the same commit that abolished them, and C5 deleted the
+whole file, per its own stated plan — the rename it guarded is complete, so it
+has nothing left to catch:
 
-- **C1 (landed)** — bans the literal `@/mock`.
-- **C2 (landed)** — adds `WorkItem`, `work_item`, `work-items`.
-- **C3 (landed)** — adds `Cycle`, `Module`, `Intake`, `Sticky`.
-- **C5** — delete the file.
+- **C1 (landed)** — banned the literal `@/mock`.
+- **C2 (landed)** — added `WorkItem`, `work_item`, `work-items`.
+- **C3 (landed)** — added `Cycle`, `Module`, `Intake`, `Sticky`.
+- **C5 (landed)** — deleted the file. Nothing referenced it by path (no Jest/
+  Vitest config named it explicitly; it was picked up by the default test
+  glob), so the deletion needed no other edit.
 
 C2 added an `allowed` field to the `Ban` type: literals that contain a banned
 pattern but are legitimately still in the tree, stripped from a line before it
@@ -443,3 +446,156 @@ once reverted.
 
 Nothing from C4's own cluster was deferred — see "Deliberately left alone"
 above for the (non-rename) exceptions.
+
+## What C5 actually did
+
+Renamed the last vocabulary cluster — visibility — plus the labels and copy
+deferred above, deleted the tripwire, and closed out P2.
+
+### The DB rename was smaller than §3.2 items 13–17 describe
+
+Before touching anything, the actual schema was checked against architecture
+§3.2's five-item table (items 13–17), because C3's own "What C3 actually did"
+table (above) already lists `page_visibility`→`doc_visibility` and
+`intake_status`→`request_status` alongside `module_status`→`workstream_status`
+— which C3's prose says is item 16, without saying anything about 15 and 17.
+The schema settles it: `waypoint-backend/src/db/schema/requests.ts` already
+declared `pgEnum('request_status', …)` and `docs.ts` already declared
+`pgEnum('doc_visibility', …)` going into this commit, and
+`drizzle/0000_baseline.sql` already has `CREATE TYPE "request_status"` and
+`CREATE TYPE "doc_visibility"` — both enum types were renamed as a natural
+side effect of C3 renaming the `requests` and `docs` tables that own them,
+even though the architecture doc's item list scoped that pair to C5.
+
+So C5's actual database work was items 13 and 14 only:
+
+| From | To |
+|---|---|
+| column `projects.network` | `projects.visibility` |
+| enum type `network` | `visibility` |
+
+`saved_views.visibility` — the second column that shares the `network` enum
+type per §3.2's note — was left untouched, exactly as instructed: its column
+was already named `visibility`, only the type it references moved underneath
+it (`waypoint-backend/src/db/schema/views.ts`'s import changed from
+`networkEnum` to `visibilityEnum`; the column definition itself did not
+change).
+
+### The migration
+
+Both the enum-type rename and the column rename came back from
+`drizzle-kit generate` as true renames, not drop+recreate, so neither needed
+hand-writing. The C2/C3 pty recipe was reused unchanged — `expect` driving the
+prompts, `\033[B` (down) to select the `~ network › visibility` row, `\r` to
+confirm — and this time it was only two prompts (one enum, one column), so no
+prompt-counting script was needed, just two fixed sends.
+`drizzle/0002_nappy_ultimo.sql` is two lines, no `DROP` of any kind:
+
+```sql
+ALTER TYPE "public"."network" RENAME TO "visibility";
+ALTER TABLE "projects" RENAME COLUMN "network" TO "visibility";
+```
+
+`meta/0002_snapshot.json` diffs against `0001_snapshot.json` in exactly the
+expected places: the id/prevId pair, the `network`→`visibility` column
+definition on `projects`, and the `public.network`→`public.visibility` enum
+definition. Applied to a from-empty database via
+`docker compose down -v && npm run db:migrate && npm run db:seed` as part of
+this commit's own verification (see below); `npm run db:generate` after that
+reports no further changes, confirming the schema and the migration history
+agree.
+
+### Labels and copy
+
+| Location | From | To |
+|---|---|---|
+| `Sidebar.tsx` nav | `Archives` | `Archive` |
+| `Sidebar.tsx` nav, `YourWork.tsx` h1 | `Your work` | `My work` |
+| `WorkspaceSettingsLayout.tsx` nav, `Billing.tsx` h2 | `Billing and plans` | `Billing` |
+| `ProjectSettingsLayout.tsx` nav group | `Work Structure` | `Ticket setup` |
+| `Estimates.tsx` preset label (the `categories` estimate type) | `Categories` | `Sizes` |
+| `project-settings/General.tsx` field label | `Network` | `Visibility` |
+
+The `EstimateType` value itself (`'points' \| 'categories'`) and every
+identifier built on it — the zod enum in `projects.schema.ts`, the
+`ESTIMATE_PRESETS` record key — were left as `categories`. Only the
+human-facing `label` string changed. This is copy, not a data-model rename:
+nothing in §3.2's item list touches the estimate system, the value is
+project-scoped `jsonb` rather than a column or enum type, and renaming the
+key would have meant migrating every project's stored `estimate.type`, which
+nobody asked for.
+
+**The Notifications/Inbox mismatch.** `Topbar.tsx`'s bell button carries
+`aria-label="Notifications"` and no tooltip; `pages/Notifications.tsx`
+rendered an `<h1>` reading `Inbox`. `pages/profile-settings/Notifications.tsx`
+— the other file of that duplicate pair the architecture doc's §6.3 flags —
+already read `Notifications` on its own heading. Fixed by changing the page
+heading to `Notifications`, matching the nav trigger and the other file,
+rather than changing the nav to `Inbox`; nothing else in the app called this
+page or feature "Inbox".
+
+**The Workstream(s) defect**, first spotted by C3: `TicketDetailPage.tsx`'s
+sidebar `<PropertyRow label="Workstreams">` sits over a single-select
+dropdown (`currentWorkstream?.name ?? 'No workstream'`, an "add" affordance
+for exactly one). Changed to singular `label="Workstream"`.
+
+### README
+
+Rewrote the entity-list prose C2 and C3 both deferred: the root `README.md`'s
+opening paragraph, its "What's in the box" bullets, and its screenshot
+captions; `waypoint-backend/README.md`'s one-line description. `work items` →
+`tickets`, `cycles` → `sprints`, `modules` → `workstreams`, `pages` → `docs`,
+`intake` → `requests`, throughout, rewritten as prose rather than
+find-replaced (the "Ticket tracking" bullet's "sub-items" also became
+"subtasks" to match C2, which the deferred text had missed).
+
+**Left alone, flagged rather than fixed:** the screenshot files in
+`docs/screenshots/` are still named `work-item-detail.png`, `work-items.png`
+and `cycles.png`, and the images themselves are unverified — they may still
+show pre-rename UI copy, since renaming vocabulary in source does not
+retroactively update a captured screenshot. Renaming the files without
+knowing whether their pixel content matches the new copy would trade one
+inconsistency for another, and regenerating screenshots is outside a
+labels-and-copy commit. The README's alt text and captions now say `ticket`/
+`sprint`, which reads as slightly ahead of the (unchanged) filenames. Left
+for a follow-up that can actually regenerate the images.
+
+### Verification
+
+`npm run build && npm test` green in both halves. `docker compose down -v &&
+npm run db:migrate && npm run db:seed` succeeded from an empty volume with
+`0002_nappy_ultimo.sql` applied; the full suite was re-run against that fresh
+database and stayed green. `lint:honesty` clean. The vocabulary tripwire was
+green immediately before its own deletion (all eight bans, zero hits), and
+`waypoint-frontend/src/renderer/__tests__/vocabulary.test.ts` no longer
+exists; nothing referenced it by path, so no config needed updating.
+
+## P2 closed — final whole-rename sanity pass
+
+C5 is the last of the five sequential rename commits (§6.2), so before
+closing this file out, the full C1–C5 diff was re-checked for coherence, not
+just C5's own slice — see this commit's own handoff for the exact grep and
+the full triage of every hit. Anything found there that reads as leftover
+rename debt from an earlier commit (as opposed to one of the already-
+documented "deliberately left alone" exceptions above) is called out in that
+handoff for a decision before this branch moves on to P3; it is not silently
+fixed or silently ignored here.
+
+## Closing summary
+
+All five commits are landed: C1 (`mock/`→`data/`), C2 (work items→tickets),
+C3 (cycles/modules/intake/pages/stickies→sprints/workstreams/requests/docs/
+scratch notes), C4 (the MCP tool surface and Copilot prompt), C5 (labels,
+visibility, and copy). `npm run build && npm test` is green in both halves
+after each commit, per the bisect requirement in this file's opening
+paragraph, and the vocabulary tripwire caught zero half-renamed states across
+the whole sequence.
+
+This file's job is essentially done. It stays in the tree as the historical
+record of how the rename actually happened — the per-commit "What N actually
+did" sections, the destructive-migration notes, the deferred-item tables —
+but no further commits are expected against it: there is no C6, the "Landed"
+column above is complete, and the tripwire it used to track is deleted. A
+later reader should treat everything above this point as frozen history, the
+same way this file already treats `waypoint-differentiation-audit.md` and
+`waypoint-defingerprinting-plan.md`.

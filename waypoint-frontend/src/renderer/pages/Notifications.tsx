@@ -76,7 +76,7 @@ export default function Notifications() {
   return (
     <div className="mx-auto max-w-3xl p-6 md:p-8">
       <div className="flex items-center gap-2">
-        <h1 className="font-display text-2xl font-medium text-text">Inbox</h1>
+        <h1 className="font-display text-2xl font-medium text-text">Notifications</h1>
         {unreadCount > 0 && (
           <span className="rounded-full bg-accent-soft-bg px-2 py-0.5 text-xs font-medium text-accent-soft-text">
             {unreadCount} unread

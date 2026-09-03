@@ -101,7 +101,7 @@ export default function YourWork() {
 
   return (
     <div className="mx-auto max-w-6xl p-6 md:p-8">
-      <h1 className="font-display text-2xl font-medium text-text">Your work</h1>
+      <h1 className="font-display text-2xl font-medium text-text">My work</h1>
 
       <div className="mt-5 flex gap-1 border-b border-border">
         {TABS.map((t) => (
