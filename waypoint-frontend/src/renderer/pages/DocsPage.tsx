@@ -20,6 +20,7 @@ import {
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import { createDoc, deleteDoc, listMembers, listDocs, updateDoc } from '@/data/api';
+import { refreshProjectInStore } from '@/lib/projectsStore';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button, IconButton } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -172,6 +173,10 @@ export default function DocsPage() {
     try {
       const doc = await createDoc(project.id, '', parentDocId);
       reload();
+      // This may be the project's first doc — refresh the shared projects
+      // store so the sidebar's Docs entry (driven by
+      // primitiveCounts.docs > 0) appears without a page reload.
+      refreshProjectInStore(project.id);
       navigate(`/projects/${project.id}/docs/${doc.id}`);
     } finally {
       setCreating(false);
@@ -200,21 +205,6 @@ export default function DocsPage() {
     if (!window.confirm(`Delete "${doc.title || 'Untitled'}"? This can't be undone.`)) return;
     await deleteDoc(doc.id);
     reload();
-  }
-
-  if (!project.features.docs) {
-    return (
-      <EmptyState
-        icon={<FileText size={28} />}
-        title="Docs is disabled for this project"
-        description="Turn Docs back on in project settings to write and browse them again."
-        action={
-          <Button variant="primary" onClick={() => navigate(`/projects/${project.id}/settings/features`)}>
-            Go to features
-          </Button>
-        }
-      />
-    );
   }
 
   return (
