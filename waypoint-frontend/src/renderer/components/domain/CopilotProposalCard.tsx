@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { clsx } from 'clsx';
-import { AlertTriangle, ArrowRight, Check } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
+import { IconAlert, IconCheck } from '@/components/icons';
 import type { ProposalView, ProposalKind, Priority } from '@/types/entities';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
@@ -426,7 +427,7 @@ export function CopilotProposalCard({
         <ProposalBody proposal={proposal} agentName={agentName} />
         {isStale && (
           <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-warning bg-warning-bg px-2.5 py-2 text-[12.5px] leading-snug font-medium text-warning">
-            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <IconAlert size={14} className="mt-0.5 shrink-0" />
             <span>
               {proposal.statusReason ??
                 'This proposal is no longer applicable.'}
@@ -486,7 +487,7 @@ export function CopilotProposalCard({
             note.ok ? 'bg-success-bg text-success' : 'text-text-muted',
           )}
         >
-          {note.ok ? <Check size={13} /> : <span aria-hidden>—</span>}
+          {note.ok ? <IconCheck size={13} /> : <span aria-hidden>—</span>}
           {note.text}
         </div>
       )}
