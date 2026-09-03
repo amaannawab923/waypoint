@@ -50,7 +50,16 @@ export function TicketDrawer({
   }
 
   return createPortal(
-    <div className="fixed inset-0 z-50 bg-black/40" onClick={onClose}>
+    // data-ticket-drawer: a presence marker, not a style hook — the W5.4
+    // global Escape cascade (useGlobalKeyboardShortcuts.ts) checks for this
+    // to know a drawer is open (and about to close itself, via this
+    // component's own Escape listener above) so its own fallback doesn't
+    // ALSO clear an unrelated selection on the same keystroke.
+    <div
+      className="fixed inset-0 z-50 bg-black/40"
+      data-ticket-drawer
+      onClick={onClose}
+    >
       <div
         className="thin-scroll absolute inset-y-0 right-0 flex h-full w-full max-w-[720px] flex-col border-l border-border bg-surface shadow-2xl transition-transform duration-200 ease-out"
         style={{ transform: visible ? 'translateX(0)' : 'translateX(100%)' }}
