@@ -26,9 +26,13 @@ import { refreshProjectInStore } from '@/lib/projectsStore';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { Modal } from '@/components/ui/Modal';
+import { NamePromptModal } from '@/components/ui/NamePromptModal';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
 import TicketList from '@/pages/tickets/TicketList';
+import TicketListToolbar, {
+  captureSavedViewFilter,
+  PROJECT_GROUP_BY_OPTIONS,
+} from '@/pages/tickets/TicketListToolbar';
 import {
   EMPTY_FILTERS,
   useTicketsView,
@@ -109,70 +113,6 @@ function Dropdown({
   );
 }
 
-/** Electron's renderer doesn't implement window.prompt() at all (unlike
- * window.confirm(), which is real) — any code path relying on it crashes
- * unconditionally. This is the in-app replacement, local to this file since
- * there's no shared single-field text-prompt primitive yet. */
-function NamePromptModal({
-  open,
-  title,
-  initialValue,
-  confirmLabel,
-  onCancel,
-  onSubmit,
-}: {
-  open: boolean;
-  title: string;
-  initialValue: string;
-  confirmLabel: string;
-  onCancel: () => void;
-  onSubmit: (value: string) => void;
-}) {
-  const [value, setValue] = useState(initialValue);
-  useEffect(() => {
-    if (open) setValue(initialValue);
-  }, [open, initialValue]);
-
-  function submit() {
-    const trimmed = value.trim();
-    if (!trimmed) return;
-    onSubmit(trimmed);
-  }
-
-  return (
-    <Modal
-      open={open}
-      onClose={onCancel}
-      title={title}
-      footer={
-        <>
-          <Button variant="secondary" size="sm" onClick={onCancel}>
-            Cancel
-          </Button>
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={submit}
-            disabled={!value.trim()}
-          >
-            {confirmLabel}
-          </Button>
-        </>
-      }
-    >
-      <input
-        autoFocus
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') submit();
-        }}
-        className="h-9 w-full rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 text-sm text-text outline-none focus:border-accent"
-      />
-    </Modal>
-  );
-}
-
 function MenuItem({
   icon,
   label,
@@ -214,6 +154,8 @@ export default function ProjectViewsPage() {
   const { data: members } = useAsync(() => listMembers(), []);
   const ticketsView = useTicketsView({ projectId: project.id });
 
+  const [savingFilters, setSavingFilters] = useState(false);
+
   const normalizedFilters = useMemo(
     () =>
       activeView ? filtersFromSavedView(activeView.filters) : EMPTY_FILTERS,
@@ -226,6 +168,37 @@ export default function ProjectViewsPage() {
     // ticketsView identity change (setFilters is stable per render).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [normalizedFilters]);
+
+  // Whether the toolbar below (rendered against `ticketsView`, seeded from
+  // `normalizedFilters` above) has diverged from the saved view's own
+  // filters — i.e. whether there's an edit worth persisting. Compared as
+  // plain values (TicketFilters is flat arrays-of-strings + one string, no
+  // nested objects) rather than a field-by-field diff; a toggle-then-toggle-
+  // back can reorder an array and read as dirty when it isn't, which only
+  // means "Save changes" is enabled a little more eagerly than strictly
+  // necessary — never the reverse, so it never hides a real, savable edit.
+  const filtersAreDirty = useMemo(
+    () =>
+      JSON.stringify(ticketsView.filters) !== JSON.stringify(normalizedFilters),
+    [ticketsView.filters, normalizedFilters],
+  );
+
+  async function handleSaveViewFilters() {
+    if (!activeView) return;
+    setSavingFilters(true);
+    try {
+      const filters = captureSavedViewFilter(ticketsView.filters, project.id);
+      const updated = await updateView(activeView.id, { filters });
+      // Reflects the save immediately without a round-trip through
+      // `reload()` + re-selecting the view from the refreshed `views` list —
+      // `normalizedFilters` (and so `filtersAreDirty`) recomputes off this
+      // state, so the button returns to disabled the moment the save lands.
+      setActiveView(updated);
+      reload();
+    } finally {
+      setSavingFilters(false);
+    }
+  }
 
   function handleAddView() {
     if (creating) return;
@@ -306,6 +279,29 @@ export default function ProjectViewsPage() {
               </p>
             </div>
           </div>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-3">
+          {/* Reuses the same group/filter/search controls the live ticket
+              list toolbar renders (TicketListToolbar) — editing a saved
+              view's filter is just driving this same `ticketsView` the way
+              any other TicketsView is driven, not a second filter-editing
+              UI. Its own "Save as view" button also renders here (this
+              `ticketsView` has `projectId` set), which doubles as "Save as
+              a new view" on top of this screen's own "Save changes"
+              (update-in-place) below — a deliberate, harmless overlap
+              rather than something worth suppressing. */}
+          <TicketListToolbar
+            view={ticketsView}
+            groupByOptions={PROJECT_GROUP_BY_OPTIONS}
+          />
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={handleSaveViewFilters}
+            disabled={!filtersAreDirty || savingFilters}
+          >
+            {savingFilters ? 'Saving…' : 'Save changes'}
+          </Button>
         </div>
         <div className="thin-scroll min-h-0 flex-1 overflow-y-auto">
           <TicketList view={ticketsView} projectId={project.id} />
