@@ -25,6 +25,7 @@ import {
   registerCopilotConnectIpc,
   killAllCopilotConnectProcesses,
 } from './copilot/copilotConnect';
+import { registerCopilotDetectIpc } from './copilot/copilotDetect';
 import { registerRepoLinkIpc } from './repoLink';
 
 // Opt-in remote debugging for scripted/agent-driven QA (docs/qa-electron.md)
@@ -106,6 +107,7 @@ ipcMain.on('ipc-example', async (event, arg) => {
 registerCopilotIpc(() => mainWindow);
 registerCopilotAuthIpc();
 registerCopilotConnectIpc(() => mainWindow);
+registerCopilotDetectIpc();
 registerRepoLinkIpc(() => mainWindow);
 
 if (process.env.NODE_ENV === 'production') {
