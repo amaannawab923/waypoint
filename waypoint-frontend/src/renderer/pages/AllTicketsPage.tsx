@@ -23,11 +23,17 @@ import { TicketDrawer } from '@/components/domain/TicketDrawer';
  * one either, since Board/Calendar/Gantt's column-per-state or
  * date-range framing doesn't carry over cleanly to a cross-project list.
  *
- * "Save as view" and "New ticket" are both intentionally absent: the former
- * is W5.3's saved-view filter editor (building even a stub risks landing a
- * `createView({})` shape that unit exists specifically to prevent); the
+ * "Save as view" and "New ticket" are both intentionally absent here. The
  * latter has no single target project to create into (see TicketList's own
- * comment on why `projectId` is left undefined here).
+ * comment on why `projectId` is left undefined here). The former is W5.3's
+ * saved-view filter editor, which does exist now (TicketListToolbar.tsx) —
+ * but it's gated on `view.projectId` being set, so it doesn't render for
+ * this page's `TicketListToolbar` regardless: this workspace scope has no
+ * project to save a view into (the only create endpoint is
+ * `POST /projects/:projectId/views`) and no page to browse/manage a
+ * workspace-scoped view afterward (this page replaced the old
+ * WorkspaceViewsPage outright rather than sitting alongside it — see above).
+ * See TicketListToolbar.tsx's own doc comment for the full reasoning.
  */
 export default function AllTicketsPage() {
   const view = useTicketsView({ defaultGroupBy: 'project' });

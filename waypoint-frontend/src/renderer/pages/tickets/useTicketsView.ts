@@ -78,8 +78,19 @@ export interface TicketGroup {
  * empty TicketFilters encodes to `undefined` so a view with no filter
  * applied hits the same unfiltered `GET /projects/:id/tickets` path as
  * before, instead of round-tripping an empty `?filter=`.
+ *
+ * Exported (as of W5.3) so the saved-view filter editor can reuse this exact
+ * translation to capture a live TicketsView's current filters into the typed
+ * shape `createView`/`updateView` require, instead of re-deriving it. Note
+ * the `undefined` collapse still applies here too — a caller that needs a
+ * saved view's filter to never be empty (W5.3's own accept criterion) must
+ * fall back to a real base object (e.g. `{ v: 1, projectIds: [...] }`)
+ * itself; this function's contract (mirrors the unfiltered-fetch path)
+ * isn't the place to special-case that.
  */
-function toFilterQuery(filters: TicketFilters): TicketFilterQuery | undefined {
+export function toFilterQuery(
+  filters: TicketFilters,
+): TicketFilterQuery | undefined {
   const query: TicketFilterQuery = { v: 1 };
   if (filters.priority.length) query.priorities = filters.priority;
   if (filters.stateId.length) query.stateIds = filters.stateId;
@@ -191,7 +202,10 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
   // grouping — that's exactly the count-line invariant this hook exists to
   // protect.
   const states = useMemo(
-    () => Array.from(new Map((statesLists ?? []).flat().map((s) => [s.id, s])).values()),
+    () =>
+      Array.from(
+        new Map((statesLists ?? []).flat().map((s) => [s.id, s])).values(),
+      ),
     [statesLists],
   );
 
@@ -200,7 +214,10 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
     [projectIdsKey],
   );
   const labels = useMemo(
-    () => Array.from(new Map((labelsLists ?? []).flat().map((l) => [l.id, l])).values()),
+    () =>
+      Array.from(
+        new Map((labelsLists ?? []).flat().map((l) => [l.id, l])).values(),
+      ),
     [labelsLists],
   );
 
