@@ -15,7 +15,6 @@ import { Popover } from '@/pages/tickets/Popover';
 import { createView } from '@/data/api';
 import { refreshProjectInStore } from '@/lib/projectsStore';
 import {
-  EMPTY_FILTERS,
   toFilterQuery,
   type GroupBy,
   type TicketFilters,
@@ -250,9 +249,7 @@ export default function TicketListToolbar({
           {activeFilterCount > 0 && (
             <button
               type="button"
-              onClick={() =>
-                view.setFilters((f) => ({ ...EMPTY_FILTERS, text: f.text }))
-              }
+              onClick={() => view.resetFilters()}
               className="cursor-pointer self-start px-2 text-xs text-accent hover:underline"
             >
               Clear filters
