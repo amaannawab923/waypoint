@@ -8,6 +8,21 @@ import { NotFoundError } from '../middleware/errors.js';
 // UPDATE's actual serialization under concurrency is a database property
 // the mocks cannot prove; what they CAN prove is that the claim carries the
 // exact WHERE (id AND status='proposed') that makes it correct.
+// Flattens a drizzle sql`` template fragment's raw string chunks back into
+// one string, skipping interpolated non-string values (columns, params) —
+// enough to assert on the literal SQL a `set({...})` value contains without
+// standing up real Postgres.
+function sqlFragmentText(fragment: unknown): string {
+  const chunks = (fragment as { queryChunks?: unknown[] })?.queryChunks ?? [];
+  return chunks
+    .map((chunk) =>
+      Array.isArray((chunk as { value?: unknown })?.value)
+        ? ((chunk as { value: unknown[] }).value.join(''))
+        : '',
+    )
+    .join('');
+}
+
 function chainable(resolvedValue: unknown) {
   const chain: Record<string, unknown> = {};
   const methods = ['from', 'where', 'limit', 'orderBy', 'values', 'set'];
@@ -44,14 +59,14 @@ vi.mock('drizzle-orm', async (importOriginal) => {
   };
 });
 
-vi.mock('./workItems.service.js');
+vi.mock('./tickets.service.js');
 vi.mock('./comments.service.js');
 vi.mock('./states.service.js');
 vi.mock('./members.service.js');
 vi.mock('./projects.service.js');
 
-const { copilotProposals, copilotConversations } = await import('../db/schema/index.js');
-const workItemsService = await import('./workItems.service.js');
+const { proposals, copilotConversations } = await import('../db/schema/index.js');
+const ticketsService = await import('./tickets.service.js');
 const commentsService = await import('./comments.service.js');
 const statesService = await import('./states.service.js');
 const membersService = await import('./members.service.js');
@@ -113,7 +128,7 @@ function makeCreateTx({
 const COMMENT_INPUT = {
   conversationId: 'conv-abc1234',
   kind: 'comment' as const,
-  workItemId: 'wi-1',
+  ticketId: 'wi-1',
   payload: { body: 'hello' },
   snapshot: { identifier: 'WI-1', title: 'A ticket', itemUpdatedAt: '2026-01-01T00:00:00.000Z' },
 };
@@ -125,13 +140,13 @@ describe('createProposal', () => {
 
     const result = await createProposal(COMMENT_INPUT);
 
-    expect(tx.insert).toHaveBeenCalledWith(copilotProposals);
+    expect(tx.insert).toHaveBeenCalledWith(proposals);
     const values = (tx.insert.mock.results[0].value.values as Vfn).mock.calls[0][0];
     expect(values.id).toMatch(/^prop-/);
     expect(values).toMatchObject({
       conversationId: 'conv-abc1234',
       kind: 'comment',
-      workItemId: 'wi-1',
+      ticketId: 'wi-1',
       payload: { body: 'hello' },
       snapshot: COMMENT_INPUT.snapshot,
       // max(seq) came back as the string '7' (postgres-js bigint behavior)
@@ -175,7 +190,7 @@ describe('createProposal', () => {
     expect(eleventh.insert).not.toHaveBeenCalled();
     // The turn cap counts rows sharing this proposal's own (conversation,
     // anchorSeq) — i.e. this turn, not the whole conversation.
-    expect(eq).toHaveBeenCalledWith(copilotProposals.anchorSeq, 7);
+    expect(eq).toHaveBeenCalledWith(proposals.anchorSeq, 7);
   });
 
   it('rejects the 21st pending proposal in a conversation, counting only proposed rows', async () => {
@@ -185,31 +200,35 @@ describe('createProposal', () => {
       createProposal(COMMENT_INPUT).catch((e) => Promise.reject(e.message)),
     ).rejects.toMatch(/Too many pending proposals in this conversation \(max 20\)/);
     expect(tx.insert).not.toHaveBeenCalled();
-    expect(eq).toHaveBeenCalledWith(copilotProposals.status, 'proposed');
+    expect(eq).toHaveBeenCalledWith(proposals.status, 'proposed');
   });
 
-  it('supersedes a pending state_change on the same (conversation, work item, kind) — and only proposed rows', async () => {
+  it('supersedes a pending state_change on the same (conversation, ticket, kind) — and only proposed rows', async () => {
     const tx = makeCreateTx();
 
     await createProposal({
       conversationId: 'conv-abc1234',
       kind: 'state_change',
-      workItemId: 'wi-1',
+      ticketId: 'wi-1',
       payload: { stateId: 'st-done' },
       snapshot: {},
     });
 
     expect(tx.update).toHaveBeenCalledTimes(1);
-    expect(tx.update).toHaveBeenCalledWith(copilotProposals);
+    expect(tx.update).toHaveBeenCalledWith(proposals);
     const setArgs = (tx.update.mock.results[0].value.set as Vfn).mock.calls[0][0];
     expect(setArgs).toMatchObject({ status: 'superseded' });
     expect(setArgs.resolvedAt).toBeInstanceOf(Date);
+    // W4.5 (decision 10): nobody decided this, a newer proposal replaced it
+    // automatically — decidedBy='system', no decisionLatencyMs.
+    expect(setArgs.decidedBy).toBe('system');
+    expect(setArgs.decisionLatencyMs).toBeUndefined();
     // Row-level condition assertions: exactly the four columns that define
     // "the same pending proposal", nothing broader.
-    expect(eq).toHaveBeenCalledWith(copilotProposals.conversationId, 'conv-abc1234');
-    expect(eq).toHaveBeenCalledWith(copilotProposals.workItemId, 'wi-1');
-    expect(eq).toHaveBeenCalledWith(copilotProposals.kind, 'state_change');
-    expect(eq).toHaveBeenCalledWith(copilotProposals.status, 'proposed');
+    expect(eq).toHaveBeenCalledWith(proposals.conversationId, 'conv-abc1234');
+    expect(eq).toHaveBeenCalledWith(proposals.ticketId, 'wi-1');
+    expect(eq).toHaveBeenCalledWith(proposals.kind, 'state_change');
+    expect(eq).toHaveBeenCalledWith(proposals.status, 'proposed');
   });
 
   it('supersede for assignee_change additionally matches the payload assigneeId (five conditions, not four)', async () => {
@@ -218,7 +237,7 @@ describe('createProposal', () => {
     await createProposal({
       conversationId: 'conv-abc1234',
       kind: 'assignee_change',
-      workItemId: 'wi-1',
+      ticketId: 'wi-1',
       payload: { assigneeId: 'mem-2', action: 'add' },
       snapshot: {},
     });
@@ -238,13 +257,13 @@ describe('createProposal', () => {
     expect(tx.update).not.toHaveBeenCalled();
   });
 
-  it('never supersedes for create_work_item proposals', async () => {
+  it('never supersedes for create_ticket proposals', async () => {
     const tx = makeCreateTx();
 
     await createProposal({
       conversationId: 'conv-abc1234',
-      kind: 'create_work_item',
-      workItemId: null,
+      kind: 'create_ticket',
+      ticketId: null,
       payload: { projectId: 'proj-1', title: 'New', stateId: 'st-1' },
       snapshot: {},
     });
@@ -262,7 +281,7 @@ function proposalRow(overrides: Record<string, unknown> = {}) {
     id: 'prop-abc1234',
     conversationId: 'conv-abc1234',
     kind: 'comment',
-    workItemId: 'wi-1',
+    ticketId: 'wi-1',
     payload: { body: 'hello <script>alert(1)</script>' },
     snapshot: { identifier: 'WI-1', title: 'A ticket', itemUpdatedAt: '2026-01-01T00:00:00.000Z' },
     anchorSeq: 7,
@@ -277,7 +296,7 @@ function proposalRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function workItem(overrides: Record<string, unknown> = {}) {
+function ticket(overrides: Record<string, unknown> = {}) {
   return {
     id: 'wi-1',
     projectId: 'proj-1',
@@ -297,7 +316,7 @@ describe('approveProposal', () => {
     const claimChain = chainable([proposalRow()]);
     const finalizeChain = chainable([proposalRow({ status: 'executed' })]);
     db.update.mockReturnValueOnce(claimChain).mockReturnValueOnce(finalizeChain);
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(workItem() as never);
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
     vi.mocked(commentsService.addComment).mockResolvedValue({ id: 'cm-1' } as never);
 
     await approveProposal('prop-abc1234');
@@ -305,8 +324,8 @@ describe('approveProposal', () => {
     const claimSet = (claimChain.set as Vfn).mock.calls[0][0];
     expect(claimSet.status).toBe('executing');
     // The claim's WHERE is the whole single-execution guarantee.
-    expect(eq).toHaveBeenCalledWith(copilotProposals.id, 'prop-abc1234');
-    expect(eq).toHaveBeenCalledWith(copilotProposals.status, 'proposed');
+    expect(eq).toHaveBeenCalledWith(proposals.id, 'prop-abc1234');
+    expect(eq).toHaveBeenCalledWith(proposals.status, 'proposed');
     expect(and).toHaveBeenCalled();
   });
 
@@ -321,7 +340,7 @@ describe('approveProposal', () => {
     expect(view.status).toBe('executed');
     expect(view.resultInfo).toEqual({ commentId: 'cm-1' });
     expect(commentsService.addComment).not.toHaveBeenCalled();
-    expect(workItemsService.updateWorkItem).not.toHaveBeenCalled();
+    expect(ticketsService.updateTicket).not.toHaveBeenCalled();
     // Exactly one update ever ran — the failed claim; nothing re-finalized.
     expect(db.update).toHaveBeenCalledTimes(1);
   });
@@ -346,6 +365,10 @@ describe('approveProposal', () => {
       .mock.calls[0][0];
     expect(finalizeSet).toMatchObject({ status: 'expired' });
     expect(finalizeSet.statusReason).toMatch(/expired/i);
+    // Nobody decided this — the TTL did — so decidedBy is 'system', never
+    // 'user', and decisionLatencyMs is left unset (W4.5, decision 10).
+    expect(finalizeSet.decidedBy).toBe('system');
+    expect(finalizeSet.decisionLatencyMs).toBeUndefined();
   });
 
   // Staleness matrix — every branch must finalize as stale WITH a reason
@@ -362,11 +385,15 @@ describe('approveProposal', () => {
       expect(setArgs.status).toBe('stale');
       expect(setArgs.statusReason).toMatch(reasonPattern);
       expect(setArgs.resolvedAt).toBeInstanceOf(Date);
+      // Reality changed, not a person deciding — decidedBy='system' (W4.5,
+      // decision 10), same as the TTL-expiry branch above.
+      expect(setArgs.decidedBy).toBe('system');
+      expect(setArgs.decisionLatencyMs).toBeUndefined();
     }
 
-    it('comment: a deleted work item is stale', async () => {
+    it('comment: a deleted ticket is stale', async () => {
       const finalize = claimThenFinalize({ kind: 'comment' });
-      vi.mocked(workItemsService.getWorkItem).mockResolvedValue(undefined as never);
+      vi.mocked(ticketsService.getTicket).mockResolvedValue(undefined as never);
 
       const view = await approveProposal('prop-abc1234');
 
@@ -375,9 +402,9 @@ describe('approveProposal', () => {
       expectFinalizedStale(finalize, /no longer available/);
     });
 
-    it('comment: a work item hidden as a draft is stale, same as missing', async () => {
+    it('comment: a ticket hidden as a draft is stale, same as missing', async () => {
       const finalize = claimThenFinalize({ kind: 'comment' });
-      vi.mocked(workItemsService.getWorkItem).mockResolvedValue(workItem({ isDraft: true }) as never);
+      vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket({ isDraft: true }) as never);
 
       await approveProposal('prop-abc1234');
 
@@ -391,13 +418,13 @@ describe('approveProposal', () => {
         payload: { stateId: 'st-done' },
         snapshot: { fromStateId: 'st-progress' },
       });
-      vi.mocked(workItemsService.getWorkItem).mockResolvedValue(
-        workItem({ stateId: 'st-review' }) as never,
+      vi.mocked(ticketsService.getTicket).mockResolvedValue(
+        ticket({ stateId: 'st-review' }) as never,
       );
 
       await approveProposal('prop-abc1234');
 
-      expect(workItemsService.updateWorkItem).not.toHaveBeenCalled();
+      expect(ticketsService.updateTicket).not.toHaveBeenCalled();
       expectFinalizedStale(finalize, /changed since Copilot proposed this/);
     });
 
@@ -407,12 +434,12 @@ describe('approveProposal', () => {
         payload: { stateId: 'st-done' },
         snapshot: { fromStateId: 'st-progress' },
       });
-      vi.mocked(workItemsService.getWorkItem).mockResolvedValue(workItem() as never);
+      vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
       vi.mocked(statesService.listStates).mockResolvedValue([{ id: 'st-progress' }] as never);
 
       await approveProposal('prop-abc1234');
 
-      expect(workItemsService.updateWorkItem).not.toHaveBeenCalled();
+      expect(ticketsService.updateTicket).not.toHaveBeenCalled();
       expectFinalizedStale(finalize, /target state no longer exists/);
     });
 
@@ -422,11 +449,11 @@ describe('approveProposal', () => {
         payload: { priority: 'urgent' },
         snapshot: { fromPriority: 'medium' },
       });
-      vi.mocked(workItemsService.getWorkItem).mockResolvedValue(workItem({ priority: 'high' }) as never);
+      vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket({ priority: 'high' }) as never);
 
       await approveProposal('prop-abc1234');
 
-      expect(workItemsService.updateWorkItem).not.toHaveBeenCalled();
+      expect(ticketsService.updateTicket).not.toHaveBeenCalled();
       expectFinalizedStale(finalize, /changed since Copilot proposed this/);
     });
 
@@ -436,13 +463,13 @@ describe('approveProposal', () => {
         payload: { assigneeId: 'mem-2', action: 'add' },
         snapshot: {},
       });
-      vi.mocked(workItemsService.getWorkItem).mockResolvedValue(
-        workItem({ assigneeIds: ['mem-2'] }) as never,
+      vi.mocked(ticketsService.getTicket).mockResolvedValue(
+        ticket({ assigneeIds: ['mem-2'] }) as never,
       );
 
       await approveProposal('prop-abc1234');
 
-      expect(workItemsService.toggleWorkItemAssignee).not.toHaveBeenCalled();
+      expect(ticketsService.toggleTicketAssignee).not.toHaveBeenCalled();
       expectFinalizedStale(finalize, /already assigned/);
     });
 
@@ -452,18 +479,18 @@ describe('approveProposal', () => {
         payload: { assigneeId: 'mem-2', action: 'remove' },
         snapshot: {},
       });
-      vi.mocked(workItemsService.getWorkItem).mockResolvedValue(workItem({ assigneeIds: [] }) as never);
+      vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket({ assigneeIds: [] }) as never);
 
       await approveProposal('prop-abc1234');
 
-      expect(workItemsService.toggleWorkItemAssignee).not.toHaveBeenCalled();
+      expect(ticketsService.toggleTicketAssignee).not.toHaveBeenCalled();
       expectFinalizedStale(finalize, /not currently assigned/);
     });
 
-    it('create_work_item: a deleted project is stale', async () => {
+    it('create_ticket: a deleted project is stale', async () => {
       const finalize = claimThenFinalize({
-        kind: 'create_work_item',
-        workItemId: null,
+        kind: 'create_ticket',
+        ticketId: null,
         payload: { projectId: 'proj-1', title: 'New', stateId: 'st-1' },
         snapshot: {},
       });
@@ -471,14 +498,35 @@ describe('approveProposal', () => {
 
       await approveProposal('prop-abc1234');
 
-      expect(workItemsService.createWorkItem).not.toHaveBeenCalled();
+      expect(ticketsService.createTicket).not.toHaveBeenCalled();
       expectFinalizedStale(finalize, /project is no longer available/);
     });
 
-    it('create_work_item: the resolved default state having been deleted is stale', async () => {
+    // Regression: getProject has no archived filter of its own (unlike
+    // listProjects) — a project archived between propose and approve must
+    // re-check as stale too, not slip a real ticket into a project no UI
+    // list surfaces anymore.
+    it('create_ticket: a project archived since propose time is stale', async () => {
       const finalize = claimThenFinalize({
-        kind: 'create_work_item',
-        workItemId: null,
+        kind: 'create_ticket',
+        ticketId: null,
+        payload: { projectId: 'proj-1', title: 'New', stateId: 'st-1' },
+        snapshot: {},
+      });
+      vi.mocked(projectsService.getProject).mockResolvedValue(
+        { id: 'proj-1', archivedAt: new Date('2026-01-02') } as never,
+      );
+
+      await approveProposal('prop-abc1234');
+
+      expect(ticketsService.createTicket).not.toHaveBeenCalled();
+      expectFinalizedStale(finalize, /project is no longer available/);
+    });
+
+    it('create_ticket: the resolved default state having been deleted is stale', async () => {
+      const finalize = claimThenFinalize({
+        kind: 'create_ticket',
+        ticketId: null,
         payload: { projectId: 'proj-1', title: 'New', stateId: 'st-gone' },
         snapshot: {},
       });
@@ -487,7 +535,7 @@ describe('approveProposal', () => {
 
       await approveProposal('prop-abc1234');
 
-      expect(workItemsService.createWorkItem).not.toHaveBeenCalled();
+      expect(ticketsService.createTicket).not.toHaveBeenCalled();
       expectFinalizedStale(finalize, /state no longer exists/);
     });
   });
@@ -495,7 +543,7 @@ describe('approveProposal', () => {
   it('executes an approved comment with the disclosure-prefixed, entity-escaped html — script tags neutered', async () => {
     const finalizeChain = chainable([proposalRow({ status: 'executed' })]);
     db.update.mockReturnValueOnce(chainable([proposalRow()])).mockReturnValueOnce(finalizeChain);
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(workItem() as never);
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
     vi.mocked(commentsService.addComment).mockResolvedValue({ id: 'cm-1' } as never);
 
     const view = await approveProposal('prop-abc1234');
@@ -515,6 +563,34 @@ describe('approveProposal', () => {
     const finalizeSet = (finalizeChain.set as Vfn).mock.calls[0][0];
     expect(finalizeSet).toMatchObject({ status: 'executed', resultInfo: { commentId: 'cm-1' } });
     expect(view.status).toBe('executed');
+    // A real user decision — decidedBy='user' with a computed latency
+    // (W4.5, decision 10).
+    expect(finalizeSet.decidedBy).toBe('user');
+    expect(typeof finalizeSet.decisionLatencyMs).toBe('number');
+    expect(finalizeSet.decisionLatencyMs).toBeGreaterThanOrEqual(0);
+  });
+
+  // W4.5 (decision 10): decisionLatencyMs must measure createdAt -> the
+  // decision, not createdAt -> whenever finalize happens to run.
+  it('stamps decisionLatencyMs as roughly createdAt -> now, not createdAt -> execution finish', async () => {
+    vi.useFakeTimers();
+    try {
+      const createdAt = new Date('2026-01-01T00:00:00.000Z');
+      vi.setSystemTime(new Date(createdAt.getTime() + 5_000)); // 5s "later"
+      const finalizeChain = chainable([proposalRow({ status: 'executed' })]);
+      db.update
+        .mockReturnValueOnce(chainable([proposalRow({ createdAt })]))
+        .mockReturnValueOnce(finalizeChain);
+      vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
+      vi.mocked(commentsService.addComment).mockResolvedValue({ id: 'cm-1' } as never);
+
+      await approveProposal('prop-abc1234');
+
+      const finalizeSet = (finalizeChain.set as Vfn).mock.calls[0][0];
+      expect(finalizeSet.decisionLatencyMs).toBe(5_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('executes a state change with EXACTLY one patch key — stateId — nothing else touched', async () => {
@@ -529,14 +605,14 @@ describe('approveProposal', () => {
         ]),
       )
       .mockReturnValueOnce(chainable([proposalRow({ status: 'executed' })]));
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(workItem() as never);
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
     vi.mocked(statesService.listStates).mockResolvedValue([{ id: 'st-done' }] as never);
-    vi.mocked(workItemsService.updateWorkItem).mockResolvedValue({} as never);
+    vi.mocked(ticketsService.updateTicket).mockResolvedValue({} as never);
 
     await approveProposal('prop-abc1234');
 
-    expect(workItemsService.updateWorkItem).toHaveBeenCalledTimes(1);
-    expect(workItemsService.updateWorkItem).toHaveBeenCalledWith('wi-1', { stateId: 'st-done' });
+    expect(ticketsService.updateTicket).toHaveBeenCalledTimes(1);
+    expect(ticketsService.updateTicket).toHaveBeenCalledWith('wi-1', { stateId: 'st-done' });
   });
 
   it('executes a priority change with EXACTLY one patch key — priority', async () => {
@@ -551,12 +627,12 @@ describe('approveProposal', () => {
         ]),
       )
       .mockReturnValueOnce(chainable([proposalRow({ status: 'executed' })]));
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(workItem() as never);
-    vi.mocked(workItemsService.updateWorkItem).mockResolvedValue({} as never);
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
+    vi.mocked(ticketsService.updateTicket).mockResolvedValue({} as never);
 
     await approveProposal('prop-abc1234');
 
-    expect(workItemsService.updateWorkItem).toHaveBeenCalledWith('wi-1', { priority: 'urgent' });
+    expect(ticketsService.updateTicket).toHaveBeenCalledWith('wi-1', { priority: 'urgent' });
   });
 
   it('executes an assignee change through the toggle only after the direction guard passed', async () => {
@@ -571,22 +647,22 @@ describe('approveProposal', () => {
         ]),
       )
       .mockReturnValueOnce(chainable([proposalRow({ status: 'executed' })]));
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(workItem({ assigneeIds: [] }) as never);
-    vi.mocked(workItemsService.toggleWorkItemAssignee).mockResolvedValue({} as never);
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket({ assigneeIds: [] }) as never);
+    vi.mocked(ticketsService.toggleTicketAssignee).mockResolvedValue({} as never);
 
     await approveProposal('prop-abc1234');
 
-    expect(workItemsService.toggleWorkItemAssignee).toHaveBeenCalledWith('wi-1', 'mem-2');
+    expect(ticketsService.toggleTicketAssignee).toHaveBeenCalledWith('wi-1', 'mem-2');
   });
 
-  it('executes create_work_item with isDraft forced false and finalizes with the created identifier', async () => {
+  it('executes create_ticket with isDraft forced false and finalizes with the created identifier', async () => {
     const finalizeChain = chainable([proposalRow({ status: 'executed' })]);
     db.update
       .mockReturnValueOnce(
         chainable([
           proposalRow({
-            kind: 'create_work_item',
-            workItemId: null,
+            kind: 'create_ticket',
+            ticketId: null,
             payload: {
               projectId: 'proj-1',
               title: 'New ticket',
@@ -602,13 +678,13 @@ describe('approveProposal', () => {
       .mockReturnValueOnce(finalizeChain);
     vi.mocked(projectsService.getProject).mockResolvedValue({ id: 'proj-1' } as never);
     vi.mocked(statesService.listStates).mockResolvedValue([{ id: 'st-1' }] as never);
-    vi.mocked(workItemsService.createWorkItem).mockResolvedValue(
+    vi.mocked(ticketsService.createTicket).mockResolvedValue(
       { id: 'wi-new', identifier: 'PROJ-9' } as never,
     );
 
     await approveProposal('prop-abc1234');
 
-    expect(workItemsService.createWorkItem).toHaveBeenCalledWith({
+    expect(ticketsService.createTicket).toHaveBeenCalledWith({
       projectId: 'proj-1',
       title: 'New ticket',
       description: 'body',
@@ -618,7 +694,76 @@ describe('approveProposal', () => {
       isDraft: false,
     });
     const finalizeSet = (finalizeChain.set as Vfn).mock.calls[0][0];
-    expect(finalizeSet.resultInfo).toEqual({ workItemId: 'wi-new', identifier: 'PROJ-9' });
+    expect(finalizeSet.resultInfo).toEqual({ ticketId: 'wi-new', identifier: 'PROJ-9' });
+  });
+
+  // Final review finding M1: createTicket and the follow-up dueDate
+  // updateTicket are two independent writes — if the SECOND one throws, the
+  // first (the ticket itself) already committed. The generic revert-to-
+  // 'proposed' catch must not run here: re-approving would call createTicket
+  // a SECOND time and create a duplicate ticket. This must park as 'stale'
+  // instead, carrying the already-created ticket's id/identifier.
+  it('create_ticket: a dueDate update failing AFTER the ticket already exists parks as stale, not proposed — no duplicate-ticket risk', async () => {
+    const finalizeChain = chainable([proposalRow({ status: 'stale' })]);
+    db.update
+      .mockReturnValueOnce(
+        chainable([
+          proposalRow({
+            kind: 'create_ticket',
+            ticketId: null,
+            payload: { projectId: 'proj-1', title: 'New ticket', stateId: 'st-1', dueDate: '2026-06-01' },
+            snapshot: {},
+          }),
+        ]),
+      )
+      .mockReturnValueOnce(finalizeChain);
+    vi.mocked(projectsService.getProject).mockResolvedValue({ id: 'proj-1' } as never);
+    vi.mocked(statesService.listStates).mockResolvedValue([{ id: 'st-1' }] as never);
+    vi.mocked(ticketsService.createTicket).mockResolvedValue(
+      { id: 'wi-new', identifier: 'PROJ-9' } as never,
+    );
+    vi.mocked(ticketsService.updateTicket).mockRejectedValue(new Error('db down'));
+
+    const view = await approveProposal('prop-abc1234');
+
+    // The claim is finalized (as stale), NOT reverted back to 'proposed' —
+    // exactly one more db.update call (the finalize), never a third
+    // "revert" update.
+    expect(db.update).toHaveBeenCalledTimes(2);
+    const finalizeSet = (finalizeChain.set as Vfn).mock.calls[0][0];
+    expect(finalizeSet.status).toBe('stale');
+    expect(finalizeSet.statusReason).toMatch(/PROJ-9 was created/);
+    expect(finalizeSet.resultInfo).toEqual({ ticketId: 'wi-new', identifier: 'PROJ-9' });
+    expect(finalizeSet.decidedBy).toBe('system');
+    expect(view.status).toBe('stale');
+  });
+
+  // Final review finding M5: 'add_label' is a live value in the schema/
+  // enum (see the ProposalKind comment) but no propose_add_label tool
+  // exists to create one — so executeProposal has no real case for it.
+  // Falling through to the generic `default: throw` would trip the generic
+  // revert-to-'proposed' catch, and Approve would 500 and infinite-loop
+  // forever (every click re-throws the same way). This must fail
+  // PERMANENTLY (rejected), not revert to an approvable state.
+  it("add_label: fails permanently as 'rejected' with a clear reason, never reverts to 'proposed' (would infinite-loop Approve)", async () => {
+    const finalizeChain = chainable([proposalRow({ status: 'rejected' })]);
+    db.update
+      .mockReturnValueOnce(chainable([proposalRow({ kind: 'add_label', payload: {}, snapshot: {} })]))
+      .mockReturnValueOnce(finalizeChain);
+    // checkStaleness's generic (non-create_ticket) branch re-fetches the
+    // ticket first — must resolve to a real, non-draft ticket so this test
+    // reaches executeProposal's add_label case rather than short-circuiting
+    // as stale on a not-found ticket.
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
+
+    const view = await approveProposal('prop-abc1234');
+
+    expect(db.update).toHaveBeenCalledTimes(2);
+    const finalizeSet = (finalizeChain.set as Vfn).mock.calls[0][0];
+    expect(finalizeSet.status).toBe('rejected');
+    expect(finalizeSet.statusReason).toMatch(/not supported yet/);
+    expect(finalizeSet.decidedBy).toBe('system');
+    expect(view.status).toBe('rejected');
   });
 
   // Final review M2: finalize is guarded on status='executing' — only the
@@ -632,8 +777,8 @@ describe('approveProposal', () => {
       .mockReturnValueOnce(chainable([proposalRow({ kind: 'priority_change', payload: { priority: 'urgent' }, snapshot: { fromPriority: 'medium' } })]))
       .mockReturnValueOnce(lostFinalizeChain);
     // finalize's fallback fetch returns the row as the repair parked it.
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(workItem({ priority: 'medium' }) as never);
-    vi.mocked(workItemsService.updateWorkItem).mockResolvedValue({} as never);
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket({ priority: 'medium' }) as never);
+    vi.mocked(ticketsService.updateTicket).mockResolvedValue({} as never);
     db.select.mockReturnValueOnce(
       chainable([proposalRow({ status: 'stale', statusReason: 'Approval was interrupted' })]),
     );
@@ -642,14 +787,14 @@ describe('approveProposal', () => {
 
     const finalizeAnd = (lostFinalizeChain.where as Vfn).mock.calls.length;
     expect(finalizeAnd).toBe(1);
-    expect(eq).toHaveBeenCalledWith(copilotProposals.status, 'executing');
+    expect(eq).toHaveBeenCalledWith(proposals.status, 'executing');
     expect(view.status).toBe('stale');
   });
 
   it('reverts the claim (executing → proposed) and rethrows when execution itself throws', async () => {
     const revertChain = chainable([]);
     db.update.mockReturnValueOnce(chainable([proposalRow()])).mockReturnValueOnce(revertChain);
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(workItem() as never);
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
     vi.mocked(commentsService.addComment).mockRejectedValue(new Error('db down'));
 
     await expect(approveProposal('prop-abc1234')).rejects.toThrow('db down');
@@ -658,7 +803,7 @@ describe('approveProposal', () => {
     // claim marker cleared, conditioned on still holding the claim.
     const revertSet = (revertChain.set as Vfn).mock.calls[0][0];
     expect(revertSet).toEqual({ status: 'proposed', resolvedAt: null });
-    expect(eq).toHaveBeenCalledWith(copilotProposals.status, 'executing');
+    expect(eq).toHaveBeenCalledWith(proposals.status, 'executing');
   });
 });
 
@@ -676,11 +821,68 @@ describe('rejectProposal', () => {
     const setArgs = (rejectChain.set as Vfn).mock.calls[0][0];
     // statusReason deliberately NOT in the set — a stale card's reason
     // survives its dismissal.
-    expect(Object.keys(setArgs).sort()).toEqual(['resolvedAt', 'status']);
+    expect(Object.keys(setArgs).sort()).toEqual([
+      'decidedBy',
+      'decisionLatencyMs',
+      'resolvedAt',
+      'status',
+    ]);
     expect(setArgs.status).toBe('rejected');
-    expect(inArray).toHaveBeenCalledWith(copilotProposals.status, ['proposed', 'stale']);
+    expect(inArray).toHaveBeenCalledWith(proposals.status, ['proposed', 'stale']);
     expect(view.status).toBe('rejected');
     expect(view.statusReason).toBe('was stale');
+  });
+
+  // W4.5 (decision 10): a real user reject must stamp decision provenance
+  // so it counts toward the review-health strip and, later, trust
+  // computation — regardless of whether the row was 'proposed' or 'stale'
+  // when Reject was clicked (dismissing a stale card is still a decision).
+  it('stamps decidedBy=user and a computed decisionLatencyMs on every reject', async () => {
+    const rejectChain = chainable([proposalRow({ status: 'rejected' })]);
+    db.update.mockReturnValueOnce(rejectChain);
+
+    await rejectProposal('prop-abc1234');
+
+    const setArgs = (rejectChain.set as Vfn).mock.calls[0][0];
+    expect(setArgs.decidedBy).toBe('user');
+    // A SQL fragment computed against this row's own createdAt, not a
+    // plain JS number — see the function's own comment for why.
+    expect(setArgs.decisionLatencyMs).toBeDefined();
+    expect(typeof setArgs.decisionLatencyMs).toBe('object');
+  });
+
+  // decisionLatencyMs writes to a Postgres `integer` (int4) column, which
+  // caps at 2147483647ms (~24.8 days). A 'stale' proposal has no TTL, so a
+  // row old enough would otherwise overflow int4 and Postgres would throw
+  // 22003 on every reject attempt, forever. The DB is mocked here (these
+  // tests verify this service's own SQL, not real Postgres arithmetic — see
+  // the file-level comment), so the strongest thing this test can assert is
+  // that the generated SQL fragment itself clamps via LEAST(..., 2147483647)
+  // regardless of how old the row is, rather than writing the raw,
+  // unbounded epoch-based value straight through.
+  it('clamps the generated decisionLatencyMs SQL to the int4 max so an old stale proposal cannot overflow it', async () => {
+    const rejectChain = chainable([proposalRow({ status: 'rejected' })]);
+    db.update.mockReturnValueOnce(rejectChain);
+
+    await rejectProposal('prop-abc1234');
+
+    const setArgs = (rejectChain.set as Vfn).mock.calls[0][0];
+    expect(sqlFragmentText(setArgs.decisionLatencyMs)).toMatch(/least\(.*2147483647/i);
+  });
+
+  // Simulates what Postgres itself would now return for an old stale
+  // proposal after the LEAST(...) clamp: reject still succeeds and the
+  // written/returned value is the clamped int4 max, not an overflowed one.
+  it('succeeds and returns the clamped int4 max for a proposal old enough that the raw latency would have overflowed', async () => {
+    const rejectChain = chainable([
+      proposalRow({ status: 'rejected', decisionLatencyMs: 2147483647 }),
+    ]);
+    db.update.mockReturnValueOnce(rejectChain);
+
+    const view = await rejectProposal('prop-abc1234');
+
+    expect(view.status).toBe('rejected');
+    expect(view.decisionLatencyMs).toBe(2147483647);
   });
 
   it('echoes an already-resolved row idempotently and 404s a missing one', async () => {
@@ -703,11 +905,38 @@ describe('rejectAllPending', () => {
     const result = await rejectAllPending('conv-abc1234');
 
     expect(db.update).toHaveBeenCalledTimes(1);
-    expect(eq).toHaveBeenCalledWith(copilotProposals.conversationId, 'conv-abc1234');
+    expect(eq).toHaveBeenCalledWith(proposals.conversationId, 'conv-abc1234');
     // stale included (final review m5): a stale card's only affordance is
     // Dismiss, so reject-all leaving them behind stranded them.
-    expect(inArray).toHaveBeenCalledWith(copilotProposals.status, ['proposed', 'stale']);
+    expect(inArray).toHaveBeenCalledWith(proposals.status, ['proposed', 'stale']);
     expect(result).toEqual({ rejected: 2 });
+  });
+
+  // W4.5 (decision 10): "reject all" is still a person's decision for
+  // every row it touches.
+  it('stamps decidedBy=user on every row the bulk reject touches', async () => {
+    const chain = chainable([{ id: 'prop-1' }, { id: 'prop-2' }]);
+    db.update.mockReturnValueOnce(chain);
+
+    await rejectAllPending('conv-abc1234');
+
+    const setArgs = (chain.set as Vfn).mock.calls[0][0];
+    expect(setArgs.decidedBy).toBe('user');
+    expect(setArgs.decisionLatencyMs).toBeDefined();
+  });
+
+  // Same int4-overflow hazard as rejectProposal (see that describe block's
+  // comment), except worse here: this is a single UPDATE across every
+  // matched row, so one old stale proposal in the batch would otherwise
+  // fail "reject all" for the entire conversation, permanently.
+  it('clamps the generated decisionLatencyMs SQL to the int4 max so one old stale row cannot poison the whole batch', async () => {
+    const chain = chainable([{ id: 'prop-1' }, { id: 'prop-2' }]);
+    db.update.mockReturnValueOnce(chain);
+
+    await rejectAllPending('conv-abc1234');
+
+    const setArgs = (chain.set as Vfn).mock.calls[0][0];
+    expect(sqlFragmentText(setArgs.decisionLatencyMs)).toMatch(/least\(.*2147483647/i);
   });
 });
 
@@ -720,9 +949,9 @@ describe('markProposalsNotified', () => {
 
     const setArgs = (chain.set as Vfn).mock.calls[0][0];
     expect(Object.keys(setArgs)).toEqual(['modelNotifiedAt']);
-    expect(inArray).toHaveBeenCalledWith(copilotProposals.id, ['prop-1', 'prop-2']);
-    expect(eq).toHaveBeenCalledWith(copilotProposals.conversationId, 'conv-abc1234');
-    expect(isNull).toHaveBeenCalledWith(copilotProposals.modelNotifiedAt);
+    expect(inArray).toHaveBeenCalledWith(proposals.id, ['prop-1', 'prop-2']);
+    expect(eq).toHaveBeenCalledWith(proposals.conversationId, 'conv-abc1234');
+    expect(isNull).toHaveBeenCalledWith(proposals.modelNotifiedAt);
     expect(result).toEqual({ notified: 1 });
   });
 });
@@ -748,13 +977,13 @@ describe('listProposals', () => {
     expect(reviveSet.status).toBe('stale');
     expect(reviveSet.resolvedAt).toBeInstanceOf(Date);
     expect(reviveSet.statusReason).toMatch(/interrupted/i);
-    expect(eq).toHaveBeenCalledWith(copilotProposals.status, 'executing');
+    expect(eq).toHaveBeenCalledWith(proposals.status, 'executing');
     // The view carries the server-computed disclosure for the card preview.
     expect(views).toHaveLength(1);
     expect(views[0].disclosureText).toBe(
       'Hi, this is Copilot — Amaan’s agent — commenting on their behalf: ',
     );
     // No live staleness reads happen at list time — approve is authoritative.
-    expect(workItemsService.getWorkItem).not.toHaveBeenCalled();
+    expect(ticketsService.getTicket).not.toHaveBeenCalled();
   });
 });

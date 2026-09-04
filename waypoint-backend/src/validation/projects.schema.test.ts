@@ -45,3 +45,15 @@ describe('updateProjectSchema repoPath', () => {
     expect(updateProjectSchema.safeParse({}).success).toBe(false);
   });
 });
+
+describe('updateProjectSchema archivedAt', () => {
+  // The only payload an unarchive action can ever send (ArchivedProjects.tsx).
+  it('accepts an explicit null as a valid single-field update', () => {
+    const result = updateProjectSchema.safeParse({ archivedAt: null });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a non-null archivedAt (archiving goes through POST /projects/:id/archive instead)', () => {
+    expect(updateProjectSchema.safeParse({ archivedAt: '2026-01-01T00:00:00.000Z' }).success).toBe(false);
+  });
+});

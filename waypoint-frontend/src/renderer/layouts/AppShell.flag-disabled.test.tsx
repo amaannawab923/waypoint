@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { AppShell } from './AppShell';
 
 // A separate file (rather than jest.resetModules() inside a single test)
-// because resetModules() would load a second copy of the `react` module,
+// because jest.resetModules() would load a second copy of the `react` module,
 // and a dynamically re-required AppShell using that second copy while this
 // file's own JSX still uses the first breaks hooks with "Invalid hook call".
 // A statically mocked flag value, applied for this whole file, sidesteps

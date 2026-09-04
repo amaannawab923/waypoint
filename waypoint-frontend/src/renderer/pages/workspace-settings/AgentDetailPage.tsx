@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { clsx } from 'clsx';
-import { ArrowLeft, Check, Trash2 } from 'lucide-react';
+import { ArrowLeft, Trash2 } from 'lucide-react';
+import { IconCheck } from '@/components/icons';
 import { useAsync } from '@/lib/useAsync';
-import { createAgent, deleteAgent, detectLocalClaudeCode, getAgent, listProjects, updateAgent } from '@/mock/api';
+import { createAgent, deleteAgent, detectLocalClaudeCode, getAgent, listProjects, updateAgent } from '@/data/api';
 import type { Agent, AgentAutonomy, AgentTrigger } from '@/types/entities';
 import { Button, IconButton } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Avatar } from '@/components/ui/Avatar';
 import { renderMarkdown } from '@/lib/markdown';
+import { ClaudeCodeStatus } from '@/components/domain/ClaudeCodeStatus';
+import { NotWired } from '@/components/ui/NotWired';
 import {
   AGENT_TEMPLATES,
   CLAUDE_MODELS,
@@ -17,7 +20,7 @@ import {
   type AgentTemplate,
 } from '@/components/domain/agentTemplates';
 
-type SaveStatus = 'idle' | 'saving' | 'saved';
+type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 const AUTONOMY_OPTIONS: { value: AgentAutonomy; label: string; hint: string }[] = [
   { value: 'plan-only', label: 'Plan only', hint: 'Writes a plan, never touches code.' },
@@ -73,6 +76,12 @@ export default function AgentDetailPage() {
   const pendingPatchRef = useRef<Partial<Agent>>({});
   const loadedRef = useRef<string | null>(null);
   const preselectedScopeRef = useRef(false);
+  // Kept in sync every render (see the assignment right after `persistedId`
+  // is set below) so the unmount flush effect — which only runs once, with
+  // a closure frozen at mount when `persistedId` is still null — can read
+  // the CURRENT persisted id instead of the stale one from its own closure.
+  const persistedIdRef = useRef<string | null>(null);
+  persistedIdRef.current = persistedId;
 
   useEffect(() => {
     if (!existing) return;
@@ -108,9 +117,26 @@ export default function AgentDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projects, agentId]);
 
+  // On unmount, flush any still-pending debounced save instead of just
+  // discarding it, so navigating away from an agent's settings within the
+  // 800ms debounce window doesn't silently drop the last edit despite the
+  // UI's last visible state having claimed "Saving…". Matches the pattern
+  // applied to DocDetailPage.tsx's autosave in commit 0114353.
   useEffect(() => {
     return () => {
-      if (saveTimer.current) clearTimeout(saveTimer.current);
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+        const toSave = pendingPatchRef.current;
+        const id = persistedIdRef.current;
+        if (id && Object.keys(toSave).length > 0) {
+          pendingPatchRef.current = {};
+          // Fire-and-forget: the component is unmounting, so there's no
+          // local state left to update on success/failure — still swallow
+          // the rejection explicitly rather than letting it go unhandled.
+          void updateAgent(id, toSave).catch(() => {});
+        }
+      }
     };
   }, []);
 
@@ -119,11 +145,13 @@ export default function AgentDetailPage() {
     Object.assign(pendingPatchRef.current, patch);
     setStatus('saving');
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
+    saveTimer.current = setTimeout(() => {
+      saveTimer.current = null;
       const toSave = pendingPatchRef.current;
       pendingPatchRef.current = {};
-      await updateAgent(persistedId, toSave);
-      setStatus('saved');
+      void updateAgent(persistedId, toSave)
+        .then(() => setStatus('saved'))
+        .catch(() => setStatus('error'));
     }, 800);
   }
 
@@ -260,8 +288,16 @@ export default function AgentDetailPage() {
         <span className="font-display text-sm font-medium text-text">
           {persistedId ? name || 'Agent' : 'New agent'}
         </span>
-        <span className="text-xs text-text-muted">
-          {persistedId ? (status === 'saving' ? 'Saving…' : status === 'saved' ? 'Saved' : ' ') : ' '}
+        <span className={clsx('text-xs', status === 'error' ? 'text-danger' : 'text-text-muted')}>
+          {persistedId
+            ? status === 'saving'
+              ? 'Saving…'
+              : status === 'saved'
+                ? 'Saved'
+                : status === 'error'
+                  ? 'Failed to save'
+                  : ' '
+            : ' '}
         </span>
         {persistedId && (
           <IconButton
@@ -474,22 +510,18 @@ export default function AgentDetailPage() {
                   className="flex flex-col gap-1 rounded-[var(--radius)] border-[1.5px] border-success bg-success-bg p-3"
                 >
                   <div className="flex items-center gap-1.5 text-sm font-medium text-text">
-                    <Check size={14} className="text-success" />
+                    <IconCheck size={14} className="text-success" />
                     {method.label}
                   </div>
-                  <p className="text-xs text-success">
-                    {!detection && 'Detecting Claude Code CLI…'}
-                    {detection?.status === 'connected' &&
-                      `● Connected — Claude Code CLI v${detection.version}, signed in as ${detection.account}`}
-                    {detection?.status === 'not-found' && (
-                      <span className="text-warning">Claude Code CLI not found on this machine.</span>
-                    )}
-                  </p>
+                  <ClaudeCodeStatus
+                    probe={detection ?? { state: 'checking' }}
+                    className="mt-0.5"
+                  />
                 </div>
               );
             })}
           </div>
-          {detection?.status === 'not-found' && (
+          {detection?.state === 'absent' && (
             <p className="mt-2 text-xs text-text-muted">
               You can still save this agent, but it won't run until Claude Code is detected.
             </p>
@@ -558,6 +590,8 @@ export default function AgentDetailPage() {
             ))}
           </div>
         </div>
+
+        <NotWired capability="agents.runtime" />
       </div>
 
       {!persistedId && (

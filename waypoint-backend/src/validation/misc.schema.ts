@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const createStickySchema = z.object({
+export const createScratchNoteSchema = z.object({
   title: z.string(),
   body: z.string(),
 });
@@ -22,12 +22,12 @@ export const createWebhookSchema = z.object({
     }),
   eventTypes: z.array(
     z.enum([
-      'work_item.created',
-      'work_item.updated',
-      'work_item.deleted',
+      'ticket.created',
+      'ticket.updated',
+      'ticket.deleted',
       'project.created',
-      'cycle.created',
-      'module.created',
+      'sprint.created',
+      'workstream.created',
     ]),
   ),
 });

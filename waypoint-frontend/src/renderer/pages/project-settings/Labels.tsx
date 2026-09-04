@@ -1,12 +1,13 @@
-import { useState } from 'react';
-import { Plus, Tag, Pencil, Trash2 } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { Tag, Trash2 } from 'lucide-react';
+import { IconPlus, IconEdit } from '@/components/icons';
 import { Button, IconButton } from '@/components/ui/Button';
 import { Badge, Dot } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
 import { useAsync } from '@/lib/useAsync';
 import { useProject } from '@/layouts/ProjectLayout';
-import { createLabel, updateLabel, deleteLabel, listLabels } from '@/mock/api';
+import { createLabel, updateLabel, deleteLabel, listLabels } from '@/data/api';
 import type { Label } from '@/types/entities';
 
 const PRESET_COLORS = [
@@ -24,9 +25,17 @@ function LabelEditor({ label, onSaved, onCancel }: { label: Label; onSaved: () =
   const [name, setName] = useState(label.name);
   const [color, setColor] = useState(label.color);
   const [saving, setSaving] = useState(false);
+  // Same fix as CopilotProposalCard.tsx's act(): "Save" disables itself
+  // (saving) while the POST is in flight, and onSaved unmounts this whole
+  // editor on success — either path force-blurs to <body> and leaks the
+  // next keystroke to useGlobalKeyboardShortcuts.ts's global nav
+  // shortcuts. This editor's own root is the stable container neither
+  // path touches.
+  const editorRef = useRef<HTMLDivElement>(null);
 
   async function handleSave() {
     if (!name.trim() || saving) return;
+    editorRef.current?.focus();
     setSaving(true);
     try {
       await updateLabel(label.id, { name: name.trim(), color });
@@ -37,7 +46,12 @@ function LabelEditor({ label, onSaved, onCancel }: { label: Label; onSaved: () =
   }
 
   return (
-    <div className="flex flex-col gap-3 rounded-[var(--radius-sm)] border border-border-strong bg-surface p-3">
+    <div
+      ref={editorRef}
+      tabIndex={-1}
+      data-shortcut-guard
+      className="flex flex-col gap-3 rounded-[var(--radius-sm)] border border-border-strong bg-surface p-3 outline-none"
+    >
       <input
         autoFocus
         value={name}
@@ -82,9 +96,21 @@ export default function Labels() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // Same fix as CopilotProposalCard.tsx's act(), applied at two more
+  // sites in this component: "Add label" disables itself (submitting)
+  // and unmounts this form (setShowForm(false)) on success; "Confirm"
+  // delete disables itself (deletingId) and, once `reload()` drops the
+  // deleted label from `labels`, unmounts its own row. Both force-blur to
+  // <body> and leak the next keystroke to useGlobalKeyboardShortcuts.ts's
+  // global nav shortcuts.
+  const createFormRef = useRef<HTMLDivElement>(null);
+  // Delete lives per-row, so each label's row needs its own focus target
+  // — a ref Map keyed by label id, same shape as any keyed-list ref map.
+  const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   async function handleCreate() {
     if (!name.trim() || submitting) return;
+    createFormRef.current?.focus();
     setSubmitting(true);
     try {
       await createLabel(project.id, { name: name.trim(), color });
@@ -99,6 +125,7 @@ export default function Labels() {
 
   async function handleDelete(id: string) {
     if (deletingId) return;
+    rowRefs.current.get(id)?.focus();
     setDeletingId(id);
     try {
       await deleteLabel(id);
@@ -114,16 +141,21 @@ export default function Labels() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-lg font-medium text-text">Labels</h1>
-          <p className="mt-1 text-sm text-text-secondary">Manage labels used to categorize work items.</p>
+          <p className="mt-1 text-sm text-text-secondary">Manage labels used to categorize tickets.</p>
         </div>
         <Button variant="primary" size="sm" onClick={() => setShowForm((v) => !v)}>
-          <Plus size={14} />
+          <IconPlus size={14} />
           Add label
         </Button>
       </div>
 
       {showForm && (
-        <div className="flex flex-col gap-3 rounded-[var(--radius)] border border-border-strong p-4">
+        <div
+          ref={createFormRef}
+          tabIndex={-1}
+          data-shortcut-guard
+          className="flex flex-col gap-3 rounded-[var(--radius)] border border-border-strong p-4 outline-none"
+        >
           <input
             autoFocus
             placeholder="Label name"
@@ -162,7 +194,7 @@ export default function Labels() {
           <SkeletonListRows rows={4} />
         </div>
       ) : (labels ?? []).length === 0 ? (
-        <EmptyState icon={<Tag size={28} />} title="No labels yet" description="Add labels to categorize work items." />
+        <EmptyState icon={<Tag size={28} />} title="No labels yet" description="Add labels to categorize tickets." />
       ) : (
         <div className="flex flex-col gap-2">
           {(labels ?? []).map((label) =>
@@ -179,7 +211,13 @@ export default function Labels() {
             ) : (
               <div
                 key={label.id}
-                className="group flex items-center gap-2 rounded-[var(--radius-sm)] border border-border-strong px-3 py-1.5"
+                ref={(el) => {
+                  if (el) rowRefs.current.set(label.id, el);
+                  else rowRefs.current.delete(label.id);
+                }}
+                tabIndex={-1}
+                data-shortcut-guard
+                className="group flex items-center gap-2 rounded-[var(--radius-sm)] border border-border-strong px-3 py-1.5 outline-none"
               >
                 <Badge outline className="border-0 px-0">
                   <Dot color={label.color} />
@@ -187,7 +225,7 @@ export default function Labels() {
                 </Badge>
                 <div className="ml-auto flex items-center gap-1 opacity-0 group-hover:opacity-100">
                   <IconButton label="Edit label" onClick={() => setEditingId(label.id)}>
-                    <Pencil size={13} />
+                    <IconEdit size={13} />
                   </IconButton>
                   {confirmDeleteId === label.id ? (
                     <Button

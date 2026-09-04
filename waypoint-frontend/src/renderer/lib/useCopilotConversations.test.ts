@@ -4,14 +4,14 @@ import {
   createCopilotConversation,
   getCopilotConversation,
   deleteCopilotConversation,
-} from '@/mock/api';
+} from '@/data/api';
 import type {
   CopilotConversationSummary,
   CopilotConversation,
 } from '@/types/entities';
 import { useCopilotConversations } from './useCopilotConversations';
 
-jest.mock('@/mock/api', () => ({
+jest.mock('@/data/api', () => ({
   listCopilotConversations: jest.fn(),
   createCopilotConversation: jest.fn(),
   getCopilotConversation: jest.fn(),

@@ -1,13 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import {
   FolderPlus,
   UserPlus,
   Settings2,
   Sparkles,
   X,
-  Link2,
-  StickyNote as StickyNoteIcon,
   Clock,
   LayoutList,
   FileText,
@@ -15,12 +13,55 @@ import {
   Boxes,
   Check,
   ChevronDown,
+  ClipboardCheck,
 } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
-import { getCurrentUser, listProjects, listStickies } from '@/mock/api';
+import {
+  getCurrentUser,
+  listProjects,
+  listSprints,
+  listStates,
+  listTickets,
+  getProposalCounts,
+  type ReviewQueueCounts,
+} from '@/data/api';
+import type { Sprint } from '@/types/entities';
 import { listRecents, type RecentEntry, type RecentType } from '@/lib/recents';
-import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { parseSprintDate } from '@/pages/sprints/sprint-utils';
+
+interface ActiveSprintSummary {
+  sprint: Sprint;
+  projectName: string;
+  projectId: string;
+  done: number;
+  total: number;
+  daysLeft: number;
+}
+
+// Home shows at most one sprint card — the mockup's own Home only ever
+// surfaces a single active sprint, not a per-project list. Scans every
+// project that actually has sprints (sparse projects have none) and
+// returns the first one whose date range currently contains today, so a
+// workspace mid-sprint on more than one project just shows whichever is
+// found first rather than trying to rank them.
+async function findActiveSprint(projectIds: { id: string; name: string }[]): Promise<ActiveSprintSummary | null> {
+  const now = new Date();
+  for (const project of projectIds) {
+    const sprints = await listSprints(project.id);
+    const active = sprints.find((s) => parseSprintDate(s.startDate) <= now && now <= parseSprintDate(s.endDate));
+    if (!active) continue;
+    const [tickets, states] = await Promise.all([
+      listTickets(project.id, { v: 1, sprintIds: [active.id] }),
+      listStates(project.id),
+    ]);
+    const completedStateIds = new Set(states.filter((s) => s.group === 'completed').map((s) => s.id));
+    const done = tickets.filter((t) => completedStateIds.has(t.stateId)).length;
+    const daysLeft = Math.max(0, Math.ceil((parseSprintDate(active.endDate).getTime() - now.getTime()) / 86_400_000));
+    return { sprint: active, projectName: project.name, projectId: project.id, done, total: tickets.length, daysLeft };
+  }
+  return null;
+}
 
 const RECENTS_FETCH_LIMIT = 20;
 const RECENTS_DISPLAY_LIMIT = 8;
@@ -29,10 +70,10 @@ type RecentsFilter = RecentType | 'all';
 
 const RECENTS_FILTER_OPTIONS: { value: RecentsFilter; label: string }[] = [
   { value: 'all', label: 'All' },
-  { value: 'work-item', label: 'Work items' },
-  { value: 'page', label: 'Pages' },
-  { value: 'cycle', label: 'Cycles' },
-  { value: 'module', label: 'Modules' },
+  { value: 'ticket', label: 'Tickets' },
+  { value: 'doc', label: 'Docs' },
+  { value: 'sprint', label: 'Sprints' },
+  { value: 'workstream', label: 'Workstreams' },
 ];
 
 function RecentsFilterDropdown({
@@ -120,17 +161,17 @@ function formatRelativeTime(iso: string): string {
 }
 
 const RECENT_TYPE_ICON: Record<RecentType, typeof LayoutList> = {
-  'work-item': LayoutList,
-  page: FileText,
-  cycle: RefreshCw,
-  module: Boxes,
+  ticket: LayoutList,
+  doc: FileText,
+  sprint: RefreshCw,
+  workstream: Boxes,
 };
 
 const QUICKSTART_CARDS = [
   {
     icon: FolderPlus,
     title: 'Create a project',
-    description: 'Spin up a project to start tracking work items, cycles, and modules.',
+    description: 'Spin up a project to start tracking tickets, sprints, and workstreams.',
     to: '/projects',
   },
   {
@@ -155,10 +196,12 @@ const QUICKSTART_CARDS = [
 
 export default function Home() {
   const { data: user } = useAsync(() => getCurrentUser(), []);
-  const { data: stickies } = useAsync(() => listStickies(), []);
   const { data: projects } = useAsync(() => listProjects(), []);
-  const navigate = useNavigate();
-
+  const { data: proposalCounts } = useAsync<ReviewQueueCounts>(() => getProposalCounts(), []);
+  const { data: activeSprint } = useAsync(async () => {
+    if (!projects) return null;
+    return findActiveSprint(projects.filter((p) => p.primitiveCounts.sprints > 0));
+  }, [projects]);
   const [quickstartDismissed, setQuickstartDismissed] = useState(true);
   const [recents, setRecents] = useState<RecentEntry[]>([]);
   const [recentsFilter, setRecentsFilter] = useState<RecentsFilter>('all');
@@ -172,6 +215,14 @@ export default function Home() {
     localStorage.setItem(QUICKSTART_DISMISSED_KEY, '1');
     setQuickstartDismissed(true);
   }
+
+  // Onboarding only earns its place on an actually-empty workspace — once
+  // there's a real project, the mockup's Home has no room for it at all
+  // (it shows proposals-waiting + the active sprint + Recents instead), so
+  // showing a permanent "get started" block on top of real content would
+  // be exactly the kind of unconditional promotional clutter the removed
+  // Quicklinks card was cut for.
+  const showQuickstart = !quickstartDismissed && projects !== undefined && projects.length === 0;
 
   const projectById = useMemo(() => new Map((projects ?? []).map((p) => [p.id, p])), [projects]);
 
@@ -198,10 +249,10 @@ export default function Home() {
           {greeting}
           {user ? `, ${user.displayName}` : ''}
         </h1>
-        <p className="mt-1 text-sm text-text-secondary">{dateLabel}</p>
+        <p className="mt-1 text-sm text-text-secondary">{dateLabel} · running locally, on this machine</p>
       </div>
 
-      {!quickstartDismissed && (
+      {showQuickstart && (
         <section className="rounded-[var(--radius-lg)] border border-border bg-surface p-5">
           <div className="mb-4 flex items-center justify-between">
             <div>
@@ -237,52 +288,39 @@ export default function Home() {
         </section>
       )}
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <section className="rounded-[var(--radius-lg)] border border-border bg-surface p-5">
-          <h2 className="font-display text-sm font-medium text-text">Quicklinks</h2>
-          <div className="mt-2">
-            <EmptyState
-              icon={<Link2 size={28} />}
-              title="No quicklinks yet"
-              description="Pin projects, pages, or views here for fast access."
-            />
-          </div>
-        </section>
-
-        <section className="rounded-[var(--radius-lg)] border border-border bg-surface p-5">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="font-display text-sm font-medium text-text">Your stickies</h2>
-            <Button size="xs" variant="secondary" onClick={() => navigate('/stickies')}>
-              Add sticky
-            </Button>
-          </div>
-          {stickies && stickies.length > 0 ? (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              {stickies.slice(0, 3).map((sticky) => (
-                <div
-                  key={sticky.id}
-                  className="flex min-h-[110px] flex-col gap-1.5 rounded-[var(--radius)] border border-border bg-bg p-3"
-                  style={{ borderLeft: `3px solid ${sticky.color}` }}
-                >
-                  <p className="line-clamp-2 text-sm font-medium text-text">{sticky.title || 'Untitled'}</p>
-                  <p className="line-clamp-4 text-xs whitespace-pre-wrap text-text-secondary">{sticky.body}</p>
-                </div>
-              ))}
+      {proposalCounts && (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Link
+            to="/review"
+            className="flex flex-col gap-1.5 rounded-[var(--radius-lg)] border border-border bg-surface p-5 transition-colors hover:border-accent"
+          >
+            <div className="flex items-center gap-2 font-display text-sm font-medium text-text">
+              <ClipboardCheck size={16} />
+              {proposalCounts.proposed} proposal{proposalCounts.proposed === 1 ? '' : 's'} waiting on you
             </div>
-          ) : (
-            <EmptyState
-              icon={<StickyNoteIcon size={28} />}
-              title="No stickies yet"
-              description="Jot down quick notes for yourself."
-              action={
-                <Button size="sm" variant="secondary" onClick={() => navigate('/stickies')}>
-                  Add sticky
-                </Button>
-              }
-            />
+            <p className="text-xs text-text-secondary">
+              {proposalCounts.blocked} blocked · {proposalCounts.recent} resolved in the last 24h
+            </p>
+          </Link>
+
+          {activeSprint && (
+            <Link
+              to={`/projects/${activeSprint.projectId}/sprints/${activeSprint.sprint.id}`}
+              className="flex flex-col gap-1.5 rounded-[var(--radius-lg)] border border-border bg-surface p-5 transition-colors hover:border-accent"
+            >
+              <div className="font-display text-sm font-medium text-text">
+                {activeSprint.sprint.name} — {activeSprint.projectName}
+              </div>
+              <p className="text-xs text-text-secondary">
+                {activeSprint.done} of {activeSprint.total} tickets done ·{' '}
+                {activeSprint.daysLeft === 0
+                  ? 'ends today'
+                  : `ends in ${activeSprint.daysLeft} day${activeSprint.daysLeft === 1 ? '' : 's'}`}
+              </p>
+            </Link>
           )}
-        </section>
-      </div>
+        </div>
+      )}
 
       <section className="rounded-[var(--radius-lg)] border border-border bg-surface p-5">
         <div className="flex items-center justify-between">
@@ -326,7 +364,7 @@ export default function Home() {
             <EmptyState
               icon={<Clock size={28} />}
               title="Nothing here yet"
-              description="Work items, pages, cycles, and modules you open will show up here."
+              description="Tickets, docs, sprints, and workstreams you open will show up here."
             />
           )}
         </div>

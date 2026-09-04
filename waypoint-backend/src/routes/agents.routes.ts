@@ -55,7 +55,7 @@ agentsRouter.get(
 );
 
 agentsRouter.post(
-  '/work-items/:id/agent-assignments',
+  '/tickets/:id/agent-assignments',
   asyncHandler(async (req, res) => {
     const { agentIds } = ensureAgentAssignmentsSchema.parse(req.body);
     await agentAssignmentsService.ensureAgentAssignments(req.params.id, agentIds);
@@ -64,14 +64,14 @@ agentsRouter.post(
 );
 
 agentsRouter.post(
-  '/work-items/:id/agents/:agentId/toggle',
+  '/tickets/:id/agents/:agentId/toggle',
   asyncHandler(async (req, res) => {
-    res.json(await agentAssignmentsService.toggleWorkItemAgent(req.params.id, req.params.agentId));
+    res.json(await agentAssignmentsService.toggleTicketAgent(req.params.id, req.params.agentId));
   }),
 );
 
 agentsRouter.post(
-  '/work-items/:id/agents/:agentId/take-back',
+  '/tickets/:id/agents/:agentId/take-back',
   asyncHandler(async (req, res) => {
     res.json(await agentAssignmentsService.takeBackOverFromAgent(req.params.id, req.params.agentId));
   }),

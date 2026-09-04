@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArchiveRestore, Trash2, PartyPopper } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
-import { listArchivedProjects, listMembers, updateProject, deleteProject } from '@/mock/api';
+import { listArchivedProjects, listMembers, updateProject, deleteProject } from '@/data/api';
 import type { Project } from '@/types/entities';
 import { Badge } from '@/components/ui/Badge';
 import { AvatarStack } from '@/components/ui/Avatar';
@@ -21,7 +21,12 @@ export default function ArchivedProjects() {
     <div className="mx-auto max-w-6xl px-6 py-6">
       <div className="mb-6">
         <h1 className="font-display text-xl font-medium text-text">Archived projects</h1>
-        <p className="text-sm text-text-secondary">
+        {/* A <p> here would put Skeleton's/Skeleton.Block's <div> markup
+            inside a <p> while loading — invalid HTML that React logs as a
+            hydration-error warning (`<div> cannot be a descendant of
+            <p>`). This subtitle line never needs paragraph semantics, so a
+            <div> is both valid and visually identical. */}
+        <div className="text-sm text-text-secondary">
           {projects ? (
             `${projects.length} archived project${projects.length === 1 ? '' : 's'}`
           ) : (
@@ -29,7 +34,7 @@ export default function ArchivedProjects() {
               <Skeleton.Block height="1rem" width="8rem" />
             </Skeleton>
           )}
-        </p>
+        </div>
       </div>
 
       {loading && !projects && <SkeletonCardGrid />}
@@ -49,7 +54,7 @@ export default function ArchivedProjects() {
               key={project.id}
               project={project}
               memberById={memberById}
-              onOpen={() => navigate(`/projects/${project.id}/work-items`)}
+              onOpen={() => navigate(`/projects/${project.id}/tickets`)}
               onRestore={async () => {
                 await updateProject(project.id, { archivedAt: null });
                 reload();
@@ -139,7 +144,7 @@ function ArchivedProjectCard({
         <div className="mt-auto flex items-center justify-between pt-1">
           <AvatarStack people={people} size={22} max={4} />
           <Badge tone="neutral" outline>
-            {project.network}
+            {project.visibility}
           </Badge>
         </div>
       </div>

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
 import { useProject } from '@/layouts/ProjectLayout';
-import { archiveProject, deleteProject, updateProject } from '@/mock/api';
+import { archiveProject, deleteProject, updateProject } from '@/data/api';
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
@@ -34,7 +34,7 @@ export default function General() {
 
   const [name, setName] = useState(project.name);
   const [description, setDescription] = useState(project.description);
-  const [network, setNetwork] = useState(project.network);
+  const [visibility, setVisibility] = useState(project.visibility);
   const [timezone, setTimezone] = useState(project.timezone || 'UTC');
   const [saving, setSaving] = useState(false);
   const [archiving, setArchiving] = useState(false);
@@ -44,14 +44,14 @@ export default function General() {
   const dirty =
     name !== project.name ||
     description !== project.description ||
-    network !== project.network ||
+    visibility !== project.visibility ||
     timezone !== (project.timezone || 'UTC');
 
   async function handleSave() {
     if (!name.trim() || saving) return;
     setSaving(true);
     try {
-      await updateProject(project.id, { name: name.trim(), description, network, timezone });
+      await updateProject(project.id, { name: name.trim(), description, visibility, timezone });
       reloadProject();
     } finally {
       setSaving(false);
@@ -117,16 +117,16 @@ export default function General() {
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium text-text">Network</label>
+          <label className="text-sm font-medium text-text">Visibility</label>
           <div className="flex gap-2">
             {(['public', 'private'] as const).map((n) => (
               <button
                 key={n}
                 type="button"
-                onClick={() => setNetwork(n)}
+                onClick={() => setVisibility(n)}
                 className={
                   'h-8 flex-1 rounded-[var(--radius-sm)] border text-sm capitalize transition-colors ' +
-                  (network === n
+                  (visibility === n
                     ? 'border-accent bg-accent-soft-bg text-accent-soft-text'
                     : 'border-border-strong text-text-secondary hover:bg-surface-2')
                 }
@@ -136,7 +136,7 @@ export default function General() {
             ))}
           </div>
           <p className="text-xs text-text-muted">
-            {network === 'public'
+            {visibility === 'public'
               ? 'Anyone in the workspace can see this project.'
               : 'Only invited members can see this project.'}
           </p>
@@ -189,8 +189,8 @@ export default function General() {
         <div>
           <h2 className="font-display text-sm font-medium text-danger">Delete project</h2>
           <p className="mt-1 text-sm text-text-secondary">
-            When you delete a project, all of the data associated with that project, including work items, cycles,
-            modules, and pages, will be permanently removed. This action cannot be undone.
+            When you delete a project, all of the data associated with that project, including tickets, sprints,
+            workstreams, and docs, will be permanently removed. This action cannot be undone.
           </p>
         </div>
         <div className="flex items-center gap-2">

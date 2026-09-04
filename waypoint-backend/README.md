@@ -1,8 +1,8 @@
 # Waypoint — Backend (API server)
 
 The REST API that backs the [`waypoint-frontend`](../waypoint-frontend) Electron
-app: projects, work items, cycles, modules, pages, saved views, intake, agents,
-and everything else the desktop client renders.
+app: projects, tickets, sprints, workstreams, docs, saved views, requests,
+agents, and everything else the desktop client renders.
 
 See the [root README](../README.md) for the product pitch and how this fits
 together with the frontend.
@@ -69,7 +69,7 @@ src/
   app.ts           Express app assembly: CORS, body parsing, route mounting
   db/
     client.ts       Drizzle/Postgres client
-    schema/          One file per resource group (projects, work-items, …)
+    schema/          One file per resource group (projects, tickets, …)
     seed.ts          Demo data used by npm run db:seed and POST /dev/reset
   lib/              Small shared helpers (id generation, …)
   middleware/        Request validation wiring, centralized error handling

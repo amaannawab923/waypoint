@@ -37,7 +37,7 @@ export function boundedJson<T extends z.ZodTypeAny>(schema: T) {
 // rejected as 400 invalid_input at the validation boundary, rather than
 // reaching a service's `.update().set(patch)` as an empty object — which
 // Postgres rejects with a syntax error that surfaces as a raw 500 (see
-// cycles.service.ts/modules.service.ts's memberIds-only patch bug, and the
+// sprints.service.ts/workstreams.service.ts's memberIds-only patch bug, and the
 // same underlying risk in every other all-optional PATCH schema).
 export function requireAtLeastOneField<T extends z.ZodRawShape>(schema: z.ZodObject<T>) {
   return schema.refine((obj) => Object.keys(obj).length > 0, {

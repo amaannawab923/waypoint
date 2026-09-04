@@ -1,7 +1,7 @@
 import { pgTable, text, boolean, timestamp, pgEnum, primaryKey, unique } from 'drizzle-orm/pg-core';
 import { workspaces, members } from './workspace.js';
 import { projects } from './projects.js';
-import { workItems } from './work-items.js';
+import { tickets } from './tickets.js';
 
 export const executionMethodEnum = pgEnum('execution_method', [
   'local-claude-subscription',
@@ -66,15 +66,15 @@ export const agentProjectScopes = pgTable(
   (t) => [primaryKey({ columns: [t.agentId, t.projectId] })],
 );
 
-// unique(work_item_id, agent_id) is exactly the row ensureAgentAssignment's
+// unique(ticket_id, agent_id) is exactly the row ensureAgentAssignment's
 // find-or-create logic in the mock depends on.
 export const agentAssignments = pgTable(
   'agent_assignments',
   {
     id: text('id').primaryKey(),
-    workItemId: text('work_item_id')
+    ticketId: text('ticket_id')
       .notNull()
-      .references(() => workItems.id, { onDelete: 'cascade' }),
+      .references(() => tickets.id, { onDelete: 'cascade' }),
     agentId: text('agent_id')
       .notNull()
       .references(() => agents.id, { onDelete: 'cascade' }),
@@ -83,5 +83,5 @@ export const agentAssignments = pgTable(
     startedAt: timestamp('started_at', { withTimezone: true }),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [unique().on(t.workItemId, t.agentId)],
+  (t) => [unique().on(t.ticketId, t.agentId)],
 );

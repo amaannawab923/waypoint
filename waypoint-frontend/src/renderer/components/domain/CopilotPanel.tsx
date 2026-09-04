@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { clsx } from 'clsx';
-import { ArrowLeft, FolderGit2, Plus, Send, Sparkles, X } from 'lucide-react';
+import { ArrowLeft, FolderGit2, Send } from 'lucide-react';
+import { IconPlus, IconSparkles, IconX } from '@/components/icons';
 import {
   postCopilotUserMessage,
   postCopilotAssistantMessage,
   updateProject,
-} from '@/mock/api';
+} from '@/data/api';
 import { useCopilotConversations } from '@/lib/useCopilotConversations';
 import { useCopilotProposals } from '@/lib/useCopilotProposals';
 import { useCurrentRouteProject } from '@/lib/useCurrentRouteProject';
@@ -113,11 +114,20 @@ function CopilotRepoLinkCard({
 }) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Same fix as CopilotProposalCard.tsx's act(): "Choose folder…" disables
+  // itself (saving) while the updateProject POST is in flight, and
+  // onLinked unmounts this whole card on success (it stops rendering the
+  // moment the project has a repoPath) — either path force-blurs to
+  // <body> and leaks the next keystroke to useGlobalKeyboardShortcuts.ts's
+  // global nav shortcuts. This card's own root is the stable container
+  // neither path touches.
+  const cardRef = useRef<HTMLDivElement>(null);
 
   async function handleChoose() {
     if (saving) return;
     const picked = await window.electron.repo.chooseFolder();
     if (picked.canceled) return;
+    cardRef.current?.focus();
     setSaving(true);
     setError(null);
     try {
@@ -134,7 +144,12 @@ function CopilotRepoLinkCard({
   }
 
   return (
-    <div className="w-full shrink-0 self-start overflow-hidden rounded-[var(--radius)] border border-border-strong bg-surface">
+    <div
+      ref={cardRef}
+      tabIndex={-1}
+      data-shortcut-guard
+      className="w-full shrink-0 self-start overflow-hidden rounded-[var(--radius)] border border-border-strong bg-surface outline-none"
+    >
       <div className="flex items-center gap-2 border-b border-border bg-bg-inset px-3 py-2">
         <FolderGit2 size={13} className="shrink-0 text-text-secondary" />
         <span className="text-[10.5px] font-bold tracking-wider text-text-secondary uppercase">
@@ -199,7 +214,22 @@ function Composer({
     <div className="flex items-end gap-2 border-t border-border px-4 py-3">
       <textarea
         value={value}
-        disabled={composerDisabled}
+        // readOnly, NOT disabled: a *disabled* form control is forced out of
+        // the tab order and force-blurred by the browser the instant the
+        // attribute is applied (HTML spec, "become disabled" while focused
+        // -> loses focus). Composer becomes composerDisabled synchronously
+        // on submit (the send is in flight / streaming), which is exactly
+        // while the user's fingers are often still on the keyboard mid next
+        // thought — a `disabled` attribute here silently kicks focus to
+        // <body>, and every subsequent keystroke (that isn't itself a typing
+        // target) is then live for useGlobalKeyboardShortcuts.ts's `g`-nav
+        // and any mounted page's own j/k/x/e/r listeners to pick up —
+        // confirmed live: typing "hello there", hitting Enter, then "g"
+        // "t" navigated the whole app to /views mid-conversation. readOnly
+        // blocks edits the exact same way (browser refuses the keystroke,
+        // no onChange fires) without ever moving focus, so the field stays
+        // a real typing target for as long as it visually looks "disabled".
+        readOnly={composerDisabled}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey) {
@@ -209,7 +239,7 @@ function Composer({
         }}
         rows={1}
         placeholder="Ask Copilot…"
-        className="thin-scroll max-h-28 min-h-9 flex-1 resize-none rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 py-2 text-sm outline-none focus:border-accent disabled:opacity-50"
+        className="thin-scroll max-h-28 min-h-9 flex-1 resize-none rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 py-2 text-sm outline-none focus:border-accent read-only:opacity-50"
       />
       <IconButton
         label="Send"
@@ -226,7 +256,7 @@ function Composer({
 /**
  * Persistent right-hand chat panel — conditionally mounted by AppShell.tsx
  * (only while `copilotOpen`), with NO backdrop, unlike Modal.tsx/
- * WorkItemDrawer.tsx's portal convention this otherwise mirrors — the rest
+ * TicketDrawer.tsx's portal convention this otherwise mirrors — the rest
  * of the app stays interactive while this is open. Positioned below the
  * topbar (not inset-y-0, which would run under it) so the topbar —
  * including the toggle that opened this panel — stays visible and
@@ -546,7 +576,11 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
                 // already linked — the model is only ever told about the
                 // sentinel in the unlinked prompt, so a `true` in any other
                 // state is stale and ignored rather than trusted.
-                if (needsRepoLink && groundingProject && !groundingProject.repoPath) {
+                if (
+                  needsRepoLink &&
+                  groundingProject &&
+                  !groundingProject.repoPath
+                ) {
                   setRepoLinkPrompt({
                     sessionId,
                     projectId: groundingProject.projectId,
@@ -755,11 +789,19 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     // fails just leaves the duplicate the retry would have created anyway.
     const failedTurnAnchor = sessions
       .find((s) => s.id === sessionId)
-      ?.messages.reduce((max, m) => (typeof m.seq === 'number' && m.seq > max ? m.seq : max), 0);
+      ?.messages.reduce(
+        (max, m) => (typeof m.seq === 'number' && m.seq > max ? m.seq : max),
+        0,
+      );
     const retryStale = proposalStore.proposals.filter(
       (p) =>
         p.status === 'proposed' &&
         typeof failedTurnAnchor === 'number' &&
+        // anchorSeq is only null for a non-copilot origin (architecture
+        // §4.2's widening) — every proposal this conversation-scoped hook
+        // returns is origin='copilot', but the type is now shared with
+        // non-transcript surfaces, so guard rather than assume.
+        p.anchorSeq != null &&
         p.anchorSeq >= failedTurnAnchor,
     );
     // Synchronous when there's nothing to reject — the common case, and
@@ -843,8 +885,15 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     !messagesLoadErrorHere;
 
   return createPortal(
+    // data-copilot-panel: a presence marker, not a style hook — the W5.4
+    // global Escape cascade (useGlobalKeyboardShortcuts.ts) reads it via
+    // closest() to mirror this component's OWN "is focus inside the panel"
+    // check above, so its own fallback doesn't also clear an unrelated
+    // selection on the same Escape keystroke this panel is already
+    // consuming.
     <div
       ref={panelRef}
+      data-copilot-panel
       className="fixed top-12 right-0 bottom-0 z-40 flex w-full max-w-[400px] flex-col border-l border-border bg-surface shadow-2xl transition-transform duration-200 ease-out"
       style={{ transform: visible ? 'translateX(0)' : 'translateX(100%)' }}
     >
@@ -881,11 +930,11 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
             )}
           {!activeSession && (
             <IconButton label="New session" onClick={handleCreateSession}>
-              <Plus size={16} />
+              <IconPlus size={16} />
             </IconButton>
           )}
           <IconButton label="Close panel" onClick={onClose}>
-            <X size={16} />
+            <IconX size={16} />
           </IconButton>
         </div>
       </div>
@@ -1006,7 +1055,7 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
                   onClick={() => setConnectOpen(true)}
                   className="mt-1"
                 >
-                  <Sparkles size={13} />
+                  <IconSparkles size={13} />
                   Connect your Claude subscription
                 </Button>
               </div>

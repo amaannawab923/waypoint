@@ -11,7 +11,7 @@ import { errorHandler } from '../middleware/errorHandler.js';
 // @modelcontextprotocol/sdk Client (the same client machinery the spawned
 // `claude` CLI itself uses) drives the initialize handshake and tool call
 // over a real HTTP connection, rather than hand-authoring raw JSON-RPC
-// bodies that could get the handshake details wrong. workItemTools.test.ts
+// bodies that could get the handshake details wrong. ticketTools.test.ts
 // covers the tool handlers' own logic against mocked services; this test
 // only needs one tool exercised to prove the wiring works.
 // db carries callable fns (not just {}) because the V2 proposal tests below
@@ -21,14 +21,14 @@ import { errorHandler } from '../middleware/errorHandler.js';
 vi.mock('../db/client.js', () => ({
   db: { select: vi.fn(), insert: vi.fn(), update: vi.fn(), delete: vi.fn(), transaction: vi.fn() },
 }));
-vi.mock('../services/workItems.service.js');
+vi.mock('../services/tickets.service.js');
 vi.mock('../services/states.service.js');
 vi.mock('../services/comments.service.js');
 vi.mock('../services/members.service.js');
 vi.mock('../services/projects.service.js');
 vi.mock('../lib/actorNames.js');
 const { db } = await import('../db/client.js');
-const workItemsService = await import('../services/workItems.service.js');
+const ticketsService = await import('../services/tickets.service.js');
 const { resolveStateNames } = await import('../services/states.service.js');
 const commentsService = await import('../services/comments.service.js');
 const membersService = await import('../services/members.service.js');
@@ -68,7 +68,7 @@ afterEach(async () => {
 
 describe('POST /mcp/copilot', () => {
   it('serves a real MCP client end-to-end: initialize, then a tool call reaches the service layer', async () => {
-    vi.mocked(workItemsService.listAllWorkItems).mockResolvedValue([
+    vi.mocked(ticketsService.listAllTickets).mockResolvedValue([
       { id: 'wi-1', identifier: 'WI-1', title: 'Fix login bug', projectId: 'proj-1', stateId: 'state-1', priority: 'high', assigneeIds: [] } as never,
     ]);
 
@@ -76,9 +76,9 @@ describe('POST /mcp/copilot', () => {
     const transport = new StreamableHTTPClientTransport(new URL(baseUrl));
     await client.connect(transport);
 
-    const result = await client.callTool({ name: 'list_work_items', arguments: {} });
+    const result = await client.callTool({ name: 'list_tickets', arguments: {} });
 
-    expect(workItemsService.listAllWorkItems).toHaveBeenCalled();
+    expect(ticketsService.listAllTickets).toHaveBeenCalled();
     const content = (result.content as { type: string; text: string }[])[0];
     expect(JSON.parse(content.text)).toEqual({
       items: [
@@ -101,21 +101,21 @@ describe('POST /mcp/copilot', () => {
   });
 
   it('reports a real service error back to the MCP client as a tool error, not a dropped connection', async () => {
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(undefined);
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(undefined);
 
     const client = new Client({ name: 'test-client', version: '1.0.0' });
     const transport = new StreamableHTTPClientTransport(new URL(baseUrl));
     await client.connect(transport);
 
-    const result = await client.callTool({ name: 'get_work_item', arguments: { id: 'missing' } });
+    const result = await client.callTool({ name: 'get_ticket', arguments: { id: 'missing' } });
 
     expect(result.isError).toBe(true);
     await client.close();
   });
 
   // Regression test: dueBefore's inputSchema previously accepted any
-  // string, so a malformed value reached workItems.service.ts's
-  // lte(workItems.dueDate, ...) raw and could leak a Postgres error string
+  // string, so a malformed value reached tickets.service.ts's
+  // lte(tickets.dueDate, ...) raw and could leak a Postgres error string
   // back into the chat. It's now a regex-validated ISO date, so the real
   // MCP protocol layer (zod's own tool-input validation, not this app's
   // handler code) must reject a bad value before the service is ever
@@ -127,14 +127,14 @@ describe('POST /mcp/copilot', () => {
     await client.connect(transport);
 
     const result = await client.callTool({
-      name: 'list_work_items',
+      name: 'list_tickets',
       arguments: { dueBefore: 'not-a-date' },
     });
 
     expect(result.isError).toBe(true);
     const content = (result.content as { type: string; text: string }[])[0];
     expect(content.text).toMatch(/ISO date/i);
-    expect(workItemsService.listAllWorkItems).not.toHaveBeenCalled();
+    expect(ticketsService.listAllTickets).not.toHaveBeenCalled();
 
     await client.close();
   });
@@ -142,7 +142,7 @@ describe('POST /mcp/copilot', () => {
   // Regression test: the regex behind dueBefore's ISO_DATE schema only
   // checked the SHAPE (YYYY-MM-DD), not that the date is real — a
   // calendar-invalid value like "2026-13-99" or "2026-02-31" matched it
-  // fine and reached workItems.service.ts's lte(workItems.dueDate, ...) raw,
+  // fine and reached tickets.service.ts's lte(tickets.dueDate, ...) raw,
   // where Postgres's own rejection (including the full SQL statement,
   // column names, and bound parameters) came back as the tool's error text.
   // ISO_DATE now has a .refine() that actually parses the string — this
@@ -155,50 +155,50 @@ describe('POST /mcp/copilot', () => {
     await client.connect(transport);
 
     const result = await client.callTool({
-      name: 'list_work_items',
+      name: 'list_tickets',
       arguments: { dueBefore: '2026-13-99' },
     });
 
     expect(result.isError).toBe(true);
     const content = (result.content as { type: string; text: string }[])[0];
     expect(content.text).not.toMatch(/postgres|SELECT|column|relation/i);
-    expect(workItemsService.listAllWorkItems).not.toHaveBeenCalled();
+    expect(ticketsService.listAllTickets).not.toHaveBeenCalled();
 
     await client.close();
   });
 
-  // MINOR regression test: search_work_items's query param previously had
-  // no .min(1), so an empty string matched every work item's title (an
-  // unscoped ilike(title, '%%') in workItems.service.ts) — effectively
+  // MINOR regression test: search_tickets's query param previously had
+  // no .min(1), so an empty string matched every ticket's title (an
+  // unscoped ilike(title, '%%') in tickets.service.ts) — effectively
   // turning "search" into "list everything" by accident.
-  it('rejects an empty search_work_items query at the protocol layer', async () => {
+  it('rejects an empty search_tickets query at the protocol layer', async () => {
     const client = new Client({ name: 'test-client', version: '1.0.0' });
     const transport = new StreamableHTTPClientTransport(new URL(baseUrl));
     await client.connect(transport);
 
-    const result = await client.callTool({ name: 'search_work_items', arguments: { query: '' } });
+    const result = await client.callTool({ name: 'search_tickets', arguments: { query: '' } });
 
     expect(result.isError).toBe(true);
-    expect(workItemsService.searchWorkItems).not.toHaveBeenCalled();
+    expect(ticketsService.searchTickets).not.toHaveBeenCalled();
 
     await client.close();
   });
 
   // MINOR regression test: .min(1) alone still let a whitespace-only query
   // (e.g. a single space) through, since " ".length is 1 — and that still
-  // matched every work item's title the same way an empty string did, via
+  // matched every ticket's title the same way an empty string did, via
   // the underlying ilike('%<query>%', title). query is now .trim().min(1),
   // so a whitespace-only value must be rejected here too, not just a
   // literally empty one.
-  it('rejects a whitespace-only search_work_items query at the protocol layer', async () => {
+  it('rejects a whitespace-only search_tickets query at the protocol layer', async () => {
     const client = new Client({ name: 'test-client', version: '1.0.0' });
     const transport = new StreamableHTTPClientTransport(new URL(baseUrl));
     await client.connect(transport);
 
-    const result = await client.callTool({ name: 'search_work_items', arguments: { query: '   ' } });
+    const result = await client.callTool({ name: 'search_tickets', arguments: { query: '   ' } });
 
     expect(result.isError).toBe(true);
-    expect(workItemsService.searchWorkItems).not.toHaveBeenCalled();
+    expect(ticketsService.searchTickets).not.toHaveBeenCalled();
 
     await client.close();
   });
@@ -209,17 +209,17 @@ describe('POST /mcp/copilot', () => {
   // the raw untrimmed string — proving zod's .trim() transform flows through
   // to the handler (see safeParseAsync in the MCP SDK, which hands the
   // handler parseResult.data, not the raw request arguments).
-  it('trims surrounding whitespace from a search_work_items query before it reaches the service', async () => {
-    vi.mocked(workItemsService.searchWorkItems).mockResolvedValue([]);
+  it('trims surrounding whitespace from a search_tickets query before it reaches the service', async () => {
+    vi.mocked(ticketsService.searchTickets).mockResolvedValue([]);
 
     const client = new Client({ name: 'test-client', version: '1.0.0' });
     const transport = new StreamableHTTPClientTransport(new URL(baseUrl));
     await client.connect(transport);
 
-    const result = await client.callTool({ name: 'search_work_items', arguments: { query: '  login  ' } });
+    const result = await client.callTool({ name: 'search_tickets', arguments: { query: '  login  ' } });
 
     expect(result.isError).toBeFalsy();
-    expect(workItemsService.searchWorkItems).toHaveBeenCalledWith('login', undefined, expect.any(Number));
+    expect(ticketsService.searchTickets).toHaveBeenCalledWith('login', undefined, expect.any(Number));
 
     await client.close();
   });
@@ -238,14 +238,14 @@ describe('POST /mcp/copilot', () => {
     await client.connect(transport);
 
     const result = await client.callTool({
-      name: 'list_work_items',
+      name: 'list_tickets',
       arguments: { dueBefore: '0000-01-01' },
     });
 
     expect(result.isError).toBe(true);
     const content = (result.content as { type: string; text: string }[])[0];
     expect(content.text).toMatch(/year/i);
-    expect(workItemsService.listAllWorkItems).not.toHaveBeenCalled();
+    expect(ticketsService.listAllTickets).not.toHaveBeenCalled();
 
     await client.close();
   });
@@ -255,21 +255,21 @@ describe('POST /mcp/copilot', () => {
   // previously reached the MCP SDK's own error serialization with its raw
   // `error.message`, which could contain arbitrary internal detail (driver
   // text, SQL, etc). Every registered tool handler is now wrapped
-  // (withErrorSafetyNet in workItemTools.ts) so a thrown error becomes a
+  // (withErrorSafetyNet in ticketTools.ts) so a thrown error becomes a
   // generic message instead — verified here through the real protocol
   // layer, not just by calling the handler function directly, so it proves
-  // the wrapping is actually wired into registerWorkItemTools and not just
+  // the wrapping is actually wired into registerTicketTools and not just
   // defined and unused.
   it('turns a thrown service-layer error into a generic message instead of leaking it to the client', async () => {
-    vi.mocked(workItemsService.getWorkItem).mockRejectedValue(
-      new Error('relation "work_items" violates constraint "fk_work_items_project_id" — DETAIL: Key (project_id)=(proj-1) is not present in table "projects".'),
+    vi.mocked(ticketsService.getTicket).mockRejectedValue(
+      new Error('relation "tickets" violates constraint "fk_tickets_project_id" — DETAIL: Key (project_id)=(proj-1) is not present in table "projects".'),
     );
 
     const client = new Client({ name: 'test-client', version: '1.0.0' });
     const transport = new StreamableHTTPClientTransport(new URL(baseUrl));
     await client.connect(transport);
 
-    const result = await client.callTool({ name: 'get_work_item', arguments: { id: 'wi-1' } });
+    const result = await client.callTool({ name: 'get_ticket', arguments: { id: 'wi-1' } });
 
     expect(result.isError).toBe(true);
     const content = (result.content as { type: string; text: string }[])[0];
@@ -297,7 +297,7 @@ function connectClient(headers?: Record<string, string>) {
   return client.connect(transport).then(() => client);
 }
 
-function visibleWorkItem() {
+function visibleTicket() {
   return {
     id: 'wi-1',
     projectId: 'proj-1',
@@ -342,6 +342,7 @@ function installProposalStore() {
         const chain = chainable(undefined);
         const capture = chain.values as ReturnType<typeof vi.fn>;
         chain.returning = vi.fn(() => {
+          const values = capture.mock.calls[0][0] as Record<string, unknown>;
           store.row = {
             status: 'proposed',
             statusReason: null,
@@ -349,7 +350,14 @@ function installProposalStore() {
             modelNotifiedAt: null,
             resolvedAt: null,
             createdAt: new Date(),
-            ...capture.mock.calls[0][0],
+            ...values,
+            // createProposal resolves projectId via a correlated SQL
+            // subquery against the target ticket (see proposals.service.ts)
+            // rather than a plain JS value — this fake doesn't run real
+            // SQL, so stand in with the fixed project id every ticket in
+            // this file's tests belongs to (see visibleTicket()) instead of
+            // storing the raw (circular, unserializable) SQL fragment.
+            projectId: typeof values.projectId === 'string' ? values.projectId : 'proj-1',
           };
           return Promise.resolve([{ ...store.row }]);
         });
@@ -386,12 +394,12 @@ function installProposalStore() {
 describe('POST /mcp/copilot — V2 write proposals', () => {
   it('delivers the conversation id via the transport header into the stored proposal row — never via tool input', async () => {
     const store = installProposalStore();
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(visibleWorkItem());
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(visibleTicket());
     const client = await connectClient(CONVERSATION_HEADERS);
 
     const result = await client.callTool({
       name: 'propose_comment',
-      arguments: { workItemId: 'wi-1', body: 'summarizing the fix' },
+      arguments: { ticketId: 'wi-1', body: 'summarizing the fix' },
     });
 
     expect(result.isError).toBeFalsy();
@@ -408,13 +416,13 @@ describe('POST /mcp/copilot — V2 write proposals', () => {
   });
 
   it('refuses proposing cleanly when the header is absent, while read tools keep working', async () => {
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(visibleWorkItem());
-    vi.mocked(workItemsService.listAllWorkItems).mockResolvedValue([]);
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(visibleTicket());
+    vi.mocked(ticketsService.listAllTickets).mockResolvedValue([]);
     const client = await connectClient();
 
     const propose = await client.callTool({
       name: 'propose_comment',
-      arguments: { workItemId: 'wi-1', body: 'hi' },
+      arguments: { ticketId: 'wi-1', body: 'hi' },
     });
     expect(propose.isError).toBe(true);
     expect((propose.content as { text: string }[])[0].text).toBe(
@@ -422,7 +430,7 @@ describe('POST /mcp/copilot — V2 write proposals', () => {
     );
     expect(db.transaction).not.toHaveBeenCalled();
 
-    const read = await client.callTool({ name: 'list_work_items', arguments: {} });
+    const read = await client.callTool({ name: 'list_tickets', arguments: {} });
     expect(read.isError).toBeFalsy();
 
     await client.close();
@@ -433,7 +441,7 @@ describe('POST /mcp/copilot — V2 write proposals', () => {
 
     const result = await client.callTool({
       name: 'propose_comment',
-      arguments: { workItemId: 'wi-1', body: 'hi' },
+      arguments: { ticketId: 'wi-1', body: 'hi' },
     });
 
     expect(result.isError).toBe(true);
@@ -449,25 +457,25 @@ describe('POST /mcp/copilot — V2 write proposals', () => {
 
     const result = await client.callTool({
       name: 'propose_comment',
-      arguments: { workItemId: 'wi-1', body: '   ' },
+      arguments: { ticketId: 'wi-1', body: '   ' },
     });
 
     expect(result.isError).toBe(true);
-    expect(workItemsService.getWorkItem).not.toHaveBeenCalled();
+    expect(ticketsService.getTicket).not.toHaveBeenCalled();
     expect(db.transaction).not.toHaveBeenCalled();
 
     await client.close();
   });
 
   it('scrubs a service-layer throw inside a propose handler to the generic internal-error message', async () => {
-    vi.mocked(workItemsService.getWorkItem).mockRejectedValue(
+    vi.mocked(ticketsService.getTicket).mockRejectedValue(
       new Error('relation "copilot_proposals" violates constraint "fk" — DETAIL: everything'),
     );
     const client = await connectClient(CONVERSATION_HEADERS);
 
     const result = await client.callTool({
       name: 'propose_comment',
-      arguments: { workItemId: 'wi-1', body: 'hi' },
+      arguments: { ticketId: 'wi-1', body: 'hi' },
     });
 
     expect(result.isError).toBe(true);
@@ -480,7 +488,7 @@ describe('POST /mcp/copilot — V2 write proposals', () => {
 
   it('END-TO-END: propose over MCP, approve over REST executes the disclosure-prefixed comment exactly once; a second approve does not re-execute', async () => {
     installProposalStore();
-    vi.mocked(workItemsService.getWorkItem).mockResolvedValue(visibleWorkItem());
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(visibleTicket());
     vi.mocked(membersService.getCurrentUser).mockResolvedValue({ displayName: 'Amaan' } as never);
     vi.mocked(commentsService.addComment).mockResolvedValue({ id: 'cm-1' } as never);
     const client = await connectClient(CONVERSATION_HEADERS);
@@ -488,7 +496,7 @@ describe('POST /mcp/copilot — V2 write proposals', () => {
     // 1. The model proposes — nothing executes.
     const proposeResult = await client.callTool({
       name: 'propose_comment',
-      arguments: { workItemId: 'wi-1', body: 'Fixed by removing the breakpoint override.' },
+      arguments: { ticketId: 'wi-1', body: 'Fixed by removing the breakpoint override.' },
     });
     const { proposalId } = JSON.parse((proposeResult.content as { text: string }[])[0].text);
     expect(commentsService.addComment).not.toHaveBeenCalled();
@@ -500,8 +508,8 @@ describe('POST /mcp/copilot — V2 write proposals', () => {
     expect(approve.body.status).toBe('executed');
     expect(approve.body.resultInfo).toEqual({ commentId: 'cm-1' });
     expect(commentsService.addComment).toHaveBeenCalledTimes(1);
-    const [workItemId, html] = vi.mocked(commentsService.addComment).mock.calls[0];
-    expect(workItemId).toBe('wi-1');
+    const [ticketId, html] = vi.mocked(commentsService.addComment).mock.calls[0];
+    expect(ticketId).toBe('wi-1');
     expect(
       html.startsWith('<p><em>Hi, this is Copilot — Amaan’s agent — commenting on their behalf: </em>'),
     ).toBe(true);

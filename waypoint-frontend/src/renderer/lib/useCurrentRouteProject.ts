@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { getProject } from '@/mock/api';
+import { getProject } from '@/data/api';
 
 export interface CurrentRouteProject {
   projectId: string;

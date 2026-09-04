@@ -1,6 +1,6 @@
 {
-  "id": "2b80cf58-341a-448f-bcde-7256af72f2d2",
-  "prevId": "4584c38e-355a-4298-9cfd-861f796f60fc",
+  "id": "fa045b76-91e7-46c7-aa75-924fb75a3281",
+  "prevId": "a9a10ead-2bd3-44a2-b03a-5891e6f64960",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -335,9 +335,9 @@
           "primaryKey": false,
           "notNull": true
         },
-        "network": {
-          "name": "network",
-          "type": "network",
+        "visibility": {
+          "name": "visibility",
+          "type": "visibility",
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
@@ -398,6 +398,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
+        },
+        "repo_path": {
+          "name": "repo_path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {},
@@ -448,8 +454,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.work_item_states": {
-      "name": "work_item_states",
+    "public.ticket_states": {
+      "name": "ticket_states",
       "schema": "",
       "columns": {
         "id": {
@@ -500,9 +506,9 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "work_item_states_project_id_projects_id_fk": {
-          "name": "work_item_states_project_id_projects_id_fk",
-          "tableFrom": "work_item_states",
+        "ticket_states_project_id_projects_id_fk": {
+          "name": "ticket_states_project_id_projects_id_fk",
+          "tableFrom": "ticket_states",
           "tableTo": "projects",
           "columnsFrom": [
             "project_id"
@@ -520,12 +526,12 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.cycle_members": {
-      "name": "cycle_members",
+    "public.sprint_members": {
+      "name": "sprint_members",
       "schema": "",
       "columns": {
-        "cycle_id": {
-          "name": "cycle_id",
+        "sprint_id": {
+          "name": "sprint_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -539,12 +545,12 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "cycle_members_cycle_id_cycles_id_fk": {
-          "name": "cycle_members_cycle_id_cycles_id_fk",
-          "tableFrom": "cycle_members",
-          "tableTo": "cycles",
+        "sprint_members_sprint_id_sprints_id_fk": {
+          "name": "sprint_members_sprint_id_sprints_id_fk",
+          "tableFrom": "sprint_members",
+          "tableTo": "sprints",
           "columnsFrom": [
-            "cycle_id"
+            "sprint_id"
           ],
           "columnsTo": [
             "id"
@@ -552,9 +558,9 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "cycle_members_member_id_members_id_fk": {
-          "name": "cycle_members_member_id_members_id_fk",
-          "tableFrom": "cycle_members",
+        "sprint_members_member_id_members_id_fk": {
+          "name": "sprint_members_member_id_members_id_fk",
+          "tableFrom": "sprint_members",
           "tableTo": "members",
           "columnsFrom": [
             "member_id"
@@ -567,10 +573,10 @@
         }
       },
       "compositePrimaryKeys": {
-        "cycle_members_cycle_id_member_id_pk": {
-          "name": "cycle_members_cycle_id_member_id_pk",
+        "sprint_members_sprint_id_member_id_pk": {
+          "name": "sprint_members_sprint_id_member_id_pk",
           "columns": [
-            "cycle_id",
+            "sprint_id",
             "member_id"
           ]
         }
@@ -580,8 +586,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.cycles": {
-      "name": "cycles",
+    "public.sprints": {
+      "name": "sprints",
       "schema": "",
       "columns": {
         "id": {
@@ -630,9 +636,9 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "cycles_project_id_projects_id_fk": {
-          "name": "cycles_project_id_projects_id_fk",
-          "tableFrom": "cycles",
+        "sprints_project_id_projects_id_fk": {
+          "name": "sprints_project_id_projects_id_fk",
+          "tableFrom": "sprints",
           "tableTo": "projects",
           "columnsFrom": [
             "project_id"
@@ -643,9 +649,9 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "cycles_lead_id_members_id_fk": {
-          "name": "cycles_lead_id_members_id_fk",
-          "tableFrom": "cycles",
+        "sprints_lead_id_members_id_fk": {
+          "name": "sprints_lead_id_members_id_fk",
+          "tableFrom": "sprints",
           "tableTo": "members",
           "columnsFrom": [
             "lead_id"
@@ -663,12 +669,12 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.module_members": {
-      "name": "module_members",
+    "public.workstream_members": {
+      "name": "workstream_members",
       "schema": "",
       "columns": {
-        "module_id": {
-          "name": "module_id",
+        "workstream_id": {
+          "name": "workstream_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -682,12 +688,12 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "module_members_module_id_work_modules_id_fk": {
-          "name": "module_members_module_id_work_modules_id_fk",
-          "tableFrom": "module_members",
-          "tableTo": "work_modules",
+        "workstream_members_workstream_id_workstreams_id_fk": {
+          "name": "workstream_members_workstream_id_workstreams_id_fk",
+          "tableFrom": "workstream_members",
+          "tableTo": "workstreams",
           "columnsFrom": [
-            "module_id"
+            "workstream_id"
           ],
           "columnsTo": [
             "id"
@@ -695,9 +701,9 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "module_members_member_id_members_id_fk": {
-          "name": "module_members_member_id_members_id_fk",
-          "tableFrom": "module_members",
+        "workstream_members_member_id_members_id_fk": {
+          "name": "workstream_members_member_id_members_id_fk",
+          "tableFrom": "workstream_members",
           "tableTo": "members",
           "columnsFrom": [
             "member_id"
@@ -710,10 +716,10 @@
         }
       },
       "compositePrimaryKeys": {
-        "module_members_module_id_member_id_pk": {
-          "name": "module_members_module_id_member_id_pk",
+        "workstream_members_workstream_id_member_id_pk": {
+          "name": "workstream_members_workstream_id_member_id_pk",
           "columns": [
-            "module_id",
+            "workstream_id",
             "member_id"
           ]
         }
@@ -723,8 +729,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.work_modules": {
-      "name": "work_modules",
+    "public.workstreams": {
+      "name": "workstreams",
       "schema": "",
       "columns": {
         "id": {
@@ -760,7 +766,7 @@
         },
         "status": {
           "name": "status",
-          "type": "module_status",
+          "type": "workstream_status",
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
@@ -781,9 +787,9 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "work_modules_project_id_projects_id_fk": {
-          "name": "work_modules_project_id_projects_id_fk",
-          "tableFrom": "work_modules",
+        "workstreams_project_id_projects_id_fk": {
+          "name": "workstreams_project_id_projects_id_fk",
+          "tableFrom": "workstreams",
           "tableTo": "projects",
           "columnsFrom": [
             "project_id"
@@ -794,9 +800,9 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "work_modules_lead_id_members_id_fk": {
-          "name": "work_modules_lead_id_members_id_fk",
-          "tableFrom": "work_modules",
+        "workstreams_lead_id_members_id_fk": {
+          "name": "workstreams_lead_id_members_id_fk",
+          "tableFrom": "workstreams",
           "tableTo": "members",
           "columnsFrom": [
             "lead_id"
@@ -824,8 +830,8 @@
           "primaryKey": true,
           "notNull": true
         },
-        "work_item_id": {
-          "name": "work_item_id",
+        "ticket_id": {
+          "name": "ticket_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -858,12 +864,12 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "activity_entries_work_item_id_work_items_id_fk": {
-          "name": "activity_entries_work_item_id_work_items_id_fk",
+        "activity_entries_ticket_id_tickets_id_fk": {
+          "name": "activity_entries_ticket_id_tickets_id_fk",
           "tableFrom": "activity_entries",
-          "tableTo": "work_items",
+          "tableTo": "tickets",
           "columnsFrom": [
-            "work_item_id"
+            "ticket_id"
           ],
           "columnsTo": [
             "id"
@@ -888,8 +894,8 @@
           "primaryKey": true,
           "notNull": true
         },
-        "work_item_id": {
-          "name": "work_item_id",
+        "ticket_id": {
+          "name": "ticket_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -916,12 +922,12 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "comments_work_item_id_work_items_id_fk": {
-          "name": "comments_work_item_id_work_items_id_fk",
+        "comments_ticket_id_tickets_id_fk": {
+          "name": "comments_ticket_id_tickets_id_fk",
           "tableFrom": "comments",
-          "tableTo": "work_items",
+          "tableTo": "tickets",
           "columnsFrom": [
-            "work_item_id"
+            "ticket_id"
           ],
           "columnsTo": [
             "id"
@@ -936,12 +942,12 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.work_item_assignees": {
-      "name": "work_item_assignees",
+    "public.ticket_assignees": {
+      "name": "ticket_assignees",
       "schema": "",
       "columns": {
-        "work_item_id": {
-          "name": "work_item_id",
+        "ticket_id": {
+          "name": "ticket_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -962,12 +968,12 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "work_item_assignees_work_item_id_work_items_id_fk": {
-          "name": "work_item_assignees_work_item_id_work_items_id_fk",
-          "tableFrom": "work_item_assignees",
-          "tableTo": "work_items",
+        "ticket_assignees_ticket_id_tickets_id_fk": {
+          "name": "ticket_assignees_ticket_id_tickets_id_fk",
+          "tableFrom": "ticket_assignees",
+          "tableTo": "tickets",
           "columnsFrom": [
-            "work_item_id"
+            "ticket_id"
           ],
           "columnsTo": [
             "id"
@@ -978,11 +984,11 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "work_item_assignees_work_item_id_assignee_id_unique": {
-          "name": "work_item_assignees_work_item_id_assignee_id_unique",
+        "ticket_assignees_ticket_id_assignee_id_unique": {
+          "name": "ticket_assignees_ticket_id_assignee_id_unique",
           "nullsNotDistinct": false,
           "columns": [
-            "work_item_id",
+            "ticket_id",
             "assignee_id"
           ]
         }
@@ -991,12 +997,12 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.work_item_labels": {
-      "name": "work_item_labels",
+    "public.ticket_labels": {
+      "name": "ticket_labels",
       "schema": "",
       "columns": {
-        "work_item_id": {
-          "name": "work_item_id",
+        "ticket_id": {
+          "name": "ticket_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -1010,12 +1016,12 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "work_item_labels_work_item_id_work_items_id_fk": {
-          "name": "work_item_labels_work_item_id_work_items_id_fk",
-          "tableFrom": "work_item_labels",
-          "tableTo": "work_items",
+        "ticket_labels_ticket_id_tickets_id_fk": {
+          "name": "ticket_labels_ticket_id_tickets_id_fk",
+          "tableFrom": "ticket_labels",
+          "tableTo": "tickets",
           "columnsFrom": [
-            "work_item_id"
+            "ticket_id"
           ],
           "columnsTo": [
             "id"
@@ -1023,9 +1029,9 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "work_item_labels_label_id_labels_id_fk": {
-          "name": "work_item_labels_label_id_labels_id_fk",
-          "tableFrom": "work_item_labels",
+        "ticket_labels_label_id_labels_id_fk": {
+          "name": "ticket_labels_label_id_labels_id_fk",
+          "tableFrom": "ticket_labels",
           "tableTo": "labels",
           "columnsFrom": [
             "label_id"
@@ -1038,10 +1044,10 @@
         }
       },
       "compositePrimaryKeys": {
-        "work_item_labels_work_item_id_label_id_pk": {
-          "name": "work_item_labels_work_item_id_label_id_pk",
+        "ticket_labels_ticket_id_label_id_pk": {
+          "name": "ticket_labels_ticket_id_label_id_pk",
           "columns": [
-            "work_item_id",
+            "ticket_id",
             "label_id"
           ]
         }
@@ -1051,8 +1057,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.work_item_links": {
-      "name": "work_item_links",
+    "public.ticket_links": {
+      "name": "ticket_links",
       "schema": "",
       "columns": {
         "id": {
@@ -1061,8 +1067,8 @@
           "primaryKey": true,
           "notNull": true
         },
-        "work_item_id": {
-          "name": "work_item_id",
+        "ticket_id": {
+          "name": "ticket_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -1089,12 +1095,12 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "work_item_links_work_item_id_work_items_id_fk": {
-          "name": "work_item_links_work_item_id_work_items_id_fk",
-          "tableFrom": "work_item_links",
-          "tableTo": "work_items",
+        "ticket_links_ticket_id_tickets_id_fk": {
+          "name": "ticket_links_ticket_id_tickets_id_fk",
+          "tableFrom": "ticket_links",
+          "tableTo": "tickets",
           "columnsFrom": [
-            "work_item_id"
+            "ticket_id"
           ],
           "columnsTo": [
             "id"
@@ -1109,8 +1115,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.work_items": {
-      "name": "work_items",
+    "public.tickets": {
+      "name": "tickets",
       "schema": "",
       "columns": {
         "id": {
@@ -1164,14 +1170,22 @@
           "notNull": true,
           "default": "'none'"
         },
-        "module_id": {
-          "name": "module_id",
+        "source": {
+          "name": "source",
+          "type": "ticket_source",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'manual'"
+        },
+        "workstream_id": {
+          "name": "workstream_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "cycle_id": {
-          "name": "cycle_id",
+        "sprint_id": {
+          "name": "sprint_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -1257,9 +1271,9 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "work_items_project_id_projects_id_fk": {
-          "name": "work_items_project_id_projects_id_fk",
-          "tableFrom": "work_items",
+        "tickets_project_id_projects_id_fk": {
+          "name": "tickets_project_id_projects_id_fk",
+          "tableFrom": "tickets",
           "tableTo": "projects",
           "columnsFrom": [
             "project_id"
@@ -1270,10 +1284,10 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "work_items_state_id_work_item_states_id_fk": {
-          "name": "work_items_state_id_work_item_states_id_fk",
-          "tableFrom": "work_items",
-          "tableTo": "work_item_states",
+        "tickets_state_id_ticket_states_id_fk": {
+          "name": "tickets_state_id_ticket_states_id_fk",
+          "tableFrom": "tickets",
+          "tableTo": "ticket_states",
           "columnsFrom": [
             "state_id"
           ],
@@ -1283,12 +1297,12 @@
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
-        "work_items_module_id_work_modules_id_fk": {
-          "name": "work_items_module_id_work_modules_id_fk",
-          "tableFrom": "work_items",
-          "tableTo": "work_modules",
+        "tickets_workstream_id_workstreams_id_fk": {
+          "name": "tickets_workstream_id_workstreams_id_fk",
+          "tableFrom": "tickets",
+          "tableTo": "workstreams",
           "columnsFrom": [
-            "module_id"
+            "workstream_id"
           ],
           "columnsTo": [
             "id"
@@ -1296,12 +1310,12 @@
           "onDelete": "set null",
           "onUpdate": "no action"
         },
-        "work_items_cycle_id_cycles_id_fk": {
-          "name": "work_items_cycle_id_cycles_id_fk",
-          "tableFrom": "work_items",
-          "tableTo": "cycles",
+        "tickets_sprint_id_sprints_id_fk": {
+          "name": "tickets_sprint_id_sprints_id_fk",
+          "tableFrom": "tickets",
+          "tableTo": "sprints",
           "columnsFrom": [
-            "cycle_id"
+            "sprint_id"
           ],
           "columnsTo": [
             "id"
@@ -1309,10 +1323,10 @@
           "onDelete": "set null",
           "onUpdate": "no action"
         },
-        "work_items_parent_id_work_items_id_fk": {
-          "name": "work_items_parent_id_work_items_id_fk",
-          "tableFrom": "work_items",
-          "tableTo": "work_items",
+        "tickets_parent_id_tickets_id_fk": {
+          "name": "tickets_parent_id_tickets_id_fk",
+          "tableFrom": "tickets",
+          "tableTo": "tickets",
           "columnsFrom": [
             "parent_id"
           ],
@@ -1322,9 +1336,9 @@
           "onDelete": "set null",
           "onUpdate": "no action"
         },
-        "work_items_created_by_id_members_id_fk": {
-          "name": "work_items_created_by_id_members_id_fk",
-          "tableFrom": "work_items",
+        "tickets_created_by_id_members_id_fk": {
+          "name": "tickets_created_by_id_members_id_fk",
+          "tableFrom": "tickets",
           "tableTo": "members",
           "columnsFrom": [
             "created_by_id"
@@ -1338,15 +1352,15 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "work_items_identifier_unique": {
-          "name": "work_items_identifier_unique",
+        "tickets_identifier_unique": {
+          "name": "tickets_identifier_unique",
           "nullsNotDistinct": false,
           "columns": [
             "identifier"
           ]
         },
-        "work_items_project_id_sequence_id_unique": {
-          "name": "work_items_project_id_sequence_id_unique",
+        "tickets_project_id_sequence_id_unique": {
+          "name": "tickets_project_id_sequence_id_unique",
           "nullsNotDistinct": false,
           "columns": [
             "project_id",
@@ -1358,8 +1372,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.pages": {
-      "name": "pages",
+    "public.docs": {
+      "name": "docs",
       "schema": "",
       "columns": {
         "id": {
@@ -1395,7 +1409,7 @@
         },
         "visibility": {
           "name": "visibility",
-          "type": "page_visibility",
+          "type": "doc_visibility",
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
@@ -1421,8 +1435,8 @@
           "notNull": true,
           "default": false
         },
-        "parent_page_id": {
-          "name": "parent_page_id",
+        "parent_doc_id": {
+          "name": "parent_doc_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -1444,9 +1458,9 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "pages_project_id_projects_id_fk": {
-          "name": "pages_project_id_projects_id_fk",
-          "tableFrom": "pages",
+        "docs_project_id_projects_id_fk": {
+          "name": "docs_project_id_projects_id_fk",
+          "tableFrom": "docs",
           "tableTo": "projects",
           "columnsFrom": [
             "project_id"
@@ -1457,9 +1471,9 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "pages_owner_id_members_id_fk": {
-          "name": "pages_owner_id_members_id_fk",
-          "tableFrom": "pages",
+        "docs_owner_id_members_id_fk": {
+          "name": "docs_owner_id_members_id_fk",
+          "tableFrom": "docs",
           "tableTo": "members",
           "columnsFrom": [
             "owner_id"
@@ -1470,12 +1484,12 @@
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
-        "pages_parent_page_id_pages_id_fk": {
-          "name": "pages_parent_page_id_pages_id_fk",
-          "tableFrom": "pages",
-          "tableTo": "pages",
+        "docs_parent_doc_id_docs_id_fk": {
+          "name": "docs_parent_doc_id_docs_id_fk",
+          "tableFrom": "docs",
+          "tableTo": "docs",
           "columnsFrom": [
-            "parent_page_id"
+            "parent_doc_id"
           ],
           "columnsTo": [
             "id"
@@ -1526,7 +1540,7 @@
         },
         "visibility": {
           "name": "visibility",
-          "type": "network",
+          "type": "visibility",
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
@@ -1582,8 +1596,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.intake_requests": {
-      "name": "intake_requests",
+    "public.requests": {
+      "name": "requests",
       "schema": "",
       "columns": {
         "id": {
@@ -1613,7 +1627,7 @@
         },
         "status": {
           "name": "status",
-          "type": "intake_status",
+          "type": "request_status",
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
@@ -1645,8 +1659,8 @@
           "notNull": true,
           "default": "now()"
         },
-        "linked_work_item_id": {
-          "name": "linked_work_item_id",
+        "linked_ticket_id": {
+          "name": "linked_ticket_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -1654,9 +1668,9 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "intake_requests_project_id_projects_id_fk": {
-          "name": "intake_requests_project_id_projects_id_fk",
-          "tableFrom": "intake_requests",
+        "requests_project_id_projects_id_fk": {
+          "name": "requests_project_id_projects_id_fk",
+          "tableFrom": "requests",
           "tableTo": "projects",
           "columnsFrom": [
             "project_id"
@@ -1667,12 +1681,12 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "intake_requests_linked_work_item_id_work_items_id_fk": {
-          "name": "intake_requests_linked_work_item_id_work_items_id_fk",
-          "tableFrom": "intake_requests",
-          "tableTo": "work_items",
+        "requests_linked_ticket_id_tickets_id_fk": {
+          "name": "requests_linked_ticket_id_tickets_id_fk",
+          "tableFrom": "requests",
+          "tableTo": "tickets",
           "columnsFrom": [
-            "linked_work_item_id"
+            "linked_ticket_id"
           ],
           "columnsTo": [
             "id"
@@ -1709,8 +1723,8 @@
           "primaryKey": false,
           "notNull": true
         },
-        "work_item_id": {
-          "name": "work_item_id",
+        "ticket_id": {
+          "name": "ticket_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -1758,12 +1772,12 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "notifications_work_item_id_work_items_id_fk": {
-          "name": "notifications_work_item_id_work_items_id_fk",
+        "notifications_ticket_id_tickets_id_fk": {
+          "name": "notifications_ticket_id_tickets_id_fk",
           "tableFrom": "notifications",
-          "tableTo": "work_items",
+          "tableTo": "tickets",
           "columnsFrom": [
-            "work_item_id"
+            "ticket_id"
           ],
           "columnsTo": [
             "id"
@@ -1778,8 +1792,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.stickies": {
-      "name": "stickies",
+    "public.scratch_notes": {
+      "name": "scratch_notes",
       "schema": "",
       "columns": {
         "id": {
@@ -1822,9 +1836,9 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "stickies_author_id_members_id_fk": {
-          "name": "stickies_author_id_members_id_fk",
-          "tableFrom": "stickies",
+        "scratch_notes_author_id_members_id_fk": {
+          "name": "scratch_notes_author_id_members_id_fk",
+          "tableFrom": "scratch_notes",
           "tableTo": "members",
           "columnsFrom": [
             "author_id"
@@ -1983,8 +1997,8 @@
           "primaryKey": true,
           "notNull": true
         },
-        "work_item_id": {
-          "name": "work_item_id",
+        "ticket_id": {
+          "name": "ticket_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -2025,12 +2039,12 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "agent_assignments_work_item_id_work_items_id_fk": {
-          "name": "agent_assignments_work_item_id_work_items_id_fk",
+        "agent_assignments_ticket_id_tickets_id_fk": {
+          "name": "agent_assignments_ticket_id_tickets_id_fk",
           "tableFrom": "agent_assignments",
-          "tableTo": "work_items",
+          "tableTo": "tickets",
           "columnsFrom": [
-            "work_item_id"
+            "ticket_id"
           ],
           "columnsTo": [
             "id"
@@ -2054,11 +2068,11 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "agent_assignments_work_item_id_agent_id_unique": {
-          "name": "agent_assignments_work_item_id_agent_id_unique",
+        "agent_assignments_ticket_id_agent_id_unique": {
+          "name": "agent_assignments_ticket_id_agent_id_unique",
           "nullsNotDistinct": false,
           "columns": [
-            "work_item_id",
+            "ticket_id",
             "agent_id"
           ]
         }
@@ -2444,8 +2458,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.copilot_proposals": {
-      "name": "copilot_proposals",
+    "public.proposals": {
+      "name": "proposals",
       "schema": "",
       "columns": {
         "id": {
@@ -2454,21 +2468,58 @@
           "primaryKey": true,
           "notNull": true
         },
-        "conversation_id": {
-          "name": "conversation_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "kind": {
-          "name": "kind",
-          "type": "copilot_proposal_kind",
+        "origin": {
+          "name": "origin",
+          "type": "proposal_origin",
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
         },
-        "work_item_id": {
-          "name": "work_item_id",
+        "conversation_id": {
+          "name": "conversation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "anchor_seq": {
+          "name": "anchor_seq",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "agent_run_id": {
+          "name": "agent_run_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_request_id": {
+          "name": "source_request_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "proposal_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ticket_id": {
+          "name": "ticket_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -2485,15 +2536,9 @@
           "primaryKey": false,
           "notNull": true
         },
-        "anchor_seq": {
-          "name": "anchor_seq",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
         "status": {
           "name": "status",
-          "type": "copilot_proposal_status",
+          "type": "proposal_status",
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
@@ -2535,11 +2580,114 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "decided_by": {
+          "name": "decided_by",
+          "type": "proposal_decided_by",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "trust_grant_id": {
+          "name": "trust_grant_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "decision_latency_ms": {
+          "name": "decision_latency_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
-        "copilot_proposals_conversation_id_created_at_idx": {
-          "name": "copilot_proposals_conversation_id_created_at_idx",
+        "proposals_status_created_at_idx": {
+          "name": "proposals_status_created_at_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "proposals_project_status_idx": {
+          "name": "proposals_project_status_idx",
+          "columns": [
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "proposals_agent_status_idx": {
+          "name": "proposals_agent_status_idx",
+          "columns": [
+            {
+              "expression": "agent_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "proposals_ticket_status_idx": {
+          "name": "proposals_ticket_status_idx",
+          "columns": [
+            {
+              "expression": "ticket_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "proposals_conversation_created_at_idx": {
+          "name": "proposals_conversation_created_at_idx",
           "columns": [
             {
               "expression": "conversation_id",
@@ -2558,12 +2706,71 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "proposals_agent_kind_resolved_idx": {
+          "name": "proposals_agent_kind_resolved_idx",
+          "columns": [
+            {
+              "expression": "agent_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "resolved_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "proposals_pending_expiry_idx": {
+          "name": "proposals_pending_expiry_idx",
+          "columns": [
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"proposals\".\"status\" = 'proposed'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "proposals_stuck_claim_idx": {
+          "name": "proposals_stuck_claim_idx",
+          "columns": [
+            {
+              "expression": "resolved_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"proposals\".\"status\" = 'executing'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
-        "copilot_proposals_conversation_id_copilot_conversations_id_fk": {
-          "name": "copilot_proposals_conversation_id_copilot_conversations_id_fk",
-          "tableFrom": "copilot_proposals",
+        "proposals_conversation_id_copilot_conversations_id_fk": {
+          "name": "proposals_conversation_id_copilot_conversations_id_fk",
+          "tableFrom": "proposals",
           "tableTo": "copilot_conversations",
           "columnsFrom": [
             "conversation_id"
@@ -2572,6 +2779,19 @@
             "id"
           ],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "proposals_source_request_id_requests_id_fk": {
+          "name": "proposals_source_request_id_requests_id_fk",
+          "tableFrom": "proposals",
+          "tableTo": "requests",
+          "columnsFrom": [
+            "source_request_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -2613,14 +2833,6 @@
         "enterprise"
       ]
     },
-    "public.network": {
-      "name": "network",
-      "schema": "public",
-      "values": [
-        "public",
-        "private"
-      ]
-    },
     "public.state_group": {
       "name": "state_group",
       "schema": "public",
@@ -2629,20 +2841,26 @@
         "unstarted",
         "started",
         "completed",
-        "cancelled",
-        "triage"
+        "cancelled"
       ]
     },
-    "public.module_status": {
-      "name": "module_status",
+    "public.visibility": {
+      "name": "visibility",
       "schema": "public",
       "values": [
-        "backlog",
+        "public",
+        "private"
+      ]
+    },
+    "public.workstream_status": {
+      "name": "workstream_status",
+      "schema": "public",
+      "values": [
         "planned",
-        "in-progress",
+        "active",
         "paused",
-        "completed",
-        "cancelled"
+        "done",
+        "dropped"
       ]
     },
     "public.assignee_kind": {
@@ -2664,8 +2882,18 @@
         "none"
       ]
     },
-    "public.page_visibility": {
-      "name": "page_visibility",
+    "public.ticket_source": {
+      "name": "ticket_source",
+      "schema": "public",
+      "values": [
+        "manual",
+        "request",
+        "agent",
+        "import"
+      ]
+    },
+    "public.doc_visibility": {
+      "name": "doc_visibility",
       "schema": "public",
       "values": [
         "public",
@@ -2673,8 +2901,8 @@
         "archived"
       ]
     },
-    "public.intake_status": {
-      "name": "intake_status",
+    "public.request_status": {
+      "name": "request_status",
       "schema": "public",
       "values": [
         "pending",
@@ -2744,19 +2972,37 @@
         "assistant"
       ]
     },
-    "public.copilot_proposal_kind": {
-      "name": "copilot_proposal_kind",
+    "public.proposal_decided_by": {
+      "name": "proposal_decided_by",
+      "schema": "public",
+      "values": [
+        "user",
+        "trust_grant",
+        "system"
+      ]
+    },
+    "public.proposal_kind": {
+      "name": "proposal_kind",
       "schema": "public",
       "values": [
         "comment",
         "state_change",
         "assignee_change",
         "priority_change",
-        "create_work_item"
+        "create_ticket",
+        "add_label"
       ]
     },
-    "public.copilot_proposal_status": {
-      "name": "copilot_proposal_status",
+    "public.proposal_origin": {
+      "name": "proposal_origin",
+      "schema": "public",
+      "values": [
+        "copilot",
+        "agent_run"
+      ]
+    },
+    "public.proposal_status": {
+      "name": "proposal_status",
       "schema": "public",
       "values": [
         "proposed",
@@ -2765,7 +3011,8 @@
         "rejected",
         "stale",
         "expired",
-        "superseded"
+        "superseded",
+        "reverted"
       ]
     }
   },

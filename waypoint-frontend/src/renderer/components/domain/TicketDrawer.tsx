@@ -1,0 +1,79 @@
+import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
+import { TicketDetailContent } from '@/pages/tickets/TicketDetailPage';
+
+/**
+ * Controlled "peek" panel: slides in from the right edge showing a ticket's
+ * full detail without navigating away. Mirrors Modal.tsx's portal/backdrop/
+ * ESC-to-close convention, docked to the right instead of centered.
+ *
+ * This component is intentionally dumb — it does not track which item (if any)
+ * is peeked; the caller mounts it with a `projectId`/`identifier` pair and
+ * unmounts (or swaps) it to change what's shown.
+ */
+export function TicketDrawer({
+  projectId,
+  identifier,
+  onClose,
+}: {
+  projectId: string;
+  identifier: string;
+  onClose: () => void;
+}) {
+  const navigate = useNavigate();
+  // Mount closed, then flip to open on the next frame so the initial render
+  // starts off-screen and the transition actually animates in.
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setVisible(true));
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  function handleExpand() {
+    // Clear the peek param (via replace, while still on the list route)
+    // BEFORE navigating away, so the list's history entry is clean. If this
+    // ran after navigate(), it would fire against the wrong route and the
+    // list entry would keep peek=identifier — back from the full page would
+    // land on "list with drawer open" instead of the plain list.
+    onClose();
+    navigate(`/projects/${projectId}/tickets/${identifier}`);
+  }
+
+  return createPortal(
+    // data-ticket-drawer: a presence marker, not a style hook — the W5.4
+    // global Escape cascade (useGlobalKeyboardShortcuts.ts) checks for this
+    // to know a drawer is open (and about to close itself, via this
+    // component's own Escape listener above) so its own fallback doesn't
+    // ALSO clear an unrelated selection on the same keystroke.
+    <div
+      className="fixed inset-0 z-50 bg-black/40"
+      data-ticket-drawer
+      onClick={onClose}
+    >
+      <div
+        className="thin-scroll absolute inset-y-0 right-0 flex h-full w-full max-w-[720px] flex-col border-l border-border bg-surface shadow-2xl transition-transform duration-200 ease-out"
+        style={{ transform: visible ? 'translateX(0)' : 'translateX(100%)' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <TicketDetailContent
+          projectId={projectId}
+          identifier={identifier}
+          variant="drawer"
+          onClose={onClose}
+          onExpand={handleExpand}
+        />
+      </div>
+    </div>,
+    document.body,
+  );
+}

@@ -1,4 +1,4 @@
-import type { CopilotProposal } from '@/types/entities';
+import type { ProposalView } from '@/types/entities';
 
 // The minimal message shape interleaving needs. `seq` is optional because
 // optimistically-appended local messages (CopilotPanel's handleSend) don't
@@ -14,7 +14,7 @@ export interface TranscriptMessage {
 
 export type TranscriptItem<M extends TranscriptMessage> =
   | { type: 'message'; message: M }
-  | { type: 'proposal'; proposal: CopilotProposal };
+  | { type: 'proposal'; proposal: ProposalView };
 
 /**
  * Pure positioning logic for proposal cards in the Copilot transcript —
@@ -32,7 +32,7 @@ export type TranscriptItem<M extends TranscriptMessage> =
  */
 export function interleaveProposals<M extends TranscriptMessage>(
   messages: M[],
-  proposals: CopilotProposal[],
+  proposals: ProposalView[],
 ): TranscriptItem<M>[] {
   // Message order is taken AS GIVEN, not re-sorted by seq: the panel's
   // cache is already chronological (backend fetches come seq-ascending;
@@ -41,21 +41,38 @@ export function interleaveProposals<M extends TranscriptMessage>(
   // message BEHIND its own later-persisted reply. Only proposals are
   // sorted, since their fetch order isn't load-bearing.
   const sortedProposals = [...proposals].sort(
-    (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+    (a, b) =>
+      a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
   );
 
-  const afterMessage = new Map<string, CopilotProposal[]>();
-  const tail: CopilotProposal[] = [];
+  const afterMessage = new Map<string, ProposalView[]>();
+  const tail: ProposalView[] = [];
   for (const proposal of sortedProposals) {
+    // anchorSeq is only ever null for a non-copilot origin (architecture
+    // §4.2's widening) — this transcript only ever receives one
+    // conversation's own proposals, which are always origin='copilot', but
+    // the type is now shared with non-transcript surfaces, so guard rather
+    // than assume.
+    if (proposal.anchorSeq == null) {
+      tail.push(proposal);
+      continue;
+    }
+    const { anchorSeq } = proposal;
     const anchor =
       messages.find(
-        (m) => m.role === 'assistant' && typeof m.seq === 'number' && m.seq > proposal.anchorSeq,
-      ) ?? messages.find((m) => m.seq === proposal.anchorSeq);
+        (m) =>
+          m.role === 'assistant' &&
+          typeof m.seq === 'number' &&
+          m.seq > anchorSeq,
+      ) ?? messages.find((m) => m.seq === anchorSeq);
     if (!anchor) {
       tail.push(proposal);
       continue;
     }
-    afterMessage.set(anchor.id, [...(afterMessage.get(anchor.id) ?? []), proposal]);
+    afterMessage.set(anchor.id, [
+      ...(afterMessage.get(anchor.id) ?? []),
+      proposal,
+    ]);
   }
 
   const items: TranscriptItem<M>[] = [];

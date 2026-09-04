@@ -1,6 +1,6 @@
-import { Check } from 'lucide-react';
+import { IconCheck } from '@/components/icons';
 import { useAsync } from '@/lib/useAsync';
-import { getWorkspace } from '@/mock/api';
+import { getWorkspace } from '@/data/api';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
@@ -53,7 +53,7 @@ export default function Billing() {
 
   return (
     <div>
-      <h2 className="mb-6 font-display text-lg font-medium text-text">Billing and plans</h2>
+      <h2 className="mb-6 font-display text-lg font-medium text-text">Billing</h2>
 
       {loading && !workspace && (
         <Skeleton>
@@ -79,7 +79,7 @@ export default function Billing() {
               <Badge tone="accent">{PLAN_LABEL[workspace.plan] ?? workspace.plan}</Badge>
             </div>
             <p className="text-sm text-text-secondary">
-              Unlimited projects, issues, cycles, modules, pages, and storage.
+              Unlimited projects, issues, sprints, workstreams, docs, and storage.
             </p>
           </div>
 
@@ -95,12 +95,17 @@ export default function Billing() {
                 <ul className="mt-4 flex flex-1 flex-col gap-2">
                   {plan.features.map((feature) => (
                     <li key={feature} className="flex items-start gap-2 text-sm text-text-secondary">
-                      <Check size={14} className="mt-0.5 shrink-0 text-success" />
+                      <IconCheck size={14} className="mt-0.5 shrink-0 text-success" />
                       {feature}
                     </li>
                   ))}
                 </ul>
-                <Button variant={plan.variant} className="mt-5 w-full">
+                <Button
+                  variant={plan.variant}
+                  className="mt-5 w-full"
+                  disabled
+                  title="Billing isn't connected to a payment processor yet."
+                >
                   {plan.cta}
                 </Button>
               </div>

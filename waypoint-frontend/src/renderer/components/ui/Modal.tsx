@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { X } from 'lucide-react';
+import { IconX } from '@/components/icons';
 import { IconButton } from '@/components/ui/Button';
 
 function getFocusableElements(container: HTMLElement): HTMLElement[] {
@@ -105,7 +105,7 @@ export function Modal({
         <div className="flex shrink-0 items-center justify-between border-b border-border px-5 py-4">
           <h2 className="font-display text-base font-medium">{title}</h2>
           <IconButton label="Close" onClick={onClose}>
-            <X size={16} />
+            <IconX size={16} />
           </IconButton>
         </div>
         {/* Body scrolls on its own; header and footer stay pinned so the

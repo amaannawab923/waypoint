@@ -1,8 +1,9 @@
 import { NavLink, Outlet, useOutletContext } from 'react-router-dom';
 import { clsx } from 'clsx';
-import { Building2, Users, Bot, CreditCard, Download, Webhook } from 'lucide-react';
+import { Building2, Users, CreditCard, Download, Webhook } from 'lucide-react';
+import { IconBot } from '@/components/icons';
 import { useAsync } from '@/lib/useAsync';
-import { getWorkspace } from '@/mock/api';
+import { getWorkspace } from '@/data/api';
 import type { Workspace } from '@/types/entities';
 
 export interface WorkspaceOutletContext {
@@ -22,8 +23,8 @@ const navLinkClass = ({ isActive }: { isActive: boolean }) =>
 const ADMINISTRATION_ITEMS = [
   { to: 'general', label: 'General', icon: Building2 },
   { to: 'members', label: 'Members', icon: Users },
-  { to: 'agents', label: 'Agents', icon: Bot },
-  { to: 'billing', label: 'Billing and plans', icon: CreditCard },
+  { to: 'agents', label: 'Agents', icon: IconBot },
+  { to: 'billing', label: 'Billing', icon: CreditCard },
   { to: 'exports', label: 'Exports', icon: Download },
 ];
 

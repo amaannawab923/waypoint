@@ -135,7 +135,7 @@ export function renderMarkdown(src: string): string {
     const heading = /^(#{1,3})\s+(.*)$/.exec(raw);
     if (heading) {
       closeList();
-      const level = heading[1].length + 1; // start at h2, matching Pages' preview scale
+      const level = heading[1].length + 1; // start at h2, matching Docs' preview scale
       html.push(`<h${level}>${inline(heading[2])}</h${level}>`);
       continue;
     }

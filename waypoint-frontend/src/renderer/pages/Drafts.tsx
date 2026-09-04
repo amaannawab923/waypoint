@@ -1,13 +1,14 @@
 import { Link } from 'react-router-dom';
-import { FileEdit } from 'lucide-react';
+import { IconEdit } from '@/components/icons';
 import { useAsync } from '@/lib/useAsync';
-import { listDraftWorkItems, listProjects } from '@/mock/api';
+import { listDraftTickets, listProjects } from '@/data/api';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PriorityIcon } from '@/components/domain/PriorityIcon';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
+import { NotWired } from '@/components/ui/NotWired';
 
 async function loadDrafts() {
-  const [drafts, projects] = await Promise.all([listDraftWorkItems(), listProjects()]);
+  const [drafts, projects] = await Promise.all([listDraftTickets(), listProjects()]);
   return { drafts, projects };
 }
 
@@ -30,14 +31,18 @@ export default function Drafts() {
   return (
     <div className="mx-auto max-w-4xl p-6 md:p-8">
       <h1 className="font-display text-2xl font-medium text-text">Drafts</h1>
-      <p className="mt-1 text-sm text-text-secondary">Work items you started but haven't published yet.</p>
+      <p className="mt-1 text-sm text-text-secondary">Tickets you started but haven't published yet.</p>
+
+      <div className="mt-4">
+        <NotWired capability="tickets.drafts" />
+      </div>
 
       <div className="mt-6">
         {drafts.length === 0 ? (
           <EmptyState
-            icon={<FileEdit size={28} />}
-            title="Half-written work items"
-            description="Work items you start but don't finish get auto-saved here, so you can pick up where you left off."
+            icon={<IconEdit size={28} />}
+            title="Half-written tickets"
+            description="Tickets you start but don't finish get auto-saved here, so you can pick up where you left off."
           />
         ) : (
           <div className="divide-y divide-border rounded-[var(--radius-lg)] border border-border bg-surface">
@@ -46,7 +51,7 @@ export default function Drafts() {
               return (
                 <Link
                   key={item.id}
-                  to={`/projects/${item.projectId}/work-items`}
+                  to={`/projects/${item.projectId}/tickets`}
                   className="flex items-center gap-3 px-4 py-3 text-sm transition-colors hover:bg-surface-2"
                 >
                   <PriorityIcon priority={item.priority} />

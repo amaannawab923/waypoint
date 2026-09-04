@@ -6,7 +6,7 @@ export const createProjectSchema = z.object({
   identifier: z.string().min(1),
   description: z.string().optional(),
   icon: z.string().optional(),
-  network: z.enum(['public', 'private']).optional(),
+  visibility: z.enum(['public', 'private']).optional(),
   leadId: z.string().nullable().optional(),
 });
 
@@ -15,11 +15,25 @@ export const updateProjectSchema = requireAtLeastOneField(
     name: z.string().min(1).optional(),
     description: z.string().optional(),
     icon: z.string().optional(),
-    network: z.enum(['public', 'private']).optional(),
+    visibility: z.enum(['public', 'private']).optional(),
     leadId: z.string().nullable().optional(),
     defaultAssigneeId: z.string().nullable().optional(),
     timezone: z.string().optional(),
     guestAccessEnabled: z.boolean().optional(),
+    // Unarchiving is the only PATCH-driven write to this column — archiving
+    // itself goes through POST /projects/:id/archive, which stamps a real
+    // Date server-side. So the only valid client value is a literal `null`
+    // (see ArchivedProjects.tsx's "Restore project" action): without this
+    // field, `archivedAt` was an unrecognized key that zod silently
+    // stripped, leaving an empty `{}` that requireAtLeastOneField always
+    // rejected as "at least one field is required" — the one payload an
+    // unarchive action can ever send could never succeed.
+    archivedAt: z.literal(null).optional(),
+    // A capability ("accept submissions from outside"), not a feature
+    // toggle — see docs/design/waypoint-revamp-architecture.md §3.4. No
+    // dedicated route: it's set through the same generic project PATCH as
+    // guestAccessEnabled.
+    acceptsRequests: z.boolean().optional(),
     // Shape only — existence, directory-ness and git-repo-ness need `fs`
     // calls, so they live in projects.service.ts's validateRepoPath instead.
     // Both POSIX (`/...`) and Windows drive-letter (`C:\...`, `C:/...`)
@@ -40,14 +54,6 @@ export const addProjectMemberSchema = z.object({
   role: z.enum(['admin', 'member', 'guest']).optional(),
 });
 
-export const projectFeaturesSchema = z.object({
-  cycles: z.boolean().optional(),
-  modules: z.boolean().optional(),
-  views: z.boolean().optional(),
-  pages: z.boolean().optional(),
-  intake: z.boolean().optional(),
-});
-
 export const projectEstimateSchema = z
   .object({
     type: z.enum(['points', 'categories']),
@@ -64,14 +70,14 @@ export const projectAutomationsSchema = z.object({
 
 export const createStateSchema = z.object({
   name: z.string().min(1),
-  group: z.enum(['backlog', 'unstarted', 'started', 'completed', 'cancelled', 'triage']),
+  group: z.enum(['backlog', 'unstarted', 'started', 'completed', 'cancelled']),
   color: z.string(),
 });
 
 export const updateStateSchema = requireAtLeastOneField(
   z.object({
     name: z.string().min(1).optional(),
-    group: z.enum(['backlog', 'unstarted', 'started', 'completed', 'cancelled', 'triage']).optional(),
+    group: z.enum(['backlog', 'unstarted', 'started', 'completed', 'cancelled']).optional(),
     color: z.string().optional(),
   }),
 );

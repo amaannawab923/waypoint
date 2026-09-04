@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import * as workItemsService from '../services/workItems.service.js';
+import * as ticketsService from '../services/tickets.service.js';
 import * as statesService from '../services/states.service.js';
 import * as projectsService from '../services/projects.service.js';
 import {
@@ -10,8 +10,9 @@ import {
   type ProposalPayload,
   type ProposalSnapshot,
 } from '../services/proposals.service.js';
+import { NotFoundError } from '../middleware/errors.js';
 import { resolveActorNames } from '../lib/actorNames.js';
-import { PRIORITY, ISO_DATE, jsonResult, notFoundResult, withErrorSafetyNet } from './workItemTools.js';
+import { PRIORITY, ISO_DATE, jsonResult, notFoundResult, withErrorSafetyNet } from './ticketTools.js';
 
 // Model-actionable validation failure — same result shape as
 // notFoundResult, but with a message specific enough for the model to
@@ -35,7 +36,7 @@ const UNAVAILABLE_MESSAGE = 'Proposals are unavailable in this session.';
 async function submitProposal(input: {
   conversationId: string;
   kind: ProposalKind;
-  workItemId: string | null;
+  ticketId: string | null;
   payload: ProposalPayload;
   snapshot: ProposalSnapshot;
   summary: string;
@@ -44,7 +45,7 @@ async function submitProposal(input: {
     const row = await createProposal({
       conversationId: input.conversationId,
       kind: input.kind,
-      workItemId: input.workItemId,
+      ticketId: input.ticketId,
       payload: input.payload,
       snapshot: input.snapshot,
     });
@@ -55,15 +56,20 @@ async function submitProposal(input: {
     });
   } catch (error) {
     if (error instanceof ProposalValidationError) return validationErrorResult(error.message);
+    // createProposal throws NotFoundError('conversation') when the
+    // conversation row is gone (its own comment: intended to "404-shape
+    // fail"). Without this mapping it fell through to withErrorSafetyNet's
+    // generic scrub and came back as an opaque internal-error message.
+    if (error instanceof NotFoundError) return notFoundResult('conversation');
     throw error;
   }
 }
 
-// Same draft-hiding requirement as workItemTools's get/list handlers: a
+// Same draft-hiding requirement as ticketTools's get/list handlers: a
 // draft is invisible to every read tool, so proposing against one must read
 // as a plain miss, not confirm its existence.
-async function getVisibleWorkItem(workItemId: string) {
-  const item = await workItemsService.getWorkItem(workItemId);
+async function getVisibleTicket(ticketId: string) {
+  const item = await ticketsService.getTicket(ticketId);
   if (!item || item.isDraft) return undefined;
   return item;
 }
@@ -78,15 +84,15 @@ function baseSnapshot(item: { identifier: string; title: string; updatedAt: Date
 
 export async function proposeCommentHandler(
   conversationId: string | null,
-  { workItemId, body }: { workItemId: string; body: string },
+  { ticketId, body }: { ticketId: string; body: string },
 ) {
   if (!conversationId) return validationErrorResult(UNAVAILABLE_MESSAGE);
-  const item = await getVisibleWorkItem(workItemId);
-  if (!item) return notFoundResult('work item');
+  const item = await getVisibleTicket(ticketId);
+  if (!item) return notFoundResult('ticket');
   return submitProposal({
     conversationId,
     kind: 'comment',
-    workItemId,
+    ticketId,
     payload: { body },
     snapshot: baseSnapshot(item),
     summary: `Proposed: comment on ${item.identifier}`,
@@ -95,12 +101,12 @@ export async function proposeCommentHandler(
 
 export async function proposeStateChangeHandler(
   conversationId: string | null,
-  { workItemId, stateId }: { workItemId: string; stateId: string },
+  { ticketId, stateId }: { ticketId: string; stateId: string },
 ) {
   if (!conversationId) return validationErrorResult(UNAVAILABLE_MESSAGE);
-  const item = await getVisibleWorkItem(workItemId);
-  if (!item) return notFoundResult('work item');
-  // Project-scoping check updateWorkItem itself lacks: its stateId column
+  const item = await getVisibleTicket(ticketId);
+  if (!item) return notFoundResult('ticket');
+  // Project-scoping check updateTicket itself lacks: its stateId column
   // FK only proves the state EXISTS, not that it belongs to this ticket's
   // project — approving a cross-project state would corrupt the board.
   const states = await statesService.listStates(item.projectId);
@@ -119,7 +125,7 @@ export async function proposeStateChangeHandler(
   return submitProposal({
     conversationId,
     kind: 'state_change',
-    workItemId,
+    ticketId,
     payload: { stateId },
     snapshot: {
       ...baseSnapshot(item),
@@ -135,11 +141,11 @@ export async function proposeStateChangeHandler(
 
 export async function proposeAssigneeChangeHandler(
   conversationId: string | null,
-  { workItemId, assigneeId, action }: { workItemId: string; assigneeId: string; action: 'add' | 'remove' },
+  { ticketId, assigneeId, action }: { ticketId: string; assigneeId: string; action: 'add' | 'remove' },
 ) {
   if (!conversationId) return validationErrorResult(UNAVAILABLE_MESSAGE);
-  const item = await getVisibleWorkItem(workItemId);
-  if (!item) return notFoundResult('work item');
+  const item = await getVisibleTicket(ticketId);
+  if (!item) return notFoundResult('ticket');
   // The proposed assignee AND the item's current assignees resolve in one
   // batched lookup — the card shows the ticket's current assignment as
   // context ("currently: Lena"), and building that from ids at render time
@@ -165,7 +171,7 @@ export async function proposeAssigneeChangeHandler(
   return submitProposal({
     conversationId,
     kind: 'assignee_change',
-    workItemId,
+    ticketId,
     payload: { assigneeId, action },
     snapshot: { ...baseSnapshot(item), assigneeName, wasAssigned, currentAssigneeNames },
     summary:
@@ -177,11 +183,11 @@ export async function proposeAssigneeChangeHandler(
 
 export async function proposePriorityChangeHandler(
   conversationId: string | null,
-  { workItemId, priority }: { workItemId: string; priority: z.infer<typeof PRIORITY> },
+  { ticketId, priority }: { ticketId: string; priority: z.infer<typeof PRIORITY> },
 ) {
   if (!conversationId) return validationErrorResult(UNAVAILABLE_MESSAGE);
-  const item = await getVisibleWorkItem(workItemId);
-  if (!item) return notFoundResult('work item');
+  const item = await getVisibleTicket(ticketId);
+  if (!item) return notFoundResult('ticket');
   if (priority === item.priority) {
     return validationErrorResult(
       `This ticket's priority is already ${priority} — there is no change to propose.`,
@@ -190,14 +196,14 @@ export async function proposePriorityChangeHandler(
   return submitProposal({
     conversationId,
     kind: 'priority_change',
-    workItemId,
+    ticketId,
     payload: { priority },
     snapshot: { ...baseSnapshot(item), fromPriority: item.priority },
     summary: `Proposed: change ${item.identifier} priority from ${item.priority} to ${priority}`,
   });
 }
 
-export async function proposeCreateWorkItemHandler(
+export async function proposeCreateTicketHandler(
   conversationId: string | null,
   {
     projectId,
@@ -219,7 +225,11 @@ export async function proposeCreateWorkItemHandler(
 ) {
   if (!conversationId) return validationErrorResult(UNAVAILABLE_MESSAGE);
   const project = await projectsService.getProject(projectId);
-  if (!project) return notFoundResult('project');
+  // getProject (unlike listProjects, used by list_projects) has no archived
+  // filter — an archived project must still read as not-found here, same as
+  // getVisibleTicket hides drafts, so Copilot can't create a real ticket in
+  // a project no UI list ever surfaces again.
+  if (!project || project.archivedAt) return notFoundResult('project');
   const states = await statesService.listStates(projectId);
   // The stored payload always carries a CONCRETE stateId — resolving the
   // default here (not at approve time) means the card can show the real
@@ -253,8 +263,8 @@ export async function proposeCreateWorkItemHandler(
   }
   return submitProposal({
     conversationId,
-    kind: 'create_work_item',
-    workItemId: null,
+    kind: 'create_ticket',
+    ticketId: null,
     payload: {
       projectId,
       title,
@@ -275,8 +285,8 @@ export async function proposeCreateWorkItemHandler(
   });
 }
 
-// Read tool, but registered here rather than workItemTools: it only exists
-// to serve propose_create_work_item (the model needs a projectId, and V1's
+// Read tool, but registered here rather than ticketTools: it only exists
+// to serve propose_create_ticket (the model needs a projectId, and V1's
 // read set had no way to list projects). Projected to id/name/identifier —
 // a project row carries config (automations, gradients, lead) that's noise
 // in the model's context.
@@ -299,15 +309,15 @@ export function registerProposalTools(server: McpServer, conversationId: string 
     'propose_comment',
     {
       description:
-        `Propose posting a comment on a work item (ticket) on the user's behalf. ${PROPOSAL_CONTRACT} ` +
+        `Propose posting a comment on a ticket on the user's behalf. ${PROPOSAL_CONTRACT} ` +
         'Write the body as plain text (no markdown/HTML — it is escaped, not rendered). Waypoint automatically prefixes ' +
         'the posted comment with a Copilot self-disclosure line — do not write one yourself.',
       inputSchema: {
-        workItemId: z.string(),
+        ticketId: z.string(),
         body: z.string().trim().min(1).max(8000),
       },
     },
-    withErrorSafetyNet('propose_comment', (args: { workItemId: string; body: string }) =>
+    withErrorSafetyNet('propose_comment', (args: { ticketId: string; body: string }) =>
       proposeCommentHandler(conversationId, args),
     ),
   );
@@ -315,13 +325,13 @@ export function registerProposalTools(server: McpServer, conversationId: string 
   server.registerTool(
     'propose_state_change',
     {
-      description: `Propose moving a work item (ticket) to a different workflow state. ${PROPOSAL_CONTRACT} Use list_states with the ticket's projectId to find valid state ids.`,
+      description: `Propose moving a ticket to a different workflow state. ${PROPOSAL_CONTRACT} Use list_states with the ticket's projectId to find valid state ids.`,
       inputSchema: {
-        workItemId: z.string(),
+        ticketId: z.string(),
         stateId: z.string().describe("The target state's id — must belong to the ticket's own project."),
       },
     },
-    withErrorSafetyNet('propose_state_change', (args: { workItemId: string; stateId: string }) =>
+    withErrorSafetyNet('propose_state_change', (args: { ticketId: string; stateId: string }) =>
       proposeStateChangeHandler(conversationId, args),
     ),
   );
@@ -329,16 +339,16 @@ export function registerProposalTools(server: McpServer, conversationId: string 
   server.registerTool(
     'propose_assignee_change',
     {
-      description: `Propose adding or removing one assignee on a work item (ticket). ${PROPOSAL_CONTRACT} Use list_members to find assignee ids.`,
+      description: `Propose adding or removing one assignee on a ticket. ${PROPOSAL_CONTRACT} Use list_members to find assignee ids.`,
       inputSchema: {
-        workItemId: z.string(),
+        ticketId: z.string(),
         assigneeId: z.string(),
         action: z.enum(['add', 'remove']),
       },
     },
     withErrorSafetyNet(
       'propose_assignee_change',
-      (args: { workItemId: string; assigneeId: string; action: 'add' | 'remove' }) =>
+      (args: { ticketId: string; assigneeId: string; action: 'add' | 'remove' }) =>
         proposeAssigneeChangeHandler(conversationId, args),
     ),
   );
@@ -346,24 +356,24 @@ export function registerProposalTools(server: McpServer, conversationId: string 
   server.registerTool(
     'propose_priority_change',
     {
-      description: `Propose changing a work item (ticket)'s priority. ${PROPOSAL_CONTRACT}`,
+      description: `Propose changing a ticket's priority. ${PROPOSAL_CONTRACT}`,
       inputSchema: {
-        workItemId: z.string(),
+        ticketId: z.string(),
         priority: PRIORITY,
       },
     },
     withErrorSafetyNet(
       'propose_priority_change',
-      (args: { workItemId: string; priority: z.infer<typeof PRIORITY> }) =>
+      (args: { ticketId: string; priority: z.infer<typeof PRIORITY> }) =>
         proposePriorityChangeHandler(conversationId, args),
     ),
   );
 
   server.registerTool(
-    'propose_create_work_item',
+    'propose_create_ticket',
     {
       description:
-        `Propose creating a new work item (ticket) in a project. ${PROPOSAL_CONTRACT} ` +
+        `Propose creating a new ticket in a project. ${PROPOSAL_CONTRACT} ` +
         'Use list_projects to find a projectId. If stateId is omitted, the project\'s first backlog/unstarted state is used.',
       inputSchema: {
         projectId: z.string(),
@@ -376,7 +386,7 @@ export function registerProposalTools(server: McpServer, conversationId: string 
       },
     },
     withErrorSafetyNet(
-      'propose_create_work_item',
+      'propose_create_ticket',
       (args: {
         projectId: string;
         title: string;
@@ -385,7 +395,7 @@ export function registerProposalTools(server: McpServer, conversationId: string 
         priority?: z.infer<typeof PRIORITY>;
         assigneeIds?: string[];
         dueDate?: string;
-      }) => proposeCreateWorkItemHandler(conversationId, args),
+      }) => proposeCreateTicketHandler(conversationId, args),
     ),
   );
 
@@ -393,7 +403,7 @@ export function registerProposalTools(server: McpServer, conversationId: string 
     'list_projects',
     {
       description:
-        'List the projects in the workspace (id, name, identifier). Use this to find a projectId for propose_create_work_item or to scope other tools.',
+        'List the projects in the workspace (id, name, identifier). Use this to find a projectId for propose_create_ticket or to scope other tools.',
       inputSchema: {},
     },
     withErrorSafetyNet('list_projects', listProjectsHandler),

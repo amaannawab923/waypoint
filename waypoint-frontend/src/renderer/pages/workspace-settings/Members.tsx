@@ -1,14 +1,16 @@
 import { useMemo, useState } from 'react';
-import { Check, ChevronDown, ListFilter, Plus, Search, Users } from 'lucide-react';
+import { Users } from 'lucide-react';
+import { IconCheck, IconChevron, IconFilter, IconPlus, IconSearch } from '@/components/icons';
 import { useAsync } from '@/lib/useAsync';
-import { listMembers, inviteMember } from '@/mock/api';
+import { listMembers, inviteMember } from '@/data/api';
 import type { Member } from '@/types/entities';
 import { Button } from '@/components/ui/Button';
 import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { Avatar } from '@/components/ui/Avatar';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { NotWired } from '@/components/ui/NotWired';
 import { Skeleton, SkeletonTableRows } from '@/components/ui/Skeleton';
-import { Popover } from '@/pages/work-items/Popover';
+import { Popover } from '@/pages/tickets/Popover';
 
 const ROLE_TONE: Record<Member['role'], BadgeTone> = {
   admin: 'accent',
@@ -65,67 +67,75 @@ export default function Members() {
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h2 className="font-display text-lg font-medium text-text">Members</h2>
-          <p className="text-sm text-text-secondary">
+          {/* A <p> here would put Skeleton.Block's <div> markup inside a
+              <p> while loading — invalid HTML that React logs as a
+              hydration-error warning (`<div> cannot be a descendant of
+              <p>`). This subtitle line never needs paragraph semantics, so
+              a <div> is both valid and visually identical. */}
+          <div className="text-sm text-text-secondary">
             {members ? (
               `${members.length} member${members.length === 1 ? '' : 's'}`
             ) : (
               <Skeleton.Block height="1rem" width="4rem" />
             )}
-          </p>
+          </div>
         </div>
         <Button variant="primary" onClick={() => setInviting((v) => !v)}>
-          <Plus size={15} />
+          <IconPlus size={15} />
           Invite member
         </Button>
       </div>
 
       {inviting && (
-        <div className="mb-5 flex flex-wrap items-end gap-2 rounded-[var(--radius-lg)] border border-border bg-surface-2 p-4">
-          <div className="min-w-[220px] flex-1">
-            <label className="mb-1.5 block text-sm font-medium text-text" htmlFor="invite-email">
-              Email address
-            </label>
-            <input
-              id="invite-email"
-              autoFocus
-              type="email"
-              placeholder="teammate@company.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="h-9 w-full rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 text-sm outline-none focus:border-accent"
-            />
-          </div>
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-text" htmlFor="invite-role">
-              Role
-            </label>
-            <select
-              id="invite-role"
-              value={role}
-              onChange={(e) => setRole(e.target.value as Member['role'])}
-              className="h-9 w-32 rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 text-sm capitalize outline-none focus:border-accent"
-            >
-              {ROLES.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="flex gap-2">
-            <Button variant="ghost" onClick={() => setInviting(false)}>
-              Cancel
-            </Button>
-            <Button variant="primary" disabled={!email.trim() || submitting} onClick={handleInvite}>
-              {submitting ? 'Sending…' : 'Send invite'}
-            </Button>
+        <div className="mb-5 flex flex-col gap-3 rounded-[var(--radius-lg)] border border-border bg-surface-2 p-4">
+          <NotWired capability="members.invite" />
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="min-w-[220px] flex-1">
+              <label className="mb-1.5 block text-sm font-medium text-text" htmlFor="invite-email">
+                Email address
+              </label>
+              <input
+                id="invite-email"
+                autoFocus
+                type="email"
+                placeholder="teammate@company.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="h-9 w-full rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 text-sm outline-none focus:border-accent"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-text" htmlFor="invite-role">
+                Role
+              </label>
+              <select
+                id="invite-role"
+                value={role}
+                onChange={(e) => setRole(e.target.value as Member['role'])}
+                className="h-9 w-32 rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 text-sm capitalize outline-none focus:border-accent"
+              >
+                {ROLES.map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="ghost" onClick={() => setInviting(false)}>
+                Cancel
+              </Button>
+              <Button variant="primary" disabled={!email.trim() || submitting} onClick={handleInvite}>
+                {submitting ? 'Adding…' : 'Add member'}
+              </Button>
+            </div>
           </div>
         </div>
       )}
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <div className="relative min-w-[220px] flex-1 sm:max-w-xs">
-          <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-muted" />
+          <IconSearch size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-muted" />
           <input
             type="text"
             placeholder="Search members…"
@@ -139,10 +149,10 @@ export default function Members() {
           align="start"
           trigger={({ open, toggle }) => (
             <Button variant={open ? 'secondary' : 'ghost'} size="sm" onClick={toggle}>
-              <ListFilter size={14} />
+              <IconFilter size={14} />
               Filters
               {roleFilter.length > 0 && <Badge tone="accent">{roleFilter.length}</Badge>}
-              <ChevronDown size={13} />
+              <IconChevron size={13} />
             </Button>
           )}
         >
@@ -162,7 +172,7 @@ export default function Members() {
                   />
                   {r}
                 </span>
-                {roleFilter.includes(r) && <Check size={13} className="text-accent" />}
+                {roleFilter.includes(r) && <IconCheck size={13} className="text-accent" />}
               </label>
             ))}
             {roleFilter.length > 0 && (

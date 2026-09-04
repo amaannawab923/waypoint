@@ -118,7 +118,6 @@ const configuration: webpack.Configuration = {
       // 14000, not Express's conventional 4000 — matches waypoint-backend's
       // moved default (see its docker-compose.yml/.env.example).
       WAYPOINT_API_BASE_URL: 'http://localhost:14000',
-      WAYPOINT_FEATURE_AGENT_SESSIONS: 'false',
       WAYPOINT_FEATURE_COPILOT: 'false',
     }),
 

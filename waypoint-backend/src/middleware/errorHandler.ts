@@ -6,7 +6,7 @@ import { NotFoundError, ConflictError, ValidationError } from './errors.js';
 // PostgresError in `.cause`; the Postgres error code lives on whichever of
 // the two actually carries it. Without this, a bad foreign key (e.g. a
 // nonexistent projectId on create, a stateId that doesn't belong to any
-// project, deleting a state that work items still reference) surfaces as an
+// project, deleting a state that tickets still reference) surfaces as an
 // opaque 500 instead of a client-actionable 400/409.
 function pgErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== 'object') return undefined;

@@ -1,0 +1,2306 @@
+<meta charset="utf-8">
+<title>Waypoint IA Revamp</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --font-display: 'Space Grotesk', ui-sans-serif, sans-serif;
+  --font-body: 'Public Sans', ui-sans-serif, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  --bg: #ffffff;
+  --bg-inset: #f9f9fb;
+  --surface: #ffffff;
+  --surface-2: #f4f4f6;
+  --border: #e4e4e8;
+  --border-strong: #d3d3d9;
+  --text: #0a0a0c;
+  --text-secondary: #53535c;
+  --text-muted: #9a9aa3;
+
+  --accent: #18181b;
+  --accent-hover: #000000;
+  --accent-gradient: linear-gradient(180deg, #303035 0%, #0a0a0c 100%);
+  --accent-soft-bg: #f1f1f3;
+  --accent-soft-text: #0a0a0c;
+  --on-accent: #ffffff;
+
+  --success: #157a3d;
+  --success-bg: #eafbf0;
+  --warning: #a4650b;
+  --warning-bg: #fdf3e3;
+  --danger: #c8241a;
+  --danger-bg: #fdeceb;
+  --info: #1c5fc4;
+  --info-bg: #eaf1fd;
+
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 16px;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0a0a0c; --bg-inset: #131316; --surface: #131316; --surface-2: #1c1c20;
+    --border: #29292f; --border-strong: #3a3a42;
+    --text: #f2f2f4; --text-secondary: #a8a8b3; --text-muted: #6b6b76;
+    --accent: #f2f2f4; --accent-hover: #ffffff;
+    --accent-gradient: linear-gradient(180deg, #ffffff 0%, #d8d8dc 100%);
+    --accent-soft-bg: #232328; --accent-soft-text: #f2f2f4; --on-accent: #0a0a0c;
+    --success: #3ecf7e; --success-bg: #0d2418; --warning: #e2a13d; --warning-bg: #2a1e08;
+    --danger: #f0655f; --danger-bg: #2c1210; --info: #5b93e6; --info-bg: #101f33;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0a0a0c; --bg-inset: #131316; --surface: #131316; --surface-2: #1c1c20;
+  --border: #29292f; --border-strong: #3a3a42;
+  --text: #f2f2f4; --text-secondary: #a8a8b3; --text-muted: #6b6b76;
+  --accent: #f2f2f4; --accent-hover: #ffffff;
+  --accent-gradient: linear-gradient(180deg, #ffffff 0%, #d8d8dc 100%);
+  --accent-soft-bg: #232328; --accent-soft-text: #f2f2f4; --on-accent: #0a0a0c;
+  --success: #3ecf7e; --success-bg: #0d2418; --warning: #e2a13d; --warning-bg: #2a1e08;
+  --danger: #f0655f; --danger-bg: #2c1210; --info: #5b93e6; --info-bg: #101f33;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg-inset); color: var(--text);
+  font-family: var(--font-body); font-size: 14px; line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, h4 { font-family: var(--font-display); letter-spacing: -0.01em; margin: 0; text-wrap: balance; }
+button, input, select { font-family: inherit; font-size: inherit; color: inherit; }
+button { cursor: pointer; background: none; border: none; }
+.mono { font-family: var(--font-mono); }
+.thin-scroll { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+.thin-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.thin-scroll::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
+
+.icon { width: 15px; height: 15px; flex-shrink: 0; }
+.icon-sm { width: 13px; height: 13px; }
+
+/* ---------- Review banner ---------- */
+.review-banner {
+  position: sticky; top: 0; z-index: 80;
+  background: var(--accent); color: var(--on-accent);
+  padding: 10px 20px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  font-size: 12.5px;
+}
+.review-banner b { font-weight: 600; }
+.review-banner .sep { opacity: 0.35; }
+.review-toggle { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.review-toggle label {
+  display: flex; align-items: center; gap: 6px; cursor: pointer;
+  padding: 5px 10px; border-radius: var(--radius-sm); border: 1px solid color-mix(in srgb, var(--on-accent) 30%, transparent);
+}
+.review-toggle input { accent-color: var(--on-accent); }
+.review-theme-btn {
+  padding: 5px 10px; border-radius: var(--radius-sm); border: 1px solid color-mix(in srgb, var(--on-accent) 30%, transparent);
+  font-size: 12.5px;
+}
+
+/* ---------- App shell ---------- */
+.app { display: flex; height: calc(100vh - 41px); min-height: 560px; }
+.sidebar {
+  width: 244px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; overflow-y: auto;
+}
+.sb-header { display: flex; align-items: center; gap: 9px; padding: 14px 14px 10px; }
+.sb-mark {
+  width: 26px; height: 26px; border-radius: 8px; background: var(--accent-gradient);
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.sb-mark svg { width: 15px; height: 15px; }
+.sb-workspace { font-family: var(--font-display); font-weight: 600; font-size: 14px; }
+
+.sb-group { padding: 4px 8px; }
+.sb-group-label {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 8px 4px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em;
+  color: var(--text-muted); text-transform: uppercase;
+}
+.sb-item {
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+  padding: 6px 8px; border-radius: var(--radius-sm); color: var(--text-secondary);
+  font-size: 13px; position: relative;
+}
+.sb-item:hover { background: var(--surface-2); color: var(--text); }
+.sb-item.active { background: var(--accent-soft-bg); color: var(--accent-soft-text); font-weight: 500; }
+.sb-item .icon { color: currentColor; opacity: 0.85; }
+.sb-item .count { margin-left: auto; font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.sb-item .badge-alert {
+  margin-left: auto; font-size: 10px; font-weight: 700; min-width: 18px; text-align: center;
+  background: var(--accent); background-image: var(--accent-gradient); color: var(--on-accent);
+  padding: 1px 6px; border-radius: 999px;
+}
+.sb-sep { height: 1px; background: var(--border); margin: 6px 12px; }
+
+.sb-project { margin-bottom: 2px; }
+.sb-project-row {
+  display: flex; align-items: center; gap: 7px; width: 100%; padding: 6px 8px;
+  border-radius: var(--radius-sm); font-size: 13px; font-weight: 500;
+}
+.sb-project-row:hover { background: var(--surface-2); }
+.sb-settings-gear {
+  margin-left: auto; color: var(--text-muted); opacity: 0; width: 20px; height: 20px;
+  display: flex; align-items: center; justify-content: center; border-radius: 5px;
+}
+.sb-project-row:hover .sb-settings-gear { opacity: 1; }
+.sb-settings-gear:hover { background: var(--surface); color: var(--text); }
+.sb-project-emoji { font-size: 13px; width: 16px; text-align: center; }
+.sb-project-sub { padding-left: 27px; display: flex; flex-direction: column; gap: 1px; }
+.sb-add {
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+  padding: 6px 8px; border-radius: var(--radius-sm); color: var(--text-muted);
+  font-size: 12.5px; font-style: italic;
+}
+.sb-add:hover { background: var(--surface-2); color: var(--text-secondary); }
+
+.sb-repo-chip {
+  margin: 4px 8px 6px 27px; display: flex; align-items: center; gap: 6px;
+  padding: 5px 8px; border-radius: var(--radius-sm); font-size: 11.5px;
+  background: var(--success-bg); color: var(--success); width: fit-content;
+}
+.sb-repo-chip.unlinked { background: var(--surface-2); color: var(--text-muted); }
+
+/* local-first machine strip — desktop chrome, always visible */
+.local-strip {
+  margin-top: 6px; border-top: 1px solid var(--border); padding: 9px 12px;
+  display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text-secondary);
+  width: 100%; text-align: left;
+}
+.local-strip:hover { background: var(--surface-2); }
+.local-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); flex-shrink: 0; }
+.local-strip .icon-sm { color: var(--text-muted); margin-left: auto; }
+
+/* ---------- Topbar ---------- */
+.topbar {
+  height: 48px; flex-shrink: 0; display: flex; align-items: center; gap: 10px;
+  padding: 0 14px; border-bottom: 1px solid var(--border); background: var(--surface);
+}
+.tb-search {
+  display: flex; align-items: center; gap: 8px; width: 300px; padding: 7px 10px;
+  border-radius: var(--radius-sm); border: 1px solid var(--border); color: var(--text-muted);
+  font-size: 13px;
+}
+.tb-search kbd, .kbd {
+  font-size: 10.5px; padding: 1px 5px; border-radius: 4px; font-family: var(--font-mono);
+  border: 1px solid var(--border-strong); color: var(--text-muted);
+}
+.tb-search kbd { margin-left: auto; }
+.tb-spacer { flex: 1; }
+.tb-btn {
+  display: flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: var(--radius-sm);
+  background: var(--accent); background-image: var(--accent-gradient); color: var(--on-accent);
+  font-size: 13px; font-weight: 500;
+}
+.tb-icon-btn {
+  width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-sm); color: var(--text-secondary); position: relative;
+}
+.tb-icon-btn:hover { background: var(--surface-2); color: var(--text); }
+.tb-icon-btn.active { background: var(--accent-soft-bg); color: var(--accent-soft-text); }
+.tb-dot { position: absolute; top: 6px; right: 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--danger); }
+.tb-avatar {
+  width: 26px; height: 26px; border-radius: 50%; background: #7d6ae8; color: white;
+  display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600;
+}
+
+/* ---------- Content area ---------- */
+.content-wrap { flex: 1; display: flex; overflow: hidden; }
+.content { flex: 1; overflow-y: auto; }
+.screen { display: none; padding: 28px 32px 60px; max-width: 1060px; }
+.screen.active { display: block; }
+.screen-header { margin-bottom: 22px; }
+.screen-eyebrow {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--text-muted); margin-bottom: 4px;
+}
+.screen-title { font-size: 21px; font-weight: 600; }
+.screen-sub { font-size: 13.5px; color: var(--text-secondary); margin-top: 5px; max-width: 62ch; }
+
+.proj-header {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 4px; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+}
+.proj-header-repo {
+  margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px;
+  color: var(--success); background: var(--success-bg); padding: 5px 9px; border-radius: var(--radius-sm);
+}
+.proj-tabs { display: flex; gap: 2px; margin: 16px 0 14px; border-bottom: 1px solid var(--border); }
+.proj-tab {
+  padding: 8px 12px; font-size: 13px; color: var(--text-secondary); border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.proj-tab.active { color: var(--text); border-color: var(--accent); font-weight: 500; }
+
+.card {
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+  padding: 14px 16px;
+}
+.grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+
+.row {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.row:last-child { border-bottom: none; }
+.list-box { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
+
+.pill {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 500;
+}
+.pill-mono { font-family: var(--font-mono); color: var(--text-muted); font-size: 11.5px; }
+.pill-quiet { background: var(--surface-2); color: var(--text-secondary); }
+
+.avatar-sm {
+  width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  font-size: 9.5px; font-weight: 600; color: white; flex-shrink: 0;
+}
+.avatar-agent {
+  width: 20px; height: 20px; border-radius: 6px; display: flex; align-items: center; justify-content: center;
+  background: var(--accent-soft-bg); color: var(--accent-soft-text); flex-shrink: 0; border: 1px dashed var(--border-strong);
+}
+
+.empty {
+  text-align: center; padding: 40px 20px; color: var(--text-muted); border: 1px dashed var(--border); border-radius: var(--radius);
+}
+.empty .icon { width: 22px; height: 22px; margin: 0 auto 10px; opacity: 0.5; }
+.empty-title { font-size: 13.5px; font-weight: 500; color: var(--text-secondary); margin-bottom: 3px; }
+.empty-body { font-size: 12.5px; max-width: 40ch; margin: 0 auto; }
+
+.rule-box {
+  border: 1px solid var(--border); border-left: 3px solid var(--info); border-radius: var(--radius-sm);
+  background: var(--bg-inset); padding: 10px 13px; font-size: 12.5px; color: var(--text-secondary);
+  margin-bottom: 16px;
+}
+.rule-box b { color: var(--text); font-weight: 600; }
+
+/* ---------- changed-element annotation ---------- */
+[data-was] { position: relative; }
+body.show-changes [data-was] { outline: 1.5px dashed var(--info); outline-offset: 2px; border-radius: 5px; }
+body.show-changes [data-was]::after {
+  content: attr(data-was);
+  position: absolute; left: 0; top: -17px; z-index: 40;
+  font-size: 9.5px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap;
+  color: var(--info); background: var(--info-bg); padding: 1px 5px; border-radius: 4px;
+  opacity: 0; pointer-events: none; transition: opacity 120ms ease;
+}
+body.show-changes [data-was]:hover::after { opacity: 1; }
+body.show-changes [data-removed] { outline: 1.5px dashed var(--warning); outline-offset: 2px; border-radius: 5px; position: relative; }
+body.show-changes [data-removed]::after {
+  content: attr(data-removed);
+  position: absolute; left: 0; top: -17px; z-index: 40;
+  font-size: 9.5px; font-weight: 600; white-space: nowrap;
+  color: var(--warning); background: var(--warning-bg); padding: 1px 5px; border-radius: 4px;
+  opacity: 0; pointer-events: none; transition: opacity 120ms ease;
+}
+body.show-changes [data-removed]:hover::after { opacity: 1; }
+
+/* ---------- Copilot panel ---------- */
+.copilot-panel {
+  width: 380px; flex-shrink: 0; border-left: 1px solid var(--border); background: var(--surface);
+  display: none; flex-direction: column;
+}
+.copilot-panel.open { display: flex; }
+.cp-header { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.cp-title { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600; margin-bottom: 8px; }
+.cp-title .cp-actions { margin-left: auto; display: flex; gap: 2px; }
+.cp-grounding {
+  display: flex; align-items: center; gap: 7px; padding: 7px 9px; border-radius: var(--radius-sm);
+  background: var(--info-bg); color: var(--info); font-size: 12px;
+}
+.cp-grounding b { font-weight: 600; }
+.cp-pending {
+  display: flex; align-items: center; gap: 7px; padding: 6px 9px; margin-top: 6px;
+  border-radius: var(--radius-sm); background: var(--warning-bg); color: var(--warning); font-size: 11.5px;
+}
+.cp-pending button { margin-left: auto; font-size: 11.5px; font-weight: 600; color: inherit; text-decoration: underline; }
+.cp-body { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+.cp-sessions { flex: 1; overflow-y: auto; padding: 8px; display: none; flex-direction: column; gap: 2px; }
+.copilot-panel.sessions .cp-body { display: none; }
+.copilot-panel.sessions .cp-sessions { display: flex; }
+.cp-session-group { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); padding: 10px 8px 4px; display: flex; align-items: center; gap: 5px; }
+.cp-session {
+  display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: var(--radius-sm);
+  font-size: 12.5px; color: var(--text-secondary);
+}
+.cp-session:hover { background: var(--surface-2); color: var(--text); }
+.cp-session.current { background: var(--accent-soft-bg); color: var(--accent-soft-text); }
+.cp-session .cp-session-acts { margin-left: auto; display: flex; gap: 1px; opacity: 0; }
+.cp-session:hover .cp-session-acts { opacity: 1; }
+.cp-session.pinned .cp-session-acts { opacity: 1; }
+.cp-mini { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; border-radius: 5px; color: var(--text-muted); }
+.cp-mini:hover { background: var(--surface-2); color: var(--text); }
+/* Dismisses the whole panel rather than acting on a session, so it sits
+   slightly apart from the session controls next to it. */
+.cp-close { margin-left: 4px; border-left: 1px solid var(--border); border-radius: 0 5px 5px 0; padding-left: 5px; width: 27px; }
+.cp-msg-user {
+  align-self: flex-end; max-width: 85%; background: var(--accent); background-image: var(--accent-gradient);
+  color: var(--on-accent); padding: 8px 11px; border-radius: var(--radius); font-size: 13px;
+}
+.cp-msg-assist { max-width: 92%; font-size: 13px; color: var(--text); }
+.cp-input {
+  margin: 10px; padding: 9px 10px; border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text-muted); font-size: 13px;
+}
+.cp-newsession {
+  margin: 8px; padding: 8px; border: 1px dashed var(--border-strong); border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 12.5px; color: var(--text-secondary);
+}
+
+/* ---------- proposal card: ONE component, four surfaces ---------- */
+.proposal-card { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
+.proposal-head {
+  display: flex; align-items: center; gap: 7px; padding: 8px 10px; background: var(--surface-2);
+  font-size: 11.5px; font-weight: 600; color: var(--text-secondary);
+}
+.proposal-head .kind { color: var(--text); }
+.proposal-head .when { margin-left: auto; font-weight: 400; color: var(--text-muted); }
+.proposal-body { padding: 10px; font-size: 12.5px; }
+.proposal-actions { display: flex; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--border); align-items: center; }
+.diff { display: flex; flex-direction: column; gap: 4px; margin: 7px 0; }
+.diff-row { display: flex; align-items: center; gap: 7px; font-size: 12px; flex-wrap: wrap; }
+.diff-field { color: var(--text-muted); min-width: 74px; }
+.diff-from { color: var(--text-secondary); text-decoration: line-through; opacity: 0.7; }
+.diff-to { color: var(--text); font-weight: 500; }
+.evidence {
+  display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 11px;
+  background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 2px 6px; color: var(--text-secondary);
+}
+.why { color: var(--text-secondary); font-size: 12px; margin-top: 6px; }
+.btn-sm {
+  padding: 5px 10px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 500;
+  border: 1px solid var(--border-strong);
+}
+.btn-sm.primary { background: var(--accent); background-image: var(--accent-gradient); color: var(--on-accent); border: none; }
+.btn-sm.ghost { border-color: transparent; color: var(--text-secondary); }
+
+/* ---------- toolbar / filters / bulk ---------- */
+.toolbar { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 10px; }
+.tool-btn {
+  display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; font-size: 12.5px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-secondary); background: var(--surface);
+}
+.tool-btn:hover { border-color: var(--border-strong); color: var(--text); }
+.tool-btn.on { background: var(--accent-soft-bg); color: var(--accent-soft-text); border-color: var(--border-strong); }
+.tool-search {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface);
+}
+.tool-search input { border: none; outline: none; background: none; width: 150px; font-size: 12.5px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 6px 3px 9px; font-size: 11.5px;
+  border-radius: 999px; background: var(--info-bg); color: var(--info); font-weight: 500;
+}
+.chip button { color: inherit; display: flex; opacity: 0.7; }
+.chip button:hover { opacity: 1; }
+.count-line { font-size: 12px; color: var(--text-muted); margin-bottom: 8px; }
+.bulk-bar {
+  display: none; align-items: center; gap: 8px; padding: 8px 12px; margin-bottom: 8px;
+  border-radius: var(--radius); background: var(--accent); background-image: var(--accent-gradient);
+  color: var(--on-accent); font-size: 12.5px;
+}
+.bulk-bar.on { display: flex; }
+.bulk-bar .bulk-act {
+  padding: 4px 9px; border-radius: var(--radius-sm); font-size: 12px;
+  border: 1px solid color-mix(in srgb, var(--on-accent) 32%, transparent); color: inherit;
+}
+.bulk-bar .bulk-act:hover { background: color-mix(in srgb, var(--on-accent) 15%, transparent); }
+
+.popover {
+  position: absolute; z-index: 70; min-width: 190px; max-height: 320px; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius);
+  box-shadow: 0 8px 28px rgba(10,10,12,0.16); padding: 5px;
+}
+.pop-head {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-muted); padding: 7px 9px 4px;
+}
+.pop-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  padding: 6px 9px; border-radius: var(--radius-sm); font-size: 12.5px; color: var(--text-secondary);
+}
+.pop-item:hover { background: var(--surface-2); color: var(--text); }
+.pop-item.sel { color: var(--text); font-weight: 500; }
+.pop-note { font-size: 11.5px; color: var(--text-muted); padding: 7px 9px; border-top: 1px solid var(--border); margin-top: 4px; line-height: 1.45; }
+.cbox {
+  width: 14px; height: 14px; border-radius: 4px; border: 1.5px solid var(--border-strong);
+  flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+}
+.cbox.on { background: var(--accent); background-image: var(--accent-gradient); border-color: transparent; color: var(--on-accent); }
+.cbox svg { width: 10px; height: 10px; }
+
+/* ---------- deep ticket table ---------- */
+.tk-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.tk-inner { min-width: 760px; }
+.grp-head {
+  position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px;
+  padding: 7px 12px; background: var(--surface-2); border-bottom: 1px solid var(--border);
+  font-size: 11.5px; font-weight: 600; color: var(--text-secondary); cursor: pointer;
+}
+.grp-head .grp-count { color: var(--text-muted); font-weight: 400; }
+.grp-head .chev { margin-left: auto; color: var(--text-muted); transition: transform 120ms ease; }
+.grp-head.collapsed .chev { transform: rotate(-90deg); }
+.tk-row {
+  display: flex; align-items: center; gap: 9px; padding: 7px 12px; border-bottom: 1px solid var(--border);
+  font-size: 13px; cursor: pointer;
+}
+.tk-row:hover { background: var(--surface-2); }
+.tk-row.focus { background: var(--accent-soft-bg); box-shadow: inset 2px 0 0 var(--accent); }
+.tk-row.sel { background: var(--info-bg); }
+.tk-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk-meta { display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
+.tk-label {
+  font-size: 10px; padding: 1px 6px; border-radius: 999px; background: var(--surface-2);
+  color: var(--text-secondary); border: 1px solid var(--border);
+}
+.tk-label.flagged { background: var(--warning-bg); color: var(--warning); border-color: transparent; }
+.tk-when { font-size: 11px; color: var(--text-muted); width: 46px; text-align: right; flex-shrink: 0; }
+.tk-proj { font-size: 11px; color: var(--text-muted); width: 92px; flex-shrink: 0; }
+
+/* ---------- review queue ---------- */
+.seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: var(--radius-sm); background: var(--surface-2); margin-bottom: 14px; }
+.seg button { padding: 5px 11px; border-radius: 5px; font-size: 12.5px; color: var(--text-secondary); }
+.seg button.on { background: var(--surface); color: var(--text); font-weight: 500; box-shadow: 0 1px 2px rgba(10,10,12,0.06); }
+.rv-item { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border-bottom: 1px solid var(--border); }
+.rv-item:last-child { border-bottom: none; }
+.rv-item.sel { background: var(--info-bg); }
+.rv-src { font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin-top: 5px; }
+
+/* ---------- drawer ---------- */
+.rv-health {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 10px 13px; margin-bottom: 10px; font-size: 12.5px;
+}
+.rv-health.warn { border-color: color-mix(in srgb, var(--warning) 45%, transparent); background: var(--warning-bg); }
+.rv-stat { display: flex; align-items: baseline; gap: 6px; }
+.rv-stat b { font-family: var(--font-display); font-size: 15px; font-variant-numeric: tabular-nums; }
+.rv-stat span { color: var(--text-secondary); }
+.rv-health.warn .rv-stat span, .rv-health.warn .rv-health-note { color: var(--warning); }
+.rv-health-note { color: var(--text-secondary); flex: 1; min-width: 220px; }
+.rv-trust {
+  display: none; align-items: flex-start; gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--info) 40%, transparent); background: var(--info-bg);
+  border-radius: var(--radius); padding: 11px 13px; margin-bottom: 10px; font-size: 12.5px; color: var(--info);
+}
+.rv-trust.on { display: flex; }
+.rv-trust b { font-weight: 600; }
+.rv-trust-actions { margin-left: auto; display: flex; gap: 7px; flex-shrink: 0; }
+.trust-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.trust-table th {
+  text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-muted); font-weight: 600; padding: 0 0 7px;
+}
+.trust-table td { padding: 8px 0; border-top: 1px solid var(--border); color: var(--text-secondary); }
+.trust-table td:first-child { color: var(--text); }
+.trust-table td:last-child { text-align: right; }
+.ticket-row { cursor: pointer; }
+.ticket-row:hover { background: var(--surface-2); }
+.drawer-backdrop {
+  display: none; position: fixed; inset: 0; z-index: 90; background: rgba(10,10,12,0.32);
+  align-items: stretch; justify-content: flex-end;
+}
+.drawer-backdrop.open { display: flex; }
+.ticket-drawer {
+  width: 440px; max-width: 100%; background: var(--surface); border-left: 1px solid var(--border);
+  display: flex; flex-direction: column; height: 100%;
+}
+.td-header { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.td-body { flex: 1; overflow-y: auto; padding: 16px; }
+.td-title { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin: 10px 0 8px; }
+.td-desc { font-size: 13px; color: var(--text-secondary); margin-bottom: 16px; }
+.td-rail { border: 1px solid var(--border); border-radius: var(--radius); padding: 4px 12px; margin-bottom: 18px; }
+.td-rail-row {
+  display: flex; align-items: center; justify-content: space-between; padding: 8px 0;
+  border-bottom: 1px solid var(--border); font-size: 12.5px; color: var(--text-secondary);
+}
+.td-rail-row:last-child { border-bottom: none; }
+.td-rail-row > span:last-child { color: var(--text); font-weight: 500; }
+.td-section { margin-bottom: 16px; }
+.td-section-label {
+  display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600;
+  color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px;
+}
+.td-comment { display: flex; gap: 9px; font-size: 12.5px; color: var(--text); }
+
+/* ---------- keyboard cheatsheet ---------- */
+.ks-backdrop {
+  display: none; position: fixed; inset: 0; z-index: 95; background: rgba(10,10,12,0.4);
+  align-items: center; justify-content: center; padding: 24px;
+}
+.ks-backdrop.open { display: flex; }
+.ks-card {
+  width: 560px; max-width: 100%; max-height: 80vh; overflow-y: auto; background: var(--surface);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-lg); padding: 20px 22px;
+  box-shadow: 0 20px 60px rgba(10,10,12,0.28);
+}
+.ks-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px 28px; margin-top: 14px; }
+.ks-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-secondary); padding: 3px 0; }
+.ks-row .keys { margin-left: auto; display: flex; gap: 3px; }
+.ks-sec { font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px; }
+
+.toast {
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 99;
+  background: var(--accent); background-image: var(--accent-gradient); color: var(--on-accent);
+  padding: 9px 16px; border-radius: var(--radius); font-size: 12.5px; opacity: 0; pointer-events: none;
+  transition: opacity 160ms ease;
+}
+.toast.on { opacity: 1; }
+
+@media (max-width: 900px) {
+  .sidebar { position: absolute; z-index: 30; height: 100%; }
+  .grid-2, .grid-3, .ks-grid { grid-template-columns: 1fr; }
+}
+</style>
+
+<div class="review-banner">
+  <span><b>Proposed revamp v2</b> — revised after senior PM review</span>
+  <span class="sep">·</span>
+  <span>Review queue replaces Agents in nav</span>
+  <span class="sep">·</span>
+  <span>Stickies → <b>Scratchpad</b>, not Notes</span>
+  <span class="sep">·</span>
+  <span>Press <span class="kbd" style="border-color:currentColor;color:inherit;opacity:.8">?</span> for shortcuts</span>
+  <div class="review-toggle">
+    <label><input type="checkbox" id="changeToggle"> Show what changed</label>
+    <button class="review-theme-btn" id="themeBtn">Dark preview</button>
+  </div>
+</div>
+
+<div class="app">
+  <aside class="sidebar thin-scroll">
+    <div class="sb-header">
+      <div class="sb-mark"><svg viewBox="0 0 24 24" fill="none" stroke="var(--on-accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><polygon points="16,8 13,13 8,16 11,11"></polygon></svg></div>
+      <div class="sb-workspace">Waypoint Labs</div>
+    </div>
+
+    <nav class="sb-group">
+      <button class="sb-item" data-nav="home">${'{icon:home}'}Home</button>
+      <button class="sb-item" data-nav="mywork" data-was="was: Your work">${'{icon:user}'}My work</button>
+      <button class="sb-item" data-nav="notifications" data-was="fixes: bell opened a page titled &quot;Inbox&quot; while the nav said Notifications — one name now">${'{icon:bell}'}Notifications<span class="count">4</span></button>
+      <button class="sb-item" data-nav="drafts">${'{icon:edit}'}Drafts<span class="count">3</span></button>
+      <button class="sb-item" data-nav="scratchpad" data-was="was: Stickies → renamed &quot;Notes&quot; in v1, which collided with Docs. Scratchpad names a place, not a thing type — so there is no &quot;which one do I create?&quot; question left.">${'{icon:scratch}'}Scratchpad</button>
+    </nav>
+
+    <div class="sb-sep"></div>
+
+    <nav class="sb-group">
+      <div class="sb-group-label">Agent output</div>
+      <button class="sb-item" data-nav="review" data-was="was: &quot;Agents&quot; — an agent *configuration* page. Config is low-frequency and went back to Settings; this slot now holds agent *output*: every pending proposal, everything blocked, everything that ran overnight.">${'{icon:review}'}Review<span class="badge-alert">6</span></button>
+    </nav>
+
+    <div class="sb-sep"></div>
+
+    <nav class="sb-group">
+      <div class="sb-group-label">Projects<button style="color:var(--text-muted)" title="New project">${'{icon:plus}'}</button></div>
+      <div class="sb-project">
+        <button class="sb-project-row" data-nav="projects">${'{icon:folder}'}All projects</button>
+      </div>
+      <div class="sb-project">
+        <button class="sb-project-row" data-nav="alltickets" data-was="was labeled &quot;Views&quot; but opened a screen titled &quot;All work items&quot;. Now it is the same filter/group/bulk surface as a project list, with no project filter applied — and it carries &quot;Save as view&quot;, which is workspace saved views at zero extra concept cost.">${'{icon:layers}'}All tickets</button>
+      </div>
+
+      <div class="sb-project">
+        <div class="sb-project-row" style="gap:6px;">
+          <span class="sb-project-emoji">🧭</span>Compass Web
+          <button class="sb-settings-gear" data-nav="projectsettings" title="Project settings" data-was="was: nowhere near the project itself — settings for a project lived only under a global Settings tree">${'{icon:settings}'}</button>
+        </div>
+        <div class="sb-repo-chip" data-was="was: buried in Settings &gt; Codebase, 4 clicks deep">${'{icon:git-branch}'}~/code/compass-web</div>
+        <div class="sb-project-sub">
+          <button class="sb-item active" data-nav="tickets">${'{icon:list}'}Tickets<span class="count" id="cwCount">203</span></button>
+          <button class="sb-item" data-nav="sprints" data-was="was: Cycles">${'{icon:refresh}'}Sprints</button>
+          <button class="sb-item" data-nav="workstreams" data-was="was: Modules">${'{icon:track}'}Workstreams</button>
+          <button class="sb-item" data-nav="views">${'{icon:eye}'}Views</button>
+          <button class="sb-item" data-nav="requests" data-was="was: Intake">${'{icon:inbox}'}Requests<span class="count">5</span></button>
+          <button class="sb-item" data-nav="docs" data-was="was: Pages">${'{icon:file}'}Docs</button>
+          <button class="sb-add" data-add="cw">${'{icon:plus}'}Add…</button>
+        </div>
+      </div>
+
+      <div class="sb-project">
+        <div class="sb-project-row" style="gap:6px;">
+          <span class="sb-project-emoji">🚀</span>Product Launch
+          <button class="sb-settings-gear" title="Project settings">${'{icon:settings}'}</button>
+        </div>
+        <div class="sb-repo-chip unlinked">${'{icon:git-branch}'}Link a repo</div>
+        <div class="sb-project-sub" data-proj="pl" data-was="the crux: v1 showed all six sub-items for every project while its own text proposed the opposite. This project has only tickets, so only Tickets shows — and &quot;Add…&quot; is how you get the first Sprint. Creating one IS enabling it; there is no separate feature toggle.">
+          <button class="sb-item" data-nav="pltickets">${'{icon:list}'}Tickets<span class="count" id="plSideCount">9</span></button>
+          <button class="sb-add" data-add="pl">${'{icon:plus}'}Add…</button>
+        </div>
+      </div>
+    </nav>
+
+    <div style="flex:1;"></div>
+
+    <nav class="sb-group">
+      <button class="sb-item" data-nav="archive" data-was="was: Archives (plural). One archive, so: Archive. Also absorbs the separate /projects/archived route as a tab.">${'{icon:archive}'}Archive</button>
+      <button class="sb-item" data-nav="analytics" data-was="v1 renamed this &quot;Insights&quot; — reverted. The audit itself rated the rename &quot;keep&quot;, and &quot;Insights&quot; promises interpretation over three counters.">${'{icon:chart}'}Analytics</button>
+      <button class="sb-item" data-nav="settings">${'{icon:settings}'}Workspace settings</button>
+    </nav>
+
+    <button class="local-strip" data-nav="machine" data-was="new: local-first was a string in a settings select. It is the only position a cloud tracker structurally cannot copy, so it gets permanent chrome — like a VPN indicator — and a screen behind it.">
+      <span class="local-dot"></span>
+      <span><b style="font-weight:600;color:var(--text);">Local</b> · 2 repos · Claude ready</span>
+      ${'{icon:chevron-r}'}
+    </button>
+  </aside>
+
+  <div class="content-wrap">
+    <div style="display:flex; flex-direction:column; flex:1; min-width:0;">
+      <div class="topbar">
+        <button class="tb-search">${'{icon:search}'}Search tickets, docs, sprints…<kbd>⌘K</kbd></button>
+        <div class="tb-spacer"></div>
+        <button class="tb-btn" data-was="fixes: the topbar's primary action always filed into projects[0] — from anywhere, including deep inside another project. It files into the project you are looking at.">${'{icon:plus}'}New ticket</button>
+        <button class="tb-icon-btn" title="Theme">${'{icon:sun}'}</button>
+        <button class="tb-icon-btn" data-nav="notifications" title="Notifications">${'{icon:bell}'}<span class="tb-dot"></span></button>
+        <button class="tb-icon-btn" id="shortcutsBtn" title="Keyboard shortcuts (?)" data-was="new: ⌘K was the only global binding in the whole app. For a product whose pitch is &quot;native desktop&quot;, that was the cheapest miss on the list.">${'{icon:keyboard}'}</button>
+        <button class="tb-icon-btn active" id="copilotToggle" title="Copilot">${'{icon:sparkles}'}</button>
+        <button class="tb-avatar" data-nav="profile" title="Profile settings">AN</button>
+      </div>
+
+      <div class="content thin-scroll">
+
+        <section class="screen active" id="screen-home">
+          <div class="screen-header">
+            <div class="screen-title">Good afternoon, Amaan</div>
+            <div class="screen-sub">Thursday 3 September · working offline-capable, on this machine</div>
+          </div>
+          <div class="grid-2" style="margin-bottom:16px;">
+            <button class="card" data-nav="review" style="text-align:left;" data-was="v1 had this card and never built the screen behind it. It now opens the Review queue.">
+              <div style="font-weight:500; margin-bottom:4px; display:flex; align-items:center; gap:7px;">${'{icon:review}'} 6 proposals waiting on you</div>
+              <div style="font-size:12.5px; color:var(--text-secondary);">2 blocked · 12 ran overnight and needed nothing</div>
+            </button>
+            <div class="card">
+              <div style="font-weight:500; margin-bottom:4px;">Sprint 12 — Compass Web</div>
+              <div style="font-size:12.5px; color:var(--text-secondary);">31 of 68 tickets done · ends in 4 days</div>
+            </div>
+          </div>
+          <div class="card">
+            <div style="font-weight:500; margin-bottom:10px;">Recents</div>
+            <div class="list-box">
+              <div class="row"><span class="pill-mono">CW-142</span>Fix session token refresh race<span style="margin-left:auto;color:var(--text-muted);font-size:12px;">Ticket</span></div>
+              <div class="row"><span class="pill-mono">—</span>Auth flow redesign<span style="margin-left:auto;color:var(--text-muted);font-size:12px;">Doc</span></div>
+              <div class="row"><span class="pill-mono">—</span>Sprint 12<span style="margin-left:auto;color:var(--text-muted);font-size:12px;">Sprint</span></div>
+            </div>
+          </div>
+          <div class="rule-box" style="margin-top:16px;" data-removed="removed: Quicklinks — a permanent empty state on the landing screen advertising a pinning feature that does not exist">
+            <b>Quicklinks is gone.</b> It rendered an unconditional empty state promising &ldquo;pin projects, pages, or views here&rdquo; with no way to pin anything. Ship it working, ship it labelled &ldquo;not yet&rdquo;, or delete it.
+          </div>
+        </section>
+
+        <section class="screen" id="screen-mywork">
+          <div class="screen-header"><div class="screen-title" data-was="was: Your work">My work</div></div>
+          <div class="proj-tabs">
+            <div class="proj-tab active">Assigned</div>
+            <div class="proj-tab">Created</div>
+            <div class="proj-tab" data-removed="removed: Subscribed and Activity were two of five tabs that were permanently empty — nothing in the codebase ever populates them">Subscribed</div>
+          </div>
+          <div class="list-box">
+            <div class="row">${'{icon:circledot}'}<span class="pill-mono">CW-142</span>Fix session token refresh race<span class="pill" style="margin-left:auto;background:var(--danger-bg);color:var(--danger);">Urgent</span></div>
+            <div class="row">${'{icon:circle}'}<span class="pill-mono">CW-138</span>Add rate limiting to the export endpoint</div>
+            <div class="row">${'{icon:circle}'}<span class="pill-mono">PL-04</span>Draft the launch-week timeline</div>
+          </div>
+        </section>
+
+        <section class="screen" id="screen-drafts">
+          <div class="screen-header"><div class="screen-title">Drafts</div><div class="screen-sub" data-was="fixes: a draft linked to the ticket *list*, not back to the draft — while its own copy promised you could pick up where you left off. Also: nothing in the app ever set isDraft, so this slot could never populate at all.">Unsent ticket drafts. Resuming one reopens the draft itself.</div></div>
+          <div class="list-box">
+            <div class="row">${'{icon:edit}'}Investigate flaky CI on compass-web<span style="margin-left:auto;color:var(--text-muted);font-size:12px;">2h ago</span></div>
+            <div class="row">${'{icon:edit}'}Safari download regression — needs repro steps<span style="margin-left:auto;color:var(--text-muted);font-size:12px;">1d ago</span></div>
+          </div>
+        </section>
+
+        <section class="screen" id="screen-notifications">
+          <div class="screen-header">
+            <div class="screen-title" data-was="was: nav said &quot;Notifications&quot;, the page itself said &quot;Inbox&quot; — one name now">Notifications</div>
+            <div class="screen-sub">Things that already happened. Read-only — you can ignore this whole screen and nothing breaks.</div>
+          </div>
+          <div class="rule-box">
+            <b>Three queue-shaped surfaces, one rule.</b> <b>Notifications</b> = already happened, ignorable.
+            <b>Requests</b> = work from outside the team asking to come in.
+            <b>Review</b> = an agent is blocked on you and nothing happens until you act. Only the third has a cost for inaction.
+          </div>
+          <div class="list-box">
+            <div class="row">${'{icon:bot}'}<div><b>Triage Agent</b> proposed a duplicate link on <span class="mono">CW-143</span><div style="font-size:11.5px;color:var(--text-muted);">also waiting in Review</div></div><span style="margin-left:auto;color:var(--text-muted);font-size:12px;">12m ago</span></div>
+            <div class="row"><div class="avatar-sm" style="background:#2f9e6b;">MP</div><div>Maya mentioned you on <span class="mono">CW-140</span></div><span style="margin-left:auto;color:var(--text-muted);font-size:12px;">1h ago</span></div>
+            <div class="row">${'{icon:circledot}'}<div><span class="mono">CW-138</span> moved to <b>In Progress</b></div><span style="margin-left:auto;color:var(--text-muted);font-size:12px;">3h ago</span></div>
+            <div class="row">${'{icon:bot}'}<div><b>Code Reviewer</b> is blocked on <span class="mono">CW-141</span></div><span style="margin-left:auto;color:var(--text-muted);font-size:12px;">5h ago</span></div>
+          </div>
+        </section>
+
+        <section class="screen" id="screen-scratchpad">
+          <div class="screen-header">
+            <div class="screen-title" data-was="was: Stickies. v1 renamed it &quot;Notes&quot;, which created a brand-new collision with Docs — two note surfaces, synonymous names, no rule. This is the fix.">Scratchpad</div>
+            <div class="screen-sub">Yours and unfiled — quick thoughts that don't belong to a project yet.</div>
+          </div>
+          <div class="rule-box">
+            <b>The rule, shipped in the product rather than in a design doc:</b> Scratchpad is personal and unfiled. <b>Docs</b> live inside a project and are shared with its members.
+            A naming collision is only fixed when a user can state the rule — so the rule is in the empty state, not the changelog.
+          </div>
+          <div class="grid-3">
+            <div class="card" style="background:var(--warning-bg);border-color:transparent;"><div style="font-size:12.5px;color:var(--warning);">Ask Maya about the Q4 roadmap review date</div></div>
+            <div class="card" style="background:var(--info-bg);border-color:transparent;"><div style="font-size:12.5px;color:var(--info);">Demo script for Friday — cover Requests triage first</div></div>
+            <div class="card" style="border-style:dashed;color:var(--text-muted);display:flex;align-items:center;justify-content:center;font-size:12.5px;">+ New note</div>
+          </div>
+          <div class="rule-box" style="margin-top:14px;border-left-color:var(--warning);">
+            <b>Known defect, not a design choice:</b> there is no update endpoint, so editing a note deletes and recreates it — and the backend assigns colour randomly, so editing the text silently changes the colour and moves the note in the list.
+          </div>
+        </section>
+
+        <section class="screen" id="screen-review">
+          <div class="screen-header">
+            <div class="screen-eyebrow" data-was="new screen — this nav slot used to hold agent configuration">The spine</div>
+            <div class="screen-title">Review</div>
+            <div class="screen-sub">Every pending proposal from every agent, across every project — what would change, and Approve or Reject. Agents never write directly; a <span class="mono" style="font-size:12px;">propose_*</span> tool inserts a proposal and approving is the only thing that mutates anything.</div>
+          </div>
+          <div class="seg" id="rvSeg">
+            <button class="on" data-seg="pending">Waiting on you <span class="mono" style="opacity:.6">6</span></button>
+            <button data-seg="blocked">Blocked <span class="mono" style="opacity:.6">2</span></button>
+            <button data-seg="recent">Ran overnight <span class="mono" style="opacity:.6">12</span></button>
+          </div>
+          <div class="rv-health" id="rvHealth" data-was="new — neither review pass raised this. A review queue only works in a narrow band: approve everything without reading and the human-in-the-loop is theatre with extra clicks; reject everything and it is a chore. So the queue measures whether review is actually happening, not just how much got approved."></div>
+
+          <div class="rv-trust" id="rvTrust"></div>
+
+          <div class="toolbar">
+            <button class="tool-btn" id="rvAgentBtn">${'{icon:bot}'}Agent: All ${'{icon:chevron}'}</button>
+            <button class="tool-btn" id="rvProjBtn">${'{icon:folder}'}Project: All ${'{icon:chevron}'}</button>
+            <button class="tool-btn" id="rvKindBtn">${'{icon:filter}'}Kind: All ${'{icon:chevron}'}</button>
+            <div id="rvChips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+          </div>
+          <div class="count-line" id="rvCount"></div>
+          <div class="bulk-bar" id="rvBulk">
+            <span id="rvBulkCount">0 selected</span>
+            <button class="bulk-act" id="rvApproveAll">Approve selected</button>
+            <button class="bulk-act" id="rvRejectAll">Reject selected</button>
+            <button class="bulk-act" style="margin-left:auto;" id="rvClearSel">Clear</button>
+          </div>
+          <div class="list-box" id="rvList"></div>
+        </section>
+
+        <section class="screen" id="screen-tickets">
+          <div class="proj-header">
+            <span class="sb-project-emoji">🧭</span>
+            <div style="font-weight:600;">Compass Web</div>
+            <div class="proj-header-repo" data-was="was: Codebase settings page, 4 clicks deep">${'{icon:git-branch}'}Repo linked: ~/code/compass-web · main</div>
+            <button class="tb-icon-btn" data-nav="projectsettings" title="Project settings" style="width:28px;height:28px;">${'{icon:settings}'}</button>
+          </div>
+          <div class="proj-tabs">
+            <div class="proj-tab active">List</div>
+            <div class="proj-tab">Board</div>
+            <div class="proj-tab">Calendar</div>
+            <div class="proj-tab">Spreadsheet</div>
+            <div class="proj-tab">Gantt</div>
+          </div>
+          <div class="rule-box" data-was="v1 showed this screen at four rows. You cannot tell whether an IA holds until you see the most important screen in a tracker under load — so this one is 203 real rows, generated, with working grouping, filters, bulk selection and keyboard traversal.">
+            <b>203 tickets, generated.</b> Grouping, filters, search, bulk selection and <span class="kbd">j</span><span class="kbd">k</span><span class="kbd">x</span> keyboard traversal all work. The count below always agrees with what is on screen — in the real app it does not, because three of five layouts create their own unfiltered view instance while the toolbar keeps its active-filter badge.
+          </div>
+          <div class="toolbar" id="tkToolbar"></div>
+          <div class="count-line" id="tkCount"></div>
+          <div class="bulk-bar" id="tkBulk"></div>
+          <div class="tk-scroll thin-scroll"><div class="tk-inner" id="tkList"></div></div>
+        </section>
+
+        <section class="screen" id="screen-alltickets">
+          <div class="screen-header">
+            <div class="screen-title" data-was="was labeled &quot;Views&quot; in the nav and titled &quot;All work items&quot; on the page — two different things called Views, one of which was not a views feature">All tickets</div>
+            <div class="screen-sub">The same surface as a project list with no project filter applied. A view is a saved filter; scope is part of the filter. That is one concept instead of two, and &ldquo;Save as view&rdquo; here is workspace-level saved views for free.</div>
+          </div>
+          <div class="toolbar" id="atToolbar"></div>
+          <div class="count-line" id="atCount"></div>
+          <div class="bulk-bar" id="atBulk"></div>
+          <div class="tk-scroll thin-scroll"><div class="tk-inner" id="atList"></div></div>
+        </section>
+
+        <section class="screen" id="screen-pltickets">
+          <div class="proj-header">
+            <span class="sb-project-emoji">🚀</span>
+            <div style="font-weight:600;">Product Launch</div>
+            <div class="proj-header-repo" style="background:var(--surface-2);color:var(--text-secondary);">${'{icon:git-branch}'}No repo linked — link one to ground Copilot</div>
+          </div>
+          <div class="rule-box" data-was="answers the crux question the review raised: how do I create my first Sprint if Sprints is not in the nav because I have none?">
+            <b>This project uses only tickets</b> — so its sidebar shows only Tickets. To get a Sprint, use <b>Add…</b> at the bottom of its sub-nav: the menu lists the primitives this project is not using yet, and creating the first Sprint <em>is</em> what puts Sprints in the nav. One action, not two. There is no feature-toggle grid, and none of the five near-identical &ldquo;X is disabled for this project&rdquo; screens exist any more.
+          </div>
+          <div class="toolbar" id="plToolbar"></div>
+          <div class="count-line" id="plCount"></div>
+          <div class="bulk-bar" id="plBulk"></div>
+          <div class="tk-scroll thin-scroll" style="max-height:340px;"><div class="tk-inner" id="plList"></div></div>
+        </section>
+
+        <section class="screen" id="screen-plnew">
+          <div class="proj-header">
+            <span class="sb-project-emoji">🚀</span>
+            <div style="font-weight:600;">Product Launch</div>
+          </div>
+          <div class="screen-header" style="margin-top:18px;">
+            <div class="screen-eyebrow">Just created</div>
+            <div class="screen-title" id="plNewTitle">Sprint 1</div>
+            <div class="screen-sub" id="plNewSub">Nothing in it yet. It is now in Product Launch's sidebar — creating the first one is what put it there.</div>
+          </div>
+          <div class="empty">${'{icon:list}'}<div class="empty-title" id="plNewEmpty">No tickets in this sprint yet</div><div class="empty-body">Add tickets from the Tickets list, or drag them in from the board.</div></div>
+        </section>
+
+        <section class="screen" id="screen-sprints">
+          <div class="screen-header">
+            <div class="screen-eyebrow" data-was="was: Cycles">Time-boxed grouping</div>
+            <div class="screen-title">Sprints</div>
+            <div class="screen-sub">A fixed window with a start and end date. Planned by people.</div>
+          </div>
+          <div class="grid-2">
+            <div class="card">
+              <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;"><b>Sprint 12</b><span class="pill" style="background:var(--success-bg);color:var(--success);">Active</span></div>
+              <div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px;">Aug 28 – Sep 11 · 31 of 68 done</div>
+              <div style="height:5px;background:var(--surface-2);border-radius:99px;overflow:hidden;"><div style="width:46%;height:100%;background:var(--accent);background-image:var(--accent-gradient);"></div></div>
+            </div>
+            <div class="card">
+              <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;"><b>Sprint 13</b><span class="pill pill-quiet">Upcoming</span></div>
+              <div style="font-size:12px;color:var(--text-secondary);">Sep 11 – Sep 25 · not started</div>
+            </div>
+          </div>
+          <div class="rule-box" style="margin-top:14px;border-left-color:var(--warning);" data-removed="removed: the burndown chart, until it has data">
+            <b>No burndown here yet, deliberately.</b> The real one is two data points — day 0 and today — joined with <span class="mono">connectNulls</span> so it renders as a continuous line next to real progress numbers. The code comment is honest that no per-day history exists; the chart was not. Record daily snapshots, or draw two points.
+          </div>
+        </section>
+
+        <section class="screen" id="screen-workstreams">
+          <div class="screen-header">
+            <div class="screen-eyebrow" data-was="was: Modules">Continuing grouping</div>
+            <div class="screen-title">Workstreams</div>
+            <div class="screen-sub">Not time-boxed — a standing area of the product that outlives any one sprint.</div>
+          </div>
+          <div class="rule-box" style="border-left-color:var(--warning);" data-was="v1 made workstreams &quot;agent-native&quot;: an agent owned a workstream and ran against its &quot;standing brief&quot;. Withdrawn.">
+            <b>Reversed from v1.</b> Making an agent own a workstream put its instructions in two places — the agent's own <span class="mono">agent.md</span> and the workstream's &ldquo;standing brief&rdquo; — with no rule for which wins, and gave one agent three simultaneous relationships. It was a rationalisation for keeping two grouping primitives, written after the decision. <b>An agent's scope is a saved view now</b> — see Views. Workstreams is a plain grouping primitive again, and a project with no agents gets no orphan nav item.
+          </div>
+          <div class="grid-2">
+            <div class="card">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                <div class="avatar-sm" style="background:#7d6ae8;width:26px;height:26px;">AN</div>
+                <div><b>Payments</b><div style="font-size:11.5px;color:var(--text-muted);">Led by Amaan N. · 34 tickets</div></div>
+              </div>
+              <div style="font-size:12px;color:var(--text-secondary);border-top:1px solid var(--border);padding-top:8px;">Stripe client, webhook retry, idempotency keys.</div>
+            </div>
+            <div class="card">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                <div class="avatar-sm" style="background:#2f9e6b;width:26px;height:26px;">MP</div>
+                <div><b>Onboarding</b><div style="font-size:11.5px;color:var(--text-muted);">Led by Maya P. · 21 tickets</div></div>
+              </div>
+              <div style="font-size:12px;color:var(--text-secondary);border-top:1px solid var(--border);padding-top:8px;">Signup, first-run, workspace creation.</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen" id="screen-views">
+          <div class="screen-header">
+            <div class="screen-title">Views</div>
+            <div class="screen-sub">A view is a saved filter. One concept — a project view is just a view whose filter includes that project.</div>
+          </div>
+          <div class="rule-box" data-was="new: the Views screen already contained &quot;Needs triage review · label: agent-flagged&quot; and nothing connected it to the agents. This is that connection.">
+            <b>A view is also how an agent gets a scope.</b> An agent is one brief (<span class="mono">agent.md</span>, always one place) plus the views it watches. &ldquo;Watch everything matching <span class="mono">label:security</span>&rdquo; is a brief <em>with</em> a scope, expressed in a primitive that already exists. Assigning an agent to a single ticket is just a scope of one — same model, no special case.
+          </div>
+          <div class="list-box">
+            <div class="row">${'{icon:eye}'}My open tickets<span style="margin-left:auto;display:flex;align-items:center;gap:10px;"><span class="mono" style="color:var(--text-muted);font-size:11.5px;">assignee:me state:!done</span></span></div>
+            <div class="row">${'{icon:eye}'}Needs triage review<span style="margin-left:auto;display:flex;align-items:center;gap:10px;"><span class="pill" style="background:var(--info-bg);color:var(--info);gap:5px;">${'{icon:bot}'}Watched by Triage Agent</span><span class="mono" style="color:var(--text-muted);font-size:11.5px;">label:agent-flagged</span></span></div>
+            <div class="row">${'{icon:eye}'}Security-labelled<span style="margin-left:auto;display:flex;align-items:center;gap:10px;"><span class="pill" style="background:var(--info-bg);color:var(--info);gap:5px;">${'{icon:bot}'}Watched by Code Reviewer</span><span class="mono" style="color:var(--text-muted);font-size:11.5px;">label:security</span></span></div>
+            <div class="row">${'{icon:eye}'}Stale over 30 days<span style="margin-left:auto;display:flex;align-items:center;gap:10px;"><span class="mono" style="color:var(--text-muted);font-size:11.5px;">updated:&lt;-30d state:!done</span></span></div>
+          </div>
+          <div class="rule-box" style="margin-top:14px;border-left-color:var(--warning);">
+            <b>Prerequisite:</b> saved views can be created but never configured today — <span class="mono">createView(project.id, name, {})</span> saves empty filters and there is no filter editor anywhere, so every user-created view shows everything. Giving views a job is the forcing function that gets the editor built.
+          </div>
+        </section>
+
+        <section class="screen" id="screen-requests">
+          <div class="screen-header">
+            <div class="screen-eyebrow" data-was="was: Intake">Agent-triaged queue</div>
+            <div class="screen-title">Requests</div>
+            <div class="screen-sub">Work from outside the team asking to come in. The Triage Agent reads each one against the repo and the existing tickets, then proposes a verdict — same proposal card, same Approve/Reject, and it also appears in Review.</div>
+          </div>
+          <div class="rule-box" style="border-left-color:var(--warning);">
+            <b>Cost signal:</b> <span class="mono">IntakePage.tsx</span> has <b>zero</b> agent code today. This screen is entirely net-new build, not a rearrangement.
+          </div>
+          <div class="list-box" id="rqList"></div>
+        </section>
+
+        <section class="screen" id="screen-docs">
+          <div class="screen-header">
+            <div class="screen-eyebrow" data-was="was: Pages">Project-scoped and shared</div>
+            <div class="screen-title">Docs</div>
+            <div class="screen-sub">Long-form writing that belongs to this project. Personal, unfiled jottings go on the Scratchpad.</div>
+          </div>
+          <div class="list-box">
+            <div class="row">${'{icon:file}'}Auth flow redesign<span style="margin-left:auto;color:var(--text-muted);font-size:12px;">Maya P. · 2d ago</span></div>
+            <div class="row">${'{icon:file}'}Q3 retro<span style="margin-left:auto;color:var(--text-muted);font-size:12px;">Amaan N. · 3w ago</span></div>
+            <div class="row">${'{icon:file}'}Payments webhook contract<span style="margin-left:auto;color:var(--text-muted);font-size:12px;">Amaan N. · 1mo ago</span></div>
+          </div>
+        </section>
+
+        <section class="screen" id="screen-projects">
+          <div class="screen-header">
+            <div class="screen-title">All projects</div>
+            <div class="screen-sub">Each one opens straight to its tickets. Settings are one click away on the card, or from inside the project.</div>
+          </div>
+          <div class="grid-2">
+            <div class="card" data-nav="tickets" style="cursor:pointer;">
+              <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:10px;">
+                <span class="sb-project-emoji" style="font-size:20px;">🧭</span>
+                <div style="flex:1;">
+                  <div style="font-weight:600;">Compass Web</div>
+                  <div style="font-size:11.5px;color:var(--text-muted);">CW · <span data-was="was: &quot;Network&quot; — an internal data-model field name surfacing as a user-facing label">Private</span></div>
+                </div>
+                <button class="tb-icon-btn" data-nav="projectsettings" title="Project settings" style="width:26px;height:26px;">${'{icon:settings}'}</button>
+              </div>
+              <div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px;">The main web client and its API.</div>
+              <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--text-muted);border-top:1px solid var(--border);padding-top:8px;">
+                <span>203 tickets · Sprint 12 active</span>
+                <span style="display:flex;"><span class="avatar-sm" style="background:#7d6ae8;">AN</span><span class="avatar-sm" style="background:#2f9e6b;margin-left:-6px;">MP</span></span>
+              </div>
+            </div>
+            <div class="card" data-nav="pltickets" style="cursor:pointer;">
+              <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:10px;">
+                <span class="sb-project-emoji" style="font-size:20px;">🚀</span>
+                <div style="flex:1;">
+                  <div style="font-weight:600;">Product Launch</div>
+                  <div style="font-size:11.5px;color:var(--text-muted);">PL · Public</div>
+                </div>
+                <button class="tb-icon-btn" title="Project settings" style="width:26px;height:26px;">${'{icon:settings}'}</button>
+              </div>
+              <div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px;">Marketing site and launch-week coordination.</div>
+              <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--text-muted);border-top:1px solid var(--border);padding-top:8px;">
+                <span>9 tickets · no repo linked</span>
+                <span class="avatar-sm" style="background:#7d6ae8;">AN</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen" id="screen-archive">
+          <div class="screen-header"><div class="screen-eyebrow" data-was="was: Archives (plural)">Archive</div><div class="screen-title">Archive</div></div>
+          <div class="proj-tabs">
+            <div class="proj-tab active">Tickets and sprints</div>
+            <div class="proj-tab" data-was="was: its own separate top-level route, /projects/archived">Projects</div>
+          </div>
+          <div class="list-box">
+            <div class="row">${'{icon:check}'}<span class="pill-mono">CW-121</span>Migrate build to esbuild<span style="margin-left:auto;color:var(--text-muted);font-size:12px;">closed 32d ago</span></div>
+            <div class="row">${'{icon:refresh}'}Sprint 10<span style="margin-left:auto;color:var(--text-muted);font-size:12px;">completed</span></div>
+          </div>
+        </section>
+
+        <section class="screen" id="screen-analytics">
+          <div class="screen-header">
+            <div class="screen-title" data-was="v1 renamed this &quot;Insights&quot; — reverted. The audit rated the rename &quot;keep&quot; and the mockup adopted it anyway.">Analytics</div>
+            <div class="screen-sub">Counts only, and labelled as counts. Nothing here interpolates history it does not have.</div>
+          </div>
+          <div class="grid-3">
+            <div class="card"><div style="font-size:11.5px;color:var(--text-muted);margin-bottom:4px;">Open tickets</div><div style="font-size:22px;font-weight:600;">137</div></div>
+            <div class="card"><div style="font-size:11.5px;color:var(--text-muted);margin-bottom:4px;">Closed this sprint</div><div style="font-size:22px;font-weight:600;">31</div></div>
+            <div class="card" data-was="new: the metric that decides whether the whole thesis is right"><div style="font-size:11.5px;color:var(--text-muted);margin-bottom:4px;">Proposals approved / active day</div><div style="font-size:22px;font-weight:600;">4.2</div></div>
+          </div>
+          <div class="rule-box" style="margin-top:14px;">
+            <b>The third tile is the one that matters.</b> Open tickets and closed-this-sprint measure whether someone is using a tracker — a question four other companies already answered. Proposals approved per active day measures whether <em>this</em> product is real. Instrument it before building the review queue, not after.
+          </div>
+        </section>
+
+        <section class="screen" id="screen-agents">
+          <div class="screen-header">
+            <button class="btn-sm" data-nav="settings" style="margin-bottom:10px;">← Workspace settings</button>
+            <div class="screen-eyebrow" data-was="v1 gave this a primary nav slot. Configuring an agent is quarterly; by frequency it belongs in settings. Agent *output* took the nav slot instead.">Workspace settings → Agents</div>
+            <div class="screen-title">Agents</div>
+            <div class="screen-sub">An agent is one brief, a scope, an autonomy level and a trigger. It reads your repo and proposes; it never writes. Nothing here is required — a project with zero agents behaves exactly like a plain tracker.</div>
+          </div>
+          <div class="rule-box" style="border-left-color:var(--warning);" data-was="fixes: detectLocalClaudeCode() is hardcoded to resolve {status:'connected', version:'2.4.1'} after a fake 500–900ms delay on every machine, then renders a green badge naming that version and the user's real email">
+            <b>Honest connection state.</b> The real app fabricates &ldquo;● Connected — Claude Code CLI v2.4.1, signed in as &lt;your email&gt;&rdquo; regardless of whether Claude Code is installed. That is a lie about the one component the entire product position rests on, and it has to be a real probe with a real <em>not detected</em> state before any claim on the This-machine screen is worth making.
+          </div>
+          <div class="grid-3">
+            <button class="card" data-nav="agentdetail" style="text-align:left;">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;"><div class="avatar-agent" style="width:28px;height:28px;">${'{icon:bot}'}</div><div><div style="font-weight:500;">Triage Agent</div><div style="font-size:11.5px;color:var(--text-muted);">Ask before write</div></div></div>
+              <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;">Reads incoming requests, checks for duplicates, drafts a ticket.</div>
+              <div style="font-size:11px;color:var(--info);background:var(--info-bg);display:inline-flex;padding:2px 7px;border-radius:99px;">Watches: Needs triage review</div>
+            </button>
+            <button class="card" style="text-align:left;">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;"><div class="avatar-agent" style="width:28px;height:28px;">${'{icon:bot}'}</div><div><div style="font-weight:500;">Code Reviewer</div><div style="font-size:11.5px;color:var(--text-muted);">Ask before PR</div></div></div>
+              <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;">Flags changes to the Stripe client for human review.</div>
+              <div style="font-size:11px;color:var(--info);background:var(--info-bg);display:inline-flex;padding:2px 7px;border-radius:99px;">Watches: Security-labelled</div>
+            </button>
+            <button class="card" style="text-align:left;">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;"><div class="avatar-agent" style="width:28px;height:28px;">${'{icon:bot}'}</div><div><div style="font-weight:500;">Release Notes</div><div style="font-size:11.5px;color:var(--text-muted);">Full auto</div></div></div>
+              <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;">Drafts release notes from a sprint's closed tickets.</div>
+              <div style="font-size:11px;color:var(--warning);background:var(--warning-bg);display:inline-flex;padding:2px 7px;border-radius:99px;">Configured, not yet running</div>
+            </button>
+          </div>
+          <button class="card" style="margin-top:12px;width:100%;text-align:left;display:flex;align-items:center;gap:8px;color:var(--text-secondary);border-style:dashed;">${'{icon:plus}'}Add an agent</button>
+        </section>
+
+        <section class="screen" id="screen-agentdetail">
+          <div class="screen-header">
+            <button class="btn-sm" data-nav="agents" style="margin-bottom:10px;">← Back to Agents</button>
+            <div style="display:flex;align-items:center;gap:10px;">
+              <div class="avatar-agent" style="width:34px;height:34px;">${'{icon:bot}'}</div>
+              <div><div class="screen-title" style="font-size:18px;">Triage Agent</div><div style="font-size:12.5px;color:var(--text-muted);">Active · reads and proposes only</div></div>
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="card">
+              <div style="font-weight:500;margin-bottom:10px;">Behaviour</div>
+              <div style="font-size:12.5px;color:var(--text-secondary);display:flex;flex-direction:column;gap:9px;">
+                <div style="display:flex;justify-content:space-between;"><span>Autonomy</span><span style="color:var(--text);">Ask before write</span></div>
+                <div style="display:flex;justify-content:space-between;"><span>Trigger</span><span style="color:var(--text);">New request submitted</span></div>
+                <div style="display:flex;justify-content:space-between;"><span>Model</span><span style="color:var(--text);">Local Claude subscription</span></div>
+                <div style="display:flex;justify-content:space-between;" data-was="was: &quot;Scope: Compass Web only&quot; — a project list. Scope is a saved view now, which is the same thing a filter already expresses."><span>Scope</span><span style="color:var(--text);">Watches <b>Needs triage review</b></span></div>
+              </div>
+            </div>
+            <div class="card">
+              <div style="font-weight:500;margin-bottom:10px;">Brief — <span class="mono" style="font-size:11.5px;color:var(--text-muted);">agent.md</span></div>
+              <div class="mono" style="font-size:11.5px;color:var(--text-secondary);background:var(--bg-inset);padding:10px;border-radius:var(--radius-sm);line-height:1.6;">
+                Search open and closed tickets for a likely duplicate before drafting a new one.<br>
+                If none found, draft with a suggested state, priority and workstream.<br>
+                Never close or reassign an existing ticket without approval.
+              </div>
+              <div style="font-size:11.5px;color:var(--text-muted);margin-top:8px;" data-was="v1 also had a &quot;standing brief&quot; on the workstream, with no rule for which won. There is exactly one brief per agent now.">One brief per agent. There is no second place instructions can live.</div>
+            </div>
+          </div>
+          <div class="card" style="margin-top:12px;">
+            <div style="font-weight:500;margin-bottom:10px;">Recent activity</div>
+            <div class="list-box" style="border:none;">
+              <div class="row" style="padding-left:0;padding-right:0;">${'{icon:bot}'}Proposed linking &ldquo;Export fails on Safari&rdquo; to <span class="mono">CW-138</span> as a duplicate<span style="margin-left:auto;color:var(--text-muted);font-size:12px;">1h ago</span></div>
+              <div class="row" style="padding-left:0;padding-right:0;">${'{icon:bot}'}Drafted <span class="mono">CW-143</span> from a slow-load request<span style="margin-left:auto;color:var(--text-muted);font-size:12px;">14h ago</span></div>
+            </div>
+          </div>
+          <div class="card" style="margin-top:12px;" data-was="new — the missing mechanic. Without a way to earn trust per kind of change, the review queue does not scale past a handful of proposals a day, and bulk-approve-without-reading becomes the release valve, which defeats the safety model the product is built on.">
+            <div style="font-weight:500;margin-bottom:4px;">Earned trust</div>
+            <div style="font-size:12.5px;color:var(--text-secondary);margin-bottom:12px;">Trust is per <em>kind of change</em>, not per agent — an agent reliable about labels has earned nothing about state changes. A single rejection sends that kind straight back to review.</div>
+            <table class="trust-table" id="trustTable"></table>
+          </div>
+
+          <div class="rule-box" style="margin-top:12px;border-left-color:var(--warning);">
+            <b>Not shipping yet.</b> Today <span class="mono">instructionsFile</span>, <span class="mono">autonomy</span> and <span class="mono">triggers</span> are stored and read by no runtime — the Copilot runner has its own hardcoded prompt and no knowledge that Agents exist, and an assignment only ever goes queued → done. Until the runner honours all three, this page says so instead of showing a green dot.
+          </div>
+        </section>
+
+        <section class="screen" id="screen-machine">
+          <div class="screen-header">
+            <div class="screen-eyebrow" data-was="new screen — local-first was one string in a settings select (ExecutionMethod = 'local-claude-subscription'). If it is the position, it needs structure, not a config value.">Reached from the sidebar strip</div>
+            <div class="screen-title">This machine</div>
+            <div class="screen-sub">The one claim Linear, Jira and Plane are architecturally prevented from making — stated precisely enough to be checked.</div>
+          </div>
+          <div class="card" style="margin-bottom:12px;">
+            <div style="font-weight:500;margin-bottom:10px;display:flex;align-items:center;gap:7px;">${'{icon:shield}'}What leaves this machine</div>
+            <div class="list-box" style="border:none;">
+              <div class="row" style="padding-left:0;padding-right:0;">Your tickets<span class="pill" style="margin-left:auto;background:var(--success-bg);color:var(--success);">Never</span></div>
+              <div class="row" style="padding-left:0;padding-right:0;">Your code<span class="pill" style="margin-left:auto;background:var(--success-bg);color:var(--success);">Never</span></div>
+              <div class="row" style="padding-left:0;padding-right:0;"><div>Agent prompts<div style="font-size:11.5px;color:var(--text-muted);">Only what you send, only when you send it — same as running <span class="mono">claude</span> in your terminal</div></div><span class="pill" style="margin-left:auto;background:var(--warning-bg);color:var(--warning);">To Anthropic, on your own subscription</span></div>
+              <div class="row" style="padding-left:0;padding-right:0;">Telemetry<span class="pill pill-quiet" style="margin-left:auto;">Off</span></div>
+            </div>
+            <div style="font-size:12px;color:var(--text-secondary);margin-top:10px;" data-was="the honest version of the pitch: &quot;nothing leaves your laptop&quot; is false the moment the Copilot runs">
+              There is no Waypoint server. &ldquo;Nothing leaves your laptop&rdquo; would be false and is not what this says — the precise claim is more credible than the marketing one, and unlike the marketing one it is checkable on this screen.
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="card">
+              <div style="font-weight:500;margin-bottom:10px;">Where your data lives</div>
+              <div style="font-size:12.5px;color:var(--text-secondary);display:flex;flex-direction:column;gap:8px;">
+                <div style="display:flex;justify-content:space-between;gap:10px;"><span>Database</span><span class="mono" style="color:var(--text);font-size:11.5px;">~/Library/…/waypoint.db</span></div>
+                <div style="display:flex;justify-content:space-between;"><span>Size</span><span style="color:var(--text);">14.2 MB</span></div>
+                <div><button class="btn-sm" style="margin-top:2px;">Reveal in Finder</button></div>
+              </div>
+            </div>
+            <div class="card">
+              <div style="font-weight:500;margin-bottom:10px;">Claude Code</div>
+              <div style="font-size:12.5px;color:var(--success);display:flex;align-items:center;gap:6px;margin-bottom:6px;"><span style="width:6px;height:6px;border-radius:50%;background:var(--success);"></span>Detected — <span class="mono" style="font-size:11.5px;">claude 2.1.9</span> at <span class="mono" style="font-size:11.5px;">/usr/local/bin</span></div>
+              <div style="font-size:11.5px;color:var(--text-muted);">Probed at launch. If it is not installed this reads &ldquo;Not detected&rdquo; and links to setup — it never asserts a version it did not read.</div>
+            </div>
+            <div class="card" style="grid-column:1/-1;">
+              <div style="font-weight:500;margin-bottom:10px;">Linked repos</div>
+              <div class="list-box" style="border:none;">
+                <div class="row" style="padding-left:0;padding-right:0;">${'{icon:git-branch}'}<span>Compass Web</span><span class="mono" style="color:var(--text-muted);font-size:11.5px;">~/code/compass-web</span><span class="pill pill-quiet" style="margin-left:auto;">main · clean</span></div>
+                <div class="row" style="padding-left:0;padding-right:0;">${'{icon:git-branch}'}<span>Product Launch</span><span style="color:var(--text-muted);font-size:12px;">not linked</span><button class="btn-sm" style="margin-left:auto;">Link a folder</button></div>
+              </div>
+            </div>
+          </div>
+          <div class="rule-box" style="margin-top:14px;">
+            <b>The second wedge lives here.</b> A local app can watch the working tree, notice the branch you just checked out, offer the ticket that matches it, and run an agent on file save. None of that is available to a cloud tracker. It is also the item most likely to get cut — everything else on the roadmap is defensive, and this is the only offensive one.
+          </div>
+        </section>
+
+        <section class="screen" id="screen-projectsettings">
+          <div class="screen-header">
+            <button class="btn-sm" data-nav="tickets" style="margin-bottom:10px;">← Back to Compass Web</button>
+            <div class="screen-title" data-was="was: only reachable via a global Settings tree, never from the project itself">Compass Web · Settings</div>
+            <div class="screen-sub">General → Members → Ticket setup → Automations. Codebase moved to the project header, and there is no Features toggle grid — a project shows whatever it is actually using.</div>
+          </div>
+          <div class="grid-2">
+            <div class="card">
+              <div style="font-weight:500;margin-bottom:10px;">General</div>
+              <div style="font-size:12.5px;color:var(--text-secondary);display:flex;flex-direction:column;gap:8px;">
+                <div style="display:flex;justify-content:space-between;"><span>Project name</span><span style="color:var(--text);">Compass Web</span></div>
+                <div style="display:flex;justify-content:space-between;"><span>Project ID</span><span class="mono" style="color:var(--text);">CW</span></div>
+                <div style="display:flex;justify-content:space-between;"><span data-was="was: &quot;Network&quot; — Plane's internal data-model name surfacing as a UI label, and the sharpest single provenance signal in the audit">Visibility</span><span style="color:var(--text);">Private</span></div>
+                <div style="display:flex;justify-content:space-between;"><span>Default assignee</span><span style="color:var(--text);">Unassigned</span></div>
+              </div>
+            </div>
+            <div class="card">
+              <div style="font-weight:500;margin-bottom:10px;">Members</div>
+              <div class="list-box" style="border:none;">
+                <div class="row" style="padding-left:0;padding-right:0;"><div class="avatar-sm" style="background:#7d6ae8;">AN</div>Amaan Nawab<span style="margin-left:auto;color:var(--text-muted);font-size:12px;">Lead</span></div>
+                <div class="row" style="padding-left:0;padding-right:0;"><div class="avatar-sm" style="background:#2f9e6b;">MP</div>Maya P.<span style="margin-left:auto;color:var(--text-muted);font-size:12px;">Member</span></div>
+              </div>
+            </div>
+            <div class="card">
+              <div style="font-weight:500;margin-bottom:10px;" data-was="was: settings group &quot;Work Structure&quot;">Ticket setup</div>
+              <div style="font-size:12.5px;color:var(--text-secondary);display:flex;flex-direction:column;gap:8px;">
+                <div style="display:flex;justify-content:space-between;"><span>States</span><span style="color:var(--text);">5 groups <span data-removed="removed: Triage as a sixth state group — Plane keeps Triage outside the group taxonomy, and promoting it left live debris (an orphan triage:0 counter that BREAKDOWN_ORDER then excludes)" style="text-decoration:line-through;opacity:.5;">+Triage</span></span></div>
+                <div style="display:flex;justify-content:space-between;"><span>Labels</span><span style="color:var(--text);">7 labels</span></div>
+                <div style="display:flex;justify-content:space-between;"><span data-was="was: Estimates → &quot;Categories&quot;, which is Plane's exact type name for the same T-shirt sizes">Sizes</span><span style="color:var(--text);">XS–XXL</span></div>
+              </div>
+            </div>
+            <div class="card">
+              <div style="font-weight:500;margin-bottom:10px;">Automations</div>
+              <div style="font-size:12px;color:var(--text-secondary);display:flex;flex-direction:column;gap:10px;">
+                <div>
+                  <div style="color:var(--text);font-weight:500;margin-bottom:2px;">Auto-archive closed tickets</div>
+                  <div data-was="fixes: the previous copy was Plane's own automation sentence with the product name swapped in — one of three locations carrying copied prose, including CreateProjectModal.tsx:26-52 which the first audit missed entirely">After 30 days, closed tickets move to the Archive automatically.</div>
+                </div>
+                <div>
+                  <div style="color:var(--text);font-weight:500;margin-bottom:2px;">Auto-close stale tickets</div>
+                  <div>After 90 days with no activity, an open ticket closes and notifies its assignee.</div>
+                </div>
+                <div style="color:var(--warning);border-top:1px solid var(--border);padding-top:8px;">Both toggles persist today and nothing consumes them. Wire them or label them.</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen" id="screen-settings">
+          <div class="screen-header">
+            <div class="screen-title">Workspace settings</div>
+            <div class="screen-sub">General → Members → Agents → Billing → Exports → Webhooks.</div>
+          </div>
+          <div class="grid-2">
+            <div class="card">
+              <div style="font-weight:500;margin-bottom:10px;">General</div>
+              <div style="font-size:12.5px;color:var(--text-secondary);display:flex;flex-direction:column;gap:8px;">
+                <div style="display:flex;justify-content:space-between;"><span>Workspace name</span><span style="color:var(--text);">Waypoint Labs</span></div>
+                <div style="display:flex;justify-content:space-between;"><span>Timezone</span><span style="color:var(--text);">UTC</span></div>
+              </div>
+            </div>
+            <div class="card">
+              <div style="font-weight:500;margin-bottom:10px;">Members</div>
+              <div style="font-size:12.5px;color:var(--text-secondary);">4 members · <span style="color:var(--info);">Invite by email</span></div>
+            </div>
+            <button class="card" data-nav="agents" style="text-align:left;" data-was="Agents lives here again — this is where its frequency puts it">
+              <div style="font-weight:500;margin-bottom:10px;display:flex;align-items:center;gap:7px;">${'{icon:bot}'}Agents</div>
+              <div style="font-size:12.5px;color:var(--text-secondary);">3 configured · 2 running · output goes to Review →</div>
+            </button>
+            <div class="card">
+              <div style="font-weight:500;margin-bottom:10px;" data-was="was: &quot;Billing and plans&quot;">Billing</div>
+              <div style="font-size:12.5px;color:var(--text-secondary);">Local install · no per-seat AI charge, because there is no seat</div>
+            </div>
+            <div class="card" style="grid-column:1/-1;">
+              <div style="font-weight:500;margin-bottom:10px;">Exports · Webhooks</div>
+              <div style="font-size:12.5px;color:var(--text-secondary);display:flex;flex-direction:column;gap:6px;">
+                <div data-was="was: cycle.created / module.created">2 webhooks configured — <span class="mono" style="font-size:11px;">sprint.created</span>, <span class="mono" style="font-size:11px;">ticket.updated</span></div>
+                <div style="color:var(--warning);" data-removed="both surfaces ship looking finished and do nothing: webhooks.service.ts has no fetch and no dispatch; createExport inserts a row with status:'completed' and returns no file">Both are labelled &ldquo;not delivering yet&rdquo; until they deliver.</div>
+              </div>
+            </div>
+          </div>
+          <div class="rule-box" style="margin-top:14px;" data-removed="removed: the entire six-route Instance admin surface — an SMTP form with nothing to send, an OpenAI key page contradicting the actual Claude runtime, a Workspaces page reading &quot;this instance hosts a single workspace&quot;, and OAuth client-secret collection discarded on save. No entry point existed anywhere in the app.">
+            <b>Instance admin is deleted.</b> Six fully-built pages, URL-only, unreachable from any link — simultaneously the clearest structural evidence of provenance in the codebase and a live security smell. Highest value-per-line change available.
+          </div>
+        </section>
+
+        <section class="screen" id="screen-profile">
+          <div class="screen-header">
+            <div class="screen-title">Profile settings</div>
+            <div class="screen-sub">Profile → Preferences → Notifications → Security → Copilot → Personal access tokens.</div>
+          </div>
+          <div class="grid-2">
+            <div class="card">
+              <div style="display:flex;align-items:center;gap:10px;"><div class="tb-avatar" style="width:32px;height:32px;">AN</div><div><b>Amaan Nawab</b><div style="font-size:11.5px;color:var(--text-muted);">amaan@waypointlabs.dev</div></div></div>
+            </div>
+            <div class="card">
+              <div style="font-weight:500;margin-bottom:10px;">Preferences</div>
+              <div style="font-size:12.5px;color:var(--text-secondary);display:flex;flex-direction:column;gap:8px;">
+                <div style="display:flex;justify-content:space-between;"><span>Timezone</span><span style="color:var(--text);">UTC</span></div>
+                <div style="display:flex;justify-content:space-between;"><span>First day of week</span><span style="color:var(--text);">Monday</span></div>
+              </div>
+            </div>
+            <div class="card" style="grid-column:1/-1;border-color:var(--danger);">
+              <div style="font-weight:500;margin-bottom:8px;display:flex;align-items:center;gap:7px;">${'{icon:lock}'}Security</div>
+              <div style="font-size:12.5px;color:var(--danger);" data-removed="Tier 0: Security.tsx:36-43 — &quot;Change password&quot; calls no API. It clears three fields and shows &quot;Password updated.&quot; Also two fabricated logged-in devices in &quot;San Francisco, US&quot; and a Revoke button with no handler.">
+                <b>Tier 0 — fix before anything else in this mockup ships.</b> The change-password form calls no API and then tells the user their password was updated. Everything else fake in this app is inert; this one is actively unsafe, and it sits next to a fabricated device list.
+              </div>
+            </div>
+            <div class="card">
+              <div style="font-weight:500;margin-bottom:10px;display:flex;align-items:center;gap:7px;">${'{icon:sparkles}'}Copilot</div>
+              <div style="font-size:12.5px;color:var(--success);display:flex;align-items:center;gap:6px;"><span style="width:6px;height:6px;border-radius:50%;background:var(--success);"></span>Connected — local Claude subscription</div>
+              <div style="font-size:11.5px;color:var(--text-muted);margin-top:6px;" data-was="the real Copilot ships OFF by default in dev AND prod while the fake Agents UI ships ON. Unflag it — it is the best code in the repo and it is the product.">Ships unflagged.</div>
+            </div>
+            <div class="card">
+              <div style="font-weight:500;margin-bottom:10px;display:flex;align-items:center;gap:7px;">${'{icon:key}'}Personal access tokens</div>
+              <div style="font-size:12.5px;color:var(--text-secondary);">1 active token · <span class="mono">wpt_live_••••8f2a</span></div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </div>
+
+    <aside class="copilot-panel" id="copilotPanel">
+      <div class="cp-header">
+        <div class="cp-title">
+          ${'{icon:sparkles}'}Copilot
+          <span class="cp-actions" data-was="v1's panel was one static conversation — a capability regression against the real 1,095-line CopilotPanel, which has a session list, rename, pin, New session and Reject all pending. Restored.">
+            <button class="cp-mini" id="cpSessionsBtn" title="Sessions">${'{icon:panel}'}</button>
+            <button class="cp-mini" id="cpNewBtn" title="New session">${'{icon:plus}'}</button>
+            <button class="cp-mini cp-close" id="cpCloseBtn" title="Close panel (Esc)" aria-label="Close Copilot panel">${'{icon:x}'}</button>
+          </span>
+        </div>
+        <div class="cp-grounding" data-was="new in v1, kept: grounding follows whichever project route is open and changes silently as you navigate. Without this chip you cannot tell which repo the next message will read.">${'{icon:git-branch}'}Grounded in <b>Compass Web</b> · ~/code/compass-web</div>
+        <div class="cp-pending" id="cpPending" data-was="restored: &quot;Reject all pending&quot; exists in the real panel and was dropped from v1">
+          ${'{icon:review}'}<span id="cpPendingCount">2 pending proposals</span>
+          <button id="cpRejectAll">Reject all</button>
+        </div>
+      </div>
+
+      <div class="cp-body thin-scroll" id="cpBody">
+        <div class="cp-msg-user">why does the export button silently fail on Safari?</div>
+        <div class="cp-msg-assist">
+          Found it — <span class="mono" style="font-size:12px;">src/export/download.ts:42</span> uses a Blob URL pattern Safari revokes before the click fires. I can draft a ticket, and there is an existing ticket on the same code path.
+          <div class="proposal-card" style="margin-top:8px;">
+            <div class="proposal-head">${'{icon:file}'}<span class="kind">Create ticket</span><span class="when">just now</span></div>
+            <div class="proposal-body">
+              <b>Export download fails silently on Safari</b>
+              <div class="diff">
+                <div class="diff-row"><span class="diff-field">Priority</span><span class="diff-to">High</span></div>
+                <div class="diff-row"><span class="diff-field">Workstream</span><span class="diff-to">Payments</span></div>
+                <div class="diff-row"><span class="diff-field">Sprint</span><span class="diff-to">Sprint 12</span></div>
+              </div>
+              <span class="evidence">${'{icon:git-branch}'}src/export/download.ts:42</span>
+              <div class="why">Same code path as CW-138 (export rate limiting) — related, not a duplicate.</div>
+            </div>
+            <div class="proposal-actions"><button class="btn-sm primary">Approve</button><button class="btn-sm">Reject</button><span style="margin-left:auto;font-size:11px;color:var(--text-muted);">also in Review</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="cp-sessions thin-scroll" id="cpSessions">
+        <div class="cp-session-group">${'{icon:pin}'}Pinned</div>
+        <div class="cp-session pinned">${'{icon:sparkles}'}Safari export bug<span class="cp-session-acts"><button class="cp-mini" title="Rename">${'{icon:edit}'}</button><button class="cp-mini" title="Unpin">${'{icon:pin}'}</button></span></div>
+        <div class="cp-session-group">Today</div>
+        <div class="cp-session current">${'{icon:sparkles}'}Token refresh race<span class="cp-session-acts"><button class="cp-mini" title="Rename">${'{icon:edit}'}</button><button class="cp-mini" title="Pin to top">${'{icon:pin}'}</button></span></div>
+        <div class="cp-session">${'{icon:sparkles}'}Why is the settings page slow<span class="cp-session-acts"><button class="cp-mini" title="Rename">${'{icon:edit}'}</button><button class="cp-mini" title="Pin to top">${'{icon:pin}'}</button></span></div>
+        <div class="cp-session-group">Last 7 days</div>
+        <div class="cp-session">${'{icon:sparkles}'}Webhook retry semantics<span class="cp-session-acts"><button class="cp-mini" title="Rename">${'{icon:edit}'}</button><button class="cp-mini" title="Pin to top">${'{icon:pin}'}</button></span></div>
+        <div class="cp-session">${'{icon:sparkles}'}Q3 retro summary<span class="cp-session-acts"><button class="cp-mini" title="Rename">${'{icon:edit}'}</button><button class="cp-mini" title="Pin to top">${'{icon:pin}'}</button></span></div>
+        <button class="cp-newsession" id="cpNewBtn2">${'{icon:plus}'}New session</button>
+      </div>
+
+      <div class="cp-input" id="cpInput">Ask Copilot…</div>
+    </aside>
+  </div>
+</div>
+
+<div class="drawer-backdrop" id="ticketDrawerBackdrop">
+  <aside class="ticket-drawer" id="ticketDrawer">
+    <div class="td-header">
+      <span class="pill-mono" id="tdId">CW-142</span>
+      <span id="tdState" style="font-size:12px;color:var(--text-secondary);"></span>
+      <button class="tb-icon-btn" id="ticketDrawerClose" style="margin-left:auto;">${'{icon:x}'}</button>
+    </div>
+    <div class="td-body thin-scroll">
+      <div class="td-title" id="tdTitle"></div>
+      <div class="td-desc" id="tdDesc"></div>
+
+      <div class="td-section" id="tdProposalsWrap">
+        <div class="td-section-label" data-was="new: the propose→approve model was a card that appeared in three disconnected places. Same component here, in Requests, in the Copilot panel and in Review — one model, four surfaces.">${'{icon:review}'}Waiting on you</div>
+        <div id="tdProposals"></div>
+      </div>
+
+      <div class="td-rail">
+        <div class="td-rail-row"><span>Assignee</span><span id="tdAssignee" style="display:flex;align-items:center;gap:6px;"></span></div>
+        <div class="td-rail-row"><span>Priority</span><span id="tdPriority"></span></div>
+        <div class="td-rail-row"><span>Sprint</span><span id="tdSprint"></span></div>
+        <div class="td-rail-row"><span>Workstream</span><span id="tdWorkstream"></span></div>
+        <div class="td-rail-row"><span data-was="was: &quot;Estimate&quot; using Plane's &quot;Categories&quot; type name">Size</span><span id="tdSize">M</span></div>
+        <div class="td-rail-row"><span data-was="was: &quot;Sub-work items&quot;">Subtasks</span><span>1 of 2</span></div>
+      </div>
+
+      <div class="td-section">
+        <button class="btn-sm" id="tdAskBtn" style="width:100%;text-align:left;display:flex;align-items:center;gap:7px;" data-removed="Sessions (~900 lines, localStorage, one hardcoded agent, replies from a 3-string array, behind a second flag) is deleted. Its one genuinely good idea — dispatch intents — is harvested here.">${'{icon:sparkles}'}Ask Copilot to…</button>
+      </div>
+
+      <div class="td-section">
+        <div class="td-section-label">${'{icon:message}'}Comments</div>
+        <div class="td-comment"><div class="avatar-sm" style="background:#2f9e6b;">MP</div><div><b>Maya P.</b> <span style="color:var(--text-muted);">2h ago</span><div>Repro'd locally — it's the localStorage write, not the request itself.</div></div></div>
+        <div class="rule-box" style="margin-top:10px;margin-bottom:0;border-left-color:var(--danger);">
+          <b>Tier 0:</b> the comment box posts a plain textarea as <span class="mono">bodyHtml</span> and renders it with <span class="mono">dangerouslySetInnerHTML</span>. The proposal card two sections up deliberately renders model text as plain nodes, with a comment explaining why. Same ticket, opposite decision.
+        </div>
+      </div>
+      <div class="td-section">
+        <div class="td-section-label">${'{icon:clock}'}Activity</div>
+        <div style="font-size:12px;color:var(--text-secondary);display:flex;flex-direction:column;gap:5px;">
+          <div>State changed to <b>In Progress</b> · 3h ago</div>
+          <div>Assigned · 1d ago</div>
+        </div>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<div class="ks-backdrop" id="ksBackdrop">
+  <div class="ks-card">
+    <div style="display:flex;align-items:center;gap:8px;">
+      <div class="screen-title" style="font-size:17px;">Keyboard</div>
+      <button class="tb-icon-btn" id="ksClose" style="margin-left:auto;">${'{icon:x}'}</button>
+    </div>
+    <div style="font-size:12.5px;color:var(--text-secondary);margin-top:4px;">Everything below works in this mockup. In the real app <span class="kbd">⌘K</span> is the only global binding that exists.</div>
+    <div class="ks-grid">
+      <div>
+        <div class="ks-sec">Go to</div>
+        <div class="ks-row">Home<span class="keys"><span class="kbd">g</span><span class="kbd">h</span></span></div>
+        <div class="ks-row">Review<span class="keys"><span class="kbd">g</span><span class="kbd">r</span></span></div>
+        <div class="ks-row">Tickets<span class="keys"><span class="kbd">g</span><span class="kbd">t</span></span></div>
+        <div class="ks-row">My work<span class="keys"><span class="kbd">g</span><span class="kbd">m</span></span></div>
+        <div class="ks-row">All tickets<span class="keys"><span class="kbd">g</span><span class="kbd">a</span></span></div>
+        <div class="ks-row">This machine<span class="keys"><span class="kbd">g</span><span class="kbd">l</span></span></div>
+      </div>
+      <div>
+        <div class="ks-sec">Lists</div>
+        <div class="ks-row">Move down / up<span class="keys"><span class="kbd">j</span><span class="kbd">k</span></span></div>
+        <div class="ks-row">Open<span class="keys"><span class="kbd">↵</span></span></div>
+        <div class="ks-row">Select<span class="keys"><span class="kbd">x</span></span></div>
+        <div class="ks-row">Select all visible<span class="keys"><span class="kbd">⌘</span><span class="kbd">a</span></span></div>
+        <div class="ks-sec" style="margin-top:14px;">Review queue</div>
+        <div class="ks-row">Approve selected<span class="keys"><span class="kbd">e</span></span></div>
+        <div class="ks-row">Reject selected<span class="keys"><span class="kbd">r</span></span></div>
+        <div class="ks-sec" style="margin-top:14px;">Global</div>
+        <div class="ks-row">Search<span class="keys"><span class="kbd">⌘</span><span class="kbd">K</span></span></div>
+        <div class="ks-row">Copilot<span class="keys"><span class="kbd">⌘</span><span class="kbd">J</span></span></div>
+        <div class="ks-row">This help<span class="keys"><span class="kbd">?</span></span></div>
+        <div class="ks-row">Close / clear<span class="keys"><span class="kbd">esc</span></span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const ICONS = {
+  home: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V20a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V9.5"/></svg>',
+  user: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-3.5 3.2-6 7-6s7 2.5 7 6"/></svg>',
+  bell: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 10a6 6 0 0 1 12 0c0 4 1.5 5.5 1.5 5.5H4.5S6 14 6 10Z"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>',
+  edit: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L18.5 9.5a2 2 0 0 0-4-4L4 16z"/></svg>',
+  scratch: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 4.5h15v10l-5 5h-10z"/><path d="M19.5 14.5h-5v5"/><path d="M8 9h8M8 12.5h5"/></svg>',
+  review: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 13 3.5 3.5L13 10"/><path d="m11 16.5 2 2L21 10"/></svg>',
+  plus: '<svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+  folder: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.5a1.5 1.5 0 0 1 1.5-1.5h4l2 2.5h9a1.5 1.5 0 0 1 1.5 1.5v8.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17z"/></svg>',
+  layers: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/></svg>',
+  list: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="4.5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="4.5" cy="18" r="1" fill="currentColor" stroke="none"/></svg>',
+  refresh: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0 1 14-5.3L21 9"/><path d="M21 4v5h-5"/><path d="M20 12a8 8 0 0 1-14 5.3L3 15"/><path d="M3 20v-5h5"/></svg>',
+  track: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5v6a3 3 0 0 0 3 3h13"/><circle cx="4" cy="5" r="1.6" fill="currentColor" stroke="none"/><circle cx="20" cy="14" r="1.6" fill="currentColor" stroke="none"/><path d="M20 14v5"/></svg>',
+  eye: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3"/></svg>',
+  inbox: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h4l2 3h4l2-3h4"/><path d="M4 12 5.5 5a1 1 0 0 1 1-.8h11a1 1 0 0 1 1 .8L20 12v5.5a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z"/></svg>',
+  file: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l4 4v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v4h4"/><path d="M9 13h6M9 16.5h6"/></svg>',
+  settings: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M4.2 7l2.2 1.3M17.6 15.7l2.2 1.3M3 12h2.5M18.5 12H21M4.2 17l2.2-1.3M17.6 8.3l2.2-1.3"/></svg>',
+  'git-branch': '<svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="9" r="2"/><path d="M6 7v10M6 12c0-3.5 3-3.5 6.5-3.5H15"/></svg>',
+  'chevron-r': '<svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 5 7 7-7 7"/></svg>',
+  chevron: '<svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 9 7 7 7-7"/></svg>',
+  archive: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="4" rx="1"/><path d="M5 8v10a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 18V8"/><path d="M10 12.5h4"/></svg>',
+  chart: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 19V10M12 19V5M19 19v-7"/></svg>',
+  search: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m20 20-4.4-4.4"/></svg>',
+  sun: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M3 12h2M19 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>',
+  keyboard: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6.5 10h.01M10 10h.01M13.5 10h.01M17 10h.01M8 14h8"/></svg>',
+  sparkles: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2 2M16 16l2 2M18 6l-2 2M8 16l-2 2"/></svg>',
+  circle: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/></svg>',
+  circledot: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></svg>',
+  dashed: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="2.6 3.2"><circle cx="12" cy="12" r="8"/></svg>',
+  check: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="m9 12 2 2 4-4"/></svg>',
+  xcircle: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="m9.5 9.5 5 5M14.5 9.5l-5 5"/></svg>',
+  bot: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="9" width="16" height="11" rx="2.5"/><path d="M12 5.5V9"/><circle cx="12" cy="4" r="1.3" fill="currentColor" stroke="none"/><circle cx="9" cy="14.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="15" cy="14.5" r="1.1" fill="currentColor" stroke="none"/></svg>',
+  filter: '<svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 5h17l-6.5 7.5V20l-4-2.5v-5z"/></svg>',
+  shield: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v6c0 4.4 3 7.6 7 9 4-1.4 7-4.6 7-9V6z"/><path d="m9.5 12 2 2 3.5-4"/></svg>',
+  lock: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10.5" width="14" height="9" rx="1.5"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/></svg>',
+  key: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="m11 12 8-8M16 5l2.5 2.5M13 8l2 2"/></svg>',
+  message: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5h16v11H9l-4 3.5v-3.5H4z"/></svg>',
+  clock: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>',
+  x: '<svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+  panel: '<svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9.5 4.5v15"/></svg>',
+  pin: '<svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3.5 20.5 9l-3 1-4.5 4.5-1 4-6-6 4-1L14.5 6.5z"/><path d="m6 18-2.5 2.5"/></svg>',
+  alert: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4.5 21 19.5H3z"/><path d="M12 10v4M12 16.8h.01"/></svg>'
+};
+function ic(name) { return ICONS[name] || ''; }
+
+// Placeholder swap. Runs before any listener is attached, because it replaces innerHTML.
+document.querySelectorAll('.sidebar, .content, .topbar, .copilot-panel, .ticket-drawer, .ks-card').forEach(root => {
+  root.innerHTML = root.innerHTML.replace(/\$\{'\{icon:([\w-]+)\}'\}/g, (m, name) => ICONS[name] || '');
+});
+
+/* ---------------- navigation ---------------- */
+const contentEl = document.querySelector('.content');
+function goto(nav) {
+  const target = document.getElementById('screen-' + nav);
+  if (!target) return;
+  document.querySelectorAll('.sb-item[data-nav]').forEach(b => b.classList.remove('active'));
+  const sbMatch = document.querySelector('.sb-item[data-nav="' + nav + '"]');
+  if (sbMatch) sbMatch.classList.add('active');
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  target.classList.add('active');
+  contentEl.scrollTop = 0;
+  closePopover();
+}
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-nav]');
+  if (btn && !e.target.closest('.popover')) { goto(btn.dataset.nav); }
+});
+
+/* ---------------- toast ---------------- */
+let toastTimer;
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('on');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('on'), 1800);
+}
+
+/* ---------------- popover ---------------- */
+let popEl = null;
+function closePopover() { if (popEl) { popEl.remove(); popEl = null; } }
+function openPopover(anchor, html, onClick) {
+  closePopover();
+  const p = document.createElement('div');
+  p.className = 'popover thin-scroll';
+  p.innerHTML = html;
+  document.body.appendChild(p);
+  const r = anchor.getBoundingClientRect();
+  const top = Math.min(r.bottom + 6, window.innerHeight - p.offsetHeight - 12);
+  const left = Math.min(r.left, window.innerWidth - p.offsetWidth - 12);
+  p.style.top = Math.max(8, top) + 'px';
+  p.style.left = Math.max(8, left) + 'px';
+  p.addEventListener('click', (e) => {
+    const item = e.target.closest('[data-val]');
+    if (!item) return;
+    e.stopPropagation();
+    if (onClick) onClick(item.dataset.val, item);
+  });
+  popEl = p;
+  setTimeout(() => {
+    document.addEventListener('click', function once(ev) {
+      if (popEl && !popEl.contains(ev.target)) { closePopover(); document.removeEventListener('click', once); }
+      else if (!popEl) document.removeEventListener('click', once);
+    });
+  }, 0);
+}
+function checkRow(val, label, on) {
+  return '<button class="pop-item' + (on ? ' sel' : '') + '" data-val="' + val + '">' +
+    '<span class="cbox' + (on ? ' on' : '') + '">' + (on ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7"/></svg>' : '') + '</span>' + label + '</button>';
+}
+
+/* ---------------- ticket data (generated, not hand-authored) ---------------- */
+const STATES = [
+  { k: 'backlog',    n: 'Backlog',     i: 'dashed' },
+  { k: 'todo',       n: 'Todo',        i: 'circle' },
+  { k: 'inprogress', n: 'In Progress', i: 'circledot' },
+  { k: 'inreview',   n: 'In Review',   i: 'circledot' },
+  { k: 'done',       n: 'Done',        i: 'check' },
+  { k: 'cancelled',  n: 'Cancelled',   i: 'xcircle' }
+];
+const PRIOS = [
+  { k: 'urgent', n: 'Urgent', bg: 'var(--danger-bg)',  fg: 'var(--danger)'  },
+  { k: 'high',   n: 'High',   bg: 'var(--warning-bg)', fg: 'var(--warning)' },
+  { k: 'medium', n: 'Medium', bg: 'var(--info-bg)',    fg: 'var(--info)'    },
+  { k: 'low',    n: 'Low',    bg: 'var(--surface-2)',  fg: 'var(--text-secondary)' },
+  { k: 'none',   n: 'None',   bg: 'var(--surface-2)',  fg: 'var(--text-muted)' }
+];
+const PEOPLE = [
+  { k: 'AN', n: 'Amaan Nawab', c: '#7d6ae8' },
+  { k: 'MP', n: 'Maya P.',     c: '#2f9e6b' },
+  { k: 'JR', n: 'Jonas R.',    c: '#c2703a' },
+  { k: 'SK', n: 'Sana K.',     c: '#3a72c2' },
+  { k: 'DT', n: 'Dev T.',      c: '#a13f8f' }
+];
+const AGENT_NAMES = ['Triage Agent', 'Code Reviewer', 'Release Notes'];
+const LABELS = ['bug', 'perf', 'security', 'a11y', 'infra', 'ux', 'agent-flagged'];
+const SPRINTS = ['Sprint 11', 'Sprint 12', 'Sprint 13', '—'];
+const STREAMS = ['Payments', 'Onboarding', 'Platform', '—'];
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const V = ['Fix', 'Add', 'Remove', 'Refactor', 'Investigate', 'Harden', 'Cache', 'Debounce', 'Migrate', 'Instrument', 'Document', 'Retry', 'Validate', 'Paginate'];
+const O = ['the export endpoint', 'session token refresh', 'the Stripe webhook handler', 'the settings page query', 'workspace onboarding', 'the search index', 'the ticket drawer', 'the sprint burndown job', 'agent proposal snapshots', 'the repo picker', 'the comment renderer', 'the saved-view filter parser', 'draft autosave', 'the notification fan-out', 'the archive sweep', 'the MCP tool schema', 'the offline queue', 'the label editor', 'board drag persistence', 'the intake public form'];
+const Q = ['on Safari', 'under concurrent writes', 'for large workspaces', 'when the repo is unlinked', 'after a branch switch', 'on first run', 'with 200+ rows', 'in the packaged build', 'when offline', ''];
+
+function makeTickets(prefix, projectName, count, seed) {
+  const rnd = mulberry32(seed);
+  const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const state = pick(STATES);
+    const isAgent = rnd() < 0.17;
+    const labels = [];
+    if (rnd() < 0.75) labels.push(pick(LABELS));
+    if (rnd() < 0.22) labels.push(pick(LABELS));
+    const flagged = rnd() < 0.12;
+    if (flagged && !labels.includes('agent-flagged')) labels.push('agent-flagged');
+    const q = pick(Q);
+    out.push({
+      id: prefix + '-' + (count + 40 - i),
+      project: projectName,
+      projectKey: prefix,
+      title: pick(V) + ' ' + pick(O) + (q ? ' ' + q : ''),
+      state: state.k,
+      stateName: state.n,
+      stateIcon: state.i,
+      prio: pick(PRIOS).k,
+      assignee: isAgent
+        ? { kind: 'agent', n: pick(AGENT_NAMES) }
+        : (rnd() < 0.12 ? null : Object.assign({ kind: 'human' }, pick(PEOPLE))),
+      sprint: pick(SPRINTS),
+      stream: pick(STREAMS),
+      labels: Array.from(new Set(labels)),
+      days: Math.floor(rnd() * 40),
+      hasProposal: flagged || rnd() < 0.06
+    });
+  }
+  return out;
+}
+const CW_TICKETS = makeTickets('CW', 'Compass Web', 203, 20260903);
+CW_TICKETS[0] = Object.assign(CW_TICKETS[0], {
+  id: 'CW-142', title: 'Fix session token refresh race', state: 'inprogress', stateName: 'In Progress',
+  stateIcon: 'circledot', prio: 'urgent', sprint: 'Sprint 12', stream: 'Platform',
+  labels: ['bug', 'agent-flagged'], days: 0, hasProposal: true,
+  assignee: { kind: 'human', k: 'AN', n: 'Amaan Nawab', c: '#7d6ae8' },
+  desc: "Two tabs refreshing at once both write the new token, and the loser's request replays with a token that has already been rotated."
+});
+const PL_TICKETS = makeTickets('PL', 'Product Launch', 9, 77120);
+const ALL_TICKETS = CW_TICKETS.concat(PL_TICKETS);
+
+const prioOf = (k) => PRIOS.find(p => p.k === k) || PRIOS[4];
+const stateOf = (k) => STATES.find(s => s.k === k) || STATES[0];
+const ago = (d) => d === 0 ? 'now' : (d < 1 ? '1h' : d + 'd');
+
+function assigneeHTML(a) {
+  if (!a) return '<span style="font-size:11px;color:var(--text-muted);">Unassigned</span>';
+  if (a.kind === 'agent') return '<span class="avatar-agent" title="' + a.n + ' (agent)">' + ic('bot') + '</span>';
+  return '<span class="avatar-sm" style="background:' + a.c + ';" title="' + a.n + '">' + a.k + '</span>';
+}
+
+/* ---------------- deep ticket view (used twice: project list + workspace list) ---------------- */
+const GROUPS = [
+  { k: 'state',    n: 'State' },
+  { k: 'prio',     n: 'Priority' },
+  { k: 'assignee', n: 'Assignee' },
+  { k: 'sprint',   n: 'Sprint' },
+  { k: 'stream',   n: 'Workstream' },
+  { k: 'project',  n: 'Project' },
+  { k: 'none',     n: 'None' }
+];
+
+function buildTicketView(cfg) {
+  const data = cfg.data;
+  const st = {
+    group: cfg.defaultGroup, q: '',
+    states: new Set(), prios: new Set(), labels: new Set(), assignee: 'all',
+    sel: new Set(), collapsed: new Set(), focus: -1
+  };
+  const tb = document.getElementById(cfg.toolbar);
+  const countEl = document.getElementById(cfg.count);
+  const bulkEl = document.getElementById(cfg.bulk);
+  const listEl = document.getElementById(cfg.list);
+  let flat = [];
+
+  tb.innerHTML =
+    '<button class="tool-btn" data-t="group">' + ic('layers') + '<span data-slot="group"></span>' + ic('chevron') + '</button>' +
+    '<button class="tool-btn" data-t="state">' + ic('circle') + 'State' + ic('chevron') + '</button>' +
+    '<button class="tool-btn" data-t="prio">' + ic('filter') + 'Priority' + ic('chevron') + '</button>' +
+    '<button class="tool-btn" data-t="assignee">' + ic('user') + 'Assignee' + ic('chevron') + '</button>' +
+    '<button class="tool-btn" data-t="label">' + ic('filter') + 'Label' + ic('chevron') + '</button>' +
+    '<span class="tool-search">' + ic('search') + '<input type="text" placeholder="Search titles…" data-t="q"></span>' +
+    '<span data-slot="chips" style="display:flex;gap:6px;flex-wrap:wrap;"></span>' +
+    '<span style="margin-left:auto;display:flex;gap:6px;">' +
+      '<button class="tool-btn" data-t="save">' + ic('eye') + 'Save as view</button>' +
+      '<button class="tool-btn" data-t="new">' + ic('plus') + 'New ticket</button>' +
+    '</span>';
+
+  bulkEl.innerHTML =
+    '<span data-slot="n">0 selected</span>' +
+    '<button class="bulk-act" data-b="state">Set state</button>' +
+    '<button class="bulk-act" data-b="prio">Set priority</button>' +
+    '<button class="bulk-act" data-b="assign">Assign</button>' +
+    '<button class="bulk-act" data-b="sprint">Add to sprint</button>' +
+    '<button class="bulk-act" data-b="ask">' + 'Ask an agent…' + '</button>' +
+    '<button class="bulk-act" data-b="clear" style="margin-left:auto;">Clear</button>';
+
+  function filtered() {
+    const q = st.q.trim().toLowerCase();
+    return data.filter(t => {
+      if (st.states.size && !st.states.has(t.state)) return false;
+      if (st.prios.size && !st.prios.has(t.prio)) return false;
+      if (st.labels.size && !t.labels.some(l => st.labels.has(l))) return false;
+      if (st.assignee === 'me' && !(t.assignee && t.assignee.k === 'AN')) return false;
+      if (st.assignee === 'agents' && !(t.assignee && t.assignee.kind === 'agent')) return false;
+      if (st.assignee === 'none' && t.assignee) return false;
+      if (q && t.title.toLowerCase().indexOf(q) === -1 && t.id.toLowerCase().indexOf(q) === -1) return false;
+      return true;
+    });
+  }
+  function groupKey(t) {
+    switch (st.group) {
+      case 'state': return t.stateName;
+      case 'prio': return prioOf(t.prio).n;
+      case 'assignee': return t.assignee ? t.assignee.n : 'Unassigned';
+      case 'sprint': return t.sprint === '—' ? 'No sprint' : t.sprint;
+      case 'stream': return t.stream === '—' ? 'No workstream' : t.stream;
+      case 'project': return t.project;
+      default: return '';
+    }
+  }
+  function orderedGroups(rows) {
+    const map = new Map();
+    rows.forEach(t => {
+      const k = groupKey(t);
+      if (!map.has(k)) map.set(k, []);
+      map.get(k).push(t);
+    });
+    let keys = Array.from(map.keys());
+    if (st.group === 'state') keys = STATES.map(s => s.n).filter(n => map.has(n));
+    if (st.group === 'prio') keys = PRIOS.map(p => p.n).filter(n => map.has(n));
+    return keys.map(k => [k, map.get(k)]);
+  }
+
+  function chips() {
+    const out = [];
+    const add = (label, clear) => out.push('<span class="chip">' + label + '<button data-clear="' + clear + '">' + ic('x') + '</button></span>');
+    if (st.states.size) add('State: ' + Array.from(st.states).map(k => stateOf(k).n).join(', '), 'states');
+    if (st.prios.size) add('Priority: ' + Array.from(st.prios).map(k => prioOf(k).n).join(', '), 'prios');
+    if (st.labels.size) add('Label: ' + Array.from(st.labels).join(', '), 'labels');
+    if (st.assignee !== 'all') add('Assignee: ' + ({ me: 'me', agents: 'agents', none: 'unassigned' })[st.assignee], 'assignee');
+    if (st.q.trim()) add('“' + st.q.trim() + '”', 'q');
+    return out.join('');
+  }
+
+  function render() {
+    const rows = filtered();
+    tb.querySelector('[data-slot="group"]').textContent = 'Group: ' + (GROUPS.find(g => g.k === st.group) || {}).n;
+    tb.querySelector('[data-slot="chips"]').innerHTML = chips();
+    tb.querySelectorAll('.tool-btn[data-t]').forEach(b => {
+      const t = b.dataset.t;
+      b.classList.toggle('on',
+        (t === 'state' && st.states.size > 0) || (t === 'prio' && st.prios.size > 0) ||
+        (t === 'label' && st.labels.size > 0) || (t === 'assignee' && st.assignee !== 'all'));
+    });
+    countEl.textContent = rows.length + ' of ' + data.length + ' tickets' +
+      (rows.length !== data.length ? ' · filtered' : '') +
+      (st.group !== 'none' ? ' · grouped by ' + (GROUPS.find(g => g.k === st.group) || {}).n.toLowerCase() : '');
+
+    flat = [];
+    let html = '';
+    const groups = st.group === 'none' ? [['', rows]] : orderedGroups(rows);
+    groups.forEach(([gk, items]) => {
+      const collapsed = st.collapsed.has(gk);
+      if (gk) {
+        html += '<div class="grp-head' + (collapsed ? ' collapsed' : '') + '" data-grp="' + gk.replace(/"/g, '') + '">' +
+          gk + '<span class="grp-count">' + items.length + '</span><span class="chev">' + ic('chevron') + '</span></div>';
+      }
+      if (collapsed) return;
+      items.forEach(t => {
+        const idx = flat.length;
+        flat.push(t);
+        const p = prioOf(t.prio);
+        html += '<div class="tk-row' + (st.sel.has(t.id) ? ' sel' : '') + (st.focus === idx ? ' focus' : '') + '" data-id="' + t.id + '" data-idx="' + idx + '">' +
+          '<span class="cbox' + (st.sel.has(t.id) ? ' on' : '') + '" data-cb="' + t.id + '">' +
+            (st.sel.has(t.id) ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7"/></svg>' : '') +
+          '</span>' +
+          '<span style="color:var(--text-muted);display:flex;" title="' + t.stateName + '">' + ic(t.stateIcon) + '</span>' +
+          '<span class="pill-mono" style="width:62px;flex-shrink:0;">' + t.id + '</span>' +
+          (cfg.showProject ? '<span class="tk-proj">' + t.project + '</span>' : '') +
+          '<span class="tk-title">' + t.title + '</span>' +
+          '<span class="tk-meta">' +
+            t.labels.map(l => '<span class="tk-label' + (l === 'agent-flagged' ? ' flagged' : '') + '">' + l + '</span>').join('') +
+            (t.hasProposal ? '<span class="tk-label flagged" title="a proposal is waiting on you">' + '1 proposal' + '</span>' : '') +
+            '<span class="pill" style="background:' + p.bg + ';color:' + p.fg + ';">' + p.n + '</span>' +
+            assigneeHTML(t.assignee) +
+          '</span>' +
+          '<span class="tk-when">' + ago(t.days) + '</span>' +
+        '</div>';
+      });
+    });
+    listEl.innerHTML = html || '<div class="empty"><div class="empty-title">Nothing matches</div><div class="empty-body">Clear a filter, or widen the search.</div></div>';
+    bulkEl.classList.toggle('on', st.sel.size > 0);
+    bulkEl.querySelector('[data-slot="n"]').textContent = st.sel.size + ' selected';
+  }
+
+  tb.addEventListener('click', (e) => {
+    const clear = e.target.closest('[data-clear]');
+    if (clear) {
+      const c = clear.dataset.clear;
+      if (c === 'assignee') st.assignee = 'all';
+      else if (c === 'q') { st.q = ''; tb.querySelector('input[data-t="q"]').value = ''; }
+      else st[c].clear();
+      render(); return;
+    }
+    const b = e.target.closest('.tool-btn[data-t]');
+    if (!b) return;
+    const t = b.dataset.t;
+    if (t === 'group') {
+      openPopover(b, '<div class="pop-head">Group by</div>' +
+        GROUPS.filter(g => cfg.showProject || g.k !== 'project')
+          .map(g => '<button class="pop-item' + (st.group === g.k ? ' sel' : '') + '" data-val="' + g.k + '">' + g.n + '</button>').join(''),
+        (v) => { st.group = v; st.collapsed.clear(); closePopover(); render(); });
+    } else if (t === 'state') {
+      openPopover(b, '<div class="pop-head">State</div>' + STATES.map(s => checkRow(s.k, s.n, st.states.has(s.k))).join(''),
+        (v) => { st.states.has(v) ? st.states.delete(v) : st.states.add(v); render(); refreshPop(b, t); });
+    } else if (t === 'prio') {
+      openPopover(b, '<div class="pop-head">Priority</div>' + PRIOS.map(p => checkRow(p.k, p.n, st.prios.has(p.k))).join(''),
+        (v) => { st.prios.has(v) ? st.prios.delete(v) : st.prios.add(v); render(); refreshPop(b, t); });
+    } else if (t === 'label') {
+      openPopover(b, '<div class="pop-head">Label</div>' + LABELS.map(l => checkRow(l, l, st.labels.has(l))).join(''),
+        (v) => { st.labels.has(v) ? st.labels.delete(v) : st.labels.add(v); render(); refreshPop(b, t); });
+    } else if (t === 'assignee') {
+      openPopover(b, '<div class="pop-head">Assignee</div>' +
+        [['all', 'Anyone'], ['me', 'Me'], ['agents', 'Any agent'], ['none', 'Unassigned']]
+          .map(([v, n]) => '<button class="pop-item' + (st.assignee === v ? ' sel' : '') + '" data-val="' + v + '">' + n + '</button>').join('') +
+        '<div class="pop-note">Agents and humans share one assignee space — but Spreadsheet, cycle lists and the workspace table resolve members only today, so agent-assigned tickets read “Unassigned” there.</div>',
+        (v) => { st.assignee = v; closePopover(); render(); });
+    } else if (t === 'save') {
+      toast('Saved as a view — scope is part of the filter, so this is a workspace view if no project filter is set');
+    } else if (t === 'new') {
+      toast('New ticket in ' + (cfg.showProject ? 'the project you pick' : 'Compass Web') + ' — not projects[0]');
+    }
+  });
+  function refreshPop(anchor, t) {
+    const map = { state: () => '<div class="pop-head">State</div>' + STATES.map(s => checkRow(s.k, s.n, st.states.has(s.k))).join(''),
+                  prio: () => '<div class="pop-head">Priority</div>' + PRIOS.map(p => checkRow(p.k, p.n, st.prios.has(p.k))).join(''),
+                  label: () => '<div class="pop-head">Label</div>' + LABELS.map(l => checkRow(l, l, st.labels.has(l))).join('') };
+    if (popEl && map[t]) popEl.innerHTML = map[t]();
+  }
+  tb.addEventListener('input', (e) => {
+    if (e.target.dataset.t === 'q') { st.q = e.target.value; render(); }
+  });
+
+  listEl.addEventListener('click', (e) => {
+    const g = e.target.closest('.grp-head');
+    if (g) { const k = g.dataset.grp; st.collapsed.has(k) ? st.collapsed.delete(k) : st.collapsed.add(k); render(); return; }
+    const cb = e.target.closest('[data-cb]');
+    if (cb) { e.stopPropagation(); const id = cb.dataset.cb; st.sel.has(id) ? st.sel.delete(id) : st.sel.add(id); render(); return; }
+    const row = e.target.closest('.tk-row');
+    if (row) openTicketDrawer(data.find(t => t.id === row.dataset.id));
+  });
+  bulkEl.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-b]');
+    if (!b) return;
+    if (b.dataset.b === 'clear') { st.sel.clear(); render(); return; }
+    if (b.dataset.b === 'ask') { toast('Dispatch intent on ' + st.sel.size + ' tickets — runs land in Review'); return; }
+    toast(b.textContent + ' on ' + st.sel.size + ' tickets');
+  });
+
+  render();
+  return {
+    st,
+    flat: () => flat,
+    render,
+    move(d) {
+      if (!flat.length) return;
+      st.focus = Math.max(0, Math.min(flat.length - 1, st.focus < 0 ? 0 : st.focus + d));
+      render();
+      const el = listEl.querySelector('.tk-row.focus');
+      if (el) el.scrollIntoView({ block: 'nearest' });
+    },
+    toggleSel() { const t = flat[st.focus]; if (t) { st.sel.has(t.id) ? st.sel.delete(t.id) : st.sel.add(t.id); render(); } },
+    selectAll() { flat.forEach(t => st.sel.add(t.id)); render(); },
+    open() { const t = flat[st.focus]; if (t) openTicketDrawer(t); },
+    clear() { st.sel.clear(); st.focus = -1; render(); }
+  };
+}
+
+const tkView = buildTicketView({ data: CW_TICKETS, toolbar: 'tkToolbar', count: 'tkCount', bulk: 'tkBulk', list: 'tkList', defaultGroup: 'state', showProject: false });
+const atView = buildTicketView({ data: ALL_TICKETS, toolbar: 'atToolbar', count: 'atCount', bulk: 'atBulk', list: 'atList', defaultGroup: 'project', showProject: true });
+// Third instantiation of the same component — the sparse project. The sidebar
+// count and this list read from one array, so they cannot disagree.
+const plView = buildTicketView({ data: PL_TICKETS, toolbar: 'plToolbar', count: 'plCount', bulk: 'plBulk', list: 'plList', defaultGroup: 'state', showProject: false });
+function activeView() {
+  if (document.getElementById('screen-tickets').classList.contains('active')) return tkView;
+  if (document.getElementById('screen-alltickets').classList.contains('active')) return atView;
+  return null;
+}
+
+/* ---------------- proposal card: ONE renderer, four surfaces ---------------- */
+function diffHTML(changes) {
+  if (!changes || !changes.length) return '';
+  return '<div class="diff">' + changes.map(c =>
+    '<div class="diff-row"><span class="diff-field">' + c.f + '</span>' +
+    (c.from ? '<span class="diff-from">' + c.from + '</span><span style="color:var(--text-muted);">→</span>' : '') +
+    '<span class="diff-to">' + c.to + '</span></div>').join('') + '</div>';
+}
+function proposalHTML(p, opts) {
+  opts = opts || {};
+  const acts = opts.readonly
+    ? '<span class="pill" style="background:' + (p.outcome === 'Approved' ? 'var(--success-bg);color:var(--success)' : p.outcome === 'Rejected' ? 'var(--danger-bg);color:var(--danger)' : 'var(--surface-2);color:var(--text-secondary)') + ';">' + p.outcome + '</span>' +
+      '<span style="margin-left:auto;font-size:11px;color:var(--text-muted);">no action needed</span>'
+    : '<button class="btn-sm primary" data-act="approve" data-p="' + p.id + '">Approve</button>' +
+      '<button class="btn-sm" data-act="reject" data-p="' + p.id + '">Reject</button>' +
+      '<button class="btn-sm ghost" data-act="open" data-p="' + p.id + '">Open ' + p.ticket + '</button>' +
+      (p.stale ? '<span class="pill" style="margin-left:auto;background:var(--warning-bg);color:var(--warning);">Stale — the ticket moved since this was proposed</span>' : '');
+  return '<div class="proposal-card">' +
+    '<div class="proposal-head">' + ic(p.blocked ? 'alert' : 'bot') + '<span class="kind">' + p.kind + '</span>' +
+      '<span style="font-weight:400;color:var(--text-muted);">· ' + p.agent + '</span>' +
+      '<span class="when">' + p.when + '</span></div>' +
+    '<div class="proposal-body">' +
+      '<b>' + p.ticket + '</b> ' + p.ticketTitle +
+      diffHTML(p.changes) +
+      (p.evidence ? '<span class="evidence">' + ic('git-branch') + p.evidence + '</span>' : '') +
+      '<div class="why">' + p.why + '</div>' +
+      '<div class="rv-src">' + ic('folder') + p.project + (p.source ? ' · via ' + p.source : '') + '</div>' +
+    '</div>' +
+    '<div class="proposal-actions">' + acts + '</div>' +
+  '</div>';
+}
+
+const PROPOSALS = [
+  { id: 'p1', status: 'pending', agent: 'Triage Agent', project: 'Compass Web', ticket: 'CW-143', ticketTitle: 'Settings page N+1 query on load', kind: 'Create ticket', when: '12m', source: 'Requests', evidence: 'src/settings/loader.ts:88',
+    changes: [{ f: 'Priority', to: 'Medium' }, { f: 'Workstream', to: 'Platform' }, { f: 'Sprint', to: 'Sprint 12' }],
+    why: 'Not a duplicate of anything open. The loader fetches one row per project inside a map.' },
+  { id: 'p2', status: 'pending', agent: 'Triage Agent', project: 'Compass Web', ticket: 'CW-138', ticketTitle: 'Add rate limiting to the export endpoint', kind: 'Link duplicate', when: '18m', source: 'Requests',
+    changes: [{ f: 'Relation', to: 'duplicates ← “Export button does nothing on Safari”' }],
+    why: 'Same export code path. Linking rather than opening a second ticket.', evidence: 'src/export/download.ts:42' },
+  { id: 'p3', status: 'pending', agent: 'Code Reviewer', project: 'Compass Web', ticket: 'CW-141', ticketTitle: 'Retry webhook delivery', kind: 'Change state', when: '1h',
+    changes: [{ f: 'State', from: 'In Progress', to: 'In Review' }, { f: 'Assignee', from: 'Code Reviewer', to: 'Maya P.' }],
+    why: 'Backoff and the 3-attempt cap are implemented and tested; the Stripe-client touch needs a human.', evidence: 'src/webhooks/retry.ts:120' },
+  { id: 'p4', status: 'pending', agent: 'Code Reviewer', project: 'Compass Web', ticket: 'CW-142', ticketTitle: 'Fix session token refresh race', kind: 'Comment', when: '2h', evidence: 'src/auth/session.ts:210',
+    changes: [{ f: 'Comment', to: '“The write is not guarded — two tabs both pass the freshness check before either writes.”' }],
+    why: 'Disclosure prefix is added server-side; the comment will be marked as agent-authored.' },
+  { id: 'p5', status: 'pending', agent: 'Triage Agent', project: 'Product Launch', ticket: 'PL-09', ticketTitle: 'Pricing page: “no per-seat AI” claim needs a source', kind: 'Create ticket', when: '4h', source: 'Requests',
+    changes: [{ f: 'Priority', to: 'Low' }],
+    why: 'Flagged from a request; no repo is linked to this project, so this is text-only reasoning.' },
+  { id: 'p6', status: 'pending', agent: 'Code Reviewer', project: 'Compass Web', ticket: 'CW-129', ticketTitle: 'Harden the comment renderer', kind: 'Change priority', when: '6h', stale: true,
+    changes: [{ f: 'Priority', from: 'Low', to: 'Urgent' }],
+    why: 'The comment box posts a raw textarea as bodyHtml and renders it with dangerouslySetInnerHTML.', evidence: 'WorkItemDetailPage.tsx:858' },
+
+  { id: 'b1', status: 'blocked', blocked: true, agent: 'Code Reviewer', project: 'Compass Web', ticket: 'CW-141', ticketTitle: 'Retry webhook delivery', kind: 'Blocked — needs a decision', when: '5h',
+    changes: [{ f: 'Question', to: 'Retry on 4xx as well as 5xx, or 5xx only?' }],
+    why: 'Stopped rather than guessing. Answer in the thread and the run resumes from where it paused.' },
+  { id: 'b2', status: 'blocked', blocked: true, agent: 'Triage Agent', project: 'Product Launch', ticket: '—', ticketTitle: 'Cannot read the repo', kind: 'Blocked — no repo linked', when: '1d',
+    changes: [{ f: 'Needs', to: 'A linked local checkout for Product Launch' }],
+    why: 'Two of the five dispatch intents need a working tree. The rest still run without one.' },
+
+  { id: 'r1', status: 'recent', agent: 'Release Notes', project: 'Compass Web', ticket: 'CW-121', ticketTitle: 'Drafted Sprint 11 release notes', kind: 'Create doc', when: '02:14', outcome: 'Auto-approved', changes: [{ f: 'Doc', to: 'Sprint 11 — release notes' }], why: 'Full auto, non-destructive kind. Logged, not queued.' },
+  { id: 'r2', status: 'recent', agent: 'Triage Agent', project: 'Compass Web', ticket: 'CW-140', ticketTitle: 'Auth flow redesign notes', kind: 'Add label', when: '03:40', outcome: 'Auto-approved', changes: [{ f: 'Label', to: 'ux' }], why: 'Matched the saved view it watches.' },
+  { id: 'r3', status: 'recent', agent: 'Code Reviewer', project: 'Compass Web', ticket: 'CW-133', ticketTitle: 'Paginate the search index', kind: 'Comment', when: '04:02', outcome: 'Approved', changes: [{ f: 'Comment', to: '“Index build is O(n²) over labels.”' }], why: 'Approved by you at 08:31.' },
+  { id: 'r4', status: 'recent', agent: 'Triage Agent', project: 'Compass Web', ticket: '—', ticketTitle: 'Spam request from the public form', kind: 'Decline request', when: '05:18', outcome: 'Rejected', changes: [{ f: 'Request', to: 'declined' }], why: 'You rejected this at 08:33 — the outcome was reported back to the model exactly once.' }
+];
+
+let rvSeg = 'pending', rvAgent = 'All', rvProj = 'All', rvKind = 'All';
+const rvSel = new Set();
+function rvRows() {
+  return PROPOSALS.filter(p => p.status === rvSeg)
+    .filter(p => rvAgent === 'All' || p.agent === rvAgent)
+    .filter(p => rvProj === 'All' || p.project === rvProj)
+    .filter(p => rvKind === 'All' || p.kind === rvKind);
+}
+/* ---- review health + trust escalation ----
+   The rubber-stamp risk: a queue where you approve everything without reading
+   is not review, it is theatre with extra clicks. So the queue instruments the
+   DECISION, not the throughput — approval rate and time-to-decision together —
+   and warns on the pattern that looks like rubber-stamping. The escalation
+   offer is the other half: if an agent is reliably right about one KIND of
+   change, stop asking about that kind rather than asking the user to keep
+   clicking Approve forever. That is the only way the queue scales past a
+   handful of proposals a day without bulk-approve defeating the safety model. */
+const DECISIONS = { approved: 38, rejected: 3, times: [11, 6, 9, 14, 7, 22, 8, 5, 12, 9] };
+const TRUST = [
+  { kind: 'Add label', agent: 'Triage Agent', decided: 42, approved: 40, level: 'ask' },
+  { kind: 'Link duplicate', agent: 'Triage Agent', decided: 18, approved: 17, level: 'ask' },
+  { kind: 'Change state', agent: 'Code Reviewer', decided: 9, approved: 5, level: 'ask' },
+  { kind: 'Create ticket', agent: 'Triage Agent', decided: 12, approved: 9, level: 'ask' },
+];
+let trustDismissed = false;
+function median(a) { const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; }
+function renderHealth() {
+  const total = DECISIONS.approved + DECISIONS.rejected;
+  const rate = total ? Math.round((DECISIONS.approved / total) * 100) : 0;
+  const med = DECISIONS.times.length ? median(DECISIONS.times) : 0;
+  // Both conditions, not either: a high approval rate alone can just mean a
+  // good agent. High rate AND near-instant decisions is the tell.
+  const rubberStamping = rate >= 95 && med <= 4 && total >= 10;
+  const el = document.getElementById('rvHealth');
+  el.classList.toggle('warn', rubberStamping);
+  el.innerHTML =
+    '<div class="rv-stat"><b>' + rate + '%</b><span>approved</span></div>' +
+    '<div class="rv-stat"><b>' + med + 's</b><span>median time to decide</span></div>' +
+    '<div class="rv-stat"><b>' + total + '</b><span>decisions this week</span></div>' +
+    '<div class="rv-health-note">' + (rubberStamping
+      ? 'You are approving almost everything, almost instantly. That is rubber-stamping, not review — either these proposals have earned auto-apply below, or they need a closer look.'
+      : 'A 100% approval rate should worry you as much as 0%. Both mean the queue is not doing its job.') + '</div>';
+}
+function renderTrust() {
+  const el = document.getElementById('rvTrust');
+  const candidate = TRUST.find(t => t.level === 'ask' && t.decided >= 20 && t.approved / t.decided >= 0.93);
+  if (!candidate || trustDismissed) { el.classList.remove('on'); return; }
+  el.classList.add('on');
+  el.innerHTML = ic('shield') +
+    '<div><b>' + candidate.agent + ' has been right on ' + candidate.approved + ' of its last ' +
+    candidate.decided + ' “' + candidate.kind + '” proposals.</b><div style="margin-top:2px;opacity:.9;">' +
+    'Stop asking about this one kind, from this one agent? Everything else still comes here. Reversible from the agent’s page, and any rejection sends this kind back to review automatically.</div></div>' +
+    '<div class="rv-trust-actions"><button class="btn-sm primary" id="trustYes">Auto-apply “' + candidate.kind + '”</button>' +
+    '<button class="btn-sm" id="trustNo">Keep reviewing</button></div>';
+  document.getElementById('trustYes').addEventListener('click', () => {
+    candidate.level = 'auto';
+    toast('“' + candidate.kind + '” from ' + candidate.agent + ' now applies without review');
+    renderTrust(); renderTrustTable();
+  });
+  document.getElementById('trustNo').addEventListener('click', () => { trustDismissed = true; renderTrust(); });
+}
+function renderTrustTable() {
+  const el = document.getElementById('trustTable');
+  if (!el) return;
+  el.innerHTML =
+    '<tr><th>Proposal kind</th><th>Agent</th><th>Approved</th><th>Currently</th></tr>' +
+    TRUST.map(t => '<tr><td>' + t.kind + '</td><td>' + t.agent + '</td><td>' +
+      t.approved + ' / ' + t.decided + ' (' + Math.round(t.approved / t.decided * 100) + '%)</td><td>' +
+      (t.level === 'auto'
+        ? '<span class="pill" style="background:var(--success-bg);color:var(--success);">Auto-applies</span>'
+        : '<span class="pill" style="background:var(--surface-2);color:var(--text-secondary);">Asks every time</span>') +
+      '</td></tr>').join('');
+}
+
+function renderReview() {
+  renderHealth(); renderTrust();
+  const rows = rvRows();
+  document.getElementById('rvCount').textContent =
+    rows.length + (rvSeg === 'pending' ? ' waiting on you' : rvSeg === 'blocked' ? ' blocked' : ' handled overnight, no action needed');
+  document.getElementById('rvList').innerHTML = rows.length
+    ? rows.map(p => '<div class="rv-item' + (rvSel.has(p.id) ? ' sel' : '') + '" data-rid="' + p.id + '">' +
+        (rvSeg === 'recent' ? '' : '<span class="cbox' + (rvSel.has(p.id) ? ' on' : '') + '" data-rcb="' + p.id + '" style="margin-top:10px;">' +
+          (rvSel.has(p.id) ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7"/></svg>' : '') + '</span>') +
+        '<div style="flex:1;min-width:0;">' + proposalHTML(p, { readonly: rvSeg === 'recent' }) + '</div>' +
+      '</div>').join('')
+    : '<div class="empty">' + ic('review') + '<div class="empty-title">Nothing waiting</div><div class="empty-body">When an agent wants to change something, it lands here. Nothing an agent does takes effect until you approve it.</div></div>';
+  document.getElementById('rvBulk').classList.toggle('on', rvSel.size > 0);
+  document.getElementById('rvBulkCount').textContent = rvSel.size + ' selected';
+  document.querySelectorAll('#rvSeg button').forEach(b => b.classList.toggle('on', b.dataset.seg === rvSeg));
+  document.getElementById('rvAgentBtn').innerHTML = ic('bot') + 'Agent: ' + rvAgent + ic('chevron');
+  document.getElementById('rvProjBtn').innerHTML = ic('folder') + 'Project: ' + rvProj + ic('chevron');
+  document.getElementById('rvKindBtn').innerHTML = ic('filter') + 'Kind: ' + rvKind + ic('chevron');
+}
+document.getElementById('rvSeg').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-seg]');
+  if (!b) return;
+  rvSeg = b.dataset.seg; rvSel.clear(); renderReview();
+});
+document.getElementById('rvList').addEventListener('click', (e) => {
+  const cb = e.target.closest('[data-rcb]');
+  if (cb) { const id = cb.dataset.rcb; rvSel.has(id) ? rvSel.delete(id) : rvSel.add(id); renderReview(); return; }
+  const act = e.target.closest('[data-act]');
+  if (!act) return;
+  const p = PROPOSALS.find(x => x.id === act.dataset.p);
+  if (act.dataset.act === 'open') {
+    const t = ALL_TICKETS.find(x => x.id === p.ticket);
+    if (t) openTicketDrawer(t); else toast('No ticket yet — this proposal would create one');
+    return;
+  }
+  p.status = 'recent';
+  p.outcome = act.dataset.act === 'approve' ? 'Approved' : 'Rejected';
+  p.when = 'just now';
+  rvSel.delete(p.id);
+  recordDecision(p.outcome);
+  toast(p.outcome + ' — outcome reported back to the model once, then never again');
+  renderReview(); updateBadges();
+});
+/* Real instrumentation, not a static stat strip: decisions made in this
+   session feed the same counters. Approve several proposals quickly and the
+   health bar trips into its warning state on its own. */
+let lastDecisionAt = Date.now();
+function recordDecision(outcome) {
+  const secs = Math.max(1, Math.round((Date.now() - lastDecisionAt) / 1000));
+  lastDecisionAt = Date.now();
+  DECISIONS.times.push(Math.min(secs, 120));
+  if (DECISIONS.times.length > 10) DECISIONS.times.shift();
+  if (outcome === 'Approved') DECISIONS.approved++; else DECISIONS.rejected++;
+}
+function rvPop(btn, key, values) {
+  openPopover(btn, '<div class="pop-head">' + key + '</div>' +
+    values.map(v => '<button class="pop-item" data-val="' + v + '">' + v + '</button>').join(''),
+    (v) => {
+      if (key === 'Agent') rvAgent = v; else if (key === 'Project') rvProj = v; else rvKind = v;
+      closePopover(); renderReview();
+    });
+}
+document.getElementById('rvAgentBtn').addEventListener('click', (e) => rvPop(e.currentTarget, 'Agent', ['All'].concat(AGENT_NAMES)));
+document.getElementById('rvProjBtn').addEventListener('click', (e) => rvPop(e.currentTarget, 'Project', ['All', 'Compass Web', 'Product Launch']));
+document.getElementById('rvKindBtn').addEventListener('click', (e) => rvPop(e.currentTarget, 'Kind', ['All'].concat(Array.from(new Set(PROPOSALS.map(p => p.kind))))));
+function rvBulkApply(outcome) {
+  Array.from(rvSel).forEach(id => {
+    const p = PROPOSALS.find(x => x.id === id);
+    if (p) { p.status = 'recent'; p.outcome = outcome; p.when = 'just now'; recordDecision(outcome); }
+  });
+  toast(outcome + ' ' + rvSel.size + ' proposals');
+  rvSel.clear(); renderReview(); updateBadges();
+}
+document.getElementById('rvApproveAll').addEventListener('click', () => rvBulkApply('Approved'));
+document.getElementById('rvRejectAll').addEventListener('click', () => rvBulkApply('Rejected'));
+document.getElementById('rvClearSel').addEventListener('click', () => { rvSel.clear(); renderReview(); });
+
+function updateBadges() {
+  const n = PROPOSALS.filter(p => p.status === 'pending').length;
+  const b = document.querySelector('.sb-item[data-nav="review"] .badge-alert');
+  if (b) b.textContent = n;
+  document.querySelectorAll('#rvSeg button').forEach(btn => {
+    const c = PROPOSALS.filter(p => p.status === btn.dataset.seg).length;
+    const s = btn.querySelector('span');
+    if (s) s.textContent = c;
+  });
+  const cp = document.getElementById('cpPendingCount');
+  if (cp) cp.textContent = n + ' pending proposals';
+}
+
+/* Requests — the same card, with an external source */
+function renderRequests() {
+  const reqs = PROPOSALS.filter(p => p.source === 'Requests' && p.status === 'pending');
+  document.getElementById('rqList').innerHTML = reqs.length
+    ? reqs.map(p => '<div class="rv-item"><div style="flex:1;min-width:0;">' + proposalHTML(p) + '</div></div>').join('')
+    : '<div class="empty">' + ic('inbox') + '<div class="empty-title">Nothing incoming</div><div class="empty-body">Requests submitted from outside the team land here and get a first pass from the Triage Agent.</div></div>';
+}
+document.getElementById('rqList').addEventListener('click', (e) => {
+  const act = e.target.closest('[data-act]');
+  if (!act) return;
+  const p = PROPOSALS.find(x => x.id === act.dataset.p);
+  if (act.dataset.act === 'open') { toast('Opens ' + p.ticket); return; }
+  p.status = 'recent';
+  p.outcome = act.dataset.act === 'approve' ? 'Approved' : 'Rejected';
+  recordDecision(p.outcome);
+  toast(p.outcome + ' — and it disappears from Review too, because it is one queue');
+  renderRequests(); renderReview(); updateBadges();
+});
+
+/* ---------------- ticket drawer ---------------- */
+function openTicketDrawer(t) {
+  if (!t) return;
+  document.getElementById('tdId').textContent = t.id;
+  document.getElementById('tdState').textContent = t.stateName;
+  document.getElementById('tdTitle').textContent = t.title;
+  document.getElementById('tdDesc').textContent = t.desc ||
+    'Generated sample body. Everything on this drawer — the rail, the proposal section, the dispatch menu — is the same for all ' + ALL_TICKETS.length + ' tickets.';
+  document.getElementById('tdSprint').textContent = t.sprint;
+  document.getElementById('tdWorkstream').textContent = t.stream;
+  const p = prioOf(t.prio);
+  document.getElementById('tdPriority').innerHTML = '<span class="pill" style="background:' + p.bg + ';color:' + p.fg + ';">' + p.n + '</span>';
+  document.getElementById('tdAssignee').innerHTML = assigneeHTML(t.assignee) +
+    '<span>' + (t.assignee ? t.assignee.n : 'Unassigned') + '</span>';
+
+  const wrap = document.getElementById('tdProposalsWrap');
+  const live = PROPOSALS.filter(x => x.ticket === t.id && x.status === 'pending');
+  if (live.length) {
+    wrap.style.display = '';
+    document.getElementById('tdProposals').innerHTML = live.map(x => proposalHTML(x)).join('');
+  } else if (t.hasProposal) {
+    wrap.style.display = '';
+    document.getElementById('tdProposals').innerHTML = proposalHTML({
+      id: 'syn-' + t.id, agent: 'Code Reviewer', project: t.project, ticket: t.id, ticketTitle: t.title,
+      kind: 'Change state', when: '1h', evidence: 'src/' + t.id.toLowerCase() + '/index.ts:64',
+      changes: [{ f: 'State', from: t.stateName, to: 'In Review' }, { f: 'Label', to: 'agent-flagged' }],
+      why: 'Proposed after reading the linked checkout. Approving is the only thing that writes.'
+    });
+  } else {
+    wrap.style.display = 'none';
+  }
+  document.getElementById('ticketDrawerBackdrop').classList.add('open');
+}
+document.getElementById('ticketDrawerClose').addEventListener('click', () => document.getElementById('ticketDrawerBackdrop').classList.remove('open'));
+document.getElementById('ticketDrawerBackdrop').addEventListener('click', (e) => {
+  if (e.target.id === 'ticketDrawerBackdrop') e.currentTarget.classList.remove('open');
+});
+document.getElementById('tdProposals').addEventListener('click', (e) => {
+  const act = e.target.closest('[data-act]');
+  if (!act) return;
+  if (act.dataset.act === 'open') return;
+  const p = PROPOSALS.find(x => x.id === act.dataset.p);
+  if (p) { p.status = 'recent'; p.outcome = act.dataset.act === 'approve' ? 'Approved' : 'Rejected'; recordDecision(p.outcome); }
+  toast((act.dataset.act === 'approve' ? 'Approved' : 'Rejected') + ' here, and gone from Review — one queue, four surfaces');
+  document.getElementById('tdProposalsWrap').style.display = 'none';
+  renderReview(); renderRequests(); updateBadges();
+});
+const INTENTS = ['Research & give RCA', 'Comment on the ticket', 'Follow up on the ticket', 'Start working on this bug', 'Custom instruction…'];
+document.getElementById('tdAskBtn').addEventListener('click', (e) => {
+  openPopover(e.currentTarget,
+    '<div class="pop-head">Dispatch</div>' +
+    INTENTS.map(i => '<button class="pop-item" data-val="' + i + '">' + i + '</button>').join('') +
+    '<div class="pop-note">Harvested from the deleted Sessions screen — the one good idea in 900 lines of prototype. Only RCA and “start working” need a linked checkout; the run lands in Review.</div>',
+    (v) => { closePopover(); toast('“' + v + '” dispatched — watch Review'); });
+});
+
+/* ---------------- sidebar Add… menu (the crux answer) ---------------- */
+document.getElementById('cwCount').textContent = CW_TICKETS.length;
+document.getElementById('plSideCount').textContent = PL_TICKETS.length;
+
+const ADDABLE = {
+  cw: [['sprints', 'Sprint'], ['workstreams', 'Workstream'], ['views', 'View'], ['docs', 'Doc']],
+  pl: [['plnew', 'Sprint'], ['plnew', 'Workstream'], ['plnew', 'View'], ['plnew', 'Requests queue'], ['plnew', 'Doc']]
+};
+// Icons for a sub-nav row inserted into a project that did not have one.
+const ADDED_ICON = { Sprint: 'refresh', Workstream: 'track', View: 'eye', 'Requests queue': 'inbox', Doc: 'file' };
+document.querySelectorAll('.sb-add').forEach(btn => {
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const key = btn.dataset.add;
+    const opts = ADDABLE[key];
+    if (!opts.length) {
+      openPopover(btn, '<div class="pop-head">Nothing left to add</div><div class="pop-note">This project is already using every primitive.</div>', () => closePopover());
+      return;
+    }
+    openPopover(btn,
+      '<div class="pop-head">Not used yet in this project</div>' +
+      opts.map(([nav, label], i) => '<button class="pop-item" data-val="' + i + '">' + ic('plus') + 'New ' + label + '</button>').join('') +
+      '<div class="pop-note">Creating the first one is what puts it in the nav. There is no separate “enable this feature” step, and no toggle grid.</div>',
+      (v) => {
+        const [nav, label] = opts[Number(v)];
+        closePopover();
+        // Product Launch has no per-primitive screens of its own — creating one
+        // inserts the row into ITS sub-nav and opens the empty thing you just
+        // made. v1 navigated to Compass Web's Sprints screen from here, which
+        // demonstrated the crux at the menu and contradicted it at the landing.
+        if (key === 'pl') {
+          opts.splice(Number(v), 1);
+          const sub = document.querySelector('.sb-project-sub[data-proj="pl"]');
+          const row = document.createElement('button');
+          row.className = 'sb-item';
+          row.dataset.nav = 'plnew';
+          row.innerHTML = ic(ADDED_ICON[label] || 'list') + label + 's';
+          row.addEventListener('click', () => { setPlNew(label); goto('plnew'); });
+          sub.insertBefore(row, sub.querySelector('.sb-add'));
+          setPlNew(label);
+          goto('plnew');
+          toast(label + ' created — it is now in Product Launch’s sidebar');
+          return;
+        }
+        goto(nav);
+        toast('Creating the first one adds it to this project’s sidebar');
+      });
+  });
+});
+function setPlNew(label) {
+  const first = { Sprint: 'Sprint 1', Workstream: 'Workstream 1', View: 'New view', 'Requests queue': 'Requests', Doc: 'Untitled doc' }[label] || label;
+  document.getElementById('plNewTitle').textContent = first;
+  document.getElementById('plNewSub').textContent =
+    'Nothing in it yet. It is now in Product Launch’s sidebar — creating the first one is what put it there.';
+  document.getElementById('plNewEmpty').textContent = 'No tickets in this ' + label.toLowerCase() + ' yet';
+}
+
+/* ---------------- copilot panel ---------------- */
+const panel = document.getElementById('copilotPanel');
+document.getElementById('copilotToggle').addEventListener('click', () => {
+  panel.classList.toggle('open');
+  document.getElementById('copilotToggle').classList.toggle('active', panel.classList.contains('open'));
+});
+function closeCopilot() {
+  panel.classList.remove('open');
+  panel.classList.remove('sessions');
+  document.getElementById('copilotToggle').classList.remove('active');
+}
+document.getElementById('cpCloseBtn').addEventListener('click', closeCopilot);
+document.getElementById('cpSessionsBtn').addEventListener('click', () => panel.classList.toggle('sessions'));
+document.getElementById('cpNewBtn').addEventListener('click', () => { panel.classList.remove('sessions'); toast('New Copilot session'); });
+document.getElementById('cpNewBtn2').addEventListener('click', () => { panel.classList.remove('sessions'); toast('New Copilot session'); });
+document.getElementById('cpRejectAll').addEventListener('click', () => {
+  PROPOSALS.filter(p => p.status === 'pending').forEach(p => { p.status = 'recent'; p.outcome = 'Rejected'; p.when = 'just now'; });
+  toast('Rejected all pending — the real panel has this and v1 dropped it');
+  renderReview(); renderRequests(); updateBadges();
+});
+document.getElementById('cpSessions').addEventListener('click', (e) => {
+  const b = e.target.closest('.cp-mini');
+  if (b) { e.stopPropagation(); toast(b.title); return; }
+  const s = e.target.closest('.cp-session');
+  if (s) { panel.classList.remove('sessions'); toast('Resumed session'); }
+});
+panel.classList.add('open');
+
+/* ---------------- keyboard ---------------- */
+const ks = document.getElementById('ksBackdrop');
+function toggleKs(on) { ks.classList.toggle('open', on === undefined ? !ks.classList.contains('open') : on); }
+document.getElementById('shortcutsBtn').addEventListener('click', () => toggleKs());
+document.getElementById('ksClose').addEventListener('click', () => toggleKs(false));
+ks.addEventListener('click', (e) => { if (e.target === ks) toggleKs(false); });
+
+let gPending = false;
+document.addEventListener('keydown', (e) => {
+  const typing = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA';
+  if (e.key === 'Escape') {
+    if (ks.classList.contains('open')) return toggleKs(false);
+    if (popEl) return closePopover();
+    const d = document.getElementById('ticketDrawerBackdrop');
+    if (d.classList.contains('open')) return d.classList.remove('open');
+    // Scoped to the panel deliberately: Escape while you're working in the
+    // ticket list should clear the selection, not close a panel you opened on
+    // purpose and that persists across navigation.
+    if (panel.classList.contains('open') && e.target.closest && e.target.closest('.copilot-panel')) {
+      return closeCopilot();
+    }
+    const v = activeView(); if (v) v.clear();
+    if (typing) e.target.blur();
+    return;
+  }
+  if (typing) return;
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); toast('⌘K — search palette'); return; }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'j') {
+    e.preventDefault();
+    panel.classList.toggle('open');
+    document.getElementById('copilotToggle').classList.toggle('active', panel.classList.contains('open'));
+    return;
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
+    const v = activeView(); if (v) { e.preventDefault(); v.selectAll(); }
+    return;
+  }
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+  if (gPending) {
+    gPending = false;
+    const map = { h: 'home', r: 'review', t: 'tickets', m: 'mywork', a: 'alltickets', l: 'machine', d: 'docs', s: 'sprints' };
+    if (map[e.key]) { goto(map[e.key]); return; }
+  }
+  if (e.key === 'g') { gPending = true; setTimeout(() => { gPending = false; }, 900); return; }
+  if (e.key === '?') { toggleKs(true); return; }
+
+  const onReview = document.getElementById('screen-review').classList.contains('active');
+  if (onReview) {
+    if (e.key === 'e' && rvSel.size) { rvBulkApply('Approved'); return; }
+    if (e.key === 'r' && rvSel.size) { rvBulkApply('Rejected'); return; }
+  }
+  const v = activeView();
+  if (!v) return;
+  if (e.key === 'j') { e.preventDefault(); v.move(1); }
+  else if (e.key === 'k') { e.preventDefault(); v.move(-1); }
+  else if (e.key === 'x') { e.preventDefault(); v.toggleSel(); }
+  else if (e.key === 'Enter' || e.key === 'o') { e.preventDefault(); v.open(); }
+});
+
+/* ---------------- review-mode chrome ---------------- */
+document.getElementById('changeToggle').addEventListener('change', (e) => {
+  document.body.classList.toggle('show-changes', e.target.checked);
+});
+let dark = false;
+document.getElementById('themeBtn').addEventListener('click', () => {
+  dark = !dark;
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+  document.getElementById('themeBtn').textContent = dark ? 'Light preview' : 'Dark preview';
+});
+
+renderReview();
+renderRequests();
+renderTrustTable();
+updateBadges();
+</script>

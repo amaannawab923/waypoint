@@ -1,13 +1,22 @@
-import { useState } from 'react';
-import { Plus, Pencil } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { IconPlus, IconEdit } from '@/components/icons';
 import { Button, IconButton } from '@/components/ui/Button';
 import { Dot } from '@/components/ui/Badge';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
-import { STATE_GROUP_LABEL, STATE_GROUP_ORDER } from '@/components/domain/StateIcon';
+import {
+  STATE_GROUP_LABEL,
+  STATE_GROUP_ORDER,
+} from '@/components/domain/StateIcon';
 import { useAsync } from '@/lib/useAsync';
 import { useProject } from '@/layouts/ProjectLayout';
-import { createState, updateState, deleteState, countWorkItemsInState, listStates } from '@/mock/api';
-import type { StateGroup, WorkItemState } from '@/types/entities';
+import {
+  createState,
+  updateState,
+  deleteState,
+  countTicketsInState,
+  listStates,
+} from '@/data/api';
+import type { StateGroup, TicketState } from '@/types/entities';
 
 const PRESET_COLORS = [
   '#c2542a',
@@ -26,7 +35,7 @@ function StateEditor({
   onDeleted,
   onCancel,
 }: {
-  state: WorkItemState;
+  state: TicketState;
   onSaved: () => void;
   onDeleted: () => void;
   onCancel: () => void;
@@ -36,15 +45,26 @@ function StateEditor({
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  // The server rejects deleting a state that any work item still
-  // references (work_items.state_id is `onDelete: 'restrict'`, no
+  // The server rejects deleting a state that any ticket still
+  // references (tickets.state_id is `onDelete: 'restrict'`, no
   // reassignment happens) — fetched upfront so the delete control can
   // reflect that up front rather than let the user reach a confirm step
   // for a delete that's guaranteed to fail.
-  const { data: usageCount } = useAsync(() => countWorkItemsInState(state.id), [state.id]);
+  const { data: usageCount } = useAsync(
+    () => countTicketsInState(state.id),
+    [state.id],
+  );
+  // Same fix as CopilotProposalCard.tsx's act(): Save/Delete below disable
+  // themselves (saving/deleting) while their POST is in flight, and
+  // onSaved/onDeleted unmount this whole editor on success — either path
+  // force-blurs to <body> and leaks the next keystroke to
+  // useGlobalKeyboardShortcuts.ts's global nav shortcuts. This editor's
+  // own root is the stable container neither path touches.
+  const editorRef = useRef<HTMLDivElement>(null);
 
   async function handleSave() {
     if (!name.trim() || saving) return;
+    editorRef.current?.focus();
     setSaving(true);
     try {
       await updateState(state.id, { name: name.trim(), color });
@@ -60,6 +80,7 @@ function StateEditor({
       setConfirmDelete(true);
       return;
     }
+    editorRef.current?.focus();
     setDeleting(true);
     try {
       await deleteState(state.id);
@@ -73,7 +94,12 @@ function StateEditor({
   }
 
   return (
-    <div className="flex flex-col gap-3 px-4 py-3">
+    <div
+      ref={editorRef}
+      tabIndex={-1}
+      data-shortcut-guard
+      className="flex flex-col gap-3 px-4 py-3 outline-none"
+    >
       <div className="flex gap-2">
         <input
           autoFocus
@@ -88,10 +114,11 @@ function StateEditor({
             key={c}
             type="button"
             onClick={() => setColor(c)}
-            className={
-              'size-6 rounded-full transition-transform ' +
-              (color === c ? 'scale-110 ring-2 ring-offset-2 ring-offset-surface ring-accent' : '')
-            }
+            className={`size-6 rounded-full transition-transform ${
+              color === c
+                ? 'scale-110 ring-2 ring-offset-2 ring-offset-surface ring-accent'
+                : ''
+            }`}
             style={{ background: c }}
             aria-label={c}
           />
@@ -99,12 +126,14 @@ function StateEditor({
       </div>
       {!!usageCount && (
         <p className="text-xs text-text-muted">
-          {usageCount} work item{usageCount === 1 ? '' : 's'} use this state, so it can't be deleted. Move them
-          to another state first.
+          {usageCount} ticket{usageCount === 1 ? '' : 's'} use this state, so it
+          can't be deleted. Move them to another state first.
         </p>
       )}
       {confirmDelete && !usageCount && (
-        <p className="text-xs text-danger">This can't be undone. Click delete again to confirm.</p>
+        <p className="text-xs text-danger">
+          This can't be undone. Click delete again to confirm.
+        </p>
       )}
       <div className="flex items-center justify-between gap-2">
         <Button
@@ -116,17 +145,27 @@ function StateEditor({
             state.isDefault
               ? 'Default states cannot be deleted'
               : usageCount
-                ? `${usageCount} work item${usageCount === 1 ? '' : 's'} still use this state`
+                ? `${usageCount} ticket${usageCount === 1 ? '' : 's'} still use this state`
                 : undefined
           }
         >
           {deleting ? 'Deleting…' : confirmDelete ? 'Confirm delete' : 'Delete'}
         </Button>
         <div className="flex gap-2">
-          <Button variant="ghost" size="sm" onClick={onCancel} disabled={saving || deleting}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onCancel}
+            disabled={saving || deleting}
+          >
             Cancel
           </Button>
-          <Button variant="primary" size="sm" disabled={!name.trim() || saving} onClick={handleSave}>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={!name.trim() || saving}
+            onClick={handleSave}
+          >
             {saving ? 'Saving…' : 'Save'}
           </Button>
         </div>
@@ -137,7 +176,11 @@ function StateEditor({
 
 export default function States() {
   const { project } = useProject();
-  const { data: states, loading, reload } = useAsync(() => listStates(project.id), [project.id]);
+  const {
+    data: states,
+    loading,
+    reload,
+  } = useAsync(() => listStates(project.id), [project.id]);
 
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
@@ -145,9 +188,16 @@ export default function States() {
   const [color, setColor] = useState(PRESET_COLORS[0]);
   const [submitting, setSubmitting] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Same fix as CopilotProposalCard.tsx's act(): "Add state" disables
+  // itself (submitting) while the POST is in flight, and unmounts this
+  // whole form (setShowForm(false)) on success — either path force-blurs
+  // to <body> and leaks the next keystroke to
+  // useGlobalKeyboardShortcuts.ts's global nav shortcuts.
+  const createFormRef = useRef<HTMLDivElement>(null);
 
   async function handleCreate() {
     if (!name.trim() || submitting) return;
+    createFormRef.current?.focus();
     setSubmitting(true);
     try {
       await createState(project.id, { name: name.trim(), group, color });
@@ -170,16 +220,27 @@ export default function States() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-lg font-medium text-text">States</h1>
-          <p className="mt-1 text-sm text-text-secondary">Manage the workflow states work items move through.</p>
+          <p className="mt-1 text-sm text-text-secondary">
+            Manage the workflow states tickets move through.
+          </p>
         </div>
-        <Button variant="primary" size="sm" onClick={() => setShowForm((v) => !v)}>
-          <Plus size={14} />
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={() => setShowForm((v) => !v)}
+        >
+          <IconPlus size={14} />
           Add state
         </Button>
       </div>
 
       {showForm && (
-        <div className="flex flex-col gap-3 rounded-[var(--radius)] border border-border-strong p-4">
+        <div
+          ref={createFormRef}
+          tabIndex={-1}
+          data-shortcut-guard
+          className="flex flex-col gap-3 rounded-[var(--radius)] border border-border-strong p-4 outline-none"
+        >
           <div className="flex gap-2">
             <input
               autoFocus
@@ -206,20 +267,30 @@ export default function States() {
                 key={c}
                 type="button"
                 onClick={() => setColor(c)}
-                className={
-                  'size-6 rounded-full transition-transform ' +
-                  (color === c ? 'scale-110 ring-2 ring-offset-2 ring-offset-surface ring-accent' : '')
-                }
+                className={`size-6 rounded-full transition-transform ${
+                  color === c
+                    ? 'scale-110 ring-2 ring-offset-2 ring-offset-surface ring-accent'
+                    : ''
+                }`}
                 style={{ background: c }}
                 aria-label={c}
               />
             ))}
           </div>
           <div className="flex justify-end gap-2">
-            <Button variant="ghost" size="sm" onClick={() => setShowForm(false)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowForm(false)}
+            >
               Cancel
             </Button>
-            <Button variant="primary" size="sm" disabled={!name.trim() || submitting} onClick={handleCreate}>
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={!name.trim() || submitting}
+              onClick={handleCreate}
+            >
               {submitting ? 'Adding…' : 'Add state'}
             </Button>
           </div>
@@ -238,7 +309,9 @@ export default function States() {
                 {STATE_GROUP_LABEL[g]}
               </div>
               {groupStates.length === 0 ? (
-                <p className="px-1 text-sm text-text-muted">No states in this group.</p>
+                <p className="px-1 text-sm text-text-muted">
+                  No states in this group.
+                </p>
               ) : (
                 <div className="flex flex-col divide-y divide-border rounded-[var(--radius)] border border-border">
                   {groupStates.map((state) =>
@@ -257,16 +330,31 @@ export default function States() {
                         onCancel={() => setEditingId(null)}
                       />
                     ) : (
-                      <button
+                      // A <button> row wrapping the "Edit state" IconButton
+                      // — itself a real <button> — nested one <button>
+                      // inside another, invalid HTML with real click/focus
+                      // risk. Same role="button"/tabIndex/Enter-key pattern
+                      // as ArchivedProjects.tsx's card and Agents.tsx's row,
+                      // so the inner IconButton stays a sibling, not a
+                      // descendant.
+                      <div
                         key={state.id}
-                        type="button"
+                        role="button"
+                        tabIndex={0}
                         onClick={() => setEditingId(state.id)}
-                        className="group flex w-full items-center gap-2.5 px-4 py-2.5 text-left hover:bg-surface-2"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') setEditingId(state.id);
+                        }}
+                        className="group flex w-full cursor-pointer items-center gap-2.5 px-4 py-2.5 text-left hover:bg-surface-2"
                       >
                         <Dot color={state.color} />
                         <span className="text-sm text-text">{state.name}</span>
                         <div className="ml-auto flex items-center gap-2">
-                          {state.isDefault && <span className="text-xs text-text-muted">Default</span>}
+                          {state.isDefault && (
+                            <span className="text-xs text-text-muted">
+                              Default
+                            </span>
+                          )}
                           <IconButton
                             label="Edit state"
                             className="opacity-0 group-hover:opacity-100"
@@ -275,10 +363,10 @@ export default function States() {
                               setEditingId(state.id);
                             }}
                           >
-                            <Pencil size={13} />
+                            <IconEdit size={13} />
                           </IconButton>
                         </div>
-                      </button>
+                      </div>
                     ),
                   )}
                 </div>

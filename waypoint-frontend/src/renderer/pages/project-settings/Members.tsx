@@ -4,11 +4,13 @@ import { Badge } from '@/components/ui/Badge';
 import { Button, IconButton } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Modal } from '@/components/ui/Modal';
+import { NotWired } from '@/components/ui/NotWired';
 import { SkeletonTableRows } from '@/components/ui/Skeleton';
 import { useAsync } from '@/lib/useAsync';
 import { useProject } from '@/layouts/ProjectLayout';
-import { addProjectMember, listMembers, removeProjectMember, updateProject } from '@/mock/api';
-import { Plus, Search, Trash2, Users } from 'lucide-react';
+import { addProjectMember, listMembers, removeProjectMember, updateProject } from '@/data/api';
+import { Trash2, Users } from 'lucide-react';
+import { IconPlus, IconSearch } from '@/components/icons';
 import type { Member, MemberRole } from '@/types/entities';
 
 const ROLE_LABEL: Record<MemberRole, string> = {
@@ -243,7 +245,7 @@ export default function Members() {
           </p>
         </div>
         <Button variant="primary" size="sm" onClick={() => setAddOpen(true)}>
-          <Plus size={14} />
+          <IconPlus size={14} />
           Add member
         </Button>
       </div>
@@ -267,12 +269,15 @@ export default function Members() {
         />
       </div>
 
-      <div className="flex items-center justify-between rounded-[var(--radius)] border border-border-strong px-4 py-3">
-        <div>
-          <p className="text-sm font-medium text-text">Guest access</p>
-          <p className="mt-0.5 text-sm text-text-secondary">Allow guests to view and interact with this project.</p>
+      <div className="flex flex-col gap-3 rounded-[var(--radius)] border border-border-strong px-4 py-3">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium text-text">Guest access</p>
+            <p className="mt-0.5 text-sm text-text-secondary">Allow guests to view and interact with this project.</p>
+          </div>
+          <Toggle checked={project.guestAccessEnabled ?? false} onChange={handleGuestAccessChange} />
         </div>
-        <Toggle checked={project.guestAccessEnabled ?? false} onChange={handleGuestAccessChange} />
+        <NotWired capability="members.guestAccess" />
       </div>
 
       <AddMemberModal
@@ -288,7 +293,7 @@ export default function Members() {
       />
 
       <div className="relative">
-        <Search size={14} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-text-muted" />
+        <IconSearch size={14} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-text-muted" />
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -304,7 +309,7 @@ export default function Members() {
       ) : projectMembers.length === 0 ? (
         <EmptyState icon={<Users size={28} />} title="No members" description="This project has no members yet." />
       ) : filteredMembers.length === 0 ? (
-        <EmptyState icon={<Search size={28} />} title="No matches" description="No members match your search." />
+        <EmptyState icon={<IconSearch size={28} />} title="No matches" description="No members match your search." />
       ) : (
         <div className="overflow-hidden rounded-[var(--radius)] border border-border">
           <table className="w-full text-left text-sm">

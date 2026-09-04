@@ -16,7 +16,7 @@ vi.mock('drizzle-orm', async (importOriginal) => {
   return { ...actual, inArray: vi.fn(actual.inArray) };
 });
 
-const { workItemStates } = await import('../db/schema/index.js');
+const { ticketStates } = await import('../db/schema/index.js');
 const { resolveStateNames } = await import('./states.service.js');
 const { inArray } = await import('drizzle-orm');
 
@@ -46,8 +46,8 @@ describe('resolveStateNames', () => {
 
     await resolveStateNames(['st-l-progress', 'st-l-progress']);
 
-    expect(chain.from).toHaveBeenCalledWith(workItemStates);
-    expect(inArray).toHaveBeenCalledWith(workItemStates.id, ['st-l-progress']);
+    expect(chain.from).toHaveBeenCalledWith(ticketStates);
+    expect(inArray).toHaveBeenCalledWith(ticketStates.id, ['st-l-progress']);
   });
 
   it('leaves an unresolvable id absent from the map, not thrown', async () => {

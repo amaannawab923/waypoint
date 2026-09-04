@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, AtSign } from 'lucide-react';
+import { AtSign } from 'lucide-react';
+import { IconBell } from '@/components/icons';
 import { useAsync } from '@/lib/useAsync';
-import { listNotifications, listMembers, listAgents, markNotificationRead, getWorkItem } from '@/mock/api';
+import { listNotifications, listMembers, listAgents, markNotificationRead, getTicket } from '@/data/api';
 import type { Agent, Member, NotificationItem } from '@/types/entities';
 import { Avatar } from '@/components/ui/Avatar';
 import { agentLabel } from '@/lib/agentLabel';
@@ -44,7 +45,7 @@ export default function Notifications() {
   }, [data, tab]);
 
   // A notification's actor may be a human member or an agent — both live in
-  // the same actorId space (see resolveActor in WorkItemDetailPage for the
+  // the same actorId space (see resolveActor in TicketDetailPage for the
   // same pattern applied to activity/comment authorship).
   function actor(
     members: Member[],
@@ -63,10 +64,10 @@ export default function Notifications() {
       await markNotificationRead(n.id);
       reload();
     }
-    if (n.workItemId) {
-      const item = await getWorkItem(n.workItemId);
+    if (n.ticketId) {
+      const item = await getTicket(n.ticketId);
       if (item) {
-        navigate(`/projects/${item.projectId}/work-items/${item.identifier}`);
+        navigate(`/projects/${item.projectId}/tickets/${item.identifier}`);
       }
     }
   }
@@ -76,13 +77,18 @@ export default function Notifications() {
   return (
     <div className="mx-auto max-w-3xl p-6 md:p-8">
       <div className="flex items-center gap-2">
-        <h1 className="font-display text-2xl font-medium text-text">Inbox</h1>
+        <h1 className="font-display text-2xl font-medium text-text">Notifications</h1>
         {unreadCount > 0 && (
           <span className="rounded-full bg-accent-soft-bg px-2 py-0.5 text-xs font-medium text-accent-soft-text">
             {unreadCount} unread
           </span>
         )}
       </div>
+      <p className="mt-1 text-sm text-text-secondary">
+        Things that already happened. Read-only — you can ignore this whole page and nothing breaks.
+        Requests are work from outside asking to come in; Review is where an agent is blocked on you and
+        nothing happens until you act. Only Review has a cost for inaction.
+      </p>
 
       <div className="mt-5 flex gap-1 border-b border-border">
         {(
@@ -114,7 +120,7 @@ export default function Notifications() {
           </div>
         ) : filtered.length === 0 ? (
           <EmptyState
-            icon={tab === 'mentions' ? <AtSign size={28} /> : <Bell size={28} />}
+            icon={tab === 'mentions' ? <AtSign size={28} /> : <IconBell size={28} />}
             title={tab === 'mentions' ? 'No mentions' : 'You’re all caught up'}
             description={
               tab === 'mentions'

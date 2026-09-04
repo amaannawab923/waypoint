@@ -1,19 +1,19 @@
 import { eq, asc, count, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { workItemStates, workItems } from '../db/schema/index.js';
+import { ticketStates, tickets } from '../db/schema/index.js';
 import { NotFoundError } from '../middleware/errors.js';
 import { newId } from '../lib/ids.js';
 
 export async function listStates(projectId: string) {
   return db
     .select()
-    .from(workItemStates)
-    .where(eq(workItemStates.projectId, projectId))
-    .orderBy(asc(workItemStates.sortOrder));
+    .from(ticketStates)
+    .where(eq(ticketStates.projectId, projectId))
+    .orderBy(asc(ticketStates.sortOrder));
 }
 
 // Batched sibling of listStates for callers that only have a scattered set
-// of stateIds (e.g. Copilot's MCP work-item summaries) and no single
+// of stateIds (e.g. Copilot's MCP ticket summaries) and no single
 // projectId to list from — one query for every distinct id, not one query
 // per row. Mirrors lib/actorNames.ts's resolveActorNames: same batching
 // shape, same "id -> display info" purpose, different table.
@@ -21,19 +21,19 @@ export async function resolveStateNames(ids: string[]): Promise<Map<string, { na
   const uniqueIds = [...new Set(ids)];
   if (uniqueIds.length === 0) return new Map();
   const rows = await db
-    .select({ id: workItemStates.id, name: workItemStates.name, group: workItemStates.group })
-    .from(workItemStates)
-    .where(inArray(workItemStates.id, uniqueIds));
+    .select({ id: ticketStates.id, name: ticketStates.name, group: ticketStates.group })
+    .from(ticketStates)
+    .where(inArray(ticketStates.id, uniqueIds));
   return new Map(rows.map((row) => [row.id, { name: row.name, group: row.group }]));
 }
 
 export async function createState(
   projectId: string,
-  input: { name: string; group: (typeof workItemStates.$inferInsert)['group']; color: string },
+  input: { name: string; group: (typeof ticketStates.$inferInsert)['group']; color: string },
 ) {
   const existing = await listStates(projectId);
   const [row] = await db
-    .insert(workItemStates)
+    .insert(ticketStates)
     .values({
       id: newId('st'),
       projectId,
@@ -47,17 +47,17 @@ export async function createState(
   return row;
 }
 
-export async function updateState(id: string, patch: Partial<typeof workItemStates.$inferInsert>) {
-  const [row] = await db.update(workItemStates).set(patch).where(eq(workItemStates.id, id)).returning();
+export async function updateState(id: string, patch: Partial<typeof ticketStates.$inferInsert>) {
+  const [row] = await db.update(ticketStates).set(patch).where(eq(ticketStates.id, id)).returning();
   if (!row) throw new NotFoundError('state');
   return row;
 }
 
-export async function countWorkItemsInState(stateId: string) {
-  const [row] = await db.select({ n: count() }).from(workItems).where(eq(workItems.stateId, stateId));
+export async function countTicketsInState(stateId: string) {
+  const [row] = await db.select({ n: count() }).from(tickets).where(eq(tickets.stateId, stateId));
   return row?.n ?? 0;
 }
 
 export async function deleteState(id: string) {
-  await db.delete(workItemStates).where(eq(workItemStates.id, id));
+  await db.delete(ticketStates).where(eq(ticketStates.id, id));
 }

@@ -29,9 +29,9 @@ statesRouter.patch(
 );
 
 statesRouter.get(
-  '/states/:id/work-item-count',
+  '/states/:id/ticket-count',
   asyncHandler(async (req, res) => {
-    res.json({ count: await statesService.countWorkItemsInState(req.params.id) });
+    res.json({ count: await statesService.countTicketsInState(req.params.id) });
   }),
 );
 

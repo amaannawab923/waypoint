@@ -223,20 +223,22 @@ afterEach(() => {
 });
 
 const ALL_MCP_TOOLS = [
-  'mcp__waypoint__list_work_items',
-  'mcp__waypoint__get_work_item',
-  'mcp__waypoint__get_work_item_by_identifier',
-  'mcp__waypoint__search_work_items',
+  'mcp__waypoint__list_tickets',
+  'mcp__waypoint__get_ticket',
+  'mcp__waypoint__get_ticket_by_identifier',
+  'mcp__waypoint__search_tickets',
   'mcp__waypoint__list_comments',
   'mcp__waypoint__list_activity',
   'mcp__waypoint__list_states',
   'mcp__waypoint__list_members',
   'mcp__waypoint__list_projects',
+  'mcp__waypoint__list_sprints',
+  'mcp__waypoint__get_sprint',
   'mcp__waypoint__propose_comment',
   'mcp__waypoint__propose_state_change',
   'mcp__waypoint__propose_assignee_change',
   'mcp__waypoint__propose_priority_change',
-  'mcp__waypoint__propose_create_work_item',
+  'mcp__waypoint__propose_create_ticket',
 ];
 
 describe('registerCopilotIpc', () => {
@@ -817,6 +819,9 @@ describe('linking a repo (Copilot V3)', () => {
     repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'waypoint-runner-repo-'));
     filePath = path.join(repoDir, 'README.md');
     fs.writeFileSync(filePath, '# fixture\n');
+    // resolveRepoRoot now requires a real .git directory (see
+    // fix(agent): verify repoPath is a real git checkout before granting file access).
+    fs.mkdirSync(path.join(repoDir, '.git'));
   });
 
   afterEach(() => {

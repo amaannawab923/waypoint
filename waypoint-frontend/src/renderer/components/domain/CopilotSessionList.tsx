@@ -1,14 +1,8 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { clsx } from 'clsx';
-import {
-  GripVertical,
-  MoreHorizontal,
-  Pencil,
-  Pin,
-  Plus,
-  Trash2,
-} from 'lucide-react';
+import { GripVertical, MoreHorizontal, Trash2 } from 'lucide-react';
+import { IconEdit, IconPin, IconPlus } from '@/components/icons';
 import {
   formatRelativeTime,
   groupKeyForSession,
@@ -107,7 +101,7 @@ function SessionContextMenu({
         onClick={onRename}
         className="flex w-full cursor-pointer items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-text hover:bg-surface-2"
       >
-        <Pencil size={14} />
+        <IconEdit size={14} />
         Rename
       </button>
       <button
@@ -116,7 +110,7 @@ function SessionContextMenu({
         onClick={onTogglePin}
         className="flex w-full cursor-pointer items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-text hover:bg-surface-2"
       >
-        <Pin
+        <IconPin
           size={14}
           className={session.pinned ? 'fill-current' : undefined}
         />
@@ -296,7 +290,7 @@ function SessionRow({
             session.pinned ? 'text-text' : 'text-text-secondary',
           )}
         >
-          <Pin
+          <IconPin
             size={14}
             className={session.pinned ? 'fill-current' : undefined}
           />
@@ -361,7 +355,7 @@ export function CopilotSessionList({
         onClick={onCreate}
         className="mx-1 mt-1 mb-1 flex w-[calc(100%-8px)] cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] border border-dashed border-border-strong px-2.5 py-2 text-sm text-text-secondary hover:border-text-muted hover:bg-surface-2 hover:text-text"
       >
-        <Plus size={14} />
+        <IconPlus size={14} />
         New session
       </button>
 
@@ -375,7 +369,7 @@ export function CopilotSessionList({
         <div key={group.key}>
           <div className="flex items-center gap-1.5 px-1.5 pt-3.5 pb-1.5 font-mono text-[10.5px] tracking-wider text-text-muted uppercase first:pt-1">
             {group.key === 'pinned' && (
-              <Pin size={11} className="fill-current" />
+              <IconPin size={11} className="fill-current" />
             )}
             {group.label}
           </div>

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/headless';
-import { AlertTriangle, CheckCircle2, KeySquare, Loader2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
+import { IconAlert, IconCheck, IconKey } from '@/components/icons';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 
@@ -372,7 +373,7 @@ export function CopilotConnectModal({
         {state === 'prompt' && (
           <>
             <span className="flex size-13 items-center justify-center rounded-full bg-accent-soft-bg text-text">
-              <KeySquare size={24} />
+              <IconKey size={24} />
             </span>
             <p className="max-w-[30ch] text-sm text-text-secondary">
               We&apos;ll open your browser to sign in with Anthropic. Nothing to
@@ -431,7 +432,7 @@ export function CopilotConnectModal({
         {state === 'success' && (
           <>
             <span className="flex size-13 items-center justify-center rounded-full bg-success-bg text-success">
-              <CheckCircle2 size={24} />
+              <IconCheck size={24} />
             </span>
             <p className="text-sm font-medium text-text">Connected</p>
             <p className="text-sm text-text-secondary">
@@ -443,7 +444,7 @@ export function CopilotConnectModal({
         {state === 'error' && (
           <>
             <span className="flex size-13 items-center justify-center rounded-full bg-danger-bg text-danger">
-              <AlertTriangle size={24} />
+              <IconAlert size={24} />
             </span>
             <p className="text-sm font-medium text-text">
               Couldn&apos;t connect

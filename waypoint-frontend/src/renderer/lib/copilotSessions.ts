@@ -1,6 +1,6 @@
 // Session list view-model + pure grouping/formatting helpers for the
 // Copilot panel (issue #11). Session identity, messages, and titles are now
-// backend-persisted (see mock/api.ts's Copilot functions and
+// backend-persisted (see data/api.ts's Copilot functions and
 // useCopilotConversations.ts, the hook that fetches them and merges in
 // local-only pin/order metadata from copilotSessionMeta.ts). What remains
 // here is the pure, storage-agnostic logic for grouping/formatting a
@@ -95,7 +95,7 @@ export function groupKeyForSession(
 /**
  * Compact relative-time label for a session row (e.g. "35m", "2h", "6d").
  * Deliberately not date-fns's formatDistanceToNow (used elsewhere in this
- * app, e.g. IntakePage.tsx) — that produces "about 2 hours ago", far too
+ * app, e.g. RequestsPage.tsx) — that produces "about 2 hours ago", far too
  * wide for the mockup's single-token, tabular-nums time chip.
  */
 export function formatRelativeTime(

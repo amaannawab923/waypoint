@@ -17,12 +17,11 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: 'general', label: 'General' },
       { to: 'members', label: 'Members' },
-      { to: 'features', label: 'Features' },
       { to: 'codebase', label: 'Codebase' },
     ],
   },
   {
-    label: 'Work Structure',
+    label: 'Ticket setup',
     items: [
       { to: 'states', label: 'States' },
       { to: 'labels', label: 'Labels' },

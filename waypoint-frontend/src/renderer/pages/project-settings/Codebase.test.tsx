@@ -1,11 +1,11 @@
 import '@testing-library/jest-dom';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { updateProject } from '@/mock/api';
+import { updateProject } from '@/data/api';
 import { useProject } from '@/layouts/ProjectLayout';
 import type { Project } from '@/types/entities';
 import Codebase from './Codebase';
 
-jest.mock('@/mock/api', () => ({ updateProject: jest.fn() }));
+jest.mock('@/data/api', () => ({ updateProject: jest.fn() }));
 jest.mock('@/layouts/ProjectLayout', () => ({ useProject: jest.fn() }));
 
 const PROJECT: Project = {
@@ -16,17 +16,10 @@ const PROJECT: Project = {
   description: '',
   icon: '📦',
   coverGradient: ['#c2542a', '#3a2314'],
-  network: 'public',
+  visibility: 'public',
   leadId: null,
   defaultAssigneeId: null,
   timezone: 'UTC',
-  features: {
-    cycles: true,
-    modules: true,
-    views: true,
-    pages: true,
-    intake: true,
-  },
   estimate: null,
   automations: {
     autoArchiveEnabled: false,
@@ -39,6 +32,8 @@ const PROJECT: Project = {
   memberIds: [],
   guestAccessEnabled: false,
   repoPath: null,
+  primitiveCounts: { sprints: 0, workstreams: 0, views: 0, docs: 0, requests: 0, requestsPending: 0 },
+  acceptsRequests: false,
 };
 
 const chooseFolder = jest.fn();

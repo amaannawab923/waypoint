@@ -1,21 +1,23 @@
 import { useState } from 'react';
-import { Plus, Trash2, Webhook as WebhookIcon } from 'lucide-react';
+import { Trash2, Webhook as WebhookIcon } from 'lucide-react';
+import { IconPlus } from '@/components/icons';
 import { useAsync } from '@/lib/useAsync';
-import { listWebhooks, createWebhook, deleteWebhook } from '@/mock/api';
+import { listWebhooks, createWebhook, deleteWebhook } from '@/data/api';
 import type { WebhookEventType } from '@/types/entities';
 import { Button, IconButton } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Modal } from '@/components/ui/Modal';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
+import { NotWired } from '@/components/ui/NotWired';
 
 const EVENT_TYPES: { value: WebhookEventType; label: string }[] = [
-  { value: 'work_item.created', label: 'Work item created' },
-  { value: 'work_item.updated', label: 'Work item updated' },
-  { value: 'work_item.deleted', label: 'Work item deleted' },
+  { value: 'ticket.created', label: 'Ticket created' },
+  { value: 'ticket.updated', label: 'Ticket updated' },
+  { value: 'ticket.deleted', label: 'Ticket deleted' },
   { value: 'project.created', label: 'Project created' },
-  { value: 'cycle.created', label: 'Cycle created' },
-  { value: 'module.created', label: 'Module created' },
+  { value: 'sprint.created', label: 'Sprint created' },
+  { value: 'workstream.created', label: 'Workstream created' },
 ];
 
 function toggleInArray<T>(arr: T[], value: T): T[] {
@@ -66,9 +68,13 @@ export default function Webhooks() {
           </p>
         </div>
         <Button variant="primary" onClick={() => setAddOpen(true)}>
-          <Plus size={15} />
+          <IconPlus size={15} />
           Add webhook
         </Button>
+      </div>
+
+      <div className="mb-6">
+        <NotWired capability="webhooks.delivery" />
       </div>
 
       {loading && !webhooks && <SkeletonListRows rows={3} />}
@@ -77,10 +83,10 @@ export default function Webhooks() {
         <EmptyState
           icon={<WebhookIcon size={28} />}
           title="No webhooks yet"
-          description="Add a webhook to notify an external service when work items, projects, cycles, or modules change."
+          description="Add a webhook to notify an external service when tickets, projects, sprints, or workstreams change."
           action={
             <Button variant="primary" onClick={() => setAddOpen(true)}>
-              <Plus size={15} />
+              <IconPlus size={15} />
               Add webhook
             </Button>
           }

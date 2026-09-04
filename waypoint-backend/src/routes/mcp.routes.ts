@@ -28,9 +28,14 @@ mcpRouter.post(
       rawConversationId && CONVERSATION_ID_PATTERN.test(rawConversationId) ? rawConversationId : null;
     const server = createCopilotMcpServer({ conversationId });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    // Both close() calls return Promise<void> — an unhandled rejection from
+    // either would, under Node's default behavior, crash this whole
+    // single-process backend (no supervisor). This is a best-effort
+    // teardown on connection close, not a request the caller is waiting on,
+    // so a failure here is swallowed rather than propagated.
     res.on('close', () => {
-      transport.close();
-      server.close();
+      transport.close().catch(() => {});
+      server.close().catch(() => {});
     });
     await server.connect(transport);
     await transport.handleRequest(req, res, req.body);

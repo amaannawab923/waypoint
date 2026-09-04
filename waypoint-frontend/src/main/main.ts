@@ -25,6 +25,7 @@ import {
   registerCopilotConnectIpc,
   killAllCopilotConnectProcesses,
 } from './copilot/copilotConnect';
+import { registerCopilotDetectIpc } from './copilot/copilotDetect';
 import { registerRepoLinkIpc } from './repoLink';
 
 // Opt-in remote debugging for scripted/agent-driven QA (docs/qa-electron.md)
@@ -42,7 +43,7 @@ if (qaDebugPort) {
 
 // The packaged app loads the renderer from disk with no server behind it —
 // a bare `file://` load can't support createBrowserRouter (a hard
-// refresh/deep-link at e.g. /projects/proj-launch/work-items has no file at
+// refresh/deep-link at e.g. /projects/proj-launch/tickets has no file at
 // that path to find). This registers a custom `app://` scheme that serves
 // the built renderer directory and falls back to index.html for any path
 // that isn't a real file on disk, mirroring what webpack-dev-server's
@@ -70,7 +71,7 @@ function registerAppProtocol() {
     );
     // Path-traversal guard, and the actual SPA-fallback: any request that
     // doesn't resolve to a real file under rendererDist — including every
-    // client-side route like /projects/proj-launch/work-items — serves
+    // client-side route like /projects/proj-launch/tickets — serves
     // index.html instead, exactly like a server's `try_files` rewrite would.
     if (
       !filePath.startsWith(rendererDist) ||
@@ -106,6 +107,7 @@ ipcMain.on('ipc-example', async (event, arg) => {
 registerCopilotIpc(() => mainWindow);
 registerCopilotAuthIpc();
 registerCopilotConnectIpc(() => mainWindow);
+registerCopilotDetectIpc();
 registerRepoLinkIpc(() => mainWindow);
 
 if (process.env.NODE_ENV === 'production') {
@@ -192,10 +194,58 @@ const createWindow = async () => {
   const menuBuilder = new MenuBuilder(mainWindow);
   menuBuilder.buildMenu();
 
-  // Open urls in the user's browser
+  // Open urls in the user's browser — but only if it's actually a browser
+  // that should be opening them. edata.url is whatever the renderer's DOM
+  // asked to open (window.open, target="_blank" on an <a>, etc.), and
+  // nothing upstream of this handler validates it: a ticket comment or
+  // link field (see waypoint-backend's addCommentSchema/addTicketLinkSchema)
+  // could in principle carry a javascript: URL or a file: URL pointing at
+  // an arbitrary local path, and shell.openExternal would hand either
+  // straight to the OS with no guardrail — script execution in one case,
+  // opening an arbitrary local file in the other. Mirrors the scheme-check
+  // pattern already used by copilotConnect.ts's own openExternal IPC
+  // handler (https: + a fixed host allowlist there, since that one only
+  // ever needs to open one specific OAuth URL); here the host can't be
+  // fixed the same way — legitimate links point at arbitrary external
+  // sites — so only the scheme is restricted.
   mainWindow.webContents.setWindowOpenHandler((edata) => {
-    shell.openExternal(edata.url);
+    let parsed: URL;
+    try {
+      parsed = new URL(edata.url);
+    } catch {
+      return { action: 'deny' };
+    }
+    if (parsed.protocol !== 'https:') {
+      return { action: 'deny' };
+    }
+    shell.openExternal(edata.url).catch((err) => {
+      log.error('Failed to open external URL', err);
+    });
     return { action: 'deny' };
+  });
+
+  // Deny in-window navigation to anything the renderer didn't already ship
+  // with — without this, a malicious link (e.g. from the same unsanitized-
+  // comment vector) could navigate the actual app window itself (not just
+  // a new window/tab, which setWindowOpenHandler above already covers) to
+  // an arbitrary destination, including a local file:// URL. The packaged
+  // app only ever navigates within its own app:// origin (see
+  // registerAppProtocol above) or, in dev, the local webpack-dev-server
+  // origin — anything else is a navigation this window has no legitimate
+  // reason to make.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!mainWindow) return;
+    // Fail closed: an unparseable URL or a same-origin check that can't be
+    // evaluated is treated as "not obviously safe" rather than let through.
+    try {
+      const target = new URL(url);
+      const current = new URL(mainWindow.webContents.getURL());
+      if (target.origin !== current.origin) {
+        event.preventDefault();
+      }
+    } catch {
+      event.preventDefault();
+    }
   });
 
   // Remove this if your app does not use auto updates

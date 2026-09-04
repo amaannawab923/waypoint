@@ -12,8 +12,7 @@ import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom';
 import { AppShell } from '@/layouts/AppShell';
 import { ProjectLayout } from '@/layouts/ProjectLayout';
 import { isOnboarded } from '@/lib/onboarding';
-import { AGENT_SESSIONS_ENABLED } from '@/lib/featureFlags';
-import SessionsScreen from '@/pages/sessions/SessionsScreen';
+import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 
 import Login from '@/pages/auth/Login';
 import Signup from '@/pages/auth/Signup';
@@ -22,29 +21,30 @@ import CreateWorkspace from '@/pages/auth/CreateWorkspace';
 import Home from '@/pages/Home';
 import YourWork from '@/pages/YourWork';
 import Drafts from '@/pages/Drafts';
-import Stickies from '@/pages/Stickies';
+import Scratchpad from '@/pages/Scratchpad';
 import Notifications from '@/pages/Notifications';
 import ProjectsList from '@/pages/ProjectsList';
 import ArchivedProjects from '@/pages/ArchivedProjects';
 import AnalyticsPage from '@/pages/AnalyticsPage';
-import WorkspaceViewsPage from '@/pages/WorkspaceViewsPage';
+import ReviewPage from '@/pages/ReviewPage';
+import MachinePage from '@/pages/MachinePage';
+import AllTicketsPage from '@/pages/AllTicketsPage';
 
-import WorkItemsLayout from '@/pages/work-items/WorkItemsLayout';
-import WorkItemDetailPage from '@/pages/work-items/WorkItemDetailPage';
+import TicketsLayout from '@/pages/tickets/TicketsLayout';
+import TicketDetailPage from '@/pages/tickets/TicketDetailPage';
 
-import CyclesPage from '@/pages/CyclesPage';
-import CycleDetailPage from '@/pages/CycleDetailPage';
-import ModulesPage from '@/pages/ModulesPage';
-import ModuleDetailPage from '@/pages/ModuleDetailPage';
+import SprintsPage from '@/pages/SprintsPage';
+import SprintDetailPage from '@/pages/SprintDetailPage';
+import WorkstreamsPage from '@/pages/WorkstreamsPage';
+import WorkstreamDetailPage from '@/pages/WorkstreamDetailPage';
 import ProjectViewsPage from '@/pages/ProjectViewsPage';
-import IntakePage from '@/pages/IntakePage';
-import PagesPage from '@/pages/PagesPage';
-import PageDetailPage from '@/pages/PageDetailPage';
+import RequestsPage from '@/pages/RequestsPage';
+import DocsPage from '@/pages/DocsPage';
+import DocDetailPage from '@/pages/DocDetailPage';
 
 import ProjectSettingsLayout from '@/pages/project-settings/ProjectSettingsLayout';
 import ProjectSettingsGeneral from '@/pages/project-settings/General';
 import ProjectSettingsMembers from '@/pages/project-settings/Members';
-import ProjectSettingsFeatures from '@/pages/project-settings/Features';
 import ProjectSettingsCodebase from '@/pages/project-settings/Codebase';
 import ProjectSettingsStates from '@/pages/project-settings/States';
 import ProjectSettingsLabels from '@/pages/project-settings/Labels';
@@ -67,14 +67,6 @@ import ProfileSettingsNotifications from '@/pages/profile-settings/Notifications
 import ProfileSettingsSecurity from '@/pages/profile-settings/Security';
 import ProfileSettingsTokens from '@/pages/profile-settings/Tokens';
 import ProfileSettingsCopilot from '@/pages/profile-settings/Copilot';
-
-import AdminLayout from '@/pages/admin/AdminLayout';
-import AdminGeneral from '@/pages/admin/General';
-import AdminEmail from '@/pages/admin/Email';
-import AdminAuth from '@/pages/admin/Auth';
-import AdminWorkspaces from '@/pages/admin/Workspaces';
-import AdminAI from '@/pages/admin/AI';
-import AdminImages from '@/pages/admin/Images';
 
 /**
  * Guards every route nested under AppShell. There's no real backend/session
@@ -99,113 +91,113 @@ export const router = createBrowserRouter([
       {
         element: <AppShell />,
         children: [
-          { path: '/', element: <Home /> },
-          { path: '/your-work', element: <YourWork /> },
-          { path: '/drafts', element: <Drafts /> },
-          { path: '/stickies', element: <Stickies /> },
-          { path: '/notifications', element: <Notifications /> },
-          { path: '/projects', element: <ProjectsList /> },
-          { path: '/projects/archived', element: <ArchivedProjects /> },
-          { path: '/analytics', element: <AnalyticsPage /> },
-          { path: '/views', element: <WorkspaceViewsPage /> },
-
+          // Wraps every routed page (not AppShell's own sidebar/topbar chrome,
+          // which stays outside so it's still usable if a page's content
+          // crashes) in a recovery boundary — see ErrorBoundary.tsx. Without
+          // this, an unguarded throw during any single page's render (e.g.
+          // TicketDetailPage.tsx assuming route/outlet context that isn't
+          // always there) unmounted the ENTIRE app to a blank white screen.
           {
-            path: '/projects/:projectId',
-            element: <ProjectLayout />,
+            element: (
+              <ErrorBoundary>
+                <Outlet />
+              </ErrorBoundary>
+            ),
             children: [
-              { index: true, element: <Navigate to="work-items" replace /> },
-              { path: 'work-items', element: <WorkItemsLayout /> },
+              { path: '/', element: <Home /> },
+              { path: '/your-work', element: <YourWork /> },
+              { path: '/drafts', element: <Drafts /> },
+              { path: '/scratchpad', element: <Scratchpad /> },
+              { path: '/notifications', element: <Notifications /> },
+              { path: '/projects', element: <ProjectsList /> },
+              { path: '/projects/archived', element: <ArchivedProjects /> },
+              { path: '/analytics', element: <AnalyticsPage /> },
+              { path: '/review', element: <ReviewPage /> },
+              { path: '/machine', element: <MachinePage /> },
+              { path: '/views', element: <AllTicketsPage /> },
+
               {
-                path: 'work-items/:identifier',
-                element: <WorkItemDetailPage />,
-              },
-              { path: 'cycles', element: <CyclesPage /> },
-              { path: 'cycles/:cycleId', element: <CycleDetailPage /> },
-              { path: 'modules', element: <ModulesPage /> },
-              { path: 'modules/:moduleId', element: <ModuleDetailPage /> },
-              { path: 'views', element: <ProjectViewsPage /> },
-              { path: 'pages', element: <PagesPage /> },
-              { path: 'pages/:pageId', element: <PageDetailPage /> },
-              { path: 'intake', element: <IntakePage /> },
-              {
-                path: 'settings',
-                element: <ProjectSettingsLayout />,
+                path: '/projects/:projectId',
+                element: <ProjectLayout />,
                 children: [
-                  { index: true, element: <Navigate to="general" replace /> },
-                  { path: 'general', element: <ProjectSettingsGeneral /> },
-                  { path: 'members', element: <ProjectSettingsMembers /> },
-                  { path: 'features', element: <ProjectSettingsFeatures /> },
-                  { path: 'codebase', element: <ProjectSettingsCodebase /> },
-                  { path: 'states', element: <ProjectSettingsStates /> },
-                  { path: 'labels', element: <ProjectSettingsLabels /> },
-                  { path: 'estimates', element: <ProjectSettingsEstimates /> },
+                  { index: true, element: <Navigate to="tickets" replace /> },
+                  { path: 'tickets', element: <TicketsLayout /> },
                   {
-                    path: 'automations',
-                    element: <ProjectSettingsAutomations />,
+                    path: 'tickets/:identifier',
+                    element: <TicketDetailPage />,
+                  },
+                  { path: 'sprints', element: <SprintsPage /> },
+                  { path: 'sprints/:sprintId', element: <SprintDetailPage /> },
+                  { path: 'workstreams', element: <WorkstreamsPage /> },
+                  {
+                    path: 'workstreams/:workstreamId',
+                    element: <WorkstreamDetailPage />,
+                  },
+                  { path: 'views', element: <ProjectViewsPage /> },
+                  { path: 'docs', element: <DocsPage /> },
+                  { path: 'docs/:docId', element: <DocDetailPage /> },
+                  { path: 'requests', element: <RequestsPage /> },
+                  {
+                    path: 'settings',
+                    element: <ProjectSettingsLayout />,
+                    children: [
+                      { index: true, element: <Navigate to="general" replace /> },
+                      { path: 'general', element: <ProjectSettingsGeneral /> },
+                      { path: 'members', element: <ProjectSettingsMembers /> },
+                      { path: 'codebase', element: <ProjectSettingsCodebase /> },
+                      { path: 'states', element: <ProjectSettingsStates /> },
+                      { path: 'labels', element: <ProjectSettingsLabels /> },
+                      { path: 'estimates', element: <ProjectSettingsEstimates /> },
+                      {
+                        path: 'automations',
+                        element: <ProjectSettingsAutomations />,
+                      },
+                    ],
                   },
                 ],
               },
-            ],
-          },
 
-          {
-            path: '/settings',
-            element: <WorkspaceSettingsLayout />,
-            children: [
-              { index: true, element: <Navigate to="general" replace /> },
-              { path: 'general', element: <WorkspaceSettingsGeneral /> },
-              { path: 'members', element: <WorkspaceSettingsMembers /> },
-              { path: 'agents', element: <WorkspaceSettingsAgents /> },
-              { path: 'agents/new', element: <AgentDetailPage /> },
-              { path: 'agents/:agentId', element: <AgentDetailPage /> },
-              { path: 'billing', element: <WorkspaceSettingsBilling /> },
-              { path: 'exports', element: <WorkspaceSettingsExports /> },
-              { path: 'webhooks', element: <WorkspaceSettingsWebhooks /> },
-            ],
-          },
-
-          {
-            path: '/profile',
-            element: <ProfileSettingsLayout />,
-            children: [
-              { index: true, element: <Navigate to="general" replace /> },
-              { path: 'general', element: <ProfileSettingsProfile /> },
-              { path: 'preferences', element: <ProfileSettingsPreferences /> },
               {
-                path: 'notifications',
-                element: <ProfileSettingsNotifications />,
+                path: '/settings',
+                element: <WorkspaceSettingsLayout />,
+                children: [
+                  { index: true, element: <Navigate to="general" replace /> },
+                  { path: 'general', element: <WorkspaceSettingsGeneral /> },
+                  { path: 'members', element: <WorkspaceSettingsMembers /> },
+                  { path: 'agents', element: <WorkspaceSettingsAgents /> },
+                  { path: 'agents/new', element: <AgentDetailPage /> },
+                  { path: 'agents/:agentId', element: <AgentDetailPage /> },
+                  { path: 'billing', element: <WorkspaceSettingsBilling /> },
+                  { path: 'exports', element: <WorkspaceSettingsExports /> },
+                  { path: 'webhooks', element: <WorkspaceSettingsWebhooks /> },
+                ],
               },
-              { path: 'security', element: <ProfileSettingsSecurity /> },
-              { path: 'tokens', element: <ProfileSettingsTokens /> },
-              { path: 'copilot', element: <ProfileSettingsCopilot /> },
+
+              {
+                path: '/profile',
+                element: <ProfileSettingsLayout />,
+                children: [
+                  { index: true, element: <Navigate to="general" replace /> },
+                  { path: 'general', element: <ProfileSettingsProfile /> },
+                  {
+                    path: 'preferences',
+                    element: <ProfileSettingsPreferences />,
+                  },
+                  {
+                    path: 'notifications',
+                    element: <ProfileSettingsNotifications />,
+                  },
+                  { path: 'security', element: <ProfileSettingsSecurity /> },
+                  { path: 'tokens', element: <ProfileSettingsTokens /> },
+                  { path: 'copilot', element: <ProfileSettingsCopilot /> },
+                ],
+              },
+
+              { path: '*', element: <Navigate to="/" replace /> },
             ],
           },
-
-          {
-            path: '/admin',
-            element: <AdminLayout />,
-            children: [
-              { index: true, element: <Navigate to="general" replace /> },
-              { path: 'general', element: <AdminGeneral /> },
-              { path: 'email', element: <AdminEmail /> },
-              { path: 'authentication', element: <AdminAuth /> },
-              { path: 'workspaces', element: <AdminWorkspaces /> },
-              { path: 'ai', element: <AdminAI /> },
-              { path: 'images', element: <AdminImages /> },
-            ],
-          },
-
-          { path: '*', element: <Navigate to="/" replace /> },
         ],
       },
-
-      // Sibling of the AppShell-wrapped tree, not nested inside it — Sessions
-      // is a genuine full-viewport takeover with no sidebar/topbar, not a
-      // panel within the normal app chrome. Flag-gated: mock frontend only,
-      // no real backend runtime behind it yet (see lib/featureFlags.ts).
-      ...(AGENT_SESSIONS_ENABLED
-        ? [{ path: '/sessions', element: <SessionsScreen /> }]
-        : []),
     ],
   },
 ]);

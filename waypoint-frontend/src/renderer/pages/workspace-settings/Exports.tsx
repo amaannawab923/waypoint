@@ -1,11 +1,13 @@
 import { useState } from 'react';
-import { Download, RefreshCw } from 'lucide-react';
+import { Download } from 'lucide-react';
+import { IconRefresh } from '@/components/icons';
 import { useAsync } from '@/lib/useAsync';
-import { listProjects, listExports, createExport } from '@/mock/api';
+import { listProjects, listExports, createExport } from '@/data/api';
 import { Button, IconButton } from '@/components/ui/Button';
 import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { SkeletonTableRows } from '@/components/ui/Skeleton';
+import { NotWired } from '@/components/ui/NotWired';
 import type { ExportStatus } from '@/types/entities';
 import { clsx } from 'clsx';
 
@@ -57,9 +59,13 @@ export default function Exports() {
   return (
     <div>
       <h2 className="mb-1 font-display text-lg font-medium text-text">Exports</h2>
-      <p className="mb-6 text-sm text-text-secondary">
+      <p className="mb-3 text-sm text-text-secondary">
         Export your workspace data as a downloadable file.
       </p>
+
+      <div className="mb-6">
+        <NotWired capability="exports.download" />
+      </div>
 
       <div className="mb-8 flex flex-wrap items-end gap-3 rounded-[var(--radius-lg)] border border-border bg-surface-2 p-4">
         <div className="min-w-[200px]">
@@ -102,7 +108,7 @@ export default function Exports() {
       <div className="mb-3 flex items-center justify-between">
         <h3 className="font-display text-sm font-medium text-text">Previous exports</h3>
         <IconButton label="Refresh exports" onClick={handleRefresh} disabled={refreshing || loading}>
-          <RefreshCw size={14} className={clsx((refreshing || loading) && 'animate-spin')} />
+          <IconRefresh size={14} className={clsx((refreshing || loading) && 'animate-spin')} />
         </IconButton>
       </div>
 

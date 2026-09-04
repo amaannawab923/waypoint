@@ -1,0 +1,131 @@
+import {
+  pgTable,
+  text,
+  integer,
+  numeric,
+  boolean,
+  timestamp,
+  date,
+  pgEnum,
+  primaryKey,
+  unique,
+  type AnyPgColumn,
+} from 'drizzle-orm/pg-core';
+import { projects, ticketStates, labels } from './projects.js';
+import { workstreams, sprints } from './workstreams-sprints.js';
+import { members } from './workspace.js';
+
+export const priorityEnum = pgEnum('priority', ['urgent', 'high', 'medium', 'low', 'none']);
+export const assigneeKindEnum = pgEnum('assignee_kind', ['member', 'agent']);
+// Where a ticket came from. Replaces the dropped 'triage' state group
+// (§3.3): provenance is a fact about the ticket, not a position in the
+// project's workflow, so it belongs on the ticket rather than in a state
+// every project had to carry.
+export const ticketSourceEnum = pgEnum('ticket_source', ['manual', 'request', 'agent', 'import']);
+
+export const tickets = pgTable(
+  'tickets',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    identifier: text('identifier').notNull().unique(),
+    sequenceId: integer('sequence_id').notNull(),
+    title: text('title').notNull(),
+    description: text('description').notNull().default(''),
+    stateId: text('state_id')
+      .notNull()
+      .references(() => ticketStates.id, { onDelete: 'restrict' }),
+    priority: priorityEnum('priority').notNull().default('none'),
+    source: ticketSourceEnum('source').notNull().default('manual'),
+    workstreamId: text('workstream_id').references(() => workstreams.id, { onDelete: 'set null' }),
+    sprintId: text('sprint_id').references(() => sprints.id, { onDelete: 'set null' }),
+    parentId: text('parent_id').references((): AnyPgColumn => tickets.id, { onDelete: 'set null' }),
+    estimatePoints: numeric('estimate_points'),
+    estimateValue: text('estimate_value'),
+    startDate: date('start_date'),
+    dueDate: date('due_date'),
+    createdById: text('created_by_id')
+      .notNull()
+      .references(() => members.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    attachmentCount: integer('attachment_count').notNull().default(0),
+    linkCount: integer('link_count').notNull().default(0),
+    isDraft: boolean('is_draft').notNull().default(false),
+    // Fractional/lexo sort key — the DB equivalent of the mock's array-splice
+    // ordering. Reorder = compute the midpoint between the target row and its
+    // neighbor; list/board queries `ORDER BY sort_order`.
+    sortOrder: numeric('sort_order', { precision: 30, scale: 10 }).notNull().default('0'),
+  },
+  (t) => [unique().on(t.projectId, t.sequenceId)],
+);
+
+export const ticketLinks = pgTable('ticket_links', {
+  id: text('id').primaryKey(),
+  ticketId: text('ticket_id')
+    .notNull()
+    .references(() => tickets.id, { onDelete: 'cascade' }),
+  url: text('url').notNull(),
+  label: text('label').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const ticketLabels = pgTable(
+  'ticket_labels',
+  {
+    ticketId: text('ticket_id')
+      .notNull()
+      .references(() => tickets.id, { onDelete: 'cascade' }),
+    labelId: text('label_id')
+      .notNull()
+      .references(() => labels.id, { onDelete: 'cascade' }),
+  },
+  (t) => [primaryKey({ columns: [t.ticketId, t.labelId] })],
+);
+
+// No FK on assigneeId — an assignee id is polymorphic (member OR agent, per
+// entities.ts), so no single FK target is possible. Integrity is enforced in
+// the service layer, same as the mock's logAssigneeChanges/nameFor() do by
+// checking both lists.
+export const ticketAssignees = pgTable(
+  'ticket_assignees',
+  {
+    ticketId: text('ticket_id')
+      .notNull()
+      .references(() => tickets.id, { onDelete: 'cascade' }),
+    assigneeId: text('assignee_id').notNull(),
+    assigneeKind: assigneeKindEnum('assignee_kind').notNull(),
+  },
+  (t) => [unique().on(t.ticketId, t.assigneeId)],
+);
+
+// authorId has no FK — same polymorphic reasoning as ticketAssignees:
+// agents post comments too (see mock/seed.ts's agent-authored comments), so
+// no single FK target is possible. Validated in the service layer.
+export const comments = pgTable('comments', {
+  id: text('id').primaryKey(),
+  ticketId: text('ticket_id')
+    .notNull()
+    .references(() => tickets.id, { onDelete: 'cascade' }),
+  authorId: text('author_id').notNull(),
+  bodyHtml: text('body_html').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// verb is plain text, not a pg enum — ActivityVerb has already grown twice in
+// the client codebase, and ALTER TYPE ... ADD VALUE has enough transactional
+// caveats to avoid on the fastest-moving field. Validated at the zod layer.
+// actorId has no FK — same polymorphic reasoning as comments.authorId above
+// (activity entries like 'agent_status_changed' are actored by an agent).
+export const activityEntries = pgTable('activity_entries', {
+  id: text('id').primaryKey(),
+  ticketId: text('ticket_id')
+    .notNull()
+    .references(() => tickets.id, { onDelete: 'cascade' }),
+  actorId: text('actor_id').notNull(),
+  verb: text('verb').notNull(),
+  detail: text('detail').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});

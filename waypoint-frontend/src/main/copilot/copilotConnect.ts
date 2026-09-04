@@ -21,14 +21,18 @@ import { ipcMain, shell, type BrowserWindow } from 'electron';
 // emulation engine VS Code's own integrated terminal runs on — and reads
 // back its resolved screen buffer instead of the raw byte stream.
 
-const COMMON_INSTALL_DIRS = [
+// Exported for copilotDetect.ts's `claude --version` probe, which needs the
+// exact same PATH-augmentation shape this file already established — see
+// its own comment for why that reuse matters (consistency with the one
+// already-reviewed pattern, not a fresh reimplementation).
+export const COMMON_INSTALL_DIRS = [
   '/opt/homebrew/bin',
   '/usr/local/bin',
   path.join(os.homedir(), '.claude', 'local'),
   path.join(os.homedir(), '.local', 'bin'),
 ];
 
-function buildEnv(): Record<string, string> {
+export function buildEnv(): Record<string, string> {
   const existing = (process.env.PATH || '').split(path.delimiter);
   const missing = COMMON_INSTALL_DIRS.filter((dir) => !existing.includes(dir));
   const env: Record<string, string> = {

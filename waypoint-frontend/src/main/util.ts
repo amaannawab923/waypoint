@@ -14,7 +14,7 @@ export function resolveHtmlPath(htmlFileName: string) {
   // Served by the custom `app://` protocol handler registered in main.ts
   // (protocol.handle('app', ...)) rather than a bare file:// load — file://
   // has no server behind it at all, so createBrowserRouter's real paths
-  // (e.g. a hard refresh at /projects/proj-launch/work-items) would have
+  // (e.g. a hard refresh at /projects/proj-launch/tickets) would have
   // nothing to resolve to. The app:// handler serves real files when they
   // exist and falls back to index.html otherwise, the same SPA-fallback
   // behavior webpack-dev-server's historyApiFallback already provides in

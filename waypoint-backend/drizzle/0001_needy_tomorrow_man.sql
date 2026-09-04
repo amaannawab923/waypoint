@@ -1,0 +1,13 @@
+-- HAND-WRITTEN. `drizzle-kit generate` cannot express an enum *value*
+-- rename — see the C4 rename commit's docs/design/RENAME-STATE.md entry for
+-- why: its default output for this schema diff was
+--   ALTER TABLE "copilot_proposals" ALTER COLUMN "kind" SET DATA TYPE text;
+--   DROP TYPE "public"."copilot_proposal_kind";
+--   CREATE TYPE "public"."copilot_proposal_kind" AS ENUM(..., 'create_ticket');
+--   ALTER TABLE "copilot_proposals" ALTER COLUMN "kind" SET DATA TYPE
+--     "public"."copilot_proposal_kind" USING "kind"::"public"."copilot_proposal_kind";
+-- which is destructive: the final USING cast fails for any existing row
+-- whose "kind" is still the text 'create_work_item', since that label no
+-- longer exists in the rebuilt enum. RENAME VALUE preserves every existing
+-- row's "kind" in place — it relabels the enum, not the data.
+ALTER TYPE "copilot_proposal_kind" RENAME VALUE 'create_work_item' TO 'create_ticket';

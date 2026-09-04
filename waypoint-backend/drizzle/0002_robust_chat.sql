@@ -1,1 +1,0 @@
-ALTER TABLE "copilot_conversations" ADD COLUMN "claude_session_id" text;

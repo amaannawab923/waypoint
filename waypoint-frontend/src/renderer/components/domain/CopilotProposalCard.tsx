@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { clsx } from 'clsx';
-import { AlertTriangle, ArrowRight, Check } from 'lucide-react';
-import type { CopilotProposal, CopilotProposalKind, Priority } from '@/types/entities';
+import { ArrowRight } from 'lucide-react';
+import { IconAlert, IconCheck } from '@/components/icons';
+import type { ProposalView, ProposalKind, Priority } from '@/types/entities';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { PriorityIcon, PRIORITY_LABEL } from './PriorityIcon';
@@ -12,40 +13,78 @@ import { PriorityIcon, PRIORITY_LABEL } from './PriorityIcon';
 // never bare ids; nothing executes until Approve; a resolved card replaces
 // its buttons with a resolution note (unmounted, not disabled — a resolved
 // proposal can never be executed twice from the UI).
+//
+// Generalized for architecture §1.8/W4.2: this component takes a
+// ProposalView regardless of `origin` ('copilot' from the Copilot panel
+// today, 'agent_run' from an autonomous agent tomorrow) and regardless of
+// which surface mounts it (the panel transcript, and — not built here, see
+// W4.3/W4.4 — a future Review list, ticket drawer, or Requests). Nothing in
+// this file may assume panel-specific layout, scroll, or transcript context.
 
-const KIND_LABELS: Record<CopilotProposalKind, string> = {
+const KIND_LABELS: Record<ProposalKind, string> = {
   comment: 'Proposed change · Comment',
   state_change: 'Proposed change · State',
   assignee_change: 'Proposed change · Assignee',
   priority_change: 'Proposed change · Priority',
-  create_work_item: 'Proposed change · New ticket',
+  create_ticket: 'Proposed change · New ticket',
+  add_label: 'Proposed change · Label',
 };
 
-function StatusBadge({ status }: { status: CopilotProposal['status'] }) {
-  const base = 'rounded-full px-2 py-0.5 text-[10.5px] font-semibold whitespace-nowrap';
+function StatusBadge({ status }: { status: ProposalView['status'] }) {
+  const base =
+    'rounded-full px-2 py-0.5 text-[10.5px] font-semibold whitespace-nowrap';
   switch (status) {
     case 'proposed':
       return (
-        <span className={clsx(base, 'border border-border-strong bg-surface-2 text-text-secondary')}>
+        <span
+          className={clsx(
+            base,
+            'border border-border-strong bg-surface-2 text-text-secondary',
+          )}
+        >
           Pending review
         </span>
       );
     case 'executing':
-      return <span className={clsx(base, 'bg-surface-2 text-text-secondary')}>Applying…</span>;
+      return (
+        <span className={clsx(base, 'bg-surface-2 text-text-secondary')}>
+          Applying…
+        </span>
+      );
     case 'executed':
-      return <span className={clsx(base, 'bg-success-bg text-success')}>Applied ✓</span>;
+      return (
+        <span className={clsx(base, 'bg-success-bg text-success')}>
+          Applied ✓
+        </span>
+      );
     case 'stale':
-      return <span className={clsx(base, 'bg-warning-bg text-warning')}>Stale</span>;
+      return (
+        <span className={clsx(base, 'bg-warning-bg text-warning')}>Stale</span>
+      );
     case 'expired':
-      return <span className={clsx(base, 'bg-surface-2 text-text-muted')}>Expired</span>;
+      return (
+        <span className={clsx(base, 'bg-surface-2 text-text-muted')}>
+          Expired
+        </span>
+      );
     case 'rejected':
     case 'superseded':
     default:
-      return <span className={clsx(base, 'bg-surface-2 text-text-muted')}>Dismissed</span>;
+      return (
+        <span className={clsx(base, 'bg-surface-2 text-text-muted')}>
+          Dismissed
+        </span>
+      );
   }
 }
 
-function TicketLine({ identifier, title }: { identifier?: string; title?: string }) {
+function TicketLine({
+  identifier,
+  title,
+}: {
+  identifier?: string;
+  title?: string;
+}) {
   return (
     <div className="flex items-baseline gap-2 text-[13px]">
       <span className="rounded border border-border bg-surface-2 px-1.5 py-px font-mono text-[11.5px] font-semibold text-text-secondary">
@@ -93,25 +132,74 @@ function PriorityChip({ priority }: { priority?: Priority }) {
 
 // The disclosure prefix is server-computed from the real display name;
 // pulling that name back out just feeds the avatar initials, so a
-// non-matching format degrades to "You" instead of anything wrong.
+// non-matching format degrades to "You" instead of anything wrong. Only
+// meaningful for origin === 'copilot' — disclosureText is always computed
+// the same way (from the CURRENT/approving user's name, so an approved
+// comment's disclosure matches what addComment will actually write)
+// regardless of origin, but the "Copilot — <name>'s agent" phrasing this
+// regex expects is specific to the Copilot-conversation flow.
 function displayNameFromDisclosure(disclosureText: string): string {
   const match = /—\s*(.+?)[’']s agent/.exec(disclosureText);
   return match?.[1] ?? 'You';
 }
 
-function ProposalBody({ proposal }: { proposal: CopilotProposal }) {
+// Who to credit a comment proposal to. Copilot-origin cards keep the exact
+// prior behavior (name parsed from the server-computed disclosure, "Posted
+// as you" — the disclosure IS what the approved comment will say). An
+// agent_run has no such disclosure text to parse; it needs the attribution
+// the caller has (or can look up) for `proposal.agentId` instead. Kept as a
+// prop rather than a backend join (architecture §1.8/W4.2 decision — see
+// the unit's report) so this component's own data needs don't grow.
+function ProposerBadge({
+  proposal,
+  agentName,
+}: {
+  proposal: ProposalView;
+  agentName?: string;
+}) {
+  if (proposal.origin === 'agent_run') {
+    const name = agentName ?? proposal.agentId ?? 'Agent';
+    return (
+      <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-[10.5px] font-semibold text-text-secondary">
+        <Avatar name={name} size={16} />
+        Proposed by {name}
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-[10.5px] font-semibold text-text-secondary">
+      <Avatar
+        name={displayNameFromDisclosure(proposal.disclosureText)}
+        size={16}
+      />
+      Posted as you
+    </span>
+  );
+}
+
+function ProposalBody({
+  proposal,
+  agentName,
+}: {
+  proposal: ProposalView;
+  agentName?: string;
+}) {
   const { kind, payload, snapshot, disclosureText } = proposal;
 
-  if (kind === 'create_work_item') {
+  if (kind === 'create_ticket') {
     return (
       <>
         <div className="flex items-baseline gap-2 text-[13px]">
           <span className="rounded border border-border bg-surface-2 px-1.5 py-px font-mono text-[11.5px] font-semibold text-text-secondary">
             {snapshot.projectIdentifier ?? '—'}
           </span>
-          <span className="text-text-secondary">New ticket in {snapshot.projectName ?? 'project'}</span>
+          <span className="text-text-secondary">
+            New ticket in {snapshot.projectName ?? 'project'}
+          </span>
         </div>
-        <div className="text-[13px] leading-snug font-semibold">{payload.title}</div>
+        <div className="text-[13px] leading-snug font-semibold">
+          {payload.title}
+        </div>
         {/* Plain text node — a model-authored description must never reach
             dangerouslySetInnerHTML. */}
         {payload.description ? (
@@ -143,9 +231,16 @@ function ProposalBody({ proposal }: { proposal: CopilotProposal }) {
       <TicketLine identifier={snapshot.identifier} title={snapshot.title} />
       {kind === 'state_change' && (
         <div className="flex flex-wrap items-center gap-2">
-          <StateChip name={snapshot.fromStateName} color={snapshot.fromStateColor} />
+          <StateChip
+            name={snapshot.fromStateName}
+            color={snapshot.fromStateColor}
+          />
           <ArrowRight size={14} className="text-text-muted" />
-          <StateChip name={snapshot.toStateName} color={snapshot.toStateColor} highlight />
+          <StateChip
+            name={snapshot.toStateName}
+            color={snapshot.toStateColor}
+            highlight
+          />
         </div>
       )}
       {kind === 'priority_change' && (
@@ -164,11 +259,22 @@ function ProposalBody({ proposal }: { proposal: CopilotProposal }) {
             <em className="text-text-secondary">{disclosureText}</em>
             {payload.body}
           </div>
-          <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-[10.5px] font-semibold text-text-secondary">
-            <Avatar name={displayNameFromDisclosure(disclosureText)} size={16} />
-            Posted as you
-          </span>
+          <ProposerBadge proposal={proposal} agentName={agentName} />
         </>
+      )}
+      {kind === 'add_label' && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[13px] text-text-secondary">Add label:</span>
+          {/* No real producer exists yet for this kind (architecture §4.2 —
+              the enum was widened ahead of an MCP tool); shape is
+              best-effort from the label schema (id/name/color), mirroring
+              how StateChip renders a state's name+color from the snapshot. */}
+          <StateChip
+            name={snapshot.labelName}
+            color={snapshot.labelColor}
+            highlight
+          />
+        </div>
       )}
       {kind === 'assignee_change' && (
         <div className="flex items-center gap-2 text-[13px]">
@@ -197,14 +303,17 @@ function ProposalBody({ proposal }: { proposal: CopilotProposal }) {
   );
 }
 
-function resolutionNote(proposal: CopilotProposal): { ok: boolean; text: string } {
+function resolutionNote(proposal: ProposalView): { ok: boolean; text: string } {
   const { kind, status } = proposal;
   if (status === 'executed') {
     switch (kind) {
       case 'comment':
         return { ok: true, text: 'Applied — comment posted' };
       case 'state_change':
-        return { ok: true, text: `Applied — moved to ${proposal.snapshot.toStateName ?? 'the new state'}` };
+        return {
+          ok: true,
+          text: `Applied — moved to ${proposal.snapshot.toStateName ?? 'the new state'}`,
+        };
       case 'priority_change':
         return {
           ok: true,
@@ -218,15 +327,24 @@ function resolutionNote(proposal: CopilotProposal): { ok: boolean; text: string 
               ? `Applied — ${proposal.snapshot.assigneeName ?? 'assignee'} removed`
               : `Applied — ${proposal.snapshot.assigneeName ?? 'assignee'} assigned`,
         };
-      case 'create_work_item':
+      case 'add_label':
+        return {
+          ok: true,
+          text: `Applied — ${proposal.snapshot.labelName ?? 'label'} added`,
+        };
+      case 'create_ticket':
       default:
         return { ok: true, text: 'Applied — ticket created' };
     }
   }
-  if (status === 'expired') return { ok: false, text: 'Expired — nothing changed' };
+  if (status === 'expired')
+    return { ok: false, text: 'Expired — nothing changed' };
   return {
     ok: false,
-    text: kind === 'comment' ? 'Dismissed, nothing posted' : 'Dismissed, nothing changed',
+    text:
+      kind === 'comment'
+        ? 'Dismissed, nothing posted'
+        : 'Dismissed, nothing changed',
   };
 }
 
@@ -243,17 +361,43 @@ export function CopilotProposalCard({
   proposal,
   onApprove,
   onReject,
+  agentName,
 }: {
-  proposal: CopilotProposal;
+  proposal: ProposalView;
   onApprove: (id: string) => Promise<unknown>;
   onReject: (id: string) => Promise<unknown>;
+  /**
+   * Display name for `proposal.agentId` when `proposal.origin ===
+   * 'agent_run'` — optional, caller-supplied (architecture §1.8/W4.2
+   * decision: ProposalView carries only the agent's id, and adding a
+   * backend join just for this card's attribution line felt like the wrong
+   * place to grow the service layer; a future agent_run consumer that
+   * already has the agent's name in hand — e.g. from the same page's agent
+   * list — passes it straight through). Unused, and safe to omit, for
+   * origin === 'copilot'.
+   */
+  agentName?: string;
 }) {
   // Disables both buttons while either POST is in flight — the backend's
   // claim UPDATE already makes a double-approve harmless, but the UI
   // shouldn't invite one.
   const [acting, setActing] = useState(false);
+  // Same fix as Composer.tsx's readOnly-not-disabled switch (CopilotPanel.tsx),
+  // but buttons have no readOnly equivalent — Approve/Reject are native
+  // <button>s that go `disabled={acting}` below, and the HTML spec
+  // force-blurs a focused control the instant `disabled` is applied. Here
+  // it's worse than the composer: a resolved outcome unmounts this entire
+  // footer, which blurs to <body> the same way even when nothing failed.
+  // Either path — if unhandled — leaks the next keystroke to global
+  // shortcuts (e.g. Tab to Approve, Enter to approve, then "g" navigating
+  // the whole app away mid-review instead of typing "g" anywhere). Moving
+  // focus to this card's own root — a stable container that's neither
+  // disabled nor unmounted by either path — before disabling keeps focus
+  // somewhere real instead of falling through to <body>.
+  const cardRef = useRef<HTMLDivElement>(null);
 
   async function act(fn: (id: string) => Promise<unknown>) {
+    cardRef.current?.focus();
     setActing(true);
     try {
       await fn(proposal.id);
@@ -269,15 +413,30 @@ export function CopilotProposalCard({
   const isPending = status === 'proposed';
   const isStale = status === 'stale';
   const resolved =
-    status === 'executed' || status === 'rejected' || status === 'superseded' || status === 'expired';
+    status === 'executed' ||
+    status === 'rejected' ||
+    status === 'superseded' ||
+    status === 'expired';
   const note = resolved ? resolutionNote(proposal) : null;
 
   return (
     <div
+      ref={cardRef}
+      // Programmatic focus target only (see `act` above) — not a tab stop,
+      // and no visible focus ring for a container nothing but this card's
+      // own click handler ever focuses. The data attribute tells
+      // useGlobalKeyboardShortcuts.ts not to treat a keystroke landing here
+      // (right after Approve/Reject force-blurs to this container) as a
+      // global nav shortcut trigger.
+      tabIndex={-1}
+      data-shortcut-guard
       className={clsx(
-        'w-full shrink-0 self-start overflow-hidden rounded-[var(--radius)] border bg-surface',
+        'w-full shrink-0 self-start overflow-hidden rounded-[var(--radius)] border bg-surface outline-none',
         status === 'executed' ? 'border-success' : 'border-border-strong',
-        (status === 'rejected' || status === 'superseded' || status === 'expired') && 'opacity-70',
+        (status === 'rejected' ||
+          status === 'superseded' ||
+          status === 'expired') &&
+          'opacity-70',
       )}
     >
       <div className="flex items-center justify-between gap-2 border-b border-border bg-bg-inset px-3 py-2">
@@ -288,11 +447,14 @@ export function CopilotProposalCard({
       </div>
 
       <div className="flex flex-col gap-2.5 p-3">
-        <ProposalBody proposal={proposal} />
+        <ProposalBody proposal={proposal} agentName={agentName} />
         {isStale && (
           <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-warning bg-warning-bg px-2.5 py-2 text-[12.5px] leading-snug font-medium text-warning">
-            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-            <span>{proposal.statusReason ?? 'This proposal is no longer applicable.'}</span>
+            <IconAlert size={14} className="mt-0.5 shrink-0" />
+            <span>
+              {proposal.statusReason ??
+                'This proposal is no longer applicable.'}
+            </span>
           </div>
         )}
       </div>
@@ -303,10 +465,20 @@ export function CopilotProposalCard({
             Executes once on approve · expires in 24h
           </span>
           <div className="flex shrink-0 gap-2">
-            <Button size="xs" variant="secondary" disabled={acting} onClick={() => act(onReject)}>
+            <Button
+              size="xs"
+              variant="secondary"
+              disabled={acting}
+              onClick={() => act(onReject)}
+            >
               Reject
             </Button>
-            <Button size="xs" variant="primary" disabled={acting} onClick={() => act(onApprove)}>
+            <Button
+              size="xs"
+              variant="primary"
+              disabled={acting}
+              onClick={() => act(onApprove)}
+            >
               Approve
             </Button>
           </div>
@@ -319,7 +491,12 @@ export function CopilotProposalCard({
             Blocked — what's shown above no longer matches the ticket
           </span>
           <div className="flex shrink-0 gap-2">
-            <Button size="xs" variant="secondary" disabled={acting} onClick={() => act(onReject)}>
+            <Button
+              size="xs"
+              variant="secondary"
+              disabled={acting}
+              onClick={() => act(onReject)}
+            >
               Dismiss
             </Button>
           </div>
@@ -333,7 +510,7 @@ export function CopilotProposalCard({
             note.ok ? 'bg-success-bg text-success' : 'text-text-muted',
           )}
         >
-          {note.ok ? <Check size={13} /> : <span aria-hidden>—</span>}
+          {note.ok ? <IconCheck size={13} /> : <span aria-hidden>—</span>}
           {note.text}
         </div>
       )}
