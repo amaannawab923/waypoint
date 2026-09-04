@@ -424,8 +424,12 @@ export function CopilotProposalCard({
       ref={cardRef}
       // Programmatic focus target only (see `act` above) — not a tab stop,
       // and no visible focus ring for a container nothing but this card's
-      // own click handler ever focuses.
+      // own click handler ever focuses. The data attribute tells
+      // useGlobalKeyboardShortcuts.ts not to treat a keystroke landing here
+      // (right after Approve/Reject force-blurs to this container) as a
+      // global nav shortcut trigger.
       tabIndex={-1}
+      data-shortcut-guard
       className={clsx(
         'w-full shrink-0 self-start overflow-hidden rounded-[var(--radius)] border bg-surface outline-none',
         status === 'executed' ? 'border-success' : 'border-border-strong',
