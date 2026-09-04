@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ListTodo, ListChecks, Link2, Terminal } from 'lucide-react';
 import { IconChevron, IconChevronRight, IconPlus } from '@/components/icons';
@@ -23,7 +29,11 @@ import {
 import { AGENT_STATUS_CONFIG } from '@/components/domain/AgentStatusBadge';
 import { CreateTicketModal } from '@/components/domain/CreateTicketModal';
 import { Popover } from '@/pages/tickets/Popover';
-import type { TicketsView } from '@/pages/tickets/useTicketsView';
+import {
+  EMPTY_FILTERS,
+  hasActiveFilters,
+  type TicketsView,
+} from '@/pages/tickets/useTicketsView';
 import type { Ticket } from '@/types/entities';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
 import { registerActiveSelectableView } from '@/lib/useActiveSelectableView';
@@ -295,26 +305,46 @@ export default function TicketList({
   }
 
   if (!view.loading && view.items.length === 0) {
+    // A filter/search active and zero results is a different situation
+    // from the project (or scope) genuinely having no tickets at all —
+    // both used to render identical "No tickets / Create your first
+    // ticket..." copy, which falsely implies the project itself is empty
+    // when really nothing matched the current filter.
+    const searching = hasActiveFilters(view.filters);
+    let emptyTitle = 'No tickets';
+    let emptyDescription = 'Tickets matching this filter will show up here.';
+    let emptyAction: ReactNode;
+    if (searching) {
+      emptyTitle = 'No matching tickets';
+      emptyDescription = 'No tickets match your search or filters.';
+      emptyAction = (
+        <button
+          type="button"
+          onClick={() => view.setFilters(EMPTY_FILTERS)}
+          className="cursor-pointer text-sm font-medium text-accent hover:underline"
+        >
+          Clear filters
+        </button>
+      );
+    } else if (projectId) {
+      emptyDescription =
+        'Create your first ticket to start tracking work in this project.';
+      emptyAction = (
+        <button
+          type="button"
+          onClick={() => setCreateForGroup('none')}
+          className="cursor-pointer text-sm font-medium text-accent hover:underline"
+        >
+          + New ticket
+        </button>
+      );
+    }
     return (
       <EmptyState
         icon={<ListTodo size={28} />}
-        title="No tickets"
-        description={
-          projectId
-            ? 'Create your first ticket to start tracking work in this project.'
-            : 'Tickets matching this filter will show up here.'
-        }
-        action={
-          projectId ? (
-            <button
-              type="button"
-              onClick={() => setCreateForGroup('none')}
-              className="cursor-pointer text-sm font-medium text-accent hover:underline"
-            >
-              + New ticket
-            </button>
-          ) : undefined
-        }
+        title={emptyTitle}
+        description={emptyDescription}
+        action={emptyAction}
       />
     );
   }

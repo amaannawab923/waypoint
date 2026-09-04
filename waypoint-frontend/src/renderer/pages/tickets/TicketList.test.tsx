@@ -21,7 +21,7 @@ import {
   getActiveSelectableView,
   __resetActiveSelectableViewForTests,
 } from '@/lib/useActiveSelectableView';
-import { useTicketsView } from './useTicketsView';
+import { useTicketsView, type TicketFilters } from './useTicketsView';
 import TicketList from './TicketList';
 
 // W5.2's own accept-criterion coverage for the shared TicketList component:
@@ -134,9 +134,15 @@ beforeEach(() => {
   jest.mocked(updateTicket).mockResolvedValue(ticket());
 });
 
-function TestHarness({ fixture }: { fixture: Ticket[] }) {
+function TestHarness({
+  fixture,
+  defaultFilters,
+}: {
+  fixture: Ticket[];
+  defaultFilters?: Partial<TicketFilters>;
+}) {
   jest.mocked(listTickets).mockResolvedValue(fixture);
-  const view = useTicketsView({ projectId: 'proj-1' });
+  const view = useTicketsView({ projectId: 'proj-1', defaultFilters });
   return <TicketList view={view} projectId="proj-1" />;
 }
 
@@ -149,6 +155,38 @@ async function renderList(fixture: Ticket[]) {
   await waitFor(() => expect(screen.queryByText(/^\d+ tickets?$/)).toBeInTheDocument());
   return utils;
 }
+
+describe('TicketList empty state', () => {
+  it('shows the genuinely-empty-project copy when no filter is active', async () => {
+    render(
+      <MemoryRouter>
+        <TestHarness fixture={[]} />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('No tickets')).toBeInTheDocument();
+    expect(
+      screen.getByText('Create your first ticket to start tracking work in this project.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Clear filters')).not.toBeInTheDocument();
+  });
+
+  // Used to render the exact same "No tickets / Create your first ticket…"
+  // copy here too, falsely implying the project itself was empty when
+  // really nothing matched the active filter.
+  it('shows search-aware copy when a filter is active and matches nothing', async () => {
+    render(
+      <MemoryRouter>
+        <TestHarness fixture={[]} defaultFilters={{ priority: ['urgent'] }} />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('No matching tickets')).toBeInTheDocument();
+    expect(screen.getByText('No tickets match your search or filters.')).toBeInTheDocument();
+    expect(screen.queryByText('Create your first ticket to start tracking work in this project.')).not.toBeInTheDocument();
+    expect(screen.getByText('Clear filters')).toBeInTheDocument();
+  });
+});
 
 describe('TicketList count line', () => {
   it('the count line always equals the number of rendered rows', async () => {
