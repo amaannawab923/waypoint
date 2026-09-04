@@ -40,7 +40,10 @@ export interface CreateSprintInput {
   description?: string;
   startDate: string;
   endDate: string;
-  leadId?: string;
+  // `string | null`, not just `string | undefined` — an update patch needs to be able to
+  // send an explicit `null` to clear a previously-set lead (see updateSprint below), which
+  // is distinct from the field being absent entirely.
+  leadId?: string | null;
   memberIds?: string[];
 }
 
