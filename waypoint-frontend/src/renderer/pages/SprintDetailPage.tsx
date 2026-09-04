@@ -202,8 +202,17 @@ export default function SprintDetailPage() {
   const status = getSprintStatus(sprint);
   const allSprints = sprints ?? [];
 
-  async function patchSprint(fields: Parameters<typeof updateSprint>[1]) {
-    await updateSprint(sprint!.id, fields);
+  // `updateSprint`'s parameter type (data/api.ts, derived from the shared `Sprint` type)
+  // types `leadId` as `ID | undefined` only — it hasn't been widened to `ID | null` the way
+  // `Workstream.leadId` has (see WorkstreamDetailPage.tsx's identical "clear lead" pattern).
+  // That's a shared-type change spanning files outside this fix's scope. `leadId: null` is
+  // exactly what the backend now needs to distinguish "clear the lead" from "field omitted"
+  // (JSON.stringify drops `undefined` keys, so sending `undefined` silently no-ops), so this
+  // local cast lets SprintDetailPage send it without widening the shared type file.
+  type SprintPatch = Omit<Parameters<typeof updateSprint>[1], 'leadId'> & { leadId?: string | null };
+
+  async function patchSprint(fields: SprintPatch) {
+    await updateSprint(sprint!.id, fields as Parameters<typeof updateSprint>[1]);
     reloadSprints();
   }
 
@@ -400,7 +409,7 @@ export default function SprintDetailPage() {
                   <button
                     type="button"
                     onClick={() => {
-                      patchSprint({ leadId: undefined });
+                      patchSprint({ leadId: null });
                       close();
                     }}
                     className={OPTION_CLASS}
