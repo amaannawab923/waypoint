@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAsync } from '@/lib/useAsync';
 import {
   listTickets,
@@ -103,12 +103,24 @@ export function toFilterQuery(
   return Object.keys(query).length > 1 ? query : undefined;
 }
 
+function sameArray<T>(a: T[], b: T[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
 /**
- * Whether any filter/search field is actually set — i.e. whether the
- * current `items` is a real (possibly empty) result of narrowing down,
- * rather than "every ticket in scope". Reuses toFilterQuery's own
- * "would this encode to something real" check rather than re-deriving it,
- * so the two never drift.
+ * Whether `filters` differs from `baseline` in any user-visible way — i.e.
+ * whether the current `items` is a real (possibly empty) result of
+ * narrowing down further than the view's own baseline scope, rather than
+ * "every ticket in scope".
+ *
+ * `baseline` defaults to `EMPTY_FILTERS` for callers with no seeded scope,
+ * but a view seeded via `defaultFilters` (e.g. YourWork's "Assigned to me"
+ * tab, seeded with `{ assigneeId: ['@me'] }`) must pass its own
+ * `view.defaultFilters` as the baseline — otherwise the seeded scope itself
+ * would be counted as an "active" user-set filter, which both mislabels an
+ * untouched seeded view as filtered AND, if "Clear filters" just reset to
+ * `EMPTY_FILTERS`, would invite wiping that seeded scope entirely (see
+ * `resetFilters` below, which exists for exactly that reason).
  *
  * Exists so an empty ticket list can tell "genuinely nothing here yet"
  * apart from "nothing matched this search" (TicketList.tsx's empty
@@ -116,8 +128,20 @@ export function toFilterQuery(
  * your first ticket..."), which is misleading when the project actually
  * has tickets and only the current filter/search matched none of them.
  */
-export function hasActiveFilters(filters: TicketFilters): boolean {
-  return toFilterQuery(filters) !== undefined;
+export function hasActiveFilters(
+  filters: TicketFilters,
+  baseline: TicketFilters = EMPTY_FILTERS,
+): boolean {
+  return (
+    !sameArray(filters.priority, baseline.priority) ||
+    !sameArray(filters.stateId, baseline.stateId) ||
+    !sameArray(filters.labelId, baseline.labelId) ||
+    !sameArray(filters.assigneeId, baseline.assigneeId) ||
+    !sameArray(filters.workstreamId, baseline.workstreamId) ||
+    !sameArray(filters.sprintId, baseline.sprintId) ||
+    !sameArray(filters.creatorId, baseline.creatorId) ||
+    filters.text.trim() !== baseline.text.trim()
+  );
 }
 
 export interface TicketsViewOptions {
@@ -170,11 +194,86 @@ export interface TicketsViewOptions {
  */
 export function useTicketsView(options: TicketsViewOptions = {}) {
   const { projectId, defaultFilters, defaultGroupBy = 'state' } = options;
-  const [filters, setFilters] = useState<TicketFilters>(() => ({
-    ...EMPTY_FILTERS,
-    ...defaultFilters,
-  }));
-  const filterQuery = useMemo(() => toFilterQuery(filters), [filters]);
+  // Merged once per distinct `defaultFilters` identity — the view's own
+  // baseline scope (e.g. YourWork's `{ assigneeId: ['@me'] }`). Exposed
+  // below (as `defaultFilters`) so consumers can restore it via
+  // `resetFilters` and measure "no *additional* filters set" via
+  // `hasActiveFilters(filters, view.defaultFilters)` instead of comparing
+  // against a hardcoded empty state that would wrongly count the seeded
+  // scope itself as user-set.
+  const resolvedDefaultFilters = useMemo<TicketFilters>(
+    () => ({ ...EMPTY_FILTERS, ...defaultFilters }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+  const [filters, setFilters] = useState<TicketFilters>(
+    () => resolvedDefaultFilters,
+  );
+
+  /**
+   * Resets filters back to this view's own baseline scope — `EMPTY_FILTERS`
+   * merged with the view's `defaultFilters` — rather than a bare
+   * `EMPTY_FILTERS`. A view seeded with e.g. `{ assigneeId: ['@me'] }`
+   * (YourWork's "Assigned to me" tab) must restore that scope on "Clear
+   * filters," not wipe it: bare `EMPTY_FILTERS` would silently turn
+   * "Assigned to me" into "every ticket in the workspace" while the tab is
+   * still labeled "Assigned to me."
+   */
+  function resetFilters() {
+    setFilters(resolvedDefaultFilters);
+  }
+
+  // Search text is debounced before it flows into the query that drives a
+  // refetch (300ms) — the input itself (`filters.text`) still updates on
+  // every keystroke for instant visual feedback, but the server round-trip
+  // (and the itemsLoading flip that would otherwise flash the skeleton) only
+  // fires once the user pauses typing. Every other filter field applies
+  // immediately, unaffected by this debounce.
+  const [debouncedText, setDebouncedText] = useState(filters.text);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedText(filters.text), 300);
+    return () => clearTimeout(timer);
+  }, [filters.text]);
+
+  // Deliberately depends on each filter field individually (not the whole
+  // `filters` object) plus `debouncedText` rather than `filters.text` — an
+  // object identity created fresh by every `setFilters` call (including one
+  // that only touched `text`) would otherwise recompute this on every
+  // keystroke regardless of the debounce above, since a new `filterQuery`
+  // reference is exactly what re-triggers the `useAsync` fetch below.
+  const filterQuery = useMemo(
+    () =>
+      toFilterQuery({
+        priority: filters.priority,
+        stateId: filters.stateId,
+        labelId: filters.labelId,
+        assigneeId: filters.assigneeId,
+        workstreamId: filters.workstreamId,
+        sprintId: filters.sprintId,
+        creatorId: filters.creatorId,
+        text: debouncedText,
+      }),
+    [
+      filters.priority,
+      filters.stateId,
+      filters.labelId,
+      filters.assigneeId,
+      filters.workstreamId,
+      filters.sprintId,
+      filters.creatorId,
+      debouncedText,
+    ],
+  );
+  // A stable string identity for "the filter actually applied to the last
+  // fetch" — changes exactly when filterQuery's content changes (i.e. when
+  // a refetch is actually triggered), unlike `filters` itself which gets a
+  // new object identity on every keystroke. Consumers that need to react to
+  // a real, applied filter change (e.g. invalidating bulk selection) should
+  // key off this instead of `filters`.
+  const appliedFiltersKey = useMemo(
+    () => JSON.stringify(filterQuery ?? null),
+    [filterQuery],
+  );
 
   const {
     data: items,
@@ -193,18 +292,49 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
   // groupedItems' useMemo below a fresh [] reference on every render.
   const resolvedItems = useMemo(() => items ?? [], [items]);
 
+  // True only for the genuine first paint (no data on screen yet at all) —
+  // NOT for a filter-driven refetch, which keeps rendering the previous
+  // `items`/`states` while itemsLoading/statesLoading flip back to true
+  // (useAsync never clears `data` mid-reload). Consumers (TicketList,
+  // BoardView) use this — not the raw itemsLoading/statesLoading — to
+  // decide when to show a full skeleton, so narrowing an already-loaded
+  // list via a filter change no longer flashes the skeleton on every
+  // keystroke/filter click; only the true initial load does. If the
+  // initial fetch errors, `items`/`statesLists` stay undefined but their
+  // `loading` flags settle to false, so this correctly stops being true
+  // rather than pinning the skeleton on screen forever.
+  const initialItemsLoading = items === undefined && itemsLoading;
+
+  // Unfiltered — fetched once per scope (projectId, or the whole workspace)
+  // independent of `filters`/`filterQuery`, specifically to give sub-item
+  // completion badges (subItemCountByParent below) a TRUE total/done count
+  // that doesn't change just because the active filter narrowed `items`.
+  // `items`/`allItems` below are the FILTERED result (filtering moved
+  // server-side — see this hook's own doc comment further down); this is
+  // the one place that still needs an actually-unfiltered dataset.
+  const { data: unfilteredItems } = useAsync(
+    () => (projectId ? listTickets(projectId) : listAllTickets()),
+    [projectId],
+  );
+
   // The set of projects actually represented in the current result —
   // exactly [projectId] in project scope (so this degrades to the original
   // single-project fetches below with no behavior change), or every
-  // distinct project the loaded tickets span in workspace scope. Bounded by
-  // what's on screen, not every project in the workspace: states/labels are
-  // per-project-customizable with no workspace-wide list endpoint, so this
-  // mirrors the same bounded Promise.all shape YourWork.tsx's loadYourWork
-  // already used for exactly this problem before W5.2.
+  // distinct project the loaded tickets span in workspace scope. Prefers
+  // `unfilteredItems` (the true unfiltered set) once it's loaded so
+  // states/labels cover every project a parent ticket's sub-items could
+  // belong to — not just the projects visible under the current filter —
+  // falling back to the filtered `resolvedItems` only for the brief gap
+  // before the unfiltered fetch resolves. Bounded by what's on screen, not
+  // every project in the workspace: states/labels are per-project-
+  // customizable with no workspace-wide list endpoint, so this mirrors the
+  // same bounded Promise.all shape YourWork.tsx's loadYourWork already used
+  // for exactly this problem before W5.2.
   const distinctProjectIds = useMemo(() => {
     if (projectId) return [projectId];
-    return Array.from(new Set(resolvedItems.map((i) => i.projectId))).sort();
-  }, [projectId, resolvedItems]);
+    const source = unfilteredItems ?? resolvedItems;
+    return Array.from(new Set(source.map((i) => i.projectId))).sort();
+  }, [projectId, resolvedItems, unfilteredItems]);
   const projectIdsKey = distinctProjectIds.join(',');
 
   const { data: statesLists, loading: statesLoading } = useAsync(
@@ -261,7 +391,24 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
   );
   const projects = projectsData ?? [];
 
-  const loading = itemsLoading || statesLoading;
+  // True only for the genuine first paint of the states fetch too (see
+  // initialItemsLoading's comment above for why this matters) — a project
+  // filter change re-keys `projectIdsKey` no more often than a real
+  // distinct-project-set change, so this rarely refires anyway, but the
+  // same "never re-flash the skeleton once we've shown data" rule applies.
+  const initialStatesLoading = statesLists === undefined && statesLoading;
+
+  // Reserved for the true initial load only (see initialItemsLoading and
+  // initialStatesLoading above) — a filter-driven refetch keeps rendering
+  // the previous `items`/`groupedItems` while `isRefetching` below flips
+  // true, instead of this flipping back to true and re-showing a full
+  // skeleton on every keystroke or filter click.
+  const loading = initialItemsLoading || initialStatesLoading;
+  // True whenever a fetch tied to the current filter is in flight —
+  // including a filter-driven refetch after the initial load, when `loading`
+  // above is already false. Consumers that want a subtle "still narrowing
+  // the list" indicator (rather than a full skeleton) should use this.
+  const isRefetching = itemsLoading;
 
   const [groupBy, setGroupBy] = useState<GroupBy>(defaultGroupBy);
   const [showEmptyGroups, setShowEmptyGroups] = useState(true);
@@ -274,6 +421,25 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
     () => new Map(projects.map((p) => [p.id, p])),
     [projects],
   );
+
+  // TRUE per-parent sub-item total/done counts, derived from `unfilteredItems`
+  // (not the filtered `resolvedItems`/`allItems`) — a completion badge
+  // answering "how much of this parent is done" shouldn't change meaning
+  // just because the active filter narrowed the visible list (see
+  // `unfilteredItems`' own doc comment above). Consumers (TicketList,
+  // BoardView) should build subItemsByParent/subItemStats from this, not
+  // from `view.allItems`.
+  const subItemCountByParent = useMemo(() => {
+    const map = new Map<string, { total: number; done: number }>();
+    for (const wi of unfilteredItems ?? []) {
+      if (!wi.parentId) continue;
+      const entry = map.get(wi.parentId) ?? { total: 0, done: 0 };
+      entry.total += 1;
+      if (stateById.get(wi.stateId)?.group === 'completed') entry.done += 1;
+      map.set(wi.parentId, entry);
+    }
+    return map;
+  }, [unfilteredItems, stateById]);
 
   const groupedItems: TicketGroup[] = useMemo(() => {
     function build(
@@ -420,7 +586,9 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
     projectId,
     items: resolvedItems,
     allItems: resolvedItems,
+    subItemCountByParent,
     loading,
+    isRefetching,
     reload,
     patchItemLocally,
     reorderItemLocally,
@@ -431,6 +599,9 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
     projects,
     filters,
     setFilters,
+    defaultFilters: resolvedDefaultFilters,
+    resetFilters,
+    appliedFiltersKey,
     groupBy,
     setGroupBy,
     groupedItems,
