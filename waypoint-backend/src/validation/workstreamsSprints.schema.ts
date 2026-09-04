@@ -19,7 +19,9 @@ const sprintFieldsSchema = z.object({
   description: z.string().optional(),
   startDate: z.string(),
   endDate: z.string(),
-  leadId: z.string().optional(),
+  // Nullable (not just optional), mirroring createWorkstreamSchema's leadId above — an
+  // explicit `leadId: null` clears the lead, distinct from omitting the field entirely.
+  leadId: z.string().nullable().optional(),
   memberIds: z.array(z.string()).optional(),
 });
 
