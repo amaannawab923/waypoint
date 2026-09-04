@@ -95,24 +95,32 @@ export default function Automations() {
     reloadProject();
   }
 
+  // Save failed (the shared HTTP client already surfaced a toast) — revert
+  // the optimistic value so the control's visible state matches what's
+  // actually persisted, instead of looking saved when it isn't.
+
   function handleAutoArchiveToggle(v: boolean) {
+    const previous = autoArchive;
     setAutoArchive(v);
-    persist({ autoArchiveEnabled: v });
+    persist({ autoArchiveEnabled: v }).catch(() => setAutoArchive(previous));
   }
 
   function handleAutoArchiveAfterDays(n: number) {
+    const previous = autoArchiveAfterDays;
     setAutoArchiveAfterDays(n);
-    persist({ autoArchiveAfterDays: n });
+    persist({ autoArchiveAfterDays: n }).catch(() => setAutoArchiveAfterDays(previous));
   }
 
   function handleAutoCloseToggle(v: boolean) {
+    const previous = autoClose;
     setAutoClose(v);
-    persist({ autoCloseEnabled: v });
+    persist({ autoCloseEnabled: v }).catch(() => setAutoClose(previous));
   }
 
   function handleAutoCloseAfterDays(n: number) {
+    const previous = autoCloseAfterDays;
     setAutoCloseAfterDays(n);
-    persist({ autoCloseAfterDays: n });
+    persist({ autoCloseAfterDays: n }).catch(() => setAutoCloseAfterDays(previous));
   }
 
   return (
