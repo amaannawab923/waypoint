@@ -108,13 +108,15 @@ export default function Estimates() {
     }
   }
 
+  const estimate = project.estimate;
+
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-6 px-8 py-8">
       <div>
         <h1 className="font-display text-lg font-medium text-text">Estimates</h1>
       </div>
 
-      {!project.estimate ? (
+      {!estimate ? (
         <EmptyState
           icon={<Ruler size={28} />}
           title="No estimates yet"
@@ -126,31 +128,45 @@ export default function Estimates() {
           }
         />
       ) : (
-        <div className="flex flex-col gap-3 rounded-[var(--radius)] border border-border-strong p-5">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-sm font-medium text-text">{ESTIMATE_PRESETS[project.estimate.type].label}</p>
-              <p className="mt-1 text-sm text-text-secondary">
-                {ESTIMATE_PRESETS[project.estimate.type].description}
-              </p>
+        // Defensive against a project whose stored `estimate.type` doesn't
+        // match any known preset (e.g. a legacy/renamed value from before
+        // this project was created, or a future value this build doesn't
+        // know about yet). ESTIMATE_PRESETS[estimate.type] would otherwise
+        // be `undefined`, and reading `.label` off it crashed this whole
+        // page with no recovery. Fall back to the project's own stored
+        // values rather than silently swallowing the mismatch.
+        (() => {
+          const preset = ESTIMATE_PRESETS[estimate.type] ?? {
+            label: 'Custom',
+            description: 'Estimate values configured for this project.',
+            values: estimate.values,
+          };
+          return (
+            <div className="flex flex-col gap-3 rounded-[var(--radius)] border border-border-strong p-5">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-sm font-medium text-text">{preset.label}</p>
+                  <p className="mt-1 text-sm text-text-secondary">{preset.description}</p>
+                </div>
+                <div className="flex items-center gap-1">
+                  <IconButton label="Change estimate system" onClick={() => setPickerOpen(true)}>
+                    <IconEdit size={14} />
+                  </IconButton>
+                  <IconButton label="Remove estimate system" onClick={handleRemove} disabled={removing}>
+                    <Trash2 size={14} />
+                  </IconButton>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {estimate.values.map((v) => (
+                  <Badge key={v} outline>
+                    {v}
+                  </Badge>
+                ))}
+              </div>
             </div>
-            <div className="flex items-center gap-1">
-              <IconButton label="Change estimate system" onClick={() => setPickerOpen(true)}>
-                <IconEdit size={14} />
-              </IconButton>
-              <IconButton label="Remove estimate system" onClick={handleRemove} disabled={removing}>
-                <Trash2 size={14} />
-              </IconButton>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {project.estimate.values.map((v) => (
-              <Badge key={v} outline>
-                {v}
-              </Badge>
-            ))}
-          </div>
-        </div>
+          );
+        })()
       )}
 
       <EstimatePickerModal open={pickerOpen} onClose={() => setPickerOpen(false)} onPicked={handlePick} />
