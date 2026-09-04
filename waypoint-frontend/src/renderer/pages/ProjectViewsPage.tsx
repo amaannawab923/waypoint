@@ -145,6 +145,13 @@ export default function ProjectViewsPage() {
   const ticketsView = useTicketsView({ projectId: project.id });
 
   const [savingFilters, setSavingFilters] = useState(false);
+  // Same fix as CopilotProposalCard.tsx's act(): "Save changes" disables
+  // itself (savingFilters) the instant it's clicked, which force-blurs the
+  // button per the HTML spec and leaks the next keystroke to
+  // useGlobalKeyboardShortcuts.ts's global nav shortcuts. Focus this
+  // stable toolbar row — never disabled, never unmounted by the save —
+  // first.
+  const saveFiltersRowRef = useRef<HTMLDivElement>(null);
 
   const normalizedFilters = useMemo(
     () =>
@@ -183,6 +190,7 @@ export default function ProjectViewsPage() {
 
   async function handleSaveViewFilters() {
     if (!activeView) return;
+    saveFiltersRowRef.current?.focus();
     setSavingFilters(true);
     try {
       const filters = captureSavedViewFilter(ticketsView.filters, project.id, ticketsView.groupBy);
@@ -278,7 +286,12 @@ export default function ProjectViewsPage() {
             </div>
           </div>
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-3">
+        <div
+          ref={saveFiltersRowRef}
+          tabIndex={-1}
+          data-shortcut-guard
+          className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-3 outline-none"
+        >
           {/* Reuses the same group/filter/search controls the live ticket
               list toolbar renders (TicketListToolbar) — editing a saved
               view's filter is just driving this same `ticketsView` the way
