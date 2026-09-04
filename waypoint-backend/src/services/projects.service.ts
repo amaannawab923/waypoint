@@ -37,6 +37,14 @@ export interface PrimitiveCounts {
   views: number;
   docs: number;
   requests: number;
+  // Requests still pending triage — distinct from `requests` (every request
+  // regardless of status), which only drives the sidebar's "does this
+  // primitive have any rows at all" nav-visibility check. The sidebar badge
+  // itself should count only what actually needs action, the same way
+  // Review's badge counts proposed (not every past) proposals and
+  // Notifications' badge counts unread (not every) notification — see
+  // Sidebar.tsx.
+  requestsPending: number;
 }
 type ProjectWithCounts = ProjectEntity & { primitiveCounts: PrimitiveCounts };
 
@@ -83,19 +91,25 @@ function toProjectEntity(row: ProjectRow, memberIds: string[]): ProjectEntity {
 // than the string it uses for bigint/numeric (same reasoning as
 // normalizeTicket's estimatePoints on the client side).
 async function getPrimitiveCounts(projectId: string, executor: Tx | typeof db = db): Promise<PrimitiveCounts> {
-  const [[sprintsRow], [workstreamsRow], [viewsRow], [docsRow], [requestsRow]] = await Promise.all([
-    executor.select({ n: sql<number>`count(*)::int` }).from(sprints).where(eq(sprints.projectId, projectId)),
-    executor.select({ n: sql<number>`count(*)::int` }).from(workstreams).where(eq(workstreams.projectId, projectId)),
-    executor.select({ n: sql<number>`count(*)::int` }).from(savedViews).where(eq(savedViews.projectId, projectId)),
-    executor.select({ n: sql<number>`count(*)::int` }).from(docs).where(eq(docs.projectId, projectId)),
-    executor.select({ n: sql<number>`count(*)::int` }).from(requests).where(eq(requests.projectId, projectId)),
-  ]);
+  const [[sprintsRow], [workstreamsRow], [viewsRow], [docsRow], [requestsRow], [requestsPendingRow]] =
+    await Promise.all([
+      executor.select({ n: sql<number>`count(*)::int` }).from(sprints).where(eq(sprints.projectId, projectId)),
+      executor.select({ n: sql<number>`count(*)::int` }).from(workstreams).where(eq(workstreams.projectId, projectId)),
+      executor.select({ n: sql<number>`count(*)::int` }).from(savedViews).where(eq(savedViews.projectId, projectId)),
+      executor.select({ n: sql<number>`count(*)::int` }).from(docs).where(eq(docs.projectId, projectId)),
+      executor.select({ n: sql<number>`count(*)::int` }).from(requests).where(eq(requests.projectId, projectId)),
+      executor
+        .select({ n: sql<number>`count(*)::int` })
+        .from(requests)
+        .where(and(eq(requests.projectId, projectId), eq(requests.status, 'pending'))),
+    ]);
   return {
     sprints: sprintsRow?.n ?? 0,
     workstreams: workstreamsRow?.n ?? 0,
     views: viewsRow?.n ?? 0,
     docs: docsRow?.n ?? 0,
     requests: requestsRow?.n ?? 0,
+    requestsPending: requestsPendingRow?.n ?? 0,
   };
 }
 async function withPrimitiveCounts(entity: ProjectEntity, executor: Tx | typeof db = db): Promise<ProjectWithCounts> {
@@ -141,6 +155,14 @@ async function selectProjectsWithCounts(where: SQL | undefined): Promise<Project
     .from(requests)
     .groupBy(requests.projectId)
     .as('request_counts');
+  // Same shape as requestsSub, filtered to status = 'pending' — the sidebar
+  // badge shows this, not the total (see PrimitiveCounts.requestsPending).
+  const requestsPendingSub = db
+    .select({ projectId: requests.projectId, n: sql<number>`count(*)::int`.as('requests_pending_n') })
+    .from(requests)
+    .where(eq(requests.status, 'pending'))
+    .groupBy(requests.projectId)
+    .as('request_pending_counts');
 
   // Plain column references, not a raw `coalesce(...)` sql fragment — a
   // LEFT JOIN with no matching group already leaves these NULL for a
@@ -156,6 +178,7 @@ async function selectProjectsWithCounts(where: SQL | undefined): Promise<Project
       viewsCount: viewsSub.n,
       docsCount: docsSub.n,
       requestsCount: requestsSub.n,
+      requestsPendingCount: requestsPendingSub.n,
     })
     .from(projects)
     .leftJoin(sprintsSub, eq(sprintsSub.projectId, projects.id))
@@ -163,11 +186,19 @@ async function selectProjectsWithCounts(where: SQL | undefined): Promise<Project
     .leftJoin(viewsSub, eq(viewsSub.projectId, projects.id))
     .leftJoin(docsSub, eq(docsSub.projectId, projects.id))
     .leftJoin(requestsSub, eq(requestsSub.projectId, projects.id))
+    .leftJoin(requestsPendingSub, eq(requestsPendingSub.projectId, projects.id))
     .where(where);
 
   const bareRows: ProjectRow[] = rows.map(
-    ({ sprintsCount: _s, workstreamsCount: _w, viewsCount: _v, docsCount: _d, requestsCount: _r, ...row }) =>
-      row as ProjectRow,
+    ({
+      sprintsCount: _s,
+      workstreamsCount: _w,
+      viewsCount: _v,
+      docsCount: _d,
+      requestsCount: _r,
+      requestsPendingCount: _rp,
+      ...row
+    }) => row as ProjectRow,
   );
   const entities = await attachMemberIds(bareRows);
   return entities.map((entity, i) => ({
@@ -178,6 +209,7 @@ async function selectProjectsWithCounts(where: SQL | undefined): Promise<Project
       views: rows[i].viewsCount ?? 0,
       docs: rows[i].docsCount ?? 0,
       requests: rows[i].requestsCount ?? 0,
+      requestsPending: rows[i].requestsPendingCount ?? 0,
     },
   }));
 }
@@ -262,7 +294,7 @@ export async function createProject(input: CreateProjectInput): Promise<ProjectW
     // for what is necessarily all zero.
     return {
       ...toProjectEntity(project, [CURRENT_USER_ID]),
-      primitiveCounts: { sprints: 0, workstreams: 0, views: 0, docs: 0, requests: 0 },
+      primitiveCounts: { sprints: 0, workstreams: 0, views: 0, docs: 0, requests: 0, requestsPending: 0 },
     };
   });
 }

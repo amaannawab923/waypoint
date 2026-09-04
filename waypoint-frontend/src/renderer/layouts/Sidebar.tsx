@@ -138,7 +138,12 @@ function ProjectRow({ project }: { project: Project }) {
   if (primitiveCounts.workstreams > 0) subNav.push({ to: 'workstreams', label: 'Workstreams', icon: IconTrack });
   if (primitiveCounts.views > 0) subNav.push({ to: 'views', label: 'Views', icon: IconEye });
   if (project.acceptsRequests || primitiveCounts.requests > 0) {
-    subNav.push({ to: 'requests', label: 'Requests', icon: IconInbox, count: primitiveCounts.requests });
+    // The badge counts only pending (actionable) requests — the same
+    // "actionable, not historical total" rule Review's and Notifications'
+    // badges already follow above — while the nav item itself still shows
+    // based on the total (primitiveCounts.requests), so a project with only
+    // resolved requests in its history doesn't lose its Requests entry.
+    subNav.push({ to: 'requests', label: 'Requests', icon: IconInbox, count: primitiveCounts.requestsPending });
   }
   if (primitiveCounts.docs > 0) subNav.push({ to: 'docs', label: 'Docs', icon: IconFile });
 

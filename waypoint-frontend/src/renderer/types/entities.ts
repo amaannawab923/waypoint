@@ -75,6 +75,10 @@ export interface PrimitiveCounts {
   views: number;
   docs: number;
   requests: number;
+  /** Requests still pending triage — what the sidebar badge should show,
+   * distinct from `requests` (every request regardless of status), which
+   * only drives nav-visibility. See Sidebar.tsx. */
+  requestsPending: number;
 }
 
 export type EstimateType = 'points' | 'categories';

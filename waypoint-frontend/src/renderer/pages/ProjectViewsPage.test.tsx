@@ -86,6 +86,7 @@ const PROJECT: Project = {
     views: 1,
     docs: 0,
     requests: 0,
+    requestsPending: 0,
   },
   acceptsRequests: true,
 };

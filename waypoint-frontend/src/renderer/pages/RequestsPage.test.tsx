@@ -60,7 +60,7 @@ const PROJECT: Project = {
   memberIds: ['mem-1'],
   guestAccessEnabled: false,
   repoPath: null,
-  primitiveCounts: { sprints: 0, workstreams: 0, views: 0, docs: 0, requests: 0 },
+  primitiveCounts: { sprints: 0, workstreams: 0, views: 0, docs: 0, requests: 0, requestsPending: 0 },
   acceptsRequests: true,
 };
 
