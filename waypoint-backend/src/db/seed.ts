@@ -493,6 +493,8 @@ export async function seed() {
     sprintId?: string | null;
     createdAt: Date;
     updatedAt: Date;
+    startDate?: string | null;
+    dueDate?: string | null;
   };
 
   let seq = 0;
@@ -564,12 +566,41 @@ export async function seed() {
     4: { title: 'Draft the launch-week timeline', state: 'todo', priority: 'medium', assignee: { kind: 'member', id: 'mem-1' } },
   };
 
+  // A modest, realistic spread of due (and, for a few, start) dates on top
+  // of the generator's own output, which never sets one — before this, not
+  // a single seeded ticket had a dueDate, which left the Calendar and Gantt
+  // views with nothing to render (see CalendarView.tsx/GanttView.tsx's
+  // empty states). Real teams only put a due date on work that actually
+  // needs to land by a specific day, not on every ticket, so this covers a
+  // fraction of Compass Web's 203: a couple already-met dates on Done work,
+  // a cluster inside the active Sprint 12 window (sp-cw-12 runs
+  // daysAgo(6)..daysFromNow(8)), a couple slightly overdue on open work
+  // (realistic slippage), and a few further out. Keyed by CW sequence
+  // number, same as cwOverrides above.
+  const cwDates: Record<number, { startDate?: Date; dueDate: Date }> = {
+    121: { dueDate: daysAgo(35) }, // Done — shipped on time
+    142: { startDate: daysAgo(2), dueDate: daysFromNow(5) }, // Sprint 12, urgent
+    141: { startDate: daysAgo(1), dueDate: daysFromNow(3) }, // Sprint 12 window, in progress
+    138: { startDate: daysAgo(3), dueDate: daysFromNow(6) }, // in progress
+    140: { dueDate: daysFromNow(12) }, // todo
+    129: { dueDate: daysFromNow(20) }, // todo
+    133: { dueDate: daysFromNow(15) }, // todo
+    8: { dueDate: daysFromNow(4) }, // in progress, urgent
+    177: { dueDate: daysFromNow(7) }, // in progress, urgent
+    66: { dueDate: daysFromNow(9) }, // in review
+    199: { dueDate: daysFromNow(11) }, // in review
+    47: { dueDate: daysFromNow(18) }, // todo
+    88: { dueDate: daysFromNow(25) }, // todo
+    110: { dueDate: daysAgo(2) }, // slightly overdue — realistic slippage
+  };
+
   const cwTicketBySeq = new Map<number, WiSeed>();
   cwGenerated.forEach((g, idx) => {
     const seqNo = idx + 1;
     const merged = { ...g, ...cwOverrides[seqNo] };
     const createdAt = daysAgo(merged.daysAgoUpdated + merged.daysAgoCreatedExtra);
     const updatedAt = daysAgo(merged.daysAgoUpdated);
+    const dates = cwDates[seqNo];
     const s = wi('proj-cw', seqNo, {
       title: merged.title,
       description: (cwOverrides[seqNo] as { description?: string } | undefined)?.description,
@@ -581,6 +612,8 @@ export async function seed() {
       sprintId: CW_SPRINT[merged.sprintName],
       createdAt,
       updatedAt,
+      startDate: dates?.startDate ? dateOnly(dates.startDate) : undefined,
+      dueDate: dates?.dueDate ? dateOnly(dates.dueDate) : undefined,
     });
     cwTicketBySeq.set(seqNo, s);
   });
@@ -629,6 +662,8 @@ export async function seed() {
         createdById: 'mem-1',
         createdAt: w.createdAt,
         updatedAt: w.updatedAt,
+        startDate: w.startDate ?? null,
+        dueDate: w.dueDate ?? null,
         isDraft: false,
         sortOrder: String(i * 1000),
       };
