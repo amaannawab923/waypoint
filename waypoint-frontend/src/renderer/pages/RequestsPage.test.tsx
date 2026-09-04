@@ -253,4 +253,20 @@ describe('RequestsPage → public request form toggle', () => {
     expect(updateProject).toHaveBeenCalledWith('proj-1', { acceptsRequests: false });
     expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
   });
+
+  // handleTogglePublicForm used to flip local state optimistically with no
+  // error handling — a failed save left the switch showing the new position
+  // while the project's persisted acceptsRequests stayed unchanged.
+  it('reverts to the previous value when the save fails', async () => {
+    mount([]);
+    jest.mocked(updateProject).mockRejectedValue(new Error('network error'));
+
+    await screen.findByText('No requests yet');
+    await act(async () => {
+      screen.getByRole('switch').click();
+    });
+
+    expect(updateProject).toHaveBeenCalledWith('proj-1', { acceptsRequests: false });
+    expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
+  });
 });
