@@ -1,4 +1,5 @@
 import '@testing-library/jest-dom';
+import { useEffect } from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import {
@@ -137,12 +138,29 @@ beforeEach(() => {
 function TestHarness({
   fixture,
   defaultFilters,
+  appliedFilters,
 }: {
   fixture: Ticket[];
   defaultFilters?: Partial<TicketFilters>;
+  /**
+   * Applied once, post-mount, on top of `defaultFilters` — simulates a real
+   * user-set filter (e.g. via the toolbar), as opposed to `defaultFilters`
+   * itself (a view's seeded baseline scope, e.g. YourWork's `@me`). The two
+   * are deliberately different: `hasActiveFilters` compares against the
+   * baseline, so a test asserting the "some filter is active" empty-state
+   * copy must layer a change ON TOP of `defaultFilters`, not just pass
+   * `defaultFilters` and expect it alone to count as active.
+   */
+  appliedFilters?: Partial<TicketFilters>;
 }) {
   jest.mocked(listTickets).mockResolvedValue(fixture);
   const view = useTicketsView({ projectId: 'proj-1', defaultFilters });
+  useEffect(() => {
+    if (appliedFilters) {
+      view.setFilters((f) => ({ ...f, ...appliedFilters }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   return <TicketList view={view} projectId="proj-1" />;
 }
 
@@ -177,7 +195,7 @@ describe('TicketList empty state', () => {
   it('shows search-aware copy when a filter is active and matches nothing', async () => {
     render(
       <MemoryRouter>
-        <TestHarness fixture={[]} defaultFilters={{ priority: ['urgent'] }} />
+        <TestHarness fixture={[]} appliedFilters={{ priority: ['urgent'] }} />
       </MemoryRouter>,
     );
 
