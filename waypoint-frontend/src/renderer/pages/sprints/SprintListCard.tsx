@@ -1,7 +1,8 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { clsx } from 'clsx';
-import { CalendarRange, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
+import { CalendarRange, MoreHorizontal, Trash2 } from 'lucide-react';
+import { IconEdit } from '@/components/icons';
 import { deleteSprint, updateSprint } from '@/data/api';
 import type { Sprint, Ticket, TicketState } from '@/types/entities';
 import { Button } from '@/components/ui/Button';
@@ -214,7 +215,7 @@ export function SprintListCard({
           {(close) => (
             <div className="w-40 rounded-[var(--radius-sm)] border border-border bg-surface p-1 shadow-lg">
               <MenuItem
-                icon={<Pencil size={14} />}
+                icon={<IconEdit size={14} />}
                 label="Edit"
                 onClick={() => {
                   close();

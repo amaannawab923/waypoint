@@ -1,4 +1,4 @@
-import { AlertTriangle } from 'lucide-react';
+import { IconAlert } from '@/components/icons';
 import { CAPABILITIES } from '@/capabilities';
 import type { Capability, CapabilityKey } from '@/capabilities';
 
@@ -37,7 +37,7 @@ export function NotWired({ capability }: { capability: CapabilityKey }) {
       title={entry.ref}
       className="flex items-start gap-2.5 rounded-[var(--radius-sm)] border border-warning/30 bg-warning-bg px-3 py-2 text-xs text-warning"
     >
-      <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+      <IconAlert size={14} className="mt-0.5 shrink-0" />
       <span className="min-w-0 flex-1">
         {entry.note ?? 'This is not wired up yet.'}
       </span>

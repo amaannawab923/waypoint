@@ -7,7 +7,8 @@ import { AvatarStack } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Modal } from '@/components/ui/Modal';
-import { ListChecks, Plus, Search } from 'lucide-react';
+import { ListChecks } from 'lucide-react';
+import { IconPlus, IconSearch } from '@/components/icons';
 import { updateTicket } from '@/data/api';
 
 /**
@@ -56,7 +57,7 @@ function AddTicketModal({
     <Modal open={open} onClose={handleClose} title="Add ticket to sprint">
       <div className="flex flex-col gap-3">
         <div className="relative">
-          <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
+          <IconSearch size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
           <input
             autoFocus
             value={query}
@@ -141,7 +142,7 @@ export function SprintTicketList({
     <div className="flex flex-col gap-5">
       <div className="flex justify-end">
         <Button variant="secondary" size="sm" onClick={() => setAddOpen(true)}>
-          <Plus size={14} />
+          <IconPlus size={14} />
           Add ticket
         </Button>
       </div>
@@ -153,7 +154,7 @@ export function SprintTicketList({
           description="Assign an existing ticket to this sprint, or add one from the tickets list."
           action={
             <Button variant="secondary" size="sm" onClick={() => setAddOpen(true)}>
-              <Plus size={14} />
+              <IconPlus size={14} />
               Add ticket
             </Button>
           }

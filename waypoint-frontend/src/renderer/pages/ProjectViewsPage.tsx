@@ -1,18 +1,8 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { formatDistanceToNow } from 'date-fns';
 import { clsx } from 'clsx';
-import {
-  ArrowLeft,
-  Copy,
-  Globe2,
-  Layers3,
-  Lock,
-  MoreHorizontal,
-  Pencil,
-  Plus,
-  Star,
-  Trash2,
-} from 'lucide-react';
+import { ArrowLeft, Copy, Globe2, MoreHorizontal, Star, Trash2 } from 'lucide-react';
+import { IconLayers, IconLock, IconEdit, IconPlus } from '@/components/icons';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import {
@@ -320,7 +310,7 @@ export default function ProjectViewsPage() {
           </p>
         </div>
         <Button variant="primary" onClick={handleAddView} disabled={creating}>
-          <Plus size={15} />
+          <IconPlus size={15} />
           {creating ? 'Creating…' : 'Add view'}
         </Button>
       </div>
@@ -330,7 +320,7 @@ export default function ProjectViewsPage() {
           <SkeletonListRows rows={6} />
         ) : !views || views.length === 0 ? (
           <EmptyState
-            icon={<Layers3 size={28} />}
+            icon={<IconLayers size={28} />}
             title="No views yet"
             description="Save the current filter, sort, and grouping as a view you can jump back to."
             action={
@@ -339,7 +329,7 @@ export default function ProjectViewsPage() {
                 onClick={handleAddView}
                 disabled={creating}
               >
-                <Plus size={15} />
+                <IconPlus size={15} />
                 Add view
               </Button>
             }
@@ -360,7 +350,7 @@ export default function ProjectViewsPage() {
                     onClick={() => setActiveView(view)}
                     className="flex min-w-0 flex-1 items-center gap-3 text-left"
                   >
-                    <Layers3 size={15} className="shrink-0 text-text-muted" />
+                    <IconLayers size={15} className="shrink-0 text-text-muted" />
                     <span className="min-w-0 flex-1 truncate text-sm font-medium text-text">
                       {view.name}
                     </span>
@@ -399,7 +389,7 @@ export default function ProjectViewsPage() {
                       {visibility === 'public' ? (
                         <Globe2 size={14} />
                       ) : (
-                        <Lock size={14} />
+                        <IconLock size={14} />
                       )}
                     </button>
                     <button
@@ -439,7 +429,7 @@ export default function ProjectViewsPage() {
                         {(close) => (
                           <div className="w-40 rounded-[var(--radius-sm)] border border-border bg-surface p-1 shadow-lg">
                             <MenuItem
-                              icon={<Pencil size={14} />}
+                              icon={<IconEdit size={14} />}
                               label="Rename"
                               onClick={() => {
                                 close();

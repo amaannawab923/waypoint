@@ -1,10 +1,5 @@
-import {
-  AlertTriangle,
-  CheckCircle2,
-  CircleDashed,
-  CircleSlash,
-  Loader2,
-} from 'lucide-react';
+import { CircleSlash, Loader2 } from 'lucide-react';
+import { IconAlert, IconCheck, IconDashed } from '@/components/icons';
 import type { Probe } from '@/types/probe';
 
 const STATE_COPY: Record<Probe<unknown>['state'], string> = {
@@ -64,7 +59,7 @@ export function StatusBadge<T>({ probe }: { probe: Probe<T> }) {
         className="inline-flex items-center gap-1 rounded-full bg-success-bg px-2 py-0.5 text-xs font-medium text-success"
         title={title}
       >
-        <CheckCircle2 size={12} />
+        <IconCheck size={12} />
         {label}
       </span>
     );
@@ -76,7 +71,7 @@ export function StatusBadge<T>({ probe }: { probe: Probe<T> }) {
         className="inline-flex items-center gap-1 rounded-full bg-danger-bg px-2 py-0.5 text-xs font-medium text-danger"
         title={title}
       >
-        <AlertTriangle size={12} />
+        <IconAlert size={12} />
         {label}
       </span>
     );
@@ -96,7 +91,7 @@ export function StatusBadge<T>({ probe }: { probe: Probe<T> }) {
 
   return (
     <span className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-xs font-medium text-text-muted">
-      <CircleDashed size={12} />
+      <IconDashed size={12} />
       {label}
     </span>
   );

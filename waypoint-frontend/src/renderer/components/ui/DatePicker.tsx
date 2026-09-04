@@ -15,7 +15,8 @@ import {
   startOfWeek,
   subMonths,
 } from 'date-fns';
-import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Calendar, ChevronLeft } from 'lucide-react';
+import { IconChevronRight } from '@/components/icons';
 import { IconButton } from './Button';
 
 const WEEKDAY_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
@@ -198,7 +199,7 @@ export function DatePicker({
               </IconButton>
               <span className="text-sm font-medium text-text">{format(cursor, 'MMMM yyyy')}</span>
               <IconButton label="Next month" onClick={() => setCursor((c) => addMonths(c, 1))}>
-                <ChevronRight size={14} />
+                <IconChevronRight size={14} />
               </IconButton>
             </div>
             <div className="grid grid-cols-7 gap-y-1 text-center">

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertTriangle, X } from 'lucide-react';
+import { IconAlert, IconX } from '@/components/icons';
 import { subscribeToasts } from '@/lib/toast';
 
 interface ToastEntry {
@@ -33,7 +33,7 @@ export function ToastHost() {
           role="alert"
           className="flex items-start gap-2.5 rounded-[var(--radius-sm)] border border-danger/30 bg-danger-bg px-4 py-3 text-sm text-danger shadow-2xl"
         >
-          <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+          <IconAlert size={16} className="mt-0.5 shrink-0" />
           <span className="min-w-0 flex-1 break-words">{t.message}</span>
           <button
             type="button"
@@ -41,7 +41,7 @@ export function ToastHost() {
             onClick={() => setToasts((cur) => cur.filter((x) => x.id !== t.id))}
             className="shrink-0 text-danger/70 hover:text-danger"
           >
-            <X size={14} />
+            <IconX size={14} />
           </button>
         </div>
       ))}

@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react';
-import { Check, ChevronDown, Tag, UserPlus } from 'lucide-react';
+import { Tag, UserPlus } from 'lucide-react';
+import { IconCheck, IconChevron } from '@/components/icons';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { Avatar, AvatarStack } from '@/components/ui/Avatar';
@@ -187,7 +188,7 @@ export function CreateTicketModal({
               <button type="button" onClick={toggle} className={CHIP_CLASS}>
                 {currentState && <StateIcon state={currentState} />}
                 <span className="truncate">{currentState?.name ?? 'State'}</span>
-                <ChevronDown size={13} className="shrink-0 text-text-muted" />
+                <IconChevron size={13} className="shrink-0 text-text-muted" />
               </button>
             )}
           >
@@ -206,7 +207,7 @@ export function CreateTicketModal({
                   >
                     <StateIcon state={s} />
                     <span className="truncate">{s.name}</span>
-                    {s.id === resolvedStateId && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                    {s.id === resolvedStateId && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
                   </button>
                 ))}
               </div>
@@ -218,7 +219,7 @@ export function CreateTicketModal({
               <button type="button" onClick={toggle} className={CHIP_CLASS}>
                 <PriorityIcon priority={priority} />
                 <span className="truncate">{PRIORITY_LABEL[priority]}</span>
-                <ChevronDown size={13} className="shrink-0 text-text-muted" />
+                <IconChevron size={13} className="shrink-0 text-text-muted" />
               </button>
             )}
           >
@@ -236,7 +237,7 @@ export function CreateTicketModal({
                   >
                     <PriorityIcon priority={p} />
                     <span className="truncate">{PRIORITY_LABEL[p]}</span>
-                    {p === priority && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                    {p === priority && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
                   </button>
                 ))}
               </div>
@@ -253,7 +254,7 @@ export function CreateTicketModal({
                     <UserPlus size={14} /> Assignees
                   </span>
                 )}
-                <ChevronDown size={13} className="shrink-0 text-text-muted" />
+                <IconChevron size={13} className="shrink-0 text-text-muted" />
               </button>
             )}
           >
@@ -266,7 +267,7 @@ export function CreateTicketModal({
                     <button key={m.id} type="button" onClick={() => toggleAssignee(m.id)} className={OPTION_CLASS}>
                       <Avatar name={m.displayName} color={m.avatarColor} size={20} />
                       <span className="truncate">{m.displayName}</span>
-                      {checked && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                      {checked && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
                     </button>
                   );
                 })}
@@ -282,7 +283,7 @@ export function CreateTicketModal({
                           <span className="truncate">
                             {agentLabel(a.name)} <span className="text-text-muted">— {a.model}</span>
                           </span>
-                          {checked && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                          {checked && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
                         </button>
                       );
                     })}
@@ -309,7 +310,7 @@ export function CreateTicketModal({
                     <Tag size={14} /> Labels
                   </span>
                 )}
-                <ChevronDown size={13} className="shrink-0 text-text-muted" />
+                <IconChevron size={13} className="shrink-0 text-text-muted" />
               </button>
             )}
           >
@@ -324,7 +325,7 @@ export function CreateTicketModal({
                     <button key={l.id} type="button" onClick={() => toggleLabel(l.id)} className={OPTION_CLASS}>
                       <Dot color={l.color} />
                       <span className="truncate">{l.name}</span>
-                      {checked && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                      {checked && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
                     </button>
                   );
                 })}
