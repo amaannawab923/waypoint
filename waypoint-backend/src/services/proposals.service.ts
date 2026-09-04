@@ -383,7 +383,13 @@ async function checkStaleness(row: ProposalRow): Promise<StaleResult | null> {
   if (kind === 'create_ticket') {
     const payload = row.payload as CreateTicketProposalPayload;
     const project = await projectsService.getProject(payload.projectId);
-    if (!project) return { stale: true, reason: 'This project is no longer available' };
+    // getProject has no archived filter of its own (unlike listProjects) —
+    // a project archived between propose and approve must re-check as
+    // stale too, same reason/wording as a deleted project, so an approve
+    // can't slip a ticket into a project no UI list surfaces anymore.
+    if (!project || project.archivedAt) {
+      return { stale: true, reason: 'This project is no longer available' };
+    }
     const states = await statesService.listStates(payload.projectId);
     if (!states.some((s) => s.id === payload.stateId)) {
       return { stale: true, reason: 'The proposed state no longer exists in this project' };

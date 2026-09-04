@@ -487,6 +487,27 @@ describe('approveProposal', () => {
       expectFinalizedStale(finalize, /project is no longer available/);
     });
 
+    // Regression: getProject has no archived filter of its own (unlike
+    // listProjects) — a project archived between propose and approve must
+    // re-check as stale too, not slip a real ticket into a project no UI
+    // list surfaces anymore.
+    it('create_ticket: a project archived since propose time is stale', async () => {
+      const finalize = claimThenFinalize({
+        kind: 'create_ticket',
+        ticketId: null,
+        payload: { projectId: 'proj-1', title: 'New', stateId: 'st-1' },
+        snapshot: {},
+      });
+      vi.mocked(projectsService.getProject).mockResolvedValue(
+        { id: 'proj-1', archivedAt: new Date('2026-01-02') } as never,
+      );
+
+      await approveProposal('prop-abc1234');
+
+      expect(ticketsService.createTicket).not.toHaveBeenCalled();
+      expectFinalizedStale(finalize, /project is no longer available/);
+    });
+
     it('create_ticket: the resolved default state having been deleted is stale', async () => {
       const finalize = claimThenFinalize({
         kind: 'create_ticket',
