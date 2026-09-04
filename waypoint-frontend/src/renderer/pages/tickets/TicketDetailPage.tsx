@@ -404,6 +404,8 @@ export function TicketDetailContent({
   const [commentDraft, setCommentDraft] = useState('');
   const [postingComment, setPostingComment] = useState(false);
   const [createSubOpen, setCreateSubOpen] = useState(false);
+  // Stable focus target for handlePostComment below — see its own comment.
+  const commentFormRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (item) {
@@ -703,6 +705,17 @@ export function TicketDetailContent({
 
   async function handlePostComment() {
     if (!item || !commentDraft.trim() || postingComment) return;
+    // Same focus-blur/keystroke-leak issue the Copilot composer had (see
+    // CopilotPanel.tsx's Composer): this button goes `disabled={...||
+    // postingComment}` right below, and the HTML spec force-blurs a
+    // focused control the instant `disabled` is applied — moving the next
+    // keystroke to global shortcuts (e.g. Tab to this button, Enter to
+    // post, then "g" navigating away instead of doing nothing). Buttons
+    // have no readOnly equivalent, so land focus on the comment form's own
+    // stable container (commentFormRef, never disabled or unmounted by
+    // this) before disabling, instead of letting it fall through to
+    // <body>.
+    commentFormRef.current?.focus();
     setPostingComment(true);
     try {
       await addComment(item.id, commentDraft.trim());
@@ -1035,7 +1048,7 @@ export function TicketDetailContent({
 
           <div className="mt-4 flex gap-2.5">
             <Avatar name={currentUser?.displayName ?? 'Me'} color={currentUser?.avatarColor} size={26} />
-            <div className="min-w-0 flex-1">
+            <div ref={commentFormRef} tabIndex={-1} className="min-w-0 flex-1 outline-none">
               <textarea
                 value={commentDraft}
                 onChange={(e) => setCommentDraft(e.target.value)}
