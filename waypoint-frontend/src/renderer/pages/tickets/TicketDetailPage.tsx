@@ -340,6 +340,53 @@ export function TicketDetailContent({
     [allProposals, item?.id],
   );
 
+  // Reloads this ticket's own item/activity/comments whenever one of ITS
+  // proposals resolves to 'executed' — from ANY surface, not just this
+  // page's own inline "Pending proposals" card. proposalStore only tracks a
+  // proposal row's own status; approving one is just one more way this
+  // ticket's fields can change server-side (patchItem, toggleAssignee, ...
+  // above already reload after every other such mutation), and every
+  // approve/reject in the app — this card, CopilotPanel.tsx's chat-panel
+  // card, a future Review queue — already goes through the SAME shared
+  // proposalStore.approveProposal/rejectProposal, whose upsert already
+  // broadcasts to every `useAllProposals()` subscriber (this component
+  // included, via `allProposals` above). Reacting to that existing
+  // broadcast here — instead of requiring every approval call site to
+  // remember its own reload — is what makes this correct regardless of
+  // which surface triggered the approve: CopilotPanel.tsx's own card calls
+  // `proposalStore.approve` directly and previously left this page's
+  // sidebar (e.g. Priority) stale until a full reload, because that path
+  // never touched this page's local reload logic at all.
+  const seenExecutedProposalIdsRef = useRef<Set<string>>(new Set());
+  const isFirstProposalCheckRef = useRef(true);
+  useEffect(() => {
+    // Skip the mount render: `item` (fetched fresh via getTicketByIdentifier
+    // above) is already current as of mount, and any proposal that shows as
+    // already-'executed' on first paint was resolved before this page even
+    // opened — nothing to react to, just a starting snapshot to seed
+    // against so a LATER transition can be told apart from one that was
+    // already resolved when this page mounted.
+    if (isFirstProposalCheckRef.current) {
+      isFirstProposalCheckRef.current = false;
+      for (const p of ticketProposals) {
+        if (p.status === 'executed') seenExecutedProposalIdsRef.current.add(p.id);
+      }
+      return;
+    }
+    let shouldReload = false;
+    for (const p of ticketProposals) {
+      if (p.status === 'executed' && !seenExecutedProposalIdsRef.current.has(p.id)) {
+        seenExecutedProposalIdsRef.current.add(p.id);
+        shouldReload = true;
+      }
+    }
+    if (shouldReload) {
+      reloadItem();
+      reloadActivity();
+      reloadComments();
+    }
+  }, [ticketProposals, reloadItem, reloadActivity, reloadComments]);
+
   useRecordRecent(
     item
       ? {
@@ -580,28 +627,6 @@ export function TicketDetailContent({
     await updateTicket(item.id, patch);
     reloadItem();
     reloadActivity();
-  }
-
-  // Wraps proposalStore's approveProposal for the inline "Pending
-  // proposals" card below: approving executes the proposal server-side
-  // (proposals.service.ts's executeProposal calls updateTicket/addComment
-  // for this exact ticket), but the proposal store only tracks the
-  // proposal row's own status — same "approve here, gone everywhere" shape
-  // as every other proposal surface (Review queue, Copilot panel), and by
-  // design has no idea a TICKET's fields changed underneath it. Every other
-  // mutation on this page (patchItem, toggleAssignee, toggleLabel, ...)
-  // already reloads item/activity/comments afterward; approving a proposal
-  // is just one more way this ticket's own fields can change server-side,
-  // so it needs the exact same reload — without it the sidebar (e.g.
-  // Priority) silently keeps rendering whatever it had before the approve
-  // until the next full page load, even though the Pending proposals card
-  // itself (backed by the shared store) correctly resolves live.
-  async function handleApproveProposal(id: string) {
-    const result = await approveProposal(id);
-    reloadItem();
-    reloadActivity();
-    reloadComments();
-    return result;
   }
 
   async function toggleAssignee(memberId: string) {
@@ -946,7 +971,7 @@ export function TicketDetailContent({
                 <CopilotProposalCard
                   key={p.id}
                   proposal={p}
-                  onApprove={handleApproveProposal}
+                  onApprove={approveProposal}
                   onReject={rejectProposal}
                 />
               ))}
