@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { clsx } from 'clsx';
 import { EditorContent, useEditor, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
@@ -40,7 +41,7 @@ import { IconButton } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
 import type { Doc } from '@/types/entities';
 
-type SaveStatus = 'idle' | 'saving' | 'saved';
+type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 // Lightweight callout/info-box block: the same Blockquote node used for regular
 // quotes, plus an optional `callout` attribute. When set, the editor CSS below
@@ -188,6 +189,12 @@ export default function DocDetailPage() {
   const loadedDocId = useRef<string | null>(null);
   const prevVisibilityRef = useRef<'public' | 'private'>('private');
   const iconPickerRef = useRef<HTMLDivElement | null>(null);
+  // Kept in sync every render (see the assignment right after `useEditor`
+  // below) so the docId-change and unmount flush effects can read the
+  // editor's CURRENT content without depending on `editor` identity —
+  // useEditor's own instance is stable for the component's lifetime, but
+  // reading through a ref keeps the flush logic robust to that changing.
+  const editorRef = useRef<Editor | null>(null);
 
   const editor = useEditor({
     extensions: [
@@ -205,7 +212,10 @@ export default function DocDetailPage() {
       setStatus('saving');
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => {
-        void updateDoc(docId, { contentHtml: e.getHTML() }).then(() => setStatus('saved'));
+        saveTimer.current = null;
+        void updateDoc(docId, { contentHtml: e.getHTML() })
+          .then(() => setStatus('saved'))
+          .catch(() => setStatus('error'));
       }, 800);
       setSlashMenu(computeSlashMenuState(e));
     },
@@ -214,6 +224,7 @@ export default function DocDetailPage() {
     },
     onBlur: () => setSlashMenu(null),
   });
+  editorRef.current = editor ?? null;
 
   const filteredSlashItems = useMemo(() => {
     if (!slashMenu) return [];
@@ -249,6 +260,40 @@ export default function DocDetailPage() {
     return () => dom.removeEventListener('keydown', onKeyDown, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slashMenu, editor, filteredSlashItems]);
+
+  // Flush any pending debounced save from the doc we're navigating AWAY
+  // from, before the "load new doc content" effect below overwrites the
+  // editor's live buffer. Navigating from doc A to doc B does NOT unmount
+  // this component (both routes resolve to the same route element — only
+  // the `:docId` param changes), so a pending 800ms save timer scheduled
+  // while editing A is still armed when B's `docId` lands here. Left
+  // alone, that timer would eventually fire and call
+  // `updateDoc(<A's id>, { contentHtml: editor.getHTML() })` — but by then
+  // `editor.getHTML()` reads B's content (the same editor instance, now
+  // showing B), silently overwriting A with B's text. `loadedDocId.current`
+  // still holds A's id here because the content-load effect below (which
+  // advances it to B) only runs once `doc` itself updates — and `doc` is
+  // driven by an async `getDoc(docId)` fetch that hasn't resolved yet in
+  // this same render, so this effect always gets to flush first.
+  useEffect(() => {
+    const previousDocId = loadedDocId.current;
+    if (!previousDocId || previousDocId === docId) return;
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+      const pendingEditor = editorRef.current;
+      if (pendingEditor) {
+        // Deliberately doesn't touch `status`: by the time this flush
+        // settles, the status indicator in the header belongs to the doc
+        // we've already navigated TO (driven by the content-load effect
+        // below), not the one this flush is saving. Surfacing this save's
+        // outcome there would misattribute it. Still explicitly caught
+        // (matching the unmount flush below) so a failure can't produce an
+        // unhandled rejection.
+        void updateDoc(previousDocId, { contentHtml: pendingEditor.getHTML() }).catch(() => {});
+      }
+    }
+  }, [docId]);
 
   // Load doc content into the editor once, whenever we navigate to a new doc.
   useEffect(() => {
@@ -292,9 +337,25 @@ export default function DocDetailPage() {
     return () => document.removeEventListener('mousedown', onMouseDown);
   }, [iconPickerOpen]);
 
+  // On actual unmount (not a docId change — that's handled above), flush
+  // any still-pending debounced save instead of just discarding it, so
+  // navigating away from the doc editor entirely (e.g. "Back to docs")
+  // within the 800ms debounce window doesn't silently drop the last edit
+  // despite the UI's last visible state having claimed "Saving…".
   useEffect(() => {
     return () => {
-      if (saveTimer.current) clearTimeout(saveTimer.current);
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+        const pendingEditor = editorRef.current;
+        const pendingDocId = loadedDocId.current;
+        if (pendingEditor && pendingDocId) {
+          // Fire-and-forget: the component is unmounting, so there's no
+          // local state left to update on success/failure — still swallow
+          // the rejection explicitly rather than letting it go unhandled.
+          void updateDoc(pendingDocId, { contentHtml: pendingEditor.getHTML() }).catch(() => {});
+        }
+      }
       if (copyTimer.current) clearTimeout(copyTimer.current);
     };
   }, []);
@@ -407,8 +468,14 @@ export default function DocDetailPage() {
         <IconButton label="Back to docs" onClick={() => navigate(`/projects/${project.id}/docs`)}>
           <ArrowLeft size={16} />
         </IconButton>
-        <span className="text-xs text-text-muted">
-          {status === 'saving' ? 'Saving…' : status === 'saved' ? 'Saved' : ' '}
+        <span className={clsx('text-xs', status === 'error' ? 'text-danger' : 'text-text-muted')}>
+          {status === 'saving'
+            ? 'Saving…'
+            : status === 'saved'
+              ? 'Saved'
+              : status === 'error'
+                ? 'Failed to save'
+                : ' '}
         </span>
         {copied && <span className="text-xs text-accent">Link copied</span>}
 
