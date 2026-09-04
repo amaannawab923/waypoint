@@ -209,6 +209,7 @@ describe('ProjectViewsPage saved-view filter editor', () => {
       projectIds: ['proj-1'],
       priorities: ['urgent'],
       stateIds: ['st-1'],
+      groupBy: 'state',
     });
   });
 
@@ -238,6 +239,7 @@ describe('ProjectViewsPage saved-view filter editor', () => {
       v: 1,
       projectIds: ['proj-1'],
       stateIds: ['st-1'],
+      groupBy: 'state',
     });
   });
 });

@@ -151,33 +151,41 @@ export default function ProjectViewsPage() {
       activeView ? filtersFromSavedView(activeView.filters) : EMPTY_FILTERS,
     [activeView],
   );
+  // Falls back to 'state' — the same default useTicketsView's project
+  // scope itself defaults to — for a saved view created before `groupBy`
+  // existed on the stored filter shape.
+  const normalizedGroupBy = activeView?.filters.groupBy ?? 'state';
 
   useEffect(() => {
     ticketsView.setFilters(normalizedFilters);
-    // Only re-run when the normalized filters change, not on every
-    // ticketsView identity change (setFilters is stable per render).
+    ticketsView.setGroupBy(normalizedGroupBy);
+    // Only re-run when the normalized filters/groupBy change, not on every
+    // ticketsView identity change (setFilters/setGroupBy are stable per
+    // render).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [normalizedFilters]);
+  }, [normalizedFilters, normalizedGroupBy]);
 
   // Whether the toolbar below (rendered against `ticketsView`, seeded from
-  // `normalizedFilters` above) has diverged from the saved view's own
-  // filters — i.e. whether there's an edit worth persisting. Compared as
-  // plain values (TicketFilters is flat arrays-of-strings + one string, no
-  // nested objects) rather than a field-by-field diff; a toggle-then-toggle-
-  // back can reorder an array and read as dirty when it isn't, which only
-  // means "Save changes" is enabled a little more eagerly than strictly
-  // necessary — never the reverse, so it never hides a real, savable edit.
+  // `normalizedFilters`/`normalizedGroupBy` above) has diverged from the
+  // saved view's own filters or grouping — i.e. whether there's an edit
+  // worth persisting. Filters are compared as plain values (TicketFilters
+  // is flat arrays-of-strings + one string, no nested objects) rather than
+  // a field-by-field diff; a toggle-then-toggle-back can reorder an array
+  // and read as dirty when it isn't, which only means "Save changes" is
+  // enabled a little more eagerly than strictly necessary — never the
+  // reverse, so it never hides a real, savable edit.
   const filtersAreDirty = useMemo(
     () =>
-      JSON.stringify(ticketsView.filters) !== JSON.stringify(normalizedFilters),
-    [ticketsView.filters, normalizedFilters],
+      JSON.stringify(ticketsView.filters) !== JSON.stringify(normalizedFilters) ||
+      ticketsView.groupBy !== normalizedGroupBy,
+    [ticketsView.filters, normalizedFilters, ticketsView.groupBy, normalizedGroupBy],
   );
 
   async function handleSaveViewFilters() {
     if (!activeView) return;
     setSavingFilters(true);
     try {
-      const filters = captureSavedViewFilter(ticketsView.filters, project.id);
+      const filters = captureSavedViewFilter(ticketsView.filters, project.id, ticketsView.groupBy);
       const updated = await updateView(activeView.id, { filters });
       // Reflects the save immediately without a round-trip through
       // `reload()` + re-selecting the view from the refreshed `views` list —
