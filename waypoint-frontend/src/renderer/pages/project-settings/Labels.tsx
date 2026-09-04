@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Tag, Trash2 } from 'lucide-react';
 import { IconPlus, IconEdit } from '@/components/icons';
 import { Button, IconButton } from '@/components/ui/Button';
@@ -25,9 +25,17 @@ function LabelEditor({ label, onSaved, onCancel }: { label: Label; onSaved: () =
   const [name, setName] = useState(label.name);
   const [color, setColor] = useState(label.color);
   const [saving, setSaving] = useState(false);
+  // Same fix as CopilotProposalCard.tsx's act(): "Save" disables itself
+  // (saving) while the POST is in flight, and onSaved unmounts this whole
+  // editor on success — either path force-blurs to <body> and leaks the
+  // next keystroke to useGlobalKeyboardShortcuts.ts's global nav
+  // shortcuts. This editor's own root is the stable container neither
+  // path touches.
+  const editorRef = useRef<HTMLDivElement>(null);
 
   async function handleSave() {
     if (!name.trim() || saving) return;
+    editorRef.current?.focus();
     setSaving(true);
     try {
       await updateLabel(label.id, { name: name.trim(), color });
@@ -38,7 +46,12 @@ function LabelEditor({ label, onSaved, onCancel }: { label: Label; onSaved: () =
   }
 
   return (
-    <div className="flex flex-col gap-3 rounded-[var(--radius-sm)] border border-border-strong bg-surface p-3">
+    <div
+      ref={editorRef}
+      tabIndex={-1}
+      data-shortcut-guard
+      className="flex flex-col gap-3 rounded-[var(--radius-sm)] border border-border-strong bg-surface p-3 outline-none"
+    >
       <input
         autoFocus
         value={name}
@@ -83,9 +96,21 @@ export default function Labels() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // Same fix as CopilotProposalCard.tsx's act(), applied at two more
+  // sites in this component: "Add label" disables itself (submitting)
+  // and unmounts this form (setShowForm(false)) on success; "Confirm"
+  // delete disables itself (deletingId) and, once `reload()` drops the
+  // deleted label from `labels`, unmounts its own row. Both force-blur to
+  // <body> and leak the next keystroke to useGlobalKeyboardShortcuts.ts's
+  // global nav shortcuts.
+  const createFormRef = useRef<HTMLDivElement>(null);
+  // Delete lives per-row, so each label's row needs its own focus target
+  // — a ref Map keyed by label id, same shape as any keyed-list ref map.
+  const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   async function handleCreate() {
     if (!name.trim() || submitting) return;
+    createFormRef.current?.focus();
     setSubmitting(true);
     try {
       await createLabel(project.id, { name: name.trim(), color });
@@ -100,6 +125,7 @@ export default function Labels() {
 
   async function handleDelete(id: string) {
     if (deletingId) return;
+    rowRefs.current.get(id)?.focus();
     setDeletingId(id);
     try {
       await deleteLabel(id);
@@ -124,7 +150,12 @@ export default function Labels() {
       </div>
 
       {showForm && (
-        <div className="flex flex-col gap-3 rounded-[var(--radius)] border border-border-strong p-4">
+        <div
+          ref={createFormRef}
+          tabIndex={-1}
+          data-shortcut-guard
+          className="flex flex-col gap-3 rounded-[var(--radius)] border border-border-strong p-4 outline-none"
+        >
           <input
             autoFocus
             placeholder="Label name"
@@ -180,7 +211,13 @@ export default function Labels() {
             ) : (
               <div
                 key={label.id}
-                className="group flex items-center gap-2 rounded-[var(--radius-sm)] border border-border-strong px-3 py-1.5"
+                ref={(el) => {
+                  if (el) rowRefs.current.set(label.id, el);
+                  else rowRefs.current.delete(label.id);
+                }}
+                tabIndex={-1}
+                data-shortcut-guard
+                className="group flex items-center gap-2 rounded-[var(--radius-sm)] border border-border-strong px-3 py-1.5 outline-none"
               >
                 <Badge outline className="border-0 px-0">
                   <Dot color={label.color} />
