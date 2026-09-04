@@ -132,6 +132,22 @@ describe('proposeCommentHandler', () => {
       'pg exploded',
     );
   });
+
+  // Regression: createProposal throws NotFoundError('conversation') when
+  // the conversation row is gone (its own comment says this is meant to
+  // "404-shape fail") — previously that fell through to the generic rethrow
+  // and got scrubbed by withErrorSafetyNet into an opaque internal-error
+  // message instead of a clean not-found result.
+  it('maps a NotFoundError from createProposal (a gone conversation) to a clean not-found result, not a rethrow', async () => {
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
+    const { NotFoundError } = await import('../middleware/errors.js');
+    vi.mocked(proposalsService.createProposal).mockRejectedValue(new NotFoundError('conversation'));
+
+    const result = await proposeCommentHandler(CONV, { ticketId: 'wi-1', body: 'hi' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe('conversation not found');
+  });
 });
 
 describe('proposeStateChangeHandler', () => {
@@ -327,6 +343,23 @@ describe('proposeCreateTicketHandler', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toBe('project not found');
+  });
+
+  // Regression: getProject (unlike listProjects, which list_projects uses)
+  // has no archived filter of its own — an archived project must still read
+  // as a plain not-found here, same as a deleted one, so Copilot can't
+  // create a real ticket in a project no UI list surfaces anymore.
+  it('404s an archived project, same as a missing one', async () => {
+    vi.mocked(projectsService.getProject).mockResolvedValue(
+      { id: 'proj-1', name: 'P', identifier: 'P', archivedAt: new Date('2026-01-01') } as never,
+    );
+
+    const result = await proposeCreateTicketHandler(CONV, { projectId: 'proj-1', title: 'New' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe('project not found');
+    expect(statesService.listStates).not.toHaveBeenCalled();
+    expect(proposalsService.createProposal).not.toHaveBeenCalled();
   });
 
   it('defaults stateId to the first backlog/unstarted state in board order when omitted', async () => {

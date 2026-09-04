@@ -225,7 +225,11 @@ export async function proposeCreateTicketHandler(
 ) {
   if (!conversationId) return validationErrorResult(UNAVAILABLE_MESSAGE);
   const project = await projectsService.getProject(projectId);
-  if (!project) return notFoundResult('project');
+  // getProject (unlike listProjects, used by list_projects) has no archived
+  // filter — an archived project must still read as not-found here, same as
+  // getVisibleTicket hides drafts, so Copilot can't create a real ticket in
+  // a project no UI list ever surfaces again.
+  if (!project || project.archivedAt) return notFoundResult('project');
   const states = await statesService.listStates(projectId);
   // The stored payload always carries a CONCRETE stateId — resolving the
   // default here (not at approve time) means the card can show the real
