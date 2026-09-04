@@ -258,6 +258,12 @@ export default function ReviewPage() {
   const [projectId, setProjectId] = useState<string | undefined>(undefined);
   const [kind, setKind] = useState<ProposalKind | undefined>(undefined);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Same fix as CopilotProposalCard.tsx's act(): "Load more" disables
+  // itself (queue.loadingMore) the instant it's clicked, which force-blurs
+  // the button per the HTML spec and leaks the next keystroke to
+  // useGlobalKeyboardShortcuts.ts's global nav shortcuts. Focus this
+  // stable wrapper — never disabled, never unmounted by the load — first.
+  const loadMoreRef = useRef<HTMLDivElement>(null);
 
   const { data: agents } = useAsync(() => listAgents(), []);
   const { data: projects } = useAsync(() => listProjects(), []);
@@ -527,12 +533,20 @@ export default function ReviewPage() {
       })()}
 
       {queue.hasMore && (
-        <div className="mt-4 flex justify-center">
+        <div
+          ref={loadMoreRef}
+          tabIndex={-1}
+          data-shortcut-guard
+          className="mt-4 flex justify-center outline-none"
+        >
           <Button
             variant="secondary"
             size="sm"
             disabled={queue.loadingMore}
-            onClick={queue.loadMore}
+            onClick={() => {
+              loadMoreRef.current?.focus();
+              queue.loadMore();
+            }}
           >
             {queue.loadingMore ? 'Loading…' : 'Load more'}
           </Button>
