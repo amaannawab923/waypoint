@@ -106,7 +106,9 @@ export default function AnalyticsPage() {
     <div className="mx-auto max-w-6xl px-6 py-6">
       <div className="mb-6">
         <h1 className="font-display text-xl font-medium text-text">Analytics</h1>
-        <p className="text-sm text-text-secondary">Workspace-wide overview across every project.</p>
+        <p className="text-sm text-text-secondary">
+          Workspace-wide counts across every project. Nothing here interpolates history it doesn't have.
+        </p>
       </div>
 
       {loading && !data && (

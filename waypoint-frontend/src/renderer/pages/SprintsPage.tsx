@@ -55,7 +55,7 @@ export default function SprintsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-lg font-medium text-text">Sprints</h1>
-          <p className="text-sm text-text-muted">Time-boxed iterations for planning and tracking work.</p>
+          <p className="text-sm text-text-muted">A fixed window with a start and end date, planned by people.</p>
         </div>
         {!showForm && (
           <Button variant="primary" size="sm" onClick={() => setShowForm(true)}>

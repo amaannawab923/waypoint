@@ -102,7 +102,9 @@ export default function WorkstreamsPage() {
       <div className="flex items-center justify-between border-b border-border px-6 py-4">
         <div>
           <h1 className="font-display text-lg font-medium text-text">Workstreams</h1>
-          <p className="text-sm text-text-secondary">Group work into shippable pieces for {project.name}</p>
+          <p className="text-sm text-text-secondary">
+            Not time-boxed — a standing area of {project.name} that outlives any one sprint.
+          </p>
         </div>
         <Button variant="primary" onClick={() => setCreating(true)}>
           <IconPlus size={15} />
