@@ -250,12 +250,20 @@ export default function RequestsPage() {
   }
 
   async function handleTogglePublicForm(v: boolean) {
+    const previous = publicFormEnabled;
     setPublicFormEnabled(v);
-    await updateProject(project.id, { acceptsRequests: v });
-    // Keeps the sidebar's Requests entry (driven by
-    // acceptsRequests || primitiveCounts.requests > 0) in sync without a
-    // page reload, matching handleCreate's refresh below.
-    refreshProjectInStore(project.id);
+    try {
+      await updateProject(project.id, { acceptsRequests: v });
+      // Keeps the sidebar's Requests entry (driven by
+      // acceptsRequests || primitiveCounts.requests > 0) in sync without a
+      // page reload, matching handleCreate's refresh below.
+      refreshProjectInStore(project.id);
+    } catch {
+      // Save failed (the shared HTTP client already surfaced a toast) —
+      // revert so the toggle's visible state matches what's actually
+      // persisted, instead of looking saved when it isn't.
+      setPublicFormEnabled(previous);
+    }
   }
 
   async function handleCopyLink() {
