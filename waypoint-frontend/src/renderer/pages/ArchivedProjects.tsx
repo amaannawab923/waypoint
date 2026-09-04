@@ -21,7 +21,12 @@ export default function ArchivedProjects() {
     <div className="mx-auto max-w-6xl px-6 py-6">
       <div className="mb-6">
         <h1 className="font-display text-xl font-medium text-text">Archived projects</h1>
-        <p className="text-sm text-text-secondary">
+        {/* A <p> here would put Skeleton's/Skeleton.Block's <div> markup
+            inside a <p> while loading — invalid HTML that React logs as a
+            hydration-error warning (`<div> cannot be a descendant of
+            <p>`). This subtitle line never needs paragraph semantics, so a
+            <div> is both valid and visually identical. */}
+        <div className="text-sm text-text-secondary">
           {projects ? (
             `${projects.length} archived project${projects.length === 1 ? '' : 's'}`
           ) : (
@@ -29,7 +34,7 @@ export default function ArchivedProjects() {
               <Skeleton.Block height="1rem" width="8rem" />
             </Skeleton>
           )}
-        </p>
+        </div>
       </div>
 
       {loading && !projects && <SkeletonCardGrid />}
