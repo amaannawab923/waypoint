@@ -96,12 +96,15 @@ export default function TicketList({
   // Same fix as CopilotProposalCard.tsx's act(): the "Set state" / "Set
   // priority" / "Assign" bulk actions below disable themselves
   // (bulkBusy) AND clear `selected` synchronously in applyBulkPatch,
-  // which unmounts the whole bulk-action bar (`selected.size > 0`)
+  // which would unmount the whole bulk-action bar (`selected.size > 0`)
   // immediately — either path force-blurs to <body> and leaks the next
   // keystroke to useGlobalKeyboardShortcuts.ts's global nav shortcuts.
-  // This component's own root is the stable container neither path
-  // touches.
-  const rootRef = useRef<HTMLDivElement>(null);
+  // The guard is on the bulk bar itself (kept mounted via `bulkBusy`,
+  // below), NOT this component's root — an earlier version guarded the
+  // whole list, which also suppressed g-nav/? while simply tabbing
+  // through ticket rows, far outside the actual disable-blur window this
+  // is meant to cover.
+  const bulkBarRef = useRef<HTMLDivElement>(null);
 
   const memberById = useMemo(
     () => new Map((members ?? []).map((m) => [m.id, m])),
@@ -283,9 +286,8 @@ export default function TicketList({
     async (patch: Partial<Ticket>) => {
       const ids = Array.from(selected);
       if (ids.length === 0) return;
-      rootRef.current?.focus();
+      bulkBarRef.current?.focus();
       setBulkBusy(true);
-      setSelected(new Set());
       try {
         // No bulk ticket-mutation endpoint exists yet (unlike proposals'
         // POST /proposals/bulk-approve) — updateTicket already supports
@@ -295,6 +297,7 @@ export default function TicketList({
         await Promise.all(ids.map((id) => updateTicket(id, patch)));
       } finally {
         setBulkBusy(false);
+        setSelected(new Set());
         view.reload();
       }
     },
@@ -355,12 +358,7 @@ export default function TicketList({
   }
 
   return (
-    <div
-      ref={rootRef}
-      tabIndex={-1}
-      data-shortcut-guard
-      className="flex flex-col pb-8 outline-none"
-    >
+    <div className="flex flex-col pb-8">
       <div className="flex items-center gap-2 px-6 py-2 text-xs font-medium text-text-muted">
         {view.items.length} ticket{view.items.length === 1 ? '' : 's'}
         {/* A filter-driven refetch keeps the previous rows on screen (see
@@ -372,8 +370,13 @@ export default function TicketList({
         )}
       </div>
 
-      {selected.size > 0 && (
-        <div className="sticky top-0 z-20 mx-6 mb-2 flex items-center gap-2 rounded-[var(--radius)] border border-accent bg-accent-soft-bg px-3 py-2">
+      {(selected.size > 0 || bulkBusy) && (
+        <div
+          ref={bulkBarRef}
+          tabIndex={-1}
+          data-shortcut-guard
+          className="sticky top-0 z-20 mx-6 mb-2 flex items-center gap-2 rounded-[var(--radius)] border border-accent bg-accent-soft-bg px-3 py-2 outline-none"
+        >
           <span className="text-sm font-medium text-accent-soft-text">
             {selected.size} selected
           </span>
@@ -468,8 +471,9 @@ export default function TicketList({
 
           <button
             type="button"
+            disabled={bulkBusy}
             onClick={() => setSelected(new Set())}
-            className="ml-auto cursor-pointer text-xs text-text-secondary hover:underline"
+            className="ml-auto cursor-pointer text-xs text-text-secondary hover:underline disabled:cursor-not-allowed disabled:opacity-50"
           >
             Clear
           </button>
