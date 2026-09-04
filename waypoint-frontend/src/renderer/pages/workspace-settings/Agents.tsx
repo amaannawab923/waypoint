@@ -28,12 +28,16 @@ export default function Agents() {
         <div>
           <h2 className="font-display text-lg font-medium text-text">Agents</h2>
           <p className="text-sm text-text-secondary">
-            An agent is one brief, a scope, and the local subscription it runs on. It reads and
-            proposes; it never writes on its own. Nothing here is required — a project with zero
-            agents behaves exactly like a plain tracker.
+            An agent is one brief, a scope, and the local subscription it runs
+            on. It reads and proposes; it never writes on its own. Nothing here
+            is required — a project with zero agents behaves exactly like a
+            plain tracker.
           </p>
         </div>
-        <Button variant="primary" onClick={() => navigate('/settings/agents/new')}>
+        <Button
+          variant="primary"
+          onClick={() => navigate('/settings/agents/new')}
+        >
           <IconPlus size={15} />
           Create agent
         </Button>
@@ -51,7 +55,10 @@ export default function Agents() {
           title="No agents yet"
           description="Create one to give it its own instructions, scope, and execution method."
           action={
-            <Button variant="primary" onClick={() => navigate('/settings/agents/new')}>
+            <Button
+              variant="primary"
+              onClick={() => navigate('/settings/agents/new')}
+            >
               <IconPlus size={15} />
               Create agent
             </Button>
@@ -63,18 +70,39 @@ export default function Agents() {
         <div className="flex flex-col gap-3">
           {agents.map((agent) => {
             const claudeCliAbsent =
-              agent.executionMethod === 'local-claude-subscription' && detection?.state === 'absent';
+              agent.executionMethod === 'local-claude-subscription' &&
+              detection?.state === 'absent';
             return (
-              <button
+              // A <button> row wrapping the "Delete" IconButton — itself a
+              // real <button> — nested one <button> inside another, which
+              // is invalid HTML with real click/focus-target risk (browsers
+              // handle nested interactive elements unpredictably). Uses the
+              // same `role="button"`/`tabIndex`/Enter-key pattern
+              // ArchivedProjects.tsx's card already uses for this exact
+              // situation, so the inner IconButton stays a sibling, not a
+              // descendant, of any button.
+              <div
                 key={agent.id}
-                type="button"
+                role="button"
+                tabIndex={0}
                 onClick={() => navigate(`/settings/agents/${agent.id}`)}
-                className="flex w-full items-center gap-3 rounded-[var(--radius-lg)] border border-border bg-surface p-3 text-left hover:border-border-strong"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter')
+                    navigate(`/settings/agents/${agent.id}`);
+                }}
+                className="flex w-full cursor-pointer items-center gap-3 rounded-[var(--radius-lg)] border border-border bg-surface p-3 text-left hover:border-border-strong"
               >
-                <Avatar name={agent.name} color={agent.avatarColor} shape="square" size={32} />
+                <Avatar
+                  name={agent.name}
+                  color={agent.avatarColor}
+                  shape="square"
+                  size={32}
+                />
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="truncate text-sm font-medium text-text">{agent.name}</span>
+                    <span className="truncate text-sm font-medium text-text">
+                      {agent.name}
+                    </span>
                     <Badge tone="info">{agent.model}</Badge>
                     {claudeCliAbsent && detection && (
                       <StatusBadge probe={detection} />
@@ -82,7 +110,9 @@ export default function Agents() {
                   </div>
                   <p className="mt-0.5 truncate text-xs text-text-muted">
                     {agent.instructionsFile.filename} ·{' '}
-                    {agent.scopeAllProjects ? 'All projects' : `${agent.scopeProjectIds.length} project(s)`}
+                    {agent.scopeAllProjects
+                      ? 'All projects'
+                      : `${agent.scopeProjectIds.length} project(s)`}
                   </p>
                 </div>
                 <IconButton
@@ -94,7 +124,7 @@ export default function Agents() {
                 >
                   <Trash2 size={14} />
                 </IconButton>
-              </button>
+              </div>
             );
           })}
         </div>
