@@ -57,6 +57,13 @@ export const ticketFilterSchema = z
     createdAfter: filterDate.optional(),
     text: z.string().max(200).optional(),
     includeDrafts: z.boolean().optional(),
+    // Mirrors useTicketsView.ts's GroupBy exactly. Saved views used to
+    // capture only the filter predicate, not the grouping the list was
+    // showing when it was saved — every view opened back into the
+    // toolbar's own default grouping regardless of what was active at
+    // save time. Optional so an existing saved view (created before this
+    // field existed) just falls back to that same default.
+    groupBy: z.enum(['state', 'priority', 'workstream', 'sprint', 'assignee', 'project', 'none']).optional(),
   })
   .strict();
 
