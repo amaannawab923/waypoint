@@ -66,13 +66,18 @@ export default function Members() {
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h2 className="font-display text-lg font-medium text-text">Members</h2>
-          <p className="text-sm text-text-secondary">
+          {/* A <p> here would put Skeleton.Block's <div> markup inside a
+              <p> while loading — invalid HTML that React logs as a
+              hydration-error warning (`<div> cannot be a descendant of
+              <p>`). This subtitle line never needs paragraph semantics, so
+              a <div> is both valid and visually identical. */}
+          <div className="text-sm text-text-secondary">
             {members ? (
               `${members.length} member${members.length === 1 ? '' : 's'}`
             ) : (
               <Skeleton.Block height="1rem" width="4rem" />
             )}
-          </p>
+          </div>
         </div>
         <Button variant="primary" onClick={() => setInviting((v) => !v)}>
           <IconPlus size={15} />
