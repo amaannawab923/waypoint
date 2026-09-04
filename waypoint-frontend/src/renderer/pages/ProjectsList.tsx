@@ -5,6 +5,7 @@ import { IconSettings, IconPlus, IconArchive, IconFolder } from '@/components/ic
 import { useAsync } from '@/lib/useAsync';
 import { listProjects, listMembers, listAllTickets, listSprints, archiveProject } from '@/data/api';
 import type { Project } from '@/types/entities';
+import { parseSprintDate } from '@/pages/sprints/sprint-utils';
 import { Button, IconButton } from '@/components/ui/Button';
 import { AvatarStack } from '@/components/ui/Avatar';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -32,7 +33,7 @@ async function loadProjectStats(projects: Project[]): Promise<Map<string, Projec
         .filter((p) => p.primitiveCounts.sprints > 0)
         .map(async (p) => {
           const sprints = await listSprints(p.id);
-          const active = sprints.find((s) => new Date(s.startDate) <= now && now <= new Date(s.endDate));
+          const active = sprints.find((s) => parseSprintDate(s.startDate) <= now && now <= parseSprintDate(s.endDate));
           return active ? ([p.id, active.name] as const) : null;
         }),
     ),
