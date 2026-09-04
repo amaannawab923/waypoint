@@ -18,7 +18,6 @@ import { PriorityIcon } from '@/components/domain/PriorityIcon';
 import { AGENT_STATUS_CONFIG } from '@/components/domain/AgentStatusBadge';
 import { CreateTicketModal } from '@/components/domain/CreateTicketModal';
 import {
-  EMPTY_FILTERS,
   hasActiveFilters,
   type TicketsView,
 } from '@/pages/tickets/useTicketsView';
@@ -77,23 +76,13 @@ export default function BoardView({
   }
   const canReorderPersist = view.groupBy === 'state';
 
-  const subItemsByParent = useMemo(() => {
-    const map = new Map<string, Ticket[]>();
-    for (const wi of view.allItems) {
-      if (!wi.parentId) continue;
-      const list = map.get(wi.parentId) ?? [];
-      list.push(wi);
-      map.set(wi.parentId, list);
-    }
-    return map;
-  }, [view.allItems]);
-
+  // Built from `view.subItemCountByParent` (a genuinely unfiltered dataset),
+  // not `view.allItems` (which, despite the name, is the currently FILTERED
+  // set — see useTicketsView's own doc comment) — a completion badge
+  // answering "how much of this parent is done" must not undercount just
+  // because the active filter narrowed the visible list.
   function subItemStats(item: Ticket) {
-    const children = subItemsByParent.get(item.id) ?? [];
-    const done = children.filter(
-      (c) => view.stateFor(c)?.group === 'completed',
-    ).length;
-    return { total: children.length, done };
+    return view.subItemCountByParent.get(item.id) ?? { total: 0, done: 0 };
   }
 
   function assigneesFor(item: Ticket) {
@@ -180,7 +169,7 @@ export default function BoardView({
     // zero results is not the same as the project genuinely having no
     // tickets — the two used to share identical "Create your first
     // ticket..." copy.
-    const searching = hasActiveFilters(view.filters);
+    const searching = hasActiveFilters(view.filters, view.defaultFilters);
     return (
       <EmptyState
         icon={<Kanban size={28} />}
@@ -194,7 +183,7 @@ export default function BoardView({
           searching ? (
             <button
               type="button"
-              onClick={() => view.setFilters(EMPTY_FILTERS)}
+              onClick={() => view.resetFilters()}
               className="cursor-pointer text-sm font-medium text-accent hover:underline"
             >
               Clear filters
