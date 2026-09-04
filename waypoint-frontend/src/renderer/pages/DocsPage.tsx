@@ -310,10 +310,21 @@ export default function DocsPage() {
               const isRenaming = renamingId === doc.id;
               return (
                 <li key={doc.id} className="group flex w-full items-center gap-3 py-3 pr-3 transition-colors hover:bg-surface-2">
-                  <button
-                    type="button"
+                  {/* A <button> row wrapping the rename <input> — itself a real
+                      focusable form control — nested interactive content inside
+                      a <button>, invalid HTML with real click/focus-target risk.
+                      Same role="button"/tabIndex/Enter-key pattern used for the
+                      row-as-button case elsewhere in this PR (Agents.tsx,
+                      States.tsx), so the input stays a sibling, not a
+                      descendant, of any button. */}
+                  <div
+                    role="button"
+                    tabIndex={0}
                     onClick={() => !isRenaming && navigate(`/projects/${project.id}/docs/${doc.id}`)}
-                    className={`flex min-w-0 flex-1 items-center gap-3 text-left ${
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !isRenaming) navigate(`/projects/${project.id}/docs/${doc.id}`);
+                    }}
+                    className={`flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left ${
                       depth === 1 ? 'pl-14' : 'pl-6'
                     }`}
                   >
@@ -326,6 +337,7 @@ export default function DocsPage() {
                         onClick={(e) => e.stopPropagation()}
                         onBlur={() => commitRename(doc)}
                         onKeyDown={(e) => {
+                          e.stopPropagation();
                           if (e.key === 'Enter') {
                             e.preventDefault();
                             (e.target as HTMLInputElement).blur();
@@ -344,7 +356,7 @@ export default function DocsPage() {
                     <span className="w-32 shrink-0 text-right text-xs text-text-muted">
                       Updated {formatDistanceToNow(new Date(doc.updatedAt), { addSuffix: true })}
                     </span>
-                  </button>
+                  </div>
 
                   <div className="flex shrink-0 items-center gap-0.5">
                     <button
