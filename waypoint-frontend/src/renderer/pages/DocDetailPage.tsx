@@ -255,7 +255,10 @@ export default function DocDetailPage() {
     if (!doc || !editor) return;
     if (loadedDocId.current === doc.id) return;
     loadedDocId.current = doc.id;
-    editor.commands.setContent(doc.contentHtml || '<p></p>');
+    // emitUpdate must be false here: Tiptap v3's setContent defaults it to
+    // true, which fires onUpdate (and therefore the autosave below) just
+    // from loading a doc into the editor, bumping updatedAt on a pure view.
+    editor.commands.setContent(doc.contentHtml || '<p></p>', { emitUpdate: false });
     setTitle(doc.title);
     setIcon(doc.icon || '📄');
     setVisibility(doc.visibility);
@@ -269,7 +272,13 @@ export default function DocDetailPage() {
   }, [doc, editor]);
 
   useEffect(() => {
-    editor?.setEditable(!isLocked);
+    // Tiptap v3's setEditable defaults emitUpdate to true and emits an
+    // "update" event unconditionally (it doesn't check whether the doc
+    // actually changed). That fires the autosave in onUpdate below, so
+    // this effect alone would bump updatedAt on mount and on every lock
+    // toggle even though it never touches content. Pass emitUpdate: false;
+    // handleToggleLocked already persists the lock state explicitly.
+    editor?.setEditable(!isLocked, false);
   }, [isLocked, editor]);
 
   useEffect(() => {
