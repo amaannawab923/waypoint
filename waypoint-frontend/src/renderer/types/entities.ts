@@ -35,6 +35,12 @@ export interface TicketFilterQuery {
   createdAfter?: string;
   text?: string;
   includeDrafts?: boolean;
+  // Mirrors useTicketsView.ts's GroupBy — kept as the same string-literal
+  // union rather than importing that type here, since types/entities.ts is
+  // the portable entity shape and useTicketsView.ts is page-local hook
+  // state. Optional so a saved view created before this field existed
+  // just falls back to the toolbar's own default grouping.
+  groupBy?: 'state' | 'priority' | 'workstream' | 'sprint' | 'assignee' | 'project' | 'none';
 }
 
 export type Visibility = 'public' | 'private';
