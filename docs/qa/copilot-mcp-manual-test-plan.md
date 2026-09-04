@@ -1,11 +1,10 @@
 # Copilot MCP tools — manual test plan
 
 This is a manual (agent- or human-executable) test plan for the Copilot
-panel's new read-only MCP ticket-lookup capability (issue #9,
-`waypoint-backend/src/mcp/workItemTools.ts`) plus the GFM table support it
+panel's MCP ticket tools (issue #9,
+`waypoint-backend/src/mcp/ticketTools.ts`) plus the GFM table support it
 motivated in the shared markdown renderer
-(`waypoint-frontend/src/renderer/lib/markdown.ts`). Both are uncommitted on
-`feat/copilot-mcp-tools` as of this writing.
+(`waypoint-frontend/src/renderer/lib/markdown.ts`).
 
 Copilot is a real headless `claude` CLI subprocess
 (`waypoint-frontend/src/main/copilot/copilotRunner.ts`), not a mock — every
@@ -16,14 +15,22 @@ call to a tool by name. Expect a real reply to take 5–30+ seconds; see
 That playbook is the execution procedure — this document is only the list of
 cases and what "pass" means for each.
 
-Eight tools exist, all read-only, all served by
-`waypoint-backend/src/mcp/workItemTools.ts`: `list_work_items` (filterable by
-`assigneeId`, `stateId`, `priority`, `dueBefore`), `get_work_item`,
-`get_work_item_by_identifier`, `search_work_items` (title keyword only),
-`list_comments`, `list_activity`, `list_states`, `list_members`. There is no
-write tool yet — asking Copilot to change a ticket should produce a decline,
-per its system prompt ("You still cannot make changes on the user's behalf
-yet").
+Eight read-only lookup tools exist, all served by
+`waypoint-backend/src/mcp/ticketTools.ts`: `list_tickets` (filterable by
+`assigneeId`, `stateId`, `priority`, `dueBefore`), `get_ticket`,
+`get_ticket_by_identifier`, `search_tickets` (title keyword only),
+`list_comments`, `list_activity`, `list_states`, `list_members`. The cases
+below (V1) cover those.
+
+Copilot can also propose writes — `propose_state_change`,
+`propose_priority_change`, `propose_comment`, `propose_assignee_change`,
+`propose_create_ticket` (`waypoint-backend/src/mcp/proposalTools.ts`) — under
+a propose→approve safety model: calling one of these only creates a
+proposal row for a human to review, it never mutates anything by itself.
+Approving it in the Waypoint panel (or on the ticket page) is what actually
+applies the change, server-side, exactly once; rejecting or leaving it
+pending applies nothing. See [V2 — Write proposals](#v2--write-proposals)
+below for that model's detail and its own test cases.
 
 ## Ground truth (verified live in the running app before writing this plan)
 
@@ -80,7 +87,7 @@ Copilot's own words.
 
 ## Test cases
 
-**1. `list_work_items`, project-scoped — realistic list question**
+**1. `list_tickets`, project-scoped — realistic list question**
 Session: fresh.
 Prompt: "What tickets are currently in the Product Launch project?"
 Expected: A list (prose or table) covering Product Launch's tickets.
@@ -89,7 +96,7 @@ by identifier and title; no raw id like `wi_...`, `mem-...`, or `agent-...`
 appears anywhere in the reply — any assignee named is a real display name
 (e.g. "Lena", "Ethan (agent)"), not an id.
 
-**2. `get_work_item_by_identifier` — full detail by name**
+**2. `get_ticket_by_identifier` — full detail by name**
 Session: fresh.
 Prompt: "Give me the full rundown on LAUNCH-3 — state, priority, due date,
 and who's on it."
@@ -97,7 +104,7 @@ Expected: State "In Progress", priority "Urgent", due date on/around
 2026-08-27, assignees "Lena" and "Ethan (agent)" — by name, not id.
 Verify: all four fields correct; no `mem-` / `agent-` id text anywhere.
 
-**3. `search_work_items` — keyword search, not by name**
+**3. `search_tickets` — keyword search, not by name**
 Session: fresh.
 Prompt: "Do we have any ticket about the staging promotion pipeline?"
 Expected: Finds LAUNCH-7 ("Set up staging → production promotion
@@ -140,7 +147,7 @@ Verify: all 5 present with correct roles; **Ethan and Dan do NOT appear**
 be silent over-inclusion rather than a missing name, so check for it
 explicitly.
 
-**8. `get_work_item` (raw id) / full-detail drill-down**
+**8. `get_ticket` (raw id) / full-detail drill-down**
 Session: fresh.
 Prompt: "Search for anything about 'iPad' and then tell me its estimate and
 full description."
@@ -148,8 +155,8 @@ Expected: Finds LAUNCH-3 via search, then reports estimate `1` and states
 plainly that there's no description set (rather than inventing one).
 Verify: estimate `1` is correct; reply does not fabricate description text
 for a ticket whose description is genuinely empty. Note: Copilot may
-satisfy the detail half of this via `get_work_item` (raw internal id, from
-the search result) or `get_work_item_by_identifier` (identifier, also in
+satisfy the detail half of this via `get_ticket` (raw internal id, from
+the search result) or `get_ticket_by_identifier` (identifier, also in
 the search result) — either is legitimate, and which one it picked isn't
 observable from the UI. What's being verified is that the full-detail path
 works and stays honest about missing data, not which of the two tools fired.
@@ -192,8 +199,8 @@ not OR.
 **13. Negative: nonexistent ticket**
 Session: fresh.
 Prompt: "What's the status of LAUNCH-999?"
-Expected: Copilot says it can't find that ticket (the tool returns a "work
-item not found" error result for an unknown identifier).
+Expected: Copilot says it can't find that ticket (the tool returns a
+"ticket not found" error result for an unknown identifier).
 Verify: reply clearly states LAUNCH-999 wasn't found; it does **not**
 invent a state/priority/assignee for a ticket that doesn't exist.
 
@@ -257,11 +264,11 @@ turn-over-turn, not just on a session's first message.
 
 ## V2 — Write proposals
 
-Covers the Copilot write-approval feature (uncommitted on
-`feat/copilot-mcp-write-tools`): five write-proposing MCP tools
+Covers the Copilot write-approval feature: five write-proposing MCP tools
 (`propose_comment`, `propose_state_change`, `propose_assignee_change`,
-`propose_priority_change`, `propose_create_work_item`) plus read-only
-`list_projects`. A proposal never executes directly — it renders as an
+`propose_priority_change`, `propose_create_ticket`) plus read-only
+`list_projects` (all in `waypoint-backend/src/mcp/proposalTools.ts`). A
+proposal never executes directly — it renders as an
 approval card in the transcript (per
 [`copilot-write-approval-mockup.html`](./copilot-write-approval-mockup.html))
 with Reject/Approve; only Approve executes it, once, server-side, after a
@@ -277,7 +284,7 @@ cases are about the real in-app UX.
 revert it (via the app's own UI where possible, else direct psql through
 `docker exec waypoint-backend-postgres-1 psql -U waypoint -d waypoint`) and
 re-verify the revert. Delete any ticket created by
-`propose_create_work_item` after verifying it (plus orphaned activity rows).
+`propose_create_ticket` after verifying it (plus orphaned activity rows).
 Before finishing a run, confirm: 19 work items (14 LAUNCH / 5 TOOLS),
 LAUNCH-3 back to In Progress / urgent with exactly 2 comments, and
 `select count(*) from copilot_proposals where status='proposed'` = 0
@@ -347,9 +354,9 @@ Expected: An assignee card for LAUNCH-6 ("Draft empty states for
 onboarding steps 1-4") naming **Priya** (avatar/name, not `mem-2`).
 Verify: card renders correctly. Approve → Applied ✓; the Work Items UI
 shows Priya on LAUNCH-6. **Revert:** remove Priya from LAUNCH-6 (app UI or
-psql `work_item_assignees`) and re-verify the original assignee set.
+psql `ticket_assignees`) and re-verify the original assignee set.
 
-**V2-6. `propose_create_work_item` — full preview card, approve, cleanup**
+**V2-6. `propose_create_ticket` — full preview card, approve, cleanup**
 Session: fresh.
 Prompt: "Create a ticket in Internal Tools for rotating the reporting
 cron's API keys before launch — medium priority."
