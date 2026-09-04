@@ -40,6 +40,8 @@ export default function Copilot() {
   const [error, setError] = useState<string | null>(null);
   const [justConnected, setJustConnected] = useState(false);
   const [showManual, setShowManual] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [disconnectError, setDisconnectError] = useState<string | null>(null);
   const justConnectedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
@@ -113,8 +115,21 @@ export default function Copilot() {
   }
 
   async function handleDisconnect() {
-    await window.electron.copilot.auth.clear();
-    setStatus({ connected: false, last4: null });
+    if (disconnecting) return;
+    setDisconnecting(true);
+    setDisconnectError(null);
+    try {
+      await window.electron.copilot.auth.clear();
+      setStatus({ connected: false, last4: null });
+    } catch (err) {
+      setDisconnectError(
+        err instanceof Error
+          ? err.message
+          : "Couldn't disconnect — try again.",
+      );
+    } finally {
+      setDisconnecting(false);
+    }
   }
 
   return (
@@ -141,21 +156,33 @@ export default function Copilot() {
       )}
 
       {status?.connected && (
-        <div className="mb-6 flex items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-border bg-surface p-3.5">
-          <div className="flex items-center gap-3">
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-[var(--radius-sm)] bg-surface-2 text-text-secondary">
-              <IconKey size={16} />
-            </span>
-            <div>
-              <p className="text-sm text-text">Claude subscription connected</p>
-              <p className="font-mono text-xs text-text-muted">
-                •••• {status.last4}
-              </p>
+        <div className="mb-6 flex flex-col gap-2">
+          <div className="flex items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-border bg-surface p-3.5">
+            <div className="flex items-center gap-3">
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-[var(--radius-sm)] bg-surface-2 text-text-secondary">
+                <IconKey size={16} />
+              </span>
+              <div>
+                <p className="text-sm text-text">Claude subscription connected</p>
+                <p className="font-mono text-xs text-text-muted">
+                  •••• {status.last4}
+                </p>
+              </div>
             </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleDisconnect}
+              disabled={disconnecting}
+            >
+              {disconnecting ? 'Disconnecting…' : 'Disconnect'}
+            </Button>
           </div>
-          <Button variant="ghost" size="sm" onClick={handleDisconnect}>
-            Disconnect
-          </Button>
+          {disconnectError && (
+            <Badge tone="danger" outline>
+              {disconnectError}
+            </Badge>
+          )}
         </div>
       )}
 
