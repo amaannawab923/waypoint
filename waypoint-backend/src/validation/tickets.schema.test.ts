@@ -7,25 +7,17 @@ describe('addCommentSchema bodyHtml', () => {
     expect(result.bodyHtml).toBe('Looks good to me.');
   });
 
-  it('entity-escapes a <script> tag so it can never reach stored/rendered HTML', () => {
+  // Human comments render as a plain React text node (TicketDetailPage.tsx),
+  // which already escapes on render — validation must NOT also escape, or
+  // the value gets entity-escaped twice and a comment containing `don't`
+  // would come back as `don&amp;#39;t` instead of `don't`. This asserts the
+  // create round-trip (what the schema hands to the service/DB/API) is the
+  // untouched, single-escaped-on-render value.
+  it('round-trips punctuation and markup characters unescaped', () => {
     const result = addCommentSchema.parse({
-      bodyHtml: '<script>alert(document.cookie)</script>',
+      bodyHtml: `don't <script>alert(1)</script> & "quoted"`,
     });
-    expect(result.bodyHtml).toBe('&lt;script&gt;alert(document.cookie)&lt;/script&gt;');
-    expect(result.bodyHtml).not.toContain('<script>');
-  });
-
-  it('neutralizes a javascript: or file: href by escaping the surrounding tag', () => {
-    const js = addCommentSchema.parse({
-      bodyHtml: '<a href="javascript:alert(1)">click me</a>',
-    });
-    expect(js.bodyHtml).not.toContain('<a ');
-    expect(js.bodyHtml).toContain('&lt;a href=&quot;javascript:alert(1)&quot;&gt;');
-
-    const file = addCommentSchema.parse({
-      bodyHtml: '<a href="file:///etc/passwd">click me</a>',
-    });
-    expect(file.bodyHtml).not.toContain('<a ');
+    expect(result.bodyHtml).toBe(`don't <script>alert(1)</script> & "quoted"`);
   });
 
   it('still rejects an empty body', () => {
