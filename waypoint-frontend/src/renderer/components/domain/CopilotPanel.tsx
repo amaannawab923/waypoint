@@ -200,7 +200,22 @@ function Composer({
     <div className="flex items-end gap-2 border-t border-border px-4 py-3">
       <textarea
         value={value}
-        disabled={composerDisabled}
+        // readOnly, NOT disabled: a *disabled* form control is forced out of
+        // the tab order and force-blurred by the browser the instant the
+        // attribute is applied (HTML spec, "become disabled" while focused
+        // -> loses focus). Composer becomes composerDisabled synchronously
+        // on submit (the send is in flight / streaming), which is exactly
+        // while the user's fingers are often still on the keyboard mid next
+        // thought — a `disabled` attribute here silently kicks focus to
+        // <body>, and every subsequent keystroke (that isn't itself a typing
+        // target) is then live for useGlobalKeyboardShortcuts.ts's `g`-nav
+        // and any mounted page's own j/k/x/e/r listeners to pick up —
+        // confirmed live: typing "hello there", hitting Enter, then "g"
+        // "t" navigated the whole app to /views mid-conversation. readOnly
+        // blocks edits the exact same way (browser refuses the keystroke,
+        // no onChange fires) without ever moving focus, so the field stays
+        // a real typing target for as long as it visually looks "disabled".
+        readOnly={composerDisabled}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey) {
@@ -210,7 +225,7 @@ function Composer({
         }}
         rows={1}
         placeholder="Ask Copilot…"
-        className="thin-scroll max-h-28 min-h-9 flex-1 resize-none rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 py-2 text-sm outline-none focus:border-accent disabled:opacity-50"
+        className="thin-scroll max-h-28 min-h-9 flex-1 resize-none rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 py-2 text-sm outline-none focus:border-accent read-only:opacity-50"
       />
       <IconButton
         label="Send"

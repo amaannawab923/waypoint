@@ -787,7 +787,7 @@ describe('CopilotPanel', () => {
         await screen.findByText("Claude Code isn't installed."),
       ).toBeInTheDocument();
       expect(screen.getByText('hello', { selector: 'p' })).toBeInTheDocument();
-      await waitFor(() => expect(getTextarea().disabled).toBe(false));
+      await waitFor(() => expect(getTextarea().readOnly).toBe(false));
 
       // "Try again" retries the run with the same prompt, not a new send —
       // the user's message must not be duplicated in the session's messages.
@@ -855,7 +855,7 @@ describe('CopilotPanel', () => {
       expect(
         await screen.findByText(/didn't return a reply/i),
       ).toBeInTheDocument();
-      await waitFor(() => expect(getTextarea().disabled).toBe(false));
+      await waitFor(() => expect(getTextarea().readOnly).toBe(false));
 
       copilotIpc.runPrompt.mockImplementationOnce(() => jest.fn());
       act(() => {
@@ -984,7 +984,7 @@ describe('CopilotPanel', () => {
       expect(screen.getByText(/Illegal invocation/)).toBeInTheDocument();
       // No lingering typing indicator once the run has definitively failed.
       expect(document.querySelector('.copilot-typing')).not.toBeInTheDocument();
-      await waitFor(() => expect(getTextarea().disabled).toBe(false));
+      await waitFor(() => expect(getTextarea().readOnly).toBe(false));
 
       copilotIpc.runPrompt.mockImplementationOnce(() => jest.fn());
       act(() => {
@@ -993,7 +993,7 @@ describe('CopilotPanel', () => {
       expect(copilotIpc.runPrompt).toHaveBeenCalledTimes(2);
     });
 
-    it('disables the composer for the duration of an in-flight streaming run, and re-enables it once done', async () => {
+    it('makes the composer read-only (never natively disabled) for the duration of an in-flight streaming run, and reverts it once done', async () => {
       render(<CopilotPanel onClose={jest.fn()} />);
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
@@ -1001,13 +1001,23 @@ describe('CopilotPanel', () => {
       await typeAndSend('in flight check');
       const handlers = await waitForRun('in flight check');
 
-      expect(getTextarea().disabled).toBe(true);
+      expect(getTextarea().readOnly).toBe(true);
+      // Must stay `disabled === false` throughout: a genuinely `disabled`
+      // textarea is force-blurred by the browser the instant the attribute
+      // lands, silently kicking a mid-message user's focus out to <body> —
+      // where it's no longer recognized as a typing target, so the next
+      // keystroke they type is live for the global keyboard shortcuts (see
+      // useGlobalKeyboardShortcuts.ts) to act on instead of landing in the
+      // composer. readOnly blocks edits the same way without ever touching
+      // focus.
+      expect(getTextarea().disabled).toBe(false);
 
       await act(async () => {
         handlers.onDone({ fullText: 'reply', sessionId: 'sess-1' });
       });
 
-      await waitFor(() => expect(getTextarea().disabled).toBe(false));
+      await waitFor(() => expect(getTextarea().readOnly).toBe(false));
+      expect(getTextarea().disabled).toBe(false);
     });
 
     it('shows a typing indicator before the first token arrives, replaced by the real text once streaming starts', async () => {
