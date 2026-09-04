@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { IconPlus, IconEdit } from '@/components/icons';
 import { Button, IconButton } from '@/components/ui/Button';
 import { Dot } from '@/components/ui/Badge';
@@ -54,9 +54,17 @@ function StateEditor({
     () => countTicketsInState(state.id),
     [state.id],
   );
+  // Same fix as CopilotProposalCard.tsx's act(): Save/Delete below disable
+  // themselves (saving/deleting) while their POST is in flight, and
+  // onSaved/onDeleted unmount this whole editor on success — either path
+  // force-blurs to <body> and leaks the next keystroke to
+  // useGlobalKeyboardShortcuts.ts's global nav shortcuts. This editor's
+  // own root is the stable container neither path touches.
+  const editorRef = useRef<HTMLDivElement>(null);
 
   async function handleSave() {
     if (!name.trim() || saving) return;
+    editorRef.current?.focus();
     setSaving(true);
     try {
       await updateState(state.id, { name: name.trim(), color });
@@ -72,6 +80,7 @@ function StateEditor({
       setConfirmDelete(true);
       return;
     }
+    editorRef.current?.focus();
     setDeleting(true);
     try {
       await deleteState(state.id);
@@ -85,7 +94,12 @@ function StateEditor({
   }
 
   return (
-    <div className="flex flex-col gap-3 px-4 py-3">
+    <div
+      ref={editorRef}
+      tabIndex={-1}
+      data-shortcut-guard
+      className="flex flex-col gap-3 px-4 py-3 outline-none"
+    >
       <div className="flex gap-2">
         <input
           autoFocus
@@ -174,9 +188,16 @@ export default function States() {
   const [color, setColor] = useState(PRESET_COLORS[0]);
   const [submitting, setSubmitting] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Same fix as CopilotProposalCard.tsx's act(): "Add state" disables
+  // itself (submitting) while the POST is in flight, and unmounts this
+  // whole form (setShowForm(false)) on success — either path force-blurs
+  // to <body> and leaks the next keystroke to
+  // useGlobalKeyboardShortcuts.ts's global nav shortcuts.
+  const createFormRef = useRef<HTMLDivElement>(null);
 
   async function handleCreate() {
     if (!name.trim() || submitting) return;
+    createFormRef.current?.focus();
     setSubmitting(true);
     try {
       await createState(project.id, { name: name.trim(), group, color });
@@ -214,7 +235,12 @@ export default function States() {
       </div>
 
       {showForm && (
-        <div className="flex flex-col gap-3 rounded-[var(--radius)] border border-border-strong p-4">
+        <div
+          ref={createFormRef}
+          tabIndex={-1}
+          data-shortcut-guard
+          className="flex flex-col gap-3 rounded-[var(--radius)] border border-border-strong p-4 outline-none"
+        >
           <div className="flex gap-2">
             <input
               autoFocus
