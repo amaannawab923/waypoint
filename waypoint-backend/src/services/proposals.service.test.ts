@@ -8,6 +8,21 @@ import { NotFoundError } from '../middleware/errors.js';
 // UPDATE's actual serialization under concurrency is a database property
 // the mocks cannot prove; what they CAN prove is that the claim carries the
 // exact WHERE (id AND status='proposed') that makes it correct.
+// Flattens a drizzle sql`` template fragment's raw string chunks back into
+// one string, skipping interpolated non-string values (columns, params) —
+// enough to assert on the literal SQL a `set({...})` value contains without
+// standing up real Postgres.
+function sqlFragmentText(fragment: unknown): string {
+  const chunks = (fragment as { queryChunks?: unknown[] })?.queryChunks ?? [];
+  return chunks
+    .map((chunk) =>
+      Array.isArray((chunk as { value?: unknown })?.value)
+        ? ((chunk as { value: unknown[] }).value.join(''))
+        : '',
+    )
+    .join('');
+}
+
 function chainable(resolvedValue: unknown) {
   const chain: Record<string, unknown> = {};
   const methods = ['from', 'where', 'limit', 'orderBy', 'values', 'set'];
@@ -836,6 +851,40 @@ describe('rejectProposal', () => {
     expect(typeof setArgs.decisionLatencyMs).toBe('object');
   });
 
+  // decisionLatencyMs writes to a Postgres `integer` (int4) column, which
+  // caps at 2147483647ms (~24.8 days). A 'stale' proposal has no TTL, so a
+  // row old enough would otherwise overflow int4 and Postgres would throw
+  // 22003 on every reject attempt, forever. The DB is mocked here (these
+  // tests verify this service's own SQL, not real Postgres arithmetic — see
+  // the file-level comment), so the strongest thing this test can assert is
+  // that the generated SQL fragment itself clamps via LEAST(..., 2147483647)
+  // regardless of how old the row is, rather than writing the raw,
+  // unbounded epoch-based value straight through.
+  it('clamps the generated decisionLatencyMs SQL to the int4 max so an old stale proposal cannot overflow it', async () => {
+    const rejectChain = chainable([proposalRow({ status: 'rejected' })]);
+    db.update.mockReturnValueOnce(rejectChain);
+
+    await rejectProposal('prop-abc1234');
+
+    const setArgs = (rejectChain.set as Vfn).mock.calls[0][0];
+    expect(sqlFragmentText(setArgs.decisionLatencyMs)).toMatch(/least\(.*2147483647/i);
+  });
+
+  // Simulates what Postgres itself would now return for an old stale
+  // proposal after the LEAST(...) clamp: reject still succeeds and the
+  // written/returned value is the clamped int4 max, not an overflowed one.
+  it('succeeds and returns the clamped int4 max for a proposal old enough that the raw latency would have overflowed', async () => {
+    const rejectChain = chainable([
+      proposalRow({ status: 'rejected', decisionLatencyMs: 2147483647 }),
+    ]);
+    db.update.mockReturnValueOnce(rejectChain);
+
+    const view = await rejectProposal('prop-abc1234');
+
+    expect(view.status).toBe('rejected');
+    expect(view.decisionLatencyMs).toBe(2147483647);
+  });
+
   it('echoes an already-resolved row idempotently and 404s a missing one', async () => {
     db.update.mockReturnValueOnce(chainable([]));
     db.select.mockReturnValueOnce(chainable([proposalRow({ status: 'executed' })]));
@@ -874,6 +923,20 @@ describe('rejectAllPending', () => {
     const setArgs = (chain.set as Vfn).mock.calls[0][0];
     expect(setArgs.decidedBy).toBe('user');
     expect(setArgs.decisionLatencyMs).toBeDefined();
+  });
+
+  // Same int4-overflow hazard as rejectProposal (see that describe block's
+  // comment), except worse here: this is a single UPDATE across every
+  // matched row, so one old stale proposal in the batch would otherwise
+  // fail "reject all" for the entire conversation, permanently.
+  it('clamps the generated decisionLatencyMs SQL to the int4 max so one old stale row cannot poison the whole batch', async () => {
+    const chain = chainable([{ id: 'prop-1' }, { id: 'prop-2' }]);
+    db.update.mockReturnValueOnce(chain);
+
+    await rejectAllPending('conv-abc1234');
+
+    const setArgs = (chain.set as Vfn).mock.calls[0][0];
+    expect(sqlFragmentText(setArgs.decisionLatencyMs)).toMatch(/least\(.*2147483647/i);
   });
 });
 
