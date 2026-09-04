@@ -13,6 +13,7 @@ import {
   listRequests,
   listStates,
   listTickets,
+  updateProject,
   updateRequestStatus,
 } from '@/data/api';
 import { refreshProjectInStore } from '@/lib/projectsStore';
@@ -81,7 +82,14 @@ export default function RequestsPage() {
   const [newPriority, setNewPriority] = useState<Priority>('none');
   const [creating, setCreating] = useState(false);
 
-  const [publicFormEnabled, setPublicFormEnabled] = useState(false);
+  // Seeded from the project's own persisted `acceptsRequests` — this toggle
+  // used to start every render at a hardcoded `false` and never call
+  // updateProject on change, so it looked functional (UI flipped instantly,
+  // the URL/disclosure rendered) but silently never saved: a reload always
+  // reverted it. The `acceptsRequests` field and its PATCH /projects/:id
+  // route already existed (see projects.schema.ts); this was purely a
+  // missing wire-up.
+  const [publicFormEnabled, setPublicFormEnabled] = useState(project.acceptsRequests);
   const [linkCopied, setLinkCopied] = useState(false);
 
   const [reviewRequest, setReviewRequest] = useState<Request | null>(null);
@@ -241,6 +249,15 @@ export default function RequestsPage() {
     }
   }
 
+  async function handleTogglePublicForm(v: boolean) {
+    setPublicFormEnabled(v);
+    await updateProject(project.id, { acceptsRequests: v });
+    // Keeps the sidebar's Requests entry (driven by
+    // acceptsRequests || primitiveCounts.requests > 0) in sync without a
+    // page reload, matching handleCreate's refresh below.
+    refreshProjectInStore(project.id);
+  }
+
   async function handleCopyLink() {
     try {
       await navigator.clipboard.writeText(publicFormUrl);
@@ -279,7 +296,7 @@ export default function RequestsPage() {
               <p className="text-xs text-text-secondary">Let anyone with the link submit a request without an account.</p>
             </div>
           </div>
-          <Toggle checked={publicFormEnabled} onChange={setPublicFormEnabled} />
+          <Toggle checked={publicFormEnabled} onChange={handleTogglePublicForm} />
         </div>
         {publicFormEnabled && <NotWired capability="requests.publicForm" />}
         {publicFormEnabled && (

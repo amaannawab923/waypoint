@@ -6,11 +6,13 @@ import {
   convertRequestToTicket,
   createRequest,
   getCurrentUser,
+  getProject,
   listRequestProposals,
   listRequests,
   listStates,
   listTickets,
   rejectCopilotProposal,
+  updateProject,
   updateRequestStatus,
 } from '@/data/api';
 import { useProject } from '@/layouts/ProjectLayout';
@@ -28,10 +30,12 @@ jest.mock('@/data/api', () => ({
   convertRequestToTicket: jest.fn(),
   createRequest: jest.fn(),
   getCurrentUser: jest.fn(),
+  getProject: jest.fn(),
   listRequestProposals: jest.fn(),
   listRequests: jest.fn(),
   listStates: jest.fn(),
   listTickets: jest.fn(),
+  updateProject: jest.fn(),
   updateRequestStatus: jest.fn(),
 }));
 jest.mock('@/layouts/ProjectLayout', () => ({ useProject: jest.fn() }));
@@ -133,6 +137,8 @@ function mount(requests: Request[], proposalsByRequestId: Record<string, Proposa
   jest.mocked(createRequest).mockResolvedValue(requestWith());
   jest.mocked(updateRequestStatus).mockResolvedValue(requestWith({ status: 'declined' }));
   jest.mocked(convertRequestToTicket).mockResolvedValue({} as never);
+  jest.mocked(updateProject).mockResolvedValue(PROJECT);
+  jest.mocked(getProject).mockResolvedValue(PROJECT);
 
   return render(
     <MemoryRouter>
@@ -219,5 +225,30 @@ describe('RequestsPage → pending proposals section', () => {
 
     expect(rejectCopilotProposal).toHaveBeenCalledWith('prop-1');
     expect(await screen.findByText('Dismissed, nothing changed')).toBeInTheDocument();
+  });
+});
+
+// The toggle used to be pure local state (`useState(false)`) with no
+// initialization from the project and no save call, so it looked
+// functional but silently never persisted — see PATCH /projects/:id's
+// existing acceptsRequests field in projects.schema.ts.
+describe('RequestsPage → public request form toggle', () => {
+  it('initializes from the project’s acceptsRequests value', async () => {
+    mount([]);
+
+    await screen.findByText('No requests yet');
+    expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('persists the change via updateProject when toggled', async () => {
+    mount([]);
+
+    await screen.findByText('No requests yet');
+    await act(async () => {
+      screen.getByRole('switch').click();
+    });
+
+    expect(updateProject).toHaveBeenCalledWith('proj-1', { acceptsRequests: false });
+    expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
   });
 });
