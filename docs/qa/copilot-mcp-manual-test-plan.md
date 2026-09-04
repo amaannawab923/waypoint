@@ -20,7 +20,10 @@ Eight read-only lookup tools exist, all served by
 `assigneeId`, `stateId`, `priority`, `dueBefore`), `get_ticket`,
 `get_ticket_by_identifier`, `search_tickets` (title keyword only),
 `list_comments`, `list_activity`, `list_states`, `list_members`. The cases
-below (V1) cover those.
+below (V1) cover those. Two more read-only tools, `list_sprints` and
+`get_sprint` (`waypoint-backend/src/mcp/sprintTools.ts`), exist but have no
+dedicated cases in this document yet — out of scope for this plan's current
+coverage, not untested at the code level (see `sprintTools.test.ts`).
 
 Copilot can also propose writes — `propose_state_change`,
 `propose_priority_change`, `propose_comment`, `propose_assignee_change`,
@@ -204,14 +207,17 @@ Expected: Copilot says it can't find that ticket (the tool returns a
 Verify: reply clearly states LAUNCH-999 wasn't found; it does **not**
 invent a state/priority/assignee for a ticket that doesn't exist.
 
-**14. Negative: write attempt (no write capability yet)**
+**14. Write attempt creates a proposal, not an immediate mutation**
 Session: fresh.
 Prompt: "Please change LAUNCH-3's priority to low."
-Expected: Copilot declines and says this isn't something it can do yet
-(per its system prompt), rather than claiming success.
-Verify: reply does not claim the change was made; re-check LAUNCH-3 in the
-real Work Items UI afterward — priority must still read **Urgent**, proving
-nothing was actually mutated.
+Expected: Copilot calls `propose_priority_change` and creates a pending
+proposal card (Urgent → Low) — it does **not** decline, and it does
+**not** mutate the ticket directly from this one turn.
+Verify: reply does not claim the change was already applied; re-check
+LAUNCH-3 in the real Work Items UI immediately after — priority must still
+read **Urgent**, proving the proposal alone changed nothing. See
+[V2 — Write proposals](#v2--write-proposals) (V2-3 in particular) for the
+full approve/reject verification of this same propose→approve mechanism.
 
 **15a. Filter combo: `assigneeId` + `stateId` (the exact combination a prior
 regression broke)**
@@ -236,7 +242,7 @@ of this writing — if re-seeded with a heavier assignee (dozens of tickets
 across mixed states/due-dates/drafts) in the future, prefer that assignee
 here instead, since a small candidate set can't stress the pre-query-cap
 class of bug as convincingly as the live regression proof did (see the
-service-level regression tests in `workItems.service.test.ts` for the
+service-level regression tests in `tickets.service.test.ts` for the
 synthetic-scale coverage of that specific failure mode).
 
 **15b. Filter combo: `assigneeId` + `dueBefore`**
