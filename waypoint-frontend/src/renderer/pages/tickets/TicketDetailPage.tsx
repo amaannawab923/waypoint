@@ -1048,7 +1048,16 @@ export function TicketDetailContent({
 
           <div className="mt-4 flex gap-2.5">
             <Avatar name={currentUser?.displayName ?? 'Me'} color={currentUser?.avatarColor} size={26} />
-            <div ref={commentFormRef} tabIndex={-1} className="min-w-0 flex-1 outline-none">
+            <div
+              ref={commentFormRef}
+              tabIndex={-1}
+              // See CopilotProposalCard.tsx's identical marker: the comment
+              // button's `disabled` state force-blurs focus onto this
+              // container, and without this marker the next keystroke would
+              // still be free to fire a global nav shortcut.
+              data-shortcut-guard
+              className="min-w-0 flex-1 outline-none"
+            >
               <textarea
                 value={commentDraft}
                 onChange={(e) => setCommentDraft(e.target.value)}
