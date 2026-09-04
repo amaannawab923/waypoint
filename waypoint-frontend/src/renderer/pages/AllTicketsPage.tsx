@@ -39,6 +39,15 @@ export default function AllTicketsPage() {
   const view = useTicketsView({ defaultGroupBy: 'project' });
   const [searchParams, setSearchParams] = useSearchParams();
   const peekIdentifier = searchParams.get('peek');
+  // `view.items` may not have loaded yet, or (on a `?peek=` deep link) may
+  // simply not include this identifier yet — e.g. it hasn't loaded, or a
+  // filter/page excludes it. Falling back to '' here previously built a
+  // broken `/projects//tickets/...`-shaped link and, downstream, fed
+  // TicketDetailContent an empty projectId prop. Leave it undefined until
+  // the real id resolves instead of guessing at one.
+  const peekProjectId = peekIdentifier
+    ? view.items.find((i) => i.identifier === peekIdentifier)?.projectId
+    : undefined;
 
   function openPeek(identifier: string) {
     setSearchParams(
@@ -83,12 +92,9 @@ export default function AllTicketsPage() {
         <TicketList view={view} onOpenItem={openPeek} showProjectColumn />
       </div>
 
-      {peekIdentifier && (
+      {peekIdentifier && peekProjectId && (
         <TicketDrawer
-          projectId={
-            view.items.find((i) => i.identifier === peekIdentifier)
-              ?.projectId ?? ''
-          }
+          projectId={peekProjectId}
           identifier={peekIdentifier}
           onClose={closePeek}
         />
