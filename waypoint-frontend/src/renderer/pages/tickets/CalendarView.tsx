@@ -1,8 +1,11 @@
 import { useMemo, useState } from 'react';
 import { clsx } from 'clsx';
+import { format } from 'date-fns';
 import { ChevronLeft } from 'lucide-react';
 import { IconChevronRight, IconPlus } from '@/components/icons';
 import { useProject } from '@/layouts/ProjectLayout';
+import { updateTicket } from '@/data/api';
+import type { Ticket } from '@/types/entities';
 import type { TicketsView } from './useTicketsView';
 import { Button, IconButton } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -54,7 +57,9 @@ export default function CalendarView({
   const { project } = useProject();
   const { items, loading, reload } = view;
   const [cursor, setCursor] = useState<Date>(() => startOfMonth(new Date()));
-  const [createOpen, setCreateOpen] = useState(false);
+  // The day whose "+" was clicked, if any — drives both whether the create
+  // modal is open and which date the new ticket should land on.
+  const [createDate, setCreateDate] = useState<Date | null>(null);
   const today = new Date();
 
   const weeks = useMemo(() => {
@@ -188,7 +193,7 @@ export default function CalendarView({
                   </span>
                   <button
                     type="button"
-                    onClick={() => setCreateOpen(true)}
+                    onClick={() => setCreateDate(day)}
                     aria-label="New ticket"
                     className="cursor-pointer rounded-[var(--radius-sm)] p-1 text-text-muted opacity-0 hover:bg-surface hover:text-accent group-hover:opacity-100"
                   >
@@ -215,10 +220,23 @@ export default function CalendarView({
       </div>
 
       <CreateTicketModal
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
+        open={createDate !== null}
+        onClose={() => setCreateDate(null)}
         projectId={project.id}
-        onCreated={() => reload()}
+        onCreated={(item: Ticket) => {
+          // CreateTicketModal has no way to set a due date at creation time,
+          // so this cell's "+" used to open a fully generic create dialog —
+          // the resulting ticket never actually landed on the day the user
+          // clicked. Patch the due date onto the newly created ticket
+          // immediately after, then reload either way so the calendar
+          // reflects whatever actually got persisted.
+          if (createDate) {
+            const dueDate = format(createDate, 'yyyy-MM-dd');
+            void updateTicket(item.id, { dueDate }).catch(() => {}).then(() => reload());
+          } else {
+            reload();
+          }
+        }}
       />
     </div>
   );
