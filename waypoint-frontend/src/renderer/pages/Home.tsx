@@ -248,7 +248,7 @@ export default function Home() {
           {greeting}
           {user ? `, ${user.displayName}` : ''}
         </h1>
-        <p className="mt-1 text-sm text-text-secondary">{dateLabel}</p>
+        <p className="mt-1 text-sm text-text-secondary">{dateLabel} · running locally, on this machine</p>
       </div>
 
       {showQuickstart && (

@@ -59,6 +59,11 @@ export const CAPABILITIES = {
     state: 'not-wired',
     note: 'This agent is configured but not yet running. Assignments will queue.',
   },
+  'scratchpad.editing': {
+    state: 'partial',
+    note: 'There is no update endpoint yet — saving an edit deletes and recreates this note, and its color reassigns at random.',
+    ref: 'scratchNotes.service.ts has no update, only create/delete',
+  },
 } as const satisfies Record<string, Capability>;
 
 export type CapabilityKey = keyof typeof CAPABILITIES;

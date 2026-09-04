@@ -8,6 +8,7 @@ import { Button, IconButton } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { NotWired } from '@/components/ui/NotWired';
 
 const NOTE_TITLE_WIDTHS = ['w-24', 'w-32', 'w-20'];
 
@@ -67,6 +68,7 @@ function NoteModal({
       }
     >
       <div className="flex flex-col gap-3">
+        {editing && <NotWired capability="scratchpad.editing" />}
         <input
           autoFocus
           placeholder="Title"
