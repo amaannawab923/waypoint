@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Button, IconButton } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Modal } from '@/components/ui/Modal';
+import { NotWired } from '@/components/ui/NotWired';
 import { SkeletonTableRows } from '@/components/ui/Skeleton';
 import { useAsync } from '@/lib/useAsync';
 import { useProject } from '@/layouts/ProjectLayout';
@@ -268,12 +269,15 @@ export default function Members() {
         />
       </div>
 
-      <div className="flex items-center justify-between rounded-[var(--radius)] border border-border-strong px-4 py-3">
-        <div>
-          <p className="text-sm font-medium text-text">Guest access</p>
-          <p className="mt-0.5 text-sm text-text-secondary">Allow guests to view and interact with this project.</p>
+      <div className="flex flex-col gap-3 rounded-[var(--radius)] border border-border-strong px-4 py-3">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium text-text">Guest access</p>
+            <p className="mt-0.5 text-sm text-text-secondary">Allow guests to view and interact with this project.</p>
+          </div>
+          <Toggle checked={project.guestAccessEnabled ?? false} onChange={handleGuestAccessChange} />
         </div>
-        <Toggle checked={project.guestAccessEnabled ?? false} onChange={handleGuestAccessChange} />
+        <NotWired capability="members.guestAccess" />
       </div>
 
       <AddMemberModal
