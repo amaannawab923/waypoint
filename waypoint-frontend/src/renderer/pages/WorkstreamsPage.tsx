@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CheckCircle2, Loader, Users } from 'lucide-react';
 import { IconTrack, IconPlus } from '@/components/icons';
@@ -70,6 +70,16 @@ export default function WorkstreamsPage() {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  // Same fix as CopilotProposalCard.tsx's act(): "Create workstream"
+  // disables itself (submitting) while the POST is in flight.
+  // Modal.tsx's own Escape/Tab handling doesn't cover this — a generic
+  // dialog isn't one of useGlobalKeyboardShortcuts.ts's
+  // isShortcutSuppressed exemptions ([data-ticket-drawer],
+  // [data-copilot-panel], [data-shortcut-guard]) — so the force-blur mid-
+  // request can still leak the next keystroke to global nav shortcuts.
+  // Modal.tsx isn't ours to touch here, so this wraps just the footer
+  // buttons in a local, stable, always-mounted-while-open focus target.
+  const footerRef = useRef<HTMLDivElement>(null);
 
   const membersById = useMemo(
     () => new Map((allMembers ?? []).map((m) => [m.id, m])),
@@ -116,6 +126,7 @@ export default function WorkstreamsPage() {
 
   async function handleCreate() {
     if (!name.trim() || submitting) return;
+    footerRef.current?.focus();
     setSubmitting(true);
     try {
       await createWorkstream(project.id, { name: name.trim() });
@@ -274,7 +285,12 @@ export default function WorkstreamsPage() {
         }}
         title="New workstream"
         footer={
-          <>
+          <div
+            ref={footerRef}
+            tabIndex={-1}
+            data-shortcut-guard
+            className="flex gap-2 outline-none"
+          >
             <Button variant="ghost" onClick={() => setCreating(false)}>
               Cancel
             </Button>
@@ -285,7 +301,7 @@ export default function WorkstreamsPage() {
             >
               {submitting ? 'Creating…' : 'Create workstream'}
             </Button>
-          </>
+          </div>
         }
       >
         <input
