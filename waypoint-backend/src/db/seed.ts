@@ -736,7 +736,15 @@ export async function seed() {
       id: 'cm-1',
       ticketId: cw142.id,
       authorId: 'mem-2',
-      bodyHtml: "<p>Repro'd locally — it's the localStorage write, not the request itself.</p>",
+      // Plain text, no markup: a human comment's bodyHtml is whatever the
+      // comment textarea posted verbatim (see TicketDetailPage.tsx's
+      // handlePostComment), and the ticket drawer deliberately renders
+      // human-authored bodyHtml as plain text rather than trusting it as
+      // HTML (see TicketDetailPage.test.tsx's "stored XSS fix" suite) —
+      // a real human comment can never contain actual markup. A literal
+      // "<p>...</p>" here used to render as visible, literal tag text on
+      // CW-142 instead of formatted text.
+      bodyHtml: "Repro'd locally — it's the localStorage write, not the request itself.",
       createdAt: hoursAgo(2),
     },
   ]);
