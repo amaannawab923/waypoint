@@ -30,7 +30,6 @@ import { AGENT_STATUS_CONFIG } from '@/components/domain/AgentStatusBadge';
 import { CreateTicketModal } from '@/components/domain/CreateTicketModal';
 import { Popover } from '@/pages/tickets/Popover';
 import {
-  EMPTY_FILTERS,
   hasActiveFilters,
   type TicketsView,
 } from '@/pages/tickets/useTicketsView';
@@ -114,14 +113,19 @@ export default function TicketList({
     [view.labels],
   );
 
-  // Any filter, group, or search change invalidates the current selection
+  // Any *applied* filter or group change invalidates the current selection
   // and focus — a checked row that just scrolled out from under a new
   // filter must not silently stay part of a bulk action the user can no
-  // longer see (same rule ReviewPage's bulk selection follows).
+  // longer see (same rule ReviewPage's bulk selection follows). Keyed on
+  // `view.appliedFiltersKey` (the debounced, actually-fetched filter),
+  // not `view.filters` directly — the latter gets a new object identity on
+  // every keystroke in the search box, which used to clear the selection
+  // and focus ring on every character typed rather than on a real filter
+  // change.
   useEffect(() => {
     setSelected(new Set());
     setFocusId(null);
-  }, [view.filters, view.groupBy]);
+  }, [view.appliedFiltersKey, view.groupBy]);
 
   function primaryAgentAssignment(item: Ticket) {
     const agentId = item.assigneeIds.find((id) => agentById.has(id));
@@ -131,23 +135,13 @@ export default function TicketList({
     return { agent, assignment: assignmentByKey.get(`${item.id}:${agentId}`) };
   }
 
-  const subItemsByParent = useMemo(() => {
-    const map = new Map<string, Ticket[]>();
-    for (const wi of view.allItems) {
-      if (!wi.parentId) continue;
-      const list = map.get(wi.parentId) ?? [];
-      list.push(wi);
-      map.set(wi.parentId, list);
-    }
-    return map;
-  }, [view.allItems]);
-
+  // Built from `view.subItemCountByParent` (a genuinely unfiltered dataset),
+  // not `view.allItems` (which, despite the name, is the currently FILTERED
+  // set — see useTicketsView's own doc comment) — a completion badge
+  // answering "how much of this parent is done" must not undercount just
+  // because the active filter narrowed the visible list.
   function subItemStats(item: Ticket) {
-    const children = subItemsByParent.get(item.id) ?? [];
-    const done = children.filter(
-      (c) => view.stateFor(c)?.group === 'completed',
-    ).length;
-    return { total: children.length, done };
+    return view.subItemCountByParent.get(item.id) ?? { total: 0, done: 0 };
   }
 
   function toggleGroup(key: string) {
@@ -310,7 +304,7 @@ export default function TicketList({
     // both used to render identical "No tickets / Create your first
     // ticket..." copy, which falsely implies the project itself is empty
     // when really nothing matched the current filter.
-    const searching = hasActiveFilters(view.filters);
+    const searching = hasActiveFilters(view.filters, view.defaultFilters);
     let emptyTitle = 'No tickets';
     let emptyDescription = 'Tickets matching this filter will show up here.';
     let emptyAction: ReactNode;
@@ -320,7 +314,7 @@ export default function TicketList({
       emptyAction = (
         <button
           type="button"
-          onClick={() => view.setFilters(EMPTY_FILTERS)}
+          onClick={() => view.resetFilters()}
           className="cursor-pointer text-sm font-medium text-accent hover:underline"
         >
           Clear filters
@@ -353,6 +347,13 @@ export default function TicketList({
     <div className="flex flex-col pb-8">
       <div className="flex items-center gap-2 px-6 py-2 text-xs font-medium text-text-muted">
         {view.items.length} ticket{view.items.length === 1 ? '' : 's'}
+        {/* A filter-driven refetch keeps the previous rows on screen (see
+            useTicketsView's `isRefetching`/`loading` split) rather than
+            flashing the full skeleton — this subtle indicator is the only
+            sign a narrower query is in flight. */}
+        {view.isRefetching && (
+          <span className="text-text-muted/70">Updating…</span>
+        )}
       </div>
 
       {selected.size > 0 && (
