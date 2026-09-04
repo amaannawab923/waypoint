@@ -28,6 +28,7 @@ import {
 import type { Sprint } from '@/types/entities';
 import { listRecents, type RecentEntry, type RecentType } from '@/lib/recents';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { parseSprintDate } from '@/pages/sprints/sprint-utils';
 
 interface ActiveSprintSummary {
   sprint: Sprint;
@@ -48,7 +49,7 @@ async function findActiveSprint(projectIds: { id: string; name: string }[]): Pro
   const now = new Date();
   for (const project of projectIds) {
     const sprints = await listSprints(project.id);
-    const active = sprints.find((s) => new Date(s.startDate) <= now && now <= new Date(s.endDate));
+    const active = sprints.find((s) => parseSprintDate(s.startDate) <= now && now <= parseSprintDate(s.endDate));
     if (!active) continue;
     const [tickets, states] = await Promise.all([
       listTickets(project.id, { v: 1, sprintIds: [active.id] }),
@@ -56,7 +57,7 @@ async function findActiveSprint(projectIds: { id: string; name: string }[]): Pro
     ]);
     const completedStateIds = new Set(states.filter((s) => s.group === 'completed').map((s) => s.id));
     const done = tickets.filter((t) => completedStateIds.has(t.stateId)).length;
-    const daysLeft = Math.max(0, Math.ceil((new Date(active.endDate).getTime() - now.getTime()) / 86_400_000));
+    const daysLeft = Math.max(0, Math.ceil((parseSprintDate(active.endDate).getTime() - now.getTime()) / 86_400_000));
     return { sprint: active, projectName: project.name, projectId: project.id, done, total: tickets.length, daysLeft };
   }
   return null;
