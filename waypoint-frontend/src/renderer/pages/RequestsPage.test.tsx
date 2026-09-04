@@ -78,6 +78,8 @@ const MEMBER: Member = {
   role: 'member',
   authMethod: 'email',
   joinedAt: new Date().toISOString(),
+  firstDayOfWeek: 'Sunday',
+  notificationPrefs: null,
 };
 
 function requestWith(overrides: Partial<Request> = {}): Request {

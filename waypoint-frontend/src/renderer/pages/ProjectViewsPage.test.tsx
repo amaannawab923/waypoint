@@ -101,6 +101,8 @@ const MEMBER: Member = {
   role: 'member',
   authMethod: 'email',
   joinedAt: new Date().toISOString(),
+  firstDayOfWeek: 'Sunday',
+  notificationPrefs: null,
 };
 
 function savedView(overrides: Partial<SavedView> = {}): SavedView {

@@ -101,6 +101,8 @@ function member(overrides: Partial<Member> = {}): Member {
     role: 'member',
     authMethod: 'email',
     joinedAt: '2025-01-01T00:00:00.000Z',
+    firstDayOfWeek: 'Sunday',
+    notificationPrefs: null,
     ...overrides,
   };
 }
