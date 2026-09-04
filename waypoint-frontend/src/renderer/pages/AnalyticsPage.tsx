@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FolderKanban, ListTodo, RefreshCw, Boxes, FileText, Users, CheckCircle2 } from 'lucide-react';
+import { Users } from 'lucide-react';
+import { IconFolder, IconList, IconRefresh, IconTrack, IconFile, IconCheck } from '@/components/icons';
 import { useAsync } from '@/lib/useAsync';
 import {
   listProjects,
@@ -91,11 +92,11 @@ export default function AnalyticsPage() {
 
   const metrics = useMemo(
     () => [
-      { label: 'Projects', value: data?.totals.projects, icon: FolderKanban },
-      { label: 'Tickets', value: data?.totals.tickets, icon: ListTodo },
-      { label: 'Sprints', value: data?.totals.sprints, icon: RefreshCw },
-      { label: 'Workstreams', value: data?.totals.workstreams, icon: Boxes },
-      { label: 'Docs', value: data?.totals.docs, icon: FileText },
+      { label: 'Projects', value: data?.totals.projects, icon: IconFolder },
+      { label: 'Tickets', value: data?.totals.tickets, icon: IconList },
+      { label: 'Sprints', value: data?.totals.sprints, icon: IconRefresh },
+      { label: 'Workstreams', value: data?.totals.workstreams, icon: IconTrack },
+      { label: 'Docs', value: data?.totals.docs, icon: IconFile },
       { label: 'Members', value: data?.totals.members, icon: Users },
     ],
     [data],
@@ -155,7 +156,7 @@ export default function AnalyticsPage() {
               for why), and honestly null — not 0 — until there is at least
               one active day of data. */}
           <div className="mb-6 rounded-[var(--radius)] border border-border bg-surface p-4">
-            <CheckCircle2 size={16} className="mb-3 text-text-muted" strokeWidth={2} />
+            <IconCheck size={16} className="mb-3 text-text-muted" strokeWidth={2} />
             {data.approvedPerActiveDay.averagePerActiveDay == null ? (
               <>
                 <p className="font-display text-2xl font-medium text-text-muted">Not enough data yet</p>

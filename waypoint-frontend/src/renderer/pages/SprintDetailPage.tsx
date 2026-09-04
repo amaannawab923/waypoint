@@ -1,7 +1,8 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { clsx } from 'clsx';
-import { ArrowLeft, CalendarRange, Check, ChevronDown, MoreHorizontal, Pencil, Trash2, UserPlus, Users } from 'lucide-react';
+import { ArrowLeft, CalendarRange, MoreHorizontal, Trash2, UserPlus, Users } from 'lucide-react';
+import { IconCheck, IconChevron, IconEdit } from '@/components/icons';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import { useRecordRecent } from '@/lib/recents';
@@ -331,7 +332,7 @@ export default function SprintDetailPage() {
                 {(close) => (
                   <div className="w-40 rounded-[var(--radius-sm)] border border-border bg-surface p-1 shadow-lg">
                     <MenuItem
-                      icon={<Pencil size={14} />}
+                      icon={<IconEdit size={14} />}
                       label="Edit"
                       onClick={() => {
                         close();
@@ -390,7 +391,7 @@ export default function SprintDetailPage() {
                       <UserPlus size={14} /> No lead
                     </span>
                   )}
-                  <ChevronDown size={13} className="ml-auto shrink-0 text-text-muted" />
+                  <IconChevron size={13} className="ml-auto shrink-0 text-text-muted" />
                 </button>
               )}
             >
@@ -405,7 +406,7 @@ export default function SprintDetailPage() {
                     className={OPTION_CLASS}
                   >
                     <span className="text-text-muted">No lead</span>
-                    {!sprint.leadId && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                    {!sprint.leadId && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
                   </button>
                   {projectMembers.map((m) => (
                     <button
@@ -419,7 +420,7 @@ export default function SprintDetailPage() {
                     >
                       <Avatar name={m.displayName} color={m.avatarColor} size={20} />
                       <span className="truncate">{m.displayName}</span>
-                      {m.id === sprint.leadId && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                      {m.id === sprint.leadId && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
                     </button>
                   ))}
                 </div>
@@ -439,7 +440,7 @@ export default function SprintDetailPage() {
                       <Users size={14} /> No members
                     </span>
                   )}
-                  <ChevronDown size={13} className="ml-auto shrink-0 text-text-muted" />
+                  <IconChevron size={13} className="ml-auto shrink-0 text-text-muted" />
                 </button>
               )}
             >
@@ -454,7 +455,7 @@ export default function SprintDetailPage() {
                       <button key={m.id} type="button" onClick={() => toggleMember(m.id)} className={OPTION_CLASS}>
                         <Avatar name={m.displayName} color={m.avatarColor} size={20} />
                         <span className="truncate">{m.displayName}</span>
-                        {checked && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                        {checked && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
                       </button>
                     );
                   })}

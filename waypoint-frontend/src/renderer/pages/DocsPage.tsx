@@ -3,20 +3,15 @@ import { useNavigate } from 'react-router-dom';
 import { formatDistanceToNow } from 'date-fns';
 import { clsx } from 'clsx';
 import {
-  FileText,
   Lock,
   Archive,
   Globe2,
-  Plus,
-  Search,
   ArrowUpDown,
-  ChevronDown,
-  Check,
   MoreHorizontal,
-  Pencil,
   Star,
   Trash2,
 } from 'lucide-react';
+import { IconFile, IconPlus, IconSearch, IconChevron, IconCheck, IconEdit } from '@/components/icons';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import { createDoc, deleteDoc, listMembers, listDocs, updateDoc } from '@/data/api';
@@ -215,7 +210,7 @@ export default function DocsPage() {
           <p className="text-sm text-text-secondary">Specs, runbooks, and notes for {project.name}</p>
         </div>
         <Button variant="primary" onClick={() => handleAddDoc()} disabled={creating}>
-          <Plus size={15} />
+          <IconPlus size={15} />
           {creating ? 'Creating…' : 'Add doc'}
         </Button>
       </div>
@@ -240,7 +235,7 @@ export default function DocsPage() {
 
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-6 py-3">
         <div className="relative min-w-[200px] flex-1 sm:max-w-xs">
-          <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-muted" />
+          <IconSearch size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-muted" />
           <input
             type="text"
             placeholder="Search docs…"
@@ -256,7 +251,7 @@ export default function DocsPage() {
             <Button variant={open ? 'secondary' : 'ghost'} size="sm" onClick={toggle}>
               <ArrowUpDown size={14} />
               {SORT_OPTIONS.find((o) => o.key === sortBy)?.label}
-              <ChevronDown size={13} />
+              <IconChevron size={13} />
             </Button>
           )}
         >
@@ -273,7 +268,7 @@ export default function DocsPage() {
                   className="flex w-full items-center justify-between gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-sm text-text hover:bg-surface-2"
                 >
                   {opt.label}
-                  {sortBy === opt.key && <Check size={13} className="text-accent" />}
+                  {sortBy === opt.key && <IconCheck size={13} className="text-accent" />}
                 </button>
               ))}
             </div>
@@ -286,7 +281,7 @@ export default function DocsPage() {
           <SkeletonListRows rows={6} />
         ) : rows.length === 0 ? (
           <EmptyState
-            icon={<FileText size={28} />}
+            icon={<IconFile size={28} />}
             title={query ? 'No docs match your search' : `No ${tab} docs yet`}
             description={
               query
@@ -298,7 +293,7 @@ export default function DocsPage() {
             action={
               !query && tab !== 'archived' ? (
                 <Button variant="primary" onClick={() => handleAddDoc()} disabled={creating}>
-                  <Plus size={15} />
+                  <IconPlus size={15} />
                   Add doc
                 </Button>
               ) : undefined
@@ -369,7 +364,7 @@ export default function DocsPage() {
                         onClick={() => handleAddDoc(doc.id)}
                         className="opacity-0 transition-opacity group-hover:opacity-100"
                       >
-                        <Plus size={14} />
+                        <IconPlus size={14} />
                       </IconButton>
                     )}
 
@@ -388,7 +383,7 @@ export default function DocsPage() {
                       {(close) => (
                         <div className="w-40 rounded-[var(--radius-sm)] border border-border bg-surface p-1 shadow-lg">
                           <MenuItem
-                            icon={<Pencil size={14} />}
+                            icon={<IconEdit size={14} />}
                             label="Rename"
                             onClick={() => {
                               close();

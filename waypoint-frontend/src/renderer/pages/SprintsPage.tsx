@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, RefreshCw } from 'lucide-react';
+import { IconPlus, IconRefresh } from '@/components/icons';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import { listSprints, listStates, listTickets } from '@/data/api';
@@ -59,7 +59,7 @@ export default function SprintsPage() {
         </div>
         {!showForm && (
           <Button variant="primary" size="sm" onClick={() => setShowForm(true)}>
-            <Plus size={14} />
+            <IconPlus size={14} />
             Add sprint
           </Button>
         )}
@@ -87,7 +87,7 @@ export default function SprintsPage() {
         </div>
       ) : (sprints ?? []).length === 0 ? (
         <EmptyState
-          icon={<RefreshCw size={28} />}
+          icon={<IconRefresh size={28} />}
           title="No sprints yet"
           description="Create a sprint to give a slice of work its own dates, lead, and status."
         />

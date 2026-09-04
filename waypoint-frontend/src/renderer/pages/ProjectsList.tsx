@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Settings, Plus, ArrowUpDown, Archive } from 'lucide-react';
+import { ArrowUpDown } from 'lucide-react';
+import { IconSettings, IconPlus, IconArchive, IconFolder } from '@/components/icons';
 import { useAsync } from '@/lib/useAsync';
 import { listProjects, listMembers, archiveProject } from '@/data/api';
 import type { Project } from '@/types/entities';
@@ -9,7 +10,6 @@ import { Badge } from '@/components/ui/Badge';
 import { AvatarStack } from '@/components/ui/Avatar';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { CreateProjectModal } from '@/components/domain/CreateProjectModal';
-import { FolderKanban } from 'lucide-react';
 import { Skeleton, SkeletonCardGrid } from '@/components/ui/Skeleton';
 
 type SortKey = 'name' | 'created';
@@ -51,7 +51,7 @@ export default function ProjectsList() {
           </p>
         </div>
         <Button variant="primary" onClick={() => setCreateOpen(true)}>
-          <Plus size={15} />
+          <IconPlus size={15} />
           Add Project
         </Button>
       </div>
@@ -87,12 +87,12 @@ export default function ProjectsList() {
 
       {projects && visibleProjects.length === 0 && (
         <EmptyState
-          icon={<FolderKanban size={32} strokeWidth={1.5} />}
+          icon={<IconFolder size={32} strokeWidth={1.5} />}
           title="No projects match this filter"
           description="Try a different visibility filter, or create a new project."
           action={
             <Button variant="primary" onClick={() => setCreateOpen(true)}>
-              <Plus size={15} />
+              <IconPlus size={15} />
               Add Project
             </Button>
           }
@@ -175,7 +175,7 @@ function ProjectCard({
                 onArchive();
               }}
             >
-              <Archive size={14} />
+              <IconArchive size={14} />
             </IconButton>
             <IconButton
               label="Project settings"
@@ -184,7 +184,7 @@ function ProjectCard({
                 onSettings();
               }}
             >
-              <Settings size={14} />
+              <IconSettings size={14} />
             </IconButton>
           </div>
         </div>

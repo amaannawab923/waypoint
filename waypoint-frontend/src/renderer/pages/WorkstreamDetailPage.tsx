@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Check, ChevronDown, ChevronLeft, Plus, Search, UserPlus, Users } from 'lucide-react';
+import { ChevronLeft, UserPlus, Users } from 'lucide-react';
+import { IconCheck, IconChevron, IconPlus, IconSearch } from '@/components/icons';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import { useRecordRecent } from '@/lib/recents';
@@ -129,7 +130,7 @@ function AddTicketModal({
     <Modal open={open} onClose={handleClose} title="Add ticket to workstream">
       <div className="flex flex-col gap-3">
         <div className="relative">
-          <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
+          <IconSearch size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
           <input
             autoFocus
             value={query}
@@ -359,7 +360,7 @@ export default function WorkstreamDetailPage() {
             <div className="mb-2 flex items-center justify-between">
               <label className="text-xs font-medium text-text-muted">Tickets ({items.length})</label>
               <Button variant="secondary" size="sm" onClick={() => setAddItemOpen(true)}>
-                <Plus size={14} />
+                <IconPlus size={14} />
                 Add ticket
               </Button>
             </div>
@@ -368,7 +369,7 @@ export default function WorkstreamDetailPage() {
                 title="No tickets in this workstream yet"
                 action={
                   <Button variant="secondary" size="sm" onClick={() => setAddItemOpen(true)}>
-                    <Plus size={14} />
+                    <IconPlus size={14} />
                     Add ticket
                   </Button>
                 }
@@ -438,7 +439,7 @@ export default function WorkstreamDetailPage() {
                       <UserPlus size={14} /> No lead
                     </span>
                   )}
-                  <ChevronDown size={13} className="ml-auto shrink-0 text-text-muted" />
+                  <IconChevron size={13} className="ml-auto shrink-0 text-text-muted" />
                 </button>
               )}
             >
@@ -453,7 +454,7 @@ export default function WorkstreamDetailPage() {
                     className={OPTION_CLASS}
                   >
                     <span className="text-text-muted">No lead</span>
-                    {!workstream.leadId && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                    {!workstream.leadId && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
                   </button>
                   {projectMembers.map((m) => (
                     <button
@@ -467,7 +468,7 @@ export default function WorkstreamDetailPage() {
                     >
                       <Avatar name={m.displayName} color={m.avatarColor} size={20} />
                       <span className="truncate">{m.displayName}</span>
-                      {m.id === workstream.leadId && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                      {m.id === workstream.leadId && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
                     </button>
                   ))}
                 </div>
@@ -487,7 +488,7 @@ export default function WorkstreamDetailPage() {
                       <Users size={14} /> No members
                     </span>
                   )}
-                  <ChevronDown size={13} className="ml-auto shrink-0 text-text-muted" />
+                  <IconChevron size={13} className="ml-auto shrink-0 text-text-muted" />
                 </button>
               )}
             >
@@ -502,7 +503,7 @@ export default function WorkstreamDetailPage() {
                       <button key={m.id} type="button" onClick={() => toggleMember(m.id)} className={OPTION_CLASS}>
                         <Avatar name={m.displayName} color={m.avatarColor} size={20} />
                         <span className="truncate">{m.displayName}</span>
-                        {checked && <Check size={14} className="ml-auto shrink-0 text-accent" />}
+                        {checked && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
                       </button>
                     );
                   })}

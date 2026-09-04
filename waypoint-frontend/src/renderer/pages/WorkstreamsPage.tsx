@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Boxes, CheckCircle2, Loader, Plus, Users } from 'lucide-react';
+import { CheckCircle2, Loader, Users } from 'lucide-react';
+import { IconTrack, IconPlus } from '@/components/icons';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import { createWorkstream, listMembers, listWorkstreams, listStates, listTickets } from '@/data/api';
@@ -104,7 +105,7 @@ export default function WorkstreamsPage() {
           <p className="text-sm text-text-secondary">Group work into shippable pieces for {project.name}</p>
         </div>
         <Button variant="primary" onClick={() => setCreating(true)}>
-          <Plus size={15} />
+          <IconPlus size={15} />
           Add Workstream
         </Button>
       </div>
@@ -112,7 +113,7 @@ export default function WorkstreamsPage() {
       {!!workstreams?.length && (
         <div className="grid grid-cols-3 gap-3 border-b border-border px-6 py-4">
           <div className="rounded-[var(--radius)] border border-border bg-surface p-4">
-            <Boxes size={16} className="mb-3 text-text-muted" strokeWidth={2} />
+            <IconTrack size={16} className="mb-3 text-text-muted" strokeWidth={2} />
             <p className="font-display text-2xl font-medium text-text">{stats.total}</p>
             <p className="text-xs text-text-secondary">Total workstreams</p>
           </div>
@@ -134,12 +135,12 @@ export default function WorkstreamsPage() {
           <SkeletonListRows rows={6} />
         ) : !workstreams || workstreams.length === 0 ? (
           <EmptyState
-            icon={<Boxes size={28} />}
+            icon={<IconTrack size={28} />}
             title="No workstreams yet"
             description="Create a workstream to give a slice of work — a migration, a redesign — its own lead and status."
             action={
               <Button variant="primary" onClick={() => setCreating(true)}>
-                <Plus size={15} />
+                <IconPlus size={15} />
                 Add Workstream
               </Button>
             }

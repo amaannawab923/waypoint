@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { formatDistanceToNow } from 'date-fns';
-import { Check, Copy, Globe2, Inbox, Link2, Plus, X } from 'lucide-react';
+import { Copy, Globe2, Link2 } from 'lucide-react';
+import { IconCheck, IconInbox, IconPlus, IconX } from '@/components/icons';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import {
@@ -259,7 +260,7 @@ export default function RequestsPage() {
           <p className="text-sm text-text-secondary">Triage requests submitted for {project.name}</p>
         </div>
         <Button variant="primary" size="sm" onClick={() => setCreateOpen(true)}>
-          <Plus size={14} />
+          <IconPlus size={14} />
           New request
         </Button>
       </div>
@@ -313,7 +314,7 @@ export default function RequestsPage() {
           <SkeletonListRows rows={6} />
         ) : !requests || requests.length === 0 ? (
           <EmptyState
-            icon={<Inbox size={28} />}
+            icon={<IconInbox size={28} />}
             title="No requests yet"
             description="Requests submitted to this project's request form will show up here."
           />
@@ -375,7 +376,7 @@ export default function RequestsPage() {
                         disabled={workingId === request.id}
                         onClick={() => handleDecline(request)}
                       >
-                        <X size={14} />
+                        <IconX size={14} />
                         Decline
                       </Button>
                       <Button
@@ -384,7 +385,7 @@ export default function RequestsPage() {
                         disabled={workingId === request.id}
                         onClick={() => openReview(request)}
                       >
-                        <Check size={14} />
+                        <IconCheck size={14} />
                         Accept
                       </Button>
                     </div>
