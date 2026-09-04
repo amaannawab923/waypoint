@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import {
   addComment,
@@ -348,5 +348,65 @@ describe('TicketDetailPage → pending proposals section', () => {
 
     expect(rejectCopilotProposal).toHaveBeenCalledWith('prop-1');
     expect(await screen.findByText('Dismissed, nothing changed')).toBeInTheDocument();
+  });
+
+  // Regression test for the bug this page's approve wiring used to have:
+  // approving executes the proposal server-side (it mutates THIS ticket's
+  // own priority via proposals.service.ts's executeProposal ->
+  // ticketsService.updateTicket), but the proposal store only ever knew
+  // about the proposal row's status, not the ticket underneath it — so the
+  // sidebar kept rendering the pre-approve value until a full page reload.
+  // Asserts the fix: approving re-fetches this ticket (getTicketByIdentifier
+  // called again) and the sidebar's Priority field reflects the new value
+  // with no reload/remount.
+  it("approving a proposal that mutates this ticket refreshes the ticket's own sidebar fields, not just the card", async () => {
+    mount(
+      [],
+      [],
+      [
+        proposal({
+          id: 'prop-1',
+          kind: 'priority_change',
+          payload: { priority: 'high' },
+          snapshot: {
+            identifier: 'LAUNCH-3',
+            title: 'T',
+            fromPriority: 'none',
+          },
+        }),
+      ],
+    );
+    jest
+      .mocked(approveCopilotProposal)
+      .mockResolvedValue(
+        proposal({ id: 'prop-1', kind: 'priority_change', status: 'executed' }),
+      );
+
+    expect(await screen.findByText('Pending proposals (1)')).toBeInTheDocument();
+
+    const priorityRowBefore = screen.getByText('Priority')
+      .parentElement as HTMLElement;
+    expect(within(priorityRowBefore).getByText('None')).toBeInTheDocument();
+
+    // The reload this fix adds resolves to the post-approve ticket — same shape a real GET
+    // would return once proposals.service.ts's executeProposal has actually run the priority
+    // update server-side.
+    jest
+      .mocked(getTicketByIdentifier)
+      .mockResolvedValue({ ...ITEM, priority: 'high' });
+
+    await act(async () => {
+      screen.getByRole('button', { name: 'Approve' }).click();
+    });
+
+    expect(getTicketByIdentifier).toHaveBeenCalledTimes(2);
+    const priorityRowAfter = screen.getByText('Priority')
+      .parentElement as HTMLElement;
+    await waitFor(() =>
+      expect(within(priorityRowAfter).getByText('High')).toBeInTheDocument(),
+    );
+    expect(
+      within(priorityRowAfter).queryByText('None'),
+    ).not.toBeInTheDocument();
   });
 });

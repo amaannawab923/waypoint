@@ -523,6 +523,28 @@ export function TicketDetailContent({
     reloadActivity();
   }
 
+  // Wraps proposalStore's approveProposal for the inline "Pending
+  // proposals" card below: approving executes the proposal server-side
+  // (proposals.service.ts's executeProposal calls updateTicket/addComment
+  // for this exact ticket), but the proposal store only tracks the
+  // proposal row's own status — same "approve here, gone everywhere" shape
+  // as every other proposal surface (Review queue, Copilot panel), and by
+  // design has no idea a TICKET's fields changed underneath it. Every other
+  // mutation on this page (patchItem, toggleAssignee, toggleLabel, ...)
+  // already reloads item/activity/comments afterward; approving a proposal
+  // is just one more way this ticket's own fields can change server-side,
+  // so it needs the exact same reload — without it the sidebar (e.g.
+  // Priority) silently keeps rendering whatever it had before the approve
+  // until the next full page load, even though the Pending proposals card
+  // itself (backed by the shared store) correctly resolves live.
+  async function handleApproveProposal(id: string) {
+    const result = await approveProposal(id);
+    reloadItem();
+    reloadActivity();
+    reloadComments();
+    return result;
+  }
+
   async function toggleAssignee(memberId: string) {
     if (!item) return;
     // Toggles against the current persisted assigneeIds server-side (see
@@ -865,7 +887,7 @@ export function TicketDetailContent({
                 <CopilotProposalCard
                   key={p.id}
                   proposal={p}
-                  onApprove={approveProposal}
+                  onApprove={handleApproveProposal}
                   onReject={rejectProposal}
                 />
               ))}
