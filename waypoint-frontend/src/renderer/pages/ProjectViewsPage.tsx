@@ -306,7 +306,8 @@ export default function ProjectViewsPage() {
         <div>
           <h1 className="font-display text-lg font-medium text-text">Views</h1>
           <p className="text-sm text-text-secondary">
-            Saved filters for {project.name}
+            A view is a saved filter. One concept — a project view is just a view whose filter includes{' '}
+            {project.name}.
           </p>
         </div>
         <Button variant="primary" onClick={handleAddView} disabled={creating}>

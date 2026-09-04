@@ -206,8 +206,12 @@ export default function DocsPage() {
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-border px-6 py-4">
         <div>
+          <p className="text-xs font-medium tracking-wide text-text-muted uppercase">Project-scoped and shared</p>
           <h1 className="font-display text-lg font-medium text-text">Docs</h1>
-          <p className="text-sm text-text-secondary">Specs, runbooks, and notes for {project.name}</p>
+          <p className="text-sm text-text-secondary">
+            Long-form writing that belongs to {project.name}. Personal, unfiled jottings go on the
+            Scratchpad.
+          </p>
         </div>
         <Button variant="primary" onClick={() => handleAddDoc()} disabled={creating}>
           <IconPlus size={15} />

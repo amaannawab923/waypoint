@@ -256,8 +256,13 @@ export default function RequestsPage() {
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between gap-3 border-b border-border px-6 py-4">
         <div>
+          <p className="text-xs font-medium tracking-wide text-text-muted uppercase">Agent-triaged queue</p>
           <h1 className="font-display text-lg font-medium text-text">Requests</h1>
-          <p className="text-sm text-text-secondary">Triage requests submitted for {project.name}</p>
+          <p className="text-sm text-text-secondary">
+            Work from outside the team asking to come in. The Triage Agent reviews each one against the
+            repo and the existing tickets, then proposes a verdict below — approve or reject it here, and
+            it shows up in Review too.
+          </p>
         </div>
         <Button variant="primary" size="sm" onClick={() => setCreateOpen(true)}>
           <IconPlus size={14} />
