@@ -27,6 +27,17 @@ describe('NotWired', () => {
     }).toThrow();
   });
 
+  // entry.ref (e.g. "exports.service.ts inserts status:completed and
+  // returns") used to be rendered as this element's `title` attribute —
+  // a raw internal dev pointer leaking out as a literal browser hover
+  // tooltip on every "not wired yet" banner in the app.
+  it('never renders `ref` as a title attribute, even for a capability that has one', () => {
+    render(<NotWired capability="webhooks.delivery" />);
+
+    expect(CAPABILITIES['webhooks.delivery'].ref).toBeTruthy();
+    expect(screen.getByRole('status')).not.toHaveAttribute('title');
+  });
+
   it('has no `note` prop to call it with — the register is the only source of copy', () => {
     render(
       // @ts-expect-error — NotWired takes only `capability`, never ad-hoc `note` prose.

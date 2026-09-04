@@ -34,7 +34,11 @@ export function NotWired({ capability }: { capability: CapabilityKey }) {
       role="status"
       data-capability={capability}
       data-capability-state={entry.state}
-      title={entry.ref}
+      // entry.ref (e.g. "exports.service.ts inserts status:completed and
+      // returns") is a pointer for the next engineer reading
+      // capabilities.ts, not end-user copy — it must never end up as a
+      // `title` attribute, which the browser renders as a literal hover
+      // tooltip. See the register's own `ref` doc comment.
       className="flex items-start gap-2.5 rounded-[var(--radius-sm)] border border-warning/30 bg-warning-bg px-3 py-2 text-xs text-warning"
     >
       <IconAlert size={14} className="mt-0.5 shrink-0" />
