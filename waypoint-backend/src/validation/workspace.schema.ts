@@ -17,10 +17,23 @@ export const inviteMemberSchema = z.object({
   role: z.enum(['admin', 'member', 'guest']),
 });
 
+export const notificationPrefsSchema = z.object({
+  email: z.boolean().optional(),
+  push: z.boolean().optional(),
+  mentions: z.boolean().optional(),
+  comments: z.boolean().optional(),
+});
+
 export const updateCurrentUserSchema = requireAtLeastOneField(
   z.object({
     fullName: z.string().min(1).optional(),
     displayName: z.string().min(1).optional(),
     email: z.string().email().optional(),
+    firstDayOfWeek: z.enum(['Sunday', 'Monday']).optional(),
+    // Merged into the stored value, not replaced — see
+    // members.service.ts's updateCurrentUser, the same convention
+    // projects.service.ts's updateProjectAutomations uses for its own
+    // partial-patch jsonb column.
+    notificationPrefs: notificationPrefsSchema.optional(),
   }),
 );
