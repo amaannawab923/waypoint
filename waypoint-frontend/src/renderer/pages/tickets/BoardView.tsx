@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import { Plus, Kanban, ListChecks, Link2, Terminal } from 'lucide-react';
+import { Kanban, ListChecks, Link2, Terminal } from 'lucide-react';
+import { IconPlus } from '@/components/icons';
 import { clsx } from 'clsx';
 import { useAsync } from '@/lib/useAsync';
 import { listAgentAssignments, listAgents, listMembers, updateTicket, reorderTicket } from '@/data/api';
@@ -177,7 +178,7 @@ export default function BoardView({
               aria-label="New ticket"
               className="ml-auto cursor-pointer rounded-[var(--radius-sm)] p-1 text-text-muted hover:bg-surface hover:text-accent"
             >
-              <Plus size={14} />
+              <IconPlus size={14} />
             </button>
           </div>
 
@@ -280,7 +281,7 @@ export default function BoardView({
               onClick={() => setCreateForGroup(group.key)}
               className="flex cursor-pointer items-center gap-1.5 rounded-[var(--radius-sm)] px-2 py-2 text-left text-sm text-text-secondary hover:bg-surface hover:text-accent"
             >
-              <Plus size={14} />
+              <IconPlus size={14} />
               New ticket
             </button>
           </div>

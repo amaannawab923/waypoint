@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { clsx } from 'clsx';
-import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
+import { ChevronLeft } from 'lucide-react';
+import { IconChevronRight, IconPlus } from '@/components/icons';
 import { useProject } from '@/layouts/ProjectLayout';
 import type { TicketsView } from './useTicketsView';
 import { Button, IconButton } from '@/components/ui/Button';
@@ -132,7 +133,7 @@ export default function CalendarView({
             <ChevronLeft size={16} />
           </IconButton>
           <IconButton label="Next month" onClick={() => setCursor((c) => new Date(c.getFullYear(), c.getMonth() + 1, 1))}>
-            <ChevronRight size={16} />
+            <IconChevronRight size={16} />
           </IconButton>
         </div>
       </div>
@@ -177,7 +178,7 @@ export default function CalendarView({
                     aria-label="New ticket"
                     className="cursor-pointer rounded-[var(--radius-sm)] p-1 text-text-muted opacity-0 hover:bg-surface hover:text-accent group-hover:opacity-100"
                   >
-                    <Plus size={13} />
+                    <IconPlus size={13} />
                   </button>
                 </div>
                 <div className="mt-1 flex flex-col gap-1">
