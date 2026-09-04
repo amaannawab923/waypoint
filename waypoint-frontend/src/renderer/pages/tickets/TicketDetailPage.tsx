@@ -24,6 +24,7 @@ import {
   createTicket,
   deleteTicket,
   getCurrentUser,
+  getProject,
   getTicket,
   getTicketByIdentifier,
   listActivity,
@@ -231,7 +232,19 @@ export function TicketDetailContent({
   autoAssignAgentId?: string;
   onAutoAssigned?: () => void;
 }) {
-  const { project } = useProject();
+  // useProject() is `useOutletContext<ProjectOutletContext>()` under the
+  // hood — it does NOT throw when there's no ambient outlet context, it
+  // just returns undefined. This page is reachable from routes that never
+  // provide that context at all: AllTicketsPage's peek drawer (`/views`)
+  // isn't nested under <ProjectLayout>, and each row there can belong to a
+  // DIFFERENT project anyway, so even a route that DID provide a project
+  // wouldn't necessarily be the right one for the ticket being viewed.
+  // Never destructure this directly — `const { project } = useProject()`
+  // throws a TypeError the instant `useProject()` returns undefined, which
+  // previously took the entire app down to a white screen (there was no
+  // ErrorBoundary yet either — see router.tsx). Resolve the actual project
+  // this ticket belongs to further down, from the ticket's own projectId.
+  const projectOutletContext = useProject();
   const navigate = useNavigate();
   const isDrawer = variant === 'drawer';
 
@@ -248,6 +261,24 @@ export function TicketDetailContent({
   // fetch entirely while there's no real id yet, same end state, no
   // spurious failed request or error toast along the way.
   const itemProjectId = item?.projectId ?? '';
+
+  // The outlet-provided project is only trustworthy when it's actually
+  // FOR this ticket — true on every normal /projects/:projectId/tickets/:id
+  // route, but never true on the All Tickets peek drawer (no context at
+  // all) and not guaranteed anywhere a ticket from one project could be
+  // rendered while a different project's route context happens to be
+  // mounted. When it doesn't match, fetch this ticket's own project
+  // directly instead of assuming one.
+  const contextProject =
+    projectOutletContext && projectOutletContext.project.id === itemProjectId
+      ? projectOutletContext.project
+      : undefined;
+  const needsProjectFetch = !contextProject && itemProjectId !== '';
+  const { data: fetchedProject, loading: projectFetchLoading } = useAsync(
+    () => (needsProjectFetch ? getProject(itemProjectId) : Promise.resolve(undefined)),
+    [needsProjectFetch, itemProjectId],
+  );
+  const project = contextProject ?? fetchedProject;
   const { data: states } = useAsync(
     () => (itemProjectId ? listStates(itemProjectId) : Promise.resolve([])),
     [itemProjectId],
@@ -363,16 +394,26 @@ export function TicketDetailContent({
   const membersById = useMemo(() => new Map((allMembers ?? []).map((m) => [m.id, m])), [allMembers]);
   const agentsById = useMemo(() => new Map((agents ?? []).map((a) => [a.id, a])), [agents]);
   const statesById = useMemo(() => new Map((states ?? []).map((s) => [s.id, s])), [states]);
+  // `project` can still be undefined here — these memos run on every render,
+  // including the ones before stillLoadingCritical/the `!project` guard
+  // below have had a chance to bail out (React hooks must run
+  // unconditionally, so nothing above this point can be gated on `project`
+  // being resolved yet).
   const projectMembers = useMemo(
-    () => (allMembers ?? []).filter((m) => project.memberIds.includes(m.id)),
-    [allMembers, project.memberIds],
+    () => (project ? (allMembers ?? []).filter((m) => project.memberIds.includes(m.id)) : []),
+    [allMembers, project],
   );
   // Agents are scoped to a project the same way project membership scopes
   // humans: workspace-wide agents (scopeProjectIds: []) plus any explicitly
   // scoped to this project.
   const projectAgents = useMemo(
-    () => (agents ?? []).filter((a) => a.isActive && (a.scopeProjectIds.length === 0 || a.scopeProjectIds.includes(project.id))),
-    [agents, project.id],
+    () =>
+      project
+        ? (agents ?? []).filter(
+            (a) => a.isActive && (a.scopeProjectIds.length === 0 || a.scopeProjectIds.includes(project.id)),
+          )
+        : [],
+    [agents, project],
   );
 
   // An assignee id (or activity/comment author id) may resolve against a
@@ -394,14 +435,18 @@ export function TicketDetailContent({
   // still be in flight — showing a brief "No state" / "No activity yet"
   // flash instead of the skeleton. Wait for those two (the ones the header
   // and Activity section directly depend on) before considering this loaded.
-  const stillLoadingCritical = (itemLoading && !item) || Boolean(item && (states === undefined || activity === undefined));
+  // Also waits on the project resolving (see contextProject/fetchedProject
+  // above) — everything below this point assumes `project` is defined.
+  const stillLoadingCritical =
+    (itemLoading && !item) ||
+    Boolean(item && (states === undefined || activity === undefined || (needsProjectFetch && projectFetchLoading)));
 
   if (stillLoadingCritical) {
     const sidebarLabels = [
       'State',
       'Assignees',
       'Priority',
-      ...(project.estimate ? ['Estimate'] : []),
+      ...(project?.estimate ? ['Estimate'] : []),
       'Created by',
       'Start date',
       'Due date',
@@ -495,6 +540,20 @@ export function TicketDetailContent({
             Back to tickets
           </Button>
         }
+      />
+    );
+  }
+
+  // The ticket resolved but its own project didn't — either the fetch
+  // above genuinely failed to find it (deleted/archived project, matching
+  // ProjectLayout's own not-found copy) or, on a route that DOES provide
+  // outlet context, that context is for some other project than this
+  // ticket's own. Everything below assumes `project` is defined.
+  if (!project) {
+    return (
+      <EmptyState
+        title="Project not found"
+        description="This ticket's project may have been deleted or archived."
       />
     );
   }

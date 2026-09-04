@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as os from 'os';
+import * as path from 'path';
 import {
   runCopilotQuery,
   type McpServerConfig,
@@ -80,21 +81,31 @@ const REPO_PATH_PATTERN = /^\/|^[A-Za-z]:[\\/]/;
 const SESSION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// Deliberately NOT a second .git check: that was already done once, at link
-// time, by the backend (projects.service.ts's validateRepoPath), and this
-// runs on every single attempt. Re-verifying it here would be redundant I/O
-// for no real safety gain — this isn't a security boundary, it's UX, and a
-// directory that still exists is a fine cwd whether or not .git was renamed
-// since. What CAN legitimately go stale is "does the checkout still exist
-// at all" (moved/deleted), which is what's checked — and failing it
-// degrades to the previous os.tmpdir() behavior rather than erroring the
-// whole turn, matching how conversationId/outcomePreamble degrade elsewhere.
+// This DOES include a second .git check, deliberately re-verified on every
+// attempt rather than trusted from link time alone: the backend's own
+// validateRepoPath (projects.service.ts) already confirms repoPath is a git
+// checkout when a project is linked, but repoPath arrives HERE raw over IPC
+// from the renderer, with nothing re-checking it on the way in. If the
+// renderer were ever compromised — e.g. by an XSS payload in some untrusted
+// rendered content calling window.electron.copilot.runPrompt directly with
+// an attacker-chosen repoPath — this is the one place standing between that
+// and handing Copilot's file-read tools (REPO_DENYLIST_PATTERNS aside) a
+// cwd of, say, the user's home directory. A directory that merely exists is
+// not enough of a check for that; requiring an actual .git alongside it is
+// cheap, matches what link time already required, and closes the gap
+// without trusting anything upstream of this function. What CAN
+// legitimately go stale despite this — "does the checkout still exist at
+// all" (moved/deleted, or .git removed since linking) — degrades the same
+// way it always did: to the previous os.tmpdir() behavior rather than
+// erroring the whole turn, matching how conversationId/outcomePreamble
+// degrade elsewhere.
 //
 // Run fresh on every attempt (see runSession below), not once per policy —
 // a stale-session retry re-runs, and the checkout could in principle have
-// gone away between the two attempts. This is also the one place
-// `repoLinked` gets decided, so cwd and the tool/prompt selection that
-// follow from it can never disagree (architecture doc §5.1 invariant 8).
+// gone away (or stopped being a git checkout) between the two attempts.
+// This is also the one place `repoLinked` gets decided, so cwd and the
+// tool/prompt selection that follow from it can never disagree
+// (architecture doc §5.1 invariant 8).
 function resolveRepoRoot(repoPath: string | undefined): {
   cwd: string;
   linked: boolean;
@@ -106,7 +117,10 @@ function resolveRepoRoot(repoPath: string | undefined): {
       // unmounted drive, a deleted checkout), and statSync alone already
       // answers both "does it exist" and "is it a directory" via one throw
       // vs. one boolean, with no window in between.
-      if (fs.statSync(repoPath).isDirectory()) {
+      if (
+        fs.statSync(repoPath).isDirectory() &&
+        fs.existsSync(path.join(repoPath, '.git'))
+      ) {
         return { cwd: repoPath, linked: true };
       }
     } catch {
