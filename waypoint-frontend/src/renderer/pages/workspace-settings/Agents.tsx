@@ -27,8 +27,9 @@ export default function Agents() {
         <div>
           <h2 className="font-display text-lg font-medium text-text">Agents</h2>
           <p className="text-sm text-text-secondary">
-            Agents you've defined — each with its own instructions file, project scope, and the
-            local subscription it runs on.
+            An agent is one brief, a scope, and the local subscription it runs on. It reads and
+            proposes; it never writes on its own. Nothing here is required — a project with zero
+            agents behaves exactly like a plain tracker.
           </p>
         </div>
         <Button variant="primary" onClick={() => navigate('/settings/agents/new')}>
