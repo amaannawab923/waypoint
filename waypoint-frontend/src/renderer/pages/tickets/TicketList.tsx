@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -92,6 +93,15 @@ export default function TicketList({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [focusId, setFocusId] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
+  // Same fix as CopilotProposalCard.tsx's act(): the "Set state" / "Set
+  // priority" / "Assign" bulk actions below disable themselves
+  // (bulkBusy) AND clear `selected` synchronously in applyBulkPatch,
+  // which unmounts the whole bulk-action bar (`selected.size > 0`)
+  // immediately — either path force-blurs to <body> and leaks the next
+  // keystroke to useGlobalKeyboardShortcuts.ts's global nav shortcuts.
+  // This component's own root is the stable container neither path
+  // touches.
+  const rootRef = useRef<HTMLDivElement>(null);
 
   const memberById = useMemo(
     () => new Map((members ?? []).map((m) => [m.id, m])),
@@ -273,6 +283,7 @@ export default function TicketList({
     async (patch: Partial<Ticket>) => {
       const ids = Array.from(selected);
       if (ids.length === 0) return;
+      rootRef.current?.focus();
       setBulkBusy(true);
       setSelected(new Set());
       try {
@@ -344,7 +355,12 @@ export default function TicketList({
   }
 
   return (
-    <div className="flex flex-col pb-8">
+    <div
+      ref={rootRef}
+      tabIndex={-1}
+      data-shortcut-guard
+      className="flex flex-col pb-8 outline-none"
+    >
       <div className="flex items-center gap-2 px-6 py-2 text-xs font-medium text-text-muted">
         {view.items.length} ticket{view.items.length === 1 ? '' : 's'}
         {/* A filter-driven refetch keeps the previous rows on screen (see
