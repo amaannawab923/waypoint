@@ -130,6 +130,21 @@ export default function GanttView({
     return <EmptyState title="No tickets" description="Tickets will show up here on the timeline." />;
   }
 
+  // items.length > 0 here, but a row only gets a bar on the timeline when
+  // it has a startDate or dueDate (see hasRange below) — a project whose
+  // tickets have neither yet would otherwise render a full-width ticket
+  // list with a totally blank timeline next to it, no more informative
+  // than an empty view, with no explanation of why nothing is plotted.
+  const hasAnyDate = items.some((item) => item.startDate || item.dueDate);
+  if (!hasAnyDate) {
+    return (
+      <EmptyState
+        title="No dates set"
+        description="None of this project's tickets have a start or due date yet. Set one from a ticket's detail page to see it plotted here."
+      />
+    );
+  }
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-border px-4 py-3">

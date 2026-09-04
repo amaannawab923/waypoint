@@ -119,6 +119,20 @@ export default function CalendarView({
     );
   }
 
+  // items.length > 0 here, but the grid below only ever places a ticket on
+  // the day its dueDate falls on (see itemsByDay above) — a project whose
+  // tickets simply have no due dates yet would otherwise render a fully
+  // blank month grid with no indication of why, instead of this explicit
+  // explanation.
+  if (itemsByDay.size === 0) {
+    return (
+      <EmptyState
+        title="No due dates set"
+        description="None of this project's tickets have a due date yet. Set one from a ticket's detail page to see it here."
+      />
+    );
+  }
+
   const monthLabel = cursor.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 
   return (
