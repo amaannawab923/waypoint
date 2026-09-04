@@ -84,6 +84,11 @@ export default function Notifications() {
           </span>
         )}
       </div>
+      <p className="mt-1 text-sm text-text-secondary">
+        Things that already happened. Read-only — you can ignore this whole page and nothing breaks.
+        Requests are work from outside asking to come in; Review is where an agent is blocked on you and
+        nothing happens until you act. Only Review has a cost for inaction.
+      </p>
 
       <div className="mt-5 flex gap-1 border-b border-border">
         {(
