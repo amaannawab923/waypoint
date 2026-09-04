@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { Avatar } from '@/components/ui/Avatar';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { NotWired } from '@/components/ui/NotWired';
 import { Skeleton, SkeletonTableRows } from '@/components/ui/Skeleton';
 import { Popover } from '@/pages/tickets/Popover';
 
@@ -86,45 +87,48 @@ export default function Members() {
       </div>
 
       {inviting && (
-        <div className="mb-5 flex flex-wrap items-end gap-2 rounded-[var(--radius-lg)] border border-border bg-surface-2 p-4">
-          <div className="min-w-[220px] flex-1">
-            <label className="mb-1.5 block text-sm font-medium text-text" htmlFor="invite-email">
-              Email address
-            </label>
-            <input
-              id="invite-email"
-              autoFocus
-              type="email"
-              placeholder="teammate@company.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="h-9 w-full rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 text-sm outline-none focus:border-accent"
-            />
-          </div>
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-text" htmlFor="invite-role">
-              Role
-            </label>
-            <select
-              id="invite-role"
-              value={role}
-              onChange={(e) => setRole(e.target.value as Member['role'])}
-              className="h-9 w-32 rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 text-sm capitalize outline-none focus:border-accent"
-            >
-              {ROLES.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="flex gap-2">
-            <Button variant="ghost" onClick={() => setInviting(false)}>
-              Cancel
-            </Button>
-            <Button variant="primary" disabled={!email.trim() || submitting} onClick={handleInvite}>
-              {submitting ? 'Sending…' : 'Send invite'}
-            </Button>
+        <div className="mb-5 flex flex-col gap-3 rounded-[var(--radius-lg)] border border-border bg-surface-2 p-4">
+          <NotWired capability="members.invite" />
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="min-w-[220px] flex-1">
+              <label className="mb-1.5 block text-sm font-medium text-text" htmlFor="invite-email">
+                Email address
+              </label>
+              <input
+                id="invite-email"
+                autoFocus
+                type="email"
+                placeholder="teammate@company.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="h-9 w-full rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 text-sm outline-none focus:border-accent"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-text" htmlFor="invite-role">
+                Role
+              </label>
+              <select
+                id="invite-role"
+                value={role}
+                onChange={(e) => setRole(e.target.value as Member['role'])}
+                className="h-9 w-32 rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 text-sm capitalize outline-none focus:border-accent"
+              >
+                {ROLES.map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="ghost" onClick={() => setInviting(false)}>
+                Cancel
+              </Button>
+              <Button variant="primary" disabled={!email.trim() || submitting} onClick={handleInvite}>
+                {submitting ? 'Adding…' : 'Add member'}
+              </Button>
+            </div>
           </div>
         </div>
       )}
