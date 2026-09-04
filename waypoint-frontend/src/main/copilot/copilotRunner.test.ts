@@ -819,6 +819,9 @@ describe('linking a repo (Copilot V3)', () => {
     repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'waypoint-runner-repo-'));
     filePath = path.join(repoDir, 'README.md');
     fs.writeFileSync(filePath, '# fixture\n');
+    // resolveRepoRoot now requires a real .git directory (see
+    // fix(agent): verify repoPath is a real git checkout before granting file access).
+    fs.mkdirSync(path.join(repoDir, '.git'));
   });
 
   afterEach(() => {
