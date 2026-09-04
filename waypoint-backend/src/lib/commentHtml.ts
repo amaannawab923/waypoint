@@ -17,6 +17,12 @@ export const COPILOT_DISCLOSURE = (displayName: string) =>
 // ticket drawer, so both the model-authored body AND the display name
 // (which a user can set to something containing < or ') must be escaped
 // before being wrapped in tags here.
+//
+// Shared beyond this file: validation/tickets.schema.ts's addCommentSchema
+// reuses this SAME function to neutralize the REST/human comment path's
+// bodyHtml (previously validated as a bare, unsanitized string — see that
+// schema's own comment for why the fix lives at the validation boundary
+// rather than inside comments.service.ts's addComment()).
 export function escapeHtml(s: string): string {
   return s
     .replace(/&/g, '&amp;')
