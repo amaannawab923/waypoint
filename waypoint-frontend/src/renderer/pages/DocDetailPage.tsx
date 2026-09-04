@@ -26,11 +26,9 @@ import {
   Star,
   Lock,
   Unlock,
-  Link2,
   Archive,
   ArchiveRestore,
   Trash2,
-  Check,
 } from 'lucide-react';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
@@ -182,10 +180,8 @@ export default function DocDetailPage() {
   const [isLocked, setIsLocked] = useState(false);
   const [status, setStatus] = useState<SaveStatus>('idle');
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [slashMenu, setSlashMenu] = useState<SlashMenuState | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadedDocId = useRef<string | null>(null);
   const prevVisibilityRef = useRef<'public' | 'private'>('private');
   const iconPickerRef = useRef<HTMLDivElement | null>(null);
@@ -356,7 +352,6 @@ export default function DocDetailPage() {
           void updateDoc(pendingDocId, { contentHtml: pendingEditor.getHTML() }).catch(() => {});
         }
       }
-      if (copyTimer.current) clearTimeout(copyTimer.current);
     };
   }, []);
 
@@ -380,24 +375,40 @@ export default function DocDetailPage() {
 
   async function handleToggleFavorite() {
     if (!doc) return;
+    const previous = isFavorite;
     const next = !isFavorite;
     setIsFavorite(next);
     setStatus('saving');
-    await updateDoc(doc.id, { isFavorite: next });
-    setStatus('saved');
+    try {
+      await updateDoc(doc.id, { isFavorite: next });
+      setStatus('saved');
+    } catch {
+      // Save failed (the shared HTTP client already surfaced a toast) —
+      // revert so the toggle's visible state matches what's actually
+      // persisted, instead of looking saved when it isn't.
+      setIsFavorite(previous);
+      setStatus('error');
+    }
   }
 
   async function handleToggleLocked() {
     if (!doc) return;
+    const previous = isLocked;
     const next = !isLocked;
     setIsLocked(next);
     setStatus('saving');
-    await updateDoc(doc.id, { isLocked: next });
-    setStatus('saved');
+    try {
+      await updateDoc(doc.id, { isLocked: next });
+      setStatus('saved');
+    } catch {
+      setIsLocked(previous);
+      setStatus('error');
+    }
   }
 
   async function handleToggleArchived() {
     if (!doc) return;
+    const previous = visibility;
     const isCurrentlyArchived = visibility === 'archived';
     // Capture the visibility that's actually in effect right now, at the exact
     // moment Archive fires, so Unarchive always restores it — not via a
@@ -409,8 +420,19 @@ export default function DocDetailPage() {
     const next: Doc['visibility'] = isCurrentlyArchived ? prevVisibilityRef.current : 'archived';
     setVisibility(next);
     setStatus('saving');
-    await updateDoc(doc.id, { visibility: next });
-    setStatus('saved');
+    try {
+      await updateDoc(doc.id, { visibility: next });
+      setStatus('saved');
+    } catch {
+      // Save failed (the shared HTTP client already surfaced a toast) —
+      // revert so the control's visible state matches what's actually
+      // persisted, instead of looking saved when it isn't. No need to also
+      // roll back prevVisibilityRef: it was set to `previous` (the same
+      // value visibility reverts to) above, so it's already correct for a
+      // retried Archive.
+      setVisibility(previous);
+      setStatus('error');
+    }
   }
 
   async function handleDeleteDoc() {
@@ -418,17 +440,6 @@ export default function DocDetailPage() {
     if (!window.confirm(`Delete "${doc.title || 'Untitled'}"? This can't be undone.`)) return;
     await deleteDoc(doc.id);
     navigate(`/projects/${project.id}/docs`);
-  }
-
-  async function handleCopyLink() {
-    try {
-      await navigator.clipboard.writeText(window.location.href);
-      setCopied(true);
-      if (copyTimer.current) clearTimeout(copyTimer.current);
-      copyTimer.current = setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Clipboard access can be denied by the browser; fail silently.
-    }
   }
 
   if (loading && !doc) {
@@ -477,7 +488,6 @@ export default function DocDetailPage() {
                 ? 'Failed to save'
                 : ' '}
         </span>
-        {copied && <span className="text-xs text-accent">Link copied</span>}
 
         <div className="ml-auto flex items-center gap-1">
           <IconButton
@@ -493,9 +503,6 @@ export default function DocDetailPage() {
             className={isLocked ? 'text-accent' : undefined}
           >
             {isLocked ? <Lock size={15} /> : <Unlock size={15} />}
-          </IconButton>
-          <IconButton label="Copy link" onClick={handleCopyLink}>
-            {copied ? <Check size={15} /> : <Link2 size={15} />}
           </IconButton>
           <IconButton
             label={isArchived ? 'Unarchive doc' : 'Archive doc'}
