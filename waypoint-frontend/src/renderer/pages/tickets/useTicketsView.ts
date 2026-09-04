@@ -103,6 +103,23 @@ export function toFilterQuery(
   return Object.keys(query).length > 1 ? query : undefined;
 }
 
+/**
+ * Whether any filter/search field is actually set — i.e. whether the
+ * current `items` is a real (possibly empty) result of narrowing down,
+ * rather than "every ticket in scope". Reuses toFilterQuery's own
+ * "would this encode to something real" check rather than re-deriving it,
+ * so the two never drift.
+ *
+ * Exists so an empty ticket list can tell "genuinely nothing here yet"
+ * apart from "nothing matched this search" (TicketList.tsx's empty
+ * state) — the two used to share identical copy ("No tickets / Create
+ * your first ticket..."), which is misleading when the project actually
+ * has tickets and only the current filter/search matched none of them.
+ */
+export function hasActiveFilters(filters: TicketFilters): boolean {
+  return toFilterQuery(filters) !== undefined;
+}
+
 export interface TicketsViewOptions {
   /**
    * Omitted (or undefined) means workspace-wide — every ticket across every
