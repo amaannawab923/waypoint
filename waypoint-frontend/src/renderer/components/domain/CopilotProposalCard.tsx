@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { clsx } from 'clsx';
 import { ArrowRight } from 'lucide-react';
 import { IconAlert, IconCheck } from '@/components/icons';
@@ -382,8 +382,22 @@ export function CopilotProposalCard({
   // claim UPDATE already makes a double-approve harmless, but the UI
   // shouldn't invite one.
   const [acting, setActing] = useState(false);
+  // Same fix as Composer.tsx's readOnly-not-disabled switch (CopilotPanel.tsx),
+  // but buttons have no readOnly equivalent — Approve/Reject are native
+  // <button>s that go `disabled={acting}` below, and the HTML spec
+  // force-blurs a focused control the instant `disabled` is applied. Here
+  // it's worse than the composer: a resolved outcome unmounts this entire
+  // footer, which blurs to <body> the same way even when nothing failed.
+  // Either path — if unhandled — leaks the next keystroke to global
+  // shortcuts (e.g. Tab to Approve, Enter to approve, then "g" navigating
+  // the whole app away mid-review instead of typing "g" anywhere). Moving
+  // focus to this card's own root — a stable container that's neither
+  // disabled nor unmounted by either path — before disabling keeps focus
+  // somewhere real instead of falling through to <body>.
+  const cardRef = useRef<HTMLDivElement>(null);
 
   async function act(fn: (id: string) => Promise<unknown>) {
+    cardRef.current?.focus();
     setActing(true);
     try {
       await fn(proposal.id);
@@ -407,8 +421,13 @@ export function CopilotProposalCard({
 
   return (
     <div
+      ref={cardRef}
+      // Programmatic focus target only (see `act` above) — not a tab stop,
+      // and no visible focus ring for a container nothing but this card's
+      // own click handler ever focuses.
+      tabIndex={-1}
       className={clsx(
-        'w-full shrink-0 self-start overflow-hidden rounded-[var(--radius)] border bg-surface',
+        'w-full shrink-0 self-start overflow-hidden rounded-[var(--radius)] border bg-surface outline-none',
         status === 'executed' ? 'border-success' : 'border-border-strong',
         (status === 'rejected' ||
           status === 'superseded' ||
