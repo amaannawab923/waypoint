@@ -264,6 +264,15 @@ export default function ReviewPage() {
   // useGlobalKeyboardShortcuts.ts's global nav shortcuts. Focus this
   // stable wrapper — never disabled, never unmounted by the load — first.
   const loadMoreRef = useRef<HTMLDivElement>(null);
+  const bulkBarRef = useRef<HTMLDivElement>(null);
+  // bulkApprove/bulkReject used to clear `selected` synchronously before
+  // the request even started, which — since the bar below is gated on
+  // `selected.size > 0` — unmounted the guarded bar in the SAME tick as
+  // the click, before focusing it could do any good (unlike loadMoreRef's
+  // wrapper, which never unmounts). Keeping the bar mounted via
+  // `bulkBusy` for the request's duration gives the guard an actual
+  // stable window to protect, matching the pattern's real precondition.
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const { data: agents } = useAsync(() => listAgents(), []);
   const { data: projects } = useAsync(() => listProjects(), []);
@@ -302,21 +311,37 @@ export default function ReviewPage() {
   const bulkApprove = useCallback(async () => {
     const ids = Array.from(selected);
     if (ids.length === 0) return;
-    setSelected(new Set());
-    const results = await bulkApproveProposals(ids);
-    applyBulkResults(ids, results);
-    queue.refreshCounts();
-    health.reload();
+    // Focus the bar's own stable root before disabling its buttons —
+    // same shape as CopilotProposalCard.tsx's act(). bulkBusy (not an
+    // immediate setSelected) keeps the bar itself mounted for the guard
+    // to actually protect during the request.
+    bulkBarRef.current?.focus();
+    setBulkBusy(true);
+    try {
+      const results = await bulkApproveProposals(ids);
+      applyBulkResults(ids, results);
+      queue.refreshCounts();
+      health.reload();
+    } finally {
+      setBulkBusy(false);
+      setSelected(new Set());
+    }
   }, [selected, applyBulkResults, queue, health]);
 
   const bulkReject = useCallback(async () => {
     const ids = Array.from(selected);
     if (ids.length === 0) return;
-    setSelected(new Set());
-    const results = await bulkRejectProposals(ids);
-    applyBulkResults(ids, results);
-    queue.refreshCounts();
-    health.reload();
+    bulkBarRef.current?.focus();
+    setBulkBusy(true);
+    try {
+      const results = await bulkRejectProposals(ids);
+      applyBulkResults(ids, results);
+      queue.refreshCounts();
+      health.reload();
+    } finally {
+      setBulkBusy(false);
+      setSelected(new Set());
+    }
   }, [selected, applyBulkResults, queue, health]);
 
   async function handleApprove(id: string) {
@@ -346,7 +371,11 @@ export default function ReviewPage() {
         target?.tagName === 'TEXTAREA' ||
         target?.isContentEditable;
       if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
-      if (selected.size === 0) return;
+      // bulkBusy: selected now stays populated for the request's duration
+      // (see bulkApprove/bulkReject) instead of clearing immediately, so
+      // this must not re-fire a second bulk action on top of one already
+      // in flight for the same selection.
+      if (selected.size === 0 || bulkBusy) return;
       if (e.key === 'e') {
         e.preventDefault();
         bulkApprove();
@@ -357,7 +386,7 @@ export default function ReviewPage() {
     }
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [selected, bulkApprove, bulkReject]);
+  }, [selected, bulkBusy, bulkApprove, bulkReject]);
 
   // W5.4: registers this screen as the app-shell keyboard layer's "active
   // selectable view" so ⌘A (useGlobalKeyboardShortcuts.ts) can reach it —
@@ -473,21 +502,37 @@ export default function ReviewPage() {
         {countLineText(segment, queue.proposals.length)}
       </p>
 
-      {selected.size > 0 && (
-        <div className="mb-3 flex items-center gap-2 rounded-[var(--radius)] border border-accent bg-accent-soft-bg px-3 py-2">
+      {(selected.size > 0 || bulkBusy) && (
+        <div
+          ref={bulkBarRef}
+          tabIndex={-1}
+          data-shortcut-guard
+          className="mb-3 flex items-center gap-2 rounded-[var(--radius)] border border-accent bg-accent-soft-bg px-3 py-2 outline-none"
+        >
           <span className="text-sm font-medium text-accent-soft-text">
             {selected.size} selected
           </span>
-          <Button size="xs" variant="primary" onClick={bulkApprove}>
+          <Button
+            size="xs"
+            variant="primary"
+            disabled={bulkBusy}
+            onClick={bulkApprove}
+          >
             Approve selected
           </Button>
-          <Button size="xs" variant="secondary" onClick={bulkReject}>
+          <Button
+            size="xs"
+            variant="secondary"
+            disabled={bulkBusy}
+            onClick={bulkReject}
+          >
             Reject selected
           </Button>
           <button
             type="button"
+            disabled={bulkBusy}
             onClick={() => setSelected(new Set())}
-            className="ml-auto cursor-pointer text-xs text-text-secondary hover:underline"
+            className="ml-auto cursor-pointer text-xs text-text-secondary hover:underline disabled:cursor-not-allowed disabled:opacity-50"
           >
             Clear
           </button>
