@@ -39,12 +39,23 @@ import type { TicketFilterQuery } from '@/types/entities';
  * Exported so ProjectViewsPage's saved-view filter EDITOR (the "Save
  * changes" flow on an existing view, also W5.3) can capture an edited
  * TicketsView's filters the same way, rather than a second implementation.
+ *
+ * `groupBy` rides along on the same typed shape (optional, so an older
+ * saved view without one just falls back to the toolbar's own default) —
+ * a saved view used to capture only the filter predicate, so opening one
+ * always reset to the default grouping regardless of what was showing
+ * when it was saved.
  */
 export function captureSavedViewFilter(
   filters: TicketFilters,
   projectId: string,
+  groupBy: GroupBy,
 ): TicketFilterQuery {
-  return { ...(toFilterQuery(filters) ?? { v: 1 }), projectIds: [projectId] };
+  return {
+    ...(toFilterQuery(filters) ?? { v: 1 }),
+    projectIds: [projectId],
+    groupBy,
+  };
 }
 
 export const PROJECT_GROUP_BY_OPTIONS: { key: GroupBy; label: string }[] = [
@@ -121,7 +132,7 @@ export default function TicketListToolbar({
       await createView(
         projectId,
         name,
-        captureSavedViewFilter(view.filters, projectId),
+        captureSavedViewFilter(view.filters, projectId, view.groupBy),
       );
       // This may be the project's first view — refresh the shared projects
       // store so the sidebar's Views entry (driven by

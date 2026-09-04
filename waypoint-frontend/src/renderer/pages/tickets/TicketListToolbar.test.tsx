@@ -75,9 +75,10 @@ function makeView(overrides: Partial<TicketsView> = {}): TicketsView {
 
 describe('captureSavedViewFilter', () => {
   it('never produces an empty filter, even from all-empty TicketFilters', () => {
-    expect(captureSavedViewFilter(EMPTY_FILTERS, 'proj-1')).toEqual({
+    expect(captureSavedViewFilter(EMPTY_FILTERS, 'proj-1', 'state')).toEqual({
       v: 1,
       projectIds: ['proj-1'],
+      groupBy: 'state',
     });
   });
 
@@ -90,12 +91,14 @@ describe('captureSavedViewFilter', () => {
           text: 'race condition',
         },
         'proj-1',
+        'priority',
       ),
     ).toEqual({
       v: 1,
       projectIds: ['proj-1'],
       priorities: ['urgent', 'high'],
       text: 'race condition',
+      groupBy: 'priority',
     });
   });
 });
@@ -136,7 +139,7 @@ describe('TicketListToolbar "Save as view"', () => {
     expect(name).toBe('My saved view');
     // The accept criterion, exercised end to end: never `{}`.
     expect(filters).not.toEqual({});
-    expect(filters).toEqual({ v: 1, projectIds: ['proj-1'] });
+    expect(filters).toEqual({ v: 1, projectIds: ['proj-1'], groupBy: 'state' });
     expect(refreshProjectInStore).toHaveBeenCalledWith('proj-1');
   });
 
@@ -165,6 +168,7 @@ describe('TicketListToolbar "Save as view"', () => {
       projectIds: ['proj-1'],
       priorities: ['urgent'],
       text: 'flaky test',
+      groupBy: 'state',
     });
   });
 });
