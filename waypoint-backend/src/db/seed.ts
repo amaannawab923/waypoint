@@ -279,7 +279,7 @@ export async function seed() {
       defaultAssigneeId: null,
       timezone: 'UTC',
       // "Sizes XS–XXL" per screen-projectsettings.
-      estimate: { type: 'sizes', values: ['XS', 'S', 'M', 'L', 'XL', 'XXL'] },
+      estimate: { type: 'categories', values: ['XS', 'S', 'M', 'L', 'XL', 'XXL'] },
       automations: {
         autoArchiveEnabled: true,
         autoArchiveAfterDays: 30,
