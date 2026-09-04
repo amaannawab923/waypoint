@@ -1,6 +1,22 @@
+import { parseISO } from 'date-fns';
 import type { Sprint, StateGroup, Ticket, TicketState } from '@/types/entities';
 
 export type SprintStatus = 'active' | 'upcoming' | 'completed';
+
+/**
+ * Sprint `startDate`/`endDate` are Drizzle `date()` columns, so the API returns bare
+ * `yyyy-MM-dd` strings. `new Date(str)` parses a date-only string as UTC midnight, but every
+ * reader in this module (and its callers) works in local time — `startOfDay`/`endOfDay`, and
+ * `toLocaleDateString` further down. For any timezone west of UTC that silently shifts every
+ * sprint date a day earlier (e.g. `endDate: '2026-09-10'` resolving to Sep 9 locally). `date-fns`'
+ * `parseISO` resolves a date-only string against local time instead, avoiding the mismatch —
+ * see `DatePicker.tsx`, which documents and works around the identical hazard. Centralized
+ * here so every sprint-date-to-Date conversion (in this file and its callers) goes through the
+ * same fix instead of each re-deriving it and drifting out of sync.
+ */
+export function parseSprintDate(value: string): Date {
+  return parseISO(value);
+}
 
 function startOfDay(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -12,8 +28,8 @@ function endOfDay(d: Date): Date {
 
 /** Active = today falls between start and end date (inclusive), Upcoming = starts later, Completed = already ended. */
 export function getSprintStatus(sprint: Sprint, today: Date = new Date()): SprintStatus {
-  const start = startOfDay(new Date(sprint.startDate));
-  const end = endOfDay(new Date(sprint.endDate));
+  const start = startOfDay(parseSprintDate(sprint.startDate));
+  const end = endOfDay(parseSprintDate(sprint.endDate));
   if (today < start) return 'upcoming';
   if (today > end) return 'completed';
   return 'active';
@@ -39,8 +55,8 @@ export function findOverlappingSprint(
 }
 
 export function formatDateRange(startDate: string, endDate: string): string {
-  const start = new Date(startDate);
-  const end = new Date(endDate);
+  const start = parseSprintDate(startDate);
+  const end = parseSprintDate(endDate);
   const sameYear = start.getFullYear() === end.getFullYear();
   const fmt = (d: Date, withYear: boolean) =>
     d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: withYear ? 'numeric' : undefined });
@@ -98,8 +114,8 @@ export interface BurndownPoint {
 export function buildBurndownData(sprint: Sprint, items: Ticket[], states: TicketState[], today: Date = new Date()): BurndownPoint[] {
   const stateById = new Map(states.map((s) => [s.id, s]));
   const dayMs = 24 * 60 * 60 * 1000;
-  const startDay = startOfDay(new Date(sprint.startDate));
-  const endDay = startOfDay(new Date(sprint.endDate));
+  const startDay = startOfDay(parseSprintDate(sprint.startDate));
+  const endDay = startOfDay(parseSprintDate(sprint.endDate));
   const todayDay = startOfDay(today);
   const totalDays = Math.max(1, Math.round((endDay.getTime() - startDay.getTime()) / dayMs));
   const total = items.length;
