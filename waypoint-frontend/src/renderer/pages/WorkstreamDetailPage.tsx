@@ -221,9 +221,14 @@ export default function WorkstreamDetailPage() {
     [tickets, workstreamId],
   );
 
+  // Only truly unassigned tickets — `i.workstreamId !== workstreamId` used to
+  // also pull in tickets already assigned to a DIFFERENT workstream, which
+  // the picker's empty state ("No unassigned tickets in this project")
+  // wrongly implied couldn't happen, and picking one here would silently
+  // move it out of its actual workstream.
   const addItemCandidates = useMemo(
-    () => (tickets ?? []).filter((i) => i.workstreamId !== workstreamId),
-    [tickets, workstreamId],
+    () => (tickets ?? []).filter((i) => i.workstreamId == null),
+    [tickets],
   );
 
   async function handleAddItem(item: Ticket) {
