@@ -121,7 +121,12 @@ export function SprintTicketList({
 }) {
   const [addOpen, setAddOpen] = useState(false);
 
-  const candidates = useMemo(() => allItems.filter((i) => i.sprintId !== sprintId), [allItems, sprintId]);
+  // Only truly unassigned tickets — `i.sprintId !== sprintId` used to also
+  // pull in tickets already assigned to a DIFFERENT sprint, which the empty
+  // state below ("No unassigned tickets in this project") wrongly implied
+  // couldn't happen, and picking one here would silently move it out of its
+  // actual sprint.
+  const candidates = useMemo(() => allItems.filter((i) => i.sprintId == null), [allItems]);
 
   async function handleAdd(item: Ticket) {
     await updateTicket(item.id, { sprintId });
