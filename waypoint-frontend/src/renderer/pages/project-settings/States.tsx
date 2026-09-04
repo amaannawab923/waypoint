@@ -3,10 +3,19 @@ import { IconPlus, IconEdit } from '@/components/icons';
 import { Button, IconButton } from '@/components/ui/Button';
 import { Dot } from '@/components/ui/Badge';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
-import { STATE_GROUP_LABEL, STATE_GROUP_ORDER } from '@/components/domain/StateIcon';
+import {
+  STATE_GROUP_LABEL,
+  STATE_GROUP_ORDER,
+} from '@/components/domain/StateIcon';
 import { useAsync } from '@/lib/useAsync';
 import { useProject } from '@/layouts/ProjectLayout';
-import { createState, updateState, deleteState, countTicketsInState, listStates } from '@/data/api';
+import {
+  createState,
+  updateState,
+  deleteState,
+  countTicketsInState,
+  listStates,
+} from '@/data/api';
 import type { StateGroup, TicketState } from '@/types/entities';
 
 const PRESET_COLORS = [
@@ -41,7 +50,10 @@ function StateEditor({
   // reassignment happens) — fetched upfront so the delete control can
   // reflect that up front rather than let the user reach a confirm step
   // for a delete that's guaranteed to fail.
-  const { data: usageCount } = useAsync(() => countTicketsInState(state.id), [state.id]);
+  const { data: usageCount } = useAsync(
+    () => countTicketsInState(state.id),
+    [state.id],
+  );
 
   async function handleSave() {
     if (!name.trim() || saving) return;
@@ -88,10 +100,11 @@ function StateEditor({
             key={c}
             type="button"
             onClick={() => setColor(c)}
-            className={
-              'size-6 rounded-full transition-transform ' +
-              (color === c ? 'scale-110 ring-2 ring-offset-2 ring-offset-surface ring-accent' : '')
-            }
+            className={`size-6 rounded-full transition-transform ${
+              color === c
+                ? 'scale-110 ring-2 ring-offset-2 ring-offset-surface ring-accent'
+                : ''
+            }`}
             style={{ background: c }}
             aria-label={c}
           />
@@ -99,12 +112,14 @@ function StateEditor({
       </div>
       {!!usageCount && (
         <p className="text-xs text-text-muted">
-          {usageCount} ticket{usageCount === 1 ? '' : 's'} use this state, so it can't be deleted. Move them
-          to another state first.
+          {usageCount} ticket{usageCount === 1 ? '' : 's'} use this state, so it
+          can't be deleted. Move them to another state first.
         </p>
       )}
       {confirmDelete && !usageCount && (
-        <p className="text-xs text-danger">This can't be undone. Click delete again to confirm.</p>
+        <p className="text-xs text-danger">
+          This can't be undone. Click delete again to confirm.
+        </p>
       )}
       <div className="flex items-center justify-between gap-2">
         <Button
@@ -123,10 +138,20 @@ function StateEditor({
           {deleting ? 'Deleting…' : confirmDelete ? 'Confirm delete' : 'Delete'}
         </Button>
         <div className="flex gap-2">
-          <Button variant="ghost" size="sm" onClick={onCancel} disabled={saving || deleting}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onCancel}
+            disabled={saving || deleting}
+          >
             Cancel
           </Button>
-          <Button variant="primary" size="sm" disabled={!name.trim() || saving} onClick={handleSave}>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={!name.trim() || saving}
+            onClick={handleSave}
+          >
             {saving ? 'Saving…' : 'Save'}
           </Button>
         </div>
@@ -137,7 +162,11 @@ function StateEditor({
 
 export default function States() {
   const { project } = useProject();
-  const { data: states, loading, reload } = useAsync(() => listStates(project.id), [project.id]);
+  const {
+    data: states,
+    loading,
+    reload,
+  } = useAsync(() => listStates(project.id), [project.id]);
 
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
@@ -170,9 +199,15 @@ export default function States() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-lg font-medium text-text">States</h1>
-          <p className="mt-1 text-sm text-text-secondary">Manage the workflow states tickets move through.</p>
+          <p className="mt-1 text-sm text-text-secondary">
+            Manage the workflow states tickets move through.
+          </p>
         </div>
-        <Button variant="primary" size="sm" onClick={() => setShowForm((v) => !v)}>
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={() => setShowForm((v) => !v)}
+        >
           <IconPlus size={14} />
           Add state
         </Button>
@@ -206,20 +241,30 @@ export default function States() {
                 key={c}
                 type="button"
                 onClick={() => setColor(c)}
-                className={
-                  'size-6 rounded-full transition-transform ' +
-                  (color === c ? 'scale-110 ring-2 ring-offset-2 ring-offset-surface ring-accent' : '')
-                }
+                className={`size-6 rounded-full transition-transform ${
+                  color === c
+                    ? 'scale-110 ring-2 ring-offset-2 ring-offset-surface ring-accent'
+                    : ''
+                }`}
                 style={{ background: c }}
                 aria-label={c}
               />
             ))}
           </div>
           <div className="flex justify-end gap-2">
-            <Button variant="ghost" size="sm" onClick={() => setShowForm(false)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowForm(false)}
+            >
               Cancel
             </Button>
-            <Button variant="primary" size="sm" disabled={!name.trim() || submitting} onClick={handleCreate}>
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={!name.trim() || submitting}
+              onClick={handleCreate}
+            >
               {submitting ? 'Adding…' : 'Add state'}
             </Button>
           </div>
@@ -238,7 +283,9 @@ export default function States() {
                 {STATE_GROUP_LABEL[g]}
               </div>
               {groupStates.length === 0 ? (
-                <p className="px-1 text-sm text-text-muted">No states in this group.</p>
+                <p className="px-1 text-sm text-text-muted">
+                  No states in this group.
+                </p>
               ) : (
                 <div className="flex flex-col divide-y divide-border rounded-[var(--radius)] border border-border">
                   {groupStates.map((state) =>
@@ -257,16 +304,31 @@ export default function States() {
                         onCancel={() => setEditingId(null)}
                       />
                     ) : (
-                      <button
+                      // A <button> row wrapping the "Edit state" IconButton
+                      // — itself a real <button> — nested one <button>
+                      // inside another, invalid HTML with real click/focus
+                      // risk. Same role="button"/tabIndex/Enter-key pattern
+                      // as ArchivedProjects.tsx's card and Agents.tsx's row,
+                      // so the inner IconButton stays a sibling, not a
+                      // descendant.
+                      <div
                         key={state.id}
-                        type="button"
+                        role="button"
+                        tabIndex={0}
                         onClick={() => setEditingId(state.id)}
-                        className="group flex w-full items-center gap-2.5 px-4 py-2.5 text-left hover:bg-surface-2"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') setEditingId(state.id);
+                        }}
+                        className="group flex w-full cursor-pointer items-center gap-2.5 px-4 py-2.5 text-left hover:bg-surface-2"
                       >
                         <Dot color={state.color} />
                         <span className="text-sm text-text">{state.name}</span>
                         <div className="ml-auto flex items-center gap-2">
-                          {state.isDefault && <span className="text-xs text-text-muted">Default</span>}
+                          {state.isDefault && (
+                            <span className="text-xs text-text-muted">
+                              Default
+                            </span>
+                          )}
                           <IconButton
                             label="Edit state"
                             className="opacity-0 group-hover:opacity-100"
@@ -278,7 +340,7 @@ export default function States() {
                             <IconEdit size={13} />
                           </IconButton>
                         </div>
-                      </button>
+                      </div>
                     ),
                   )}
                 </div>
