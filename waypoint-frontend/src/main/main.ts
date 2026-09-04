@@ -194,10 +194,58 @@ const createWindow = async () => {
   const menuBuilder = new MenuBuilder(mainWindow);
   menuBuilder.buildMenu();
 
-  // Open urls in the user's browser
+  // Open urls in the user's browser — but only if it's actually a browser
+  // that should be opening them. edata.url is whatever the renderer's DOM
+  // asked to open (window.open, target="_blank" on an <a>, etc.), and
+  // nothing upstream of this handler validates it: a ticket comment or
+  // link field (see waypoint-backend's addCommentSchema/addTicketLinkSchema)
+  // could in principle carry a javascript: URL or a file: URL pointing at
+  // an arbitrary local path, and shell.openExternal would hand either
+  // straight to the OS with no guardrail — script execution in one case,
+  // opening an arbitrary local file in the other. Mirrors the scheme-check
+  // pattern already used by copilotConnect.ts's own openExternal IPC
+  // handler (https: + a fixed host allowlist there, since that one only
+  // ever needs to open one specific OAuth URL); here the host can't be
+  // fixed the same way — legitimate links point at arbitrary external
+  // sites — so only the scheme is restricted.
   mainWindow.webContents.setWindowOpenHandler((edata) => {
-    shell.openExternal(edata.url);
+    let parsed: URL;
+    try {
+      parsed = new URL(edata.url);
+    } catch {
+      return { action: 'deny' };
+    }
+    if (parsed.protocol !== 'https:') {
+      return { action: 'deny' };
+    }
+    shell.openExternal(edata.url).catch((err) => {
+      log.error('Failed to open external URL', err);
+    });
     return { action: 'deny' };
+  });
+
+  // Deny in-window navigation to anything the renderer didn't already ship
+  // with — without this, a malicious link (e.g. from the same unsanitized-
+  // comment vector) could navigate the actual app window itself (not just
+  // a new window/tab, which setWindowOpenHandler above already covers) to
+  // an arbitrary destination, including a local file:// URL. The packaged
+  // app only ever navigates within its own app:// origin (see
+  // registerAppProtocol above) or, in dev, the local webpack-dev-server
+  // origin — anything else is a navigation this window has no legitimate
+  // reason to make.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!mainWindow) return;
+    // Fail closed: an unparseable URL or a same-origin check that can't be
+    // evaluated is treated as "not obviously safe" rather than let through.
+    try {
+      const target = new URL(url);
+      const current = new URL(mainWindow.webContents.getURL());
+      if (target.origin !== current.origin) {
+        event.preventDefault();
+      }
+    } catch {
+      event.preventDefault();
+    }
   });
 
   // Remove this if your app does not use auto updates
