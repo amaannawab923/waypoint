@@ -95,9 +95,17 @@ export default function Notifications() {
   }, [user]);
 
   async function handleToggle(key: keyof NotificationPrefs) {
+    const previous = values[key];
     const next = { ...values, [key]: !values[key] };
     setValues(next);
-    await updateCurrentUser({ notificationPrefs: { [key]: next[key] } });
+    try {
+      await updateCurrentUser({ notificationPrefs: { [key]: next[key] } });
+    } catch {
+      // Save failed (the shared HTTP client already surfaced a toast) —
+      // revert this toggle so its visible position matches what's actually
+      // persisted, instead of looking saved when it isn't.
+      setValues((v) => ({ ...v, [key]: previous }));
+    }
   }
 
   return (
