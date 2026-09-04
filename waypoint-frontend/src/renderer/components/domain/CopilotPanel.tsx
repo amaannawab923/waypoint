@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { clsx } from 'clsx';
-import { ArrowLeft, FolderGit2, Plus, Send, Sparkles, X } from 'lucide-react';
+import { ArrowLeft, FolderGit2, Send } from 'lucide-react';
+import { IconPlus, IconSparkles, IconX } from '@/components/icons';
 import {
   postCopilotUserMessage,
   postCopilotAssistantMessage,
@@ -900,11 +901,11 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
             )}
           {!activeSession && (
             <IconButton label="New session" onClick={handleCreateSession}>
-              <Plus size={16} />
+              <IconPlus size={16} />
             </IconButton>
           )}
           <IconButton label="Close panel" onClick={onClose}>
-            <X size={16} />
+            <IconX size={16} />
           </IconButton>
         </div>
       </div>
@@ -1025,7 +1026,7 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
                   onClick={() => setConnectOpen(true)}
                   className="mt-1"
                 >
-                  <Sparkles size={13} />
+                  <IconSparkles size={13} />
                   Connect your Claude subscription
                 </Button>
               </div>
