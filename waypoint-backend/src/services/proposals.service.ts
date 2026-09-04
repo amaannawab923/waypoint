@@ -1003,6 +1003,19 @@ export interface BulkProposalResult {
   statusReason: string | null;
 }
 
+// Best-effort fallback for the bulk loops below: when approve/reject throws
+// something other than NotFoundError, report the row's ACTUAL current
+// status rather than inventing a synthetic one. approveProposal's own catch
+// already reverts a claimed-then-failed row back to 'proposed' (except for
+// the TerminalExecutionFailure cases above, which finalize it themselves),
+// so this read reflects reality, not a guess — and it stays within the
+// existing ProposalStatus union the caller (and the frontend's identical
+// type) already knows how to render.
+async function currentProposalStatusOrNotFound(id: string): Promise<ProposalStatus | 'not_found'> {
+  const [existing] = await db.select().from(proposals).where(eq(proposals.id, id)).limit(1);
+  return existing ? (existing.status as ProposalStatus) : 'not_found';
+}
+
 // Sequential, not Promise.all — deliberately not one transaction
 // (architecture §4.4): a stale/already-resolved id must resolve on its own
 // and the rest of the batch must still run. Each id runs the EXISTING
@@ -1019,7 +1032,15 @@ export async function bulkApproveProposals(ids: string[]): Promise<BulkProposalR
         results.push({ id, status: 'not_found', statusReason: 'proposal not found' });
         continue;
       }
-      throw error;
+      // Final review finding M3: approveProposal can also throw
+      // ConflictError (e.g. createTicket's validateAssigneeIds, when a
+      // proposed assignee was since deleted) and, in principle, other
+      // unexpected error types. Throwing out of this loop discarded the
+      // WHOLE request's results, including already-successful approvals
+      // earlier in the batch, and surfaced no record of which id failed or
+      // why. Record this id's failure and keep processing the rest.
+      const reason = error instanceof Error ? error.message : 'approve failed';
+      results.push({ id, status: await currentProposalStatusOrNotFound(id), statusReason: reason });
     }
   }
   return results;
@@ -1036,7 +1057,11 @@ export async function bulkRejectProposals(ids: string[]): Promise<BulkProposalRe
         results.push({ id, status: 'not_found', statusReason: 'proposal not found' });
         continue;
       }
-      throw error;
+      // Same reasoning as bulkApproveProposals above: never discard the
+      // rest of the batch (or already-successful results ahead of it) over
+      // one id's unexpected failure.
+      const reason = error instanceof Error ? error.message : 'reject failed';
+      results.push({ id, status: await currentProposalStatusOrNotFound(id), statusReason: reason });
     }
   }
   return results;

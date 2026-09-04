@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { NotFoundError } from '../middleware/errors.js';
+import { NotFoundError, ConflictError } from '../middleware/errors.js';
 
 // New test file for the W3.2/W3.3 additions to proposals.service.ts (the
 // review queue, its counts, bulk approve/reject, and the extracted repair
@@ -379,6 +379,51 @@ describe('bulkApproveProposals', () => {
 
     expect(results[0]).toEqual({ id: 'prop-missing', status: 'not_found', statusReason: 'proposal not found' });
     expect(results[1].status).toBe('executed');
+  });
+
+  // Final review finding M3: approveProposal can throw error types OTHER
+  // than NotFoundError — e.g. ConflictError from createTicket's
+  // validateAssigneeIds when a proposed assignee was since deleted. Before
+  // this fix, only NotFoundError was caught per-item, so this threw out of
+  // the WHOLE loop and discarded every already-successful result ahead of
+  // it (a real 409 that dropped prop-earlier's successful approval on the
+  // floor). Both items must resolve, in order, with the failure recorded
+  // rather than the batch aborting.
+  it('a ConflictError mid-batch (e.g. a deleted assignee) is recorded per-item, preserving earlier results and running the rest of the batch', async () => {
+    // First id ("prop-earlier"): claims and executes successfully.
+    const earlierClaim = chainable([proposalRow({ id: 'prop-earlier', status: 'executing' })]);
+    const earlierFinalize = chainable([proposalRow({ id: 'prop-earlier', status: 'executed' })]);
+    // Second id ("prop-conflict"): claims, then execution throws
+    // ConflictError — approveProposal's own catch reverts the claim back to
+    // 'proposed' (not a TerminalExecutionFailure case) and rethrows.
+    const conflictClaim = chainable([proposalRow({ id: 'prop-conflict', status: 'executing' })]);
+    const conflictRevert = chainable([]);
+    // bulkApproveProposals's new catch-all fallback re-reads the row's
+    // actual current status (the revert above already put it back to
+    // 'proposed') rather than inventing one.
+    const conflictStatusRead = chainable([proposalRow({ id: 'prop-conflict', status: 'proposed' })]);
+
+    db.update
+      .mockReturnValueOnce(earlierClaim)
+      .mockReturnValueOnce(earlierFinalize)
+      .mockReturnValueOnce(conflictClaim)
+      .mockReturnValueOnce(conflictRevert);
+    db.select.mockReturnValueOnce(conflictStatusRead);
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
+    vi.mocked(commentsService.addComment)
+      .mockResolvedValueOnce({ id: 'cm-1' } as never)
+      .mockRejectedValueOnce(new ConflictError('unknown assignee id(s): mem-ghost'));
+
+    const results = await bulkApproveProposals(['prop-earlier', 'prop-conflict']);
+
+    expect(results).toEqual([
+      { id: 'prop-earlier', status: 'executed', statusReason: null },
+      { id: 'prop-conflict', status: 'proposed', statusReason: 'unknown assignee id(s): mem-ghost' },
+    ]);
+    // The claim WAS reverted (not left stuck 'executing') — the revert
+    // update ran with the expected patch.
+    const revertSet = (conflictRevert.set as Vfn).mock.calls[0][0];
+    expect(revertSet).toEqual({ status: 'proposed', resolvedAt: null });
   });
 });
 
