@@ -48,6 +48,36 @@ function isTypingTarget(target: EventTarget | null): boolean {
   );
 }
 
+// The `g`-navigation/`?` gate below used to be `isTypingTarget` alone, which
+// only recognizes text inputs. That missed a real case: a few places
+// (CopilotProposalCard's Approve/Reject, TicketDetailPage's comment-post
+// button) deliberately move focus to a stable, non-input container — see
+// those components' own comments — specifically so a disabled/unmounted
+// button doesn't force-blur focus to <body>. But a plain focused <div>
+// isn't a typing target either, so without this, the very next keystroke
+// after approving a proposal or posting a comment (e.g. a stray "g") could
+// still fire a global nav shortcut and navigate the whole app away mid-review
+// — the same class of bug the readOnly/focus-target fixes address, just not
+// closed off here. This mirrors the drawer/Copilot-panel tiering the
+// Escape-key branch below already does, extended to every other shortcut.
+function isShortcutSuppressed(
+  target: EventTarget | null,
+  copilotOpen: boolean,
+): boolean {
+  if (isTypingTarget(target)) return true;
+  if (document.querySelector('[data-ticket-drawer]')) return true;
+  const el = target as HTMLElement | null;
+  if (copilotOpen && el?.closest?.('[data-copilot-panel]')) return true;
+  // The drawer/panel checks above only catch the peek-drawer and Copilot
+  // side-panel cases. The same stable-focus-container pattern also renders
+  // inline on a ticket's own full-page route (no drawer, no Copilot panel
+  // open) — e.g. the "Pending proposals" card and the comment-post button
+  // on TicketDetailPage. Those containers carry this marker so they're
+  // covered here too, regardless of where they're mounted.
+  if (el?.closest?.('[data-shortcut-guard]')) return true;
+  return false;
+}
+
 /**
  * The app-shell-level keyboard layer (architecture §P5, W5.4): the mockup's
  * full keyboard map minus what already exists elsewhere. Deliberately does
@@ -180,6 +210,14 @@ export function useGlobalKeyboardShortcuts({
       // `if (e.metaKey || e.ctrlKey || e.altKey) return;` guard ahead of
       // `g` and `?`.
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      // Bare-key nav (`g`-chord, `?`) is the shortcut class actually at risk
+      // of firing right after an Approve/Reject/comment-post action moves
+      // focus to a stable non-input container (see isShortcutSuppressed's
+      // own comment) — Cmd+J/Cmd+A above stay available regardless, since
+      // requiring a modifier already makes accidental collision unlikely
+      // and toggling Copilot closed should keep working while it's open.
+      if (isShortcutSuppressed(e.target, copilotOpen)) return;
 
       if (gPendingRef.current) {
         clearGPending();
