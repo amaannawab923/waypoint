@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { addDays, format } from 'date-fns';
 import { Button } from '@/components/ui/Button';
 import { createSprint } from '@/data/api';
@@ -33,6 +33,13 @@ export function NewSprintForm({
   const [startDate, setStartDate] = useState(today());
   const [endDate, setEndDate] = useState(inTwoWeeks());
   const [submitting, setSubmitting] = useState(false);
+  // Same fix as CopilotProposalCard.tsx's act(): "Create sprint" disables
+  // itself (submitting) while the POST is in flight, and the caller
+  // typically unmounts this form on success (onCreated) — either path
+  // force-blurs to <body> and leaks the next keystroke to
+  // useGlobalKeyboardShortcuts.ts's global nav shortcuts. This form's own
+  // root is the stable container neither path touches.
+  const formRef = useRef<HTMLDivElement>(null);
 
   const dateOrderValid = Boolean(startDate && endDate && startDate <= endDate);
   const overlapping = dateOrderValid ? findOverlappingSprint(existingSprints, startDate, endDate) : null;
@@ -40,6 +47,7 @@ export function NewSprintForm({
 
   async function handleSubmit() {
     if (!valid || submitting) return;
+    formRef.current?.focus();
     setSubmitting(true);
     try {
       const sprint = await createSprint(projectId, { name: name.trim(), description: '', startDate, endDate });
@@ -50,7 +58,12 @@ export function NewSprintForm({
   }
 
   return (
-    <div className="flex flex-col gap-3 rounded-[var(--radius)] border border-border-strong bg-surface p-4">
+    <div
+      ref={formRef}
+      tabIndex={-1}
+      data-shortcut-guard
+      className="flex flex-col gap-3 rounded-[var(--radius)] border border-border-strong bg-surface p-4 outline-none"
+    >
       <div className="flex flex-col gap-1.5">
         <label className="text-xs font-medium text-text-secondary">Sprint name</label>
         <input
