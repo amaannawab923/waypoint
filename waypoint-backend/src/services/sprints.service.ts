@@ -25,6 +25,16 @@ export async function listAllSprints() {
   return attachMemberIds(rows);
 }
 
+// Single-row sibling of listSprints/listAllSprints — added for the
+// get_sprint MCP tool (src/mcp/sprintTools.ts), which needs an id ->
+// full-record lookup the same way ticketTools.ts's get_ticket does.
+export async function getSprint(id: string) {
+  const [row] = await db.select().from(sprints).where(eq(sprints.id, id));
+  if (!row) return undefined;
+  const [withMembers] = await attachMemberIds([row]);
+  return withMembers;
+}
+
 export interface CreateSprintInput {
   name: string;
   description?: string;

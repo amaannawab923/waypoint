@@ -79,6 +79,8 @@ const MCP_TOOLS = [
   'mcp__waypoint__list_states',
   'mcp__waypoint__list_members',
   'mcp__waypoint__list_projects',
+  'mcp__waypoint__list_sprints',
+  'mcp__waypoint__get_sprint',
   'mcp__waypoint__propose_comment',
   'mcp__waypoint__propose_state_change',
   'mcp__waypoint__propose_assignee_change',

@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerTicketTools } from './ticketTools.js';
+import { registerSprintTools } from './sprintTools.js';
 import { registerProposalTools } from './proposalTools.js';
 
 // One server per request (see mcp.routes.ts) — cheap to construct, and
@@ -14,6 +15,7 @@ export function createCopilotMcpServer(
 ): McpServer {
   const server = new McpServer({ name: 'waypoint', version: '2.0.0' });
   registerTicketTools(server);
+  registerSprintTools(server);
   registerProposalTools(server, context.conversationId);
   return server;
 }
