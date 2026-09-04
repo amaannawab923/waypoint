@@ -64,6 +64,16 @@ export const CAPABILITIES = {
     note: 'There is no update endpoint yet — saving an edit deletes and recreates this note, and its color reassigns at random.',
     ref: 'scratchNotes.service.ts has no update, only create/delete',
   },
+  'members.guestAccess': {
+    state: 'not-wired',
+    note: 'This setting is saved but nothing restricts project access based on it yet.',
+    ref: 'no code path reads project.guestAccessEnabled to gate access',
+  },
+  'members.invite': {
+    state: 'not-wired',
+    note: 'No invite email is sent — adding someone here grants them full access immediately.',
+    ref: 'members.service.ts inviteMember inserts a live member row directly, no mailer exists',
+  },
 } as const satisfies Record<string, Capability>;
 
 export type CapabilityKey = keyof typeof CAPABILITIES;
