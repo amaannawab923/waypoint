@@ -52,10 +52,11 @@ function Dropdown({
 }
 
 /**
- * Sprint dates are persisted as full ISO timestamps (see src/mock/seed.ts), but
- * `<input type="date">` only accepts/displays `yyyy-MM-dd`. Truncate before handing the
- * stored value to a date input so the edit form shows the sprint's actual dates instead of
- * rendering empty.
+ * Sprint `startDate`/`endDate` are Drizzle `date()` columns and already come back from the
+ * API as bare `yyyy-MM-dd` strings — there's no `src/mock/seed.ts` storing full ISO
+ * timestamps in this codebase (that was stale). This slice is a defensive no-op against
+ * whatever shape `value` actually has, keeping it safe for `<input type="date">`, which only
+ * accepts/displays `yyyy-MM-dd`.
  */
 function toDateInputValue(value: string): string {
   return value ? value.slice(0, 10) : '';
