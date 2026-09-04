@@ -50,6 +50,13 @@
       "when": 1788454174368,
       "tag": "0006_projects_sparse",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788516961317,
+      "tag": "0007_dapper_mesmero",
+      "breakpoints": true
     }
   ]
 }
