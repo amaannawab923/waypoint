@@ -54,6 +54,13 @@ export interface Workspace {
   restrictWorkspaceCreation: boolean;
 }
 
+export interface NotificationPrefs {
+  email?: boolean;
+  push?: boolean;
+  mentions?: boolean;
+  comments?: boolean;
+}
+
 export interface Member {
   id: ID;
   workspaceId: ID;
@@ -64,6 +71,15 @@ export interface Member {
   role: MemberRole;
   authMethod: 'email' | 'google' | 'github' | 'gitlab' | 'gitea';
   joinedAt: string;
+  // profile-settings/Preferences.tsx's "First day of the week" select —
+  // real, persisted state (see the 'preferences.firstDayOfWeek'
+  // capability), though nothing reads it to change calendar rendering yet.
+  firstDayOfWeek: 'Sunday' | 'Monday';
+  // profile-settings/Notifications.tsx's toggle rows. Null means "use the
+  // page's own defaults" — same absent-is-unset convention as
+  // Project.estimate/automations, so a member row from before this column
+  // existed doesn't need a backfill.
+  notificationPrefs: NotificationPrefs | null;
 }
 
 // Replaces ProjectFeatures (docs/design/waypoint-revamp-architecture.md
