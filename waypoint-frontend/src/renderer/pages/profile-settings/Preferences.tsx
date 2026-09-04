@@ -23,8 +23,16 @@ export default function Preferences() {
   }, [user]);
 
   async function handleChange(value: 'Sunday' | 'Monday') {
+    const previous = firstDayOfWeek;
     setFirstDayOfWeek(value);
-    await updateCurrentUser({ firstDayOfWeek: value });
+    try {
+      await updateCurrentUser({ firstDayOfWeek: value });
+    } catch {
+      // Save failed (the shared HTTP client already surfaced a toast) —
+      // revert the select so its visible value matches what's actually
+      // persisted, instead of looking saved when it isn't.
+      setFirstDayOfWeek(previous);
+    }
   }
 
   return (
