@@ -682,6 +682,75 @@ describe('approveProposal', () => {
     expect(finalizeSet.resultInfo).toEqual({ ticketId: 'wi-new', identifier: 'PROJ-9' });
   });
 
+  // Final review finding M1: createTicket and the follow-up dueDate
+  // updateTicket are two independent writes — if the SECOND one throws, the
+  // first (the ticket itself) already committed. The generic revert-to-
+  // 'proposed' catch must not run here: re-approving would call createTicket
+  // a SECOND time and create a duplicate ticket. This must park as 'stale'
+  // instead, carrying the already-created ticket's id/identifier.
+  it('create_ticket: a dueDate update failing AFTER the ticket already exists parks as stale, not proposed — no duplicate-ticket risk', async () => {
+    const finalizeChain = chainable([proposalRow({ status: 'stale' })]);
+    db.update
+      .mockReturnValueOnce(
+        chainable([
+          proposalRow({
+            kind: 'create_ticket',
+            ticketId: null,
+            payload: { projectId: 'proj-1', title: 'New ticket', stateId: 'st-1', dueDate: '2026-06-01' },
+            snapshot: {},
+          }),
+        ]),
+      )
+      .mockReturnValueOnce(finalizeChain);
+    vi.mocked(projectsService.getProject).mockResolvedValue({ id: 'proj-1' } as never);
+    vi.mocked(statesService.listStates).mockResolvedValue([{ id: 'st-1' }] as never);
+    vi.mocked(ticketsService.createTicket).mockResolvedValue(
+      { id: 'wi-new', identifier: 'PROJ-9' } as never,
+    );
+    vi.mocked(ticketsService.updateTicket).mockRejectedValue(new Error('db down'));
+
+    const view = await approveProposal('prop-abc1234');
+
+    // The claim is finalized (as stale), NOT reverted back to 'proposed' —
+    // exactly one more db.update call (the finalize), never a third
+    // "revert" update.
+    expect(db.update).toHaveBeenCalledTimes(2);
+    const finalizeSet = (finalizeChain.set as Vfn).mock.calls[0][0];
+    expect(finalizeSet.status).toBe('stale');
+    expect(finalizeSet.statusReason).toMatch(/PROJ-9 was created/);
+    expect(finalizeSet.resultInfo).toEqual({ ticketId: 'wi-new', identifier: 'PROJ-9' });
+    expect(finalizeSet.decidedBy).toBe('system');
+    expect(view.status).toBe('stale');
+  });
+
+  // Final review finding M5: 'add_label' is a live value in the schema/
+  // enum (see the ProposalKind comment) but no propose_add_label tool
+  // exists to create one — so executeProposal has no real case for it.
+  // Falling through to the generic `default: throw` would trip the generic
+  // revert-to-'proposed' catch, and Approve would 500 and infinite-loop
+  // forever (every click re-throws the same way). This must fail
+  // PERMANENTLY (rejected), not revert to an approvable state.
+  it("add_label: fails permanently as 'rejected' with a clear reason, never reverts to 'proposed' (would infinite-loop Approve)", async () => {
+    const finalizeChain = chainable([proposalRow({ status: 'rejected' })]);
+    db.update
+      .mockReturnValueOnce(chainable([proposalRow({ kind: 'add_label', payload: {}, snapshot: {} })]))
+      .mockReturnValueOnce(finalizeChain);
+    // checkStaleness's generic (non-create_ticket) branch re-fetches the
+    // ticket first — must resolve to a real, non-draft ticket so this test
+    // reaches executeProposal's add_label case rather than short-circuiting
+    // as stale on a not-found ticket.
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
+
+    const view = await approveProposal('prop-abc1234');
+
+    expect(db.update).toHaveBeenCalledTimes(2);
+    const finalizeSet = (finalizeChain.set as Vfn).mock.calls[0][0];
+    expect(finalizeSet.status).toBe('rejected');
+    expect(finalizeSet.statusReason).toMatch(/not supported yet/);
+    expect(finalizeSet.decidedBy).toBe('system');
+    expect(view.status).toBe('rejected');
+  });
+
   // Final review M2: finalize is guarded on status='executing' — only the
   // holder of a live claim may finalize. A claim lost to the stuck-claim
   // repair (execute outlived EXECUTING_STUCK_MS) must NOT stomp the

@@ -469,6 +469,30 @@ async function finalize(
   return current;
 }
 
+// Internal signal for an executeProposal failure whose correct resolution
+// is a TERMINAL status, not approveProposal's generic revert-to-'proposed'
+// (final review findings M1/M5). Reverting to 'proposed' makes the card
+// approvable again, which is actively harmful for both cases this is thrown
+// for:
+//  - create_ticket: the first write (ticket creation) already committed
+//    before the second write (setting dueDate) failed — retrying would run
+//    createTicket a SECOND time, a duplicate ticket.
+//  - add_label: executeProposal has no real implementation for this kind
+//    (see the ProposalKind comment — no propose_add_label tool exists yet
+//    to produce one, but it IS a live enum value) — retrying would just
+//    throw again on every Approve click, forever.
+// approveProposal's catch special-cases this instead of its generic revert.
+class TerminalExecutionFailure extends Error {
+  constructor(
+    public readonly status: 'stale' | 'rejected',
+    public readonly reason: string,
+    public readonly resultInfo: unknown = null,
+  ) {
+    super(reason);
+    this.name = 'TerminalExecutionFailure';
+  }
+}
+
 async function executeProposal(row: ProposalRow, displayName: string): Promise<unknown> {
   const kind = row.kind as ProposalKind;
   switch (kind) {
@@ -507,9 +531,37 @@ async function executeProposal(row: ProposalRow, displayName: string): Promise<u
         isDraft: false,
       });
       if (payload.dueDate) {
-        await ticketsService.updateTicket(created.id, { dueDate: payload.dueDate });
+        try {
+          await ticketsService.updateTicket(created.id, { dueDate: payload.dueDate });
+        } catch {
+          // createTicket already committed its own transaction — this
+          // execute is now PARTIAL, not failed. approveProposal's generic
+          // catch must not revert this row to 'proposed' (see
+          // TerminalExecutionFailure above): re-approving would call
+          // createTicket a second time and create a duplicate ticket. Park
+          // it as stale instead, carrying the created ticket's id/identifier
+          // so the card can still link to it.
+          throw new TerminalExecutionFailure(
+            'stale',
+            `${created.identifier} was created, but setting its due date failed — check the ticket directly.`,
+            { ticketId: created.id, identifier: created.identifier },
+          );
+        }
       }
       return { ticketId: created.id, identifier: created.identifier };
+    }
+    case 'add_label': {
+      // No propose_add_label MCP tool exists yet, so this kind is
+      // unreachable in practice today (see the ProposalKind comment) — but
+      // it IS a live value in the schema/enum, so execute must still handle
+      // it defensively rather than falling through to the generic
+      // `default: throw`, which would trip approveProposal's revert-to-
+      // 'proposed' catch and infinite-loop Approve forever. Fail this one
+      // permanently and cleanly instead.
+      throw new TerminalExecutionFailure(
+        'rejected',
+        'Adding labels via Copilot is not supported yet — this proposal cannot be approved.',
+      );
     }
     default:
       throw new Error(`unknown proposal kind: ${String(kind)}`);
@@ -579,6 +631,23 @@ export async function approveProposal(id: string): Promise<ProposalView> {
   try {
     resultInfo = await executeProposal(claimed, displayName);
   } catch (error) {
+    // TerminalExecutionFailure (final review findings M1/M5): the generic
+    // revert below must NOT run for this — reverting to 'proposed' would
+    // make the card approvable again for an outcome that's either already
+    // partially committed (a duplicate write on retry) or can never
+    // succeed (an infinite retry loop). Finalize straight to the terminal
+    // status the failure carries instead. Nobody decided this — the
+    // failure did — so decidedBy='system', same as every other
+    // system-driven resolution in this file.
+    if (error instanceof TerminalExecutionFailure) {
+      const finalized = await finalize(id, {
+        status: error.status,
+        statusReason: error.reason,
+        resultInfo: error.resultInfo,
+        decidedBy: 'system',
+      });
+      return toView(finalized, displayName);
+    }
     // Execution failed — release the claim so the card stays pending and
     // approve is retryable, then let errorHandler shape the HTTP response.
     await db
