@@ -45,6 +45,26 @@ jobs:
       - run: npm run build
       - run: npm test
 
+  backend-unit:
+    name: Backend unit tests
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: waypoint-backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: waypoint-backend/package-lock.json
+      - run: npm ci
+      # No Postgres setup here, unlike the e2e job below: every backend
+      # *.test.ts file mocks its DB access rather than hitting a real
+      # database, so this job only needs the package installed and built.
+      - run: npm run build
+      - run: npm test
+
   e2e:
     name: Electron E2E (Playwright)
     # macos-latest, to actually build/run the real Electron app — but
