@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { escapeHtml } from '../lib/commentHtml.js';
 
 // Exported so other validation modules (e.g. ticketFilter.schema.ts) reuse
 // the same literal set instead of redeclaring it.
@@ -63,26 +62,20 @@ export const addTicketLinkSchema = z.object({
   label: z.string(),
 });
 
-// bodyHtml arrives here as raw, unsanitized input from any REST caller —
-// unlike the Copilot path (buildCopilotCommentHtml in lib/commentHtml.ts),
-// which only ever escapes model-authored plain text before wrapping it in a
-// fixed <p>/<em> template, this field had no equivalent treatment: a
-// human (or anyone hitting the REST API directly) could store a raw
-// <script> tag or a javascript:/file: href in bodyHtml, which is a stored
-// XSS payload the moment any renderer (present or future) trusts this field
-// enough to use dangerouslySetInnerHTML on it — exactly what the Copilot
-// comment path already does for its own bodyHtml. Escaping here, with the
-// SAME escapeHtml primitive commentHtml.ts uses, neutralizes that at the
-// validation boundary, before the value is ever persisted, matching the
-// Copilot path's posture: a comment body is prose, not rich content.
-// Deliberately NOT done inside comments.service.ts's addComment() — that
-// function is also called with already-built, already-safe HTML from the
-// Copilot path (proposals.service.ts) and from agentAssignments.service.ts;
-// escaping there a second time would corrupt those callers' real <p>/<em>
-// tags into literal, visible entities instead of leaving them as-is.
+// bodyHtml arrives here as raw, unsanitized input from any REST caller, and
+// this is the human-authored comment path (see routes/tickets.routes.ts's
+// POST comment handler — the only caller of this schema). Unlike the
+// Copilot path (buildCopilotCommentHtml in lib/commentHtml.ts), which
+// escapes model-authored text before wrapping it in a fixed <p>/<em>
+// template for rendering via dangerouslySetInnerHTML, a human-authored
+// comment is rendered by the frontend as a PLAIN TEXT node (see
+// TicketDetailPage.tsx's comment list: the non-agent branch renders
+// {c.bodyHtml} directly as a JSX child, which React escapes on its own at
+// render time — no dangerouslySetInnerHTML, no HTML parsing). Running
+// bodyHtml through escapeHtml here as well would double-escape it: a
+// comment containing `don't` would round-trip as `don&amp;#39;t` instead of
+// `don't`. So this schema deliberately does NOT escape bodyHtml — the
+// plain-text render path is what neutralizes it, not validation.
 export const addCommentSchema = z.object({
-  bodyHtml: z
-    .string()
-    .min(1)
-    .transform((value) => escapeHtml(value)),
+  bodyHtml: z.string().min(1),
 });
