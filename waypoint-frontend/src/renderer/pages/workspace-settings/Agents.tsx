@@ -9,6 +9,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
 import { Avatar } from '@/components/ui/Avatar';
 import { StatusBadge } from '@/components/ui/StatusBadge';
+import { NotWired } from '@/components/ui/NotWired';
 
 export default function Agents() {
   const { data: agents, loading, reload } = useAsync(() => listAgents(), []);
@@ -36,6 +37,10 @@ export default function Agents() {
           <IconPlus size={15} />
           Create agent
         </Button>
+      </div>
+
+      <div className="mb-6">
+        <NotWired capability="agents.runtime" />
       </div>
 
       {loading && !agents && <SkeletonListRows rows={4} />}

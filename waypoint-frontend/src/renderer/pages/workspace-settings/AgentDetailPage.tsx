@@ -11,6 +11,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Avatar } from '@/components/ui/Avatar';
 import { renderMarkdown } from '@/lib/markdown';
 import { ClaudeCodeStatus } from '@/components/domain/ClaudeCodeStatus';
+import { NotWired } from '@/components/ui/NotWired';
 import {
   AGENT_TEMPLATES,
   CLAUDE_MODELS,
@@ -556,6 +557,8 @@ export default function AgentDetailPage() {
             ))}
           </div>
         </div>
+
+        <NotWired capability="agents.runtime" />
       </div>
 
       {!persistedId && (
