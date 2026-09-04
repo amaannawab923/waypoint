@@ -20,6 +20,15 @@ export const updateProjectSchema = requireAtLeastOneField(
     defaultAssigneeId: z.string().nullable().optional(),
     timezone: z.string().optional(),
     guestAccessEnabled: z.boolean().optional(),
+    // Unarchiving is the only PATCH-driven write to this column — archiving
+    // itself goes through POST /projects/:id/archive, which stamps a real
+    // Date server-side. So the only valid client value is a literal `null`
+    // (see ArchivedProjects.tsx's "Restore project" action): without this
+    // field, `archivedAt` was an unrecognized key that zod silently
+    // stripped, leaving an empty `{}` that requireAtLeastOneField always
+    // rejected as "at least one field is required" — the one payload an
+    // unarchive action can ever send could never succeed.
+    archivedAt: z.literal(null).optional(),
     // A capability ("accept submissions from outside"), not a feature
     // toggle — see docs/design/waypoint-revamp-architecture.md §3.4. No
     // dedicated route: it's set through the same generic project PATCH as
