@@ -794,13 +794,64 @@ export async function seed() {
   // notes" is the doc the r1 proposal below creates (Release Notes agent,
   // auto-approved); docs.ownerId has no agent-authorship concept (member
   // only), so it is attributed to Amaan rather than left ownerless.
+  //
+  // Real, on-topic bodies rather than lorem ipsum — same "honest, real-
+  // feeling" bar the rest of this seed already holds itself to (see e.g.
+  // cm-1's comment, or the Copilot conversation turns below) — each one
+  // grounded in specifics that already exist elsewhere in this file, not
+  // invented from nothing:
+  //  - Auth flow redesign: CW-142's session-refresh race
+  //    (src/auth/session.ts:210 — see proposals below) and the 'Platform'
+  //    workstream's own description ("Auth, sessions, and shared platform
+  //    services").
+  //  - Payments webhook contract: the conv-webhook-retry Copilot turn
+  //    below ("Backoff and the 3-attempt cap are implemented and tested;
+  //    the Stripe-client touch needs a human").
+  //  - Sprint 11 — release notes: written in the Release Notes agent's own
+  //    voice (its instructionsContentMarkdown below: "Drafts release notes
+  //    from a sprint's closed tickets"), covering sp-cw-11's real date
+  //    range (daysAgo(20)..daysAgo(6)).
+  const AUTH_FLOW_DOC_HTML = [
+    '<h2>Why this needs a redesign</h2>',
+    '<p>CW-142 is the immediate trigger: two tabs both pass the freshness check in <code>src/auth/session.ts:210</code> before either one writes, so the loser\'s next request replays a token that has already been rotated. That\'s a symptom of a bigger gap — refresh has never had a single source of truth across tabs, it just hasn\'t bitten us publicly until now.</p>',
+    '<h2>Proposed approach</h2>',
+    '<ul><li>Elect one tab as the refresh leader (a <code>BroadcastChannel</code> lock is enough — we don\'t need a server-side lease) and have follower tabs wait on its result instead of racing their own refresh.</li><li>Write the rotated token and the leader election state atomically, so a follower reading mid-write never observes a half-updated pair.</li><li>On a 401 that survives a refresh attempt, force a full re-auth instead of retrying silently — right now a stuck refresh just fails requests one at a time with no clear signal.</li></ul>',
+    '<h2>Open questions</h2>',
+    '<p>Does the leader election need to survive a tab close mid-refresh, or is "another tab just re-elects" an acceptable recovery path? Need Jonas\'s read on this before we scope it into a sprint.</p>',
+  ].join('');
+  const Q3_RETRO_DOC_HTML = [
+    '<h2>What went well</h2>',
+    '<ul><li>Sprint 11 closed clean — the Release Notes agent\'s draft needed almost no editing before it went out.</li><li>The MCP tool schema migration is holding up under concurrent writes now, after two rounds of hardening.</li><li>Faster turnaround on Requests triage since the Triage Agent started proposing verdicts instead of everything landing on a human cold.</li></ul>',
+    '<h2>What didn\'t</h2>',
+    '<ul><li>The offline queue keeps resurfacing across unrelated tickets (large workspaces, branch switches, packaged builds) — feels like we\'re patching symptoms of one underlying design problem rather than fixing it once.</li><li>Stripe webhook handling needed three separate hardening passes this quarter. The retry/backoff work is finally solid (see the Payments webhook contract doc), but it shouldn\'t have taken three tries to get there.</li><li>CW-142\'s session refresh race sat un-investigated for longer than it should have — nothing caught it until a real user hit it.</li></ul>',
+    '<h2>Going into Q4</h2>',
+    '<p>Prioritize the auth flow redesign before it causes a second incident, and give the offline queue a real design pass instead of another one-off fix.</p>',
+  ].join('');
+  const PAYMENTS_WEBHOOK_DOC_HTML = [
+    '<h2>Contract</h2>',
+    '<p>Stripe posts to our webhook endpoint for every subscription and payment event we\'ve registered for. We verify the <code>Stripe-Signature</code> header against the raw request body before touching anything else — an unverified payload is rejected outright, not just logged.</p>',
+    '<h2>Retry policy</h2>',
+    '<p>Backoff and the 3-attempt cap are implemented and tested: a failed handler retries with exponential backoff, gives up after 3 attempts, and dead-letters the event rather than retrying forever. The Stripe-client touch on that path still needs a human review before it ships — that\'s the one piece Copilot flagged as out of scope for an agent to sign off on alone.</p>',
+    '<h2>Idempotency</h2>',
+    '<p>Every event carries Stripe\'s own event id, which we store on first successful processing. A redelivered event (Stripe\'s guarantee is at-least-once, not exactly-once) short-circuits once we see a matching id instead of re-applying the same charge or subscription change twice.</p>',
+  ].join('');
+  const SPRINT_11_RELEASE_NOTES_HTML = [
+    '<p><em>Drafted by the Release Notes agent from Sprint 11\'s closed tickets.</em></p>',
+    '<h2>Fixed</h2>',
+    '<ul><li>Session token refresh no longer duplicates work across tabs on first run.</li><li>The comment renderer no longer breaks on Safari for long threads.</li><li>Board drag persistence survives a branch switch instead of silently dropping the new order.</li></ul>',
+    '<h2>Improved</h2>',
+    '<ul><li>The search index now paginates instead of loading every result at once for large workspaces.</li><li>Draft autosave debounces more aggressively under concurrent writes, cutting down on redundant saves.</li></ul>',
+    '<h2>Known issues carried into Sprint 12</h2>',
+    '<p>The offline queue still needs a real fix, not another patch — tracked across several open tickets rather than one. See the Q3 retro doc for the broader pattern.</p>',
+  ].join('');
+
   await tx.insert(schema.docs).values([
     {
       id: 'doc-auth-flow',
       projectId: 'proj-cw',
       title: 'Auth flow redesign',
       icon: '📄',
-      contentHtml: '<p></p>',
+      contentHtml: AUTH_FLOW_DOC_HTML,
       visibility: 'public',
       ownerId: 'mem-2',
       isFavorite: false,
@@ -814,7 +865,7 @@ export async function seed() {
       projectId: 'proj-cw',
       title: 'Q3 retro',
       icon: '📄',
-      contentHtml: '<p></p>',
+      contentHtml: Q3_RETRO_DOC_HTML,
       visibility: 'public',
       ownerId: 'mem-1',
       isFavorite: false,
@@ -828,7 +879,7 @@ export async function seed() {
       projectId: 'proj-cw',
       title: 'Payments webhook contract',
       icon: '📄',
-      contentHtml: '<p></p>',
+      contentHtml: PAYMENTS_WEBHOOK_DOC_HTML,
       visibility: 'public',
       ownerId: 'mem-1',
       isFavorite: false,
@@ -842,7 +893,7 @@ export async function seed() {
       projectId: 'proj-cw',
       title: 'Sprint 11 — release notes',
       icon: '🤖',
-      contentHtml: '<p></p>',
+      contentHtml: SPRINT_11_RELEASE_NOTES_HTML,
       visibility: 'public',
       ownerId: 'mem-1',
       isFavorite: false,
