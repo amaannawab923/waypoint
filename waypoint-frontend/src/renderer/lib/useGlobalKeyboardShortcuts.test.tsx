@@ -84,7 +84,9 @@ beforeEach(() => {
 
 afterEach(() => {
   document
-    .querySelectorAll('[data-ticket-drawer], [data-copilot-panel]')
+    .querySelectorAll(
+      '[data-ticket-drawer], [data-copilot-panel], [data-shortcut-guard]',
+    )
     .forEach((el) => el.remove());
 });
 
@@ -130,6 +132,75 @@ describe('useGlobalKeyboardShortcuts — typing-field guard', () => {
     expect(document.activeElement).not.toBe(input);
 
     document.body.removeChild(input);
+  });
+});
+
+// Regression coverage: CopilotProposalCard's Approve/Reject and
+// TicketDetailPage's comment-post button both deliberately move focus to a
+// stable, non-input container (marked data-shortcut-guard) before disabling
+// themselves, since a disabled focused element force-blurs to <body> per the
+// HTML spec. That container isn't a typing target, so without this guard the
+// very next bare-key press would still be free to fire a global nav
+// shortcut — exactly the class of bug this hook exists to prevent for real
+// text inputs. This covers the inline-on-a-ticket-page case (no drawer, no
+// Copilot panel open), which the drawer/panel tiers alone don't reach.
+describe('useGlobalKeyboardShortcuts — shortcut-guard container', () => {
+  it('ignores g-then-key navigation while focus is on a data-shortcut-guard element', () => {
+    // Start somewhere other than "h"'s target ('/') so an unwanted
+    // navigation is actually observable.
+    renderShortcuts({}, '/your-work');
+
+    const guard = document.createElement('div');
+    guard.setAttribute('tabindex', '-1');
+    guard.setAttribute('data-shortcut-guard', '');
+    document.body.appendChild(guard);
+    guard.focus();
+
+    fireEvent.keyDown(guard, { key: 'g' });
+    fireEvent.keyDown(guard, { key: 'h' });
+
+    expect(currentPath()).toBe('/your-work');
+
+    document.body.removeChild(guard);
+  });
+
+  it('ignores "?" while focus is on a nested descendant of a data-shortcut-guard element', () => {
+    renderShortcuts();
+
+    const guard = document.createElement('div');
+    guard.setAttribute('data-shortcut-guard', '');
+    const child = document.createElement('span');
+    guard.appendChild(child);
+    document.body.appendChild(guard);
+
+    fireEvent.keyDown(child, { key: '?' });
+
+    expect(screen.queryByText(/keyboard shortcuts/i)).not.toBeInTheDocument();
+
+    document.body.removeChild(guard);
+  });
+
+  it('still navigates on g-then-key once focus has moved off the guard container', () => {
+    renderShortcuts();
+
+    const guard = document.createElement('div');
+    guard.setAttribute('tabindex', '-1');
+    guard.setAttribute('data-shortcut-guard', '');
+    document.body.appendChild(guard);
+    guard.focus();
+
+    // Suppressed while focus is on the guard — doesn't even arm gPending.
+    fireEvent.keyDown(guard, { key: 'g' });
+    expect(currentPath()).not.toBe('/review');
+
+    guard.blur();
+    document.body.removeChild(guard);
+
+    // A fresh g-then-r from an unguarded target navigates normally.
+    fireEvent.keyDown(document.body, { key: 'g' });
+    fireEvent.keyDown(document.body, { key: 'r' });
+
+    expect(currentPath()).toBe('/review');
   });
 });
 
