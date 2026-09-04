@@ -116,7 +116,7 @@ export async function inviteMember(input: {
 // looked like a save but silently discarded every edit. This is the real
 // endpoint it's now wired to.
 export async function updateCurrentUser(
-  patch: Partial<Pick<Member, 'fullName' | 'displayName' | 'email'>>,
+  patch: Partial<Pick<Member, 'fullName' | 'displayName' | 'email' | 'firstDayOfWeek' | 'notificationPrefs'>>,
 ): Promise<Member> {
   return http.patch<Member>('/me', patch);
 }
