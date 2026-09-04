@@ -677,13 +677,19 @@ export async function rejectProposal(id: string): Promise<ProposalView> {
   // decisionLatencyMs is computed in SQL against this row's OWN createdAt
   // rather than a JS Date.now() - <pre-fetched row>.createdAt, so this stays
   // one UPDATE with no read-before-write.
+  // Clamped to the int4 max: decisionLatencyMs is a Postgres `integer`
+  // column, which caps at 2147483647 (~24.8 days in ms). A 'stale' proposal
+  // has no TTL, so a row that sits stale long enough would otherwise
+  // overflow int4 here and Postgres would throw 22003 on every reject
+  // attempt, forever (the row's createdAt never changes, so the raw value
+  // only grows). LEAST(...) keeps the write in range without a schema change.
   const [updated] = await db
     .update(proposals)
     .set({
       status: 'rejected',
       resolvedAt: new Date(),
       decidedBy: 'user',
-      decisionLatencyMs: sql`(extract(epoch from (now() - ${proposals.createdAt})) * 1000)::int`,
+      decisionLatencyMs: sql`least((extract(epoch from (now() - ${proposals.createdAt})) * 1000)::bigint, 2147483647)::int`,
     })
     .where(and(eq(proposals.id, id), inArray(proposals.status, ['proposed', 'stale'])))
     .returning();
@@ -701,14 +707,17 @@ export async function rejectAllPending(conversationId: string): Promise<{ reject
   // Same decision-provenance stamping as rejectProposal, and for the same
   // reason: "Reject all" is still a person clicking one button, a genuine
   // decision for every row it touches — decidedBy='user',
-  // decisionLatencyMs per-row from that row's own createdAt.
+  // decisionLatencyMs per-row from that row's own createdAt. Clamped to the
+  // int4 max for the same reason as rejectProposal: this is a single UPDATE
+  // across every matched row, so one old stale row overflowing int4 would
+  // fail the whole batch instead of just that row.
   const rows = await db
     .update(proposals)
     .set({
       status: 'rejected',
       resolvedAt: new Date(),
       decidedBy: 'user',
-      decisionLatencyMs: sql`(extract(epoch from (now() - ${proposals.createdAt})) * 1000)::int`,
+      decisionLatencyMs: sql`least((extract(epoch from (now() - ${proposals.createdAt})) * 1000)::bigint, 2147483647)::int`,
     })
     .where(
       and(
