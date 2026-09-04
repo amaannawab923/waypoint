@@ -114,11 +114,20 @@ function CopilotRepoLinkCard({
 }) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Same fix as CopilotProposalCard.tsx's act(): "Choose folder…" disables
+  // itself (saving) while the updateProject POST is in flight, and
+  // onLinked unmounts this whole card on success (it stops rendering the
+  // moment the project has a repoPath) — either path force-blurs to
+  // <body> and leaks the next keystroke to useGlobalKeyboardShortcuts.ts's
+  // global nav shortcuts. This card's own root is the stable container
+  // neither path touches.
+  const cardRef = useRef<HTMLDivElement>(null);
 
   async function handleChoose() {
     if (saving) return;
     const picked = await window.electron.repo.chooseFolder();
     if (picked.canceled) return;
+    cardRef.current?.focus();
     setSaving(true);
     setError(null);
     try {
@@ -135,7 +144,12 @@ function CopilotRepoLinkCard({
   }
 
   return (
-    <div className="w-full shrink-0 self-start overflow-hidden rounded-[var(--radius)] border border-border-strong bg-surface">
+    <div
+      ref={cardRef}
+      tabIndex={-1}
+      data-shortcut-guard
+      className="w-full shrink-0 self-start overflow-hidden rounded-[var(--radius)] border border-border-strong bg-surface outline-none"
+    >
       <div className="flex items-center gap-2 border-b border-border bg-bg-inset px-3 py-2">
         <FolderGit2 size={13} className="shrink-0 text-text-secondary" />
         <span className="text-[10.5px] font-bold tracking-wider text-text-secondary uppercase">
