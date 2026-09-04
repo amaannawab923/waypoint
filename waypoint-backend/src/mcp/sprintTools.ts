@@ -24,6 +24,17 @@ import { jsonResult, notFoundResult, withErrorSafetyNet } from './ticketTools.js
 // sit in a "completed"-group state. Kept local to this file rather than
 // extracted to a shared helper: the two call sites (Home.tsx, here) are on
 // opposite sides of the frontend/backend boundary and can't share code.
+// LLM date arithmetic is unreliable (no live clock, easy off-by-one/off-by-
+// timezone errors) — a real repro: Copilot told a user "6 days remaining"
+// for a sprint the Home dashboard correctly showed 8 days left for, on the
+// same day. Rather than handing the model raw start/endDate and trusting
+// it to subtract "today" itself, compute the answer server-side — the
+// exact same formula Home.tsx's findActiveSprint already uses — and hand
+// the model an already-correct number to just repeat.
+function daysLeft(endDate: string, now: Date = new Date()): number {
+  return Math.max(0, Math.ceil((new Date(endDate).getTime() - now.getTime()) / 86_400_000));
+}
+
 async function toSprintSummary(sprint: Awaited<ReturnType<typeof sprintsService.listAllSprints>>[number]) {
   const [tickets, leadNames] = await Promise.all([
     ticketsService.listTicketsByFilter({ sprintIds: [sprint.id] }),
@@ -38,6 +49,9 @@ async function toSprintSummary(sprint: Awaited<ReturnType<typeof sprintsService.
     projectId: sprint.projectId,
     startDate: sprint.startDate,
     endDate: sprint.endDate,
+    // Pre-computed so the model never has to do its own "today minus
+    // endDate" arithmetic — see the daysLeft() comment above.
+    daysLeft: daysLeft(sprint.endDate),
     leadId: sprint.leadId,
     leadName: sprint.leadId ? (leadNames.get(sprint.leadId) ?? sprint.leadId) : null,
     memberIds: sprint.memberIds,
@@ -62,7 +76,7 @@ export function registerSprintTools(server: McpServer): void {
     'list_sprints',
     {
       description:
-        'List sprints (a.k.a. cycles), optionally scoped to one project. Returns each sprint\'s name, date range, lead, and a ticketCount/doneCount progress summary. Use this before answering any question that names a specific sprint (e.g. "Sprint 12") — do not assume sprints are unsupported without checking here first.',
+        'List sprints (a.k.a. cycles), optionally scoped to one project. Returns each sprint\'s name, date range, lead, and a ticketCount/doneCount progress summary. Use this before answering any question that names a specific sprint (e.g. "Sprint 12") — do not assume sprints are unsupported without checking here first. When reporting how much time is left on a sprint, always use the returned `daysLeft` number as-is — never compute it yourself from startDate/endDate, since you do not reliably know today\'s date.',
       inputSchema: {
         projectId: z.string().optional().describe('If given, only list sprints in this project.'),
       },
@@ -73,7 +87,8 @@ export function registerSprintTools(server: McpServer): void {
   server.registerTool(
     'get_sprint',
     {
-      description: 'Get one sprint by its internal id, with the same progress summary as list_sprints.',
+      description:
+        'Get one sprint by its internal id, with the same progress summary as list_sprints. When reporting how much time is left, always use the returned `daysLeft` number as-is — never compute it yourself.',
       inputSchema: { id: z.string() },
     },
     withErrorSafetyNet('get_sprint', getSprintHandler),

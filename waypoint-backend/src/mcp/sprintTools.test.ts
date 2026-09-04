@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Same mocking shape as ticketTools.test.ts: these tests verify the MCP
 // tool handlers' own logic (which service function they call, with what
@@ -37,6 +37,17 @@ beforeEach(() => {
   vi.mocked(ticketsService.listTicketsByFilter).mockResolvedValue([]);
   vi.mocked(resolveStateNames).mockResolvedValue(new Map());
   vi.mocked(resolveActorNames).mockResolvedValue(new Map());
+  // Fixed "now" so daysLeft — computed server-side precisely so the model
+  // never has to guess today's date itself (see sprintTools.ts's own
+  // comment on the real bug this fixes: Copilot reporting "6 days
+  // remaining" for a sprint the Home dashboard correctly showed 8 days
+  // left for) — is deterministic across test runs.
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-09-01T00:00:00.000Z'));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('listSprintsHandler', () => {
@@ -72,6 +83,7 @@ describe('listSprintsHandler', () => {
         projectId: 'proj-1',
         startDate: '2026-08-25',
         endDate: '2026-09-08',
+        daysLeft: 7,
         leadId: 'mem-1',
         leadName: 'Priya',
         memberIds: ['mem-1', 'mem-2'],
@@ -79,6 +91,21 @@ describe('listSprintsHandler', () => {
         doneCount: 0,
       },
     ]);
+  });
+
+  it('computes daysLeft server-side rather than handing the model raw dates to subtract itself', async () => {
+    vi.mocked(sprintsService.listAllSprints).mockResolvedValue([
+      { ...SPRINT, id: 'sp-future', endDate: '2026-09-10' },
+      { ...SPRINT, id: 'sp-today', endDate: '2026-09-01' },
+      { ...SPRINT, id: 'sp-past', endDate: '2026-08-20' },
+    ]);
+
+    const [future, today, past] = parseJsonContent(await listSprintsHandler({}));
+
+    expect(future.daysLeft).toBe(9);
+    expect(today.daysLeft).toBe(0);
+    // Never negative — an overdue sprint reads as "0 days left", not "-12".
+    expect(past.daysLeft).toBe(0);
   });
 
   it('falls back to the raw leadId when it cannot be resolved, and to null when there is no lead at all', async () => {
@@ -139,6 +166,7 @@ describe('getSprintHandler', () => {
       projectId: 'proj-1',
       startDate: '2026-08-25',
       endDate: '2026-09-08',
+      daysLeft: 7,
       leadId: 'mem-1',
       leadName: 'Priya',
       memberIds: ['mem-1', 'mem-2'],
