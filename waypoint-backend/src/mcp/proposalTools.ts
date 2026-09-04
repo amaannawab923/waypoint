@@ -10,6 +10,7 @@ import {
   type ProposalPayload,
   type ProposalSnapshot,
 } from '../services/proposals.service.js';
+import { NotFoundError } from '../middleware/errors.js';
 import { resolveActorNames } from '../lib/actorNames.js';
 import { PRIORITY, ISO_DATE, jsonResult, notFoundResult, withErrorSafetyNet } from './ticketTools.js';
 
@@ -55,6 +56,11 @@ async function submitProposal(input: {
     });
   } catch (error) {
     if (error instanceof ProposalValidationError) return validationErrorResult(error.message);
+    // createProposal throws NotFoundError('conversation') when the
+    // conversation row is gone (its own comment: intended to "404-shape
+    // fail"). Without this mapping it fell through to withErrorSafetyNet's
+    // generic scrub and came back as an opaque internal-error message.
+    if (error instanceof NotFoundError) return notFoundResult('conversation');
     throw error;
   }
 }
