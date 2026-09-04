@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Plus, Pencil, Trash2, NotepadText } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
+import { IconPlus, IconEdit, IconScratch } from '@/components/icons';
 import { useAsync } from '@/lib/useAsync';
 import { listScratchNotes, createScratchNote, deleteScratchNote } from '@/data/api';
 import type { ScratchNote } from '@/types/entities';
@@ -115,7 +116,7 @@ export default function Scratchpad() {
           </p>
         </div>
         <Button variant="primary" onClick={openCreate}>
-          <Plus size={15} />
+          <IconPlus size={15} />
           New note
         </Button>
       </div>
@@ -149,7 +150,7 @@ export default function Scratchpad() {
                   </p>
                   <div className="flex shrink-0 gap-1 opacity-0 transition-opacity group-hover:opacity-100">
                     <IconButton label="Edit note" onClick={() => openEdit(note)}>
-                      <Pencil size={14} />
+                      <IconEdit size={14} />
                     </IconButton>
                     <IconButton label="Delete note" onClick={() => handleDelete(note.id)}>
                       <Trash2 size={14} />
@@ -162,12 +163,12 @@ export default function Scratchpad() {
           </div>
         ) : (
           <EmptyState
-            icon={<NotepadText size={28} />}
+            icon={<IconScratch size={28} />}
             title="Nothing on the scratchpad yet"
             description="Scratchpad is personal and unfiled. Docs live inside a project and are shared with its members."
             action={
               <Button variant="secondary" onClick={openCreate}>
-                <Plus size={15} />
+                <IconPlus size={15} />
                 New note
               </Button>
             }

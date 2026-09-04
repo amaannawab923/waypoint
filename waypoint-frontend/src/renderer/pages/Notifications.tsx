@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, AtSign } from 'lucide-react';
+import { AtSign } from 'lucide-react';
+import { IconBell } from '@/components/icons';
 import { useAsync } from '@/lib/useAsync';
 import { listNotifications, listMembers, listAgents, markNotificationRead, getTicket } from '@/data/api';
 import type { Agent, Member, NotificationItem } from '@/types/entities';
@@ -114,7 +115,7 @@ export default function Notifications() {
           </div>
         ) : filtered.length === 0 ? (
           <EmptyState
-            icon={tab === 'mentions' ? <AtSign size={28} /> : <Bell size={28} />}
+            icon={tab === 'mentions' ? <AtSign size={28} /> : <IconBell size={28} />}
             title={tab === 'mentions' ? 'No mentions' : 'You’re all caught up'}
             description={
               tab === 'mentions'

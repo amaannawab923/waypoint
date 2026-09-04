@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { FileEdit } from 'lucide-react';
+import { IconEdit } from '@/components/icons';
 import { useAsync } from '@/lib/useAsync';
 import { listDraftTickets, listProjects } from '@/data/api';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -40,7 +40,7 @@ export default function Drafts() {
       <div className="mt-6">
         {drafts.length === 0 ? (
           <EmptyState
-            icon={<FileEdit size={28} />}
+            icon={<IconEdit size={28} />}
             title="Half-written tickets"
             description="Tickets you start but don't finish get auto-saved here, so you can pick up where you left off."
           />

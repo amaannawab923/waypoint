@@ -1,11 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import {
-  ListTodo,
-  UserCheck2,
-  Bell,
-  Activity as ActivityIcon,
-} from 'lucide-react';
+import { ListTodo, UserCheck2 } from 'lucide-react';
 import { useAsync } from '@/lib/useAsync';
 import { getCurrentUser } from '@/data/api';
 import type { Member, StateGroup } from '@/types/entities';
@@ -24,14 +19,16 @@ import TicketListToolbar, {
 } from '@/pages/tickets/TicketListToolbar';
 import TicketList from '@/pages/tickets/TicketList';
 
-type TabKey = 'summary' | 'assigned' | 'created' | 'subscribed' | 'activity';
+// Subscribed/Activity were cut per docs/design/waypoint-revamp-mockup.html's
+// own annotation on this exact tab set: nothing in this codebase has ever
+// populated either one, the same permanently-empty-surface defect P1's
+// honesty pass already removed elsewhere in this app.
+type TabKey = 'summary' | 'assigned' | 'created';
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'summary', label: 'Summary' },
   { key: 'assigned', label: 'Assigned' },
   { key: 'created', label: 'Created' },
-  { key: 'subscribed', label: 'Subscribed' },
-  { key: 'activity', label: 'Activity' },
 ];
 
 const WORKLOAD_GROUPS: StateGroup[] = [
@@ -235,22 +232,6 @@ export default function YourWork() {
               </div>
               <TicketList view={createdView} showProjectColumn />
             </div>
-          )}
-
-          {tab === 'subscribed' && (
-            <EmptyState
-              icon={<Bell size={28} />}
-              title="No subscriptions"
-              description="Tickets you subscribe to will show up here."
-            />
-          )}
-
-          {tab === 'activity' && (
-            <EmptyState
-              icon={<ActivityIcon size={28} />}
-              title="No recent activity"
-              description="Your recent activity across the workspace will show up here."
-            />
           )}
         </div>
 
