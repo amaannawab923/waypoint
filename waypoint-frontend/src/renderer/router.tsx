@@ -12,6 +12,7 @@ import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom';
 import { AppShell } from '@/layouts/AppShell';
 import { ProjectLayout } from '@/layouts/ProjectLayout';
 import { isOnboarded } from '@/lib/onboarding';
+import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 
 import Login from '@/pages/auth/Login';
 import Signup from '@/pages/auth/Signup';
@@ -90,93 +91,111 @@ export const router = createBrowserRouter([
       {
         element: <AppShell />,
         children: [
-          { path: '/', element: <Home /> },
-          { path: '/your-work', element: <YourWork /> },
-          { path: '/drafts', element: <Drafts /> },
-          { path: '/scratchpad', element: <Scratchpad /> },
-          { path: '/notifications', element: <Notifications /> },
-          { path: '/projects', element: <ProjectsList /> },
-          { path: '/projects/archived', element: <ArchivedProjects /> },
-          { path: '/analytics', element: <AnalyticsPage /> },
-          { path: '/review', element: <ReviewPage /> },
-          { path: '/machine', element: <MachinePage /> },
-          { path: '/views', element: <AllTicketsPage /> },
-
+          // Wraps every routed page (not AppShell's own sidebar/topbar chrome,
+          // which stays outside so it's still usable if a page's content
+          // crashes) in a recovery boundary — see ErrorBoundary.tsx. Without
+          // this, an unguarded throw during any single page's render (e.g.
+          // TicketDetailPage.tsx assuming route/outlet context that isn't
+          // always there) unmounted the ENTIRE app to a blank white screen.
           {
-            path: '/projects/:projectId',
-            element: <ProjectLayout />,
+            element: (
+              <ErrorBoundary>
+                <Outlet />
+              </ErrorBoundary>
+            ),
             children: [
-              { index: true, element: <Navigate to="tickets" replace /> },
-              { path: 'tickets', element: <TicketsLayout /> },
+              { path: '/', element: <Home /> },
+              { path: '/your-work', element: <YourWork /> },
+              { path: '/drafts', element: <Drafts /> },
+              { path: '/scratchpad', element: <Scratchpad /> },
+              { path: '/notifications', element: <Notifications /> },
+              { path: '/projects', element: <ProjectsList /> },
+              { path: '/projects/archived', element: <ArchivedProjects /> },
+              { path: '/analytics', element: <AnalyticsPage /> },
+              { path: '/review', element: <ReviewPage /> },
+              { path: '/machine', element: <MachinePage /> },
+              { path: '/views', element: <AllTicketsPage /> },
+
               {
-                path: 'tickets/:identifier',
-                element: <TicketDetailPage />,
-              },
-              { path: 'sprints', element: <SprintsPage /> },
-              { path: 'sprints/:sprintId', element: <SprintDetailPage /> },
-              { path: 'workstreams', element: <WorkstreamsPage /> },
-              {
-                path: 'workstreams/:workstreamId',
-                element: <WorkstreamDetailPage />,
-              },
-              { path: 'views', element: <ProjectViewsPage /> },
-              { path: 'docs', element: <DocsPage /> },
-              { path: 'docs/:docId', element: <DocDetailPage /> },
-              { path: 'requests', element: <RequestsPage /> },
-              {
-                path: 'settings',
-                element: <ProjectSettingsLayout />,
+                path: '/projects/:projectId',
+                element: <ProjectLayout />,
                 children: [
-                  { index: true, element: <Navigate to="general" replace /> },
-                  { path: 'general', element: <ProjectSettingsGeneral /> },
-                  { path: 'members', element: <ProjectSettingsMembers /> },
-                  { path: 'codebase', element: <ProjectSettingsCodebase /> },
-                  { path: 'states', element: <ProjectSettingsStates /> },
-                  { path: 'labels', element: <ProjectSettingsLabels /> },
-                  { path: 'estimates', element: <ProjectSettingsEstimates /> },
+                  { index: true, element: <Navigate to="tickets" replace /> },
+                  { path: 'tickets', element: <TicketsLayout /> },
                   {
-                    path: 'automations',
-                    element: <ProjectSettingsAutomations />,
+                    path: 'tickets/:identifier',
+                    element: <TicketDetailPage />,
+                  },
+                  { path: 'sprints', element: <SprintsPage /> },
+                  { path: 'sprints/:sprintId', element: <SprintDetailPage /> },
+                  { path: 'workstreams', element: <WorkstreamsPage /> },
+                  {
+                    path: 'workstreams/:workstreamId',
+                    element: <WorkstreamDetailPage />,
+                  },
+                  { path: 'views', element: <ProjectViewsPage /> },
+                  { path: 'docs', element: <DocsPage /> },
+                  { path: 'docs/:docId', element: <DocDetailPage /> },
+                  { path: 'requests', element: <RequestsPage /> },
+                  {
+                    path: 'settings',
+                    element: <ProjectSettingsLayout />,
+                    children: [
+                      { index: true, element: <Navigate to="general" replace /> },
+                      { path: 'general', element: <ProjectSettingsGeneral /> },
+                      { path: 'members', element: <ProjectSettingsMembers /> },
+                      { path: 'codebase', element: <ProjectSettingsCodebase /> },
+                      { path: 'states', element: <ProjectSettingsStates /> },
+                      { path: 'labels', element: <ProjectSettingsLabels /> },
+                      { path: 'estimates', element: <ProjectSettingsEstimates /> },
+                      {
+                        path: 'automations',
+                        element: <ProjectSettingsAutomations />,
+                      },
+                    ],
                   },
                 ],
               },
-            ],
-          },
 
-          {
-            path: '/settings',
-            element: <WorkspaceSettingsLayout />,
-            children: [
-              { index: true, element: <Navigate to="general" replace /> },
-              { path: 'general', element: <WorkspaceSettingsGeneral /> },
-              { path: 'members', element: <WorkspaceSettingsMembers /> },
-              { path: 'agents', element: <WorkspaceSettingsAgents /> },
-              { path: 'agents/new', element: <AgentDetailPage /> },
-              { path: 'agents/:agentId', element: <AgentDetailPage /> },
-              { path: 'billing', element: <WorkspaceSettingsBilling /> },
-              { path: 'exports', element: <WorkspaceSettingsExports /> },
-              { path: 'webhooks', element: <WorkspaceSettingsWebhooks /> },
-            ],
-          },
-
-          {
-            path: '/profile',
-            element: <ProfileSettingsLayout />,
-            children: [
-              { index: true, element: <Navigate to="general" replace /> },
-              { path: 'general', element: <ProfileSettingsProfile /> },
-              { path: 'preferences', element: <ProfileSettingsPreferences /> },
               {
-                path: 'notifications',
-                element: <ProfileSettingsNotifications />,
+                path: '/settings',
+                element: <WorkspaceSettingsLayout />,
+                children: [
+                  { index: true, element: <Navigate to="general" replace /> },
+                  { path: 'general', element: <WorkspaceSettingsGeneral /> },
+                  { path: 'members', element: <WorkspaceSettingsMembers /> },
+                  { path: 'agents', element: <WorkspaceSettingsAgents /> },
+                  { path: 'agents/new', element: <AgentDetailPage /> },
+                  { path: 'agents/:agentId', element: <AgentDetailPage /> },
+                  { path: 'billing', element: <WorkspaceSettingsBilling /> },
+                  { path: 'exports', element: <WorkspaceSettingsExports /> },
+                  { path: 'webhooks', element: <WorkspaceSettingsWebhooks /> },
+                ],
               },
-              { path: 'security', element: <ProfileSettingsSecurity /> },
-              { path: 'tokens', element: <ProfileSettingsTokens /> },
-              { path: 'copilot', element: <ProfileSettingsCopilot /> },
+
+              {
+                path: '/profile',
+                element: <ProfileSettingsLayout />,
+                children: [
+                  { index: true, element: <Navigate to="general" replace /> },
+                  { path: 'general', element: <ProfileSettingsProfile /> },
+                  {
+                    path: 'preferences',
+                    element: <ProfileSettingsPreferences />,
+                  },
+                  {
+                    path: 'notifications',
+                    element: <ProfileSettingsNotifications />,
+                  },
+                  { path: 'security', element: <ProfileSettingsSecurity /> },
+                  { path: 'tokens', element: <ProfileSettingsTokens /> },
+                  { path: 'copilot', element: <ProfileSettingsCopilot /> },
+                ],
+              },
+
+              { path: '*', element: <Navigate to="/" replace /> },
             ],
           },
-
-          { path: '*', element: <Navigate to="/" replace /> },
         ],
       },
     ],
