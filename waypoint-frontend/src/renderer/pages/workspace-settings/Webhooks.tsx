@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Plus, Trash2, Webhook as WebhookIcon } from 'lucide-react';
+import { Trash2, Webhook as WebhookIcon } from 'lucide-react';
+import { IconPlus } from '@/components/icons';
 import { useAsync } from '@/lib/useAsync';
 import { listWebhooks, createWebhook, deleteWebhook } from '@/data/api';
 import type { WebhookEventType } from '@/types/entities';
@@ -67,7 +68,7 @@ export default function Webhooks() {
           </p>
         </div>
         <Button variant="primary" onClick={() => setAddOpen(true)}>
-          <Plus size={15} />
+          <IconPlus size={15} />
           Add webhook
         </Button>
       </div>
@@ -85,7 +86,7 @@ export default function Webhooks() {
           description="Add a webhook to notify an external service when tickets, projects, sprints, or workstreams change."
           action={
             <Button variant="primary" onClick={() => setAddOpen(true)}>
-              <Plus size={15} />
+              <IconPlus size={15} />
               Add webhook
             </Button>
           }

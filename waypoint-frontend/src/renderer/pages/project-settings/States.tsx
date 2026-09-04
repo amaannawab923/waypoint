@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, Pencil } from 'lucide-react';
+import { IconPlus, IconEdit } from '@/components/icons';
 import { Button, IconButton } from '@/components/ui/Button';
 import { Dot } from '@/components/ui/Badge';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
@@ -173,7 +173,7 @@ export default function States() {
           <p className="mt-1 text-sm text-text-secondary">Manage the workflow states tickets move through.</p>
         </div>
         <Button variant="primary" size="sm" onClick={() => setShowForm((v) => !v)}>
-          <Plus size={14} />
+          <IconPlus size={14} />
           Add state
         </Button>
       </div>
@@ -275,7 +275,7 @@ export default function States() {
                               setEditingId(state.id);
                             }}
                           >
-                            <Pencil size={13} />
+                            <IconEdit size={13} />
                           </IconButton>
                         </div>
                       </button>

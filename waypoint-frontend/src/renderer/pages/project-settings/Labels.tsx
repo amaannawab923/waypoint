@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Plus, Tag, Pencil, Trash2 } from 'lucide-react';
+import { Tag, Trash2 } from 'lucide-react';
+import { IconPlus, IconEdit } from '@/components/icons';
 import { Button, IconButton } from '@/components/ui/Button';
 import { Badge, Dot } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -117,7 +118,7 @@ export default function Labels() {
           <p className="mt-1 text-sm text-text-secondary">Manage labels used to categorize tickets.</p>
         </div>
         <Button variant="primary" size="sm" onClick={() => setShowForm((v) => !v)}>
-          <Plus size={14} />
+          <IconPlus size={14} />
           Add label
         </Button>
       </div>
@@ -187,7 +188,7 @@ export default function Labels() {
                 </Badge>
                 <div className="ml-auto flex items-center gap-1 opacity-0 group-hover:opacity-100">
                   <IconButton label="Edit label" onClick={() => setEditingId(label.id)}>
-                    <Pencil size={13} />
+                    <IconEdit size={13} />
                   </IconButton>
                   {confirmDeleteId === label.id ? (
                     <Button

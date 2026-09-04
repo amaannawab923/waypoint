@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { clsx } from 'clsx';
-import { ArrowLeft, Check, Trash2 } from 'lucide-react';
+import { ArrowLeft, Trash2 } from 'lucide-react';
+import { IconCheck } from '@/components/icons';
 import { useAsync } from '@/lib/useAsync';
 import { createAgent, deleteAgent, detectLocalClaudeCode, getAgent, listProjects, updateAgent } from '@/data/api';
 import type { Agent, AgentAutonomy, AgentTrigger } from '@/types/entities';
@@ -475,7 +476,7 @@ export default function AgentDetailPage() {
                   className="flex flex-col gap-1 rounded-[var(--radius)] border-[1.5px] border-success bg-success-bg p-3"
                 >
                   <div className="flex items-center gap-1.5 text-sm font-medium text-text">
-                    <Check size={14} className="text-success" />
+                    <IconCheck size={14} className="text-success" />
                     {method.label}
                   </div>
                   <ClaudeCodeStatus

@@ -1,4 +1,4 @@
-import { Check } from 'lucide-react';
+import { IconCheck } from '@/components/icons';
 import { useAsync } from '@/lib/useAsync';
 import { getWorkspace } from '@/data/api';
 import { Button } from '@/components/ui/Button';
@@ -95,7 +95,7 @@ export default function Billing() {
                 <ul className="mt-4 flex flex-1 flex-col gap-2">
                   {plan.features.map((feature) => (
                     <li key={feature} className="flex items-start gap-2 text-sm text-text-secondary">
-                      <Check size={14} className="mt-0.5 shrink-0 text-success" />
+                      <IconCheck size={14} className="mt-0.5 shrink-0 text-success" />
                       {feature}
                     </li>
                   ))}

@@ -1,4 +1,4 @@
-import { KeyRound, Plus } from 'lucide-react';
+import { IconKey, IconPlus } from '@/components/icons';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Button } from '@/components/ui/Button';
 
@@ -11,7 +11,7 @@ export default function Tokens() {
       </p>
 
       <EmptyState
-        icon={<KeyRound size={28} />}
+        icon={<IconKey size={28} />}
         title="No Personal token yet"
         description="Create a new personal access token to use the API."
         action={
@@ -20,7 +20,7 @@ export default function Tokens() {
             disabled
             title="Waypoint has no API authentication yet, so a token would have nothing to grant."
           >
-            <Plus size={15} />
+            <IconPlus size={15} />
             Add access token
           </Button>
         }

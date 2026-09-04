@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { CheckCircle2, KeySquare, Sparkles } from 'lucide-react';
+import { IconCheck, IconKey, IconSparkles } from '@/components/icons';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { CopilotConnectModal } from '@/components/domain/CopilotConnectModal';
@@ -144,7 +144,7 @@ export default function Copilot() {
         <div className="mb-6 flex items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-border bg-surface p-3.5">
           <div className="flex items-center gap-3">
             <span className="flex size-9 shrink-0 items-center justify-center rounded-[var(--radius-sm)] bg-surface-2 text-text-secondary">
-              <KeySquare size={16} />
+              <IconKey size={16} />
             </span>
             <div>
               <p className="text-sm text-text">Claude subscription connected</p>
@@ -161,7 +161,7 @@ export default function Copilot() {
 
       {justConnected && (
         <div className="mb-6 flex items-center gap-2 text-sm text-success">
-          <CheckCircle2 size={15} />
+          <IconCheck size={15} />
           Connected — Copilot will use this from now on.
         </div>
       )}
@@ -174,7 +174,7 @@ export default function Copilot() {
               onClick={() => setConnectOpen(true)}
               className="w-full"
             >
-              <Sparkles size={15} />
+              <IconSparkles size={15} />
               Connect with Claude
             </Button>
             <p className="mt-2 text-xs text-text-muted">

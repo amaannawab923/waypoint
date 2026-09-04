@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom';
-import { Bot, Plus, Trash2 } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
+import { IconBot, IconPlus } from '@/components/icons';
 import { useAsync } from '@/lib/useAsync';
 import { deleteAgent, detectLocalClaudeCode, listAgents } from '@/data/api';
 import { Badge } from '@/components/ui/Badge';
@@ -31,7 +32,7 @@ export default function Agents() {
           </p>
         </div>
         <Button variant="primary" onClick={() => navigate('/settings/agents/new')}>
-          <Plus size={15} />
+          <IconPlus size={15} />
           Create agent
         </Button>
       </div>
@@ -40,12 +41,12 @@ export default function Agents() {
 
       {agents && agents.length === 0 && (
         <EmptyState
-          icon={<Bot size={28} />}
+          icon={<IconBot size={28} />}
           title="No agents yet"
           description="Create one to give it its own instructions, scope, and execution method."
           action={
             <Button variant="primary" onClick={() => navigate('/settings/agents/new')}>
-              <Plus size={15} />
+              <IconPlus size={15} />
               Create agent
             </Button>
           }

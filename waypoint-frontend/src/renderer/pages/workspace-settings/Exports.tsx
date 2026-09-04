@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Download, RefreshCw } from 'lucide-react';
+import { Download } from 'lucide-react';
+import { IconRefresh } from '@/components/icons';
 import { useAsync } from '@/lib/useAsync';
 import { listProjects, listExports, createExport } from '@/data/api';
 import { Button, IconButton } from '@/components/ui/Button';
@@ -107,7 +108,7 @@ export default function Exports() {
       <div className="mb-3 flex items-center justify-between">
         <h3 className="font-display text-sm font-medium text-text">Previous exports</h3>
         <IconButton label="Refresh exports" onClick={handleRefresh} disabled={refreshing || loading}>
-          <RefreshCw size={14} className={clsx((refreshing || loading) && 'animate-spin')} />
+          <IconRefresh size={14} className={clsx((refreshing || loading) && 'animate-spin')} />
         </IconButton>
       </div>
 

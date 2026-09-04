@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Ruler, Pencil, Trash2 } from 'lucide-react';
+import { Ruler, Trash2 } from 'lucide-react';
+import { IconEdit } from '@/components/icons';
 import { Button, IconButton } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Modal } from '@/components/ui/Modal';
@@ -135,7 +136,7 @@ export default function Estimates() {
             </div>
             <div className="flex items-center gap-1">
               <IconButton label="Change estimate system" onClick={() => setPickerOpen(true)}>
-                <Pencil size={14} />
+                <IconEdit size={14} />
               </IconButton>
               <IconButton label="Remove estimate system" onClick={handleRemove} disabled={removing}>
                 <Trash2 size={14} />

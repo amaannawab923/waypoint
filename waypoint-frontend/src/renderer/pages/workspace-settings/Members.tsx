@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import { Check, ChevronDown, ListFilter, Plus, Search, Users } from 'lucide-react';
+import { Users } from 'lucide-react';
+import { IconCheck, IconChevron, IconFilter, IconPlus, IconSearch } from '@/components/icons';
 import { useAsync } from '@/lib/useAsync';
 import { listMembers, inviteMember } from '@/data/api';
 import type { Member } from '@/types/entities';
@@ -74,7 +75,7 @@ export default function Members() {
           </p>
         </div>
         <Button variant="primary" onClick={() => setInviting((v) => !v)}>
-          <Plus size={15} />
+          <IconPlus size={15} />
           Invite member
         </Button>
       </div>
@@ -125,7 +126,7 @@ export default function Members() {
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <div className="relative min-w-[220px] flex-1 sm:max-w-xs">
-          <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-muted" />
+          <IconSearch size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-muted" />
           <input
             type="text"
             placeholder="Search members…"
@@ -139,10 +140,10 @@ export default function Members() {
           align="start"
           trigger={({ open, toggle }) => (
             <Button variant={open ? 'secondary' : 'ghost'} size="sm" onClick={toggle}>
-              <ListFilter size={14} />
+              <IconFilter size={14} />
               Filters
               {roleFilter.length > 0 && <Badge tone="accent">{roleFilter.length}</Badge>}
-              <ChevronDown size={13} />
+              <IconChevron size={13} />
             </Button>
           )}
         >
@@ -162,7 +163,7 @@ export default function Members() {
                   />
                   {r}
                 </span>
-                {roleFilter.includes(r) && <Check size={13} className="text-accent" />}
+                {roleFilter.includes(r) && <IconCheck size={13} className="text-accent" />}
               </label>
             ))}
             {roleFilter.length > 0 && (

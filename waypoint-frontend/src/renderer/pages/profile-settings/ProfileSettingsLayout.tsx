@@ -1,13 +1,7 @@
 import { NavLink, Outlet } from 'react-router-dom';
 import { clsx } from 'clsx';
-import {
-  UserRound,
-  Sliders,
-  Bell,
-  ShieldCheck,
-  KeyRound,
-  Sparkles,
-} from 'lucide-react';
+import { Sliders } from 'lucide-react';
+import { IconUser, IconBell, IconShield, IconKey, IconSparkles } from '@/components/icons';
 import { useAsync } from '@/lib/useAsync';
 import { getCurrentUser } from '@/data/api';
 import { Avatar } from '@/components/ui/Avatar';
@@ -21,11 +15,11 @@ const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   );
 
 const PROFILE_ITEMS = [
-  { to: 'general', label: 'Profile', icon: UserRound },
+  { to: 'general', label: 'Profile', icon: IconUser },
   { to: 'preferences', label: 'Preferences', icon: Sliders },
-  { to: 'notifications', label: 'Notifications', icon: Bell },
-  { to: 'security', label: 'Security', icon: ShieldCheck },
-  { to: 'copilot', label: 'Copilot', icon: Sparkles },
+  { to: 'notifications', label: 'Notifications', icon: IconBell },
+  { to: 'security', label: 'Security', icon: IconShield },
+  { to: 'copilot', label: 'Copilot', icon: IconSparkles },
 ];
 
 export default function ProfileSettingsLayout() {
@@ -65,7 +59,7 @@ export default function ProfileSettingsLayout() {
         </p>
         <nav className="flex flex-col gap-0.5">
           <NavLink to="tokens" className={navLinkClass}>
-            <KeyRound size={15} className="shrink-0" />
+            <IconKey size={15} className="shrink-0" />
             <span className="truncate">Personal access tokens</span>
           </NavLink>
         </nav>
