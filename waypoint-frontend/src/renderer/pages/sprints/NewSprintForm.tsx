@@ -1,17 +1,20 @@
 import { useState } from 'react';
+import { addDays, format } from 'date-fns';
 import { Button } from '@/components/ui/Button';
 import { createSprint } from '@/data/api';
 import type { Sprint } from '@/types/entities';
 import { findOverlappingSprint, formatDateRange } from './sprint-utils';
 
+// `Date#toISOString()` renders in UTC, so a user west of UTC creating a sprint in the
+// evening got tomorrow's date pre-filled here. `date-fns#format` reads the local calendar
+// date instead (same fix as DatePicker.tsx's `toIsoDate` and sprint-utils.ts's
+// `parseSprintDate` — the identical UTC-vs-local hazard, just on the write side this time).
 function today(): string {
-  return new Date().toISOString().slice(0, 10);
+  return format(new Date(), 'yyyy-MM-dd');
 }
 
 function inTwoWeeks(): string {
-  const d = new Date();
-  d.setDate(d.getDate() + 14);
-  return d.toISOString().slice(0, 10);
+  return format(addDays(new Date(), 14), 'yyyy-MM-dd');
 }
 
 /** Small inline form (not a modal) for creating a sprint: name plus a start/end date range. */
