@@ -226,6 +226,20 @@ export interface JiraTicket {
   epicName: string | null;
   storyPoints: number | null;
   sprintName: string | null;
+  /**
+   * When Jira last changed this issue (ISO). Carried across the wire since
+   * the first read (see JiraWireTicket) but dropped here until now, which is
+   * why the list could only ever render in whatever order the search
+   * returned. "Recently updated" is the sort a work queue actually wants,
+   * and it needs a timestamp to be one.
+   *
+   * Worth knowing before trusting it too far: main falls back to "now" when
+   * Jira returned no `updated` field at all (jiraMap.ts), so such an issue
+   * sorts to the very top claiming it was just touched. Rare, pre-existing,
+   * and deliberately not papered over here — a second fallback layered on a
+   * first would only make the lie harder to find.
+   */
+  updatedAt: string;
   attachments: JiraAttachment[];
   isTombstoned: boolean;
   tombstone: JiraTombstoneInfo | null;

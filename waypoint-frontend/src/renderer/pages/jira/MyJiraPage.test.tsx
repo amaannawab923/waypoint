@@ -67,6 +67,7 @@ function ticket(overrides: Partial<JiraTicket> = {}): JiraTicket {
     epicName: null,
     storyPoints: null,
     sprintName: null,
+    updatedAt: '2026-09-01T10:00:00.000Z',
     attachments: [],
     isTombstoned: false,
     tombstone: null,
@@ -76,6 +77,11 @@ function ticket(overrides: Partial<JiraTicket> = {}): JiraTicket {
   };
 }
 
+// Distinct `updatedAt`s, descending in array order. Two reasons they are not
+// all equal: a shared timestamp would make every ordering assertion pass by
+// accident under any comparator, and the four are deliberately already in the
+// default sort's own order so that every test below this one is asserting
+// what it was written to assert rather than a re-ordering.
 const TICKETS: JiraTicket[] = [
   ticket({
     id: 't-eng-1',
@@ -83,6 +89,7 @@ const TICKETS: JiraTicket[] = [
     projectKey: 'ENG',
     role: 'assignee',
     title: 'Eng assignee ticket',
+    updatedAt: '2026-09-04T10:00:00.000Z',
   }),
   ticket({
     id: 't-eng-2',
@@ -90,6 +97,7 @@ const TICKETS: JiraTicket[] = [
     projectKey: 'ENG',
     role: 'watcher',
     title: 'Eng watcher ticket',
+    updatedAt: '2026-09-03T10:00:00.000Z',
   }),
   ticket({
     id: 't-plat-1',
@@ -97,6 +105,7 @@ const TICKETS: JiraTicket[] = [
     projectKey: 'PLAT',
     role: 'reporter',
     title: 'Plat reporter ticket',
+    updatedAt: '2026-09-02T10:00:00.000Z',
   }),
   ticket({
     id: 't-grw-1',
@@ -104,6 +113,7 @@ const TICKETS: JiraTicket[] = [
     projectKey: 'GRW',
     role: 'assignee',
     title: 'Grw assignee ticket',
+    updatedAt: '2026-09-01T10:00:00.000Z',
   }),
 ];
 

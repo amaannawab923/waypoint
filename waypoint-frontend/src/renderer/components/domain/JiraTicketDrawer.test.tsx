@@ -62,6 +62,7 @@ function ticket(overrides: Partial<JiraTicket> = {}): JiraTicket {
     epicName: null,
     storyPoints: null,
     sprintName: null,
+    updatedAt: '2026-09-01T10:00:00.000Z',
     attachments: [],
     isTombstoned: false,
     tombstone: null,

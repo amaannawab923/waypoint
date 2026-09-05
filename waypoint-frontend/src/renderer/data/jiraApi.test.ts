@@ -176,6 +176,21 @@ describe('listMyJiraTickets', () => {
 
     expect(await api.listMyJiraTickets()).toMatchObject({ truncated: true });
   });
+
+  // updatedAt crossed the wire from the first read and then went no further:
+  // toTicket simply didn't copy it, which is why the list could only render
+  // in whatever order the search happened to return. It is a sort key now, so
+  // it has to survive the mapping verbatim — not reformatted, not defaulted.
+  it("keeps the issue's last-updated time verbatim", async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([wireTicket({ updatedAt: '2026-03-04T05:06:07.008Z' })]),
+    );
+
+    const { tickets } = await api.listMyJiraTickets();
+
+    expect(tickets[0].updatedAt).toBe('2026-03-04T05:06:07.008Z');
+  });
 });
 
 describe('getJiraTransitions', () => {

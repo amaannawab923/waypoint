@@ -190,6 +190,7 @@ function toTicket(wire: JiraWireTicket): JiraTicket {
     epicName: wire.epicName,
     storyPoints: wire.storyPoints,
     sprintName: wire.sprintName,
+    updatedAt: wire.updatedAt,
     attachments: wire.attachments.map(toAttachment),
     // Both of these describe drift between what this app last read and what
     // Jira holds now — a tombstone is "this was reassigned away from you", a
