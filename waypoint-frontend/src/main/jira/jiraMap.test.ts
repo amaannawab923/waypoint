@@ -2,6 +2,7 @@ import {
   adfToPlainText,
   buildTransitionFieldsPayload,
   formatFileSize,
+  mapAttachments,
   mapComment,
   mapIssue,
   mapPriority,
@@ -114,6 +115,106 @@ describe('mapStateCategory / mapPriority / formatFileSize', () => {
     expect(formatFileSize(512)).toBe('512 B');
     expect(formatFileSize(219136)).toBe('214 KB');
     expect(formatFileSize(3_145_728)).toBe('3.0 MB');
+  });
+});
+
+describe('mapAttachments', () => {
+  // A realistic attachment object, with every field a real Jira Cloud response
+  // carries — including the three URL fields this mapper deliberately drops.
+  const ATTACHMENT = {
+    self: 'https://waypoint123.atlassian.net/rest/api/3/attachment/10050',
+    id: '10050',
+    filename: 'replay-log.txt',
+    author: { accountId: 'acct-sam', displayName: 'Sam Lee' },
+    created: '2026-09-01T09:00:00.000+0000',
+    size: 219136,
+    mimeType: 'text/plain',
+    content:
+      'https://waypoint123.atlassian.net/rest/api/3/attachment/content/10050',
+    thumbnail:
+      'https://waypoint123.atlassian.net/rest/api/3/attachment/thumbnail/10050',
+  };
+
+  it('carries the id, the raw byte count and the mime type alongside the label', () => {
+    expect(mapAttachments([ATTACHMENT])).toEqual([
+      {
+        id: '10050',
+        fileName: 'replay-log.txt',
+        sizeLabel: '214 KB',
+        sizeBytes: 219136,
+        mimeType: 'text/plain',
+        uploaderName: 'Sam Lee',
+      },
+    ]);
+  });
+
+  it('coerces a numeric id rather than losing the download over it', () => {
+    expect(mapAttachments([{ ...ATTACHMENT, id: 10050 }])[0].id).toBe('10050');
+  });
+
+  // Not dropped, unlike an idless priority option or assignable user: the name
+  // and size are still true and still worth showing. It is only the download
+  // that becomes impossible, and null is how the UI is told so.
+  it('keeps an attachment with no usable id, marking it unaddressable', () => {
+    expect(mapAttachments([{ ...ATTACHMENT, id: null }])[0]).toMatchObject({
+      id: null,
+      fileName: 'replay-log.txt',
+    });
+  });
+
+  it('degrades a payload that is missing everything instead of throwing', () => {
+    expect(mapAttachments([{}])).toEqual([
+      {
+        id: null,
+        fileName: 'attachment',
+        sizeLabel: '0 B',
+        sizeBytes: 0,
+        mimeType: 'application/octet-stream',
+        uploaderName: 'Someone',
+      },
+    ]);
+  });
+
+  /**
+   * The security property this whole shape exists for.
+   *
+   * A download is an authenticated request carrying HTTP Basic
+   * `email:apiToken` — a bearer credential for the user's entire Atlassian
+   * account. If the URL for that request were read out of a JSON response
+   * body, then whatever host that field named would receive the credential.
+   * `content` is a field Jira fills in and this app cannot verify.
+   *
+   * The strongest available proof is structural rather than behavioural: a
+   * caller cannot misuse a field that does not exist on the type it is handed.
+   * So this asserts on the mapped object's own keys — not merely that a
+   * hostile URL went unused on some particular code path today, but that there
+   * is no property on the wire shape a future caller could reach for at all.
+   */
+  it('never carries a URL out of the response, hostile or otherwise', () => {
+    const [mapped] = mapAttachments([
+      {
+        ...ATTACHMENT,
+        content: 'https://evil.example/x',
+        self: 'https://evil.example/self',
+        thumbnail: 'https://evil.example/thumb',
+      },
+    ]);
+
+    expect(Object.keys(mapped).sort()).toEqual([
+      'fileName',
+      'id',
+      'mimeType',
+      'sizeBytes',
+      'sizeLabel',
+      'uploaderName',
+    ]);
+    expect(JSON.stringify(mapped)).not.toContain('evil.example');
+    expect(JSON.stringify(mapped)).not.toContain('http');
+  });
+
+  it('reports a non-array attachment field as no attachments', () => {
+    expect(mapAttachments(undefined)).toEqual([]);
+    expect(mapAttachments(null)).toEqual([]);
   });
 });
 

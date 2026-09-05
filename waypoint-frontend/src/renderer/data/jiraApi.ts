@@ -21,6 +21,7 @@
 
 import { JiraApiError } from '@/types/jira';
 import type {
+  JiraAttachment,
   JiraComment,
   JiraConnectionStatus,
   JiraDuplicateNudge,
@@ -37,6 +38,7 @@ import type { Priority } from '@/types/entities';
 // in sync. Nothing at runtime is imported from src/main.
 import type {
   JiraPriorityOption as JiraWirePriorityOption,
+  JiraWireAttachment,
   JiraWireComment,
   JiraWireTicket,
   JiraWireTransition,
@@ -134,6 +136,27 @@ function toPriorityOption(wire: JiraWirePriorityOption): JiraPriorityOption {
   return { id: wire.id, name: wire.name };
 }
 
+/**
+ * Same story as toPriorityOption — nothing to translate, but main's shapes stop
+ * at this file.
+ *
+ * Written out field by field rather than passed through wholesale, which is the
+ * point: the wire shape deliberately carries no URL for the file (see
+ * `JiraWireAttachment`), and an explicit mapping is what keeps that true if the
+ * wire shape ever grows one. A download is addressed by `id` and performed
+ * entirely in main.
+ */
+function toAttachment(wire: JiraWireAttachment): JiraAttachment {
+  return {
+    id: wire.id,
+    fileName: wire.fileName,
+    sizeLabel: wire.sizeLabel,
+    sizeBytes: wire.sizeBytes,
+    mimeType: wire.mimeType,
+    uploaderName: wire.uploaderName,
+  };
+}
+
 /** Same story as toPriorityOption — nothing to translate, but main's shapes
  * stop at this file. */
 function toUserOption(wire: JiraWireUser): JiraUserOption {
@@ -163,7 +186,7 @@ function toTicket(wire: JiraWireTicket): JiraTicket {
     epicName: wire.epicName,
     storyPoints: wire.storyPoints,
     sprintName: wire.sprintName,
-    attachments: wire.attachments,
+    attachments: wire.attachments.map(toAttachment),
     // Both of these describe drift between what this app last read and what
     // Jira holds now — a tombstone is "this was reassigned away from you", a
     // conflict is "someone else moved it while you were looking". Detecting

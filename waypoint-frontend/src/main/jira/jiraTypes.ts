@@ -132,9 +132,38 @@ export interface JiraWireTransition {
   requiresFields: JiraWireTransitionField[];
 }
 
+/**
+ * One file attached to an issue.
+ *
+ * Note what is NOT here: Jira's own `content` URL, which every attachment in a
+ * real response carries. Leaving it out is the deliberate part.
+ *
+ * A download has to be authenticated, and this client's authentication is HTTP
+ * Basic over `email:apiToken` — a bearer credential for the user's entire
+ * Atlassian account. Carrying `content` across the wire and later fetching it
+ * with that header attached would mean sending the whole-account credential to
+ * whatever host a string inside a JSON response body happened to name. That
+ * field is Jira's to fill in, not this app's to verify, and "the response said
+ * so" is not a property worth aiming a credential at.
+ *
+ * `id` is what replaces it. Main builds
+ * `https://{the stored site}/rest/api/3/attachment/content/{id}` itself, from a
+ * hostname it validated at connect time and an id it validated at the IPC
+ * boundary — so the destination of an authenticated request is always
+ * constructed here, never quoted from a payload. Null when Jira returned no
+ * usable id, which is exactly the case where no download can be offered.
+ */
 export interface JiraWireAttachment {
+  id: string | null;
   fileName: string;
+  /** Human-readable, for display — "214 KB". */
   sizeLabel: string;
+  /** The same size as a number, because a size cap is a comparison and
+   * "214 KB" is not one. 0 when Jira didn't say. */
+  sizeBytes: number;
+  /** Jira's own `mimeType` for the file, or `application/octet-stream` when it
+   * didn't say — the honest default for bytes of unknown kind. */
+  mimeType: string;
   uploaderName: string;
 }
 

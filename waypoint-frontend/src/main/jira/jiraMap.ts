@@ -614,14 +614,42 @@ function sprintNameOf(value: unknown): string | null {
   return typeof chosen.name === 'string' ? chosen.name : null;
 }
 
-function mapAttachments(value: unknown): JiraWireAttachment[] {
+/**
+ * One issue's attachments, reduced to what this app can act on.
+ *
+ * The omission is the design. A real Jira attachment object carries a `content`
+ * URL (and a `self`, and a `thumbnail`), and none of the three is carried
+ * across the wire — see `JiraWireAttachment`'s own note. A download is an
+ * authenticated request made with a whole-account credential, and the host it
+ * is aimed at is built in jiraClient.ts from the stored site plus `id`, never
+ * read out of a response body. Dropping the field here rather than "just not
+ * using it" is what makes that unfalsifiable: there is no property on the wire
+ * type a later caller could reach for by accident.
+ *
+ * `id` degrades to null rather than dropping the whole attachment: an
+ * attachment with no id is still worth *showing* (its name and size are true),
+ * it simply cannot be downloaded, and the UI can say so. That is the opposite
+ * call from `mapPriorityOptions`/`mapUserOption`, which drop an idless entry —
+ * because those are rows whose only purpose is to be clicked.
+ */
+export function mapAttachments(value: unknown): JiraWireAttachment[] {
   if (!Array.isArray(value)) return [];
   return value.map((entry) => {
     const record = asRecord(entry);
+    const { id, size, mimeType } = record;
     return {
+      // Coerced from a number the same way `priorityId` is, for the same
+      // reason: current Cloud sends a string, older and proxied payloads a
+      // number, and neither is worth losing a download over.
+      id: typeof id === 'string' || typeof id === 'number' ? String(id) : null,
       fileName:
         typeof record.filename === 'string' ? record.filename : 'attachment',
-      sizeLabel: formatFileSize(record.size),
+      sizeLabel: formatFileSize(size),
+      sizeBytes: typeof size === 'number' && Number.isFinite(size) ? size : 0,
+      mimeType:
+        typeof mimeType === 'string' && mimeType
+          ? mimeType
+          : 'application/octet-stream',
       uploaderName: displayNameOf(record.author, 'Someone'),
     };
   });

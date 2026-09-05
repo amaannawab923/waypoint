@@ -156,9 +156,26 @@ export interface JiraUserOption {
   avatarUrl: string | null;
 }
 
+/**
+ * One file attached to a Jira issue.
+ *
+ * Mirrors `JiraWireAttachment` (main/jira/jiraTypes.ts) including its most
+ * important property, which is a field that is not here: Jira's own `content`
+ * URL. A download is an authenticated request carrying a whole-account
+ * credential, and main builds its URL from the connected site plus `id` rather
+ * than from a string that arrived inside a response body. Nothing on this side
+ * names a destination, and nothing on this side could.
+ */
 export interface JiraAttachment {
+  /** Jira's own id, or null when it returned none — which is exactly when no
+   * download can be offered for this row. */
+  id: string | null;
   fileName: string;
   sizeLabel: string;
+  /** The same size as a number. Display uses `sizeLabel`; this is what a
+   * comparison against a size cap is made from. */
+  sizeBytes: number;
+  mimeType: string;
   uploaderName: string;
 }
 

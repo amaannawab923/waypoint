@@ -235,7 +235,12 @@ export function JiraTicketDrawer({
 
           {ticket.attachments.map((a) => (
             <div
-              key={a.fileName}
+              // Jira lets two attachments on one issue share a filename —
+              // upload `log.txt` twice and you get two of them — so the name
+              // alone was a real key collision, not a theoretical one. The id
+              // is unique per attachment; the name is only the fallback for an
+              // attachment Jira returned without one.
+              key={a.id ?? a.fileName}
               className="mb-4 flex items-center gap-2 rounded-[var(--radius-sm)] border border-border bg-bg-inset px-2.5 py-2 text-[11.5px] text-text-secondary"
             >
               <span className="font-mono text-[11px]">{a.fileName}</span>
