@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getJiraTransitions, transitionJiraTicket } from '@/data/jiraApi';
 import { showErrorToast } from '@/lib/toast';
 import { Avatar } from '@/components/ui/Avatar';
@@ -43,6 +43,7 @@ export function JiraTicketRow({
   const [saving, setSaving] = useState(false);
   const [resolvingConflict, setResolvingConflict] = useState(false);
   const [dismissing, setDismissing] = useState(false);
+  const stateChipRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!popoverOpen) return;
@@ -219,6 +220,7 @@ export function JiraTicketRow({
           disabledTitle="Write paused until reloaded"
           saving={saving}
           open={popoverOpen}
+          buttonRef={stateChipRef}
           onClick={() => setPopoverOpen((o) => !o)}
         />
         <PriorityIcon priority={ticket.priority} />
@@ -232,6 +234,7 @@ export function JiraTicketRow({
             transitions={transitions}
             loading={loadingTransitions}
             error={transitionsError}
+            triggerRef={stateChipRef}
             onSelect={handleSelectTransition}
             onClose={() => setPopoverOpen(false)}
           />

@@ -307,6 +307,64 @@ describe('JiraTicketDrawer — description wrapping', () => {
   });
 });
 
+// The ticket list is an `overflow-hidden` container and each row is a
+// `relative` box inside it. A popover rendered as a plain `absolute` sibling
+// of the state chip is therefore clipped at the list's bottom edge — nearly
+// entirely so on the last row. jsdom does no layout, so what's asserted is
+// the escape itself: the panel is a child of <body>, positioned in viewport
+// coordinates rather than against the row.
+describe('JiraTransitionPopover — escapes the list clipping container', () => {
+  async function openPopoverOnLastRow() {
+    jest.mocked(listMyJiraTickets).mockResolvedValue(TICKETS);
+    jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
+    jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
+    jest.mocked(getJiraTransitions).mockResolvedValue([
+      {
+        id: '31',
+        targetStateName: 'In Progress',
+        targetStateColor: 'var(--warning)',
+        requiresFields: [],
+      },
+    ]);
+    jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
+    const { container } = render(<MyJiraPage />);
+
+    await screen.findByText('Grw assignee ticket');
+    const chips = screen.getAllByRole('button', { name: 'To Do' });
+    fireEvent.click(chips[chips.length - 1]);
+
+    const panel = (await screen.findByText('Move GRW-1 to')).closest(
+      '[data-shortcut-guard]',
+    );
+    return { panel, container };
+  }
+
+  it('renders the panel outside the list, as a child of document.body', async () => {
+    const { panel, container } = await openPopoverOnLastRow();
+
+    expect(panel).not.toBeNull();
+    expect(panel?.parentElement).toBe(document.body);
+    expect(container.contains(panel as Node)).toBe(false);
+  });
+
+  it('positions the panel in viewport coordinates, not against the row', async () => {
+    const { panel } = await openPopoverOnLastRow();
+
+    expect(panel).toHaveClass('fixed');
+    expect(panel).not.toHaveClass('absolute');
+  });
+
+  it('still closes on Escape', async () => {
+    await openPopoverOnLastRow();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    await waitFor(() =>
+      expect(screen.queryByText('Move GRW-1 to')).not.toBeInTheDocument(),
+    );
+  });
+});
+
 describe('MyJiraPage — Copilot rail', () => {
   function proposal(overrides: Partial<JiraProposal> = {}): JiraProposal {
     return {

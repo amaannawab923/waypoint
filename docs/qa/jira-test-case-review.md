@@ -70,15 +70,20 @@ Formatted to be appended directly. Suggested subsection placement is given as a
   transition badged "needs a field" on any row within 3 rows of the bottom.
   Expected: The full popover — heading, every transition option, and the "your
   Jira workflow allows" footer — is visible and clickable in every case.
-  Coverage: **Gap worth flagging** — `MyJiraPage` wraps the rows in
-  `<div className="overflow-hidden rounded-… border …">`, and
-  `JiraTransitionPopover` is `position: absolute` inside each row's own
-  `relative` div, which sits inside that clipping container. A ~270px-wide,
-  several-hundred-pixel-tall panel opening downward from a ~44px row will be cut
-  off at the list's bottom edge. On the last row it should be almost entirely
-  invisible; the required-field form (taller than the option list) fails sooner.
-  This is the highest-probability *visible* defect in the feature and no existing
-  case would catch it — JIRA-67 only asserts that the popover opens.
+  Coverage: **Supported** — the clip was real and is fixed. `MyJiraPage` still
+  wraps the rows in `<div className="overflow-hidden rounded-… border …">` and
+  each row is still `relative`, but `JiraTransitionPopover` no longer renders
+  inside either: it is portaled to `document.body` and positioned `fixed` from
+  the state chip's own `getBoundingClientRect()`, following the same pattern
+  `DatePicker.tsx` already uses in this app and for the same reason. It flips
+  above the chip when there isn't room below, clamps inside the viewport on both
+  axes, and re-measures on scroll, on resize and on the swap into the
+  required-field form (which is taller than the option list — the case that
+  failed soonest). `z-30` became `z-[60]` so a body-level panel clears the ticket
+  drawer's `z-50` backdrop while staying under ToastHost's `z-[200]`. Asserted in
+  `MyJiraPage.test.tsx` — jsdom does no layout, so the tests pin the escape (the
+  panel is a child of `<body>`, positioned `fixed`) rather than the pixels; the
+  steps above are still the right live check.
 
 - **JIRA-154** — A very long issue summary
   Steps: Find or create an issue with a 200+ character summary. Look at its row,
@@ -150,9 +155,11 @@ Formatted to be appended directly. Suggested subsection placement is given as a
   `<button>`s so Tab will reach them, but `JiraTransitionPopover` never moves
   focus into itself on open (it only calls `panelRef.current?.focus()` on the way
   *out*, as a blur guard), carries no `role="menu"`/`aria-expanded`/
-  `aria-haspopup`, and restores focus nowhere on close. Combined with JIRA-153's
-  clipping, keyboard operation may be the only way to reach a clipped option —
-  which makes this more than a compliance checkbox.
+  `aria-haspopup`, and restores focus nowhere on close. This no longer compounds
+  with JIRA-153 (the panel is portaled and can't be clipped any more), but note
+  that portaling moves the panel out of the row's DOM order, so Tab order is now
+  wherever `<body>` puts it rather than immediately after the chip — worth
+  checking as part of this case rather than assuming it improved.
 
 - **JIRA-160** — Ticket drawer as a dialog
   Steps: Open a drawer with the keyboard. Tab repeatedly. Close with Escape.
