@@ -10,7 +10,11 @@ import {
   listMyJiraTickets,
 } from '@/data/jiraApi';
 import { useLoadedJiraConnection } from '@/lib/jiraStore';
-import type { JiraDuplicateNudge, JiraProposal, JiraTicket } from '@/types/jira';
+import type {
+  JiraDuplicateNudge,
+  JiraProposal,
+  JiraTicket,
+} from '@/types/jira';
 import MyJiraPage from './MyJiraPage';
 
 // The "My work" tab pulls in JiraTicketRow, JiraTicketDrawer,
@@ -62,10 +66,34 @@ function ticket(overrides: Partial<JiraTicket> = {}): JiraTicket {
 }
 
 const TICKETS: JiraTicket[] = [
-  ticket({ id: 't-eng-1', key: 'ENG-1', projectKey: 'ENG', role: 'assignee', title: 'Eng assignee ticket' }),
-  ticket({ id: 't-eng-2', key: 'ENG-2', projectKey: 'ENG', role: 'watcher', title: 'Eng watcher ticket' }),
-  ticket({ id: 't-plat-1', key: 'PLAT-1', projectKey: 'PLAT', role: 'reporter', title: 'Plat reporter ticket' }),
-  ticket({ id: 't-grw-1', key: 'GRW-1', projectKey: 'GRW', role: 'assignee', title: 'Grw assignee ticket' }),
+  ticket({
+    id: 't-eng-1',
+    key: 'ENG-1',
+    projectKey: 'ENG',
+    role: 'assignee',
+    title: 'Eng assignee ticket',
+  }),
+  ticket({
+    id: 't-eng-2',
+    key: 'ENG-2',
+    projectKey: 'ENG',
+    role: 'watcher',
+    title: 'Eng watcher ticket',
+  }),
+  ticket({
+    id: 't-plat-1',
+    key: 'PLAT-1',
+    projectKey: 'PLAT',
+    role: 'reporter',
+    title: 'Plat reporter ticket',
+  }),
+  ticket({
+    id: 't-grw-1',
+    key: 'GRW-1',
+    projectKey: 'GRW',
+    role: 'assignee',
+    title: 'Grw assignee ticket',
+  }),
 ];
 
 function mount() {
@@ -138,7 +166,9 @@ describe('MyJiraPage — project + role filtering (combined)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^GRW \d/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Watching' }));
 
-    expect(screen.getByText('No tickets match these filters.')).toBeInTheDocument();
+    expect(
+      screen.getByText('No tickets match these filters.'),
+    ).toBeInTheDocument();
   });
 
   it('"All" clears both filters back to the full list', async () => {
@@ -215,8 +245,12 @@ describe('MyJiraPage — Copilot rail', () => {
     await screen.findByText('Also queued');
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
 
-    await waitFor(() => expect(dismissJiraDuplicateNudge).toHaveBeenCalledWith('jira-dup-1'));
-    await waitFor(() => expect(screen.queryByText('Also queued')).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(dismissJiraDuplicateNudge).toHaveBeenCalledWith('jira-dup-1'),
+    );
+    await waitFor(() =>
+      expect(screen.queryByText('Also queued')).not.toBeInTheDocument(),
+    );
   });
 
   it('renders no rail at all when there is neither a proposal nor a nudge', async () => {
