@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { clsx } from 'clsx';
 import {
+  dismissJiraDuplicateNudge,
   dismissJiraTombstone,
+  getJiraDuplicateNudge,
+  getMyJiraProposal,
   listMyJiraTickets,
   resolveJiraConflict,
 } from '@/data/jiraApi';
@@ -9,11 +12,20 @@ import { showErrorToast } from '@/lib/toast';
 import { useAsync } from '@/lib/useAsync';
 import { useLoadedJiraConnection } from '@/lib/jiraStore';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
+import { Button } from '@/components/ui/Button';
 import { JiraMark } from '@/components/domain/JiraMark';
 import { JiraTicketRow } from '@/components/domain/JiraTicketRow';
 import { JiraTicketDrawer } from '@/components/domain/JiraTicketDrawer';
+import { JiraProposalCard } from '@/components/domain/JiraProposalCard';
+import { JiraConnectionPanel } from '@/components/domain/JiraConnectionPanel';
 import { JIRA_PROJECT_COLOR } from '@/types/jira';
-import type { JiraProjectKey, JiraTicket, JiraTicketRole } from '@/types/jira';
+import type {
+  JiraDuplicateNudge,
+  JiraProjectKey,
+  JiraProposal,
+  JiraTicket,
+  JiraTicketRole,
+} from '@/types/jira';
 
 type TabKey = 'work' | 'connection';
 
@@ -84,6 +96,85 @@ function LiveSyncIndicator({ lastSyncAt }: { lastSyncAt: string }) {
   );
 }
 
+/**
+ * The "My work" tab's Copilot rail — the proposal card plus the small
+ * "Also queued" duplicate nudge underneath it (mockup's `.work-rail`).
+ * Renders nothing when neither exists, so an empty rail never reserves
+ * layout space next to the ticket list.
+ */
+function CopilotRail({
+  proposal,
+  onProposalResolved,
+  nudge,
+  onOpenDrawer,
+  onNudgeDismissed,
+}: {
+  proposal: JiraProposal | null;
+  onProposalResolved: (updated: JiraProposal) => void;
+  nudge: JiraDuplicateNudge | null;
+  onOpenDrawer: (ticketId: string) => void;
+  onNudgeDismissed: () => void;
+}) {
+  const [dismissing, setDismissing] = useState(false);
+
+  async function handleDismiss() {
+    if (!nudge) return;
+    setDismissing(true);
+    try {
+      await dismissJiraDuplicateNudge(nudge.id);
+      onNudgeDismissed();
+    } catch (err) {
+      showErrorToast(
+        err instanceof Error ? err.message : 'Could not dismiss this.',
+      );
+    } finally {
+      setDismissing(false);
+    }
+  }
+
+  if (!proposal && !nudge) return null;
+
+  return (
+    <div className="flex w-full flex-col gap-3 sm:w-[292px] sm:min-w-[262px] sm:shrink-0">
+      {proposal && (
+        <JiraProposalCard proposal={proposal} onResolved={onProposalResolved} />
+      )}
+      {nudge && (
+        <div className="rounded-[var(--radius-sm)] border border-border bg-surface p-2.5 text-xs leading-relaxed text-text-secondary shadow-sm">
+          <b className="text-text">Also queued</b> — Copilot thinks{' '}
+          <span
+            className="font-mono font-semibold"
+            style={{ color: nudge.ticketProjectColor }}
+          >
+            {nudge.ticketKey}
+          </span>{' '}
+          duplicates{' '}
+          <span
+            className="font-mono font-semibold"
+            style={{ color: nudge.ticketProjectColor }}
+          >
+            {nudge.duplicateOfKey}
+          </span>{' '}
+          (same Safari 17.4 stack trace).
+          <div className="mt-2 flex gap-1.5">
+            <Button size="xs" onClick={() => onOpenDrawer(nudge.ticketId)}>
+              Review
+            </Button>
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={dismissing}
+              onClick={handleDismiss}
+            >
+              {dismissing ? 'Dismissing…' : 'Dismiss'}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function MyJiraPage() {
   const [tab, setTab] = useState<TabKey>('work');
   const [projFilter, setProjFilter] = useState<JiraProjectKey | 'all'>('all');
@@ -100,8 +191,39 @@ export default function MyJiraPage() {
     if (fetchedTickets) setTickets(fetchedTickets);
   }, [fetchedTickets]);
 
+  const { data: fetchedProposal } = useAsync(() => getMyJiraProposal(), []);
+  const [proposal, setProposal] = useState<JiraProposal | null>(null);
+  useEffect(() => {
+    if (fetchedProposal) setProposal(fetchedProposal);
+  }, [fetchedProposal]);
+
+  const { data: fetchedNudge, loading: nudgeLoading } = useAsync(
+    () => getJiraDuplicateNudge(),
+    [],
+  );
+  const [nudge, setNudge] = useState<JiraDuplicateNudge | null>(null);
+  useEffect(() => {
+    if (!nudgeLoading) setNudge(fetchedNudge ?? null);
+  }, [nudgeLoading, fetchedNudge]);
+
   function updateTicket(updated: JiraTicket) {
     setTickets((ts) => ts.map((t) => (t.id === updated.id ? updated : t)));
+  }
+
+  function handleProposalResolved(updated: JiraProposal) {
+    setProposal(updated);
+    // Approving moves the real ticket's state — reflect it in the row this
+    // page already has, exactly like every other write path here, rather
+    // than a full refetch.
+    if (updated.status === 'executed') {
+      setTickets((ts) =>
+        ts.map((t) =>
+          t.id === updated.ticketId
+            ? { ...t, stateName: updated.toStateName, stateColor: updated.toStateColor }
+            : t,
+        ),
+      );
+    }
   }
 
   async function handleResolveConflict(ticketId: string) {
@@ -200,7 +322,8 @@ export default function MyJiraPage() {
           {loading && !fetchedTickets ? (
             <SkeletonListRows />
           ) : (
-            <>
+            <div className="flex flex-wrap items-start gap-4">
+              <div className="min-w-0 flex-1 basis-[460px]">
               <div className="mb-2.5 flex flex-wrap items-center gap-1.5">
                 <FilterChip
                   active={projFilter === 'all'}
@@ -267,17 +390,30 @@ export default function MyJiraPage() {
               <div className="mt-3 flex items-start gap-2 rounded-[var(--radius-sm)] border border-jira/30 bg-jira-bg px-3 py-2.5 text-[12.5px] text-jira">
                 <span>
                   Your own clicks write straight to Jira — no approval step,
-                  ~400ms.
+                  ~400ms. Copilot&apos;s don&apos;t: see the rail.
                 </span>
               </div>
-            </>
+              </div>
+
+              <CopilotRail
+                proposal={proposal}
+                onProposalResolved={handleProposalResolved}
+                nudge={nudge}
+                onOpenDrawer={setDrawerTicketId}
+                onNudgeDismissed={() => setNudge(null)}
+              />
+            </div>
           )}
         </div>
       )}
 
       {tab === 'connection' && (
-        <div className="mt-4 ml-[41px] rounded-[var(--radius)] border border-border bg-surface p-6 text-sm text-text-secondary">
-          Connection details and controls are coming in the next phase.
+        <div className="mt-4 ml-[41px]">
+          {connection ? (
+            <JiraConnectionPanel connection={connection} />
+          ) : (
+            <SkeletonListRows />
+          )}
         </div>
       )}
 
