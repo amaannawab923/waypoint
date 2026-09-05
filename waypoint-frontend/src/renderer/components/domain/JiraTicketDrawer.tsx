@@ -165,6 +165,11 @@ export function JiraTicketDrawer({
                       {c.postedByWaypoint ? ' · via Waypoint' : ''}
                     </span>
                   </div>
+                  {c.disclosureText && (
+                    <div className="mb-1 inline-block rounded bg-jira-bg px-1.5 py-0.5 text-[11px] text-jira">
+                      {c.disclosureText}
+                    </div>
+                  )}
                   <div className="text-[12.5px] leading-relaxed whitespace-pre-wrap text-text-secondary">
                     {c.body}
                   </div>
