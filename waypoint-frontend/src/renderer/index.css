@@ -241,7 +241,8 @@ h4 {
 .boot-mark-dot {
   opacity: 0;
   transform-origin: center;
-  animation: boot-dot-pop 420ms 1000ms cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  animation: boot-dot-pop 420ms 1000ms cubic-bezier(0.34, 1.56, 0.64, 1)
+    forwards;
 }
 .boot-wordmark {
   opacity: 0;
