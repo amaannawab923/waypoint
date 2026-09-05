@@ -17,27 +17,43 @@ function freshApi(): JiraApiModule {
 describe('jiraApi — per-project workflows', () => {
   it('GRW has no In Review state, unlike ENG and PLAT', async () => {
     const api = freshApi();
-    const grw12 = (await api.listMyJiraTickets()).find((t) => t.key === 'GRW-12')!;
+    const grw12 = (await api.listMyJiraTickets()).find(
+      (t) => t.key === 'GRW-12',
+    )!;
     const transitions = await api.getJiraTransitions(grw12.id);
-    expect(transitions.map((t) => t.targetStateName)).toEqual(['In Progress', 'Done']);
+    expect(transitions.map((t) => t.targetStateName)).toEqual([
+      'In Progress',
+      'Done',
+    ]);
   });
 
   it('ENG requires a Resolution (and offers an optional Time spent) to reach Done, but not to reach In Review', async () => {
     const api = freshApi();
-    const eng421 = (await api.listMyJiraTickets()).find((t) => t.key === 'ENG-421')!;
+    const eng421 = (await api.listMyJiraTickets()).find(
+      (t) => t.key === 'ENG-421',
+    )!;
     const transitions = await api.getJiraTransitions(eng421.id);
 
     const toReview = transitions.find((t) => t.targetStateName === 'In Review');
     const toDone = transitions.find((t) => t.targetStateName === 'Done');
     expect(toReview?.requiresFields).toEqual([]);
-    expect(toDone?.requiresFields.map((f) => f.key)).toEqual(['resolution', 'timeSpent']);
-    expect(toDone?.requiresFields.find((f) => f.key === 'resolution')?.required).toBe(true);
-    expect(toDone?.requiresFields.find((f) => f.key === 'timeSpent')?.required).toBe(false);
+    expect(toDone?.requiresFields.map((f) => f.key)).toEqual([
+      'resolution',
+      'timeSpent',
+    ]);
+    expect(
+      toDone?.requiresFields.find((f) => f.key === 'resolution')?.required,
+    ).toBe(true);
+    expect(
+      toDone?.requiresFields.find((f) => f.key === 'timeSpent')?.required,
+    ).toBe(false);
   });
 
   it('GRW requires a Resolution to reach Done directly from To Do, unlike ENG', async () => {
     const api = freshApi();
-    const grw12 = (await api.listMyJiraTickets()).find((t) => t.key === 'GRW-12')!;
+    const grw12 = (await api.listMyJiraTickets()).find(
+      (t) => t.key === 'GRW-12',
+    )!;
     const transitions = await api.getJiraTransitions(grw12.id);
     const toDone = transitions.find((t) => t.targetStateName === 'Done');
     expect(toDone?.requiresFields.map((f) => f.key)).toEqual(['resolution']);
@@ -45,24 +61,35 @@ describe('jiraApi — per-project workflows', () => {
 
   it('PLAT requires a Resolution on Done from In Review too, unlike ENG which only requires it from In Progress', async () => {
     const api = freshApi();
-    const plat88 = (await api.listMyJiraTickets()).find((t) => t.key === 'PLAT-88')!;
+    const plat88 = (await api.listMyJiraTickets()).find(
+      (t) => t.key === 'PLAT-88',
+    )!;
     const fromInProgress = await api.getJiraTransitions(plat88.id);
-    const toInReview = fromInProgress.find((t) => t.targetStateName === 'In Review')!;
+    const toInReview = fromInProgress.find(
+      (t) => t.targetStateName === 'In Review',
+    )!;
 
     await api.transitionJiraTicket(plat88.id, toInReview.id, {});
 
     const fromInReview = await api.getJiraTransitions(plat88.id);
     const toDone = fromInReview.find((t) => t.targetStateName === 'Done');
-    expect(toDone?.requiresFields.map((f) => f.key)).toEqual(['resolution', 'timeSpent']);
+    expect(toDone?.requiresFields.map((f) => f.key)).toEqual([
+      'resolution',
+      'timeSpent',
+    ]);
   });
 
   it('transitionJiraTicket rejects a transition missing a required field, and never mutates the ticket', async () => {
     const api = freshApi();
-    const eng421 = (await api.listMyJiraTickets()).find((t) => t.key === 'ENG-421')!;
+    const eng421 = (await api.listMyJiraTickets()).find(
+      (t) => t.key === 'ENG-421',
+    )!;
     const transitions = await api.getJiraTransitions(eng421.id);
     const toDone = transitions.find((t) => t.targetStateName === 'Done')!;
 
-    await expect(api.transitionJiraTicket(eng421.id, toDone.id, {})).rejects.toThrow('Resolution is required');
+    await expect(
+      api.transitionJiraTicket(eng421.id, toDone.id, {}),
+    ).rejects.toThrow('Resolution is required');
 
     const stillUnchanged = await api.getJiraTicket(eng421.id);
     expect(stillUnchanged?.stateName).toBe('In Progress');
@@ -70,11 +97,15 @@ describe('jiraApi — per-project workflows', () => {
 
   it('transitionJiraTicket succeeds once the required field is supplied', async () => {
     const api = freshApi();
-    const eng421 = (await api.listMyJiraTickets()).find((t) => t.key === 'ENG-421')!;
+    const eng421 = (await api.listMyJiraTickets()).find(
+      (t) => t.key === 'ENG-421',
+    )!;
     const transitions = await api.getJiraTransitions(eng421.id);
     const toDone = transitions.find((t) => t.targetStateName === 'Done')!;
 
-    const updated = await api.transitionJiraTicket(eng421.id, toDone.id, { resolution: 'Fixed' });
+    const updated = await api.transitionJiraTicket(eng421.id, toDone.id, {
+      resolution: 'Fixed',
+    });
     expect(updated.stateName).toBe('Done');
   });
 });
@@ -129,7 +160,9 @@ describe('jiraApi — connection lifecycle', () => {
     const refreshed = await api.refreshJiraSync();
 
     expect(refreshed.connected).toBe(true);
-    expect(new Date(refreshed.lastSyncAt).getTime()).toBeGreaterThanOrEqual(new Date(before.lastSyncAt).getTime());
+    expect(new Date(refreshed.lastSyncAt).getTime()).toBeGreaterThanOrEqual(
+      new Date(before.lastSyncAt).getTime(),
+    );
   });
 
   it('setJiraSyncPaused persists the paused flag independently of connected', async () => {
@@ -152,7 +185,9 @@ describe('jiraApi — connection lifecycle', () => {
     const status = await api.getJiraConnectionStatus();
 
     expect(status.issueCount).toBe(live.length);
-    expect(status.projectCount).toBe(new Set(live.map((t) => t.projectKey)).size);
+    expect(status.projectCount).toBe(
+      new Set(live.map((t) => t.projectKey)).size,
+    );
   });
 });
 
@@ -201,8 +236,12 @@ describe('jiraApi — the Copilot rail proposal', () => {
 
   it('approveJiraProposal / rejectJiraProposal reject an unknown id', async () => {
     const api = freshApi();
-    await expect(api.approveJiraProposal('nope')).rejects.toThrow('Unknown Jira proposal');
-    await expect(api.rejectJiraProposal('nope')).rejects.toThrow('Unknown Jira proposal');
+    await expect(api.approveJiraProposal('nope')).rejects.toThrow(
+      'Unknown Jira proposal',
+    );
+    await expect(api.rejectJiraProposal('nope')).rejects.toThrow(
+      'Unknown Jira proposal',
+    );
   });
 });
 
