@@ -1,32 +1,54 @@
 const showSaveDialogMock = jest.fn();
+const showOpenDialogMock = jest.fn();
 const showItemInFolderMock = jest.fn();
 const getPathMock = jest.fn<string, [string]>(() => '/Users/max/Downloads');
 jest.mock('electron', () => ({
   app: { getPath: (name: string) => getPathMock(name) },
   dialog: {
     showSaveDialog: (...args: unknown[]) => showSaveDialogMock(...args),
+    showOpenDialog: (...args: unknown[]) => showOpenDialogMock(...args),
   },
   shell: { showItemInFolder: (p: string) => showItemInFolderMock(p) },
 }));
 
 const writeFileMock = jest.fn();
+const statMock = jest.fn();
+const readFileMock = jest.fn();
 jest.mock('fs', () => ({
-  promises: { writeFile: (...args: unknown[]) => writeFileMock(...args) },
+  promises: {
+    writeFile: (...args: unknown[]) => writeFileMock(...args),
+    stat: (...args: unknown[]) => statMock(...args),
+    readFile: (...args: unknown[]) => readFileMock(...args),
+  },
 }));
 
 const downloadAttachmentMock = jest.fn();
+const uploadAttachmentMock = jest.fn();
+// The cap is a real exported constant, not a number this file invents — a
+// mocked-away `undefined` here would silently disable the guard the size
+// tests below exist to prove.
+const MAX_TRANSFER_BYTES = 100 * 1024 * 1024;
 jest.mock('./jiraClient', () => ({
+  MAX_TRANSFER_BYTES: 100 * 1024 * 1024,
   downloadAttachment: (...args: unknown[]) => downloadAttachmentMock(...args),
+  uploadAttachment: (...args: unknown[]) => uploadAttachmentMock(...args),
 }));
 
 // eslint-disable-next-line import/order, import/first
-import { downloadAttachmentToDisk, safeBaseName } from './jiraFiles';
+import {
+  downloadAttachmentToDisk,
+  mimeTypeForFileName,
+  pickAndUploadAttachment,
+  safeBaseName,
+} from './jiraFiles';
 
 const BYTES = Buffer.from('replay log, line one\n');
 
 /** A window object is only ever passed through to a dialog, so a bare token
  * is enough to prove it was — nothing here calls a method on it. */
 const WINDOW = { id: 1 } as never;
+
+const TICKET = { id: '10421', key: 'ENG-421' };
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -35,11 +57,18 @@ beforeEach(() => {
     ok: true,
     value: { bytes: BYTES },
   });
+  uploadAttachmentMock.mockResolvedValue({ ok: true, value: TICKET });
   showSaveDialogMock.mockResolvedValue({
     canceled: false,
     filePath: '/Users/max/Downloads/replay-log.txt',
   });
+  showOpenDialogMock.mockResolvedValue({
+    canceled: false,
+    filePaths: ['/Users/max/Desktop/replay-log.txt'],
+  });
   writeFileMock.mockResolvedValue(undefined);
+  statMock.mockResolvedValue({ size: BYTES.byteLength });
+  readFileMock.mockResolvedValue(BYTES);
 });
 
 /**
@@ -240,6 +269,183 @@ describe('downloadAttachmentToDisk', () => {
     ).toMatchObject({ ok: true });
     expect(showSaveDialogMock).toHaveBeenCalledWith(WINDOW, {
       defaultPath: 'replay-log.txt',
+    });
+  });
+});
+
+describe('mimeTypeForFileName', () => {
+  it.each([
+    ['screenshot.PNG', 'image/png'],
+    ['report.pdf', 'application/pdf'],
+    ['replay.log', 'text/plain'],
+    ['bundle.tar.gz', 'application/gzip'],
+  ])('names %p as %p', (fileName, expected) => {
+    expect(mimeTypeForFileName(fileName)).toBe(expected);
+  });
+
+  // Not a degraded fallback — it is the correct name for bytes of unknown
+  // kind, and Jira stores and lists the file the same way either way.
+  it.each(['thing.qqq', 'Makefile', ''])(
+    'answers application/octet-stream for %p',
+    (fileName) => {
+      expect(mimeTypeForFileName(fileName)).toBe('application/octet-stream');
+    },
+  );
+});
+
+describe('pickAndUploadAttachment', () => {
+  // The order is the guard, not a preference: a size cap enforced after the
+  // read has already done the thing it exists to prevent, which is pulling an
+  // arbitrarily large file into the main process's heap.
+  it('stats the file, then reads it, then uploads it', async () => {
+    const result = await pickAndUploadAttachment(WINDOW, '10421');
+
+    expect(statMock).toHaveBeenCalledWith('/Users/max/Desktop/replay-log.txt');
+    expect(readFileMock).toHaveBeenCalledWith(
+      '/Users/max/Desktop/replay-log.txt',
+    );
+    expect(statMock.mock.invocationCallOrder[0]).toBeLessThan(
+      readFileMock.mock.invocationCallOrder[0],
+    );
+    expect(readFileMock.mock.invocationCallOrder[0]).toBeLessThan(
+      uploadAttachmentMock.mock.invocationCallOrder[0],
+    );
+    expect(uploadAttachmentMock).toHaveBeenCalledWith(
+      '10421',
+      'replay-log.txt',
+      BYTES,
+      'text/plain',
+    );
+    expect(result).toEqual({
+      ok: true,
+      value: { canceled: false, ticket: TICKET },
+    });
+  });
+
+  // Single-select is the dialog's own default. `multiSelections` is simply
+  // never asked for, rather than a multi-file result being trimmed afterwards.
+  it('opens a single-file picker parented to the window', async () => {
+    await pickAndUploadAttachment(WINDOW, '10421');
+
+    expect(showOpenDialogMock).toHaveBeenCalledWith(WINDOW, {
+      properties: ['openFile'],
+    });
+    const [, options] = showOpenDialogMock.mock.calls[0];
+    expect((options as { properties: string[] }).properties).not.toContain(
+      'multiSelections',
+    );
+  });
+
+  it('opens a free-floating picker when there is no window', async () => {
+    await pickAndUploadAttachment(null, '10421');
+
+    expect(showOpenDialogMock).toHaveBeenCalledWith({
+      properties: ['openFile'],
+    });
+  });
+
+  // A cancelled picker is a normal outcome. The renderer's unwrap() throws on
+  // any ok:false, so a failure here would fire an error toast on every Escape.
+  it('reports a cancelled picker as a success, and reads nothing', async () => {
+    showOpenDialogMock.mockResolvedValue({ canceled: true, filePaths: [] });
+
+    expect(await pickAndUploadAttachment(WINDOW, '10421')).toEqual({
+      ok: true,
+      value: { canceled: true },
+    });
+    expect(statMock).not.toHaveBeenCalled();
+    expect(readFileMock).not.toHaveBeenCalled();
+    expect(uploadAttachmentMock).not.toHaveBeenCalled();
+  });
+
+  // Some platforms answer a cancel with `canceled: false` and no paths.
+  it('treats an empty selection as a cancel', async () => {
+    showOpenDialogMock.mockResolvedValue({ canceled: false, filePaths: [] });
+
+    expect(await pickAndUploadAttachment(WINDOW, '10421')).toEqual({
+      ok: true,
+      value: { canceled: true },
+    });
+    expect(readFileMock).not.toHaveBeenCalled();
+  });
+
+  // The whole point of stat-before-read: the file is refused without ever
+  // being pulled into memory.
+  it('refuses an oversized file before reading a byte of it', async () => {
+    statMock.mockResolvedValue({ size: MAX_TRANSFER_BYTES + 1 });
+
+    expect(await pickAndUploadAttachment(WINDOW, '10421')).toMatchObject({
+      ok: false,
+      reason: 'file_error',
+      message: expect.stringContaining('100MB'),
+    });
+    expect(readFileMock).not.toHaveBeenCalled();
+    expect(uploadAttachmentMock).not.toHaveBeenCalled();
+  });
+
+  // Jira's own limit is usually lower and its own refusal names the site's
+  // real number, so the message points there rather than pretending this cap
+  // is the one that matters.
+  it('points an oversized file at Jira rather than claiming the last word', async () => {
+    statMock.mockResolvedValue({ size: MAX_TRANSFER_BYTES + 1 });
+
+    const result = await pickAndUploadAttachment(WINDOW, '10421');
+
+    expect(result).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('Jira'),
+    });
+  });
+
+  it('guesses the mime type from the picked file’s own extension', async () => {
+    showOpenDialogMock.mockResolvedValue({
+      canceled: false,
+      filePaths: ['/Users/max/Desktop/screenshot.png'],
+    });
+
+    await pickAndUploadAttachment(WINDOW, '10421');
+
+    expect(uploadAttachmentMock).toHaveBeenCalledWith(
+      '10421',
+      'screenshot.png',
+      BYTES,
+      'image/png',
+    );
+  });
+
+  // "Jira said no" and "your disk said no" are different facts about
+  // different systems and need different sentences.
+  it('reports an unreadable file as file_error, without uploading', async () => {
+    readFileMock.mockRejectedValue(new Error('EACCES: permission denied'));
+
+    expect(await pickAndUploadAttachment(WINDOW, '10421')).toMatchObject({
+      ok: false,
+      reason: 'file_error',
+      message: expect.stringContaining('EACCES'),
+    });
+    expect(uploadAttachmentMock).not.toHaveBeenCalled();
+  });
+
+  it('reports a file that vanished between the dialog and the stat', async () => {
+    statMock.mockRejectedValue(new Error('ENOENT: no such file or directory'));
+
+    expect(await pickAndUploadAttachment(WINDOW, '10421')).toMatchObject({
+      ok: false,
+      reason: 'file_error',
+    });
+    expect(readFileMock).not.toHaveBeenCalled();
+  });
+
+  it('passes a refusal from Jira straight through', async () => {
+    uploadAttachmentMock.mockResolvedValue({
+      ok: false,
+      reason: 'forbidden',
+      message: "Your Jira account isn't allowed to do that.",
+    });
+
+    expect(await pickAndUploadAttachment(WINDOW, '10421')).toMatchObject({
+      ok: false,
+      reason: 'forbidden',
     });
   });
 });

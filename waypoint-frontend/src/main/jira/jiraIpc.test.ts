@@ -48,8 +48,11 @@ const setTicketAssigneeMock = jest.fn();
 const listCommentsMock = jest.fn();
 const postCommentMock = jest.fn();
 const downloadAttachmentMock = jest.fn();
+const uploadAttachmentMock = jest.fn();
 jest.mock('./jiraClient', () => ({
+  MAX_TRANSFER_BYTES: 100 * 1024 * 1024,
   downloadAttachment: (...args: unknown[]) => downloadAttachmentMock(...args),
+  uploadAttachment: (...args: unknown[]) => uploadAttachmentMock(...args),
   validateCredential: (...args: unknown[]) => validateCredentialMock(...args),
   listMyTickets: (...args: unknown[]) => listMyTicketsMock(...args),
   listTransitions: (...args: unknown[]) => listTransitionsMock(...args),
@@ -68,8 +71,14 @@ jest.mock('./jiraClient', () => ({
 // dialog is a success rather than a failure — lives in it. Only the Electron
 // dialogs and the filesystem underneath it are stubbed.
 const writeFileMock = jest.fn();
+const statMock = jest.fn();
+const readFileMock = jest.fn();
 jest.mock('fs', () => ({
-  promises: { writeFile: (...args: unknown[]) => writeFileMock(...args) },
+  promises: {
+    writeFile: (...args: unknown[]) => writeFileMock(...args),
+    stat: (...args: unknown[]) => statMock(...args),
+    readFile: (...args: unknown[]) => readFileMock(...args),
+  },
 }));
 
 // eslint-disable-next-line import/order, import/first
@@ -544,6 +553,72 @@ describe('per-ticket channels', () => {
         expect.anything(),
       );
       expect(JSON.stringify(result)).not.toContain('/etc/cron.d/pwn');
+    });
+  });
+
+  /**
+   * The upload half of the same property, and the sharper half of it: this
+   * channel's entire payload is an issue id. There is no filename and no path
+   * to send, so the renderer cannot name what gets read off this machine even
+   * if it tried — the native picker is the only thing that chooses a file.
+   */
+  describe('jira:attachments:upload', () => {
+    beforeEach(() => {
+      showOpenDialogMock.mockResolvedValue({
+        canceled: false,
+        filePaths: ['/Users/max/Desktop/replay-log.txt'],
+      });
+      statMock.mockResolvedValue({ size: 21 });
+      readFileMock.mockResolvedValue(Buffer.from('replay log, line one\n'));
+      uploadAttachmentMock.mockResolvedValue({
+        ok: true,
+        value: { id: '10421', key: 'ENG-421' },
+      });
+    });
+
+    it('refuses a ticket id that is not one, before opening any picker', async () => {
+      expect(
+        await getHandler('jira:attachments:upload')(
+          {},
+          { ticketId: '../../../admin' },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(showOpenDialogMock).not.toHaveBeenCalled();
+      expect(uploadAttachmentMock).not.toHaveBeenCalled();
+    });
+
+    // The whole point of the channel's shape. A path in the payload is not a
+    // field this handler reads — main discovers the file itself.
+    it('ignores anything path-shaped in the payload and uses the picker', async () => {
+      await getHandler('jira:attachments:upload')(
+        {},
+        { ticketId: '10421', path: '/etc/shadow', fileName: '/etc/shadow' },
+      );
+
+      expect(readFileMock).toHaveBeenCalledWith(
+        '/Users/max/Desktop/replay-log.txt',
+      );
+      expect(readFileMock).not.toHaveBeenCalledWith('/etc/shadow');
+    });
+
+    it('reports a cancelled picker as a success, never a failure', async () => {
+      showOpenDialogMock.mockResolvedValue({ canceled: true, filePaths: [] });
+
+      expect(
+        await getHandler('jira:attachments:upload')({}, { ticketId: '10421' }),
+      ).toEqual({ ok: true, value: { canceled: true } });
+      expect(readFileMock).not.toHaveBeenCalled();
+    });
+
+    // The re-read ticket comes back so the renderer can patch its cached list
+    // with what Jira holds, matching every other write on this boundary.
+    it('hands the whole re-read ticket back on success', async () => {
+      expect(
+        await getHandler('jira:attachments:upload')({}, { ticketId: '10421' }),
+      ).toEqual({
+        ok: true,
+        value: { canceled: false, ticket: { id: '10421', key: 'ENG-421' } },
+      });
     });
   });
 

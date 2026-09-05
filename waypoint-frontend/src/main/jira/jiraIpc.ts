@@ -344,6 +344,34 @@ export function registerJiraIpc(getWindow: () => BrowserWindow | null): void {
     },
   );
 
+  /**
+   * Attaches a file to an issue.
+   *
+   * The payload is one issue id, and that is the whole argument list. No
+   * filename, no path — main discovers the file through its own native picker,
+   * so the renderer cannot name what gets read off this machine. There is
+   * consequently nothing here to validate about the file: the dialog is the
+   * authorization, and it can only produce something the user chose in it.
+   *
+   * The answer carries the full re-read ticket rather than a bare "it worked",
+   * matching every other write on this boundary. That is what lets the
+   * renderer patch its cached list with `.map()` — a ticket with a new
+   * attachment on it, from Jira, rather than one this app assembled by
+   * guessing what the upload did.
+   */
+  ipcMain.handle(
+    'jira:attachments:upload',
+    async (
+      _event,
+      args: unknown,
+    ): Promise<JiraResult<{ canceled: boolean; ticket?: JiraWireTicket }>> => {
+      const input = (args ?? {}) as Record<string, unknown>;
+      const ticketId = readTicketId(input.ticketId);
+      if (!ticketId) return failure('invalid_input', 'Unknown Jira issue.');
+      return files.pickAndUploadAttachment(getWindow(), ticketId);
+    },
+  );
+
   ipcMain.handle(
     'jira:comments:list',
     async (

@@ -541,6 +541,39 @@ export async function downloadJiraAttachment(
 }
 
 /**
+ * Attaches a file to a real issue.
+ *
+ * Takes an issue id and nothing else — no filename, no path, no `File`. Main
+ * opens a native file picker, reads what the user chose and uploads it, all
+ * inside one handler. This side cannot name what gets read off the machine,
+ * which is the security property the whole attachment design is built for and
+ * the reason this signature looks so thin.
+ *
+ * A cancel is `{ canceled: true }` with no ticket, never a thrown error:
+ * closing a file picker is a normal outcome and must not fire the error toast.
+ *
+ * On success the whole re-read ticket comes back and the cached list is
+ * patched with `.map()`, matching every other write in this file. A
+ * `.filter()` would be wrong here in the most obvious way — attaching a file
+ * cannot remove an issue from anyone's queue — but the reason the map is worth
+ * naming is what it carries: the ticket Jira returned, with the new attachment
+ * on it and with Jira's own filename for it (a site can rename on collision),
+ * rather than one this module assembled by assuming the upload did what it
+ * asked for.
+ */
+export async function uploadJiraAttachment(
+  ticketId: string,
+): Promise<{ canceled: boolean; ticket: JiraTicket | null }> {
+  const result = unwrap(await bridge().uploadAttachment({ ticketId }));
+  if (result.canceled || !result.ticket) {
+    return { canceled: true, ticket: null };
+  }
+  const ticket = toTicket(result.ticket);
+  lastTickets = lastTickets.map((t) => (t.id === ticket.id ? ticket : t));
+  return { canceled: false, ticket };
+}
+
+/**
  * Posts a plain-text comment as the connected user.
  *
  * Plain text is the whole contract: an "@Name" typed into the body stays

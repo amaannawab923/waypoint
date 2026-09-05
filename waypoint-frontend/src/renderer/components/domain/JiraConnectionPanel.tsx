@@ -136,14 +136,20 @@ export function JiraConnectionPanel({
               it now because setJiraTicketAssignee is real: the drawer's
               assignee chip opens a picker of the people this issue's own
               project allows, Unassign included, and writes the choice
-              straight through. jiraApi.ts's whole write surface is
-              transitionJiraTicket, postJiraComment, setJiraTicketPriority and
-              setJiraTicketAssignee — four, and this sentence names four. */}
+              straight through. Attaching joins it now for the same reason:
+              uploadJiraAttachment is real, and the drawer's Attachments
+              header has a button that opens a native file picker and sends
+              what the user chooses. jiraApi.ts's whole write surface is
+              transitionJiraTicket, postJiraComment, setJiraTicketPriority,
+              setJiraTicketAssignee and uploadJiraAttachment — five, and this
+              sentence names five. (downloadJiraAttachment is not among them:
+              it changes nothing about the issue.) */}
           <span>
             <b>Your</b> edits — moving a ticket through its workflow, posting a
-            comment, changing its priority, and reassigning it — write straight
-            to Jira the moment you make them, as you. Those four are the whole
-            set; everything else about an issue is read-only here.
+            comment, changing its priority, reassigning it, and attaching a file
+            — write straight to Jira the moment you make them, as you. Those
+            five are the whole set; everything else about an issue is read-only
+            here.
           </span>
         </div>
         <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-warning/30 bg-warning-bg px-3 py-2.5 text-[12.5px] leading-relaxed text-warning">
@@ -161,10 +167,14 @@ export function JiraConnectionPanel({
           Not built yet — said plainly
         </div>
         <ul className="list-disc space-y-1.5 pl-4 text-[12.5px] leading-relaxed text-text-secondary">
-          <li>
-            Uploading attachments. You can see what&apos;s attached and its
-            size; adding one still happens in Jira.
-          </li>
+          {/* "Uploading attachments" used to head this list. It is gone
+              because it stopped being true in the same commit that made it
+              untrue — a list of things that don't work is only worth
+              anything if it is maintained with the same care as the list of
+              things that do. Downloading and attaching both work now; what
+              remains genuinely missing is deleting an attachment and
+              uploading more than one at a time, neither of which is claimed
+              anywhere. */}
           <li>
             Rich-text authoring — tables, panels, syntax-highlighted code
             blocks. Comments you write here are plain text, and so is what you

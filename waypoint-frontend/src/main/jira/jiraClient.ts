@@ -304,6 +304,39 @@ async function jiraFetch<T>(
   return readJsonBody<T>(sent.value);
 }
 
+/**
+ * The same request machinery again, sending `multipart/form-data`.
+ *
+ * Two things here are Jira's contract rather than this app's preference, and
+ * both are easy to get wrong in a way that produces an unhelpful 4xx or 5xx
+ * with nothing legible in it:
+ *
+ *  - `X-Atlassian-Token: no-check` is required on the attachment endpoint. It
+ *    is Atlassian's XSRF guard, and Jira's own documentation is blunt about
+ *    the consequence of omitting it: the request is blocked.
+ *  - No `Content-Type` is set, and that omission is deliberate. `fetch`
+ *    derives the header from the `FormData` instance *including the boundary
+ *    parameter* that tells the far side where each part begins. Writing
+ *    `Content-Type: multipart/form-data` by hand drops that boundary and
+ *    produces a body Jira cannot parse — which is why the header map below
+ *    has exactly one entry, and why jiraClient.test.ts asserts that no
+ *    Content-Type was set on this path rather than trusting a comment.
+ */
+async function jiraFetchMultipart<T>(
+  credential: Credentialish,
+  request: { path: string; form: FormData },
+): Promise<JiraResult<T>> {
+  const sent = await performRequest(credential, {
+    method: 'POST',
+    path: request.path,
+    headers: { 'X-Atlassian-Token': 'no-check' },
+    body: request.form,
+    timeoutMs: TRANSFER_TIMEOUT_MS,
+  });
+  if (!sent.ok) return sent;
+  return readJsonBody<T>(sent.value);
+}
+
 function tooLargeMessage(bytes: number): string {
   return `That attachment is ${Math.round(bytes / (1024 * 1024))}MB, past the ${Math.round(
     MAX_TRANSFER_BYTES / (1024 * 1024),
@@ -806,6 +839,61 @@ export async function downloadAttachment(
   });
   if (!result.ok) return result;
   return { ok: true, value: { bytes: result.value } };
+}
+
+/**
+ * Attaches one file to an issue, then re-reads the issue.
+ *
+ * The re-read is the same pattern every other write here uses, and it earns
+ * its round trip twice over on this one. Jira's own answer is an array of
+ * attachment objects for the files just uploaded — not the issue — so without
+ * it the caller would have to splice a new attachment into a ticket it already
+ * held and hope the two agree. It also means the caller learns Jira's real
+ * filename for the file, which can differ from the one sent (a site can
+ * rename on collision).
+ *
+ * The form field must be called `file`. That is Jira's parameter name, not a
+ * convention: the endpoint looks for exactly that.
+ *
+ * One file per call, deliberately. The endpoint accepts several `file` parts
+ * in one request, and a multi-file upload raises partial success — three of
+ * five stored, which two failed, what the ticket now says — as a real problem
+ * needing a real answer in the UI. That is a reasonable later expansion and
+ * not something to half-build now.
+ */
+export async function uploadAttachment(
+  ticketId: string,
+  fileName: string,
+  bytes: Buffer,
+  mimeType: string,
+): Promise<JiraResult<JiraWireTicket>> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+  const credential = credentialResult.value;
+
+  if (bytes.byteLength > MAX_TRANSFER_BYTES) {
+    return failure('jira_error', tooLargeMessage(bytes.byteLength));
+  }
+
+  // A Buffer's own `buffer` is typed `ArrayBufferLike`, which TypeScript will
+  // not narrow to the `ArrayBuffer` a BlobPart wants — the gap is
+  // SharedArrayBuffer, which nothing here can produce (`fs.readFile` and
+  // `Buffer.from` both allocate ordinary ArrayBuffers). The alternative,
+  // `new Uint8Array(bytes)`, copies — and `new Blob` already copies, so
+  // satisfying the checker that way would mean holding a third copy of a file
+  // up to the transfer cap in main's heap. The cast is the cheaper honesty.
+  const part = bytes as unknown as Uint8Array<ArrayBuffer>;
+
+  const form = new FormData();
+  form.append('file', new Blob([part], { type: mimeType }), fileName);
+
+  const posted = await jiraFetchMultipart<unknown>(credential, {
+    path: `/rest/api/3/issue/${encodeURIComponent(ticketId)}/attachments`,
+    form,
+  });
+  if (!posted.ok) return posted;
+
+  return getTicket(ticketId);
 }
 
 // -----------------------------------------------------------------------

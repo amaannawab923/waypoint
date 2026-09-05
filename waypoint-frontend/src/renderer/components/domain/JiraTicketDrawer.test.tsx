@@ -11,6 +11,7 @@ import {
   listJiraComments,
   searchJiraAssignableUsers,
   setJiraTicketAssignee,
+  uploadJiraAttachment,
 } from '@/data/jiraApi';
 import { useJiraConnection } from '@/lib/jiraStore';
 import { showErrorToast } from '@/lib/toast';
@@ -32,6 +33,7 @@ jest.mock('@/data/jiraApi', () => ({
   postJiraComment: jest.fn(),
   searchJiraAssignableUsers: jest.fn(),
   setJiraTicketAssignee: jest.fn(),
+  uploadJiraAttachment: jest.fn(),
 }));
 jest.mock('@/lib/jiraStore', () => ({ useJiraConnection: jest.fn() }));
 jest.mock('@/lib/toast', () => ({ showErrorToast: jest.fn() }));
@@ -129,6 +131,9 @@ beforeEach(() => {
   jest.mocked(useJiraConnection).mockReturnValue(CONNECTION);
   jest.mocked(searchJiraAssignableUsers).mockResolvedValue(ASSIGNABLE);
   jest.mocked(downloadJiraAttachment).mockResolvedValue({ canceled: false });
+  jest
+    .mocked(uploadJiraAttachment)
+    .mockResolvedValue({ canceled: true, ticket: null });
 });
 
 afterEach(() => {
@@ -214,6 +219,82 @@ describe('attachments', () => {
     await waitFor(() =>
       expect(showErrorToast).toHaveBeenCalledWith('Attachment does not exist.'),
     );
+  });
+});
+
+describe('attaching a file', () => {
+  // The header is where "Attach a file" lives, so hiding it on an empty list
+  // would hide the upload entry point on the single most common case there is
+  // — a ticket with nothing attached yet.
+  it('shows the Attachments header and the button on a ticket with none', () => {
+    renderDrawer({ attachments: [] });
+
+    expect(screen.getByText('Attachments')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Attach a file' })).toBeEnabled();
+    expect(screen.getByText(/Nothing attached yet/i)).toBeInTheDocument();
+  });
+
+  // No filename, no path, no File — main opens the picker. This assertion is
+  // the renderer-side half of "no path crosses IPC".
+  it('sends only the issue id, and nothing that names a file', async () => {
+    renderDrawer();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Attach a file' }));
+
+    await waitFor(() => expect(uploadJiraAttachment).toHaveBeenCalled());
+    expect(uploadJiraAttachment).toHaveBeenCalledWith('10421');
+    expect(jest.mocked(uploadJiraAttachment).mock.calls[0]).toHaveLength(1);
+  });
+
+  it('hands the re-read ticket up so the row behind the drawer updates too', async () => {
+    const updated = ticket({ attachments: [attachment()] });
+    jest
+      .mocked(uploadJiraAttachment)
+      .mockResolvedValue({ canceled: false, ticket: updated });
+    renderDrawer();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Attach a file' }));
+
+    await waitFor(() => expect(onTicketUpdated).toHaveBeenCalledWith(updated));
+  });
+
+  // A closed file picker is not an error and is not an update.
+  it('updates nothing and says nothing when the picker is cancelled', async () => {
+    renderDrawer();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Attach a file' }));
+
+    await waitFor(() => expect(uploadJiraAttachment).toHaveBeenCalled());
+    expect(onTicketUpdated).not.toHaveBeenCalled();
+    expect(showErrorToast).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a refused upload and updates nothing', async () => {
+    jest
+      .mocked(uploadJiraAttachment)
+      .mockRejectedValue(
+        new Error('The file exceeds its maximum permitted size.'),
+      );
+    renderDrawer();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Attach a file' }));
+
+    await waitFor(() =>
+      expect(showErrorToast).toHaveBeenCalledWith(
+        'The file exceeds its maximum permitted size.',
+      ),
+    );
+    expect(onTicketUpdated).not.toHaveBeenCalled();
+  });
+
+  // Same posture as the assignee chip: a ticket whose writes are paused says
+  // why rather than silently doing nothing.
+  it('is disabled, and says why, while the ticket is in conflict', () => {
+    renderDrawer({ hasConflict: true });
+
+    const button = screen.getByRole('button', { name: 'Attach a file' });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute('title', 'Write paused until reloaded');
   });
 });
 

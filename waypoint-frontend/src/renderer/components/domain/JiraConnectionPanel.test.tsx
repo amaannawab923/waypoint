@@ -64,33 +64,46 @@ describe('JiraConnectionPanel', () => {
 
   // This assertion is the capability register, not decoration. The banner
   // once listed a priority write that did not exist, which this test was
-  // originally written to pin shut. jiraApi.ts now genuinely exposes four
-  // writes — transitionJiraTicket, postJiraComment, setJiraTicketPriority and
-  // setJiraTicketAssignee — so the banner names four, and the check moves with
-  // it rather than being deleted: what it guards is that the count on screen
-  // matches the count in the data layer, in either direction.
-  it('names exactly the four writes that exist, reassigning among them', () => {
+  // originally written to pin shut. jiraApi.ts now genuinely exposes five
+  // writes — transitionJiraTicket, postJiraComment, setJiraTicketPriority,
+  // setJiraTicketAssignee and uploadJiraAttachment — so the banner names five,
+  // and the check moves with it rather than being deleted: what it guards is
+  // that the count on screen matches the count in the data layer, in either
+  // direction.
+  it('names exactly the five writes that exist, attaching among them', () => {
     render(<JiraConnectionPanel connection={status()} />);
 
     expect(
       screen.getByText(
-        /moving a ticket through its workflow, posting a comment, changing its priority, and reassigning it/i,
+        /moving a ticket through its workflow, posting a comment, changing its priority, reassigning it, and attaching a file/i,
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText(/those four are the whole set/i)).toBeVisible();
+    expect(screen.getByText(/those five are the whole set/i)).toBeVisible();
   });
 
-  // Uploading an attachment is still genuinely not built, so the banner must
-  // not have quietly grown into a claim about it, and the "Not built yet"
-  // list must still say so plainly. The stale counts are checked too: a
-  // banner left reading "three" after a fourth write shipped is the same
-  // defect as one claiming a write that does not exist.
-  it('does not claim a write it does not have', () => {
+  // The other direction of the same defect. Uploading an attachment IS built
+  // now, so the "Not built yet" list must no longer say it isn't — a list of
+  // missing capabilities that has gone stale misleads exactly as much as a
+  // banner claiming one that does not exist. The old counts are checked for
+  // the same reason: "those four are the whole set" left standing after a
+  // fifth write shipped would be just as wrong.
+  it('no longer says attachments cannot be uploaded, because they can', () => {
     render(<JiraConnectionPanel connection={status()} />);
 
+    expect(screen.queryByText(/Uploading attachments/i)).toBeNull();
     expect(screen.queryByText(/those two are the whole set/i)).toBeNull();
     expect(screen.queryByText(/those three are the whole set/i)).toBeNull();
-    expect(screen.getByText(/Uploading attachments/i)).toBeInTheDocument();
+    expect(screen.queryByText(/those four are the whole set/i)).toBeNull();
+  });
+
+  // What is still genuinely missing stays listed. Removing one true entry
+  // from this list must not turn into quietly emptying it.
+  it('still says plainly what is not built', () => {
+    render(<JiraConnectionPanel connection={status()} />);
+
+    expect(screen.getByText(/Rich-text authoring/i)).toBeInTheDocument();
+    expect(screen.getByText(/Background sync/i)).toBeInTheDocument();
+    expect(screen.getByText(/Creating issues/i)).toBeInTheDocument();
   });
 
   it('Refresh now calls refreshJiraSync and pushes the result into jiraStore', async () => {

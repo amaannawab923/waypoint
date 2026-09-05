@@ -2,7 +2,7 @@ import { app, dialog, shell, type BrowserWindow } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as client from './jiraClient';
-import type { JiraFailure, JiraResult } from './jiraTypes';
+import type { JiraFailure, JiraResult, JiraWireTicket } from './jiraTypes';
 
 // Where the Jira feature meets the local machine: native file dialogs, the
 // filesystem, and the OS file manager. Deliberately its own file, and
@@ -166,4 +166,127 @@ export async function downloadAttachmentToDisk(
 
   shell.showItemInFolder(chosen.filePath);
   return { ok: true, value: { canceled: false, savedPath: chosen.filePath } };
+}
+
+/**
+ * A minimal extension → mime type lookup.
+ *
+ * Node has no built-in mime sniffing and this repo has no mime library. One
+ * field on one request is not worth a new dependency and its supply chain, so
+ * this covers the handful of types people actually attach to a ticket and
+ * answers `application/octet-stream` for everything else — which is not a
+ * degraded fallback but the correct name for bytes of unknown kind. Jira
+ * stores what it is told and shows the filename either way; the type mostly
+ * decides whether the file previews inline.
+ *
+ * Extension-based rather than content-based on purpose. Sniffing magic bytes
+ * would be more accurate and would also mean this app quietly disagreeing
+ * with the user's own filename about what their file is.
+ */
+const MIME_BY_EXTENSION: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.pdf': 'application/pdf',
+  '.txt': 'text/plain',
+  '.log': 'text/plain',
+  '.md': 'text/markdown',
+  '.csv': 'text/csv',
+  '.json': 'application/json',
+  '.xml': 'application/xml',
+  '.html': 'text/html',
+  '.zip': 'application/zip',
+  '.gz': 'application/gzip',
+  '.mp4': 'video/mp4',
+  '.mov': 'video/quicktime',
+};
+
+export function mimeTypeForFileName(fileName: string): string {
+  return (
+    MIME_BY_EXTENSION[path.extname(fileName).toLowerCase()] ??
+    'application/octet-stream'
+  );
+}
+
+/**
+ * Lets the user pick a file and attaches it to an issue.
+ *
+ * The renderer asks for this by issue id and nothing else. It cannot name a
+ * file, which is the entire point: the native picker is the authorization, so
+ * there is no path to validate and no way for anything upstream to choose what
+ * gets read off this machine. The path the dialog returns lives for the three
+ * statements that stat it, read it and send it.
+ *
+ * `stat` before `readFile`, in that order, because the order is the guard. A
+ * size cap enforced after the read has already done the thing it exists to
+ * prevent — pulling an arbitrarily large file into the main process's heap.
+ *
+ * The local cap is a ceiling, not a prediction. Most sites' real attachment
+ * limit is well below it (Jira Cloud's own default is 10MB), and that limit is
+ * Jira's to enforce and explain: its own refusal names the site's actual
+ * number, where a guess made here would be wrong in both directions. What this
+ * check is for is the case Jira never gets to answer, because the file was too
+ * big to hold in the first place.
+ *
+ * Single file per upload — `showOpenDialog` without `multiSelections` is
+ * single-select, so this is the dialog's own default rather than something
+ * enforced afterwards. See `uploadAttachment` for why multi-file is a later
+ * expansion and not a quiet promise.
+ *
+ * A cancel is `{ ok: true, value: { canceled: true } }`, never a failure, for
+ * the same reason as the download: the renderer turns every `ok: false` into
+ * an error toast, and closing a file picker is not an error.
+ */
+export async function pickAndUploadAttachment(
+  win: BrowserWindow | null,
+  ticketId: string,
+): Promise<JiraResult<{ canceled: boolean; ticket?: JiraWireTicket }>> {
+  // `['openFile']` with no `multiSelections`, which is what makes this
+  // single-select — the same call repoLink.ts makes for a folder.
+  const picked = win
+    ? await dialog.showOpenDialog(win, { properties: ['openFile'] })
+    : await dialog.showOpenDialog({ properties: ['openFile'] });
+  if (picked.canceled || picked.filePaths.length === 0) {
+    return { ok: true, value: { canceled: true } };
+  }
+  const [filePath] = picked.filePaths;
+
+  let size: number;
+  try {
+    size = (await fs.promises.stat(filePath)).size;
+  } catch (err) {
+    return fileFailure(`Couldn't read that file — ${reasonOf(err)}`);
+  }
+  if (size > client.MAX_TRANSFER_BYTES) {
+    return fileFailure(
+      `That file is ${Math.round(size / (1024 * 1024))}MB, past the ${Math.round(
+        client.MAX_TRANSFER_BYTES / (1024 * 1024),
+      )}MB this app will upload. Your Jira site's own limit is likely lower still — attach it in Jira if it needs to go up.`,
+    );
+  }
+
+  let bytes: Buffer;
+  try {
+    bytes = await fs.promises.readFile(filePath);
+  } catch (err) {
+    return fileFailure(`Couldn't read that file — ${reasonOf(err)}`);
+  }
+
+  // `path.basename`, not `safeBaseName`: this name came from the OS's own
+  // picker rather than from a Jira payload, so it needs stripping of its
+  // directory and nothing else — scrubbing it would mangle a legitimate
+  // filename the user chose.
+  const fileName = path.basename(filePath);
+  const uploaded = await client.uploadAttachment(
+    ticketId,
+    fileName,
+    bytes,
+    mimeTypeForFileName(fileName),
+  );
+  if (!uploaded.ok) return uploaded;
+
+  return { ok: true, value: { canceled: false, ticket: uploaded.value } };
 }

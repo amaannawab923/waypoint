@@ -17,6 +17,7 @@ import {
   setTicketAssignee,
   setTicketPriority,
   transitionTicket,
+  uploadAttachment,
   validateCredential,
 } from './jiraClient';
 
@@ -969,6 +970,162 @@ describe('downloadAttachment', () => {
     readStoredJiraCredentialMock.mockReturnValue(null);
 
     expect(await downloadAttachment('10050')).toMatchObject({
+      ok: false,
+      reason: 'not_connected',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('uploadAttachment', () => {
+  const BYTES = Buffer.from('replay log, line one\n');
+
+  const UPDATED_ISSUE = {
+    id: '10421',
+    key: 'ENG-421',
+    fields: {
+      summary: 'Webhook receiver drops events',
+      project: { key: 'ENG' },
+      status: { name: 'In Progress', statusCategory: { key: 'indeterminate' } },
+      attachment: [
+        {
+          id: '10050',
+          filename: 'replay-log.txt',
+          size: 21,
+          mimeType: 'text/plain',
+          author: { displayName: 'Max Chen' },
+        },
+      ],
+    },
+  };
+
+  /** What Jira answers an upload with: an array of the attachments it just
+   * stored, not the issue — which is why this client re-reads the issue. */
+  const UPLOAD_RESPONSE = [{ id: '10050', filename: 'replay-log.txt' }];
+
+  function upload() {
+    return uploadAttachment('10421', 'replay-log.txt', BYTES, 'text/plain');
+  }
+
+  it('POSTs to the issue’s attachments endpoint', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(UPLOAD_RESPONSE))
+      .mockResolvedValueOnce(jsonResponse(UPDATED_ISSUE));
+
+    await upload();
+
+    const [url, init] = call(0);
+    expect(url).toBe(
+      'https://waypoint123.atlassian.net/rest/api/3/issue/10421/attachments',
+    );
+    expect(init.method).toBe('POST');
+  });
+
+  // Atlassian's XSRF guard. Jira's own documentation is blunt about the
+  // consequence of omitting it: the request is blocked.
+  it('carries X-Atlassian-Token: no-check', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(UPLOAD_RESPONSE))
+      .mockResolvedValueOnce(jsonResponse(UPDATED_ISSUE));
+
+    await upload();
+
+    expect(headerValue(0, 'X-Atlassian-Token')).toBe('no-check');
+  });
+
+  /**
+   * The single easiest way to get this endpoint wrong.
+   *
+   * `fetch` derives `Content-Type` from the `FormData` instance INCLUDING the
+   * boundary parameter that tells the far side where each part begins. Setting
+   * `Content-Type: multipart/form-data` by hand drops that boundary and
+   * produces a body Jira cannot parse. So the assertion is about absence: no
+   * Content-Type may be set on this path, at all.
+   */
+  it('sets no Content-Type by hand, leaving fetch to derive the boundary', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(UPLOAD_RESPONSE))
+      .mockResolvedValueOnce(jsonResponse(UPDATED_ISSUE));
+
+    await upload();
+
+    const headers = call(0)[1].headers as Record<string, string>;
+    expect(Object.keys(headers)).not.toContain('Content-Type');
+    expect(Object.keys(headers).map((k) => k.toLowerCase())).not.toContain(
+      'content-type',
+    );
+    // The two that must be there, so this isn't passing because the headers
+    // went missing entirely.
+    expect(Object.keys(headers)).toEqual(
+      expect.arrayContaining(['Authorization', 'X-Atlassian-Token']),
+    );
+  });
+
+  it('sends the file as a FormData part named "file"', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(UPLOAD_RESPONSE))
+      .mockResolvedValueOnce(jsonResponse(UPDATED_ISSUE));
+
+    await upload();
+
+    const { body } = call(0)[1];
+    expect(body).toBeInstanceOf(FormData);
+    // `file` is Jira's own parameter name on this endpoint, not a convention.
+    const part = (body as FormData).get('file');
+    expect(part).not.toBeNull();
+    expect((part as File).name).toBe('replay-log.txt');
+  });
+
+  // Jira answers with the attachments it stored, not the issue — so the state
+  // the caller gets has to come from a re-read, the same pattern every other
+  // write here follows.
+  it('re-reads the issue afterwards and returns that', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(UPLOAD_RESPONSE))
+      .mockResolvedValueOnce(jsonResponse(UPDATED_ISSUE));
+
+    const result = await upload();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(call(1)[0]).toContain('/rest/api/3/issue/10421');
+    expect(call(1)[1].method).toBe('GET');
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        attachments: [
+          expect.objectContaining({ id: '10050', fileName: 'replay-log.txt' }),
+        ],
+      },
+    });
+  });
+
+  it("surfaces Jira's own error message when it rejects the upload", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        { errorMessages: ['The file exceeds its maximum permitted size.'] },
+        413,
+      ),
+    );
+
+    expect(await upload()).toMatchObject({
+      ok: false,
+      reason: 'jira_error',
+      message: 'The file exceeds its maximum permitted size.',
+    });
+    // Failed write, so nothing was re-read and nothing is reported as changed.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a permission failure as forbidden, not as bad credentials', async () => {
+    fetchMock.mockResolvedValueOnce(emptyResponse(403));
+
+    expect(await upload()).toMatchObject({ ok: false, reason: 'forbidden' });
+  });
+
+  it('refuses without a stored credential rather than calling out unauthenticated', async () => {
+    readStoredJiraCredentialMock.mockReturnValue(null);
+
+    expect(await upload()).toMatchObject({
       ok: false,
       reason: 'not_connected',
     });

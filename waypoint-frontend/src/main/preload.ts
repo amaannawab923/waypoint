@@ -326,6 +326,18 @@ const electronHandler = {
     }): Promise<JiraResult<{ canceled: boolean }>> {
       return ipcRenderer.invoke('jira:attachments:download', args);
     },
+    // One issue id, and that is the entire argument list — no filename and no
+    // path. Main opens its own file picker, so the renderer cannot name what
+    // gets read off this machine.
+    //
+    // The answer carries the whole re-read ticket, like every other write
+    // here, so the renderer can patch its cached list with what Jira actually
+    // holds rather than with a ticket it assembled by guessing.
+    uploadAttachment(args: {
+      ticketId: string;
+    }): Promise<JiraResult<{ canceled: boolean; ticket?: JiraWireTicket }>> {
+      return ipcRenderer.invoke('jira:attachments:upload', args);
+    },
     listComments(ticketId: string): Promise<JiraResult<JiraWireComment[]>> {
       return ipcRenderer.invoke('jira:comments:list', ticketId);
     },

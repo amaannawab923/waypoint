@@ -4,6 +4,7 @@ import {
   downloadJiraAttachment,
   listJiraComments,
   setJiraTicketAssignee,
+  uploadJiraAttachment,
 } from '@/data/jiraApi';
 import { showErrorToast } from '@/lib/toast';
 import { useAsync } from '@/lib/useAsync';
@@ -63,6 +64,9 @@ export function JiraTicketDrawer({
   // ticket can have several rows and only the one that was clicked should say
   // "Saving…".
   const [downloading, setDownloading] = useState<string | null>(null);
+  // One at a time, so a boolean is enough — unlike `downloading`, there is
+  // only ever the single "Attach a file" control.
+  const [uploading, setUploading] = useState(false);
   const assigneeChipRef = useRef<HTMLButtonElement>(null);
   const connection = useJiraConnection();
 
@@ -124,6 +128,35 @@ export function JiraTicketDrawer({
       );
     } finally {
       setDownloading(null);
+    }
+  }
+
+  /**
+   * Asks main to let the user pick a file and attach it to this issue.
+   *
+   * Nothing is passed but the issue id: main opens the picker, reads the file
+   * and uploads it. This component cannot name a file, and could not be made
+   * to by anything upstream of it.
+   *
+   * The re-read ticket goes up through `onTicketUpdated`, which is what
+   * re-renders the list of attachments above — this drawer takes its ticket as
+   * a prop from MyJiraPage, so the new attachment appears by the ordinary
+   * route rather than through a second local copy of the list.
+   */
+  async function handleUpload() {
+    setUploading(true);
+    try {
+      const { ticket: updated } = await uploadJiraAttachment(ticket.id);
+      // Null on a cancel, which is not an error and is not an update.
+      if (updated) onTicketUpdated(updated);
+    } catch (err) {
+      showErrorToast(
+        err instanceof Error
+          ? err.message
+          : 'Could not attach that file in Jira.',
+      );
+    } finally {
+      setUploading(false);
     }
   }
 
@@ -274,6 +307,35 @@ export function JiraTicketDrawer({
           <p className="mb-3.5 text-[12.5px] leading-relaxed whitespace-pre-wrap text-text-secondary">
             {ticket.description}
           </p>
+
+          {/* Rendered unconditionally, including on the common case of a
+              ticket with nothing attached. The header is where "Attach a
+              file" lives, so hiding it when the list is empty would hide the
+              upload entry point exactly where a user is most likely to want
+              it — the same reason the Comments header below it always shows
+              even when there are no comments. */}
+          <div className="mb-2 flex items-center gap-2">
+            <span className="text-[11px] font-bold tracking-wide text-text-muted uppercase">
+              Attachments
+            </span>
+            <button
+              type="button"
+              className="ml-auto shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold text-text-secondary hover:bg-surface-2 hover:text-text disabled:opacity-60"
+              disabled={uploading || ticket.hasConflict}
+              title={
+                ticket.hasConflict ? 'Write paused until reloaded' : undefined
+              }
+              onClick={handleUpload}
+            >
+              {uploading ? 'Uploading…' : 'Attach a file'}
+            </button>
+          </div>
+
+          {ticket.attachments.length === 0 && (
+            <p className="mb-4 text-[12.5px] text-text-muted">
+              Nothing attached yet.
+            </p>
+          )}
 
           {ticket.attachments.map((a) => (
             <div
