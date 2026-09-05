@@ -119,10 +119,63 @@ export interface JiraConnectionStatus {
   issueCount: number;
   projectCount: number;
   pollIntervalSec: number;
+  /** Sync paused by the user from the Connection tab — reads still work
+   * (nothing here disables the ticket list), this only gates
+   * refreshJiraSync()'s "feels live" polling story. */
+  paused: boolean;
 }
 
 /** A mention target offered by the comment composer's @-popover. */
 export interface JiraMentionCandidate {
   name: string;
   role: string; // e.g. "reviewer", "reporter", "watcher" — free text, display-only
+}
+
+/** phase 2 — the Copilot rail's proposal for ENG-421. Deliberately a SINGLE
+ * combined proposal covering both a state move AND a comment post, unlike
+ * the native ProposalView (types/entities.ts), which is one-kind-per-row.
+ * The mockup's approveProp() applies both atomically behind one Approve
+ * click, and that's a meaningful part of the design (a Jira transition and
+ * its justifying comment belong together), not an accident of the mock —
+ * so this type preserves it rather than splitting into two ProposalView-like
+ * rows. Never built on top of ProposalView/ProposalKind: those are tightly
+ * coupled to real ticket UUIDs and a backend-driven claim state machine that
+ * doesn't exist for Jira (see JiraProposalCard.tsx's own header comment). */
+export type JiraProposalStatus = 'proposed' | 'executing' | 'executed' | 'rejected';
+
+export interface JiraProposal {
+  id: ID;
+  ticketId: ID;
+  ticketKey: string;
+  ticketProjectColor: string;
+  status: JiraProposalStatus;
+  fromStateName: string;
+  fromStateColor: string;
+  toStateName: string;
+  toStateColor: string;
+  commentBody: string;
+  commentMentions: string[];
+  /** Local-provenance context — "read from your checkout by the local
+   * agent, no code left this machine" (mockup copy), rendered in the rail's
+   * `.ctx` block. */
+  repoPath: string;
+  branch: string;
+  commitCount: number;
+  prNumber: number;
+  prStatus: string; // e.g. "open" — free text, display-only, matches the mock's own PR fixture
+  createdAt: string; // ISO
+  resolvedAt: string | null; // ISO, set once executed or rejected
+}
+
+/** The rail's small "Also queued" duplicate-ticket nudge (GRW-12 vs GRW-9).
+ * Deliberately NOT a second JiraProposal — there's no real second proposal
+ * object to approve/reject here, just a dismissible pointer at an existing
+ * ticket (see jiraApi.ts's getJiraDuplicateNudge for why this stays this
+ * thin rather than growing a parallel fixture). */
+export interface JiraDuplicateNudge {
+  id: ID;
+  ticketId: ID;
+  ticketKey: string;
+  ticketProjectColor: string;
+  duplicateOfKey: string; // e.g. "GRW-9" — no real ticket object exists for it
 }
