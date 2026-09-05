@@ -146,7 +146,17 @@ export interface JiraTicket {
   role: JiraTicketRole;
   stateName: string;
   stateColor: string;
+  /** The normalized bucket PriorityIcon draws — five values shared with this
+   * app's own native tickets. Lossy by design, and not writable back to Jira:
+   * no real site has a priority named "urgent". */
   priority: Priority;
+  /** This site's own id for the current priority, or null when none is set.
+   * The only handle a priority write can be built from. */
+  priorityId: string | null;
+  /** The site's own label ("Highest", "Blocker", or whatever it was renamed
+   * to), so the picker can show what the ticket actually says rather than the
+   * bucket it was flattened into. */
+  priorityName: string;
   assigneeName: string;
   reporterName: string;
   description: string;

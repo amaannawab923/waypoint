@@ -53,6 +53,8 @@ function ticket(overrides: Partial<JiraTicket> = {}): JiraTicket {
     stateName: 'To Do',
     stateColor: 'var(--text-muted)',
     priority: 'none',
+    priorityId: null,
+    priorityName: 'None',
     assigneeName: 'Max Chen',
     reporterName: 'Sam Lee',
     description: '',

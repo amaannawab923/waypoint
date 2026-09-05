@@ -60,6 +60,22 @@ export type JiraStateCategory = 'todo' | 'in-progress' | 'done';
 
 export type JiraPriority = 'urgent' | 'high' | 'medium' | 'low' | 'none';
 
+/**
+ * One priority a site actually offers, in its own words.
+ *
+ * Deliberately separate from `JiraPriority` above, and not a replacement for
+ * it. That enum is a *normalization* — five buckets every site's scheme is
+ * squeezed into so `PriorityIcon` (shared with this app's own native tickets)
+ * can pick a glyph. It is lossy by design and cannot be written back: a site
+ * running the Blocker/Critical/Major scheme has no priority called "urgent",
+ * and one that renamed "Highest" to "Drop everything" has neither. Writing a
+ * priority needs the site's real id, which is what this carries.
+ */
+export interface JiraPriorityOption {
+  id: string;
+  name: string;
+}
+
 export type JiraTicketRole = 'assignee' | 'reporter' | 'watcher';
 
 /** One field a transition screen requires before Jira will accept the move. */
@@ -102,7 +118,15 @@ export interface JiraWireTicket {
   role: JiraTicketRole;
   stateName: string;
   stateCategory: JiraStateCategory;
+  /** The normalized bucket, for display only — see JiraPriorityOption. */
   priority: JiraPriority;
+  /** This site's own id for the issue's current priority, or null when the
+   * issue has none set. The one value a priority write can be built from. */
+  priorityId: string | null;
+  /** The site's own label — "Highest", "Blocker", whatever this site renamed
+   * it to. "None" when the issue has no priority, which is a display fallback
+   * and not a name Jira returned. */
+  priorityName: string;
   assigneeName: string;
   reporterName: string;
   description: string;

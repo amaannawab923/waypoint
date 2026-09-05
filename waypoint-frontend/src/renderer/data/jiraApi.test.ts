@@ -35,6 +35,8 @@ function wireTicket(overrides: Partial<JiraWireTicket> = {}): JiraWireTicket {
     stateName: 'In Progress',
     stateCategory: 'in-progress',
     priority: 'urgent',
+    priorityId: '1',
+    priorityName: 'Highest',
     assigneeName: 'Max Chen',
     reporterName: 'Sam Lee',
     description: 'Details.',

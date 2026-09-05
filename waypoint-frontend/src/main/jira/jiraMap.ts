@@ -547,6 +547,11 @@ export function mapIssue(
   const storyPointsRaw = findNamedField(fields, names, /^story point/i);
   const sprintRaw = findNamedField(fields, names, /^sprint$/i);
   const projectKey = asRecord(fields.project).key;
+  // Both the normalized bucket AND the site's own id/name. The bucket is what
+  // PriorityIcon draws; the id is the only thing a priority *write* can be
+  // built from, because "urgent" is this app's word and no site has a
+  // priority by that name.
+  const priority = asRecord(fields.priority);
 
   return {
     id: typeof issue.id === 'string' ? issue.id : key,
@@ -559,7 +564,18 @@ export function mapIssue(
     role: roleOf(fields, myAccountId),
     stateName: typeof status.name === 'string' ? status.name : 'Unknown',
     stateCategory: mapStateCategory(asRecord(status.statusCategory).key),
-    priority: mapPriority(asRecord(fields.priority).name),
+    priority: mapPriority(priority.name),
+    // Jira returns the id as a string on every current API version, but it is
+    // a number in enough older/proxied payloads to be worth coercing rather
+    // than silently dropping.
+    priorityId:
+      typeof priority.id === 'string' || typeof priority.id === 'number'
+        ? String(priority.id)
+        : null,
+    priorityName:
+      typeof priority.name === 'string' && priority.name
+        ? priority.name
+        : 'None',
     assigneeName: displayNameOf(fields.assignee, 'Unassigned'),
     reporterName: displayNameOf(fields.reporter, 'Unknown'),
     description: tidyPlainText(adfToPlainText(fields.description)),

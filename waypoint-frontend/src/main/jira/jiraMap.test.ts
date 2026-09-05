@@ -126,7 +126,7 @@ describe('mapIssue', () => {
           name: 'In Progress',
           statusCategory: { key: 'indeterminate' },
         },
-        priority: { name: 'Highest' },
+        priority: { id: '1', name: 'Highest' },
         assignee: { accountId: ME, displayName: 'Max Chen' },
         reporter: { accountId: SOMEONE_ELSE, displayName: 'Sam Lee' },
         updated: '2026-09-01T10:00:00.000+0000',
@@ -156,9 +156,47 @@ describe('mapIssue', () => {
       stateName: 'In Progress',
       stateCategory: 'in-progress',
       priority: 'urgent',
+      priorityId: '1',
+      priorityName: 'Highest',
       assigneeName: 'Max Chen',
       reporterName: 'Sam Lee',
       description: 'Details.',
+    });
+  });
+
+  // The normalized bucket and the site's own id/name are both carried, and
+  // neither substitutes for the other: 'urgent' is what PriorityIcon draws,
+  // and it is also a word no real Jira site has a priority called — so a
+  // write has to be built from the id.
+  describe('the site’s own priority id and name, alongside the bucket', () => {
+    it('carries a custom scheme’s real label even when the bucket is none', () => {
+      expect(
+        mapIssue(
+          issue({ priority: { id: '10100', name: 'Drop everything' } }),
+          ME,
+        ),
+      ).toMatchObject({
+        priority: 'none',
+        priorityId: '10100',
+        priorityName: 'Drop everything',
+      });
+    });
+
+    // Current Jira returns the id as a string; older and proxied payloads
+    // hand back a number, and dropping it there would silently make the
+    // ticket unwritable.
+    it('coerces a numeric id rather than dropping it', () => {
+      expect(
+        mapIssue(issue({ priority: { id: 3, name: 'Medium' } }), ME),
+      ).toMatchObject({ priorityId: '3', priorityName: 'Medium' });
+    });
+
+    it('reports no id, and "None" as a display fallback, when the issue has no priority', () => {
+      expect(mapIssue(issue({ priority: null }), ME)).toMatchObject({
+        priority: 'none',
+        priorityId: null,
+        priorityName: 'None',
+      });
     });
   });
 
@@ -195,6 +233,8 @@ describe('mapIssue', () => {
     expect(mapped).toMatchObject({
       assigneeName: 'Unassigned',
       priority: 'none',
+      priorityId: null,
+      priorityName: 'None',
       description: '',
       attachments: [],
     });

@@ -131,6 +131,8 @@ function toTicket(wire: JiraWireTicket): JiraTicket {
     stateName: wire.stateName,
     stateColor: stateColor(wire.stateCategory),
     priority: wire.priority as Priority,
+    priorityId: wire.priorityId,
+    priorityName: wire.priorityName,
     assigneeName: wire.assigneeName,
     reporterName: wire.reporterName,
     description: wire.description,
