@@ -29,16 +29,22 @@ export function JiraTransitionPopover({
   currentStateName: string;
   transitions: JiraTransition[];
   loading: boolean;
-  onSelect: (transition: JiraTransition, fieldValues: Record<string, string>) => void;
+  onSelect: (
+    transition: JiraTransition,
+    fieldValues: Record<string, string>,
+  ) => void;
   onClose: () => void;
 }) {
-  const [formTransition, setFormTransition] = useState<JiraTransition | null>(null);
+  const [formTransition, setFormTransition] = useState<JiraTransition | null>(
+    null,
+  );
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function onDown(e: MouseEvent) {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) onClose();
+      if (panelRef.current && !panelRef.current.contains(e.target as Node))
+        onClose();
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') onClose();
@@ -88,9 +94,15 @@ export function JiraTransitionPopover({
           <div className="px-3 pt-2.5 pb-1.5 text-[10.5px] font-bold tracking-wide text-text-muted uppercase">
             Move {ticketKey} to
           </div>
-          {loading && <div className="px-3 py-3 text-xs text-text-muted">Loading transitions…</div>}
+          {loading && (
+            <div className="px-3 py-3 text-xs text-text-muted">
+              Loading transitions…
+            </div>
+          )}
           {!loading && transitions.length === 0 && (
-            <div className="px-3 py-3 text-xs text-text-muted">No transitions available from here.</div>
+            <div className="px-3 py-3 text-xs text-text-muted">
+              No transitions available from here.
+            </div>
           )}
           {transitions.map((t) => (
             <button
@@ -112,27 +124,40 @@ export function JiraTransitionPopover({
             </button>
           ))}
           <div className="border-t border-border px-3 py-2.5 text-[10.5px] leading-relaxed text-text-muted">
-            These are the transitions <b className="text-text-secondary">your Jira workflow</b> allows from{' '}
-            {currentStateName} — Waypoint doesn't invent them.
+            These are the transitions{' '}
+            <b className="text-text-secondary">your Jira workflow</b> allows
+            from {currentStateName} — Waypoint doesn't invent them.
           </div>
         </>
       ) : (
         <div className="p-3">
-          <h4 className="mb-0.5 text-[12.5px] font-semibold text-text">Jira needs one more field</h4>
+          <h4 className="mb-0.5 text-[12.5px] font-semibold text-text">
+            Jira needs one more field
+          </h4>
           <p className="mb-2.5 text-[11px] leading-relaxed text-text-muted">
-            The <b className="text-text-secondary">{formTransition.targetStateName}</b> transition on the{' '}
-            {projectKey} workflow requires a {formTransition.requiresFields[0]?.label}. Waypoint asks here so
-            the move doesn't fail silently in Jira.
+            The{' '}
+            <b className="text-text-secondary">
+              {formTransition.targetStateName}
+            </b>{' '}
+            transition on the {projectKey} workflow requires a{' '}
+            {formTransition.requiresFields[0]?.label}. Waypoint asks here so the
+            move doesn't fail silently in Jira.
           </p>
           {formTransition.requiresFields.map((field) => (
             <div key={field.key} className="mb-2.5">
               <label className="mb-1 block text-[11px] font-bold text-text-secondary">
-                {field.label} {field.required && <span className="text-danger">*</span>}
+                {field.label}{' '}
+                {field.required && <span className="text-danger">*</span>}
               </label>
               {field.type === 'select' ? (
                 <select
                   value={fieldValues[field.key] ?? ''}
-                  onChange={(e) => setFieldValues((v) => ({ ...v, [field.key]: e.target.value }))}
+                  onChange={(e) =>
+                    setFieldValues((v) => ({
+                      ...v,
+                      [field.key]: e.target.value,
+                    }))
+                  }
                   className="w-full rounded-[var(--radius-sm)] border border-border-strong bg-surface px-2 py-1.5 text-[12.5px] text-text outline-none focus:border-accent"
                 >
                   <option value="">Select…</option>
@@ -145,16 +170,30 @@ export function JiraTransitionPopover({
               ) : (
                 <input
                   value={fieldValues[field.key] ?? ''}
-                  onChange={(e) => setFieldValues((v) => ({ ...v, [field.key]: e.target.value }))}
+                  onChange={(e) =>
+                    setFieldValues((v) => ({
+                      ...v,
+                      [field.key]: e.target.value,
+                    }))
+                  }
                   placeholder="e.g. 3h 30m"
                   className="w-full rounded-[var(--radius-sm)] border border-border-strong bg-surface px-2 py-1.5 text-[12.5px] text-text outline-none focus:border-accent"
                 />
               )}
-              {field.hint && <div className="mt-1 text-[10.5px] text-text-muted">{field.hint}</div>}
+              {field.hint && (
+                <div className="mt-1 text-[10.5px] text-text-muted">
+                  {field.hint}
+                </div>
+              )}
             </div>
           ))}
           <div className="mt-1 flex gap-2">
-            <Button size="xs" variant="primary" disabled={requiredMissing} onClick={submitForm}>
+            <Button
+              size="xs"
+              variant="primary"
+              disabled={requiredMissing}
+              onClick={submitForm}
+            >
               Move to {formTransition.targetStateName}
             </Button>
             <Button
@@ -207,7 +246,10 @@ export function JiraStateChip({
         (disabled || saving) && 'cursor-not-allowed opacity-50',
       )}
     >
-      <span className="size-[7px] shrink-0 rounded-full" style={{ background: stateColor }} />
+      <span
+        className="size-[7px] shrink-0 rounded-full"
+        style={{ background: stateColor }}
+      />
       {saving ? 'Saving…' : stateName}
     </button>
   );
