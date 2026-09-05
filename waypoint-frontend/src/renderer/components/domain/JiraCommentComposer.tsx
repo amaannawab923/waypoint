@@ -61,18 +61,29 @@ export function JiraCommentComposer({
       setDraft('');
       setMentionQuery(null);
     } catch (err) {
-      showErrorToast(err instanceof Error ? err.message : 'Could not post this comment to Jira.');
+      showErrorToast(
+        err instanceof Error
+          ? err.message
+          : 'Could not post this comment to Jira.',
+      );
     } finally {
       setPosting(false);
     }
   }
 
   const filteredCandidates = (candidates ?? []).filter((c) =>
-    mentionQuery ? c.name.toLowerCase().startsWith(mentionQuery.toLowerCase()) : true,
+    mentionQuery
+      ? c.name.toLowerCase().startsWith(mentionQuery.toLowerCase())
+      : true,
   );
 
   return (
-    <div ref={formRef} tabIndex={-1} data-shortcut-guard className="relative outline-none">
+    <div
+      ref={formRef}
+      tabIndex={-1}
+      data-shortcut-guard
+      className="relative outline-none"
+    >
       {mentionQuery !== null && filteredCandidates.length > 0 && (
         <div className="absolute bottom-full left-0 z-10 mb-1 w-[210px] overflow-hidden rounded-[var(--radius-sm)] border border-border-strong bg-surface shadow-2xl">
           <div className="px-2.5 pt-1.5 pb-1 text-[10px] font-bold tracking-wide text-text-muted uppercase">
@@ -86,7 +97,9 @@ export function JiraCommentComposer({
               className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12.5px] text-text hover:bg-surface-2"
             >
               {c.name}
-              <span className="ml-auto text-[11px] text-text-muted">{c.role}</span>
+              <span className="ml-auto text-[11px] text-text-muted">
+                {c.role}
+              </span>
             </button>
           ))}
         </div>
@@ -101,8 +114,15 @@ export function JiraCommentComposer({
           className="w-full resize-none rounded-t-[var(--radius-sm)] bg-transparent px-2.5 py-2 text-[12.5px] leading-relaxed text-text outline-none"
         />
         <div className="flex items-center gap-2 border-t border-border px-2 py-1.5">
-          <span className="flex-1 text-[10.5px] text-text-muted">Posts to Jira as Max Chen · plain text + mentions</span>
-          <Button size="xs" variant="primary" disabled={!draft.trim() || posting} onClick={handlePost}>
+          <span className="flex-1 text-[10.5px] text-text-muted">
+            Posts to Jira as Max Chen · plain text + mentions
+          </span>
+          <Button
+            size="xs"
+            variant="primary"
+            disabled={!draft.trim() || posting}
+            onClick={handlePost}
+          >
             {posting ? 'Posting…' : 'Comment'}
           </Button>
         </div>
