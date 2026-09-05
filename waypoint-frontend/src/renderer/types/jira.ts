@@ -10,15 +10,41 @@
 
 import type { ID, Priority } from '@/types/entities';
 
-/** The three Jira projects the mock fixtures span — see jiraApi.ts. */
-export type JiraProjectKey = 'ENG' | 'PLAT' | 'GRW';
+/**
+ * A Jira project key — "ENG", "OPS", "WAY". Deliberately an open string
+ * rather than the closed union this was while the data layer was fixtures:
+ * project keys are whatever a real site's admins created, and a union would
+ * mean a connected user's own projects failed to typecheck against a list
+ * written before their site existed.
+ */
+export type JiraProjectKey = string;
 
-/** Per-project identity color, as a `var(--p-*)` reference — see index.css. */
-export const JIRA_PROJECT_COLOR: Record<JiraProjectKey, string> = {
-  ENG: 'var(--p-eng)',
-  PLAT: 'var(--p-plat)',
-  GRW: 'var(--p-grw)',
-};
+/** The per-project identity colors, as `var(--p-*)` references — see
+ * index.css. Three of them, which was one-per-project when there were exactly
+ * three fixture projects and is now a palette to distribute across however
+ * many a real account can see. */
+const JIRA_PROJECT_COLORS = [
+  'var(--p-eng)',
+  'var(--p-plat)',
+  'var(--p-grw)',
+] as const;
+
+/**
+ * A stable color for a project key. Stable is the whole requirement: the same
+ * key must get the same swatch on the filter chip, the row's left border and
+ * the drawer header, across reloads and regardless of which projects happen
+ * to be in the current result set — so this hashes the key rather than
+ * assigning colors by list position. Two projects can collide on a color;
+ * that's acceptable for what is a secondary visual grouping cue next to the
+ * key itself, which is always shown.
+ */
+export function jiraProjectColor(projectKey: string): string {
+  let hash = 0;
+  for (let i = 0; i < projectKey.length; i += 1) {
+    hash = (hash * 31 + projectKey.charCodeAt(i)) % 100003;
+  }
+  return JIRA_PROJECT_COLORS[hash % JIRA_PROJECT_COLORS.length];
+}
 
 /** How the current user relates to a ticket — never mutually exclusive in
  * real Jira (a person can be all three), but the mock fixtures (like the
@@ -79,9 +105,7 @@ export interface JiraTicket {
   stateColor: string;
   priority: Priority;
   assigneeName: string;
-  assigneeInitials: string;
   reporterName: string;
-  watcherNames: string[];
   description: string;
   epicName: string | null;
   storyPoints: number | null;
@@ -93,15 +117,18 @@ export interface JiraTicket {
   conflict: JiraConflictInfo | null;
 }
 
+// `assigneeInitials`/`watcherNames` above, and `authorInitials`/`mentions`
+// below, were fixture-only fields no component ever rendered (Avatar derives
+// its own initials from a name). Two of them are also things a Jira search
+// response cannot supply — the search returns a watcher *count*, never the
+// names — so keeping them would have meant shipping fields permanently filled
+// with empty placeholders.
+
 export interface JiraComment {
   id: ID;
   ticketId: ID;
   authorName: string;
-  authorInitials: string;
   body: string;
-  /** Names mentioned via @Name — best-effort, matched against
-   * listJiraMentionCandidates() at post time. */
-  mentions: string[];
   createdAt: string; // ISO
   postedByWaypoint: boolean;
   /** Self-disclosure prefix for a Copilot-authored comment (phase 2's
@@ -115,21 +142,26 @@ export interface JiraConnectionStatus {
   accountName: string;
   accountEmail: string;
   site: string;
+  /** When the ticket list was last actually read from Jira. */
   lastSyncAt: string; // ISO
   issueCount: number;
   projectCount: number;
-  pollIntervalSec: number;
-  /** Sync paused by the user from the Connection tab — reads still work
-   * (nothing here disables the ticket list), this only gates
-   * refreshJiraSync()'s "feels live" polling story. */
-  paused: boolean;
 }
+// `pollIntervalSec` and `paused` used to live here, describing a background
+// poll that kept the queue "feeling live". Neither the fixture layer nor the
+// real Jira client ever polled: the list is read on mount and on an explicit
+// Refresh. Now that these numbers describe a real Atlassian account rather
+// than a mock, a poll interval this app does not honor is a claim it cannot
+// back — so the fields, the interval readout and the Pause control are gone
+// rather than left describing behavior that does not exist.
 
-/** A mention target offered by the comment composer's @-popover. */
-export interface JiraMentionCandidate {
-  name: string;
-  role: string; // e.g. "reviewer", "reporter", "watcher" — free text, display-only
-}
+// JiraMentionCandidate — the composer's @-popover suggestion list — is gone
+// with the popover itself. A real Jira mention is an ADF `mention` node
+// carrying an accountId; typing "@Sam Lee" into a plain-text comment body
+// produces literal characters that notify nobody. While the composer wrote to
+// fixtures that was a cosmetic shortcut; now that it posts to a real issue,
+// offering a picker that silently produces a non-mention would be the app
+// telling the user it did something it did not do.
 
 /** phase 2 — the Copilot rail's proposal for ENG-421. Deliberately a SINGLE
  * combined proposal covering both a state move AND a comment post, unlike
