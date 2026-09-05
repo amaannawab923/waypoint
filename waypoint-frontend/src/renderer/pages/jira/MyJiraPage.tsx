@@ -18,7 +18,7 @@ import { JiraTicketRow } from '@/components/domain/JiraTicketRow';
 import { JiraTicketDrawer } from '@/components/domain/JiraTicketDrawer';
 import { JiraProposalCard } from '@/components/domain/JiraProposalCard';
 import { JiraConnectionPanel } from '@/components/domain/JiraConnectionPanel';
-import { JIRA_PROJECT_COLOR } from '@/types/jira';
+import { jiraProjectColor } from '@/types/jira';
 import type {
   JiraDuplicateNudge,
   JiraProjectKey,
@@ -76,8 +76,10 @@ function FilterChip({
 
 function LiveSyncIndicator({ lastSyncAt }: { lastSyncAt: string }) {
   // Re-renders once a second purely so the "synced Ns ago" label keeps
-  // advancing — the sync itself is not polling anything real yet (no
-  // backend exists), this just keeps the displayed age honest.
+  // advancing. `lastSyncAt` is genuinely the moment the JQL search last ran
+  // against the connected site, so this age is real — but nothing refreshes
+  // it on a timer, which is exactly why the label reports an age rather than
+  // implying a live stream.
   const [, forceTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => forceTick((n) => n + 1), 1000);
@@ -255,12 +257,22 @@ export default function MyJiraPage() {
     }
   }
 
+  // Derived from whatever the connected account can actually see, sorted for
+  // a stable chip order. This used to iterate a hardcoded ['ENG','PLAT','GRW']
+  // — the three fixture projects — which against a real site would have
+  // rendered no project chips at all for anyone whose projects happen to be
+  // called something else.
   const projectCounts = useMemo(() => {
     const counts = new Map<JiraProjectKey, number>();
     for (const t of tickets)
       counts.set(t.projectKey, (counts.get(t.projectKey) ?? 0) + 1);
     return counts;
   }, [tickets]);
+
+  const projectKeys = useMemo(
+    () => Array.from(projectCounts.keys()).sort((a, b) => a.localeCompare(b)),
+    [projectCounts],
+  );
 
   const filtered = useMemo(
     () =>
@@ -297,9 +309,12 @@ export default function MyJiraPage() {
       <p className="mt-1.5 ml-[41px] max-w-[70ch] text-[12.5px] text-text-secondary">
         Everything assigned to you, reported by you, or watched by you — across{' '}
         <b>every</b> Jira project you can see, not one board.
+        {/* The literal JQL that runs — parentheses included. JQL binds AND
+            tighter than OR, so without them the Unresolved filter would apply
+            to the watcher clause alone; see jiraClient.ts's MY_WORK_JQL. */}
         <span className="mt-1 block font-mono text-[11px] text-text-muted">
-          assignee = currentUser() OR reporter = currentUser() OR watcher =
-          currentUser() — AND resolution = Unresolved
+          (assignee = currentUser() OR reporter = currentUser() OR watcher =
+          currentUser()) AND resolution = Unresolved
         </span>
       </p>
 
@@ -335,18 +350,16 @@ export default function MyJiraPage() {
                   >
                     All {tickets.length}
                   </FilterChip>
-                  {(['ENG', 'PLAT', 'GRW'] as JiraProjectKey[])
-                    .filter((key) => projectCounts.has(key))
-                    .map((key) => (
-                      <FilterChip
-                        key={key}
-                        active={projFilter === key}
-                        onClick={() => setProjFilter(key)}
-                        swatch={JIRA_PROJECT_COLOR[key]}
-                      >
-                        {key} {projectCounts.get(key)}
-                      </FilterChip>
-                    ))}
+                  {projectKeys.map((key) => (
+                    <FilterChip
+                      key={key}
+                      active={projFilter === key}
+                      onClick={() => setProjFilter(key)}
+                      swatch={jiraProjectColor(key)}
+                    >
+                      {key} {projectCounts.get(key)}
+                    </FilterChip>
+                  ))}
                   <span className="mx-1 h-4.5 w-px bg-border" />
                   {ROLE_FILTERS.map((r) => (
                     <FilterChip
@@ -365,11 +378,10 @@ export default function MyJiraPage() {
                     {visibleProjectCount} Jira project
                     {visibleProjectCount === 1 ? '' : 's'}
                   </span>
-                  {connection && (
-                    <span>
-                      one API call · polls every {connection.pollIntervalSec}s
-                    </span>
-                  )}
+                  {/* This used to read "polls every 15s". Nothing polls —
+                      the list is read on mount and on the Connection tab's
+                      Refresh — so it now says what actually happens. */}
+                  {connection && <span>one API call · refresh to re-read</span>}
                 </div>
 
                 <div className="overflow-hidden rounded-[var(--radius)] border border-border bg-surface shadow-sm">
