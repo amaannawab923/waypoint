@@ -261,6 +261,7 @@ export function JiraAssigneeChip({
   disabledTitle,
   saving,
   open,
+  compact,
   buttonRef,
   onClick,
 }: {
@@ -269,6 +270,14 @@ export function JiraAssigneeChip({
   disabledTitle?: string;
   saving?: boolean;
   open?: boolean;
+  /** Drops the "Assignee · " prefix and renders as a full-width property
+   * row instead of a pill. For the detail view's properties rail, where the
+   * row's own label column already reads "Assignee" — repeating it there
+   * both said the word twice and wrapped the pill onto two lines. The
+   * accessible name is deliberately unchanged either way: it is what names
+   * this control for a screen reader, and it should not depend on which
+   * layout the control happens to be sitting in. */
+  compact?: boolean;
   buttonRef?: RefObject<HTMLButtonElement | null>;
   onClick: () => void;
 }) {
@@ -281,12 +290,23 @@ export function JiraAssigneeChip({
       title={disabled ? disabledTitle : `Assignee: ${assigneeName}`}
       onClick={onClick}
       className={clsx(
-        'inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2.5 py-1 text-[11px] font-semibold text-text-secondary hover:bg-surface-3',
-        open && 'border-accent',
+        compact
+          ? 'flex h-8 w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 text-sm text-text hover:bg-surface-2'
+          : 'inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2.5 py-1 text-[11px] font-semibold text-text-secondary hover:bg-surface-3',
+        open && (compact ? 'bg-surface-2' : 'border-accent'),
         (disabled || saving) && 'cursor-not-allowed opacity-50',
       )}
     >
-      Assignee · {saving ? 'Saving…' : assigneeName}
+      {compact ? (
+        <>
+          <span aria-hidden="true" className="flex shrink-0">
+            <Avatar name={assigneeName} size={20} />
+          </span>
+          <span className="truncate">{saving ? 'Saving…' : assigneeName}</span>
+        </>
+      ) : (
+        <>Assignee · {saving ? 'Saving…' : assigneeName}</>
+      )}
     </button>
   );
 }

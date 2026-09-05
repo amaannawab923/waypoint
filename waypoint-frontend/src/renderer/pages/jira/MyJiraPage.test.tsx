@@ -1,5 +1,6 @@
 import '@testing-library/jest-dom';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import {
   dismissJiraDuplicateNudge,
   getJiraDuplicateNudge,
@@ -113,7 +114,11 @@ function mount() {
   jest.mocked(getJiraTransitions).mockResolvedValue([]);
   jest.mocked(listJiraComments).mockResolvedValue([]);
   jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
-  return render(<MyJiraPage />);
+  return render(
+    <MemoryRouter>
+      <MyJiraPage />
+    </MemoryRouter>,
+  );
 }
 
 beforeEach(() => {
@@ -202,7 +207,11 @@ describe('MyJiraPage — a failed ticket read is not an empty queue', () => {
     jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
     jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
-    return render(<MyJiraPage />);
+    return render(
+      <MemoryRouter>
+        <MyJiraPage />
+      </MemoryRouter>,
+    );
   }
 
   it('names the failure instead of claiming the filters matched nothing', async () => {
@@ -266,7 +275,11 @@ describe('MyJiraPage — sync indicator', () => {
     jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
     jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
     jest.mocked(useLoadedJiraConnection).mockReturnValue(connection(null));
-    render(<MyJiraPage />);
+    render(
+      <MemoryRouter>
+        <MyJiraPage />
+      </MemoryRouter>,
+    );
 
     expect(await screen.findByText('not synced yet')).toBeInTheDocument();
     expect(screen.queryByText(/^synced /)).not.toBeInTheDocument();
@@ -279,7 +292,11 @@ describe('MyJiraPage — sync indicator', () => {
     jest
       .mocked(useLoadedJiraConnection)
       .mockReturnValue(connection(new Date().toISOString()));
-    render(<MyJiraPage />);
+    render(
+      <MemoryRouter>
+        <MyJiraPage />
+      </MemoryRouter>,
+    );
 
     expect(await screen.findByText(/^synced \d+s ago$/)).toBeInTheDocument();
     expect(screen.queryByText('not synced yet')).not.toBeInTheDocument();
@@ -304,7 +321,11 @@ describe('JiraTicketDrawer — description wrapping', () => {
     jest.mocked(listJiraComments).mockResolvedValue([]);
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
     jest.mocked(useJiraConnection).mockReturnValue(undefined);
-    render(<MyJiraPage />);
+    render(
+      <MemoryRouter>
+        <MyJiraPage />
+      </MemoryRouter>,
+    );
 
     fireEvent.click(await screen.findByText('Described ticket'));
 
@@ -333,7 +354,11 @@ describe('JiraTransitionPopover — escapes the list clipping container', () => 
       },
     ]);
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
-    const { container } = render(<MyJiraPage />);
+    const { container } = render(
+      <MemoryRouter>
+        <MyJiraPage />
+      </MemoryRouter>,
+    );
 
     await screen.findByText('Grw assignee ticket');
     const chips = screen.getAllByRole('button', { name: 'To Do' });
@@ -413,7 +438,11 @@ describe('MyJiraPage — Copilot rail', () => {
     jest.mocked(getJiraTransitions).mockResolvedValue([]);
     jest.mocked(listJiraComments).mockResolvedValue([]);
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
-    render(<MyJiraPage />);
+    render(
+      <MemoryRouter>
+        <MyJiraPage />
+      </MemoryRouter>,
+    );
 
     await screen.findByText('Needs your approval');
     expect(screen.getByText('Also queued')).toBeInTheDocument();
@@ -426,7 +455,11 @@ describe('MyJiraPage — Copilot rail', () => {
     jest.mocked(getJiraDuplicateNudge).mockResolvedValue(nudge());
     jest.mocked(dismissJiraDuplicateNudge).mockResolvedValue(undefined);
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
-    render(<MyJiraPage />);
+    render(
+      <MemoryRouter>
+        <MyJiraPage />
+      </MemoryRouter>,
+    );
 
     await screen.findByText('Also queued');
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));

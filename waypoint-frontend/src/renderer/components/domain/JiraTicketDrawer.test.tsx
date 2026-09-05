@@ -1,4 +1,5 @@
 import '@testing-library/jest-dom';
+import { MemoryRouter } from 'react-router-dom';
 import {
   act,
   fireEvent,
@@ -113,13 +114,18 @@ const ASSIGNABLE = [
 
 const onTicketUpdated = jest.fn();
 
+/** Wrapped in a router because the drawer's expand button is a real
+ * navigation to /my-jira/:key — the same jump TicketDrawer makes to a
+ * native ticket's own page — so `useNavigate` needs a Router above it. */
 function renderDrawer(overrides: Partial<JiraTicket> = {}) {
   return render(
-    <JiraTicketDrawer
-      ticket={ticket(overrides)}
-      onTicketUpdated={onTicketUpdated}
-      onClose={jest.fn()}
-    />,
+    <MemoryRouter>
+      <JiraTicketDrawer
+        ticket={ticket(overrides)}
+        onTicketUpdated={onTicketUpdated}
+        onClose={jest.fn()}
+      />
+    </MemoryRouter>,
   );
 }
 
@@ -326,12 +332,17 @@ describe('the assignee chip', () => {
     expect(chip).toBeEnabled();
   });
 
-  // Everything else in that chip row — reporter, epic, points, sprint — is
-  // read-only here, and must not have quietly become a control alongside it.
-  it('leaves the reporter chip a plain label', () => {
+  // Everything else in the properties panel — reporter, epic, points,
+  // sprint — is read-only here, and must not have quietly become a control
+  // alongside the three (state, assignee, priority) that are writable.
+  // Asserted on the value, not the "Reporter" label, since the label is now
+  // its own element in a PropertyRow rather than one "Reporter · Sam Lee"
+  // chip.
+  it('leaves the reporter a plain label, not a control', () => {
     renderDrawer();
 
-    expect(screen.getByText('Reporter · Sam Lee').tagName).not.toBe('BUTTON');
+    expect(screen.getByText('Sam Lee').tagName).not.toBe('BUTTON');
+    expect(screen.queryByRole('button', { name: /Sam Lee/ })).toBeNull();
   });
 
   it('reads nothing from Jira until it is opened', () => {

@@ -31,6 +31,7 @@ import ReviewPage from '@/pages/ReviewPage';
 import MachinePage from '@/pages/MachinePage';
 import AllTicketsPage from '@/pages/AllTicketsPage';
 import MyJiraPage from '@/pages/jira/MyJiraPage';
+import JiraTicketPage from '@/pages/jira/JiraTicketPage';
 
 import TicketsLayout from '@/pages/tickets/TicketsLayout';
 import TicketDetailPage from '@/pages/tickets/TicketDetailPage';
@@ -127,6 +128,17 @@ export const router = createBrowserRouter([
                 path: '/my-jira',
                 element: MY_JIRA_ENABLED ? (
                   <MyJiraPage />
+                ) : (
+                  <Navigate to="/" replace />
+                ),
+              },
+              // The drawer's expand target. Behind the same flag as the list
+              // for the same reason: a stale bookmark to a single issue must
+              // not be a way around a disabled feature.
+              {
+                path: '/my-jira/:ticketKey',
+                element: MY_JIRA_ENABLED ? (
+                  <JiraTicketPage />
                 ) : (
                   <Navigate to="/" replace />
                 ),
