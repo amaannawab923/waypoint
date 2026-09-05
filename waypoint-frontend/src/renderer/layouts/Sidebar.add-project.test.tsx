@@ -36,12 +36,16 @@ jest.mock('@/components/domain/AddProjectWizard', () => ({
 }));
 
 function mount() {
-  jest.mocked(getWorkspace).mockResolvedValue({ id: 'ws-1', name: 'Waypoint Labs' } as never);
+  jest
+    .mocked(getWorkspace)
+    .mockResolvedValue({ id: 'ws-1', name: 'Waypoint Labs' } as never);
   jest.mocked(listProjects).mockResolvedValue([]);
   jest.mocked(getProposalCounts).mockResolvedValue({ proposed: 0 } as never);
   jest.mocked(listNotifications).mockResolvedValue([]);
   jest.mocked(listDraftTickets).mockResolvedValue([]);
-  jest.mocked(detectLocalClaudeCode).mockResolvedValue({ state: 'absent' } as never);
+  jest
+    .mocked(detectLocalClaudeCode)
+    .mockResolvedValue({ state: 'absent' } as never);
   jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
   return render(
     <MemoryRouter>
