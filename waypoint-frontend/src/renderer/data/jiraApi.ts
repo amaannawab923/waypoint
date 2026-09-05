@@ -472,10 +472,15 @@ export async function getMyJiraProposal(): Promise<JiraProposal | undefined> {
   return proposalFixture ? { ...proposalFixture } : undefined;
 }
 
-export async function getJiraDuplicateNudge(): Promise<JiraDuplicateNudge | undefined> {
+export async function getJiraDuplicateNudge(): Promise<
+  JiraDuplicateNudge | undefined
+> {
   await delay(120);
-  if (!duplicateNudgeFixture || duplicateNudgeFixture.dismissed) return undefined;
-  const ticket = ticketsFixture.find((t) => t.id === duplicateNudgeFixture!.ticketId);
+  if (!duplicateNudgeFixture || duplicateNudgeFixture.dismissed)
+    return undefined;
+  const ticket = ticketsFixture.find(
+    (t) => t.id === duplicateNudgeFixture!.ticketId,
+  );
   if (!ticket) return undefined;
   return {
     id: duplicateNudgeFixture.id,
@@ -509,14 +514,19 @@ export async function disconnectJira(): Promise<void> {
  * even though nothing in the fixtures ever actually drifts on its own. */
 export async function refreshJiraSync(): Promise<JiraConnectionStatus> {
   await delay(500);
-  connectionFixture = { ...connectionFixture, lastSyncAt: new Date().toISOString() };
+  connectionFixture = {
+    ...connectionFixture,
+    lastSyncAt: new Date().toISOString(),
+  };
   return getJiraConnectionStatus();
 }
 
 /** Connection tab's "Pause sync" — a real, persisted (well, fixture-lived)
  * boolean rather than a disabled/"Not built yet" control, since jiraStore
  * already exists for exactly this kind of live cross-surface state. */
-export async function setJiraSyncPaused(paused: boolean): Promise<JiraConnectionStatus> {
+export async function setJiraSyncPaused(
+  paused: boolean,
+): Promise<JiraConnectionStatus> {
   await delay(300);
   connectionFixture = { ...connectionFixture, paused };
   return getJiraConnectionStatus();
