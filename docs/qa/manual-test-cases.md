@@ -894,14 +894,17 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: Set a due date on one of your Jira issues for today, another for yesterday. Refresh My Jira. Look for a due date anywhere.
   Expected: Due dates visible on the row or in the drawer.
   Coverage: **Gap worth flagging** — `fields.duedate` is never read; `JiraWireTicket` and `JiraTicket` have no due-date field at all. There is no way to see, filter or sort by due date, and no overdue indicator. For a tool whose stated job is mirroring "everything you're on the hook for", the absence of "when is it due" is the largest single field gap in the feature.
+  Result: FAIL — set a real due date (yesterday, genuinely overdue) on ENG-4 via the Jira API, reloaded, checked both the row and drawer: no due date appears anywhere. Directly confirms the gap with live data.
 - **JIRA-51** — Overdue highlighting
   Steps: With an overdue issue in your queue, look for any visual distinction on its row.
   Expected: Document that there is none.
   Coverage: **Gap worth flagging** — follows directly from JIRA-50; nothing computes or renders overdue state.
+  Result: FAIL (confirms the gap directly) — with ENG-4 genuinely overdue (due date set to yesterday) in real Jira, its row rendered with zero visual distinction from any other row: no color, no icon, no badge.
 - **JIRA-52** — A priority-first view of your queue
   Steps: Try to answer "what are my urgent issues right now" using only My Jira.
   Expected: Document how many steps it takes.
   Coverage: **Gap worth flagging** — the only way is visually scanning priority icons down an updated-DESC list. No filter, no sort, no grouping. Combined with JIRA-33 this makes the list hard to triage at any real volume.
+  Result: PASS (confirms the gap) — the only mechanism is scrolling the full 98-row updated-DESC list and eyeballing icons; confirmed no filter/sort/grouping control exists anywhere on the page.
 
 ### History & reassignment — "this used to be mine"
 
@@ -909,34 +912,42 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: Note an issue currently assigned to you in My Jira. In Jira's own UI, reassign it to someone else (a QA engineer, a PM). Return to Waypoint and press Refresh now.
   Expected: Document what happens to the row.
   Coverage: **Gap worth flagging** — this is the founder's own named use case and it is not delivered. If you're still the reporter or a watcher the issue silently changes role tag; if you're neither, it vanishes from the list with no trace, no tombstone and no notification. The tombstone UI exists (`JiraTicketRow`'s "Reassigned to X … Kept here for 24 hours so it doesn't vanish mid-thought" strip) but `toTicket()` hardcodes `isTombstoned: false`, so it can never render.
+  Result: PASS on the "still reporter" half, live-verified — unassigned ENG-4 from myself via the API (I remain its reporter); after reload the row stayed in the list (still 98 total), role tag silently switched "assignee" → "reporter", avatar switched to "UN". No toast, no indicator, no trace of the change — exactly the documented "silently changes role tag" behavior. Could not test the "vanishes with no trace" half: every ticket in this seed dataset has me as reporter (I created them all via my own token), so no assignee-only ticket exists to reassign fully away.
 - **JIRA-54** — Tombstone strip renders when a ticket leaves your queue
   Steps: Try to produce a struck-through "was yours" row by any means.
   Expected: Confirm it cannot be produced.
   Coverage: **Partial** — the component, the "was yours" role label, the disabled "Not yours to move any more" state chip and the "Dismiss now" action are all built and wired through `dismissJiraTombstone`, but nothing ever sets the flag. Detecting it needs a persisted previous read, which this phase has no store for — honestly documented in `jiraApi.ts`, but the result is dead UI.
+  Result: PASS (confirms it cannot be produced) — reassigned ENG-4 away from myself for real via the Jira API; after reload, its row shows no strikethrough and no tombstone text of any kind ("reassigned"/"was yours"), just a normal row with an updated role tag.
 - **JIRA-55** — Tombstone's "Open in Jira" link
   Steps: If a tombstoned row can be produced, click its "Open in Jira" button.
   Expected: It should open the issue.
   Coverage: **Partial** — the tombstone row's button is hardcoded `disabled` with title "Opening a ticket in Jira isn't wired up yet.", even though the drawer's equivalent link was upgraded to a real `https://{site}/browse/{key}` URL when the site became known. Stale leftover; the tombstone row has the key and the store has the site.
+  Result: NOT TESTED — JIRA-54 confirmed a tombstoned row cannot be produced at all (even with a real reassignment), so its "Open in Jira" button can't be reached to test.
 - **JIRA-56** — Finding issues you previously reported that someone else now owns
   Steps: Filter to "Reported". Look for issues you reported that are now assigned to a QA engineer or PM.
   Expected: They appear, with the current assignee's avatar.
   Coverage: **Supported** — the reporter arm of the JQL covers exactly this, and the row's avatar is the *current* assignee (`displayNameOf(fields.assignee, 'Unassigned')`). This is the closest thing the build has to the founder's "this was mine" need, and it works — but only while you're still the reporter.
+  Result: PASS, live-verified — after unassigning ENG-4 from myself via the API, filtering to "Reported" still shows it, now with a "UN" (Unassigned) avatar reflecting the real current assignee state.
 - **JIRA-57** — Issues you were assigned but never reported or watched
   Steps: Have someone reassign away an issue you were assigned but did not report and do not watch. Refresh.
   Expected: Document that it is gone with no record.
   Coverage: **Gap worth flagging** — the sharpest form of JIRA-53. There is no local history, no "recently left your queue" list, and no changelog read, so the issue is unrecoverable from Waypoint. A user who was mid-thought on it has no path back except remembering the key.
+  Result: NOT TESTED — every ticket in this seed dataset has me as reporter (I created them all via my own token), so no assignee-only ticket exists to reassign fully away and observe vanishing with no trace.
 - **JIRA-58** — Activity / change history on a ticket
   Steps: Open the drawer on a ticket that has been reassigned, re-prioritised and moved several times in Jira. Look for a change log.
   Expected: No change history is shown at all. The drawer contains exactly the description, the fixed chip set, attachments and comments — no reassignment, priority or status events, and no "view history" affordance.
   Coverage: **Gap worth flagging** — the drawer shows description, a fixed chip set, attachments and comments, and nothing else. Jira's `changelog` expand is never requested. Waypoint's own native ticket detail page has a full activity log (see TIXDET-07), so the Jira drawer is conspicuously thinner than the app's own established bar.
+  Result: PASS (confirms the gap) — ENG-4 now has real, verifiable history (reassigned, due date set, label added, all via this pass), and none of it appears in the drawer: just description, the fixed chip set, and comments.
 - **JIRA-59** — Who reported an issue
   Steps: Open any drawer and check the "Reporter ·" chip against Jira.
   Expected: Correct display name, or "Unknown" if Jira didn't return one.
   Coverage: **Supported** — `displayNameOf(fields.reporter, 'Unknown')`.
+  Result: PASS — "Reporter · Amaan Nawab" matches the real reporter on every ticket checked.
 - **JIRA-60** — Unassigned issue renders sensibly
   Steps: Find an unassigned issue in your queue (you reported it, nobody's picked it up). Check the row avatar and the drawer chip.
   Expected: "Unassigned" rather than a blank or a crash.
   Coverage: **Supported** — `displayNameOf(fields.assignee, 'Unassigned')`; `Avatar` derives initials from that string.
+  Result: PASS — ENG-4 (unassigned via this pass) and ENG-81 (unassigned from seed data) both render "Unassigned"/"UN" cleanly on row and drawer, no crash or blank.
 
 ### Sprints, backlog and boards
 
@@ -944,26 +955,32 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: Look for a Kanban board, a backlog list, a swimlane view or any board-like grouping in My Jira.
   Expected: None exists, and the UI says so rather than hinting at one.
   Coverage: **Not supported (by design)** — stated architecture decision; the wizard's confirm step says plainly "Sprints, Docs and Workstreams don't appear here — Jira owns those, and Waypoint won't fake a mirror of them."
+  Result: PASS — no board/backlog/swimlane view exists anywhere; the only match for "board" in the page is the header copy "...not one board," an explicit disclosure, not a hint at one.
 - **JIRA-62** — Backlog vs. active sprint distinction
   Steps: Try to tell, from My Jira alone, which of your issues are in the current sprint and which are backlog.
   Expected: Document what's possible.
   Coverage: **Partial** — the drawer shows a single "Sprint ·" chip per ticket, and `sprintNameOf()` correctly prefers the *active* sprint when an issue sits in several (a carried-over ticket). But there is no sprint filter, no grouping, and no chip on the list row, so answering the question means opening every ticket one at a time. The boundary is honest that boards are out of scope; a sprint *filter* is a different, smaller thing that the data already supports.
+  Result: PASS (confirms the gap) — with ENG-4 genuinely in a real active sprint, its list row shows no sprint text at all and no sprint filter control exists anywhere; the sprint name only appears after opening the drawer.
 - **JIRA-63** — Sprint name on a site without Jira Software
   Steps: Connect an account on a Jira Work Management / Service Management site with no sprint field.
   Expected: The Sprint chip is simply absent, not an error or an empty chip.
   Coverage: **Supported** — `findNamedField(..., /^sprint$/i)` returns undefined, `sprintNameOf(undefined)` returns null, and the drawer renders the chip conditionally.
+  Result: PASS (adjacent evidence, not the exact scenario) — before this pass added a real sprint, ENG-4 had no sprint assigned and showed no Sprint chip at all (no error, no empty chip), confirming the conditional-render path. The exact "site has no sprint field at all" scenario (a Work Management/Service Management site) wasn't tested — this account's site does have Jira Software/sprints available.
 - **JIRA-64** — Issue in multiple sprints
   Steps: Find (or create) an issue carried across two sprints, one closed and one active. Check the Sprint chip.
   Expected: Shows the active sprint, not the closed one.
   Coverage: **Supported** — `sprintNameOf()` explicitly prefers `state === 'active'`, falling back to the last listed.
+  Result: PASS, live-verified with real Jira sprint data — created a real closed sprint and a real active sprint, put ENG-4 in both (confirmed via the API: field carries both entries), reloaded: the drawer shows "Sprint · ENG Sprint 1" — the active one — not the closed sprint.
 - **JIRA-65** — Sprint dates, goals or progress
   Steps: Look for sprint start/end dates or completion progress anywhere.
   Expected: None — Jira owns sprints.
   Coverage: **Not supported (by design)** — consistent with the stated boundary.
+  Result: PASS — with a real active sprint on ENG-4, the drawer shows only "Sprint · ENG Sprint 1"; no start/end date, no goal, no progress bar.
 - **JIRA-66** — Waypoint's own Sprints page is unaffected
   Steps: With Jira connected, open a native Waypoint project's Sprints page.
   Expected: Unchanged behavior; no Jira data leaks in, no Jira issues appear in native sprint counts.
   Coverage: **Supported** — My Jira is a standalone concept (`types/jira.ts` header: deliberately not folded into `types/entities.ts`), with no shared store or route. Worth confirming live that the two never cross.
+  Result: NOT TESTED — this dev environment has no native Waypoint project seeded (`/projects` shows an empty "All projects" list), so there's no native Sprints page to check against.
 
 ### Transitions & workflow
 
