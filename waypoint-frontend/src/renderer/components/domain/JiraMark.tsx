@@ -7,7 +7,13 @@
  */
 export function JiraMark({ size = 16 }: { size?: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+    >
       <path
         d="M11.53 2c0 2.4 1.97 4.35 4.4 4.35h1.8v1.72c0 2.4 1.96 4.34 4.37 4.35V2.87A.87.87 0 0 0 21.23 2H11.53Z"
         fill="currentColor"
