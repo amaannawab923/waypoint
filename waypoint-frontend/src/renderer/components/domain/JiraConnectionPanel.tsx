@@ -1,5 +1,10 @@
 import { useState } from 'react';
-import { disconnectJira, getJiraConnectionStatus, refreshJiraSync, setJiraSyncPaused } from '@/data/jiraApi';
+import {
+  disconnectJira,
+  getJiraConnectionStatus,
+  refreshJiraSync,
+  setJiraSyncPaused,
+} from '@/data/jiraApi';
 import { setJiraConnection } from '@/lib/jiraStore';
 import { showErrorToast } from '@/lib/toast';
 import { Avatar } from '@/components/ui/Avatar';
@@ -16,7 +21,11 @@ import type { JiraConnectionStatus } from '@/types/jira';
  * what makes the sidebar's MyJiraNavItem disappear live, since it reads the
  * exact same store.
  */
-export function JiraConnectionPanel({ connection }: { connection: JiraConnectionStatus }) {
+export function JiraConnectionPanel({
+  connection,
+}: {
+  connection: JiraConnectionStatus;
+}) {
   const [refreshing, setRefreshing] = useState(false);
   const [pausing, setPausing] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
@@ -27,7 +36,9 @@ export function JiraConnectionPanel({ connection }: { connection: JiraConnection
       const updated = await refreshJiraSync();
       setJiraConnection(updated);
     } catch (err) {
-      showErrorToast(err instanceof Error ? err.message : 'Could not refresh from Jira.');
+      showErrorToast(
+        err instanceof Error ? err.message : 'Could not refresh from Jira.',
+      );
     } finally {
       setRefreshing(false);
     }
@@ -39,7 +50,9 @@ export function JiraConnectionPanel({ connection }: { connection: JiraConnection
       const updated = await setJiraSyncPaused(!connection.paused);
       setJiraConnection(updated);
     } catch (err) {
-      showErrorToast(err instanceof Error ? err.message : 'Could not change sync.');
+      showErrorToast(
+        err instanceof Error ? err.message : 'Could not change sync.',
+      );
     } finally {
       setPausing(false);
     }
@@ -52,7 +65,9 @@ export function JiraConnectionPanel({ connection }: { connection: JiraConnection
       const updated = await getJiraConnectionStatus();
       setJiraConnection(updated);
     } catch (err) {
-      showErrorToast(err instanceof Error ? err.message : 'Could not disconnect from Jira.');
+      showErrorToast(
+        err instanceof Error ? err.message : 'Could not disconnect from Jira.',
+      );
     } finally {
       setDisconnecting(false);
     }
@@ -64,7 +79,9 @@ export function JiraConnectionPanel({ connection }: { connection: JiraConnection
         <div className="flex items-center gap-3 border-b border-border px-4.5 py-3.5">
           <Avatar name={connection.accountName} size={34} />
           <div className="min-w-0">
-            <b className="block text-[13.5px] font-semibold text-text">{connection.accountName}</b>
+            <b className="block text-[13.5px] font-semibold text-text">
+              {connection.accountName}
+            </b>
             <div className="mt-0.5 truncate text-[12.5px] text-text-muted">
               {connection.accountEmail} · {connection.site}
             </div>
@@ -84,25 +101,47 @@ export function JiraConnectionPanel({ connection }: { connection: JiraConnection
 
         <div className="flex flex-wrap gap-6 px-4.5 py-3.5">
           <div>
-            <b className="block font-mono text-lg font-bold tabular-nums text-text">{connection.issueCount}</b>
-            <span className="text-[11.5px] text-text-muted">issues in your queue</span>
+            <b className="block font-mono text-lg font-bold tabular-nums text-text">
+              {connection.issueCount}
+            </b>
+            <span className="text-[11.5px] text-text-muted">
+              issues in your queue
+            </span>
           </div>
           <div>
-            <b className="block font-mono text-lg font-bold tabular-nums text-text">{connection.projectCount}</b>
-            <span className="text-[11.5px] text-text-muted">Jira projects represented</span>
+            <b className="block font-mono text-lg font-bold tabular-nums text-text">
+              {connection.projectCount}
+            </b>
+            <span className="text-[11.5px] text-text-muted">
+              Jira projects represented
+            </span>
           </div>
           <div>
-            <b className="block font-mono text-lg font-bold tabular-nums text-text">{connection.pollIntervalSec}s</b>
+            <b className="block font-mono text-lg font-bold tabular-nums text-text">
+              {connection.pollIntervalSec}s
+            </b>
             <span className="text-[11.5px] text-text-muted">poll interval</span>
           </div>
         </div>
 
         <div className="flex flex-wrap gap-2 border-t border-border px-4.5 py-3">
-          <Button size="xs" disabled={refreshing || !connection.connected} onClick={handleRefresh}>
+          <Button
+            size="xs"
+            disabled={refreshing || !connection.connected}
+            onClick={handleRefresh}
+          >
             {refreshing ? 'Refreshing…' : 'Refresh now'}
           </Button>
-          <Button size="xs" disabled={pausing || !connection.connected} onClick={handleTogglePause}>
-            {pausing ? 'Saving…' : connection.paused ? 'Resume sync' : 'Pause sync'}
+          <Button
+            size="xs"
+            disabled={pausing || !connection.connected}
+            onClick={handleTogglePause}
+          >
+            {pausing
+              ? 'Saving…'
+              : connection.paused
+                ? 'Resume sync'
+                : 'Pause sync'}
           </Button>
           <Button
             size="xs"
@@ -119,15 +158,16 @@ export function JiraConnectionPanel({ connection }: { connection: JiraConnection
         <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-accent/30 bg-accent-soft-bg px-3 py-2.5 text-[12.5px] leading-relaxed text-accent-soft-text">
           <IconCircleDot size={15} className="mt-0.5 shrink-0" />
           <span>
-            <b>Your</b> edits — moving, commenting, changing priority — write straight to Jira the moment you make
-            them, as you.
+            <b>Your</b> edits — moving, commenting, changing priority — write
+            straight to Jira the moment you make them, as you.
           </span>
         </div>
         <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-warning/30 bg-warning-bg px-3 py-2.5 text-[12.5px] leading-relaxed text-warning">
           <IconAlert size={15} className="mt-0.5 shrink-0" />
           <span>
-            <b>Copilot&apos;s</b> proposals always need an explicit approval click — no exceptions, no earned-trust
-            bypass, because a Jira write reaches people who never opened Waypoint.
+            <b>Copilot&apos;s</b> proposals always need an explicit approval
+            click — no exceptions, no earned-trust bypass, because a Jira write
+            reaches people who never opened Waypoint.
           </span>
         </div>
       </div>
@@ -137,10 +177,13 @@ export function JiraConnectionPanel({ connection }: { connection: JiraConnection
           Not built yet — said plainly
         </div>
         <ul className="list-disc space-y-1.5 pl-4 text-[12.5px] leading-relaxed text-text-secondary">
-          <li>Uploading attachments. You can see what&apos;s attached and its size; adding one still happens in Jira.</li>
           <li>
-            Rich-text authoring — tables, panels, syntax-highlighted code blocks. Comments you write here are plain
-            text with @mentions.
+            Uploading attachments. You can see what&apos;s attached and its
+            size; adding one still happens in Jira.
+          </li>
+          <li>
+            Rich-text authoring — tables, panels, syntax-highlighted code
+            blocks. Comments you write here are plain text with @mentions.
           </li>
           <li>Linear and Shortcut companions.</li>
         </ul>
