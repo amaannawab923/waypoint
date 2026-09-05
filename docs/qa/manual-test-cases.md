@@ -1509,6 +1509,7 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   `sm:w-[292px] sm:min-w-[262px] sm:shrink-0`, and the drawer is
   `w-full max-w-[460px]`. Plausible but unverified; no case in the whole 152 set
   resizes anything.
+  Result: FAIL at narrow widths, live-verified — at 900px the page held up fine (chips wrapped, rows stayed readable, no overflow). At 600px, `document.body.scrollWidth === window.innerWidth` (both 600, confirmed no horizontal scroll exists), yet a row's priority icon measured `width: 0` (collapsed to nothing) and its avatar's bounding rect sat at x=632-654 — entirely past the 600px viewport edge. That content is not reachable by any means at this width: it doesn't reflow, wrap, or scroll into view, it's just gone.
 - **JIRA-158** — Every My Jira surface in the dark theme
   Steps: Switch to dark theme (CHROME-04). Visit My Jira: the header chip, the
   sync indicator, filter chips, rows, project color swatches, the state chip, the
@@ -1520,6 +1521,7 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   colors are fixed `--p-eng`/`--p-plat`/`--p-grw` references whose contrast in
   dark mode has never been checked against the row's `bg-surface`. Cheap to
   verify, and the app ships a theme toggle so a user will hit it.
+  Result: PASS — switched to dark theme (`data-theme="dark"`, body background `rgb(10,10,12)`) and screenshotted the header, sync indicator, filter chips, rows, a real ticket drawer with comments, and the Connection tab's neutral and amber-tinted banner blocks: every surface was clearly legible with good contrast. No hardcoded light-mode color visibly survived.
 
 ### Accessibility and keyboard operation
 
