@@ -6,7 +6,6 @@ import {
   getJiraTransitions,
   getMyJiraProposal,
   listJiraComments,
-  listJiraMentionCandidates,
   listMyJiraTickets,
 } from '@/data/jiraApi';
 import { useLoadedJiraConnection } from '@/lib/jiraStore';
@@ -31,12 +30,17 @@ jest.mock('@/data/jiraApi', () => ({
   getJiraTransitions: jest.fn(),
   transitionJiraTicket: jest.fn(),
   listJiraComments: jest.fn(),
-  listJiraMentionCandidates: jest.fn(),
   postJiraComment: jest.fn(),
   approveJiraProposal: jest.fn(),
   rejectJiraProposal: jest.fn(),
 }));
-jest.mock('@/lib/jiraStore', () => ({ useLoadedJiraConnection: jest.fn() }));
+// useJiraConnection is here because the drawer and the comment composer both
+// read the connected account from the same store — the drawer to build the
+// real "Open in Jira" link, the composer to name who a comment posts as.
+jest.mock('@/lib/jiraStore', () => ({
+  useLoadedJiraConnection: jest.fn(),
+  useJiraConnection: jest.fn(),
+}));
 
 function ticket(overrides: Partial<JiraTicket> = {}): JiraTicket {
   return {
@@ -49,9 +53,7 @@ function ticket(overrides: Partial<JiraTicket> = {}): JiraTicket {
     stateColor: 'var(--text-muted)',
     priority: 'none',
     assigneeName: 'Max Chen',
-    assigneeInitials: 'MC',
     reporterName: 'Sam Lee',
-    watcherNames: [],
     description: '',
     epicName: null,
     storyPoints: null,
@@ -102,7 +104,6 @@ function mount() {
   jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
   jest.mocked(getJiraTransitions).mockResolvedValue([]);
   jest.mocked(listJiraComments).mockResolvedValue([]);
-  jest.mocked(listJiraMentionCandidates).mockResolvedValue([]);
   jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
   return render(<MyJiraPage />);
 }
@@ -225,7 +226,6 @@ describe('MyJiraPage — Copilot rail', () => {
     jest.mocked(getJiraDuplicateNudge).mockResolvedValue(nudge());
     jest.mocked(getJiraTransitions).mockResolvedValue([]);
     jest.mocked(listJiraComments).mockResolvedValue([]);
-    jest.mocked(listJiraMentionCandidates).mockResolvedValue([]);
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
     render(<MyJiraPage />);
 
