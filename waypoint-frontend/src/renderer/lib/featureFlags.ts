@@ -10,3 +10,13 @@
  * #7).
  */
 export const COPILOT_ENABLED = process.env.WAYPOINT_FEATURE_COPILOT === 'true';
+
+/**
+ * The "My Jira" companion project — a project type that mirrors a user's own
+ * Jira work (everything assigned to, reported by, or watched by them, across
+ * every Jira project they can see) inside Waypoint, writable from here. Gates
+ * the sidebar's "My Jira" nav slot, the /my-jira route, and (a later phase)
+ * the Add Project wizard's Companion option. No backend exists yet — the
+ * data layer is an in-memory mock (see data/jiraApi.ts).
+ */
+export const MY_JIRA_ENABLED = process.env.WAYPOINT_FEATURE_MY_JIRA === 'true';
