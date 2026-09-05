@@ -17,6 +17,7 @@ import type {
   JiraTicket,
 } from '@/types/jira';
 import MyJiraPage from './MyJiraPage';
+import { resetMyJiraQueueForTests } from './useMyJiraQueue';
 
 // The "My work" tab pulls in JiraTicketRow, JiraTicketDrawer,
 // JiraCommentComposer, and JiraProposalCard, all of which import their own
@@ -142,6 +143,12 @@ function mount() {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // The query outlives the component on purpose — it is what survives the
+  // drawer's Expand navigating away and back — which means it also outlives
+  // an `it()` block unless something resets it. Without this line a test that
+  // clicks a filter chip silently changes the starting state of every test
+  // after it, and the failures read as flake rather than as leakage.
+  resetMyJiraQueueForTests();
 });
 
 describe('MyJiraPage — project + role filtering (combined)', () => {
@@ -217,10 +224,276 @@ describe('MyJiraPage — project + role filtering (combined)', () => {
   });
 });
 
+/** The issue keys currently rendered, in DOM order — each row prints its own
+ *  key in a `<span>` as "ENG-9". Order is the entire point of the sort tests,
+ *  and presence alone would let a broken comparator pass every one of them. */
+function renderedKeys(): string[] {
+  // A matcher function rather than a regex, because the row splits its key
+  // across elements to color the project half — `<b>ENG</b>-9` — so the
+  // string "ENG-9" exists only as the span's combined textContent and a plain
+  // text matcher never sees it.
+  return screen
+    .getAllByText((_content, element) =>
+      /^[A-Z]+-\d+$/.test(element?.textContent ?? ''),
+    )
+    .map((el) => el.textContent ?? '');
+}
+
+function mountWith(tickets: JiraTicket[]) {
+  jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(tickets));
+  jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
+  jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
+  jest.mocked(getJiraTransitions).mockResolvedValue([]);
+  jest.mocked(listJiraComments).mockResolvedValue([]);
+  jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
+  return render(
+    <MemoryRouter>
+      <MyJiraPage />
+    </MemoryRouter>,
+  );
+}
+
+describe('MyJiraPage — sorting', () => {
+  // Deliberately in none of the three sort orders as written, so no assertion
+  // below can pass just because the page rendered the array it was handed.
+  const UNSORTED: JiraTicket[] = [
+    ticket({
+      id: 's-1',
+      key: 'ENG-81',
+      title: 'Oldest, low',
+      priority: 'low',
+      updatedAt: '2026-09-01T00:00:00.000Z',
+    }),
+    ticket({
+      id: 's-2',
+      key: 'ENG-9',
+      title: 'Newest, none',
+      priority: 'none',
+      updatedAt: '2026-09-03T00:00:00.000Z',
+    }),
+    ticket({
+      id: 's-3',
+      key: 'ENG-10',
+      title: 'Middle, urgent',
+      priority: 'urgent',
+      updatedAt: '2026-09-02T00:00:00.000Z',
+    }),
+  ];
+
+  function chooseSort(label: string) {
+    fireEvent.click(screen.getByRole('button', { name: /^Sort:/ }));
+    fireEvent.click(screen.getByRole('button', { name: label }));
+  }
+
+  it('defaults to most recently updated', async () => {
+    mountWith(UNSORTED);
+    await screen.findByText('Newest, none');
+
+    expect(renderedKeys()).toEqual(['ENG-9', 'ENG-10', 'ENG-81']);
+  });
+
+  it('reorders by priority when asked', async () => {
+    mountWith(UNSORTED);
+    await screen.findByText('Newest, none');
+
+    chooseSort('Priority');
+
+    expect(renderedKeys()).toEqual(['ENG-10', 'ENG-81', 'ENG-9']);
+  });
+
+  // The reason compareIssueKeys exists rather than a bare string compare —
+  // and the one ordering a user would notice being wrong immediately.
+  it('reads the issue number as a number, not as text', async () => {
+    mountWith(UNSORTED);
+    await screen.findByText('Newest, none');
+
+    chooseSort('Issue key');
+
+    expect(renderedKeys()).toEqual(['ENG-9', 'ENG-10', 'ENG-81']);
+  });
+});
+
+describe('MyJiraPage — search and status', () => {
+  function typeSearch(text: string) {
+    fireEvent.change(screen.getByLabelText('Search your Jira queue'), {
+      target: { value: text },
+    });
+  }
+
+  it('narrows the list to matching titles', async () => {
+    mount();
+    await screen.findByText('Eng assignee ticket');
+
+    typeSearch('watcher');
+
+    expect(screen.getByText('Eng watcher ticket')).toBeInTheDocument();
+    expect(screen.queryByText('Eng assignee ticket')).not.toBeInTheDocument();
+    expect(screen.getByText('1 issue · 1 Jira project')).toBeInTheDocument();
+  });
+
+  // "PLAT-1" is how people refer to their own work out loud; a search box on
+  // a list that prints the key on every row has to find it by that key.
+  it('matches the issue key as well as the title', async () => {
+    mount();
+    await screen.findByText('Eng assignee ticket');
+
+    typeSearch('plat-1');
+
+    expect(screen.getByText('Plat reporter ticket')).toBeInTheDocument();
+    expect(screen.queryByText('Eng assignee ticket')).not.toBeInTheDocument();
+  });
+
+  it('narrows to the selected statuses', async () => {
+    mountWith([
+      ticket({
+        id: 'st-1',
+        key: 'ENG-1',
+        title: 'Todo one',
+        stateName: 'To Do',
+      }),
+      ticket({
+        id: 'st-2',
+        key: 'ENG-2',
+        title: 'Doing one',
+        stateName: 'In Progress',
+      }),
+    ]);
+    await screen.findByText('Todo one');
+
+    fireEvent.click(screen.getByRole('button', { name: /^Status/ }));
+    fireEvent.click(screen.getByLabelText('In Progress'));
+
+    expect(screen.getByText('Doing one')).toBeInTheDocument();
+    expect(screen.queryByText('Todo one')).not.toBeInTheDocument();
+  });
+});
+
+// "No tickets match these filters." over an unfiltered, genuinely empty queue
+// reads as a malfunction. These are two different pieces of news and they now
+// get two different sentences.
+describe('MyJiraPage — empty queue is not the same as no match', () => {
+  it('says the queue itself is empty when nothing was read and nothing is filtered', async () => {
+    mountWith([]);
+
+    expect(
+      await screen.findByText('Nothing in your Jira queue.'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('No tickets match these filters.'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('offers a Clear filters that actually brings the rows back', async () => {
+    mount();
+    await screen.findByText('Eng assignee ticket');
+
+    fireEvent.change(screen.getByLabelText('Search your Jira queue'), {
+      target: { value: 'nothing matches this' },
+    });
+    expect(
+      screen.getByText('No tickets match these filters.'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('Nothing in your Jira queue.'),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+
+    expect(screen.getByText('Eng assignee ticket')).toBeInTheDocument();
+    expect(screen.getByText('Grw assignee ticket')).toBeInTheDocument();
+  });
+
+  // A read that never reached Jira must not produce EITHER sentence — both
+  // are claims about what the user's Jira contains.
+  it('lets a failed read win over both empty states', async () => {
+    jest
+      .mocked(listMyJiraTickets)
+      .mockRejectedValue(new Error("Couldn't reach Jira."));
+    jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
+    jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
+    jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
+    render(
+      <MemoryRouter>
+        <MyJiraPage />
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole('alert');
+    expect(
+      screen.queryByText('Nothing in your Jira queue.'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('No tickets match these filters.'),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe('MyJiraPage — pagination', () => {
+  // 30 > PAGE_SIZE (25), so exactly two pages with a short second one — the
+  // shape that catches an off-by-one in either the slice or the range label.
+  const MANY: JiraTicket[] = Array.from({ length: 30 }, (_, i) =>
+    ticket({
+      id: `p-${i}`,
+      key: `ENG-${i + 1}`,
+      projectKey: i < 20 ? 'ENG' : 'PLAT',
+      title: `Paged ticket ${i + 1}`,
+      updatedAt: `2026-09-01T00:00:${String(59 - i).padStart(2, '0')}.000Z`,
+    }),
+  );
+
+  it('shows one page of rows and states the range exactly', async () => {
+    mountWith(MANY);
+    await screen.findByText('Paged ticket 1');
+
+    expect(renderedKeys()).toHaveLength(25);
+    expect(screen.getByText('Showing 1–25 of 30')).toBeInTheDocument();
+    expect(screen.queryByText('Paged ticket 26')).not.toBeInTheDocument();
+  });
+
+  it('advances to the rest on Next', async () => {
+    mountWith(MANY);
+    await screen.findByText('Paged ticket 1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next ›' }));
+
+    expect(screen.getByText('Showing 26–30 of 30')).toBeInTheDocument();
+    expect(screen.getByText('Paged ticket 26')).toBeInTheDocument();
+    expect(screen.queryByText('Paged ticket 1')).not.toBeInTheDocument();
+  });
+
+  // jiraClient's own note says a personal queue is 10-40 issues, so most
+  // users never page at all. "Page 1 of 1" beside two dead arrows is chrome
+  // that implies there is somewhere else to be.
+  it('renders no pager at all when everything fits on one page', async () => {
+    mount();
+    await screen.findByText('Eng assignee ticket');
+
+    expect(
+      screen.queryByRole('navigation', { name: 'Ticket list pages' }),
+    ).not.toBeInTheDocument();
+  });
+
+  // Page 3 of one filter is not page 3 of another, so changing what is in the
+  // list has to go back to the start. Being on a page past the end would
+  // otherwise render "No tickets match these filters." over a list with
+  // plenty in it.
+  it('returns to the first page when the filters change', async () => {
+    mountWith(MANY);
+    await screen.findByText('Paged ticket 1');
+    fireEvent.click(screen.getByRole('button', { name: 'Next ›' }));
+    expect(screen.getByText('Showing 26–30 of 30')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^ENG \d/ }));
+
+    expect(screen.getByText('Paged ticket 1')).toBeInTheDocument();
+    expect(screen.queryByText(/^Showing 26/)).not.toBeInTheDocument();
+  });
+});
+
 // "4 issues · 3 Jira projects" over a page-capped read is a count presented
 // as a total. The strip is what stops the page making that claim silently.
 describe('MyJiraPage — a page-capped read says so', () => {
-  function mountWith(truncated: boolean) {
+  function mountCapped(truncated: boolean) {
     jest
       .mocked(listMyJiraTickets)
       .mockResolvedValue(queueRead(TICKETS, truncated));
@@ -236,7 +509,7 @@ describe('MyJiraPage — a page-capped read says so', () => {
   }
 
   it('warns that the list is only the first slice of the queue', async () => {
-    mountWith(true);
+    mountCapped(true);
     await screen.findByText('Eng assignee ticket');
 
     expect(
@@ -245,7 +518,7 @@ describe('MyJiraPage — a page-capped read says so', () => {
   });
 
   it('says nothing at all when the read was complete', async () => {
-    mountWith(false);
+    mountCapped(false);
     await screen.findByText('Eng assignee ticket');
 
     expect(
@@ -258,7 +531,7 @@ describe('MyJiraPage — a page-capped read says so', () => {
   // successful read was long is the wrong urgency, and it would also make
   // the several `findByRole('alert')` waits below ambiguous.
   it('is not announced as an alert', async () => {
-    mountWith(true);
+    mountCapped(true);
     await screen.findByText('Eng assignee ticket');
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();

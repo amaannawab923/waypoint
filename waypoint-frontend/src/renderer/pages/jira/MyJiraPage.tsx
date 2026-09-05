@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { clsx } from 'clsx';
 import {
   dismissJiraDuplicateNudge,
@@ -19,14 +19,14 @@ import { JiraTicketDrawer } from '@/components/domain/JiraTicketDrawer';
 import { JiraProposalCard } from '@/components/domain/JiraProposalCard';
 import { JiraLoadError } from '@/components/domain/JiraLoadError';
 import { JiraConnectionPanel } from '@/components/domain/JiraConnectionPanel';
-import { jiraProjectColor } from '@/types/jira';
 import type {
   JiraDuplicateNudge,
-  JiraProjectKey,
   JiraProposal,
   JiraTicket,
-  JiraTicketRole,
 } from '@/types/jira';
+import MyJiraToolbar from './MyJiraToolbar';
+import MyJiraPager from './MyJiraPager';
+import { useMyJiraQueue } from './useMyJiraQueue';
 
 type TabKey = 'work' | 'connection';
 
@@ -34,46 +34,6 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'work', label: 'My work' },
   { key: 'connection', label: 'Connection' },
 ];
-
-const ROLE_FILTERS: { key: JiraTicketRole | 'all'; label: string }[] = [
-  { key: 'all', label: 'Any role' },
-  { key: 'assignee', label: 'Assigned' },
-  { key: 'reporter', label: 'Reported' },
-  { key: 'watcher', label: 'Watching' },
-];
-
-function FilterChip({
-  active,
-  onClick,
-  swatch,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  swatch?: string;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={clsx(
-        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.5px] font-semibold whitespace-nowrap',
-        active
-          ? 'border-accent bg-accent-soft-bg text-accent-soft-text'
-          : 'border-border-strong bg-surface text-text-secondary hover:bg-surface-2',
-      )}
-    >
-      {swatch && (
-        <span
-          className="size-2 shrink-0 rounded-sm"
-          style={{ background: swatch }}
-        />
-      )}
-      {children}
-    </button>
-  );
-}
 
 function LiveSyncIndicator({ lastSyncAt }: { lastSyncAt: string | null }) {
   // Re-renders once a second purely so the "synced Ns ago" label keeps
@@ -193,8 +153,6 @@ function CopilotRail({
 
 export default function MyJiraPage() {
   const [tab, setTab] = useState<TabKey>('work');
-  const [projFilter, setProjFilter] = useState<JiraProjectKey | 'all'>('all');
-  const [roleFilter, setRoleFilter] = useState<JiraTicketRole | 'all'>('all');
   const [drawerTicketId, setDrawerTicketId] = useState<string | null>(null);
 
   const connection = useLoadedJiraConnection();
@@ -286,34 +244,13 @@ export default function MyJiraPage() {
     }
   }
 
-  // Derived from whatever the connected account can actually see, sorted for
-  // a stable chip order. This used to iterate a hardcoded ['ENG','PLAT','GRW']
-  // — the three fixture projects — which against a real site would have
-  // rendered no project chips at all for anyone whose projects happen to be
-  // called something else.
-  const projectCounts = useMemo(() => {
-    const counts = new Map<JiraProjectKey, number>();
-    for (const t of tickets)
-      counts.set(t.projectKey, (counts.get(t.projectKey) ?? 0) + 1);
-    return counts;
-  }, [tickets]);
+  // Every filter, the sort and the pagination, all client-side over the array
+  // already read — see useMyJiraQueue's own header for the four reasons that
+  // is deliberate rather than lazy, and for what it costs.
+  const queue = useMyJiraQueue(tickets);
+  const { matched, pageItems } = queue;
 
-  const projectKeys = useMemo(
-    () => Array.from(projectCounts.keys()).sort((a, b) => a.localeCompare(b)),
-    [projectCounts],
-  );
-
-  const filtered = useMemo(
-    () =>
-      tickets.filter(
-        (t) =>
-          (projFilter === 'all' || t.projectKey === projFilter) &&
-          (roleFilter === 'all' || t.role === roleFilter),
-      ),
-    [tickets, projFilter, roleFilter],
-  );
-
-  const visibleProjectCount = new Set(filtered.map((t) => t.projectKey)).size;
+  const visibleProjectCount = new Set(matched.map((t) => t.projectKey)).size;
   const drawerTicket = drawerTicketId
     ? (tickets.find((t) => t.id === drawerTicketId) ?? null)
     : null;
@@ -372,38 +309,18 @@ export default function MyJiraPage() {
           ) : (
             <div className="flex flex-wrap items-start gap-4">
               <div className="min-w-0 flex-1 basis-[460px]">
-                <div className="mb-2.5 flex flex-wrap items-center gap-1.5">
-                  <FilterChip
-                    active={projFilter === 'all'}
-                    onClick={() => setProjFilter('all')}
-                  >
-                    All {tickets.length}
-                  </FilterChip>
-                  {projectKeys.map((key) => (
-                    <FilterChip
-                      key={key}
-                      active={projFilter === key}
-                      onClick={() => setProjFilter(key)}
-                      swatch={jiraProjectColor(key)}
-                    >
-                      {key} {projectCounts.get(key)}
-                    </FilterChip>
-                  ))}
-                  <span className="mx-1 h-4.5 w-px bg-border" />
-                  {ROLE_FILTERS.map((r) => (
-                    <FilterChip
-                      key={r.key}
-                      active={roleFilter === r.key}
-                      onClick={() => setRoleFilter(r.key)}
-                    >
-                      {r.label}
-                    </FilterChip>
-                  ))}
-                </div>
+                {/* Deliberately outside the overflow-hidden list container
+                    below: both of its popovers open as `absolute z-40` panels
+                    and would be clipped at that container's edge. */}
+                <MyJiraToolbar queue={queue} totalCount={tickets.length} />
 
                 <div className="mb-1.5 flex items-center justify-between gap-2.5 text-[11.5px] text-text-muted">
+                  {/* Counts the whole matched set, not the current page —
+                      "4 issues" is a fact about the queue you filtered to,
+                      and paging through it must not appear to shrink it. The
+                      page's own range lives in the pager's footer instead. */}
                   <span>
-                    {filtered.length} issue{filtered.length === 1 ? '' : 's'} ·{' '}
+                    {matched.length} issue{matched.length === 1 ? '' : 's'} ·{' '}
                     {visibleProjectCount} Jira project
                     {visibleProjectCount === 1 ? '' : 's'}
                   </span>
@@ -442,12 +359,24 @@ export default function MyJiraPage() {
                   </div>
                 )}
 
-                {/* Three distinct outcomes, deliberately not collapsed into
-                    two: the read failed, the read succeeded and matched
-                    nothing, or there are rows. The error is rendered even
-                    when rows are present (a reload can fail over a list this
-                    page already has) so nothing on screen silently predates
-                    a failure. */}
+                {/* Four distinct outcomes, deliberately not collapsed: the
+                    read failed; it succeeded over a genuinely empty queue; it
+                    succeeded over a real queue that the current filters
+                    narrowed to nothing; or there are rows. The middle two used
+                    to share one sentence, and "No tickets match these
+                    filters." over an unfiltered empty queue reads as a
+                    malfunction rather than as good news.
+
+                    The error is rendered even when rows are present (a reload
+                    can fail over a list this page already has) so nothing on
+                    screen silently predates a failure.
+
+                    The empty-queue branch is also reachable, slightly wrongly,
+                    after handleDismissTombstone empties the list — the queue
+                    was not empty, we emptied it. That path cannot happen today
+                    (toTicket never marks anything tombstoned) and special-
+                    casing an unreachable state would be inventing a case to
+                    handle it. */}
                 <div className="overflow-hidden rounded-[var(--radius)] border border-border bg-surface shadow-sm">
                   {ticketsError && (
                     <JiraLoadError
@@ -456,12 +385,32 @@ export default function MyJiraPage() {
                       onRetry={reloadTickets}
                     />
                   )}
-                  {!ticketsError && filtered.length === 0 && (
+                  {!ticketsError && tickets.length === 0 && (
                     <div className="px-4 py-6 text-center text-sm text-text-muted">
-                      No tickets match these filters.
+                      <p className="font-semibold text-text-secondary">
+                        Nothing in your Jira queue.
+                      </p>
+                      <p className="mt-1">
+                        Nothing is assigned to, reported by, or watched by you
+                        that&apos;s still unresolved.
+                      </p>
                     </div>
                   )}
-                  {filtered.map((ticket) => (
+                  {!ticketsError &&
+                    tickets.length > 0 &&
+                    matched.length === 0 && (
+                      <div className="px-4 py-6 text-center text-sm text-text-muted">
+                        No tickets match these filters.
+                        <button
+                          type="button"
+                          onClick={queue.resetQuery}
+                          className="mt-2 block w-full cursor-pointer text-sm font-medium text-accent hover:underline"
+                        >
+                          Clear filters
+                        </button>
+                      </div>
+                    )}
+                  {pageItems.map((ticket) => (
                     <JiraTicketRow
                       key={ticket.id}
                       ticket={ticket}
@@ -472,6 +421,8 @@ export default function MyJiraPage() {
                     />
                   ))}
                 </div>
+
+                <MyJiraPager queue={queue} />
 
                 <div className="mt-3 flex items-start gap-2 rounded-[var(--radius-sm)] border border-jira/30 bg-jira-bg px-3 py-2.5 text-[12.5px] text-jira">
                   <span>

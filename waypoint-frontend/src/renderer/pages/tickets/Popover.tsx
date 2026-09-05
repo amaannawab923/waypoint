@@ -5,6 +5,16 @@ import { clsx } from 'clsx';
  * Small local dropdown helper shared by the tickets toolbar (Display,
  * Filters). Not a app-wide primitive — kept local to this page directory
  * since no shared Popover exists in src/components/ui.
+ *
+ * It now has a second caller outside this directory: My Jira's own toolbar
+ * (pages/jira/MyJiraToolbar.tsx), which reaches across for it rather than
+ * growing a third near-identical dropdown. That makes the "kept local"
+ * justification above half-true — two page directories is not local. It is
+ * left where it is on purpose for now, because moving it to components/ui/
+ * is a promotion to a shared primitive and two callers is thin evidence for
+ * one. A THIRD caller is the point at which that stops being true: move it
+ * to components/ui/Popover.tsx then, rather than adding another cross-page
+ * import to this one.
  */
 export function Popover({
   trigger,
@@ -21,7 +31,8 @@ export function Popover({
   useEffect(() => {
     if (!open) return;
     function onPointerDown(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      if (ref.current && !ref.current.contains(e.target as Node))
+        setOpen(false);
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') setOpen(false);
