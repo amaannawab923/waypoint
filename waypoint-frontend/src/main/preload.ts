@@ -2,6 +2,14 @@
 /* eslint no-unused-vars: off */
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import type { CopilotDetectResult } from './copilot/copilotDetect';
+import type {
+  JiraConnectionSnapshot,
+  JiraIdentity,
+  JiraResult,
+  JiraWireComment,
+  JiraWireTicket,
+  JiraWireTransition,
+} from './jira/jiraTypes';
 
 // The global Web Crypto API, not Node's `crypto` module: this preload script
 // runs in Electron's sandboxed renderer context by default (Electron 20+),
@@ -230,6 +238,55 @@ const electronHandler = {
     // handler for what each case actually means.
     detect(): Promise<CopilotDetectResult> {
       return ipcRenderer.invoke('copilot:detect');
+    },
+  },
+  // The My Jira companion's entire data path. Every one of these is
+  // request/response rather than a stream — a Jira call produces exactly one
+  // answer — and every one of them crosses into the main process rather than
+  // being a fetch() from the renderer, because the API token that
+  // authenticates them is a real bearer credential for the user's whole Jira
+  // account and never leaves main (see main/jira/jiraAuth.ts).
+  //
+  // Nothing here takes or returns a token: `connect` sends one in and gets an
+  // identity back, and every later call authenticates from what main already
+  // has stored.
+  jira: {
+    status(): Promise<JiraConnectionSnapshot> {
+      return ipcRenderer.invoke('jira:status');
+    },
+    connect(args: {
+      site: string;
+      email: string;
+      apiToken: string;
+    }): Promise<JiraResult<JiraIdentity>> {
+      return ipcRenderer.invoke('jira:connect', args);
+    },
+    disconnect(): Promise<{ ok: true }> {
+      return ipcRenderer.invoke('jira:disconnect');
+    },
+    listTickets(): Promise<JiraResult<JiraWireTicket[]>> {
+      return ipcRenderer.invoke('jira:tickets:list');
+    },
+    listTransitions(
+      ticketId: string,
+    ): Promise<JiraResult<JiraWireTransition[]>> {
+      return ipcRenderer.invoke('jira:tickets:transitions', ticketId);
+    },
+    transition(args: {
+      ticketId: string;
+      transitionId: string;
+      fieldValues: Record<string, string>;
+    }): Promise<JiraResult<JiraWireTicket>> {
+      return ipcRenderer.invoke('jira:tickets:transition', args);
+    },
+    listComments(ticketId: string): Promise<JiraResult<JiraWireComment[]>> {
+      return ipcRenderer.invoke('jira:comments:list', ticketId);
+    },
+    postComment(args: {
+      ticketId: string;
+      body: string;
+    }): Promise<JiraResult<JiraWireComment>> {
+      return ipcRenderer.invoke('jira:comments:post', args);
     },
   },
   // Top-level, not nested under `copilot`: "point me at a local folder" is
