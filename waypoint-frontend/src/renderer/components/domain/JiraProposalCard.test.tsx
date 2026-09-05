@@ -36,7 +36,9 @@ function proposal(overrides: Partial<JiraProposal> = {}): JiraProposal {
 
 function renderCard(p: JiraProposal) {
   const onResolved = jest.fn();
-  const utils = render(<JiraProposalCard proposal={p} onResolved={onResolved} />);
+  const utils = render(
+    <JiraProposalCard proposal={p} onResolved={onResolved} />,
+  );
   return { onResolved, ...utils };
 }
 
@@ -51,7 +53,9 @@ describe('JiraProposalCard', () => {
     expect(screen.getByText('ENG-421')).toBeInTheDocument();
     expect(screen.getByText('In Progress')).toBeInTheDocument();
     expect(screen.getByText('In Review')).toBeInTheDocument();
-    expect(screen.getByText(/PR #418 adds a token-bucket limiter/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/PR #418 adds a token-bucket limiter/),
+    ).toBeInTheDocument();
     expect(screen.queryByText('jira-prop-eng-421')).not.toBeInTheDocument();
     expect(screen.queryByText('jira-eng-421')).not.toBeInTheDocument();
   });
@@ -96,12 +100,19 @@ describe('JiraProposalCard', () => {
     expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Reject' })).toBeDisabled();
 
-    resolveApprove(proposal({ status: 'executed', resolvedAt: '2026-01-01T01:00:00.000Z' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled());
+    resolveApprove(
+      proposal({ status: 'executed', resolvedAt: '2026-01-01T01:00:00.000Z' }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled(),
+    );
   });
 
   it('approve calls approveJiraProposal with the id and reports the resolved proposal up', async () => {
-    const executed = proposal({ status: 'executed', resolvedAt: '2026-01-01T01:00:00.000Z' });
+    const executed = proposal({
+      status: 'executed',
+      resolvedAt: '2026-01-01T01:00:00.000Z',
+    });
     jest.mocked(approveJiraProposal).mockResolvedValue(executed);
     const { onResolved } = renderCard(proposal());
 
@@ -112,7 +123,10 @@ describe('JiraProposalCard', () => {
   });
 
   it('reject calls rejectJiraProposal with the id and reports the resolved proposal up', async () => {
-    const rejected = proposal({ status: 'rejected', resolvedAt: '2026-01-01T01:00:00.000Z' });
+    const rejected = proposal({
+      status: 'rejected',
+      resolvedAt: '2026-01-01T01:00:00.000Z',
+    });
     jest.mocked(rejectJiraProposal).mockResolvedValue(rejected);
     const { onResolved } = renderCard(proposal());
 
@@ -126,18 +140,30 @@ describe('JiraProposalCard', () => {
   // by devtools; an absent one cannot re-execute anything (same invariant
   // as CopilotProposalCard.tsx's resolved state).
   it('an executed card shows the written-to-Jira note with buttons UNMOUNTED', () => {
-    renderCard(proposal({ status: 'executed', resolvedAt: '2026-01-01T01:00:00.000Z' }));
+    renderCard(
+      proposal({ status: 'executed', resolvedAt: '2026-01-01T01:00:00.000Z' }),
+    );
 
     expect(screen.getByText('Written to Jira')).toBeInTheDocument();
-    expect(screen.getByText(/moved to In Review and the comment posted/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Reject' })).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/moved to In Review and the comment posted/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Approve' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Reject' }),
+    ).not.toBeInTheDocument();
   });
 
   it('a rejected card shows the dismissed note with no buttons at all', () => {
-    renderCard(proposal({ status: 'rejected', resolvedAt: '2026-01-01T01:00:00.000Z' }));
+    renderCard(
+      proposal({ status: 'rejected', resolvedAt: '2026-01-01T01:00:00.000Z' }),
+    );
 
-    expect(screen.getByText(/Rejected — Copilot is told why on its next turn/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Rejected — Copilot is told why on its next turn/),
+    ).toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 });
