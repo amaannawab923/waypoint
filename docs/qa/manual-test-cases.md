@@ -619,13 +619,21 @@ Format per case: **ID** — title / Steps / Expected.
 
 ---
 
-## JIRA — My Jira companion (Round 1 — authoring only, NOT executed)
+## JIRA — My Jira companion (Round 2 — live execution against the real seeded Jira Cloud account)
 
 Authored against the shipped implementation (`src/renderer/pages/jira/`,
 `src/renderer/components/domain/Jira*.tsx`, `src/renderer/data/jiraApi.ts`,
-`src/main/jira/`). **No case below has been run.** There is deliberately no
-`Result:` line on any of them — results belong to a separate execution pass, and
-writing one now would blur what was authored against what was actually observed.
+`src/main/jira/`) as a 152-case Round 1, then reviewed by a second pass that
+added 38 more cases (JIRA-153..190) and 18 corrections, still without
+execution. Round 2 executed all 190 cases against the real running app,
+connected to a real seeded Jira Cloud account (`waypoint123.atlassian.net`,
+~98 issues), including real writes (transitions, comments, labels, due dates,
+sprints, issue links, ADF-authored content) made via the Jira REST API
+specifically to produce live test data this account didn't start with. Every
+case now carries a `Result:` line reflecting what was actually observed, not
+predicted from the code. A `NOT TESTED` result names the specific real
+blocker (a second account was needed, a tool was denied, a workflow lacked
+the field being tested, etc.) rather than guessing.
 
 Each case carries a **Coverage:** line placing it in one of five buckets:
 **Supported** / **Partial** / **Not supported (by design)** /
@@ -1437,6 +1445,501 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Expected: A clear message rather than a property-of-undefined crash.
   Coverage: **Supported** — `bridge()` throws "The Jira connection is unavailable in this window." explicitly for this case, and since JIRA-133's fix that message is now rendered on the list path rather than swallowed into an empty queue.
   Result: NOT TESTED — would require loading the renderer bundle in a plain browser tab outside Electron entirely (a different serving setup than this dev session), not attempted.
+
+### Rendering, layout and visual correctness
+
+- **JIRA-153** — Transition popover is clipped by the ticket list's clipping container
+  Steps: Load a queue with at least 6 issues. Click the state chip on the **last**
+  row in the list. Then click the state chip on the second-to-last row. Then on a
+  transition badged "needs a field" on any row within 3 rows of the bottom.
+  Expected: The full popover — heading, every transition option, and the "your
+  Jira workflow allows" footer — is visible and clickable in every case.
+  Coverage: **Supported** — the clip was real and is fixed. `MyJiraPage` still
+  wraps the rows in `<div className="overflow-hidden rounded-… border …">` and
+  each row is still `relative`, but `JiraTransitionPopover` no longer renders
+  inside either: it is portaled to `document.body` and positioned `fixed` from
+  the state chip's own `getBoundingClientRect()`, following the same pattern
+  `DatePicker.tsx` already uses in this app and for the same reason. It flips
+  above the chip when there isn't room below, clamps inside the viewport on both
+  axes, and re-measures on scroll, on resize and on the swap into the
+  required-field form (which is taller than the option list — the case that
+  failed soonest). `z-30` became `z-[60]` so a body-level panel clears the ticket
+  drawer's `z-50` backdrop while staying under ToastHost's `z-[200]`. Asserted in
+  `MyJiraPage.test.tsx` — jsdom does no layout, so the tests pin the escape (the
+  panel is a child of `<body>`, positioned `fixed`) rather than the pixels; the
+  steps above are still the right live check.
+- **JIRA-154** — A very long issue summary
+  Steps: Find or create an issue with a 200+ character summary. Look at its row,
+  then open its drawer.
+  Expected: The row truncates to one line with an ellipsis and does not push the
+  role tag, state chip, priority icon or avatar out of the row. The drawer shows
+  the summary in full, wrapped.
+  Coverage: **Supported** — the row's title button is `truncate` inside
+  `min-w-0 flex-1`; the drawer's `<h3>` wraps freely. Worth confirming because
+  every sibling element in the row is `shrink-0`, so a truncation failure would
+  break the whole row layout rather than one cell.
+- **JIRA-155** — A description or comment containing one very long unbroken string
+  Steps: Put a 300-character URL, a base64 blob, or a long stack-trace frame with
+  no spaces into a Jira description, and a second one into a comment. Open the
+  drawer.
+  Expected: Both wrap or scroll inside the 460px drawer; neither forces the
+  drawer's content to scroll horizontally or pushes the close button off-screen.
+  Coverage: **Not supported (untested/unknown)** — the description `<p>` and the
+  comment body `<div>` carry no `break-words`/`break-all` and no `overflow-x`.
+  A long unbroken token is the standard way this class of layout fails, and a
+  pasted stack trace or URL in a bug ticket is the most ordinary content there is.
+- **JIRA-156** — Duplicate attachment filenames on one issue
+  Steps: In Jira, attach two different files with the same name to one issue
+  (Jira permits this). Open that ticket's drawer in Waypoint; check the browser
+  console.
+  Expected: Both attachments are listed distinctly; no React duplicate-key
+  warning.
+  Coverage: **Gap worth flagging** — `JiraTicketDrawer` renders attachments with
+  `key={a.fileName}`, and `mapAttachments` doesn't carry Jira's attachment id at
+  all, so there is no unique value available to key on. Two `screenshot.png`
+  uploads is an everyday occurrence on a bug ticket.
+- **JIRA-157** — My Jira in a narrow window
+  Steps: Resize the app window to roughly 900px wide, then to the narrowest the
+  window manager allows. Work through the My work tab: filter chips, a row, a
+  transition popover, the drawer.
+  Expected: No horizontal page scroll, no overlapping controls, chips wrap, the
+  drawer stays usable.
+  Coverage: **Not supported (untested/unknown)** — the page is
+  `max-w-6xl` with a fixed `ml-[41px]` gutter on every block, the rail is
+  `sm:w-[292px] sm:min-w-[262px] sm:shrink-0`, and the drawer is
+  `w-full max-w-[460px]`. Plausible but unverified; no case in the whole 152 set
+  resizes anything.
+- **JIRA-158** — Every My Jira surface in the dark theme
+  Steps: Switch to dark theme (CHROME-04). Visit My Jira: the header chip, the
+  sync indicator, filter chips, rows, project color swatches, the state chip, the
+  transition popover, the required-field form, the drawer and its backdrop, the
+  Connection tab's three banner blocks.
+  Expected: Every surface is legible; no hardcoded light-mode color survives.
+  Coverage: **Partial** — nearly everything uses theme tokens, but
+  `JiraTicketDrawer`'s backdrop is a literal `bg-black/40` and the three project
+  colors are fixed `--p-eng`/`--p-plat`/`--p-grw` references whose contrast in
+  dark mode has never been checked against the row's `bg-surface`. Cheap to
+  verify, and the app ships a theme toggle so a user will hit it.
+
+### Accessibility and keyboard operation
+
+- **JIRA-159** — Move a ticket without touching the mouse
+  Steps: From the My work tab, Tab through the page. Reach a row's state chip,
+  activate it with Enter/Space, and try to reach and choose a transition option
+  using only the keyboard. Repeat for a transition that opens the required-field
+  form.
+  Expected: Focus moves into the popover when it opens, arrow keys or Tab reach
+  every option, Escape returns focus to the chip that opened it.
+  Coverage: **Not supported (untested/unknown)** — the options are real
+  `<button>`s so Tab will reach them, but `JiraTransitionPopover` never moves
+  focus into itself on open (it only calls `panelRef.current?.focus()` on the way
+  *out*, as a blur guard), carries no `role="menu"`/`aria-expanded`/
+  `aria-haspopup`, and restores focus nowhere on close. This no longer compounds
+  with JIRA-153 (the panel is portaled and can't be clipped any more), but note
+  that portaling moves the panel out of the row's DOM order, so Tab order is now
+  wherever `<body>` puts it rather than immediately after the chip — worth
+  checking as part of this case rather than assuming it improved.
+- **JIRA-160** — Ticket drawer as a dialog
+  Steps: Open a drawer with the keyboard. Tab repeatedly. Close with Escape.
+  Expected: Focus enters the drawer, is trapped inside it while open, and returns
+  to the row that opened it on close.
+  Coverage: **Gap worth flagging** — `JiraTicketDrawer` has no `role="dialog"`,
+  no `aria-modal`, no accessible name, no focus trap and no focus restoration; it
+  is a portal with a backdrop and an Escape listener. Tabbing while it's open
+  walks the list behind it. Worth checking against the app's existing
+  `TicketDrawer` convention, which this one deliberately mirrors — if that one
+  has the same shape, this is an app-wide finding rather than a Jira one.
+- **JIRA-161** — In-flight and failed writes are announced
+  Steps: With a screen reader running, transition a ticket and post a comment.
+  Then force a failure (offline) and do both again.
+  Expected: "Saving…"/"Posting…" and the resulting error are announced, not just
+  rendered.
+  Coverage: **Not supported (untested/unknown)** — the chip's "Saving…" is a
+  plain text swap inside a button that is simultaneously `disabled`, and errors
+  go to `showErrorToast`. Nothing is in an `aria-live` region. A screen-reader
+  user gets no signal that a write started, finished, or failed.
+- **JIRA-162** — Information carried only by color
+  Steps: For each of: priority, workflow state, project — cover the color and ask
+  whether the value is still readable. Then view the list through a
+  deuteranopia/protanopia simulation.
+  Expected: No value is conveyed by hue alone.
+  Coverage: **Partial** — state and project both pair color with text (status
+  name, project key), so those are fine. Priority is the exception: `PriorityIcon`
+  distinguishes urgent/high/medium/low by both glyph *and* color, but `low` and
+  `none` are `SignalLow` vs `Minus` at 14px in `--text-secondary` vs
+  `--text-muted` — near-identical at a glance. And per JIRA-34 there is no
+  priority label, tooltip, filter or sort anywhere to disambiguate.
+
+### Text, language and content extremes
+
+- **JIRA-163** — Non-Latin and right-to-left content
+  Steps: Put a Japanese summary on one issue, an Arabic or Hebrew summary on a
+  second, and post a comment in each script from Jira. Read all of it in
+  Waypoint, then post an Arabic comment from Waypoint's composer and read it back
+  in Jira.
+  Expected: All text renders correctly; RTL text reads right-to-left within its
+  own block; nothing renders as boxes or mojibake; the round-tripped comment is
+  byte-identical in Jira.
+  Coverage: **Not supported (untested/unknown)** — nothing sets `dir="auto"`
+  anywhere, so RTL summaries will render LTR-ordered inside a `truncate` cell
+  (which also truncates from the wrong end for RTL). Purely a rendering question;
+  the transport is JSON throughout and should be clean.
+- **JIRA-164** — Emoji in a summary and in a comment
+  Steps: Add emoji to an issue summary and to a comment (using Jira's own emoji
+  picker, which produces an ADF `emoji` node, not just a literal character).
+  Read both in Waypoint.
+  Expected: Emoji appear as emoji, or at worst as their `:shortname:`; never as
+  an empty gap or a broken glyph.
+  Coverage: **Supported** — `adfToPlainText` handles the `emoji` node type,
+  preferring `attrs.text` and falling back to `attrs.shortName`. Worth exercising
+  because it's the one ADF node type with a two-level fallback and no test data
+  behind it.
+- **JIRA-165** — Avatar initials for unusual display names
+  Steps: Look at rows and comments whose author display name is: a single word
+  ("Priya"), a non-Latin script, an email address, and a name with a leading
+  emoji. Also check an unassigned issue's avatar.
+  Expected: Something sensible in every case — never an empty circle or a crash.
+  Coverage: **Partial** — every Jira surface uses the app's initials `Avatar`
+  derived from a display-name string, including the literal string "Unassigned"
+  (which will render "U"). Note separately that Jira **does** return a real
+  avatar URL and the main process stores it (`JiraCredential.avatarUrl`,
+  `JiraIdentity.avatarUrl`), but `JiraConnectionStatus` has no such field, so no
+  surface can ever render it. See correction to JIRA-02.
+- **JIRA-166** — A comment whose formatting depends on leading whitespace
+  Steps: In Waypoint's composer, type a comment that begins with an indented
+  block (a pasted code snippet, a bulleted list indented two spaces) and has
+  trailing blank lines. Post it, then read it in Jira.
+  Expected: What lands in Jira is what was typed.
+  Coverage: **Gap worth flagging** — the body is trimmed twice on the way out:
+  `JiraCommentComposer.handlePost` sends `draft.trim()`, and
+  `jiraIpc.ts` applies `readString()` (also `.trim()`) again at the boundary.
+  Leading indentation on the first line and trailing structure are silently
+  removed. Small, but it's exactly the case a developer pasting a snippet hits,
+  and JIRA-94 ("line breaks preserved") tests the middle of a comment while this
+  tests its edges.
+
+### Time, clocks and timezones
+
+- **JIRA-167** — A timestamp from the future
+  Steps: Find or produce a comment whose `created` is slightly ahead of the local
+  clock (a machine whose clock is a few minutes behind, or a comment posted from
+  another timezone with a skewed client). Read it in the drawer.
+  Expected: A sane label, not a negative age.
+  Coverage: **Partial** — `formatRelativeTime` computes `Date.now() - created`
+  with no floor, so a future timestamp yields a negative `diffSec`, which lands
+  under `< 45` and prints "just now". Benign by luck rather than design, and
+  worth recording. `LiveSyncIndicator` and the row's relative-time helpers do
+  clamp with `Math.max(0, …)`; `formatRelativeTime` is the one that doesn't.
+- **JIRA-168** — Sleep, resume, and a changed clock
+  Steps: Open My Jira, note "synced Ns ago". Close the laptop lid for an hour and
+  reopen it. Then change the system clock forward a day and look again.
+  Expected: The indicator's age should stay truthful about when the read actually
+  happened, and should not present a very stale read in the same visual language
+  as a fresh one.
+  Coverage: **Gap worth flagging** — the age itself stays arithmetically correct
+  (it's a real timestamp difference), but `LiveSyncIndicator` renders "synced 60m
+  ago" in `text-success` beside an `animate-pulse` success-colored dot, and
+  nothing degrades that treatment as the read gets older. JIRA-122 flags the
+  visual-language problem at rest; this is the version a real user hits, because
+  a laptop that slept is the normal way a Waypoint window ends up hours stale.
+
+### Identity, tenancy and permissions
+
+- **JIRA-169** — An issue with an issue-security level set
+  Steps: On a project using an issue security scheme, put a security level on an
+  issue in your queue. Refresh My Jira and open its drawer.
+  Expected: The issue appears (you can see it), and its restricted status is
+  indicated somewhere — or, if it isn't, confirm nothing about the row implies
+  the issue is ordinary.
+  Coverage: **Gap worth flagging** — `fields.security` is never read or mapped.
+  A security-restricted issue renders identically to a public one, which matters
+  most in the drawer: a user reading a restricted ticket has no cue that its
+  contents are limited-audience, and (with the composer's "Posts to Jira as X ·
+  plain text" footer as the only context) no cue about who will see their reply.
+  Same class as JIRA-97 for comments, and arguably worse because it covers the
+  whole issue.
+- **JIRA-170** — An issue whose assignee or reporter you're not permitted to see
+  Steps: Find or create an issue in your queue where the People fields are
+  restricted by a field configuration or permission scheme (common on Service
+  Management projects). Check its row's role tag and avatar, and the drawer's
+  Assignee/Reporter chips.
+  Expected: "Unassigned"/"Unknown" is acceptable; a *wrong role tag* is not.
+  Coverage: **Gap worth flagging** — `roleOf()` in `jiraMap.ts` tests
+  `assignee.accountId === myAccountId`, then `reporter.accountId ===
+  myAccountId`, and **falls through to `'watcher'` unconditionally**. If Jira
+  omits or redacts the assignee object, `accountIdOf` returns null and an issue
+  assigned to you is labeled "watching" — and then disappears from the
+  "Assigned" role filter (JIRA-27) while appearing under "Watching". The
+  fall-through is safe only while both fields are always readable, which is
+  precisely what a permission scheme breaks.
+- **JIRA-171** — A ticket whose comments you aren't permitted to read
+  Steps: Find a ticket in your queue in a project where your role can browse
+  issues but not view comments (or where every comment is restricted to a group
+  you're not in). Open its drawer.
+  Expected: Something that distinguishes "you can't see these" from "there aren't
+  any."
+  Coverage: **Gap worth flagging** — a 403 on `jira:comments:list` produces a
+  perfectly good message ("Your Jira account isn't allowed to do that."), which
+  `JiraTicketDrawer` then discards because it destructures only `{ data }` from
+  `useAsync`. The user reads "No comments yet." — a false factual claim about a
+  ticket that may have a long restricted thread. Same root cause as JIRA-134 but
+  a *reachable-today, no-outage-required* path to it, which makes it the better
+  case to actually run.
+- **JIRA-172** — Connecting a service/bot account rather than a person
+  Steps: Connect using an Atlassian account that is a service account or a shared
+  bot (`ci-bot@yourteam.com`), not a human. Open My Jira; open a drawer; post a
+  comment; transition an issue.
+  Expected: Document the whole experience — what the queue contains, what the
+  composer footer says, and how the write is attributed in Jira.
+  Coverage: **Not supported (untested/unknown)** — `currentUser()` resolves to
+  the bot, so the queue is the bot's work (usually near-empty, since bots are
+  rarely watchers), the composer footer reads "Posts to Jira as CI Bot", and the
+  connect form's own promise — "Writes are attributed to you, not to a service
+  account" (`AddProjectWizard`) — becomes literally false, since the connected
+  identity *is* a service account. Nothing prevents or warns about this. The
+  founder asked about it specifically and it appears nowhere in the 152.
+- **JIRA-173** — One Atlassian org with more than one Jira site
+  Steps: Using an account with access to two Jira Cloud sites in the same
+  Atlassian org (`teamA.atlassian.net` and `teamB.atlassian.net`), connect one.
+  Confirm which issues appear. Then look for any way to see the other site's
+  work, or any indication that a second site exists.
+  Expected: A user with work on both sites should be able to tell that Waypoint
+  is showing them half of it.
+  Coverage: **Gap worth flagging** — a credential is one `site` string and
+  `jiraFetch` pins every request to `https://${credential.site}`, so exactly one
+  site is ever visible. Combined with JIRA-15's silent single-credential
+  overwrite, a two-site user who connects the second site loses the first with no
+  warning and no way to have both. The Connection tab's "Not built yet" list
+  doesn't mention it, and the confirm step's "your work across every project you
+  can see" is true only within one site — the copy reads as broader than it is.
+- **JIRA-174** — An Atlassian account with no Jira product access
+  Steps: Connect an account that exists on the site (Confluence-only, or a
+  Jira licence that was removed) with a valid API token.
+  Expected: A message that names the actual problem, distinguishable from a bad
+  token and from a wrong site address.
+  Coverage: **Not supported (untested/unknown)** — `/rest/api/3/myself` may
+  answer 200 with a valid `accountId` for such an account, in which case
+  `validateCredential` succeeds, the wizard shows "Connected", and the confirm
+  step reports "0 issues, 0 projects" — a green connection to a site the user
+  can't actually use. Or the site returns 403, which maps to "Your Jira account
+  isn't allowed to do that." on a *connect* button, which reads as nonsense.
+  Both outcomes are worth documenting; neither is handled deliberately.
+- **JIRA-175** — The connected account is deactivated or removed mid-session
+  Steps: With Waypoint open and connected, have a Jira admin deactivate the
+  account (or remove its Jira licence). Then refresh the list, open a drawer,
+  transition, and comment.
+  Expected: The app should stop presenting itself as connected and should say
+  what happened.
+  Coverage: **Gap worth flagging** — distinct from JIRA-136 (revoked token) in
+  its status code: a deactivated account gets **403**, not 401, so the user is
+  told "Your Jira account isn't allowed to do that" for every action, which
+  points them at permissions rather than at their account. And as with JIRA-136,
+  `jira:status` is a local file read, so the sidebar and the Connection tab stay
+  green indefinitely. Same underlying defect, materially more confusing message.
+
+### Workflow variation and Jira-side automation
+
+- **JIRA-176** — Transition menu labels are target statuses, not transition names
+  Steps: Pick a workflow with a transition whose *name* differs from its
+  destination status — e.g. a transition called "Send back to dev" that leads to
+  status "In Progress", or "Reject" leading to "Done". Open Jira's own issue view
+  and note the button labels. Open the same issue's menu in Waypoint.
+  Expected: The user should be able to map Waypoint's options onto the ones they
+  know from Jira.
+  Coverage: **Gap worth flagging** — `mapTransition` uses `to.name` first and
+  falls back to the transition's own `name` only when the destination is missing,
+  so Waypoint labels the menu with *destinations* while Jira labels it with
+  *transitions*. On workflows where they coincide (the common case) this is
+  invisible; on a workflow with named transitions it means the list a user
+  recognises and the list Waypoint shows have different words in them. The
+  popover's footer — "These are the transitions your Jira workflow allows … —
+  Waypoint doesn't invent them" — makes an accuracy claim this labeling doesn't
+  quite honour. See correction to JIRA-68.
+- **JIRA-177** — Two transitions leading to the same status
+  Steps: Find a workflow where two distinct transitions land on the same status
+  (e.g. "Won't Do" and "Duplicate" both → Done, or "Reject" and "Cancel" both →
+  Closed). Open that issue's menu.
+  Expected: The two options are distinguishable before choosing one.
+  Coverage: **Gap worth flagging** — follows directly from JIRA-176: both entries
+  render the identical `to.name` label with the identical status-category dot,
+  so the menu shows the same word twice with no way to tell which is which.
+  Picking the wrong one runs a different post-function and records a different
+  resolution. Cheap to fix (fall back to, or append, the transition's own name
+  when two options share a destination) and not currently covered.
+- **JIRA-178** — A Jira automation rule fires on your transition
+  Steps: On a project with an automation rule triggered by an issue transition
+  (auto-assign on "In Progress", auto-transition to "Done" when a subtask
+  closes, auto-set a field), perform that transition from Waypoint. Watch the
+  row's state chip, then refresh and compare against Jira.
+  Expected: The chip should not settle on a state that is already wrong.
+  Coverage: **Gap worth flagging** — `transitionTicket()` POSTs and then
+  immediately calls `getTicket()` to re-read. That re-read races the automation:
+  land first and the chip shows the pre-automation state and stays there
+  (nothing polls); land second and it shows the post-automation state. The
+  outcome is nondeterministic and the UI presents both with equal confidence.
+  The design decision to re-read rather than predict is right — this is about the
+  window the re-read leaves open, which is exactly the founder's question and is
+  covered nowhere. Note that no existing case exercises a Jira-side reaction to a
+  Waypoint write at all.
+- **JIRA-179** — An automation posts a comment in response to your comment
+  Steps: On a project whose automation replies to comments (common on Service
+  Management), post a comment from Waypoint's composer and keep the drawer open.
+  Expected: Document what the user sees.
+  Coverage: **Partial** — the same mechanism as JIRA-98 (`onPosted` appends
+  locally, nothing refetches), but worth its own case because here the missing
+  comment is a *direct consequence of the user's own action*: they will look for
+  it, not see it, and reasonably conclude the automation didn't run. JIRA-98 is
+  about a colleague; this is about the app hiding the result of what you just did.
+- **JIRA-180** — A workflow validator rejects the transition
+  Steps: Find a transition with a validator (e.g. "assignee must be set", "field
+  X is required", a permission validator). Trigger it from Waypoint from a state
+  that will fail.
+  Expected: Jira's own validator message reaches the user, and the row's chip
+  returns to the old state.
+  Coverage: **Partial** — `messageFromErrorBody` reads `errorMessages[0]` and
+  then the first string in `errors`, so a validator message should surface. But
+  Jira reports validator failures inconsistently (some as `errorMessages`, some
+  as `errors` keyed by field id, some as a plain 400 with neither), and the
+  fallback is the bare "Jira returned 400." A validator is the single most common
+  way a transition fails on a mature workflow, and JIRA-82 only tests that *some*
+  error appears, not that the message is usable.
+- **JIRA-181** — A transition that requires a comment
+  Steps: Use a transition whose screen has a **required** comment field (a
+  standard "Reject requires a reason" setup). Open its menu entry in Waypoint.
+  Expected: A usable field for the comment, labeled as a comment.
+  Coverage: **Gap worth flagging** — `mapTransitionField` keeps required fields
+  and gives anything without `allowedValues` `type: 'text'`, which
+  `JiraTransitionPopover` renders as a **single-line `<input>` with the hardcoded
+  placeholder `e.g. 3h 30m`**. A required transition comment therefore appears as
+  a one-line box that suggests you type a duration into it. Concrete, common, and
+  a sharper instance of JIRA-75 than the date/user-picker examples that case uses.
+
+### Volume, rate limits and multiple instances
+
+- **JIRA-182** — Realistic burst usage against Jira's rate limits
+  Steps: With a queue of 30+ issues, in quick succession: press Refresh now five
+  times; open the transition menu on ten different rows; open six drawers. Watch
+  the network calls and the UI.
+  Expected: No duplicate in-flight requests for the same thing, and if Jira
+  starts returning 429 the user is told.
+  Coverage: **Gap worth flagging** — there is no debounce, no in-flight dedup and
+  no request queue anywhere. Each popover open that misses the cache is one
+  `/transitions` call (`getJiraTransitions` only caches *non-empty* results, so a
+  genuinely dead-end issue is re-fetched every single open); each drawer is one
+  comment call; each Refresh is 1–5 search calls. And per JIRA-133/JIRA-135 a 429
+  on the list or transitions path is swallowed entirely — the good message
+  identified in JIRA-138 is only reachable from a write. This is the case that
+  makes JIRA-138 actually testable end to end.
+- **JIRA-183** — Two Waypoint instances sharing one credential file
+  Steps: Launch a second Waypoint process (run the binary/`npm start` twice —
+  there is no single-instance lock). Open My Jira in both. Transition a ticket in
+  instance A. Then press Disconnect in instance A and keep using instance B.
+  Expected: At minimum, instance B should not keep presenting a connection whose
+  credential has been deleted from under it.
+  Coverage: **Gap worth flagging** — `main.ts` creates exactly one
+  `BrowserWindow` and never calls `requestSingleInstanceLock()`, so the reachable
+  scenario is two *processes* sharing one `~/…/jira-auth.json`, not two windows
+  (see correction to JIRA-151). After A disconnects, B's `jiraStore` still holds
+  `connected: true` — the sidebar item, the badge and the green Connected pill all
+  persist — while every actual call now fails `requireCredential()` with "No Jira
+  account is connected", which per JIRA-133 renders as an empty queue. Also worth
+  recording that a *connect* from B silently overwrites A's credential (JIRA-15's
+  overwrite, reached without either window knowing).
+
+### Wizard lifecycle
+
+- **JIRA-184** — Abandoning the wizard after connecting
+  Steps: Open the "+" wizard, go to step 3, connect a real account successfully.
+  Then close the modal (X, Escape, or backdrop) **without** clicking "Create
+  project" on step 4. Check the sidebar and `/my-jira`.
+  Expected: Whatever happens should match what the user thinks they did.
+  Coverage: **Gap worth flagging** — `handleConnectJira` writes the encrypted
+  credential to disk and calls `setJiraConnection(status)` the moment Connect
+  succeeds, so closing the wizard afterwards leaves a fully live connection: the
+  sidebar "My Jira" item appears, the route works, and the token is stored. The
+  user cancelled a creation flow and got an account connected anyway. There is no
+  "cancel undoes the connect" path and nothing says the Connect button is the
+  point of no return.
+- **JIRA-185** — Reopening the wizard while an account is already connected
+  Steps: With Jira connected, click "+" → Companion project → Jira → Continue to
+  step 3.
+  Expected: The step should reflect that an account is already connected.
+  Coverage: **Gap worth flagging** — `AddProjectWizard` keeps `connectionStatus`
+  in **local** state, reset to `null` by `resetAll()` on every close, and never
+  reads `jiraStore` or `getJiraConnectionStatus()` on open. So step 3 shows an
+  empty connect form, gives no hint that an account is connected, and — because
+  `nextDisabled` on step 3 is `!connectionStatus?.connected` — cannot be advanced
+  past *without re-entering a site, email and a fresh API token*. The credential
+  that connect then writes silently replaces the existing one (JIRA-15). This is
+  the concrete, reachable path into JIRA-15's silent overwrite, and it's also the
+  only path a user has to change accounts, which makes it worth its own case.
+- **JIRA-186** — "1 API call to load" on the confirm step
+  Steps: On step 4, read the "1 · API call to load" stat. Count the actual
+  requests the connect flow made (DevTools network, or main-process logging).
+  Expected: The number shown should be the number of calls.
+  Coverage: **Gap worth flagging** — `connectJira()` performs one
+  `GET /rest/api/3/myself`, then `listMyJiraTickets()`, which is 1 to 5
+  `GET /rest/api/3/search/jql` calls depending on queue size, then a local status
+  read. So the minimum is 2 and the maximum is 6 — never 1. Small, but it is a
+  hardcoded number presented as a measurement on the same screen as the two
+  counts JIRA-11 correctly praises for being real, and it is the same class of
+  finding as JIRA-19 and JIRA-131's "~400ms".
+
+### Everyday failure composites, scope boundary, and consistency
+
+- **JIRA-187** — Launching offline with Jira connected
+  Steps: Connect Jira. Quit Waypoint. Disable networking. Launch Waypoint and,
+  without touching anything else, look at the sidebar, then open My Jira, then
+  open a ticket drawer, then try a transition.
+  Expected: The app should not claim to be showing a current, complete queue.
+  Coverage: **Partial** — the composite this case was written to name is gone.
+  JIRA-123 and JIRA-133/134/135 are fixed, so offline-at-launch now shows a muted
+  "not synced yet" instead of a pulsing green "synced 0s ago", and the list, the
+  drawer's comments and the transition menu each read "Couldn't load … Couldn't
+  reach Jira. Check your connection and try again." with a Try again button.
+  What survives is JIRA-136's half: the sidebar still shows "My Jira" with a
+  badge of **0** (the credential read is local and succeeds; `lastTickets` is
+  empty), and the Connection tab still shows a green "Connected" pill for a site
+  the app cannot reach. So the app no longer *claims* a fresh, empty queue — but
+  two of its status surfaces still read as healthy. Worth running exactly as
+  written, against those two.
+- **JIRA-188** — An unposted comment draft when the drawer closes
+  Steps: Open a drawer, type several paragraphs into the composer without
+  posting. Press Escape. Reopen the same ticket.
+  Expected: The draft survives, or the user is warned before it doesn't.
+  Coverage: **Gap worth flagging** — the composer's `draft` is local `useState`
+  in a component that unmounts with the drawer, and the drawer closes on Escape,
+  on the X, and on any backdrop click with no guard. A half-written comment is
+  gone silently, including from a misfired Escape aimed at a transition popover.
+  Waypoint has a Drafts feature of its own (the DRAFT section of this sheet), so
+  this is below the app's own established bar in the same way JIRA-84 and
+  JIRA-112 are.
+- **JIRA-189** — There is no way to see anyone else's queue
+  Steps: Try, from within My Jira, to see a teammate's work: look for an account
+  switcher, an assignee filter listing other people, an editable JQL box, a
+  "team" view, or any control that would answer "what is Priya working on".
+  Check the drawer and the Connection tab too.
+  Expected: None exists, and nothing in the copy implies one does.
+  Coverage: **Not supported (by design)** — the JQL is `currentUser()`-pinned in
+  `jiraClient.ts` and printed read-only on the page, the credential is a single
+  personal API token, and the only assignee shown anywhere is a display name with
+  no filter attached. Recording this as a *deliberate, verified* boundary matters
+  because "My Jira" is a personal mirror by design and a manager-view request is
+  the most predictable scope-creep pressure this feature will face; there should
+  be a case that pins the boundary rather than leaving it implicit. Same reason to
+  note here that the fixed JQL means none of `membersOf()`, `openSprints()`,
+  `endOfWeek()` or a user's own saved filters are reachable (JIRA-114/115).
+- **JIRA-190** — Filter chip counts ignore the other active filter
+  Steps: With issues across several projects, click the "Reported" role chip.
+  Now read the "All N" chip and each project chip's number. Click a project chip
+  and count the rows that appear.
+  Expected: A chip's number should predict how many rows clicking it produces.
+  Coverage: **Gap worth flagging** — in `MyJiraPage`, `projectCounts` and the
+  "All {tickets.length}" chip are both computed from the **unfiltered** `tickets`
+  array, while only the "N issues · M Jira projects" summary line uses `filtered`.
+  So with a role filter active, "ENG 12" can produce 3 rows, and "All 30" can
+  produce 8. The two numbers sit inches apart on screen and disagree. Not caught
+  by JIRA-26 or JIRA-29, both of which only check the summary line.
 
 ---
 
