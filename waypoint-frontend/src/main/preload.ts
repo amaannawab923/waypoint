@@ -310,6 +310,22 @@ const electronHandler = {
     }): Promise<JiraResult<JiraWireTicket>> {
       return ipcRenderer.invoke('jira:tickets:set-assignee', args);
     },
+    // No path in the arguments and no path in the answer, and that is the
+    // shape rather than an omission. Main fetches the bytes, opens a native
+    // save dialog and writes the file, all inside its own handler — the
+    // renderer never names a location and never learns one. `fileName` is a
+    // suggestion for the dialog's default, which main sanitizes before use.
+    //
+    // `canceled: true` is a success. The user closing the dialog is not an
+    // error, and modelling it as one would fire an error toast on every
+    // Escape (see `unwrap` in data/jiraApi.ts).
+    downloadAttachment(args: {
+      ticketId: string;
+      attachmentId: string;
+      fileName: string;
+    }): Promise<JiraResult<{ canceled: boolean }>> {
+      return ipcRenderer.invoke('jira:attachments:download', args);
+    },
     listComments(ticketId: string): Promise<JiraResult<JiraWireComment[]>> {
       return ipcRenderer.invoke('jira:comments:list', ticketId);
     },

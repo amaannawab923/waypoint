@@ -7,6 +7,7 @@ jest.mock('./jiraAuth', () => ({
 
 // eslint-disable-next-line import/order, import/first
 import {
+  downloadAttachment,
   listComments,
   listMyTickets,
   listPriorityOptions,
@@ -842,6 +843,136 @@ describe('assignee', () => {
       });
       expect(fetchMock).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('downloadAttachment', () => {
+  /** A binary response. `arrayBuffer` rather than `text`, and a real
+   * `content-length`, because the size guard reads that header before it
+   * allocates anything. */
+  function binaryResponse(
+    bytes: Buffer,
+    headers: Record<string, string> = {
+      'content-length': String(bytes.byteLength),
+    },
+  ): Response {
+    return {
+      status: 200,
+      ok: true,
+      headers: new Headers(headers),
+      arrayBuffer: jest.fn(async () =>
+        bytes.buffer.slice(
+          bytes.byteOffset,
+          bytes.byteOffset + bytes.byteLength,
+        ),
+      ),
+      text: jest.fn(async () => {
+        throw new Error('text() must not be called on the binary path');
+      }),
+    } as unknown as Response;
+  }
+
+  const BYTES = Buffer.from('replay log, line one\n');
+
+  /**
+   * The single most important assertion about attachments.
+   *
+   * Jira hands back a `content` URL on every attachment object, and following
+   * it with the Basic-auth header attached would send a credential for the
+   * user's entire Atlassian account to whatever host that field named. So the
+   * URL is *constructed*: the site comes from the stored credential, the id
+   * from the caller, and nothing in between comes out of a response body.
+   */
+  it('builds the URL from the stored site and the id, never from a response field', async () => {
+    fetchMock.mockResolvedValue(binaryResponse(BYTES));
+
+    await downloadAttachment('10050');
+
+    const [url, init] = call();
+    expect(url).toBe(
+      'https://waypoint123.atlassian.net/rest/api/3/attachment/content/10050',
+    );
+    expect(init.method).toBe('GET');
+    expect(headerValue(0, 'Authorization')).toContain('Basic ');
+  });
+
+  it('returns the bytes Jira sent', async () => {
+    fetchMock.mockResolvedValue(binaryResponse(BYTES));
+
+    const result = await downloadAttachment('10050');
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) throw new Error('expected a successful download');
+    expect(result.value.bytes.equals(BYTES)).toBe(true);
+  });
+
+  // The response is an attachment, not JSON. Reading it with .text() would
+  // corrupt anything that is not valid UTF-8 — which is most files worth
+  // attaching — so the binary path must never take the JSON body route. The
+  // mock's text() throws, which is what makes this assertion real rather than
+  // a spy count.
+  it('reads the body with arrayBuffer(), never text()', async () => {
+    const response = binaryResponse(BYTES);
+    fetchMock.mockResolvedValue(response);
+
+    expect(await downloadAttachment('10050')).toMatchObject({ ok: true });
+    expect(response.arrayBuffer).toHaveBeenCalledTimes(1);
+    expect(response.text).not.toHaveBeenCalled();
+  });
+
+  // Refused from the declared length, before anything is allocated — the
+  // whole point is not to buffer an arbitrarily large file into main's heap.
+  it('refuses an oversized attachment on content-length, without reading the body', async () => {
+    const response = binaryResponse(BYTES, {
+      'content-length': String(500 * 1024 * 1024),
+    });
+    fetchMock.mockResolvedValue(response);
+
+    expect(await downloadAttachment('10050')).toMatchObject({
+      ok: false,
+      reason: 'jira_error',
+      message: expect.stringContaining('100MB'),
+    });
+    expect(response.arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  // A chunked response declares no length. That is ordinary, not an error, so
+  // the transfer proceeds — the post-read backstop is the only check left.
+  it('still downloads when the response declares no length', async () => {
+    fetchMock.mockResolvedValue(binaryResponse(BYTES, {}));
+
+    expect(await downloadAttachment('10050')).toMatchObject({ ok: true });
+  });
+
+  it('reports a deleted attachment as a Jira error, in Jira’s own words', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ errorMessages: ['Attachment does not exist.'] }, 404),
+    );
+
+    expect(await downloadAttachment('10050')).toMatchObject({
+      ok: false,
+      reason: 'jira_error',
+      message: 'Attachment does not exist.',
+    });
+  });
+
+  it('reports a permission failure as forbidden, not as bad credentials', async () => {
+    fetchMock.mockResolvedValue(emptyResponse(403));
+
+    expect(await downloadAttachment('10050')).toMatchObject({
+      ok: false,
+      reason: 'forbidden',
+    });
+  });
+
+  it('refuses without a stored credential rather than calling out unauthenticated', async () => {
+    readStoredJiraCredentialMock.mockReturnValue(null);
+
+    expect(await downloadAttachment('10050')).toMatchObject({
+      ok: false,
+      reason: 'not_connected',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

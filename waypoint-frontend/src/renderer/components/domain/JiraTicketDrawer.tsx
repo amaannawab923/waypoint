@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { listJiraComments, setJiraTicketAssignee } from '@/data/jiraApi';
+import {
+  downloadJiraAttachment,
+  listJiraComments,
+  setJiraTicketAssignee,
+} from '@/data/jiraApi';
 import { showErrorToast } from '@/lib/toast';
 import { useAsync } from '@/lib/useAsync';
 import { useJiraConnection } from '@/lib/jiraStore';
@@ -14,7 +18,7 @@ import {
 import { JiraCommentComposer } from '@/components/domain/JiraCommentComposer';
 import { JiraLoadError } from '@/components/domain/JiraLoadError';
 import { jiraProjectColor } from '@/types/jira';
-import type { JiraComment, JiraTicket } from '@/types/jira';
+import type { JiraAttachment, JiraComment, JiraTicket } from '@/types/jira';
 
 function formatRelativeTime(iso: string): string {
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -55,6 +59,10 @@ export function JiraTicketDrawer({
   const [comments, setComments] = useState<JiraComment[]>([]);
   const [assigneeOpen, setAssigneeOpen] = useState(false);
   const [savingAssignee, setSavingAssignee] = useState(false);
+  // Which attachment is mid-download, by id — not a plain boolean, because a
+  // ticket can have several rows and only the one that was clicked should say
+  // "Saving…".
+  const [downloading, setDownloading] = useState<string | null>(null);
   const assigneeChipRef = useRef<HTMLButtonElement>(null);
   const connection = useJiraConnection();
 
@@ -82,6 +90,40 @@ export function JiraTicketDrawer({
       );
     } finally {
       setSavingAssignee(false);
+    }
+  }
+
+  /**
+   * Hands one attachment off to main, which fetches it, asks the user where to
+   * put it, writes it and reveals it in the OS file manager.
+   *
+   * Nothing here names a location, and nothing comes back naming one — see
+   * downloadJiraAttachment in data/jiraApi.ts. The in-flight window covers the
+   * dialog as well as the transfer, which is why it can be open for a while:
+   * "Saving…" is true from the moment the fetch starts until the user has
+   * either saved or cancelled.
+   *
+   * A cancel is not an error and produces no toast. There is no success toast
+   * either — this app's toast system has no success channel — which is exactly
+   * why main reveals the saved file in Finder/Explorer instead.
+   */
+  async function handleDownload(attachment: JiraAttachment) {
+    if (!attachment.id) return;
+    setDownloading(attachment.id);
+    try {
+      await downloadJiraAttachment(
+        ticket.id,
+        attachment.id,
+        attachment.fileName,
+      );
+    } catch (err) {
+      showErrorToast(
+        err instanceof Error
+          ? err.message
+          : 'Could not download that attachment from Jira.',
+      );
+    } finally {
+      setDownloading(null);
     }
   }
 
@@ -247,9 +289,28 @@ export function JiraTicketDrawer({
               <span>
                 · {a.sizeLabel} · {a.uploaderName}
               </span>
-              <span className="ml-auto shrink-0 rounded bg-surface-3 px-1.5 py-0.5 text-[10px] font-bold text-text-muted">
-                download in Jira
-              </span>
+              {a.id ? (
+                <button
+                  type="button"
+                  className="ml-auto shrink-0 rounded bg-surface-3 px-1.5 py-0.5 text-[10px] font-bold text-text-secondary hover:bg-surface-2 hover:text-text disabled:opacity-60"
+                  disabled={downloading !== null}
+                  onClick={() => handleDownload(a)}
+                >
+                  {downloading === a.id ? 'Saving…' : 'Download'}
+                </button>
+              ) : (
+                // An attachment Jira returned without an id cannot be
+                // addressed — the download URL is built from that id (see
+                // main/jira/jiraClient.ts's downloadAttachment) — so this
+                // says where it can be had rather than offering a button
+                // whose only possible outcome is failing.
+                <span
+                  className="ml-auto shrink-0 rounded bg-surface-3 px-1.5 py-0.5 text-[10px] font-bold text-text-muted"
+                  title="Jira didn't return an id for this attachment."
+                >
+                  download in Jira
+                </span>
+              )}
             </div>
           ))}
 

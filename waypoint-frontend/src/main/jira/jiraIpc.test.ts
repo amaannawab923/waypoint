@@ -2,7 +2,22 @@ import type { JiraCredential } from './jiraAuth';
 import type { JiraIdentity, JiraResult } from './jiraTypes';
 
 const ipcMainHandleMock = jest.fn();
-jest.mock('electron', () => ({ ipcMain: { handle: ipcMainHandleMock } }));
+const showSaveDialogMock = jest.fn();
+const showOpenDialogMock = jest.fn();
+const showItemInFolderMock = jest.fn();
+// `dialog`, `shell` and `app` join `ipcMain` here because the attachment
+// channels reach main/jira/jiraFiles.ts, which is the one file in this feature
+// that touches them. They are stubbed rather than left out so a handler that
+// unexpectedly opened a real dialog would fail loudly instead of hanging.
+jest.mock('electron', () => ({
+  ipcMain: { handle: ipcMainHandleMock },
+  dialog: {
+    showSaveDialog: (...args: unknown[]) => showSaveDialogMock(...args),
+    showOpenDialog: (...args: unknown[]) => showOpenDialogMock(...args),
+  },
+  shell: { showItemInFolder: (p: string) => showItemInFolderMock(p) },
+  app: { getPath: () => '/Users/max/Downloads' },
+}));
 
 const readStoredJiraCredentialMock = jest.fn<JiraCredential | null, []>();
 const writeStoredJiraCredentialMock = jest.fn();
@@ -32,7 +47,9 @@ const searchAssignableUsersMock = jest.fn();
 const setTicketAssigneeMock = jest.fn();
 const listCommentsMock = jest.fn();
 const postCommentMock = jest.fn();
+const downloadAttachmentMock = jest.fn();
 jest.mock('./jiraClient', () => ({
+  downloadAttachment: (...args: unknown[]) => downloadAttachmentMock(...args),
   validateCredential: (...args: unknown[]) => validateCredentialMock(...args),
   listMyTickets: (...args: unknown[]) => listMyTicketsMock(...args),
   listTransitions: (...args: unknown[]) => listTransitionsMock(...args),
@@ -44,6 +61,15 @@ jest.mock('./jiraClient', () => ({
   setTicketAssignee: (...args: unknown[]) => setTicketAssigneeMock(...args),
   listComments: (...args: unknown[]) => listCommentsMock(...args),
   postComment: (...args: unknown[]) => postCommentMock(...args),
+}));
+
+// jiraFiles is deliberately NOT mocked: it is the thing on the other side of
+// these channels, and the property worth testing here — that a cancelled
+// dialog is a success rather than a failure — lives in it. Only the Electron
+// dialogs and the filesystem underneath it are stubbed.
+const writeFileMock = jest.fn();
+jest.mock('fs', () => ({
+  promises: { writeFile: (...args: unknown[]) => writeFileMock(...args) },
 }));
 
 // eslint-disable-next-line import/order, import/first
@@ -79,11 +105,19 @@ const GOOD_CONNECT = {
   apiToken: 'ATATT3xFfGF0-not-a-real-token',
 };
 
+/** The window getter main.ts passes. Null is a real answer there — a window
+ * closed and reopened is a different object, and registration happens before
+ * any window exists — so tests that do not care about it pass one that says
+ * so. */
+const WINDOW = { id: 1 } as never;
+const getWindowMock = jest.fn<never | null, []>(() => WINDOW);
+
 beforeEach(() => {
   jest.clearAllMocks();
   readStoredJiraCredentialMock.mockReturnValue(null);
   isJiraSecureStorageAvailableMock.mockReturnValue(true);
-  registerJiraIpc();
+  getWindowMock.mockReturnValue(WINDOW);
+  registerJiraIpc(getWindowMock);
 });
 
 describe('jira:status', () => {
@@ -387,6 +421,130 @@ describe('per-ticket channels', () => {
       ),
     ).toMatchObject({ ok: false, reason: 'invalid_input' });
     expect(postCommentMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The security property this whole feature is shaped around: no filesystem
+   * path crosses this boundary in either direction. The renderer sends an
+   * issue id, an attachment id and a suggested filename, and gets back only
+   * whether the user cancelled. Everything between the fetch and the file on
+   * disk happens inside main, where the native dialog is the authorization.
+   */
+  describe('jira:attachments:download', () => {
+    beforeEach(() => {
+      downloadAttachmentMock.mockResolvedValue({
+        ok: true,
+        value: { bytes: Buffer.from('bytes') },
+      });
+      showSaveDialogMock.mockResolvedValue({
+        canceled: false,
+        filePath: '/Users/max/Downloads/replay-log.txt',
+      });
+      writeFileMock.mockResolvedValue(undefined);
+    });
+
+    it('refuses a ticket id that is not one, before any client call', async () => {
+      expect(
+        await getHandler('jira:attachments:download')(
+          {},
+          {
+            ticketId: '../../../admin',
+            attachmentId: '10050',
+            fileName: 'x.txt',
+          },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(downloadAttachmentMock).not.toHaveBeenCalled();
+      expect(showSaveDialogMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses an attachment id that is not one, before any client call', async () => {
+      expect(
+        await getHandler('jira:attachments:download')(
+          {},
+          {
+            ticketId: '10421',
+            attachmentId: '../../../etc/passwd',
+            fileName: 'x.txt',
+          },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(downloadAttachmentMock).not.toHaveBeenCalled();
+      expect(showSaveDialogMock).not.toHaveBeenCalled();
+    });
+
+    it('accepts a real numeric attachment id and downloads by it', async () => {
+      await getHandler('jira:attachments:download')(
+        {},
+        {
+          ticketId: '10421',
+          attachmentId: '10050',
+          fileName: 'replay-log.txt',
+        },
+      );
+
+      expect(downloadAttachmentMock).toHaveBeenCalledWith('10050');
+    });
+
+    // A user closing a save dialog is a normal outcome, not a failure. The
+    // renderer's unwrap() throws on any ok:false and every caller turns that
+    // into an error toast, so a cancel modelled as a failure would pop a red
+    // message on every Escape.
+    it('reports a cancelled save dialog as a success, never a failure', async () => {
+      showSaveDialogMock.mockResolvedValue({ canceled: true, filePath: '' });
+
+      expect(
+        await getHandler('jira:attachments:download')(
+          {},
+          {
+            ticketId: '10421',
+            attachmentId: '10050',
+            fileName: 'replay-log.txt',
+          },
+        ),
+      ).toEqual({ ok: true, value: { canceled: true } });
+      expect(writeFileMock).not.toHaveBeenCalled();
+    });
+
+    it('parents the dialog to whatever window exists right now', async () => {
+      await getHandler('jira:attachments:download')(
+        {},
+        { ticketId: '10421', attachmentId: '10050', fileName: 'x.txt' },
+      );
+      expect(showSaveDialogMock).toHaveBeenCalledWith(
+        WINDOW,
+        expect.anything(),
+      );
+
+      getWindowMock.mockReturnValue(null);
+      await getHandler('jira:attachments:download')(
+        {},
+        { ticketId: '10421', attachmentId: '10050', fileName: 'x.txt' },
+      );
+      expect(showSaveDialogMock).toHaveBeenLastCalledWith(expect.anything());
+    });
+
+    // The renderer cannot say where a file goes, and is not told where it
+    // went — the answer it gets is a boolean.
+    it('takes no path in and hands no path back', async () => {
+      const result = await getHandler('jira:attachments:download')(
+        {},
+        {
+          ticketId: '10421',
+          attachmentId: '10050',
+          fileName: 'replay-log.txt',
+          // A path the renderer has no business sending. It is not a field on
+          // this channel, and nothing reads it.
+          path: '/etc/cron.d/pwn',
+        },
+      );
+
+      expect(writeFileMock).toHaveBeenCalledWith(
+        '/Users/max/Downloads/replay-log.txt',
+        expect.anything(),
+      );
+      expect(JSON.stringify(result)).not.toContain('/etc/cron.d/pwn');
+    });
   });
 
   it('jira:tickets:list delegates straight to the client', async () => {

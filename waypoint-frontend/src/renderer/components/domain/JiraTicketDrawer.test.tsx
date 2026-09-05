@@ -7,13 +7,18 @@ import {
   waitFor,
 } from '@testing-library/react';
 import {
+  downloadJiraAttachment,
   listJiraComments,
   searchJiraAssignableUsers,
   setJiraTicketAssignee,
 } from '@/data/jiraApi';
 import { useJiraConnection } from '@/lib/jiraStore';
 import { showErrorToast } from '@/lib/toast';
-import type { JiraConnectionStatus, JiraTicket } from '@/types/jira';
+import type {
+  JiraAttachment,
+  JiraConnectionStatus,
+  JiraTicket,
+} from '@/types/jira';
 import { JiraTicketDrawer } from './JiraTicketDrawer';
 
 // The drawer owns the assignee write and the picker owns its own debounced
@@ -22,6 +27,7 @@ import { JiraTicketDrawer } from './JiraTicketDrawer';
 // real portaled panel render together, exactly as JiraTicketRow.test.tsx does
 // for the priority flow.
 jest.mock('@/data/jiraApi', () => ({
+  downloadJiraAttachment: jest.fn(),
   listJiraComments: jest.fn(),
   postJiraComment: jest.fn(),
   searchJiraAssignableUsers: jest.fn(),
@@ -56,6 +62,18 @@ function ticket(overrides: Partial<JiraTicket> = {}): JiraTicket {
     tombstone: null,
     hasConflict: false,
     conflict: null,
+    ...overrides,
+  };
+}
+
+function attachment(overrides: Partial<JiraAttachment> = {}): JiraAttachment {
+  return {
+    id: '10050',
+    fileName: 'replay-log.txt',
+    sizeLabel: '214 KB',
+    sizeBytes: 219136,
+    mimeType: 'text/plain',
+    uploaderName: 'Sam Lee',
     ...overrides,
   };
 }
@@ -110,10 +128,93 @@ beforeEach(() => {
   jest.mocked(listJiraComments).mockResolvedValue([]);
   jest.mocked(useJiraConnection).mockReturnValue(CONNECTION);
   jest.mocked(searchJiraAssignableUsers).mockResolvedValue(ASSIGNABLE);
+  jest.mocked(downloadJiraAttachment).mockResolvedValue({ canceled: false });
 });
 
 afterEach(() => {
   jest.useRealTimers();
+});
+
+describe('attachments', () => {
+  it('offers a real Download button per attachment, not a static label', () => {
+    renderDrawer({ attachments: [attachment()] });
+
+    expect(screen.queryByText('download in Jira')).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'Download' }),
+    ).toBeInTheDocument();
+  });
+
+  // Jira lets two files on one issue share a name. Keying the rows on the
+  // filename collapsed them into one React key; the id is what makes them two
+  // distinct rows.
+  it('renders two attachments sharing a filename as two distinct rows', () => {
+    // React reports a duplicate key as a console error rather than a throw, so
+    // the only way to assert its absence is to watch the console.
+    const consoleError = jest
+      .spyOn(console, 'error')
+      .mockImplementation(() => {});
+    renderDrawer({
+      attachments: [
+        attachment({ id: '10050' }),
+        attachment({ id: '10051', uploaderName: 'Priya Raman' }),
+      ],
+    });
+
+    expect(screen.getAllByText('replay-log.txt')).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: 'Download' })).toHaveLength(2);
+    expect(consoleError.mock.calls.flat().join(' ')).not.toContain('same key');
+    consoleError.mockRestore();
+  });
+
+  it('downloads by the attachment id, carrying the name only as a suggestion', async () => {
+    renderDrawer({ attachments: [attachment()] });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download' }));
+
+    await waitFor(() =>
+      expect(downloadJiraAttachment).toHaveBeenCalledWith(
+        '10421',
+        '10050',
+        'replay-log.txt',
+      ),
+    );
+  });
+
+  // The download URL is built in main from the attachment id (see
+  // jiraClient.ts), so a row without one cannot be fetched — and a button
+  // whose only possible outcome is failing is worse than no button.
+  it('offers no Download on an attachment Jira returned without an id', () => {
+    renderDrawer({ attachments: [attachment({ id: null })] });
+
+    expect(screen.queryByRole('button', { name: 'Download' })).toBeNull();
+    expect(screen.getByText('download in Jira')).toBeInTheDocument();
+  });
+
+  // A cancel is not an error — main answers `{ canceled: true }` rather than
+  // a failure, precisely so this fires no toast.
+  it('says nothing when the user cancels the save dialog', async () => {
+    jest.mocked(downloadJiraAttachment).mockResolvedValue({ canceled: true });
+    renderDrawer({ attachments: [attachment()] });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download' }));
+
+    await waitFor(() => expect(downloadJiraAttachment).toHaveBeenCalled());
+    expect(showErrorToast).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a refused download', async () => {
+    jest
+      .mocked(downloadJiraAttachment)
+      .mockRejectedValue(new Error('Attachment does not exist.'));
+    renderDrawer({ attachments: [attachment()] });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download' }));
+
+    await waitFor(() =>
+      expect(showErrorToast).toHaveBeenCalledWith('Attachment does not exist.'),
+    );
+  });
 });
 
 describe('the assignee chip', () => {

@@ -39,7 +39,19 @@ export type JiraFailureReason =
   | 'site_not_found'
   | 'network'
   | 'storage_unavailable'
-  | 'jira_error';
+  | 'jira_error'
+  /**
+   * The local filesystem said no — the disk is full, the chosen folder is not
+   * writable, the picked file vanished between the dialog and the read.
+   *
+   * Separate from `jira_error` for the same reason `invalid_credentials` is
+   * separate from `network`: they are different facts about different systems
+   * and they need different sentences. "Jira rejected that upload" sends a
+   * user to their Jira admin; "Waypoint couldn't write that file" sends them
+   * to their own disk, and telling them the first when the second happened
+   * wastes their time on someone else's system.
+   */
+  | 'file_error';
 
 export interface JiraFailure {
   ok: false;

@@ -508,6 +508,39 @@ export async function setJiraTicketAssignee(
 }
 
 /**
+ * Saves one of an issue's attachments to disk.
+ *
+ * Not really a write to Jira at all — nothing about the issue changes — but it
+ * lives among the writes because it is an action the user takes rather than
+ * data this module reads, and because it is the one function here whose result
+ * is a file on their machine.
+ *
+ * Note the signature: there is no `path` parameter, and none comes back. This
+ * side cannot name a destination. It asks main to download an attachment and
+ * let the user choose where it goes, and main owns the whole fetch → native
+ * save dialog → write → reveal-in-Finder sequence inside a single handler.
+ * That is the point of the design rather than an inconvenience of it: nothing
+ * the renderer says can decide where bytes land, so there is nothing to
+ * validate and nothing to get wrong. `fileName` is only the dialog's default
+ * suggestion, and main sanitizes it before use — a Jira filename is chosen by
+ * whoever uploaded it.
+ *
+ * A cancel comes back as `{ canceled: true }`, never as a thrown error. The
+ * user closing a save dialog is a normal outcome and must not fire the error
+ * toast every other failure here produces.
+ */
+export async function downloadJiraAttachment(
+  ticketId: string,
+  attachmentId: string,
+  fileName: string,
+): Promise<{ canceled: boolean }> {
+  const result = unwrap(
+    await bridge().downloadAttachment({ ticketId, attachmentId, fileName }),
+  );
+  return { canceled: result.canceled };
+}
+
+/**
  * Posts a plain-text comment as the connected user.
  *
  * Plain text is the whole contract: an "@Name" typed into the body stays

@@ -33,6 +33,30 @@ import type {
 
 const REQUEST_TIMEOUT_MS = 20_000;
 
+// A file transfer is not a JSON call and must not be timed like one. Twenty
+// seconds is generous for "tell me about this issue" and plainly wrong for
+// "send me a 40MB screen recording over hotel wifi" — a cap that aborts a
+// transfer that was going fine is indistinguishable, from the user's side,
+// from Jira being broken.
+const TRANSFER_TIMEOUT_MS = 120_000;
+
+/**
+ * The largest attachment this app will move in either direction.
+ *
+ * 100MB, which is Atlassian's own maximum configurable attachment size on
+ * Jira Cloud — so it is a ceiling no site can legitimately exceed, rather
+ * than a number picked here. It is deliberately not a guess at any particular
+ * site's limit: most sites run well below this (Cloud's default is 10MB), and
+ * a *site's* real cap is Jira's to enforce and to explain, in its own words,
+ * far better than a guessed local number could.
+ *
+ * What this guard is actually for is the main process's heap. A download is
+ * buffered whole before it is written, and an upload is read whole before it
+ * is sent; without a ceiling, either is an unbounded allocation driven by a
+ * file this app did not choose.
+ */
+export const MAX_TRANSFER_BYTES = 100 * 1024 * 1024;
+
 // One personal queue is 10-40 issues. 100 per page with a hard cap of 5 pages
 // means the normal case is a single request and a pathological account still
 // can't turn "load my work" into an unbounded crawl of someone's Jira.
@@ -127,10 +151,51 @@ interface JiraRequest {
   body?: unknown;
 }
 
-async function jiraFetch<T>(
+/** What `performRequest` needs, once a caller has decided how the body is
+ * encoded and how long the call is allowed to take. Deliberately lower-level
+ * than `JiraRequest`: `body` here is already a `BodyInit`, and `headers` is
+ * whatever this particular flavour of request adds on top of the two every
+ * Jira call carries. */
+interface RawJiraRequest {
+  method: 'GET' | 'POST' | 'PUT';
+  path: string;
+  query?: Record<string, string>;
+  /** Merged over `Authorization` and `Accept`. Deliberately optional and
+   * deliberately never defaulted to a `Content-Type`: `fetch` derives the
+   * right one (with the boundary) from a `FormData` body, and setting it by
+   * hand there produces a request Jira rejects. */
+  headers?: Record<string, string>;
+  /** The two encodings this client actually sends: a JSON string, or a
+   * `FormData` for the attachment upload. Deliberately narrower than fetch's
+   * own `BodyInit` — nothing here streams, and a union of exactly what is
+   * sent is a union a reader can check against the call sites. */
+  body?: string | FormData;
+  timeoutMs: number;
+}
+
+/**
+ * Every Jira request in this app goes through here, and this is the only place
+ * that decides what a failure means.
+ *
+ * That single-place-ness is the entire reason it exists as its own function.
+ * There are three body shapes to send (JSON, nothing, multipart) and two to
+ * read back (JSON, raw bytes), and the combinations do not share a return
+ * type — but they share every question worth getting right: which host the
+ * request is pinned to, that the credential rides in a header and never a
+ * URL, when to give up, and what a 401 versus a 403 versus a 429 versus an
+ * ENOTFOUND actually means to a user. Copying that ladder per body shape
+ * would leave three functions free to hold three different opinions about
+ * what rate-limiting is, and they would drift, because nothing would notice.
+ *
+ * Returns the raw `Response` and reads no body on success — how the body is
+ * read is precisely the part that differs. Every non-2xx status is fully
+ * handled here, including reading and parsing Jira's own error body, because
+ * an error body is JSON no matter what the caller asked for.
+ */
+async function performRequest(
   credential: Credentialish,
-  request: JiraRequest,
-): Promise<JiraResult<T>> {
+  request: RawJiraRequest,
+): Promise<JiraResult<Response>> {
   const url = new URL(`https://${credential.site}${request.path}`);
   for (const [key, value] of Object.entries(request.query ?? {})) {
     url.searchParams.set(key, value);
@@ -141,7 +206,7 @@ async function jiraFetch<T>(
   // module is loaded in (the test environment included), and a timeout is not
   // something worth making conditional.
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), request.timeoutMs);
 
   let response: Response;
   try {
@@ -150,12 +215,9 @@ async function jiraFetch<T>(
       headers: {
         Authorization: authorizationHeader(credential),
         Accept: 'application/json',
-        ...(request.body !== undefined
-          ? { 'Content-Type': 'application/json' }
-          : {}),
+        ...(request.headers ?? {}),
       },
-      body:
-        request.body !== undefined ? JSON.stringify(request.body) : undefined,
+      body: request.body,
       signal: controller.signal,
     });
   } catch (err) {
@@ -173,16 +235,6 @@ async function jiraFetch<T>(
   if (response.status === 403) {
     return failure('forbidden', "Your Jira account isn't allowed to do that.");
   }
-  if (response.status === 204) return { ok: true, value: undefined as T };
-
-  let parsed: unknown;
-  let parseFailed = false;
-  try {
-    const text = await response.text();
-    parsed = text ? JSON.parse(text) : undefined;
-  } catch {
-    parseFailed = true;
-  }
 
   if (!response.ok) {
     if (response.status === 429) {
@@ -191,17 +243,39 @@ async function jiraFetch<T>(
         'Jira is rate-limiting this account right now — wait a moment and try again.',
       );
     }
+    // Jira reports problems as JSON whatever the request asked to receive, so
+    // reading the error body here rather than per-caller is what lets a failed
+    // binary download still say "Resolution is required"-grade things.
+    let parsed: unknown;
+    try {
+      const text = await response.text();
+      parsed = text ? JSON.parse(text) : undefined;
+    } catch {
+      parsed = undefined;
+    }
     return failure(
       'jira_error',
       messageFromErrorBody(parsed, `Jira returned ${response.status}.`),
     );
   }
 
-  // A 200 that isn't JSON is not a Jira API response at all — it's almost
-  // always a login page or a parked-domain page from a hostname that happens
-  // to answer on https. Saying so beats a downstream "cannot read property
-  // of undefined".
-  if (parseFailed) {
+  return { ok: true, value: response };
+}
+
+/** Reads a successful response as JSON. The tail shared by `jiraFetch` and
+ * `jiraFetchMultipart` — both send different bodies and both get JSON back. */
+async function readJsonBody<T>(response: Response): Promise<JiraResult<T>> {
+  if (response.status === 204) return { ok: true, value: undefined as T };
+
+  let parsed: unknown;
+  try {
+    const text = await response.text();
+    parsed = text ? JSON.parse(text) : undefined;
+  } catch {
+    // A 200 that isn't JSON is not a Jira API response at all — it's almost
+    // always a login page or a parked-domain page from a hostname that happens
+    // to answer on https. Saying so beats a downstream "cannot read property
+    // of undefined".
     return failure(
       'site_not_found',
       'That address answered, but not like a Jira Cloud site — check the site address.',
@@ -209,6 +283,66 @@ async function jiraFetch<T>(
   }
 
   return { ok: true, value: parsed as T };
+}
+
+async function jiraFetch<T>(
+  credential: Credentialish,
+  request: JiraRequest,
+): Promise<JiraResult<T>> {
+  const sent = await performRequest(credential, {
+    method: request.method,
+    path: request.path,
+    query: request.query,
+    headers:
+      request.body !== undefined
+        ? { 'Content-Type': 'application/json' }
+        : undefined,
+    body: request.body !== undefined ? JSON.stringify(request.body) : undefined,
+    timeoutMs: REQUEST_TIMEOUT_MS,
+  });
+  if (!sent.ok) return sent;
+  return readJsonBody<T>(sent.value);
+}
+
+function tooLargeMessage(bytes: number): string {
+  return `That attachment is ${Math.round(bytes / (1024 * 1024))}MB, past the ${Math.round(
+    MAX_TRANSFER_BYTES / (1024 * 1024),
+  )}MB this app will transfer — download it in Jira instead.`;
+}
+
+/**
+ * The same request machinery, reading raw bytes instead of JSON.
+ *
+ * The size guard sits here rather than in the caller because it needs the
+ * response, and it has to run *before* `.arrayBuffer()` — the whole point is
+ * not to allocate the thing. `content-length` is what Jira sends for an
+ * attachment, so the declared-length check is the one that actually protects
+ * the heap; the check after the read is a cheap backstop for a chunked
+ * response that declared nothing, and is honest about only being able to
+ * refuse the file after it has already arrived.
+ */
+async function jiraFetchBinary(
+  credential: Credentialish,
+  request: Omit<JiraRequest, 'body'>,
+): Promise<JiraResult<Buffer>> {
+  const sent = await performRequest(credential, {
+    method: request.method,
+    path: request.path,
+    query: request.query,
+    timeoutMs: TRANSFER_TIMEOUT_MS,
+  });
+  if (!sent.ok) return sent;
+
+  const declared = Number(sent.value.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > MAX_TRANSFER_BYTES) {
+    return failure('jira_error', tooLargeMessage(declared));
+  }
+
+  const bytes = Buffer.from(await sent.value.arrayBuffer());
+  if (bytes.byteLength > MAX_TRANSFER_BYTES) {
+    return failure('jira_error', tooLargeMessage(bytes.byteLength));
+  }
+  return { ok: true, value: bytes };
 }
 
 function requireCredential(): JiraResult<JiraCredential> {
@@ -633,7 +767,49 @@ export async function setTicketAssignee(
 }
 
 // -----------------------------------------------------------------------
-// 6. Comments
+// 6. Attachments
+// -----------------------------------------------------------------------
+
+/**
+ * The bytes of one attachment.
+ *
+ * The URL is built here, from the site stored with the credential plus the
+ * caller's attachment id, and that is the whole security posture of this
+ * function. Jira hands back a `content` URL on every attachment object and
+ * this app deliberately never carries it (see `JiraWireAttachment`): a request
+ * made with HTTP Basic `email:apiToken` is a request carrying a credential for
+ * the user's entire Atlassian account, and the one thing that must never
+ * decide where it goes is a string that arrived inside a response body. A
+ * hostname validated at connect time and an id validated at the IPC boundary
+ * are the only two inputs.
+ *
+ * Jira answers this endpoint with a redirect to a short-lived storage URL
+ * rather than the bytes. `fetch` follows it, and the WHATWG fetch algorithm
+ * that Node implements strips `Authorization` on a cross-origin redirect — so
+ * the credential reaches Atlassian and stops there, which is exactly the
+ * behaviour wanted and the reason the redirect is followed rather than being
+ * turned off and re-issued by hand.
+ *
+ * Wrapped in an object rather than returning the Buffer bare, so a later
+ * addition (the real filename Jira has, a content type) is a field rather than
+ * a breaking change at every call site.
+ */
+export async function downloadAttachment(
+  attachmentId: string,
+): Promise<JiraResult<{ bytes: Buffer }>> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+
+  const result = await jiraFetchBinary(credentialResult.value, {
+    method: 'GET',
+    path: `/rest/api/3/attachment/content/${encodeURIComponent(attachmentId)}`,
+  });
+  if (!result.ok) return result;
+  return { ok: true, value: { bytes: result.value } };
+}
+
+// -----------------------------------------------------------------------
+// 7. Comments
 // -----------------------------------------------------------------------
 
 // Reads go through v3, writes through v2 — a deliberate split, not an

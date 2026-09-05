@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron';
+import { ipcMain, type BrowserWindow } from 'electron';
 import {
   deleteStoredJiraCredential,
   isJiraSecureStorageAvailable,
@@ -7,6 +7,7 @@ import {
   writeStoredJiraCredential,
 } from './jiraAuth';
 import * as client from './jiraClient';
+import * as files from './jiraFiles';
 import { normalizeJiraSite } from './jiraMap';
 import type {
   JiraConnectionSnapshot,
@@ -51,6 +52,24 @@ function readTicketId(value: unknown): string | null {
   return /^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$/.test(id) ? id : null;
 }
 
+/**
+ * Guards the attachment channels.
+ *
+ * Its own function rather than a reuse of `readTicketId`, because the two
+ * guard different things and saying so is worth a name: an attachment id on
+ * Jira Cloud is a small integer as a string ("10050"), not an issue key. The
+ * character class is deliberately no looser than the ticket guard's — the
+ * property that matters is identical, that nothing caller-supplied can escape
+ * into a REST path — and deliberately no tighter, i.e. not pinned to digits.
+ * Pinning it would buy no additional safety (a path cannot be spelled in
+ * `[A-Za-z0-9_-]` either way) while breaking downloads outright on any site,
+ * proxy or future API version whose ids are not purely numeric.
+ */
+function readAttachmentId(value: unknown): string | null {
+  const id = readString(value);
+  return /^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$/.test(id) ? id : null;
+}
+
 /** Only string-valued entries survive: the transition popover collects text
  * and select values, and anything else arriving under this key is not
  * something the renderer sends. */
@@ -65,7 +84,17 @@ function readFieldValues(value: unknown): Record<string, string> {
   );
 }
 
-export function registerJiraIpc(): void {
+/**
+ * `getWindow` is a getter rather than a window, matching `registerRepoLinkIpc`
+ * and `registerCopilotIpc` exactly and for their reason: registration happens
+ * once at module load, when `mainWindow` is still null, and a window closed and
+ * reopened later is a *different* object. A dialog parented to the window that
+ * existed at startup would be parented to nothing.
+ *
+ * A null answer is a real case rather than an error — the dialogs then open
+ * free-floating instead of as a sheet.
+ */
+export function registerJiraIpc(getWindow: () => BrowserWindow | null): void {
   // A purely local read of the credential store — deliberately not a network
   // round trip. The sidebar and the My Jira page both ask for this on every
   // mount, and "is an account connected" is answered by the file on disk;
@@ -260,6 +289,58 @@ export function registerJiraIpc(): void {
         return failure('invalid_input', 'Pick someone to assign this to.');
       }
       return client.setTicketAssignee(ticketId, accountId);
+    },
+  );
+
+  /**
+   * Downloads one attachment and lets the user say where it goes.
+   *
+   * Note what this channel does NOT take, in either direction: a filesystem
+   * path. The renderer cannot name a destination, and none comes back. Main
+   * fetches the bytes, opens a native save dialog, and writes — the whole
+   * round trip inside one handler, with the path existing only between the
+   * dialog that produced it and the write that consumed it. The dialog is the
+   * authorization, which is why there is nothing here to validate about where
+   * the file lands.
+   *
+   * `fileName` is a suggestion for the dialog's default and nothing else. It
+   * is attacker-influenced (any Jira user can name a file
+   * `../../../.ssh/authorized_keys`), so `jiraFiles.safeBaseName` reduces it
+   * to a bare name before it reaches the dialog; it never becomes a path here.
+   *
+   * `ticketId` is validated and then unused, deliberately: Jira's
+   * attachment-content endpoint is addressed by attachment id alone, so the
+   * ticket id builds no part of the request. It stays on the channel because
+   * it is what makes the call self-describing at both ends — every other
+   * per-issue channel names its issue, and a download is an action on a
+   * ticket even when the URL doesn't say so.
+   *
+   * The saved path is narrowed off the answer here rather than passed
+   * through. `downloadAttachmentToDisk` reports it because a main-process
+   * caller may reasonably want it, but "no path crosses IPC" is a claim about
+   * both directions and this is the direction it would otherwise leak in. The
+   * renderer gets a boolean, which is all it can act on anyway.
+   */
+  ipcMain.handle(
+    'jira:attachments:download',
+    async (
+      _event,
+      args: unknown,
+    ): Promise<JiraResult<{ canceled: boolean }>> => {
+      const input = (args ?? {}) as Record<string, unknown>;
+      const ticketId = readTicketId(input.ticketId);
+      const attachmentId = readAttachmentId(input.attachmentId);
+      if (!ticketId) return failure('invalid_input', 'Unknown Jira issue.');
+      if (!attachmentId) {
+        return failure('invalid_input', 'Unknown Jira attachment.');
+      }
+      const saved = await files.downloadAttachmentToDisk(
+        getWindow(),
+        attachmentId,
+        readString(input.fileName),
+      );
+      if (!saved.ok) return saved;
+      return { ok: true, value: { canceled: saved.value.canceled } };
     },
   );
 

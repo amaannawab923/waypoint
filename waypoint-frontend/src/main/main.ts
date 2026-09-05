@@ -109,9 +109,13 @@ registerCopilotIpc(() => mainWindow);
 registerCopilotAuthIpc();
 registerCopilotConnectIpc(() => mainWindow);
 registerCopilotDetectIpc();
-// No window getter: every Jira channel is request/response, so none of them
-// ever needs to push to a window the way the Copilot stream does.
-registerJiraIpc();
+// Every Jira channel is still request/response — none of them pushes to a
+// window the way the Copilot stream does. The getter is for the attachment
+// channels' native save/open dialogs, which parent to the window to be modal
+// on macOS; a getter rather than the window itself for the same reason as the
+// two above, that `mainWindow` is null at this point and is a different object
+// after a close and reopen.
+registerJiraIpc(() => mainWindow);
 registerRepoLinkIpc(() => mainWindow);
 
 if (process.env.NODE_ENV === 'production') {
