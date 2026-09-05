@@ -1314,6 +1314,7 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: Open My Jira and look for the Copilot proposal card or the "Also queued" duplicate nudge.
   Expected: Neither appears, and no empty rail reserves layout space next to the list.
   Coverage: **Supported (honest by design)** — `getMyJiraProposal` and `getJiraDuplicateNudge` both return `undefined` unconditionally, and `CopilotRail` returns `null` when both are empty. The prior hand-written ENG-421 fixture was removed precisely because it named an issue the user doesn't have.
+  Result: PASS — the only Copilot-related text anywhere on the page is the disclosure sentence itself ("Copilot's don't: see the rail."); no actual proposal card, rail, or reserved layout space renders.
 - **JIRA-130** — Approving a proposal throws loudly rather than faking a write
   Steps: If a proposal can somehow be rendered, click Approve.
   Expected: A clear error naming that this isn't built — never a claimed Jira write.
@@ -1322,10 +1323,12 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: Read the two banners on the Connection tab and the Jira-tinted note under the ticket list. Perform a transition and a comment, timing them.
   Expected: Your own actions write straight through with no approval step; the copy accurately describes both halves.
   Coverage: **Partial** — the human half is accurate and the Copilot half is a promise about unbuilt code. The claim "~400ms" under the list is a specific latency number the app doesn't measure and can't guarantee across networks — a small but real instance of asserting something unverified.
+  Result: FAIL on the "~400ms" claim, precisely measured — instrumented a real transition click-to-settle with `performance.now()`: popup open was fast (~22ms), but the actual write (click "To Do" → chip visibly settles on the new state) took **1752.8ms**, over 4x the claimed figure. The human-writes-no-approval-step half is otherwise accurate; only the specific number is wrong.
 - **JIRA-132** — No agent can write to Jira today
   Steps: With Jira connected, ask Copilot to change a Jira ticket.
   Expected: The ticket is unchanged in Jira — no write path from Copilot exists, since `jiraApi.ts`'s only two writes (`transitionJiraTicket`, `postJiraComment`) are reachable only from a user's own click. What Copilot *says* when asked is the open question this case exists to settle: it must decline rather than claim a change it cannot make.
   Coverage: **Not supported (untested/unknown)** — no Copilot→Jira pipeline exists, but Copilot's behavior when *asked* about Jira (does it hallucinate a proposal? claim success? correctly decline?) has never been checked. Worth a real test given COPILOT-03/04 showed the native side declines correctly.
+  Result: NOT TESTED — attempted to open the Copilot panel via its documented ⌘J shortcut; it did not open in this environment (same synthetic-key-event reliability issue hit earlier with ⌘K, which needed a real button click instead). Did not locate an alternate UI entry point within reasonable effort for this one case; deferred rather than force it.
 
 ### Edge cases & failure modes
 
