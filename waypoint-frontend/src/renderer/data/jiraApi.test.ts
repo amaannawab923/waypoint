@@ -55,6 +55,15 @@ function wireTicket(overrides: Partial<JiraWireTicket> = {}): JiraWireTicket {
   };
 }
 
+/** The shape main now answers `jira:tickets:list` with — the tickets plus
+ * whether the page cap cut the crawl short. Wrapped in a helper because every
+ * one of these call sites cares about the array and none of them cares about
+ * the flag; spelling `{ tickets, truncated: false }` out a dozen times would
+ * bury the one test where the flag is the point. */
+function ticketsResult(tickets: JiraWireTicket[], truncated = false) {
+  return { ok: true as const, value: { tickets, truncated } };
+}
+
 const CONNECTED = {
   connected: true,
   identity: {
@@ -70,7 +79,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   (window as unknown as { electron: unknown }).electron = { jira: bridge };
   bridge.status.mockResolvedValue(CONNECTED);
-  bridge.listTickets.mockResolvedValue({ ok: true, value: [] });
+  bridge.listTickets.mockResolvedValue(ticketsResult([]));
 });
 
 describe('failure handling', () => {
@@ -121,16 +130,15 @@ describe('failure handling', () => {
 describe('listMyJiraTickets', () => {
   it("colors a ticket from Jira's status category, the only portable grouping", async () => {
     const api = freshApi();
-    bridge.listTickets.mockResolvedValue({
-      ok: true,
-      value: [
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([
         wireTicket({ id: '1', stateCategory: 'todo' }),
         wireTicket({ id: '2', stateCategory: 'in-progress' }),
         wireTicket({ id: '3', stateCategory: 'done' }),
-      ],
-    });
+      ]),
+    );
 
-    const tickets = await api.listMyJiraTickets();
+    const { tickets } = await api.listMyJiraTickets();
 
     expect(tickets.map((t) => t.stateColor)).toEqual([
       'var(--text-muted)',
@@ -144,16 +152,29 @@ describe('listMyJiraTickets', () => {
   // nothing invents them.
   it('never marks a real ticket as tombstoned or conflicted', async () => {
     const api = freshApi();
-    bridge.listTickets.mockResolvedValue({ ok: true, value: [wireTicket()] });
+    bridge.listTickets.mockResolvedValue(ticketsResult([wireTicket()]));
 
-    expect(await api.listMyJiraTickets()).toEqual([
-      expect.objectContaining({
-        isTombstoned: false,
-        tombstone: null,
-        hasConflict: false,
-        conflict: null,
-      }),
-    ]);
+    expect(await api.listMyJiraTickets()).toMatchObject({
+      tickets: [
+        expect.objectContaining({
+          isTombstoned: false,
+          tombstone: null,
+          hasConflict: false,
+          conflict: null,
+        }),
+      ],
+    });
+  });
+
+  // The whole point of the pair. A capped read and a complete one are the
+  // same array; if this flag were dropped anywhere between the client and
+  // here, the UI would go back to rendering "here is everything" over a
+  // prefix and nothing would fail.
+  it("carries main's truncation flag through untouched", async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue(ticketsResult([wireTicket()], true));
+
+    expect(await api.listMyJiraTickets()).toMatchObject({ truncated: true });
   });
 });
 
@@ -167,10 +188,9 @@ describe('getJiraTransitions', () => {
 
   it('uses the transitions the bulk search already returned, with no extra call', async () => {
     const api = freshApi();
-    bridge.listTickets.mockResolvedValue({
-      ok: true,
-      value: [wireTicket({ transitions: [BULK_TRANSITION] })],
-    });
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([wireTicket({ transitions: [BULK_TRANSITION] })]),
+    );
     await api.listMyJiraTickets();
 
     const transitions = await api.getJiraTransitions('10421');
@@ -192,10 +212,9 @@ describe('getJiraTransitions', () => {
   // their Jira plainly lets them move.
   it('does not believe an empty bulk result, and asks per-issue instead', async () => {
     const api = freshApi();
-    bridge.listTickets.mockResolvedValue({
-      ok: true,
-      value: [wireTicket({ transitions: [] })],
-    });
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([wireTicket({ transitions: [] })]),
+    );
     bridge.listTransitions.mockResolvedValue({
       ok: true,
       value: [BULK_TRANSITION],
@@ -220,9 +239,8 @@ describe('getJiraTransitions', () => {
 describe('transitionJiraTicket', () => {
   it('returns the re-read ticket and forgets the now-stale transition list', async () => {
     const api = freshApi();
-    bridge.listTickets.mockResolvedValue({
-      ok: true,
-      value: [
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([
         wireTicket({
           transitions: [
             {
@@ -233,8 +251,8 @@ describe('transitionJiraTicket', () => {
             },
           ],
         }),
-      ],
-    });
+      ]),
+    );
     await api.listMyJiraTickets();
     bridge.transition.mockResolvedValue({
       ok: true,
@@ -287,10 +305,9 @@ describe('priority', () => {
   // row is patched in place and never dropped — the `.map()`, not a filter.
   it('patches the cached row rather than removing it', async () => {
     const api = freshApi();
-    bridge.listTickets.mockResolvedValue({
-      ok: true,
-      value: [wireTicket({ id: '10421' }), wireTicket({ id: '10999' })],
-    });
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([wireTicket({ id: '10421' }), wireTicket({ id: '10999' })]),
+    );
     await api.listMyJiraTickets();
     bridge.setPriority.mockResolvedValue({
       ok: true,
@@ -350,10 +367,9 @@ describe('assignee', () => {
    */
   it('patches a ticket reassigned away from you rather than dropping it', async () => {
     const api = freshApi();
-    bridge.listTickets.mockResolvedValue({
-      ok: true,
-      value: [wireTicket({ id: '10421' }), wireTicket({ id: '10999' })],
-    });
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([wireTicket({ id: '10421' }), wireTicket({ id: '10999' })]),
+    );
     await api.listMyJiraTickets();
     bridge.setAssignee.mockResolvedValue({
       ok: true,
@@ -389,10 +405,9 @@ describe('assignee', () => {
   // for exactly this before any string coercion.
   it('sends a literal null for unassign, and keeps the row', async () => {
     const api = freshApi();
-    bridge.listTickets.mockResolvedValue({
-      ok: true,
-      value: [wireTicket({ id: '10421' })],
-    });
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([wireTicket({ id: '10421' })]),
+    );
     await api.listMyJiraTickets();
     bridge.setAssignee.mockResolvedValue({
       ok: true,
@@ -419,10 +434,9 @@ describe('assignee', () => {
   // patched with a state Jira never reached.
   it('leaves the cached row untouched when Jira rejects the write', async () => {
     const api = freshApi();
-    bridge.listTickets.mockResolvedValue({
-      ok: true,
-      value: [wireTicket({ id: '10421', assigneeName: 'Max Chen' })],
-    });
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([wireTicket({ id: '10421', assigneeName: 'Max Chen' })]),
+    );
     await api.listMyJiraTickets();
     bridge.setAssignee.mockResolvedValue({
       ok: false,
@@ -443,14 +457,13 @@ describe('connect / status / disconnect', () => {
   it('lists immediately after connecting so the counts shown are this account’s real ones', async () => {
     const api = freshApi();
     bridge.connect.mockResolvedValue({ ok: true, value: CONNECTED.identity });
-    bridge.listTickets.mockResolvedValue({
-      ok: true,
-      value: [
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([
         wireTicket({ id: '1', projectKey: 'ENG' }),
         wireTicket({ id: '2', projectKey: 'ENG' }),
         wireTicket({ id: '3', projectKey: 'OPS' }),
-      ],
-    });
+      ]),
+    );
 
     const status = await api.connectJira({
       site: 'waypoint123.atlassian.net',
@@ -497,7 +510,7 @@ describe('connect / status / disconnect', () => {
 
   it('drops the cached counts on disconnect', async () => {
     const api = freshApi();
-    bridge.listTickets.mockResolvedValue({ ok: true, value: [wireTicket()] });
+    bridge.listTickets.mockResolvedValue(ticketsResult([wireTicket()]));
     await api.listMyJiraTickets();
     expect((await api.getJiraConnectionStatus()).issueCount).toBe(1);
 

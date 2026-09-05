@@ -229,6 +229,23 @@ export interface JiraWireTicket {
 }
 
 /**
+ * What one "my work" read produced, and whether it is the whole answer.
+ *
+ * The array alone could not say. listMyTickets caps its crawl at
+ * MAX_PAGES × PAGE_SIZE deliberately (see its own comment — a pathological
+ * account must not turn "load my work" into an unbounded crawl), but a
+ * capped list and a complete one are the same shape, so the UI had no way to
+ * tell them apart and rendered both as "here is everything". `truncated` is
+ * the one bit that distinguishes them.
+ */
+export interface JiraTicketQueryResult {
+  tickets: JiraWireTicket[];
+  /** True when the page cap stopped the crawl while Jira still had more to
+   *  give — i.e. `tickets` is a prefix of the answer, not the answer. */
+  truncated: boolean;
+}
+
+/**
  * The ADF shape a comment is now written as — the renderer's own composer
  * builds one of these (see jiraApi.ts's `buildCommentAdf`) from its
  * lightweight-markdown draft, a toolbar-driven subset chosen to match what

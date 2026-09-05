@@ -27,6 +27,7 @@ import type {
   JiraIdentity,
   JiraPriorityOption,
   JiraResult,
+  JiraTicketQueryResult,
   JiraWireComment,
   JiraWireTicket,
   JiraWireTransition,
@@ -426,7 +427,7 @@ export function registerJiraIpc(getWindow: () => BrowserWindow | null): void {
 
   ipcMain.handle(
     'jira:tickets:list',
-    (): Promise<JiraResult<JiraWireTicket[]>> => client.listMyTickets(),
+    (): Promise<JiraResult<JiraTicketQueryResult>> => client.listMyTickets(),
   );
 
   ipcMain.handle(

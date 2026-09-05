@@ -199,7 +199,7 @@ export default function MyJiraPage() {
 
   const connection = useLoadedJiraConnection();
   const {
-    data: fetchedTickets,
+    data: fetchedRead,
     loading,
     // A failed list read used to be dropped on the floor here, so a 401, a
     // 429, a timeout and an offline laptop all rendered as "No tickets match
@@ -209,9 +209,18 @@ export default function MyJiraPage() {
     reload: reloadTickets,
   } = useAsync(() => listMyJiraTickets(), []);
   const [tickets, setTickets] = useState<JiraTicket[]>([]);
+  // Held separately from `tickets` rather than read off `fetchedRead` at
+  // render, because `tickets` is patched in place by every write on this page
+  // (a transition, a reassign, a dismissed tombstone) while the cap is a
+  // property of the read that produced them and does not change when a row
+  // does. Both are set from the same effect so they can never describe two
+  // different reads.
+  const [truncated, setTruncated] = useState(false);
   useEffect(() => {
-    if (fetchedTickets) setTickets(fetchedTickets);
-  }, [fetchedTickets]);
+    if (!fetchedRead) return;
+    setTickets(fetchedRead.tickets);
+    setTruncated(fetchedRead.truncated);
+  }, [fetchedRead]);
 
   const { data: fetchedProposal } = useAsync(() => getMyJiraProposal(), []);
   const [proposal, setProposal] = useState<JiraProposal | null>(null);
@@ -358,7 +367,7 @@ export default function MyJiraPage() {
 
       {tab === 'work' && (
         <div className="mt-4 ml-[41px]">
-          {loading && !fetchedTickets ? (
+          {loading && !fetchedRead ? (
             <SkeletonListRows />
           ) : (
             <div className="flex flex-wrap items-start gap-4">
@@ -403,6 +412,35 @@ export default function MyJiraPage() {
                       Refresh — so it now says what actually happens. */}
                   {connection && <span>one API call · refresh to re-read</span>}
                 </div>
+
+                {/* A standing fact about the list below, not an event — so a
+                    strip that sits there for as long as it is true, and
+                    deliberately NOT a toast (which would announce itself once
+                    and then be gone while the thing it warned about stayed on
+                    screen) and NOT role="alert" (JiraLoadError owns that
+                    register here; a read that succeeded but came back short is
+                    not the same news as a read that failed).
+
+                    `warning`, not `danger`: nothing is broken and nothing
+                    needs fixing. The list is real, it is just a prefix.
+
+                    What it claims is exactly what listMyTickets guarantees —
+                    the first PAGE_SIZE × MAX_PAGES of MY_WORK_JQL's own
+                    `ORDER BY updated DESC` — and nothing more. It offers no
+                    "load the rest" action because there is none: raising the
+                    cap is the deliberate non-decision documented on those
+                    constants, and a button that cannot do what it says is
+                    worse than no button. The 500 is written out rather than
+                    imported because those constants live in the main process
+                    and are not part of the wire contract; if they ever move,
+                    this sentence moves with them. */}
+                {truncated && (
+                  <div className="mb-1.5 rounded-[var(--radius-sm)] border border-warning/30 bg-warning-bg px-3 py-2 text-[11.5px] leading-relaxed text-warning">
+                    Jira had more issues than this app reads in one go — this is
+                    the first 500, most recently updated. The filters and
+                    sorting below apply only to these.
+                  </div>
+                )}
 
                 {/* Three distinct outcomes, deliberately not collapsed into
                     two: the read failed, the read succeeded and matched

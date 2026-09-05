@@ -263,7 +263,7 @@ describe('listMyTickets', () => {
 
     expect(result).toMatchObject({
       ok: true,
-      value: [{ id: '10421', key: 'ENG-421', role: 'assignee' }],
+      value: { tickets: [{ id: '10421', key: 'ENG-421', role: 'assignee' }] },
     });
   });
 
@@ -288,7 +288,9 @@ describe('listMyTickets', () => {
     expect(new URL(call(1)[0]).searchParams.get('nextPageToken')).toBe('p2');
     expect(result).toMatchObject({
       ok: true,
-      value: [{ id: '1' }, { id: '2' }],
+      // Jira said it was done, so this is the whole answer and the list may
+      // be rendered as one.
+      value: { tickets: [{ id: '1' }, { id: '2' }], truncated: false },
     });
   });
 
@@ -302,9 +304,36 @@ describe('listMyTickets', () => {
       }),
     );
 
-    await listMyTickets();
+    const result = await listMyTickets();
 
     expect(fetchMock).toHaveBeenCalledTimes(5);
+    // The cap stopping the crawl is not the interesting part — it already
+    // did that. Saying so is: this flag is the only thing standing between
+    // the UI and rendering a prefix as if it were the queue.
+    expect(result).toMatchObject({ ok: true, value: { truncated: true } });
+  });
+
+  // The boundary case the flag is easiest to get wrong on: the crawl used
+  // every page it had, and Jira happened to finish on exactly the last one.
+  // "We stopped at the cap" and "Jira ran out at the cap" look identical
+  // from the page count alone, and only the first is truncation.
+  it('is not truncated when the final allowed page is genuinely the last', async () => {
+    const page = (nextPageToken?: string) =>
+      jsonResponse({
+        issues: [{ id: '1', key: 'ENG-1', fields: {} }],
+        ...(nextPageToken ? { nextPageToken } : { isLast: true }),
+      });
+    fetchMock
+      .mockResolvedValueOnce(page('p2'))
+      .mockResolvedValueOnce(page('p3'))
+      .mockResolvedValueOnce(page('p4'))
+      .mockResolvedValueOnce(page('p5'))
+      .mockResolvedValueOnce(page());
+
+    const result = await listMyTickets();
+
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(result).toMatchObject({ ok: true, value: { truncated: false } });
   });
 });
 

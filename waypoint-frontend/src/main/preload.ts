@@ -8,6 +8,7 @@ import type {
   JiraIdentity,
   JiraPriorityOption,
   JiraResult,
+  JiraTicketQueryResult,
   JiraWireComment,
   JiraWireTicket,
   JiraWireTransition,
@@ -267,7 +268,7 @@ const electronHandler = {
     disconnect(): Promise<{ ok: true }> {
       return ipcRenderer.invoke('jira:disconnect');
     },
-    listTickets(): Promise<JiraResult<JiraWireTicket[]>> {
+    listTickets(): Promise<JiraResult<JiraTicketQueryResult>> {
       return ipcRenderer.invoke('jira:tickets:list');
     },
     listTransitions(

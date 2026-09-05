@@ -13,6 +13,7 @@ import type {
   JiraIdentity,
   JiraPriorityOption,
   JiraResult,
+  JiraTicketQueryResult,
   JiraWireComment,
   JiraWireTicket,
   JiraWireTransition,
@@ -453,15 +454,26 @@ interface SearchResponse {
   isLast?: boolean;
 }
 
-export async function listMyTickets(): Promise<JiraResult<JiraWireTicket[]>> {
+export async function listMyTickets(): Promise<
+  JiraResult<JiraTicketQueryResult>
+> {
   const credentialResult = requireCredential();
   if (!credentialResult.ok) return credentialResult;
   const credential = credentialResult.value;
 
   const tickets: JiraWireTicket[] = [];
   let nextPageToken: string | undefined;
+  // True while Jira has said, in its own words, that there is another page.
+  // After the loop it means exactly one thing: the page cap stopped us, not
+  // Jira — which is the difference between "here is your queue" and "here is
+  // the first 500 of it", and the only signal that can tell the UI apart.
+  //
+  // This replaces a `break` that computed the same condition and then threw
+  // it away. Behaviourally the loop is identical; the flag is simply the
+  // answer the `break` already knew and did not keep.
+  let more = true;
 
-  for (let page = 0; page < MAX_PAGES; page += 1) {
+  for (let page = 0; page < MAX_PAGES && more; page += 1) {
     const query: Record<string, string> = {
       jql: MY_WORK_JQL,
       fields: '*all',
@@ -489,10 +501,10 @@ export async function listMyTickets(): Promise<JiraResult<JiraWireTicket[]>> {
     );
 
     nextPageToken = body.nextPageToken;
-    if (!nextPageToken || body.isLast === true) break;
+    more = Boolean(nextPageToken) && body.isLast !== true;
   }
 
-  return { ok: true, value: tickets };
+  return { ok: true, value: { tickets, truncated: more } };
 }
 
 // -----------------------------------------------------------------------

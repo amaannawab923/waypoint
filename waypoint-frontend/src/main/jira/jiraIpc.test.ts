@@ -966,11 +966,14 @@ describe('per-ticket channels', () => {
   });
 
   it('jira:tickets:list delegates straight to the client', async () => {
-    listMyTicketsMock.mockResolvedValue({ ok: true, value: [] });
+    listMyTicketsMock.mockResolvedValue({
+      ok: true,
+      value: { tickets: [], truncated: false },
+    });
 
     expect(await getHandler('jira:tickets:list')({})).toEqual({
       ok: true,
-      value: [],
+      value: { tickets: [], truncated: false },
     });
   });
 });

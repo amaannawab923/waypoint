@@ -107,8 +107,17 @@ const TICKETS: JiraTicket[] = [
   }),
 ];
 
+/** The page reads a `{ tickets, truncated }` pair, not a bare array — the
+ * flag is how it knows whether the list below is the queue or only the first
+ * page-capped slice of it. Almost every test here is about the tickets, so
+ * `truncated` defaults to the honest "this is all of it". */
+const queueRead = (tickets: JiraTicket[], truncated = false) => ({
+  tickets,
+  truncated,
+});
+
 function mount() {
-  jest.mocked(listMyJiraTickets).mockResolvedValue(TICKETS);
+  jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(TICKETS));
   jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
   jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
   jest.mocked(getJiraTransitions).mockResolvedValue([]);
@@ -198,6 +207,54 @@ describe('MyJiraPage — project + role filtering (combined)', () => {
   });
 });
 
+// "4 issues · 3 Jira projects" over a page-capped read is a count presented
+// as a total. The strip is what stops the page making that claim silently.
+describe('MyJiraPage — a page-capped read says so', () => {
+  function mountWith(truncated: boolean) {
+    jest
+      .mocked(listMyJiraTickets)
+      .mockResolvedValue(queueRead(TICKETS, truncated));
+    jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
+    jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
+    jest.mocked(getJiraTransitions).mockResolvedValue([]);
+    jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
+    return render(
+      <MemoryRouter>
+        <MyJiraPage />
+      </MemoryRouter>,
+    );
+  }
+
+  it('warns that the list is only the first slice of the queue', async () => {
+    mountWith(true);
+    await screen.findByText('Eng assignee ticket');
+
+    expect(
+      screen.getByText(/more issues than this app reads in one go/),
+    ).toBeInTheDocument();
+  });
+
+  it('says nothing at all when the read was complete', async () => {
+    mountWith(false);
+    await screen.findByText('Eng assignee ticket');
+
+    expect(
+      screen.queryByText(/more issues than this app reads in one go/),
+    ).not.toBeInTheDocument();
+  });
+
+  // A standing fact, not an event. role="alert" is JiraLoadError's register
+  // here — interrupting a screen reader mid-sentence to report that a
+  // successful read was long is the wrong urgency, and it would also make
+  // the several `findByRole('alert')` waits below ambiguous.
+  it('is not announced as an alert', async () => {
+    mountWith(true);
+    await screen.findByText('Eng assignee ticket');
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});
+
 // "No tickets match these filters." is a claim about the user's Jira. A read
 // that never reached Jira must not make it — the three cases below are the
 // difference between "your queue is empty" and "we could not ask".
@@ -271,7 +328,7 @@ describe('MyJiraPage — sync indicator', () => {
   }
 
   it('says so plainly when nothing has synced yet', async () => {
-    jest.mocked(listMyJiraTickets).mockResolvedValue(TICKETS);
+    jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(TICKETS));
     jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
     jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
     jest.mocked(useLoadedJiraConnection).mockReturnValue(connection(null));
@@ -286,7 +343,7 @@ describe('MyJiraPage — sync indicator', () => {
   });
 
   it('reports a real age once a read has landed', async () => {
-    jest.mocked(listMyJiraTickets).mockResolvedValue(TICKETS);
+    jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(TICKETS));
     jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
     jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
     jest
@@ -315,7 +372,7 @@ describe('JiraTicketDrawer — description wrapping', () => {
       title: 'Described ticket',
       description: 'First paragraph.\n\nSecond paragraph.\n- a bullet',
     });
-    jest.mocked(listMyJiraTickets).mockResolvedValue([described]);
+    jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead([described]));
     jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
     jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
     jest.mocked(listJiraComments).mockResolvedValue([]);
@@ -342,7 +399,7 @@ describe('JiraTicketDrawer — description wrapping', () => {
 // coordinates rather than against the row.
 describe('JiraTransitionPopover — escapes the list clipping container', () => {
   async function openPopoverOnLastRow() {
-    jest.mocked(listMyJiraTickets).mockResolvedValue(TICKETS);
+    jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(TICKETS));
     jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
     jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
     jest.mocked(getJiraTransitions).mockResolvedValue([
@@ -432,7 +489,7 @@ describe('MyJiraPage — Copilot rail', () => {
   }
 
   it('renders the proposal card and the nudge card when both exist', async () => {
-    jest.mocked(listMyJiraTickets).mockResolvedValue(TICKETS);
+    jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(TICKETS));
     jest.mocked(getMyJiraProposal).mockResolvedValue(proposal());
     jest.mocked(getJiraDuplicateNudge).mockResolvedValue(nudge());
     jest.mocked(getJiraTransitions).mockResolvedValue([]);
@@ -450,7 +507,7 @@ describe('MyJiraPage — Copilot rail', () => {
   });
 
   it('dismissing the nudge calls the mock function and removes the card', async () => {
-    jest.mocked(listMyJiraTickets).mockResolvedValue(TICKETS);
+    jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(TICKETS));
     jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
     jest.mocked(getJiraDuplicateNudge).mockResolvedValue(nudge());
     jest.mocked(dismissJiraDuplicateNudge).mockResolvedValue(undefined);

@@ -295,9 +295,27 @@ export async function getJiraConnectionStatus(): Promise<JiraConnectionStatus> {
   };
 }
 
-export async function listMyJiraTickets(): Promise<JiraTicket[]> {
-  const wire = unwrap(await bridge().listTickets());
-  return rememberTickets(wire);
+/**
+ * One read of the "my work" query: the tickets, and whether the page cap cut
+ * them short.
+ *
+ * Returned as a pair rather than a bare array so no caller can render a count
+ * without also having the fact that makes the count possibly a floor. The
+ * obvious alternative — keep `listMyJiraTickets(): Promise<JiraTicket[]>` and
+ * add a second `listMyJiraQueue()` beside it — was rejected precisely because
+ * the lossy one would stay the convenient one: every new caller would reach
+ * for the array, and the "we only got the first 500" fact would go missing
+ * again one call site at a time. There is one function, and its type makes
+ * the caveat impossible to not receive.
+ */
+export interface JiraQueueRead {
+  tickets: JiraTicket[];
+  truncated: boolean;
+}
+
+export async function listMyJiraTickets(): Promise<JiraQueueRead> {
+  const { tickets, truncated } = unwrap(await bridge().listTickets());
+  return { tickets: rememberTickets(tickets), truncated };
 }
 
 /**
@@ -1110,7 +1128,7 @@ export async function dismissJiraTombstone(ticketId: string): Promise<void> {
 export async function resolveJiraConflict(
   ticketId: string,
 ): Promise<JiraTicket> {
-  const tickets = await listMyJiraTickets();
+  const { tickets } = await listMyJiraTickets();
   const found = tickets.find((t) => t.id === ticketId);
   if (!found) throw new Error('That issue is no longer in your queue.');
   return found;
