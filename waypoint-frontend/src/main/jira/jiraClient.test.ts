@@ -9,8 +9,10 @@ jest.mock('./jiraAuth', () => ({
 import {
   listComments,
   listMyTickets,
+  listPriorityOptions,
   listTransitions,
   postComment,
+  setTicketPriority,
   transitionTicket,
   validateCredential,
 } from './jiraClient';
@@ -427,6 +429,179 @@ describe('transitionTicket', () => {
       ok: false,
       reason: 'jira_error',
       message: 'Resolution is required.',
+    });
+  });
+});
+
+describe('priority', () => {
+  const EDITMETA = {
+    fields: {
+      summary: { required: true, name: 'Summary' },
+      priority: {
+        required: false,
+        name: 'Priority',
+        schema: { type: 'priority', system: 'priority' },
+        allowedValues: [
+          { id: '1', name: 'Highest' },
+          { id: '3', name: 'Medium' },
+          { id: '5', name: 'Lowest' },
+        ],
+      },
+    },
+  };
+
+  const UPDATED_ISSUE = {
+    id: '10421',
+    key: 'ENG-421',
+    fields: {
+      summary: 'Webhook receiver drops events',
+      project: { key: 'ENG' },
+      status: { name: 'In Progress', statusCategory: { key: 'indeterminate' } },
+      priority: { id: '3', name: 'Medium' },
+    },
+  };
+
+  describe('listPriorityOptions', () => {
+    // Per-issue, not the global /rest/api/3/priority list: a site can attach a
+    // different priority scheme to each project, so the global list is a
+    // superset containing values this issue would 400 on.
+    it('reads the issue’s own editmeta, not the site-wide priority list', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(EDITMETA));
+
+      const result = await listPriorityOptions('10421');
+
+      const [url, init] = call();
+      expect(url).toContain('/rest/api/3/issue/10421/editmeta');
+      expect(url).not.toContain('/rest/api/3/priority');
+      expect(init.method).toBe('GET');
+      expect(result).toMatchObject({
+        ok: true,
+        value: [
+          { id: '1', name: 'Highest' },
+          { id: '3', name: 'Medium' },
+          { id: '5', name: 'Lowest' },
+        ],
+      });
+    });
+
+    // Priority not being editable on an issue type is an ordinary answer, not
+    // a fault — reporting it as a failure would put a red error in front of a
+    // user whose Jira is behaving perfectly normally.
+    it('reports an issue with no editable priority as an empty list, not a failure', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({ fields: { summary: { required: true } } }),
+      );
+
+      expect(await listPriorityOptions('10421')).toEqual({
+        ok: true,
+        value: [],
+      });
+    });
+
+    it('still reports a real read failure as one', async () => {
+      fetchMock.mockResolvedValue(emptyResponse(403));
+
+      expect(await listPriorityOptions('10421')).toMatchObject({
+        ok: false,
+        reason: 'forbidden',
+      });
+    });
+  });
+
+  describe('setTicketPriority', () => {
+    it('PUTs the chosen id to the issue itself and returns the re-read issue', async () => {
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse(EDITMETA))
+        .mockResolvedValueOnce(emptyResponse(204))
+        .mockResolvedValueOnce(jsonResponse(UPDATED_ISSUE));
+
+      const result = await setTicketPriority('10421', '3');
+
+      const [putUrl, putInit] = call(1);
+      expect(putInit.method).toBe('PUT');
+      expect(putUrl).toContain('/rest/api/3/issue/10421');
+      expect(putUrl).not.toContain('/transitions');
+      expect(JSON.parse(putInit.body as string)).toEqual({
+        fields: { priority: { id: '3' } },
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        value: { priorityId: '3', priorityName: 'Medium', priority: 'medium' },
+      });
+    });
+
+    // The same defense transitionTicket has: the id in hand came from a menu
+    // that may have been open a while, and live metadata is the only thing
+    // that knows whether it is still legal.
+    it('reads the live editmeta BEFORE the write, in that order', async () => {
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse(EDITMETA))
+        .mockResolvedValueOnce(emptyResponse(204))
+        .mockResolvedValueOnce(jsonResponse(UPDATED_ISSUE));
+
+      await setTicketPriority('10421', '3');
+
+      expect(call(0)[0]).toContain('/editmeta');
+      expect(call(0)[1].method).toBe('GET');
+      expect(call(1)[1].method).toBe('PUT');
+    });
+
+    // Not merely "fails" — fails *without writing*. A priority this issue has
+    // stopped accepting must never be attempted, so the user gets a sentence
+    // that explains itself instead of a bare 400 from Jira.
+    it('refuses a priority the issue no longer offers, without issuing the PUT', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(EDITMETA));
+
+      const result = await setTicketPriority('10421', '99');
+
+      expect(result).toMatchObject({
+        ok: false,
+        reason: 'jira_error',
+        message: expect.stringContaining("isn't available on this issue"),
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(
+        fetchMock.mock.calls.some(
+          ([, init]) => (init as RequestInit).method === 'PUT',
+        ),
+      ).toBe(false);
+    });
+
+    it('refuses every priority, without writing, when the issue has none editable', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse({ fields: {} }));
+
+      expect(await setTicketPriority('10421', '3')).toMatchObject({
+        ok: false,
+        reason: 'jira_error',
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("surfaces Jira's own error message when it rejects the write", async () => {
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse(EDITMETA))
+        .mockResolvedValueOnce(
+          jsonResponse(
+            { errors: { priority: 'Field priority cannot be set.' } },
+            400,
+          ),
+        );
+
+      expect(await setTicketPriority('10421', '3')).toMatchObject({
+        ok: false,
+        reason: 'jira_error',
+        message: 'Field priority cannot be set.',
+      });
+    });
+
+    it('refuses without a stored credential rather than calling out unauthenticated', async () => {
+      readStoredJiraCredentialMock.mockReturnValue(null);
+
+      expect(await setTicketPriority('10421', '3')).toMatchObject({
+        ok: false,
+        reason: 'not_connected',
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
     });
   });
 });

@@ -5,6 +5,7 @@ import type { CopilotDetectResult } from './copilot/copilotDetect';
 import type {
   JiraConnectionSnapshot,
   JiraIdentity,
+  JiraPriorityOption,
   JiraResult,
   JiraWireComment,
   JiraWireTicket,
@@ -278,6 +279,17 @@ const electronHandler = {
       fieldValues: Record<string, string>;
     }): Promise<JiraResult<JiraWireTicket>> {
       return ipcRenderer.invoke('jira:tickets:transition', args);
+    },
+    listPriorityOptions(
+      ticketId: string,
+    ): Promise<JiraResult<JiraPriorityOption[]>> {
+      return ipcRenderer.invoke('jira:tickets:priority-options', ticketId);
+    },
+    setPriority(args: {
+      ticketId: string;
+      priorityId: string;
+    }): Promise<JiraResult<JiraWireTicket>> {
+      return ipcRenderer.invoke('jira:tickets:set-priority', args);
     },
     listComments(ticketId: string): Promise<JiraResult<JiraWireComment[]>> {
       return ipcRenderer.invoke('jira:comments:list', ticketId);

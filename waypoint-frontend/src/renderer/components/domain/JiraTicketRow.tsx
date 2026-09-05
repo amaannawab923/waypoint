@@ -1,14 +1,26 @@
 import { useEffect, useRef, useState } from 'react';
-import { getJiraTransitions, transitionJiraTicket } from '@/data/jiraApi';
+import {
+  getJiraPriorityOptions,
+  getJiraTransitions,
+  setJiraTicketPriority,
+  transitionJiraTicket,
+} from '@/data/jiraApi';
 import { showErrorToast } from '@/lib/toast';
 import { Avatar } from '@/components/ui/Avatar';
-import { PriorityIcon } from '@/components/domain/PriorityIcon';
+import {
+  JiraPriorityChip,
+  JiraPriorityPicker,
+} from '@/components/domain/JiraPriorityPicker';
 import {
   JiraStateChip,
   JiraTransitionPopover,
 } from '@/components/domain/JiraTransitionPopover';
 import { jiraProjectColor } from '@/types/jira';
-import type { JiraTicket, JiraTransition } from '@/types/jira';
+import type {
+  JiraPriorityOption,
+  JiraTicket,
+  JiraTransition,
+} from '@/types/jira';
 
 function roleLabel(ticket: JiraTicket): string {
   if (ticket.isTombstoned) return 'was yours';
@@ -18,10 +30,16 @@ function roleLabel(ticket: JiraTicket): string {
 
 /**
  * One row in the My Jira ticket list. Owns everything about that ticket's
- * own interaction: fetching/opening its transition popover, the actual
- * transitionJiraTicket write (and the chip's own "saving" state while it's
- * in flight — JiraTransitionPopover is a pure picker and never calls the
- * mock API itself), and the conflict/tombstone quiet-strip variants.
+ * own interaction: fetching/opening its transition and priority pickers, the
+ * actual transitionJiraTicket / setJiraTicketPriority writes (and each chip's
+ * own "saving" state while one is in flight — both pickers are pure and
+ * neither calls the data layer itself), and the conflict/tombstone
+ * quiet-strip variants.
+ *
+ * The two pickers keep separate open/loading/error/saving state rather than
+ * sharing one set. They read different endpoints and fail independently, and
+ * collapsing them would mean a failed transitions read putting an error in
+ * the priority menu.
  */
 export function JiraTicketRow({
   ticket,
@@ -41,9 +59,17 @@ export function JiraTicketRow({
   const [loadingTransitions, setLoadingTransitions] = useState(false);
   const [transitionsError, setTransitionsError] = useState<Error | null>(null);
   const [saving, setSaving] = useState(false);
+  const [priorityOpen, setPriorityOpen] = useState(false);
+  const [priorityOptions, setPriorityOptions] = useState<JiraPriorityOption[]>(
+    [],
+  );
+  const [loadingPriorities, setLoadingPriorities] = useState(false);
+  const [prioritiesError, setPrioritiesError] = useState<Error | null>(null);
+  const [savingPriority, setSavingPriority] = useState(false);
   const [resolvingConflict, setResolvingConflict] = useState(false);
   const [dismissing, setDismissing] = useState(false);
   const stateChipRef = useRef<HTMLButtonElement>(null);
+  const priorityChipRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!popoverOpen) return;
@@ -73,6 +99,51 @@ export function JiraTicketRow({
       cancelled = true;
     };
   }, [popoverOpen, ticket.id]);
+
+  // Fetched on open, never cached: a project's priority scheme is an admin
+  // setting that can change under a menu, and unlike transitions there is no
+  // already-paid-for copy riding along with the ticket list. Same lazy shape
+  // as the transitions read above, including the `.catch()` — without one, a
+  // broken connection would render "No priority options here.", which is a
+  // claim about the user's Jira that a failed request cannot support.
+  useEffect(() => {
+    if (!priorityOpen) return undefined;
+    let cancelled = false;
+    setLoadingPriorities(true);
+    setPrioritiesError(null);
+    getJiraPriorityOptions(ticket.id)
+      .then((rows) => {
+        if (!cancelled) setPriorityOptions(rows);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setPriorityOptions([]);
+        setPrioritiesError(err instanceof Error ? err : new Error(String(err)));
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingPriorities(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [priorityOpen, ticket.id]);
+
+  async function handleSelectPriority(option: JiraPriorityOption) {
+    setPriorityOpen(false);
+    setSavingPriority(true);
+    try {
+      const updated = await setJiraTicketPriority(ticket.id, option.id);
+      onTicketUpdated(updated);
+    } catch (err) {
+      showErrorToast(
+        err instanceof Error
+          ? err.message
+          : "Could not change this ticket's priority in Jira.",
+      );
+    } finally {
+      setSavingPriority(false);
+    }
+  }
 
   async function handleSelectTransition(
     transition: JiraTransition,
@@ -169,7 +240,13 @@ export function JiraTicketRow({
             disabledTitle="Not yours to move any more"
             onClick={() => {}}
           />
-          <PriorityIcon priority={ticket.priority} />
+          <JiraPriorityChip
+            priority={ticket.priority}
+            priorityName={ticket.priorityName}
+            disabled
+            disabledTitle="Not yours to change any more"
+            onClick={() => {}}
+          />
           <Avatar name={ticket.assigneeName} size={22} />
         </div>
       </div>
@@ -223,8 +300,30 @@ export function JiraTicketRow({
           buttonRef={stateChipRef}
           onClick={() => setPopoverOpen((o) => !o)}
         />
-        <PriorityIcon priority={ticket.priority} />
+        <JiraPriorityChip
+          priority={ticket.priority}
+          priorityName={ticket.priorityName}
+          disabled={ticket.hasConflict}
+          disabledTitle="Write paused until reloaded"
+          saving={savingPriority}
+          open={priorityOpen}
+          buttonRef={priorityChipRef}
+          onClick={() => setPriorityOpen((o) => !o)}
+        />
         <Avatar name={ticket.assigneeName} size={22} />
+
+        {priorityOpen && (
+          <JiraPriorityPicker
+            ticketKey={ticket.key}
+            currentPriorityId={ticket.priorityId}
+            options={priorityOptions}
+            loading={loadingPriorities}
+            error={prioritiesError}
+            triggerRef={priorityChipRef}
+            onSelect={handleSelectPriority}
+            onClose={() => setPriorityOpen(false)}
+          />
+        )}
 
         {popoverOpen && (
           <JiraTransitionPopover

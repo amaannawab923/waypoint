@@ -12,6 +12,7 @@ import type {
   JiraConnectionSnapshot,
   JiraFailure,
   JiraIdentity,
+  JiraPriorityOption,
   JiraResult,
   JiraWireComment,
   JiraWireTicket,
@@ -184,6 +185,34 @@ export function registerJiraIpc(): void {
         transitionId,
         readFieldValues(input.fieldValues),
       );
+    },
+  );
+
+  ipcMain.handle(
+    'jira:tickets:priority-options',
+    async (
+      _event,
+      rawTicketId: unknown,
+    ): Promise<JiraResult<JiraPriorityOption[]>> => {
+      const ticketId = readTicketId(rawTicketId);
+      if (!ticketId) return failure('invalid_input', 'Unknown Jira issue.');
+      return client.listPriorityOptions(ticketId);
+    },
+  );
+
+  ipcMain.handle(
+    'jira:tickets:set-priority',
+    async (_event, args: unknown): Promise<JiraResult<JiraWireTicket>> => {
+      const input = (args ?? {}) as Record<string, unknown>;
+      const ticketId = readTicketId(input.ticketId);
+      // A priority id never reaches a URL path — it goes in a JSON body — so
+      // the only check it needs is that it is a non-empty string, the same
+      // treatment `transitionId` gets one handler up.
+      const priorityId = readString(input.priorityId);
+      if (!ticketId) return failure('invalid_input', 'Unknown Jira issue.');
+      if (!priorityId)
+        return failure('invalid_input', 'Pick a priority first.');
+      return client.setTicketPriority(ticketId, priorityId);
     },
   );
 

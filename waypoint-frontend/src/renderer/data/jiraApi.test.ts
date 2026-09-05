@@ -15,6 +15,8 @@ const bridge = {
   listTickets: jest.fn(),
   listTransitions: jest.fn(),
   transition: jest.fn(),
+  listPriorityOptions: jest.fn(),
+  setPriority: jest.fn(),
   listComments: jest.fn(),
   postComment: jest.fn(),
 };
@@ -255,6 +257,58 @@ describe('transitionJiraTicket', () => {
     // set for this ticket must not be reused.
     await api.getJiraTransitions('10421');
     expect(bridge.listTransitions).toHaveBeenCalledWith('10421');
+  });
+});
+
+describe('priority', () => {
+  // Unlike transitions, these are never cached: nothing about a priority
+  // scheme rides along with the ticket list, and a cache would hold a list an
+  // admin can change underneath it in exchange for saving one request.
+  it('asks Jira every time the menu opens', async () => {
+    const api = freshApi();
+    bridge.listPriorityOptions.mockResolvedValue({
+      ok: true,
+      value: [{ id: '3', name: 'Medium' }],
+    });
+
+    expect(await api.getJiraPriorityOptions('10421')).toEqual([
+      { id: '3', name: 'Medium' },
+    ]);
+    await api.getJiraPriorityOptions('10421');
+
+    expect(bridge.listPriorityOptions).toHaveBeenCalledTimes(2);
+    expect(bridge.listPriorityOptions).toHaveBeenCalledWith('10421');
+  });
+
+  // A priority change cannot move a ticket out of the "my work" JQL, so the
+  // row is patched in place and never dropped — the `.map()`, not a filter.
+  it('patches the cached row rather than removing it', async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue({
+      ok: true,
+      value: [wireTicket({ id: '10421' }), wireTicket({ id: '10999' })],
+    });
+    await api.listMyJiraTickets();
+    bridge.setPriority.mockResolvedValue({
+      ok: true,
+      value: wireTicket({
+        id: '10421',
+        priorityId: '3',
+        priorityName: 'Medium',
+      }),
+    });
+
+    const updated = await api.setJiraTicketPriority('10421', '3');
+
+    expect(bridge.setPriority).toHaveBeenCalledWith({
+      ticketId: '10421',
+      priorityId: '3',
+    });
+    expect(updated).toMatchObject({ priorityId: '3', priorityName: 'Medium' });
+    // Both rows still counted: the write patched one, it did not evict it.
+    expect(await api.getJiraConnectionStatus()).toMatchObject({
+      issueCount: 2,
+    });
   });
 });
 

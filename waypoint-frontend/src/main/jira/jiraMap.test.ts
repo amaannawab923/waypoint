@@ -5,6 +5,7 @@ import {
   mapComment,
   mapIssue,
   mapPriority,
+  mapPriorityOptions,
   mapStateCategory,
   mapTransitions,
   normalizeJiraSite,
@@ -111,6 +112,79 @@ describe('mapStateCategory / mapPriority / formatFileSize', () => {
     expect(formatFileSize(512)).toBe('512 B');
     expect(formatFileSize(219136)).toBe('214 KB');
     expect(formatFileSize(3_145_728)).toBe('3.0 MB');
+  });
+});
+
+describe('mapPriorityOptions', () => {
+  it('reads the allowedValues off an issue’s editmeta', () => {
+    expect(
+      mapPriorityOptions({
+        fields: {
+          summary: { required: true, name: 'Summary' },
+          priority: {
+            required: false,
+            name: 'Priority',
+            schema: { type: 'priority', system: 'priority' },
+            allowedValues: [
+              {
+                self: 'https://waypoint123.atlassian.net/rest/api/3/priority/1',
+                iconUrl: 'https://waypoint123.atlassian.net/images/highest.svg',
+                name: 'Highest',
+                id: '1',
+              },
+              { name: 'Medium', id: '3' },
+            ],
+          },
+        },
+      }),
+    ).toEqual([
+      { id: '1', name: 'Highest' },
+      { id: '3', name: 'Medium' },
+    ]);
+  });
+
+  // Priority missing from editmeta means it is not editable on this issue
+  // type — a real, ordinary answer. It has to be distinguishable from a
+  // failure by the caller, so it produces an empty list rather than throwing.
+  it.each<[unknown, string]>([
+    [{ fields: { summary: { required: true } } }, 'no priority field at all'],
+    [{ fields: { priority: { name: 'Priority' } } }, 'no allowedValues key'],
+    [{ fields: { priority: { allowedValues: [] } } }, 'an empty allowedValues'],
+    [{ fields: {} }, 'no editable fields'],
+    [{}, 'no fields key'],
+    [null, 'a null body'],
+    ['not an object', 'a non-object body'],
+  ])('returns [] for %#: %s', (editmeta) => {
+    expect(mapPriorityOptions(editmeta)).toEqual([]);
+  });
+
+  // An option the picker cannot write back is worse than one not offered:
+  // the only thing clicking it could do is fail.
+  it('drops an entry with no usable id', () => {
+    expect(
+      mapPriorityOptions({
+        fields: {
+          priority: {
+            allowedValues: [
+              { name: 'Highest' },
+              { id: '3', name: 'Medium' },
+              null,
+            ],
+          },
+        },
+      }),
+    ).toEqual([{ id: '3', name: 'Medium' }]);
+  });
+
+  // A real priority the issue accepts, offered under its id rather than
+  // hidden — hiding it would be this app deciding the user may not pick
+  // something their own Jira allows.
+  it('keeps a nameless option, labelled by its id', () => {
+    expect(
+      mapPriorityOptions({
+        fields: { priority: { allowedValues: [{ id: 7 }] } },
+      }),
+    ).toEqual([{ id: '7', name: '7' }]);
   });
 });
 

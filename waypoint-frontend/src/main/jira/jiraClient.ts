@@ -3,11 +3,13 @@ import {
   buildTransitionFieldsPayload,
   mapComment,
   mapIssue,
+  mapPriorityOptions,
   mapTransitions,
 } from './jiraMap';
 import type {
   JiraFailure,
   JiraIdentity,
+  JiraPriorityOption,
   JiraResult,
   JiraWireComment,
   JiraWireTicket,
@@ -113,7 +115,10 @@ function classifyNetworkError(err: unknown): JiraFailure {
 }
 
 interface JiraRequest {
-  method: 'GET' | 'POST';
+  // PUT is Jira's verb for editing an issue's own fields — the transition
+  // endpoint is a POST because a move is an action, but changing a priority
+  // is an edit of the issue itself.
+  method: 'GET' | 'POST' | 'PUT';
   /** Absolute REST path, e.g. "/rest/api/3/myself". */
   path: string;
   query?: Record<string, string>;
@@ -434,7 +439,94 @@ export async function getTicket(
 }
 
 // -----------------------------------------------------------------------
-// 4. Comments
+// 4. Priority
+// -----------------------------------------------------------------------
+
+/**
+ * The issue's live edit metadata — what this user may change on this issue,
+ * right now, on this site.
+ *
+ * Deliberately per-issue. A site can attach a different priority scheme to
+ * each project, so the global `/rest/api/3/priority` list is a superset that
+ * can contain values this particular issue would reject; and whether priority
+ * is editable at all depends on the issue's own edit screen and this user's
+ * permissions. Asking the issue is the only answer that is true for the issue.
+ */
+async function fetchEditmeta(
+  ticketId: string,
+): Promise<JiraResult<Record<string, unknown> | undefined>> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+
+  return jiraFetch<Record<string, unknown>>(credentialResult.value, {
+    method: 'GET',
+    path: `/rest/api/3/issue/${encodeURIComponent(ticketId)}/editmeta`,
+  });
+}
+
+/**
+ * The priorities this issue will actually accept.
+ *
+ * An empty array is a success, not a failure. `fields.priority` missing from
+ * editmeta means priority isn't editable on this issue type — a real and
+ * ordinary answer, the exact analogue of a workflow that offers no moves —
+ * and reporting it as an error would put a red failure message in front of a
+ * user whose Jira is behaving normally.
+ */
+export async function listPriorityOptions(
+  ticketId: string,
+): Promise<JiraResult<JiraPriorityOption[]>> {
+  const meta = await fetchEditmeta(ticketId);
+  if (!meta.ok) return meta;
+  return { ok: true, value: mapPriorityOptions(meta.value) };
+}
+
+/**
+ * Sets an issue's priority, then re-reads the issue so the caller gets the
+ * state Jira actually landed on rather than the one the UI assumed.
+ *
+ * The editmeta re-read immediately before the write mirrors
+ * `transitionTicket`'s own defense, for the same reason: the id in hand came
+ * from a menu that may have been open for a while, and an admin changing the
+ * project's priority scheme in that window would otherwise produce a bare 400
+ * with nothing useful in it. Checking first means that case says what actually
+ * happened — and, just as importantly, means the PUT is never attempted with a
+ * value this issue has already stopped accepting.
+ */
+export async function setTicketPriority(
+  ticketId: string,
+  priorityId: string,
+): Promise<JiraResult<JiraWireTicket>> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+  const credential = credentialResult.value;
+
+  const meta = await fetchEditmeta(ticketId);
+  if (!meta.ok) return meta;
+
+  const options = mapPriorityOptions(meta.value);
+  if (!options.some((option) => option.id === priorityId)) {
+    return failure(
+      'jira_error',
+      "That priority isn't available on this issue any more — reopen the menu to see the current options.",
+    );
+  }
+
+  // The generic issue-edit endpoint, which is what a priority change is. It
+  // answers 204 with no body on success, so there is nothing here to map —
+  // the re-read below is what produces the ticket the caller gets.
+  const written = await jiraFetch<void>(credential, {
+    method: 'PUT',
+    path: `/rest/api/3/issue/${encodeURIComponent(ticketId)}`,
+    body: { fields: { priority: { id: priorityId } } },
+  });
+  if (!written.ok) return written;
+
+  return getTicket(ticketId);
+}
+
+// -----------------------------------------------------------------------
+// 5. Comments
 // -----------------------------------------------------------------------
 
 // Reads go through v3, writes through v2 — a deliberate split, not an

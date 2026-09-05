@@ -30,6 +30,8 @@ jest.mock('@/data/jiraApi', () => ({
   dismissJiraDuplicateNudge: jest.fn(),
   getJiraTransitions: jest.fn(),
   transitionJiraTicket: jest.fn(),
+  getJiraPriorityOptions: jest.fn(),
+  setJiraTicketPriority: jest.fn(),
   listJiraComments: jest.fn(),
   postJiraComment: jest.fn(),
   approveJiraProposal: jest.fn(),

@@ -1,5 +1,6 @@
 import type {
   JiraPriority,
+  JiraPriorityOption,
   JiraStateCategory,
   JiraTicketRole,
   JiraWireAttachment,
@@ -418,6 +419,50 @@ export function buildTransitionFieldsPayload(
     },
     {},
   );
+}
+
+// -----------------------------------------------------------------------
+// Priority
+// -----------------------------------------------------------------------
+
+/**
+ * The priorities a site actually offers *on one specific issue*, read out of
+ * that issue's `/editmeta`.
+ *
+ * Per-issue, not global, and that is the whole reason this reads editmeta
+ * rather than `/rest/api/3/priority`: Jira lets an admin attach a different
+ * priority scheme to each project, so the global list is a superset that can
+ * contain values this issue would 400 on. Editmeta is the same
+ * ask-the-site-what-is-legal-right-now principle `mapTransition` and
+ * `buildTransitionFieldsPayload` already work on.
+ *
+ * An editmeta with no `fields.priority` at all is a real and unremarkable
+ * answer — it means priority is not editable on this issue type, or by this
+ * user — and it produces an empty array here rather than anything error-
+ * shaped. Callers render that as "no options", the same way a workflow with
+ * no legal moves renders as "no transitions".
+ *
+ * An entry with no usable id is dropped: an option the picker cannot write
+ * back is worse than one that isn't offered, since the only thing it could do
+ * is fail on click.
+ */
+export function mapPriorityOptions(editmeta: unknown): JiraPriorityOption[] {
+  const field = asRecord(asRecord(asRecord(editmeta).fields).priority);
+  const allowedValues = Array.isArray(field.allowedValues)
+    ? field.allowedValues
+    : [];
+
+  return allowedValues
+    .map((entry): JiraPriorityOption | null => {
+      const { id } = asRecord(entry);
+      if (typeof id !== 'string' && typeof id !== 'number') return null;
+      const name = allowedValueLabel(entry);
+      // A nameless option still gets offered, labelled by its id: it is a real
+      // priority this issue accepts, and hiding it would be this app deciding
+      // the user may not pick something their Jira allows.
+      return { id: String(id), name: name ?? String(id) };
+    })
+    .filter((option): option is JiraPriorityOption => option !== null);
 }
 
 // -----------------------------------------------------------------------

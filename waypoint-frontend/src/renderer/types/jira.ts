@@ -116,6 +116,22 @@ export interface JiraTransition {
   requiresFields: JiraTransitionField[];
 }
 
+/**
+ * One priority the connected site offers on a particular issue, in the site's
+ * own words — read live from that issue rather than from a list this app
+ * keeps, because a Jira admin can attach a different priority scheme to every
+ * project.
+ *
+ * Distinct from `Priority` (types/entities.ts), which is the five-bucket enum
+ * `PriorityIcon` draws and which this app shares with its own native tickets.
+ * That enum is a display normalization and cannot be written back — "urgent"
+ * is Waypoint's word, not any site's — so a write is built from `id` here.
+ */
+export interface JiraPriorityOption {
+  id: string;
+  name: string;
+}
+
 export interface JiraAttachment {
   fileName: string;
   sizeLabel: string;

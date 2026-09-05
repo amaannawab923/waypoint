@@ -61,17 +61,33 @@ describe('JiraConnectionPanel', () => {
     ).not.toBeInTheDocument();
   });
 
-  // The write banner used to list "moving, commenting, changing priority".
-  // Only the first two exist — jiraApi.ts's whole write surface is
-  // transitionJiraTicket and postJiraComment — so the third was a capability
-  // claim made by the one panel that exists to be accurate about them.
-  it('names only the two writes that exist, and no priority write', () => {
+  // This assertion is the capability register, not decoration. The banner
+  // once listed a priority write that did not exist, which this test was
+  // originally written to pin shut. jiraApi.ts now genuinely exposes three
+  // writes — transitionJiraTicket, postJiraComment, setJiraTicketPriority —
+  // so the banner names three, and the check moves with it rather than being
+  // deleted: what it guards is that the count on screen matches the count in
+  // the data layer, in either direction.
+  it('names exactly the three writes that exist, priority among them', () => {
     render(<JiraConnectionPanel connection={status()} />);
 
-    expect(screen.queryByText(/changing priority/i)).not.toBeInTheDocument();
     expect(
-      screen.getByText(/moving a ticket through its workflow, and/i),
+      screen.getByText(
+        /moving a ticket through its workflow, posting a comment, and changing its priority/i,
+      ),
     ).toBeInTheDocument();
+    expect(screen.getByText(/those three are the whole set/i)).toBeVisible();
+  });
+
+  // Uploading an attachment and reassigning are still genuinely not built, so
+  // the banner must not have quietly grown into a claim about them.
+  it('does not claim a write it does not have', () => {
+    render(<JiraConnectionPanel connection={status()} />);
+
+    expect(screen.queryByText(/those two are the whole set/i)).toBeNull();
+    expect(
+      screen.queryByText(/reassigning|changing the assignee/i),
+    ).not.toBeInTheDocument();
   });
 
   it('Refresh now calls refreshJiraSync and pushes the result into jiraStore', async () => {

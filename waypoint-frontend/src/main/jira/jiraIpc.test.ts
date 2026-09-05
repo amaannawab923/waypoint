@@ -26,6 +26,8 @@ const validateCredentialMock = jest.fn();
 const listMyTicketsMock = jest.fn();
 const listTransitionsMock = jest.fn();
 const transitionTicketMock = jest.fn();
+const listPriorityOptionsMock = jest.fn();
+const setTicketPriorityMock = jest.fn();
 const listCommentsMock = jest.fn();
 const postCommentMock = jest.fn();
 jest.mock('./jiraClient', () => ({
@@ -33,6 +35,8 @@ jest.mock('./jiraClient', () => ({
   listMyTickets: (...args: unknown[]) => listMyTicketsMock(...args),
   listTransitions: (...args: unknown[]) => listTransitionsMock(...args),
   transitionTicket: (...args: unknown[]) => transitionTicketMock(...args),
+  listPriorityOptions: (...args: unknown[]) => listPriorityOptionsMock(...args),
+  setTicketPriority: (...args: unknown[]) => setTicketPriorityMock(...args),
   listComments: (...args: unknown[]) => listCommentsMock(...args),
   postComment: (...args: unknown[]) => postCommentMock(...args),
 }));
@@ -192,17 +196,50 @@ describe('per-ticket channels', () => {
   // IPC is an external input to the privileged process even when the only
   // caller is this app's own renderer, so nothing caller-supplied reaches a
   // REST path unchecked.
-  it.each(['jira:tickets:transitions', 'jira:comments:list'])(
-    '%s refuses a ticket id that is not one',
-    async (channel) => {
-      expect(await getHandler(channel)({}, '../../../admin')).toMatchObject({
-        ok: false,
-        reason: 'invalid_input',
-      });
-      expect(listTransitionsMock).not.toHaveBeenCalled();
-      expect(listCommentsMock).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    'jira:tickets:transitions',
+    'jira:tickets:priority-options',
+    'jira:comments:list',
+  ])('%s refuses a ticket id that is not one', async (channel) => {
+    expect(await getHandler(channel)({}, '../../../admin')).toMatchObject({
+      ok: false,
+      reason: 'invalid_input',
+    });
+    expect(listTransitionsMock).not.toHaveBeenCalled();
+    expect(listPriorityOptionsMock).not.toHaveBeenCalled();
+    expect(listCommentsMock).not.toHaveBeenCalled();
+  });
+
+  it('jira:tickets:set-priority refuses a ticket id that is not one', async () => {
+    expect(
+      await getHandler('jira:tickets:set-priority')(
+        {},
+        { ticketId: '../../../admin', priorityId: '3' },
+      ),
+    ).toMatchObject({ ok: false, reason: 'invalid_input' });
+    expect(setTicketPriorityMock).not.toHaveBeenCalled();
+  });
+
+  it('jira:tickets:set-priority requires both a ticket and a priority', async () => {
+    expect(
+      await getHandler('jira:tickets:set-priority')(
+        {},
+        { ticketId: '10421', priorityId: '  ' },
+      ),
+    ).toMatchObject({ ok: false, reason: 'invalid_input' });
+    expect(setTicketPriorityMock).not.toHaveBeenCalled();
+  });
+
+  it('jira:tickets:set-priority delegates a valid pair to the client', async () => {
+    setTicketPriorityMock.mockResolvedValue({ ok: true, value: {} });
+
+    await getHandler('jira:tickets:set-priority')(
+      {},
+      { ticketId: '10421', priorityId: '3' },
+    );
+
+    expect(setTicketPriorityMock).toHaveBeenCalledWith('10421', '3');
+  });
 
   it('jira:tickets:transition requires both a ticket and a transition', async () => {
     expect(

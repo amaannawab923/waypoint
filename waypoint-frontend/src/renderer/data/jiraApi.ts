@@ -24,6 +24,7 @@ import type {
   JiraComment,
   JiraConnectionStatus,
   JiraDuplicateNudge,
+  JiraPriorityOption,
   JiraProposal,
   JiraTicket,
   JiraTransition,
@@ -34,6 +35,7 @@ import type { Priority } from '@/types/entities';
 // back over IPC, and restating them here would just be a second copy to keep
 // in sync. Nothing at runtime is imported from src/main.
 import type {
+  JiraPriorityOption as JiraWirePriorityOption,
   JiraWireComment,
   JiraWireTicket,
   JiraWireTransition,
@@ -119,6 +121,15 @@ function toTransition(wire: JiraWireTransition): JiraTransition {
       ...(field.hint ? { hint: field.hint } : {}),
     })),
   };
+}
+
+/** Nothing to translate — a priority option is an id and the site's own
+ * label on both sides of the wire, with no presentation to derive (unlike a
+ * transition, whose target state category becomes a CSS variable here). The
+ * mapping exists anyway so the renderer's own type is what leaves this
+ * module, keeping main's shapes from leaking past this file. */
+function toPriorityOption(wire: JiraWirePriorityOption): JiraPriorityOption {
+  return { id: wire.id, name: wire.name };
 }
 
 function toTicket(wire: JiraWireTicket): JiraTicket {
@@ -269,6 +280,25 @@ export async function getJiraTransitions(
   return transitions;
 }
 
+/**
+ * The priorities the connected site offers on this particular issue.
+ *
+ * Deliberately not cached the way transitions are. The transitions cache
+ * exists because the bulk ticket search already returns them, so reusing that
+ * saves a round trip that has genuinely already happened; nothing about a
+ * priority scheme arrives that way, so a cache here would buy one saved
+ * request in exchange for holding a list that a project's admin can change
+ * underneath it. Main re-checks the chosen id against live metadata before
+ * writing regardless (see setJiraTicketPriority), but the honest thing for a
+ * menu is to show what is true when it opens.
+ */
+export async function getJiraPriorityOptions(
+  ticketId: string,
+): Promise<JiraPriorityOption[]> {
+  const wire = unwrap(await bridge().listPriorityOptions(ticketId));
+  return wire.map(toPriorityOption);
+}
+
 export async function listJiraComments(
   ticketId: string,
 ): Promise<JiraComment[]> {
@@ -350,6 +380,30 @@ export async function transitionJiraTicket(
   // The move changes which transitions are legal from here, so the cached set
   // for this ticket is now wrong — drop it and let the next menu open ask.
   transitionsByTicketId.delete(ticketId);
+  return ticket;
+}
+
+/**
+ * Changes a real issue's priority.
+ *
+ * Main re-reads the issue's live edit metadata immediately before writing and
+ * refuses a value the issue no longer accepts, then re-reads the whole issue
+ * afterwards — the same shape as transitionJiraTicket, for the same reason:
+ * what comes back is the state Jira landed on, not the one the UI predicted.
+ *
+ * The cached list is patched with `.map()`, never filtered. A priority change
+ * cannot move a ticket out of the "my work" JQL (that query matches on
+ * assignee/reporter/watcher and resolution, none of which this touches), so
+ * there is no case where dropping the row would be right — and patching in
+ * place is what keeps the row where the user's eye already is.
+ */
+export async function setJiraTicketPriority(
+  ticketId: string,
+  priorityId: string,
+): Promise<JiraTicket> {
+  const wire = unwrap(await bridge().setPriority({ ticketId, priorityId }));
+  const ticket = toTicket(wire);
+  lastTickets = lastTickets.map((t) => (t.id === ticket.id ? ticket : t));
   return ticket;
 }
 

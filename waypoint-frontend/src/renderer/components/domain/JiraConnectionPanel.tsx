@@ -128,18 +128,21 @@ export function JiraConnectionPanel({
       <div className="mt-3.5 flex flex-col gap-2">
         <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-accent/30 bg-accent-soft-bg px-3 py-2.5 text-[12.5px] leading-relaxed text-accent-soft-text">
           <IconCircleDot size={15} className="mt-0.5 shrink-0" />
-          {/* This used to read "moving, commenting, changing priority".
-              There is no priority write path anywhere: jiraApi.ts exposes
-              exactly two writes, transitionJiraTicket and postJiraComment,
-              and the row's PriorityIcon is display-only. Naming a third
-              capability in the one panel whose whole job is saying what this
-              build does and doesn't do was the sharpest honesty violation in
-              the feature. The list is now the two writes that exist. */}
+          {/* This list is the capability register for Jira writes, and it is
+              maintained in the same commit as the write it names — never as a
+              follow-up. It once read "moving, commenting, changing priority"
+              while only the first two existed, which is the failure this
+              panel exists to not have (see commit e9e1ec9). Priority is on
+              the list again now because setJiraTicketPriority is real: the
+              row's chip opens a picker of the site's own priorities and
+              writes the chosen one straight through. jiraApi.ts's whole write
+              surface is transitionJiraTicket, postJiraComment and
+              setJiraTicketPriority — three, and this sentence names three. */}
           <span>
-            <b>Your</b> edits — moving a ticket through its workflow, and
-            posting a comment — write straight to Jira the moment you make them,
-            as you. Those two are the whole set; everything else about an issue
-            is read-only here.
+            <b>Your</b> edits — moving a ticket through its workflow, posting a
+            comment, and changing its priority — write straight to Jira the
+            moment you make them, as you. Those three are the whole set;
+            everything else about an issue is read-only here.
           </span>
         </div>
         <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-warning/30 bg-warning-bg px-3 py-2.5 text-[12.5px] leading-relaxed text-warning">
