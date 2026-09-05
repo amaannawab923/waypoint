@@ -815,11 +815,11 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
 - **JIRA-43** — Epic shown in the drawer
   Steps: Open a ticket that belongs to an epic. Check the "Epic ·" chip against Jira.
   Expected: The chip names the correct epic.
-  Coverage: **Partial** — `mapIssue()` reads `fields.parent.fields.summary` first, falling back to a named `Epic Link`/`Epic Name` custom field. Correct for a story under an epic; see JIRA-44 for where it goes wrong.
+  Coverage: **Supported** — `mapIssue()` reads `fields.parent.fields.summary` first, but only when `parent.fields.issuetype` says the parent really is an epic, falling back to a named `Epic Link`/`Epic Name` custom field otherwise (JIRA-44).
 - **JIRA-44** — "Epic" chip on a sub-task
-  Steps: Open a Jira sub-task from the list (one whose parent is a Story, not an Epic). Read the "Epic ·" chip.
-  Expected: It should either name the real epic or not claim one.
-  Coverage: **Gap worth flagging** — for a sub-task, `fields.parent` is the *parent story*, so the chip labels the parent story as "Epic". The value is right; the label is a lie. Cheap to fix (read `parent.fields.issuetype`), and visible on any team that uses sub-tasks.
+  Steps: Open a Jira sub-task from the list (one whose parent is a Story, not an Epic). Read the "Epic ·" chip. Then open a story that does sit directly under an epic and read the same chip.
+  Expected: The sub-task either names its real epic (via Epic Link) or shows no Epic chip at all — never its parent story's summary. The story under an epic still names that epic.
+  Coverage: **Supported** — `mapIssue` now reads `parent.fields.issuetype` and takes `fields.parent` as the epic only when that type is one (`hierarchyLevel >= 1`, or a name of "epic" on a site that returns no hierarchy level). A non-epic parent falls through to the Epic Link custom field, and to null when that's absent too. A parent payload carrying no issuetype at all is still trusted, matching how every other field in the mapper degrades. Covered in `jiraMap.test.ts`; still worth eyeballing on a real site with sub-tasks and a renamed epic type.
 - **JIRA-45** — Parent/child hierarchy and sub-task rollup
   Steps: Look for any indication that an issue has sub-tasks, or that a sub-task belongs to a parent, beyond the single Epic chip.
   Expected: Nothing beyond that one chip is shown — no sub-task list, no completion rollup, no parent link. A sub-task in your queue renders as a flat row indistinguishable from a top-level issue.

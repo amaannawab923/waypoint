@@ -397,6 +397,30 @@ function findNamedField(
   return match ? fields[match[0]] : undefined;
 }
 
+/**
+ * Whether a `fields.parent.fields.issuetype` describes an epic.
+ *
+ * Two signals, because neither alone is portable: `hierarchyLevel` is the
+ * structural one (0 is a standard issue, 1 is an epic, sub-tasks are -1) but
+ * isn't returned by every site or API version, and `name` is always there but
+ * is renameable per site ("Initiative", a localized label). Positive on
+ * either.
+ *
+ * Absence is deliberately treated as "yes": every other field in this mapper
+ * degrades toward what the caller had before, and a parent with no issuetype
+ * at all is far more likely to be a trimmed payload for a story under an epic
+ * — the case that already worked — than a sub-task. The lie this exists to
+ * stop needs a parent that positively says it is something else.
+ */
+function isEpicIssueType(value: unknown): boolean {
+  const issueType = asRecord(value);
+  if (Object.keys(issueType).length === 0) return true;
+  const { hierarchyLevel, name } = issueType;
+  if (typeof hierarchyLevel === 'number') return hierarchyLevel >= 1;
+  if (typeof name === 'string') return name.trim().toLowerCase() === 'epic';
+  return true;
+}
+
 function sprintNameOf(value: unknown): string | null {
   if (!Array.isArray(value) || value.length === 0) return null;
   // An issue can sit in several sprints (a carried-over ticket); the active
@@ -432,8 +456,18 @@ export function mapIssue(
   const status = asRecord(fields.status);
 
   // The epic an issue belongs to is `parent` on a modern Cloud site and a
-  // named custom field on an older one; both are checked, parent first.
-  const parentSummary = asRecord(asRecord(fields.parent).fields).summary;
+  // named custom field on an older one; both are checked, parent first —
+  // but only when the parent is actually an epic. For a sub-task,
+  // `fields.parent` is the parent *story*, and taking it unconditionally
+  // meant the drawer labelled that story "Epic". The value was right; the
+  // label was a lie, on any team that uses sub-tasks. When the parent isn't
+  // an epic this falls through to the Epic Link custom field, which on many
+  // sites still resolves the sub-task's real epic — and when that's absent
+  // too, no chip is rendered rather than a wrong one.
+  const parentFields = asRecord(asRecord(fields.parent).fields);
+  const parentSummary = isEpicIssueType(parentFields.issuetype)
+    ? parentFields.summary
+    : undefined;
   const epicFromName = findNamedField(fields, names, /^epic (link|name)$/i);
   const epicName =
     typeof parentSummary === 'string' ? parentSummary : epicFromName;

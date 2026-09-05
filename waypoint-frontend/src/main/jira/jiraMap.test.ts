@@ -238,6 +238,79 @@ describe('mapIssue', () => {
     });
   });
 
+  // For a sub-task, `fields.parent` is the parent *story* — taking it as the
+  // epic labelled that story "Epic ·" in the drawer. The value was right; the
+  // label was a lie.
+  describe('the epic chip only ever names an actual epic', () => {
+    function withParent(
+      parentFields: Record<string, unknown>,
+      extraFields: Record<string, unknown> = {},
+      names: Record<string, string> = {},
+    ) {
+      return mapIssue(
+        {
+          ...issue(),
+          fields: {
+            ...issue().fields,
+            parent: { fields: parentFields },
+            ...extraFields,
+          },
+        },
+        ME,
+        names,
+      );
+    }
+
+    it('takes the parent when it is an epic, by hierarchy level', () => {
+      expect(
+        withParent({
+          summary: 'Ingest hardening',
+          issuetype: { name: 'Epic', hierarchyLevel: 1 },
+        }),
+      ).toMatchObject({ epicName: 'Ingest hardening' });
+    });
+
+    it('takes the parent when it is an epic by name alone, on a site with no hierarchy level', () => {
+      expect(
+        withParent({
+          summary: 'Ingest hardening',
+          issuetype: { name: 'Epic' },
+        }),
+      ).toMatchObject({ epicName: 'Ingest hardening' });
+    });
+
+    it("does not call a sub-task's parent story an epic", () => {
+      expect(
+        withParent({
+          summary: 'Rewrite the ingest pipeline',
+          issuetype: { name: 'Story', hierarchyLevel: 0, subtask: false },
+        }),
+      ).toMatchObject({ epicName: null });
+    });
+
+    it("falls back to Epic Link for a sub-task, so the real epic still shows", () => {
+      expect(
+        withParent(
+          {
+            summary: 'Rewrite the ingest pipeline',
+            issuetype: { name: 'Story', hierarchyLevel: 0 },
+          },
+          { customfield_10014: 'Ingest hardening' },
+          { customfield_10014: 'Epic Link' },
+        ),
+      ).toMatchObject({ epicName: 'Ingest hardening' });
+    });
+
+    // Every other field in this mapper degrades toward what the caller had
+    // before; a parent with no issuetype is a trimmed payload, not evidence
+    // of a sub-task.
+    it('still trusts a parent whose payload carries no issue type', () => {
+      expect(withParent({ summary: 'Ingest hardening' })).toMatchObject({
+        epicName: 'Ingest hardening',
+      });
+    });
+  });
+
   it('returns null for a payload that is not an issue', () => {
     expect(mapIssue({ nope: true }, ME)).toBeNull();
   });
