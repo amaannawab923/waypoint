@@ -219,7 +219,11 @@ export default function MyJiraPage() {
       setTickets((ts) =>
         ts.map((t) =>
           t.id === updated.ticketId
-            ? { ...t, stateName: updated.toStateName, stateColor: updated.toStateColor }
+            ? {
+                ...t,
+                stateName: updated.toStateName,
+                stateColor: updated.toStateColor,
+              }
             : t,
         ),
       );
@@ -324,75 +328,75 @@ export default function MyJiraPage() {
           ) : (
             <div className="flex flex-wrap items-start gap-4">
               <div className="min-w-0 flex-1 basis-[460px]">
-              <div className="mb-2.5 flex flex-wrap items-center gap-1.5">
-                <FilterChip
-                  active={projFilter === 'all'}
-                  onClick={() => setProjFilter('all')}
-                >
-                  All {tickets.length}
-                </FilterChip>
-                {(['ENG', 'PLAT', 'GRW'] as JiraProjectKey[])
-                  .filter((key) => projectCounts.has(key))
-                  .map((key) => (
+                <div className="mb-2.5 flex flex-wrap items-center gap-1.5">
+                  <FilterChip
+                    active={projFilter === 'all'}
+                    onClick={() => setProjFilter('all')}
+                  >
+                    All {tickets.length}
+                  </FilterChip>
+                  {(['ENG', 'PLAT', 'GRW'] as JiraProjectKey[])
+                    .filter((key) => projectCounts.has(key))
+                    .map((key) => (
+                      <FilterChip
+                        key={key}
+                        active={projFilter === key}
+                        onClick={() => setProjFilter(key)}
+                        swatch={JIRA_PROJECT_COLOR[key]}
+                      >
+                        {key} {projectCounts.get(key)}
+                      </FilterChip>
+                    ))}
+                  <span className="mx-1 h-4.5 w-px bg-border" />
+                  {ROLE_FILTERS.map((r) => (
                     <FilterChip
-                      key={key}
-                      active={projFilter === key}
-                      onClick={() => setProjFilter(key)}
-                      swatch={JIRA_PROJECT_COLOR[key]}
+                      key={r.key}
+                      active={roleFilter === r.key}
+                      onClick={() => setRoleFilter(r.key)}
                     >
-                      {key} {projectCounts.get(key)}
+                      {r.label}
                     </FilterChip>
                   ))}
-                <span className="mx-1 h-4.5 w-px bg-border" />
-                {ROLE_FILTERS.map((r) => (
-                  <FilterChip
-                    key={r.key}
-                    active={roleFilter === r.key}
-                    onClick={() => setRoleFilter(r.key)}
-                  >
-                    {r.label}
-                  </FilterChip>
-                ))}
-              </div>
+                </div>
 
-              <div className="mb-1.5 flex items-center justify-between gap-2.5 text-[11.5px] text-text-muted">
-                <span>
-                  {filtered.length} issue{filtered.length === 1 ? '' : 's'} ·{' '}
-                  {visibleProjectCount} Jira project
-                  {visibleProjectCount === 1 ? '' : 's'}
-                </span>
-                {connection && (
+                <div className="mb-1.5 flex items-center justify-between gap-2.5 text-[11.5px] text-text-muted">
                   <span>
-                    one API call · polls every {connection.pollIntervalSec}s
+                    {filtered.length} issue{filtered.length === 1 ? '' : 's'} ·{' '}
+                    {visibleProjectCount} Jira project
+                    {visibleProjectCount === 1 ? '' : 's'}
                   </span>
-                )}
-              </div>
+                  {connection && (
+                    <span>
+                      one API call · polls every {connection.pollIntervalSec}s
+                    </span>
+                  )}
+                </div>
 
-              <div className="overflow-hidden rounded-[var(--radius)] border border-border bg-surface shadow-sm">
-                {filtered.length === 0 ? (
-                  <div className="px-4 py-6 text-center text-sm text-text-muted">
-                    No tickets match these filters.
-                  </div>
-                ) : (
-                  filtered.map((ticket) => (
-                    <JiraTicketRow
-                      key={ticket.id}
-                      ticket={ticket}
-                      onOpenDrawer={setDrawerTicketId}
-                      onTicketUpdated={updateTicket}
-                      onResolveConflict={handleResolveConflict}
-                      onDismissTombstone={handleDismissTombstone}
-                    />
-                  ))
-                )}
-              </div>
+                <div className="overflow-hidden rounded-[var(--radius)] border border-border bg-surface shadow-sm">
+                  {filtered.length === 0 ? (
+                    <div className="px-4 py-6 text-center text-sm text-text-muted">
+                      No tickets match these filters.
+                    </div>
+                  ) : (
+                    filtered.map((ticket) => (
+                      <JiraTicketRow
+                        key={ticket.id}
+                        ticket={ticket}
+                        onOpenDrawer={setDrawerTicketId}
+                        onTicketUpdated={updateTicket}
+                        onResolveConflict={handleResolveConflict}
+                        onDismissTombstone={handleDismissTombstone}
+                      />
+                    ))
+                  )}
+                </div>
 
-              <div className="mt-3 flex items-start gap-2 rounded-[var(--radius-sm)] border border-jira/30 bg-jira-bg px-3 py-2.5 text-[12.5px] text-jira">
-                <span>
-                  Your own clicks write straight to Jira — no approval step,
-                  ~400ms. Copilot&apos;s don&apos;t: see the rail.
-                </span>
-              </div>
+                <div className="mt-3 flex items-start gap-2 rounded-[var(--radius-sm)] border border-jira/30 bg-jira-bg px-3 py-2.5 text-[12.5px] text-jira">
+                  <span>
+                    Your own clicks write straight to Jira — no approval step,
+                    ~400ms. Copilot&apos;s don&apos;t: see the rail.
+                  </span>
+                </div>
               </div>
 
               <CopilotRail
