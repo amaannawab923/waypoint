@@ -158,7 +158,13 @@ export function JiraTicketDrawer({
             )}
           </div>
 
-          <p className="mb-3.5 text-[12.5px] leading-relaxed text-text-secondary">
+          {/* `whitespace-pre-wrap`, matching the comment bodies below.
+              adfToPlainText already emits a \n per ADF block, which is the
+              only structure that survives the flatten — and rendering it in
+              a plain <p> collapsed every one of them, turning a
+              multi-paragraph description with headings and bullets into a
+              single run-on line. */}
+          <p className="mb-3.5 text-[12.5px] leading-relaxed whitespace-pre-wrap text-text-secondary">
             {ticket.description}
           </p>
 

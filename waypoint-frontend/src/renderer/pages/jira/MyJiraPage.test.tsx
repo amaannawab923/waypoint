@@ -8,7 +8,7 @@ import {
   listJiraComments,
   listMyJiraTickets,
 } from '@/data/jiraApi';
-import { useLoadedJiraConnection } from '@/lib/jiraStore';
+import { useJiraConnection, useLoadedJiraConnection } from '@/lib/jiraStore';
 import { JiraApiError } from '@/types/jira';
 import type {
   JiraDuplicateNudge,
@@ -277,6 +277,33 @@ describe('MyJiraPage — sync indicator', () => {
 
     expect(await screen.findByText(/^synced \d+s ago$/)).toBeInTheDocument();
     expect(screen.queryByText('not synced yet')).not.toBeInTheDocument();
+  });
+});
+
+// adfToPlainText emits a \n per ADF block — that newline is the only
+// structure that survives flattening a Jira description, so the drawer has to
+// honor it. jsdom does no layout, so the class is the observable.
+describe('JiraTicketDrawer — description wrapping', () => {
+  it('preserves the paragraph breaks the ADF flattener produced', async () => {
+    const described = ticket({
+      id: 't-desc',
+      key: 'ENG-9',
+      projectKey: 'ENG',
+      title: 'Described ticket',
+      description: 'First paragraph.\n\nSecond paragraph.\n- a bullet',
+    });
+    jest.mocked(listMyJiraTickets).mockResolvedValue([described]);
+    jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
+    jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
+    jest.mocked(listJiraComments).mockResolvedValue([]);
+    jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
+    jest.mocked(useJiraConnection).mockReturnValue(undefined);
+    render(<MyJiraPage />);
+
+    fireEvent.click(await screen.findByText('Described ticket'));
+
+    const body = await screen.findByText(/First paragraph\./);
+    expect(body).toHaveClass('whitespace-pre-wrap');
   });
 });
 

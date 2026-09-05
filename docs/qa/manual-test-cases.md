@@ -1034,7 +1034,7 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
 - **JIRA-94** — Multi-line comment formatting survives
   Steps: Post a comment with several paragraphs and line breaks. Read it back.
   Expected: Line breaks preserved.
-  Coverage: **Supported** — the comment body renders with `whitespace-pre-wrap`. (Contrast the *description*, which does not — see JIRA-100.)
+  Coverage: **Supported** — the comment body renders with `whitespace-pre-wrap`, as the description now does too (JIRA-100).
 - **JIRA-95** — Edit your own comment
   Steps: Find a comment you posted. Look for an edit affordance.
   Expected: No edit control appears on any comment, including your own — not inline, not on hover, not in a menu. Correcting a posted comment is only possible in Jira.
@@ -1060,8 +1060,8 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
 
 - **JIRA-100** — A multi-paragraph description renders readably
   Steps: Open a ticket whose Jira description has several paragraphs, headings and a bulleted list.
-  Expected: Paragraph breaks are preserved.
-  Coverage: **Gap worth flagging** — `adfToPlainText` correctly emits `\n` for block types, but the drawer renders the description in a plain `<p>` with no `whitespace-pre-wrap` (unlike the comment bodies right below it, which do have it). Every newline collapses and a structured description becomes one run-on paragraph. A one-class fix, and very visible on any real ticket.
+  Expected: Paragraph breaks, list-item breaks and heading breaks all render as line breaks, exactly as they do in the comment bodies below. The description is never one run-on paragraph. (Heading and bullet *styling* is still lost — that's the deliberate flatten, JIRA-101.)
+  Coverage: **Supported** — `adfToPlainText` emits `\n` per ADF block and the drawer's description `<p>` now carries `whitespace-pre-wrap`, matching the comment bodies right below it. Asserted in `MyJiraPage.test.tsx`; jsdom does no layout, so the live check is still worth running against a real multi-paragraph description.
 - **JIRA-101** — A description containing a table or code block
   Steps: Open a ticket whose description has a table and a fenced code block.
   Expected: Cell text and code text are present as plain text; nothing renders as `[object Object]`.
