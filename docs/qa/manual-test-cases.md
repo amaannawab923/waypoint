@@ -1249,22 +1249,27 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: In Jira, add yourself as a watcher on an issue you neither report nor are assigned. Refresh My Jira.
   Expected: It appears with a "watching" role tag.
   Coverage: **Supported** — the watcher arm of the JQL, and `roleOf` falls through to `'watcher'`.
+  Result: NOT TESTED — tried to reproduce: added myself as a real watcher on ENG-1 via the API, but ENG-1's reporter is also me (every ticket in this seed account has me as reporter, since I created them all with my own token), so there's no way to produce a genuinely watcher-only role — `roleOf()`'s assignee > reporter > watcher precedence would show it under "reporter" regardless. Needs a second real account to be reporter/assignee instead.
 - **JIRA-118** — Toggle watch on/off from Waypoint
   Steps: Look for a watch toggle on a row or in the drawer.
   Expected: Document that none exists.
   Coverage: **Gap worth flagging** — un-watching is the natural way to clear noise out of your own queue, and since watched issues *are* pulled into that queue, Waypoint creates the noise without offering the remedy. The only way to shrink your Waypoint list is to go to Jira.
+  Result: PASS (confirms the gap) — no watch toggle anywhere in the row or drawer.
 - **JIRA-119** — Who else is watching a ticket
   Steps: Open a drawer and look for a watcher list or count.
   Expected: Neither a watcher list nor a watcher count appears — not in the drawer, not on the row, not on hover.
   Coverage: **Partial** — deliberately dropped: `types/jira.ts` records that a Jira *search* returns a watcher count but never names, so the field was removed rather than shipped permanently empty. The count itself, though, is available and isn't shown.
+  Result: PASS (confirms absence) — no watcher list or count appears anywhere in the drawer.
 - **JIRA-120** — Being notified when something changes in Jira
   Steps: Have a colleague comment on, reassign or transition an issue in your queue while Waypoint is open on the My Jira page. Watch for any indication in Waypoint.
   Expected: Document that nothing happens until a manual refresh.
   Coverage: **Not supported (by design)** — no background sync, disclosed on the Connection tab. Note it's a *sharp* limitation for the "companion" framing: the app can go arbitrarily long showing a confidently wrong queue.
+  Result: PASS (confirms as documented, evidenced by JIRA-98) — a comment posted via the API while the drawer stayed open produced zero indication in Waypoint until a manual reload.
 - **JIRA-121** — Jira changes do not reach Waypoint's own Notifications page
   Steps: With Jira connected, check `/notifications` after Jira activity.
   Expected: No Jira entries.
   Coverage: **Not supported (by design)** — no integration between the two surfaces; consistent with My Jira being standalone.
+  Result: PASS — despite extensive real Jira activity this session (transitions, comments, links, field edits), `/notifications` shows nothing Jira-related at all.
 
 ### Staleness, concurrency and conflicts
 
@@ -1272,6 +1277,7 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: Open My Jira and watch the green indicator next to the account chip for a few minutes without touching anything.
   Expected: The age should keep advancing and should reflect a real read.
   Coverage: **Partial** — the age is genuine (it's when the JQL last ran) and the label deliberately reports an age rather than implying a stream. But the pulsing green success-colored dot reads as "live" at a glance, and after an hour on the page it says "synced 60m ago" beside a still-pulsing dot. The copy is honest; the visual language isn't.
+  Result: PASS (confirms the visual-language concern) — the dot element carries `animate-pulse` and `bg-success` classes regardless of age; watched the age genuinely advance from "6s ago" onward across this pass's many refreshes, confirming the age itself is real. Did not sit and watch continuously for a full hour to see "60m ago" specifically, but the mechanism (age is real, dot styling is age-independent) is directly confirmed.
 - **JIRA-123** — Sync age before any read has happened
   Steps: Launch the app fresh with Jira connected. Look at the sidebar badge and, on `/my-jira`, at the sync indicator, before the list finishes loading.
   Expected: Before the first read lands, the indicator reads "not synced yet" in muted text with no pulsing green dot, and never a "synced Ns ago" age. It switches to a real age only once a search has actually come back.
@@ -1280,22 +1286,27 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: Change an issue in Jira (title, status, assignee). In Waypoint, Connection tab → Refresh now, then return to My work.
   Expected: The change is reflected; the sync indicator resets to a few seconds.
   Coverage: **Supported** — `refreshJiraSync()` calls `listMyJiraTickets()`, which re-runs the search and resets `lastSyncAt`.
+  Result: PASS — renamed ENG-4 in real Jira, pressed Refresh now on the Connection tab; sync indicator reset to "synced 6s ago", confirming a genuine re-read.
 - **JIRA-125** — Refresh does not update the list you're looking at
   Steps: Sit on the My work tab. Switch to Connection, press Refresh now, switch back to My work.
   Expected: Document whether the rows reflect the refresh.
   Coverage: **Partial** — `MyJiraPage` holds `tickets` in local state fed by a mount-time `useAsync`; `refreshJiraSync` updates the module cache and the connection store but does not push new rows into the page. The counts on the Connection tab can update while the rows behind them stay stale — an internal inconsistency inside one page.
+  Result: This Coverage prediction does not hold live — corrected. Renamed ENG-4 in real Jira, pressed Refresh now on the Connection tab, switched back to My work: the row showed the new title ("...RENAMED for refresh test") immediately, not the stale one. Switching tabs within the page evidently does re-render/re-fetch the row data (or reads from a store `refreshJiraSync` does update), contradicting the "does not push new rows into the page" claim. This is a live-testing correction to a code-reading conclusion, not a product defect — the actual behavior (list reflects the refresh) is the *better* of the two outcomes, so no gap here after all.
 - **JIRA-126** — Someone else changes a ticket while you're looking at it
   Steps: Open My Jira. Have a colleague transition one of your listed issues in Jira. Then transition it yourself from Waypoint.
   Expected: Ideally a conflict warning; at minimum, an honest outcome.
   Coverage: **Partial** — the conflict strip ("X changed this in Jira … your first conflict in 3 weeks" + Reload) is fully built in `JiraTicketRow`, but `toTicket()` hardcodes `hasConflict: false`, so it never renders. In practice the pre-write transition re-read (JIRA-76) catches the case where their change made your move illegal, and otherwise your move simply lands last. `updatedAt` is fetched on the wire but never carried into the renderer's `JiraTicket`, so nothing can compare reads.
+  Result: PASS (confirms it cannot be produced) — same live evidence as JIRA-54: a real change to ENG-4 made via the API while it was in Waypoint's queue never triggered a conflict strip on any subsequent view.
 - **JIRA-127** — Last-write-wins on a comment race
   Steps: Have a colleague comment while you're composing one on the same ticket. Post yours.
   Expected: Both comments exist in Jira.
   Coverage: **Supported** — comments append in Jira, so there's no true conflict; the only issue is visibility (JIRA-98).
+  Result: PASS (via JIRA-98's evidence) — multiple comments posted through both the API and the app UI in this pass all landed in Jira intact with no data loss; the only real issue is the visibility gap already covered by JIRA-98.
 - **JIRA-128** — Conflict "Reload" side effects
   Steps: If a conflict strip can be produced, click Reload.
   Expected: No conflict strip can be produced, so this case cannot be executed today — `toTicket()` hardcodes `hasConflict: false`. When it does become reachable, Reload must re-read only that row; as written it re-runs the whole list search and replaces every other row's cached transitions.
   Coverage: **Not supported (untested/unknown)** — unreachable today. Noting for when it becomes reachable: `resolveJiraConflict` calls `listMyJiraTickets()`, which re-runs `rememberTickets()` and replaces the *entire* transitions cache and `lastTickets`, while the page state is patched for one row only. A single-row Reload quietly discards cached transitions for every other row.
+  Result: NOT TESTED — confirmed unreachable, matching JIRA-126: no conflict strip can be produced with `hasConflict` hardcoded false, so its Reload button can't be clicked.
 
 ### Copilot proposals & the approval boundary
 
