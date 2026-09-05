@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
-import { listJiraMentionCandidates, postJiraComment } from '@/data/jiraApi';
+import { postJiraComment } from '@/data/jiraApi';
 import { showErrorToast } from '@/lib/toast';
-import { useAsync } from '@/lib/useAsync';
+import { useJiraConnection } from '@/lib/jiraStore';
 import { Button } from '@/components/ui/Button';
 import type { JiraComment } from '@/types/jira';
 
@@ -10,13 +10,17 @@ import type { JiraComment } from '@/types/jira';
 // This app's one existing real comment composer (TicketDetailPage.tsx) is a
 // plain textarea collecting plain text, and matching that simpler, already-
 // proven pattern beats introducing this app's first contentEditable/innerHTML
-// surface just to get inline-styled mention chips while typing — the
-// trade-off being "@Name" shows as plain text in the draft instead of a
-// pill until it posts, which is a modest visual downgrade for a real
-// security/complexity win (no HTML parsing of user input anywhere in this
-// component). Posted comments and the composer's own "type @ to mention"
-// footer note keep the same interaction and copy as the mockup otherwise.
-const MENTION_TRIGGER_RE = /@([A-Za-z]*)$/;
+// surface just to get inline-styled mention chips while typing.
+//
+// The @-mention picker that used to sit above this box is gone, and its
+// removal is the point rather than a simplification. This composer now posts
+// to a real Jira issue, as plain text. A real Jira mention is a structured
+// ADF `mention` node carrying an accountId — typing "@Sam Lee" into a
+// plain-text body produces eleven literal characters that notify nobody. A
+// picker that inserted them would be this app telling the user it had
+// mentioned a colleague when it had not. Writing genuine mentions means
+// writing ADF, which is a later phase; until then the footer says plainly
+// what this does post.
 
 export function JiraCommentComposer({
   ticketId,
@@ -27,28 +31,13 @@ export function JiraCommentComposer({
 }) {
   const [draft, setDraft] = useState('');
   const [posting, setPosting] = useState(false);
-  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const connection = useJiraConnection();
   // Stable focus target for handlePost below — same focus-guard pattern as
   // TicketDetailPage.tsx's commentFormRef: the Comment button goes
   // `disabled={posting}` below, which force-blurs a focused control the
   // instant `disabled` is applied. Landing focus here first keeps the next
   // keystroke from leaking to a global shortcut.
   const formRef = useRef<HTMLDivElement>(null);
-
-  const { data: candidates } = useAsync(() => listJiraMentionCandidates(), []);
-
-  function handleChange(value: string) {
-    setDraft(value);
-    const match = MENTION_TRIGGER_RE.exec(value);
-    setMentionQuery(match ? match[1] : null);
-  }
-
-  function insertMention(name: string) {
-    setDraft((prev) => prev.replace(MENTION_TRIGGER_RE, `@${name} `));
-    setMentionQuery(null);
-    textareaRef.current?.focus();
-  }
 
   async function handlePost() {
     const trimmed = draft.trim();
@@ -59,7 +48,6 @@ export function JiraCommentComposer({
       const comment = await postJiraComment(ticketId, trimmed);
       onPosted(comment);
       setDraft('');
-      setMentionQuery(null);
     } catch (err) {
       showErrorToast(
         err instanceof Error
@@ -71,12 +59,6 @@ export function JiraCommentComposer({
     }
   }
 
-  const filteredCandidates = (candidates ?? []).filter((c) =>
-    mentionQuery
-      ? c.name.toLowerCase().startsWith(mentionQuery.toLowerCase())
-      : true,
-  );
-
   return (
     <div
       ref={formRef}
@@ -84,38 +66,21 @@ export function JiraCommentComposer({
       data-shortcut-guard
       className="relative outline-none"
     >
-      {mentionQuery !== null && filteredCandidates.length > 0 && (
-        <div className="absolute bottom-full left-0 z-10 mb-1 w-[210px] overflow-hidden rounded-[var(--radius-sm)] border border-border-strong bg-surface shadow-2xl">
-          <div className="px-2.5 pt-1.5 pb-1 text-[10px] font-bold tracking-wide text-text-muted uppercase">
-            Mention
-          </div>
-          {filteredCandidates.map((c) => (
-            <button
-              key={c.name}
-              type="button"
-              onClick={() => insertMention(c.name)}
-              className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12.5px] text-text hover:bg-surface-2"
-            >
-              {c.name}
-              <span className="ml-auto text-[11px] text-text-muted">
-                {c.role}
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
       <div className="rounded-[var(--radius-sm)] border border-border-strong bg-surface">
         <textarea
-          ref={textareaRef}
           value={draft}
-          onChange={(e) => handleChange(e.target.value)}
-          placeholder="Comment… type @ to mention a teammate"
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="Comment…"
           rows={3}
           className="w-full resize-none rounded-t-[var(--radius-sm)] bg-transparent px-2.5 py-2 text-[12.5px] leading-relaxed text-text outline-none"
         />
         <div className="flex items-center gap-2 border-t border-border px-2 py-1.5">
+          {/* The name is the connected Atlassian account's own display name,
+              read from the shared connection store — this comment really is
+              posted as that person, and the label has to be able to say who
+              that is rather than the fixture name it used to hardcode. */}
           <span className="flex-1 text-[10.5px] text-text-muted">
-            Posts to Jira as Max Chen · plain text + mentions
+            Posts to Jira as {connection?.accountName || 'you'} · plain text
           </span>
           <Button
             size="xs"
