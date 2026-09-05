@@ -988,74 +988,92 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: Click a row's state chip.
   Expected: A popover headed "Move PROJ-N to" listing the transitions your Jira workflow allows from the current state, with a footer noting Waypoint doesn't invent them.
   Coverage: **Supported** — `JiraTicketRow` fetches on popover open via `getJiraTransitions`; `JiraTransitionPopover` renders the list.
+  Result: PASS, live-verified — clicking ENG-4's "To Do" chip opened a popover reading exactly "Move ENG-4 to / To Do / In Progress / Done / These are the transitions your Jira workflow allows from To Do — Waypoint doesn't invent them." Bonus confirmation: the popover is rendered as a `position: fixed` sibling of `#root` (not clipped inside the list), proving the JIRA-153 portal fix is genuinely live.
 - **JIRA-68** — Transitions match the real workflow
   Steps: For three issues in three different projects with different workflows, compare the popover's options against the transitions Jira's own UI offers from the same state.
   Expected: Identical sets, including any nonstandard status names ("Ready for QA", "Blocked").
   Coverage: **Supported** — transitions come from `/rest/api/3/issue/{id}/transitions`, and `mapTransition` uses `to.name` (falling back to the transition's own name).
+  Result: PARTIAL — only one real Jira project (ENG) exists in this account, so the "three projects with different workflows" scope can't be tested. What is confirmed: the popover's options (To Do/In Progress/Done) exactly match a direct API call to `/issue/ENG-4/transitions`.
 - **JIRA-69** — Transitions are re-asked rather than trusted from the bulk search
   Steps: Open a transition menu on an issue you can plainly move in Jira. Confirm it does not say "No transitions available from here."
   Expected: Real options appear.
   Coverage: **Supported** — a deliberate two-layer design: `rememberTickets()` refuses to cache an empty transitions array from the bulk expand (ambiguous), and `getJiraTransitions` falls through to the per-issue endpoint. This case exists to confirm the fallback actually fires on a real site.
+  Result: PASS — ENG-4's transition menu showed real options ("To Do / In Progress / Done") every time it was opened across this pass, never "No transitions available from here."
 - **JIRA-70** — A no-required-field transition writes straight through
   Steps: Pick a transition with no "needs a field" badge. Click it.
   Expected: Popover closes, chip shows "Saving…", then settles on the new state name and color. The issue's status in real Jira has changed. No approval step.
   Coverage: **Supported** — `transitionJiraTicket` posts the transition then re-reads the issue, so the chip shows what Jira actually landed on, not a prediction.
+  Result: PASS, live-verified end-to-end — clicked "In Progress" (no "needs a field" badge) on ENG-4; the row's chip settled on "In Progress" with no approval step, and a direct API call confirmed real Jira's own status is genuinely "In Progress" too.
 - **JIRA-71** — A transition requiring Resolution shows an in-place form
   Steps: Pick a transition badged "needs a field" (typically Done/Closed requiring Resolution).
   Expected: The *same* panel swaps to "Jira needs one more field", with a select populated from that workflow's real allowed resolutions, a required asterisk, a disabled "Move to X" button until filled, and a Cancel that returns to the option list. No second popover, no modal.
   Coverage: **Supported** — `JiraTransitionPopover` swaps `formTransition` in place; options come from `allowedValues` via `mapTransitionField`.
+  Result: NOT TESTED — clicked "Done" on ENG-4 expecting a Resolution form; it wrote straight through with no form of any kind. A direct API check of `/issue/ENG-4/transitions?expand=transitions.fields` confirms why: on this real site's default Kanban workflow, none of the three transitions (To Do/In Progress/Done) have any required fields at all — Jira auto-set the resolution to "Done" on its own. This account's workflow has no required-field transition to test any of JIRA-71 through 75 against; would need a custom workflow scheme with a mandatory transition-screen field, not set up on this test project.
 - **JIRA-72** — A renamed/custom resolution resolves to the right id
   Steps: On a site with a renamed resolution (e.g. "Won't Do", "Shipped"), transition using it and verify in Jira that the resolution recorded is the correct one.
   Expected: Jira shows the exact resolution chosen.
   Coverage: **Supported** — `buildTransitionFieldsPayload` re-reads live `allowedValues` immediately before writing and resolves the chosen *label* to its site-specific id, with a `{ name }` fallback. This is the case that justifies the pre-write re-read; worth exercising on a genuinely renamed value.
+  Result: NOT TESTED — same root cause as JIRA-71: this workflow's Done transition has no Resolution field on its screen at all (auto-resolved by Jira), so there's no in-app resolution picker to exercise against a renamed value.
 - **JIRA-73** — Optional time-tracking field on a transition
   Steps: Find a transition whose screen has an optional time-tracking field. Open it.
   Expected: A text field with the "e.g. 3h 30m" placeholder and an "Optional on this workflow." hint; the move proceeds whether or not it's filled; a filled value lands on the issue's work log in Jira.
   Coverage: **Partial** — deliberately the one optional field kept (all other optional fields are dropped, `mapTransitionField`), and it's sent as `{ timeSpent: value }`. But there's no validation of Jira's duration format, so a malformed entry ("3.5 hours") surfaces only as a raw Jira error after the write attempt.
+  Result: NOT TESTED — none of this workflow's transitions have any screen fields at all (confirmed via API), optional or required, so no time-tracking field ever appears to test.
 - **JIRA-74** — All other optional transition-screen fields are dropped
   Steps: Use a transition whose screen has several optional fields (comment, assignee, custom selects). Open the popover.
   Expected: Only required fields (plus time tracking) are asked for.
   Coverage: **Supported** — intentional; the popover is not a full issue editor. Worth confirming that dropping them doesn't cause Jira to reject the transition on a screen that expects them.
+  Result: NOT TESTED — same root cause: no transition on this workflow has any screen fields, required or optional, to confirm are dropped.
 - **JIRA-75** — A transition that requires a field type the popover can't render
   Steps: Find a required transition field that is a user picker, a date, a cascading select or a multi-select. Try to use that transition.
   Expected: Document what happens.
   Coverage: **Gap worth flagging** — `mapTransitionField` collapses every field to `select` (if it has `allowedValues`) or `text`. A required date renders as a free-text box; a required user picker renders as a free-text box whose value Jira will reject. The user gets a raw Jira 400 with no way to satisfy the field from Waypoint, and no explanation that this field type isn't supported.
+  Result: NOT TESTED — no transition on this real workflow has any required field of any type to try this against.
 - **JIRA-76** — A transition that stopped being legal while the popover was open
   Steps: Open a transition menu. In Jira's own UI (or another machine), move the same issue so the chosen transition is no longer available. Then click it in Waypoint.
   Expected: A clear message — "That move isn't available on this issue any more — reopen the menu to see the current options." — not a bare 400.
   Coverage: **Supported** — `transitionTicket()` re-reads the transition list and checks the target id exists before posting, specifically for this race.
+  Result: NOT TESTED — would need a second real Jira session/machine to move the issue mid-race while the popover is open on this one, not available in this pass.
 - **JIRA-77** — A ticket you can see but cannot transition
   Steps: Find an issue you're a watcher on in a project where your role can't move issues. Open its state chip.
   Expected: Either no transitions offered, or a clear permission message on attempting one.
   Coverage: **Partial** — a 403 maps to "Your Jira account isn't allowed to do that.", which is honest but generic. More likely Jira simply returns no transitions, and the popover shows "No transitions available from here." — indistinguishable from "this workflow is a dead end". The permission reason is never named.
+  Result: NOT TESTED — this account is a full admin on this test site with no role restrictions; would need a second, permission-limited real account to reproduce a genuine 403.
 - **JIRA-78** — Cannot transition from the ticket drawer
   Steps: Open a ticket's drawer. Try to change its status from there.
   Expected: The drawer's status renders as a static, non-interactive element — no click target, no hover affordance, no transition menu. Moving the ticket requires closing the drawer and using the row's own state chip.
   Coverage: **Gap worth flagging** — `JiraTicketDrawer` renders status as a static `<span>`, not a `JiraStateChip`. A user reading the full ticket (the natural moment to decide to move it) has to close the drawer and find the row again. Cheap to fix; the drawer already has the ticket object.
+  Result: PASS (confirms the gap) — the drawer's status renders as `<span class="inline-flex items-center gap-1.5 rounded-full ...">Done</span>`, not a button; no click target, no transition menu reachable from the drawer.
 - **JIRA-79** — Popover closes on Escape and on click-away
   Steps: Open a transition popover. Press Escape. Reopen it, click elsewhere on the page.
   Expected: Closes both ways without transitioning anything.
   Coverage: **Supported** — `mousedown` outside-click listener plus an Escape keydown listener in `JiraTransitionPopover`.
+  Result: PASS — Escape closed a real open popover with no transition; a genuine `mousedown` dispatched outside the popover also closed it (confirmed on a fresh state read, since an in-line read caught pre-render stale state); ENG-4's status was unchanged after both.
 - **JIRA-80** — Keystrokes after a transition don't leak to global shortcuts
   Steps: Click a transition, then immediately type a character that is a global app shortcut.
   Expected: The shortcut does not fire.
   Coverage: **Supported** — the popover is `tabIndex={-1}` with `data-shortcut-guard` and calls `panelRef.current?.focus()` before `onSelect`, matching the documented force-blur pattern used elsewhere in this app.
+  Result: PASS, live-verified — clicked a transition, then immediately pressed the real two-key "g h" (Home) shortcut; the app stayed on `/my-jira` instead of navigating away.
 - **JIRA-81** — State chip is disabled while a write is in flight
   Steps: Trigger a transition on a slow connection and try to click the chip again immediately.
   Expected: The chip reads "Saving…" and is not clickable; no double-write.
   Coverage: **Supported** — `JiraStateChip` is `disabled={disabled || saving}` and `saving` is held for the duration of the call.
+  Result: NOT TESTED — tried forcing a slow/failed write via Chrome DevTools' "Offline" network emulation, but this app's Jira HTTP client runs in the Electron main process, not the renderer, so page-level network emulation doesn't reach it at all — the write still completed for real (verified against live Jira) despite "Offline" being active. On a fast local connection the in-flight window is too brief to reliably observe via script polling. Needs either a genuinely slow connection or a host-level network block to test properly; a methodology note worth passing to whoever runs this case again.
 - **JIRA-82** — A failed transition leaves the row honest
   Steps: Force a transition failure (revoke the token mid-session, or go offline) and attempt a move.
   Expected: An error toast carrying Jira's own words where available; the row's state chip returns to the *old* state, not the attempted one.
   Coverage: **Supported** — `handleSelectTransition` only calls `onTicketUpdated` on success, and `messageFromErrorBody` surfaces Jira's `errorMessages`/`errors` verbatim.
+  Result: NOT TESTED — same blocker as JIRA-81: Chrome DevTools' "Offline" emulation doesn't reach this app's main-process Jira HTTP client, so the attempted write succeeded for real instead of failing. Revoking the real token would break every other write test in this pass and wasn't done. Needs a host-level network block or a genuinely revoked/expired token to test.
 - **JIRA-83** — Transition menu cached from an earlier open
   Steps: Open a ticket's transition menu, close it. In Jira, change that project's workflow (or move the issue). Reopen the menu in Waypoint without refreshing.
   Expected: Document whether the menu is stale.
   Coverage: **Partial** — `transitionsByTicketId` never expires within a session, so the reopened menu can be stale. The pre-write re-read (JIRA-76) means a stale *selection* fails safely with a clear message, but the user still sees options that no longer exist.
+  Result: NOT TESTED — this real workflow allows all three states to transition to each other from any state, so the option set is identical regardless of current status; there's no way to visually distinguish a stale cached list from a fresh one on this specific workflow. Would need a real workflow with state-dependent transitions to observe.
 - **JIRA-84** — Bulk transitions across several tickets
   Steps: Try to select multiple rows and move them together.
   Expected: No row checkbox, no selection state and no bulk action bar exists. Tickets can only be moved one at a time, one popover at a time.
   Coverage: **Gap worth flagging** — no checkboxes, no selection state, no bulk bar. Waypoint's own native ticket list has bulk select and bulk actions (TIX-CW-10), so this is below the app's own established bar. Common real need: closing out five stale tickets on a Friday.
+  Result: PASS (confirms the gap) — no checkbox input exists anywhere on the page, and no bulk-selection bar or "N selected" text appears.
 
 ### Collaboration & comments
 
