@@ -418,6 +418,8 @@ export function JiraTicketDrawer({
           <JiraCommentComposer
             ticketId={ticket.id}
             ticketKey={ticket.key}
+            attachments={ticket.attachments}
+            onTicketUpdated={onTicketUpdated}
             onPosted={(comment) => setComments((cs) => [...cs, comment])}
           />
         </div>

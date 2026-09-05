@@ -101,9 +101,21 @@ describe('JiraConnectionPanel', () => {
   it('still says plainly what is not built', () => {
     render(<JiraConnectionPanel connection={status()} />);
 
-    expect(screen.getByText(/Rich-text authoring/i)).toBeInTheDocument();
+    expect(screen.getByText(/Tables and panels/i)).toBeInTheDocument();
+    expect(screen.getByText(/real inline image/i)).toBeInTheDocument();
     expect(screen.getByText(/Background sync/i)).toBeInTheDocument();
     expect(screen.getByText(/Creating issues/i)).toBeInTheDocument();
+  });
+
+  // Comment formatting and emoji shipped in the same feature as the
+  // @-mention picker -- this list must not still claim comments are
+  // "plain text apart from an @-mention" once bold/italic/lists/etc. work.
+  it('no longer claims comments are plain text apart from mentions', () => {
+    render(<JiraConnectionPanel connection={status()} />);
+
+    expect(
+      screen.queryByText(/plain text apart from an @-mention/i),
+    ).toBeNull();
   });
 
   it('Refresh now calls refreshJiraSync and pushes the result into jiraStore', async () => {

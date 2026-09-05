@@ -174,12 +174,22 @@ export function JiraConnectionPanel({
               things that do. Downloading and attaching both work now; what
               remains genuinely missing is deleting an attachment and
               uploading more than one at a time, neither of which is claimed
-              anywhere. */}
+              anywhere. Same story for comments: bold, italic, strikethrough,
+              inline code, a code block, headings, lists, quotes, links and
+              emoji all work now, so this list only names what still
+              doesn't. */}
           <li>
-            Rich-text authoring — tables, panels, syntax-highlighted code
-            blocks. Comments you write here are plain text apart from an
-            @-mention, and so is what you read: a Jira description written with
-            formatting is flattened to its text.
+            Tables and panels in a comment, and reading a Jira
+            description&apos;s own formatting — that still flattens to plain
+            text either way.
+          </li>
+          <li>
+            A real inline image in a comment, the way dragging a screenshot into
+            Jira&apos;s own editor embeds it. That goes through Atlassian&apos;s
+            separate Media API, a different upload path from the one issue
+            attachments use — attaching an image here still attaches it to the
+            issue and links to it from the comment, it just doesn&apos;t preview
+            inline the way a native Jira comment does.
           </li>
           <li>
             Background sync. The list is read when you open My Jira and when you

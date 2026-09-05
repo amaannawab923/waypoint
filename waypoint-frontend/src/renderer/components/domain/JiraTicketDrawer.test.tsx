@@ -131,6 +131,10 @@ function assigneeChip(name = 'Assignee: Max Chen'): HTMLElement {
   return screen.getByRole('button', { name });
 }
 
+function commentBox(): HTMLTextAreaElement {
+  return screen.getByPlaceholderText(/Comment…/i) as HTMLTextAreaElement;
+}
+
 /** The picker debounces its search by ~250ms; nothing arrives until the timers
  * this advances have run. */
 async function runDebounce() {
@@ -571,10 +575,6 @@ describe('reassigning', () => {
 // versus assigning — so ASSIGNABLE and runDebounce are reused rather than
 // duplicated.
 describe('mentions in the comment composer', () => {
-  function commentBox(): HTMLTextAreaElement {
-    return screen.getByPlaceholderText(/Comment…/i) as HTMLTextAreaElement;
-  }
-
   it('shows a popover of teammates when typing @', async () => {
     renderDrawer();
 
@@ -661,5 +661,97 @@ describe('mentions in the comment composer', () => {
     await waitFor(() =>
       expect(postJiraComment).toHaveBeenCalledWith('10421', 'Taking it.', []),
     );
+  });
+});
+
+describe('the comment composer formatting toolbar', () => {
+  function selectAll(box: HTMLTextAreaElement) {
+    box.setSelectionRange(0, box.value.length);
+  }
+
+  it('wraps a selection in ** when Bold is clicked', () => {
+    renderDrawer();
+    const box = commentBox();
+    fireEvent.change(box, { target: { value: 'important' } });
+    selectAll(box);
+
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'Bold' }));
+
+    expect(box.value).toBe('**important**');
+  });
+
+  it('toggles a bullet prefix off when the line already has one', () => {
+    renderDrawer();
+    const box = commentBox();
+    fireEvent.change(box, { target: { value: '- already a bullet' } });
+    box.setSelectionRange(3, 3);
+
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'Bullet list' }));
+
+    expect(box.value).toBe('already a bullet');
+  });
+
+  it('wraps a selection in a fenced code block', () => {
+    renderDrawer();
+    const box = commentBox();
+    fireEvent.change(box, { target: { value: 'const x = 1;' } });
+    selectAll(box);
+
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'Code block' }));
+
+    expect(box.value).toBe('```\nconst x = 1;\n```');
+  });
+
+  it('opens an emoji popover and inserts the picked emoji at the caret', () => {
+    renderDrawer();
+    const box = commentBox();
+    fireEvent.change(box, { target: { value: 'nice ' } });
+    box.setSelectionRange(5, 5);
+
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'Emoji' }));
+    fireEvent.mouseDown(screen.getByRole('button', { name: /thumbs up/i }));
+
+    expect(box.value).toBe('nice 👍');
+  });
+
+  it('attaches a file and links it into the draft at the caret', async () => {
+    jest.mocked(uploadJiraAttachment).mockResolvedValue({
+      canceled: false,
+      ticket: ticket({
+        attachments: [attachment({ id: '10099', fileName: 'screenshot.png' })],
+      }),
+    });
+    renderDrawer();
+    const box = commentBox();
+    fireEvent.change(box, { target: { value: 'see this: ' } });
+    box.setSelectionRange(10, 10);
+
+    fireEvent.mouseDown(
+      screen.getByRole('button', { name: 'Attach a file to this comment' }),
+    );
+
+    await waitFor(() =>
+      expect(box.value).toBe(
+        'see this: [📎 screenshot.png](https://waypoint123.atlassian.net/rest/api/3/attachment/content/10099) ',
+      ),
+    );
+    expect(onTicketUpdated).toHaveBeenCalled();
+  });
+
+  it('does not link anything when the attach dialog is cancelled', async () => {
+    jest
+      .mocked(uploadJiraAttachment)
+      .mockResolvedValue({ canceled: true, ticket: null });
+    renderDrawer();
+    const box = commentBox();
+    fireEvent.change(box, { target: { value: 'see this: ' } });
+
+    fireEvent.mouseDown(
+      screen.getByRole('button', { name: 'Attach a file to this comment' }),
+    );
+
+    await waitFor(() => expect(uploadJiraAttachment).toHaveBeenCalled());
+    expect(box.value).toBe('see this: ');
+    expect(onTicketUpdated).not.toHaveBeenCalled();
   });
 });

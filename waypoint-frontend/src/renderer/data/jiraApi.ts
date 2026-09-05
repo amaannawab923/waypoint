@@ -37,6 +37,9 @@ import type { Priority } from '@/types/entities';
 // back over IPC, and restating them here would just be a second copy to keep
 // in sync. Nothing at runtime is imported from src/main.
 import type {
+  JiraAdfAnyMark,
+  JiraAdfBlockNode,
+  JiraAdfInlineNode,
   JiraCommentBody,
   JiraPriorityOption as JiraWirePriorityOption,
   JiraWireAttachment,
@@ -610,45 +613,438 @@ export interface JiraMentionSpan {
  * structure `adfToPlainText` (main/jira/jiraMap.ts) already reconstructs a
  * `\n` from on the read side.
  */
-type JiraAdfInline = JiraCommentBody['content'][number]['content'][number];
+// -----------------------------------------------------------------------
+// Comment body: a lightweight-markdown subset -> ADF
+// -----------------------------------------------------------------------
+//
+// The composer's toolbar (JiraCommentComposer.tsx) wraps a selection in
+// markdown-style delimiters -- **bold**, _em_, ~~strike~~, `code`,
+// [text](url) -- and prefixes a line for block structure -- #/##/### for
+// headings, "- "/"* " for a bullet item, "1. " for an ordered item, "> "
+// for a quote, and a ``` fence for a code block. Everything below turns
+// that plain-text-plus-syntax draft into the ADF Jira's comment-create
+// endpoint needs, in the same spirit as `JiraMentionSpan` above: the
+// textarea only ever holds flat text, so structure is recovered from it at
+// the one point that matters, right before the comment is sent.
+//
+// This is not a Markdown implementation. It supports exactly the subset the
+// toolbar can produce, not nesting (bold-and-italic-together isn't detected
+// as one span), not escaping a literal delimiter character, and not a mark
+// pair split across two lines (every inline pattern below excludes `\n`,
+// since block structure -- including which lines merge into one list -- is
+// resolved one line at a time before any inline parsing runs).
 
-/** One line's worth of inline nodes, built by walking only the mentions that
- * fall entirely within [lineStart, lineEnd) — a `.reduce` rather than a loop
- * with a mutable cursor, so the same "where did the last node end" state
- * this needs to track threads through the accumulator instead. */
-function lineToInlineNodes(
+interface InlineRun {
+  start: number;
+  end: number;
+  contentStart: number;
+  contentEnd: number;
+  kind: 'strong' | 'em' | 'strike' | 'code' | 'link';
+  href?: string;
+  priority: number;
+}
+
+const INLINE_PATTERNS: {
+  kind: InlineRun['kind'];
+  re: RegExp;
+  priority: number;
+}[] = [
+  { kind: 'code', re: /`([^`\n]+)`/g, priority: 0 },
+  { kind: 'link', re: /\[([^\]\n]+)\]\(([^)\n]+)\)/g, priority: 1 },
+  { kind: 'strong', re: /\*\*([^\n]+?)\*\*/g, priority: 2 },
+  { kind: 'strike', re: /~~([^\n]+?)~~/g, priority: 3 },
+  { kind: 'em', re: /_([^\n]+?)_/g, priority: 4 },
+];
+
+const INLINE_DELIM_LENGTH: Record<InlineRun['kind'], number> = {
+  code: 1,
+  strong: 2,
+  strike: 2,
+  em: 1,
+  link: 0, // links are positioned from the match itself, not a symmetric delimiter
+};
+
+/**
+ * Every non-overlapping formatted span within [from, to) of `text`, in
+ * priority order when two candidates start at the same position -- a code
+ * span wins a tie over em/strong/strike, so `` `_not_italic_` `` stays one
+ * code span rather than also half-matching as italic underneath it.
+ */
+function findInlineRuns(text: string, from: number, to: number): InlineRun[] {
+  const slice = text.slice(from, to);
+  const candidates = INLINE_PATTERNS.flatMap(({ kind, re, priority }) =>
+    Array.from(slice.matchAll(re)).map((m): InlineRun => {
+      const start = from + (m.index ?? 0);
+      const end = start + m[0].length;
+      if (kind === 'link') {
+        return {
+          start,
+          end,
+          contentStart: start + 1,
+          contentEnd: start + 1 + m[1].length,
+          kind,
+          href: m[2],
+          priority,
+        };
+      }
+      const delim = INLINE_DELIM_LENGTH[kind];
+      return {
+        start,
+        end,
+        contentStart: start + delim,
+        contentEnd: end - delim,
+        kind,
+        priority,
+      };
+    }),
+  );
+  const sorted = [...candidates].sort(
+    (a, b) => a.start - b.start || a.priority - b.priority,
+  );
+  return sorted.reduce<InlineRun[]>((accepted, run) => {
+    const last = accepted[accepted.length - 1];
+    return last && run.start < last.end ? accepted : [...accepted, run];
+  }, []);
+}
+
+function textNode(text: string, marks: JiraAdfAnyMark[]): JiraAdfInlineNode {
+  return marks.length ? { type: 'text', text, marks } : { type: 'text', text };
+}
+
+/**
+ * Recursively walks [from, to) of `text`, emitting plain-text runs, marked
+ * runs (from `runs`) and mentions (from `mentions`) in document order.
+ * `activeMarks` accumulates as recursion descends into a run's own content
+ * -- today's pattern set never produces overlapping runs, so this recurses
+ * at most one level in practice, but threading marks through the
+ * accumulator is the natural shape regardless.
+ *
+ * A mention is never given marks, however deep the recursion: Jira's API
+ * rejects any mark on a mention node outright (live-confirmed; see
+ * `JiraAdfMentionNode`'s own comment in main/jira/jiraTypes.ts). Text on
+ * either side of a mention inside a bold run still bolds; the mention
+ * itself renders plain.
+ */
+function parseInlineRange(
   text: string,
+  from: number,
+  to: number,
+  activeMarks: JiraAdfAnyMark[],
+  mentions: JiraMentionSpan[],
+  runs: InlineRun[],
+): JiraAdfInlineNode[] {
+  if (from >= to) return [];
+
+  const nextRun = runs.find((r) => r.start >= from && r.start < to);
+  const nextMention = mentions.find((m) => m.start >= from && m.start < to);
+  const mentionIsNext =
+    nextMention && (!nextRun || nextMention.start < nextRun.start);
+
+  if (!nextRun && !nextMention) {
+    return [textNode(text.slice(from, to), activeMarks)];
+  }
+
+  if (mentionIsNext && nextMention) {
+    const before =
+      from < nextMention.start
+        ? [textNode(text.slice(from, nextMention.start), activeMarks)]
+        : [];
+    return [
+      ...before,
+      {
+        type: 'mention',
+        attrs: {
+          id: nextMention.accountId,
+          text: `@${nextMention.displayName}`,
+        },
+      },
+      ...parseInlineRange(
+        text,
+        nextMention.end,
+        to,
+        activeMarks,
+        mentions,
+        runs,
+      ),
+    ];
+  }
+
+  const run = nextRun as InlineRun;
+  const before =
+    from < run.start
+      ? [textNode(text.slice(from, run.start), activeMarks)]
+      : [];
+  const runMark: JiraAdfAnyMark =
+    run.kind === 'link'
+      ? { type: 'link', attrs: { href: run.href ?? '' } }
+      : { type: run.kind };
+  const inner = parseInlineRange(
+    text,
+    run.contentStart,
+    run.contentEnd,
+    [...activeMarks, runMark],
+    mentions,
+    runs,
+  );
+  return [
+    ...before,
+    ...inner,
+    ...parseInlineRange(text, run.end, to, activeMarks, mentions, runs),
+  ];
+}
+
+function inlineNodesForRange(
+  text: string,
+  contentStart: number,
+  contentEnd: number,
+  mentions: JiraMentionSpan[],
+): JiraAdfInlineNode[] {
+  const runs = findInlineRuns(text, contentStart, contentEnd);
+  return parseInlineRange(text, contentStart, contentEnd, [], mentions, runs);
+}
+
+interface ContentLine {
+  contentStart: number;
+  contentEnd: number;
+}
+
+type GroupedBlock =
+  | { type: 'paragraph'; line: ContentLine }
+  | { type: 'heading'; level: 1 | 2 | 3; line: ContentLine }
+  | { type: 'bulletList'; items: ContentLine[] }
+  | { type: 'orderedList'; items: ContentLine[] }
+  | { type: 'quote'; items: ContentLine[] }
+  | { type: 'codeBlock'; text: string };
+
+type LineKind =
+  | 'codeFence'
+  | 'heading1'
+  | 'heading2'
+  | 'heading3'
+  | 'bullet'
+  | 'ordered'
+  | 'quote'
+  | 'paragraph';
+
+const LIST_BLOCK_TYPE: Record<
+  'bullet' | 'ordered' | 'quote',
+  'bulletList' | 'orderedList' | 'quote'
+> = {
+  bullet: 'bulletList',
+  ordered: 'orderedList',
+  quote: 'quote',
+};
+
+function classifyLine(
+  lineText: string,
   lineStart: number,
   lineEnd: number,
-  lineMentions: JiraMentionSpan[],
-): JiraAdfInline[] {
-  const { nodes, cursor } = lineMentions.reduce<{
-    nodes: JiraAdfInline[];
-    cursor: number;
-  }>(
-    (acc, mention) => ({
-      nodes: [
-        ...acc.nodes,
-        ...(mention.start > acc.cursor
-          ? [
-              {
-                type: 'text' as const,
-                text: text.slice(acc.cursor, mention.start),
-              },
-            ]
-          : []),
-        {
-          type: 'mention' as const,
-          attrs: { id: mention.accountId, text: `@${mention.displayName}` },
-        },
-      ],
-      cursor: mention.end,
-    }),
-    { nodes: [], cursor: lineStart },
-  );
-  return cursor < lineEnd
-    ? [...nodes, { type: 'text', text: text.slice(cursor, lineEnd) }]
-    : nodes;
+): { kind: LineKind; contentStart: number; contentEnd: number } {
+  if (/^```/.test(lineText)) {
+    return { kind: 'codeFence', contentStart: lineStart, contentEnd: lineEnd };
+  }
+  const heading = lineText.match(/^(#{1,3})\s+/);
+  if (heading) {
+    return {
+      kind: `heading${heading[1].length}` as LineKind,
+      contentStart: lineStart + heading[0].length,
+      contentEnd: lineEnd,
+    };
+  }
+  const bullet = lineText.match(/^[-*]\s+/);
+  if (bullet) {
+    return {
+      kind: 'bullet',
+      contentStart: lineStart + bullet[0].length,
+      contentEnd: lineEnd,
+    };
+  }
+  const ordered = lineText.match(/^\d+\.\s+/);
+  if (ordered) {
+    return {
+      kind: 'ordered',
+      contentStart: lineStart + ordered[0].length,
+      contentEnd: lineEnd,
+    };
+  }
+  const quote = lineText.match(/^>\s?/);
+  if (quote) {
+    return {
+      kind: 'quote',
+      contentStart: lineStart + quote[0].length,
+      contentEnd: lineEnd,
+    };
+  }
+  return { kind: 'paragraph', contentStart: lineStart, contentEnd: lineEnd };
+}
+
+/**
+ * Groups `text`'s lines into blocks: consecutive bullet/ordered/quote lines
+ * merge into one list/quote, a ``` line opens a code fence that consumes
+ * every following line verbatim (no inline parsing, no mentions) until a
+ * closing ```, and anything else is its own heading or paragraph block.
+ *
+ * A `.reduce` over the classified lines, not a loop with a mutable "current
+ * list" variable -- the accumulator's `blocks` array and in-flight `fence`
+ * buffer carry exactly that state instead.
+ */
+interface LineGroupState {
+  blocks: GroupedBlock[];
+  fence: string[] | null;
+}
+
+interface RawLine {
+  lineText: string;
+  lineStart: number;
+  lineEnd: number;
+}
+
+/** One step of `groupLinesIntoBlocks`'s fold, named and explicitly typed
+ * rather than an inline `.reduce()` callback: TypeScript's overload
+ * resolution for a generic `.reduce<U>()` can silently mis-infer the
+ * accumulator's type when the callback is this long and every branch
+ * returns a different-looking object literal, and a named function with a
+ * declared return type sidesteps that ambiguity entirely rather than
+ * fighting it with more type annotations inline. */
+function reduceLineIntoBlocks(
+  acc: LineGroupState,
+  raw: RawLine,
+): LineGroupState {
+  const { lineText, lineStart, lineEnd } = raw;
+  if (acc.fence !== null) {
+    if (/^```/.test(lineText)) {
+      return {
+        blocks: [
+          ...acc.blocks,
+          { type: 'codeBlock', text: acc.fence.join('\n') },
+        ],
+        fence: null,
+      };
+    }
+    return { blocks: acc.blocks, fence: [...acc.fence, lineText] };
+  }
+
+  const cls = classifyLine(lineText, lineStart, lineEnd);
+  if (cls.kind === 'codeFence') return { blocks: acc.blocks, fence: [] };
+
+  const last = acc.blocks[acc.blocks.length - 1];
+  const line: ContentLine = {
+    contentStart: cls.contentStart,
+    contentEnd: cls.contentEnd,
+  };
+
+  if (cls.kind === 'bullet' || cls.kind === 'ordered' || cls.kind === 'quote') {
+    const listType = LIST_BLOCK_TYPE[cls.kind];
+    if (last && last.type === listType) {
+      const merged = { ...last, items: [...last.items, line] };
+      return { blocks: [...acc.blocks.slice(0, -1), merged], fence: null };
+    }
+    return {
+      blocks: [...acc.blocks, { type: listType, items: [line] }],
+      fence: null,
+    };
+  }
+
+  if (
+    cls.kind === 'heading1' ||
+    cls.kind === 'heading2' ||
+    cls.kind === 'heading3'
+  ) {
+    const level = Number(cls.kind.slice(-1)) as 1 | 2 | 3;
+    return {
+      blocks: [...acc.blocks, { type: 'heading', level, line }],
+      fence: null,
+    };
+  }
+
+  return {
+    blocks: [...acc.blocks, { type: 'paragraph', line }],
+    fence: null,
+  };
+}
+
+function groupLinesIntoBlocks(text: string): GroupedBlock[] {
+  let offset = 0;
+  const lines: RawLine[] = text.split('\n').map((lineText) => {
+    const lineStart = offset;
+    const lineEnd = lineStart + lineText.length;
+    offset = lineEnd + 1; // +1 skips the '\n' that String.split consumed
+    return { lineText, lineStart, lineEnd };
+  });
+
+  const initial: LineGroupState = { blocks: [], fence: null };
+  const { blocks, fence } = lines.reduce(reduceLineIntoBlocks, initial);
+
+  // An unterminated fence (the user never typed a closing ```) is flushed as
+  // a code block rather than silently dropped -- whatever they typed still
+  // posts, just without the fence having been "completed".
+  return fence !== null
+    ? [...blocks, { type: 'codeBlock', text: fence.join('\n') }]
+    : blocks;
+}
+
+function blockToAdf(
+  block: GroupedBlock,
+  text: string,
+  mentions: JiraMentionSpan[],
+): JiraAdfBlockNode {
+  if (block.type === 'paragraph') {
+    return {
+      type: 'paragraph',
+      content: inlineNodesForRange(
+        text,
+        block.line.contentStart,
+        block.line.contentEnd,
+        mentions,
+      ),
+    };
+  }
+  if (block.type === 'heading') {
+    return {
+      type: 'heading',
+      attrs: { level: block.level },
+      content: inlineNodesForRange(
+        text,
+        block.line.contentStart,
+        block.line.contentEnd,
+        mentions,
+      ),
+    };
+  }
+  if (block.type === 'bulletList' || block.type === 'orderedList') {
+    return {
+      type: block.type,
+      content: block.items.map((item) => ({
+        type: 'listItem' as const,
+        content: [
+          {
+            type: 'paragraph' as const,
+            content: inlineNodesForRange(
+              text,
+              item.contentStart,
+              item.contentEnd,
+              mentions,
+            ),
+          },
+        ],
+      })),
+    };
+  }
+  if (block.type === 'quote') {
+    return {
+      type: 'blockquote',
+      content: block.items.map((item) => ({
+        type: 'paragraph' as const,
+        content: inlineNodesForRange(
+          text,
+          item.contentStart,
+          item.contentEnd,
+          mentions,
+        ),
+      })),
+    };
+  }
+  return { type: 'codeBlock', content: [{ type: 'text', text: block.text }] };
 }
 
 export function buildCommentAdf(
@@ -659,36 +1055,11 @@ export function buildCommentAdf(
     .filter((m) => text.slice(m.start, m.end) === `@${m.displayName}`)
     .sort((a, b) => a.start - b.start);
 
-  const { paragraphs } = text.split('\n').reduce<{
-    paragraphs: JiraCommentBody['content'];
-    lineStart: number;
-  }>(
-    (acc, line) => {
-      const lineEnd = acc.lineStart + line.length;
-      const lineMentions = validMentions.filter(
-        (m) => m.start >= acc.lineStart && m.end <= lineEnd,
-      );
-      return {
-        paragraphs: [
-          ...acc.paragraphs,
-          {
-            type: 'paragraph',
-            content: lineToInlineNodes(
-              text,
-              acc.lineStart,
-              lineEnd,
-              lineMentions,
-            ),
-          },
-        ],
-        // +1 skips the '\n' that String.split consumed.
-        lineStart: lineEnd + 1,
-      };
-    },
-    { paragraphs: [], lineStart: 0 },
+  const content = groupLinesIntoBlocks(text).map((block) =>
+    blockToAdf(block, text, validMentions),
   );
 
-  return { type: 'doc', version: 1, content: paragraphs };
+  return { type: 'doc', version: 1, content };
 }
 
 /**

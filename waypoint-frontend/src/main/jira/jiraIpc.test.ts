@@ -533,6 +533,246 @@ describe('per-ticket channels', () => {
 
       expect(postCommentMock).toHaveBeenCalledWith('10421', mentionBody);
     });
+
+    it('passes a text node carrying a strong mark straight through', async () => {
+      postCommentMock.mockResolvedValue({ ok: true, value: { id: '10504' } });
+      const body = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: 'bold', marks: [{ type: 'strong' }] },
+            ],
+          },
+        ],
+      };
+
+      await getHandler('jira:comments:post')({}, { ticketId: '10421', body });
+
+      expect(postCommentMock).toHaveBeenCalledWith('10421', body);
+    });
+
+    it('passes a text node carrying a link mark straight through', async () => {
+      postCommentMock.mockResolvedValue({ ok: true, value: { id: '10505' } });
+      const body = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              {
+                type: 'text',
+                text: 'the docs',
+                marks: [
+                  { type: 'link', attrs: { href: 'https://example.com' } },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+
+      await getHandler('jira:comments:post')({}, { ticketId: '10421', body });
+
+      expect(postCommentMock).toHaveBeenCalledWith('10421', body);
+    });
+
+    it('refuses a link mark with a non-string href', async () => {
+      expect(
+        await getHandler('jira:comments:post')(
+          {},
+          {
+            ticketId: '10421',
+            body: {
+              type: 'doc',
+              version: 1,
+              content: [
+                {
+                  type: 'paragraph',
+                  content: [
+                    {
+                      type: 'text',
+                      text: 'bad link',
+                      marks: [{ type: 'link', attrs: { href: 42 } }],
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(postCommentMock).not.toHaveBeenCalled();
+    });
+
+    it("refuses a mention node carrying marks, matching Jira's own 400", async () => {
+      expect(
+        await getHandler('jira:comments:post')(
+          {},
+          {
+            ticketId: '10421',
+            body: {
+              type: 'doc',
+              version: 1,
+              content: [
+                {
+                  type: 'paragraph',
+                  content: [
+                    {
+                      type: 'mention',
+                      attrs: { id: '712020:6d51d3e3-1111', text: '@Sam Lee' },
+                      marks: [{ type: 'strong' }],
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(postCommentMock).not.toHaveBeenCalled();
+    });
+
+    it('passes a heading straight through', async () => {
+      postCommentMock.mockResolvedValue({ ok: true, value: { id: '10506' } });
+      const body = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'heading',
+            attrs: { level: 2 },
+            content: [{ type: 'text', text: 'Section' }],
+          },
+        ],
+      };
+
+      await getHandler('jira:comments:post')({}, { ticketId: '10421', body });
+
+      expect(postCommentMock).toHaveBeenCalledWith('10421', body);
+    });
+
+    it('refuses a heading with an out-of-range level', async () => {
+      expect(
+        await getHandler('jira:comments:post')(
+          {},
+          {
+            ticketId: '10421',
+            body: {
+              type: 'doc',
+              version: 1,
+              content: [
+                {
+                  type: 'heading',
+                  attrs: { level: 7 },
+                  content: [{ type: 'text', text: 'Section' }],
+                },
+              ],
+            },
+          },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(postCommentMock).not.toHaveBeenCalled();
+    });
+
+    it('passes a bullet list straight through', async () => {
+      postCommentMock.mockResolvedValue({ ok: true, value: { id: '10507' } });
+      const body = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'bulletList',
+            content: [
+              {
+                type: 'listItem',
+                content: [
+                  {
+                    type: 'paragraph',
+                    content: [{ type: 'text', text: 'item' }],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+
+      await getHandler('jira:comments:post')({}, { ticketId: '10421', body });
+
+      expect(postCommentMock).toHaveBeenCalledWith('10421', body);
+    });
+
+    it('passes a blockquote and a codeBlock straight through', async () => {
+      postCommentMock.mockResolvedValue({ ok: true, value: { id: '10508' } });
+      const body = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'blockquote',
+            content: [
+              {
+                type: 'paragraph',
+                content: [{ type: 'text', text: 'a quote' }],
+              },
+            ],
+          },
+          {
+            type: 'codeBlock',
+            content: [{ type: 'text', text: 'const x = 1;' }],
+          },
+        ],
+      };
+
+      await getHandler('jira:comments:post')({}, { ticketId: '10421', body });
+
+      expect(postCommentMock).toHaveBeenCalledWith('10421', body);
+    });
+
+    it('refuses a codeBlock whose content carries a mark', async () => {
+      expect(
+        await getHandler('jira:comments:post')(
+          {},
+          {
+            ticketId: '10421',
+            body: {
+              type: 'doc',
+              version: 1,
+              content: [
+                {
+                  type: 'codeBlock',
+                  content: [
+                    { type: 'text', text: 'x', marks: [{ type: 'strong' }] },
+                  ],
+                },
+              ],
+            },
+          },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(postCommentMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses an unrecognized block type', async () => {
+      expect(
+        await getHandler('jira:comments:post')(
+          {},
+          {
+            ticketId: '10421',
+            body: {
+              type: 'doc',
+              version: 1,
+              content: [{ type: 'panel', content: [] }],
+            },
+          },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(postCommentMock).not.toHaveBeenCalled();
+    });
   });
 
   /**

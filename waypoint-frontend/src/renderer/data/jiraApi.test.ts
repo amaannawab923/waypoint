@@ -691,6 +691,214 @@ describe('comments', () => {
   });
 });
 
+// buildCommentAdf's markdown-lite subset -- what JiraCommentComposer.tsx's
+// toolbar produces, not general Markdown. Exercised through postJiraComment
+// like every other case above, so a regression here is caught at the same
+// boundary a real post would fail at.
+describe('comment formatting', () => {
+  async function postAndCaptureBody(text: string) {
+    const api = freshApi();
+    bridge.postComment.mockResolvedValue({
+      ok: true,
+      value: {
+        id: 'c1',
+        ticketId: '10421',
+        authorName: 'Max Chen',
+        body: text,
+        createdAt: '2026-09-01T10:00:00.000Z',
+      },
+    });
+    await api.postJiraComment('10421', text);
+    return bridge.postComment.mock.calls[0][0].body;
+  }
+
+  it('wraps **bold** as a strong mark', async () => {
+    expect(await postAndCaptureBody('this is **bold** text')).toEqual({
+      type: 'doc',
+      version: 1,
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'this is ' },
+            { type: 'text', text: 'bold', marks: [{ type: 'strong' }] },
+            { type: 'text', text: ' text' },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('wraps _em_, ~~strike~~ and `code` as their own marks', async () => {
+    const body = await postAndCaptureBody('_em_ ~~strike~~ `code`');
+    expect(body.content[0].content).toEqual([
+      { type: 'text', text: 'em', marks: [{ type: 'em' }] },
+      { type: 'text', text: ' ' },
+      { type: 'text', text: 'strike', marks: [{ type: 'strike' }] },
+      { type: 'text', text: ' ' },
+      { type: 'text', text: 'code', marks: [{ type: 'code' }] },
+    ]);
+  });
+
+  it('turns [text](url) into a link mark', async () => {
+    const body = await postAndCaptureBody(
+      'see [the docs](https://example.com)',
+    );
+    expect(body.content[0].content).toEqual([
+      { type: 'text', text: 'see ' },
+      {
+        type: 'text',
+        text: 'the docs',
+        marks: [{ type: 'link', attrs: { href: 'https://example.com' } }],
+      },
+    ]);
+  });
+
+  it('never puts a mark on a mention, even inside a bold run', async () => {
+    const api = freshApi();
+    bridge.postComment.mockResolvedValue({
+      ok: true,
+      value: {
+        id: 'c1',
+        ticketId: '10421',
+        authorName: 'Max Chen',
+        body: '**hi @Sam Lee**',
+        createdAt: '2026-09-01T10:00:00.000Z',
+      },
+    });
+
+    // "**hi @Sam Lee**" -- the mention span covers [5, 13).
+    await api.postJiraComment('10421', '**hi @Sam Lee**', [
+      { start: 5, end: 13, accountId: 'acct-sam', displayName: 'Sam Lee' },
+    ]);
+
+    const { body } = bridge.postComment.mock.calls[0][0];
+    expect(body.content[0].content).toEqual([
+      { type: 'text', text: 'hi ', marks: [{ type: 'strong' }] },
+      { type: 'mention', attrs: { id: 'acct-sam', text: '@Sam Lee' } },
+    ]);
+  });
+
+  it('turns a "# " line into a heading', async () => {
+    const body = await postAndCaptureBody('# Section title');
+    expect(body.content).toEqual([
+      {
+        type: 'heading',
+        attrs: { level: 1 },
+        content: [{ type: 'text', text: 'Section title' }],
+      },
+    ]);
+  });
+
+  it('merges consecutive "- " lines into one bullet list', async () => {
+    const body = await postAndCaptureBody('- first\n- second');
+    expect(body.content).toEqual([
+      {
+        type: 'bulletList',
+        content: [
+          {
+            type: 'listItem',
+            content: [
+              { type: 'paragraph', content: [{ type: 'text', text: 'first' }] },
+            ],
+          },
+          {
+            type: 'listItem',
+            content: [
+              {
+                type: 'paragraph',
+                content: [{ type: 'text', text: 'second' }],
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('merges consecutive "1. " lines into one ordered list', async () => {
+    const body = await postAndCaptureBody('1. first\n1. second');
+    expect(body.content).toEqual([
+      {
+        type: 'orderedList',
+        content: [
+          {
+            type: 'listItem',
+            content: [
+              { type: 'paragraph', content: [{ type: 'text', text: 'first' }] },
+            ],
+          },
+          {
+            type: 'listItem',
+            content: [
+              {
+                type: 'paragraph',
+                content: [{ type: 'text', text: 'second' }],
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('turns a "> " line into a blockquote', async () => {
+    const body = await postAndCaptureBody('> a real quote');
+    expect(body.content).toEqual([
+      {
+        type: 'blockquote',
+        content: [
+          {
+            type: 'paragraph',
+            content: [{ type: 'text', text: 'a real quote' }],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('ends a list when a non-list line follows, starting a new block', async () => {
+    const body = await postAndCaptureBody('- item one\nback to prose');
+    expect(body.content).toEqual([
+      {
+        type: 'bulletList',
+        content: [
+          {
+            type: 'listItem',
+            content: [
+              {
+                type: 'paragraph',
+                content: [{ type: 'text', text: 'item one' }],
+              },
+            ],
+          },
+        ],
+      },
+      { type: 'paragraph', content: [{ type: 'text', text: 'back to prose' }] },
+    ]);
+  });
+
+  it('collects a fenced code block verbatim, with no inline formatting inside it', async () => {
+    const body = await postAndCaptureBody('```\nconst x = **not bold**;\n```');
+    expect(body.content).toEqual([
+      {
+        type: 'codeBlock',
+        content: [{ type: 'text', text: 'const x = **not bold**;' }],
+      },
+    ]);
+  });
+
+  it('flushes an unterminated fence as a code block rather than losing it', async () => {
+    const body = await postAndCaptureBody('```\nno closing fence');
+    expect(body.content).toEqual([
+      {
+        type: 'codeBlock',
+        content: [{ type: 'text', text: 'no closing fence' }],
+      },
+    ]);
+  });
+});
+
 describe('the Copilot rail', () => {
   // These used to return a hand-written ENG-421 proposal from the design
   // mockup. Against a live site that names an issue the user does not have,

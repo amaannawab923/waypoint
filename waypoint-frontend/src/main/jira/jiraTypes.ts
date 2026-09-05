@@ -230,20 +230,38 @@ export interface JiraWireTicket {
 
 /**
  * The ADF shape a comment is now written as — the renderer's own composer
- * builds one of these (see jiraApi.ts's `buildCommentAdf`) so that a
- * mention typed there becomes a real `mention` node carrying an accountId,
- * not eleven characters of "@Display Name" that notify nobody. Deliberately
- * narrow: only the two inline node kinds a plain-text-plus-mentions composer
- * can ever produce, not the general ADF schema.
+ * builds one of these (see jiraApi.ts's `buildCommentAdf`) from its
+ * lightweight-markdown draft, a toolbar-driven subset chosen to match what
+ * Jira's own comment editor's toolbar offers, not general Markdown. Narrow
+ * by design: exactly the node and mark kinds that subset can ever produce,
+ * not the general ADF schema.
  */
+export type JiraAdfMarkType = 'strong' | 'em' | 'strike' | 'code';
+
+export interface JiraAdfMark {
+  type: JiraAdfMarkType;
+}
+
+export interface JiraAdfLinkMark {
+  type: 'link';
+  attrs: { href: string };
+}
+
+export type JiraAdfAnyMark = JiraAdfMark | JiraAdfLinkMark;
+
 export interface JiraAdfTextNode {
   type: 'text';
   text: string;
+  marks?: JiraAdfAnyMark[];
 }
 
 export interface JiraAdfMentionNode {
   type: 'mention';
   attrs: { id: string; text: string };
+  // Deliberately no `marks` field: live-confirmed that Jira's comment-create
+  // endpoint 400s (INVALID_INPUT) on a mention node carrying any mark at
+  // all, while every other node/mark combination here succeeds. A mention
+  // inside a bold run renders unbold; the text around it still bolds.
 }
 
 export type JiraAdfInlineNode = JiraAdfTextNode | JiraAdfMentionNode;
@@ -253,10 +271,51 @@ export interface JiraAdfParagraph {
   content: JiraAdfInlineNode[];
 }
 
+export interface JiraAdfHeading {
+  type: 'heading';
+  attrs: { level: 1 | 2 | 3 };
+  content: JiraAdfInlineNode[];
+}
+
+export interface JiraAdfListItem {
+  type: 'listItem';
+  content: JiraAdfParagraph[];
+}
+
+export interface JiraAdfBulletList {
+  type: 'bulletList';
+  content: JiraAdfListItem[];
+}
+
+export interface JiraAdfOrderedList {
+  type: 'orderedList';
+  content: JiraAdfListItem[];
+}
+
+export interface JiraAdfBlockquote {
+  type: 'blockquote';
+  content: JiraAdfParagraph[];
+}
+
+/** Jira's codeBlock content is always plain text -- no marks, no mentions.
+ * A code fence is meant to render exactly what's inside it, literally. */
+export interface JiraAdfCodeBlock {
+  type: 'codeBlock';
+  content: JiraAdfTextNode[];
+}
+
+export type JiraAdfBlockNode =
+  | JiraAdfParagraph
+  | JiraAdfHeading
+  | JiraAdfBulletList
+  | JiraAdfOrderedList
+  | JiraAdfBlockquote
+  | JiraAdfCodeBlock;
+
 export interface JiraCommentBody {
   type: 'doc';
   version: 1;
-  content: JiraAdfParagraph[];
+  content: JiraAdfBlockNode[];
 }
 
 export interface JiraWireComment {

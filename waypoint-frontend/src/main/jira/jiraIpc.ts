@@ -10,7 +10,17 @@ import * as client from './jiraClient';
 import * as files from './jiraFiles';
 import { normalizeJiraSite } from './jiraMap';
 import type {
+  JiraAdfAnyMark,
+  JiraAdfBlockNode,
+  JiraAdfBlockquote,
+  JiraAdfBulletList,
+  JiraAdfCodeBlock,
+  JiraAdfHeading,
   JiraAdfInlineNode,
+  JiraAdfListItem,
+  JiraAdfOrderedList,
+  JiraAdfParagraph,
+  JiraAdfTextNode,
   JiraCommentBody,
   JiraConnectionSnapshot,
   JiraFailure,
@@ -92,80 +102,227 @@ function readFieldValues(value: unknown): Record<string, string> {
  * The renderer's composer builds this shape itself (see jiraApi.ts's
  * `buildCommentAdf`), so this isn't validating against a hostile author —
  * it's the same boundary rule every other channel here follows: nothing
- * caller-supplied reaches `client.postComment`'s network call unchecked. Only
- * the two node kinds the composer can ever produce survive; anything else
- * (an unrecognized node `type`, a mention missing its `attrs.id`, a
- * non-string `text`) is dropped rather than forwarded, so a malformed doc
- * fails here with a clear message instead of as an opaque 400 from Jira.
+ * caller-supplied reaches `client.postComment`'s network call unchecked.
+ * Only the node, mark and block kinds the composer's markdown-lite subset
+ * can ever produce survive; anything else is dropped rather than forwarded,
+ * so a malformed doc fails here with a clear message instead of an opaque
+ * 400 from Jira.
+ *
+ * One rule threads through every reader below and is not incidental: a
+ * `mention` node never carries `marks`, on read or on write. Live-confirmed
+ * against the real API that Jira's comment-create endpoint 400s on a bold
+ * mention while every other combination here succeeds — so a mention with a
+ * `marks` array attached is treated the same as any other malformed node
+ * rather than silently stripped, keeping this reader's contract "produces
+ * exactly what it validates" rather than quietly rewriting caller input.
  */
-function readCommentBody(value: unknown): JiraCommentBody | null {
-  if (!value || typeof value !== 'object') return null;
-  const doc = value as Record<string, unknown>;
-  if (doc.type !== 'doc' || !Array.isArray(doc.content)) return null;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
 
-  const content = doc.content.map(
-    (
-      rawParagraph,
-    ): {
-      type: 'paragraph';
-      content: JiraAdfInlineNode[];
-    } | null => {
-      if (
-        !rawParagraph ||
-        typeof rawParagraph !== 'object' ||
-        (rawParagraph as Record<string, unknown>).type !== 'paragraph' ||
-        !Array.isArray((rawParagraph as Record<string, unknown>).content)
-      ) {
-        return null;
-      }
-      const inline = (
-        (rawParagraph as Record<string, unknown>).content as unknown[]
-      ).map((rawNode): JiraAdfInlineNode | null => {
-        if (!rawNode || typeof rawNode !== 'object') return null;
-        const node = rawNode as Record<string, unknown>;
-        if (node.type === 'text' && typeof node.text === 'string') {
-          return { type: 'text', text: node.text };
-        }
-        if (
-          node.type === 'mention' &&
-          node.attrs &&
-          typeof node.attrs === 'object' &&
-          typeof (node.attrs as Record<string, unknown>).id === 'string' &&
-          typeof (node.attrs as Record<string, unknown>).text === 'string'
-        ) {
-          const attrs = node.attrs as Record<string, unknown>;
-          return {
-            type: 'mention',
-            attrs: { id: attrs.id as string, text: attrs.text as string },
-          };
-        }
-        return null;
-      });
-      if (inline.some((n) => n === null)) return null;
-      return { type: 'paragraph', content: inline as JiraAdfInlineNode[] };
-    },
+function readMark(raw: unknown): JiraAdfAnyMark | null {
+  if (!isRecord(raw)) return null;
+  if (
+    raw.type === 'strong' ||
+    raw.type === 'em' ||
+    raw.type === 'strike' ||
+    raw.type === 'code'
+  ) {
+    return { type: raw.type };
+  }
+  if (
+    raw.type === 'link' &&
+    isRecord(raw.attrs) &&
+    typeof raw.attrs.href === 'string'
+  ) {
+    return { type: 'link', attrs: { href: raw.attrs.href } };
+  }
+  return null;
+}
+
+/** `undefined` (no `marks` key at all) is valid and means "no marks" — the
+ * common case for plain text and the only legal state for a mention. An
+ * absent key and an explicit `marks: []` are both accepted and treated
+ * alike; only a present-but-invalid entry fails the whole node. */
+function readOptionalMarks(raw: unknown): JiraAdfAnyMark[] | null | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) return null;
+  const marks = raw.map(readMark);
+  return marks.some((m) => m === null) ? null : (marks as JiraAdfAnyMark[]);
+}
+
+function readInlineNode(raw: unknown): JiraAdfInlineNode | null {
+  if (!isRecord(raw)) return null;
+  if (raw.type === 'text' && typeof raw.text === 'string') {
+    const marks = readOptionalMarks(raw.marks);
+    if (marks === null) return null;
+    return marks
+      ? { type: 'text', text: raw.text, marks }
+      : { type: 'text', text: raw.text };
+  }
+  if (
+    raw.type === 'mention' &&
+    raw.marks === undefined &&
+    isRecord(raw.attrs) &&
+    typeof raw.attrs.id === 'string' &&
+    typeof raw.attrs.text === 'string'
+  ) {
+    return {
+      type: 'mention',
+      attrs: { id: raw.attrs.id, text: raw.attrs.text },
+    };
+  }
+  return null;
+}
+
+function readInlineContent(raw: unknown): JiraAdfInlineNode[] | null {
+  if (!Array.isArray(raw)) return null;
+  const nodes = raw.map(readInlineNode);
+  return nodes.some((n) => n === null) ? null : (nodes as JiraAdfInlineNode[]);
+}
+
+function readParagraph(raw: unknown): JiraAdfParagraph | null {
+  if (!isRecord(raw) || raw.type !== 'paragraph') return null;
+  const content = readInlineContent(raw.content);
+  return content ? { type: 'paragraph', content } : null;
+}
+
+function readHeading(raw: unknown): JiraAdfHeading | null {
+  if (!isRecord(raw) || raw.type !== 'heading') return null;
+  const level = isRecord(raw.attrs) ? raw.attrs.level : null;
+  if (level !== 1 && level !== 2 && level !== 3) return null;
+  const content = readInlineContent(raw.content);
+  return content ? { type: 'heading', attrs: { level }, content } : null;
+}
+
+function readListItem(raw: unknown): JiraAdfListItem | null {
+  if (
+    !isRecord(raw) ||
+    raw.type !== 'listItem' ||
+    !Array.isArray(raw.content)
+  ) {
+    return null;
+  }
+  const paragraphs = raw.content.map(readParagraph);
+  return paragraphs.some((p) => p === null)
+    ? null
+    : { type: 'listItem', content: paragraphs as JiraAdfParagraph[] };
+}
+
+function readList(
+  raw: unknown,
+  kind: 'bulletList' | 'orderedList',
+): JiraAdfBulletList | JiraAdfOrderedList | null {
+  if (!isRecord(raw) || raw.type !== kind || !Array.isArray(raw.content)) {
+    return null;
+  }
+  const items = raw.content.map(readListItem);
+  return items.some((i) => i === null)
+    ? null
+    : { type: kind, content: items as JiraAdfListItem[] };
+}
+
+function readBlockquote(raw: unknown): JiraAdfBlockquote | null {
+  if (
+    !isRecord(raw) ||
+    raw.type !== 'blockquote' ||
+    !Array.isArray(raw.content)
+  ) {
+    return null;
+  }
+  const paragraphs = raw.content.map(readParagraph);
+  return paragraphs.some((p) => p === null)
+    ? null
+    : { type: 'blockquote', content: paragraphs as JiraAdfParagraph[] };
+}
+
+/** A code fence's content is plain text only -- no marks, no mentions, so
+ * this reads `text` nodes directly rather than through `readInlineNode`,
+ * which would happily accept a mark or a mention that Jira's own codeBlock
+ * schema does not represent. */
+function readCodeBlock(raw: unknown): JiraAdfCodeBlock | null {
+  if (
+    !isRecord(raw) ||
+    raw.type !== 'codeBlock' ||
+    !Array.isArray(raw.content)
+  ) {
+    return null;
+  }
+  const lines = raw.content.map((node): JiraAdfTextNode | null =>
+    isRecord(node) &&
+    node.type === 'text' &&
+    typeof node.text === 'string' &&
+    node.marks === undefined
+      ? { type: 'text', text: node.text }
+      : null,
   );
-  if (content.some((p) => p === null)) return null;
+  return lines.some((l) => l === null)
+    ? null
+    : { type: 'codeBlock', content: lines as JiraAdfTextNode[] };
+}
 
-  return {
-    type: 'doc',
-    version: 1,
-    content: content as { type: 'paragraph'; content: JiraAdfInlineNode[] }[],
-  };
+function readBlockNode(raw: unknown): JiraAdfBlockNode | null {
+  if (!isRecord(raw)) return null;
+  switch (raw.type) {
+    case 'paragraph':
+      return readParagraph(raw);
+    case 'heading':
+      return readHeading(raw);
+    case 'bulletList':
+      return readList(raw, 'bulletList');
+    case 'orderedList':
+      return readList(raw, 'orderedList');
+    case 'blockquote':
+      return readBlockquote(raw);
+    case 'codeBlock':
+      return readCodeBlock(raw);
+    default:
+      return null;
+  }
+}
+
+function readCommentBody(value: unknown): JiraCommentBody | null {
+  if (
+    !isRecord(value) ||
+    value.type !== 'doc' ||
+    !Array.isArray(value.content)
+  ) {
+    return null;
+  }
+  const content = value.content.map(readBlockNode);
+  if (content.some((b) => b === null)) return null;
+  return { type: 'doc', version: 1, content: content as JiraAdfBlockNode[] };
+}
+
+function inlineHasContent(nodes: JiraAdfInlineNode[]): boolean {
+  return nodes.some((n) => n.type === 'mention' || n.text.trim().length > 0);
 }
 
 /** Whether a validated comment body has anything a user would recognize as
- * content — at least one non-blank text run or one mention. A doc made of
- * empty paragraphs is what an all-whitespace draft turns into once trimmed
- * paragraph-by-paragraph, and posting that to Jira is the same empty-comment
- * mistake `readString`'s truthiness check already guards against elsewhere on
- * this channel. */
+ * content — at least one non-blank text run or one mention, anywhere in the
+ * (possibly nested) block structure. A doc made of empty paragraphs is what
+ * an all-whitespace draft turns into once trimmed block-by-block, and
+ * posting that to Jira is the same empty-comment mistake `readString`'s
+ * truthiness check already guards against elsewhere on this channel. */
 function commentBodyHasContent(body: JiraCommentBody): boolean {
-  return body.content.some((paragraph) =>
-    paragraph.content.some(
-      (node) => node.type === 'mention' || node.text.trim().length > 0,
-    ),
-  );
+  return body.content.some((block) => {
+    switch (block.type) {
+      case 'paragraph':
+      case 'heading':
+        return inlineHasContent(block.content);
+      case 'bulletList':
+      case 'orderedList':
+        return block.content.some((item) =>
+          item.content.some((p) => inlineHasContent(p.content)),
+        );
+      case 'blockquote':
+        return block.content.some((p) => inlineHasContent(p.content));
+      case 'codeBlock':
+        return block.content.some((t) => t.text.trim().length > 0);
+      default:
+        return false;
+    }
+  });
 }
 
 /**
