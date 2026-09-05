@@ -13,7 +13,9 @@ jest.mock('@/data/jiraApi', () => ({
   getJiraConnectionStatus: jest.fn(),
 }));
 
-function status(overrides: Partial<JiraConnectionStatus> = {}): JiraConnectionStatus {
+function status(
+  overrides: Partial<JiraConnectionStatus> = {},
+): JiraConnectionStatus {
   return {
     connected: true,
     accountName: 'Max Chen',
@@ -92,7 +94,9 @@ describe('jiraStore', () => {
   });
 
   it('useLoadedJiraConnection fetches once on mount and feeds the shared store', async () => {
-    jest.mocked(getJiraConnectionStatus).mockResolvedValue(status({ issueCount: 9 }));
+    jest
+      .mocked(getJiraConnectionStatus)
+      .mockResolvedValue(status({ issueCount: 9 }));
 
     const { result } = renderHook(() => useLoadedJiraConnection());
     await act(async () => {});
