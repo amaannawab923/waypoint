@@ -1336,82 +1336,102 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: Connect, then go offline (or revoke the token). Navigate away from My Jira and back so the list refetches.
   Expected: The list body reads "Couldn't load your Jira queue." followed by main's own sentence for that failure ("Couldn't reach Jira…", "Jira is rate-limiting this account right now…"), in an element with `role="alert"`. "No tickets match these filters." does not appear. A credential failure adds "Reconnect on the Connection tab." and offers no retry; every other failure offers a "Try again" button that genuinely re-runs the read.
   Coverage: **Supported** — `MyJiraPage` now destructures `error`/`reload` from `useAsync` and renders `JiraLoadError` in place of the empty state; `unwrap()` in `jiraApi.ts` throws a `JiraApiError` carrying main's `reason`, so `invalid_credentials` is distinguishable from `network` in the UI rather than only in the main process. Covered by unit tests in `MyJiraPage.test.tsx` and `jiraApi.test.ts`; not yet exercised against a live revoked token.
+  Result: PASS on the adjacent "no credential" reason, live-verified (not the exact "revoked mid-session" scenario — see JIRA-136). Disconnected, then navigated fresh to `/my-jira`: the list body read exactly "Couldn't load your Jira queue. No Jira account is connected. Reconnect on the Connection tab." in place of "No tickets match these filters." Could not test the true "valid-looking stored credential that Jira now rejects" path — that needs revoking the real token at id.atlassian.com, and browser navigation there was blocked in this environment (tool-level denial, not a product issue).
 - **JIRA-134** — A failed comment load renders as "No comments yet."
   Steps: With the connection broken, open a ticket drawer on a ticket you know has comments.
   Expected: The comments area reads "Couldn't load this issue's comments." plus main's own failure sentence, in an element with `role="alert"`, with a "Try again" button. "No comments yet." does not appear.
   Coverage: **Supported** — `JiraTicketDrawer` now destructures `error`/`reload` from `useAsync` and renders `JiraLoadError` instead of the empty line, so the drawer no longer asserts a ticket has no comments on the strength of a read that failed.
+  Result: NOT TESTED — same blocker as JIRA-133: needs a genuinely broken/revoked connection, which requires revoking the real token via a browser navigation that was blocked in this environment.
 - **JIRA-135** — A failed transitions fetch is an unhandled rejection
   Steps: With the connection broken, click a row's state chip. Check the console.
   Expected: The popover reads "Couldn't load PROJ-N's transitions." plus main's own failure sentence; "No transitions available from here." does not appear, and neither does the "your Jira workflow allows" footer. The console shows no unhandled promise rejection.
   Coverage: **Supported** — `JiraTicketRow`'s effect now has a `.catch()` that records the error and clears the stale transition list, and `JiraTransitionPopover` takes an `error` prop rendered via `JiraLoadError`. The workflow footer is suppressed on error because it asserts that what's above it is the workflow's real answer, which a failed read cannot back.
+  Result: NOT TESTED — same blocker as JIRA-133/134.
 - **JIRA-136** — API token revoked mid-session
   Steps: With Waypoint open and Jira connected, revoke the API token at id.atlassian.com. Then, in Waypoint: refresh the list, open a drawer, attempt a transition, attempt a comment.
   Expected: Each action should say the credential is no longer valid, and the app should stop presenting itself as connected.
   Coverage: **Gap worth flagging** — `jira:status` is a purely local file read, so `connected` stays `true` forever after a revoke. The sidebar keeps showing "My Jira" with a stale badge, the Connection tab keeps showing a green "Connected" pill, and the sync indicator is the only thing that hints otherwise. The list, the drawer's comments and the transition menu now each name the 401 and point at the Connection tab (JIRA-133/134/135), so the user is no longer silently misled — but `connected` itself is still a lie, nothing invalidates the stored credential on a 401, and there is no "reconnect" action anywhere: the user still has to work out that Disconnect-then-reconnect is the fix.
+  Result: NOT TESTED — attempted to revoke the real API token at id.atlassian.com to test this exactly as written; browser navigation to that domain was denied by this session's own tooling permissions, not by the app. Not retried further given the tool-level nature of the block. The related "no connect CTA" half of this gap is independently confirmed live under JIRA-141.
 - **JIRA-137** — Token expiry (Atlassian tokens now expire)
   Steps: Same as JIRA-136 but via natural expiry rather than manual revocation.
   Expected: Same handling; ideally a proactive warning before expiry.
   Coverage: **Gap worth flagging** — Atlassian API tokens have expiry dates, and nothing stores, checks, or warns about one. The failure mode is identical to JIRA-136: a dead connection whose Connected pill still reads green. Every read path now names the 401 rather than failing silently, so the user finds out — but only after the token is already dead, and still with no in-app way to replace it.
+  Result: NOT TESTED — same failure mode as JIRA-136 by the code's own account; natural token expiry can't be forced on demand within this pass.
 - **JIRA-138** — Jira rate-limits the account
   Steps: Trigger a 429 (rapid repeated Refresh, or an already-throttled account).
   Expected: "Jira is rate-limiting this account right now — wait a moment and try again."
   Coverage: **Supported** — the message exists, is good, and now reaches the user on the list path too: it is rendered verbatim by `JiraLoadError` beside a "Try again" button, rather than being swallowed into an empty queue as it was before JIRA-133 was fixed.
+  Result: NOT TESTED — attempted to actually trigger this: fired 40 concurrent real requests at the Jira API; all 40 returned 200, no 429. Atlassian's real rate limits are far more generous than that; pushing harder risked actually throttling the test account and breaking the rest of this pass, so it wasn't pursued further.
 - **JIRA-139** — Jira takes longer than 20 seconds
   Steps: Simulate a very slow site.
   Expected: "Jira took too long to respond — try again." rather than an indefinite spinner.
   Coverage: **Supported** — a hand-rolled `AbortController` at `REQUEST_TIMEOUT_MS = 20_000`, deliberately not `AbortSignal.timeout()` for environment-compatibility reasons. The timeout message now surfaces on the list path as well, since JIRA-133's swallow is fixed.
+  Result: NOT TESTED — cannot slow down a real Atlassian Cloud response on demand without a host-level traffic-shaping tool; renderer-level network emulation was already confirmed (JIRA-81/82) not to reach this app's main-process HTTP client.
 - **JIRA-140** — Network drops mid-transition
   Steps: Start a transition and kill the network before it completes.
   Expected: An error toast; the row's chip returns to the old state; the issue in Jira is either moved or not, never half-moved.
   Coverage: **Supported** — a transition is one POST; the follow-up `getTicket` failing would surface as an error while the move may have landed. Worth confirming the reported state after reconnecting matches Jira.
+  Result: NOT TESTED — same architectural blocker as JIRA-81/82: this app's Jira writes happen in the main process, so renderer-level network emulation can't interrupt one mid-flight; a host-level network cut would be needed.
 - **JIRA-141** — Opening `/my-jira` directly while disconnected
   Steps: Disconnect Jira, then navigate to `/my-jira` by URL (or from a stale in-app link).
   Expected: A clear "not connected" state with a way to connect.
   Coverage: **Gap worth flagging** — the Connection tab renders `<SkeletonListRows />` forever when `connection` is falsy, and once the status resolves to `connected: false` the header renders a bare " · " chip from empty `accountName`/`site` strings. The My work tab shows the empty-filter message. There is no "connect an account" call to action anywhere on the page.
+  Result: PARTIAL, live-verified with a real disconnect — the My work tab actually shows a good, specific message now ("Couldn't load your Jira queue. No Jira account is connected. Reconnect on the Connection tab."), not the vague empty-filter message the Coverage note describes — that part of the note is outdated, superseded by the JIRA-133 fix. The Connection tab itself, however, confirms the core gap exactly as described: a bare "·" chip (empty accountName/site), and critically, no "Connect" button of any kind — `Refresh now`/`Disconnect` are correctly disabled, but there's no CTA anywhere on the page. One further correction: it does not render a skeleton forever; it resolves cleanly to a "Disconnected" state.
 - **JIRA-142** — Opening `/my-jira` with the feature flag off
   Steps: Build with `WAYPOINT_FEATURE_MY_JIRA` unset and navigate to `/my-jira`.
   Expected: Redirect to `/`, not a blank page or a crash.
   Coverage: **Supported** — gated at the route level (`MY_JIRA_ENABLED ? <MyJiraPage/> : <Navigate to="/" replace/>`) specifically so the flag is never checked after hooks have run.
+  Result: NOT TESTED — would require rebuilding/restarting the dev server with `WAYPOINT_FEATURE_MY_JIRA` unset, which would tear down the running app this whole pass depends on; not done given how much else depends on the current session staying up.
 - **JIRA-143** — The "+" button with the flag off is unchanged
   Steps: With the flag off, click "+" in the sidebar.
   Expected: The plain CreateProjectModal, byte-for-byte the pre-Jira behavior — no Companion option, no wizard.
   Coverage: **Supported** — `Sidebar.tsx` mounts `AddProjectWizard` only when the flag is on; otherwise `CreateProjectModal` directly.
+  Result: NOT TESTED — same blocker as JIRA-142.
 - **JIRA-144** — An issue with a status Waypoint has never seen
   Steps: Find an issue in a status like "Ready for QA" or "Blocked".
   Expected: The status name renders verbatim; its color follows Jira's own status *category*.
   Coverage: **Supported** — `mapStateCategory` uses `statusCategory.key`, the only status property that means the same thing on every site. Accepted cost, documented in `jiraApi.ts`: "In Progress" and "In Review" are both `indeterminate` and therefore share a color.
+  Result: NOT TESTED — this workflow only has the three standard statuses (To Do/In Progress/Done); no unusual status name ("Ready for QA", "Blocked") exists to test against. All three standard names rendered correctly and colored by category throughout this pass, which is a weaker adjacent confirmation, not the case as written.
 - **JIRA-145** — An issue Jira returns in a shape the mapper can't handle
   Steps: Hard to stage; check that a queue containing unusual issues (no project field, no status, a moved issue) still renders every other row.
   Expected: One bad issue is skipped, not fatal to the list.
   Coverage: **Supported** — `mapIssue` returns null on a missing key and every field degrades to a default; `listMyTickets` filters nulls out. `mapComment` and `mapTransition` do the same. Deliberately defensive by construction.
+  Result: NOT TESTED — deliberately staging a malformed Jira API response would mean intercepting real traffic, which this app's main-process HTTP client puts out of reach of the tooling used in this pass (see JIRA-81/82's finding). Not attempted.
 - **JIRA-146** — Malformed IPC input is rejected at the boundary
   Steps: Code-level or console check: call `jira:tickets:transition` with a ticket id containing a slash or path traversal.
   Expected: Refused with "Unknown Jira issue." before any REST path is built.
   Coverage: **Supported** — `readTicketId()` enforces `^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$` at the IPC boundary, on top of `encodeURIComponent` in the client. Worth an explicit check since it's a security-relevant guard.
+  Result: PASS, live-verified with a real attack payload — called `window.electron.jira.transition({ ticketId: '../../etc/passwd', ... })` directly from the renderer console; got back `{ ok: false, reason: 'invalid_input', message: 'Unknown Jira issue.' }` before any REST call could have been built. A second malformed id ("not a valid id at all!!") was refused identically.
 - **JIRA-147** — The API token never reaches the renderer
   Steps: With DevTools open, inspect every `jira:*` IPC response and the renderer's state after connecting.
   Expected: The token appears nowhere outside the main process — not in a response, not in a store, not in a log line, not in a URL.
   Coverage: **Supported** — `toJiraIdentity()` is the only credential-derived shape crossing IPC and it omits `apiToken`; `authorizationHeader()` is the single place the token becomes transmittable. This case exists to verify that architectural claim empirically, since it's the feature's core security promise.
+  Result: PASS, strongly confirmed — searched the DOM (`body.innerHTML`), `localStorage`, and `sessionStorage` for the real token string: found nowhere. Beyond that: the renderer's own Chrome DevTools network log shows **zero** requests to `waypoint123.atlassian.net` across this entire multi-hour pass — every single Jira HTTP call happens in the Electron main process, architecturally invisible to the renderer's network stack, let alone leaking a token through it. This is the strongest form of the claim: not just "the token isn't in the response," but "the renderer never sees the request happen at all."
 - **JIRA-148** — Credential file permissions and encryption at rest
   Steps: Locate `jira-auth.json` under the app's userData directory. Check its mode and whether the token is readable in it.
   Expected: `0600`, and the content is a base64 ciphertext blob with no plaintext token or email.
   Coverage: **Supported** — `writeStoredJiraCredential` writes `{ encrypted }` with `mode: 0o600`; email is deliberately encrypted alongside the token rather than left in plaintext.
+  Result: PASS, definitively verified via the real filesystem — `stat` on the real `jira-auth.json` under the app's userData directory shows mode exactly `0600` (`-rw-------`). Content is `{"encrypted": "<732-char base64-looking blob>"}`; a direct string search confirmed the real email, API token, and site strings appear nowhere in the file.
 - **JIRA-149** — A corrupted or hand-edited credential file
   Steps: Corrupt `jira-auth.json` (truncate it, or replace the ciphertext with garbage). Restart the app.
   Expected: The app treats it as "not connected" — no crash, no partial state.
   Coverage: **Supported** — every failure mode in `readStoredJiraCredential` collapses to `null` inside one try/catch, by design.
+  Result: PASS, live-verified with a genuinely corrupted file — overwrote the real `jira-auth.json` with `{"encrypted": "not-valid-base64-!!!garbage"}` on disk (after backing up the original), then called `window.electron.jira.status()` directly: returned `{ connected: false, identity: null }` cleanly, no thrown exception, no crash, no new console errors. Restored the real file afterward and confirmed the real connection still works.
 - **JIRA-150** — Disconnect leaves nothing behind that could authenticate
   Steps: Disconnect. Confirm `jira-auth.json` is gone. Reload the app.
   Expected: File deleted (not just marked inactive); no cached identity, no residual sidebar item.
   Coverage: **Partial** — the file is genuinely deleted and `clearCache()` empties `lastTickets`/`transitionsByTicketId`. But `clearCache()` does not reset `lastSyncAt`, so a subsequent reconnect within the same session inherits a sync timestamp from the previous account. Cosmetic, but it's a timestamp about a different Atlassian identity.
+  Result: PASS on file deletion, definitively verified via the real filesystem — `ls` on the real `jira-auth.json` path immediately after Disconnect returned "No such file or directory". The sidebar "My Jira" item also disappeared live, no reload needed (stronger than the case asks). Did not specifically re-test the `lastSyncAt`-inherited-across-reconnect cosmetic issue the Coverage note flags.
 - **JIRA-151** — Two Waypoint windows open on My Jira
   Steps: If multiple windows are possible, open My Jira in both and transition a ticket in one.
   Expected: Document whether the other window updates.
   Coverage: **Not supported (untested/unknown)** — `jiraStore` is per-renderer, and the `jiraApi.ts` session cache is module-level per window. The second window would stay stale until refreshed.
+  Result: NOT TESTED — attempted to open a genuine second Electron window via the DevTools tooling used in this pass; it refused with "Target.createTarget: Not supported" (Electron `BrowserWindow` creation isn't exposed to CDP the way Chrome tabs are). Would need the app's own multi-window UI affordance, if one exists, or a second full app launch.
 - **JIRA-152** — Behavior in a bare browser (no Electron bridge)
   Steps: If the renderer can be loaded outside Electron, open My Jira.
   Expected: A clear message rather than a property-of-undefined crash.
   Coverage: **Supported** — `bridge()` throws "The Jira connection is unavailable in this window." explicitly for this case, and since JIRA-133's fix that message is now rendered on the list path rather than swallowed into an empty queue.
+  Result: NOT TESTED — would require loading the renderer bundle in a plain browser tab outside Electron entirely (a different serving setup than this dev session), not attempted.
 
 ---
 
