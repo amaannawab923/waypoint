@@ -527,16 +527,17 @@ Formatted to be appended directly. Suggested subsection placement is given as a
   without touching anything else, look at the sidebar, then open My Jira, then
   open a ticket drawer, then try a transition.
   Expected: The app should not claim to be showing a current, complete queue.
-  Coverage: **Gap worth flagging** — this is the composite of JIRA-123, JIRA-133
-  and JIRA-136 and it is what a user on a train actually experiences: the sidebar
-  shows "My Jira" with a badge of **0** (local credential read succeeds,
-  `lastTickets` is empty), the page shows "No tickets match these filters."
-  beneath a **pulsing green "synced 0s ago"** (module-load `lastSyncAt`), the
-  drawer says "No comments yet.", and only the transition surfaces a real error.
-  Every individual mechanism is already logged; nobody has written down that they
-  compose into an app that confidently reports an empty, freshly-synced queue
-  while offline. If one case from this whole review gets run first, it should be
-  this one.
+  Coverage: **Partial** — the composite this case was written to name is gone.
+  JIRA-123 and JIRA-133/134/135 are fixed, so offline-at-launch now shows a muted
+  "not synced yet" instead of a pulsing green "synced 0s ago", and the list, the
+  drawer's comments and the transition menu each read "Couldn't load … Couldn't
+  reach Jira. Check your connection and try again." with a Try again button.
+  What survives is JIRA-136's half: the sidebar still shows "My Jira" with a
+  badge of **0** (the credential read is local and succeeds; `lastTickets` is
+  empty), and the Connection tab still shows a green "Connected" pill for a site
+  the app cannot reach. So the app no longer *claims* a fresh, empty queue — but
+  two of its status surfaces still read as healthy. Worth running exactly as
+  written, against those two.
 
 - **JIRA-188** — An unposted comment draft when the drawer closes
   Steps: Open a drawer, type several paragraphs into the composer without

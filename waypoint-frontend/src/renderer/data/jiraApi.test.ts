@@ -83,6 +83,24 @@ describe('failure handling', () => {
     );
   });
 
+  // The kind rides along on the error, not just the sentence: the UI has to
+  // tell "your token died — reconnect" from "you're offline — try again", and
+  // dropping `reason` here is what made those indistinguishable.
+  it("carries main's failure reason on the thrown error", async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue({
+      ok: false,
+      reason: 'invalid_credentials',
+      message: 'Jira rejected that email and API token.',
+    });
+
+    await expect(api.listMyJiraTickets()).rejects.toMatchObject({
+      name: 'JiraApiError',
+      reason: 'invalid_credentials',
+      message: 'Jira rejected that email and API token.',
+    });
+  });
+
   it('explains itself when there is no Electron bridge at all', async () => {
     const api = freshApi();
     (window as unknown as { electron?: unknown }).electron = undefined;
@@ -307,19 +325,41 @@ describe('connect / status / disconnect', () => {
   });
 
   // lastSyncAt is what the page's "synced Ns ago" indicator reports, so it
-  // has to move only when the list is genuinely re-read.
+  // has to move only when the list is genuinely re-read — and must not exist
+  // at all before one has.
+  it('reports no sync time until a read has actually succeeded', async () => {
+    const api = freshApi();
+
+    expect((await api.getJiraConnectionStatus()).lastSyncAt).toBeNull();
+  });
+
+  it('leaves lastSyncAt unset when the list read fails', async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue({
+      ok: false,
+      reason: 'network',
+      message: "Couldn't reach Jira. Check your connection and try again.",
+    });
+
+    await expect(api.listMyJiraTickets()).rejects.toThrow(/reach Jira/);
+
+    expect((await api.getJiraConnectionStatus()).lastSyncAt).toBeNull();
+  });
+
   it('refreshJiraSync genuinely re-reads and advances lastSyncAt', async () => {
     jest.useFakeTimers();
     try {
       const api = freshApi();
+      await api.listMyJiraTickets();
       const before = (await api.getJiraConnectionStatus()).lastSyncAt;
+      expect(before).not.toBeNull();
       jest.advanceTimersByTime(60_000);
 
       const refreshed = await api.refreshJiraSync();
 
-      expect(bridge.listTickets).toHaveBeenCalledTimes(1);
-      expect(new Date(refreshed.lastSyncAt).getTime()).toBeGreaterThan(
-        new Date(before).getTime(),
+      expect(bridge.listTickets).toHaveBeenCalledTimes(2);
+      expect(new Date(refreshed.lastSyncAt ?? 0).getTime()).toBeGreaterThan(
+        new Date(before ?? 0).getTime(),
       );
     } finally {
       jest.useRealTimers();

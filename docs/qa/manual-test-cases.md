@@ -784,7 +784,7 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
 - **JIRA-36** — Empty result set for a genuinely empty queue
   Steps: Connect an account with no unresolved issues in any role (or filter to a project/role combination with none).
   Expected: A clear empty state.
-  Coverage: **Partial** — it renders "No tickets match these filters.", which is correct for a filter combination but wrong for a genuinely empty queue or a failed load (see JIRA-104). Same class of misleading-empty-state bug already logged as TIX-CW-09 elsewhere in this sheet.
+  Coverage: **Partial** — a failed load no longer lands here (JIRA-133 now renders its own error state), but the wording is still filter-shaped: an account with a genuinely empty queue and no filters applied is told its *filters* matched nothing. Same class of misleading-empty-state copy already logged as TIX-CW-09 elsewhere in this sheet.
 - **JIRA-37** — Sidebar badge matches the list
   Steps: Compare the sidebar "My Jira" count badge to the "All N" chip on the page.
   Expected: Equal.
@@ -1161,8 +1161,8 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Coverage: **Partial** — the age is genuine (it's when the JQL last ran) and the label deliberately reports an age rather than implying a stream. But the pulsing green success-colored dot reads as "live" at a glance, and after an hour on the page it says "synced 60m ago" beside a still-pulsing dot. The copy is honest; the visual language isn't.
 - **JIRA-123** — Sync age before any read has happened
   Steps: Launch the app fresh with Jira connected. Look at the sidebar badge and, on `/my-jira`, at the sync indicator, before the list finishes loading.
-  Expected: Nothing should claim a sync that hasn't happened.
-  Coverage: **Gap worth flagging** — `lastSyncAt` in `jiraApi.ts` is initialised to `new Date().toISOString()` at *module load*, so before any real read the indicator says "synced 0s ago" when nothing has synced. Same module-level cache makes `issueCount`/`projectCount` read 0 until a list happens, so the sidebar badge can show 0 on a queue of 30.
+  Expected: Before the first read lands, the indicator reads "not synced yet" in muted text with no pulsing green dot, and never a "synced Ns ago" age. It switches to a real age only once a search has actually come back.
+  Coverage: **Supported** — `lastSyncAt` in `jiraApi.ts` is now `null` until `rememberTickets()` runs, which happens only after a search resolves, so a failed or not-yet-completed read never advances it; `LiveSyncIndicator` renders the muted "not synced yet" branch for `null`. The separate `issueCount`/`projectCount` behavior is unchanged and still reads 0 until a list happens — that half stays logged under JIRA-37.
 - **JIRA-124** — Refresh now genuinely re-reads
   Steps: Change an issue in Jira (title, status, assignee). In Waypoint, Connection tab → Refresh now, then return to My work.
   Expected: The change is reflected; the sync indicator resets to a few seconds.
@@ -1207,32 +1207,32 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
 
 - **JIRA-133** — A failed ticket load renders as an empty queue
   Steps: Connect, then go offline (or revoke the token). Navigate away from My Jira and back so the list refetches.
-  Expected: An error state naming what went wrong.
-  Coverage: **Gap worth flagging** — `MyJiraPage` destructures only `{ data, loading }` from `useAsync` and ignores `error`, so a 401, a timeout, a rate limit or an offline laptop all render "No tickets match these filters." beside a green "synced" dot. The main process produces excellent, specific error messages (`invalid_credentials` vs `network` vs `site_not_found`) and none of them ever reach the user on this path. Highest-severity issue found in this section.
+  Expected: The list body reads "Couldn't load your Jira queue." followed by main's own sentence for that failure ("Couldn't reach Jira…", "Jira is rate-limiting this account right now…"), in an element with `role="alert"`. "No tickets match these filters." does not appear. A credential failure adds "Reconnect on the Connection tab." and offers no retry; every other failure offers a "Try again" button that genuinely re-runs the read.
+  Coverage: **Supported** — `MyJiraPage` now destructures `error`/`reload` from `useAsync` and renders `JiraLoadError` in place of the empty state; `unwrap()` in `jiraApi.ts` throws a `JiraApiError` carrying main's `reason`, so `invalid_credentials` is distinguishable from `network` in the UI rather than only in the main process. Covered by unit tests in `MyJiraPage.test.tsx` and `jiraApi.test.ts`; not yet exercised against a live revoked token.
 - **JIRA-134** — A failed comment load renders as "No comments yet."
   Steps: With the connection broken, open a ticket drawer on a ticket you know has comments.
-  Expected: An error, not a false claim that the ticket has no comments.
-  Coverage: **Gap worth flagging** — same root cause as JIRA-133: `JiraTicketDrawer` ignores `useAsync`'s `error`. Worse than JIRA-133 because "No comments yet." is a positive factual assertion about the ticket, not an ambiguous empty list.
+  Expected: The comments area reads "Couldn't load this issue's comments." plus main's own failure sentence, in an element with `role="alert"`, with a "Try again" button. "No comments yet." does not appear.
+  Coverage: **Supported** — `JiraTicketDrawer` now destructures `error`/`reload` from `useAsync` and renders `JiraLoadError` instead of the empty line, so the drawer no longer asserts a ticket has no comments on the strength of a read that failed.
 - **JIRA-135** — A failed transitions fetch is an unhandled rejection
   Steps: With the connection broken, click a row's state chip. Check the console.
-  Expected: A clear message in the UI; no unhandled promise rejection.
-  Coverage: **Gap worth flagging** — `JiraTicketRow`'s effect chains `getJiraTransitions(...).then(...).finally(...)` with no `.catch()`. The rejection is unhandled, and the popover shows "No transitions available from here." — telling the user their workflow is a dead end when the real cause is a dead connection. Third instance of the same swallow-the-error pattern.
+  Expected: The popover reads "Couldn't load PROJ-N's transitions." plus main's own failure sentence; "No transitions available from here." does not appear, and neither does the "your Jira workflow allows" footer. The console shows no unhandled promise rejection.
+  Coverage: **Supported** — `JiraTicketRow`'s effect now has a `.catch()` that records the error and clears the stale transition list, and `JiraTransitionPopover` takes an `error` prop rendered via `JiraLoadError`. The workflow footer is suppressed on error because it asserts that what's above it is the workflow's real answer, which a failed read cannot back.
 - **JIRA-136** — API token revoked mid-session
   Steps: With Waypoint open and Jira connected, revoke the API token at id.atlassian.com. Then, in Waypoint: refresh the list, open a drawer, attempt a transition, attempt a comment.
   Expected: Each action should say the credential is no longer valid, and the app should stop presenting itself as connected.
-  Coverage: **Gap worth flagging** — `jira:status` is a purely local file read, so `connected` stays `true` forever after a revoke. The sidebar keeps showing "My Jira" with a stale badge, the Connection tab keeps showing a green "Connected" pill, and (per JIRA-133/134) the list and comments fail silently. Only a transition or a comment surfaces the 401, and only as a toast. There is no path from "your token died" to "reconnect" — the user has to guess and Disconnect manually.
+  Coverage: **Gap worth flagging** — `jira:status` is a purely local file read, so `connected` stays `true` forever after a revoke. The sidebar keeps showing "My Jira" with a stale badge, the Connection tab keeps showing a green "Connected" pill, and the sync indicator is the only thing that hints otherwise. The list, the drawer's comments and the transition menu now each name the 401 and point at the Connection tab (JIRA-133/134/135), so the user is no longer silently misled — but `connected` itself is still a lie, nothing invalidates the stored credential on a 401, and there is no "reconnect" action anywhere: the user still has to work out that Disconnect-then-reconnect is the fix.
 - **JIRA-137** — Token expiry (Atlassian tokens now expire)
   Steps: Same as JIRA-136 but via natural expiry rather than manual revocation.
   Expected: Same handling; ideally a proactive warning before expiry.
-  Coverage: **Gap worth flagging** — Atlassian API tokens have expiry dates, and nothing stores, checks, or warns about one. The failure mode is identical to JIRA-136: a silently dead connection that still looks green.
+  Coverage: **Gap worth flagging** — Atlassian API tokens have expiry dates, and nothing stores, checks, or warns about one. The failure mode is identical to JIRA-136: a dead connection whose Connected pill still reads green. Every read path now names the 401 rather than failing silently, so the user finds out — but only after the token is already dead, and still with no in-app way to replace it.
 - **JIRA-138** — Jira rate-limits the account
   Steps: Trigger a 429 (rapid repeated Refresh, or an already-throttled account).
   Expected: "Jira is rate-limiting this account right now — wait a moment and try again."
-  Coverage: **Partial** — the message exists and is good, but on the list path it's swallowed by JIRA-133 and the user just sees an empty queue. Reachable only via a transition/comment.
+  Coverage: **Supported** — the message exists, is good, and now reaches the user on the list path too: it is rendered verbatim by `JiraLoadError` beside a "Try again" button, rather than being swallowed into an empty queue as it was before JIRA-133 was fixed.
 - **JIRA-139** — Jira takes longer than 20 seconds
   Steps: Simulate a very slow site.
   Expected: "Jira took too long to respond — try again." rather than an indefinite spinner.
-  Coverage: **Supported** — a hand-rolled `AbortController` at `REQUEST_TIMEOUT_MS = 20_000`, deliberately not `AbortSignal.timeout()` for environment-compatibility reasons. Again subject to JIRA-133 on the list path.
+  Coverage: **Supported** — a hand-rolled `AbortController` at `REQUEST_TIMEOUT_MS = 20_000`, deliberately not `AbortSignal.timeout()` for environment-compatibility reasons. The timeout message now surfaces on the list path as well, since JIRA-133's swallow is fixed.
 - **JIRA-140** — Network drops mid-transition
   Steps: Start a transition and kill the network before it completes.
   Expected: An error toast; the row's chip returns to the old state; the issue in Jira is either moved or not, never half-moved.
@@ -1284,7 +1284,7 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
 - **JIRA-152** — Behavior in a bare browser (no Electron bridge)
   Steps: If the renderer can be loaded outside Electron, open My Jira.
   Expected: A clear message rather than a property-of-undefined crash.
-  Coverage: **Supported** — `bridge()` throws "The Jira connection is unavailable in this window." explicitly for this case. Note that per JIRA-133 this error would still be swallowed on the list path.
+  Coverage: **Supported** — `bridge()` throws "The Jira connection is unavailable in this window." explicitly for this case, and since JIRA-133's fix that message is now rendered on the list path rather than swallowed into an empty queue.
 
 ---
 

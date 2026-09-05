@@ -19,6 +19,7 @@
 // fixtures with a real site touched this file and nothing about how
 // JiraTicketRow or JiraTicketDrawer ask for data.
 
+import { JiraApiError } from '@/types/jira';
 import type {
   JiraComment,
   JiraConnectionStatus,
@@ -46,8 +47,8 @@ import type {
  * Structurally identical to main/jira/jiraTypes.ts's JiraResult, restated
  * here rather than imported: the renderer does not import from src/main
  * (only preload.d.ts crosses that line, and only for the bridge's own type),
- * and `reason` widened to `string` is all this side needs — the renderer
- * turns every failure into the same thrown Error regardless of kind.
+ * and `reason` widened to `string` is all this side needs — nothing here
+ * switches on the exact union, it just carries the kind through.
  */
 type IpcResult<T> =
   { ok: true; value: T } | { ok: false; reason: string; message: string };
@@ -70,10 +71,16 @@ function bridge() {
  * keeps that one convention rather than introducing a second error style
  * halfway up the tree — and Jira's own message is preserved verbatim, since
  * "Resolution is required" is far more useful than "the move failed".
+ *
+ * `reason` rides along on the thrown error (see `JiraApiError` in
+ * types/jira.ts) rather than being dropped. It used to be discarded here,
+ * which is how a dead token and a slow network arrived at the UI
+ * indistinguishable from each other — and, because the read paths ignored
+ * the failure entirely, indistinguishable from an empty queue.
  */
 function unwrap<T>(result: IpcResult<T>): T {
   if (result.ok) return result.value;
-  throw new Error(result.message);
+  throw new JiraApiError(result.message, result.reason);
 }
 
 // -----------------------------------------------------------------------
@@ -176,10 +183,15 @@ function toComment(wire: JiraWireComment): JiraComment {
 //  - `transitionsByTicketId` holds whatever the bulk search returned, so
 //    opening a transition menu is usually free.
 //  - `lastSyncAt` is genuinely "when the list was last read", which is what
-//    the page's "synced Ns ago" indicator claims to show.
+//    the page's "synced Ns ago" indicator claims to show. It starts `null`
+//    and is only ever written by `rememberTickets`, which runs after a
+//    search has actually come back — so a failed read never advances it and
+//    a session with no successful read has no sync time at all. It used to
+//    be seeded with `new Date()` at module load, which meant an app that had
+//    never reached Jira still rendered a pulsing "synced 0s ago".
 let lastTickets: JiraTicket[] = [];
 let transitionsByTicketId = new Map<string, JiraTransition[]>();
-let lastSyncAt = new Date().toISOString();
+let lastSyncAt: string | null = null;
 
 function rememberTickets(wire: JiraWireTicket[]): JiraTicket[] {
   const tickets = wire.map(toTicket);

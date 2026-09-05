@@ -46,6 +46,49 @@ export function jiraProjectColor(projectKey: string): string {
   return JIRA_PROJECT_COLORS[hash % JIRA_PROJECT_COLORS.length];
 }
 
+/**
+ * Why a Jira call failed, in the renderer's own vocabulary — the same set
+ * `main/jira/jiraTypes.ts` defines as `JiraFailureReason`, widened to a bare
+ * string so this file stays independent of the main process's own types (the
+ * only thing crossing that line is `data/jiraApi.ts`'s type-only import).
+ */
+export type JiraErrorReason = string;
+
+/**
+ * What `data/jiraApi.ts` throws when main answers with a failure.
+ *
+ * Still an `Error` with Jira's own message verbatim, so every existing
+ * `catch (err) { showErrorToast(err.message) }` path is unchanged. The
+ * addition is `reason`: main distinguishes `invalid_credentials` from
+ * `network` from `site_not_found` deliberately (see `JiraFailureReason`'s
+ * own note), and collapsing that to a message string meant the UI could not
+ * tell "your token died — reconnect" from "you're offline — try again".
+ *
+ * Declared here rather than in `data/jiraApi.ts` so a component can narrow
+ * a caught error without importing the data module — which component tests
+ * routinely `jest.mock()` wholesale.
+ */
+export class JiraApiError extends Error {
+  readonly reason: JiraErrorReason;
+
+  constructor(message: string, reason: JiraErrorReason) {
+    super(message);
+    this.name = 'JiraApiError';
+    this.reason = reason;
+  }
+}
+
+/** True when this failure means the stored credential can no longer be used
+ * — i.e. the fix is reconnecting, not retrying. */
+export function isJiraCredentialFailure(err: unknown): boolean {
+  return (
+    err instanceof JiraApiError &&
+    (err.reason === 'invalid_credentials' ||
+      err.reason === 'not_connected' ||
+      err.reason === 'forbidden')
+  );
+}
+
 /** How the current user relates to a ticket — never mutually exclusive in
  * real Jira (a person can be all three), but the mock fixtures (like the
  * mockup) assign each ticket exactly one role, matching the single
@@ -142,8 +185,15 @@ export interface JiraConnectionStatus {
   accountName: string;
   accountEmail: string;
   site: string;
-  /** When the ticket list was last actually read from Jira. */
-  lastSyncAt: string; // ISO
+  /**
+   * When the ticket list was last actually read from Jira, or `null` when no
+   * read has succeeded yet this session. Nullable deliberately: this used to
+   * be seeded with `Date.now()` at module load, so a connected app that had
+   * never reached Jira — offline at launch, dead token — still reported
+   * "synced 0s ago". Absence of a sync is a real state and has to be
+   * representable.
+   */
+  lastSyncAt: string | null; // ISO
   issueCount: number;
   projectCount: number;
 }

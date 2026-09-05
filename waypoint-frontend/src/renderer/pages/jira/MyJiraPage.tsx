@@ -17,6 +17,7 @@ import { JiraMark } from '@/components/domain/JiraMark';
 import { JiraTicketRow } from '@/components/domain/JiraTicketRow';
 import { JiraTicketDrawer } from '@/components/domain/JiraTicketDrawer';
 import { JiraProposalCard } from '@/components/domain/JiraProposalCard';
+import { JiraLoadError } from '@/components/domain/JiraLoadError';
 import { JiraConnectionPanel } from '@/components/domain/JiraConnectionPanel';
 import { jiraProjectColor } from '@/types/jira';
 import type {
@@ -74,17 +75,30 @@ function FilterChip({
   );
 }
 
-function LiveSyncIndicator({ lastSyncAt }: { lastSyncAt: string }) {
+function LiveSyncIndicator({ lastSyncAt }: { lastSyncAt: string | null }) {
   // Re-renders once a second purely so the "synced Ns ago" label keeps
   // advancing. `lastSyncAt` is genuinely the moment the JQL search last ran
   // against the connected site, so this age is real — but nothing refreshes
   // it on a timer, which is exactly why the label reports an age rather than
   // implying a live stream.
+  //
+  // `null` means no search has come back yet this session — offline at
+  // launch, a dead token, or simply the second before the first read lands.
+  // That case gets its own muted, un-pulsing label rather than the green
+  // "synced 0s ago" it used to borrow from a module-load timestamp.
   const [, forceTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => forceTick((n) => n + 1), 1000);
     return () => clearInterval(id);
   }, []);
+  if (!lastSyncAt) {
+    return (
+      <span className="ml-auto inline-flex items-center gap-1.5 text-[11.5px] font-bold text-text-muted">
+        <span className="size-1.5 shrink-0 rounded-full bg-text-muted" />
+        not synced yet
+      </span>
+    );
+  }
   const secs = Math.max(
     0,
     Math.round((Date.now() - new Date(lastSyncAt).getTime()) / 1000),
@@ -184,10 +198,16 @@ export default function MyJiraPage() {
   const [drawerTicketId, setDrawerTicketId] = useState<string | null>(null);
 
   const connection = useLoadedJiraConnection();
-  const { data: fetchedTickets, loading } = useAsync(
-    () => listMyJiraTickets(),
-    [],
-  );
+  const {
+    data: fetchedTickets,
+    loading,
+    // A failed list read used to be dropped on the floor here, so a 401, a
+    // 429, a timeout and an offline laptop all rendered as "No tickets match
+    // these filters." next to a green sync dot. The error is now carried to
+    // the list body below.
+    error: ticketsError,
+    reload: reloadTickets,
+  } = useAsync(() => listMyJiraTickets(), []);
   const [tickets, setTickets] = useState<JiraTicket[]>([]);
   useEffect(() => {
     if (fetchedTickets) setTickets(fetchedTickets);
@@ -384,23 +404,35 @@ export default function MyJiraPage() {
                   {connection && <span>one API call · refresh to re-read</span>}
                 </div>
 
+                {/* Three distinct outcomes, deliberately not collapsed into
+                    two: the read failed, the read succeeded and matched
+                    nothing, or there are rows. The error is rendered even
+                    when rows are present (a reload can fail over a list this
+                    page already has) so nothing on screen silently predates
+                    a failure. */}
                 <div className="overflow-hidden rounded-[var(--radius)] border border-border bg-surface shadow-sm">
-                  {filtered.length === 0 ? (
+                  {ticketsError && (
+                    <JiraLoadError
+                      what="your Jira queue"
+                      error={ticketsError}
+                      onRetry={reloadTickets}
+                    />
+                  )}
+                  {!ticketsError && filtered.length === 0 && (
                     <div className="px-4 py-6 text-center text-sm text-text-muted">
                       No tickets match these filters.
                     </div>
-                  ) : (
-                    filtered.map((ticket) => (
-                      <JiraTicketRow
-                        key={ticket.id}
-                        ticket={ticket}
-                        onOpenDrawer={setDrawerTicketId}
-                        onTicketUpdated={updateTicket}
-                        onResolveConflict={handleResolveConflict}
-                        onDismissTombstone={handleDismissTombstone}
-                      />
-                    ))
                   )}
+                  {filtered.map((ticket) => (
+                    <JiraTicketRow
+                      key={ticket.id}
+                      ticket={ticket}
+                      onOpenDrawer={setDrawerTicketId}
+                      onTicketUpdated={updateTicket}
+                      onResolveConflict={handleResolveConflict}
+                      onDismissTombstone={handleDismissTombstone}
+                    />
+                  ))}
                 </div>
 
                 <div className="mt-3 flex items-start gap-2 rounded-[var(--radius-sm)] border border-jira/30 bg-jira-bg px-3 py-2.5 text-[12.5px] text-jira">

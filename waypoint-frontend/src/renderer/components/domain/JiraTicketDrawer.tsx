@@ -7,6 +7,7 @@ import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { IconX } from '@/components/icons';
 import { JiraCommentComposer } from '@/components/domain/JiraCommentComposer';
+import { JiraLoadError } from '@/components/domain/JiraLoadError';
 import { jiraProjectColor } from '@/types/jira';
 import type { JiraComment, JiraTicket } from '@/types/jira';
 
@@ -41,10 +42,15 @@ export function JiraTicketDrawer({
   const [comments, setComments] = useState<JiraComment[]>([]);
   const connection = useJiraConnection();
 
-  const { data: fetchedComments } = useAsync(
-    () => listJiraComments(ticket.id),
-    [ticket.id],
-  );
+  // `error` is destructured, not ignored: "No comments yet." is a positive
+  // factual claim about this issue, and rendering it because the comment read
+  // failed tells the user the thread is empty when the truth is that Waypoint
+  // never saw it.
+  const {
+    data: fetchedComments,
+    error: commentsError,
+    reload: reloadComments,
+  } = useAsync(() => listJiraComments(ticket.id), [ticket.id]);
   useEffect(() => {
     if (fetchedComments) setComments(fetchedComments);
   }, [fetchedComments]);
@@ -197,7 +203,15 @@ export function JiraTicketDrawer({
                 </div>
               </div>
             ))}
-            {comments.length === 0 && (
+            {commentsError && (
+              <JiraLoadError
+                compact
+                what="this issue's comments"
+                error={commentsError}
+                onRetry={reloadComments}
+              />
+            )}
+            {!commentsError && comments.length === 0 && (
               <p className="text-[12.5px] text-text-muted">No comments yet.</p>
             )}
           </div>

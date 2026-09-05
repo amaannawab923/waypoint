@@ -39,6 +39,7 @@ export function JiraTicketRow({
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [transitions, setTransitions] = useState<JiraTransition[]>([]);
   const [loadingTransitions, setLoadingTransitions] = useState(false);
+  const [transitionsError, setTransitionsError] = useState<Error | null>(null);
   const [saving, setSaving] = useState(false);
   const [resolvingConflict, setResolvingConflict] = useState(false);
   const [dismissing, setDismissing] = useState(false);
@@ -47,9 +48,22 @@ export function JiraTicketRow({
     if (!popoverOpen) return;
     let cancelled = false;
     setLoadingTransitions(true);
+    setTransitionsError(null);
     getJiraTransitions(ticket.id)
       .then((rows) => {
         if (!cancelled) setTransitions(rows);
+      })
+      // This chain had no `.catch()` at all, so a broken connection produced
+      // an unhandled rejection *and* left the popover rendering "No
+      // transitions available from here." — telling the user their Jira
+      // workflow is a dead end when the real cause is that Waypoint never
+      // reached Jira. Two different facts; they now render differently.
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setTransitions([]);
+        setTransitionsError(
+          err instanceof Error ? err : new Error(String(err)),
+        );
       })
       .finally(() => {
         if (!cancelled) setLoadingTransitions(false);
@@ -217,6 +231,7 @@ export function JiraTicketRow({
             currentStateName={ticket.stateName}
             transitions={transitions}
             loading={loadingTransitions}
+            error={transitionsError}
             onSelect={handleSelectTransition}
             onClose={() => setPopoverOpen(false)}
           />

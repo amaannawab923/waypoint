@@ -9,6 +9,7 @@ import {
   listMyJiraTickets,
 } from '@/data/jiraApi';
 import { useLoadedJiraConnection } from '@/lib/jiraStore';
+import { JiraApiError } from '@/types/jira';
 import type {
   JiraDuplicateNudge,
   JiraProposal,
@@ -182,6 +183,100 @@ describe('MyJiraPage — project + role filtering (combined)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^All \d/ }));
     expect(screen.getByText('Eng assignee ticket')).toBeInTheDocument();
     expect(screen.getByText('Plat reporter ticket')).toBeInTheDocument();
+  });
+});
+
+// "No tickets match these filters." is a claim about the user's Jira. A read
+// that never reached Jira must not make it — the three cases below are the
+// difference between "your queue is empty" and "we could not ask".
+describe('MyJiraPage — a failed ticket read is not an empty queue', () => {
+  function mountFailing(error: Error) {
+    jest.mocked(listMyJiraTickets).mockRejectedValue(error);
+    jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
+    jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
+    jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
+    return render(<MyJiraPage />);
+  }
+
+  it("names the failure instead of claiming the filters matched nothing", async () => {
+    mountFailing(
+      new Error("Couldn't reach Jira. Check your connection and try again."),
+    );
+
+    await screen.findByRole('alert');
+    expect(
+      screen.getByText(/Couldn't reach Jira/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('No tickets match these filters.'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('offers a retry that actually re-runs the read', async () => {
+    mountFailing(new Error('Jira took too long to respond — try again.'));
+    await screen.findByRole('alert');
+    expect(listMyJiraTickets).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    await waitFor(() => expect(listMyJiraTickets).toHaveBeenCalledTimes(2));
+  });
+
+  it('points a dead credential at the Connection tab rather than at retrying', async () => {
+    mountFailing(
+      new JiraApiError(
+        'Jira rejected that email and API token.',
+        'invalid_credentials',
+      ),
+    );
+
+    await screen.findByRole('alert');
+    expect(
+      screen.getByText(/Reconnect on the Connection tab/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Try again' }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+// The sync indicator sat beside all of the above claiming "synced 0s ago",
+// because its timestamp came from module load rather than from a read.
+describe('MyJiraPage — sync indicator', () => {
+  function connection(lastSyncAt: string | null) {
+    return {
+      connected: true,
+      accountName: 'Max Chen',
+      accountEmail: 'max@northwind.dev',
+      site: 'waypoint123.atlassian.net',
+      lastSyncAt,
+      issueCount: 4,
+      projectCount: 3,
+    };
+  }
+
+  it('says so plainly when nothing has synced yet', async () => {
+    jest.mocked(listMyJiraTickets).mockResolvedValue(TICKETS);
+    jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
+    jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
+    jest.mocked(useLoadedJiraConnection).mockReturnValue(connection(null));
+    render(<MyJiraPage />);
+
+    expect(await screen.findByText('not synced yet')).toBeInTheDocument();
+    expect(screen.queryByText(/^synced /)).not.toBeInTheDocument();
+  });
+
+  it('reports a real age once a read has landed', async () => {
+    jest.mocked(listMyJiraTickets).mockResolvedValue(TICKETS);
+    jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
+    jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
+    jest
+      .mocked(useLoadedJiraConnection)
+      .mockReturnValue(connection(new Date().toISOString()));
+    render(<MyJiraPage />);
+
+    expect(await screen.findByText(/^synced \d+s ago$/)).toBeInTheDocument();
+    expect(screen.queryByText('not synced yet')).not.toBeInTheDocument();
   });
 });
 

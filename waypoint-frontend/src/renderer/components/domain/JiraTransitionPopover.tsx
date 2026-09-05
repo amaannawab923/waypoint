@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { clsx } from 'clsx';
 import { Button } from '@/components/ui/Button';
+import { JiraLoadError } from '@/components/domain/JiraLoadError';
 import type { JiraTransition } from '@/types/jira';
 
 /**
@@ -21,6 +22,7 @@ export function JiraTransitionPopover({
   currentStateName,
   transitions,
   loading,
+  error,
   onSelect,
   onClose,
 }: {
@@ -29,6 +31,11 @@ export function JiraTransitionPopover({
   currentStateName: string;
   transitions: JiraTransition[];
   loading: boolean;
+  /** Set when the transitions read failed. Kept separate from an empty
+   * `transitions` array on purpose: "Jira offers no moves from here" and
+   * "we could not ask Jira" are different answers and used to render the
+   * same sentence. */
+  error: Error | null;
   onSelect: (
     transition: JiraTransition,
     fieldValues: Record<string, string>,
@@ -99,7 +106,14 @@ export function JiraTransitionPopover({
               Loading transitions…
             </div>
           )}
-          {!loading && transitions.length === 0 && (
+          {!loading && error && (
+            <JiraLoadError
+              compact
+              what={`${ticketKey}'s transitions`}
+              error={error}
+            />
+          )}
+          {!loading && !error && transitions.length === 0 && (
             <div className="px-3 py-3 text-xs text-text-muted">
               No transitions available from here.
             </div>
@@ -123,11 +137,16 @@ export function JiraTransitionPopover({
               )}
             </button>
           ))}
-          <div className="border-t border-border px-3 py-2.5 text-[10.5px] leading-relaxed text-text-muted">
-            These are the transitions{' '}
-            <b className="text-text-secondary">your Jira workflow</b> allows
-            from {currentStateName} — Waypoint doesn't invent them.
-          </div>
+          {/* Suppressed on error: this footer asserts that what's above it is
+              your workflow's real answer, which is exactly the claim a failed
+              read cannot back. */}
+          {!error && (
+            <div className="border-t border-border px-3 py-2.5 text-[10.5px] leading-relaxed text-text-muted">
+              These are the transitions{' '}
+              <b className="text-text-secondary">your Jira workflow</b> allows
+              from {currentStateName} — Waypoint doesn't invent them.
+            </div>
+          )}
         </>
       ) : (
         <div className="p-3">
