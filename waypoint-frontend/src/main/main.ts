@@ -26,6 +26,7 @@ import {
   killAllCopilotConnectProcesses,
 } from './copilot/copilotConnect';
 import { registerCopilotDetectIpc } from './copilot/copilotDetect';
+import { registerJiraIpc } from './jira/jiraIpc';
 import { registerRepoLinkIpc } from './repoLink';
 
 // Opt-in remote debugging for scripted/agent-driven QA (docs/qa-electron.md)
@@ -108,6 +109,9 @@ registerCopilotIpc(() => mainWindow);
 registerCopilotAuthIpc();
 registerCopilotConnectIpc(() => mainWindow);
 registerCopilotDetectIpc();
+// No window getter: every Jira channel is request/response, so none of them
+// ever needs to push to a window the way the Copilot stream does.
+registerJiraIpc();
 registerRepoLinkIpc(() => mainWindow);
 
 if (process.env.NODE_ENV === 'production') {
