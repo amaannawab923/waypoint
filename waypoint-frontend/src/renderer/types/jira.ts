@@ -141,7 +141,8 @@ export interface JiraMentionCandidate {
  * rows. Never built on top of ProposalView/ProposalKind: those are tightly
  * coupled to real ticket UUIDs and a backend-driven claim state machine that
  * doesn't exist for Jira (see JiraProposalCard.tsx's own header comment). */
-export type JiraProposalStatus = 'proposed' | 'executing' | 'executed' | 'rejected';
+export type JiraProposalStatus =
+  'proposed' | 'executing' | 'executed' | 'rejected';
 
 export interface JiraProposal {
   id: ID;
