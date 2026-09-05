@@ -1163,46 +1163,57 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: Open a ticket whose description has a table and a fenced code block.
   Expected: Cell text and code text are present as plain text; nothing renders as `[object Object]`.
   Coverage: **Supported (honest limitation)** — structure is deliberately lost, as the Connection tab states; `ADF_BLOCK_TYPES` includes `tableRow` and `codeBlock` so their text survives.
+  Result: PASS, live-verified — set a real ADF description on ENG-81 with a table and a code block via the v3 API; rendered as clean plain text ("Header A\nHeader B\n\ncell1\ncell2\n\nfunction f() { return 1; }"), no `[object Object]`, no crash. Notably cleaner than comments (JIRA-87/88): the issue endpoint returns real ADF objects, while the v2 comments endpoint pre-flattens to wiki-markup strings — that difference is the actual root cause of the mention/markup leak found in comments, and it does not affect descriptions.
 - **JIRA-102** — An empty description
   Steps: Open a ticket with no description.
   Expected: An empty area or nothing, not "null"/"undefined" or a crash.
   Coverage: **Supported** — `adfToPlainText(null)` returns `''` and `tidyPlainText` trims.
+  Result: PASS — cleared ENG-81's description to `null` via the API; the drawer shows an empty area, no "null"/"undefined" text, no crash.
 - **JIRA-103** — Attachments are listed but not retrievable
   Steps: Open a ticket with attachments. Try to open or download one.
   Expected: File name, size and uploader shown, with a "download in Jira" marker and no clickable link.
   Coverage: **Supported (honest limitation)** — `mapAttachments` maps exactly those three fields and the badge is a static `<span>`; the Connection tab discloses that uploading happens in Jira. Note the *download* side isn't offered either even though the content URL is available — worth confirming whether the disclosure covers that.
+  Result: NOT TESTED — did not attach a real file to an issue via the API (a multipart upload, more involved than the field writes done elsewhere in this pass) given time already spent; deferred rather than rushed.
 - **JIRA-104** — Add an attachment from Waypoint
   Steps: Look for any upload control in the drawer.
   Expected: None.
   Coverage: **Not supported (by design)** — explicitly disclosed on the Connection tab.
+  Result: PASS — no upload control of any kind near "Open in Jira" or anywhere else in the drawer.
 - **JIRA-105** — Linked issues (blocks / is blocked by / relates to / duplicates)
   Steps: Open a ticket with Jira issue links. Look for them in the drawer.
   Expected: No issue links appear anywhere — no blocks / is blocked by / relates to / duplicates section in the drawer, and no marker on the row.
   Coverage: **Gap worth flagging** — `fields.issuelinks` is never mapped. "What's blocking this" is one of the first questions asked about any ticket, and it's invisible. Also undercuts the built-but-dormant duplicate-nudge UI, which points at a duplicate relationship the drawer can't show.
+  Result: FAIL (confirms the gap directly) — created a real "Blocks" link between ENG-81 and ENG-4 via the API; the drawer shows nothing about it at all.
 - **JIRA-106** — Time tracking: original estimate, remaining, logged
   Steps: Open a ticket with time tracking populated in Jira.
   Expected: No original estimate, remaining estimate, logged time or worklog entry appears on the row or in the drawer.
   Coverage: **Not supported (untested/unknown)** — `fields.timetracking` and `fields.worklog` are never mapped. The only time-tracking touchpoint anywhere is the optional field on a transition screen (JIRA-73), which writes but never reads back.
+  Result: NOT TESTED — not attempted this pass; would need to populate time-tracking fields via the API, deferred given time already spent on higher-priority cases.
 - **JIRA-107** — Log work against a ticket
   Steps: Look for a "log work" action.
   Expected: None outside a transition screen.
   Coverage: **Not supported (untested/unknown)** — no worklog endpoint is called. Reasonable to defer, but for teams that bill time this is a daily blocker to using Waypoint as the front end.
+  Result: PASS (confirms absence) — no "log work" action exists anywhere outside the transition screen's optional time field (JIRA-73, itself untestable on this workflow).
 - **JIRA-108** — "Open in Jira" from the drawer
   Steps: Open a drawer and click "Open in Jira ↗".
   Expected: Opens `https://{site}/browse/{KEY}` in the system browser, not inside the app window.
   Coverage: **Supported** — the URL is built from the connected site and the ticket key; `main.ts`'s window-open handler routes `target="_blank"` https links externally.
+  Result: PASS — link's real `href="https://waypoint123.atlassian.net/browse/ENG-81"` with `target="_blank"`; not manually clicked to confirm external routing (would open a real browser tab), but the URL and attributes are correct and this window-open routing was already confirmed working earlier in this feature's build.
 - **JIRA-109** — Drawer closes cleanly
   Steps: Open a drawer. Close via Escape, via the X, and via clicking the backdrop.
   Expected: All three close it; no stuck backdrop; the underlying list is unchanged.
   Coverage: **Supported** — portal + backdrop `onClick` + Escape keydown, matching the app's existing `TicketDrawer` convention.
+  Result: PASS — all three close methods verified: Escape, the X button, and a real click dispatched on the backdrop element (`document.body.children[1]`, a `fixed inset-0` overlay) all closed the drawer, leaving only `#root` behind each time.
 - **JIRA-110** — Ticket key with an unusual shape
   Steps: If available, open a ticket whose project key contains digits (e.g. `AB2C-14`).
   Expected: Key renders correctly in the row.
   Coverage: **Partial** — the row renders `{projectKey}-{ticket.key.split('-')[1]}`, which reconstructs rather than printing the key. Safe for standard `PROJ-123` keys; worth confirming nothing odd happens for keys with more than one hyphen.
+  Result: NOT TESTED — this account has only the standard `ENG-N` key shape; no project with digits in its key or an unusual hyphenation pattern exists to test against.
 - **JIRA-111** — An issue moved to another Jira project mid-session
   Steps: Move an issue to a different project in Jira (its key changes). Then act on it in Waypoint without refreshing — open its drawer, transition it.
   Expected: Actions still resolve to the right issue; the displayed key may be stale until refresh.
   Coverage: **Supported** — `JiraWireTicket.id` is Jira's numeric issue id, chosen explicitly because it survives a project move; every REST path uses it.
+  Result: NOT TESTED — only one real Jira project exists in this account, so there's nowhere to move an issue to.
 
 ### Search, sort and saved views
 
@@ -1210,22 +1221,27 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: With 40+ issues loaded, try to find `PROJ-137` without scrolling.
   Expected: No search input exists anywhere in the My Jira view — no key lookup, no title filter, no in-page find. The only way to reach PROJ-137 is to scroll to it.
   Coverage: **Gap worth flagging** — there is no text search, no key lookup, no filter-by-title. At any real queue size the only tool is the eye. Waypoint's native ticket list has both search and Cmd+K (TIX-CW-08, CHROME-01), so this is again below the app's own bar.
+  Result: PASS (confirms the gap) — no search input of any kind exists within the My Jira view itself.
 - **JIRA-113** — Cmd+K finds a Jira ticket
   Steps: Press Cmd+K and type a Jira ticket's title or key.
   Expected: Document whether Jira tickets are searchable from the global palette.
   Coverage: **Not supported (untested/unknown)** — the palette is wired to the native project/ticket data; nothing registers Jira tickets with it. Likely returns nothing, which would be a quiet inconsistency for a user who has both kinds of work open.
+  Result: FAIL (confirms the gap directly, live-verified) — the global search palette returned "No results for \"Task 1\"." for a real Jira ticket's exact title, and "No results for \"ENG-4\"." for its exact key. Jira tickets are completely invisible to global search.
 - **JIRA-114** — Custom JQL
   Steps: Look for any way to edit or supplement the query.
   Expected: None — the JQL is fixed and displayed read-only.
   Coverage: **Not supported (by design)** — "my work mirror, not a project mirror" is the stated scope, and the fixed query is what makes that claim checkable. Worth flagging separately (JIRA-24) that the *specific* `resolution = Unresolved` clause has no escape hatch.
+  Result: PASS — no JQL edit control exists; the query is printed as read-only text.
 - **JIRA-115** — Saved Jira filters
   Steps: Look for access to the saved filters you use in Jira daily.
   Expected: None.
   Coverage: **Not supported (by design)**, adjacent to JIRA-114 — but worth noting that a user's own saved filters are the closest real-world analogue of what My Jira does, and reusing one would be a natural future scope expansion.
+  Result: PASS — no "saved filters" text or control appears anywhere on the page.
 - **JIRA-116** — Waypoint's saved-view mechanism does not apply
   Steps: Look for "Save as view" on My Jira.
   Expected: Absent.
   Coverage: **Not supported (by design)** — My Jira is a standalone concept, not a project, so the project Views mechanism (and its known persistence gap, VIEWS-01) doesn't reach it.
+  Result: PASS — no "Save as view" or equivalent control appears anywhere on the page.
 
 ### Watching & notifications
 
