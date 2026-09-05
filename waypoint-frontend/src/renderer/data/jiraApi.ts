@@ -1,650 +1,398 @@
 // The one integration point between "My Jira" UI code and its data — same
 // contract as data/api.ts (see that file's own header comment for the tone
-// this mirrors), except there is no real backend for this feature yet: every
-// export here is an async function backed by in-memory fixtures, mutated by
-// the mock "write" functions so the UI sees consistent results across calls.
-// UI code must never reach into this module's fixture arrays directly; it
-// only ever calls the exported functions below.
+// this mirrors). Every export here is an async function; UI code never
+// reaches past them.
 //
-// Fixtures are the mockup's own example data verbatim (six tickets across
-// three Jira projects, one already reassigned away, one mid-conflict) — see
-// the My Jira mockup this was ported from for the exact source copy.
+// This file used to be backed by in-memory fixtures. It is now backed by a
+// real Jira Cloud site, reached over IPC through window.electron.jira (see
+// main/jira/). Every function below performs, or reads the result of, a real
+// authenticated REST call against whichever site the user connected.
+//
+// Why IPC and not fetch() from here: the credential is an Atlassian API
+// token — a bearer credential for the user's entire Jira account. It is held,
+// encrypted, in the main process and never enters the renderer (see
+// main/jira/jiraAuth.ts). That also means this file cannot "just call Jira";
+// it can only ask main to, which is the point.
+//
+// The seam is what made the swap containable: the function signatures below
+// are the same ones every Jira component already imports, so replacing
+// fixtures with a real site touched this file and nothing about how
+// JiraTicketRow or JiraTicketDrawer ask for data.
 
-import { JIRA_PROJECT_COLOR } from '@/types/jira';
 import type {
   JiraComment,
   JiraConnectionStatus,
   JiraDuplicateNudge,
-  JiraMentionCandidate,
-  JiraProjectKey,
   JiraProposal,
   JiraTicket,
   JiraTransition,
-  JiraTransitionField,
 } from '@/types/jira';
-
-// Every mock write/read carries an artificial delay so loading/saving states
-// are real, not instant — short-circuited to 0ms under Jest (NODE_ENV=test)
-// so tests stay fast, otherwise close to the mockup's own toast timings
-// (~150ms for a read, 400-600ms for a write that "reaches Jira").
-function delay(ms: number): Promise<void> {
-  const actual = process.env.NODE_ENV === 'test' ? 0 : ms;
-  return new Promise((resolve) => setTimeout(resolve, actual));
-}
-
-// -----------------------------------------------------------------------
-// Fixtures
-// -----------------------------------------------------------------------
-
-// Whether the mock connection starts already-connected. Phase 1 had no
-// wizard yet, so this defaulted to `true` so the sidebar item and /my-jira
-// route were reachable without one. Phase 2 adds the Add Project wizard's
-// Companion flow (components/domain/AddProjectWizard.tsx) as the real path
-// to a connected state, so this flips to `false`: a fresh app load with the
-// flag on now shows no My Jira sidebar item until the wizard — or the
-// Connection tab's own "Connect" affordance — actually connects it.
-const DEFAULT_JIRA_CONNECTED = false;
-
-const CURRENT_USER_NAME = 'Max Chen';
-const CURRENT_USER_INITIALS = 'MC';
-
-function minutesAgo(mins: number): string {
-  return new Date(Date.now() - mins * 60_000).toISOString();
-}
-function secondsAgo(secs: number): string {
-  return new Date(Date.now() - secs * 1000).toISOString();
-}
-
-let connectionFixture: JiraConnectionStatus = {
-  connected: DEFAULT_JIRA_CONNECTED,
-  accountName: CURRENT_USER_NAME,
-  accountEmail: 'max@northwind.dev',
-  site: 'northwind.atlassian.net',
-  lastSyncAt: secondsAgo(8),
-  // issueCount/projectCount below are placeholders — getJiraConnectionStatus
-  // recomputes both from the live ticket list so they never drift from what
-  // the list actually shows (e.g. after a tombstone is dismissed).
-  issueCount: 6,
-  projectCount: 3,
-  pollIntervalSec: 15,
-  paused: false,
-};
-
-let ticketsFixture: JiraTicket[] = [
-  {
-    id: 'jira-eng-421',
-    key: 'ENG-421',
-    projectKey: 'ENG',
-    title: 'Webhook receiver drops events past 500/min',
-    role: 'assignee',
-    stateName: 'In Progress',
-    stateColor: 'var(--warning)',
-    priority: 'urgent',
-    assigneeName: 'Max Chen',
-    assigneeInitials: 'MC',
-    reporterName: 'Sam Lee',
-    watcherNames: ['Priya Raman'],
-    description:
-      'Above roughly 500 events/min the receiver returns 200 but never enqueues. Reproduced on staging with a 900/min replay: 41% of events never reach the worker. Needs a real limiter with backpressure, not a silent drop.',
-    epicName: 'Ingest hardening',
-    storyPoints: 5,
-    sprintName: 'Ingest 24',
-    attachments: [
-      {
-        fileName: 'replay-900rpm.log',
-        sizeLabel: '214 KB',
-        uploaderName: 'Sam Lee',
-      },
-    ],
-    isTombstoned: false,
-    tombstone: null,
-    hasConflict: false,
-    conflict: null,
-  },
-  {
-    id: 'jira-plat-88',
-    key: 'PLAT-88',
-    projectKey: 'PLAT',
-    title: 'Backfill the events table for August',
-    role: 'assignee',
-    stateName: 'In Progress',
-    stateColor: 'var(--warning)',
-    priority: 'medium',
-    assigneeName: 'Max Chen',
-    assigneeInitials: 'MC',
-    reporterName: 'Rob Kim',
-    watcherNames: [],
-    description:
-      'August rows are missing from the events table after the ingest outage — needs a backfill job against the archived S3 dump.',
-    epicName: null,
-    storyPoints: null,
-    sprintName: null,
-    attachments: [],
-    isTombstoned: false,
-    tombstone: null,
-    hasConflict: true,
-    conflict: { changedBy: 'Rob', changedAt: secondsAgo(4) },
-  },
-  {
-    id: 'jira-grw-12',
-    key: 'GRW-12',
-    projectKey: 'GRW',
-    title: 'Signup funnel drops 8% on mobile Safari',
-    role: 'reporter',
-    stateName: 'To Do',
-    stateColor: 'var(--text-muted)',
-    priority: 'low',
-    assigneeName: 'Priya Raman',
-    assigneeInitials: 'PR',
-    reporterName: 'Max Chen',
-    watcherNames: [],
-    description:
-      'Signup completion drops 8% specifically on mobile Safari 17.4 — a stack trace in Sentry points at the phone-verification step failing to submit.',
-    epicName: null,
-    storyPoints: null,
-    sprintName: null,
-    attachments: [],
-    isTombstoned: false,
-    tombstone: null,
-    hasConflict: false,
-    conflict: null,
-  },
-  {
-    id: 'jira-eng-388',
-    key: 'ENG-388',
-    projectKey: 'ENG',
-    title: 'Rotate the staging database credentials',
-    role: 'watcher',
-    stateName: 'In Review',
-    stateColor: 'var(--accent)',
-    priority: 'none',
-    assigneeName: 'Sam Lee',
-    assigneeInitials: 'SL',
-    reporterName: 'Max Chen',
-    watcherNames: ['Max Chen'],
-    description:
-      'Routine credential rotation for the staging database, scoped to the ingest and API services.',
-    epicName: null,
-    storyPoints: null,
-    sprintName: null,
-    attachments: [],
-    isTombstoned: false,
-    tombstone: null,
-    hasConflict: false,
-    conflict: null,
-  },
-  {
-    id: 'jira-eng-402',
-    key: 'ENG-402',
-    projectKey: 'ENG',
-    title: 'Add a health-check endpoint to the export worker',
-    role: 'assignee',
-    stateName: 'To Do',
-    stateColor: 'var(--text-muted)',
-    priority: 'none',
-    assigneeName: 'Max Chen',
-    assigneeInitials: 'MC',
-    reporterName: 'Sam Lee',
-    watcherNames: [],
-    description:
-      'The export worker has no liveness endpoint, so a wedged worker looks healthy to the orchestrator.',
-    epicName: null,
-    storyPoints: null,
-    sprintName: null,
-    attachments: [],
-    isTombstoned: false,
-    tombstone: null,
-    hasConflict: false,
-    conflict: null,
-  },
-  {
-    id: 'jira-plat-91',
-    key: 'PLAT-91',
-    projectKey: 'PLAT',
-    title: 'Split the ingest worker into two queues',
-    role: 'assignee',
-    stateName: 'In Progress',
-    stateColor: 'var(--warning)',
-    priority: 'none',
-    assigneeName: 'Priya Raman',
-    assigneeInitials: 'PR',
-    reporterName: 'Rob Kim',
-    watcherNames: [],
-    description:
-      'Split the single ingest queue into a fast-path and a backfill-path queue to stop head-of-line blocking.',
-    epicName: null,
-    storyPoints: null,
-    sprintName: null,
-    attachments: [],
-    isTombstoned: true,
-    tombstone: { reassignedTo: 'Priya Raman', reassignedAt: minutesAgo(6) },
-    hasConflict: false,
-    conflict: null,
-  },
-];
-
-let commentsFixture: JiraComment[] = [
-  {
-    id: 'jira-cmt-1',
-    ticketId: 'jira-eng-421',
-    authorName: 'Sam Lee',
-    authorInitials: 'SL',
-    body: 'Replay log attached. @Max Chen this is blocking the Northwind rollout — can you take it this sprint?',
-    mentions: ['Max Chen'],
-    createdAt: minutesAgo(60 * 20),
-    postedByWaypoint: false,
-    disclosureText: null,
-  },
-  {
-    id: 'jira-cmt-2',
-    ticketId: 'jira-eng-421',
-    authorName: 'Max Chen',
-    authorInitials: 'MC',
-    body: 'Taking it. Token bucket rather than a fixed window — fixed windows still cliff at the boundary.',
-    mentions: [],
-    createdAt: minutesAgo(60 * 3),
-    postedByWaypoint: false,
-    disclosureText: null,
-  },
-];
-
-const MENTION_CANDIDATES: JiraMentionCandidate[] = [
-  { name: 'Priya Raman', role: 'reviewer' },
-  { name: 'Sam Lee', role: 'reporter' },
-  { name: 'Rob Kim', role: 'watcher' },
-];
-
-// The Copilot rail's one combined proposal, matching the mockup's ENG-421
-// example verbatim — a single Approve applies both the state move and the
-// comment post atomically (see types/jira.ts's own header comment on
-// JiraProposal for why this isn't two separate rows).
-let proposalFixture: JiraProposal | undefined = {
-  id: 'jira-prop-eng-421',
-  ticketId: 'jira-eng-421',
-  ticketKey: 'ENG-421',
-  ticketProjectColor: JIRA_PROJECT_COLOR.ENG,
-  status: 'proposed',
-  fromStateName: 'In Progress',
-  fromStateColor: 'var(--warning)',
-  toStateName: 'In Review',
-  toStateColor: 'var(--accent)',
-  commentBody:
-    'PR #418 adds a token-bucket limiter in webhookReceiver.ts (500/min, burst 50) and a regression test for the 501st event. Ready for review — @Priya Raman.',
-  commentMentions: ['Priya Raman'],
-  repoPath: '~/code/northwind',
-  branch: 'fix/webhook-ratelimit',
-  commitCount: 3,
-  prNumber: 418,
-  prStatus: 'open',
-  createdAt: minutesAgo(4),
-  resolvedAt: null,
-};
-
-// The rail's small "Also queued" duplicate nudge — GRW-12 vs GRW-9. GRW-9
-// itself has no fixture (it's never opened, only referenced by key), so
-// this stays a thin pointer at the real GRW-12 ticket rather than a second
-// parallel ticket fixture.
-let duplicateNudgeFixture:
-  | { id: string; ticketId: string; duplicateOfKey: string; dismissed: boolean }
-  | undefined = {
-  id: 'jira-dup-grw12',
-  ticketId: 'jira-grw-12',
-  duplicateOfKey: 'GRW-9',
-  dismissed: false,
-};
+import type { Priority } from '@/types/entities';
+// A type-only reach into the main process, the same crossing preload.d.ts
+// already makes for the bridge as a whole: these describe the shapes coming
+// back over IPC, and restating them here would just be a second copy to keep
+// in sync. Nothing at runtime is imported from src/main.
+import type {
+  JiraWireComment,
+  JiraWireTicket,
+  JiraWireTransition,
+} from '../../main/jira/jiraTypes';
 
 // -----------------------------------------------------------------------
-// Per-project workflows — "these are the transitions your Jira workflow
-// allows... Waypoint doesn't invent them" (mockup copy). ENG and PLAT share
-// a 4-state workflow (To Do / In Progress / In Review / Done); GRW's is
-// simpler (no In Review). Both `requiresResolution`/`optionalTimeSpent`
-// mirror exactly which transitions the mockup marks "needs a field".
+// The bridge
 // -----------------------------------------------------------------------
 
-interface WorkflowTransitionDef {
-  targetStateName: string;
-  requiresResolution?: boolean;
-  optionalTimeSpent?: boolean;
-}
+/**
+ * Structurally identical to main/jira/jiraTypes.ts's JiraResult, restated
+ * here rather than imported: the renderer does not import from src/main
+ * (only preload.d.ts crosses that line, and only for the bridge's own type),
+ * and `reason` widened to `string` is all this side needs — the renderer
+ * turns every failure into the same thrown Error regardless of kind.
+ */
+type IpcResult<T> =
+  { ok: true; value: T } | { ok: false; reason: string; message: string };
 
-const STATE_COLOR: Record<string, string> = {
-  'To Do': 'var(--text-muted)',
-  'In Progress': 'var(--warning)',
-  'In Review': 'var(--accent)',
-  Done: 'var(--success)',
-};
-
-const RESOLUTION_OPTIONS = [
-  'Fixed',
-  "Won't Do",
-  'Duplicate',
-  'Cannot Reproduce',
-];
-
-const ENG_WORKFLOW: Record<string, WorkflowTransitionDef[]> = {
-  'To Do': [{ targetStateName: 'In Progress' }],
-  'In Progress': [
-    { targetStateName: 'In Review' },
-    {
-      targetStateName: 'Done',
-      requiresResolution: true,
-      optionalTimeSpent: true,
-    },
-    { targetStateName: 'To Do' },
-  ],
-  'In Review': [{ targetStateName: 'Done' }],
-  Done: [],
-};
-
-// "PLAT similar to ENG" (build plan) — same shape, except PLAT's own Done
-// transition from In Review also requires a Resolution (ENG's doesn't).
-const PLAT_WORKFLOW: Record<string, WorkflowTransitionDef[]> = {
-  'To Do': [{ targetStateName: 'In Progress' }],
-  'In Progress': [
-    { targetStateName: 'In Review' },
-    {
-      targetStateName: 'Done',
-      requiresResolution: true,
-      optionalTimeSpent: true,
-    },
-    { targetStateName: 'To Do' },
-  ],
-  'In Review': [
-    {
-      targetStateName: 'Done',
-      requiresResolution: true,
-      optionalTimeSpent: true,
-    },
-  ],
-  Done: [],
-};
-
-// GRW has no In Review state at all — the contrast with ENG/PLAT the build
-// plan calls out as load-bearing.
-const GRW_WORKFLOW: Record<string, WorkflowTransitionDef[]> = {
-  'To Do': [
-    { targetStateName: 'In Progress' },
-    { targetStateName: 'Done', requiresResolution: true },
-  ],
-  'In Progress': [{ targetStateName: 'Done', requiresResolution: true }],
-  Done: [],
-};
-
-const WORKFLOWS: Record<
-  JiraProjectKey,
-  Record<string, WorkflowTransitionDef[]>
-> = {
-  ENG: ENG_WORKFLOW,
-  PLAT: PLAT_WORKFLOW,
-  GRW: GRW_WORKFLOW,
-};
-
-function buildTransitionFields(
-  def: WorkflowTransitionDef,
-): JiraTransitionField[] {
-  if (!def.requiresResolution) return [];
-  const fields: JiraTransitionField[] = [
-    {
-      key: 'resolution',
-      label: 'Resolution',
-      type: 'select',
-      required: true,
-      options: RESOLUTION_OPTIONS,
-    },
-  ];
-  if (def.optionalTimeSpent) {
-    fields.push({
-      key: 'timeSpent',
-      label: 'Time spent',
-      type: 'text',
-      required: false,
-      hint: 'Optional on this workflow.',
-    });
+function bridge() {
+  const api = window.electron?.jira;
+  if (!api) {
+    // Only reachable outside a real Electron window (a bare browser, a test
+    // that forgot to stub). Saying so beats "cannot read property of
+    // undefined" three frames deeper.
+    throw new Error('The Jira connection is unavailable in this window.');
   }
-  return fields;
+  return api;
 }
 
-function transitionsFor(ticket: JiraTicket): JiraTransition[] {
-  const defs = WORKFLOWS[ticket.projectKey][ticket.stateName] ?? [];
-  return defs.map((def) => ({
-    id: `${ticket.id}::${def.targetStateName.replace(/\s+/g, '-')}`,
-    targetStateName: def.targetStateName,
-    targetStateColor: STATE_COLOR[def.targetStateName] ?? 'var(--text-muted)',
-    requiresFields: buildTransitionFields(def),
-  }));
+/**
+ * Main answers with a discriminated union; this layer's callers (and the
+ * components above them) are all written around try/catch and
+ * showErrorToast, exactly like data/api.ts's HTTP layer. Converting once here
+ * keeps that one convention rather than introducing a second error style
+ * halfway up the tree — and Jira's own message is preserved verbatim, since
+ * "Resolution is required" is far more useful than "the move failed".
+ */
+function unwrap<T>(result: IpcResult<T>): T {
+  if (result.ok) return result.value;
+  throw new Error(result.message);
+}
+
+// -----------------------------------------------------------------------
+// Wire → UI mapping
+// -----------------------------------------------------------------------
+
+// Jira groups every status on every workflow into exactly three categories
+// (`statusCategory.key`). Status *names* are per-workflow and unbounded, so
+// the category is the only thing that can be colored consistently across
+// sites. The cost is real and worth naming: "In Progress" and "In Review" are
+// both `indeterminate` in Jira's eyes and therefore share a color here, where
+// the fixture data gave them two. Inventing a distinction Jira doesn't make
+// would mean guessing from status names, which is exactly the guesswork the
+// category exists to avoid.
+const STATE_COLOR: Record<string, string> = {
+  todo: 'var(--text-muted)',
+  'in-progress': 'var(--warning)',
+  done: 'var(--success)',
+};
+
+function stateColor(category: string): string {
+  return STATE_COLOR[category] ?? 'var(--text-muted)';
+}
+
+function toTransition(wire: JiraWireTransition): JiraTransition {
+  return {
+    id: wire.id,
+    targetStateName: wire.targetStateName,
+    targetStateColor: stateColor(wire.targetStateCategory),
+    requiresFields: wire.requiresFields.map((field) => ({
+      key: field.key,
+      label: field.label,
+      type: field.type,
+      required: field.required,
+      ...(field.options ? { options: field.options } : {}),
+      ...(field.hint ? { hint: field.hint } : {}),
+    })),
+  };
+}
+
+function toTicket(wire: JiraWireTicket): JiraTicket {
+  return {
+    id: wire.id,
+    key: wire.key,
+    projectKey: wire.projectKey,
+    title: wire.title,
+    role: wire.role,
+    stateName: wire.stateName,
+    stateColor: stateColor(wire.stateCategory),
+    priority: wire.priority as Priority,
+    assigneeName: wire.assigneeName,
+    reporterName: wire.reporterName,
+    description: wire.description,
+    epicName: wire.epicName,
+    storyPoints: wire.storyPoints,
+    sprintName: wire.sprintName,
+    attachments: wire.attachments,
+    // Both of these describe drift between what this app last read and what
+    // Jira holds now — a tombstone is "this was reassigned away from you", a
+    // conflict is "someone else moved it while you were looking". Detecting
+    // either needs a persisted previous read to compare against, which this
+    // phase has no store for, so nothing fabricates one: no ticket is ever
+    // marked tombstoned or conflicted, and the strips that render them simply
+    // never appear. The components stay, ready for the phase that adds the
+    // comparison.
+    isTombstoned: false,
+    tombstone: null,
+    hasConflict: false,
+    conflict: null,
+  };
+}
+
+function toComment(wire: JiraWireComment): JiraComment {
+  return {
+    id: wire.id,
+    ticketId: wire.ticketId,
+    authorName: wire.authorName,
+    body: wire.body,
+    createdAt: wire.createdAt,
+    // Jira has no concept of "this comment came from Waypoint" — there's no
+    // property on a comment to carry it and this app doesn't keep its own
+    // record of what it posted. A comment read back from Jira is therefore
+    // just a comment, whoever typed it.
+    postedByWaypoint: false,
+    disclosureText: null,
+  };
+}
+
+// -----------------------------------------------------------------------
+// Session cache
+// -----------------------------------------------------------------------
+
+// Not a general client cache (data/api.ts has no such thing and this isn't
+// the place to introduce one) — three specific pieces of state that would
+// otherwise force redundant network calls:
+//
+//  - `lastTickets` backs getJiraConnectionStatus()'s issue/project counts, so
+//    the Connection tab and the wizard's confirm step can show real numbers
+//    without every status read re-running the JQL search.
+//  - `transitionsByTicketId` holds whatever the bulk search returned, so
+//    opening a transition menu is usually free.
+//  - `lastSyncAt` is genuinely "when the list was last read", which is what
+//    the page's "synced Ns ago" indicator claims to show.
+let lastTickets: JiraTicket[] = [];
+let transitionsByTicketId = new Map<string, JiraTransition[]>();
+let lastSyncAt = new Date().toISOString();
+
+function rememberTickets(wire: JiraWireTicket[]): JiraTicket[] {
+  const tickets = wire.map(toTicket);
+  // Only tickets whose transitions actually came back are remembered. An
+  // empty transitions array from the bulk search is ambiguous — it means
+  // either "this issue has no legal moves" or "the bulk expand didn't
+  // populate them" — and caching the ambiguity would show a user an empty
+  // transition menu on a ticket they can plainly move. Storing nothing
+  // instead makes getJiraTransitions() fall through to the per-issue
+  // endpoint, which is unambiguous.
+  transitionsByTicketId = new Map(
+    wire
+      .filter((item) => item.transitions.length > 0)
+      .map((item) => [item.id, item.transitions.map(toTransition)]),
+  );
+  lastTickets = tickets;
+  lastSyncAt = new Date().toISOString();
+  return tickets;
+}
+
+function clearCache(): void {
+  lastTickets = [];
+  transitionsByTicketId = new Map();
 }
 
 // -----------------------------------------------------------------------
 // Reads
 // -----------------------------------------------------------------------
 
+/**
+ * A purely local read — main answers from the encrypted credential file
+ * without touching the network, because the sidebar and the My Jira page both
+ * ask on every mount. The counts come from the last actual ticket read
+ * (zero until one happens), which is why connectJira() and refreshJiraSync()
+ * both list before returning a status.
+ */
 export async function getJiraConnectionStatus(): Promise<JiraConnectionStatus> {
-  await delay(150);
-  const live = ticketsFixture.filter((t) => !t.isTombstoned);
+  const snapshot = await bridge().status();
   return {
-    ...connectionFixture,
-    issueCount: live.length,
-    projectCount: new Set(live.map((t) => t.projectKey)).size,
+    connected: snapshot.connected,
+    accountName: snapshot.identity?.displayName ?? '',
+    accountEmail: snapshot.identity?.email ?? '',
+    site: snapshot.identity?.site ?? '',
+    lastSyncAt,
+    issueCount: lastTickets.length,
+    projectCount: new Set(lastTickets.map((t) => t.projectKey)).size,
   };
 }
 
 export async function listMyJiraTickets(): Promise<JiraTicket[]> {
-  await delay(200);
-  return ticketsFixture.map((t) => ({ ...t }));
+  const wire = unwrap(await bridge().listTickets());
+  return rememberTickets(wire);
 }
 
-export async function getJiraTicket(
-  id: string,
-): Promise<JiraTicket | undefined> {
-  await delay(150);
-  const found = ticketsFixture.find((t) => t.id === id);
-  return found ? { ...found } : undefined;
-}
-
+/**
+ * The transition menu's data, with the fallback that makes it trustworthy.
+ *
+ * The bulk search asks for transitions inline, and when that works this
+ * returns without a round trip. But an empty result there cannot be believed
+ * — see rememberTickets — so anything not positively known is asked for
+ * per-issue instead. The alternative (trusting the bulk expand) would fail
+ * silently and in exactly the worst way: a ticket that renders "No
+ * transitions available from here" when the user's Jira plainly offers three.
+ */
 export async function getJiraTransitions(
   ticketId: string,
 ): Promise<JiraTransition[]> {
-  await delay(150);
-  const ticket = ticketsFixture.find((t) => t.id === ticketId);
-  if (!ticket) return [];
-  return transitionsFor(ticket);
+  const cached = transitionsByTicketId.get(ticketId);
+  if (cached && cached.length > 0) return cached;
+  const wire = unwrap(await bridge().listTransitions(ticketId));
+  const transitions = wire.map(toTransition);
+  if (transitions.length > 0) transitionsByTicketId.set(ticketId, transitions);
+  return transitions;
 }
 
 export async function listJiraComments(
   ticketId: string,
 ): Promise<JiraComment[]> {
-  await delay(150);
-  return commentsFixture
-    .filter((c) => c.ticketId === ticketId)
-    .map((c) => ({ ...c }))
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const wire = unwrap(await bridge().listComments(ticketId));
+  return wire.map(toComment);
 }
 
-export async function listJiraMentionCandidates(): Promise<
-  JiraMentionCandidate[]
-> {
-  await delay(80);
-  return MENTION_CANDIDATES.map((c) => ({ ...c }));
-}
-
+// The Copilot rail's proposal and its "Also queued" duplicate nudge. Both
+// return nothing, always.
+//
+// Until this file talked to a real site, these returned a hand-written
+// ENG-421 proposal from the design mockup. Against a live Jira that fixture
+// is a fabrication: it names an issue the user does not have, and its Approve
+// button would report a state move and a posted comment that never reached
+// Jira at all. Generating one for real needs a Copilot→Jira pipeline that
+// does not exist yet, so nothing is returned rather than something invented —
+// MyJiraPage renders no rail at all when both are empty. JiraProposalCard and
+// the nudge markup are left in place for the phase that builds the pipeline.
 export async function getMyJiraProposal(): Promise<JiraProposal | undefined> {
-  await delay(150);
-  return proposalFixture ? { ...proposalFixture } : undefined;
+  return undefined;
 }
 
 export async function getJiraDuplicateNudge(): Promise<
   JiraDuplicateNudge | undefined
 > {
-  await delay(120);
-  if (!duplicateNudgeFixture || duplicateNudgeFixture.dismissed)
-    return undefined;
-  const ticket = ticketsFixture.find(
-    (t) => t.id === duplicateNudgeFixture!.ticketId,
-  );
-  if (!ticket) return undefined;
-  return {
-    id: duplicateNudgeFixture.id,
-    ticketId: ticket.id,
-    ticketKey: ticket.key,
-    ticketProjectColor: JIRA_PROJECT_COLOR[ticket.projectKey],
-    duplicateOfKey: duplicateNudgeFixture.duplicateOfKey,
-  };
+  return undefined;
 }
 
 // -----------------------------------------------------------------------
 // Writes
 // -----------------------------------------------------------------------
 
-export async function connectJira(): Promise<JiraConnectionStatus> {
-  await delay(900);
-  connectionFixture = {
-    ...connectionFixture,
-    connected: true,
-    lastSyncAt: new Date().toISOString(),
-  };
+/**
+ * Validates the credentials against the user's real site and, only if Jira
+ * accepts them, stores them encrypted in the main process.
+ *
+ * The immediate follow-up list() is not incidental: it makes the wizard's
+ * confirm step show this account's actual issue and project counts rather
+ * than zeros, and it proves the connection can do the one thing it exists to
+ * do before the wizard claims success.
+ */
+export async function connectJira(credentials: {
+  site: string;
+  email: string;
+  apiToken: string;
+}): Promise<JiraConnectionStatus> {
+  unwrap(await bridge().connect(credentials));
+  await listMyJiraTickets();
   return getJiraConnectionStatus();
 }
 
 export async function disconnectJira(): Promise<void> {
-  await delay(300);
-  connectionFixture = { ...connectionFixture, connected: false };
+  await bridge().disconnect();
+  clearCache();
 }
 
-/** Connection tab's "Refresh now" — genuinely re-reads (bumps lastSyncAt),
- * even though nothing in the fixtures ever actually drifts on its own. */
+/** Connection tab's "Refresh now" — a genuine re-read of the JQL search. */
 export async function refreshJiraSync(): Promise<JiraConnectionStatus> {
-  await delay(500);
-  connectionFixture = {
-    ...connectionFixture,
-    lastSyncAt: new Date().toISOString(),
-  };
+  await listMyJiraTickets();
   return getJiraConnectionStatus();
 }
 
-/** Connection tab's "Pause sync" — a real, persisted (well, fixture-lived)
- * boolean rather than a disabled/"Not built yet" control, since jiraStore
- * already exists for exactly this kind of live cross-surface state. */
-export async function setJiraSyncPaused(
-  paused: boolean,
-): Promise<JiraConnectionStatus> {
-  await delay(300);
-  connectionFixture = { ...connectionFixture, paused };
-  return getJiraConnectionStatus();
-}
-
+/**
+ * Moves a real issue. Main re-reads the transition's live field metadata
+ * before writing (so a select's chosen label resolves to whatever id this
+ * site uses for it) and re-reads the issue afterwards, so what comes back is
+ * the state Jira actually landed on rather than the one the UI predicted.
+ */
 export async function transitionJiraTicket(
   ticketId: string,
   transitionId: string,
   fieldValues: Record<string, string>,
 ): Promise<JiraTicket> {
-  const ticket = ticketsFixture.find((t) => t.id === ticketId);
-  if (!ticket) throw new Error(`Unknown Jira ticket: ${ticketId}`);
-  const transition = transitionsFor(ticket).find((t) => t.id === transitionId);
-  if (!transition) throw new Error(`Unknown transition: ${transitionId}`);
-  for (const field of transition.requiresFields) {
-    if (field.required && !fieldValues[field.key]?.trim()) {
-      throw new Error(`${field.label} is required for this transition.`);
-    }
-  }
-  await delay(450);
-  ticket.stateName = transition.targetStateName;
-  ticket.stateColor = transition.targetStateColor;
-  return { ...ticket };
+  const wire = unwrap(
+    await bridge().transition({ ticketId, transitionId, fieldValues }),
+  );
+  const ticket = toTicket(wire);
+  lastTickets = lastTickets.map((t) => (t.id === ticket.id ? ticket : t));
+  // The move changes which transitions are legal from here, so the cached set
+  // for this ticket is now wrong — drop it and let the next menu open ask.
+  transitionsByTicketId.delete(ticketId);
+  return ticket;
 }
 
+/**
+ * Posts a plain-text comment as the connected user.
+ *
+ * Plain text is the whole contract: an "@Name" typed into the body stays
+ * literal characters and notifies nobody, which is why the composer no longer
+ * offers a mention picker (see types/jira.ts).
+ */
+export async function postJiraComment(
+  ticketId: string,
+  body: string,
+): Promise<JiraComment> {
+  return toComment(unwrap(await bridge().postComment({ ticketId, body })));
+}
+
+// Approve/reject for the Copilot rail's proposal. Unreachable in this phase —
+// nothing ever produces a proposal for the card to render (see
+// getMyJiraProposal above) — and deliberately left throwing rather than
+// re-implemented against fixtures: a Jira write attributed to an approval
+// this app cannot actually perform is the one outcome worth being loud about
+// if the pipeline is ever wired up before these are.
+export async function approveJiraProposal(id: string): Promise<JiraProposal> {
+  throw new Error(
+    `Approving a Copilot proposal against Jira isn't built yet (${id}).`,
+  );
+}
+
+export async function rejectJiraProposal(id: string): Promise<JiraProposal> {
+  throw new Error(
+    `Rejecting a Copilot proposal against Jira isn't built yet (${id}).`,
+  );
+}
+
+// dismissJiraTombstone / resolveJiraConflict — MyJiraPage still wires both to
+// their rows, but no ticket is ever marked tombstoned or conflicted (see
+// toTicket), so neither strip renders and neither is reachable. Kept as the
+// callbacks those components' props require, doing the only honest thing
+// available: dropping the row locally, and re-reading the issue from Jira.
 export async function dismissJiraTombstone(ticketId: string): Promise<void> {
-  await delay(200);
-  ticketsFixture = ticketsFixture.filter((t) => t.id !== ticketId);
+  lastTickets = lastTickets.filter((t) => t.id !== ticketId);
 }
 
 export async function resolveJiraConflict(
   ticketId: string,
 ): Promise<JiraTicket> {
-  const ticket = ticketsFixture.find((t) => t.id === ticketId);
-  if (!ticket) throw new Error(`Unknown Jira ticket: ${ticketId}`);
-  await delay(600);
-  // Re-reading picks up the other user's edit — in this fixture, Rob's own
-  // move to In Review (matching the mockup's resolveConflict() outcome).
-  ticket.hasConflict = false;
-  ticket.conflict = null;
-  ticket.stateName = 'In Review';
-  ticket.stateColor = STATE_COLOR['In Review'];
-  return { ...ticket };
+  const tickets = await listMyJiraTickets();
+  const found = tickets.find((t) => t.id === ticketId);
+  if (!found) throw new Error('That issue is no longer in your queue.');
+  return found;
 }
 
-export async function postJiraComment(
-  ticketId: string,
-  body: string,
-): Promise<JiraComment> {
-  await delay(500);
-  const mentionNames = MENTION_CANDIDATES.map((c) => c.name).filter((name) =>
-    body.includes(`@${name}`),
-  );
-  const comment: JiraComment = {
-    id: `jira-cmt-${Math.random().toString(36).slice(2, 10)}`,
-    ticketId,
-    authorName: CURRENT_USER_NAME,
-    authorInitials: CURRENT_USER_INITIALS,
-    body,
-    mentions: mentionNames,
-    createdAt: new Date().toISOString(),
-    postedByWaypoint: true,
-    disclosureText: null,
-  };
-  commentsFixture = [...commentsFixture, comment];
-  return { ...comment };
-}
-
-/** Approves the rail's ENG-421 proposal — applies BOTH halves atomically:
- * the ticket's state moves, and the comment is appended with a disclosure
- * line, matching the mockup's approveProp() outcome exactly. */
-export async function approveJiraProposal(id: string): Promise<JiraProposal> {
-  if (!proposalFixture || proposalFixture.id !== id) {
-    throw new Error(`Unknown Jira proposal: ${id}`);
-  }
-  await delay(700);
-  const proposal = proposalFixture;
-  const ticket = ticketsFixture.find((t) => t.id === proposal.ticketId);
-  if (ticket) {
-    ticket.stateName = proposal.toStateName;
-    ticket.stateColor = proposal.toStateColor;
-  }
-  const comment: JiraComment = {
-    id: `jira-cmt-${Math.random().toString(36).slice(2, 10)}`,
-    ticketId: proposal.ticketId,
-    authorName: CURRENT_USER_NAME,
-    authorInitials: CURRENT_USER_INITIALS,
-    body: proposal.commentBody,
-    mentions: proposal.commentMentions,
-    createdAt: new Date().toISOString(),
-    postedByWaypoint: true,
-    disclosureText: `Written by Waypoint Copilot · approved by ${CURRENT_USER_NAME}`,
-  };
-  commentsFixture = [...commentsFixture, comment];
-  proposalFixture = {
-    ...proposal,
-    status: 'executed',
-    resolvedAt: new Date().toISOString(),
-  };
-  return { ...proposalFixture };
-}
-
-export async function rejectJiraProposal(id: string): Promise<JiraProposal> {
-  if (!proposalFixture || proposalFixture.id !== id) {
-    throw new Error(`Unknown Jira proposal: ${id}`);
-  }
-  await delay(300);
-  proposalFixture = {
-    ...proposalFixture,
-    status: 'rejected',
-    resolvedAt: new Date().toISOString(),
-  };
-  return { ...proposalFixture };
-}
-
+// The id is still taken — it is the shape MyJiraPage's rail calls with, and
+// narrowing it would be churn for a function that exists only to satisfy that
+// contract until the proposal pipeline is built.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export async function dismissJiraDuplicateNudge(id: string): Promise<void> {
-  await delay(150);
-  if (duplicateNudgeFixture && duplicateNudgeFixture.id === id) {
-    duplicateNudgeFixture = { ...duplicateNudgeFixture, dismissed: true };
-  }
+  // No nudge is ever produced, so there is nothing to dismiss.
 }
