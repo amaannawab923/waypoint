@@ -119,6 +119,7 @@ const configuration: webpack.Configuration = {
       // moved default (see its docker-compose.yml/.env.example).
       WAYPOINT_API_BASE_URL: 'http://localhost:14000',
       WAYPOINT_FEATURE_COPILOT: 'false',
+      WAYPOINT_FEATURE_MY_JIRA: 'false',
     }),
 
     new MiniCssExtractPlugin({

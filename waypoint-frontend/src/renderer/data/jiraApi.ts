@@ -1,0 +1,1125 @@
+// The one integration point between "My Jira" UI code and its data — same
+// contract as data/api.ts (see that file's own header comment for the tone
+// this mirrors). Every export here is an async function; UI code never
+// reaches past them.
+//
+// This file used to be backed by in-memory fixtures. It is now backed by a
+// real Jira Cloud site, reached over IPC through window.electron.jira (see
+// main/jira/). Every function below performs, or reads the result of, a real
+// authenticated REST call against whichever site the user connected.
+//
+// Why IPC and not fetch() from here: the credential is an Atlassian API
+// token — a bearer credential for the user's entire Jira account. It is held,
+// encrypted, in the main process and never enters the renderer (see
+// main/jira/jiraAuth.ts). That also means this file cannot "just call Jira";
+// it can only ask main to, which is the point.
+//
+// The seam is what made the swap containable: the function signatures below
+// are the same ones every Jira component already imports, so replacing
+// fixtures with a real site touched this file and nothing about how
+// JiraTicketRow or JiraTicketDrawer ask for data.
+
+import { JiraApiError } from '@/types/jira';
+import type {
+  JiraAttachment,
+  JiraComment,
+  JiraConnectionStatus,
+  JiraDuplicateNudge,
+  JiraPriorityOption,
+  JiraProposal,
+  JiraTicket,
+  JiraTransition,
+  JiraUserOption,
+} from '@/types/jira';
+import type { Priority } from '@/types/entities';
+// A type-only reach into the main process, the same crossing preload.d.ts
+// already makes for the bridge as a whole: these describe the shapes coming
+// back over IPC, and restating them here would just be a second copy to keep
+// in sync. Nothing at runtime is imported from src/main.
+import type {
+  JiraAdfAnyMark,
+  JiraAdfBlockNode,
+  JiraAdfInlineNode,
+  JiraCommentBody,
+  JiraPriorityOption as JiraWirePriorityOption,
+  JiraWireAttachment,
+  JiraWireComment,
+  JiraWireTicket,
+  JiraWireTransition,
+  JiraWireUser,
+} from '../../main/jira/jiraTypes';
+
+// -----------------------------------------------------------------------
+// The bridge
+// -----------------------------------------------------------------------
+
+/**
+ * Structurally identical to main/jira/jiraTypes.ts's JiraResult, restated
+ * here rather than imported: the renderer does not import from src/main
+ * (only preload.d.ts crosses that line, and only for the bridge's own type),
+ * and `reason` widened to `string` is all this side needs — nothing here
+ * switches on the exact union, it just carries the kind through.
+ */
+type IpcResult<T> =
+  { ok: true; value: T } | { ok: false; reason: string; message: string };
+
+function bridge() {
+  const api = window.electron?.jira;
+  if (!api) {
+    // Only reachable outside a real Electron window (a bare browser, a test
+    // that forgot to stub). Saying so beats "cannot read property of
+    // undefined" three frames deeper.
+    throw new Error('The Jira connection is unavailable in this window.');
+  }
+  return api;
+}
+
+/**
+ * Main answers with a discriminated union; this layer's callers (and the
+ * components above them) are all written around try/catch and
+ * showErrorToast, exactly like data/api.ts's HTTP layer. Converting once here
+ * keeps that one convention rather than introducing a second error style
+ * halfway up the tree — and Jira's own message is preserved verbatim, since
+ * "Resolution is required" is far more useful than "the move failed".
+ *
+ * `reason` rides along on the thrown error (see `JiraApiError` in
+ * types/jira.ts) rather than being dropped. It used to be discarded here,
+ * which is how a dead token and a slow network arrived at the UI
+ * indistinguishable from each other — and, because the read paths ignored
+ * the failure entirely, indistinguishable from an empty queue.
+ */
+function unwrap<T>(result: IpcResult<T>): T {
+  if (result.ok) return result.value;
+  throw new JiraApiError(result.message, result.reason);
+}
+
+// -----------------------------------------------------------------------
+// Wire → UI mapping
+// -----------------------------------------------------------------------
+
+// Jira groups every status on every workflow into exactly three categories
+// (`statusCategory.key`). Status *names* are per-workflow and unbounded, so
+// the category is the only thing that can be colored consistently across
+// sites. The cost is real and worth naming: "In Progress" and "In Review" are
+// both `indeterminate` in Jira's eyes and therefore share a color here, where
+// the fixture data gave them two. Inventing a distinction Jira doesn't make
+// would mean guessing from status names, which is exactly the guesswork the
+// category exists to avoid.
+const STATE_COLOR: Record<string, string> = {
+  todo: 'var(--text-muted)',
+  'in-progress': 'var(--warning)',
+  done: 'var(--success)',
+};
+
+function stateColor(category: string): string {
+  return STATE_COLOR[category] ?? 'var(--text-muted)';
+}
+
+function toTransition(wire: JiraWireTransition): JiraTransition {
+  return {
+    id: wire.id,
+    targetStateName: wire.targetStateName,
+    targetStateColor: stateColor(wire.targetStateCategory),
+    requiresFields: wire.requiresFields.map((field) => ({
+      key: field.key,
+      label: field.label,
+      type: field.type,
+      required: field.required,
+      ...(field.options ? { options: field.options } : {}),
+      ...(field.hint ? { hint: field.hint } : {}),
+    })),
+  };
+}
+
+/** Nothing to translate — a priority option is an id and the site's own
+ * label on both sides of the wire, with no presentation to derive (unlike a
+ * transition, whose target state category becomes a CSS variable here). The
+ * mapping exists anyway so the renderer's own type is what leaves this
+ * module, keeping main's shapes from leaking past this file. */
+function toPriorityOption(wire: JiraWirePriorityOption): JiraPriorityOption {
+  return { id: wire.id, name: wire.name };
+}
+
+/**
+ * Same story as toPriorityOption — nothing to translate, but main's shapes stop
+ * at this file.
+ *
+ * Written out field by field rather than passed through wholesale, which is the
+ * point: the wire shape deliberately carries no URL for the file (see
+ * `JiraWireAttachment`), and an explicit mapping is what keeps that true if the
+ * wire shape ever grows one. A download is addressed by `id` and performed
+ * entirely in main.
+ */
+function toAttachment(wire: JiraWireAttachment): JiraAttachment {
+  return {
+    id: wire.id,
+    fileName: wire.fileName,
+    sizeLabel: wire.sizeLabel,
+    sizeBytes: wire.sizeBytes,
+    mimeType: wire.mimeType,
+    uploaderName: wire.uploaderName,
+  };
+}
+
+/** Same story as toPriorityOption — nothing to translate, but main's shapes
+ * stop at this file. */
+function toUserOption(wire: JiraWireUser): JiraUserOption {
+  return {
+    accountId: wire.accountId,
+    displayName: wire.displayName,
+    avatarUrl: wire.avatarUrl,
+  };
+}
+
+function toTicket(wire: JiraWireTicket): JiraTicket {
+  return {
+    id: wire.id,
+    key: wire.key,
+    projectKey: wire.projectKey,
+    title: wire.title,
+    role: wire.role,
+    stateName: wire.stateName,
+    stateColor: stateColor(wire.stateCategory),
+    priority: wire.priority as Priority,
+    priorityId: wire.priorityId,
+    priorityName: wire.priorityName,
+    assigneeName: wire.assigneeName,
+    assigneeAccountId: wire.assigneeAccountId,
+    reporterName: wire.reporterName,
+    description: wire.description,
+    epicName: wire.epicName,
+    storyPoints: wire.storyPoints,
+    sprintName: wire.sprintName,
+    attachments: wire.attachments.map(toAttachment),
+    // Both of these describe drift between what this app last read and what
+    // Jira holds now — a tombstone is "this was reassigned away from you", a
+    // conflict is "someone else moved it while you were looking". Detecting
+    // either needs a persisted previous read to compare against, which this
+    // phase has no store for, so nothing fabricates one: no ticket is ever
+    // marked tombstoned or conflicted, and the strips that render them simply
+    // never appear. The components stay, ready for the phase that adds the
+    // comparison.
+    isTombstoned: false,
+    tombstone: null,
+    hasConflict: false,
+    conflict: null,
+  };
+}
+
+function toComment(wire: JiraWireComment): JiraComment {
+  return {
+    id: wire.id,
+    ticketId: wire.ticketId,
+    authorName: wire.authorName,
+    body: wire.body,
+    createdAt: wire.createdAt,
+    // Jira has no concept of "this comment came from Waypoint" — there's no
+    // property on a comment to carry it and this app doesn't keep its own
+    // record of what it posted. A comment read back from Jira is therefore
+    // just a comment, whoever typed it.
+    postedByWaypoint: false,
+    disclosureText: null,
+  };
+}
+
+// -----------------------------------------------------------------------
+// Session cache
+// -----------------------------------------------------------------------
+
+// Not a general client cache (data/api.ts has no such thing and this isn't
+// the place to introduce one) — three specific pieces of state that would
+// otherwise force redundant network calls:
+//
+//  - `lastTickets` backs getJiraConnectionStatus()'s issue/project counts, so
+//    the Connection tab and the wizard's confirm step can show real numbers
+//    without every status read re-running the JQL search.
+//  - `transitionsByTicketId` holds whatever the bulk search returned, so
+//    opening a transition menu is usually free.
+//  - `lastSyncAt` is genuinely "when the list was last read", which is what
+//    the page's "synced Ns ago" indicator claims to show. It starts `null`
+//    and is only ever written by `rememberTickets`, which runs after a
+//    search has actually come back — so a failed read never advances it and
+//    a session with no successful read has no sync time at all. It used to
+//    be seeded with `new Date()` at module load, which meant an app that had
+//    never reached Jira still rendered a pulsing "synced 0s ago".
+let lastTickets: JiraTicket[] = [];
+let transitionsByTicketId = new Map<string, JiraTransition[]>();
+let lastSyncAt: string | null = null;
+
+function rememberTickets(wire: JiraWireTicket[]): JiraTicket[] {
+  const tickets = wire.map(toTicket);
+  // Only tickets whose transitions actually came back are remembered. An
+  // empty transitions array from the bulk search is ambiguous — it means
+  // either "this issue has no legal moves" or "the bulk expand didn't
+  // populate them" — and caching the ambiguity would show a user an empty
+  // transition menu on a ticket they can plainly move. Storing nothing
+  // instead makes getJiraTransitions() fall through to the per-issue
+  // endpoint, which is unambiguous.
+  transitionsByTicketId = new Map(
+    wire
+      .filter((item) => item.transitions.length > 0)
+      .map((item) => [item.id, item.transitions.map(toTransition)]),
+  );
+  lastTickets = tickets;
+  lastSyncAt = new Date().toISOString();
+  return tickets;
+}
+
+function clearCache(): void {
+  lastTickets = [];
+  transitionsByTicketId = new Map();
+}
+
+// -----------------------------------------------------------------------
+// Reads
+// -----------------------------------------------------------------------
+
+/**
+ * A purely local read — main answers from the encrypted credential file
+ * without touching the network, because the sidebar and the My Jira page both
+ * ask on every mount. The counts come from the last actual ticket read
+ * (zero until one happens), which is why connectJira() and refreshJiraSync()
+ * both list before returning a status.
+ */
+export async function getJiraConnectionStatus(): Promise<JiraConnectionStatus> {
+  const snapshot = await bridge().status();
+  return {
+    connected: snapshot.connected,
+    accountName: snapshot.identity?.displayName ?? '',
+    accountEmail: snapshot.identity?.email ?? '',
+    accountId: snapshot.identity?.accountId ?? '',
+    site: snapshot.identity?.site ?? '',
+    lastSyncAt,
+    issueCount: lastTickets.length,
+    projectCount: new Set(lastTickets.map((t) => t.projectKey)).size,
+  };
+}
+
+export async function listMyJiraTickets(): Promise<JiraTicket[]> {
+  const wire = unwrap(await bridge().listTickets());
+  return rememberTickets(wire);
+}
+
+/**
+ * The transition menu's data, with the fallback that makes it trustworthy.
+ *
+ * The bulk search asks for transitions inline, and when that works this
+ * returns without a round trip. But an empty result there cannot be believed
+ * — see rememberTickets — so anything not positively known is asked for
+ * per-issue instead. The alternative (trusting the bulk expand) would fail
+ * silently and in exactly the worst way: a ticket that renders "No
+ * transitions available from here" when the user's Jira plainly offers three.
+ */
+export async function getJiraTransitions(
+  ticketId: string,
+): Promise<JiraTransition[]> {
+  const cached = transitionsByTicketId.get(ticketId);
+  if (cached && cached.length > 0) return cached;
+  const wire = unwrap(await bridge().listTransitions(ticketId));
+  const transitions = wire.map(toTransition);
+  if (transitions.length > 0) transitionsByTicketId.set(ticketId, transitions);
+  return transitions;
+}
+
+/**
+ * The priorities the connected site offers on this particular issue.
+ *
+ * Deliberately not cached the way transitions are. The transitions cache
+ * exists because the bulk ticket search already returns them, so reusing that
+ * saves a round trip that has genuinely already happened; nothing about a
+ * priority scheme arrives that way, so a cache here would buy one saved
+ * request in exchange for holding a list that a project's admin can change
+ * underneath it. Main re-checks the chosen id against live metadata before
+ * writing regardless (see setJiraTicketPriority), but the honest thing for a
+ * menu is to show what is true when it opens.
+ */
+export async function getJiraPriorityOptions(
+  ticketId: string,
+): Promise<JiraPriorityOption[]> {
+  const wire = unwrap(await bridge().listPriorityOptions(ticketId));
+  return wire.map(toPriorityOption);
+}
+
+/**
+ * The people the connected site will let this issue be assigned to, matching
+ * what the user has typed.
+ *
+ * Takes the ticket's KEY, not its id — the one channel in this whole feature
+ * that does, because Jira's assignable-user search is specified in terms of
+ * `issueKey`. Callers hold a `JiraTicket` and pass `ticket.key`.
+ *
+ * Uncached, like the priority options and for a stronger version of the same
+ * reason: the result depends on a query the user is still typing, and on a
+ * project permission an admin can change. A blank query is a real call that
+ * returns the first page of assignable users, which is what the picker opens
+ * with.
+ */
+export async function searchJiraAssignableUsers(
+  ticketKey: string,
+  query: string,
+): Promise<JiraUserOption[]> {
+  const wire = unwrap(
+    await bridge().searchAssignableUsers({ ticketKey, query }),
+  );
+  return wire.map(toUserOption);
+}
+
+export async function listJiraComments(
+  ticketId: string,
+): Promise<JiraComment[]> {
+  const wire = unwrap(await bridge().listComments(ticketId));
+  return wire.map(toComment);
+}
+
+// The Copilot rail's proposal and its "Also queued" duplicate nudge. Both
+// return nothing, always.
+//
+// Until this file talked to a real site, these returned a hand-written
+// ENG-421 proposal from the design mockup. Against a live Jira that fixture
+// is a fabrication: it names an issue the user does not have, and its Approve
+// button would report a state move and a posted comment that never reached
+// Jira at all. Generating one for real needs a Copilot→Jira pipeline that
+// does not exist yet, so nothing is returned rather than something invented —
+// MyJiraPage renders no rail at all when both are empty. JiraProposalCard and
+// the nudge markup are left in place for the phase that builds the pipeline.
+export async function getMyJiraProposal(): Promise<JiraProposal | undefined> {
+  return undefined;
+}
+
+export async function getJiraDuplicateNudge(): Promise<
+  JiraDuplicateNudge | undefined
+> {
+  return undefined;
+}
+
+// -----------------------------------------------------------------------
+// Writes
+// -----------------------------------------------------------------------
+
+/**
+ * Validates the credentials against the user's real site and, only if Jira
+ * accepts them, stores them encrypted in the main process.
+ *
+ * The immediate follow-up list() is not incidental: it makes the wizard's
+ * confirm step show this account's actual issue and project counts rather
+ * than zeros, and it proves the connection can do the one thing it exists to
+ * do before the wizard claims success.
+ */
+export async function connectJira(credentials: {
+  site: string;
+  email: string;
+  apiToken: string;
+}): Promise<JiraConnectionStatus> {
+  unwrap(await bridge().connect(credentials));
+  await listMyJiraTickets();
+  return getJiraConnectionStatus();
+}
+
+export async function disconnectJira(): Promise<void> {
+  await bridge().disconnect();
+  clearCache();
+}
+
+/** Connection tab's "Refresh now" — a genuine re-read of the JQL search. */
+export async function refreshJiraSync(): Promise<JiraConnectionStatus> {
+  await listMyJiraTickets();
+  return getJiraConnectionStatus();
+}
+
+/**
+ * Moves a real issue. Main re-reads the transition's live field metadata
+ * before writing (so a select's chosen label resolves to whatever id this
+ * site uses for it) and re-reads the issue afterwards, so what comes back is
+ * the state Jira actually landed on rather than the one the UI predicted.
+ */
+export async function transitionJiraTicket(
+  ticketId: string,
+  transitionId: string,
+  fieldValues: Record<string, string>,
+): Promise<JiraTicket> {
+  const wire = unwrap(
+    await bridge().transition({ ticketId, transitionId, fieldValues }),
+  );
+  const ticket = toTicket(wire);
+  lastTickets = lastTickets.map((t) => (t.id === ticket.id ? ticket : t));
+  // The move changes which transitions are legal from here, so the cached set
+  // for this ticket is now wrong — drop it and let the next menu open ask.
+  transitionsByTicketId.delete(ticketId);
+  return ticket;
+}
+
+/**
+ * Changes a real issue's priority.
+ *
+ * Main re-reads the issue's live edit metadata immediately before writing and
+ * refuses a value the issue no longer accepts, then re-reads the whole issue
+ * afterwards — the same shape as transitionJiraTicket, for the same reason:
+ * what comes back is the state Jira landed on, not the one the UI predicted.
+ *
+ * The cached list is patched with `.map()`, never filtered. A priority change
+ * cannot move a ticket out of the "my work" JQL (that query matches on
+ * assignee/reporter/watcher and resolution, none of which this touches), so
+ * there is no case where dropping the row would be right — and patching in
+ * place is what keeps the row where the user's eye already is.
+ */
+export async function setJiraTicketPriority(
+  ticketId: string,
+  priorityId: string,
+): Promise<JiraTicket> {
+  const wire = unwrap(await bridge().setPriority({ ticketId, priorityId }));
+  const ticket = toTicket(wire);
+  lastTickets = lastTickets.map((t) => (t.id === ticket.id ? ticket : t));
+  return ticket;
+}
+
+/**
+ * Reassigns a real issue, or unassigns it when `accountId` is `null`.
+ *
+ * `null` is a value, not a missing argument, and it stays one the whole way
+ * down: the picker's Unassign row sends it, the IPC handler checks for the
+ * literal `null` before any string coercion (see jiraIpc.ts, where
+ * `readString` would otherwise fold it into `''` and make it indistinguishable
+ * from a field that was never sent), and Jira's assignee endpoint takes
+ * `{ accountId: null }` as its own documented payload for "nobody".
+ *
+ * The cached list is patched with `.map()`, never filtered — and here that is
+ * a decision rather than symmetry with the writes above it.
+ *
+ * Reassigning a ticket away from yourself genuinely can drop it out of the
+ * "my work" JQL: that query matches on assignee OR reporter OR watcher, and if
+ * you were only ever its assignee, you are no longer any of the three. The
+ * temptation is to remove the row on that basis. The row must stay. A ticket
+ * vanishing from under the cursor the instant a menu closes reads as data loss
+ * even when it is technically correct, and the user has no way to confirm the
+ * write they just made landed the way they meant.
+ *
+ * `.map()` is the whole mechanism for that, and no special case is needed to
+ * get it: the ticket is patched in place with what Jira returned — new
+ * assignee name, and a `role` that now honestly reads "not yours" (see
+ * `roleOf` in main/jira/jiraMap.ts) — and it simply is not excluded from
+ * anything until the next `listMyJiraTickets()` re-runs the query and does not
+ * find it. Which is exactly "stays visible until the next refresh", falling
+ * out of doing the ordinary thing. Nothing in this path may filter or remove.
+ */
+export async function setJiraTicketAssignee(
+  ticketId: string,
+  accountId: string | null,
+): Promise<JiraTicket> {
+  const wire = unwrap(await bridge().setAssignee({ ticketId, accountId }));
+  const ticket = toTicket(wire);
+  lastTickets = lastTickets.map((t) => (t.id === ticket.id ? ticket : t));
+  return ticket;
+}
+
+/**
+ * Saves one of an issue's attachments to disk.
+ *
+ * Not really a write to Jira at all — nothing about the issue changes — but it
+ * lives among the writes because it is an action the user takes rather than
+ * data this module reads, and because it is the one function here whose result
+ * is a file on their machine.
+ *
+ * Note the signature: there is no `path` parameter, and none comes back. This
+ * side cannot name a destination. It asks main to download an attachment and
+ * let the user choose where it goes, and main owns the whole fetch → native
+ * save dialog → write → reveal-in-Finder sequence inside a single handler.
+ * That is the point of the design rather than an inconvenience of it: nothing
+ * the renderer says can decide where bytes land, so there is nothing to
+ * validate and nothing to get wrong. `fileName` is only the dialog's default
+ * suggestion, and main sanitizes it before use — a Jira filename is chosen by
+ * whoever uploaded it.
+ *
+ * A cancel comes back as `{ canceled: true }`, never as a thrown error. The
+ * user closing a save dialog is a normal outcome and must not fire the error
+ * toast every other failure here produces.
+ */
+export async function downloadJiraAttachment(
+  ticketId: string,
+  attachmentId: string,
+  fileName: string,
+): Promise<{ canceled: boolean }> {
+  const result = unwrap(
+    await bridge().downloadAttachment({ ticketId, attachmentId, fileName }),
+  );
+  return { canceled: result.canceled };
+}
+
+/**
+ * Attaches a file to a real issue.
+ *
+ * Takes an issue id and nothing else — no filename, no path, no `File`. Main
+ * opens a native file picker, reads what the user chose and uploads it, all
+ * inside one handler. This side cannot name what gets read off the machine,
+ * which is the security property the whole attachment design is built for and
+ * the reason this signature looks so thin.
+ *
+ * A cancel is `{ canceled: true }` with no ticket, never a thrown error:
+ * closing a file picker is a normal outcome and must not fire the error toast.
+ *
+ * On success the whole re-read ticket comes back and the cached list is
+ * patched with `.map()`, matching every other write in this file. A
+ * `.filter()` would be wrong here in the most obvious way — attaching a file
+ * cannot remove an issue from anyone's queue — but the reason the map is worth
+ * naming is what it carries: the ticket Jira returned, with the new attachment
+ * on it and with Jira's own filename for it (a site can rename on collision),
+ * rather than one this module assembled by assuming the upload did what it
+ * asked for.
+ */
+export async function uploadJiraAttachment(
+  ticketId: string,
+): Promise<{ canceled: boolean; ticket: JiraTicket | null }> {
+  const result = unwrap(await bridge().uploadAttachment({ ticketId }));
+  if (result.canceled || !result.ticket) {
+    return { canceled: true, ticket: null };
+  }
+  const ticket = toTicket(result.ticket);
+  lastTickets = lastTickets.map((t) => (t.id === ticket.id ? ticket : t));
+  return { canceled: false, ticket };
+}
+
+export interface JiraMentionSpan {
+  /** Inclusive start offset into the composer's plain-text draft, in the
+   * same UTF-16 code units a `<textarea>`'s `selectionStart` uses. */
+  start: number;
+  /** Exclusive end offset. */
+  end: number;
+  accountId: string;
+  /** The mention's own display name, used only to re-validate that the text
+   * still reads "@" + this name at [start, end) before the span is trusted
+   * — see `buildCommentAdf`. */
+  displayName: string;
+}
+
+/**
+ * Turns the composer's plain-text draft plus its tracked mention spans into
+ * the ADF document Jira's comment-create endpoint needs.
+ *
+ * A `<textarea>` only ever holds flat text (see JiraCommentComposer.tsx's own
+ * header comment on why this app uses one rather than a contentEditable
+ * surface), so the composer tracks a mention as a span — start, end,
+ * accountId, displayName — alongside the plain string rather than storing
+ * anything richer. This is where that tracked span becomes a real `mention`
+ * ADF node, which is what makes Jira actually notify that person, rather
+ * than "@Display Name" typed as literal characters that notify nobody.
+ *
+ * A span the user has edited into since it was inserted — deleted a letter
+ * inside "@Sam Lee", say — is dropped rather than posted as a broken mention:
+ * the text at [start, end) is re-checked against "@" + displayName here, at
+ * the one point that matters, right before it becomes a network request.
+ * Whatever text is actually there today goes out as plain text instead.
+ *
+ * One `paragraph` node per line: ADF has no bare newline, so a `\n` the user
+ * typed has to become a paragraph break to survive at all — the same
+ * structure `adfToPlainText` (main/jira/jiraMap.ts) already reconstructs a
+ * `\n` from on the read side.
+ */
+// -----------------------------------------------------------------------
+// Comment body: a lightweight-markdown subset -> ADF
+// -----------------------------------------------------------------------
+//
+// The composer's toolbar (JiraCommentComposer.tsx) wraps a selection in
+// markdown-style delimiters -- **bold**, _em_, ~~strike~~, `code`,
+// [text](url) -- and prefixes a line for block structure -- #/##/### for
+// headings, "- "/"* " for a bullet item, "1. " for an ordered item, "> "
+// for a quote, and a ``` fence for a code block. Everything below turns
+// that plain-text-plus-syntax draft into the ADF Jira's comment-create
+// endpoint needs, in the same spirit as `JiraMentionSpan` above: the
+// textarea only ever holds flat text, so structure is recovered from it at
+// the one point that matters, right before the comment is sent.
+//
+// This is not a Markdown implementation. It supports exactly the subset the
+// toolbar can produce, not nesting (bold-and-italic-together isn't detected
+// as one span), not escaping a literal delimiter character, and not a mark
+// pair split across two lines (every inline pattern below excludes `\n`,
+// since block structure -- including which lines merge into one list -- is
+// resolved one line at a time before any inline parsing runs).
+
+interface InlineRun {
+  start: number;
+  end: number;
+  contentStart: number;
+  contentEnd: number;
+  kind: 'strong' | 'em' | 'strike' | 'code' | 'link';
+  href?: string;
+  priority: number;
+}
+
+const INLINE_PATTERNS: {
+  kind: InlineRun['kind'];
+  re: RegExp;
+  priority: number;
+}[] = [
+  { kind: 'code', re: /`([^`\n]+)`/g, priority: 0 },
+  { kind: 'link', re: /\[([^\]\n]+)\]\(([^)\n]+)\)/g, priority: 1 },
+  { kind: 'strong', re: /\*\*([^\n]+?)\*\*/g, priority: 2 },
+  { kind: 'strike', re: /~~([^\n]+?)~~/g, priority: 3 },
+  { kind: 'em', re: /_([^\n]+?)_/g, priority: 4 },
+];
+
+const INLINE_DELIM_LENGTH: Record<InlineRun['kind'], number> = {
+  code: 1,
+  strong: 2,
+  strike: 2,
+  em: 1,
+  link: 0, // links are positioned from the match itself, not a symmetric delimiter
+};
+
+/**
+ * Every non-overlapping formatted span within [from, to) of `text`, in
+ * priority order when two candidates start at the same position -- a code
+ * span wins a tie over em/strong/strike, so `` `_not_italic_` `` stays one
+ * code span rather than also half-matching as italic underneath it.
+ */
+function findInlineRuns(text: string, from: number, to: number): InlineRun[] {
+  const slice = text.slice(from, to);
+  const candidates = INLINE_PATTERNS.flatMap(({ kind, re, priority }) =>
+    Array.from(slice.matchAll(re)).map((m): InlineRun => {
+      const start = from + (m.index ?? 0);
+      const end = start + m[0].length;
+      if (kind === 'link') {
+        return {
+          start,
+          end,
+          contentStart: start + 1,
+          contentEnd: start + 1 + m[1].length,
+          kind,
+          href: m[2],
+          priority,
+        };
+      }
+      const delim = INLINE_DELIM_LENGTH[kind];
+      return {
+        start,
+        end,
+        contentStart: start + delim,
+        contentEnd: end - delim,
+        kind,
+        priority,
+      };
+    }),
+  );
+  const sorted = [...candidates].sort(
+    (a, b) => a.start - b.start || a.priority - b.priority,
+  );
+  return sorted.reduce<InlineRun[]>((accepted, run) => {
+    const last = accepted[accepted.length - 1];
+    return last && run.start < last.end ? accepted : [...accepted, run];
+  }, []);
+}
+
+function textNode(text: string, marks: JiraAdfAnyMark[]): JiraAdfInlineNode {
+  return marks.length ? { type: 'text', text, marks } : { type: 'text', text };
+}
+
+/**
+ * Recursively walks [from, to) of `text`, emitting plain-text runs, marked
+ * runs (from `runs`) and mentions (from `mentions`) in document order.
+ * `activeMarks` accumulates as recursion descends into a run's own content
+ * -- today's pattern set never produces overlapping runs, so this recurses
+ * at most one level in practice, but threading marks through the
+ * accumulator is the natural shape regardless.
+ *
+ * A mention is never given marks, however deep the recursion: Jira's API
+ * rejects any mark on a mention node outright (live-confirmed; see
+ * `JiraAdfMentionNode`'s own comment in main/jira/jiraTypes.ts). Text on
+ * either side of a mention inside a bold run still bolds; the mention
+ * itself renders plain.
+ */
+function parseInlineRange(
+  text: string,
+  from: number,
+  to: number,
+  activeMarks: JiraAdfAnyMark[],
+  mentions: JiraMentionSpan[],
+  runs: InlineRun[],
+): JiraAdfInlineNode[] {
+  if (from >= to) return [];
+
+  const nextRun = runs.find((r) => r.start >= from && r.start < to);
+  const nextMention = mentions.find((m) => m.start >= from && m.start < to);
+  const mentionIsNext =
+    nextMention && (!nextRun || nextMention.start < nextRun.start);
+
+  if (!nextRun && !nextMention) {
+    return [textNode(text.slice(from, to), activeMarks)];
+  }
+
+  if (mentionIsNext && nextMention) {
+    const before =
+      from < nextMention.start
+        ? [textNode(text.slice(from, nextMention.start), activeMarks)]
+        : [];
+    return [
+      ...before,
+      {
+        type: 'mention',
+        attrs: {
+          id: nextMention.accountId,
+          text: `@${nextMention.displayName}`,
+        },
+      },
+      ...parseInlineRange(
+        text,
+        nextMention.end,
+        to,
+        activeMarks,
+        mentions,
+        runs,
+      ),
+    ];
+  }
+
+  const run = nextRun as InlineRun;
+  const before =
+    from < run.start
+      ? [textNode(text.slice(from, run.start), activeMarks)]
+      : [];
+  const runMark: JiraAdfAnyMark =
+    run.kind === 'link'
+      ? { type: 'link', attrs: { href: run.href ?? '' } }
+      : { type: run.kind };
+  const inner = parseInlineRange(
+    text,
+    run.contentStart,
+    run.contentEnd,
+    [...activeMarks, runMark],
+    mentions,
+    runs,
+  );
+  return [
+    ...before,
+    ...inner,
+    ...parseInlineRange(text, run.end, to, activeMarks, mentions, runs),
+  ];
+}
+
+function inlineNodesForRange(
+  text: string,
+  contentStart: number,
+  contentEnd: number,
+  mentions: JiraMentionSpan[],
+): JiraAdfInlineNode[] {
+  const runs = findInlineRuns(text, contentStart, contentEnd);
+  return parseInlineRange(text, contentStart, contentEnd, [], mentions, runs);
+}
+
+interface ContentLine {
+  contentStart: number;
+  contentEnd: number;
+}
+
+type GroupedBlock =
+  | { type: 'paragraph'; line: ContentLine }
+  | { type: 'heading'; level: 1 | 2 | 3; line: ContentLine }
+  | { type: 'bulletList'; items: ContentLine[] }
+  | { type: 'orderedList'; items: ContentLine[] }
+  | { type: 'quote'; items: ContentLine[] }
+  | { type: 'codeBlock'; text: string };
+
+type LineKind =
+  | 'codeFence'
+  | 'heading1'
+  | 'heading2'
+  | 'heading3'
+  | 'bullet'
+  | 'ordered'
+  | 'quote'
+  | 'paragraph';
+
+const LIST_BLOCK_TYPE: Record<
+  'bullet' | 'ordered' | 'quote',
+  'bulletList' | 'orderedList' | 'quote'
+> = {
+  bullet: 'bulletList',
+  ordered: 'orderedList',
+  quote: 'quote',
+};
+
+function classifyLine(
+  lineText: string,
+  lineStart: number,
+  lineEnd: number,
+): { kind: LineKind; contentStart: number; contentEnd: number } {
+  if (/^```/.test(lineText)) {
+    return { kind: 'codeFence', contentStart: lineStart, contentEnd: lineEnd };
+  }
+  const heading = lineText.match(/^(#{1,3})\s+/);
+  if (heading) {
+    return {
+      kind: `heading${heading[1].length}` as LineKind,
+      contentStart: lineStart + heading[0].length,
+      contentEnd: lineEnd,
+    };
+  }
+  const bullet = lineText.match(/^[-*]\s+/);
+  if (bullet) {
+    return {
+      kind: 'bullet',
+      contentStart: lineStart + bullet[0].length,
+      contentEnd: lineEnd,
+    };
+  }
+  const ordered = lineText.match(/^\d+\.\s+/);
+  if (ordered) {
+    return {
+      kind: 'ordered',
+      contentStart: lineStart + ordered[0].length,
+      contentEnd: lineEnd,
+    };
+  }
+  const quote = lineText.match(/^>\s?/);
+  if (quote) {
+    return {
+      kind: 'quote',
+      contentStart: lineStart + quote[0].length,
+      contentEnd: lineEnd,
+    };
+  }
+  return { kind: 'paragraph', contentStart: lineStart, contentEnd: lineEnd };
+}
+
+/**
+ * Groups `text`'s lines into blocks: consecutive bullet/ordered/quote lines
+ * merge into one list/quote, a ``` line opens a code fence that consumes
+ * every following line verbatim (no inline parsing, no mentions) until a
+ * closing ```, and anything else is its own heading or paragraph block.
+ *
+ * A `.reduce` over the classified lines, not a loop with a mutable "current
+ * list" variable -- the accumulator's `blocks` array and in-flight `fence`
+ * buffer carry exactly that state instead.
+ */
+interface LineGroupState {
+  blocks: GroupedBlock[];
+  fence: string[] | null;
+}
+
+interface RawLine {
+  lineText: string;
+  lineStart: number;
+  lineEnd: number;
+}
+
+/** One step of `groupLinesIntoBlocks`'s fold, named and explicitly typed
+ * rather than an inline `.reduce()` callback: TypeScript's overload
+ * resolution for a generic `.reduce<U>()` can silently mis-infer the
+ * accumulator's type when the callback is this long and every branch
+ * returns a different-looking object literal, and a named function with a
+ * declared return type sidesteps that ambiguity entirely rather than
+ * fighting it with more type annotations inline. */
+function reduceLineIntoBlocks(
+  acc: LineGroupState,
+  raw: RawLine,
+): LineGroupState {
+  const { lineText, lineStart, lineEnd } = raw;
+  if (acc.fence !== null) {
+    if (/^```/.test(lineText)) {
+      return {
+        blocks: [
+          ...acc.blocks,
+          { type: 'codeBlock', text: acc.fence.join('\n') },
+        ],
+        fence: null,
+      };
+    }
+    return { blocks: acc.blocks, fence: [...acc.fence, lineText] };
+  }
+
+  const cls = classifyLine(lineText, lineStart, lineEnd);
+  if (cls.kind === 'codeFence') return { blocks: acc.blocks, fence: [] };
+
+  const last = acc.blocks[acc.blocks.length - 1];
+  const line: ContentLine = {
+    contentStart: cls.contentStart,
+    contentEnd: cls.contentEnd,
+  };
+
+  if (cls.kind === 'bullet' || cls.kind === 'ordered' || cls.kind === 'quote') {
+    const listType = LIST_BLOCK_TYPE[cls.kind];
+    if (last && last.type === listType) {
+      const merged = { ...last, items: [...last.items, line] };
+      return { blocks: [...acc.blocks.slice(0, -1), merged], fence: null };
+    }
+    return {
+      blocks: [...acc.blocks, { type: listType, items: [line] }],
+      fence: null,
+    };
+  }
+
+  if (
+    cls.kind === 'heading1' ||
+    cls.kind === 'heading2' ||
+    cls.kind === 'heading3'
+  ) {
+    const level = Number(cls.kind.slice(-1)) as 1 | 2 | 3;
+    return {
+      blocks: [...acc.blocks, { type: 'heading', level, line }],
+      fence: null,
+    };
+  }
+
+  return {
+    blocks: [...acc.blocks, { type: 'paragraph', line }],
+    fence: null,
+  };
+}
+
+function groupLinesIntoBlocks(text: string): GroupedBlock[] {
+  let offset = 0;
+  const lines: RawLine[] = text.split('\n').map((lineText) => {
+    const lineStart = offset;
+    const lineEnd = lineStart + lineText.length;
+    offset = lineEnd + 1; // +1 skips the '\n' that String.split consumed
+    return { lineText, lineStart, lineEnd };
+  });
+
+  const initial: LineGroupState = { blocks: [], fence: null };
+  const { blocks, fence } = lines.reduce(reduceLineIntoBlocks, initial);
+
+  // An unterminated fence (the user never typed a closing ```) is flushed as
+  // a code block rather than silently dropped -- whatever they typed still
+  // posts, just without the fence having been "completed".
+  return fence !== null
+    ? [...blocks, { type: 'codeBlock', text: fence.join('\n') }]
+    : blocks;
+}
+
+function blockToAdf(
+  block: GroupedBlock,
+  text: string,
+  mentions: JiraMentionSpan[],
+): JiraAdfBlockNode {
+  if (block.type === 'paragraph') {
+    return {
+      type: 'paragraph',
+      content: inlineNodesForRange(
+        text,
+        block.line.contentStart,
+        block.line.contentEnd,
+        mentions,
+      ),
+    };
+  }
+  if (block.type === 'heading') {
+    return {
+      type: 'heading',
+      attrs: { level: block.level },
+      content: inlineNodesForRange(
+        text,
+        block.line.contentStart,
+        block.line.contentEnd,
+        mentions,
+      ),
+    };
+  }
+  if (block.type === 'bulletList' || block.type === 'orderedList') {
+    return {
+      type: block.type,
+      content: block.items.map((item) => ({
+        type: 'listItem' as const,
+        content: [
+          {
+            type: 'paragraph' as const,
+            content: inlineNodesForRange(
+              text,
+              item.contentStart,
+              item.contentEnd,
+              mentions,
+            ),
+          },
+        ],
+      })),
+    };
+  }
+  if (block.type === 'quote') {
+    return {
+      type: 'blockquote',
+      content: block.items.map((item) => ({
+        type: 'paragraph' as const,
+        content: inlineNodesForRange(
+          text,
+          item.contentStart,
+          item.contentEnd,
+          mentions,
+        ),
+      })),
+    };
+  }
+  return { type: 'codeBlock', content: [{ type: 'text', text: block.text }] };
+}
+
+export function buildCommentAdf(
+  text: string,
+  mentions: JiraMentionSpan[],
+): JiraCommentBody {
+  const validMentions = mentions
+    .filter((m) => text.slice(m.start, m.end) === `@${m.displayName}`)
+    .sort((a, b) => a.start - b.start);
+
+  const content = groupLinesIntoBlocks(text).map((block) =>
+    blockToAdf(block, text, validMentions),
+  );
+
+  return { type: 'doc', version: 1, content };
+}
+
+/**
+ * Posts a comment as the connected user.
+ *
+ * `mentions` are the spans over `text` the composer's @-popover produced
+ * (see JiraCommentComposer.tsx) — `buildCommentAdf` is where those become
+ * real ADF `mention` nodes. A draft with no mentions goes through the same
+ * builder as a single-run paragraph, so there is one write path rather than
+ * a plain-text one and a separate mention-aware one.
+ */
+export async function postJiraComment(
+  ticketId: string,
+  text: string,
+  mentions: JiraMentionSpan[] = [],
+): Promise<JiraComment> {
+  const body = buildCommentAdf(text, mentions);
+  return toComment(unwrap(await bridge().postComment({ ticketId, body })));
+}
+
+// Approve/reject for the Copilot rail's proposal. Unreachable in this phase —
+// nothing ever produces a proposal for the card to render (see
+// getMyJiraProposal above) — and deliberately left throwing rather than
+// re-implemented against fixtures: a Jira write attributed to an approval
+// this app cannot actually perform is the one outcome worth being loud about
+// if the pipeline is ever wired up before these are.
+export async function approveJiraProposal(id: string): Promise<JiraProposal> {
+  throw new Error(
+    `Approving a Copilot proposal against Jira isn't built yet (${id}).`,
+  );
+}
+
+export async function rejectJiraProposal(id: string): Promise<JiraProposal> {
+  throw new Error(
+    `Rejecting a Copilot proposal against Jira isn't built yet (${id}).`,
+  );
+}
+
+// dismissJiraTombstone / resolveJiraConflict — MyJiraPage still wires both to
+// their rows, but no ticket is ever marked tombstoned or conflicted (see
+// toTicket), so neither strip renders and neither is reachable. Kept as the
+// callbacks those components' props require, doing the only honest thing
+// available: dropping the row locally, and re-reading the issue from Jira.
+export async function dismissJiraTombstone(ticketId: string): Promise<void> {
+  lastTickets = lastTickets.filter((t) => t.id !== ticketId);
+}
+
+export async function resolveJiraConflict(
+  ticketId: string,
+): Promise<JiraTicket> {
+  const tickets = await listMyJiraTickets();
+  const found = tickets.find((t) => t.id === ticketId);
+  if (!found) throw new Error('That issue is no longer in your queue.');
+  return found;
+}
+
+// The id is still taken — it is the shape MyJiraPage's rail calls with, and
+// narrowing it would be churn for a function that exists only to satisfy that
+// contract until the proposal pipeline is built.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export async function dismissJiraDuplicateNudge(id: string): Promise<void> {
+  // No nudge is ever produced, so there is nothing to dismiss.
+}

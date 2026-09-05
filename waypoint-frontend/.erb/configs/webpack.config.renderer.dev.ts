@@ -158,6 +158,10 @@ const configuration: webpack.Configuration = {
       // lib/featureFlags.ts. Off by default; run with
       // WAYPOINT_FEATURE_COPILOT=true to see it.
       WAYPOINT_FEATURE_COPILOT: 'false',
+      // Feature flag for the in-progress My Jira companion project — see
+      // lib/featureFlags.ts. Off by default; run with
+      // WAYPOINT_FEATURE_MY_JIRA=true to see it.
+      WAYPOINT_FEATURE_MY_JIRA: 'false',
     }),
 
     new webpack.LoaderOptionsPlugin({

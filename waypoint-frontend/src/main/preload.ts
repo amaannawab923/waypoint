@@ -2,6 +2,17 @@
 /* eslint no-unused-vars: off */
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import type { CopilotDetectResult } from './copilot/copilotDetect';
+import type {
+  JiraCommentBody,
+  JiraConnectionSnapshot,
+  JiraIdentity,
+  JiraPriorityOption,
+  JiraResult,
+  JiraWireComment,
+  JiraWireTicket,
+  JiraWireTransition,
+  JiraWireUser,
+} from './jira/jiraTypes';
 
 // The global Web Crypto API, not Node's `crypto` module: this preload script
 // runs in Electron's sandboxed renderer context by default (Electron 20+),
@@ -230,6 +241,112 @@ const electronHandler = {
     // handler for what each case actually means.
     detect(): Promise<CopilotDetectResult> {
       return ipcRenderer.invoke('copilot:detect');
+    },
+  },
+  // The My Jira companion's entire data path. Every one of these is
+  // request/response rather than a stream — a Jira call produces exactly one
+  // answer — and every one of them crosses into the main process rather than
+  // being a fetch() from the renderer, because the API token that
+  // authenticates them is a real bearer credential for the user's whole Jira
+  // account and never leaves main (see main/jira/jiraAuth.ts).
+  //
+  // Nothing here takes or returns a token: `connect` sends one in and gets an
+  // identity back, and every later call authenticates from what main already
+  // has stored.
+  jira: {
+    status(): Promise<JiraConnectionSnapshot> {
+      return ipcRenderer.invoke('jira:status');
+    },
+    connect(args: {
+      site: string;
+      email: string;
+      apiToken: string;
+    }): Promise<JiraResult<JiraIdentity>> {
+      return ipcRenderer.invoke('jira:connect', args);
+    },
+    disconnect(): Promise<{ ok: true }> {
+      return ipcRenderer.invoke('jira:disconnect');
+    },
+    listTickets(): Promise<JiraResult<JiraWireTicket[]>> {
+      return ipcRenderer.invoke('jira:tickets:list');
+    },
+    listTransitions(
+      ticketId: string,
+    ): Promise<JiraResult<JiraWireTransition[]>> {
+      return ipcRenderer.invoke('jira:tickets:transitions', ticketId);
+    },
+    transition(args: {
+      ticketId: string;
+      transitionId: string;
+      fieldValues: Record<string, string>;
+    }): Promise<JiraResult<JiraWireTicket>> {
+      return ipcRenderer.invoke('jira:tickets:transition', args);
+    },
+    listPriorityOptions(
+      ticketId: string,
+    ): Promise<JiraResult<JiraPriorityOption[]>> {
+      return ipcRenderer.invoke('jira:tickets:priority-options', ticketId);
+    },
+    setPriority(args: {
+      ticketId: string;
+      priorityId: string;
+    }): Promise<JiraResult<JiraWireTicket>> {
+      return ipcRenderer.invoke('jira:tickets:set-priority', args);
+    },
+    // `ticketKey`, not `ticketId`: Jira's assignable-user search takes the
+    // issue key. The name says so here rather than leaving the one channel
+    // that differs looking like all the others.
+    searchAssignableUsers(args: {
+      ticketKey: string;
+      query: string;
+    }): Promise<JiraResult<JiraWireUser[]>> {
+      return ipcRenderer.invoke('jira:tickets:assignable-users', args);
+    },
+    // `accountId: null` means unassign — Jira's own payload for it, and a
+    // value this signature has to keep nullable all the way down rather than
+    // collapsing to an empty string on the way (see jiraIpc.ts).
+    setAssignee(args: {
+      ticketId: string;
+      accountId: string | null;
+    }): Promise<JiraResult<JiraWireTicket>> {
+      return ipcRenderer.invoke('jira:tickets:set-assignee', args);
+    },
+    // No path in the arguments and no path in the answer, and that is the
+    // shape rather than an omission. Main fetches the bytes, opens a native
+    // save dialog and writes the file, all inside its own handler — the
+    // renderer never names a location and never learns one. `fileName` is a
+    // suggestion for the dialog's default, which main sanitizes before use.
+    //
+    // `canceled: true` is a success. The user closing the dialog is not an
+    // error, and modelling it as one would fire an error toast on every
+    // Escape (see `unwrap` in data/jiraApi.ts).
+    downloadAttachment(args: {
+      ticketId: string;
+      attachmentId: string;
+      fileName: string;
+    }): Promise<JiraResult<{ canceled: boolean }>> {
+      return ipcRenderer.invoke('jira:attachments:download', args);
+    },
+    // One issue id, and that is the entire argument list — no filename and no
+    // path. Main opens its own file picker, so the renderer cannot name what
+    // gets read off this machine.
+    //
+    // The answer carries the whole re-read ticket, like every other write
+    // here, so the renderer can patch its cached list with what Jira actually
+    // holds rather than with a ticket it assembled by guessing.
+    uploadAttachment(args: {
+      ticketId: string;
+    }): Promise<JiraResult<{ canceled: boolean; ticket?: JiraWireTicket }>> {
+      return ipcRenderer.invoke('jira:attachments:upload', args);
+    },
+    listComments(ticketId: string): Promise<JiraResult<JiraWireComment[]>> {
+      return ipcRenderer.invoke('jira:comments:list', ticketId);
+    },
+    postComment(args: {
+      ticketId: string;
+      body: JiraCommentBody;
+    }): Promise<JiraResult<JiraWireComment>> {
+      return ipcRenderer.invoke('jira:comments:post', args);
     },
   },
   // Top-level, not nested under `copilot`: "point me at a local folder" is

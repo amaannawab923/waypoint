@@ -12,6 +12,7 @@ import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom';
 import { AppShell } from '@/layouts/AppShell';
 import { ProjectLayout } from '@/layouts/ProjectLayout';
 import { isOnboarded } from '@/lib/onboarding';
+import { MY_JIRA_ENABLED } from '@/lib/featureFlags';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 
 import Login from '@/pages/auth/Login';
@@ -29,6 +30,8 @@ import AnalyticsPage from '@/pages/AnalyticsPage';
 import ReviewPage from '@/pages/ReviewPage';
 import MachinePage from '@/pages/MachinePage';
 import AllTicketsPage from '@/pages/AllTicketsPage';
+import MyJiraPage from '@/pages/jira/MyJiraPage';
+import JiraTicketPage from '@/pages/jira/JiraTicketPage';
 
 import TicketsLayout from '@/pages/tickets/TicketsLayout';
 import TicketDetailPage from '@/pages/tickets/TicketDetailPage';
@@ -115,6 +118,31 @@ export const router = createBrowserRouter([
               { path: '/review', element: <ReviewPage /> },
               { path: '/machine', element: <MachinePage /> },
               { path: '/views', element: <AllTicketsPage /> },
+              // Gated at the route level, not inside the page component
+              // itself, so MY_JIRA_ENABLED (a build-time constant — see
+              // lib/featureFlags.ts) never has to be checked after any
+              // hooks have already run. A direct hit on the URL with the
+              // flag off — a stale bookmark, a build with it disabled —
+              // bounces home instead of rendering the page.
+              {
+                path: '/my-jira',
+                element: MY_JIRA_ENABLED ? (
+                  <MyJiraPage />
+                ) : (
+                  <Navigate to="/" replace />
+                ),
+              },
+              // The drawer's expand target. Behind the same flag as the list
+              // for the same reason: a stale bookmark to a single issue must
+              // not be a way around a disabled feature.
+              {
+                path: '/my-jira/:ticketKey',
+                element: MY_JIRA_ENABLED ? (
+                  <JiraTicketPage />
+                ) : (
+                  <Navigate to="/" replace />
+                ),
+              },
 
               {
                 path: '/projects/:projectId',
@@ -141,13 +169,22 @@ export const router = createBrowserRouter([
                     path: 'settings',
                     element: <ProjectSettingsLayout />,
                     children: [
-                      { index: true, element: <Navigate to="general" replace /> },
+                      {
+                        index: true,
+                        element: <Navigate to="general" replace />,
+                      },
                       { path: 'general', element: <ProjectSettingsGeneral /> },
                       { path: 'members', element: <ProjectSettingsMembers /> },
-                      { path: 'codebase', element: <ProjectSettingsCodebase /> },
+                      {
+                        path: 'codebase',
+                        element: <ProjectSettingsCodebase />,
+                      },
                       { path: 'states', element: <ProjectSettingsStates /> },
                       { path: 'labels', element: <ProjectSettingsLabels /> },
-                      { path: 'estimates', element: <ProjectSettingsEstimates /> },
+                      {
+                        path: 'estimates',
+                        element: <ProjectSettingsEstimates />,
+                      },
                       {
                         path: 'automations',
                         element: <ProjectSettingsAutomations />,
