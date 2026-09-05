@@ -709,11 +709,11 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
 - **JIRA-18** — Connection tab's "Not built yet" list matches reality
   Steps: Read the Connection tab's disclosure list. For each item (attachments upload, rich text, @mentions, background sync, Copilot proposals, issue creation) attempt the thing it disclaims.
   Expected: Every disclaimed item genuinely isn't offered anywhere in the UI — no half-enabled control that implies otherwise.
-  Coverage: **Partial** — the six listed items are accurate, but the list is incomplete against the same "said plainly" standard: it omits the single-account overwrite (JIRA-15), the hard result cap (JIRA-31), and the fact that no field other than status can be edited (JIRA-25).
-- **JIRA-19** — Connection panel claims a capability that does not exist
-  Steps: Read the blue banner on the Connection tab: "**Your** edits — moving, commenting, **changing priority** — write straight to Jira the moment you make them, as you." Then try to change a ticket's priority anywhere in My Jira.
-  Expected: A priority control should exist somewhere. Confirm whether one does.
-  Coverage: **Gap worth flagging** — there is no priority write path anywhere: `jiraApi.ts` exposes only `transitionJiraTicket` and `postJiraComment` as writes, and `PriorityIcon` in the row is display-only. The banner names a capability the build does not have, in the one panel whose whole job is being honest about what it does. This is the sharpest honesty violation found in the Jira surface.
+  Coverage: **Partial** — the six listed items are accurate, and the write banner above the list now states outright that everything but the workflow move and the comment is read-only (JIRA-19), which covers the third of the three omissions previously logged here. Still missing against the same "said plainly" standard: the single-account overwrite (JIRA-15) and the hard result cap (JIRA-31).
+- **JIRA-19** — Connection panel's write claim matches the writes that exist
+  Steps: Read the blue banner on the Connection tab. Then, for every capability it names, try to perform it in My Jira; and separately try to change a ticket's priority anywhere in the view.
+  Expected: The banner names exactly two writes — moving a ticket through its workflow, and posting a comment — and both work. It does not mention priority, and no priority control exists anywhere; the banner says outright that everything else about an issue is read-only here.
+  Coverage: **Supported** — the banner used to read "moving, commenting, **changing priority**", which was a capability the build has never had: `jiraApi.ts`'s entire write surface is `transitionJiraTicket` and `postJiraComment`, and `PriorityIcon` in the row is display-only. The copy now lists those two and closes with the read-only statement, which also covers one of JIRA-18's three omissions. No priority write was added — that stays out of scope, and the claim was the defect, not the missing feature.
 
 ### Viewing & filtering your own work
 
@@ -776,7 +776,7 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
 - **JIRA-34** — Priority is visible but not actionable
   Steps: Confirm each row shows a priority icon matching the issue's Jira priority. Then try to filter by priority, sort by it, or change it.
   Expected: Icons are accurate; document that none of the three actions is possible.
-  Coverage: **Partial** — `mapPriority()` maps both the Highest…Lowest scheme and the Blocker/Critical/Major/Minor/Trivial scheme, so display should be right on most sites; but priority is read-only and unfilterable. See JIRA-19 for the copy that claims otherwise.
+  Coverage: **Partial** — `mapPriority()` maps both the Highest…Lowest scheme and the Blocker/Critical/Major/Minor/Trivial scheme, so display should be right on most sites; but priority is read-only and unfilterable. The Connection tab's banner used to claim otherwise; since JIRA-19 it says plainly that everything but status and comments is read-only here.
 - **JIRA-35** — A site with a custom priority scheme
   Steps: On a site using renamed or custom priorities (e.g. "P0", "Urgent-ish"), check what the row icons show.
   Expected: Unrecognized names should degrade to "none" rather than being forced into a wrong bucket.

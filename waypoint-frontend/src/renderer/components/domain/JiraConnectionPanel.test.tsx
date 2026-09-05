@@ -61,6 +61,19 @@ describe('JiraConnectionPanel', () => {
     ).not.toBeInTheDocument();
   });
 
+  // The write banner used to list "moving, commenting, changing priority".
+  // Only the first two exist — jiraApi.ts's whole write surface is
+  // transitionJiraTicket and postJiraComment — so the third was a capability
+  // claim made by the one panel that exists to be accurate about them.
+  it('names only the two writes that exist, and no priority write', () => {
+    render(<JiraConnectionPanel connection={status()} />);
+
+    expect(screen.queryByText(/changing priority/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/moving a ticket through its workflow, and/i),
+    ).toBeInTheDocument();
+  });
+
   it('Refresh now calls refreshJiraSync and pushes the result into jiraStore', async () => {
     const refreshed = status({ lastSyncAt: '2026-01-01T00:05:00.000Z' });
     jest.mocked(refreshJiraSync).mockResolvedValue(refreshed);
