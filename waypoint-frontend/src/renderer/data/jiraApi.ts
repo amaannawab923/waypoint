@@ -84,7 +84,11 @@ let ticketsFixture: JiraTicket[] = [
     storyPoints: 5,
     sprintName: 'Ingest 24',
     attachments: [
-      { fileName: 'replay-900rpm.log', sizeLabel: '214 KB', uploaderName: 'Sam Lee' },
+      {
+        fileName: 'replay-900rpm.log',
+        sizeLabel: '214 KB',
+        uploaderName: 'Sam Lee',
+      },
     ],
     isTombstoned: false,
     tombstone: null,
@@ -152,7 +156,8 @@ let ticketsFixture: JiraTicket[] = [
     assigneeInitials: 'SL',
     reporterName: 'Max Chen',
     watcherNames: ['Max Chen'],
-    description: 'Routine credential rotation for the staging database, scoped to the ingest and API services.',
+    description:
+      'Routine credential rotation for the staging database, scoped to the ingest and API services.',
     epicName: null,
     storyPoints: null,
     sprintName: null,
@@ -175,7 +180,8 @@ let ticketsFixture: JiraTicket[] = [
     assigneeInitials: 'MC',
     reporterName: 'Sam Lee',
     watcherNames: [],
-    description: 'The export worker has no liveness endpoint, so a wedged worker looks healthy to the orchestrator.',
+    description:
+      'The export worker has no liveness endpoint, so a wedged worker looks healthy to the orchestrator.',
     epicName: null,
     storyPoints: null,
     sprintName: null,
@@ -198,7 +204,8 @@ let ticketsFixture: JiraTicket[] = [
     assigneeInitials: 'PR',
     reporterName: 'Rob Kim',
     watcherNames: [],
-    description: 'Split the single ingest queue into a fast-path and a backfill-path queue to stop head-of-line blocking.',
+    description:
+      'Split the single ingest queue into a fast-path and a backfill-path queue to stop head-of-line blocking.',
     epicName: null,
     storyPoints: null,
     sprintName: null,
@@ -216,7 +223,7 @@ let commentsFixture: JiraComment[] = [
     ticketId: 'jira-eng-421',
     authorName: 'Sam Lee',
     authorInitials: 'SL',
-    body: "Replay log attached. @Max Chen this is blocking the Northwind rollout — can you take it this sprint?",
+    body: 'Replay log attached. @Max Chen this is blocking the Northwind rollout — can you take it this sprint?',
     mentions: ['Max Chen'],
     createdAt: minutesAgo(60 * 20),
     postedByWaypoint: false,
@@ -262,13 +269,22 @@ const STATE_COLOR: Record<string, string> = {
   Done: 'var(--success)',
 };
 
-const RESOLUTION_OPTIONS = ['Fixed', "Won't Do", 'Duplicate', 'Cannot Reproduce'];
+const RESOLUTION_OPTIONS = [
+  'Fixed',
+  "Won't Do",
+  'Duplicate',
+  'Cannot Reproduce',
+];
 
 const ENG_WORKFLOW: Record<string, WorkflowTransitionDef[]> = {
   'To Do': [{ targetStateName: 'In Progress' }],
   'In Progress': [
     { targetStateName: 'In Review' },
-    { targetStateName: 'Done', requiresResolution: true, optionalTimeSpent: true },
+    {
+      targetStateName: 'Done',
+      requiresResolution: true,
+      optionalTimeSpent: true,
+    },
     { targetStateName: 'To Do' },
   ],
   'In Review': [{ targetStateName: 'Done' }],
@@ -281,10 +297,20 @@ const PLAT_WORKFLOW: Record<string, WorkflowTransitionDef[]> = {
   'To Do': [{ targetStateName: 'In Progress' }],
   'In Progress': [
     { targetStateName: 'In Review' },
-    { targetStateName: 'Done', requiresResolution: true, optionalTimeSpent: true },
+    {
+      targetStateName: 'Done',
+      requiresResolution: true,
+      optionalTimeSpent: true,
+    },
     { targetStateName: 'To Do' },
   ],
-  'In Review': [{ targetStateName: 'Done', requiresResolution: true, optionalTimeSpent: true }],
+  'In Review': [
+    {
+      targetStateName: 'Done',
+      requiresResolution: true,
+      optionalTimeSpent: true,
+    },
+  ],
   Done: [],
 };
 
@@ -299,13 +325,18 @@ const GRW_WORKFLOW: Record<string, WorkflowTransitionDef[]> = {
   Done: [],
 };
 
-const WORKFLOWS: Record<JiraProjectKey, Record<string, WorkflowTransitionDef[]>> = {
+const WORKFLOWS: Record<
+  JiraProjectKey,
+  Record<string, WorkflowTransitionDef[]>
+> = {
   ENG: ENG_WORKFLOW,
   PLAT: PLAT_WORKFLOW,
   GRW: GRW_WORKFLOW,
 };
 
-function buildTransitionFields(def: WorkflowTransitionDef): JiraTransitionField[] {
+function buildTransitionFields(
+  def: WorkflowTransitionDef,
+): JiraTransitionField[] {
   if (!def.requiresResolution) return [];
   const fields: JiraTransitionField[] = [
     {
@@ -357,20 +388,26 @@ export async function listMyJiraTickets(): Promise<JiraTicket[]> {
   return ticketsFixture.map((t) => ({ ...t }));
 }
 
-export async function getJiraTicket(id: string): Promise<JiraTicket | undefined> {
+export async function getJiraTicket(
+  id: string,
+): Promise<JiraTicket | undefined> {
   await delay(150);
   const found = ticketsFixture.find((t) => t.id === id);
   return found ? { ...found } : undefined;
 }
 
-export async function getJiraTransitions(ticketId: string): Promise<JiraTransition[]> {
+export async function getJiraTransitions(
+  ticketId: string,
+): Promise<JiraTransition[]> {
   await delay(150);
   const ticket = ticketsFixture.find((t) => t.id === ticketId);
   if (!ticket) return [];
   return transitionsFor(ticket);
 }
 
-export async function listJiraComments(ticketId: string): Promise<JiraComment[]> {
+export async function listJiraComments(
+  ticketId: string,
+): Promise<JiraComment[]> {
   await delay(150);
   return commentsFixture
     .filter((c) => c.ticketId === ticketId)
@@ -378,7 +415,9 @@ export async function listJiraComments(ticketId: string): Promise<JiraComment[]>
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
-export async function listJiraMentionCandidates(): Promise<JiraMentionCandidate[]> {
+export async function listJiraMentionCandidates(): Promise<
+  JiraMentionCandidate[]
+> {
   await delay(80);
   return MENTION_CANDIDATES.map((c) => ({ ...c }));
 }
@@ -389,7 +428,11 @@ export async function listJiraMentionCandidates(): Promise<JiraMentionCandidate[
 
 export async function connectJira(): Promise<JiraConnectionStatus> {
   await delay(900);
-  connectionFixture = { ...connectionFixture, connected: true, lastSyncAt: new Date().toISOString() };
+  connectionFixture = {
+    ...connectionFixture,
+    connected: true,
+    lastSyncAt: new Date().toISOString(),
+  };
   return getJiraConnectionStatus();
 }
 
@@ -423,7 +466,9 @@ export async function dismissJiraTombstone(ticketId: string): Promise<void> {
   ticketsFixture = ticketsFixture.filter((t) => t.id !== ticketId);
 }
 
-export async function resolveJiraConflict(ticketId: string): Promise<JiraTicket> {
+export async function resolveJiraConflict(
+  ticketId: string,
+): Promise<JiraTicket> {
   const ticket = ticketsFixture.find((t) => t.id === ticketId);
   if (!ticket) throw new Error(`Unknown Jira ticket: ${ticketId}`);
   await delay(600);
@@ -436,9 +481,14 @@ export async function resolveJiraConflict(ticketId: string): Promise<JiraTicket>
   return { ...ticket };
 }
 
-export async function postJiraComment(ticketId: string, body: string): Promise<JiraComment> {
+export async function postJiraComment(
+  ticketId: string,
+  body: string,
+): Promise<JiraComment> {
   await delay(500);
-  const mentionNames = MENTION_CANDIDATES.map((c) => c.name).filter((name) => body.includes(`@${name}`));
+  const mentionNames = MENTION_CANDIDATES.map((c) => c.name).filter((name) =>
+    body.includes(`@${name}`),
+  );
   const comment: JiraComment = {
     id: `jira-cmt-${Math.random().toString(36).slice(2, 10)}`,
     ticketId,
