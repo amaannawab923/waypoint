@@ -288,7 +288,7 @@ describe('mapIssue', () => {
       ).toMatchObject({ epicName: null });
     });
 
-    it("falls back to Epic Link for a sub-task, so the real epic still shows", () => {
+    it('falls back to Epic Link for a sub-task, so the real epic still shows', () => {
       expect(
         withParent(
           {

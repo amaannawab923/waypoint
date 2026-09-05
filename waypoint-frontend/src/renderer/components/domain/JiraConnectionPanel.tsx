@@ -137,9 +137,9 @@ export function JiraConnectionPanel({
               the feature. The list is now the two writes that exist. */}
           <span>
             <b>Your</b> edits — moving a ticket through its workflow, and
-            posting a comment — write straight to Jira the moment you make
-            them, as you. Those two are the whole set; everything else about
-            an issue is read-only here.
+            posting a comment — write straight to Jira the moment you make them,
+            as you. Those two are the whole set; everything else about an issue
+            is read-only here.
           </span>
         </div>
         <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-warning/30 bg-warning-bg px-3 py-2.5 text-[12.5px] leading-relaxed text-warning">

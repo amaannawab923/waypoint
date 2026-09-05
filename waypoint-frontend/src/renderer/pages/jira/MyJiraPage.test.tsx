@@ -198,15 +198,13 @@ describe('MyJiraPage — a failed ticket read is not an empty queue', () => {
     return render(<MyJiraPage />);
   }
 
-  it("names the failure instead of claiming the filters matched nothing", async () => {
+  it('names the failure instead of claiming the filters matched nothing', async () => {
     mountFailing(
       new Error("Couldn't reach Jira. Check your connection and try again."),
     );
 
     await screen.findByRole('alert');
-    expect(
-      screen.getByText(/Couldn't reach Jira/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Couldn't reach Jira/)).toBeInTheDocument();
     expect(
       screen.queryByText('No tickets match these filters.'),
     ).not.toBeInTheDocument();

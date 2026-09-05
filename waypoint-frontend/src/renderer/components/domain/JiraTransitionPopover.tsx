@@ -38,11 +38,17 @@ function computeCoords(triggerRect: DOMRect, panelHeight: number): Coords {
     : triggerRect.bottom + GAP;
   const top = Math.min(
     Math.max(rawTop, VIEWPORT_MARGIN),
-    Math.max(VIEWPORT_MARGIN, window.innerHeight - panelHeight - VIEWPORT_MARGIN),
+    Math.max(
+      VIEWPORT_MARGIN,
+      window.innerHeight - panelHeight - VIEWPORT_MARGIN,
+    ),
   );
   const left = Math.min(
     Math.max(triggerRect.right - PANEL_WIDTH, VIEWPORT_MARGIN),
-    Math.max(VIEWPORT_MARGIN, window.innerWidth - PANEL_WIDTH - VIEWPORT_MARGIN),
+    Math.max(
+      VIEWPORT_MARGIN,
+      window.innerWidth - PANEL_WIDTH - VIEWPORT_MARGIN,
+    ),
   );
   return { top, left };
 }
@@ -117,14 +123,18 @@ export function JiraTransitionPopover({
   useLayoutEffect(() => {
     const trigger = triggerRef.current;
     if (!trigger) return;
-    setCoords(computeCoords(trigger.getBoundingClientRect(), PANEL_HEIGHT_ESTIMATE));
+    setCoords(
+      computeCoords(trigger.getBoundingClientRect(), PANEL_HEIGHT_ESTIMATE),
+    );
   }, [triggerRef]);
 
   useLayoutEffect(() => {
     const trigger = triggerRef.current;
     const panel = panelRef.current;
     if (!trigger || !panel) return;
-    setCoords(computeCoords(trigger.getBoundingClientRect(), panel.offsetHeight));
+    setCoords(
+      computeCoords(trigger.getBoundingClientRect(), panel.offsetHeight),
+    );
   }, [triggerRef, formTransition, loading, error, transitions]);
 
   useEffect(() => {
