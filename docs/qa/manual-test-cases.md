@@ -740,74 +740,92 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: Open `/my-jira`, My work tab.
   Expected: A list of issues, each row showing PROJECT-NUMBER, title, a role tag, a state chip, a priority icon and an assignee avatar. Spot-check three rows against the same issues in the real Jira UI.
   Coverage: **Supported** — `listMyJiraTickets()` → `jira:tickets:list` → the single `MY_WORK_JQL` search; `JiraTicketRow` renders exactly those elements.
+  Result: PASS — 98 real rows rendered, each showing key (ENG-N), title, role tag, state chip, priority icon, and assignee avatar/initials; spot-checked ENG-81 in detail via its drawer.
 - **JIRA-21** — The on-screen JQL matches what actually runs
   Steps: Read the monospace JQL under the page heading. Run that same JQL by hand in Jira's own issue search for the same account.
   Expected: The two result sets match, issue for issue (allowing for anything changed between the two reads).
   Coverage: **Supported** — the page prints the query verbatim, including the parentheses; `MY_WORK_JQL` in `jiraClient.ts` is the same string plus `ORDER BY updated DESC`.
+  Result: PASS — on-screen JQL reads exactly `(assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser()) AND resolution = Unresolved`, byte-for-byte the parenthesized form; not independently re-run in Jira's own search UI in this pass, but matches source exactly.
 - **JIRA-22** — The parentheses in the JQL are load-bearing
   Steps: In Jira's own search, run the *unparenthesized* form (`assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser() AND resolution = Unresolved`) and compare to My Jira's list.
   Expected: The unparenthesized form returns strictly more issues, including long-closed ones assigned to you. My Jira's list should match the parenthesized form, not this one.
   Coverage: **Supported** — a deliberate, documented deviation from the originally specified query; this case is what proves it's the right one.
+  Result: PASS — direct API comparison: unparenthesized JQL returned 108 issues, the app's real parenthesized JQL returned 98. The 10-issue gap exactly matches the 10 tickets seeded to Done/Resolved this session — precisely the long-closed-but-still-assigned issues the parentheses are supposed to exclude.
 - **JIRA-23** — Resolved issues are absent
   Steps: Note an issue you're assigned that is Resolved/Done in Jira. Confirm it's not in the list. Then resolve one of the listed issues in Jira's own UI and press Refresh now.
   Expected: The resolved issue leaves the list.
   Coverage: **Supported** — `resolution = Unresolved` is part of the JQL.
+  Result: PASS (via JIRA-22's evidence) — the app shows exactly 98, matching the real parenthesized-JQL count with resolution excluded; the 10 Done tickets from this session's seed are confirmed absent.
 - **JIRA-24** — No way to see what you recently finished
   Steps: Look for any view, tab, filter or toggle that shows issues you resolved this week.
   Expected: No such view, tab, filter or toggle exists anywhere in My Jira. The `resolution = Unresolved` clause is printed read-only under the heading with no control that can drop or invert it.
   Coverage: **Gap worth flagging** — `resolution = Unresolved` is hardcoded with no override, so a real daily need ("what did I ship this week", standup prep, weekly report) has no answer in Waypoint at all. Not a stated architecture decision — sprints/boards are deliberately excluded, "my recently closed work" is not.
+  Result: PASS (confirms the gap) — no tab, toggle, or filter of any kind exists to see resolved/closed work; the JQL line is printed read-only text with no control attached.
 - **JIRA-25** — Cross-project scope: every project the account can see
   Steps: Confirm the project filter chips include projects from more than one Jira project, and that at least one is a project you're only a watcher or reporter on.
   Expected: Chips are derived from the actual result set, not a fixed list; each chip shows a real count; the chips sum to the "All N" count.
   Coverage: **Supported** — `projectCounts` is derived with a `useMemo` over the fetched tickets and sorted by key; a previous hardcoded `['ENG','PLAT','GRW']` was removed precisely because it would render nothing on a real site.
+  Result: PARTIAL — the seeded test account only has one real Jira project (ENG), so true cross-project scope can't be exercised. What is confirmed: the chip shown is "ENG 98" — the real project, not the old hardcoded PLAT/GRW chips that would render on a single-project account under the previous code. Needs a multi-project account to fully verify.
 - **JIRA-26** — Project filter narrows the list
   Steps: Click one project chip. Then click "All N".
   Expected: Only that project's issues shown; the "N issues · M Jira projects" summary line updates to match; clicking All restores the full list.
   Coverage: **Supported** — client-side `filtered` memo plus `visibleProjectCount`.
+  Result: PARTIAL — only one project exists in this account, so the ENG chip trivially shows the same 98 as "All". The filtering mechanism itself is confirmed working via the role filters (JIRA-27), which use the identical `filtered` memo pattern; true narrowing needs a multi-project account.
 - **JIRA-27** — Role filters: Assigned / Reported / Watching / Any role
   Steps: Cycle all four role chips. For each, spot check that the rows shown carry that role tag.
   Expected: Each filter shows only rows tagged with that role; Any role restores everything.
   Coverage: **Supported** — `roleFilter` is applied in the same `filtered` memo, matched against the row's single `role`.
+  Result: PASS — Assigned showed 65 rows all tagged "assignee", Reported showed 33 all tagged "reporter", Watching showed 0 (this account has no watched-only issues), and 65+33+0 = 98 = "Any role", with no overlap.
 - **JIRA-28** — Role is a single strongest claim, not all your real roles
   Steps: Find an issue in Jira where you are BOTH the reporter and a watcher (or both assignee and reporter). Filter My Jira to "Watching" (or "Reported") and look for it.
   Expected: Document that the issue does not appear under its weaker role — it only ever appears under the strongest one.
   Coverage: **Partial** — `roleOf()` returns assignee > reporter > watcher, first match wins, so each row has exactly one role. A user filtering "Watching" to review everything they're watching will silently miss every watched issue they also report or are assigned. Real, and not disclosed in the UI.
+  Result: PASS (confirms the gap, inferred rather than directly reproduced) — 65 assignee + 33 reporter + 0 watching = 98 exactly with zero overlap, confirming each row gets exactly one role and none double-count. Could not construct a real issue with two roles on this account to directly watch it "disappear" from its weaker filter, since seed data doesn't have a dual-role case — the arithmetic proves the mechanism, not a lived example.
 - **JIRA-29** — Project and role filters combine
   Steps: Select one project chip AND the "Reported" role chip.
   Expected: Intersection of both, with the count line consistent.
   Coverage: **Supported** — both predicates are ANDed in one filter expression.
+  Result: PARTIAL — role+role combinations confirmed exact (JIRA-27's arithmetic); project+role can't be meaningfully tested with only one project in this account (would trivially equal the role-only count).
 - **JIRA-30** — Filters do not survive a remount
   Steps: Apply a project + role filter. Navigate to Home, then back to My Jira.
   Expected: Both filters reset to "All" / "Any role" and the whole list is refetched from Jira. Nothing about the previous selection survives the navigation.
   Coverage: **Partial** — `projFilter`/`roleFilter` are plain `useState` with no persistence, and `useAsync(..., [])` refetches on mount. Acceptable for a first pass, but worth recording as a deliberate observation rather than a surprise.
+  Result: PASS — applied "Reported" (33 issues), navigated to Home then back; list showed "98 issues" (back to All/Any role) on return, confirming the filter reset and the list refetched.
 - **JIRA-31** — An account with more than 500 matching issues
   Steps: Connect (or simulate) an account whose "my work" JQL returns more than 500 unresolved issues. Compare the count on the Connection tab against the count Jira's own search reports for the same JQL.
   Expected: Either all issues load, or the UI says plainly that it's showing a capped subset.
   Coverage: **Gap worth flagging** — `PAGE_SIZE = 100` × `MAX_PAGES = 5` caps at 500 and then simply stops, with no marker. The Connection tab would then report a confidently wrong "issues in your queue" number, and the sidebar badge would too. The cap itself is a sound protection; the silence about it is the gap.
+  Result: NOT TESTED — this seeded account has 98 issues, far short of the 500-issue cap; reproducing it would mean seeding 400+ more real tickets, out of scope for this pass.
 - **JIRA-32** — List ordering
   Steps: Note the order of rows and compare against each issue's "Updated" timestamp in Jira.
   Expected: Most recently updated first.
   Coverage: **Supported** — `ORDER BY updated DESC` in `MY_WORK_JQL`.
+  Result: PASS, live-verified against real Jira — a direct API call with the same JQL + `ORDER BY updated DESC` returned ENG-81 first (the ticket just commented on twice, most recently updated), exactly matching the app's own top row.
 - **JIRA-33** — No sort control
   Steps: Look for any way to reorder the list (by priority, by due date, by key, by project).
   Expected: No sort control of any kind exists — no column headers, no menu, no toggle. The order is always most-recently-updated first and cannot be changed from the UI.
   Coverage: **Gap worth flagging** — sorting by priority or due date is among the most basic things a person does with their own Jira queue every morning, and there is no control at all. `updated DESC` is hardcoded and the renderer never re-sorts.
+  Result: PASS (confirms the gap) — no column headers, sort menu, or toggle exists anywhere on the page.
 - **JIRA-34** — Priority is visible but not actionable
   Steps: Confirm each row shows a priority icon matching the issue's Jira priority. Then try to filter by priority, sort by it, or change it.
   Expected: Icons are accurate; document that none of the three actions is possible.
   Coverage: **Partial** — `mapPriority()` maps both the Highest…Lowest scheme and the Blocker/Critical/Major/Minor/Trivial scheme, so display should be right on most sites; but priority is read-only and unfilterable. The Connection tab's banner used to claim otherwise; since JIRA-19 it says plainly that everything but status and comments is read-only here.
+  Result: PARTIAL, plus a new finding — priority icons render (e.g. a `lucide-signal-high` icon on ENG-81) and no filter/sort/edit control exists anywhere for priority, as expected. New: the icon is `aria-hidden="true"` with no `title` or `aria-label` at all — a screen reader gets zero priority information from it, not even an inaccessible-but-present label. Worth its own line item; not something JIRA-34 as written was checking for.
 - **JIRA-35** — A site with a custom priority scheme
   Steps: On a site using renamed or custom priorities (e.g. "P0", "Urgent-ish"), check what the row icons show.
   Expected: Unrecognized names should degrade to "none" rather than being forced into a wrong bucket.
   Coverage: **Not supported (untested/unknown)** — `PRIORITY_BY_NAME` has no entry for custom names and falls through to `'none'`. That's the intended degradation, but it means a P0-scheme site shows every issue as no-priority, which reads as a bug to the user. Worth confirming against a real custom scheme.
+  Result: NOT TESTED — this account's Jira site uses the standard Highest…Lowest scheme; no custom-priority site available to test against.
 - **JIRA-36** — Empty result set for a genuinely empty queue
   Steps: Connect an account with no unresolved issues in any role (or filter to a project/role combination with none).
   Expected: A clear empty state.
   Coverage: **Partial** — a failed load no longer lands here (JIRA-133 now renders its own error state), but the wording is still filter-shaped: an account with a genuinely empty queue and no filters applied is told its *filters* matched nothing. Same class of misleading-empty-state copy already logged as TIX-CW-09 elsewhere in this sheet.
+  Result: NOT TESTED (exact scenario) — this account has 98 unresolved issues, so a true zero-filter empty queue can't be produced. Adjacent evidence: filtering to "Watching" (0 real matches) correctly showed "No tickets match these filters." — accurate wording for that case, since real filters actually were applied; doesn't test the harder unfiltered-empty-account case this line is about.
 - **JIRA-37** — Sidebar badge matches the list
   Steps: Compare the sidebar "My Jira" count badge to the "All N" chip on the page.
   Expected: Equal.
   Coverage: **Partial** — both read `issueCount` from the same store, but that number comes from the module-level `lastTickets` cache in `jiraApi.ts`, which is 0 until a list read happens. On a fresh app launch the sidebar can show a badge of 0 (or a stale count) before the page is ever opened.
+  Result: PASS (equal after a list read) — sidebar badge and "All N" chip both read 98. The Coverage note's separate concern (badge shows 0 before first read) is a real, distinct scenario not exercised by this steady-state check.
 - **JIRA-38** — Project color swatches are stable
   Steps: Note the color on a project chip and the matching row's left border. Reload the app. Filter to a different project and back.
   Expected: The same project key always gets the same color, regardless of what else is in the list.
