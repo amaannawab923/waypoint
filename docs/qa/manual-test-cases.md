@@ -700,7 +700,7 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: After connecting, Continue to step 4.
   Expected: "N issues, M projects" reflect the actual JQL search that just ran for this account; "1 API call to load"; a Jira-tinted note stating Sprints/Docs/Workstreams don't appear here.
   Coverage: **Supported** — `connectJira()` calls `listMyJiraTickets()` before returning status, so `issueCount`/`projectCount` come from a real search.
-  Result: NOT TESTED — My Jira already exists as a project from earlier testing this session; re-entering step 4 and clicking "Create project" against an already-created singleton risks an unrecoverable duplicate sidebar entry with no clean undo. Deferred rather than risked.
+  Result: PASS on the counts and note — reached step 4 safely (viewed only, backed out via Back then X without ever clicking "Create project", to avoid a duplicate singleton project). Read exactly: "98 issues, 1 projects" (matches the real account), and the Jira-tinted note "Moving, commenting and closing from Waypoint changes the real issues. Sprints, Docs and Workstreams don't appear here…". The "1 API call to load" figure is separately confirmed wrong — see JIRA-186.
 - **JIRA-12** — Finishing the wizard lands on My Jira with a sidebar entry
   Steps: Click "Create project" on step 4.
   Expected: Modal closes, app navigates to `/my-jira`, and a "My Jira" item with an issue-count badge appears in the sidebar.
@@ -1860,6 +1860,7 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   user cancelled a creation flow and got an account connected anyway. There is no
   "cancel undoes the connect" path and nothing says the Connect button is the
   point of no return.
+  Result: PASS (confirms the gap), confirmed repeatedly and reliably across this entire pass — every single time this pass closed the wizard via the X after a successful Connect, without ever reaching step 4's "Create project," the connection stayed fully live: sidebar item present, My Jira route working, real data loading. Reproduced this exact pattern well over a dozen times over the course of testing (it was the fastest way to reconnect between other tests) — a user who meant only to try/cancel gets a live connection every time.
 - **JIRA-185** — Reopening the wizard while an account is already connected
   Steps: With Jira connected, click "+" → Companion project → Jira → Continue to
   step 3.
@@ -1873,6 +1874,7 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   that connect then writes silently replaces the existing one (JIRA-15). This is
   the concrete, reachable path into JIRA-15's silent overwrite, and it's also the
   only path a user has to change accounts, which makes it worth its own case.
+  Result: PASS (confirms the gap), confirmed repeatedly — every time this pass reopened the wizard to step 3 while already connected (necessary to test connect-form validation without disturbing the real account), the form always showed empty site/email/token fields with no indication whatsoever that an account was already connected (explicitly verified via `.value` reads on all three fields — all empty strings — as part of JIRA-10's testing).
 - **JIRA-186** — "1 API call to load" on the confirm step
   Steps: On step 4, read the "1 · API call to load" stat. Count the actual
   requests the connect flow made (DevTools network, or main-process logging).
@@ -1884,6 +1886,7 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   hardcoded number presented as a measurement on the same screen as the two
   counts JIRA-11 correctly praises for being real, and it is the same class of
   finding as JIRA-19 and JIRA-131's "~400ms".
+  Result: FAIL, confirmed live — step 4 read exactly "1 · API call to load" beside "98 issues, 1 projects" for the real connected account. Reaching 98 issues from a fresh connect requires at minimum 2 real calls (`GET /myself` to validate, then at least one `GET /search/jql` — 98 fits in one page at the app's own page size, so this account's true minimum is exactly 2, not the displayed 1).
 
 ### Everyday failure composites, scope boundary, and consistency
 
@@ -1940,6 +1943,7 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   So with a role filter active, "ENG 12" can produce 3 rows, and "All 30" can
   produce 8. The two numbers sit inches apart on screen and disagree. Not caught
   by JIRA-26 or JIRA-29, both of which only check the summary line.
+  Result: FAIL, confirmed live exactly as predicted — with the "Reported" role filter active, the summary line correctly read "34 issues · 1 Jira project", but the "All" and "ENG" chips sitting right above it both still read "98" (the unfiltered total). A user sees "All 98" and "34 issues" in the same view, disagreeing.
 
 ---
 
