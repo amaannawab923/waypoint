@@ -29,11 +29,20 @@ function formatRelativeTime(iso: string): string {
  * self-contained (it takes the ticket object it already has, rather than a
  * projectId/identifier pair to refetch by).
  */
-export function JiraTicketDrawer({ ticket, onClose }: { ticket: JiraTicket; onClose: () => void }) {
+export function JiraTicketDrawer({
+  ticket,
+  onClose,
+}: {
+  ticket: JiraTicket;
+  onClose: () => void;
+}) {
   const [visible, setVisible] = useState(false);
   const [comments, setComments] = useState<JiraComment[]>([]);
 
-  const { data: fetchedComments } = useAsync(() => listJiraComments(ticket.id), [ticket.id]);
+  const { data: fetchedComments } = useAsync(
+    () => listJiraComments(ticket.id),
+    [ticket.id],
+  );
   useEffect(() => {
     if (fetchedComments) setComments(fetchedComments);
   }, [fetchedComments]);
@@ -61,11 +70,17 @@ export function JiraTicketDrawer({ ticket, onClose }: { ticket: JiraTicket; onCl
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2.5 border-b border-border px-4 py-3.5">
-          <span className="font-mono text-xs font-bold" style={{ color: projectColor }}>
+          <span
+            className="font-mono text-xs font-bold"
+            style={{ color: projectColor }}
+          >
             {ticket.key}
           </span>
           <span className="inline-flex items-center gap-1.5 rounded-full border border-border-strong bg-surface px-2.5 py-1 text-xs font-semibold text-text">
-            <span className="size-[7px] shrink-0 rounded-full" style={{ background: ticket.stateColor }} />
+            <span
+              className="size-[7px] shrink-0 rounded-full"
+              style={{ background: ticket.stateColor }}
+            />
             {ticket.stateName}
           </span>
           <Button
@@ -88,7 +103,9 @@ export function JiraTicketDrawer({ ticket, onClose }: { ticket: JiraTicket; onCl
         </div>
 
         <div className="thin-scroll flex-1 overflow-y-auto px-4 py-4">
-          <h3 className="mb-2.5 font-display text-[15px] leading-snug font-semibold text-text">{ticket.title}</h3>
+          <h3 className="mb-2.5 font-display text-[15px] leading-snug font-semibold text-text">
+            {ticket.title}
+          </h3>
 
           <div className="mb-3.5 flex flex-wrap gap-1.5">
             <span className="rounded-full border border-border bg-surface-2 px-2.5 py-1 text-[11px] font-semibold text-text-secondary">
@@ -114,7 +131,9 @@ export function JiraTicketDrawer({ ticket, onClose }: { ticket: JiraTicket; onCl
             )}
           </div>
 
-          <p className="mb-3.5 text-[12.5px] leading-relaxed text-text-secondary">{ticket.description}</p>
+          <p className="mb-3.5 text-[12.5px] leading-relaxed text-text-secondary">
+            {ticket.description}
+          </p>
 
           {ticket.attachments.map((a) => (
             <div
@@ -131,7 +150,9 @@ export function JiraTicketDrawer({ ticket, onClose }: { ticket: JiraTicket; onCl
             </div>
           ))}
 
-          <div className="mb-2 text-[11px] font-bold tracking-wide text-text-muted uppercase">Comments</div>
+          <div className="mb-2 text-[11px] font-bold tracking-wide text-text-muted uppercase">
+            Comments
+          </div>
           <div className="mb-4 space-y-3.5">
             {comments.map((c) => (
               <div key={c.id} className="flex gap-2">
@@ -150,10 +171,15 @@ export function JiraTicketDrawer({ ticket, onClose }: { ticket: JiraTicket; onCl
                 </div>
               </div>
             ))}
-            {comments.length === 0 && <p className="text-[12.5px] text-text-muted">No comments yet.</p>}
+            {comments.length === 0 && (
+              <p className="text-[12.5px] text-text-muted">No comments yet.</p>
+            )}
           </div>
 
-          <JiraCommentComposer ticketId={ticket.id} onPosted={(comment) => setComments((cs) => [...cs, comment])} />
+          <JiraCommentComposer
+            ticketId={ticket.id}
+            onPosted={(comment) => setComments((cs) => [...cs, comment])}
+          />
         </div>
       </div>
     </div>,
