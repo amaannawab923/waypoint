@@ -63,7 +63,11 @@ export function resetJiraStoreForTests(): void {
  * below unless this component is guaranteed to mount after another one has
  * already triggered the fetch (e.g. deep in the My Jira page tree). */
 export function useJiraConnection(): JiraConnectionStatus | undefined {
-  return useSyncExternalStore(subscribeJiraConnection, getSnapshot, getSnapshot);
+  return useSyncExternalStore(
+    subscribeJiraConnection,
+    getSnapshot,
+    getSnapshot,
+  );
 }
 
 /** Convenience hook for a top-level mount point (Sidebar, MyJiraPage): fetches
