@@ -127,6 +127,79 @@ export function tidyPlainText(text: string): string {
 }
 
 // -----------------------------------------------------------------------
+// Legacy wiki markup → plain text
+// -----------------------------------------------------------------------
+
+/**
+ * Flattens Jira's legacy wiki markup to plain text.
+ *
+ * This is a safety net, not the mechanism. The real fix for a leaked
+ * `[~accountid:...]` is that comments are read through v3, which returns ADF
+ * (see jiraClient.ts) — `adfToPlainText` handles a mention node properly and
+ * has always done so. But a string body is still a shape this app can be
+ * handed: an intermediary proxy, an older API version, or a revert of that
+ * endpoint switch all put one back on screen. Before this existed, the string
+ * branch of `mapComment` returned the body completely unprocessed, so
+ * whatever markup Jira flattened into it was rendered verbatim.
+ *
+ * Deliberately modest in scope. It covers the markers that show up in a
+ * flattened comment and nothing more; it is not a wiki-markup parser, and it
+ * does not try to reconstruct structure (bullets become plain lines) on a
+ * plain-text surface that could not render it anyway.
+ *
+ * `resolveMentionName` is a seam for a future live account lookup. Nothing
+ * passes one today — on this fallback path a mention becomes "@a teammate",
+ * which is vague but true. The one thing that must never happen, with or
+ * without a resolver, is the raw account id reaching the screen.
+ */
+export function wikiMarkupToPlainText(
+  raw: string,
+  resolveMentionName?: (accountId: string) => string | null,
+): string {
+  if (typeof raw !== 'string' || !raw) return '';
+
+  let text = raw;
+
+  // Mentions first, before any bracket-based rule: an account id is
+  // structured data that must be consumed here rather than left for a later
+  // pass to mangle into something that still contains it.
+  text = text.replace(/\[~accountid:([^\]]+)\]/g, (_match, accountId) => {
+    const name = resolveMentionName?.(String(accountId)) ?? null;
+    return `@${name && name.trim() ? name.trim() : 'a teammate'}`;
+  });
+
+  // Block macros: keep the content, drop the markers.
+  text = text.replace(/\{noformat\}([\s\S]*?)\{noformat\}/g, '$1');
+  text = text.replace(/\{code(?::[^}\n]*)?\}([\s\S]*?)\{code\}/g, '$1');
+  text = text.replace(/\{quote\}([\s\S]*?)\{quote\}/g, '$1');
+
+  // Line-level rules run before inline ones, and the order is load-bearing:
+  // a `*` at the start of a line is a bullet, while `*text*` mid-line is
+  // bold. Running the inline bold rule first would consume the bullet marker
+  // as an opening delimiter and corrupt both.
+  text = text.replace(/^[ \t]*h[1-6]\.[ \t]*/gm, '');
+  text = text.replace(/^[ \t]*[*#]{1,4}[ \t]+/gm, '');
+
+  // Inline markers.
+  text = text.replace(/\*([^*\n]+)\*/g, '$1');
+  // Underscores are guarded by non-word boundaries on both sides, unlike the
+  // other inline rules: `snake_case_identifiers` are ordinary content in a
+  // developer's comment, and an unguarded rule silently eats their
+  // underscores.
+  text = text.replace(/(^|[^\w])_([^_\n]+)_(?=$|[^\w])/g, '$1$2');
+  text = text.replace(/\{\{([^}\n]*)\}\}/g, '$1');
+  text = text.replace(/\[([^\]|\n]+)\|([^\]\n]+)\]/g, '$1 ($2)');
+  text = text.replace(/!([^!\s|]+)(?:\|[^!\n]*)?!/g, '[image: $1]');
+
+  // `-strikethrough-` and `~subscript~` are deliberately left alone: hyphens
+  // and tildes are ordinary characters in ordinary prose (date ranges,
+  // hyphenated words, approximations), so the false-positive rate of
+  // stripping them would do more damage than an occasional stray marker.
+
+  return tidyPlainText(text);
+}
+
+// -----------------------------------------------------------------------
 // Scalar mappings
 // -----------------------------------------------------------------------
 
@@ -505,10 +578,12 @@ export function mapIssue(
   };
 }
 
-/** v2 comments come back with a plain-string `body` (which is exactly why the
- * client reads and writes comments through v2 — see jiraClient.ts), but a
- * site or a proxy handing back a v3-shaped ADF body must not render as
- * "[object Object]", so this flattens either. */
+/** Comments are read through v3 and written through v2 (see jiraClient.ts),
+ * so both body shapes are real here and both are flattened: an ADF tree from
+ * a read, a plain string from a freshly posted comment echoed back. The
+ * string branch runs the wiki-markup pass rather than passing the body
+ * through untouched — a v2-shaped body is legacy markup, not plain text, and
+ * rendering it verbatim is what leaked a raw `[~accountid:...]` on screen. */
 export function mapComment(
   raw: unknown,
   ticketId: string,
@@ -522,7 +597,7 @@ export function mapComment(
     authorName: displayNameOf(record.author, 'Unknown'),
     body:
       typeof record.body === 'string'
-        ? record.body
+        ? wikiMarkupToPlainText(record.body)
         : tidyPlainText(adfToPlainText(record.body)),
     createdAt:
       typeof record.created === 'string'

@@ -437,13 +437,25 @@ export async function getTicket(
 // 4. Comments
 // -----------------------------------------------------------------------
 
-// v2, not v3, for both reading and writing comments — a considered choice,
-// not an oversight. v2 takes and returns a plain string body, which is
-// exactly what this app's composer produces and what its comment list
-// renders. v3 requires the body to be an Atlassian Document Format tree, and
-// has a live-confirmed defect rendering posted bodies back. Comments here are
-// plain text; the simpler API is also the correct one.
-const COMMENT_PATH = (ticketId: string) =>
+// Reads go through v3, writes through v2 — a deliberate split, not an
+// oversight on either side.
+//
+// Reads: v2 pre-flattens an ADF-authored comment into legacy wiki markup and
+// hands it back as a plain string, which turns a real Jira @mention into the
+// literal `[~accountid:712020:...]` — live-confirmed against a real connected
+// site. v3 returns the ADF tree itself, where a mention node carries
+// `attrs.text` ("@Amaan Nawab") and the account id stays where it belongs.
+// jiraMap.ts's `mapComment` already flattens ADF correctly and already
+// deliberately never surfaces an account id; reading v3 is simply what makes
+// that already-correct path the one that runs.
+//
+// Writes: v3 requires the body to be an ADF tree, while v2 takes the plain
+// string this app's composer actually produces. Comments written here are
+// plain text, so the simpler API is also the correct one — and this path is
+// unchanged.
+const COMMENT_READ_PATH = (ticketId: string) =>
+  `/rest/api/3/issue/${encodeURIComponent(ticketId)}/comment`;
+const COMMENT_WRITE_PATH = (ticketId: string) =>
   `/rest/api/2/issue/${encodeURIComponent(ticketId)}/comment`;
 
 export async function listComments(
@@ -456,8 +468,12 @@ export async function listComments(
     credentialResult.value,
     {
       method: 'GET',
-      path: COMMENT_PATH(ticketId),
-      query: { orderBy: 'created', maxResults: '100' },
+      path: COMMENT_READ_PATH(ticketId),
+      // `-created` (newest first), not `created`. The cap is 100, and on a
+      // busy ticket ascending order means those 100 are the *oldest* hundred
+      // — a thread whose most recent activity is invisible, which is the one
+      // thing a comment list exists to show.
+      query: { orderBy: '-created', maxResults: '100' },
     },
   );
   if (!result.ok) return result;
@@ -465,6 +481,10 @@ export async function listComments(
   const comments = (result.value?.comments ?? [])
     .map((raw) => mapComment(raw, ticketId))
     .filter((c): c is JiraWireComment => c !== null);
+  // Fetched newest-first, returned oldest-first: the drawer renders in array
+  // order and appends a freshly posted comment with `[...cs, comment]`, so
+  // ascending is the contract callers already depend on.
+  comments.reverse();
   return { ok: true, value: comments };
 }
 
@@ -479,7 +499,7 @@ export async function postComment(
     credentialResult.value,
     {
       method: 'POST',
-      path: COMMENT_PATH(ticketId),
+      path: COMMENT_WRITE_PATH(ticketId),
       body: { body },
     },
   );

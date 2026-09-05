@@ -8,6 +8,7 @@ import {
   mapStateCategory,
   mapTransitions,
   normalizeJiraSite,
+  wikiMarkupToPlainText,
 } from './jiraMap';
 
 // No Electron and no network in this file — these are the pure functions that
@@ -488,5 +489,121 @@ describe('mapComment', () => {
         '10421',
       )?.body,
     ).toBe('Taking it.');
+  });
+
+  // A string body is legacy wiki markup, not plain text. Before this, the
+  // string branch returned it verbatim, which is how a real Jira @mention
+  // reached the screen as `[~accountid:...]`.
+  describe('wikiMarkupToPlainText', () => {
+    const CASES: Array<[name: string, input: string, expected: string]> = [
+      ['heading markers', 'h2. Rollout plan', 'Rollout plan'],
+      ['h1 through h6', 'h6. Small heading', 'Small heading'],
+      ['bullet markers', '* first\n* second', 'first\nsecond'],
+      ['nested bullets', '** deeper', 'deeper'],
+      ['numbered list markers', '# one\n# two', 'one\ntwo'],
+      ['bold', 'Ship *today* please', 'Ship today please'],
+      ['emphasis', 'Ship _today_ please', 'Ship today please'],
+      ['monospace', 'Run {{npm test}} first', 'Run npm test first'],
+      [
+        'links',
+        'See [the doc|https://example.com/x] first',
+        'See the doc (https://example.com/x) first',
+      ],
+      ['images', '!diagram.png!', '[image: diagram.png]'],
+      [
+        'images with attributes',
+        '!diagram.png|thumbnail!',
+        '[image: diagram.png]',
+      ],
+      ['noformat blocks', '{noformat}raw text{noformat}', 'raw text'],
+      ['code blocks', '{code}const a = 1;{code}', 'const a = 1;'],
+      ['code blocks with a language', '{code:java}int a;{code}', 'int a;'],
+      ['quote blocks', '{quote}they said no{quote}', 'they said no'],
+      // A bullet marker and a bold marker are both `*`; the line-level rule
+      // has to run first or each corrupts the other.
+      ['a bold run inside a bullet', '* *ship* it', 'ship it'],
+    ];
+
+    it.each(CASES)('unwraps %s', (_name, input, expected) => {
+      expect(wikiMarkupToPlainText(input)).toBe(expected);
+    });
+
+    // A deliberate non-choice: hyphens and tildes are ordinary prose
+    // characters, so stripping them would corrupt more than it fixed.
+    it('leaves strikethrough and subscript markers alone', () => {
+      const input = 'Window 2026-09-01 - 2026-09-05, -kept- and ~kept~';
+      expect(wikiMarkupToPlainText(input)).toBe(input);
+    });
+
+    it('does not eat the underscores in a snake_case identifier', () => {
+      expect(wikiMarkupToPlainText('set custom_field_name to 3')).toBe(
+        'set custom_field_name to 3',
+      );
+    });
+
+    // The property this whole fix exists to guarantee.
+    const ACCOUNT_IDS = [
+      '712020:6d51d3e3-1111-2222-3333-444455556666',
+      '5f8a1b2c3d4e5f6a7b8c9d0e',
+      '557058:abcd-efgh-ijkl',
+      '63a1b2c3d4e5f60012345678',
+    ];
+
+    it.each(ACCOUNT_IDS)(
+      'never renders the account id in a mention (%s)',
+      (accountId) => {
+        const output = wikiMarkupToPlainText(
+          `[~accountid:${accountId}] can you take a look?`,
+        );
+        expect(output).toBe('@a teammate can you take a look?');
+        expect(output).not.toContain('accountid');
+        expect(output).not.toContain(accountId);
+      },
+    );
+
+    it('uses a resolved display name when one is available', () => {
+      const output = wikiMarkupToPlainText(
+        '[~accountid:712020:6d51d3e3] please review',
+        () => 'Amaan Nawab',
+      );
+      expect(output).toBe('@Amaan Nawab please review');
+      expect(output).not.toContain('accountid');
+    });
+
+    it('falls back to the vague name when the resolver has no answer', () => {
+      const output = wikiMarkupToPlainText(
+        '[~accountid:712020:6d51d3e3] please review',
+        () => null,
+      );
+      expect(output).toBe('@a teammate please review');
+      expect(output).not.toContain('accountid');
+    });
+
+    it('handles several mentions in one body', () => {
+      const output = wikiMarkupToPlainText(
+        '[~accountid:111] and [~accountid:222] are both on this',
+      );
+      expect(output).toBe('@a teammate and @a teammate are both on this');
+      expect(output).not.toContain('accountid');
+    });
+
+    it('returns an empty string for an empty body', () => {
+      expect(wikiMarkupToPlainText('')).toBe('');
+    });
+  });
+
+  it('runs a wiki-markup body through the flattener, mention and all', () => {
+    const body = mapComment(
+      {
+        id: '10503',
+        author: { displayName: 'Sam Lee' },
+        body: '[~accountid:712020:6d51d3e3-1111] see *this* {{patch}}',
+        created: '2026-09-01T11:00:00.000+0000',
+      },
+      '10421',
+    )?.body;
+
+    expect(body).toBe('@a teammate see this patch');
+    expect(body).not.toContain('accountid');
   });
 });

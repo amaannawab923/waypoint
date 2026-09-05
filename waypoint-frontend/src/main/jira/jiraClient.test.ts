@@ -432,16 +432,36 @@ describe('transitionTicket', () => {
 });
 
 describe('comments', () => {
-  // v2, not v3: v2 takes and returns a plain string body, which is exactly
-  // what this app's composer produces and its comment list renders.
-  it('reads comments from the v2 endpoint', async () => {
+  // v3 for the read, deliberately: v2 pre-flattens an ADF-authored comment
+  // into legacy wiki markup, which is what turned a real Jira @mention into a
+  // raw `[~accountid:...]` on screen. v3 hands back the ADF tree, where the
+  // mention node carries its own display text and the account id never
+  // surfaces.
+  it('reads comments from the v3 endpoint, not v2', async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({
         comments: [
           {
             id: '10500',
             author: { displayName: 'Sam Lee' },
-            body: 'Replay log attached.',
+            body: {
+              type: 'doc',
+              content: [
+                {
+                  type: 'paragraph',
+                  content: [
+                    {
+                      type: 'mention',
+                      attrs: {
+                        id: '712020:6d51d3e3-1111',
+                        text: '@Amaan Nawab',
+                      },
+                    },
+                    { type: 'text', text: ' replay log attached.' },
+                  ],
+                },
+              ],
+            },
             created: '2026-09-01T09:00:00.000+0000',
           },
         ],
@@ -450,10 +470,53 @@ describe('comments', () => {
 
     const result = await listComments('10421');
 
-    expect(call()[0]).toContain('/rest/api/2/issue/10421/comment');
+    expect(call()[0]).toContain('/rest/api/3/issue/10421/comment');
+    expect(call()[0]).not.toContain('/rest/api/2/');
     expect(result).toMatchObject({
       ok: true,
-      value: [{ authorName: 'Sam Lee', body: 'Replay log attached.' }],
+      value: [
+        { authorName: 'Sam Lee', body: '@Amaan Nawab replay log attached.' },
+      ],
+    });
+  });
+
+  // The cap is 100. Ascending order means those 100 are the oldest hundred on
+  // a busy ticket — the newest activity, which is the point of the list,
+  // falls off the end.
+  it('fetches newest-first but hands the caller oldest-first', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        comments: [
+          {
+            id: '3',
+            author: { displayName: 'Sam Lee' },
+            body: 'newest',
+            created: '2026-09-03T09:00:00.000+0000',
+          },
+          {
+            id: '2',
+            author: { displayName: 'Sam Lee' },
+            body: 'middle',
+            created: '2026-09-02T09:00:00.000+0000',
+          },
+          {
+            id: '1',
+            author: { displayName: 'Sam Lee' },
+            body: 'oldest',
+            created: '2026-09-01T09:00:00.000+0000',
+          },
+        ],
+      }),
+    );
+
+    const result = await listComments('10421');
+
+    expect(call()[0]).toContain('orderBy=-created');
+    // The drawer renders in array order and appends a new comment with
+    // `[...cs, comment]`, so ascending is the contract.
+    expect(result).toMatchObject({
+      ok: true,
+      value: [{ id: '1' }, { id: '2' }, { id: '3' }],
     });
   });
 
@@ -469,8 +532,12 @@ describe('comments', () => {
 
     const result = await postComment('10421', 'Taking it.');
 
+    // The write stays on v2 even though the read moved to v3: v2 takes the
+    // plain string this app's composer produces, where v3 would require an
+    // ADF tree.
     const [url, init] = call();
     expect(url).toContain('/rest/api/2/issue/10421/comment');
+    expect(url).not.toContain('/rest/api/3/');
     expect(init.method).toBe('POST');
     expect(JSON.parse(init.body as string)).toEqual({ body: 'Taking it.' });
     expect(result).toMatchObject({ ok: true, value: { id: '10502' } });
