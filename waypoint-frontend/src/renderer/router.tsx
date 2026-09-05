@@ -125,7 +125,11 @@ export const router = createBrowserRouter([
               // bounces home instead of rendering the page.
               {
                 path: '/my-jira',
-                element: MY_JIRA_ENABLED ? <MyJiraPage /> : <Navigate to="/" replace />,
+                element: MY_JIRA_ENABLED ? (
+                  <MyJiraPage />
+                ) : (
+                  <Navigate to="/" replace />
+                ),
               },
 
               {
@@ -153,13 +157,22 @@ export const router = createBrowserRouter([
                     path: 'settings',
                     element: <ProjectSettingsLayout />,
                     children: [
-                      { index: true, element: <Navigate to="general" replace /> },
+                      {
+                        index: true,
+                        element: <Navigate to="general" replace />,
+                      },
                       { path: 'general', element: <ProjectSettingsGeneral /> },
                       { path: 'members', element: <ProjectSettingsMembers /> },
-                      { path: 'codebase', element: <ProjectSettingsCodebase /> },
+                      {
+                        path: 'codebase',
+                        element: <ProjectSettingsCodebase />,
+                      },
                       { path: 'states', element: <ProjectSettingsStates /> },
                       { path: 'labels', element: <ProjectSettingsLabels /> },
-                      { path: 'estimates', element: <ProjectSettingsEstimates /> },
+                      {
+                        path: 'estimates',
+                        element: <ProjectSettingsEstimates />,
+                      },
                       {
                         path: 'automations',
                         element: <ProjectSettingsAutomations />,
