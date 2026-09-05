@@ -3,7 +3,6 @@ import {
   disconnectJira,
   getJiraConnectionStatus,
   refreshJiraSync,
-  setJiraSyncPaused,
 } from '@/data/jiraApi';
 import { setJiraConnection } from '@/lib/jiraStore';
 import { showErrorToast } from '@/lib/toast';
@@ -13,13 +12,17 @@ import { IconAlert, IconCircleDot } from '@/components/icons';
 import type { JiraConnectionStatus } from '@/types/jira';
 
 /**
- * MyJiraPage's "Connection" tab — replaces phase 1's stub placeholder.
- * Every action here is a real (if mocked) write: Refresh now bumps
- * lastSyncAt through refreshJiraSync(), Pause sync flips a persisted
- * `paused` boolean through setJiraSyncPaused(), and Disconnect genuinely
- * calls disconnectJira() and pushes the result into jiraStore — which is
- * what makes the sidebar's MyJiraNavItem disappear live, since it reads the
- * exact same store.
+ * MyJiraPage's "Connection" tab. Both actions here reach the real site:
+ * "Refresh now" re-runs the JQL search against Jira, and "Disconnect" deletes
+ * the stored API token outright in the main process before pushing the
+ * re-read status into jiraStore — which is what makes the sidebar's
+ * MyJiraNavItem disappear live, since it reads the exact same store.
+ *
+ * A third control, "Pause sync", used to sit between them, alongside a
+ * "poll interval" stat. Neither survived the move from fixtures to a real
+ * site: nothing has ever polled, so the interval was a number this app did
+ * not honor and the pause button paused nothing. Reads happen on mount and
+ * when Refresh is pressed.
  */
 export function JiraConnectionPanel({
   connection,
@@ -27,7 +30,6 @@ export function JiraConnectionPanel({
   connection: JiraConnectionStatus;
 }) {
   const [refreshing, setRefreshing] = useState(false);
-  const [pausing, setPausing] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
 
   async function handleRefresh() {
@@ -41,20 +43,6 @@ export function JiraConnectionPanel({
       );
     } finally {
       setRefreshing(false);
-    }
-  }
-
-  async function handleTogglePause() {
-    setPausing(true);
-    try {
-      const updated = await setJiraSyncPaused(!connection.paused);
-      setJiraConnection(updated);
-    } catch (err) {
-      showErrorToast(
-        err instanceof Error ? err.message : 'Could not change sync.',
-      );
-    } finally {
-      setPausing(false);
     }
   }
 
@@ -89,7 +77,7 @@ export function JiraConnectionPanel({
           {connection.connected ? (
             <span className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-full bg-success-bg py-1 pr-2.5 pl-2 text-[11.5px] font-bold text-success">
               <span className="size-1.5 shrink-0 rounded-full bg-success" />
-              {connection.paused ? 'Paused' : 'Live'}
+              Connected
             </span>
           ) : (
             <span className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-full bg-surface-2 py-1 pr-2.5 pl-2 text-[11.5px] font-bold text-text-muted">
@@ -116,12 +104,6 @@ export function JiraConnectionPanel({
               Jira projects represented
             </span>
           </div>
-          <div>
-            <b className="block font-mono text-lg font-bold tabular-nums text-text">
-              {connection.pollIntervalSec}s
-            </b>
-            <span className="text-[11.5px] text-text-muted">poll interval</span>
-          </div>
         </div>
 
         <div className="flex flex-wrap gap-2 border-t border-border px-4.5 py-3">
@@ -131,17 +113,6 @@ export function JiraConnectionPanel({
             onClick={handleRefresh}
           >
             {refreshing ? 'Refreshing…' : 'Refresh now'}
-          </Button>
-          <Button
-            size="xs"
-            disabled={pausing || !connection.connected}
-            onClick={handleTogglePause}
-          >
-            {pausing
-              ? 'Saving…'
-              : connection.paused
-                ? 'Resume sync'
-                : 'Pause sync'}
           </Button>
           <Button
             size="xs"
@@ -183,9 +154,25 @@ export function JiraConnectionPanel({
           </li>
           <li>
             Rich-text authoring — tables, panels, syntax-highlighted code
-            blocks. Comments you write here are plain text with @mentions.
+            blocks. Comments you write here are plain text, and so is what you
+            read: a Jira description written with formatting is flattened to its
+            text.
           </li>
-          <li>Linear and Shortcut companions.</li>
+          <li>
+            @mentions. A real Jira mention is a structured node carrying an
+            account id; typing &ldquo;@Sam&rdquo; here posts those characters
+            and notifies nobody, so the composer no longer offers a picker that
+            would imply otherwise.
+          </li>
+          <li>
+            Background sync. The list is read when you open My Jira and when you
+            press Refresh — nothing polls in between.
+          </li>
+          <li>
+            Copilot proposals against Jira. The approval rail exists, but
+            nothing generates a proposal from your checkout yet.
+          </li>
+          <li>Creating issues, and Linear and Shortcut companions.</li>
         </ul>
       </div>
     </div>
