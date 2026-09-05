@@ -841,42 +841,52 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: Confirm several of your Jira issues carry labels. Look for any label display or label filter in My Jira.
   Expected: Labels should be visible somewhere on the row or in the drawer.
   Coverage: **Gap worth flagging** — labels are never read: `mapIssue()` doesn't extract `fields.labels`, `JiraWireTicket` has no labels field, and neither the row nor the drawer renders any. "View by category" was an explicitly named daily use case and labels are its most common form.
+  Result: FAIL — added a real label ("qa-test-label") to ENG-4 via the Jira API, reloaded the app, opened ENG-4's drawer: the label appears nowhere, neither on the row nor in the drawer. Directly confirms the gap with live data, not just code inference.
 - **JIRA-41** — Viewing your work by component
   Steps: Confirm some issues carry Jira components. Look for component display or filtering.
   Expected: Components visible or filterable.
   Coverage: **Gap worth flagging** — `fields.components` is never read or mapped. Same class as JIRA-40; on many teams the component *is* the primary category.
+  Result: NOT TESTED — this Jira project (ENG) has zero components configured (`GET /project/ENG/components` returns `[]`), so there's no real component to assign and check. Code-level claim (never mapped) stands unverified against real data.
 - **JIRA-42** — Distinguishing bugs from stories from tasks
   Steps: Confirm your queue contains a mix of Jira issue types. Look for a type icon, a type label, or a type filter anywhere in the row or drawer.
   Expected: Issue type should be distinguishable at a glance.
   Coverage: **Gap worth flagging** — `fields.issuetype` is never mapped. Every row looks identical whether it's a Bug, a Story, an Epic or a Sub-task, and there is no way to filter to "just my bugs". This is arguably the single most-missed field for daily triage.
+  Result: FAIL — this account's 98 issues are a real mix of Bug/Task/Story (per the seed script); no type icon, label, or filter appears anywhere in the row or drawer for any of them. Confirms the gap directly.
 - **JIRA-43** — Epic shown in the drawer
   Steps: Open a ticket that belongs to an epic. Check the "Epic ·" chip against Jira.
   Expected: The chip names the correct epic.
   Coverage: **Supported** — `mapIssue()` reads `fields.parent.fields.summary` first, but only when `parent.fields.issuetype` says the parent really is an epic, falling back to a named `Epic Link`/`Epic Name` custom field otherwise (JIRA-44).
+  Result: PASS, live-verified — ENG-4 (real parent ENG-1, a real Epic) shows "Epic · Epic 1" in the drawer, exactly matching ENG-1's real Jira summary.
 - **JIRA-44** — "Epic" chip on a sub-task
   Steps: Open a Jira sub-task from the list (one whose parent is a Story, not an Epic). Read the "Epic ·" chip. Then open a story that does sit directly under an epic and read the same chip.
   Expected: The sub-task either names its real epic (via Epic Link) or shows no Epic chip at all — never its parent story's summary. The story under an epic still names that epic.
   Coverage: **Supported** — `mapIssue` now reads `parent.fields.issuetype` and takes `fields.parent` as the epic only when that type is one (`hierarchyLevel >= 1`, or a name of "epic" on a site that returns no hierarchy level). A non-epic parent falls through to the Epic Link custom field, and to null when that's absent too. A parent payload carrying no issuetype at all is still trusted, matching how every other field in the mapper degrades. Covered in `jiraMap.test.ts`; still worth eyeballing on a real site with sub-tasks and a renamed epic type.
+  Result: NOT TESTED — no real Sub-task-type issue exists in this dataset (seed script only created Bug/Task/Story), so the exact "sub-task under a non-epic Story parent" scenario can't be reproduced live. Unit-tested per the Coverage note; JIRA-43 confirms the epic-parent path works live.
 - **JIRA-45** — Parent/child hierarchy and sub-task rollup
   Steps: Look for any indication that an issue has sub-tasks, or that a sub-task belongs to a parent, beyond the single Epic chip.
   Expected: Nothing beyond that one chip is shown — no sub-task list, no completion rollup, no parent link. A sub-task in your queue renders as a flat row indistinguishable from a top-level issue.
   Coverage: **Not supported (untested/unknown)** — `fields.subtasks` is never mapped and nothing renders a hierarchy. Sub-tasks assigned to you will appear as flat, context-free rows indistinguishable from top-level issues (compounded by JIRA-42's missing type).
+  Result: PASS (confirms the gap) — ENG-4's drawer, despite having a real parent (ENG-1), shows nothing beyond the single "Epic · Epic 1" chip: no sub-task list, no rollup, no other hierarchy indicator.
 - **JIRA-46** — Story points shown when the site uses them
   Steps: Open a ticket with story points set in Jira. Check the "Story points ·" chip.
   Expected: Matches Jira's value.
   Coverage: **Supported** — `findNamedField(fields, names, /^story point/i)` matches on the *displayed field name* via `expand=names` rather than a hardcoded `customfield_10016`, so it should work on a site with a nonstandard id. Worth confirming on a real site since the field label varies ("Story Points", "Story point estimate").
+  Result: NOT TESTED — attempted to set `customfield_10016` ("Story point estimate", confirmed via `editmeta` to be this site's real story-points field) on ENG-4 via the API to test this properly, but the write was blocked by this session's own tooling permission classifier before it reached Jira. Not retried. Field-name-matching claim stands code-verified only.
 - **JIRA-47** — Custom fields generally
   Steps: Pick a custom field your team relies on (team, severity, customer, environment). Look for it in the drawer.
   Expected: It is absent. The drawer's chip set is fixed at assignee, reporter, epic, story points and sprint; no other custom field is rendered anywhere, on the row or in the drawer.
   Coverage: **Not supported (by design, but narrow)** — only story points, sprint and epic are pulled out of `*all`; the drawer renders a fixed chip set. Reasonable for a first pass, but note the search already fetches `*all`, so the data is being downloaded and thrown away.
+  Result: PASS (confirms by-design absence) — ENG-4's drawer chip set is exactly assignee, reporter, and epic; no other field, custom or standard, appears.
 - **JIRA-48** — Resolution reason
   Steps: Look for where an issue's resolution is displayed.
   Expected: No resolution is displayed anywhere. Resolved issues are excluded from the list entirely, so there is nowhere one could appear; resolution surfaces only as a required transition field on the way out (JIRA-63).
   Coverage: **Not supported (by design)** — consistent with the `resolution = Unresolved` scope. Resolution *is* handled as a required transition field on the way out (see JIRA-63).
+  Result: PASS (confirms by-design absence) — no resolution field appears anywhere on any of the 98 listed (all unresolved) issues.
 - **JIRA-49** — Versions / fixVersion / releases
   Steps: Look for any fixVersion or release information on a ticket.
   Expected: No fixVersion, affectsVersion or release appears on the row or in the drawer, and there is no version filter.
   Coverage: **Not supported (untested/unknown)** — `fields.fixVersions` is never mapped. Lower daily impact than labels/type, but it's a standard triage axis for release-driven teams.
+  Result: NOT TESTED — no fixVersion/release configured on this project to assign and check against; ENG-4's drawer shows none, consistent with the code claim but not a real-data confirmation.
 
 ### Due dates, priority views and overdue work
 
