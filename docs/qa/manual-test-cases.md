@@ -1541,6 +1541,7 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   that portaling moves the panel out of the row's DOM order, so Tab order is now
   wherever `<body>` puts it rather than immediately after the chip — worth
   checking as part of this case rather than assuming it improved.
+  Result: FAIL, seriously confirmed live — opened a real transition popover with a real click, then checked focus: it stayed on the chip button, never moved into the popover (`popover.contains(document.activeElement)` was false), and the popover element itself carries no `role`, no `aria-expanded`, no `aria-haspopup` (only `tabindex`/`data-shortcut-guard`/`class`/`style`). Pressed Tab once: focus jumped straight to the **next row's title button**, completely skipping the still-open popover, which remained open but was now unreachable by keyboard. This is worse than the Coverage note's "worth checking" framing suggests: a keyboard-only user cannot reach the transition options at all, not merely in a suboptimal order.
 - **JIRA-160** — Ticket drawer as a dialog
   Steps: Open a drawer with the keyboard. Tab repeatedly. Close with Escape.
   Expected: Focus enters the drawer, is trapped inside it while open, and returns
