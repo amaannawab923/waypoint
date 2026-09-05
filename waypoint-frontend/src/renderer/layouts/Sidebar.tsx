@@ -11,8 +11,11 @@ import {
   detectLocalClaudeCode,
 } from '@/data/api';
 import { setProjects, upsertProjects, useAllProjects } from '@/lib/projectsStore';
+import { useLoadedJiraConnection } from '@/lib/jiraStore';
+import { MY_JIRA_ENABLED } from '@/lib/featureFlags';
 import type { Project } from '@/types/entities';
 import { CreateProjectModal } from '@/components/domain/CreateProjectModal';
+import { JiraMark } from '@/components/domain/JiraMark';
 import {
   IconHome,
   IconUser,
@@ -190,6 +193,29 @@ function ProjectRow({ project }: { project: Project }) {
   );
 }
 
+/**
+ * The "My Jira" companion project's own nav slot — deliberately NOT a
+ * ProjectRow: My Jira isn't a row in projectsStore (see types/jira.ts's own
+ * header comment on why it's modeled as a standalone concept), it's a
+ * single flat link, closer to the "All tickets"/"All projects" rows above
+ * than to a real project's own sub-nav tree. Renders nothing at all when the
+ * flag is off or the mock connection isn't connected — no broken/disabled
+ * nav item for a surface that isn't reachable.
+ */
+function MyJiraNavItem() {
+  const connection = useLoadedJiraConnection();
+  if (!MY_JIRA_ENABLED || !connection?.connected) return null;
+  return (
+    <NavLink to="/my-jira" className={navLinkClass}>
+      <span className="flex size-[15px] shrink-0 items-center justify-center text-jira">
+        <JiraMark size={13} />
+      </span>
+      <span className="truncate">My Jira</span>
+      <CountBadge count={connection.issueCount} />
+    </NavLink>
+  );
+}
+
 function LocalStatusStrip() {
   const { data: projects } = useAsync(() => listProjects(), []);
   const { data: claude } = useAsync(() => detectLocalClaudeCode(), []);
@@ -324,6 +350,10 @@ export function Sidebar() {
 
       <div className="mt-2 flex flex-col gap-3 px-2">
         {projects?.map((p) => <ProjectRow key={p.id} project={p} />)}
+      </div>
+
+      <div className="mt-1 flex flex-col gap-0.5 px-2">
+        <MyJiraNavItem />
       </div>
 
       <div className="flex-1" />
