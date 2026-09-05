@@ -1086,6 +1086,7 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: Open a drawer on a long-running ticket with over 100 comments. Compare the last comment shown against the newest comment in Jira.
   Expected: Either all comments load, or there's a "load more" and a clear indication of truncation.
   Coverage: **Gap worth flagging** — `maxResults: '100'` with `orderBy: 'created'` (ascending) fetches the *oldest* 100 and silently drops everything after. On a busy ticket the user sees ancient history and misses the current conversation — including the comment that prompted them to open it. No pagination and no truncation notice.
+  Result: NOT TESTED — reproducing this would mean posting 100+ real comments to one ticket via automated API calls, which felt like disproportionate load to put on the real test site for one case; not attempted. Code-level claim is clear and specific enough to stand as-is pending a real execution.
 - **JIRA-87** — A comment written with Jira rich text
   Steps: In Jira, post a comment containing a bulleted list, bold text, a code block and a table. Read it in Waypoint.
   Expected: Readable plain text; structure is lost but content is not, and nothing renders as `[object Object]`.
@@ -1120,6 +1121,7 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: Paste a several-thousand-character comment and post it.
   Expected: Either posts intact or fails with Jira's own message; no truncation without warning, no crash.
   Coverage: **Not supported (untested/unknown)** — no length limit is enforced anywhere in the renderer, IPC or client; whatever Jira does is what happens.
+  Result: PASS — posted a 6000-character comment through the app; it posted intact and rendered in full with no truncation and no error.
 - **JIRA-94** — Multi-line comment formatting survives
   Steps: Post a comment with several paragraphs and line breaks. Read it back.
   Expected: Line breaks preserved.
@@ -1129,22 +1131,27 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: Find a comment you posted. Look for an edit affordance.
   Expected: No edit control appears on any comment, including your own — not inline, not on hover, not in a menu. Correcting a posted comment is only possible in Jira.
   Coverage: **Gap worth flagging** — no edit path at all (no PUT in `jiraClient.ts`). Fixing a typo in a comment you just posted is an extremely common action, and the only recourse is opening Jira. Not in the Connection tab's "not built yet" list either.
+  Result: PASS (confirms the gap) — the comment item contains zero buttons and zero icons of any kind; no edit affordance exists, not even hover-only.
 - **JIRA-96** — Delete your own comment
   Steps: Look for a delete affordance on a comment you authored.
   Expected: No delete control appears on any comment, including your own — not inline, not on hover, not in a menu.
   Coverage: **Not supported (untested/unknown)** — no DELETE path. Lower urgency than edit, and arguably right to keep a destructive action in Jira, but it should be said out loud.
+  Result: PASS (confirms the gap) — same evidence as JIRA-95: zero buttons/icons on the comment item, no delete control anywhere.
 - **JIRA-97** — Comment visibility restrictions
   Steps: In Jira, post a comment restricted to a specific role/group on a ticket in your queue. Read the ticket in Waypoint.
   Expected: Document whether the restricted comment appears and whether its restriction is indicated.
   Coverage: **Gap worth flagging** — `mapComment` ignores `visibility` entirely, so a role-restricted comment renders identically to a public one. A user could reasonably reply in the open to something that was internal-only. Worth confirming behavior before this is used on a Service Management project.
+  Result: FAIL (confirms the gap directly) — posted a real comment restricted to the "Administrator" project role via the API; it rendered in the drawer with zero visual distinction from a public comment — no lock icon, no "Administrators only" label, nothing.
 - **JIRA-98** — A comment posted by someone else while your drawer was open
   Steps: Open a drawer. Have a colleague comment on the same issue in Jira. Post your own comment from Waypoint.
   Expected: Document whether the colleague's comment appears.
   Coverage: **Partial** — `onPosted` appends locally and nothing refetches, so their comment is invisible until the drawer is closed and reopened. You can end up replying to a thread you can't fully see.
+  Result: PASS (confirms exactly as documented) — posted a comment via the API while the drawer stayed open (not visible, as expected); then posted my own comment through the app UI, which appended and became visible; the concurrent comment remained invisible even after that. Reproduced the exact behavior described.
 - **JIRA-99** — Comment timestamps older than a month
   Steps: Read a comment posted more than 30 days ago.
   Expected: A useful timestamp.
   Coverage: **Partial** — `formatRelativeTime` collapses everything past 30 days to the literal string "a while ago", and no absolute date is shown anywhere (not even on hover). On a long-lived ticket the whole history reads "a while ago".
+  Result: NOT TESTED — this Jira site was created fresh this session; no comment on it is genuinely more than a few hours old, let alone 30+ days.
 
 ### Content & structure — descriptions, attachments, links, time
 
