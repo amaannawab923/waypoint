@@ -1,0 +1,138 @@
+// The wire shapes the Jira integration passes across the main→preload→
+// renderer boundary. Deliberately its own file rather than living in either
+// jiraClient.ts or renderer/types/jira.ts: all three of jiraAuth.ts,
+// jiraClient.ts and jiraIpc.ts need them, and preload.ts re-states them in
+// its own bridge signatures (which is how renderer/preload.d.ts ends up
+// knowing about them at all).
+//
+// These are NOT renderer/types/jira.ts's types, and are not meant to
+// converge with them. That file describes what the My Jira *UI* renders —
+// including CSS-variable colors and presentation-only fields; this one
+// describes only what a real Jira Cloud site can actually be asked for.
+// renderer/data/jiraApi.ts owns the translation between the two, which is
+// where "Jira gave us a status category" becomes "the chip is var(--warning)".
+
+/** What a validated connection knows about the person it belongs to. Never
+ * carries the API token — see jiraAuth.ts's own note on why the credential
+ * and the identity are separate shapes even though they're stored together. */
+export interface JiraIdentity {
+  /** Bare hostname, e.g. "waypoint123.atlassian.net" — never a URL. */
+  site: string;
+  accountId: string;
+  email: string;
+  displayName: string;
+  avatarUrl: string | null;
+}
+
+/**
+ * Why a Jira call failed, in the terms the UI actually has to distinguish.
+ * `invalid_credentials` and `network` in particular must stay separable: the
+ * connect form says something completely different for "Jira said no" than
+ * for "we never reached Jira", and collapsing them would make a typo'd token
+ * and an offline laptop look identical.
+ */
+export type JiraFailureReason =
+  | 'not_connected'
+  | 'invalid_input'
+  | 'invalid_credentials'
+  | 'forbidden'
+  | 'site_not_found'
+  | 'network'
+  | 'storage_unavailable'
+  | 'jira_error';
+
+export interface JiraFailure {
+  ok: false;
+  reason: JiraFailureReason;
+  message: string;
+}
+
+/** The same discriminated-union shape copilotAuth.ts's IPC handlers already
+ * return — this codebase has no `Result<T, E>` helper, and inventing one for
+ * this feature alone would be a new error-handling dialect for no gain. */
+export type JiraResult<T> = { ok: true; value: T } | JiraFailure;
+
+/** Jira's own three-way status grouping (`statusCategory.key`: new /
+ * indeterminate / done), normalized. The renderer maps these to colors —
+ * main has no business knowing about CSS variables, and Jira has no business
+ * dictating a palette. */
+export type JiraStateCategory = 'todo' | 'in-progress' | 'done';
+
+export type JiraPriority = 'urgent' | 'high' | 'medium' | 'low' | 'none';
+
+export type JiraTicketRole = 'assignee' | 'reporter' | 'watcher';
+
+/** One field a transition screen requires before Jira will accept the move. */
+export interface JiraWireTransitionField {
+  /** The real Jira field id — "resolution", "timetracking",
+   * "customfield_10010". Sent back verbatim on the transition call so main
+   * can look its metadata up again. */
+  key: string;
+  label: string;
+  type: 'select' | 'text';
+  required: boolean;
+  /** Display strings for a select, taken from the field's allowedValues.
+   * The transition call resolves whichever one comes back to its real id. */
+  options?: string[];
+  hint?: string;
+}
+
+export interface JiraWireTransition {
+  id: string;
+  targetStateName: string;
+  targetStateCategory: JiraStateCategory;
+  requiresFields: JiraWireTransitionField[];
+}
+
+export interface JiraWireAttachment {
+  fileName: string;
+  sizeLabel: string;
+  uploaderName: string;
+}
+
+export interface JiraWireTicket {
+  /** Jira's numeric issue id, not the key. Both work as `issueIdOrKey` in
+   * every REST path this uses, but the id survives an issue being moved to
+   * another project (which changes its key) — so it's the safer handle for
+   * the renderer to hold across a refresh. */
+  id: string;
+  key: string;
+  projectKey: string;
+  title: string;
+  role: JiraTicketRole;
+  stateName: string;
+  stateCategory: JiraStateCategory;
+  priority: JiraPriority;
+  assigneeName: string;
+  reporterName: string;
+  description: string;
+  epicName: string | null;
+  storyPoints: number | null;
+  sprintName: string | null;
+  attachments: JiraWireAttachment[];
+  /**
+   * Whatever the bulk search's `expand=transitions` actually returned for
+   * this issue — frequently empty, and NOT to be trusted as "this issue has
+   * no legal moves". jiraApi.ts treats an empty array as "unknown, ask
+   * again" and falls back to the per-issue transitions endpoint; see its own
+   * comment for why that fallback is not optional.
+   */
+  transitions: JiraWireTransition[];
+  updatedAt: string;
+}
+
+export interface JiraWireComment {
+  id: string;
+  ticketId: string;
+  authorName: string;
+  body: string;
+  createdAt: string;
+}
+
+/** What `jira:status` answers with — a purely local read of the credential
+ * store, never a network call, since the renderer asks for it on every mount
+ * of the sidebar and the My Jira page. */
+export interface JiraConnectionSnapshot {
+  connected: boolean;
+  identity: JiraIdentity | null;
+}
