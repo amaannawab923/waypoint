@@ -8,6 +8,7 @@ import {
   mapUserOptions,
 } from './jiraMap';
 import type {
+  JiraCommentBody,
   JiraFailure,
   JiraIdentity,
   JiraPriorityOption,
@@ -900,26 +901,18 @@ export async function uploadAttachment(
 // 7. Comments
 // -----------------------------------------------------------------------
 
-// Reads go through v3, writes through v2 — a deliberate split, not an
-// oversight on either side.
-//
-// Reads: v2 pre-flattens an ADF-authored comment into legacy wiki markup and
-// hands it back as a plain string, which turns a real Jira @mention into the
-// literal `[~accountid:712020:...]` — live-confirmed against a real connected
-// site. v3 returns the ADF tree itself, where a mention node carries
-// `attrs.text` ("@Amaan Nawab") and the account id stays where it belongs.
-// jiraMap.ts's `mapComment` already flattens ADF correctly and already
-// deliberately never surfaces an account id; reading v3 is simply what makes
-// that already-correct path the one that runs.
-//
-// Writes: v3 requires the body to be an ADF tree, while v2 takes the plain
-// string this app's composer actually produces. Comments written here are
-// plain text, so the simpler API is also the correct one — and this path is
-// unchanged.
-const COMMENT_READ_PATH = (ticketId: string) =>
+// Reads and writes both go through v3 now. They didn't used to: writes sat
+// on v2 for as long as the composer only ever produced a plain string, which
+// v2 takes directly. That stopped being true the moment the composer grew a
+// real @-mention picker — a genuine Jira mention is a `mention` ADF node
+// carrying an accountId, and v2's comment-create endpoint has no way to
+// carry one. v3 does, because it's the same ADF tree the read side already
+// parses (see jiraMap.ts's `adfToPlainText`, which already handles a mention
+// node correctly and already deliberately never surfaces the account id) —
+// so posting a mention and reading it back both run through the one format
+// that can actually represent it.
+const COMMENT_PATH = (ticketId: string) =>
   `/rest/api/3/issue/${encodeURIComponent(ticketId)}/comment`;
-const COMMENT_WRITE_PATH = (ticketId: string) =>
-  `/rest/api/2/issue/${encodeURIComponent(ticketId)}/comment`;
 
 export async function listComments(
   ticketId: string,
@@ -931,7 +924,7 @@ export async function listComments(
     credentialResult.value,
     {
       method: 'GET',
-      path: COMMENT_READ_PATH(ticketId),
+      path: COMMENT_PATH(ticketId),
       // `-created` (newest first), not `created`. The cap is 100, and on a
       // busy ticket ascending order means those 100 are the *oldest* hundred
       // — a thread whose most recent activity is invisible, which is the one
@@ -953,7 +946,7 @@ export async function listComments(
 
 export async function postComment(
   ticketId: string,
-  body: string,
+  body: JiraCommentBody,
 ): Promise<JiraResult<JiraWireComment>> {
   const credentialResult = requireCredential();
   if (!credentialResult.ok) return credentialResult;
@@ -962,7 +955,7 @@ export async function postComment(
     credentialResult.value,
     {
       method: 'POST',
-      path: COMMENT_WRITE_PATH(ticketId),
+      path: COMMENT_PATH(ticketId),
       body: { body },
     },
   );

@@ -288,13 +288,17 @@ export interface JiraConnectionStatus {
 // back — so the fields, the interval readout and the Pause control are gone
 // rather than left describing behavior that does not exist.
 
-// JiraMentionCandidate — the composer's @-popover suggestion list — is gone
-// with the popover itself. A real Jira mention is an ADF `mention` node
-// carrying an accountId; typing "@Sam Lee" into a plain-text comment body
-// produces literal characters that notify nobody. While the composer wrote to
-// fixtures that was a cosmetic shortcut; now that it posts to a real issue,
-// offering a picker that silently produces a non-mention would be the app
-// telling the user it did something it did not do.
+// JiraMentionCandidate — the composer's @-popover suggestion list — used to
+// be listed here as gone: a real Jira mention is an ADF `mention` node
+// carrying an accountId, and while the composer wrote to fixtures, typing
+// "@Sam Lee" was a cosmetic shortcut that posted literal characters and
+// notified nobody. That's no longer the gap. The composer's popover (see
+// JiraCommentComposer.tsx) now searches this issue's real assignable users
+// via `searchJiraAssignableUsers` and, on selection, records a
+// `JiraMentionSpan` (data/jiraApi.ts) — start/end/accountId/displayName —
+// rather than just splicing text in. `buildCommentAdf` is where that span
+// becomes a genuine `mention` node before the comment is posted, which is
+// what makes Jira actually notify the person picked.
 
 /** phase 2 — the Copilot rail's proposal for ENG-421. Deliberately a SINGLE
  * combined proposal covering both a state move AND a comment post, unlike

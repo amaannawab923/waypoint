@@ -3,6 +3,7 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import type { CopilotDetectResult } from './copilot/copilotDetect';
 import type {
+  JiraCommentBody,
   JiraConnectionSnapshot,
   JiraIdentity,
   JiraPriorityOption,
@@ -343,7 +344,7 @@ const electronHandler = {
     },
     postComment(args: {
       ticketId: string;
-      body: string;
+      body: JiraCommentBody;
     }): Promise<JiraResult<JiraWireComment>> {
       return ipcRenderer.invoke('jira:comments:post', args);
     },

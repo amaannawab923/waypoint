@@ -1222,33 +1222,78 @@ describe('comments', () => {
     });
   });
 
-  it('posts a plain-string body to the v2 endpoint', async () => {
+  const PLAIN_ADF_BODY = {
+    type: 'doc' as const,
+    version: 1 as const,
+    content: [
+      {
+        type: 'paragraph' as const,
+        content: [{ type: 'text' as const, text: 'Taking it.' }],
+      },
+    ],
+  };
+
+  it('posts an ADF body to the v3 endpoint', async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({
         id: '10502',
         author: { displayName: 'Max Chen' },
-        body: 'Taking it.',
+        body: PLAIN_ADF_BODY,
         created: '2026-09-01T10:00:00.000+0000',
       }),
     );
 
-    const result = await postComment('10421', 'Taking it.');
+    const result = await postComment('10421', PLAIN_ADF_BODY);
 
-    // The write stays on v2 even though the read moved to v3: v2 takes the
-    // plain string this app's composer produces, where v3 would require an
-    // ADF tree.
+    // The write moved to v3 alongside the read: v2's comment-create endpoint
+    // takes a plain string and has no way to carry a `mention` node, which is
+    // exactly what the composer needs once its @-mention picker is real
+    // rather than cosmetic.
     const [url, init] = call();
-    expect(url).toContain('/rest/api/2/issue/10421/comment');
-    expect(url).not.toContain('/rest/api/3/');
+    expect(url).toContain('/rest/api/3/issue/10421/comment');
+    expect(url).not.toContain('/rest/api/2/');
     expect(init.method).toBe('POST');
-    expect(JSON.parse(init.body as string)).toEqual({ body: 'Taking it.' });
+    expect(JSON.parse(init.body as string)).toEqual({ body: PLAIN_ADF_BODY });
     expect(result).toMatchObject({ ok: true, value: { id: '10502' } });
+  });
+
+  it('posts a body carrying a real mention node', async () => {
+    const mentionBody = {
+      type: 'doc' as const,
+      version: 1 as const,
+      content: [
+        {
+          type: 'paragraph' as const,
+          content: [
+            {
+              type: 'mention' as const,
+              attrs: { id: '712020:6d51d3e3-1111', text: '@Sam Lee' },
+            },
+            { type: 'text' as const, text: ' can you take this?' },
+          ],
+        },
+      ],
+    };
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        id: '10503',
+        author: { displayName: 'Max Chen' },
+        body: mentionBody,
+        created: '2026-09-01T10:05:00.000+0000',
+      }),
+    );
+
+    const result = await postComment('10421', mentionBody);
+
+    const [, init] = call();
+    expect(JSON.parse(init.body as string)).toEqual({ body: mentionBody });
+    expect(result).toMatchObject({ ok: true, value: { id: '10503' } });
   });
 
   it('reports a permission failure as forbidden, not as bad credentials', async () => {
     fetchMock.mockResolvedValue(emptyResponse(403));
 
-    expect(await postComment('10421', 'Taking it.')).toMatchObject({
+    expect(await postComment('10421', PLAIN_ADF_BODY)).toMatchObject({
       ok: false,
       reason: 'forbidden',
     });

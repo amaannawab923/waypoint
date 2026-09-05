@@ -419,17 +419,120 @@ describe('per-ticket channels', () => {
     });
   });
 
-  it('jira:comments:post refuses an empty body', async () => {
-    expect(
+  describe('jira:comments:post', () => {
+    const ADF_TEXT_ONLY = {
+      type: 'doc',
+      version: 1,
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'Taking it.' }] },
+      ],
+    };
+
+    it('refuses a non-ADF body, like the plain string this channel used to take', async () => {
+      expect(
+        await getHandler('jira:comments:post')(
+          {},
+          { ticketId: '10421', body: '   ' },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(postCommentMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses a doc made only of empty paragraphs', async () => {
+      expect(
+        await getHandler('jira:comments:post')(
+          {},
+          {
+            ticketId: '10421',
+            body: {
+              type: 'doc',
+              version: 1,
+              content: [{ type: 'paragraph', content: [] }],
+            },
+          },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(postCommentMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses a mention node missing its accountId', async () => {
+      expect(
+        await getHandler('jira:comments:post')(
+          {},
+          {
+            ticketId: '10421',
+            body: {
+              type: 'doc',
+              version: 1,
+              content: [
+                {
+                  type: 'paragraph',
+                  content: [{ type: 'mention', attrs: { text: '@Sam Lee' } }],
+                },
+              ],
+            },
+          },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(postCommentMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses an unrecognized inline node type', async () => {
+      expect(
+        await getHandler('jira:comments:post')(
+          {},
+          {
+            ticketId: '10421',
+            body: {
+              type: 'doc',
+              version: 1,
+              content: [
+                { type: 'paragraph', content: [{ type: 'hardBreak' }] },
+              ],
+            },
+          },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(postCommentMock).not.toHaveBeenCalled();
+    });
+
+    it('passes a well-formed ADF body straight through', async () => {
+      postCommentMock.mockResolvedValue({ ok: true, value: { id: '10502' } });
+
       await getHandler('jira:comments:post')(
         {},
-        {
-          ticketId: '10421',
-          body: '   ',
-        },
-      ),
-    ).toMatchObject({ ok: false, reason: 'invalid_input' });
-    expect(postCommentMock).not.toHaveBeenCalled();
+        { ticketId: '10421', body: ADF_TEXT_ONLY },
+      );
+
+      expect(postCommentMock).toHaveBeenCalledWith('10421', ADF_TEXT_ONLY);
+    });
+
+    it('passes a body carrying a real mention node straight through', async () => {
+      postCommentMock.mockResolvedValue({ ok: true, value: { id: '10503' } });
+      const mentionBody = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              {
+                type: 'mention',
+                attrs: { id: '712020:6d51d3e3-1111', text: '@Sam Lee' },
+              },
+              { type: 'text', text: ' can you take this?' },
+            ],
+          },
+        ],
+      };
+
+      await getHandler('jira:comments:post')(
+        {},
+        { ticketId: '10421', body: mentionBody },
+      );
+
+      expect(postCommentMock).toHaveBeenCalledWith('10421', mentionBody);
+    });
   });
 
   /**

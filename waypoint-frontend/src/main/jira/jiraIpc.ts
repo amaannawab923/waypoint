@@ -10,6 +10,8 @@ import * as client from './jiraClient';
 import * as files from './jiraFiles';
 import { normalizeJiraSite } from './jiraMap';
 import type {
+  JiraAdfInlineNode,
+  JiraCommentBody,
   JiraConnectionSnapshot,
   JiraFailure,
   JiraIdentity,
@@ -81,6 +83,88 @@ function readFieldValues(value: unknown): Record<string, string> {
     (out, [key, raw]) =>
       typeof raw === 'string' ? { ...out, [key]: raw } : out,
     {},
+  );
+}
+
+/**
+ * Guards the comment-post channel's body.
+ *
+ * The renderer's composer builds this shape itself (see jiraApi.ts's
+ * `buildCommentAdf`), so this isn't validating against a hostile author —
+ * it's the same boundary rule every other channel here follows: nothing
+ * caller-supplied reaches `client.postComment`'s network call unchecked. Only
+ * the two node kinds the composer can ever produce survive; anything else
+ * (an unrecognized node `type`, a mention missing its `attrs.id`, a
+ * non-string `text`) is dropped rather than forwarded, so a malformed doc
+ * fails here with a clear message instead of as an opaque 400 from Jira.
+ */
+function readCommentBody(value: unknown): JiraCommentBody | null {
+  if (!value || typeof value !== 'object') return null;
+  const doc = value as Record<string, unknown>;
+  if (doc.type !== 'doc' || !Array.isArray(doc.content)) return null;
+
+  const content = doc.content.map(
+    (
+      rawParagraph,
+    ): {
+      type: 'paragraph';
+      content: JiraAdfInlineNode[];
+    } | null => {
+      if (
+        !rawParagraph ||
+        typeof rawParagraph !== 'object' ||
+        (rawParagraph as Record<string, unknown>).type !== 'paragraph' ||
+        !Array.isArray((rawParagraph as Record<string, unknown>).content)
+      ) {
+        return null;
+      }
+      const inline = (
+        (rawParagraph as Record<string, unknown>).content as unknown[]
+      ).map((rawNode): JiraAdfInlineNode | null => {
+        if (!rawNode || typeof rawNode !== 'object') return null;
+        const node = rawNode as Record<string, unknown>;
+        if (node.type === 'text' && typeof node.text === 'string') {
+          return { type: 'text', text: node.text };
+        }
+        if (
+          node.type === 'mention' &&
+          node.attrs &&
+          typeof node.attrs === 'object' &&
+          typeof (node.attrs as Record<string, unknown>).id === 'string' &&
+          typeof (node.attrs as Record<string, unknown>).text === 'string'
+        ) {
+          const attrs = node.attrs as Record<string, unknown>;
+          return {
+            type: 'mention',
+            attrs: { id: attrs.id as string, text: attrs.text as string },
+          };
+        }
+        return null;
+      });
+      if (inline.some((n) => n === null)) return null;
+      return { type: 'paragraph', content: inline as JiraAdfInlineNode[] };
+    },
+  );
+  if (content.some((p) => p === null)) return null;
+
+  return {
+    type: 'doc',
+    version: 1,
+    content: content as { type: 'paragraph'; content: JiraAdfInlineNode[] }[],
+  };
+}
+
+/** Whether a validated comment body has anything a user would recognize as
+ * content — at least one non-blank text run or one mention. A doc made of
+ * empty paragraphs is what an all-whitespace draft turns into once trimmed
+ * paragraph-by-paragraph, and posting that to Jira is the same empty-comment
+ * mistake `readString`'s truthiness check already guards against elsewhere on
+ * this channel. */
+function commentBodyHasContent(body: JiraCommentBody): boolean {
+  return body.content.some((paragraph) =>
+    paragraph.content.some(
+      (node) => node.type === 'mention' || node.text.trim().length > 0,
+    ),
   );
 }
 
@@ -389,9 +473,11 @@ export function registerJiraIpc(getWindow: () => BrowserWindow | null): void {
     async (_event, args: unknown): Promise<JiraResult<JiraWireComment>> => {
       const input = (args ?? {}) as Record<string, unknown>;
       const ticketId = readTicketId(input.ticketId);
-      const body = readString(input.body);
+      const body = readCommentBody(input.body);
       if (!ticketId) return failure('invalid_input', 'Unknown Jira issue.');
-      if (!body) return failure('invalid_input', 'Write something first.');
+      if (!body || !commentBodyHasContent(body)) {
+        return failure('invalid_input', 'Write something first.');
+      }
       return client.postComment(ticketId, body);
     },
   );

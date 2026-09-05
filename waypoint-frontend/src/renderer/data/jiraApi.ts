@@ -37,6 +37,7 @@ import type { Priority } from '@/types/entities';
 // back over IPC, and restating them here would just be a second copy to keep
 // in sync. Nothing at runtime is imported from src/main.
 import type {
+  JiraCommentBody,
   JiraPriorityOption as JiraWirePriorityOption,
   JiraWireAttachment,
   JiraWireComment,
@@ -573,17 +574,138 @@ export async function uploadJiraAttachment(
   return { canceled: false, ticket };
 }
 
+export interface JiraMentionSpan {
+  /** Inclusive start offset into the composer's plain-text draft, in the
+   * same UTF-16 code units a `<textarea>`'s `selectionStart` uses. */
+  start: number;
+  /** Exclusive end offset. */
+  end: number;
+  accountId: string;
+  /** The mention's own display name, used only to re-validate that the text
+   * still reads "@" + this name at [start, end) before the span is trusted
+   * — see `buildCommentAdf`. */
+  displayName: string;
+}
+
 /**
- * Posts a plain-text comment as the connected user.
+ * Turns the composer's plain-text draft plus its tracked mention spans into
+ * the ADF document Jira's comment-create endpoint needs.
  *
- * Plain text is the whole contract: an "@Name" typed into the body stays
- * literal characters and notifies nobody, which is why the composer no longer
- * offers a mention picker (see types/jira.ts).
+ * A `<textarea>` only ever holds flat text (see JiraCommentComposer.tsx's own
+ * header comment on why this app uses one rather than a contentEditable
+ * surface), so the composer tracks a mention as a span — start, end,
+ * accountId, displayName — alongside the plain string rather than storing
+ * anything richer. This is where that tracked span becomes a real `mention`
+ * ADF node, which is what makes Jira actually notify that person, rather
+ * than "@Display Name" typed as literal characters that notify nobody.
+ *
+ * A span the user has edited into since it was inserted — deleted a letter
+ * inside "@Sam Lee", say — is dropped rather than posted as a broken mention:
+ * the text at [start, end) is re-checked against "@" + displayName here, at
+ * the one point that matters, right before it becomes a network request.
+ * Whatever text is actually there today goes out as plain text instead.
+ *
+ * One `paragraph` node per line: ADF has no bare newline, so a `\n` the user
+ * typed has to become a paragraph break to survive at all — the same
+ * structure `adfToPlainText` (main/jira/jiraMap.ts) already reconstructs a
+ * `\n` from on the read side.
+ */
+type JiraAdfInline = JiraCommentBody['content'][number]['content'][number];
+
+/** One line's worth of inline nodes, built by walking only the mentions that
+ * fall entirely within [lineStart, lineEnd) — a `.reduce` rather than a loop
+ * with a mutable cursor, so the same "where did the last node end" state
+ * this needs to track threads through the accumulator instead. */
+function lineToInlineNodes(
+  text: string,
+  lineStart: number,
+  lineEnd: number,
+  lineMentions: JiraMentionSpan[],
+): JiraAdfInline[] {
+  const { nodes, cursor } = lineMentions.reduce<{
+    nodes: JiraAdfInline[];
+    cursor: number;
+  }>(
+    (acc, mention) => ({
+      nodes: [
+        ...acc.nodes,
+        ...(mention.start > acc.cursor
+          ? [
+              {
+                type: 'text' as const,
+                text: text.slice(acc.cursor, mention.start),
+              },
+            ]
+          : []),
+        {
+          type: 'mention' as const,
+          attrs: { id: mention.accountId, text: `@${mention.displayName}` },
+        },
+      ],
+      cursor: mention.end,
+    }),
+    { nodes: [], cursor: lineStart },
+  );
+  return cursor < lineEnd
+    ? [...nodes, { type: 'text', text: text.slice(cursor, lineEnd) }]
+    : nodes;
+}
+
+export function buildCommentAdf(
+  text: string,
+  mentions: JiraMentionSpan[],
+): JiraCommentBody {
+  const validMentions = mentions
+    .filter((m) => text.slice(m.start, m.end) === `@${m.displayName}`)
+    .sort((a, b) => a.start - b.start);
+
+  const { paragraphs } = text.split('\n').reduce<{
+    paragraphs: JiraCommentBody['content'];
+    lineStart: number;
+  }>(
+    (acc, line) => {
+      const lineEnd = acc.lineStart + line.length;
+      const lineMentions = validMentions.filter(
+        (m) => m.start >= acc.lineStart && m.end <= lineEnd,
+      );
+      return {
+        paragraphs: [
+          ...acc.paragraphs,
+          {
+            type: 'paragraph',
+            content: lineToInlineNodes(
+              text,
+              acc.lineStart,
+              lineEnd,
+              lineMentions,
+            ),
+          },
+        ],
+        // +1 skips the '\n' that String.split consumed.
+        lineStart: lineEnd + 1,
+      };
+    },
+    { paragraphs: [], lineStart: 0 },
+  );
+
+  return { type: 'doc', version: 1, content: paragraphs };
+}
+
+/**
+ * Posts a comment as the connected user.
+ *
+ * `mentions` are the spans over `text` the composer's @-popover produced
+ * (see JiraCommentComposer.tsx) — `buildCommentAdf` is where those become
+ * real ADF `mention` nodes. A draft with no mentions goes through the same
+ * builder as a single-run paragraph, so there is one write path rather than
+ * a plain-text one and a separate mention-aware one.
  */
 export async function postJiraComment(
   ticketId: string,
-  body: string,
+  text: string,
+  mentions: JiraMentionSpan[] = [],
 ): Promise<JiraComment> {
+  const body = buildCommentAdf(text, mentions);
   return toComment(unwrap(await bridge().postComment({ ticketId, body })));
 }
 

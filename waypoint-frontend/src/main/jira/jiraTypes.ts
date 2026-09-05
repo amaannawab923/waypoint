@@ -228,6 +228,37 @@ export interface JiraWireTicket {
   updatedAt: string;
 }
 
+/**
+ * The ADF shape a comment is now written as — the renderer's own composer
+ * builds one of these (see jiraApi.ts's `buildCommentAdf`) so that a
+ * mention typed there becomes a real `mention` node carrying an accountId,
+ * not eleven characters of "@Display Name" that notify nobody. Deliberately
+ * narrow: only the two inline node kinds a plain-text-plus-mentions composer
+ * can ever produce, not the general ADF schema.
+ */
+export interface JiraAdfTextNode {
+  type: 'text';
+  text: string;
+}
+
+export interface JiraAdfMentionNode {
+  type: 'mention';
+  attrs: { id: string; text: string };
+}
+
+export type JiraAdfInlineNode = JiraAdfTextNode | JiraAdfMentionNode;
+
+export interface JiraAdfParagraph {
+  type: 'paragraph';
+  content: JiraAdfInlineNode[];
+}
+
+export interface JiraCommentBody {
+  type: 'doc';
+  version: 1;
+  content: JiraAdfParagraph[];
+}
+
 export interface JiraWireComment {
   id: string;
   ticketId: string;

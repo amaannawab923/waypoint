@@ -9,6 +9,7 @@ import {
 import {
   downloadJiraAttachment,
   listJiraComments,
+  postJiraComment,
   searchJiraAssignableUsers,
   setJiraTicketAssignee,
   uploadJiraAttachment,
@@ -17,6 +18,7 @@ import { useJiraConnection } from '@/lib/jiraStore';
 import { showErrorToast } from '@/lib/toast';
 import type {
   JiraAttachment,
+  JiraComment,
   JiraConnectionStatus,
   JiraTicket,
 } from '@/types/jira';
@@ -76,6 +78,19 @@ function attachment(overrides: Partial<JiraAttachment> = {}): JiraAttachment {
     sizeBytes: 219136,
     mimeType: 'text/plain',
     uploaderName: 'Sam Lee',
+    ...overrides,
+  };
+}
+
+function comment(overrides: Partial<JiraComment> = {}): JiraComment {
+  return {
+    id: 'c1',
+    ticketId: '10421',
+    authorName: 'Max Chen',
+    body: 'hi @Sam Lee',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    postedByWaypoint: false,
+    disclosureText: null,
     ...overrides,
   };
 }
@@ -547,5 +562,104 @@ describe('reassigning', () => {
       ),
     );
     expect(onTicketUpdated).not.toHaveBeenCalled();
+  });
+});
+
+// The comment composer's @-mention picker. Same searchJiraAssignableUsers
+// endpoint and the same debounce as the assignee picker above — this app has
+// one "who's on this issue" question, not a separate one for mentioning
+// versus assigning — so ASSIGNABLE and runDebounce are reused rather than
+// duplicated.
+describe('mentions in the comment composer', () => {
+  function commentBox(): HTMLTextAreaElement {
+    return screen.getByPlaceholderText(/Comment…/i) as HTMLTextAreaElement;
+  }
+
+  it('shows a popover of teammates when typing @', async () => {
+    renderDrawer();
+
+    fireEvent.change(commentBox(), { target: { value: '@' } });
+    await runDebounce();
+
+    expect(screen.getByRole('button', { name: 'Sam Lee' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Priya Raman' }),
+    ).toBeInTheDocument();
+  });
+
+  it("searches this issue's real assignable users as the query narrows", async () => {
+    renderDrawer();
+
+    fireEvent.change(commentBox(), { target: { value: '@sa' } });
+    await runDebounce();
+
+    expect(searchJiraAssignableUsers).toHaveBeenCalledWith('ENG-421', 'sa');
+  });
+
+  // "user@example.com" typed into a comment must not pop a picker open on
+  // every email address — an "@" only starts a mention run when it opens a
+  // word.
+  it('does not treat a mid-word @ as a mention trigger', async () => {
+    renderDrawer();
+
+    fireEvent.change(commentBox(), {
+      target: { value: 'ping sam@example' },
+    });
+    await runDebounce();
+
+    expect(searchJiraAssignableUsers).not.toHaveBeenCalled();
+  });
+
+  it('inserts a picked suggestion as text and posts it as a real mention node', async () => {
+    jest.mocked(postJiraComment).mockResolvedValue(comment());
+    renderDrawer();
+    const box = commentBox();
+
+    fireEvent.change(box, { target: { value: 'hi @sa' } });
+    await runDebounce();
+    // The suggestion row is picked on mousedown, not click — a click on a
+    // button the textarea already lost focus to would arrive after the
+    // textarea has blurred, by which point the trigger it needs is gone.
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'Sam Lee' }));
+
+    expect(box.value).toBe('hi @Sam Lee ');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+
+    await waitFor(() => expect(postJiraComment).toHaveBeenCalled());
+    expect(postJiraComment).toHaveBeenCalledWith('10421', 'hi @Sam Lee ', [
+      { start: 3, end: 11, accountId: 'acct-sam', displayName: 'Sam Lee' },
+    ]);
+  });
+
+  it('closes the popover on Escape without closing the drawer', async () => {
+    renderDrawer();
+    const box = commentBox();
+
+    fireEvent.change(box, { target: { value: '@sa' } });
+    await runDebounce();
+    expect(screen.getByRole('button', { name: 'Sam Lee' })).toBeInTheDocument();
+
+    fireEvent.keyDown(box, { key: 'Escape' });
+
+    expect(
+      screen.queryByRole('button', { name: 'Sam Lee' }),
+    ).not.toBeInTheDocument();
+    // The drawer itself is still open — Escape only closed the popover.
+    expect(box).toBeInTheDocument();
+  });
+
+  it('posts plain typed text with no mentions, unchanged from before', async () => {
+    jest
+      .mocked(postJiraComment)
+      .mockResolvedValue(comment({ body: 'Taking it.' }));
+    renderDrawer();
+
+    fireEvent.change(commentBox(), { target: { value: 'Taking it.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+
+    await waitFor(() =>
+      expect(postJiraComment).toHaveBeenCalledWith('10421', 'Taking it.', []),
+    );
   });
 });

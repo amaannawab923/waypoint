@@ -177,15 +177,9 @@ export function JiraConnectionPanel({
               anywhere. */}
           <li>
             Rich-text authoring — tables, panels, syntax-highlighted code
-            blocks. Comments you write here are plain text, and so is what you
-            read: a Jira description written with formatting is flattened to its
-            text.
-          </li>
-          <li>
-            @mentions. A real Jira mention is a structured node carrying an
-            account id; typing &ldquo;@Sam&rdquo; here posts those characters
-            and notifies nobody, so the composer no longer offers a picker that
-            would imply otherwise.
+            blocks. Comments you write here are plain text apart from an
+            @-mention, and so is what you read: a Jira description written with
+            formatting is flattened to its text.
           </li>
           <li>
             Background sync. The list is read when you open My Jira and when you

@@ -568,7 +568,16 @@ describe('comments', () => {
 
     expect(bridge.postComment).toHaveBeenCalledWith({
       ticketId: '10421',
-      body: 'Taking it.',
+      body: {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'paragraph',
+            content: [{ type: 'text', text: 'Taking it.' }],
+          },
+        ],
+      },
     });
     // Jira has no property to carry provenance and this app keeps no record
     // of what it posted, so a comment read back is just a comment.
@@ -576,6 +585,108 @@ describe('comments', () => {
       body: 'Taking it.',
       postedByWaypoint: false,
       disclosureText: null,
+    });
+  });
+
+  it('builds a real mention node for a selected mention span', async () => {
+    const api = freshApi();
+    bridge.postComment.mockResolvedValue({
+      ok: true,
+      value: {
+        id: '10503',
+        ticketId: '10421',
+        authorName: 'Max Chen',
+        body: 'hi @Sam Lee can you take this?',
+        createdAt: '2026-09-01T10:00:00.000Z',
+      },
+    });
+
+    await api.postJiraComment('10421', 'hi @Sam Lee can you take this?', [
+      { start: 3, end: 11, accountId: 'acct-sam', displayName: 'Sam Lee' },
+    ]);
+
+    expect(bridge.postComment).toHaveBeenCalledWith({
+      ticketId: '10421',
+      body: {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: 'hi ' },
+              {
+                type: 'mention',
+                attrs: { id: 'acct-sam', text: '@Sam Lee' },
+              },
+              { type: 'text', text: ' can you take this?' },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
+  it('drops a mention span the text no longer matches, and sends the real text as plain text instead', async () => {
+    const api = freshApi();
+    bridge.postComment.mockResolvedValue({
+      ok: true,
+      value: {
+        id: '10504',
+        ticketId: '10421',
+        authorName: 'Max Chen',
+        body: 'hi @Sam can you take this?',
+        createdAt: '2026-09-01T10:00:00.000Z',
+      },
+    });
+
+    // The span still claims [3, 11) is "@Sam Lee", but the user deleted
+    // " Lee" after selecting it from the picker — the text at that range no
+    // longer reads "@Sam Lee", so this must not turn into a mention node.
+    await api.postJiraComment('10421', 'hi @Sam can you take this?', [
+      { start: 3, end: 11, accountId: 'acct-sam', displayName: 'Sam Lee' },
+    ]);
+
+    expect(bridge.postComment).toHaveBeenCalledWith({
+      ticketId: '10421',
+      body: {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'paragraph',
+            content: [{ type: 'text', text: 'hi @Sam can you take this?' }],
+          },
+        ],
+      },
+    });
+  });
+
+  it('splits a multi-line draft into one paragraph per line', async () => {
+    const api = freshApi();
+    bridge.postComment.mockResolvedValue({
+      ok: true,
+      value: {
+        id: '10505',
+        ticketId: '10421',
+        authorName: 'Max Chen',
+        body: 'line one\nline two',
+        createdAt: '2026-09-01T10:00:00.000Z',
+      },
+    });
+
+    await api.postJiraComment('10421', 'line one\nline two');
+
+    expect(bridge.postComment).toHaveBeenCalledWith({
+      ticketId: '10421',
+      body: {
+        type: 'doc',
+        version: 1,
+        content: [
+          { type: 'paragraph', content: [{ type: 'text', text: 'line one' }] },
+          { type: 'paragraph', content: [{ type: 'text', text: 'line two' }] },
+        ],
+      },
     });
   });
 });
