@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ChangeEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { clsx } from 'clsx';
 import { connectJira, getJiraConnectionStatus } from '@/data/jiraApi';
@@ -29,23 +29,27 @@ import type { JiraConnectionStatus } from '@/types/jira';
 // to that same real CreateProjectModal rather than reimplementing project
 // creation.
 
-type WizardStep = 1 | 2 | 3 | 4 | 5;
+// Four steps, not the five this had while the connect step was simulated.
+// The step that disappeared was "Choose your Atlassian site", which offered a
+// hardcoded pair of sites to pick between. A personal API-token connection
+// has no site-discovery step to make: a token authenticates one person
+// against one site, and which site that is has to be typed in anyway, so it
+// belongs on the connect form beside the email and the token rather than
+// being asked for again afterwards as though something had enumerated it.
+type WizardStep = 1 | 2 | 3 | 4;
 type ProjectType = 'independent' | 'companion';
 
-const TOTAL_STEPS = 5;
+const TOTAL_STEPS = 4;
 
 const STEP_TITLES: Record<WizardStep, string> = {
   1: 'Add project',
   2: 'Choose a provider',
-  3: 'Connect your account',
-  4: 'Choose your Atlassian site',
-  5: 'Review & create',
+  3: 'Connect your Jira account',
+  4: 'Review & create',
 };
 
-const SITES: { site: string; label: string }[] = [
-  { site: 'northwind.atlassian.net', label: '6 yours' },
-  { site: 'northwind-labs.atlassian.net', label: '0 yours' },
-];
+const API_TOKEN_URL =
+  'https://id.atlassian.com/manage-profile/security/api-tokens';
 
 function TypeStep({
   chosen,
@@ -165,112 +169,193 @@ function ProviderStep({
   );
 }
 
+const FIELD_CLASS =
+  'w-full rounded-[var(--radius-sm)] border border-border-strong bg-surface px-2.5 py-2 text-[13px] text-text outline-none focus:border-accent';
+
+/** One labelled input on the connect form. `htmlFor`/`id` are wired properly
+ * rather than left to a wrapping label, so the three fields are individually
+ * addressable by name — for a screen reader, and for a test. */
+function ConnectField({
+  id,
+  label,
+  hint,
+  type,
+  value,
+  placeholder,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  hint?: string;
+  type?: string;
+  value: string;
+  placeholder?: string;
+  disabled: boolean;
+  onChange: (e: ChangeEvent<HTMLInputElement>) => void;
+}) {
+  return (
+    <div className="mb-2.5">
+      <label
+        htmlFor={id}
+        className="mb-1 block text-[11px] font-bold text-text-secondary"
+      >
+        {label}
+      </label>
+      <input
+        id={id}
+        className={FIELD_CLASS}
+        type={type ?? 'text'}
+        value={value}
+        placeholder={placeholder}
+        // Off on all three: a browser-remembered value is exactly wrong for a
+        // one-time API token, and offering to remember one is worse.
+        autoComplete="off"
+        disabled={disabled}
+        onChange={onChange}
+      />
+      {hint && <div className="mt-1 text-[10.5px] text-text-muted">{hint}</div>}
+    </div>
+  );
+}
+
+/**
+ * The real connect form: site, Atlassian account email, API token.
+ *
+ * This replaces a button that waited on a timer and declared success. What
+ * happens now is a live `GET /rest/api/3/myself` against the site the user
+ * typed, authenticated with these exact credentials — so "Connected", and the
+ * name and avatar shown beside it, are Jira's own answer about who this
+ * account is, not a fixture.
+ *
+ * There is deliberately no second "Sign in with Atlassian" button next to
+ * this one. OAuth is a real and better answer for an organizational install,
+ * but it is a separate mechanism that is not built; a control that starts a
+ * flow which doesn't exist is exactly what this app's honesty rules exist to
+ * prevent, and half-stubbing it would be worse than its absence.
+ */
 function ConnectStep({
+  site,
+  email,
+  apiToken,
   connecting,
+  error,
   connectionStatus,
+  onFieldChange,
   onConnect,
 }: {
+  site: string;
+  email: string;
+  apiToken: string;
   connecting: boolean;
+  error: string | null;
   connectionStatus: JiraConnectionStatus | null;
+  onFieldChange: (field: 'site' | 'email' | 'apiToken', value: string) => void;
   onConnect: () => void;
 }) {
   if (connectionStatus?.connected) {
     return (
       <div className="flex items-center gap-3 rounded-[var(--radius)] border border-border px-4 py-3.5">
         <Avatar name={connectionStatus.accountName} size={34} />
-        <div>
+        <div className="min-w-0">
           <b className="block text-[13.5px] font-semibold text-text">
             {connectionStatus.accountName}
           </b>
-          <div className="text-xs text-text-muted">
-            {connectionStatus.accountEmail}
+          <div className="truncate text-xs text-text-muted">
+            {connectionStatus.accountEmail} · {connectionStatus.site}
           </div>
         </div>
-        <span className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-success-bg py-1 pr-2.5 pl-2 text-[11.5px] font-bold text-success">
+        <span className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-full bg-success-bg py-1 pr-2.5 pl-2 text-[11.5px] font-bold text-success">
           <span className="size-1.5 shrink-0 rounded-full bg-success" />
           Connected
         </span>
       </div>
     );
   }
+
+  const canSubmit =
+    !connecting && site.trim() && email.trim() && apiToken.trim();
+
   return (
     <div>
-      <p className="mb-4 text-[13px] leading-relaxed text-text-secondary">
+      <p className="mb-3.5 text-[13px] leading-relaxed text-text-secondary">
         Waypoint mirrors <b className="text-text">your</b> Jira work —
         everything assigned to, reported by, or watched by you. There&apos;s no
         board to pick.
       </p>
+
+      <ConnectField
+        id="jira-site"
+        label="Jira site"
+        value={site}
+        placeholder="yourteam.atlassian.net"
+        disabled={connecting}
+        onChange={(e) => onFieldChange('site', e.target.value)}
+        hint="The address you open Jira at. Pasting the full URL is fine."
+      />
+      <ConnectField
+        id="jira-email"
+        label="Atlassian account email"
+        type="email"
+        value={email}
+        placeholder="you@yourteam.com"
+        disabled={connecting}
+        onChange={(e) => onFieldChange('email', e.target.value)}
+      />
+      <ConnectField
+        id="jira-token"
+        label="API token"
+        type="password"
+        value={apiToken}
+        placeholder="Paste your API token"
+        disabled={connecting}
+        onChange={(e) => onFieldChange('apiToken', e.target.value)}
+      />
+
+      <p className="mb-3 text-[11.5px] leading-relaxed text-text-muted">
+        Create one at{' '}
+        <a
+          href={API_TOKEN_URL}
+          target="_blank"
+          rel="noreferrer"
+          className="font-medium text-accent underline"
+        >
+          id.atlassian.com › Security › API tokens
+        </a>
+        . Not your Atlassian password — a token you generate, and can revoke,
+        yourself.
+      </p>
+
       <Button
         variant="primary"
         className="w-full justify-center"
-        disabled={connecting}
+        disabled={!canSubmit}
         onClick={onConnect}
       >
-        {connecting ? 'Waiting for Atlassian…' : 'Connect Jira account'}
+        {connecting ? 'Checking with Jira…' : 'Connect'}
       </Button>
-      <div className="mt-3.5 flex items-start gap-2 rounded-[var(--radius-sm)] border border-accent/30 bg-accent-soft-bg px-3 py-2.5 text-[12.5px] leading-relaxed text-accent-soft-text">
-        Opens Atlassian&apos;s own sign-in in your browser. Waypoint never sees
-        your password, and writes are attributed to you, not to a service
-        account.
-      </div>
-    </div>
-  );
-}
 
-function SiteStep({
-  selectedSite,
-  onPick,
-}: {
-  selectedSite: string;
-  onPick: (site: string) => void;
-}) {
-  return (
-    <div>
-      <p className="mb-3 text-[12.5px] text-text-secondary">
-        Your account can see two Atlassian sites. Pick the one you work in —
-        this is the only thing left to choose.
-      </p>
-      <div className="flex flex-col gap-1.5">
-        {SITES.map((s) => (
-          <button
-            key={s.site}
-            type="button"
-            onClick={() => onPick(s.site)}
-            className={clsx(
-              'flex items-center gap-2.5 rounded-[var(--radius-sm)] border-[1.5px] px-2.5 py-2 text-left transition-colors',
-              selectedSite === s.site
-                ? 'border-accent bg-accent-soft-bg'
-                : 'border-border-strong hover:bg-surface-2',
-            )}
-          >
-            <span
-              className={clsx(
-                'relative size-[15px] shrink-0 rounded-full border-2',
-                selectedSite === s.site
-                  ? 'border-accent'
-                  : 'border-border-strong',
-              )}
-            >
-              {selectedSite === s.site && (
-                <span className="absolute inset-[2px] rounded-full bg-accent" />
-              )}
-            </span>
-            <span className="flex-1 text-[13px] font-medium text-text">
-              {s.site}
-            </span>
-            <span className="text-[11.5px] text-text-muted">{s.label}</span>
-          </button>
-        ))}
+      {error && (
+        <div
+          role="alert"
+          className="mt-3 rounded-[var(--radius-sm)] border border-danger/30 bg-danger-bg px-3 py-2.5 text-[12.5px] leading-relaxed text-danger"
+        >
+          {error}
+        </div>
+      )}
+
+      <div className="mt-3.5 flex items-start gap-2 rounded-[var(--radius-sm)] border border-accent/30 bg-accent-soft-bg px-3 py-2.5 text-[12.5px] leading-relaxed text-accent-soft-text">
+        The token is encrypted with your operating system&apos;s own key store
+        and never leaves this machine except to your Jira site. Writes are
+        attributed to you, not to a service account.
       </div>
     </div>
   );
 }
 
 function ConfirmStep({
-  site,
   connectionStatus,
 }: {
-  site: string;
   connectionStatus: JiraConnectionStatus | null;
 }) {
   return (
@@ -279,13 +364,18 @@ function ConfirmStep({
         <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-jira-bg text-jira">
           <JiraMark size={18} />
         </span>
-        <div>
+        <div className="min-w-0">
           <b className="text-sm font-semibold text-text">My Jira</b>
-          <div className="mt-0.5 text-xs text-text-muted">
-            {site} · your work across every project you can see
+          <div className="mt-0.5 truncate text-xs text-text-muted">
+            {connectionStatus?.site} · your work across every project you can
+            see
           </div>
         </div>
       </div>
+      {/* These counts are the real result of the JQL search that ran the
+          moment the connection was accepted — not an estimate, and not a
+          placeholder. The third stat used to claim a background refresh
+          interval; nothing polls, so it says what actually happens instead. */}
       <div className="mb-3 flex gap-5">
         <div>
           <b className="block font-mono text-[15px] font-bold text-text">
@@ -299,14 +389,6 @@ function ConfirmStep({
           <b className="block font-mono text-[15px] font-bold text-text">1</b>
           <span className="text-[11.5px] text-text-muted">
             API call to load
-          </span>
-        </div>
-        <div>
-          <b className="block font-mono text-[15px] font-bold text-text">
-            {connectionStatus?.pollIntervalSec ?? 15}s
-          </b>
-          <span className="text-[11.5px] text-text-muted">
-            refresh, feels live
           </span>
         </div>
       </div>
@@ -334,9 +416,14 @@ export function AddProjectWizard({
   const [chosenType, setChosenType] = useState<ProjectType | null>(null);
   const [chosenProvider, setChosenProvider] = useState<'jira' | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
+  const [credentials, setCredentials] = useState({
+    site: '',
+    email: '',
+    apiToken: '',
+  });
   const [connectionStatus, setConnectionStatus] =
     useState<JiraConnectionStatus | null>(null);
-  const [selectedSite, setSelectedSite] = useState(SITES[0].site);
   const [finishing, setFinishing] = useState(false);
 
   function resetAll() {
@@ -345,8 +432,12 @@ export function AddProjectWizard({
     setChosenType(null);
     setChosenProvider(null);
     setConnecting(false);
+    setConnectError(null);
+    // Dropped on every close, not just on success: an API token is a live
+    // credential, and there is no reason for one to sit in renderer state
+    // after the form it was typed into is gone.
+    setCredentials({ site: '', email: '', apiToken: '' });
     setConnectionStatus(null);
-    setSelectedSite(SITES[0].site);
     setFinishing(false);
   }
 
@@ -355,14 +446,33 @@ export function AddProjectWizard({
     onClose();
   }
 
+  function handleFieldChange(
+    field: 'site' | 'email' | 'apiToken',
+    value: string,
+  ) {
+    setCredentials((prev) => ({ ...prev, [field]: value }));
+    // Editing any field invalidates the last rejection — leaving "Jira
+    // rejected that token" under a token the user has since corrected reads
+    // as a fresh failure.
+    setConnectError(null);
+  }
+
   async function handleConnectJira() {
     setConnecting(true);
+    setConnectError(null);
     try {
-      const status = await connectJira();
+      const status = await connectJira(credentials);
       setJiraConnection(status);
       setConnectionStatus(status);
+      // The token has done its job — main holds it, encrypted, from here on.
+      setCredentials((prev) => ({ ...prev, apiToken: '' }));
     } catch (err) {
-      showErrorToast(
+      // Inline on the form rather than a toast: this is a form validation
+      // outcome the user has to act on in-place, and main already
+      // distinguishes bad credentials from an unreachable site from an
+      // address that isn't a Jira site at all — that specificity is worth
+      // showing next to the field it's about.
+      setConnectError(
         err instanceof Error ? err.message : 'Could not connect to Jira.',
       );
     } finally {
@@ -373,19 +483,11 @@ export function AddProjectWizard({
   async function handleFinishCompanion() {
     setFinishing(true);
     try {
-      // Continue on step 3 is disabled until connected, so this is normally
-      // already true — the fallback exists so this never fires a duplicate
-      // "Connect Jira account" click either way.
-      let status = connectionStatus;
-      if (!status?.connected) {
-        status = await connectJira();
-        setJiraConnection(status);
-      } else {
-        // Already connected — re-read so the sidebar/page reflect the final
-        // site choice's issue counts rather than a stale snapshot.
-        status = await getJiraConnectionStatus();
-        setJiraConnection(status);
-      }
+      // Continue on step 3 is disabled until connected, so this re-read is
+      // just picking up the freshest counts for the sidebar and the page —
+      // it never has to perform the connection itself.
+      const status = await getJiraConnectionStatus();
+      setJiraConnection(status);
       resetAll();
       onClose();
       navigate('/my-jira');
@@ -477,17 +579,17 @@ export function AddProjectWizard({
       )}
       {step === 3 && (
         <ConnectStep
+          site={credentials.site}
+          email={credentials.email}
+          apiToken={credentials.apiToken}
           connecting={connecting}
+          error={connectError}
           connectionStatus={connectionStatus}
+          onFieldChange={handleFieldChange}
           onConnect={handleConnectJira}
         />
       )}
-      {step === 4 && (
-        <SiteStep selectedSite={selectedSite} onPick={setSelectedSite} />
-      )}
-      {step === 5 && (
-        <ConfirmStep site={selectedSite} connectionStatus={connectionStatus} />
-      )}
+      {step === 4 && <ConfirmStep connectionStatus={connectionStatus} />}
     </Modal>
   );
 }
