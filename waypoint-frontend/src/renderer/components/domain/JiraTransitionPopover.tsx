@@ -1,57 +1,13 @@
-import {
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type RefObject,
-} from 'react';
+import { useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { clsx } from 'clsx';
 import { Button } from '@/components/ui/Button';
+import { useFloatingPanel } from '@/components/ui/useFloatingPanel';
 import { JiraLoadError } from '@/components/domain/JiraLoadError';
 import type { JiraTransition } from '@/types/jira';
 
 const PANEL_WIDTH = 270; // w-[270px]
-const PANEL_HEIGHT_ESTIMATE = 260; // corrected on mount, see below
-const GAP = 4;
-const VIEWPORT_MARGIN = 8;
-
-interface Coords {
-  top: number;
-  left: number;
-}
-
-/**
- * Where the panel's top-left corner goes for a trigger at `triggerRect`.
- * Same shape as DatePicker.tsx's `computeCoords` and for the same reason —
- * prefer below, flip above when there isn't room, then clamp fully inside
- * the viewport on both axes so a trigger near an edge can't push the panel
- * off-screen. Right-aligned to the trigger, which is how this popover has
- * always hung off its state chip.
- */
-function computeCoords(triggerRect: DOMRect, panelHeight: number): Coords {
-  const spaceBelow = window.innerHeight - triggerRect.bottom;
-  const spaceAbove = triggerRect.top;
-  const placeUp = spaceBelow < panelHeight + GAP && spaceAbove > spaceBelow;
-  const rawTop = placeUp
-    ? triggerRect.top - GAP - panelHeight
-    : triggerRect.bottom + GAP;
-  const top = Math.min(
-    Math.max(rawTop, VIEWPORT_MARGIN),
-    Math.max(
-      VIEWPORT_MARGIN,
-      window.innerHeight - panelHeight - VIEWPORT_MARGIN,
-    ),
-  );
-  const left = Math.min(
-    Math.max(triggerRect.right - PANEL_WIDTH, VIEWPORT_MARGIN),
-    Math.max(
-      VIEWPORT_MARGIN,
-      window.innerWidth - PANEL_WIDTH - VIEWPORT_MARGIN,
-    ),
-  );
-  return { top, left };
-}
+const PANEL_HEIGHT_ESTIMATE = 260; // corrected on mount by the hook
 
 /**
  * Presentational transition menu, anchored under a ticket row's state chip.
@@ -65,16 +21,22 @@ function computeCoords(triggerRect: DOMRect, panelHeight: number): Coords {
  * that does swaps this SAME panel's content into a small form in place
  * (never a second popover/modal) — a "Cancel" reverts to the option list.
  *
- * Portaled to `document.body` and positioned with real viewport coordinates,
- * exactly as DatePicker.tsx is and for exactly the same reason. This used to
- * be a plain `position: absolute` sibling of the state chip, which put it
- * inside the ticket list's `overflow-hidden` container — so a panel several
- * hundred pixels tall opening downward from a ~44px row was cut off on every
- * row that wasn't near the top of the list, and on the last row it was very
- * nearly invisible. The required-field form, being taller than the option
- * list, failed sooner still. Position is recomputed on open, on any content
- * swap that changes the panel's height, and on scroll/resize, flipping above
- * the chip when there isn't room below.
+ * Portaled to `document.body` and positioned with real viewport coordinates.
+ * This used to be a plain `position: absolute` sibling of the state chip,
+ * which put it inside the ticket list's `overflow-hidden` container — so a
+ * panel several hundred pixels tall opening downward from a ~44px row was cut
+ * off on every row that wasn't near the top of the list, and on the last row
+ * it was very nearly invisible. The required-field form, being taller than
+ * the option list, failed sooner still.
+ *
+ * All of the mechanism for that — placement, re-measuring on a content swap,
+ * scroll/resize repositioning, click-away, Escape, focus — now lives in
+ * `useFloatingPanel`, which is where it belongs: this file used to carry a
+ * hand-copied version of DatePicker.tsx's, and the copy had dropped the
+ * capture-phase `stopPropagation()` that keeps one Escape press from also
+ * closing an ancestor drawer. It also never moved focus into the panel, so a
+ * keyboard user could not reach these options at all — Tab skipped the open
+ * popover entirely and jumped to the next row.
  */
 export function JiraTransitionPopover({
   ticketKey,
@@ -111,74 +73,33 @@ export function JiraTransitionPopover({
     null,
   );
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
-  const panelRef = useRef<HTMLDivElement>(null);
-  const [coords, setCoords] = useState<Coords | null>(null);
 
-  // Two passes, both inside layout effects so neither is painted: the first
-  // places the panel from an estimate (it isn't in the DOM yet), the second
-  // corrects against its real height. `formTransition` and the loading/error
-  // flags are dependencies because each of them swaps the panel's contents
-  // for something of a different height, and a panel that grew downward past
-  // the viewport would be exactly the bug this portal exists to fix.
-  useLayoutEffect(() => {
-    const trigger = triggerRef.current;
-    if (!trigger) return;
-    setCoords(
-      computeCoords(trigger.getBoundingClientRect(), PANEL_HEIGHT_ESTIMATE),
-    );
-  }, [triggerRef]);
+  // `formTransition` and the loading/error flags each swap the panel's
+  // contents for something of a different height, so each has to trigger a
+  // re-measure — a panel that grew downward past the viewport would be
+  // exactly the bug portaling it was meant to fix.
+  const { panelProps } = useFloatingPanel({
+    triggerRef,
+    onClose,
+    width: PANEL_WIDTH,
+    estimatedHeight: PANEL_HEIGHT_ESTIMATE,
+    // Right-aligned, which is how this popover has always hung off its chip.
+    align: 'right',
+    label: `Move ${ticketKey} to`,
+    remeasureOn: [formTransition, loading, error, transitions],
+  });
 
-  useLayoutEffect(() => {
-    const trigger = triggerRef.current;
-    const panel = panelRef.current;
-    if (!trigger || !panel) return;
-    setCoords(
-      computeCoords(trigger.getBoundingClientRect(), panel.offsetHeight),
-    );
-  }, [triggerRef, formTransition, loading, error, transitions]);
-
-  useEffect(() => {
-    function onDown(e: MouseEvent) {
-      const target = e.target as Node;
-      if (panelRef.current?.contains(target)) return;
-      // The chip is no longer an ancestor-sibling of this panel, so without
-      // this the chip's own toggle and this click-away would fight: mousedown
-      // closed the panel and the following click reopened it.
-      if (triggerRef.current?.contains(target)) return;
-      onClose();
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose();
-    }
-    function onViewportChange() {
-      const trigger = triggerRef.current;
-      if (!trigger) return;
-      setCoords(
-        computeCoords(
-          trigger.getBoundingClientRect(),
-          panelRef.current?.offsetHeight ?? PANEL_HEIGHT_ESTIMATE,
-        ),
-      );
-    }
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    window.addEventListener('resize', onViewportChange);
-    window.addEventListener('scroll', onViewportChange, true);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-      window.removeEventListener('resize', onViewportChange);
-      window.removeEventListener('scroll', onViewportChange, true);
-    };
-  }, [onClose, triggerRef]);
-
+  // The `panelRef.current?.focus()` blur guards that used to sit in `pick`
+  // and `submitForm` are gone, and deliberately so. They existed for
+  // CopilotProposalCard.tsx's hazard — focus falling through to <body> when a
+  // control unmounts, where the next keystroke leaks to the global `g`-then-
+  // key shortcuts — but they never actually fixed it here: `onSelect` makes
+  // the parent unmount this whole popover on the next render, so focus landed
+  // on <body> a frame later regardless. The hook's focus-restore is the real
+  // answer: on unmount it puts focus back on the state chip the user opened
+  // this from, which is both a better destination and an actually durable one.
   function pick(transition: JiraTransition) {
     if (transition.requiresFields.length === 0) {
-      // Same focus-blur hazard as CopilotProposalCard.tsx's Approve/Reject:
-      // onSelect below causes the parent to unmount this popover on the very
-      // next render, which would otherwise blur focus to <body>. Land it on
-      // this panel's own (about-to-unmount, but not yet) container first.
-      panelRef.current?.focus();
       onSelect(transition, {});
       return;
     }
@@ -188,7 +109,6 @@ export function JiraTransitionPopover({
 
   function submitForm() {
     if (!formTransition) return;
-    panelRef.current?.focus();
     onSelect(formTransition, fieldValues);
   }
 
@@ -198,22 +118,21 @@ export function JiraTransitionPopover({
 
   return createPortal(
     <div
-      ref={panelRef}
-      tabIndex={-1}
-      data-shortcut-guard
-      onClick={(e) => e.stopPropagation()}
+      // Applied one by one rather than spread: this codebase forbids prop
+      // spreading (react/jsx-props-no-spreading), and being able to read
+      // exactly what the hook puts on this element is worth the six lines.
+      ref={panelProps.ref}
+      tabIndex={panelProps.tabIndex}
+      role={panelProps.role}
+      aria-label={panelProps['aria-label']}
+      data-shortcut-guard={panelProps['data-shortcut-guard']}
+      style={panelProps.style}
+      onClick={panelProps.onClick}
       // z-[60], matching DatePicker.tsx: as a child of <body> this is a
       // sibling of the ticket drawer's z-50 backdrop rather than nested in
       // the row, so the old z-30 would render behind it. Stays under
       // ToastHost's z-[200], which must sit above any popover.
       className="fixed z-[60] w-[270px] overflow-hidden rounded-[var(--radius)] border border-border-strong bg-surface text-left shadow-2xl outline-none"
-      // Hidden rather than unmounted for the one frame before the first
-      // measurement lands, so the panel is never painted at 0,0.
-      style={
-        coords
-          ? { top: coords.top, left: coords.left }
-          : { top: 0, left: 0, visibility: 'hidden' }
-      }
     >
       {!formTransition ? (
         <>
