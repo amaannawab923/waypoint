@@ -233,8 +233,49 @@ describe('mapIssue', () => {
       priorityId: '1',
       priorityName: 'Highest',
       assigneeName: 'Max Chen',
+      assigneeAccountId: ME,
       reporterName: 'Sam Lee',
       description: 'Details.',
+    });
+  });
+
+  // The same split priority already has between its display word and its
+  // writable id: `assigneeName` is a label (and "Unassigned" is this app's own
+  // fallback, not something Jira said), while the account id is the only thing
+  // an assignee write can be built from and the only thing that tells the two
+  // apart.
+  describe('the assignee’s account id, alongside the display name', () => {
+    it('carries the real account id of whoever is assigned', () => {
+      expect(
+        mapIssue(
+          issue({
+            assignee: { accountId: SOMEONE_ELSE, displayName: 'Sam Lee' },
+          }),
+          ME,
+        ),
+      ).toMatchObject({
+        assigneeName: 'Sam Lee',
+        assigneeAccountId: SOMEONE_ELSE,
+      });
+    });
+
+    it('reports a genuinely unassigned issue as a null id, not an empty string', () => {
+      expect(mapIssue(issue({ assignee: null }), ME)).toMatchObject({
+        assigneeName: 'Unassigned',
+        assigneeAccountId: null,
+      });
+    });
+
+    // The case the name alone cannot express: an assignee object Jira returned
+    // without a readable display name still renders as "Unassigned", so the id
+    // is what stops the picker from believing nobody is on the issue.
+    it('keeps the id when Jira returns an assignee with no display name', () => {
+      expect(
+        mapIssue(issue({ assignee: { accountId: SOMEONE_ELSE } }), ME),
+      ).toMatchObject({
+        assigneeName: 'Unassigned',
+        assigneeAccountId: SOMEONE_ELSE,
+      });
     });
   });
 

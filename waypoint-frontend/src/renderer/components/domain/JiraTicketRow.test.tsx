@@ -30,6 +30,7 @@ function ticket(overrides: Partial<JiraTicket> = {}): JiraTicket {
     priorityId: '1',
     priorityName: 'Highest',
     assigneeName: 'Max Chen',
+    assigneeAccountId: '5f8a',
     reporterName: 'Sam Lee',
     description: '',
     epicName: null,

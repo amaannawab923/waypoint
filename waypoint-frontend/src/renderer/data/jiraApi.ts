@@ -145,6 +145,7 @@ function toTicket(wire: JiraWireTicket): JiraTicket {
     priorityId: wire.priorityId,
     priorityName: wire.priorityName,
     assigneeName: wire.assigneeName,
+    assigneeAccountId: wire.assigneeAccountId,
     reporterName: wire.reporterName,
     description: wire.description,
     epicName: wire.epicName,

@@ -174,6 +174,12 @@ export interface JiraTicket {
    * bucket it was flattened into. */
   priorityName: string;
   assigneeName: string;
+  /** The assignee's own Atlassian account id, or null when nobody is
+   * assigned. The only handle an assignee write can be built from, and what
+   * lets the assignee picker mark who the issue is already on — `assigneeName`
+   * renders the literal "Unassigned" for both "nobody" and "we couldn't read
+   * who", which are not the same answer. */
+  assigneeAccountId: string | null;
   reporterName: string;
   description: string;
   epicName: string | null;

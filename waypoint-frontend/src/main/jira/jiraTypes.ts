@@ -128,6 +128,16 @@ export interface JiraWireTicket {
    * and not a name Jira returned. */
   priorityName: string;
   assigneeName: string;
+  /**
+   * The assignee's own Atlassian account id, or null when nobody is assigned.
+   *
+   * The only handle an assignee *write* can be built from — `assigneeName` is
+   * a display string, and two people on a site can share one. It also does the
+   * job `priorityId` does for priority: separating "this issue is unassigned"
+   * from "this issue has an assignee whose name we could not read", since
+   * `assigneeName` collapses both into the literal "Unassigned".
+   */
+  assigneeAccountId: string | null;
   reporterName: string;
   description: string;
   epicName: string | null;

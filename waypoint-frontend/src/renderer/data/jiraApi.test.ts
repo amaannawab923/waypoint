@@ -40,6 +40,7 @@ function wireTicket(overrides: Partial<JiraWireTicket> = {}): JiraWireTicket {
     priorityId: '1',
     priorityName: 'Highest',
     assigneeName: 'Max Chen',
+    assigneeAccountId: '5f8a',
     reporterName: 'Sam Lee',
     description: 'Details.',
     epicName: null,

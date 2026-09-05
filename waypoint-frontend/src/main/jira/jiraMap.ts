@@ -622,6 +622,12 @@ export function mapIssue(
         ? priority.name
         : 'None',
     assigneeName: displayNameOf(fields.assignee, 'Unassigned'),
+    // Carried alongside the name for the same reason priorityId is carried
+    // alongside priorityName: a display string cannot be written back, and
+    // "Unassigned" is this app's fallback word rather than something Jira
+    // returned — the id is the only thing that says which of those two an
+    // issue actually is.
+    assigneeAccountId: accountIdOf(fields.assignee),
     reporterName: displayNameOf(fields.reporter, 'Unknown'),
     description: tidyPlainText(adfToPlainText(fields.description)),
     epicName: typeof epicName === 'string' ? epicName : null,
