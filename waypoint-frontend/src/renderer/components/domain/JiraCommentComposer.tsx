@@ -376,9 +376,14 @@ export function JiraCommentComposer({
     start: number;
     query: string;
   } | null>(null);
-  const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(
-    null,
-  );
+  /** Where the "@" that opened the popover sits on screen, and how tall its
+   * line is. Raw caret geometry only — the panel's own placement is derived
+   * from this plus its real height at render time. */
+  const [caretPoint, setCaretPoint] = useState<{
+    top: number;
+    left: number;
+    lineHeight: number;
+  } | null>(null);
   const [suggestions, setSuggestions] = useState<JiraUserOption[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const [suggestionsError, setSuggestionsError] = useState<Error | null>(null);
@@ -461,31 +466,25 @@ export function JiraCommentComposer({
     return () => document.removeEventListener('mousedown', onDown);
   }, [popoverOpen]);
 
-  /** Re-derives the active mention trigger and, when one exists, the
-   * popover's anchor point — called after every change that can move the
-   * caret (typing, clicking, arrow-key navigation). */
+  /** Re-derives the active mention trigger and, when one exists, where the
+   * "@" itself sits on screen — called after every change that can move the
+   * caret (typing, clicking, arrow-key navigation).
+   *
+   * Deliberately stores only the caret's own geometry, not the panel's final
+   * position: the panel's height depends on how many suggestions came back,
+   * which isn't known yet at this point and changes again when the search
+   * resolves. Placement is derived from that real height at render time
+   * instead (see `placement` below) — computing it here against a
+   * worst-case estimate is what left the popover floating ~155px above the
+   * caret with nothing in between, since a one-result panel is 42px tall
+   * and the estimate reserved 204. */
   function syncTrigger(text: string, caret: number) {
     const next = findMentionTrigger(text, caret);
     setTrigger(next);
     if (!next) return;
     const el = textareaRef.current;
     if (!el) return;
-    const { top, left, lineHeight } = getOffsetCoordinates(el, next.start);
-    // Clamped to the viewport's right/bottom edges, the same property
-    // useFloatingPanel's own `computeCoords` guarantees for the other three
-    // pickers: a caret near the drawer's right edge or the window's bottom
-    // must not push this popover half off-screen.
-    const clampedLeft = Math.min(
-      Math.max(left, 8),
-      Math.max(8, window.innerWidth - POPOVER_WIDTH - 8),
-    );
-    const estimatedHeight = POPOVER_MAX_VISIBLE_ROWS * POPOVER_ROW_HEIGHT;
-    const spaceBelow = window.innerHeight - (top + lineHeight + 4);
-    const placeAbove = spaceBelow < estimatedHeight && top > spaceBelow;
-    const clampedTop = placeAbove
-      ? Math.max(8, top - estimatedHeight - 4)
-      : top + lineHeight + 4;
-    setAnchor({ top: clampedTop, left: clampedLeft });
+    setCaretPoint(getOffsetCoordinates(el, next.start));
   }
 
   /** Shifts every tracked mention span by `delta` characters wherever an
@@ -828,6 +827,36 @@ export function JiraCommentComposer({
       ? 20
       : 8);
 
+  /**
+   * Where the panel actually goes, computed here rather than when the "@"
+   * was typed — because only here is `popoverHeight` known, and it changes
+   * as the search resolves (one "Searching teammates…" row becoming three
+   * results). Placing against a fixed worst-case estimate instead is what
+   * made this popover sit ~155px above the caret with a gap of nothing
+   * between them: a one-result panel is 42px tall, and the estimate
+   * reserved a six-row 204.
+   *
+   * Below the caret's own line by default; flipped above only when the
+   * panel genuinely doesn't fit below, and then by its real height, so it
+   * sits directly on top of the "@" rather than somewhere above it. Both
+   * axes stay clamped inside the viewport — the same guarantee
+   * `useFloatingPanel`'s `computeCoords` makes for the other three pickers.
+   */
+  const placement = caretPoint
+    ? (() => {
+        const belowTop = caretPoint.top + caretPoint.lineHeight + 4;
+        const fitsBelow = belowTop + popoverHeight <= window.innerHeight - 8;
+        const top = fitsBelow
+          ? belowTop
+          : Math.max(8, caretPoint.top - popoverHeight - 4);
+        const left = Math.min(
+          Math.max(caretPoint.left, 8),
+          Math.max(8, window.innerWidth - POPOVER_WIDTH - 8),
+        );
+        return { top, left };
+      })()
+    : null;
+
   return (
     <div
       ref={formRef}
@@ -950,15 +979,15 @@ export function JiraCommentComposer({
       )}
 
       {popoverOpen &&
-        anchor &&
+        placement &&
         createPortal(
           <div
             ref={popoverRef}
             role="listbox"
             aria-label={`Mention someone on ${ticketKey}`}
             style={{
-              top: anchor.top,
-              left: anchor.left,
+              top: placement.top,
+              left: placement.left,
               height: popoverHeight,
             }}
             className="fixed z-[60] w-[240px] overflow-hidden rounded-[var(--radius)] border border-border-strong bg-surface text-left shadow-2xl"
