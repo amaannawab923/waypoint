@@ -1,12 +1,23 @@
-// Each test gets its OWN fresh copy of this module via freshApi() below.
-// jiraApi.ts's fixtures are plain mutable module-level state with no reset
-// hook (unlike jiraStore.ts's resetJiraStoreForTests) — a transition, an
-// approve, a dismiss all mutate arrays/objects in place, so tests that
-// shared one module instance would leak state into each other depending on
-// run order. jest.resetModules() + a fresh require() sidesteps that
-// entirely, at the cost of losing static ES import ergonomics for this one
-// file.
+import type { JiraWireTicket } from '../../main/jira/jiraTypes';
+
+// Each test gets its OWN fresh copy of this module via freshApi(). jiraApi.ts
+// keeps a small module-level session cache (the last ticket list, the
+// transitions that came with it, the last sync time), and that cache is
+// exactly what several of these tests are about — so they must not inherit
+// each other's. jest.resetModules() + a fresh require() is the same approach
+// this file used when the cache was fixtures, for the same reason.
 type JiraApiModule = typeof import('./jiraApi');
+
+const bridge = {
+  status: jest.fn(),
+  connect: jest.fn(),
+  disconnect: jest.fn(),
+  listTickets: jest.fn(),
+  listTransitions: jest.fn(),
+  transition: jest.fn(),
+  listComments: jest.fn(),
+  postComment: jest.fn(),
+};
 
 function freshApi(): JiraApiModule {
   jest.resetModules();
@@ -14,254 +25,355 @@ function freshApi(): JiraApiModule {
   return require('./jiraApi');
 }
 
-describe('jiraApi — per-project workflows', () => {
-  it('GRW has no In Review state, unlike ENG and PLAT', async () => {
+function wireTicket(overrides: Partial<JiraWireTicket> = {}): JiraWireTicket {
+  return {
+    id: '10421',
+    key: 'ENG-421',
+    projectKey: 'ENG',
+    title: 'Webhook receiver drops events past 500/min',
+    role: 'assignee',
+    stateName: 'In Progress',
+    stateCategory: 'in-progress',
+    priority: 'urgent',
+    assigneeName: 'Max Chen',
+    reporterName: 'Sam Lee',
+    description: 'Details.',
+    epicName: null,
+    storyPoints: null,
+    sprintName: null,
+    attachments: [],
+    transitions: [],
+    updatedAt: '2026-09-01T10:00:00.000Z',
+    ...overrides,
+  };
+}
+
+const CONNECTED = {
+  connected: true,
+  identity: {
+    site: 'waypoint123.atlassian.net',
+    accountId: '5f8a',
+    email: 'max@northwind.dev',
+    displayName: 'Max Chen',
+    avatarUrl: null,
+  },
+};
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  (window as unknown as { electron: unknown }).electron = { jira: bridge };
+  bridge.status.mockResolvedValue(CONNECTED);
+  bridge.listTickets.mockResolvedValue({ ok: true, value: [] });
+});
+
+describe('failure handling', () => {
+  // Main answers with a discriminated union; every component above this layer
+  // is written around try/catch and showErrorToast, so the conversion happens
+  // once, here.
+  it("throws with Jira's own message rather than a generic one", async () => {
     const api = freshApi();
-    const grw12 = (await api.listMyJiraTickets()).find(
-      (t) => t.key === 'GRW-12',
-    )!;
-    const transitions = await api.getJiraTransitions(grw12.id);
-    expect(transitions.map((t) => t.targetStateName)).toEqual([
-      'In Progress',
-      'Done',
+    bridge.listTickets.mockResolvedValue({
+      ok: false,
+      reason: 'jira_error',
+      message: 'Resolution is required.',
+    });
+
+    await expect(api.listMyJiraTickets()).rejects.toThrow(
+      'Resolution is required.',
+    );
+  });
+
+  it('explains itself when there is no Electron bridge at all', async () => {
+    const api = freshApi();
+    (window as unknown as { electron?: unknown }).electron = undefined;
+
+    await expect(api.listMyJiraTickets()).rejects.toThrow(
+      /Jira connection is unavailable/,
+    );
+  });
+});
+
+describe('listMyJiraTickets', () => {
+  it("colors a ticket from Jira's status category, the only portable grouping", async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue({
+      ok: true,
+      value: [
+        wireTicket({ id: '1', stateCategory: 'todo' }),
+        wireTicket({ id: '2', stateCategory: 'in-progress' }),
+        wireTicket({ id: '3', stateCategory: 'done' }),
+      ],
+    });
+
+    const tickets = await api.listMyJiraTickets();
+
+    expect(tickets.map((t) => t.stateColor)).toEqual([
+      'var(--text-muted)',
+      'var(--warning)',
+      'var(--success)',
     ]);
   });
 
-  it('ENG requires a Resolution (and offers an optional Time spent) to reach Done, but not to reach In Review', async () => {
+  // Tombstones and conflicts describe drift between a previous read and the
+  // current one. There is no store to compare against in this phase, so
+  // nothing invents them.
+  it('never marks a real ticket as tombstoned or conflicted', async () => {
     const api = freshApi();
-    const eng421 = (await api.listMyJiraTickets()).find(
-      (t) => t.key === 'ENG-421',
-    )!;
-    const transitions = await api.getJiraTransitions(eng421.id);
+    bridge.listTickets.mockResolvedValue({ ok: true, value: [wireTicket()] });
 
-    const toReview = transitions.find((t) => t.targetStateName === 'In Review');
-    const toDone = transitions.find((t) => t.targetStateName === 'Done');
-    expect(toReview?.requiresFields).toEqual([]);
-    expect(toDone?.requiresFields.map((f) => f.key)).toEqual([
-      'resolution',
-      'timeSpent',
+    expect(await api.listMyJiraTickets()).toEqual([
+      expect.objectContaining({
+        isTombstoned: false,
+        tombstone: null,
+        hasConflict: false,
+        conflict: null,
+      }),
     ]);
-    expect(
-      toDone?.requiresFields.find((f) => f.key === 'resolution')?.required,
-    ).toBe(true);
-    expect(
-      toDone?.requiresFields.find((f) => f.key === 'timeSpent')?.required,
-    ).toBe(false);
   });
+});
 
-  it('GRW requires a Resolution to reach Done directly from To Do, unlike ENG', async () => {
+describe('getJiraTransitions', () => {
+  const BULK_TRANSITION = {
+    id: '21',
+    targetStateName: 'In Review',
+    targetStateCategory: 'in-progress' as const,
+    requiresFields: [],
+  };
+
+  it('uses the transitions the bulk search already returned, with no extra call', async () => {
     const api = freshApi();
-    const grw12 = (await api.listMyJiraTickets()).find(
-      (t) => t.key === 'GRW-12',
-    )!;
-    const transitions = await api.getJiraTransitions(grw12.id);
-    const toDone = transitions.find((t) => t.targetStateName === 'Done');
-    expect(toDone?.requiresFields.map((f) => f.key)).toEqual(['resolution']);
-  });
+    bridge.listTickets.mockResolvedValue({
+      ok: true,
+      value: [wireTicket({ transitions: [BULK_TRANSITION] })],
+    });
+    await api.listMyJiraTickets();
 
-  it('PLAT requires a Resolution on Done from In Review too, unlike ENG which only requires it from In Progress', async () => {
-    const api = freshApi();
-    const plat88 = (await api.listMyJiraTickets()).find(
-      (t) => t.key === 'PLAT-88',
-    )!;
-    const fromInProgress = await api.getJiraTransitions(plat88.id);
-    const toInReview = fromInProgress.find(
-      (t) => t.targetStateName === 'In Review',
-    )!;
+    const transitions = await api.getJiraTransitions('10421');
 
-    await api.transitionJiraTicket(plat88.id, toInReview.id, {});
-
-    const fromInReview = await api.getJiraTransitions(plat88.id);
-    const toDone = fromInReview.find((t) => t.targetStateName === 'Done');
-    expect(toDone?.requiresFields.map((f) => f.key)).toEqual([
-      'resolution',
-      'timeSpent',
+    expect(bridge.listTransitions).not.toHaveBeenCalled();
+    expect(transitions).toEqual([
+      {
+        id: '21',
+        targetStateName: 'In Review',
+        targetStateColor: 'var(--warning)',
+        requiresFields: [],
+      },
     ]);
   });
 
-  it('transitionJiraTicket rejects a transition missing a required field, and never mutates the ticket', async () => {
+  // The important one. An empty transitions array from the bulk search is
+  // ambiguous — "no legal moves" and "the expand didn't populate" look
+  // identical — and believing it would show a user an empty menu on a ticket
+  // their Jira plainly lets them move.
+  it('does not believe an empty bulk result, and asks per-issue instead', async () => {
     const api = freshApi();
-    const eng421 = (await api.listMyJiraTickets()).find(
-      (t) => t.key === 'ENG-421',
-    )!;
-    const transitions = await api.getJiraTransitions(eng421.id);
-    const toDone = transitions.find((t) => t.targetStateName === 'Done')!;
+    bridge.listTickets.mockResolvedValue({
+      ok: true,
+      value: [wireTicket({ transitions: [] })],
+    });
+    bridge.listTransitions.mockResolvedValue({
+      ok: true,
+      value: [BULK_TRANSITION],
+    });
+    await api.listMyJiraTickets();
 
-    await expect(
-      api.transitionJiraTicket(eng421.id, toDone.id, {}),
-    ).rejects.toThrow('Resolution is required');
+    const transitions = await api.getJiraTransitions('10421');
 
-    const stillUnchanged = await api.getJiraTicket(eng421.id);
-    expect(stillUnchanged?.stateName).toBe('In Progress');
+    expect(bridge.listTransitions).toHaveBeenCalledWith('10421');
+    expect(transitions).toHaveLength(1);
   });
 
-  it('transitionJiraTicket succeeds once the required field is supplied', async () => {
+  it('asks per-issue for a ticket the last list never mentioned', async () => {
     const api = freshApi();
-    const eng421 = (await api.listMyJiraTickets()).find(
-      (t) => t.key === 'ENG-421',
-    )!;
-    const transitions = await api.getJiraTransitions(eng421.id);
-    const toDone = transitions.find((t) => t.targetStateName === 'Done')!;
+    bridge.listTransitions.mockResolvedValue({ ok: true, value: [] });
 
-    const updated = await api.transitionJiraTicket(eng421.id, toDone.id, {
+    expect(await api.getJiraTransitions('99999')).toEqual([]);
+    expect(bridge.listTransitions).toHaveBeenCalledWith('99999');
+  });
+});
+
+describe('transitionJiraTicket', () => {
+  it('returns the re-read ticket and forgets the now-stale transition list', async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue({
+      ok: true,
+      value: [
+        wireTicket({
+          transitions: [
+            {
+              id: '21',
+              targetStateName: 'In Review',
+              targetStateCategory: 'in-progress',
+              requiresFields: [],
+            },
+          ],
+        }),
+      ],
+    });
+    await api.listMyJiraTickets();
+    bridge.transition.mockResolvedValue({
+      ok: true,
+      value: wireTicket({ stateName: 'Done', stateCategory: 'done' }),
+    });
+    bridge.listTransitions.mockResolvedValue({ ok: true, value: [] });
+
+    const updated = await api.transitionJiraTicket('10421', '21', {
       resolution: 'Fixed',
     });
-    expect(updated.stateName).toBe('Done');
+
+    expect(bridge.transition).toHaveBeenCalledWith({
+      ticketId: '10421',
+      transitionId: '21',
+      fieldValues: { resolution: 'Fixed' },
+    });
+    expect(updated).toMatchObject({
+      stateName: 'Done',
+      stateColor: 'var(--success)',
+    });
+
+    // The move changes which transitions are legal from here, so the cached
+    // set for this ticket must not be reused.
+    await api.getJiraTransitions('10421');
+    expect(bridge.listTransitions).toHaveBeenCalledWith('10421');
   });
 });
 
-describe('jiraApi — tombstone and conflict', () => {
-  it('dismissJiraTombstone removes the ticket from the list entirely', async () => {
+describe('connect / status / disconnect', () => {
+  it('lists immediately after connecting so the counts shown are this account’s real ones', async () => {
     const api = freshApi();
-    const before = await api.listMyJiraTickets();
-    const tomb = before.find((t) => t.isTombstoned)!;
+    bridge.connect.mockResolvedValue({ ok: true, value: CONNECTED.identity });
+    bridge.listTickets.mockResolvedValue({
+      ok: true,
+      value: [
+        wireTicket({ id: '1', projectKey: 'ENG' }),
+        wireTicket({ id: '2', projectKey: 'ENG' }),
+        wireTicket({ id: '3', projectKey: 'OPS' }),
+      ],
+    });
 
-    await api.dismissJiraTombstone(tomb.id);
+    const status = await api.connectJira({
+      site: 'waypoint123.atlassian.net',
+      email: 'max@northwind.dev',
+      apiToken: 'ATATT3xFfGF0-not-a-real-token',
+    });
 
-    const after = await api.listMyJiraTickets();
-    expect(after.find((t) => t.id === tomb.id)).toBeUndefined();
+    expect(bridge.listTickets).toHaveBeenCalledTimes(1);
+    expect(status).toMatchObject({
+      connected: true,
+      accountName: 'Max Chen',
+      accountEmail: 'max@northwind.dev',
+      site: 'waypoint123.atlassian.net',
+      issueCount: 3,
+      projectCount: 2,
+    });
   });
 
-  it('resolveJiraConflict clears the conflict and adopts the remote state', async () => {
+  it('surfaces a rejected credential without listing anything', async () => {
     const api = freshApi();
-    const before = await api.listMyJiraTickets();
-    const conflicted = before.find((t) => t.hasConflict)!;
+    bridge.connect.mockResolvedValue({
+      ok: false,
+      reason: 'invalid_credentials',
+      message: 'Jira rejected that email and API token.',
+    });
 
-    const resolved = await api.resolveJiraConflict(conflicted.id);
-
-    expect(resolved.hasConflict).toBe(false);
-    expect(resolved.conflict).toBeNull();
-    expect(resolved.stateName).toBe('In Review');
-  });
-});
-
-describe('jiraApi — connection lifecycle', () => {
-  it('starts disconnected (the wizard is now the real path to a connected state)', async () => {
-    const api = freshApi();
-    const status = await api.getJiraConnectionStatus();
-    expect(status.connected).toBe(false);
+    await expect(
+      api.connectJira({ site: 's', email: 'e', apiToken: 't' }),
+    ).rejects.toThrow('Jira rejected that email and API token.');
+    expect(bridge.listTickets).not.toHaveBeenCalled();
   });
 
-  it('connectJira / disconnectJira flip the connected flag', async () => {
+  // Status is a local read of the credential store — the sidebar and the page
+  // both ask on every mount, so it must not put a Jira request in front of
+  // rendering a nav item.
+  it('reads status without touching the network', async () => {
     const api = freshApi();
-    const connected = await api.connectJira();
-    expect(connected.connected).toBe(true);
+
+    await api.getJiraConnectionStatus();
+
+    expect(bridge.status).toHaveBeenCalledTimes(1);
+    expect(bridge.listTickets).not.toHaveBeenCalled();
+  });
+
+  it('drops the cached counts on disconnect', async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue({ ok: true, value: [wireTicket()] });
+    await api.listMyJiraTickets();
+    expect((await api.getJiraConnectionStatus()).issueCount).toBe(1);
 
     await api.disconnectJira();
-    const after = await api.getJiraConnectionStatus();
-    expect(after.connected).toBe(false);
+
+    expect(bridge.disconnect).toHaveBeenCalledTimes(1);
+    expect((await api.getJiraConnectionStatus()).issueCount).toBe(0);
   });
 
-  it('refreshJiraSync bumps lastSyncAt without changing connected state', async () => {
-    const api = freshApi();
-    await api.connectJira();
-    const before = await api.getJiraConnectionStatus();
+  // lastSyncAt is what the page's "synced Ns ago" indicator reports, so it
+  // has to move only when the list is genuinely re-read.
+  it('refreshJiraSync genuinely re-reads and advances lastSyncAt', async () => {
+    jest.useFakeTimers();
+    try {
+      const api = freshApi();
+      const before = (await api.getJiraConnectionStatus()).lastSyncAt;
+      jest.advanceTimersByTime(60_000);
 
-    const refreshed = await api.refreshJiraSync();
+      const refreshed = await api.refreshJiraSync();
 
-    expect(refreshed.connected).toBe(true);
-    expect(new Date(refreshed.lastSyncAt).getTime()).toBeGreaterThanOrEqual(
-      new Date(before.lastSyncAt).getTime(),
-    );
-  });
-
-  it('setJiraSyncPaused persists the paused flag independently of connected', async () => {
-    const api = freshApi();
-    const initial = await api.getJiraConnectionStatus();
-    expect(initial.paused).toBe(false);
-
-    const paused = await api.setJiraSyncPaused(true);
-    expect(paused.paused).toBe(true);
-
-    const resumed = await api.setJiraSyncPaused(false);
-    expect(resumed.paused).toBe(false);
-  });
-
-  it('issueCount/projectCount are recomputed live from the ticket list (excluding tombstones), not hardcoded', async () => {
-    const api = freshApi();
-    const tickets = await api.listMyJiraTickets();
-    const live = tickets.filter((t) => !t.isTombstoned);
-
-    const status = await api.getJiraConnectionStatus();
-
-    expect(status.issueCount).toBe(live.length);
-    expect(status.projectCount).toBe(
-      new Set(live.map((t) => t.projectKey)).size,
-    );
+      expect(bridge.listTickets).toHaveBeenCalledTimes(1);
+      expect(new Date(refreshed.lastSyncAt).getTime()).toBeGreaterThan(
+        new Date(before).getTime(),
+      );
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 
-describe('jiraApi — the Copilot rail proposal', () => {
-  it('getMyJiraProposal returns the ENG-421 fixture, pending', async () => {
+describe('comments', () => {
+  it('maps a posted comment, and never claims Jira knows it came from Waypoint', async () => {
     const api = freshApi();
-    const proposal = await api.getMyJiraProposal();
-    expect(proposal?.ticketKey).toBe('ENG-421');
-    expect(proposal?.status).toBe('proposed');
-    expect(proposal?.fromStateName).toBe('In Progress');
-    expect(proposal?.toStateName).toBe('In Review');
-  });
+    bridge.postComment.mockResolvedValue({
+      ok: true,
+      value: {
+        id: '10502',
+        ticketId: '10421',
+        authorName: 'Max Chen',
+        body: 'Taking it.',
+        createdAt: '2026-09-01T10:00:00.000Z',
+      },
+    });
 
-  it('approveJiraProposal moves the ticket AND appends a disclosed comment, atomically', async () => {
-    const api = freshApi();
-    const proposal = await api.getMyJiraProposal();
+    const comment = await api.postJiraComment('10421', 'Taking it.');
 
-    const approved = await api.approveJiraProposal(proposal!.id);
-    expect(approved.status).toBe('executed');
-    expect(approved.resolvedAt).not.toBeNull();
-
-    const ticket = await api.getJiraTicket(proposal!.ticketId);
-    expect(ticket?.stateName).toBe('In Review');
-
-    const comments = await api.listJiraComments(proposal!.ticketId);
-    const posted = comments.find((c) => c.disclosureText != null);
-    expect(posted?.disclosureText).toContain('Written by Waypoint Copilot');
-    expect(posted?.body).toBe(proposal!.commentBody);
-    expect(posted?.mentions).toEqual(['Priya Raman']);
-  });
-
-  it('rejectJiraProposal marks it rejected without touching the ticket or posting a comment', async () => {
-    const api = freshApi();
-    const proposal = await api.getMyJiraProposal();
-    const before = await api.getJiraTicket(proposal!.ticketId);
-    const commentsBefore = await api.listJiraComments(proposal!.ticketId);
-
-    const rejected = await api.rejectJiraProposal(proposal!.id);
-
-    expect(rejected.status).toBe('rejected');
-    const after = await api.getJiraTicket(proposal!.ticketId);
-    expect(after?.stateName).toBe(before?.stateName);
-    const commentsAfter = await api.listJiraComments(proposal!.ticketId);
-    expect(commentsAfter).toHaveLength(commentsBefore.length);
-  });
-
-  it('approveJiraProposal / rejectJiraProposal reject an unknown id', async () => {
-    const api = freshApi();
-    await expect(api.approveJiraProposal('nope')).rejects.toThrow(
-      'Unknown Jira proposal',
-    );
-    await expect(api.rejectJiraProposal('nope')).rejects.toThrow(
-      'Unknown Jira proposal',
-    );
+    expect(bridge.postComment).toHaveBeenCalledWith({
+      ticketId: '10421',
+      body: 'Taking it.',
+    });
+    // Jira has no property to carry provenance and this app keeps no record
+    // of what it posted, so a comment read back is just a comment.
+    expect(comment).toMatchObject({
+      body: 'Taking it.',
+      postedByWaypoint: false,
+      disclosureText: null,
+    });
   });
 });
 
-describe('jiraApi — the "Also queued" duplicate nudge', () => {
-  it('getJiraDuplicateNudge points at the real GRW-12 ticket, not a synthetic row', async () => {
+describe('the Copilot rail', () => {
+  // These used to return a hand-written ENG-421 proposal from the design
+  // mockup. Against a live site that names an issue the user does not have,
+  // and its Approve button would report a state move and a comment that never
+  // reached Jira. Nothing generates one for real yet, so nothing is returned.
+  it('offers no proposal and no duplicate nudge, rather than an invented one', async () => {
     const api = freshApi();
-    const nudge = await api.getJiraDuplicateNudge();
-    expect(nudge?.ticketKey).toBe('GRW-12');
-    expect(nudge?.duplicateOfKey).toBe('GRW-9');
 
-    const ticket = await api.getJiraTicket(nudge!.ticketId);
-    expect(ticket?.key).toBe('GRW-12');
-  });
-
-  it('dismissJiraDuplicateNudge makes it disappear for good', async () => {
-    const api = freshApi();
-    const nudge = await api.getJiraDuplicateNudge();
-
-    await api.dismissJiraDuplicateNudge(nudge!.id);
-
+    expect(await api.getMyJiraProposal()).toBeUndefined();
     expect(await api.getJiraDuplicateNudge()).toBeUndefined();
+  });
+
+  it('refuses loudly if an approval is somehow attempted', async () => {
+    const api = freshApi();
+
+    await expect(api.approveJiraProposal('any')).rejects.toThrow(
+      /isn't built yet/,
+    );
   });
 });
