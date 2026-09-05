@@ -19,25 +19,51 @@ import type { JiraProposal } from '@/types/jira';
 // left clickable twice).
 
 function StatusBadge({ status }: { status: JiraProposal['status'] }) {
-  const base = 'ml-auto rounded-full px-2 py-0.5 text-[10px] font-bold whitespace-nowrap';
+  const base =
+    'ml-auto rounded-full px-2 py-0.5 text-[10px] font-bold whitespace-nowrap';
   switch (status) {
     case 'proposed':
       return (
-        <span className={clsx(base, 'border border-border-strong bg-surface text-text-secondary')}>
+        <span
+          className={clsx(
+            base,
+            'border border-border-strong bg-surface text-text-secondary',
+          )}
+        >
           Needs your approval
         </span>
       );
     case 'executing':
-      return <span className={clsx(base, 'bg-surface text-text-secondary')}>Writing…</span>;
+      return (
+        <span className={clsx(base, 'bg-surface text-text-secondary')}>
+          Writing…
+        </span>
+      );
     case 'executed':
-      return <span className={clsx(base, 'bg-success-bg text-success')}>Approved by you</span>;
+      return (
+        <span className={clsx(base, 'bg-success-bg text-success')}>
+          Approved by you
+        </span>
+      );
     case 'rejected':
     default:
-      return <span className={clsx(base, 'bg-surface text-text-muted')}>Dismissed</span>;
+      return (
+        <span className={clsx(base, 'bg-surface text-text-muted')}>
+          Dismissed
+        </span>
+      );
   }
 }
 
-function StateChip({ name, color, highlight }: { name: string; color: string; highlight?: boolean }) {
+function StateChip({
+  name,
+  color,
+  highlight,
+}: {
+  name: string;
+  color: string;
+  highlight?: boolean;
+}) {
   return (
     <span
       className={clsx(
@@ -45,7 +71,10 @@ function StateChip({ name, color, highlight }: { name: string; color: string; hi
         highlight ? 'border-accent' : 'border-border-strong',
       )}
     >
-      <span className="size-[6px] shrink-0 rounded-full" style={{ background: color }} />
+      <span
+        className="size-[6px] shrink-0 rounded-full"
+        style={{ background: color }}
+      />
       {name}
     </span>
   );
@@ -78,7 +107,9 @@ export function JiraProposalCard({
       const updated = await fn(proposal.id);
       onResolved(updated);
     } catch (err) {
-      showErrorToast(err instanceof Error ? err.message : 'Could not resolve this proposal.');
+      showErrorToast(
+        err instanceof Error ? err.message : 'Could not resolve this proposal.',
+      );
     } finally {
       setActing(false);
     }
@@ -87,7 +118,10 @@ export function JiraProposalCard({
   const { status } = proposal;
   const isPending = status === 'proposed';
   const resolved = status === 'executed' || status === 'rejected';
-  const mentionsList = proposal.commentMentions.length > 0 ? proposal.commentMentions.join(', ') : 'the team';
+  const mentionsList =
+    proposal.commentMentions.length > 0
+      ? proposal.commentMentions.join(', ')
+      : 'the team';
 
   return (
     <div
@@ -102,7 +136,9 @@ export function JiraProposalCard({
     >
       <div className="flex items-center gap-1.5 border-b border-border bg-surface-2 px-3 py-2">
         <IconSparkles size={13} className="text-accent" />
-        <span className="text-[10.5px] font-bold tracking-wide text-text-secondary uppercase">Copilot · local</span>
+        <span className="text-[10.5px] font-bold tracking-wide text-text-secondary uppercase">
+          Copilot · local
+        </span>
         <StatusBadge status={status} />
       </div>
 
@@ -112,24 +148,34 @@ export function JiraProposalCard({
             <div className="rounded-[var(--radius-sm)] border border-dashed border-border-strong bg-bg-inset px-2.5 py-2 text-[11.5px] leading-relaxed text-text-secondary">
               <div className="flex items-center gap-1.5">
                 <IconGitBranch size={12} className="shrink-0" />
-                <span className="truncate font-mono font-semibold text-text">{proposal.repoPath}</span>
+                <span className="truncate font-mono font-semibold text-text">
+                  {proposal.repoPath}
+                </span>
               </div>
               <div className="mt-1">
-                branch <span className="font-mono font-semibold text-text">{proposal.branch}</span> ·{' '}
-                {proposal.commitCount} commit{proposal.commitCount === 1 ? '' : 's'}
+                branch{' '}
+                <span className="font-mono font-semibold text-text">
+                  {proposal.branch}
+                </span>{' '}
+                · {proposal.commitCount} commit
+                {proposal.commitCount === 1 ? '' : 's'}
               </div>
               <div className="mt-1">
-                <b className="text-text">PR #{proposal.prNumber}</b> {proposal.prStatus} · &quot;closes{' '}
-                {proposal.ticketKey}&quot;
+                <b className="text-text">PR #{proposal.prNumber}</b>{' '}
+                {proposal.prStatus} · &quot;closes {proposal.ticketKey}&quot;
               </div>
               <div className="mt-1.5 border-t border-border pt-1.5 text-[10.5px] text-text-muted">
-                Read from your checkout by the local agent. No code left this machine.
+                Read from your checkout by the local agent. No code left this
+                machine.
               </div>
             </div>
 
             <div className="text-[11.5px] font-semibold text-text-muted">
               Copilot proposes, on{' '}
-              <span className="font-mono font-semibold" style={{ color: proposal.ticketProjectColor }}>
+              <span
+                className="font-mono font-semibold"
+                style={{ color: proposal.ticketProjectColor }}
+              >
                 {proposal.ticketKey}
               </span>
               :
@@ -141,9 +187,16 @@ export function JiraProposalCard({
               </span>
               <div className="flex flex-1 flex-wrap items-center gap-1.5">
                 Move
-                <StateChip name={proposal.fromStateName} color={proposal.fromStateColor} />
+                <StateChip
+                  name={proposal.fromStateName}
+                  color={proposal.fromStateColor}
+                />
                 <ArrowRight size={13} className="text-text-muted" />
-                <StateChip name={proposal.toStateName} color={proposal.toStateColor} highlight />
+                <StateChip
+                  name={proposal.toStateName}
+                  color={proposal.toStateColor}
+                  highlight
+                />
               </div>
             </div>
 
@@ -162,20 +215,31 @@ export function JiraProposalCard({
             </div>
 
             <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-jira/30 bg-jira-bg px-2.5 py-2 text-[11.5px] text-jira">
-              Approving writes to the real Jira issue as <b>Max Chen</b> — your whole team sees it, and {mentionsList}{' '}
-              gets notified.
+              Approving writes to the real Jira issue as <b>Max Chen</b> — your
+              whole team sees it, and {mentionsList} gets notified.
             </div>
           </div>
 
           <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-2.5">
             <span className="text-[10.5px] leading-tight text-text-muted">
-              Always needs this click — earned trust never auto-applies a Jira write.
+              Always needs this click — earned trust never auto-applies a Jira
+              write.
             </span>
             <div className="flex shrink-0 gap-2">
-              <Button size="xs" variant="secondary" disabled={acting || !isPending} onClick={() => act(rejectJiraProposal)}>
+              <Button
+                size="xs"
+                variant="secondary"
+                disabled={acting || !isPending}
+                onClick={() => act(rejectJiraProposal)}
+              >
                 Reject
               </Button>
-              <Button size="xs" variant="primary" disabled={acting || !isPending} onClick={() => act(approveJiraProposal)}>
+              <Button
+                size="xs"
+                variant="primary"
+                disabled={acting || !isPending}
+                onClick={() => act(approveJiraProposal)}
+              >
                 Approve
               </Button>
             </div>
@@ -185,7 +249,9 @@ export function JiraProposalCard({
         <div
           className={clsx(
             'flex items-start gap-2 px-3 py-3 text-[12.5px]',
-            status === 'executed' ? 'bg-success-bg text-success' : 'text-text-muted',
+            status === 'executed'
+              ? 'bg-success-bg text-success'
+              : 'text-text-muted',
           )}
         >
           {status === 'executed' ? (
@@ -194,8 +260,9 @@ export function JiraProposalCard({
               <div>
                 <b className="block font-semibold">Written to Jira</b>
                 <span>
-                  {proposal.ticketKey} moved to {proposal.toStateName} and the comment posted as Max Chen. Undo isn't
-                  offered — Jira has already notified {mentionsList}.
+                  {proposal.ticketKey} moved to {proposal.toStateName} and the
+                  comment posted as Max Chen. Undo isn't offered — Jira has
+                  already notified {mentionsList}.
                 </span>
               </div>
             </>
