@@ -830,10 +830,12 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: Note the color on a project chip and the matching row's left border. Reload the app. Filter to a different project and back.
   Expected: The same project key always gets the same color, regardless of what else is in the list.
   Coverage: **Supported** — `jiraProjectColor()` hashes the key rather than assigning by list position, specifically so this holds.
+  Result: PASS — ENG's key text and row left-border consistently used `var(--p-grw)` across dozens of page reloads and role/project filter changes throughout this entire pass; never observed it change.
 - **JIRA-39** — Project color collisions with many projects
   Steps: Connect an account that can see four or more Jira projects. Look at the chips and row borders.
   Expected: Document how many distinct colors appear.
   Coverage: **Partial** — the palette is only three colors (`--p-eng`, `--p-plat`, `--p-grw`), so with 4+ projects collisions are guaranteed. Acknowledged in code as acceptable since the key text is always shown; worth confirming it still reads clearly at real project counts.
+  Result: NOT TESTED — this account has only one real Jira project (ENG); no way to observe collisions among 4+.
 
 ### Categorization — labels, components, issue type, epics
 
@@ -1159,6 +1161,7 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: Open a ticket whose Jira description has several paragraphs, headings and a bulleted list.
   Expected: Paragraph breaks, list-item breaks and heading breaks all render as line breaks, exactly as they do in the comment bodies below. The description is never one run-on paragraph. (Heading and bullet *styling* is still lost — that's the deliberate flatten, JIRA-101.)
   Coverage: **Supported** — `adfToPlainText` emits `\n` per ADF block and the drawer's description `<p>` now carries `whitespace-pre-wrap`, matching the comment bodies right below it. Asserted in `MyJiraPage.test.tsx`; jsdom does no layout, so the live check is still worth running against a real multi-paragraph description.
+  Result: PASS, live-verified early in this pass — found the description `<p>` element via a DOM walk and read its computed style directly: `class="... whitespace-pre-wrap ..."` and `getComputedStyle(el).whiteSpace === 'pre-wrap'`. This is the real, running app, not jsdom — confirms the B3 fix works outside the test suite too.
 - **JIRA-101** — A description containing a table or code block
   Steps: Open a ticket whose description has a table and a fenced code block.
   Expected: Cell text and code text are present as plain text; nothing renders as `[object Object]`.
@@ -1282,6 +1285,7 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: Launch the app fresh with Jira connected. Look at the sidebar badge and, on `/my-jira`, at the sync indicator, before the list finishes loading.
   Expected: Before the first read lands, the indicator reads "not synced yet" in muted text with no pulsing green dot, and never a "synced Ns ago" age. It switches to a real age only once a search has actually come back.
   Coverage: **Supported** — `lastSyncAt` in `jiraApi.ts` is now `null` until `rememberTickets()` runs, which happens only after a search resolves, so a failed or not-yet-completed read never advances it; `LiveSyncIndicator` renders the muted "not synced yet" branch for `null`. The separate `issueCount`/`projectCount` behavior is unchanged and still reads 0 until a list happens — that half stays logged under JIRA-37.
+  Result: PASS — observed "not synced yet" in muted text (no pulsing dot) at the very first page load of this pass, before the first real connect happened; also reproduced identically after a real Disconnect (JIRA-141). Every subsequent successful read correctly replaced it with a real "synced Ns ago" age.
 - **JIRA-124** — Refresh now genuinely re-reads
   Steps: Change an issue in Jira (title, status, assignee). In Waypoint, Connection tab → Refresh now, then return to My work.
   Expected: The change is reflected; the sync indicator resets to a few seconds.
@@ -1291,7 +1295,7 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: Sit on the My work tab. Switch to Connection, press Refresh now, switch back to My work.
   Expected: Document whether the rows reflect the refresh.
   Coverage: **Partial** — `MyJiraPage` holds `tickets` in local state fed by a mount-time `useAsync`; `refreshJiraSync` updates the module cache and the connection store but does not push new rows into the page. The counts on the Connection tab can update while the rows behind them stay stale — an internal inconsistency inside one page.
-  Result: This Coverage prediction does not hold live — corrected. Renamed ENG-4 in real Jira, pressed Refresh now on the Connection tab, switched back to My work: the row showed the new title ("...RENAMED for refresh test") immediately, not the stale one. Switching tabs within the page evidently does re-render/re-fetch the row data (or reads from a store `refreshJiraSync` does update), contradicting the "does not push new rows into the page" claim. This is a live-testing correction to a code-reading conclusion, not a product defect — the actual behavior (list reflects the refresh) is the *better* of the two outcomes, so no gap here after all.
+  Result: PASS (contradicts the Coverage note's predicted staleness — corrected below). Renamed ENG-4 in real Jira, pressed Refresh now on the Connection tab, switched back to My work: the row showed the new title ("...RENAMED for refresh test") immediately, not the stale one. Switching tabs within the page evidently does re-render/re-fetch the row data (or reads from a store `refreshJiraSync` does update), contradicting the "does not push new rows into the page" claim. This is a live-testing correction to a code-reading conclusion, not a product defect — the actual behavior (list reflects the refresh) is the *better* of the two outcomes, so no gap here after all.
 - **JIRA-126** — Someone else changes a ticket while you're looking at it
   Steps: Open My Jira. Have a colleague transition one of your listed issues in Jira. Then transition it yourself from Waypoint.
   Expected: Ideally a conflict warning; at minimum, an honest outcome.
@@ -1319,6 +1323,7 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: If a proposal can somehow be rendered, click Approve.
   Expected: A clear error naming that this isn't built — never a claimed Jira write.
   Coverage: **Supported (honest by design)** — `approveJiraProposal`/`rejectJiraProposal` throw with an explicit message rather than being re-stubbed. Deliberate: a Jira write attributed to an approval the app cannot perform is the one outcome worth being loud about.
+  Result: NOT TESTED — unreachable, consistent with JIRA-129: no proposal ever renders in this build (both `getMyJiraProposal`/`getJiraDuplicateNudge` are unconditionally empty), so there is no Approve button anywhere to click.
 - **JIRA-131** — Human writes never require approval; Copilot writes always would
   Steps: Read the two banners on the Connection tab and the Jira-tinted note under the ticket list. Perform a transition and a comment, timing them.
   Expected: Your own actions write straight through with no approval step; the copy accurately describes both halves.
