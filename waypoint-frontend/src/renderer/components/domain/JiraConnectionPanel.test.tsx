@@ -4,7 +4,6 @@ import {
   disconnectJira,
   getJiraConnectionStatus,
   refreshJiraSync,
-  setJiraSyncPaused,
 } from '@/data/jiraApi';
 import { setJiraConnection } from '@/lib/jiraStore';
 import type { JiraConnectionStatus } from '@/types/jira';
@@ -12,7 +11,6 @@ import { JiraConnectionPanel } from './JiraConnectionPanel';
 
 jest.mock('@/data/jiraApi', () => ({
   refreshJiraSync: jest.fn(),
-  setJiraSyncPaused: jest.fn(),
   disconnectJira: jest.fn(),
   getJiraConnectionStatus: jest.fn(),
 }));
@@ -29,8 +27,6 @@ function status(
     lastSyncAt: '2026-01-01T00:00:00.000Z',
     issueCount: 6,
     projectCount: 3,
-    pollIntervalSec: 15,
-    paused: false,
     ...overrides,
   };
 }
@@ -49,8 +45,20 @@ describe('JiraConnectionPanel', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('6')).toBeInTheDocument();
     expect(screen.getByText('3')).toBeInTheDocument();
-    expect(screen.getByText('15s')).toBeInTheDocument();
-    expect(screen.getByText('Live')).toBeInTheDocument();
+    expect(screen.getByText('Connected')).toBeInTheDocument();
+  });
+
+  // The "poll interval" stat and the "Pause sync" button that used to sit
+  // here described a background sync that has never existed — no timer, in
+  // the fixture layer or the real one, ever re-read the list. They are gone
+  // rather than left describing behavior the app does not have.
+  it('advertises no poll interval and offers no pause, because nothing polls', () => {
+    render(<JiraConnectionPanel connection={status()} />);
+
+    expect(screen.queryByText(/poll interval/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /pause|resume/i }),
+    ).not.toBeInTheDocument();
   });
 
   it('Refresh now calls refreshJiraSync and pushes the result into jiraStore', async () => {
@@ -63,21 +71,6 @@ describe('JiraConnectionPanel', () => {
     await waitFor(() =>
       expect(setJiraConnection).toHaveBeenCalledWith(refreshed),
     );
-  });
-
-  it('Pause sync calls setJiraSyncPaused(true) and Resume sync calls it with false', async () => {
-    jest.mocked(setJiraSyncPaused).mockResolvedValue(status({ paused: true }));
-    const { rerender } = render(
-      <JiraConnectionPanel connection={status({ paused: false })} />,
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: 'Pause sync' }));
-    await waitFor(() => expect(setJiraSyncPaused).toHaveBeenCalledWith(true));
-
-    jest.mocked(setJiraSyncPaused).mockResolvedValue(status({ paused: false }));
-    rerender(<JiraConnectionPanel connection={status({ paused: true })} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Resume sync' }));
-    await waitFor(() => expect(setJiraSyncPaused).toHaveBeenCalledWith(false));
   });
 
   it('Disconnect genuinely calls disconnectJira and pushes the re-read status into jiraStore', async () => {
@@ -101,7 +94,6 @@ describe('JiraConnectionPanel', () => {
     render(<JiraConnectionPanel connection={status({ connected: false })} />);
 
     expect(screen.getByRole('button', { name: 'Refresh now' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Pause sync' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Disconnect' })).toBeDisabled();
     expect(screen.getByText('Disconnected')).toBeInTheDocument();
   });
