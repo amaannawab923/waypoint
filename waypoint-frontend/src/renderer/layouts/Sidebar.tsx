@@ -19,6 +19,7 @@ import { useLoadedJiraConnection } from '@/lib/jiraStore';
 import { MY_JIRA_ENABLED } from '@/lib/featureFlags';
 import type { Project } from '@/types/entities';
 import { CreateProjectModal } from '@/components/domain/CreateProjectModal';
+import { AddProjectWizard } from '@/components/domain/AddProjectWizard';
 import { JiraMark } from '@/components/domain/JiraMark';
 import {
   IconHome,
@@ -421,14 +422,29 @@ export function Sidebar() {
 
       <LocalStatusStrip />
 
-      <CreateProjectModal
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        onCreated={(project) => {
-          upsertProjects([project]);
-          navigate(`/projects/${project.id}/tickets`);
-        }}
-      />
+      {/* When MY_JIRA_ENABLED is off, this is byte-for-byte the same
+          CreateProjectModal mount phase 1 always had — the wizard component
+          (and its Companion option) isn't in the tree at all, so the "+"
+          button's behavior is unchanged. */}
+      {MY_JIRA_ENABLED ? (
+        <AddProjectWizard
+          open={createOpen}
+          onClose={() => setCreateOpen(false)}
+          onCreated={(project) => {
+            upsertProjects([project]);
+            navigate(`/projects/${project.id}/tickets`);
+          }}
+        />
+      ) : (
+        <CreateProjectModal
+          open={createOpen}
+          onClose={() => setCreateOpen(false)}
+          onCreated={(project) => {
+            upsertProjects([project]);
+            navigate(`/projects/${project.id}/tickets`);
+          }}
+        />
+      )}
     </aside>
   );
 }
