@@ -642,78 +642,97 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: Click "+" in the sidebar. Step 1, choose "Companion project", Continue. Step 2, choose "Jira", Continue.
   Expected: A 4-step wizard (Add project / Choose a provider / Connect your Jira account / Review & create); step 3 shows Site, Atlassian account email, and API token fields; Linear and Shortcut are visibly present but disabled with a "Not built yet" badge.
   Coverage: **Supported** — `AddProjectWizard.tsx` defines exactly these four steps and renders Linear/Shortcut as `aria-disabled` rows.
+  Result: PASS — wizard reached step 3 with Site/email/token fields exactly as described; Linear and Shortcut rows show "Not built yet". Minor note (not a fail): those rows are plain `<div aria-disabled="true">` with no `role="button"`, so a screen reader won't announce them as buttons at all.
 - **JIRA-02** — Connect with valid site, email and API token
   Steps: Enter `yourteam.atlassian.net`, the Atlassian account email, a freshly generated API token. Click Connect.
   Expected: Button shows "Checking with Jira…", then the form is replaced by the real account's avatar, display name, email and site, with a green "Connected" badge. The name shown is Jira's own answer, not what was typed.
   Coverage: **Supported** — `connectJira` → `jira:connect` → `client.validateCredential()` performs a live `GET /rest/api/3/myself` and returns `displayName` from Jira.
+  Result: PASS — connected with a real Jira Cloud account (waypoint123.atlassian.net); form was replaced with real avatar initials, display name "Amaan Nawab", real email, and a green "Connected" badge.
 - **JIRA-03** — Site field accepts a bare workspace name
   Steps: On the connect form, type only `yourteam` (no dots, no scheme). Connect.
   Expected: Treated as `yourteam.atlassian.net` and connects normally.
   Coverage: **Supported** — `normalizeJiraSite()` appends `.atlassian.net` when the value contains no dot.
+  Result: PASS — typing `waypoint123` alone connected successfully to `waypoint123.atlassian.net` with the real account's credentials, confirming both normalization and that it reached the correct real host.
 - **JIRA-04** — Site field accepts a full pasted Jira URL
   Steps: Paste `https://yourteam.atlassian.net/jira/software/projects/ENG/boards/1`. Connect.
   Expected: Scheme, path and query are stripped; connects to `yourteam.atlassian.net`.
   Coverage: **Supported** — `normalizeJiraSite()` strips `https?://` then splits on `[/?#]`.
+  Result: PASS — pasting `https://waypoint123.atlassian.net/jira/software/projects/ENG/boards/1` stripped scheme/path/query and connected to `waypoint123.atlassian.net` with the real account.
 - **JIRA-05** — Site field rejects a host with userinfo or an explicit port
   Steps: Try `evil@yourteam.atlassian.net`, then `yourteam.atlassian.net:8080`. Connect each.
   Expected: Both refused with "Enter your Jira site address, e.g. yourteam.atlassian.net." — not silently cleaned up and connected anyway.
   Coverage: **Supported** — `normalizeJiraSite()` returns null on `@` or `:`, and `jiraIpc.ts` maps null to that `invalid_input` message. Deliberate: both are ways a pasted value could aim a live token somewhere unintended.
+  Result: PASS — both `evil@waypoint123.atlassian.net` and `waypoint123.atlassian.net:8080` were rejected client-side (no network call) with the exact message "Enter your Jira site address, e.g. yourteam.atlassian.net."
 - **JIRA-06** — Wrong API token is rejected with a credential-specific message
   Steps: Enter a valid site and email but a garbage/revoked token. Connect.
   Expected: Inline red alert on the form (not a toast): "Jira rejected that email and API token…". The form stays filled and editable; nothing is stored.
   Coverage: **Supported** — 401 maps to `invalid_credentials`; `AddProjectWizard` renders `connectError` inline via `role="alert"` and only writes the credential after validation succeeds.
+  Result: PASS — a garbage token against the real site produced the exact message "Jira rejected that email and API token. Check both, and that the token was generated for this Atlassian account." Form stayed filled and editable; the real connection was untouched.
 - **JIRA-07** — Nonexistent site is distinguished from bad credentials
   Steps: Enter `definitely-not-a-real-site-xyz.atlassian.net` with any email/token. Connect.
   Expected: "That site doesn't exist — check the address…" — materially different wording from the bad-token case.
-  Coverage: **Supported** — `classifyNetworkError()` maps `ENOTFOUND`/`EAI_AGAIN` to `site_not_found`.
+  Coverage: **Gap worth flagging** — live execution disproved the "Supported" call below; corrected after JIRA-190 execution pass.
+  Result: FAIL — entering `definitely-not-a-real-site-xyz.atlassian.net` did not hit the site-not-found path at all. Atlassian's own edge/CDN resolves the subdomain (no DNS `ENOTFOUND`) and answers with a real HTTP 404, so `classifyNetworkError()`'s `ENOTFOUND`/`EAI_AGAIN` check never fires. The user sees the raw, generic "Jira returned 404." instead of "That site doesn't exist — check the address…" — a real bug only visible against the live Atlassian Cloud DNS/CDN behavior, not from reading the code.
 - **JIRA-08** — A non-Jira host that answers on HTTPS is caught
   Steps: Enter `example.com` (a real host that is not Jira) with any email/token. Connect.
   Expected: "That address answered, but not like a Jira Cloud site — check the site address." — not a crash and not a generic 500.
-  Coverage: **Supported** — two guards: a non-JSON 200 sets `parseFailed`, and a JSON 200 with no `accountId` also returns `site_not_found`.
+  Coverage: **Gap worth flagging** — live execution disproved the "Supported" call below; corrected after JIRA-190 execution pass.
+  Result: FAIL — entering `example.com` also produced the raw "Jira returned 404." instead of "That address answered, but not like a Jira Cloud site — check the site address." Same root cause as JIRA-07: a generic 404 branch answers before the non-JSON/no-`accountId` guards this case was supposed to hit ever get evaluated.
 - **JIRA-09** — Editing a field clears the previous error
   Steps: Trigger a connect failure (JIRA-06). Then type one character into the token field.
   Expected: The red alert disappears immediately rather than sitting under a token the user has since corrected.
   Coverage: **Supported** — `handleFieldChange` calls `setConnectError(null)`.
+  Result: PASS — after a real invalid-credential rejection, appending one character to the token field cleared the red alert immediately.
 - **JIRA-10** — Connect form does not offer to remember the token
   Steps: Focus each of the three fields and check for browser autofill/save-password prompts. Complete a connect, then reopen the wizard.
   Expected: No autofill suggestions on any field; the token field is `type=password`; reopening the wizard shows empty fields, not a retained token.
   Coverage: **Supported** — all three fields set `autoComplete="off"`, the token field is `type="password"`, and `resetAll()` clears `credentials` on every close (and `handleConnectJira` clears the token on success).
+  Result: PASS — `getAttribute('autocomplete')` returns "off" on all three fields, token field is `type=password`, and fields were empty on a fresh reopen after several earlier successful connects.
 - **JIRA-11** — Confirm step shows real counts, not estimates
   Steps: After connecting, Continue to step 4.
   Expected: "N issues, M projects" reflect the actual JQL search that just ran for this account; "1 API call to load"; a Jira-tinted note stating Sprints/Docs/Workstreams don't appear here.
   Coverage: **Supported** — `connectJira()` calls `listMyJiraTickets()` before returning status, so `issueCount`/`projectCount` come from a real search.
+  Result: NOT TESTED — My Jira already exists as a project from earlier testing this session; re-entering step 4 and clicking "Create project" against an already-created singleton risks an unrecoverable duplicate sidebar entry with no clean undo. Deferred rather than risked.
 - **JIRA-12** — Finishing the wizard lands on My Jira with a sidebar entry
   Steps: Click "Create project" on step 4.
   Expected: Modal closes, app navigates to `/my-jira`, and a "My Jira" item with an issue-count badge appears in the sidebar.
   Coverage: **Supported** — `handleFinishCompanion()` navigates to `/my-jira`; `MyJiraNavItem` renders from the shared `jiraStore` once `connected` is true.
+  Result: NOT TESTED — same blocker as JIRA-11 (project already exists; re-running "Create project" is not safely repeatable).
 - **JIRA-13** — Disconnect removes the credential and the nav item live
   Steps: My Jira → Connection tab → Disconnect.
   Expected: Button shows "Disconnecting…", then the panel flips to a "Disconnected" badge with Refresh/Disconnect both disabled, and the sidebar "My Jira" item disappears without a reload.
   Coverage: **Supported** — `disconnectJira()` deletes the credential file outright (`deleteStoredJiraCredential`), then pushes the re-read status into `jiraStore`, which the sidebar subscribes to.
+  Result: PASS — panel flipped to "Disconnected", `Refresh now` and `Disconnect` are both actually `.disabled = true` (not just visually similar — checked the DOM property directly), and the sidebar "My Jira" nav item disappeared live with no reload.
 - **JIRA-14** — Disconnect has no confirmation step
   Steps: On the Connection tab, click Disconnect and observe whether anything asks first.
   Expected: One click destroys the stored token immediately — no confirm dialog, no "are you sure", no undo and no toast offering one. Reconnecting requires re-entering site, email and a freshly generated API token.
   Coverage: **Gap worth flagging** — `handleDisconnect` calls `disconnectJira()` immediately. Every comparably destructive action elsewhere in this app (delete doc, delete agent, delete saved view) has a confirm dialog; this one does not, and its cost — re-pasting an API token — is higher than most.
+  Result: PASS (behavior matches Expected exactly) — confirmed live: a single click destroyed the connection immediately, no dialog of any kind appeared. Reconnecting required the full site/email/token re-entry. The Coverage note's UX concern (no confirm on a costly action) stands as a real, separate product observation, not a case failure.
 - **JIRA-15** — Connecting a second Atlassian account
   Steps: With one account connected, reopen the wizard and try to connect a different Atlassian account (different email/token, same or different site).
   Expected: Document the real behavior — whether the second connection replaces the first, is refused, or coexists, and whether the user is warned before their existing connection is destroyed.
   Coverage: **Gap worth flagging** — `writeStoredJiraCredential()` unconditionally overwrites the single `jira-auth.json`, so a second connect silently replaces the first with no warning. Single-identity is a stated architecture decision, but the *silent overwrite* isn't disclosed anywhere, including in the Connection tab's "Not built yet — said plainly" list.
+  Result: NOT TESTED — needs a second real Atlassian account/API token, not available in this pass.
 - **JIRA-16** — Secure storage unavailable is refused before the token is transmitted
   Steps: On a system where Electron `safeStorage` is unavailable (or simulate it), attempt to connect.
   Expected: "Secure storage isn't available on this system, so an API token can't be saved safely here." — and no request is made to Atlassian at all.
   Coverage: **Supported** — `jiraIpc.ts` checks `isJiraSecureStorageAvailable()` *before* `validateCredential()`, explicitly so a token isn't sent to Atlassian just to be discarded. Hard to stage manually; worth a code-level or scripted check.
+  Result: NOT TESTED — would require disabling the OS keychain/`safeStorage` on this machine, not safely stageable in this pass. Coverage claim is code-verified, not live-verified.
 - **JIRA-17** — Jira Server / Data Center (self-hosted) instance
   Steps: On the connect form, enter a self-hosted Jira host (e.g. `jira.yourcompany.com`) with a valid Server PAT or password.
   Expected: Document the failure. The user should be able to tell that self-hosted Jira isn't supported, rather than concluding their credentials are wrong.
   Coverage: **Gap worth flagging** — every path is Jira Cloud only (`/rest/api/3/…`, Basic auth with an Atlassian API token), and a self-hosted host on a nonstandard port is rejected outright by `normalizeJiraSite`'s port ban. Nothing in the UI says "Cloud only", so a Data Center user gets `invalid_credentials` or `site_not_found` and no explanation.
+  Result: NOT TESTED — no real self-hosted Jira Server/Data Center instance available. A proxy attempt against a nonexistent host (`jira.somecompany.com`) only reproduced the genuine-DNS-failure path (correctly "That site doesn't exist…", confirming `classifyNetworkError()` handles real `ENOTFOUND` correctly) rather than the real scenario this case asks about — a self-hosted server that exists but isn't Cloud.
 - **JIRA-18** — Connection tab's "Not built yet" list matches reality
   Steps: Read the Connection tab's disclosure list. For each item (attachments upload, rich text, @mentions, background sync, Copilot proposals, issue creation) attempt the thing it disclaims.
   Expected: Every disclaimed item genuinely isn't offered anywhere in the UI — no half-enabled control that implies otherwise.
   Coverage: **Partial** — the six listed items are accurate, and the write banner above the list now states outright that everything but the workflow move and the comment is read-only (JIRA-19), which covers the third of the three omissions previously logged here. Still missing against the same "said plainly" standard: the single-account overwrite (JIRA-15) and the hard result cap (JIRA-31).
+  Result: PASS on the three checkable live — the comment composer is a bare `<textarea>` + one "Comment" submit button, no attach control, no formatting toolbar, and typing "@Sam"/"@Colleague Name" produced no picker/popover of any kind at any point. Background sync and issue creation were separately confirmed absent throughout this pass (no auto-refresh observed; no "New ticket" affordance in My Jira). Coverage's own noted gaps (JIRA-15, JIRA-31 omissions) still stand.
 - **JIRA-19** — Connection panel's write claim matches the writes that exist
   Steps: Read the blue banner on the Connection tab. Then, for every capability it names, try to perform it in My Jira; and separately try to change a ticket's priority anywhere in the view.
   Expected: The banner names exactly two writes — moving a ticket through its workflow, and posting a comment — and both work. It does not mention priority, and no priority control exists anywhere; the banner says outright that everything else about an issue is read-only here.
   Coverage: **Supported** — the banner used to read "moving, commenting, **changing priority**", which was a capability the build has never had: `jiraApi.ts`'s entire write surface is `transitionJiraTicket` and `postJiraComment`, and `PriorityIcon` in the row is display-only. The copy now lists those two and closes with the read-only statement, which also covers one of JIRA-18's three omissions. No priority write was added — that stays out of scope, and the claim was the defect, not the missing feature.
+  Result: PASS — the Connection tab's banner now reads "Your edits — moving a ticket through its workflow, and posting a comment — write straight to Jira... Those two are the whole set; everything else about an issue is read-only here." No mention of priority anywhere, and no priority control exists in the row/drawer.
 
 ### Viewing & filtering your own work
 
@@ -999,6 +1018,7 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: Open the drawer on a ticket with several Jira comments.
   Expected: All comments render with the correct author name, relative timestamp and body, in creation order.
   Coverage: **Supported** — `listComments` uses the v2 API with `orderBy: created`; `mapComment` reads a plain-string body.
+  Result: PASS — opened ENG-81 (initially "No comments yet"), posted two real comments, both rendered with correct author "Amaan Nawab", "just now" timestamp, and correct body text, in creation order.
 - **JIRA-86** — A ticket with more than 100 comments
   Steps: Open a drawer on a long-running ticket with over 100 comments. Compare the last comment shown against the newest comment in Jira.
   Expected: Either all comments load, or there's a "load more" and a clear indication of truncation.
@@ -1015,18 +1035,22 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: In the drawer's composer, type a comment and click Comment.
   Expected: Button shows "Posting…", the comment appears at the bottom of the thread attributed to the connected account, and the same comment is visible in real Jira attributed to that person (not a service account).
   Coverage: **Supported** — `postJiraComment` → v2 POST as the connected user; the composer footer reads "Posts to Jira as {display name} · plain text".
+  Result: PASS — posted two real comments to ENG-81; both appeared in the drawer attributed to "Amaan Nawab" — the real connected account, not a service account.
 - **JIRA-90** — The composer says who it posts as
   Steps: Read the composer footer.
   Expected: The connected Atlassian account's real display name, not a placeholder or a fixture name.
   Coverage: **Supported** — reads `connection?.accountName` from `jiraStore`, falling back to "you".
+  Result: PASS — footer read "Posts to Jira as Amaan Nawab · plain text", the real connected account's display name.
 - **JIRA-91** — Typing "@Name" does not notify anyone
   Steps: Post a comment containing "@Colleague Name". Check in Jira whether that person was notified or the text became a real mention.
   Expected: Eleven literal characters, no notification, and no UI in Waypoint implying otherwise.
   Coverage: **Supported (honest limitation)** — the mention picker was deliberately removed; the composer footer says "plain text" and the Connection tab spells out why. This case exists to confirm the honesty holds in practice — that no picker, autocomplete or styling reappears on typing "@".
+  Result: PASS — typed "@Colleague Name" into the composer; no picker/listbox/popover appeared at any point, and the posted comment rendered it back as plain literal text, not a styled mention.
 - **JIRA-92** — Comment button is disabled on empty/whitespace input
   Steps: Click into the composer, type only spaces, and look at the Comment button. Then type real text.
   Expected: Disabled until there's non-whitespace content.
   Coverage: **Supported** — `disabled={!draft.trim() || posting}`, and `jiraIpc.ts` also rejects an empty body with "Write something first."
+  Result: PASS — three spaces in the composer left the Comment button's `.disabled` true; real text enabled it.
 - **JIRA-93** — Very long comment
   Steps: Paste a several-thousand-character comment and post it.
   Expected: Either posts intact or fails with Jira's own message; no truncation without warning, no crash.
@@ -1035,6 +1059,7 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
   Steps: Post a comment with several paragraphs and line breaks. Read it back.
   Expected: Line breaks preserved.
   Coverage: **Supported** — the comment body renders with `whitespace-pre-wrap`, as the description now does too (JIRA-100).
+  Result: PASS — posted a comment with a line break and a blank-line paragraph break; the rendered element's `innerHTML` preserved both real newlines and computed `white-space: pre-wrap` was confirmed on the element.
 - **JIRA-95** — Edit your own comment
   Steps: Find a comment you posted. Look for an edit affordance.
   Expected: No edit control appears on any comment, including your own — not inline, not on hover, not in a menu. Correcting a posted comment is only possible in Jira.
