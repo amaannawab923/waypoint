@@ -10,7 +10,11 @@ import {
   listDraftTickets,
   detectLocalClaudeCode,
 } from '@/data/api';
-import { setProjects, upsertProjects, useAllProjects } from '@/lib/projectsStore';
+import {
+  setProjects,
+  upsertProjects,
+  useAllProjects,
+} from '@/lib/projectsStore';
 import { useLoadedJiraConnection } from '@/lib/jiraStore';
 import { MY_JIRA_ENABLED } from '@/lib/featureFlags';
 import type { Project } from '@/types/entities';
@@ -78,18 +82,24 @@ function AddMenu({ project }: { project: Project }) {
   useEffect(() => {
     if (!open) return;
     function onDown(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      if (ref.current && !ref.current.contains(e.target as Node))
+        setOpen(false);
     }
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
   }, [open]);
 
   const options: { label: string; to: string }[] = [];
-  if (project.primitiveCounts.sprints === 0) options.push({ label: 'New sprint', to: 'sprints' });
-  if (project.primitiveCounts.workstreams === 0) options.push({ label: 'New workstream', to: 'workstreams' });
-  if (project.primitiveCounts.views === 0) options.push({ label: 'New view', to: 'views' });
-  if (project.primitiveCounts.docs === 0) options.push({ label: 'New doc', to: 'docs' });
-  if (!project.acceptsRequests) options.push({ label: 'Enable requests', to: 'settings/general' });
+  if (project.primitiveCounts.sprints === 0)
+    options.push({ label: 'New sprint', to: 'sprints' });
+  if (project.primitiveCounts.workstreams === 0)
+    options.push({ label: 'New workstream', to: 'workstreams' });
+  if (project.primitiveCounts.views === 0)
+    options.push({ label: 'New view', to: 'views' });
+  if (project.primitiveCounts.docs === 0)
+    options.push({ label: 'New doc', to: 'docs' });
+  if (!project.acceptsRequests)
+    options.push({ label: 'Enable requests', to: 'settings/general' });
 
   if (options.length === 0) return null;
 
@@ -126,9 +136,12 @@ function AddMenu({ project }: { project: Project }) {
 
 function ProjectRow({ project }: { project: Project }) {
   const navigate = useNavigate();
-  const subNav: { to: string; label: string; icon: typeof IconList; count?: number }[] = [
-    { to: 'tickets', label: 'Tickets', icon: IconList },
-  ];
+  const subNav: {
+    to: string;
+    label: string;
+    icon: typeof IconList;
+    count?: number;
+  }[] = [{ to: 'tickets', label: 'Tickets', icon: IconList }];
   // Nav presence is derived from whether the primitive actually has rows,
   // not a stored feature flag (docs/design/waypoint-revamp-architecture.md
   // §3.4) — a project with zero sprint rows shows no Sprints entry even if
@@ -137,24 +150,35 @@ function ProjectRow({ project }: { project: Project }) {
   // owner has turned on the request form, even before the first submission
   // arrives, since a project can accept requests before it has any.
   const { primitiveCounts } = project;
-  if (primitiveCounts.sprints > 0) subNav.push({ to: 'sprints', label: 'Sprints', icon: IconRefresh });
-  if (primitiveCounts.workstreams > 0) subNav.push({ to: 'workstreams', label: 'Workstreams', icon: IconTrack });
-  if (primitiveCounts.views > 0) subNav.push({ to: 'views', label: 'Views', icon: IconEye });
+  if (primitiveCounts.sprints > 0)
+    subNav.push({ to: 'sprints', label: 'Sprints', icon: IconRefresh });
+  if (primitiveCounts.workstreams > 0)
+    subNav.push({ to: 'workstreams', label: 'Workstreams', icon: IconTrack });
+  if (primitiveCounts.views > 0)
+    subNav.push({ to: 'views', label: 'Views', icon: IconEye });
   if (project.acceptsRequests || primitiveCounts.requests > 0) {
     // The badge counts only pending (actionable) requests — the same
     // "actionable, not historical total" rule Review's and Notifications'
     // badges already follow above — while the nav item itself still shows
     // based on the total (primitiveCounts.requests), so a project with only
     // resolved requests in its history doesn't lose its Requests entry.
-    subNav.push({ to: 'requests', label: 'Requests', icon: IconInbox, count: primitiveCounts.requestsPending });
+    subNav.push({
+      to: 'requests',
+      label: 'Requests',
+      icon: IconInbox,
+      count: primitiveCounts.requestsPending,
+    });
   }
-  if (primitiveCounts.docs > 0) subNav.push({ to: 'docs', label: 'Docs', icon: IconFile });
+  if (primitiveCounts.docs > 0)
+    subNav.push({ to: 'docs', label: 'Docs', icon: IconFile });
 
   return (
     <div className="flex flex-col gap-0.5">
       <div className="group flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] px-1.5 text-sm text-text hover:bg-surface-2">
         <span className="shrink-0 text-sm">{project.icon}</span>
-        <span className="min-w-0 flex-1 truncate font-medium">{project.name}</span>
+        <span className="min-w-0 flex-1 truncate font-medium">
+          {project.name}
+        </span>
         <button
           type="button"
           onClick={() => navigate(`/projects/${project.id}/settings/general`)}
@@ -171,7 +195,9 @@ function ProjectRow({ project }: { project: Project }) {
         onClick={() => navigate(`/projects/${project.id}/settings/codebase`)}
         className={clsx(
           'ml-1.5 flex h-6 items-center gap-1.5 truncate rounded-[var(--radius-sm)] px-1.5 text-left text-[11.5px] transition-colors hover:bg-surface-2',
-          project.repoPath ? 'text-text-muted hover:text-text-secondary' : 'text-text-muted italic',
+          project.repoPath
+            ? 'text-text-muted hover:text-text-secondary'
+            : 'text-text-muted italic',
         )}
         title={project.repoPath ?? 'Link a repo'}
       >
@@ -181,7 +207,11 @@ function ProjectRow({ project }: { project: Project }) {
 
       <div className="ml-1.5 flex flex-col gap-0.5 border-l border-border pl-2">
         {subNav.map((item) => (
-          <NavLink key={item.to} to={`/projects/${project.id}/${item.to}`} className={navLinkClass}>
+          <NavLink
+            key={item.to}
+            to={`/projects/${project.id}/${item.to}`}
+            className={navLinkClass}
+          >
             <item.icon size={14} className="shrink-0" />
             <span className="truncate">{item.label}</span>
             {item.count !== undefined && <CountBadge count={item.count} />}
@@ -232,7 +262,8 @@ function LocalStatusStrip() {
     >
       <span className="size-1.5 shrink-0 rounded-full bg-success" />
       <span className="min-w-0 flex-1 truncate text-left">
-        <b className="font-semibold text-text">Local</b> · {repoCount} repo{repoCount === 1 ? '' : 's'} ·{' '}
+        <b className="font-semibold text-text">Local</b> · {repoCount} repo
+        {repoCount === 1 ? '' : 's'} ·{' '}
         {claudeReady ? 'Claude ready' : 'Claude not detected'}
       </span>
       <IconChevronRight size={14} className="shrink-0 text-text-muted" />
@@ -266,13 +297,24 @@ export function Sidebar() {
     <aside className="thin-scroll flex h-full w-64 shrink-0 flex-col overflow-y-auto border-r border-border bg-bg-inset">
       <div className="flex items-center gap-2 px-4 py-4">
         <div className="flex size-6 shrink-0 items-center justify-center rounded-md bg-accent bg-[image:var(--accent-gradient)] text-on-accent shadow-sm">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
             <circle cx="12" cy="12" r="9" />
             <polygon points="16,8 13,13 8,16 11,11" />
           </svg>
         </div>
         {workspace ? (
-          <span className="truncate font-display text-sm font-semibold tracking-tight">{workspace.name}</span>
+          <span className="truncate font-display text-sm font-semibold tracking-tight">
+            {workspace.name}
+          </span>
         ) : (
           <span className="h-3.5 w-20 animate-pulse rounded bg-surface-2" />
         )}
@@ -323,7 +365,9 @@ export function Sidebar() {
       <div className="mx-2 my-3 border-t border-border" />
 
       <div className="flex items-center justify-between px-4">
-        <span className="text-[10.5px] font-semibold tracking-wide text-text-muted uppercase">Projects</span>
+        <span className="text-[10.5px] font-semibold tracking-wide text-text-muted uppercase">
+          Projects
+        </span>
         <button
           type="button"
           onClick={() => setCreateOpen(true)}
@@ -349,7 +393,9 @@ export function Sidebar() {
       </div>
 
       <div className="mt-2 flex flex-col gap-3 px-2">
-        {projects?.map((p) => <ProjectRow key={p.id} project={p} />)}
+        {projects?.map((p) => (
+          <ProjectRow key={p.id} project={p} />
+        ))}
       </div>
 
       <div className="mt-1 flex flex-col gap-0.5 px-2">
