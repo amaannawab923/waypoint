@@ -12,6 +12,7 @@ import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom';
 import { AppShell } from '@/layouts/AppShell';
 import { ProjectLayout } from '@/layouts/ProjectLayout';
 import { isOnboarded } from '@/lib/onboarding';
+import { MY_JIRA_ENABLED } from '@/lib/featureFlags';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 
 import Login from '@/pages/auth/Login';
@@ -29,6 +30,7 @@ import AnalyticsPage from '@/pages/AnalyticsPage';
 import ReviewPage from '@/pages/ReviewPage';
 import MachinePage from '@/pages/MachinePage';
 import AllTicketsPage from '@/pages/AllTicketsPage';
+import MyJiraPage from '@/pages/jira/MyJiraPage';
 
 import TicketsLayout from '@/pages/tickets/TicketsLayout';
 import TicketDetailPage from '@/pages/tickets/TicketDetailPage';
@@ -115,6 +117,16 @@ export const router = createBrowserRouter([
               { path: '/review', element: <ReviewPage /> },
               { path: '/machine', element: <MachinePage /> },
               { path: '/views', element: <AllTicketsPage /> },
+              // Gated at the route level, not inside the page component
+              // itself, so MY_JIRA_ENABLED (a build-time constant — see
+              // lib/featureFlags.ts) never has to be checked after any
+              // hooks have already run. A direct hit on the URL with the
+              // flag off — a stale bookmark, a build with it disabled —
+              // bounces home instead of rendering the page.
+              {
+                path: '/my-jira',
+                element: MY_JIRA_ENABLED ? <MyJiraPage /> : <Navigate to="/" replace />,
+              },
 
               {
                 path: '/projects/:projectId',
