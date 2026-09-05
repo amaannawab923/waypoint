@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { listJiraComments } from '@/data/jiraApi';
 import { useAsync } from '@/lib/useAsync';
+import { useJiraConnection } from '@/lib/jiraStore';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { IconX } from '@/components/icons';
 import { JiraCommentComposer } from '@/components/domain/JiraCommentComposer';
-import { JIRA_PROJECT_COLOR } from '@/types/jira';
+import { jiraProjectColor } from '@/types/jira';
 import type { JiraComment, JiraTicket } from '@/types/jira';
 
 function formatRelativeTime(iso: string): string {
@@ -38,6 +39,7 @@ export function JiraTicketDrawer({
 }) {
   const [visible, setVisible] = useState(false);
   const [comments, setComments] = useState<JiraComment[]>([]);
+  const connection = useJiraConnection();
 
   const { data: fetchedComments } = useAsync(
     () => listJiraComments(ticket.id),
@@ -60,7 +62,15 @@ export function JiraTicketDrawer({
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const projectColor = JIRA_PROJECT_COLOR[ticket.projectKey];
+  const projectColor = jiraProjectColor(ticket.projectKey);
+  // Now that a real site is connected, the canonical Jira URL for an issue is
+  // just its key under that site — so the header's "Open in Jira" stops being
+  // a disabled "not wired up yet" and becomes a real link. main.ts's window
+  // open handler is what turns target="_blank" into the user's own browser
+  // (https only, opened externally), so this never navigates the app window.
+  const jiraUrl = connection?.site
+    ? `https://${connection.site}/browse/${ticket.key}`
+    : null;
 
   return createPortal(
     <div className="fixed inset-0 z-50 bg-black/40" onClick={onClose}>
@@ -83,15 +93,26 @@ export function JiraTicketDrawer({
             />
             {ticket.stateName}
           </span>
-          <Button
-            variant="ghost"
-            size="xs"
-            className="ml-auto"
-            disabled
-            title="Opening a ticket in Jira isn't wired up yet."
-          >
-            Open in Jira ↗
-          </Button>
+          {jiraUrl ? (
+            <a
+              href={jiraUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="ml-auto shrink-0 rounded px-2 py-1 text-xs font-semibold text-text-secondary hover:bg-surface-2 hover:text-text"
+            >
+              Open in Jira ↗
+            </a>
+          ) : (
+            <Button
+              variant="ghost"
+              size="xs"
+              className="ml-auto"
+              disabled
+              title="No Jira site is connected."
+            >
+              Open in Jira ↗
+            </Button>
+          )}
           <button
             type="button"
             aria-label="Close"
