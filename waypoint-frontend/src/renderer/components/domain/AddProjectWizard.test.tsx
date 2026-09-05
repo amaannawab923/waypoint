@@ -24,10 +24,13 @@ jest.mock('react-router-dom', () => ({
 // flow — this file's job is only to prove the wizard delegates to it (and
 // with which props), not to re-test CreateProjectModal's own behavior.
 jest.mock('@/components/domain/CreateProjectModal', () => ({
-  CreateProjectModal: ({ open }: { open: boolean }) => (open ? <div data-testid="create-project-modal" /> : null),
+  CreateProjectModal: ({ open }: { open: boolean }) =>
+    open ? <div data-testid="create-project-modal" /> : null,
 }));
 
-function status(overrides: Partial<JiraConnectionStatus> = {}): JiraConnectionStatus {
+function status(
+  overrides: Partial<JiraConnectionStatus> = {},
+): JiraConnectionStatus {
   return {
     connected: true,
     accountName: 'Max Chen',
@@ -92,9 +95,10 @@ describe('AddProjectWizard — type picker (step 1)', () => {
 
     expect(screen.getByTestId('create-project-modal')).toBeInTheDocument();
     expect(screen.queryByText('Companion project')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Continue' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Continue' }),
+    ).not.toBeInTheDocument();
   });
-
 });
 
 describe('AddProjectWizard — Companion flow', () => {
@@ -120,7 +124,9 @@ describe('AddProjectWizard — Companion flow', () => {
 
     expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Connect Jira account' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Connect Jira account' }),
+    );
 
     await waitFor(() => expect(connectJira).toHaveBeenCalledTimes(1));
     await screen.findByText('Connected');
@@ -129,7 +135,9 @@ describe('AddProjectWizard — Companion flow', () => {
   });
 
   it('reaches the confirm step showing the chosen site and live counts', async () => {
-    jest.mocked(connectJira).mockResolvedValue(status({ issueCount: 6, projectCount: 3 }));
+    jest
+      .mocked(connectJira)
+      .mockResolvedValue(status({ issueCount: 6, projectCount: 3 }));
     renderWizard();
     await advanceToSiteStep();
 
@@ -137,8 +145,12 @@ describe('AddProjectWizard — Companion flow', () => {
     fireEvent.click(screen.getByText('northwind-labs.atlassian.net'));
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
 
-    expect(screen.getByText(/northwind-labs\.atlassian\.net/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Create project' })).toBeEnabled();
+    expect(
+      screen.getByText(/northwind-labs\.atlassian\.net/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Create project' }),
+    ).toBeEnabled();
   });
 
   it('finishing does not call connectJira a second time, closes the wizard, and navigates to /my-jira', async () => {
