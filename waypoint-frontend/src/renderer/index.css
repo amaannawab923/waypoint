@@ -32,6 +32,18 @@
   --info: #1c5fc4;
   --info-bg: #eaf1fd;
 
+  /* My Jira companion project (src/renderer/types/jira.ts) — the Jira brand
+     mark/callouts, plus one identity color per mock Jira project so the
+     cross-project ticket list's key prefix (e.g. "ENG-421") and left border
+     read as a color-coded signal, same role the mockup's own --p-* tokens
+     play. Picked close to the mockup's own values, nudged to sit on this
+     app's near-monochrome palette instead of its more saturated one. */
+  --jira: #0052cc;
+  --jira-bg: #eaf1fd;
+  --p-eng: #3d5ccc;
+  --p-plat: #0e8c7e;
+  --p-grw: #a15a1f;
+
   --shadow-color: 240 8% 8%;
   --radius-sm: 6px;
   --radius: 10px;
@@ -74,6 +86,15 @@
   --info: #5b93e6;
   --info-bg: #101f33;
 
+  /* My Jira companion project — dark-mode identity colors, lifted for
+     contrast against the near-black canvas the same way --accent etc. are
+     above. See the light-theme block for what these drive. */
+  --jira: #6e9bf4;
+  --jira-bg: #1c2740;
+  --p-eng: #8b98f0;
+  --p-plat: #48c2af;
+  --p-grw: #e0a166;
+
   color-scheme: dark;
 }
 
@@ -106,6 +127,9 @@
   --color-danger-bg: var(--danger-bg);
   --color-info: var(--info);
   --color-info-bg: var(--info-bg);
+
+  --color-jira: var(--jira);
+  --color-jira-bg: var(--jira-bg);
 }
 
 * {
