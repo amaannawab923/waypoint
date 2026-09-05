@@ -28,6 +28,12 @@ jest.mock('@/components/domain/CreateProjectModal', () => ({
     open ? <div data-testid="create-project-modal" /> : null,
 }));
 
+const CREDENTIALS = {
+  site: 'waypoint123.atlassian.net',
+  email: 'max@northwind.dev',
+  apiToken: 'ATATT3xFfGF0-not-a-real-token',
+};
+
 function status(
   overrides: Partial<JiraConnectionStatus> = {},
 ): JiraConnectionStatus {
@@ -35,12 +41,10 @@ function status(
     connected: true,
     accountName: 'Max Chen',
     accountEmail: 'max@northwind.dev',
-    site: 'northwind.atlassian.net',
+    site: 'waypoint123.atlassian.net',
     lastSyncAt: '2026-01-01T00:00:00.000Z',
     issueCount: 6,
     projectCount: 3,
-    pollIntervalSec: 15,
-    paused: false,
     ...overrides,
   };
 }
@@ -60,17 +64,24 @@ function renderWizard({
   };
 }
 
-/** Drives the wizard from the type picker through Companion's connect step,
- * leaving it sitting on step 4 (site picker) with Jira already connected. */
-async function advanceToSiteStep() {
+function fillConnectForm(overrides: Partial<typeof CREDENTIALS> = {}) {
+  const values = { ...CREDENTIALS, ...overrides };
+  fireEvent.change(screen.getByLabelText('Jira site'), {
+    target: { value: values.site },
+  });
+  fireEvent.change(screen.getByLabelText('Atlassian account email'), {
+    target: { value: values.email },
+  });
+  fireEvent.change(screen.getByLabelText('API token'), {
+    target: { value: values.apiToken },
+  });
+}
+
+/** Drives the wizard from the type picker to the connect step. */
+function advanceToConnectStep() {
   fireEvent.click(screen.getByText('Companion project'));
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-
   fireEvent.click(screen.getByText('Jira'));
-  fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-
-  fireEvent.click(screen.getByRole('button', { name: 'Connect Jira account' }));
-  await screen.findByText('Connected');
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
 }
 
@@ -113,62 +124,165 @@ describe('AddProjectWizard — Companion flow', () => {
     fireEvent.click(screen.getByText('Jira'));
     expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled();
   });
+});
 
-  it('gates the connect step on an actual connectJira() call, and pushes the result into jiraStore', async () => {
+describe('AddProjectWizard — the connect step', () => {
+  it('asks for a site, an email and a token, and cannot be submitted until it has all three', () => {
+    renderWizard();
+    advanceToConnectStep();
+
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled();
+
+    fillConnectForm({ apiToken: '' });
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled();
+
+    fillConnectForm();
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled();
+  });
+
+  // The token is a live bearer credential for the whole Jira account; it has
+  // no business being readable over someone's shoulder.
+  it('masks the API token field', () => {
+    renderWizard();
+    advanceToConnectStep();
+
+    expect(screen.getByLabelText('API token')).toHaveAttribute(
+      'type',
+      'password',
+    );
+  });
+
+  it('passes exactly what was typed to connectJira, and shows the identity Jira answered with', async () => {
     jest.mocked(connectJira).mockResolvedValue(status());
     renderWizard();
-    fireEvent.click(screen.getByText('Companion project'));
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getByText('Jira'));
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    advanceToConnectStep();
+    fillConnectForm();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+
+    await waitFor(() => expect(connectJira).toHaveBeenCalledWith(CREDENTIALS));
+    await screen.findByText('Connected');
+    expect(screen.getByText('Max Chen')).toBeInTheDocument();
+    expect(setJiraConnection).toHaveBeenCalledWith(status());
+  });
+
+  it('blocks Continue until a connection has actually been made', async () => {
+    jest.mocked(connectJira).mockResolvedValue(status());
+    renderWizard();
+    advanceToConnectStep();
 
     expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
 
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Connect Jira account' }),
-    );
-
-    await waitFor(() => expect(connectJira).toHaveBeenCalledTimes(1));
+    fillConnectForm();
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
     await screen.findByText('Connected');
-    expect(setJiraConnection).toHaveBeenCalledWith(status());
+
     expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled();
   });
 
-  it('reaches the confirm step showing the chosen site and live counts', async () => {
+  // Main distinguishes "Jira rejected these credentials" from "we never
+  // reached Jira" from "that address isn't a Jira site" — that specificity is
+  // only worth having if it reaches the person who has to act on it, so the
+  // message is shown inline on the form rather than flashed as a toast.
+  it.each([
+    ['Jira rejected that email and API token.'],
+    ["That site doesn't exist — check the address."],
+    ['That address answered, but not like a Jira Cloud site.'],
+  ])(
+    'shows %j inline on the form, and stays on the connect step',
+    async (message) => {
+      jest.mocked(connectJira).mockRejectedValue(new Error(message));
+      renderWizard();
+      advanceToConnectStep();
+      fillConnectForm();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(message);
+      expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+      expect(screen.queryByText('Connected')).not.toBeInTheDocument();
+    },
+  );
+
+  it('clears a previous failure as soon as a field is edited', async () => {
     jest
       .mocked(connectJira)
-      .mockResolvedValue(status({ issueCount: 6, projectCount: 3 }));
+      .mockRejectedValue(new Error('Jira rejected that.'));
     renderWizard();
-    await advanceToSiteStep();
+    advanceToConnectStep();
+    fillConnectForm();
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    await screen.findByRole('alert');
 
-    expect(screen.getByText('northwind.atlassian.net')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('northwind-labs.atlassian.net'));
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.change(screen.getByLabelText('API token'), {
+      target: { value: 'a-corrected-token' },
+    });
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  // OAuth is a real and better answer for an organizational install, but it
+  // is not built. A second button that started a flow which doesn't exist is
+  // exactly what this app's honesty rules exist to prevent.
+  it('offers no OAuth alternative, stubbed or otherwise', () => {
+    renderWizard();
+    advanceToConnectStep();
 
     expect(
-      screen.getByText(/northwind-labs\.atlassian\.net/),
-    ).toBeInTheDocument();
+      screen.queryByRole('button', { name: /atlassian|oauth|sign in/i }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe('AddProjectWizard — confirm and finish', () => {
+  async function advanceToConfirmStep() {
+    jest.mocked(connectJira).mockResolvedValue(status());
+    advanceToConnectStep();
+    fillConnectForm();
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    await screen.findByText('Connected');
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+  }
+
+  // There is no site-picker step any more: a personal API token
+  // authenticates one person against one site, and that site was typed on the
+  // connect form. Asking again afterwards would imply something had
+  // enumerated the account's sites, which nothing did.
+  it('goes straight from connect to review, with no site picker in between', async () => {
+    renderWizard();
+    await advanceToConfirmStep();
+
+    expect(screen.queryByText(/Atlassian site/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Review & create')).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: 'Create project' }),
     ).toBeEnabled();
   });
 
-  it('finishing does not call connectJira a second time, closes the wizard, and navigates to /my-jira', async () => {
-    jest.mocked(connectJira).mockResolvedValue(status());
+  it('shows the real counts the connection came back with', async () => {
+    renderWizard();
+    await advanceToConfirmStep();
+
+    expect(screen.getByText('6')).toBeInTheDocument();
+    expect(screen.getByText(/issues, 3 projects/)).toBeInTheDocument();
+    expect(screen.getByText(/waypoint123\.atlassian\.net/)).toBeInTheDocument();
+  });
+
+  it('finishing re-reads the status, closes the wizard and navigates to /my-jira', async () => {
     jest.mocked(getJiraConnectionStatus).mockResolvedValue(status());
     const { onClose } = renderWizard();
-    await advanceToSiteStep();
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await advanceToConfirmStep();
 
     fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
 
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    // Never a second connect attempt — the credential is already stored.
     expect(connectJira).toHaveBeenCalledTimes(1);
     expect(getJiraConnectionStatus).toHaveBeenCalledTimes(1);
     expect(navigateSpy).toHaveBeenCalledWith('/my-jira');
   });
 
-  it('Back returns to the previous step without losing the chosen type/provider', async () => {
+  it('Back returns to the previous step without losing the chosen type/provider', () => {
     renderWizard();
     fireEvent.click(screen.getByText('Companion project'));
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
