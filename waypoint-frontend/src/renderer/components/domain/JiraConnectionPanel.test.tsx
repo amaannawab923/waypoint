@@ -1,6 +1,11 @@
 import '@testing-library/jest-dom';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { disconnectJira, getJiraConnectionStatus, refreshJiraSync, setJiraSyncPaused } from '@/data/jiraApi';
+import {
+  disconnectJira,
+  getJiraConnectionStatus,
+  refreshJiraSync,
+  setJiraSyncPaused,
+} from '@/data/jiraApi';
 import { setJiraConnection } from '@/lib/jiraStore';
 import type { JiraConnectionStatus } from '@/types/jira';
 import { JiraConnectionPanel } from './JiraConnectionPanel';
@@ -13,7 +18,9 @@ jest.mock('@/data/jiraApi', () => ({
 }));
 jest.mock('@/lib/jiraStore', () => ({ setJiraConnection: jest.fn() }));
 
-function status(overrides: Partial<JiraConnectionStatus> = {}): JiraConnectionStatus {
+function status(
+  overrides: Partial<JiraConnectionStatus> = {},
+): JiraConnectionStatus {
   return {
     connected: true,
     accountName: 'Max Chen',
@@ -37,7 +44,9 @@ describe('JiraConnectionPanel', () => {
     render(<JiraConnectionPanel connection={status()} />);
 
     expect(screen.getByText('Max Chen')).toBeInTheDocument();
-    expect(screen.getByText('max@northwind.dev · northwind.atlassian.net')).toBeInTheDocument();
+    expect(
+      screen.getByText('max@northwind.dev · northwind.atlassian.net'),
+    ).toBeInTheDocument();
     expect(screen.getByText('6')).toBeInTheDocument();
     expect(screen.getByText('3')).toBeInTheDocument();
     expect(screen.getByText('15s')).toBeInTheDocument();
@@ -51,12 +60,16 @@ describe('JiraConnectionPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Refresh now' }));
 
-    await waitFor(() => expect(setJiraConnection).toHaveBeenCalledWith(refreshed));
+    await waitFor(() =>
+      expect(setJiraConnection).toHaveBeenCalledWith(refreshed),
+    );
   });
 
   it('Pause sync calls setJiraSyncPaused(true) and Resume sync calls it with false', async () => {
     jest.mocked(setJiraSyncPaused).mockResolvedValue(status({ paused: true }));
-    const { rerender } = render(<JiraConnectionPanel connection={status({ paused: false })} />);
+    const { rerender } = render(
+      <JiraConnectionPanel connection={status({ paused: false })} />,
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Pause sync' }));
     await waitFor(() => expect(setJiraSyncPaused).toHaveBeenCalledWith(true));
@@ -69,14 +82,18 @@ describe('JiraConnectionPanel', () => {
 
   it('Disconnect genuinely calls disconnectJira and pushes the re-read status into jiraStore', async () => {
     jest.mocked(disconnectJira).mockResolvedValue(undefined);
-    jest.mocked(getJiraConnectionStatus).mockResolvedValue(status({ connected: false }));
+    jest
+      .mocked(getJiraConnectionStatus)
+      .mockResolvedValue(status({ connected: false }));
     render(<JiraConnectionPanel connection={status()} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
 
     await waitFor(() => expect(disconnectJira).toHaveBeenCalledTimes(1));
     await waitFor(() =>
-      expect(setJiraConnection).toHaveBeenCalledWith(expect.objectContaining({ connected: false })),
+      expect(setJiraConnection).toHaveBeenCalledWith(
+        expect.objectContaining({ connected: false }),
+      ),
     );
   });
 
