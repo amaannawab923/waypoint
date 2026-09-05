@@ -3,7 +3,10 @@ import { getJiraTransitions, transitionJiraTicket } from '@/data/jiraApi';
 import { showErrorToast } from '@/lib/toast';
 import { Avatar } from '@/components/ui/Avatar';
 import { PriorityIcon } from '@/components/domain/PriorityIcon';
-import { JiraStateChip, JiraTransitionPopover } from '@/components/domain/JiraTransitionPopover';
+import {
+  JiraStateChip,
+  JiraTransitionPopover,
+} from '@/components/domain/JiraTransitionPopover';
 import { JIRA_PROJECT_COLOR } from '@/types/jira';
 import type { JiraTicket, JiraTransition } from '@/types/jira';
 
@@ -56,14 +59,25 @@ export function JiraTicketRow({
     };
   }, [popoverOpen, ticket.id]);
 
-  async function handleSelectTransition(transition: JiraTransition, fieldValues: Record<string, string>) {
+  async function handleSelectTransition(
+    transition: JiraTransition,
+    fieldValues: Record<string, string>,
+  ) {
     setPopoverOpen(false);
     setSaving(true);
     try {
-      const updated = await transitionJiraTicket(ticket.id, transition.id, fieldValues);
+      const updated = await transitionJiraTicket(
+        ticket.id,
+        transition.id,
+        fieldValues,
+      );
       onTicketUpdated(updated);
     } catch (err) {
-      showErrorToast(err instanceof Error ? err.message : 'Could not move this ticket in Jira.');
+      showErrorToast(
+        err instanceof Error
+          ? err.message
+          : 'Could not move this ticket in Jira.',
+      );
     } finally {
       setSaving(false);
     }
@@ -94,9 +108,11 @@ export function JiraTicketRow({
       <div className="border-b border-border last:border-b-0">
         <div className="flex flex-wrap items-center gap-2 border-b border-border bg-surface-2 px-3.5 py-2 text-[11.5px] text-text-secondary">
           <span>
-            <b className="text-text">Reassigned to {ticket.tombstone?.reassignedTo}</b>{' '}
-            {relativeMinutesLabel(ticket.tombstone?.reassignedAt)} — no longer yours. Kept here for 24 hours so it
-            doesn't vanish mid-thought.
+            <b className="text-text">
+              Reassigned to {ticket.tombstone?.reassignedTo}
+            </b>{' '}
+            {relativeMinutesLabel(ticket.tombstone?.reassignedAt)} — no longer
+            yours. Kept here for 24 hours so it doesn't vanish mid-thought.
           </span>
           <span className="ml-auto flex shrink-0 gap-3">
             <button
@@ -122,7 +138,8 @@ export function JiraTicketRow({
           style={{ borderLeft: '3px solid var(--border-strong)' }}
         >
           <span className="w-[76px] shrink-0 font-mono text-[11.5px] font-semibold text-text-muted">
-            <b className="font-bold">{ticket.projectKey}</b>-{ticket.key.split('-')[1]}
+            <b className="font-bold">{ticket.projectKey}</b>-
+            {ticket.key.split('-')[1]}
           </span>
           <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium text-text-muted line-through decoration-border-strong">
             {ticket.title}
@@ -130,7 +147,13 @@ export function JiraTicketRow({
           <span className="shrink-0 rounded bg-surface-3 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-text-muted uppercase">
             {roleLabel(ticket)}
           </span>
-          <JiraStateChip stateName={ticket.stateName} stateColor={ticket.stateColor} disabled disabledTitle="Not yours to move any more" onClick={() => {}} />
+          <JiraStateChip
+            stateName={ticket.stateName}
+            stateColor={ticket.stateColor}
+            disabled
+            disabledTitle="Not yours to move any more"
+            onClick={() => {}}
+          />
           <PriorityIcon priority={ticket.priority} />
           <Avatar name={ticket.assigneeName} size={22} />
         </div>
@@ -143,8 +166,9 @@ export function JiraTicketRow({
       {ticket.hasConflict && ticket.conflict && (
         <div className="flex items-center gap-2 border-b border-border bg-warning-bg px-3.5 py-1.5 text-[11.5px] text-warning">
           <span>
-            {ticket.conflict.changedBy} changed this in Jira {relativeSecondsLabel(ticket.conflict.changedAt)} —
-            your first conflict in 3 weeks.
+            {ticket.conflict.changedBy} changed this in Jira{' '}
+            {relativeSecondsLabel(ticket.conflict.changedAt)} — your first
+            conflict in 3 weeks.
           </span>
           <button
             type="button"
@@ -161,7 +185,8 @@ export function JiraTicketRow({
         style={{ borderLeft: `3px solid ${projectColor}` }}
       >
         <span className="w-[76px] shrink-0 font-mono text-[11.5px] font-semibold text-text-muted">
-          <b style={{ color: projectColor }}>{ticket.projectKey}</b>-{ticket.key.split('-')[1]}
+          <b style={{ color: projectColor }}>{ticket.projectKey}</b>-
+          {ticket.key.split('-')[1]}
         </span>
         <button
           type="button"
@@ -203,14 +228,20 @@ export function JiraTicketRow({
 
 function relativeSecondsLabel(iso?: string): string {
   if (!iso) return 'just now';
-  const secs = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  const secs = Math.max(
+    0,
+    Math.round((Date.now() - new Date(iso).getTime()) / 1000),
+  );
   if (secs < 60) return `${secs}s ago`;
   return `${Math.round(secs / 60)}m ago`;
 }
 
 function relativeMinutesLabel(iso?: string): string {
   if (!iso) return 'just now';
-  const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60_000));
+  const mins = Math.max(
+    0,
+    Math.round((Date.now() - new Date(iso).getTime()) / 60_000),
+  );
   if (mins < 1) return 'just now';
   if (mins < 60) return `${mins} minute${mins === 1 ? '' : 's'} ago`;
   return `${Math.round(mins / 60)}h ago`;
