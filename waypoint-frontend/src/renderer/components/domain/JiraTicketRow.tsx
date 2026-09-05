@@ -7,7 +7,7 @@ import {
   JiraStateChip,
   JiraTransitionPopover,
 } from '@/components/domain/JiraTransitionPopover';
-import { JIRA_PROJECT_COLOR } from '@/types/jira';
+import { jiraProjectColor } from '@/types/jira';
 import type { JiraTicket, JiraTransition } from '@/types/jira';
 
 function roleLabel(ticket: JiraTicket): string {
@@ -101,7 +101,7 @@ export function JiraTicketRow({
     }
   }
 
-  const projectColor = JIRA_PROJECT_COLOR[ticket.projectKey];
+  const projectColor = jiraProjectColor(ticket.projectKey);
 
   if (ticket.isTombstoned) {
     return (
