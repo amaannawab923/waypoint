@@ -5,6 +5,7 @@ import {
   mapIssue,
   mapPriorityOptions,
   mapTransitions,
+  mapUserOptions,
 } from './jiraMap';
 import type {
   JiraFailure,
@@ -14,6 +15,7 @@ import type {
   JiraWireComment,
   JiraWireTicket,
   JiraWireTransition,
+  JiraWireUser,
 } from './jiraTypes';
 
 // The Jira Cloud REST client. Runs only in the main process, holds the API
@@ -526,7 +528,112 @@ export async function setTicketPriority(
 }
 
 // -----------------------------------------------------------------------
-// 5. Comments
+// 5. Assignee
+// -----------------------------------------------------------------------
+
+// One picker's worth. The endpoint's own default is 50; asking for fewer keeps
+// a site with thousands of assignable users from turning one keystroke into a
+// large response, and a typeahead that needs more than 20 rows is a typeahead
+// the user should type another letter into.
+const ASSIGNABLE_PAGE_SIZE = 20;
+
+/**
+ * The people this issue can actually be assigned to, narrowed by what the user
+ * has typed.
+ *
+ * Per-issue, for the same reason `listPriorityOptions` reads the issue's own
+ * editmeta rather than the site-wide priority list: assignability is a
+ * project-level permission ("Assignable User"), so the set of people who can
+ * take ENG-421 is not the set who can take OPS-3, and a site-wide user search
+ * would happily offer someone Jira will then refuse.
+ *
+ * The `issueKey` parameter is the one place in this whole client that takes an
+ * issue KEY rather than the numeric id everything else holds. That is Jira's
+ * own parameter name and Jira's own contract on this endpoint — see the
+ * caller, which passes `ticket.key` deliberately.
+ *
+ * A blank query is a real, useful call, not a no-op: it is what the panel does
+ * on open, and Jira answers it with the first page of assignable users, which
+ * is exactly the "who could I hand this to" list a picker should start from.
+ *
+ * Both this and the write below can 403 on a site that restricts "Browse users
+ * and groups". That arrives here as `forbidden` through jiraFetch's existing
+ * classification and is returned as a failure rather than an empty array,
+ * which matters: an empty list renders as "nobody matches", and telling a user
+ * their colleague does not exist because their admin restricted a permission
+ * is a lie the picker would have no way to walk back.
+ */
+export async function searchAssignableUsers(
+  issueKey: string,
+  query: string,
+): Promise<JiraResult<JiraWireUser[]>> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+
+  const result = await jiraFetch<unknown>(credentialResult.value, {
+    method: 'GET',
+    path: '/rest/api/3/user/assignable/search',
+    query: {
+      issueKey,
+      query,
+      maxResults: String(ASSIGNABLE_PAGE_SIZE),
+    },
+  });
+  if (!result.ok) return result;
+
+  return { ok: true, value: mapUserOptions(result.value) };
+}
+
+/**
+ * Reassigns an issue, then re-reads it so the caller gets the state Jira
+ * actually landed on rather than the one the UI assumed.
+ *
+ * `accountId: null` is Jira's documented payload for "unassign", not a missing
+ * value — which is why it survives as a real `null` all the way from the
+ * picker's Unassign row through the IPC boundary to this body. (`"-1"` means
+ * "the project's default assignee" and is deliberately not offered: it is a
+ * third outcome the user did not ask for, and Jira's own tracker has it
+ * behaving inconsistently when addressed by account id.)
+ *
+ * The dedicated assignee endpoint, not the generic issue edit `PUT` that
+ * `setTicketPriority` uses. They need different permissions — Jira grants
+ * "Assign issues" separately from "Edit issues", specifically so a triager can
+ * hand work around without being able to rewrite it — and the generic endpoint
+ * additionally requires the assignee field to be on that issue type's edit
+ * screen, which is a configuration this app has no business insisting on.
+ *
+ * There is deliberately no pre-flight re-read here, unlike `setTicketPriority`
+ * and `transitionTicket`. Those two re-read live metadata because their
+ * payload has to be *resolved* against it — a priority id must be in
+ * allowedValues, a transition's field label must become an id — and a stale
+ * value would otherwise produce a bare 400 with nothing legible in it. An
+ * account id needs no resolving, and Jira's own answer when a user is not
+ * assignable ("User cannot be assigned issues.") is already a clear sentence
+ * that `messageFromErrorBody` surfaces verbatim. Spending a round trip to
+ * restate it would be ceremony, not defense.
+ */
+export async function setTicketAssignee(
+  ticketId: string,
+  accountId: string | null,
+): Promise<JiraResult<JiraWireTicket>> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+  const credential = credentialResult.value;
+
+  // Answers 204 with no body on success, so there is nothing here to map —
+  // the re-read below is what produces the ticket the caller gets.
+  const written = await jiraFetch<void>(credential, {
+    method: 'PUT',
+    path: `/rest/api/3/issue/${encodeURIComponent(ticketId)}/assignee`,
+    body: { accountId },
+  });
+  if (!written.ok) return written;
+
+  return getTicket(ticketId);
+}
+
+// -----------------------------------------------------------------------
+// 6. Comments
 // -----------------------------------------------------------------------
 
 // Reads go through v3, writes through v2 — a deliberate split, not an

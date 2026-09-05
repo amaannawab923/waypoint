@@ -17,6 +17,8 @@ const bridge = {
   transition: jest.fn(),
   listPriorityOptions: jest.fn(),
   setPriority: jest.fn(),
+  searchAssignableUsers: jest.fn(),
+  setAssignee: jest.fn(),
   listComments: jest.fn(),
   postComment: jest.fn(),
 };
@@ -309,6 +311,130 @@ describe('priority', () => {
     // Both rows still counted: the write patched one, it did not evict it.
     expect(await api.getJiraConnectionStatus()).toMatchObject({
       issueCount: 2,
+    });
+  });
+});
+
+describe('assignee', () => {
+  it('searches by the ticket KEY — the one call that does', async () => {
+    const api = freshApi();
+    bridge.searchAssignableUsers.mockResolvedValue({
+      ok: true,
+      value: [
+        { accountId: 'acct-sam', displayName: 'Sam Lee', avatarUrl: null },
+      ],
+    });
+
+    expect(await api.searchJiraAssignableUsers('ENG-421', 'sam')).toEqual([
+      { accountId: 'acct-sam', displayName: 'Sam Lee', avatarUrl: null },
+    ]);
+    expect(bridge.searchAssignableUsers).toHaveBeenCalledWith({
+      ticketKey: 'ENG-421',
+      query: 'sam',
+    });
+  });
+
+  /**
+   * The founder's decision, held by a test rather than by a comment.
+   *
+   * Reassigning away from yourself genuinely drops the issue out of the "my
+   * work" JQL — that query matches assignee OR reporter OR watcher, and this
+   * ticket is none of the three to you any more (its `role` comes back as
+   * 'none' to say so). The row still must not disappear from under the
+   * cursor: it stays until the next refresh re-runs the query.
+   *
+   * No special case produces that. `.map()` does — the cached row is patched
+   * with what Jira returned instead of being filtered out — which is why this
+   * test asserts the count is unchanged rather than asserting the absence of
+   * some "keep it visible" flag.
+   */
+  it('patches a ticket reassigned away from you rather than dropping it', async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue({
+      ok: true,
+      value: [wireTicket({ id: '10421' }), wireTicket({ id: '10999' })],
+    });
+    await api.listMyJiraTickets();
+    bridge.setAssignee.mockResolvedValue({
+      ok: true,
+      value: wireTicket({
+        id: '10421',
+        // No longer yours by any of the three roles the queue matches on.
+        role: 'none',
+        assigneeName: 'Sam Lee',
+        assigneeAccountId: 'acct-sam',
+      }),
+    });
+
+    const updated = await api.setJiraTicketAssignee('10421', 'acct-sam');
+
+    expect(bridge.setAssignee).toHaveBeenCalledWith({
+      ticketId: '10421',
+      accountId: 'acct-sam',
+    });
+    expect(updated).toMatchObject({
+      assigneeName: 'Sam Lee',
+      assigneeAccountId: 'acct-sam',
+      role: 'none',
+    });
+    // Both rows still counted: the write patched one in place, it did not
+    // evict it. This is the whole "stays visible until the next refresh".
+    expect(await api.getJiraConnectionStatus()).toMatchObject({
+      issueCount: 2,
+    });
+  });
+
+  // Unassign is a value the user chose, not an argument that went missing, and
+  // it has to survive as a literal null across the bridge — jiraIpc.ts checks
+  // for exactly this before any string coercion.
+  it('sends a literal null for unassign, and keeps the row', async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue({
+      ok: true,
+      value: [wireTicket({ id: '10421' })],
+    });
+    await api.listMyJiraTickets();
+    bridge.setAssignee.mockResolvedValue({
+      ok: true,
+      value: wireTicket({
+        id: '10421',
+        assigneeName: 'Unassigned',
+        assigneeAccountId: null,
+      }),
+    });
+
+    await api.setJiraTicketAssignee('10421', null);
+
+    expect(bridge.setAssignee).toHaveBeenCalledWith({
+      ticketId: '10421',
+      accountId: null,
+    });
+    expect(bridge.setAssignee.mock.calls[0][0].accountId).toBeNull();
+    expect(await api.getJiraConnectionStatus()).toMatchObject({
+      issueCount: 1,
+    });
+  });
+
+  // A rejected write must leave the cache exactly as it was — the list is not
+  // patched with a state Jira never reached.
+  it('leaves the cached row untouched when Jira rejects the write', async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue({
+      ok: true,
+      value: [wireTicket({ id: '10421', assigneeName: 'Max Chen' })],
+    });
+    await api.listMyJiraTickets();
+    bridge.setAssignee.mockResolvedValue({
+      ok: false,
+      reason: 'forbidden',
+      message: "Your Jira account isn't allowed to do that.",
+    });
+
+    await expect(
+      api.setJiraTicketAssignee('10421', 'acct-sam'),
+    ).rejects.toThrow("Your Jira account isn't allowed to do that.");
+    expect(await api.getJiraConnectionStatus()).toMatchObject({
+      issueCount: 1,
     });
   });
 });

@@ -17,6 +17,7 @@ import type {
   JiraWireComment,
   JiraWireTicket,
   JiraWireTransition,
+  JiraWireUser,
 } from './jiraTypes';
 
 // Every `jira:*` channel, in one place. Request/response (`ipcMain.handle`)
@@ -213,6 +214,52 @@ export function registerJiraIpc(): void {
       if (!priorityId)
         return failure('invalid_input', 'Pick a priority first.');
       return client.setTicketPriority(ticketId, priorityId);
+    },
+  );
+
+  // The issue KEY, not the id, and that is Jira's contract rather than this
+  // app's preference: `/user/assignable/search` takes `issueKey`. The same
+  // validator guards it — an issue key is PROJECT-NUMBER, which is exactly the
+  // alphanumeric-with-a-hyphen shape readTicketId already allows, so the check
+  // holds without being loosened for this one channel.
+  ipcMain.handle(
+    'jira:tickets:assignable-users',
+    async (_event, args: unknown): Promise<JiraResult<JiraWireUser[]>> => {
+      const input = (args ?? {}) as Record<string, unknown>;
+      const ticketKey = readTicketId(input.ticketKey);
+      if (!ticketKey) return failure('invalid_input', 'Unknown Jira issue.');
+      // A blank query is legitimate — it is what the picker sends on open, and
+      // Jira answers it with the first page of assignable users. Trimmed but
+      // not rejected.
+      return client.searchAssignableUsers(ticketKey, readString(input.query));
+    },
+  );
+
+  ipcMain.handle(
+    'jira:tickets:set-assignee',
+    async (_event, args: unknown): Promise<JiraResult<JiraWireTicket>> => {
+      const input = (args ?? {}) as Record<string, unknown>;
+      const ticketId = readTicketId(input.ticketId);
+      if (!ticketId) return failure('invalid_input', 'Unknown Jira issue.');
+
+      // The order here is the whole point of this handler.
+      //
+      // `null` is a real, meaningful value on this channel: it is Jira's own
+      // documented payload for "unassign", and the picker's Unassign row sends
+      // exactly that. `readString` turns `null` into `''` — so running the
+      // account id through it first would fold "the user chose nobody" into
+      // the same empty string as "the renderer sent no field at all", and this
+      // handler would have no way left to tell an intentional unassign from a
+      // malformed call. Checking for the literal `null` BEFORE any string
+      // coercion is what keeps the two apart end to end.
+      if (input.accountId === null)
+        return client.setTicketAssignee(ticketId, null);
+
+      const accountId = readString(input.accountId);
+      if (!accountId) {
+        return failure('invalid_input', 'Pick someone to assign this to.');
+      }
+      return client.setTicketAssignee(ticketId, accountId);
     },
   );
 

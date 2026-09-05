@@ -132,17 +132,18 @@ export function JiraConnectionPanel({
               maintained in the same commit as the write it names — never as a
               follow-up. It once read "moving, commenting, changing priority"
               while only the first two existed, which is the failure this
-              panel exists to not have (see commit e9e1ec9). Priority is on
-              the list again now because setJiraTicketPriority is real: the
-              row's chip opens a picker of the site's own priorities and
-              writes the chosen one straight through. jiraApi.ts's whole write
-              surface is transitionJiraTicket, postJiraComment and
-              setJiraTicketPriority — three, and this sentence names three. */}
+              panel exists to not have (see commit e9e1ec9). Reassigning joins
+              it now because setJiraTicketAssignee is real: the drawer's
+              assignee chip opens a picker of the people this issue's own
+              project allows, Unassign included, and writes the choice
+              straight through. jiraApi.ts's whole write surface is
+              transitionJiraTicket, postJiraComment, setJiraTicketPriority and
+              setJiraTicketAssignee — four, and this sentence names four. */}
           <span>
             <b>Your</b> edits — moving a ticket through its workflow, posting a
-            comment, and changing its priority — write straight to Jira the
-            moment you make them, as you. Those three are the whole set;
-            everything else about an issue is read-only here.
+            comment, changing its priority, and reassigning it — write straight
+            to Jira the moment you make them, as you. Those four are the whole
+            set; everything else about an issue is read-only here.
           </span>
         </div>
         <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-warning/30 bg-warning-bg px-3 py-2.5 text-[12.5px] leading-relaxed text-warning">

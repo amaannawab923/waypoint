@@ -8,6 +8,8 @@ import {
   mapPriorityOptions,
   mapStateCategory,
   mapTransitions,
+  mapUserOption,
+  mapUserOptions,
   normalizeJiraSite,
   wikiMarkupToPlainText,
 } from './jiraMap';
@@ -185,6 +187,85 @@ describe('mapPriorityOptions', () => {
         fields: { priority: { allowedValues: [{ id: 7 }] } },
       }),
     ).toEqual([{ id: '7', name: '7' }]);
+  });
+});
+
+describe('mapUserOption', () => {
+  // A realistic /user/assignable/search entry: Jira sends considerably more
+  // than the picker needs, including personal details about a colleague.
+  const RAW_USER = {
+    self: 'https://waypoint123.atlassian.net/rest/api/3/user?accountId=aaaa',
+    accountId: SOMEONE_ELSE,
+    accountType: 'atlassian',
+    emailAddress: 'sam@northwind.dev',
+    avatarUrls: {
+      '48x48': 'https://avatar.example/48',
+      '24x24': 'https://avatar.example/24',
+    },
+    displayName: 'Sam Lee',
+    active: true,
+    timeZone: 'Europe/London',
+    locale: 'en_GB',
+  };
+
+  it('reduces a user to the id, the name and an avatar', () => {
+    expect(mapUserOption(RAW_USER)).toEqual({
+      accountId: SOMEONE_ELSE,
+      displayName: 'Sam Lee',
+      avatarUrl: 'https://avatar.example/48',
+    });
+  });
+
+  // A picker needs a name and a write needs an id. A colleague's email
+  // address is neither, and it has no business crossing into the renderer
+  // because a typeahead happened to match them.
+  it('leaves a colleague’s email and locale behind at the boundary', () => {
+    const mapped = mapUserOption(RAW_USER);
+
+    expect(JSON.stringify(mapped)).not.toContain('sam@northwind.dev');
+    expect(mapped).not.toHaveProperty('emailAddress');
+    expect(mapped).not.toHaveProperty('locale');
+  });
+
+  it('falls back through the avatar sizes, and to null when there are none', () => {
+    expect(
+      mapUserOption({
+        accountId: SOMEONE_ELSE,
+        displayName: 'Sam Lee',
+        avatarUrls: { '24x24': 'https://avatar.example/24' },
+      }),
+    ).toMatchObject({ avatarUrl: 'https://avatar.example/24' });
+    expect(
+      mapUserOption({ accountId: SOMEONE_ELSE, displayName: 'Sam Lee' }),
+    ).toMatchObject({ avatarUrl: null });
+  });
+
+  // An account id is not a name — putting one on screen is the same leak
+  // adfToPlainText deliberately refuses to make for a mention node.
+  it('labels a nameless user "Unknown" rather than by their account id', () => {
+    const mapped = mapUserOption({ accountId: SOMEONE_ELSE });
+
+    expect(mapped).toMatchObject({ displayName: 'Unknown' });
+    expect(mapped?.displayName).not.toContain(SOMEONE_ELSE);
+  });
+
+  // The only thing a row with no id could do is fail on click, which is worse
+  // than not offering it — the same call mapPriorityOptions makes.
+  it('drops a user with no account id', () => {
+    expect(mapUserOption({ displayName: 'Ghost' })).toBeNull();
+    expect(mapUserOption(null)).toBeNull();
+  });
+
+  it('mapUserOptions drops the unusable entries and survives a non-array', () => {
+    expect(mapUserOptions([RAW_USER, { displayName: 'Ghost' }, null])).toEqual([
+      {
+        accountId: SOMEONE_ELSE,
+        displayName: 'Sam Lee',
+        avatarUrl: 'https://avatar.example/48',
+      },
+    ]);
+    expect(mapUserOptions({ values: [] })).toEqual([]);
+    expect(mapUserOptions(undefined)).toEqual([]);
   });
 });
 

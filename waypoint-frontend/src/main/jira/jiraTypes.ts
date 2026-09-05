@@ -77,6 +77,27 @@ export interface JiraPriorityOption {
 }
 
 /**
+ * One person this site says an issue can be assigned to.
+ *
+ * Deliberately not `JiraIdentity`. That shape describes the *connected*
+ * account and carries its email — which is a real personal detail belonging to
+ * the person holding the credential, and has no business being handed to the
+ * renderer for every colleague who turns up in a typeahead. An assignee write
+ * needs an id, and a picker needs a name; nothing here needs more than that.
+ *
+ * `avatarUrl` mirrors `JiraIdentity.avatarUrl` and is carried for the same
+ * reason it is there: it is the one presentational detail Jira volunteers
+ * about a user, and dropping it at the boundary would mean re-reading the user
+ * to get it back. Like that one, nothing renders it today — every avatar in
+ * this app is drawn from initials by components/ui/Avatar.
+ */
+export interface JiraWireUser {
+  accountId: string;
+  displayName: string;
+  avatarUrl: string | null;
+}
+
+/**
  * How the signed-in user relates to an issue — strongest claim first, since
  * the my-work JQL matches on all three at once and a person is frequently
  * more than one of them.

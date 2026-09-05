@@ -10,6 +10,7 @@ import type {
   JiraWireComment,
   JiraWireTicket,
   JiraWireTransition,
+  JiraWireUser,
 } from './jira/jiraTypes';
 
 // The global Web Crypto API, not Node's `crypto` module: this preload script
@@ -290,6 +291,24 @@ const electronHandler = {
       priorityId: string;
     }): Promise<JiraResult<JiraWireTicket>> {
       return ipcRenderer.invoke('jira:tickets:set-priority', args);
+    },
+    // `ticketKey`, not `ticketId`: Jira's assignable-user search takes the
+    // issue key. The name says so here rather than leaving the one channel
+    // that differs looking like all the others.
+    searchAssignableUsers(args: {
+      ticketKey: string;
+      query: string;
+    }): Promise<JiraResult<JiraWireUser[]>> {
+      return ipcRenderer.invoke('jira:tickets:assignable-users', args);
+    },
+    // `accountId: null` means unassign — Jira's own payload for it, and a
+    // value this signature has to keep nullable all the way down rather than
+    // collapsing to an empty string on the way (see jiraIpc.ts).
+    setAssignee(args: {
+      ticketId: string;
+      accountId: string | null;
+    }): Promise<JiraResult<JiraWireTicket>> {
+      return ipcRenderer.invoke('jira:tickets:set-assignee', args);
     },
     listComments(ticketId: string): Promise<JiraResult<JiraWireComment[]>> {
       return ipcRenderer.invoke('jira:comments:list', ticketId);

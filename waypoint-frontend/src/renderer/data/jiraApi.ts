@@ -28,6 +28,7 @@ import type {
   JiraProposal,
   JiraTicket,
   JiraTransition,
+  JiraUserOption,
 } from '@/types/jira';
 import type { Priority } from '@/types/entities';
 // A type-only reach into the main process, the same crossing preload.d.ts
@@ -39,6 +40,7 @@ import type {
   JiraWireComment,
   JiraWireTicket,
   JiraWireTransition,
+  JiraWireUser,
 } from '../../main/jira/jiraTypes';
 
 // -----------------------------------------------------------------------
@@ -130,6 +132,16 @@ function toTransition(wire: JiraWireTransition): JiraTransition {
  * module, keeping main's shapes from leaking past this file. */
 function toPriorityOption(wire: JiraWirePriorityOption): JiraPriorityOption {
   return { id: wire.id, name: wire.name };
+}
+
+/** Same story as toPriorityOption — nothing to translate, but main's shapes
+ * stop at this file. */
+function toUserOption(wire: JiraWireUser): JiraUserOption {
+  return {
+    accountId: wire.accountId,
+    displayName: wire.displayName,
+    avatarUrl: wire.avatarUrl,
+  };
 }
 
 function toTicket(wire: JiraWireTicket): JiraTicket {
@@ -248,6 +260,7 @@ export async function getJiraConnectionStatus(): Promise<JiraConnectionStatus> {
     connected: snapshot.connected,
     accountName: snapshot.identity?.displayName ?? '',
     accountEmail: snapshot.identity?.email ?? '',
+    accountId: snapshot.identity?.accountId ?? '',
     site: snapshot.identity?.site ?? '',
     lastSyncAt,
     issueCount: lastTickets.length,
@@ -298,6 +311,30 @@ export async function getJiraPriorityOptions(
 ): Promise<JiraPriorityOption[]> {
   const wire = unwrap(await bridge().listPriorityOptions(ticketId));
   return wire.map(toPriorityOption);
+}
+
+/**
+ * The people the connected site will let this issue be assigned to, matching
+ * what the user has typed.
+ *
+ * Takes the ticket's KEY, not its id — the one channel in this whole feature
+ * that does, because Jira's assignable-user search is specified in terms of
+ * `issueKey`. Callers hold a `JiraTicket` and pass `ticket.key`.
+ *
+ * Uncached, like the priority options and for a stronger version of the same
+ * reason: the result depends on a query the user is still typing, and on a
+ * project permission an admin can change. A blank query is a real call that
+ * returns the first page of assignable users, which is what the picker opens
+ * with.
+ */
+export async function searchJiraAssignableUsers(
+  ticketKey: string,
+  query: string,
+): Promise<JiraUserOption[]> {
+  const wire = unwrap(
+    await bridge().searchAssignableUsers({ ticketKey, query }),
+  );
+  return wire.map(toUserOption);
 }
 
 export async function listJiraComments(
@@ -403,6 +440,45 @@ export async function setJiraTicketPriority(
   priorityId: string,
 ): Promise<JiraTicket> {
   const wire = unwrap(await bridge().setPriority({ ticketId, priorityId }));
+  const ticket = toTicket(wire);
+  lastTickets = lastTickets.map((t) => (t.id === ticket.id ? ticket : t));
+  return ticket;
+}
+
+/**
+ * Reassigns a real issue, or unassigns it when `accountId` is `null`.
+ *
+ * `null` is a value, not a missing argument, and it stays one the whole way
+ * down: the picker's Unassign row sends it, the IPC handler checks for the
+ * literal `null` before any string coercion (see jiraIpc.ts, where
+ * `readString` would otherwise fold it into `''` and make it indistinguishable
+ * from a field that was never sent), and Jira's assignee endpoint takes
+ * `{ accountId: null }` as its own documented payload for "nobody".
+ *
+ * The cached list is patched with `.map()`, never filtered — and here that is
+ * a decision rather than symmetry with the writes above it.
+ *
+ * Reassigning a ticket away from yourself genuinely can drop it out of the
+ * "my work" JQL: that query matches on assignee OR reporter OR watcher, and if
+ * you were only ever its assignee, you are no longer any of the three. The
+ * temptation is to remove the row on that basis. The row must stay. A ticket
+ * vanishing from under the cursor the instant a menu closes reads as data loss
+ * even when it is technically correct, and the user has no way to confirm the
+ * write they just made landed the way they meant.
+ *
+ * `.map()` is the whole mechanism for that, and no special case is needed to
+ * get it: the ticket is patched in place with what Jira returned — new
+ * assignee name, and a `role` that now honestly reads "not yours" (see
+ * `roleOf` in main/jira/jiraMap.ts) — and it simply is not excluded from
+ * anything until the next `listMyJiraTickets()` re-runs the query and does not
+ * find it. Which is exactly "stays visible until the next refresh", falling
+ * out of doing the ordinary thing. Nothing in this path may filter or remove.
+ */
+export async function setJiraTicketAssignee(
+  ticketId: string,
+  accountId: string | null,
+): Promise<JiraTicket> {
+  const wire = unwrap(await bridge().setAssignee({ ticketId, accountId }));
   const ticket = toTicket(wire);
   lastTickets = lastTickets.map((t) => (t.id === ticket.id ? ticket : t));
   return ticket;

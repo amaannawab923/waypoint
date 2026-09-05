@@ -1,11 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { listJiraComments } from '@/data/jiraApi';
+import { listJiraComments, setJiraTicketAssignee } from '@/data/jiraApi';
+import { showErrorToast } from '@/lib/toast';
 import { useAsync } from '@/lib/useAsync';
 import { useJiraConnection } from '@/lib/jiraStore';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { IconX } from '@/components/icons';
+import {
+  JiraAssigneeChip,
+  JiraAssigneePicker,
+} from '@/components/domain/JiraAssigneePicker';
 import { JiraCommentComposer } from '@/components/domain/JiraCommentComposer';
 import { JiraLoadError } from '@/components/domain/JiraLoadError';
 import { jiraProjectColor } from '@/types/jira';
@@ -33,14 +38,52 @@ function formatRelativeTime(iso: string): string {
  */
 export function JiraTicketDrawer({
   ticket,
+  onTicketUpdated,
   onClose,
 }: {
   ticket: JiraTicket;
+  /**
+   * Hands a re-read ticket back up to whoever owns the list behind this
+   * drawer. Without it a reassign made here would update nothing but the
+   * drawer's own header, and closing it would reveal a row still naming the
+   * previous assignee — a stale row the user has no reason to distrust.
+   */
+  onTicketUpdated: (updated: JiraTicket) => void;
   onClose: () => void;
 }) {
   const [visible, setVisible] = useState(false);
   const [comments, setComments] = useState<JiraComment[]>([]);
+  const [assigneeOpen, setAssigneeOpen] = useState(false);
+  const [savingAssignee, setSavingAssignee] = useState(false);
+  const assigneeChipRef = useRef<HTMLButtonElement>(null);
   const connection = useJiraConnection();
+
+  /**
+   * `accountId` is `null` for Unassign — the user's choice, carried as a real
+   * value rather than an absence all the way to Jira's own
+   * `{ accountId: null }` payload.
+   *
+   * The re-read ticket goes up through `onTicketUpdated` and nothing here
+   * removes anything. Reassigning away from yourself can genuinely drop the
+   * issue out of the "my work" query, and the row still stays until the next
+   * refresh — see setJiraTicketAssignee in data/jiraApi.ts for why that is the
+   * behaviour and how patching rather than filtering is what produces it.
+   */
+  async function handleSelectAssignee(accountId: string | null) {
+    setAssigneeOpen(false);
+    setSavingAssignee(true);
+    try {
+      onTicketUpdated(await setJiraTicketAssignee(ticket.id, accountId));
+    } catch (err) {
+      showErrorToast(
+        err instanceof Error
+          ? err.message
+          : 'Could not reassign this ticket in Jira.',
+      );
+    } finally {
+      setSavingAssignee(false);
+    }
+  }
 
   // `error` is destructured, not ignored: "No comments yet." is a positive
   // factual claim about this issue, and rendering it because the comment read
@@ -135,9 +178,31 @@ export function JiraTicketDrawer({
           </h3>
 
           <div className="mb-3.5 flex flex-wrap gap-1.5">
-            <span className="rounded-full border border-border bg-surface-2 px-2.5 py-1 text-[11px] font-semibold text-text-secondary">
-              Assignee · {ticket.assigneeName}
-            </span>
+            {/* The one chip in this row that is a control. Reporter, epic,
+                story points and sprint stay plain text because none of them
+                is writable here; the assignee is, so it stops being a label
+                and becomes a button that says so. */}
+            <JiraAssigneeChip
+              assigneeName={ticket.assigneeName}
+              disabled={ticket.hasConflict}
+              disabledTitle="Write paused until reloaded"
+              saving={savingAssignee}
+              open={assigneeOpen}
+              buttonRef={assigneeChipRef}
+              onClick={() => setAssigneeOpen((o) => !o)}
+            />
+            {assigneeOpen && (
+              <JiraAssigneePicker
+                // The KEY, not the id: Jira's assignable-user search takes
+                // `issueKey`, and this is the one call in the feature that
+                // does. Everything else about this ticket travels by id.
+                ticketKey={ticket.key}
+                currentAssigneeAccountId={ticket.assigneeAccountId}
+                triggerRef={assigneeChipRef}
+                onSelect={handleSelectAssignee}
+                onClose={() => setAssigneeOpen(false)}
+              />
+            )}
             <span className="rounded-full border border-border bg-surface-2 px-2.5 py-1 text-[11px] font-semibold text-text-secondary">
               Reporter · {ticket.reporterName}
             </span>

@@ -137,6 +137,25 @@ export interface JiraPriorityOption {
   name: string;
 }
 
+/**
+ * One person the connected site says an issue can be assigned to — the rows
+ * of the assignee picker's typeahead.
+ *
+ * Read live from the issue rather than from any list this app keeps, for the
+ * same reason `JiraPriorityOption` is: assignability is a per-project
+ * permission, so who can take ENG-421 is not who can take OPS-3.
+ *
+ * `avatarUrl` is carried across the wire but nothing renders it — every avatar
+ * in this app is drawn from initials by components/ui/Avatar, which is also
+ * what keeps the picker from firing a request per row at Atlassian's CDN just
+ * to open a menu.
+ */
+export interface JiraUserOption {
+  accountId: string;
+  displayName: string;
+  avatarUrl: string | null;
+}
+
 export interface JiraAttachment {
   fileName: string;
   sizeLabel: string;
@@ -221,6 +240,16 @@ export interface JiraConnectionStatus {
   connected: boolean;
   accountName: string;
   accountEmail: string;
+  /**
+   * The connected user's own Atlassian account id.
+   *
+   * Their own, and only ever their own — this is not a directory. It is here
+   * because "Assign to me" is a write, and a write needs an id: the picker
+   * cannot build one from `accountName`, and searching the assignable list for
+   * yourself by name would be guesswork on a site with two people called Sam.
+   * Empty string when nothing is connected, matching the other fields here.
+   */
+  accountId: string;
   site: string;
   /**
    * When the ticket list was last actually read from Jira, or `null` when no

@@ -12,6 +12,8 @@ import {
   listPriorityOptions,
   listTransitions,
   postComment,
+  searchAssignableUsers,
+  setTicketAssignee,
   setTicketPriority,
   transitionTicket,
   validateCredential,
@@ -598,6 +600,243 @@ describe('priority', () => {
       readStoredJiraCredentialMock.mockReturnValue(null);
 
       expect(await setTicketPriority('10421', '3')).toMatchObject({
+        ok: false,
+        reason: 'not_connected',
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('assignee', () => {
+  const ASSIGNABLE = [
+    {
+      accountId: 'acct-sam',
+      displayName: 'Sam Lee',
+      emailAddress: 'sam@northwind.dev',
+      avatarUrls: { '48x48': 'https://avatar.example/48' },
+    },
+    { accountId: 'acct-priya', displayName: 'Priya Raman' },
+  ];
+
+  const REASSIGNED_ISSUE = {
+    id: '10421',
+    key: 'ENG-421',
+    fields: {
+      summary: 'Webhook receiver drops events',
+      project: { key: 'ENG' },
+      status: { name: 'In Progress', statusCategory: { key: 'indeterminate' } },
+      assignee: { accountId: 'acct-sam', displayName: 'Sam Lee' },
+      reporter: { accountId: 'someone-else' },
+      watches: { watchCount: 1, isWatching: false },
+    },
+  };
+
+  describe('searchAssignableUsers', () => {
+    // The one call in this whole client that takes an issue KEY. Jira's
+    // assignable-user search is specified in terms of `issueKey`, while
+    // everything else here travels by the numeric id — sending the id on this
+    // channel is a silent zero-result search, not an error.
+    it('searches by the issue KEY, not the numeric id this app otherwise holds', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(ASSIGNABLE));
+
+      await searchAssignableUsers('ENG-421', 'sam');
+
+      const [url, init] = call();
+      const params = new URL(url).searchParams;
+      expect(url).toContain('/rest/api/3/user/assignable/search');
+      expect(init.method).toBe('GET');
+      expect(params.get('issueKey')).toBe('ENG-421');
+      expect(params.get('query')).toBe('sam');
+      expect(params.get('issueId')).toBeNull();
+    });
+
+    // Per-issue, not site-wide: "Assignable User" is a project permission, so
+    // who can take ENG-421 is not who can take OPS-3, and the generic user
+    // search would happily offer someone Jira then refuses.
+    it('never falls back to the site-wide user search', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(ASSIGNABLE));
+
+      await searchAssignableUsers('ENG-421', '');
+
+      expect(call()[0]).not.toContain('/rest/api/3/user/search');
+      expect(call()[0]).not.toContain('/rest/api/3/users');
+    });
+
+    it('maps the results down to id, name and avatar', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(ASSIGNABLE));
+
+      const result = await searchAssignableUsers('ENG-421', 'a');
+
+      expect(result).toEqual({
+        ok: true,
+        value: [
+          {
+            accountId: 'acct-sam',
+            displayName: 'Sam Lee',
+            avatarUrl: 'https://avatar.example/48',
+          },
+          {
+            accountId: 'acct-priya',
+            displayName: 'Priya Raman',
+            avatarUrl: null,
+          },
+        ],
+      });
+      expect(JSON.stringify(result)).not.toContain('sam@northwind.dev');
+    });
+
+    // A blank query is what the panel opens with, and Jira answers it with
+    // the first page of assignable users — it is a real call, not a no-op the
+    // client should short-circuit into an empty list.
+    it('treats a blank query as a real search for the first page', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(ASSIGNABLE));
+
+      const result = await searchAssignableUsers('ENG-421', '');
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(new URL(call()[0]).searchParams.get('query')).toBe('');
+      expect(result).toMatchObject({
+        ok: true,
+        value: expect.arrayContaining([
+          expect.objectContaining({ displayName: 'Sam Lee' }),
+        ]),
+      });
+    });
+
+    // A site can restrict "Browse users and groups". That must not arrive as
+    // an empty list: "nobody matches" and "you may not ask who does" are
+    // different answers, and only one of them is about the user's colleagues.
+    it('reports a restricted user search as forbidden, not as zero results', async () => {
+      fetchMock.mockResolvedValue(emptyResponse(403));
+
+      expect(await searchAssignableUsers('ENG-421', 'sam')).toMatchObject({
+        ok: false,
+        reason: 'forbidden',
+      });
+    });
+
+    it('refuses without a stored credential rather than calling out unauthenticated', async () => {
+      readStoredJiraCredentialMock.mockReturnValue(null);
+
+      expect(await searchAssignableUsers('ENG-421', 'sam')).toMatchObject({
+        ok: false,
+        reason: 'not_connected',
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('setTicketAssignee', () => {
+    // The dedicated assignee endpoint, not the generic issue edit PUT that
+    // setTicketPriority uses: Jira grants "Assign issues" separately from
+    // "Edit issues", and the generic path additionally needs the assignee
+    // field to be on that issue type's edit screen.
+    it('PUTs to the dedicated assignee endpoint and returns the re-read issue', async () => {
+      fetchMock
+        .mockResolvedValueOnce(emptyResponse(204))
+        .mockResolvedValueOnce(jsonResponse(REASSIGNED_ISSUE));
+
+      const result = await setTicketAssignee('10421', 'acct-sam');
+
+      const [putUrl, putInit] = call(0);
+      expect(putInit.method).toBe('PUT');
+      expect(putUrl).toContain('/rest/api/3/issue/10421/assignee');
+      expect(JSON.parse(putInit.body as string)).toEqual({
+        accountId: 'acct-sam',
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        value: { assigneeName: 'Sam Lee', assigneeAccountId: 'acct-sam' },
+      });
+    });
+
+    // The write is addressed by the numeric id, unlike the search above —
+    // both are Jira's own contracts, and the difference between them is the
+    // single sharpest thing to get wrong in this feature.
+    it('addresses the write by the numeric id, not the key', async () => {
+      fetchMock
+        .mockResolvedValueOnce(emptyResponse(204))
+        .mockResolvedValueOnce(jsonResponse(REASSIGNED_ISSUE));
+
+      await setTicketAssignee('10421', 'acct-sam');
+
+      expect(call(0)[0]).toContain('/issue/10421/assignee');
+      expect(call(0)[0]).not.toContain('ENG-421');
+    });
+
+    // `{ accountId: null }` is Jira's own documented payload for unassign. A
+    // JSON body with an explicit null is a different thing from one with the
+    // key omitted, and from one carrying an empty string — this is the end of
+    // the chain that starts at the picker's Unassign row.
+    it('sends a literal null to unassign, never "" and never an omitted key', async () => {
+      fetchMock.mockResolvedValueOnce(emptyResponse(204)).mockResolvedValueOnce(
+        jsonResponse({
+          ...REASSIGNED_ISSUE,
+          fields: { ...REASSIGNED_ISSUE.fields, assignee: null },
+        }),
+      );
+
+      const result = await setTicketAssignee('10421', null);
+
+      const body = call(0)[1].body as string;
+      expect(body).toBe('{"accountId":null}');
+      expect(JSON.parse(body)).toEqual({ accountId: null });
+      expect(Object.keys(JSON.parse(body))).toContain('accountId');
+      expect(result).toMatchObject({
+        ok: true,
+        value: { assigneeName: 'Unassigned', assigneeAccountId: null },
+      });
+    });
+
+    // No editmeta pre-flight, unlike setTicketPriority — an account id needs
+    // no resolving against live metadata, so a second round trip would buy
+    // nothing but latency. Exactly two requests: the write and the re-read.
+    it('writes without a metadata pre-flight, then re-reads once', async () => {
+      fetchMock
+        .mockResolvedValueOnce(emptyResponse(204))
+        .mockResolvedValueOnce(jsonResponse(REASSIGNED_ISSUE));
+
+      await setTicketAssignee('10421', 'acct-sam');
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(call(0)[0]).not.toContain('/editmeta');
+      expect(call(1)[1].method).toBe('GET');
+    });
+
+    // Jira's own wording ("User cannot be assigned issues.") is the whole
+    // reason there is no pre-flight check restating it less well.
+    it("surfaces Jira's own error message when it rejects the write", async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(
+          { errorMessages: ['User cannot be assigned issues.'] },
+          400,
+        ),
+      );
+
+      expect(await setTicketAssignee('10421', 'acct-sam')).toMatchObject({
+        ok: false,
+        reason: 'jira_error',
+        message: 'User cannot be assigned issues.',
+      });
+      // Failed write, so nothing was re-read and nothing is reported as
+      // having changed.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports a permission failure as forbidden, not as bad credentials', async () => {
+      fetchMock.mockResolvedValueOnce(emptyResponse(403));
+
+      expect(await setTicketAssignee('10421', 'acct-sam')).toMatchObject({
+        ok: false,
+        reason: 'forbidden',
+      });
+    });
+
+    it('refuses without a stored credential rather than calling out unauthenticated', async () => {
+      readStoredJiraCredentialMock.mockReturnValue(null);
+
+      expect(await setTicketAssignee('10421', null)).toMatchObject({
         ok: false,
         reason: 'not_connected',
       });

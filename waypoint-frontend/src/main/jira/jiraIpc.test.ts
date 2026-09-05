@@ -28,6 +28,8 @@ const listTransitionsMock = jest.fn();
 const transitionTicketMock = jest.fn();
 const listPriorityOptionsMock = jest.fn();
 const setTicketPriorityMock = jest.fn();
+const searchAssignableUsersMock = jest.fn();
+const setTicketAssigneeMock = jest.fn();
 const listCommentsMock = jest.fn();
 const postCommentMock = jest.fn();
 jest.mock('./jiraClient', () => ({
@@ -37,6 +39,9 @@ jest.mock('./jiraClient', () => ({
   transitionTicket: (...args: unknown[]) => transitionTicketMock(...args),
   listPriorityOptions: (...args: unknown[]) => listPriorityOptionsMock(...args),
   setTicketPriority: (...args: unknown[]) => setTicketPriorityMock(...args),
+  searchAssignableUsers: (...args: unknown[]) =>
+    searchAssignableUsersMock(...args),
+  setTicketAssignee: (...args: unknown[]) => setTicketAssigneeMock(...args),
   listComments: (...args: unknown[]) => listCommentsMock(...args),
   postComment: (...args: unknown[]) => postCommentMock(...args),
 }));
@@ -268,6 +273,106 @@ describe('per-ticket channels', () => {
 
     expect(transitionTicketMock).toHaveBeenCalledWith('10421', '31', {
       resolution: 'Fixed',
+    });
+  });
+
+  it('jira:tickets:set-assignee refuses a ticket id that is not one', async () => {
+    expect(
+      await getHandler('jira:tickets:set-assignee')(
+        {},
+        { ticketId: '../../../admin', accountId: 'acct-sam' },
+      ),
+    ).toMatchObject({ ok: false, reason: 'invalid_input' });
+    expect(setTicketAssigneeMock).not.toHaveBeenCalled();
+  });
+
+  // Jira's assignable-user search takes the issue KEY, so this is the one
+  // channel carrying one. The same validator holds: an issue key is
+  // PROJECT-NUMBER, which is already the shape readTicketId allows, so
+  // nothing had to be loosened to let a real key through.
+  it('jira:tickets:assignable-users accepts a real issue key and refuses a path', async () => {
+    searchAssignableUsersMock.mockResolvedValue({ ok: true, value: [] });
+
+    await getHandler('jira:tickets:assignable-users')(
+      {},
+      { ticketKey: 'ENG-421', query: 'sam' },
+    );
+    expect(searchAssignableUsersMock).toHaveBeenCalledWith('ENG-421', 'sam');
+
+    expect(
+      await getHandler('jira:tickets:assignable-users')(
+        {},
+        { ticketKey: '../../../admin', query: 'sam' },
+      ),
+    ).toMatchObject({ ok: false, reason: 'invalid_input' });
+    expect(searchAssignableUsersMock).toHaveBeenCalledTimes(1);
+  });
+
+  // A blank query is what the picker sends on open, and Jira answers it with
+  // the first page of assignable users. Rejecting it would break the panel's
+  // opening state on the way to guarding nothing.
+  it('jira:tickets:assignable-users allows a blank query', async () => {
+    searchAssignableUsersMock.mockResolvedValue({ ok: true, value: [] });
+
+    await getHandler('jira:tickets:assignable-users')(
+      {},
+      { ticketKey: 'ENG-421' },
+    );
+
+    expect(searchAssignableUsersMock).toHaveBeenCalledWith('ENG-421', '');
+  });
+
+  // The sharpest boundary in this feature. `readString` turns null into '',
+  // so an accountId run through it before this check would make "the user
+  // pressed Unassign" and "the renderer sent no field" the same value — and
+  // this handler would have to guess which one it was looking at. These three
+  // cases must stay three different outcomes.
+  describe('jira:tickets:set-assignee — null vs missing vs empty string', () => {
+    beforeEach(() => {
+      setTicketAssigneeMock.mockResolvedValue({ ok: true, value: {} });
+    });
+
+    it('passes an explicit null straight through as null, never ""', async () => {
+      await getHandler('jira:tickets:set-assignee')(
+        {},
+        { ticketId: '10421', accountId: null },
+      );
+
+      expect(setTicketAssigneeMock).toHaveBeenCalledWith('10421', null);
+      // Belt and braces: `toHaveBeenCalledWith(…, null)` would also pass for
+      // a stray undefined under some matchers, and '' is the exact value this
+      // whole ordering exists to keep out.
+      expect(setTicketAssigneeMock.mock.calls[0][1]).toBeNull();
+      expect(setTicketAssigneeMock.mock.calls[0][1]).not.toBe('');
+    });
+
+    it('refuses a missing accountId rather than silently unassigning', async () => {
+      expect(
+        await getHandler('jira:tickets:set-assignee')(
+          {},
+          { ticketId: '10421' },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(setTicketAssigneeMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses an empty-string accountId rather than silently unassigning', async () => {
+      expect(
+        await getHandler('jira:tickets:set-assignee')(
+          {},
+          { ticketId: '10421', accountId: '   ' },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(setTicketAssigneeMock).not.toHaveBeenCalled();
+    });
+
+    it('passes a real account id through trimmed', async () => {
+      await getHandler('jira:tickets:set-assignee')(
+        {},
+        { ticketId: '10421', accountId: '  acct-sam  ' },
+      );
+
+      expect(setTicketAssigneeMock).toHaveBeenCalledWith('10421', 'acct-sam');
     });
   });
 

@@ -8,6 +8,7 @@ import type {
   JiraWireTicket,
   JiraWireTransition,
   JiraWireTransitionField,
+  JiraWireUser,
 } from './jiraTypes';
 
 // Pure translation between Jira Cloud's REST payloads and this app's wire
@@ -477,6 +478,46 @@ function accountIdOf(value: unknown): string | null {
 function displayNameOf(value: unknown, fallback: string): string {
   const name = asRecord(value).displayName;
   return typeof name === 'string' && name ? name : fallback;
+}
+
+// -----------------------------------------------------------------------
+// Users
+// -----------------------------------------------------------------------
+
+/**
+ * One entry from `/user/assignable/search`, reduced to the three things the
+ * assignee picker needs.
+ *
+ * A user with no `accountId` is dropped rather than offered, on the same
+ * principle `mapPriorityOptions` drops an option with no id: the only thing an
+ * unwritable row could do is fail on click, so it is worse than not being
+ * there. Everything else Jira sends about a user — `emailAddress`,
+ * `accountType`, `locale`, `timeZone`, the group and application-role lists —
+ * is deliberately left behind at this boundary rather than carried to the
+ * renderer, because a picker needs a name and a write needs an id and nothing
+ * about either needs a colleague's email address in the browser process.
+ */
+export function mapUserOption(raw: unknown): JiraWireUser | null {
+  const record = asRecord(raw);
+  const accountId = accountIdOf(record);
+  if (!accountId) return null;
+
+  const avatars = asRecord(record.avatarUrls);
+  const avatar = avatars['48x48'] ?? avatars['32x32'] ?? avatars['24x24'];
+
+  return {
+    accountId,
+    // "Unknown" rather than the account id: an id is not a name, and putting
+    // one on screen is the same leak `adfToPlainText` refuses to make for a
+    // mention. A nameless row is still pickable and still writes correctly.
+    displayName: displayNameOf(record, 'Unknown'),
+    avatarUrl: typeof avatar === 'string' ? avatar : null,
+  };
+}
+
+export function mapUserOptions(raw: unknown): JiraWireUser[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map(mapUserOption).filter((u): u is JiraWireUser => u !== null);
 }
 
 /**

@@ -468,6 +468,11 @@ export default function MyJiraPage() {
       {drawerTicket && (
         <JiraTicketDrawer
           ticket={drawerTicket}
+          // The same patch-in-place the rows already use, so a reassign made
+          // in the drawer lands on the row behind it too — and, per the same
+          // rule, never removes it: a ticket reassigned away from the user
+          // stays in the list until the next refresh re-runs the query.
+          onTicketUpdated={updateTicket}
           onClose={() => setDrawerTicketId(null)}
         />
       )}
