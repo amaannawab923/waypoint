@@ -10,11 +10,14 @@
 // three Jira projects, one already reassigned away, one mid-conflict) — see
 // the My Jira mockup this was ported from for the exact source copy.
 
+import { JIRA_PROJECT_COLOR } from '@/types/jira';
 import type {
   JiraComment,
   JiraConnectionStatus,
+  JiraDuplicateNudge,
   JiraMentionCandidate,
   JiraProjectKey,
+  JiraProposal,
   JiraTicket,
   JiraTransition,
   JiraTransitionField,
@@ -33,12 +36,14 @@ function delay(ms: number): Promise<void> {
 // Fixtures
 // -----------------------------------------------------------------------
 
-// Whether the mock connection starts already-connected. Phase 1 has no
-// wizard yet (that's phase 2's job), so this defaults to `true` — the sidebar
-// item and /my-jira route need to be reachable without one. Phase 2's wizard
-// is expected to flip this default once it exists; this is the one place to
-// change it.
-const DEFAULT_JIRA_CONNECTED = true;
+// Whether the mock connection starts already-connected. Phase 1 had no
+// wizard yet, so this defaulted to `true` so the sidebar item and /my-jira
+// route were reachable without one. Phase 2 adds the Add Project wizard's
+// Companion flow (components/domain/AddProjectWizard.tsx) as the real path
+// to a connected state, so this flips to `false`: a fresh app load with the
+// flag on now shows no My Jira sidebar item until the wizard — or the
+// Connection tab's own "Connect" affordance — actually connects it.
+const DEFAULT_JIRA_CONNECTED = false;
 
 const CURRENT_USER_NAME = 'Max Chen';
 const CURRENT_USER_INITIALS = 'MC';
@@ -62,6 +67,7 @@ let connectionFixture: JiraConnectionStatus = {
   issueCount: 6,
   projectCount: 3,
   pollIntervalSec: 15,
+  paused: false,
 };
 
 let ticketsFixture: JiraTicket[] = [
@@ -248,6 +254,45 @@ const MENTION_CANDIDATES: JiraMentionCandidate[] = [
   { name: 'Rob Kim', role: 'watcher' },
 ];
 
+// The Copilot rail's one combined proposal, matching the mockup's ENG-421
+// example verbatim — a single Approve applies both the state move and the
+// comment post atomically (see types/jira.ts's own header comment on
+// JiraProposal for why this isn't two separate rows).
+let proposalFixture: JiraProposal | undefined = {
+  id: 'jira-prop-eng-421',
+  ticketId: 'jira-eng-421',
+  ticketKey: 'ENG-421',
+  ticketProjectColor: JIRA_PROJECT_COLOR.ENG,
+  status: 'proposed',
+  fromStateName: 'In Progress',
+  fromStateColor: 'var(--warning)',
+  toStateName: 'In Review',
+  toStateColor: 'var(--accent)',
+  commentBody:
+    'PR #418 adds a token-bucket limiter in webhookReceiver.ts (500/min, burst 50) and a regression test for the 501st event. Ready for review — @Priya Raman.',
+  commentMentions: ['Priya Raman'],
+  repoPath: '~/code/northwind',
+  branch: 'fix/webhook-ratelimit',
+  commitCount: 3,
+  prNumber: 418,
+  prStatus: 'open',
+  createdAt: minutesAgo(4),
+  resolvedAt: null,
+};
+
+// The rail's small "Also queued" duplicate nudge — GRW-12 vs GRW-9. GRW-9
+// itself has no fixture (it's never opened, only referenced by key), so
+// this stays a thin pointer at the real GRW-12 ticket rather than a second
+// parallel ticket fixture.
+let duplicateNudgeFixture:
+  | { id: string; ticketId: string; duplicateOfKey: string; dismissed: boolean }
+  | undefined = {
+  id: 'jira-dup-grw12',
+  ticketId: 'jira-grw-12',
+  duplicateOfKey: 'GRW-9',
+  dismissed: false,
+};
+
 // -----------------------------------------------------------------------
 // Per-project workflows — "these are the transitions your Jira workflow
 // allows... Waypoint doesn't invent them" (mockup copy). ENG and PLAT share
@@ -422,6 +467,25 @@ export async function listJiraMentionCandidates(): Promise<
   return MENTION_CANDIDATES.map((c) => ({ ...c }));
 }
 
+export async function getMyJiraProposal(): Promise<JiraProposal | undefined> {
+  await delay(150);
+  return proposalFixture ? { ...proposalFixture } : undefined;
+}
+
+export async function getJiraDuplicateNudge(): Promise<JiraDuplicateNudge | undefined> {
+  await delay(120);
+  if (!duplicateNudgeFixture || duplicateNudgeFixture.dismissed) return undefined;
+  const ticket = ticketsFixture.find((t) => t.id === duplicateNudgeFixture!.ticketId);
+  if (!ticket) return undefined;
+  return {
+    id: duplicateNudgeFixture.id,
+    ticketId: ticket.id,
+    ticketKey: ticket.key,
+    ticketProjectColor: JIRA_PROJECT_COLOR[ticket.projectKey],
+    duplicateOfKey: duplicateNudgeFixture.duplicateOfKey,
+  };
+}
+
 // -----------------------------------------------------------------------
 // Writes
 // -----------------------------------------------------------------------
@@ -439,6 +503,23 @@ export async function connectJira(): Promise<JiraConnectionStatus> {
 export async function disconnectJira(): Promise<void> {
   await delay(300);
   connectionFixture = { ...connectionFixture, connected: false };
+}
+
+/** Connection tab's "Refresh now" — genuinely re-reads (bumps lastSyncAt),
+ * even though nothing in the fixtures ever actually drifts on its own. */
+export async function refreshJiraSync(): Promise<JiraConnectionStatus> {
+  await delay(500);
+  connectionFixture = { ...connectionFixture, lastSyncAt: new Date().toISOString() };
+  return getJiraConnectionStatus();
+}
+
+/** Connection tab's "Pause sync" — a real, persisted (well, fixture-lived)
+ * boolean rather than a disabled/"Not built yet" control, since jiraStore
+ * already exists for exactly this kind of live cross-surface state. */
+export async function setJiraSyncPaused(paused: boolean): Promise<JiraConnectionStatus> {
+  await delay(300);
+  connectionFixture = { ...connectionFixture, paused };
+  return getJiraConnectionStatus();
 }
 
 export async function transitionJiraTicket(
@@ -502,4 +583,58 @@ export async function postJiraComment(
   };
   commentsFixture = [...commentsFixture, comment];
   return { ...comment };
+}
+
+/** Approves the rail's ENG-421 proposal — applies BOTH halves atomically:
+ * the ticket's state moves, and the comment is appended with a disclosure
+ * line, matching the mockup's approveProp() outcome exactly. */
+export async function approveJiraProposal(id: string): Promise<JiraProposal> {
+  if (!proposalFixture || proposalFixture.id !== id) {
+    throw new Error(`Unknown Jira proposal: ${id}`);
+  }
+  await delay(700);
+  const proposal = proposalFixture;
+  const ticket = ticketsFixture.find((t) => t.id === proposal.ticketId);
+  if (ticket) {
+    ticket.stateName = proposal.toStateName;
+    ticket.stateColor = proposal.toStateColor;
+  }
+  const comment: JiraComment = {
+    id: `jira-cmt-${Math.random().toString(36).slice(2, 10)}`,
+    ticketId: proposal.ticketId,
+    authorName: CURRENT_USER_NAME,
+    authorInitials: CURRENT_USER_INITIALS,
+    body: proposal.commentBody,
+    mentions: proposal.commentMentions,
+    createdAt: new Date().toISOString(),
+    postedByWaypoint: true,
+    disclosureText: `Written by Waypoint Copilot · approved by ${CURRENT_USER_NAME}`,
+  };
+  commentsFixture = [...commentsFixture, comment];
+  proposalFixture = {
+    ...proposal,
+    status: 'executed',
+    resolvedAt: new Date().toISOString(),
+  };
+  return { ...proposalFixture };
+}
+
+export async function rejectJiraProposal(id: string): Promise<JiraProposal> {
+  if (!proposalFixture || proposalFixture.id !== id) {
+    throw new Error(`Unknown Jira proposal: ${id}`);
+  }
+  await delay(300);
+  proposalFixture = {
+    ...proposalFixture,
+    status: 'rejected',
+    resolvedAt: new Date().toISOString(),
+  };
+  return { ...proposalFixture };
+}
+
+export async function dismissJiraDuplicateNudge(id: string): Promise<void> {
+  await delay(150);
+  if (duplicateNudgeFixture && duplicateNudgeFixture.id === id) {
+    duplicateNudgeFixture = { ...duplicateNudgeFixture, dismissed: true };
+  }
 }
