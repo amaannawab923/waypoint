@@ -484,6 +484,26 @@ function displayNameOf(value: unknown, fallback: string): string {
  * queue. The JQL matches on assignee OR reporter OR watcher, and a person is
  * frequently more than one of them at once, so this picks the strongest claim
  * — the same single-role-per-row model the UI already renders.
+ *
+ * The last two branches are the ones worth explaining. This used to fall
+ * through to 'watcher' unconditionally, which was an inference from the query
+ * rather than a reading of the issue: if something is in the my-work queue and
+ * it is not yours by assignee or reporter, watching is the only reason left.
+ * That inference is sound for an issue the search returned, and it is why an
+ * absent `watches` still resolves to 'watcher' below — a project's permission
+ * scheme can hide `assignee`/`reporter` from a payload, and a trimmed or
+ * proxied response can drop `watches` entirely, and in neither case does this
+ * function know better than the query that put the issue on screen.
+ *
+ * What the inference cannot survive is `mapIssue` being reached any other way,
+ * and it routinely is: every write here re-reads its issue through
+ * `getTicket`, which runs no JQL at all. A ticket just reassigned away from
+ * you — where you are genuinely not the assignee, not the reporter and not a
+ * watcher — came back through this function with nothing left to claim, and
+ * the old fallback labelled it "watching" anyway. Jira answers that question
+ * outright: `fields.watches.isWatching` is exactly that boolean, for the
+ * calling user. When it positively says false, all three roles have been ruled
+ * out and the honest answer is 'none'.
  */
 function roleOf(
   fields: Record<string, unknown>,
@@ -491,6 +511,10 @@ function roleOf(
 ): JiraTicketRole {
   if (accountIdOf(fields.assignee) === myAccountId) return 'assignee';
   if (accountIdOf(fields.reporter) === myAccountId) return 'reporter';
+  // Only an explicit `false` rules watching out. `undefined` means this
+  // payload did not say, which is a different answer and must not be read as
+  // one — that path keeps the JQL inference described above.
+  if (asRecord(fields.watches).isWatching === false) return 'none';
   return 'watcher';
 }
 

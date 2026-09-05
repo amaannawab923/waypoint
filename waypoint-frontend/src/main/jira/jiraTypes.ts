@@ -76,7 +76,18 @@ export interface JiraPriorityOption {
   name: string;
 }
 
-export type JiraTicketRole = 'assignee' | 'reporter' | 'watcher';
+/**
+ * How the signed-in user relates to an issue — strongest claim first, since
+ * the my-work JQL matches on all three at once and a person is frequently
+ * more than one of them.
+ *
+ * `'none'` is not a fourth kind of ownership. It is the positive absence of
+ * all three, and it exists because `mapIssue` is reached by paths that JQL
+ * guarantees nothing about: every write in this client re-reads its issue
+ * through `getTicket`, which runs no query at all. See `roleOf` in jiraMap.ts
+ * for why that distinction had to become representable.
+ */
+export type JiraTicketRole = 'assignee' | 'reporter' | 'watcher' | 'none';
 
 /** One field a transition screen requires before Jira will accept the move. */
 export interface JiraWireTransitionField {

@@ -90,10 +90,15 @@ export function isJiraCredentialFailure(err: unknown): boolean {
 }
 
 /** How the current user relates to a ticket — never mutually exclusive in
- * real Jira (a person can be all three), but the mock fixtures (like the
- * mockup) assign each ticket exactly one role, matching the single
- * `role-tag` pill each row renders. */
-export type JiraTicketRole = 'assignee' | 'reporter' | 'watcher';
+ * real Jira (a person can be all three), but each row renders a single
+ * `role-tag` pill, so main picks the strongest claim and this carries it.
+ *
+ * `'none'` is the absence of all three rather than a fourth role, and it is
+ * a real state on a real ticket: reassign one away from yourself and, unless
+ * you also report or watch it, that is exactly what you are to it now. The
+ * row keeps showing until the next refresh (see setJiraTicketAssignee in
+ * data/jiraApi.ts), so the pill has to be able to say so. */
+export type JiraTicketRole = 'assignee' | 'reporter' | 'watcher' | 'none';
 
 export interface JiraTransitionField {
   key: string;

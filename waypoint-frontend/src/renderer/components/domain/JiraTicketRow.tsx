@@ -25,6 +25,10 @@ import type {
 function roleLabel(ticket: JiraTicket): string {
   if (ticket.isTombstoned) return 'was yours';
   if (ticket.role === 'watcher') return 'watching';
+  // None of the three roles the queue's query matches on — and Jira said so
+  // outright rather than this app failing to work it out (see jiraMap's
+  // roleOf). "not yours", next to the tombstone strip's "was yours".
+  if (ticket.role === 'none') return 'not yours';
   return ticket.role;
 }
 

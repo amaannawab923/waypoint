@@ -333,10 +333,65 @@ describe('mapIssue', () => {
         issue({
           assignee: { accountId: SOMEONE_ELSE },
           reporter: { accountId: SOMEONE_ELSE },
+          watches: { watchCount: 2, isWatching: true },
         }),
         ME,
       )?.role,
     ).toBe('watcher');
+  });
+
+  describe('when none of the three roles is yours', () => {
+    // The bug this replaced: 'watcher' was the unconditional fallback, so
+    // any issue that wasn't yours by assignee or reporter was reported as
+    // one you watch — whether or not you do. Reassigning a ticket away from
+    // yourself makes that the common case, because every write re-reads its
+    // issue through getTicket, which runs no JQL and so cannot support the
+    // "it's in your queue, so it must be one of the three" inference.
+    it('reports "none" when Jira says outright that you are not watching', () => {
+      expect(
+        mapIssue(
+          issue({
+            assignee: { accountId: SOMEONE_ELSE, displayName: 'Sam Lee' },
+            reporter: { accountId: SOMEONE_ELSE },
+            watches: { watchCount: 1, isWatching: false },
+          }),
+          ME,
+        )?.role,
+      ).toBe('none');
+    });
+
+    // Absent assignee/reporter objects are a real, documented case — a
+    // project's permission scheme can restrict who may see those fields — so
+    // "not yours" must be reached from Jira's own answer about watching, not
+    // from the fields that went missing.
+    it('reports "none" even when the assignee and reporter were withheld entirely', () => {
+      expect(
+        mapIssue(
+          issue({
+            assignee: null,
+            reporter: null,
+            watches: { watchCount: 0, isWatching: false },
+          }),
+          ME,
+        )?.role,
+      ).toBe('none');
+    });
+
+    // The one case that must NOT change. A payload with no `watches` at all
+    // has not said you are not watching; for an issue the my-work search
+    // returned, watching is the only role left, and that inference is the
+    // whole reason the old fallback existed. `undefined` is not `false`.
+    it('still infers "watcher" when the payload says nothing about watching', () => {
+      expect(
+        mapIssue(
+          issue({
+            assignee: { accountId: SOMEONE_ELSE },
+            reporter: { accountId: SOMEONE_ELSE },
+          }),
+          ME,
+        )?.role,
+      ).toBe('watcher');
+    });
   });
 
   it('degrades an unassigned, priority-less, description-less issue instead of throwing', () => {
