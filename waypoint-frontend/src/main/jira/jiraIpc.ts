@@ -122,6 +122,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+/**
+ * Schemes a comment link may carry.
+ *
+ * Every other field in this reader is validated to the kind the composer can
+ * produce, and `href` was the one that accepted any string at all — so
+ * `[click](javascript:...)` reached Jira, as did `[x]( )`, whose link regex
+ * needs only one non-`)` character. Neither is exploitable here (this app
+ * renders a comment body as plain text and Atlassian sanitizes its own
+ * renderer), which is exactly why it would have gone unnoticed: it is
+ * content hygiene in a stored, shared record rather than a live hole. The
+ * composer's `[text](url)` only ever means a web address or an email.
+ */
+function isPostableHref(href: string): boolean {
+  const trimmed = href.trim();
+  if (!trimmed) return false;
+  return /^(https?:\/\/|mailto:)/i.test(trimmed);
+}
+
 function readMark(raw: unknown): JiraAdfAnyMark | null {
   if (!isRecord(raw)) return null;
   if (
@@ -135,9 +153,10 @@ function readMark(raw: unknown): JiraAdfAnyMark | null {
   if (
     raw.type === 'link' &&
     isRecord(raw.attrs) &&
-    typeof raw.attrs.href === 'string'
+    typeof raw.attrs.href === 'string' &&
+    isPostableHref(raw.attrs.href)
   ) {
-    return { type: 'link', attrs: { href: raw.attrs.href } };
+    return { type: 'link', attrs: { href: raw.attrs.href.trim() } };
   }
   return null;
 }

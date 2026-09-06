@@ -785,12 +785,15 @@ export function mapIssue(
   };
 }
 
-/** Comments are read through v3 and written through v2 (see jiraClient.ts),
- * so both body shapes are real here and both are flattened: an ADF tree from
- * a read, a plain string from a freshly posted comment echoed back. The
- * string branch runs the wiki-markup pass rather than passing the body
- * through untouched — a v2-shaped body is legacy markup, not plain text, and
- * rendering it verbatim is what leaked a raw `[~accountid:...]` on screen. */
+/** Comments are read AND written through v3 (see jiraClient.ts) — this
+ * comment used to say writes went through v2, which stopped being true when
+ * the composer started sending real ADF, and a stale claim about which API
+ * answers is exactly the kind that makes a reader mis-model where a leak can
+ * happen. Both body shapes are still handled and the string branch is not
+ * dead: a proxy, a reverted endpoint or an older API version can still put
+ * legacy markup here, and it is flattened through the wiki-markup pass
+ * rather than rendered verbatim, which is what leaked a raw
+ * `[~accountid:...]` on screen. `mapIssue` shares that guard now. */
 export function mapComment(
   raw: unknown,
   ticketId: string,

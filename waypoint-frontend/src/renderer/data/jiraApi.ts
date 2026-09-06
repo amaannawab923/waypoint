@@ -788,6 +788,29 @@ function findInlineRuns(
   }, []);
 }
 
+/**
+ * The address a `[text](url)` run should actually carry, or null to post it
+ * as plain text.
+ *
+ * People type bare domains — `[docs](example.com)` — and a bare domain is not
+ * a URL: posted as-is Jira treats it as a relative link that goes nowhere.
+ * Assuming https for something that plainly looks like a host is what the
+ * user meant. Anything else with a scheme this app does not post (javascript:,
+ * data:, file:) loses the mark and keeps its text, which is the honest
+ * outcome: the words the user typed still appear, and nothing pretends to be
+ * a link that this app would not follow.
+ */
+function postableHref(raw: string | undefined): string | null {
+  const href = (raw ?? '').trim();
+  if (!href) return null;
+  if (/^(https?:\/\/|mailto:)/i.test(href)) return href;
+  // A scheme this app does not post, rather than a scheme-less address.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return null;
+  // Scheme-less: only upgrade something host-shaped, so a stray word does not
+  // silently become a link to a domain that may not be the user's.
+  return /^[\w-]+(\.[\w-]+)+([/?#].*)?$/.test(href) ? `https://${href}` : null;
+}
+
 function textNode(text: string, marks: JiraAdfAnyMark[]): JiraAdfInlineNode {
   return marks.length ? { type: 'text', text, marks } : { type: 'text', text };
 }
@@ -855,15 +878,23 @@ function parseInlineRange(
     from < run.start
       ? [textNode(text.slice(from, run.start), activeMarks)]
       : [];
-  const runMark: JiraAdfAnyMark =
-    run.kind === 'link'
-      ? { type: 'link', attrs: { href: run.href ?? '' } }
-      : { type: run.kind };
+  const linkHref = run.kind === 'link' ? postableHref(run.href) : null;
+  // A link whose address cannot be posted keeps its text and loses only the
+  // mark. The alternative — letting it through — fails the whole comment at
+  // the main-process validator, so one mistyped address would reject
+  // everything the user had written with no way to tell which part was at
+  // fault.
+  function markForRun(): JiraAdfAnyMark | null {
+    if (run.kind !== 'link') return { type: run.kind };
+    return linkHref ? { type: 'link', attrs: { href: linkHref } } : null;
+  }
+  const runMark = markForRun();
+  const innerMarks = runMark ? [...activeMarks, runMark] : activeMarks;
   const inner = parseInlineRange(
     text,
     run.contentStart,
     run.contentEnd,
-    [...activeMarks, runMark],
+    innerMarks,
     // Code is literal, so a mention inside it stays text. A fenced block
     // already worked this way (blockToAdf emits its raw text untouched);
     // an inline span did not, so `` `@Sam Lee` `` — text a user

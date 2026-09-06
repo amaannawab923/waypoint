@@ -854,6 +854,47 @@ describe('comment formatting', () => {
     });
   });
 
+  describe('link addresses', () => {
+    it('keeps a real https link', async () => {
+      const body = await postAndCaptureBody('see [the docs](https://x.dev/a)');
+      expect(body.content[0].content).toContainEqual({
+        type: 'text',
+        text: 'the docs',
+        marks: [{ type: 'link', attrs: { href: 'https://x.dev/a' } }],
+      });
+    });
+
+    // People type bare domains. Posted as-is, Jira reads that as a relative
+    // link that goes nowhere.
+    it('assumes https for a bare domain', async () => {
+      const body = await postAndCaptureBody('see [docs](example.com/guide)');
+      expect(body.content[0].content).toContainEqual({
+        type: 'text',
+        text: 'docs',
+        marks: [
+          { type: 'link', attrs: { href: 'https://example.com/guide' } },
+        ],
+      });
+    });
+
+    // The text survives; only the mark is dropped. Letting these through
+    // would fail the whole comment at the main-process validator, so one
+    // mistyped address would reject everything the user had written.
+    it.each([
+      ['javascript:alert(1)'],
+      ['data:text/html,x'],
+      ['file:///etc/passwd'],
+      [' '],
+    ])('posts %s as plain text rather than a link', async (href) => {
+      const body = await postAndCaptureBody(`click [here](${href})`);
+      const nodes = body.content[0].content as { marks?: unknown }[];
+      expect(JSON.stringify(nodes)).not.toContain('link');
+      expect(nodes.map((n) => (n as { text: string }).text).join('')).toContain(
+        'here',
+      );
+    });
+  });
+
   it('wraps **bold** as a strong mark', async () => {
     expect(await postAndCaptureBody('this is **bold** text')).toEqual({
       type: 'doc',

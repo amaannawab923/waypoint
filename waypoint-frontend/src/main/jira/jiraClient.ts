@@ -552,9 +552,20 @@ export async function listMyTickets(): Promise<
     const names = body.names ?? {};
     tickets.push(
       ...(body.issues ?? [])
-        .map((issue) => mapIssue(issue, credential.accountId, names))
-        // One unusual issue must not take the whole list down with it, so
-        // anything that couldn't be mapped is skipped rather than thrown on.
+        // One unusual issue must not take the whole list down with it. The
+        // filter alone only ever skipped an issue mapIssue RETURNED null for;
+        // an issue that made it throw still rejected the whole read, so the
+        // sentence below was describing a protection that was not
+        // implemented. `adfToPlainText` recurses without a depth bound, so a
+        // pathologically nested description was enough to fail every ticket
+        // in the queue rather than one row.
+        .map((issue) => {
+          try {
+            return mapIssue(issue, credential.accountId, names);
+          } catch {
+            return null;
+          }
+        })
         .filter((t): t is JiraWireTicket => t !== null),
     );
 

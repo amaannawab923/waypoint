@@ -234,6 +234,61 @@ describe('listMyTickets', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  // The comment on this map has always said one unusual issue must not take
+  // the whole list down. The filter alone only skipped an issue mapIssue
+  // RETURNED null for; one that made it THROW still rejected the entire read,
+  // so a single pathological description failed every row in the queue.
+  it('skips an issue that cannot be mapped instead of failing the whole read', async () => {
+    // adfToPlainText recurses without a depth bound, so deep enough nesting
+    // is a real RangeError rather than a contrived throw.
+    let description: Record<string, unknown> = {
+      type: 'text',
+      text: 'bottom',
+    };
+    // 2000 is a deliberate window, verified empirically: JSON.stringify and
+    // JSON.parse both still handle this depth, so the fixture survives the
+    // round trip through the mocked response, while adfToPlainText's
+    // unbounded recursion does not. Any deeper and the test's own
+    // stringify throws instead, testing nothing.
+    for (let i = 0; i < 2000; i += 1) {
+      description = { type: 'blockquote', content: [description] };
+    }
+
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        issues: [
+          {
+            id: '1',
+            key: 'ENG-1',
+            fields: {
+              summary: 'poison',
+              project: { key: 'ENG' },
+              status: { name: 'To Do', statusCategory: { key: 'new' } },
+              description,
+            },
+          },
+          {
+            id: '2',
+            key: 'ENG-2',
+            fields: {
+              summary: 'ordinary',
+              project: { key: 'ENG' },
+              status: { name: 'To Do', statusCategory: { key: 'new' } },
+            },
+          },
+        ],
+        isLast: true,
+      }),
+    );
+
+    const result = await listMyTickets();
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.value.tickets.map((t) => t.key)).toEqual([
+      'ENG-2',
+    ]);
+  });
+
   it('maps the returned issues', async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({
