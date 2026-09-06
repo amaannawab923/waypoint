@@ -211,6 +211,17 @@ export function adfToPlainText(node: unknown): string {
     // again one branch below it.
     return type === 'inlineCard' ? text : `${text}\n`;
   }
+  // An image contributes exactly one thing to a plain-text surface: its alt
+  // text. Without this a description that is one screenshot — a common way to
+  // file a bug — rendered completely blank, which is the same content loss as
+  // the pasted-link case above rather than the formatting loss this file's
+  // disclaimer covers. `media` is the node inside a mediaSingle/mediaGroup
+  // wrapper; `mediaInline` is the inline spelling. Both are silent when the
+  // uploader gave no alt, because inventing a filename would be worse than
+  // saying nothing.
+  if (type === 'media' || type === 'mediaInline') {
+    return attrString(record, 'alt');
+  }
   // A status lozenge ("BLOCKED") and an inline date are both words a reader
   // needs; both vanished entirely.
   if (type === 'status') return attrString(record, 'text');

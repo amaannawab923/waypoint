@@ -164,6 +164,52 @@ describe('adfToPlainText', () => {
       ).toBe('ENG-1 Fix login');
     });
 
+    // A description that is one screenshot — a common way to file a bug —
+    // rendered completely blank. Alt text is the only thing an image can
+    // contribute to a plain-text surface.
+    it('renders an image as its alt text', () => {
+      expect(
+        adfToPlainText({
+          type: 'doc',
+          content: [
+            {
+              type: 'mediaSingle',
+              content: [
+                {
+                  type: 'media',
+                  attrs: {
+                    type: 'file',
+                    id: 'abc',
+                    alt: 'architecture diagram',
+                  },
+                },
+              ],
+            },
+          ],
+        }).trim(),
+      ).toBe('architecture diagram');
+    });
+
+    it('renders an inline image as its alt text', () => {
+      expect(
+        adfToPlainText({
+          type: 'mediaInline',
+          attrs: { type: 'file', id: 'abc', alt: 'signature' },
+        }),
+      ).toBe('signature');
+    });
+
+    // Silent rather than inventing a filename: an unlabelled image has no
+    // text a reader can use, and "abc-1234.png" is noise, not content.
+    it('says nothing for an image with no alt text', () => {
+      expect(
+        adfToPlainText({
+          type: 'media',
+          attrs: { type: 'file', id: 'abc-1234' },
+        }),
+      ).toBe('');
+    });
+
     it('renders a status lozenge as its word', () => {
       expect(
         adfToPlainText(
@@ -711,7 +757,9 @@ describe('mapIssue', () => {
     }
 
     it('never renders a raw account id', () => {
-      const out = describedAs('Please look [~accountid:712020:8f1e-aaa] at this');
+      const out = describedAs(
+        'Please look [~accountid:712020:8f1e-aaa] at this',
+      );
       expect(out).not.toContain('accountid');
       expect(out).not.toContain('712020');
       expect(out).toBe('Please look @a teammate at this');
@@ -1353,9 +1401,9 @@ describe('buildTransitionFieldsPayload', () => {
     expect(
       buildTransitionFieldsPayload(TRANSITION, { notAFieldHere: 'x' }),
     ).toEqual({});
-    expect(buildTransitionFieldsPayload(TRANSITION, { resolution: '   ' })).toEqual(
-      {},
-    );
+    expect(
+      buildTransitionFieldsPayload(TRANSITION, { resolution: '   ' }),
+    ).toEqual({});
     expect(
       buildTransitionFieldsPayload(TRANSITION, { resolution: 'Fixed' }),
     ).toEqual({ resolution: { id: '10000' } });
