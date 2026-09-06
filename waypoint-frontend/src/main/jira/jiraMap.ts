@@ -162,10 +162,26 @@ function cardText(record: Record<string, unknown>): string {
  */
 const MAX_TIMESTAMP_MS = 8.64e15;
 
+/** Below this, a value cannot be a millisecond timestamp for any date after
+ *  1973, and is comfortably a seconds timestamp for any date before 5138. */
+const SECONDS_EPOCH_CEILING = 1e11;
+
 function dateText(rawTimestamp: string): string {
   const raw = rawTimestamp.trim();
   if (!/^-?\d+$/.test(raw)) return '';
-  const timestamp = Number(raw);
+  const parsed = Number(raw);
+  if (Math.abs(parsed) > MAX_TIMESTAMP_MS) return '';
+  // Seconds or milliseconds. The editor writes milliseconds, but Atlassian's
+  // own published example for this node is `"1582152559"` — ten digits,
+  // SECONDS — so any producer following the documentation literally rendered
+  // every date as some day in January 1970 (that value read as ms is
+  // 1970-01-19). Magnitude tells the two apart unambiguously in the range
+  // that matters: a millisecond timestamp for any date after 1973 exceeds
+  // 1e11, and a seconds timestamp does not reach 1e11 until the year 5138.
+  // Anything below the threshold is therefore seconds, whichever way you
+  // read it.
+  const timestamp =
+    Math.abs(parsed) < SECONDS_EPOCH_CEILING ? parsed * 1000 : parsed;
   if (Math.abs(timestamp) > MAX_TIMESTAMP_MS) return '';
   const iso = new Date(timestamp).toISOString();
   // The range check alone stops the THROW but not the wrong answer. Outside

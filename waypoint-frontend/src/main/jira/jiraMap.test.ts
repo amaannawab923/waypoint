@@ -318,6 +318,15 @@ describe('adfToPlainText', () => {
       expect(out).toBe('');
     });
 
+    // Atlassian's own published example for this node is "1582152559" — ten
+    // digits, SECONDS — so a producer following the docs literally had every
+    // date render as some day in January 1970 (that value read as ms).
+    it('reads a seconds epoch as seconds, not as January 1970', () => {
+      expect(
+        adfToPlainText({ type: 'date', attrs: { timestamp: '1582152559' } }),
+      ).toBe('2020-02-19');
+    });
+
     // The band that still has to work.
     it('still renders an ordinary millisecond timestamp', () => {
       expect(
