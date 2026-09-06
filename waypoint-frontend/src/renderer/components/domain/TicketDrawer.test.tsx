@@ -20,6 +20,7 @@ import {
 } from '@/data/api';
 import { useProject } from '@/layouts/ProjectLayout';
 import { resetProposalStoreForTests } from '@/lib/proposalStore';
+import { useCopilotOpenState } from '@/lib/copilotOpenStore';
 import type { Member, Project, Ticket } from '@/types/entities';
 import { TicketDrawer } from './TicketDrawer';
 
@@ -58,6 +59,12 @@ jest.mock('@/data/api', () => ({
   updateTicket: jest.fn(),
 }));
 jest.mock('@/layouts/ProjectLayout', () => ({ useProject: jest.fn() }));
+// Defaults to closed so every existing test (none of which cares about
+// Copilot) keeps rendering the drawer flush against the right edge —
+// only the "docks beside Copilot" describe block below overrides this.
+jest.mock('@/lib/copilotOpenStore', () => ({
+  useCopilotOpenState: jest.fn(() => false),
+}));
 
 const PROJECT: Project = {
   id: 'proj-1',
@@ -160,6 +167,7 @@ function drawerRoot(): HTMLElement {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  jest.mocked(useCopilotOpenState).mockReturnValue(false);
   resetProposalStoreForTests();
 });
 
@@ -232,5 +240,28 @@ describe('focus restoration on close', () => {
 
     expect(document.activeElement).toBe(trigger);
     document.body.removeChild(trigger);
+  });
+});
+
+// MY_JIRA_IMPROVEMENTS.md §5: once de-modalized, the drawer and CopilotPanel
+// can both be on screen at once — this asserts they dock side by side
+// instead of the drawer sitting under Copilot's own z-40 panel.
+describe('docks beside Copilot when it is open', () => {
+  it('sits flush against the right edge while Copilot is closed', async () => {
+    jest.mocked(useCopilotOpenState).mockReturnValue(false);
+    mountDrawer();
+
+    await screen.findByDisplayValue('Responsive nav breaks on iPad landscape');
+    expect(drawerRoot().className).toContain('right-0');
+    expect(drawerRoot().className).not.toContain('right-[400px]');
+  });
+
+  it('shifts left by Copilot panel width while Copilot is open', async () => {
+    jest.mocked(useCopilotOpenState).mockReturnValue(true);
+    mountDrawer();
+
+    await screen.findByDisplayValue('Responsive nav breaks on iPad landscape');
+    expect(drawerRoot().className).toContain('right-[400px]');
+    expect(drawerRoot().className).not.toContain('right-0');
   });
 });

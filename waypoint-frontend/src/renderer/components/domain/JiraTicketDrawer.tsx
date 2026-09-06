@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
+import { clsx } from 'clsx';
 import { JiraTicketDetail } from '@/components/domain/JiraTicketDetail';
+import { useCopilotOpenState } from '@/lib/copilotOpenStore';
 import type { JiraTicket } from '@/types/jira';
 
 /**
@@ -49,6 +51,11 @@ export function JiraTicketDrawer({
   // starts off-screen and the transition actually animates in.
   const [visible, setVisible] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  // Docked beside Copilot rather than under it once Copilot is open — same
+  // side-by-side layout TicketDrawer.tsx now supports for native tickets;
+  // see lib/copilotOpenStore.ts for why this reads a module-level store
+  // instead of route-scoped context.
+  const copilotOpen = useCopilotOpenState();
 
   useEffect(() => {
     const raf = requestAnimationFrame(() => setVisible(true));
@@ -109,9 +116,15 @@ export function JiraTicketDrawer({
     <div
       ref={panelRef}
       data-ticket-drawer
-      // 720px, matching TicketDrawer — the 460px this used to be is what
-      // made "Open in Jira" the only comfortable way to read a real thread.
-      className="thin-scroll fixed top-12 right-0 bottom-0 z-50 flex w-full max-w-[720px] flex-col border-l border-border bg-surface shadow-2xl transition-transform duration-200 ease-out"
+      className={clsx(
+        // 720px, matching TicketDrawer — the 460px this used to be is what
+        // made "Open in Jira" the only comfortable way to read a real thread.
+        'thin-scroll fixed top-12 bottom-0 z-50 flex w-full max-w-[720px] flex-col border-l border-border bg-surface shadow-2xl transition-[right,transform] duration-200 ease-out',
+        // Shifted left by Copilot's own width while it's open, so the two
+        // dock side by side instead of one covering the other — see
+        // lib/copilotOpenStore.ts.
+        copilotOpen ? 'right-[400px]' : 'right-0',
+      )}
       style={{ transform: visible ? 'translateX(0)' : 'translateX(100%)' }}
     >
       <JiraTicketDetail

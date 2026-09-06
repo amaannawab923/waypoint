@@ -17,6 +17,7 @@ import {
 } from '@/data/jiraApi';
 import { useJiraConnection } from '@/lib/jiraStore';
 import { showErrorToast } from '@/lib/toast';
+import { useCopilotOpenState } from '@/lib/copilotOpenStore';
 import type {
   JiraAttachment,
   JiraComment,
@@ -40,6 +41,12 @@ jest.mock('@/data/jiraApi', () => ({
 }));
 jest.mock('@/lib/jiraStore', () => ({ useJiraConnection: jest.fn() }));
 jest.mock('@/lib/toast', () => ({ showErrorToast: jest.fn() }));
+// Defaults to closed so every existing test in this file (none of which
+// cares about Copilot) keeps rendering the drawer flush against the right
+// edge — only the "docks beside Copilot" describe block below overrides this.
+jest.mock('@/lib/copilotOpenStore', () => ({
+  useCopilotOpenState: jest.fn(() => false),
+}));
 
 const ME = 'acct-max';
 
@@ -154,6 +161,7 @@ async function runDebounce() {
 beforeEach(() => {
   jest.useFakeTimers();
   jest.clearAllMocks();
+  jest.mocked(useCopilotOpenState).mockReturnValue(false);
   jest.mocked(listJiraComments).mockResolvedValue({ comments: [], total: 0 });
   jest.mocked(useJiraConnection).mockReturnValue(CONNECTION);
   jest.mocked(searchJiraAssignableUsers).mockResolvedValue(ASSIGNABLE);
@@ -1010,3 +1018,27 @@ describe('focus restoration on close', () => {
   });
 });
 
+// MY_JIRA_IMPROVEMENTS.md §5: once de-modalized, this drawer and CopilotPanel
+// can both be on screen at once — same coordination TicketDrawer.test.tsx
+// asserts for native tickets.
+describe('docks beside Copilot when it is open', () => {
+  function drawerRoot(): HTMLElement {
+    return document.querySelector('[data-ticket-drawer]') as HTMLElement;
+  }
+
+  it('sits flush against the right edge while Copilot is closed', () => {
+    jest.mocked(useCopilotOpenState).mockReturnValue(false);
+    renderDrawer();
+
+    expect(drawerRoot().className).toContain('right-0');
+    expect(drawerRoot().className).not.toContain('right-[400px]');
+  });
+
+  it('shifts left by Copilot panel width while Copilot is open', () => {
+    jest.mocked(useCopilotOpenState).mockReturnValue(true);
+    renderDrawer();
+
+    expect(drawerRoot().className).toContain('right-[400px]');
+    expect(drawerRoot().className).not.toContain('right-0');
+  });
+});

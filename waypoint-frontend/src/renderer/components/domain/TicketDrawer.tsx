@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
+import { clsx } from 'clsx';
 import { TicketDetailContent } from '@/pages/tickets/TicketDetailPage';
+import { useCopilotOpenState } from '@/lib/copilotOpenStore';
 
 /**
  * Controlled "peek" panel: slides in from the right edge showing a ticket's
@@ -35,6 +37,11 @@ export function TicketDrawer({
   // starts off-screen and the transition actually animates in.
   const [visible, setVisible] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  // Docked beside Copilot rather than under it once Copilot is open, the
+  // same side-by-side layout CopilotPanel and this drawer now both support —
+  // see lib/copilotOpenStore.ts for why this reads a module-level store
+  // instead of route-scoped context.
+  const copilotOpen = useCopilotOpenState();
 
   useEffect(() => {
     const raf = requestAnimationFrame(() => setVisible(true));
@@ -93,7 +100,13 @@ export function TicketDrawer({
     <div
       ref={panelRef}
       data-ticket-drawer
-      className="thin-scroll fixed top-12 right-0 bottom-0 z-50 flex w-full max-w-[720px] flex-col border-l border-border bg-surface shadow-2xl transition-transform duration-200 ease-out"
+      className={clsx(
+        'thin-scroll fixed top-12 bottom-0 z-50 flex w-full max-w-[720px] flex-col border-l border-border bg-surface shadow-2xl transition-[right,transform] duration-200 ease-out',
+        // Shifted left by Copilot's own width while it's open, so the two
+        // dock side by side instead of one covering the other — see
+        // lib/copilotOpenStore.ts.
+        copilotOpen ? 'right-[400px]' : 'right-0',
+      )}
       style={{ transform: visible ? 'translateX(0)' : 'translateX(100%)' }}
     >
       <TicketDetailContent
