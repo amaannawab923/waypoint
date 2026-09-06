@@ -119,21 +119,24 @@ export function JiraTicketDrawer({
       className={clsx(
         // 720px, matching TicketDrawer — the 460px this used to be is what
         // made "Open in Jira" the only comfortable way to read a real thread.
-        //
-        // shadow-2xl (Tailwind's default, unblurred rect ± its own edges) is
-        // symmetric, so with this drawer stacked above Copilot (z-50 vs
-        // z-40) its own drop shadow painted a visible gray gradient across
-        // Copilot's left edge whenever both were docked side by side —
-        // Copilot wasn't a different white, it was being shadowed by the
-        // drawer sitting on top of it. A negative x-offset keeps the same
-        // depth cue toward the main content on the left, the only side this
-        // panel actually floats over, without ever reaching past its own
-        // right edge onto whatever's docked next to it.
-        'thin-scroll fixed top-12 bottom-0 z-50 flex w-full max-w-[720px] flex-col border-l border-border bg-surface shadow-[-20px_25px_50px_-12px_rgba(0,0,0,0.25)] transition-[right,transform] duration-200 ease-out',
+        'thin-scroll fixed top-12 bottom-0 z-50 flex w-full max-w-[720px] flex-col border-l border-border bg-surface transition-[right,transform] duration-200 ease-out',
         // Shifted left by Copilot's own width while it's open, so the two
         // dock side by side instead of one covering the other — see
         // lib/copilotOpenStore.ts.
         copilotOpen ? 'right-[400px]' : 'right-0',
+        // shadow-2xl belongs only to the "floating over the main content
+        // list" state. A negative x-offset was tried first to keep it while
+        // aiming the blur away from Copilot, but box-shadow's blur has no
+        // hard edge — any offset small enough to still read as a shadow
+        // still left a soft, real (measured via pixel sampling, not
+        // eyeballed) gray tail 60-90px into Copilot's white, because this
+        // drawer sits above it in stacking order (z-50 vs z-40) and paints
+        // on top of it. Once Copilot is docked beside it, this drawer isn't
+        // floating over anything on its right — it's a peer panel with its
+        // own `border-l` divider, which is already the correct affordance
+        // for "these are two separate surfaces." No shadow there means no
+        // amount of blur tuning can ever bleed onto a docked neighbor again.
+        copilotOpen ? 'shadow-none' : 'shadow-2xl',
       )}
       style={{ transform: visible ? 'translateX(0)' : 'translateX(100%)' }}
     >

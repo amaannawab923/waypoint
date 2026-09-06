@@ -101,17 +101,21 @@ export function TicketDrawer({
       ref={panelRef}
       data-ticket-drawer
       className={clsx(
-        // Negative x-offset, not shadow-2xl's default symmetric one — this
-        // drawer sits above Copilot (z-50 vs z-40), so a symmetric drop
-        // shadow painted a visible gray gradient across Copilot's left edge
-        // whenever both were docked side by side (see JiraTicketDrawer.tsx's
-        // identical fix). Keeps the depth cue on the left, the only side
-        // this panel actually floats over main content.
-        'thin-scroll fixed top-12 bottom-0 z-50 flex w-full max-w-[720px] flex-col border-l border-border bg-surface shadow-[-20px_25px_50px_-12px_rgba(0,0,0,0.25)] transition-[right,transform] duration-200 ease-out',
+        'thin-scroll fixed top-12 bottom-0 z-50 flex w-full max-w-[720px] flex-col border-l border-border bg-surface transition-[right,transform] duration-200 ease-out',
         // Shifted left by Copilot's own width while it's open, so the two
         // dock side by side instead of one covering the other — see
         // lib/copilotOpenStore.ts.
         copilotOpen ? 'right-[400px]' : 'right-0',
+        // shadow-2xl belongs only to the "floating over the main content
+        // list" state (see JiraTicketDrawer.tsx's identical comment for the
+        // full story: a negative x-offset was tried first, but box-shadow
+        // blur has no hard edge, so any offset small enough to still read
+        // as a shadow still measured a real, non-zero gray tail well into
+        // Copilot's white — this drawer paints above it, z-50 vs z-40).
+        // Once docked beside Copilot this drawer isn't floating over
+        // anything to its right; the existing `border-l` divider is
+        // already the correct affordance for two separate peer surfaces.
+        copilotOpen ? 'shadow-none' : 'shadow-2xl',
       )}
       style={{ transform: visible ? 'translateX(0)' : 'translateX(100%)' }}
     >
