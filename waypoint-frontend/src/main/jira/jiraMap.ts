@@ -165,10 +165,18 @@ export function wikiMarkupToPlainText(
   // Mentions first, before any bracket-based rule: an account id is
   // structured data that must be consumed here rather than left for a later
   // pass to mangle into something that still contains it.
-  text = text.replace(/\[~accountid:([^\]]+)\]/g, (_match, accountId) => {
-    const name = resolveMentionName?.(String(accountId)) ?? null;
-    return `@${name && name.trim() ? name.trim() : 'a teammate'}`;
-  });
+  // `accountid:` is optional. Server-era markup and Server->Cloud migrated
+  // bodies carry the bare `[~<id>]` form, and on migrated Cloud data that id
+  // is frequently the account id itself — so the narrower pattern let through
+  // exactly the string this function exists to stop, and no later rule caught
+  // it either (the link rule needs a `|`).
+  text = text.replace(
+    /\[~(?:accountid:)?([^\]\s]+)\]/g,
+    (_match, accountId) => {
+      const name = resolveMentionName?.(String(accountId)) ?? null;
+      return `@${name && name.trim() ? name.trim() : 'a teammate'}`;
+    },
+  );
 
   // Block macros: keep the content, drop the markers.
   text = text.replace(/\{noformat\}([\s\S]*?)\{noformat\}/g, '$1');
@@ -199,6 +207,17 @@ export function wikiMarkupToPlainText(
   // stripping them would do more damage than an occasional stray marker.
 
   return tidyPlainText(text);
+}
+
+/**
+ * A Jira body field as display text, whichever of the two shapes it arrives
+ * in. Extracted so a description and a comment cannot drift apart again: the
+ * string branch is the wiki-markup floor, the object branch is real ADF.
+ */
+export function plainTextFromJiraBody(body: unknown): string {
+  return typeof body === 'string'
+    ? wikiMarkupToPlainText(body)
+    : tidyPlainText(adfToPlainText(body));
 }
 
 // -----------------------------------------------------------------------
@@ -282,10 +301,16 @@ function mapTransitionField(
   const schemaType = schemaTypeOf(meta);
   // Optional fields are dropped — a transition screen can carry a dozen of
   // them and this popover is not a full issue editor. Time tracking is the
-  // one exception: it's the common "log your time on the way out" field, and
-  // the popover already models an optional field with a hint, so offering it
-  // costs nothing and skipping it would quietly lose data the user meant to
-  // record.
+  // one exception, because updating the remaining estimate on the way out of
+  // a state is the common case and the popover already models an optional
+  // field with a hint.
+  //
+  // This is the estimate field, NOT "log your time on the way out", which is
+  // what this comment used to claim. Logging work is Jira's `worklog` field
+  // (schema type `array` of `worklog`), written through `update` rather than
+  // `fields`; being an array it is not `timetracking`, so when it is optional
+  // the line below drops it and when it is required the transition fails with
+  // Jira's own message. Neither outcome is silent, which is the point.
   if (!required && schemaType !== 'timetracking') return null;
 
   const allowedValues = Array.isArray(meta.allowedValues)
@@ -374,7 +399,22 @@ function transitionFieldPayload(
 ): unknown {
   const schemaType = schemaTypeOf(meta);
 
-  if (schemaType === 'timetracking') return { timeSpent: value };
+  // `remainingEstimate`, not `timeSpent`. Jira's TimeTrackingJsonBean — the
+  // shape `fields.timetracking` accepts — has exactly two members,
+  // `originalEstimate` and `remainingEstimate`. `timeSpent` is not one of
+  // them: logging work is a different field entirely (`worklog`, written as
+  // `update: { worklog: [{ add: { timeSpent } }] }`, not through `fields` at
+  // all). Sending it here meant the value was either rejected outright or,
+  // worse, accepted-and-ignored — the transition succeeded, the re-read came
+  // back clean, and the user believed they had logged time against an issue
+  // that has no worklog entry.
+  //
+  // Of the two members this field really has, the remaining estimate is the
+  // one a transition screen exists to update ("how much is left on this?"),
+  // and it is the one that leaves an untouched original estimate intact.
+  // Logging work is deliberately still not supported; see the caller's
+  // comment, which no longer claims otherwise.
+  if (schemaType === 'timetracking') return { remainingEstimate: value };
 
   const allowedValues = Array.isArray(meta.allowedValues)
     ? meta.allowedValues
@@ -722,7 +762,14 @@ export function mapIssue(
     // issue actually is.
     assigneeAccountId: accountIdOf(fields.assignee),
     reporterName: displayNameOf(fields.reporter, 'Unknown'),
-    description: tidyPlainText(adfToPlainText(fields.description)),
+    // Same two-branch guard `mapComment` uses, and for the same reason.
+    // `adfToPlainText` returns a string input verbatim, so a description that
+    // arrives as wiki markup rather than ADF — a proxy, a reverted endpoint,
+    // an older API version, the three cases this file's own comments name —
+    // went straight to the screen carrying `[~accountid:...]` and unstripped
+    // `*bold*`/`{code}` markers. Comments were protected; descriptions came
+    // from the same payloads and were not.
+    description: plainTextFromJiraBody(fields.description),
     epicName: typeof epicName === 'string' ? epicName : null,
     storyPoints:
       typeof storyPointsRaw === 'number' && Number.isFinite(storyPointsRaw)

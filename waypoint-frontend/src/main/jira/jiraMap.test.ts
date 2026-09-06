@@ -371,6 +371,53 @@ describe('mapUserOption', () => {
 });
 
 describe('mapIssue', () => {
+  // A description and a comment arrive in the same payloads and can arrive in
+  // the same two shapes. `mapComment` guarded the string shape from the start;
+  // `mapIssue` did not, so the account id this file says "must never reach the
+  // screen" reached it through the description while the comment thread right
+  // below it was clean.
+  describe('description, when Jira answers with wiki markup', () => {
+    function describedAs(description: unknown) {
+      return mapIssue(
+        { id: '10421', key: 'ENG-421', fields: { description } },
+        ME,
+      )?.description;
+    }
+
+    it('never renders a raw account id', () => {
+      const out = describedAs('Please look [~accountid:712020:8f1e-aaa] at this');
+      expect(out).not.toContain('accountid');
+      expect(out).not.toContain('712020');
+      expect(out).toBe('Please look @a teammate at this');
+    });
+
+    // The prefix-less form, which Server-era and Server->Cloud-migrated
+    // bodies carry and where the "username" is frequently the account id.
+    it('never renders a raw account id in the prefix-less mention form', () => {
+      const out = describedAs('hi [~712020:8f1e-aaa] please look');
+      expect(out).not.toContain('712020');
+      expect(out).toBe('hi @a teammate please look');
+    });
+
+    it('strips wiki markers rather than showing them', () => {
+      expect(describedAs('a *bold* word and {noformat}raw{noformat}')).toBe(
+        'a bold word and raw',
+      );
+    });
+
+    // The ADF path is the normal one and must be untouched by the guard.
+    it('still reads a real ADF description', () => {
+      expect(
+        describedAs({
+          type: 'doc',
+          content: [
+            { type: 'paragraph', content: [{ type: 'text', text: 'plain' }] },
+          ],
+        }),
+      ).toBe('plain');
+    });
+  });
+
   function issue(overrides: Record<string, unknown> = {}) {
     return {
       id: '10421',
@@ -809,10 +856,24 @@ describe('buildTransitionFieldsPayload', () => {
     ).toEqual({ resolution: { id: '10000' } });
   });
 
-  it('sends time tracking in the shape Jira expects, not as a bare string', () => {
+  // This test used to assert `{ timeSpent }` and was named for getting the
+  // shape right, which is how the wrong shape survived review: Jira's
+  // TimeTrackingJsonBean has only `originalEstimate` and `remainingEstimate`,
+  // and `timeSpent` belongs to `worklog` — a different field, written through
+  // `update`, not `fields`. The old payload was accepted-and-ignored or
+  // rejected, so a user who typed "3h 30m" on the way to Done believed they
+  // had logged time against an issue with no worklog entry.
+  it('sends time tracking as a remaining estimate, the member this field has', () => {
     expect(
       buildTransitionFieldsPayload(TRANSITION, { timetracking: '3h 30m' }),
-    ).toEqual({ timetracking: { timeSpent: '3h 30m' } });
+    ).toEqual({ timetracking: { remainingEstimate: '3h 30m' } });
+  });
+
+  it('never sends timeSpent, which this field does not accept', () => {
+    const payload = buildTransitionFieldsPayload(TRANSITION, {
+      timetracking: '3h 30m',
+    }) as Record<string, unknown>;
+    expect(JSON.stringify(payload)).not.toContain('timeSpent');
   });
 
   it('coerces a numeric field', () => {

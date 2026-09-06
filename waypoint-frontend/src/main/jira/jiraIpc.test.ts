@@ -122,7 +122,14 @@ const WINDOW = { id: 1 } as never;
 const getWindowMock = jest.fn<never | null, []>(() => WINDOW);
 
 beforeEach(() => {
-  jest.clearAllMocks();
+  // `clearAllMocks` clears recorded calls but NOT a `mockImplementation`, so
+  // any test that makes a mock throw leaves it throwing for every test
+  // declared after it. That is invisible in declaration order and fires under
+  // `--randomize`: the connect tests below, which need the default no-op
+  // write, failed on 7 of 9 seeds because a later test's ENOSPC
+  // implementation was still installed. Resetting implementations here makes
+  // the suite order-independent by construction rather than by luck.
+  jest.resetAllMocks();
   readStoredJiraCredentialMock.mockReturnValue(null);
   isJiraSecureStorageAvailableMock.mockReturnValue(true);
   getWindowMock.mockReturnValue(WINDOW);

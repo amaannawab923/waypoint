@@ -950,6 +950,28 @@ describe('downloadAttachment', () => {
     expect(response.text).not.toHaveBeenCalled();
   });
 
+  // The regression this covers hung the app rather than failing it. `fetch`
+  // resolves when the response HEADERS arrive, and the abort timer used to be
+  // cleared right there — so a server that sent headers and then stalled left
+  // `arrayBuffer()` running with no timeout and a disarmed controller. It
+  // never settled and never rejected: the IPC invoke never answered, the save
+  // dialog never opened, and the spinner never cleared. The timer now spans
+  // the body read, so a stall aborts, and an abort has to surface as the
+  // network failure it is rather than as a hang or a misleading "not a Jira
+  // site" parse error.
+  it('reports a body that stalls after the headers as a network failure', async () => {
+    const abort = new Error('The operation was aborted.');
+    abort.name = 'AbortError';
+    const response = binaryResponse(BYTES);
+    (response.arrayBuffer as jest.Mock).mockRejectedValue(abort);
+    fetchMock.mockResolvedValue(response);
+
+    expect(await downloadAttachment('10050')).toMatchObject({
+      ok: false,
+      reason: 'network',
+    });
+  });
+
   // Refused from the declared length, before anything is allocated — the
   // whole point is not to buffer an arbitrarily large file into main's heap.
   it('refuses an oversized attachment on content-length, without reading the body', async () => {

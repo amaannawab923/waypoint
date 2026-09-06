@@ -195,10 +195,18 @@ interface RawJiraRequest {
  * handled here, including reading and parsing Jira's own error body, because
  * an error body is JSON no matter what the caller asked for.
  */
+/** A response whose body has not been read yet, plus the handle that stops
+ *  its abort timer. Callers MUST call `release()` once they are done with
+ *  the body (or have decided not to read it), or the timer leaks. */
+interface SentRequest {
+  response: Response;
+  release: () => void;
+}
+
 async function performRequest(
   credential: Credentialish,
   request: RawJiraRequest,
-): Promise<JiraResult<Response>> {
+): Promise<JiraResult<SentRequest>> {
   const url = new URL(`https://${credential.site}${request.path}`);
   for (const [key, value] of Object.entries(request.query ?? {})) {
     url.searchParams.set(key, value);
@@ -210,6 +218,20 @@ async function performRequest(
   // something worth making conditional.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), request.timeoutMs);
+  // Deliberately NOT cleared when `fetch` settles. `fetch` resolves as soon
+  // as the response HEADERS arrive, so clearing it there left every body read
+  // — including a 40MB attachment download — running with no timeout and a
+  // disarmed controller. A connection that stalled mid-body then hung
+  // forever: `arrayBuffer()` never settled and never rejected, so the IPC
+  // invoke never answered, the save dialog never opened, the renderer's
+  // spinner never cleared, and the partial buffer stayed pinned in the main
+  // process until the app was restarted. No error was reported because no
+  // error was ever produced.
+  //
+  // The timer now covers headers AND body, and every exit path below calls
+  // `release()`. That also makes TRANSFER_TIMEOUT_MS mean what its own
+  // comment says it means on the download path, rather than only on upload.
+  const release = () => clearTimeout(timer);
 
   let response: Response;
   try {
@@ -224,23 +246,25 @@ async function performRequest(
       signal: controller.signal,
     });
   } catch (err) {
+    release();
     return classifyNetworkError(err);
-  } finally {
-    clearTimeout(timer);
   }
 
   if (response.status === 401) {
+    release();
     return failure(
       'invalid_credentials',
       'Jira rejected that email and API token. Check both, and that the token was generated for this Atlassian account.',
     );
   }
   if (response.status === 403) {
+    release();
     return failure('forbidden', "Your Jira account isn't allowed to do that.");
   }
 
   if (!response.ok) {
     if (response.status === 429) {
+      release();
       return failure(
         'jira_error',
         'Jira is rate-limiting this account right now — wait a moment and try again.',
@@ -255,6 +279,8 @@ async function performRequest(
       parsed = text ? JSON.parse(text) : undefined;
     } catch {
       parsed = undefined;
+    } finally {
+      release();
     }
     return failure(
       'jira_error',
@@ -262,17 +288,34 @@ async function performRequest(
     );
   }
 
-  return { ok: true, value: response };
+  return { ok: true, value: { response, release } };
 }
 
 /** Reads a successful response as JSON. The tail shared by `jiraFetch` and
  * `jiraFetchMultipart` — both send different bodies and both get JSON back. */
-async function readJsonBody<T>(response: Response): Promise<JiraResult<T>> {
-  if (response.status === 204) return { ok: true, value: undefined as T };
+async function readJsonBody<T>(sent: SentRequest): Promise<JiraResult<T>> {
+  const { response, release } = sent;
+  if (response.status === 204) {
+    release();
+    return { ok: true, value: undefined as T };
+  }
+
+  let text: string;
+  try {
+    // Inside the timer's window, so a stalled body aborts here instead of
+    // hanging. An abort is a network failure, not malformed JSON, and has to
+    // be classified as one — reporting "that address answered, but not like a
+    // Jira Cloud site" for a dropped connection would send the user off
+    // checking a site address that is perfectly correct.
+    text = await response.text();
+  } catch (err) {
+    return classifyNetworkError(err);
+  } finally {
+    release();
+  }
 
   let parsed: unknown;
   try {
-    const text = await response.text();
     parsed = text ? JSON.parse(text) : undefined;
   } catch {
     // A 200 that isn't JSON is not a Jira API response at all — it's almost
@@ -369,12 +412,26 @@ async function jiraFetchBinary(
   });
   if (!sent.ok) return sent;
 
-  const declared = Number(sent.value.headers.get('content-length'));
+  const { response, release } = sent.value;
+
+  const declared = Number(response.headers.get('content-length'));
   if (Number.isFinite(declared) && declared > MAX_TRANSFER_BYTES) {
+    release();
     return failure('jira_error', tooLargeMessage(declared));
   }
 
-  const bytes = Buffer.from(await sent.value.arrayBuffer());
+  // The read the abort timer now actually covers. A server that sends headers
+  // and then stalls used to hang this call forever; it now aborts and is
+  // reported as the network failure it is.
+  let bytes: Buffer;
+  try {
+    bytes = Buffer.from(await response.arrayBuffer());
+  } catch (err) {
+    return classifyNetworkError(err);
+  } finally {
+    release();
+  }
+
   if (bytes.byteLength > MAX_TRANSFER_BYTES) {
     return failure('jira_error', tooLargeMessage(bytes.byteLength));
   }
