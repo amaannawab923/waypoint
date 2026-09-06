@@ -87,6 +87,45 @@ describe('useFloatingPanel', () => {
     expect(screen.getByRole('button', { name: 'In Progress' })).toHaveFocus();
   });
 
+  // The regression guard for the bug the test above could not see.
+  //
+  // Focus used to be taken on mount, while the panel was still
+  // `visibility: hidden` waiting for its coordinates. jsdom does not
+  // implement the rule that a hidden element cannot take focus, so the
+  // assertion above passed for months while the real app left focus on the
+  // trigger and Tab skipped the open panel entirely — caught only by
+  // instrumenting HTMLElement.focus in a running Electron window.
+  //
+  // This encodes the browser's rule that jsdom is missing: whatever element
+  // focus lands on, the panel must not be hidden at the moment it happens.
+  // Reverting the hook to focus on mount fails this immediately.
+  it('does not reach for focus while the panel is still hidden', () => {
+    const visibilityAtFocus: string[] = [];
+    const realFocus = HTMLElement.prototype.focus;
+    jest.spyOn(HTMLElement.prototype, 'focus').mockImplementation(function spy(
+      this: HTMLElement,
+      ...args
+    ) {
+      const panel = document.querySelector('[role="dialog"]');
+      if (panel) {
+        visibilityAtFocus.push(
+          (panel as HTMLElement).style.visibility || 'visible',
+        );
+      }
+      return realFocus.apply(this, args);
+    });
+
+    render(<Harness />);
+    openPanel();
+
+    jest.mocked(HTMLElement.prototype.focus).mockRestore();
+
+    // The panel existed for at least one focus() call (otherwise this test is
+    // asserting nothing) and was never hidden for any of them.
+    expect(visibilityAtFocus.length).toBeGreaterThan(0);
+    expect(visibilityAtFocus).not.toContain('hidden');
+  });
+
   it('focuses the panel itself when it holds nothing focusable', () => {
     render(<Harness empty />);
 

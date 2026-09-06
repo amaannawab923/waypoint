@@ -202,16 +202,52 @@ export function useFloatingPanel({
     };
   }, [triggerRef]);
 
-  // Focus, in a passive effect on purpose: the layout effects above force a
-  // synchronous re-render to apply the real coordinates, and until that
-  // lands the panel is still `visibility: hidden` — which a real browser
-  // refuses to focus. By the time passive effects flush, it is placed and
-  // visible.
+  // Focus moves in only once the panel has real coordinates — i.e. once it is
+  // no longer `visibility: hidden`.
+  //
+  // This used to run on mount, on the assumption (written into the comment
+  // that was here) that the layout effects above had already forced a
+  // synchronous re-render, so by the time passive effects flushed the panel
+  // was placed and visible. That assumption was wrong, and wrong in the one
+  // environment nobody was watching: instrumenting `HTMLElement.focus` in the
+  // real app caught the call landing on the panel while it still computed to
+  // `visibility: hidden`, and a real browser silently no-ops a focus() on a
+  // hidden element. Focus stayed on the trigger, Tab skipped straight past
+  // the open panel to the next control, and a keyboard-only user could not
+  // reach a transition, a priority or an assignee at all.
+  //
+  // The unit test did not catch it because jsdom does not implement that
+  // rule: it will happily focus a hidden element, so the assertion passed
+  // while the product was broken. See this hook's test for the guard that now
+  // encodes the browser's actual rule.
+  //
+  // `coords !== null` is exactly the "is it visible yet" signal, because it is
+  // the same condition `panelProps.style` switches on below. A ref, not state,
+  // gates the once-only part: re-running on every reposition (a scroll, a
+  // resize, a content-driven re-measure) would yank focus back out of
+  // whatever the user had since tabbed to inside the panel.
+  const placed = coords !== null;
+  const hasFocusedRef = useRef(false);
   useEffect(() => {
+    if (!placed || hasFocusedRef.current) return;
     const panel = panelRef.current;
-    const trigger = triggerRef.current;
-    if (panel) (firstFocusable(panel) ?? panel).focus();
+    if (!panel) return;
+    hasFocusedRef.current = true;
+    // `firstFocusable` is frequently null here even on a panel that will have
+    // buttons: every picker built on this hook fetches its options when it
+    // opens, so at first paint the panel holds a "Loading…" line and nothing
+    // tabbable. Focusing the container is the right answer anyway — it caries
+    // tabIndex -1 for exactly this, and Tab from a container moves into its
+    // own descendants, so the options are reachable the moment they arrive.
+    (firstFocusable(panel) ?? panel).focus();
+  }, [placed]);
 
+  // Focus restoration is its own effect, with its own empty dependency list,
+  // because "on close" is unmount and must stay unmount. Folding it into the
+  // effect above (which now has a real dependency) would fire this cleanup on
+  // every reposition, throwing focus back at the trigger mid-interaction.
+  useEffect(() => {
+    const trigger = triggerRef.current;
     return () => {
       if (!focusIsInsideRef.current) return;
       if (!trigger?.isConnected) return;
@@ -221,7 +257,7 @@ export function useFloatingPanel({
       // something this can promise its way out of.
       trigger.focus();
     };
-    // Deliberately mount/unmount only: this is "on open" and "on close".
+    // Deliberately mount/unmount only: this is "on close".
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
