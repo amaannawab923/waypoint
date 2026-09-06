@@ -197,17 +197,23 @@ describe('AppShell', () => {
     it('starts false, matching the panel closed by default', () => {
       renderAppShell();
 
-      expect(screen.getByTestId('store-copilot-open')).toHaveTextContent('false');
+      expect(screen.getByTestId('store-copilot-open')).toHaveTextContent(
+        'false',
+      );
     });
 
     it('flips true when the panel opens, and back on close', () => {
       renderAppShell();
 
       fireEvent.click(screen.getByRole('button', { name: 'Toggle Copilot' }));
-      expect(screen.getByTestId('store-copilot-open')).toHaveTextContent('true');
+      expect(screen.getByTestId('store-copilot-open')).toHaveTextContent(
+        'true',
+      );
 
       fireEvent.click(screen.getByRole('button', { name: 'Toggle Copilot' }));
-      expect(screen.getByTestId('store-copilot-open')).toHaveTextContent('false');
+      expect(screen.getByTestId('store-copilot-open')).toHaveTextContent(
+        'false',
+      );
     });
   });
 });

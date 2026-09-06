@@ -90,7 +90,14 @@ const PROJECT: Project = {
   memberIds: ['mem-1'],
   guestAccessEnabled: false,
   repoPath: null,
-  primitiveCounts: { sprints: 0, workstreams: 0, views: 0, docs: 0, requests: 0, requestsPending: 0 },
+  primitiveCounts: {
+    sprints: 0,
+    workstreams: 0,
+    views: 0,
+    docs: 0,
+    requests: 0,
+    requestsPending: 0,
+  },
   acceptsRequests: false,
 };
 
@@ -137,7 +144,9 @@ const ITEM: Ticket = {
 };
 
 function mountDrawer(onClose: () => void = jest.fn()) {
-  jest.mocked(useProject).mockReturnValue({ project: PROJECT, reloadProject: jest.fn() });
+  jest
+    .mocked(useProject)
+    .mockReturnValue({ project: PROJECT, reloadProject: jest.fn() });
   jest.mocked(getTicketByIdentifier).mockResolvedValue(ITEM);
   jest.mocked(listStates).mockResolvedValue([]);
   jest.mocked(listLabels).mockResolvedValue([]);
@@ -156,7 +165,11 @@ function mountDrawer(onClose: () => void = jest.fn()) {
 
   return render(
     <MemoryRouter>
-      <TicketDrawer projectId="proj-1" identifier="LAUNCH-3" onClose={onClose} />
+      <TicketDrawer
+        projectId="proj-1"
+        identifier="LAUNCH-3"
+        onClose={onClose}
+      />
     </MemoryRouter>,
   );
 }

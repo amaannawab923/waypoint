@@ -794,9 +794,10 @@ describe('comment thread truncation', () => {
   }
 
   it('says how many of the thread it is showing when the page is capped', async () => {
-    jest
-      .mocked(listJiraComments)
-      .mockResolvedValue({ comments: [threadComment('1'), threadComment('2')], total: 312 });
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [threadComment('1'), threadComment('2')],
+      total: 312,
+    });
 
     renderDrawer();
 
