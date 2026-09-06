@@ -445,6 +445,24 @@ export function JiraTicketDetail({
             </div>
           ))}
 
+          {/* No "Pending proposals" section here, unlike TicketDetailContent's
+              native-ticket equivalent (MY_JIRA_IMPROVEMENTS.md §5 asked for
+              parity if the data supported it — it doesn't, yet). ProposalView
+              is origin-agnostic in shape, but every propose_* MCP tool
+              (waypoint-backend/src/mcp/proposalTools.ts) resolves its
+              `ticketId` through ticketsService.getTicket against this app's
+              own Postgres `tickets` table — and Jira issues are never rows
+              there (fetched live from Jira Cloud, no sync into that table,
+              no `source` value for it either — see db/schema/tickets.ts).
+              So a proposal's `ticketId` can equal a native Ticket.id but
+              never a JiraTicket.id: Copilot cannot propose against a Jira
+              issue today, at any layer, not just in this UI. Rendering an
+              always-empty section here would be UI asserting a capability
+              this app doesn't have — the honesty-lint rule the native
+              section's own "no empty state" comment already follows in the
+              other direction. Revisit once Copilot can actually target Jira
+              issues (a real MCP tool + a ticketId scheme that reaches them),
+              not before. */}
           <div className="mt-6 mb-2 text-[11px] font-bold tracking-wide text-text-muted uppercase">
             Comments
           </div>
