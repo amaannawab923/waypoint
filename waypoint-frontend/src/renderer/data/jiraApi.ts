@@ -277,6 +277,12 @@ function rememberTickets(
 function clearCache(): void {
   lastTickets = [];
   lastReadTruncated = false;
+  // Cleared with the rest of it. The header above states that a session with
+  // no successful read has no sync time at all; leaving this behind made
+  // that false the moment anyone disconnected, and the Connection tab went
+  // on reporting a real past sync for an account it was no longer connected
+  // to — a "synced 3m ago" over zero issues and no credential.
+  lastSyncAt = null;
   transitionsByTicketId = new Map();
 }
 
@@ -714,7 +720,38 @@ const INLINE_DELIM_LENGTH: Record<InlineRun['kind'], number> = {
  * span wins a tie over em/strong/strike, so `` `_not_italic_` `` stays one
  * code span rather than also half-matching as italic underneath it.
  */
-function findInlineRuns(text: string, from: number, to: number): InlineRun[] {
+/**
+ * True when `run`'s span cuts a mention rather than cleanly containing it.
+ *
+ * A delimiter search knows nothing about mentions, so a display name that
+ * itself contains a delimiter character (`jane_doe`, and `_`/`` ` `` are
+ * both legal in an Atlassian display name) could pair with any other
+ * occurrence of that character elsewhere in the comment and produce a "run"
+ * that starts outside the mention and ends inside it. `parseInlineRange`
+ * then recursed into the run, stopped at the run's own end, and resumed the
+ * outer walk from a point *inside* the mention — emitting the tail of the
+ * display name a second time as literal text. `_@Bob_Marley cool_` posted as
+ * `@Bob_MarleyMarley cool_`: no exception, no rejection from Jira, just
+ * duplicated text nobody typed.
+ *
+ * Containment is fine and stays supported — `**hi @Sam Lee**` is a bold run
+ * around a mention, and the mention still emits unmarked inside it. Only a
+ * partial overlap is rejected, because only a partial overlap is ambiguous.
+ */
+function runCutsMention(run: InlineRun, mentions: JiraMentionSpan[]): boolean {
+  return mentions.some((m) => {
+    const overlaps = m.start < run.end && run.start < m.end;
+    if (!overlaps) return false;
+    return !(m.start >= run.contentStart && m.end <= run.contentEnd);
+  });
+}
+
+function findInlineRuns(
+  text: string,
+  from: number,
+  to: number,
+  mentions: JiraMentionSpan[],
+): InlineRun[] {
   const slice = text.slice(from, to);
   const candidates = INLINE_PATTERNS.flatMap(({ kind, re, priority }) =>
     Array.from(slice.matchAll(re)).map((m): InlineRun => {
@@ -742,9 +779,9 @@ function findInlineRuns(text: string, from: number, to: number): InlineRun[] {
       };
     }),
   );
-  const sorted = [...candidates].sort(
-    (a, b) => a.start - b.start || a.priority - b.priority,
-  );
+  const sorted = [...candidates]
+    .filter((run) => !runCutsMention(run, mentions))
+    .sort((a, b) => a.start - b.start || a.priority - b.priority);
   return sorted.reduce<InlineRun[]>((accepted, run) => {
     const last = accepted[accepted.length - 1];
     return last && run.start < last.end ? accepted : [...accepted, run];
@@ -827,7 +864,13 @@ function parseInlineRange(
     run.contentStart,
     run.contentEnd,
     [...activeMarks, runMark],
-    mentions,
+    // Code is literal, so a mention inside it stays text. A fenced block
+    // already worked this way (blockToAdf emits its raw text untouched);
+    // an inline span did not, so `` `@Sam Lee` `` — text a user
+    // deliberately marked as code — posted a real, notifying mention. Two
+    // spellings of "this is code" disagreeing about whether it can notify
+    // someone is the kind of surprise that costs trust in the feature.
+    run.kind === 'code' ? [] : mentions,
     runs,
   );
   return [
@@ -843,7 +886,7 @@ function inlineNodesForRange(
   contentEnd: number,
   mentions: JiraMentionSpan[],
 ): JiraAdfInlineNode[] {
-  const runs = findInlineRuns(text, contentStart, contentEnd);
+  const runs = findInlineRuns(text, contentStart, contentEnd, mentions);
   return parseInlineRange(text, contentStart, contentEnd, [], mentions, runs);
 }
 
@@ -1095,9 +1138,23 @@ export function buildCommentAdf(
   text: string,
   mentions: JiraMentionSpan[],
 ): JiraCommentBody {
+  // Two filters, and the second is not redundant. The first checks each span
+  // against the text on its own; two spans can both pass it and still
+  // overlap each other (a full "@Sam Lee" and a stale prefix "@Sam" both
+  // anchored at the same offset, say). `parseInlineRange` takes the first
+  // match it finds, so which of them won was decided by the caller's array
+  // order — the same draft could post a different mention depending on the
+  // order spans happened to be appended in, dropping or truncating the
+  // other silently. Sorting first makes "first wins" mean "leftmost wins",
+  // and anything still overlapping an accepted span is dropped rather than
+  // half-applied.
   const validMentions = mentions
     .filter((m) => text.slice(m.start, m.end) === `@${m.displayName}`)
-    .sort((a, b) => a.start - b.start);
+    .sort((a, b) => a.start - b.start || b.end - a.end)
+    .reduce<JiraMentionSpan[]>((accepted, m) => {
+      const last = accepted[accepted.length - 1];
+      return last && m.start < last.end ? accepted : [...accepted, m];
+    }, []);
 
   const content = groupLinesIntoBlocks(text).map((block) =>
     blockToAdf(block, text, validMentions),

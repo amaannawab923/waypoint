@@ -765,6 +765,95 @@ describe('comment formatting', () => {
     return bridge.postComment.mock.calls[0][0].body;
   }
 
+  // Every one of these posts successfully today and is accepted by Jira —
+  // which is exactly why they needed tests. The delimiter scanner knew
+  // nothing about mention spans, so a run could start outside a mention and
+  // end inside it, and the parser's recursion then resumed from a point in
+  // the middle of the mention's own text.
+  describe('mentions are not cut by delimiter scanning', () => {
+    const M = (start: number, end: number, displayName: string) => ({
+      start,
+      end,
+      accountId: 'acc-1',
+      displayName,
+    });
+
+    async function postWithMentions(text: string, mentions: unknown[]) {
+      const api = freshApi();
+      bridge.postComment.mockResolvedValue({
+        ok: true,
+        value: {
+          id: 'c1',
+          ticketId: '10421',
+          authorName: 'Max Chen',
+          body: text,
+          createdAt: '2026-09-01T10:00:00.000Z',
+        },
+      });
+      await api.postJiraComment('10421', text, mentions as never);
+      // The LAST call, not the first. A test that posts twice (the
+      // order-independence one below does) would otherwise assert against the
+      // first call's body twice and pass no matter what the second produced.
+      const calls = bridge.postComment.mock.calls;
+      return calls[calls.length - 1][0].body.content[0].content;
+    }
+
+    // `_` is legal in an Atlassian display name. It used to pair with any
+    // other underscore in the comment and produce a run that cut the
+    // mention, emitting the tail of the name a second time: this posted as
+    // "@Bob_MarleyMarley cool_".
+    it('does not duplicate text when a display name contains a delimiter', async () => {
+      expect(
+        await postWithMentions('_@Bob_Marley cool_', [M(1, 12, 'Bob_Marley')]),
+      ).toEqual([
+        { type: 'text', text: '_' },
+        { type: 'mention', attrs: { id: 'acc-1', text: '@Bob_Marley' } },
+        { type: 'text', text: ' cool_' },
+      ]);
+    });
+
+    // A fenced block already kept a mention literal; an inline span did not,
+    // so two spellings of "this is code" disagreed about whether the text
+    // could notify someone.
+    it('keeps a mention literal inside inline code, as a fenced block does', async () => {
+      expect(await postWithMentions('`@Sam Lee`', [M(1, 9, 'Sam Lee')])).toEqual(
+        [{ type: 'text', text: '@Sam Lee', marks: [{ type: 'code' }] }],
+      );
+    });
+
+    // Containment is legitimate and must keep working — the mention still
+    // emits unmarked inside the bold run, because Jira rejects a marked one.
+    it('still allows a bold run to contain a mention', async () => {
+      const out = await postWithMentions('**hi @Sam Lee**', [
+        M(5, 13, 'Sam Lee'),
+      ]);
+      expect(out).toContainEqual({
+        type: 'mention',
+        attrs: { id: 'acc-1', text: '@Sam Lee' },
+      });
+      expect(out).toContainEqual({
+        type: 'text',
+        text: 'hi ',
+        marks: [{ type: 'strong' }],
+      });
+    });
+
+    // Two spans can each be individually valid and still overlap. Whichever
+    // came first in the caller's array used to win, so the same draft could
+    // post a different mention depending on append order.
+    it('resolves overlapping spans the same way whatever order they arrive in', async () => {
+      const leftmostWins = [
+        { type: 'mention', attrs: { id: 'acc-1', text: '@Sam Lee' } },
+      ];
+      expect(
+        await postWithMentions('@Sam Lee', [M(0, 8, 'Sam Lee'), M(0, 4, 'Sam')]),
+      ).toEqual(leftmostWins);
+      expect(
+        await postWithMentions('@Sam Lee', [M(0, 4, 'Sam'), M(0, 8, 'Sam Lee')]),
+      ).toEqual(leftmostWins);
+    });
+  });
+
   it('wraps **bold** as a strong mark', async () => {
     expect(await postAndCaptureBody('this is **bold** text')).toEqual({
       type: 'doc',
