@@ -5,7 +5,7 @@ import { useAsync } from '@/lib/useAsync';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
 import { JiraTicketDetail } from '@/components/domain/JiraTicketDetail';
 import { JiraLoadError } from '@/components/domain/JiraLoadError';
-import type { JiraTicket } from '@/types/jira';
+import type { JiraTicket, JiraTruncation } from '@/types/jira';
 
 /**
  * The expanded view of one Jira issue, at /my-jira/:ticketKey — where the
@@ -25,6 +25,26 @@ import type { JiraTicket } from '@/types/jira';
  * the empty state says so and offers Jira itself instead of pretending the
  * issue doesn't exist.
  */
+/**
+ * Why this issue isn't on screen — three genuinely different answers, and
+ * saying the wrong one is a flat lie rather than a vague one.
+ *
+ * A function rather than nested ternaries in the JSX, because the third case
+ * only exists once truncation carries a reason: `'page-cap'` can honestly
+ * name the first few hundred, `'no-cursor'` cannot (Jira stopped paging,
+ * which can happen on page one and says nothing about how much was read),
+ * and a complete read means the issue genuinely isn't the user's.
+ */
+function notFoundReason(truncated: JiraTruncation): string {
+  if (truncated === 'page-cap') {
+    return 'Jira had more issues than this app reads in one go, so we only looked at the first few hundred, most recently updated. This issue may well be yours and simply fell outside them — open it in Jira to see it in full.';
+  }
+  if (truncated) {
+    return 'Jira reported more issues than it would hand over, so this app may not have seen all of your work. This issue may well be yours — refresh My Jira, or open it in Jira to see it in full.';
+  }
+  return "My Jira shows what you're assigned, reported or watching. This issue either isn't one of those, or it's already resolved — open it in Jira to see it in full.";
+}
+
 export default function JiraTicketPage() {
   const { ticketKey } = useParams<{ ticketKey: string }>();
   const [ticket, setTicket] = useState<JiraTicket | null>(null);
@@ -69,20 +89,9 @@ export default function JiraTicketPage() {
             page cap, "it isn't one of those" is a claim about a set this app
             never finished looking at. The distinction is exactly what
             `truncated` exists to make sayable. */}
-        {read?.truncated ? (
-          <p className="mt-2 max-w-[60ch] text-[13px] leading-relaxed text-text-secondary">
-            Jira had more issues than this app reads in one go, so we only
-            looked at the first few hundred, most recently updated. This issue
-            may well be yours and simply fell outside them — open it in Jira to
-            see it in full.
-          </p>
-        ) : (
-          <p className="mt-2 max-w-[60ch] text-[13px] leading-relaxed text-text-secondary">
-            My Jira shows what you&apos;re assigned, reported or watching. This
-            issue either isn&apos;t one of those, or it&apos;s already resolved
-            — open it in Jira to see it in full.
-          </p>
-        )}
+        <p className="mt-2 max-w-[60ch] text-[13px] leading-relaxed text-text-secondary">
+          {notFoundReason(read?.truncated ?? false)}
+        </p>
         <Link
           to="/my-jira"
           className="mt-4 inline-block text-[13px] font-semibold text-accent hover:underline"

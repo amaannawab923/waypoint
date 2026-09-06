@@ -267,6 +267,19 @@ export interface JiraComment {
   disclosureText: string | null;
 }
 
+/**
+ * Why a queue read is a prefix rather than the answer — mirrors
+ * main/jira/jiraTypes.ts's JiraTruncation, and exists for the same reason:
+ * the two cases need different words on screen. Both are truthy, so
+ * `if (truncated)` still reads as "incomplete".
+ *
+ *  - `'page-cap'`  the 500-issue crawl cap stopped a read Jira would have
+ *                  kept feeding. Only here is "the first 500" true.
+ *  - `'no-cursor'` Jira said there was more and gave nothing to page with.
+ *                  Can happen on page one, so it implies nothing about size.
+ */
+export type JiraTruncation = false | 'page-cap' | 'no-cursor';
+
 export interface JiraConnectionStatus {
   connected: boolean;
   accountName: string;

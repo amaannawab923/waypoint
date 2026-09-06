@@ -15,6 +15,7 @@ import type {
   JiraResult,
   JiraTicketQueryResult,
   JiraCommentPage,
+  JiraTruncation,
   JiraWireComment,
   JiraWireTicket,
   JiraWireTransition,
@@ -597,15 +598,29 @@ export async function listMyTickets(): Promise<
     // `=== false` here, deliberately: only an explicit denial counts. An
     // absent isLast with no cursor is an ordinary last page, not a claim that
     // something is missing.
+    //
+    // Worth being honest that this is a CHOICE, not a deduction. Atlassian
+    // documents token-absence as itself a last-page signal ("not included in
+    // the response for the last page"), so a response with no token AND
+    // `isLast: false` is Jira contradicting itself, and the two fields carry
+    // equal documentary weight. We believe `isLast` because it is the
+    // explicit statement and token-absence is an inference — and because
+    // erring toward "we may not have everything" is the safer of the two
+    // wrong answers here. If a future Jira populates `isLast: false`
+    // spuriously on this endpoint, every complete read would claim
+    // incompleteness; that is the risk this choice takes, deliberately.
     strandedByJira = !nextPageToken && body.isLast === false;
   }
 
-  // Truncated when the cap stopped a crawl that could have continued, OR when
-  // Jira said there was more and gave nothing to continue with.
-  return {
-    ok: true,
-    value: { tickets, truncated: hasNextPage || strandedByJira },
-  };
+  // Which of the two, not merely whether: `hasNextPage` still true after the
+  // loop means the cap stopped a crawl Jira would have kept feeding, and that
+  // is the only case where "the first 500" is a true thing to say.
+  const truncated: JiraTruncation = (() => {
+    if (hasNextPage) return 'page-cap';
+    return strandedByJira ? 'no-cursor' : false;
+  })();
+
+  return { ok: true, value: { tickets, truncated } };
 }
 
 // -----------------------------------------------------------------------

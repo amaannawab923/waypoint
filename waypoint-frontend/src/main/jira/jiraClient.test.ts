@@ -364,8 +364,12 @@ describe('listMyTickets', () => {
     expect(fetchMock).toHaveBeenCalledTimes(5);
     // The cap stopping the crawl is not the interesting part — it already
     // did that. Saying so is: this flag is the only thing standing between
-    // the UI and rendering a prefix as if it were the queue.
-    expect(result).toMatchObject({ ok: true, value: { truncated: true } });
+    // the UI and rendering a prefix as if it were the queue. And it says
+    // WHICH kind, because only this one licenses the UI's "first 500".
+    expect(result).toMatchObject({
+      ok: true,
+      value: { truncated: 'page-cap' },
+    });
   });
 
   // The boundary case the flag is easiest to get wrong on: the crawl used
@@ -409,8 +413,13 @@ describe('listMyTickets', () => {
 
     // Stopped, because there is nothing to page with...
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    // ...but said so, because the answer is incomplete.
-    expect(result).toMatchObject({ ok: true, value: { truncated: true } });
+    // ...but said so, because the answer is incomplete — and said it is NOT
+    // the cap, since this can happen on page one and the cap's copy names a
+    // 500-issue limit that never applied here.
+    expect(result).toMatchObject({
+      ok: true,
+      value: { truncated: 'no-cursor' },
+    });
   });
 
   // A 200 with no body is not an empty queue. This was the one place a
