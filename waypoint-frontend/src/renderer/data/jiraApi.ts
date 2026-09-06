@@ -42,6 +42,7 @@ import type {
   JiraAdfInlineNode,
   JiraCommentBody,
   JiraPriorityOption as JiraWirePriorityOption,
+  JiraTruncation,
   JiraWireAttachment,
   JiraWireComment,
   JiraWireTicket,
@@ -249,11 +250,11 @@ let lastSyncAt: string | null = null;
 //  - `lastReadTruncated` travels with `lastTickets` because the counts built
 //    from that array are only as complete as the read that filled it. It is
 //    set by the same function that sets the array, so the two cannot drift.
-let lastReadTruncated = false;
+let lastReadTruncated: JiraTruncation = false;
 
 function rememberTickets(
   wire: JiraWireTicket[],
-  truncated: boolean,
+  truncated: JiraTruncation,
 ): JiraTicket[] {
   const tickets = wire.map(toTicket);
   // Only tickets whose transitions actually came back are remembered. An
@@ -308,7 +309,10 @@ export async function getJiraConnectionStatus(): Promise<JiraConnectionStatus> {
     lastSyncAt,
     issueCount: lastTickets.length,
     projectCount: new Set(lastTickets.map((t) => t.projectKey)).size,
-    countsTruncated: lastReadTruncated,
+    // Coerced, and correctly so: the counts are floors whenever the read was
+    // incomplete, whichever way it was incomplete. This one genuinely is a
+    // yes/no question, unlike the banner copy, which has to name a cause.
+    countsTruncated: Boolean(lastReadTruncated),
   };
 }
 
@@ -327,7 +331,9 @@ export async function getJiraConnectionStatus(): Promise<JiraConnectionStatus> {
  */
 export interface JiraQueueRead {
   tickets: JiraTicket[];
-  truncated: boolean;
+  /** Falsy when this is the whole queue; otherwise WHY it is not — see
+   *  JiraTruncation, whose two cases need different words on screen. */
+  truncated: JiraTruncation;
 }
 
 export async function listMyJiraTickets(): Promise<JiraQueueRead> {

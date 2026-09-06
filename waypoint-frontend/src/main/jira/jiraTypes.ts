@@ -238,11 +238,32 @@ export interface JiraWireTicket {
  * tell them apart and rendered both as "here is everything". `truncated` is
  * the one bit that distinguishes them.
  */
+/**
+ * Why a "my work" read is a prefix rather than the answer, or `false` when it
+ * is the answer.
+ *
+ * This carries the reason and not just the fact, because the two reasons need
+ * different words on screen and a boolean forced one sentence to cover both.
+ * The UI copy was written for the cap — "this is the first 500, most recently
+ * updated" — and when the second case was added under the same flag, a
+ * twelve-issue queue could render that sentence. Naming a cap that never
+ * applied is the same kind of unsupported claim the flag exists to prevent,
+ * just louder than the silence it replaced.
+ *
+ *  - `'page-cap'`  MAX_PAGES x PAGE_SIZE stopped a crawl Jira would have kept
+ *                  feeding. `tickets` is the first 500, most recently updated.
+ *  - `'no-cursor'` Jira said `isLast: false` but returned no `nextPageToken`,
+ *                  so there is more and no way to ask for it. Says nothing
+ *                  about how many were read — it can happen on page one.
+ *
+ * Both are truthy, so `if (truncated)` still means "incomplete" and only code
+ * that needs to explain WHY has to look closer.
+ */
+export type JiraTruncation = false | 'page-cap' | 'no-cursor';
+
 export interface JiraTicketQueryResult {
   tickets: JiraWireTicket[];
-  /** True when the page cap stopped the crawl while Jira still had more to
-   *  give — i.e. `tickets` is a prefix of the answer, not the answer. */
-  truncated: boolean;
+  truncated: JiraTruncation;
 }
 
 /**

@@ -15,6 +15,7 @@ import type {
   JiraResult,
   JiraTicketQueryResult,
   JiraCommentPage,
+  JiraTruncation,
   JiraWireComment,
   JiraWireTicket,
   JiraWireTransition,
@@ -521,17 +522,22 @@ export async function listMyTickets(): Promise<
 
   const tickets: JiraWireTicket[] = [];
   let nextPageToken: string | undefined;
-  // True while Jira has said, in its own words, that there is another page.
-  // After the loop it means exactly one thing: the page cap stopped us, not
-  // Jira — which is the difference between "here is your queue" and "here is
-  // the first 500 of it", and the only signal that can tell the UI apart.
+  // Two flags, because one was doing two jobs that disagree in exactly the
+  // case that was wrong.
   //
-  // This replaces a `break` that computed the same condition and then threw
-  // it away. Behaviourally the loop is identical; the flag is simply the
-  // answer the `break` already knew and did not keep.
-  let more = true;
+  // `hasNextPage` is loop control: can this crawl actually fetch more? That
+  // needs a cursor, so it is false the moment Jira stops handing one over.
+  //
+  // `strandedByJira` is the case a single flag could not express: Jira says
+  // `isLast: false` — there IS more — but hands back no `nextPageToken`. The
+  // crawl cannot continue (there is nothing to continue with), yet the answer
+  // is demonstrably incomplete. Folding that into the loop condition meant
+  // `truncated` came back false and the UI rendered a prefix as the whole
+  // queue, which is the one claim `truncated` exists to prevent.
+  let hasNextPage = true;
+  let strandedByJira = false;
 
-  for (let page = 0; page < MAX_PAGES && more; page += 1) {
+  for (let page = 0; page < MAX_PAGES && hasNextPage; page += 1) {
     const query: Record<string, string> = {
       jql: MY_WORK_JQL,
       fields: '*all',
@@ -548,7 +554,20 @@ export async function listMyTickets(): Promise<
     });
     if (!result.ok) return result;
 
-    const body = result.value ?? {};
+    // A 200 with no body at all is not an empty queue, and saying "you have
+    // no work" is a positive claim this response cannot support — it is the
+    // one place a non-answer became an answer. Deliberately narrow: only a
+    // wholly absent or non-object body fails here. A body that IS an object
+    // but omits `issues` is still treated as zero results, because that is a
+    // shape Jira could legitimately return and erroring on it would turn a
+    // genuinely empty queue into an alarm.
+    if (typeof result.value !== 'object' || result.value === null) {
+      return failure(
+        'jira_error',
+        'Jira answered your work query with an empty response — try again, and check the site address if it keeps happening.',
+      );
+    }
+    const body = result.value;
     const names = body.names ?? {};
     tickets.push(
       ...(body.issues ?? [])
@@ -570,10 +589,38 @@ export async function listMyTickets(): Promise<
     );
 
     nextPageToken = body.nextPageToken;
-    more = Boolean(nextPageToken) && body.isLast !== true;
+    // `isLast !== true` rather than `=== false`: an absent isLast alongside a
+    // real cursor means keep going, which is how the token API normally
+    // behaves. A present `isLast: true` still stops the crawl even if a token
+    // came with it, since Jira's own word about being finished beats a cursor
+    // it also handed over.
+    hasNextPage = Boolean(nextPageToken) && body.isLast !== true;
+    // `=== false` here, deliberately: only an explicit denial counts. An
+    // absent isLast with no cursor is an ordinary last page, not a claim that
+    // something is missing.
+    //
+    // Worth being honest that this is a CHOICE, not a deduction. Atlassian
+    // documents token-absence as itself a last-page signal ("not included in
+    // the response for the last page"), so a response with no token AND
+    // `isLast: false` is Jira contradicting itself, and the two fields carry
+    // equal documentary weight. We believe `isLast` because it is the
+    // explicit statement and token-absence is an inference — and because
+    // erring toward "we may not have everything" is the safer of the two
+    // wrong answers here. If a future Jira populates `isLast: false`
+    // spuriously on this endpoint, every complete read would claim
+    // incompleteness; that is the risk this choice takes, deliberately.
+    strandedByJira = !nextPageToken && body.isLast === false;
   }
 
-  return { ok: true, value: { tickets, truncated: more } };
+  // Which of the two, not merely whether: `hasNextPage` still true after the
+  // loop means the cap stopped a crawl Jira would have kept feeding, and that
+  // is the only case where "the first 500" is a true thing to say.
+  const truncated: JiraTruncation = (() => {
+    if (hasNextPage) return 'page-cap';
+    return strandedByJira ? 'no-cursor' : false;
+  })();
+
+  return { ok: true, value: { tickets, truncated } };
 }
 
 // -----------------------------------------------------------------------

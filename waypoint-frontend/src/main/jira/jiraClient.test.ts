@@ -364,8 +364,12 @@ describe('listMyTickets', () => {
     expect(fetchMock).toHaveBeenCalledTimes(5);
     // The cap stopping the crawl is not the interesting part — it already
     // did that. Saying so is: this flag is the only thing standing between
-    // the UI and rendering a prefix as if it were the queue.
-    expect(result).toMatchObject({ ok: true, value: { truncated: true } });
+    // the UI and rendering a prefix as if it were the queue. And it says
+    // WHICH kind, because only this one licenses the UI's "first 500".
+    expect(result).toMatchObject({
+      ok: true,
+      value: { truncated: 'page-cap' },
+    });
   });
 
   // The boundary case the flag is easiest to get wrong on: the crawl used
@@ -389,6 +393,112 @@ describe('listMyTickets', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(5);
     expect(result).toMatchObject({ ok: true, value: { truncated: false } });
+  });
+
+  // `truncated` and "can this crawl continue?" are different questions, and
+  // one flag answered both. They diverge exactly here: Jira denies being on
+  // the last page but hands back no cursor. The crawl genuinely cannot go on,
+  // so the old flag went false and carried `truncated: false` with it — the
+  // UI then rendered a prefix as the whole queue, which is the single claim
+  // this flag exists to prevent.
+  it('reports truncation when Jira says there is more but offers no cursor', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        issues: [{ id: '1', key: 'ENG-1', fields: {} }],
+        isLast: false,
+      }),
+    );
+
+    const result = await listMyTickets();
+
+    // Stopped, because there is nothing to page with...
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // ...but said so, because the answer is incomplete — and said it is NOT
+    // the cap, since this can happen on page one and the cap's copy names a
+    // 500-issue limit that never applied here.
+    expect(result).toMatchObject({
+      ok: true,
+      value: { truncated: 'no-cursor' },
+    });
+  });
+
+  // A 200 with no body is not an empty queue. This was the one place a
+  // non-answer became a positive claim about the user's Jira.
+  it('refuses to read an empty response as an empty queue', async () => {
+    fetchMock.mockResolvedValue({
+      status: 200,
+      ok: true,
+      headers: new Headers(),
+      text: async () => '',
+    } as unknown as Response);
+
+    expect(await listMyTickets()).toMatchObject({
+      ok: false,
+      reason: 'jira_error',
+    });
+  });
+
+  // Deliberately narrow, and pinned as such: an object body that simply has
+  // no issues IS an empty queue, and must stay one. Erroring here would turn
+  // "you're all caught up" into an alarm.
+  it('still reads a body with no issues as a genuinely empty queue', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ isLast: true }));
+
+    expect(await listMyTickets()).toMatchObject({
+      ok: true,
+      value: { tickets: [], truncated: false },
+    });
+  });
+
+  // ---- Regression pins on the other three branches ---------------------
+
+  // An ordinary last page: no cursor, no isLast at all. Absence must not be
+  // read as a denial, or every complete read would claim truncation.
+  it('is not truncated on a last page that simply offers no cursor', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ issues: [{ id: '1', key: 'ENG-1', fields: {} }] }),
+    );
+
+    const result = await listMyTickets();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ ok: true, value: { truncated: false } });
+  });
+
+  // Jira's own word about being finished beats a cursor it also handed over.
+  it('stops and reports complete when isLast is true despite a cursor', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        issues: [{ id: '1', key: 'ENG-1', fields: {} }],
+        nextPageToken: 'more',
+        isLast: true,
+      }),
+    );
+
+    const result = await listMyTickets();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ ok: true, value: { truncated: false } });
+  });
+
+  // A cursor with no isLast is the token API's normal shape: keep going.
+  it('keeps paging on a cursor with no isLast, then finishes cleanly', async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          issues: [{ id: '1', key: 'ENG-1', fields: {} }],
+          nextPageToken: 'p2',
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ issues: [{ id: '2', key: 'ENG-2', fields: {} }] }),
+      );
+
+    const result = await listMyTickets();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ ok: true, value: { truncated: false } });
+    expect(result.ok && result.value.tickets).toHaveLength(2);
   });
 });
 

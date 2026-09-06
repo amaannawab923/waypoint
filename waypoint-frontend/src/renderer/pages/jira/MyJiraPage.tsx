@@ -23,6 +23,7 @@ import type {
   JiraDuplicateNudge,
   JiraProposal,
   JiraTicket,
+  JiraTruncation,
 } from '@/types/jira';
 import MyJiraToolbar from './MyJiraToolbar';
 import MyJiraPager from './MyJiraPager';
@@ -173,7 +174,7 @@ export default function MyJiraPage() {
   // property of the read that produced them and does not change when a row
   // does. Both are set from the same effect so they can never describe two
   // different reads.
-  const [truncated, setTruncated] = useState(false);
+  const [truncated, setTruncated] = useState<JiraTruncation>(false);
   useEffect(() => {
     if (!fetchedRead) return;
     setTickets(fetchedRead.tickets);
@@ -353,9 +354,14 @@ export default function MyJiraPage() {
                     this sentence moves with them. */}
                 {truncated && (
                   <div className="mb-1.5 rounded-[var(--radius-sm)] border border-warning/30 bg-warning-bg px-3 py-2 text-[11.5px] leading-relaxed text-warning">
-                    Jira had more issues than this app reads in one go — this is
-                    the first 500, most recently updated. The filters and
-                    sorting below apply only to these.
+                    {truncated === 'page-cap'
+                      ? 'Jira had more issues than this app reads in one go — this is the first 500, most recently updated. The filters and sorting below apply only to these.'
+                      : /* Says nothing about how many were read, because this
+                           case says nothing about it: Jira reported more work
+                           and returned no way to ask for it, which can happen
+                           on the very first page. Naming a 500-issue cap here
+                           would invent a cause. */
+                        'Jira reported more issues than it would hand over, so this list may be incomplete. Refresh to try again. The filters and sorting below apply only to what loaded.'}
                   </div>
                 )}
 

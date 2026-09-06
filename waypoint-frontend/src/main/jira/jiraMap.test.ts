@@ -87,6 +87,460 @@ describe('adfToPlainText', () => {
     expect(adfToPlainText(null)).toBe('');
     expect(adfToPlainText(undefined)).toBe('');
   });
+
+  // Nodes that carry their whole content in `attrs` and have no `content`
+  // array. Each of these used to fall through to the generic branch and
+  // return '' — content loss, not lost formatting.
+  describe('leaf nodes whose text lives in attrs', () => {
+    const para = (...content: unknown[]) => ({
+      type: 'doc',
+      content: [{ type: 'paragraph', content }],
+    });
+
+    // Jira auto-converts a pasted Jira/Confluence link into an inlineCard, so
+    // a description that was one pasted link rendered completely empty.
+    it('renders an inlineCard as its URL', () => {
+      expect(
+        adfToPlainText(
+          para(
+            { type: 'text', text: 'see ' },
+            { type: 'inlineCard', attrs: { url: 'https://x.dev/ENG-1' } },
+          ),
+        ).trim(),
+      ).toBe('see https://x.dev/ENG-1');
+    });
+
+    // Block-level, unlike inlineCard — so they end their line. Without the
+    // newline the URL glues to whatever follows ("…/pages/12345The API
+    // returns 500"), which is the same run-together defect `taskItem` is in
+    // the block set to prevent.
+    it('renders blockCard and embedCard as their URL, on their own line', () => {
+      expect(
+        adfToPlainText({
+          type: 'blockCard',
+          attrs: { url: 'https://x.dev/a' },
+        }),
+      ).toBe('https://x.dev/a\n');
+      expect(
+        adfToPlainText({
+          type: 'embedCard',
+          attrs: { url: 'https://x.dev/b' },
+        }),
+      ).toBe('https://x.dev/b\n');
+    });
+
+    it('does not run a block card into the paragraph after it', () => {
+      const out = adfToPlainText({
+        type: 'doc',
+        content: [
+          { type: 'blockCard', attrs: { url: 'https://x.dev/a' } },
+          {
+            type: 'paragraph',
+            content: [{ type: 'text', text: 'The API returns 500' }],
+          },
+        ],
+      });
+      expect(out).toBe('https://x.dev/a\nThe API returns 500\n');
+    });
+
+    // Atlassian: "Either data or url must be provided, but not both." Reading
+    // only `url` left the data variant rendering empty — the exact symptom
+    // these branches exist to fix.
+    it('reads a card that carries data instead of url', () => {
+      expect(
+        adfToPlainText({
+          type: 'inlineCard',
+          attrs: {
+            data: { '@type': 'Object', name: 'ENG-1', url: 'https://x.dev/1' },
+          },
+        }),
+      ).toBe('https://x.dev/1');
+      // Falls back to the human-readable name when data carries no url.
+      expect(
+        adfToPlainText({
+          type: 'inlineCard',
+          attrs: { data: { '@type': 'Object', name: 'ENG-1 Fix login' } },
+        }),
+      ).toBe('ENG-1 Fix login');
+    });
+
+    // A description that is one screenshot — a common way to file a bug —
+    // rendered completely blank. Alt text is the only thing an image can
+    // contribute to a plain-text surface.
+    it('renders an image as its alt text', () => {
+      expect(
+        adfToPlainText({
+          type: 'doc',
+          content: [
+            {
+              type: 'mediaSingle',
+              content: [
+                {
+                  type: 'media',
+                  attrs: {
+                    type: 'file',
+                    id: 'abc',
+                    alt: 'architecture diagram',
+                  },
+                },
+              ],
+            },
+          ],
+        }).trim(),
+      ).toBe('architecture diagram');
+    });
+
+    // The suite was green while this was broken, because it only ever covered
+    // mediaSingle. mediaGroup is what the editor emits for MORE than one
+    // attachment, and without it every alt ran into the next and then into
+    // the following paragraph.
+    it('keeps images in a media group on their own lines', () => {
+      expect(
+        adfToPlainText({
+          type: 'doc',
+          content: [
+            {
+              type: 'paragraph',
+              content: [{ type: 'text', text: 'Login fails. See:' }],
+            },
+            {
+              type: 'mediaGroup',
+              content: [
+                { type: 'media', attrs: { alt: 'error toast' } },
+                { type: 'media', attrs: { alt: 'network tab' } },
+              ],
+            },
+            {
+              type: 'paragraph',
+              content: [{ type: 'text', text: 'Repro on staging only.' }],
+            },
+          ],
+        }).trim(),
+      ).toBe(
+        'Login fails. See:\nerror toast\nnetwork tab\nRepro on staging only.',
+      );
+    });
+
+    // A caption is a legal sibling of the media inside mediaSingle, and is not
+    // a block — so the image has to end its own line or the two run together.
+    it('does not run an image into its own caption', () => {
+      expect(
+        adfToPlainText({
+          type: 'mediaSingle',
+          content: [
+            { type: 'media', attrs: { alt: 'architecture diagram' } },
+            {
+              type: 'caption',
+              content: [{ type: 'text', text: 'Figure 1' }],
+            },
+          ],
+        }).trim(),
+      ).toBe('architecture diagram\nFigure 1');
+    });
+
+    it('renders an inline image as its alt text', () => {
+      expect(
+        adfToPlainText({
+          type: 'mediaInline',
+          attrs: { type: 'file', id: 'abc', alt: 'signature' },
+        }),
+      ).toBe('signature');
+    });
+
+    // Silent rather than inventing a filename: an unlabelled image has no
+    // text a reader can use, and "abc-1234.png" is noise, not content.
+    it('says nothing for an image with no alt text', () => {
+      expect(
+        adfToPlainText({
+          type: 'media',
+          attrs: { type: 'file', id: 'abc-1234' },
+        }),
+      ).toBe('');
+    });
+
+    it('renders a status lozenge as its word', () => {
+      expect(
+        adfToPlainText(
+          para({ type: 'status', attrs: { text: 'BLOCKED', color: 'red' } }),
+        ).trim(),
+      ).toBe('BLOCKED');
+    });
+
+    it('renders a date as a date, with no invented time of day', () => {
+      expect(
+        adfToPlainText(
+          para({ type: 'date', attrs: { timestamp: '1767225600000' } }),
+        ).trim(),
+      ).toBe('2026-01-01');
+    });
+
+    // A date node whose value is out of JavaScript's Date range made
+    // toISOString THROW, and neither getTicket nor listComments wraps its
+    // mapping — so it escaped ipcMain.handle and rejected the IPC call rather
+    // than returning a JiraResult failure. One bad node blanked a whole
+    // ticket or comment thread. This file's contract is that a malformed
+    // field degrades, never throws.
+    it.each([
+      ['nanoseconds', '1710460800000000000'],
+      ['just past the Date range', '8640000000000001'],
+      ['whitespace only', '   '],
+      ['hex', '0x1000'],
+      ['not a number at all', 'soon'],
+    ])('renders nothing, and does not throw, for a %s timestamp', (_l, ts) => {
+      const doc = {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [{ type: 'date', attrs: { timestamp: ts } }],
+          },
+        ],
+      };
+      expect(() => adfToPlainText(doc)).not.toThrow();
+      expect(adfToPlainText(doc).trim()).toBe('');
+    });
+
+    // Above year 9999 ISO 8601 uses the expanded form
+    // ("+010000-01-01T…"), and slicing ten characters off that gives
+    // "+010000-01" — a date with no day. A microsecond epoch (the same units
+    // mistake as nanoseconds, one order down) lands inside the range guard
+    // and rendered exactly that.
+    it.each([
+      ['a microsecond epoch', '1582152559000000'],
+      ['the year-10000 boundary', '253402300800000'],
+      ['the far negative end', '-8640000000000000'],
+    ])('renders nothing for %s rather than a date with no day', (_l, ts) => {
+      const out = adfToPlainText({
+        type: 'date',
+        attrs: { timestamp: ts },
+      });
+      expect(out).not.toContain('+');
+      expect(out).toBe('');
+    });
+
+    // Atlassian's own published example for this node is "1582152559" — ten
+    // digits, SECONDS — so a producer following the docs literally had every
+    // date render as some day in January 1970 (that value read as ms).
+    it('reads a seconds epoch as seconds, not as January 1970', () => {
+      expect(
+        adfToPlainText({ type: 'date', attrs: { timestamp: '1582152559' } }),
+      ).toBe('2020-02-19');
+    });
+
+    // The band that still has to work.
+    it('still renders an ordinary millisecond timestamp', () => {
+      expect(
+        adfToPlainText({ type: 'date', attrs: { timestamp: '1710460800000' } }),
+      ).toBe('2024-03-15');
+    });
+
+    it('keeps a collapsible section\u2019s title, which lives in attrs', () => {
+      expect(
+        adfToPlainText({
+          type: 'expand',
+          attrs: { title: 'Acceptance criteria' },
+          content: [
+            {
+              type: 'paragraph',
+              content: [{ type: 'text', text: 'must log in' }],
+            },
+          ],
+        }).trim(),
+      ).toBe('Acceptance criteria\nmust log in');
+    });
+
+    it('keeps documented blockTaskItem entries on their own lines', () => {
+      expect(
+        adfToPlainText({
+          type: 'doc',
+          content: [
+            {
+              type: 'taskList',
+              content: [
+                {
+                  type: 'blockTaskItem',
+                  content: [{ type: 'text', text: 'buy milk' }],
+                },
+                {
+                  type: 'blockTaskItem',
+                  content: [{ type: 'text', text: 'buy eggs' }],
+                },
+              ],
+            },
+          ],
+        }).trim(),
+      ).toBe('buy milk\nbuy eggs');
+    });
+
+    it('does not throw on a malformed date or a card with no url', () => {
+      expect(adfToPlainText(para({ type: 'date', attrs: {} })).trim()).toBe('');
+      expect(
+        adfToPlainText(para({ type: 'date', attrs: { timestamp: 'soon' } })),
+      ).toBe('\n');
+      expect(adfToPlainText(para({ type: 'inlineCard' })).trim()).toBe('');
+    });
+  });
+
+  // The checklist Jira calls "Action items". Without taskItem in the block
+  // set these ran together as one sentence, so separate acceptance criteria
+  // stopped reading as separate.
+  it('keeps task list items on their own lines', () => {
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'taskList',
+          content: [
+            {
+              type: 'taskItem',
+              content: [{ type: 'text', text: 'buy milk' }],
+            },
+            {
+              type: 'taskItem',
+              content: [{ type: 'text', text: 'buy eggs' }],
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(adfToPlainText(doc).trim()).toBe('buy milk\nbuy eggs');
+  });
+
+  // ---- Regression pins for behavior that must NOT change ----------------
+  //
+  // adfToPlainText renders every description and every comment, so a change
+  // here moves text on every ticket at once. These pin the shapes that
+  // already worked, so a future edit to the block set or the leaf branches
+  // cannot quietly alter them.
+  describe('existing flattening, pinned', () => {
+    it('keeps headings, quotes, code blocks and list items line-separated', () => {
+      const doc = {
+        type: 'doc',
+        content: [
+          {
+            type: 'heading',
+            attrs: { level: 2 },
+            content: [{ type: 'text', text: 'Steps' }],
+          },
+          {
+            type: 'bulletList',
+            content: [
+              {
+                type: 'listItem',
+                content: [
+                  {
+                    type: 'paragraph',
+                    content: [{ type: 'text', text: 'one' }],
+                  },
+                ],
+              },
+              {
+                type: 'listItem',
+                content: [
+                  {
+                    type: 'paragraph',
+                    content: [{ type: 'text', text: 'two' }],
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            type: 'blockquote',
+            content: [
+              { type: 'paragraph', content: [{ type: 'text', text: 'said' }] },
+            ],
+          },
+          {
+            type: 'codeBlock',
+            content: [{ type: 'text', text: 'const x = 1;' }],
+          },
+        ],
+      };
+
+      expect(adfToPlainText(doc).trim()).toBe(
+        'Steps\none\n\ntwo\n\nsaid\n\nconst x = 1;',
+      );
+    });
+
+    // Documented, deliberate and unchanged: a table flattens to its cell
+    // text, one line per ROW. Cells are not separated, which is why this is
+    // pinned rather than left to drift — the fix above deliberately did not
+    // touch tables.
+    it('still flattens a table to one line per row', () => {
+      const doc = {
+        type: 'doc',
+        content: [
+          {
+            type: 'table',
+            content: [
+              {
+                type: 'tableRow',
+                content: [
+                  {
+                    type: 'tableCell',
+                    content: [
+                      {
+                        type: 'paragraph',
+                        content: [{ type: 'text', text: 'a' }],
+                      },
+                    ],
+                  },
+                  {
+                    type: 'tableCell',
+                    content: [
+                      {
+                        type: 'paragraph',
+                        content: [{ type: 'text', text: 'b' }],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+
+      // One line per cell-paragraph, no separator between cells — pre-existing
+      // and deliberately untouched here.
+      expect(adfToPlainText(doc).trim()).toBe('a\nb');
+    });
+
+    it('still never surfaces a mention account id', () => {
+      const out = adfToPlainText({
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              {
+                type: 'mention',
+                attrs: { id: '712020:8f1e-aaa', text: '@Priya Raman' },
+              },
+            ],
+          },
+        ],
+      });
+      expect(out).toContain('@Priya Raman');
+      expect(out).not.toContain('712020');
+    });
+
+    it('still ignores an unknown node type without throwing', () => {
+      expect(
+        adfToPlainText({
+          type: 'doc',
+          content: [
+            {
+              type: 'somethingAtlassianAddedLater',
+              content: [{ type: 'text', text: 'inner' }],
+            },
+          ],
+        }),
+      ).toBe('inner');
+    });
+  });
 });
 
 describe('mapStateCategory / mapPriority / formatFileSize', () => {
@@ -385,7 +839,9 @@ describe('mapIssue', () => {
     }
 
     it('never renders a raw account id', () => {
-      const out = describedAs('Please look [~accountid:712020:8f1e-aaa] at this');
+      const out = describedAs(
+        'Please look [~accountid:712020:8f1e-aaa] at this',
+      );
       expect(out).not.toContain('accountid');
       expect(out).not.toContain('712020');
       expect(out).toBe('Please look @a teammate at this');
@@ -670,6 +1126,163 @@ describe('mapIssue', () => {
     });
   });
 
+  // The Greenhopper-era sprint field serializes ACTIVE|CLOSED|FUTURE; only the
+  // modern object form is lower case. Comparing case-sensitively meant no
+  // sprint matched on the older shape, so a carried-over ticket fell through
+  // to "the last listed" and showed the name of a CLOSED sprint.
+  it.each([['active'], ['ACTIVE'], ['Active']])(
+    'finds the active sprint when its state is spelled %s',
+    (state) => {
+      const mapped = mapIssue(
+        {
+          id: '10421',
+          key: 'ENG-421',
+          fields: {
+            summary: 's',
+            project: { key: 'ENG' },
+            status: { name: 'To Do', statusCategory: { key: 'new' } },
+            // The active sprint is listed FIRST on purpose. With it last, the
+            // "fall back to the last listed" path returns the same name by
+            // coincidence and the test passes even when the casing check is
+            // broken — which is exactly what happened on the first draft of
+            // this test.
+            customfield_10020: [
+              { name: 'Ingest 24', state },
+              { name: 'Ingest 23', state: 'closed' },
+            ],
+          },
+        },
+        ME,
+        { customfield_10020: 'Sprint' },
+      );
+      expect(mapped).toMatchObject({ sprintName: 'Ingest 24' });
+    },
+  );
+
+  // Regression pin: with no active sprint at all, the documented fallback is
+  // still the last listed.
+  it('still falls back to the last sprint listed when none is active', () => {
+    const mapped = mapIssue(
+      {
+        id: '10421',
+        key: 'ENG-421',
+        fields: {
+          summary: 's',
+          project: { key: 'ENG' },
+          status: { name: 'To Do', statusCategory: { key: 'new' } },
+          customfield_10020: [
+            { name: 'Ingest 23', state: 'closed' },
+            { name: 'Ingest 24', state: 'closed' },
+          ],
+        },
+      },
+      ME,
+      { customfield_10020: 'Sprint' },
+    );
+    expect(mapped).toMatchObject({ sprintName: 'Ingest 24' });
+  });
+
+  // ticket.id keys every subsequent write, so this is coercion, not cosmetics.
+  it('carries a numeric issue id rather than falling back to the key', () => {
+    expect(
+      mapIssue(
+        {
+          id: 10421,
+          key: 'ENG-421',
+          fields: {
+            summary: 's',
+            project: { key: 'ENG' },
+            status: { name: 'To Do', statusCategory: { key: 'new' } },
+          },
+        },
+        ME,
+      ),
+    ).toMatchObject({ id: '10421' });
+  });
+
+  // isSafeInteger and > 0, not isFinite. The looser check made this strictly
+  // worse than the fallback it replaced: ticket.id keys every write, so a
+  // float id turned a graceful degradation to the key (which works as
+  // issueIdOrKey in every Jira URL) into a 404 on the next transition.
+  it.each([
+    ['a float', 1.5],
+    ['a negative', -5],
+    ['zero', 0],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['NaN', Number.NaN],
+    ['a non-id type', true],
+  ])('falls back to the key rather than trusting %s as an id', (_l, id) => {
+    expect(
+      mapIssue(
+        {
+          id,
+          key: 'ENG-7',
+          fields: {
+            summary: 's',
+            project: { key: 'ENG' },
+            status: { name: 'To Do', statusCategory: { key: 'new' } },
+          },
+        },
+        ME,
+      ),
+    ).toMatchObject({ id: 'ENG-7' });
+  });
+
+  // Jira returns ids as STRINGS on every current API version, so validating
+  // only the number branch validated the shape that almost never arrives.
+  it.each([['1.5'], ['-3'], ['0'], ['1e21'], ['   ']])(
+    'falls back to the key for the implausible string id %p',
+    (id) => {
+      expect(
+        mapIssue(
+          {
+            id,
+            key: 'ENG-7',
+            fields: {
+              summary: 's',
+              project: { key: 'ENG' },
+              status: { name: 'To Do', statusCategory: { key: 'new' } },
+            },
+          },
+          ME,
+        ),
+      ).toMatchObject({ id: 'ENG-7' });
+    },
+  );
+
+  it('keeps a large string id exactly, without number rounding', () => {
+    expect(
+      mapIssue(
+        {
+          id: '10000000000000000001',
+          key: 'ENG-7',
+          fields: {
+            summary: 's',
+            project: { key: 'ENG' },
+            status: { name: 'To Do', statusCategory: { key: 'new' } },
+          },
+        },
+        ME,
+      ),
+    ).toMatchObject({ id: '10000000000000000001' });
+  });
+
+  it('still falls back to the key when there is no usable id at all', () => {
+    expect(
+      mapIssue(
+        {
+          key: 'ENG-421',
+          fields: {
+            summary: 's',
+            project: { key: 'ENG' },
+            status: { name: 'To Do', statusCategory: { key: 'new' } },
+          },
+        },
+        ME,
+      ),
+    ).toMatchObject({ id: 'ENG-421' });
+  });
+
   it('leaves story points and sprint null when the site has no such fields', () => {
     expect(mapIssue(issue(), ME)).toMatchObject({
       storyPoints: null,
@@ -867,6 +1480,49 @@ describe('buildTransitionFieldsPayload', () => {
     expect(
       buildTransitionFieldsPayload(TRANSITION, { timetracking: '3h 30m' }),
     ).toEqual({ timetracking: { remainingEstimate: '3h 30m' } });
+  });
+
+  // The guard's own comment says an unknown field is dropped because it would
+  // be a guaranteed 400. A bare `fields[key]` bracket read walks the
+  // prototype chain, so these six names were all truthy and sailed straight
+  // through it.
+  it.each([
+    ['constructor'],
+    ['__proto__'],
+    ['toString'],
+    ['valueOf'],
+    ['hasOwnProperty'],
+    ['isPrototypeOf'],
+  ])('drops the inherited property name %s', (key) => {
+    expect(buildTransitionFieldsPayload(TRANSITION, { [key]: 'x' })).toEqual(
+      {},
+    );
+  });
+
+  // The guard must still drop what it always dropped, and still keep what it
+  // always kept — this is the payload for every transition write.
+  it('still drops an unknown field and a blank value, and still keeps a real one', () => {
+    expect(
+      buildTransitionFieldsPayload(TRANSITION, { notAFieldHere: 'x' }),
+    ).toEqual({});
+    expect(
+      buildTransitionFieldsPayload(TRANSITION, { resolution: '   ' }),
+    ).toEqual({});
+    expect(
+      buildTransitionFieldsPayload(TRANSITION, { resolution: 'Fixed' }),
+    ).toEqual({ resolution: { id: '10000' } });
+  });
+
+  // The bare `fields[key]` read was doing two jobs; the prototype-chain fix
+  // replaced only one of them. An OWN key whose metadata is falsy has no
+  // schema and no allowedValues, so it would be forwarded as a raw string.
+  it('drops an own field whose metadata is falsy', () => {
+    expect(
+      buildTransitionFieldsPayload(
+        { fields: { customfield_1: null } },
+        { customfield_1: 'hello' },
+      ),
+    ).toEqual({});
   });
 
   it('never sends timeSpent, which this field does not accept', () => {

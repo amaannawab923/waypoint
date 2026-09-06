@@ -74,11 +74,39 @@ const ADF_BLOCK_TYPES = new Set([
   'blockquote',
   'codeBlock',
   'listItem',
+  // Jira's "Action items" checklist. Its items are line-level exactly like
+  // listItem, and leaving them out ran a whole checklist together as one
+  // unbroken sentence — "buy milkbuy eggs" — which is not lost formatting but
+  // lost meaning: acceptance criteria stop being separate criteria.
+  'taskItem',
+  // Jira's own node index documents `blockTaskItem`, not `taskItem`. The
+  // editor emits taskItem, so both are listed rather than betting on one:
+  // getting this wrong reproduces the exact run-together defect the taskItem
+  // entry above exists to fix.
+  'blockTaskItem',
+  'decisionItem',
+  // NOTE what is deliberately NOT here: blockCard, embedCard, expand,
+  // nestedExpand and media. Each is handled as a leaf below and RETURNS
+  // before this set is ever consulted, so listing them would be dead weight
+  // that misinforms the next reader about where their newline comes from —
+  // it comes from the explicit `\n` in their own branch. An earlier version
+  // listed them here with a comment claiming the early return was the reason
+  // to list them, which is exactly backwards.
+  //
+  // mediaSingle and mediaGroup are likewise absent: they are containers, and
+  // their `media` children now terminate their own lines. Leaving mediaSingle
+  // here would put a blank line after every image.
   'panel',
   'rule',
   'tableRow',
-  'mediaSingle',
 ]);
+
+/** Reads one string attr, the shape almost every leaf node here needs. */
+function attrString(record: Record<string, unknown>, key: string): string {
+  const attrs = record.attrs as Record<string, unknown> | undefined;
+  const value = attrs?.[key];
+  return typeof value === 'string' ? value : '';
+}
 
 /**
  * Flattens an ADF document to plain text.
@@ -95,6 +123,81 @@ const ADF_BLOCK_TYPES = new Set([
  * blocks lose their fencing. That's the honest consequence of a plain-text
  * surface, and the Connection tab already says rich text isn't built.
  */
+/** A card's visible text. `data` OR `url`, never both, per Atlassian — and
+ *  the `data` variant is a JSON-LD object whose `url` (or failing that,
+ *  `name`) is the part a reader needs. */
+function cardText(record: Record<string, unknown>): string {
+  const direct = attrString(record, 'url');
+  if (direct) return direct;
+  const attrs = record.attrs as Record<string, unknown> | undefined;
+  const data = attrs?.data;
+  if (!data || typeof data !== 'object') return '';
+  const asRec = data as Record<string, unknown>;
+  const url = typeof asRec.url === 'string' ? asRec.url : '';
+  if (url) return url;
+  return typeof asRec.name === 'string' ? asRec.name : '';
+}
+
+/**
+ * An ADF date node's calendar date, or '' when it is not one.
+ *
+ * Three guards, each for a wrong answer the previous version gave:
+ *
+ *  - `.trim()` before the emptiness check. `Number('   ')` is 0, so a
+ *    whitespace-only timestamp rendered 1970-01-01 — precisely the
+ *    "confident wrong answer" the old comment claimed to prevent.
+ *  - digits only. `Number('0x1000')` is 4096, and hex is not a timestamp.
+ *  - a RANGE check, not just `Number.isFinite`. JavaScript's Date tops out
+ *    at +/-8.64e15 ms and `toISOString()` THROWS past it, so a nanosecond
+ *    timestamp (a realistic mistake for an integration) threw out of
+ *    mapIssue. getTicket and listComments do not wrap their mapping, so that
+ *    escaped ipcMain.handle and rejected the IPC call instead of returning a
+ *    JiraResult failure — one bad node blanking a whole ticket or thread.
+ *    This file's contract is that a malformed field degrades, never throws.
+ *
+ * UTC slicing is deliberate and correct: Jira stores the picked calendar day
+ * as UTC midnight and reads it back with getUTC*, so slicing in UTC is the
+ * matching reader. Using local getters would shift the day for every viewer
+ * west of Greenwich.
+ */
+const MAX_TIMESTAMP_MS = 8.64e15;
+
+/** Below this, a value cannot be a millisecond timestamp for any date after
+ *  1973, and is comfortably a seconds timestamp for any date before 5138. */
+const SECONDS_EPOCH_CEILING = 1e11;
+
+function dateText(rawTimestamp: string): string {
+  const raw = rawTimestamp.trim();
+  if (!/^-?\d+$/.test(raw)) return '';
+  const parsed = Number(raw);
+  if (Math.abs(parsed) > MAX_TIMESTAMP_MS) return '';
+  // Seconds or milliseconds. The editor writes milliseconds, but Atlassian's
+  // own published example for this node is `"1582152559"` — ten digits,
+  // SECONDS — so any producer following the documentation literally rendered
+  // every date as some day in January 1970 (that value read as ms is
+  // 1970-01-19). Magnitude tells the two apart unambiguously in the range
+  // that matters: a millisecond timestamp for any date after 1973 exceeds
+  // 1e11, and a seconds timestamp does not reach 1e11 until the year 5138.
+  // Anything below the threshold is therefore seconds, whichever way you
+  // read it.
+  const timestamp =
+    Math.abs(parsed) < SECONDS_EPOCH_CEILING ? parsed * 1000 : parsed;
+  if (Math.abs(timestamp) > MAX_TIMESTAMP_MS) return '';
+  const iso = new Date(timestamp).toISOString();
+  // The range check alone stops the THROW but not the wrong answer. Outside
+  // years 1000-9999 ISO 8601 switches to the expanded form
+  // ("+010000-01-01T00:00:00.000Z"), and slicing ten characters off that
+  // yields "+010000-01" — a string with no day in it. A microsecond epoch
+  // (the same units mistake as nanoseconds, one order down) lands inside the
+  // accepted range and rendered exactly that into a description. Testing the
+  // shape of the output is stricter than any numeric bound and needs no
+  // magic constant for the year-9999 boundary.
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(iso)) return '';
+  // Date only, no time: an ADF date node carries no time of day, so
+  // rendering one would invent precision the source does not have.
+  return iso.slice(0, 10);
+}
+
 export function adfToPlainText(node: unknown): string {
   if (node == null) return '';
   if (typeof node === 'string') return node;
@@ -116,6 +219,61 @@ export function adfToPlainText(node: unknown): string {
     const attrs = record.attrs as Record<string, unknown> | undefined;
     if (typeof attrs?.text === 'string') return attrs.text;
     return typeof attrs?.shortName === 'string' ? attrs.shortName : '';
+  }
+  // Leaf nodes that carry their whole content in attrs and have no `content`
+  // array. Falling through to the generic branch below returned '' for each
+  // of them, which is content loss rather than lost formatting: Jira
+  // auto-converts a pasted Jira or Confluence link into an inlineCard, so a
+  // description consisting of one pasted link rendered completely empty.
+  if (type === 'inlineCard' || type === 'blockCard' || type === 'embedCard') {
+    // `data` OR `url`, never both — Atlassian's own wording. Reading only
+    // `url` left the `data` variant rendering empty, which is the very
+    // symptom this branch was added to fix.
+    const text = cardText(record);
+    // A block card ends its line; an inline one does not. Without this the
+    // URL glues to the next paragraph — "…/pages/12345The API returns 500" —
+    // which is the run-together defect `taskItem` was added to fix, shipped
+    // again one branch below it.
+    return type === 'inlineCard' ? text : `${text}\n`;
+  }
+  // An image contributes exactly one thing to a plain-text surface: its alt
+  // text. Without this a description that is one screenshot — a common way to
+  // file a bug — rendered completely blank, which is the same content loss as
+  // the pasted-link case above rather than the formatting loss this file's
+  // disclaimer covers. `media` is the node inside a mediaSingle/mediaGroup
+  // wrapper; `mediaInline` is the inline spelling. Both are silent when the
+  // uploader gave no alt, because inventing a filename would be worse than
+  // saying nothing.
+  if (type === 'media' || type === 'mediaInline') {
+    const alt = attrString(record, 'alt');
+    if (!alt) return '';
+    // The image ends its own line, rather than relying on a wrapper to do it.
+    // Relying on the wrapper is what broke the first version: only
+    // `mediaSingle` was in the block set, so a `mediaGroup` — what the editor
+    // emits for MORE than one attachment — ran every alt into the next and
+    // then into the following paragraph ("error toastnetwork tabRepro on
+    // staging only"). That is the same run-together defect `taskItem` and
+    // `blockCard` are both here to prevent, shipped a third time. An inline
+    // image is inline, so it does not.
+    return type === 'mediaInline' ? alt : `${alt}\n`;
+  }
+  // A status lozenge ("BLOCKED") and an inline date are both words a reader
+  // needs; both vanished entirely.
+  if (type === 'status') return attrString(record, 'text');
+  if (type === 'date') return dateText(attrString(record, 'timestamp'));
+  if (type === 'expand' || type === 'nestedExpand') {
+    // The title is dropped by the generic path because it lives in attrs, not
+    // content. It is usually the heading its content sits under ("Acceptance
+    // criteria"), so losing it loses the label rather than the formatting.
+    const title = attrString(record, 'title');
+    const inner = adfToPlainText(record.content);
+    const body = title ? `${title}\n${inner}` : inner;
+    // Its own trailing newline, for the same reason as the cards above: this
+    // branch returns before the block set is consulted. It happened to look
+    // right only because an expand's children are usually paragraphs, which
+    // bring their own — luck, not a guard, and it failed the moment the child
+    // was a bare text node or a media group.
+    return body.endsWith('\n') ? body : `${body}\n`;
   }
 
   const inner = adfToPlainText(record.content);
@@ -441,6 +599,44 @@ function transitionFieldPayload(
   return value;
 }
 
+/**
+ * A Jira id as a string, whether it arrived as one or as a number.
+ *
+ * `isSafeInteger` and `> 0`, not `isFinite`. The looser check accepted
+ * floats, negatives and zero, which made this strictly WORSE than the
+ * fallback it replaced: `id: 1.5` used to degrade to the issue key, which
+ * works as `issueIdOrKey` in every Jira URL, and instead became the literal
+ * "1.5" — and since ticket.id keys every subsequent write, that turns a
+ * graceful degradation into a 404 on the next transition or comment.
+ *
+ * The SAME rule applies to strings, which is where it actually matters: Jira
+ * returns ids as strings on every current API version, so a version that
+ * validated only the number branch was validating the shape that almost never
+ * arrives. A string that looks numeric must be a positive integer; one that
+ * does not look numeric at all passes through, since this cannot know what a
+ * future or proxied id may legitimately look like.
+ *
+ * Precision beyond MAX_SAFE_INTEGER is not something this can fix: JSON.parse
+ * has already rounded such a value before it arrives. A long digit STRING
+ * passes through exactly, which is the shape that preserves it.
+ */
+const NUMERIC_SHAPED = /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i;
+
+function idOf(raw: unknown): string | null {
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    if (!NUMERIC_SHAPED.test(trimmed)) return trimmed;
+    return /^\d+$/.test(trimmed) && trimmed !== '0'.repeat(trimmed.length)
+      ? trimmed
+      : null;
+  }
+  if (typeof raw === 'number' && Number.isSafeInteger(raw) && raw > 0) {
+    return String(raw);
+  }
+  return null;
+}
+
 export function buildTransitionFieldsPayload(
   transitionRaw: unknown,
   fieldValues: Record<string, string>,
@@ -454,7 +650,27 @@ export function buildTransitionFieldsPayload(
       // dropped: an unknown field on a transition is a guaranteed 400 from
       // Jira, and a genuinely required field's absence produces a far clearer
       // message from Jira than a rejected unknown one would.
-      if (!value || !fields[key]) return payload;
+      // `hasOwnProperty.call`, not a bare `fields[key]`. The bracket read
+      // walks the prototype chain, so `constructor`, `__proto__`, `toString`,
+      // `valueOf`, `hasOwnProperty` and `isPrototypeOf` were all truthy and
+      // sailed past this guard — `{ constructor: "x" }` reached Jira as
+      // `{"fields":{"constructor":"x"}}`, a guaranteed 400 that the comment
+      // above says cannot happen. (No prototype pollution was possible: the
+      // accumulator uses a computed key in an object literal, which defines
+      // an own property. The defect was a false guard, not a write primitive.)
+      // Both halves matter. `hasOwnProperty.call` is the prototype-chain fix;
+      // the `fields[key]` truthiness check is kept because the bare bracket
+      // read was also doing a second job — rejecting an OWN key whose
+      // metadata is falsy. Dropping it let `{ customfield_1: null }` through
+      // as a raw unschema'd string, an unremarked behaviour change in a
+      // function that writes to Jira.
+      if (
+        !value ||
+        !Object.prototype.hasOwnProperty.call(fields, key) ||
+        !fields[key]
+      ) {
+        return payload;
+      }
       const resolved = transitionFieldPayload(asRecord(fields[key]), value);
       return resolved === undefined ? payload : { ...payload, [key]: resolved };
     },
@@ -649,7 +865,15 @@ function sprintNameOf(value: unknown): string | null {
   // An issue can sit in several sprints (a carried-over ticket); the active
   // one is what the user means by "the sprint", falling back to the last
   // listed when none is active.
-  const active = value.find((entry) => asRecord(entry).state === 'active');
+  // Lowercased before comparing, like every other string compare in this
+  // file. The Greenhopper-era sprint custom field serializes
+  // `ACTIVE|CLOSED|FUTURE`; only the modern object form is lower case. On a
+  // site returning the older shape no sprint matched, so a carried-over
+  // ticket fell through to "the last listed" and displayed the name of a
+  // CLOSED sprint — a wrong value, not a missing one.
+  const active = value.find(
+    (entry) => String(asRecord(entry).state ?? '').toLowerCase() === 'active',
+  );
   const chosen = asRecord(active ?? value[value.length - 1]);
   return typeof chosen.name === 'string' ? chosen.name : null;
 }
@@ -732,7 +956,13 @@ export function mapIssue(
   const priority = asRecord(fields.priority);
 
   return {
-    id: typeof issue.id === 'string' ? issue.id : key,
+    // Coerced rather than abandoned. A numeric `id` (older payloads, some
+    // proxies — the same shapes `priorityId` and `mapAttachments` already
+    // coerce for) silently fell back to the key, which works as
+    // `issueIdOrKey` everywhere but defeats the reason jiraTypes.ts gives for
+    // carrying an id at all: it survives an issue being moved to another
+    // project, and the key does not.
+    id: idOf(issue.id) ?? key,
     key,
     // The key's own prefix is the fallback: an issue key is always
     // PROJECT-NUMBER, so it carries the project key even if `fields.project`
@@ -805,10 +1035,11 @@ export function mapComment(
     id: String(id),
     ticketId,
     authorName: displayNameOf(record.author, 'Unknown'),
-    body:
-      typeof record.body === 'string'
-        ? wikiMarkupToPlainText(record.body)
-        : tidyPlainText(adfToPlainText(record.body)),
+    // The shared helper, not a reinlined copy of it. `plainTextFromJiraBody`
+    // was extracted so a description and a comment "cannot drift apart
+    // again", and then this — the one function that comment names — kept its
+    // own duplicate of the ternary, leaving the drift the extraction was for.
+    body: plainTextFromJiraBody(record.body),
     createdAt:
       typeof record.created === 'string'
         ? record.created

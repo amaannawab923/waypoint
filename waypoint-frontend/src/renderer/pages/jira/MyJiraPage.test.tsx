@@ -15,6 +15,7 @@ import type {
   JiraDuplicateNudge,
   JiraProposal,
   JiraTicket,
+  JiraTruncation,
 } from '@/types/jira';
 import MyJiraPage from './MyJiraPage';
 import { resetMyJiraQueueForTests } from './useMyJiraQueue';
@@ -122,7 +123,10 @@ const TICKETS: JiraTicket[] = [
  * flag is how it knows whether the list below is the queue or only the first
  * page-capped slice of it. Almost every test here is about the tickets, so
  * `truncated` defaults to the honest "this is all of it". */
-const queueRead = (tickets: JiraTicket[], truncated = false) => ({
+const queueRead = (
+  tickets: JiraTicket[],
+  truncated: JiraTruncation = false,
+) => ({
   tickets,
   truncated,
 });
@@ -493,7 +497,7 @@ describe('MyJiraPage — pagination', () => {
 // "4 issues · 3 Jira projects" over a page-capped read is a count presented
 // as a total. The strip is what stops the page making that claim silently.
 describe('MyJiraPage — a page-capped read says so', () => {
-  function mountCapped(truncated: boolean) {
+  function mountCapped(truncated: JiraTruncation) {
     jest
       .mocked(listMyJiraTickets)
       .mockResolvedValue(queueRead(TICKETS, truncated));
@@ -509,12 +513,26 @@ describe('MyJiraPage — a page-capped read says so', () => {
   }
 
   it('warns that the list is only the first slice of the queue', async () => {
-    mountCapped(true);
+    mountCapped('page-cap');
     await screen.findByText('Eng assignee ticket');
 
     expect(
       screen.getByText(/more issues than this app reads in one go/),
     ).toBeInTheDocument();
+  });
+
+  // A twelve-issue queue can land here — Jira reports more work and returns
+  // no cursor on the very first page. Reusing the cap's sentence would put
+  // "this is the first 500" over twelve rows, which is a louder version of
+  // the wrong claim the banner exists to prevent.
+  it('does not claim a 500 cap when Jira simply stopped paging', async () => {
+    mountCapped('no-cursor');
+    await screen.findByText('Eng assignee ticket');
+
+    expect(
+      screen.getByText(/more issues than it would hand over/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/first 500/)).not.toBeInTheDocument();
   });
 
   it('says nothing at all when the read was complete', async () => {
@@ -531,7 +549,7 @@ describe('MyJiraPage — a page-capped read says so', () => {
   // successful read was long is the wrong urgency, and it would also make
   // the several `findByRole('alert')` waits below ambiguous.
   it('is not announced as an alert', async () => {
-    mountCapped(true);
+    mountCapped('page-cap');
     await screen.findByText('Eng assignee ticket');
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
