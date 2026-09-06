@@ -110,19 +110,58 @@ describe('adfToPlainText', () => {
       ).toBe('see https://x.dev/ENG-1');
     });
 
-    it('renders blockCard and embedCard as their URL too', () => {
+    // Block-level, unlike inlineCard — so they end their line. Without the
+    // newline the URL glues to whatever follows ("…/pages/12345The API
+    // returns 500"), which is the same run-together defect `taskItem` is in
+    // the block set to prevent.
+    it('renders blockCard and embedCard as their URL, on their own line', () => {
       expect(
         adfToPlainText({
           type: 'blockCard',
           attrs: { url: 'https://x.dev/a' },
         }),
-      ).toBe('https://x.dev/a');
+      ).toBe('https://x.dev/a\n');
       expect(
         adfToPlainText({
           type: 'embedCard',
           attrs: { url: 'https://x.dev/b' },
         }),
-      ).toBe('https://x.dev/b');
+      ).toBe('https://x.dev/b\n');
+    });
+
+    it('does not run a block card into the paragraph after it', () => {
+      const out = adfToPlainText({
+        type: 'doc',
+        content: [
+          { type: 'blockCard', attrs: { url: 'https://x.dev/a' } },
+          {
+            type: 'paragraph',
+            content: [{ type: 'text', text: 'The API returns 500' }],
+          },
+        ],
+      });
+      expect(out).toBe('https://x.dev/a\nThe API returns 500\n');
+    });
+
+    // Atlassian: "Either data or url must be provided, but not both." Reading
+    // only `url` left the data variant rendering empty — the exact symptom
+    // these branches exist to fix.
+    it('reads a card that carries data instead of url', () => {
+      expect(
+        adfToPlainText({
+          type: 'inlineCard',
+          attrs: {
+            data: { '@type': 'Object', name: 'ENG-1', url: 'https://x.dev/1' },
+          },
+        }),
+      ).toBe('https://x.dev/1');
+      // Falls back to the human-readable name when data carries no url.
+      expect(
+        adfToPlainText({
+          type: 'inlineCard',
+          attrs: { data: { '@type': 'Object', name: 'ENG-1 Fix login' } },
+        }),
+      ).toBe('ENG-1 Fix login');
     });
 
     it('renders a status lozenge as its word', () => {
@@ -139,6 +178,70 @@ describe('adfToPlainText', () => {
           para({ type: 'date', attrs: { timestamp: '1767225600000' } }),
         ).trim(),
       ).toBe('2026-01-01');
+    });
+
+    // A date node whose value is out of JavaScript's Date range made
+    // toISOString THROW, and neither getTicket nor listComments wraps its
+    // mapping — so it escaped ipcMain.handle and rejected the IPC call rather
+    // than returning a JiraResult failure. One bad node blanked a whole
+    // ticket or comment thread. This file's contract is that a malformed
+    // field degrades, never throws.
+    it.each([
+      ['nanoseconds', '1710460800000000000'],
+      ['just past the Date range', '8640000000000001'],
+      ['whitespace only', '   '],
+      ['hex', '0x1000'],
+      ['not a number at all', 'soon'],
+    ])('renders nothing, and does not throw, for a %s timestamp', (_l, ts) => {
+      const doc = {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [{ type: 'date', attrs: { timestamp: ts } }],
+          },
+        ],
+      };
+      expect(() => adfToPlainText(doc)).not.toThrow();
+      expect(adfToPlainText(doc).trim()).toBe('');
+    });
+
+    it('keeps a collapsible section\u2019s title, which lives in attrs', () => {
+      expect(
+        adfToPlainText({
+          type: 'expand',
+          attrs: { title: 'Acceptance criteria' },
+          content: [
+            {
+              type: 'paragraph',
+              content: [{ type: 'text', text: 'must log in' }],
+            },
+          ],
+        }).trim(),
+      ).toBe('Acceptance criteria\nmust log in');
+    });
+
+    it('keeps documented blockTaskItem entries on their own lines', () => {
+      expect(
+        adfToPlainText({
+          type: 'doc',
+          content: [
+            {
+              type: 'taskList',
+              content: [
+                {
+                  type: 'blockTaskItem',
+                  content: [{ type: 'text', text: 'buy milk' }],
+                },
+                {
+                  type: 'blockTaskItem',
+                  content: [{ type: 'text', text: 'buy eggs' }],
+                },
+              ],
+            },
+          ],
+        }).trim(),
+      ).toBe('buy milk\nbuy eggs');
     });
 
     it('does not throw on a malformed date or a card with no url', () => {
@@ -967,6 +1070,51 @@ describe('mapIssue', () => {
     ).toMatchObject({ id: '10421' });
   });
 
+  // isSafeInteger and > 0, not isFinite. The looser check made this strictly
+  // worse than the fallback it replaced: ticket.id keys every write, so a
+  // float id turned a graceful degradation to the key (which works as
+  // issueIdOrKey in every Jira URL) into a 404 on the next transition.
+  it.each([
+    ['a float', 1.5],
+    ['a negative', -5],
+    ['zero', 0],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['NaN', Number.NaN],
+    ['a non-id type', true],
+  ])('falls back to the key rather than trusting %s as an id', (_l, id) => {
+    expect(
+      mapIssue(
+        {
+          id,
+          key: 'ENG-7',
+          fields: {
+            summary: 's',
+            project: { key: 'ENG' },
+            status: { name: 'To Do', statusCategory: { key: 'new' } },
+          },
+        },
+        ME,
+      ),
+    ).toMatchObject({ id: 'ENG-7' });
+  });
+
+  it('keeps a large string id exactly, without number rounding', () => {
+    expect(
+      mapIssue(
+        {
+          id: '10000000000000000001',
+          key: 'ENG-7',
+          fields: {
+            summary: 's',
+            project: { key: 'ENG' },
+            status: { name: 'To Do', statusCategory: { key: 'new' } },
+          },
+        },
+        ME,
+      ),
+    ).toMatchObject({ id: '10000000000000000001' });
+  });
+
   it('still falls back to the key when there is no usable id at all', () => {
     expect(
       mapIssue(
@@ -1211,6 +1359,18 @@ describe('buildTransitionFieldsPayload', () => {
     expect(
       buildTransitionFieldsPayload(TRANSITION, { resolution: 'Fixed' }),
     ).toEqual({ resolution: { id: '10000' } });
+  });
+
+  // The bare `fields[key]` read was doing two jobs; the prototype-chain fix
+  // replaced only one of them. An OWN key whose metadata is falsy has no
+  // schema and no allowedValues, so it would be forwarded as a raw string.
+  it('drops an own field whose metadata is falsy', () => {
+    expect(
+      buildTransitionFieldsPayload(
+        { fields: { customfield_1: null } },
+        { customfield_1: 'hello' },
+      ),
+    ).toEqual({});
   });
 
   it('never sends timeSpent, which this field does not accept', () => {

@@ -79,7 +79,21 @@ const ADF_BLOCK_TYPES = new Set([
   // unbroken sentence — "buy milkbuy eggs" — which is not lost formatting but
   // lost meaning: acceptance criteria stop being separate criteria.
   'taskItem',
+  // Jira's own node index documents `blockTaskItem`, not `taskItem`. The
+  // editor emits taskItem, so both are listed rather than betting on one:
+  // getting this wrong reproduces the exact run-together defect the taskItem
+  // entry above exists to fix.
+  'blockTaskItem',
   'decisionItem',
+  // Block-level, so they end a line. They are handled as leaves below and
+  // return early, which is why they must ALSO be named here — see the
+  // newline note on `blockCardText`.
+  'blockCard',
+  'embedCard',
+  // A collapsible section is a block, and its title is usually the label the
+  // content beneath it belongs to.
+  'expand',
+  'nestedExpand',
   'panel',
   'rule',
   'tableRow',
@@ -108,6 +122,57 @@ function attrString(record: Record<string, unknown>, key: string): string {
  * blocks lose their fencing. That's the honest consequence of a plain-text
  * surface, and the Connection tab already says rich text isn't built.
  */
+/** A card's visible text. `data` OR `url`, never both, per Atlassian — and
+ *  the `data` variant is a JSON-LD object whose `url` (or failing that,
+ *  `name`) is the part a reader needs. */
+function cardText(record: Record<string, unknown>): string {
+  const direct = attrString(record, 'url');
+  if (direct) return direct;
+  const attrs = record.attrs as Record<string, unknown> | undefined;
+  const data = attrs?.data;
+  if (!data || typeof data !== 'object') return '';
+  const asRec = data as Record<string, unknown>;
+  const url = typeof asRec.url === 'string' ? asRec.url : '';
+  if (url) return url;
+  return typeof asRec.name === 'string' ? asRec.name : '';
+}
+
+/**
+ * An ADF date node's calendar date, or '' when it is not one.
+ *
+ * Three guards, each for a wrong answer the previous version gave:
+ *
+ *  - `.trim()` before the emptiness check. `Number('   ')` is 0, so a
+ *    whitespace-only timestamp rendered 1970-01-01 — precisely the
+ *    "confident wrong answer" the old comment claimed to prevent.
+ *  - digits only. `Number('0x1000')` is 4096, and hex is not a timestamp.
+ *  - a RANGE check, not just `Number.isFinite`. JavaScript's Date tops out
+ *    at +/-8.64e15 ms and `toISOString()` THROWS past it, so a nanosecond
+ *    timestamp (a realistic mistake for an integration) threw out of
+ *    mapIssue. getTicket and listComments do not wrap their mapping, so that
+ *    escaped ipcMain.handle and rejected the IPC call instead of returning a
+ *    JiraResult failure — one bad node blanking a whole ticket or thread.
+ *    This file's contract is that a malformed field degrades, never throws.
+ *
+ * UTC slicing is deliberate and correct: Jira stores the picked calendar day
+ * as UTC midnight and reads it back with getUTC*, so slicing in UTC is the
+ * matching reader. Using local getters would shift the day for every viewer
+ * west of Greenwich.
+ */
+const MAX_TIMESTAMP_MS = 8.64e15;
+
+function dateText(rawTimestamp: string): string {
+  const raw = rawTimestamp.trim();
+  if (!/^-?\d+$/.test(raw)) return '';
+  const timestamp = Number(raw);
+  if (!Number.isFinite(timestamp) || Math.abs(timestamp) > MAX_TIMESTAMP_MS) {
+    return '';
+  }
+  // Date only, no time: an ADF date node carries no time of day, so
+  // rendering one would invent precision the source does not have.
+  return new Date(timestamp).toISOString().slice(0, 10);
+}
+
 export function adfToPlainText(node: unknown): string {
   if (node == null) return '';
   if (typeof node === 'string') return node;
@@ -136,22 +201,27 @@ export function adfToPlainText(node: unknown): string {
   // auto-converts a pasted Jira or Confluence link into an inlineCard, so a
   // description consisting of one pasted link rendered completely empty.
   if (type === 'inlineCard' || type === 'blockCard' || type === 'embedCard') {
-    return attrString(record, 'url');
+    // `data` OR `url`, never both — Atlassian's own wording. Reading only
+    // `url` left the `data` variant rendering empty, which is the very
+    // symptom this branch was added to fix.
+    const text = cardText(record);
+    // A block card ends its line; an inline one does not. Without this the
+    // URL glues to the next paragraph — "…/pages/12345The API returns 500" —
+    // which is the run-together defect `taskItem` was added to fix, shipped
+    // again one branch below it.
+    return type === 'inlineCard' ? text : `${text}\n`;
   }
   // A status lozenge ("BLOCKED") and an inline date are both words a reader
   // needs; both vanished entirely.
   if (type === 'status') return attrString(record, 'text');
-  if (type === 'date') {
-    const raw = attrString(record, 'timestamp');
-    // Emptiness is checked rather than inferred from the parse: Number('') is
-    // 0, which would render a missing date as 1970-01-01 — a confident wrong
-    // answer where '' is the honest one.
-    if (!raw) return '';
-    const timestamp = Number(raw);
-    if (!Number.isFinite(timestamp)) return '';
-    // Date only, no time: an ADF date node carries no time of day, so
-    // rendering one would invent precision the source does not have.
-    return new Date(timestamp).toISOString().slice(0, 10);
+  if (type === 'date') return dateText(attrString(record, 'timestamp'));
+  if (type === 'expand' || type === 'nestedExpand') {
+    // The title is dropped by the generic path because it lives in attrs, not
+    // content. It is usually the heading its content sits under ("Acceptance
+    // criteria"), so losing it loses the label rather than the formatting.
+    const title = attrString(record, 'title');
+    const inner = adfToPlainText(record.content);
+    return title ? `${title}\n${inner}` : inner;
   }
 
   const inner = adfToPlainText(record.content);
@@ -477,11 +547,27 @@ function transitionFieldPayload(
   return value;
 }
 
-/** A Jira id as a string, whether it arrived as one or as a number. Empty
- *  and non-finite values are rejected rather than stringified. */
+/**
+ * A Jira id as a string, whether it arrived as one or as a number.
+ *
+ * `isSafeInteger` and `> 0`, not `isFinite`. The looser check accepted
+ * floats, negatives and zero, which made this strictly WORSE than the
+ * fallback it replaced: `id: 1.5` used to degrade to the issue key, which
+ * works as `issueIdOrKey` in every Jira URL, and instead became the literal
+ * "1.5" — and since ticket.id keys every subsequent write, that turns a
+ * graceful degradation into a 404 on the next transition or comment. It also
+ * kept `String(1e21)` producing "1e+21". Anything that is not a plausible id
+ * falls back to the key, as before.
+ *
+ * Precision beyond MAX_SAFE_INTEGER is not something this can fix: JSON.parse
+ * has already rounded such a value before it arrives. A string id passes
+ * through untouched, which is the shape that preserves it.
+ */
 function idOf(raw: unknown): string | null {
   if (typeof raw === 'string') return raw.trim() || null;
-  if (typeof raw === 'number' && Number.isFinite(raw)) return String(raw);
+  if (typeof raw === 'number' && Number.isSafeInteger(raw) && raw > 0) {
+    return String(raw);
+  }
   return null;
 }
 
@@ -506,7 +592,17 @@ export function buildTransitionFieldsPayload(
       // above says cannot happen. (No prototype pollution was possible: the
       // accumulator uses a computed key in an object literal, which defines
       // an own property. The defect was a false guard, not a write primitive.)
-      if (!value || !Object.prototype.hasOwnProperty.call(fields, key)) {
+      // Both halves matter. `hasOwnProperty.call` is the prototype-chain fix;
+      // the `fields[key]` truthiness check is kept because the bare bracket
+      // read was also doing a second job — rejecting an OWN key whose
+      // metadata is falsy. Dropping it let `{ customfield_1: null }` through
+      // as a raw unschema'd string, an unremarked behaviour change in a
+      // function that writes to Jira.
+      if (
+        !value ||
+        !Object.prototype.hasOwnProperty.call(fields, key) ||
+        !fields[key]
+      ) {
         return payload;
       }
       const resolved = transitionFieldPayload(asRecord(fields[key]), value);

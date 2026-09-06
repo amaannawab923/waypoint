@@ -1,4 +1,4 @@
-import type { JiraWireTicket } from '../../main/jira/jiraTypes';
+import type { JiraTruncation, JiraWireTicket } from '../../main/jira/jiraTypes';
 
 // Each test gets its OWN fresh copy of this module via freshApi(). jiraApi.ts
 // keeps a small module-level session cache (the last ticket list, the
@@ -60,7 +60,10 @@ function wireTicket(overrides: Partial<JiraWireTicket> = {}): JiraWireTicket {
  * one of these call sites cares about the array and none of them cares about
  * the flag; spelling `{ tickets, truncated: false }` out a dozen times would
  * bury the one test where the flag is the point. */
-function ticketsResult(tickets: JiraWireTicket[], truncated = false) {
+function ticketsResult(
+  tickets: JiraWireTicket[],
+  truncated: JiraTruncation = false,
+) {
   return { ok: true as const, value: { tickets, truncated } };
 }
 
@@ -170,27 +173,47 @@ describe('listMyJiraTickets', () => {
   // same array; if this flag were dropped anywhere between the client and
   // here, the UI would go back to rendering "here is everything" over a
   // prefix and nothing would fail.
-  it("carries main's truncation flag through untouched", async () => {
-    const api = freshApi();
-    bridge.listTickets.mockResolvedValue(ticketsResult([wireTicket()], true));
+  // The REASON travels, not just the fact — the two cases print different
+  // sentences, and the cap's names a 500-issue limit that the other case must
+  // never claim.
+  it.each([['page-cap'], ['no-cursor']] as const)(
+    "carries main's %s truncation through untouched",
+    async (reason) => {
+      const api = freshApi();
+      bridge.listTickets.mockResolvedValue(
+        ticketsResult([wireTicket()], reason),
+      );
 
-    expect(await api.listMyJiraTickets()).toMatchObject({ truncated: true });
-  });
+      expect(await api.listMyJiraTickets()).toMatchObject({
+        truncated: reason,
+      });
+    },
+  );
 
   // The counts on the Connection tab, the sidebar badge and the wizard are
   // all derived from the same cached list, so they inherit its cap. Reporting
   // a capped 500 as a flat "500 issues in your queue" is a specific wrong
   // number in the one panel whose job is to say what Waypoint can see.
-  it('marks the derived counts as floors when the read was capped', async () => {
-    const api = freshApi();
-    bridge.listTickets.mockResolvedValue(ticketsResult([wireTicket()], true));
-    await api.listMyJiraTickets();
+  // Both reasons, deliberately. Whether the counts are floors is a genuine
+  // yes/no question — unlike the banner copy, which has to name a cause — so
+  // this pins the Boolean() coercion against BOTH string values. A regression
+  // that special-cased 'page-cap' would otherwise slip through silently,
+  // since the string values are all main can now produce.
+  it.each([['page-cap'], ['no-cursor']] as const)(
+    'marks the derived counts as floors when the read was %s truncated',
+    async (reason) => {
+      const api = freshApi();
+      bridge.listTickets.mockResolvedValue(
+        ticketsResult([wireTicket()], reason),
+      );
+      await api.listMyJiraTickets();
 
-    expect(await api.getJiraConnectionStatus()).toMatchObject({
-      issueCount: 1,
-      countsTruncated: true,
-    });
-  });
+      expect(await api.getJiraConnectionStatus()).toMatchObject({
+        issueCount: 1,
+        countsTruncated: true,
+      });
+    },
+  );
 
   it('reports complete counts as complete', async () => {
     const api = freshApi();
@@ -794,7 +817,7 @@ describe('comment formatting', () => {
       // The LAST call, not the first. A test that posts twice (the
       // order-independence one below does) would otherwise assert against the
       // first call's body twice and pass no matter what the second produced.
-      const calls = bridge.postComment.mock.calls;
+      const { calls } = bridge.postComment.mock;
       return calls[calls.length - 1][0].body.content[0].content;
     }
 
@@ -816,9 +839,11 @@ describe('comment formatting', () => {
     // so two spellings of "this is code" disagreed about whether the text
     // could notify someone.
     it('keeps a mention literal inside inline code, as a fenced block does', async () => {
-      expect(await postWithMentions('`@Sam Lee`', [M(1, 9, 'Sam Lee')])).toEqual(
-        [{ type: 'text', text: '@Sam Lee', marks: [{ type: 'code' }] }],
-      );
+      expect(
+        await postWithMentions('`@Sam Lee`', [M(1, 9, 'Sam Lee')]),
+      ).toEqual([
+        { type: 'text', text: '@Sam Lee', marks: [{ type: 'code' }] },
+      ]);
     });
 
     // Containment is legitimate and must keep working — the mention still
@@ -846,10 +871,16 @@ describe('comment formatting', () => {
         { type: 'mention', attrs: { id: 'acc-1', text: '@Sam Lee' } },
       ];
       expect(
-        await postWithMentions('@Sam Lee', [M(0, 8, 'Sam Lee'), M(0, 4, 'Sam')]),
+        await postWithMentions('@Sam Lee', [
+          M(0, 8, 'Sam Lee'),
+          M(0, 4, 'Sam'),
+        ]),
       ).toEqual(leftmostWins);
       expect(
-        await postWithMentions('@Sam Lee', [M(0, 4, 'Sam'), M(0, 8, 'Sam Lee')]),
+        await postWithMentions('@Sam Lee', [
+          M(0, 4, 'Sam'),
+          M(0, 8, 'Sam Lee'),
+        ]),
       ).toEqual(leftmostWins);
     });
   });
@@ -871,9 +902,7 @@ describe('comment formatting', () => {
       expect(body.content[0].content).toContainEqual({
         type: 'text',
         text: 'docs',
-        marks: [
-          { type: 'link', attrs: { href: 'https://example.com/guide' } },
-        ],
+        marks: [{ type: 'link', attrs: { href: 'https://example.com/guide' } }],
       });
     });
 
