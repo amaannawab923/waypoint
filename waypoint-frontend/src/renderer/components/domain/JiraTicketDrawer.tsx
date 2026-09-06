@@ -119,7 +119,17 @@ export function JiraTicketDrawer({
       className={clsx(
         // 720px, matching TicketDrawer — the 460px this used to be is what
         // made "Open in Jira" the only comfortable way to read a real thread.
-        'thin-scroll fixed top-12 bottom-0 z-50 flex w-full max-w-[720px] flex-col border-l border-border bg-surface shadow-2xl transition-[right,transform] duration-200 ease-out',
+        //
+        // shadow-2xl (Tailwind's default, unblurred rect ± its own edges) is
+        // symmetric, so with this drawer stacked above Copilot (z-50 vs
+        // z-40) its own drop shadow painted a visible gray gradient across
+        // Copilot's left edge whenever both were docked side by side —
+        // Copilot wasn't a different white, it was being shadowed by the
+        // drawer sitting on top of it. A negative x-offset keeps the same
+        // depth cue toward the main content on the left, the only side this
+        // panel actually floats over, without ever reaching past its own
+        // right edge onto whatever's docked next to it.
+        'thin-scroll fixed top-12 bottom-0 z-50 flex w-full max-w-[720px] flex-col border-l border-border bg-surface shadow-[-20px_25px_50px_-12px_rgba(0,0,0,0.25)] transition-[right,transform] duration-200 ease-out',
         // Shifted left by Copilot's own width while it's open, so the two
         // dock side by side instead of one covering the other — see
         // lib/copilotOpenStore.ts.
