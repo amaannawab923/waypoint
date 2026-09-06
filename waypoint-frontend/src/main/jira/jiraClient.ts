@@ -14,6 +14,7 @@ import type {
   JiraPriorityOption,
   JiraResult,
   JiraTicketQueryResult,
+  JiraCommentPage,
   JiraWireComment,
   JiraWireTicket,
   JiraWireTransition,
@@ -926,13 +927,19 @@ export async function uploadAttachment(
 const COMMENT_PATH = (ticketId: string) =>
   `/rest/api/3/issue/${encodeURIComponent(ticketId)}/comment`;
 
+/** One read's worth of comments. Not raised to match Jira's 1000 ceiling:
+ *  every comment is rendered at once with no virtualisation, and the point
+ *  of this read is the recent thread, not the archive. The number is only
+ *  safe to hold because `total` now travels with it. */
+const COMMENT_PAGE_SIZE = 100;
+
 export async function listComments(
   ticketId: string,
-): Promise<JiraResult<JiraWireComment[]>> {
+): Promise<JiraResult<JiraCommentPage>> {
   const credentialResult = requireCredential();
   if (!credentialResult.ok) return credentialResult;
 
-  const result = await jiraFetch<{ comments?: unknown[] }>(
+  const result = await jiraFetch<{ comments?: unknown[]; total?: unknown }>(
     credentialResult.value,
     {
       method: 'GET',
@@ -941,7 +948,7 @@ export async function listComments(
       // busy ticket ascending order means those 100 are the *oldest* hundred
       // — a thread whose most recent activity is invisible, which is the one
       // thing a comment list exists to show.
-      query: { orderBy: '-created', maxResults: '100' },
+      query: { orderBy: '-created', maxResults: String(COMMENT_PAGE_SIZE) },
     },
   );
   if (!result.ok) return result;
@@ -953,7 +960,20 @@ export async function listComments(
   // order and appends a freshly posted comment with `[...cs, comment]`, so
   // ascending is the contract callers already depend on.
   comments.reverse();
-  return { ok: true, value: comments };
+
+  // Fall back to what was actually returned rather than to 0. A missing or
+  // non-numeric `total` is an unknown, and reporting an unknown as 0 would
+  // make `total < comments.length` — a thread that renders as "showing 40 of
+  // 0". Falling back to the page's own length instead states the one thing
+  // still known to be true, and reads as "not truncated", which is the safe
+  // direction: a missing notice is a smaller lie than a wrong count.
+  const reported = result.value?.total;
+  const total =
+    typeof reported === 'number' && Number.isFinite(reported) && reported >= 0
+      ? reported
+      : comments.length;
+
+  return { ok: true, value: { comments, total } };
 }
 
 export async function postComment(

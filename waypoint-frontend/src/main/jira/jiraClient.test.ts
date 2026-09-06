@@ -1205,9 +1205,11 @@ describe('comments', () => {
     expect(call()[0]).not.toContain('/rest/api/2/');
     expect(result).toMatchObject({
       ok: true,
-      value: [
-        { authorName: 'Sam Lee', body: '@Amaan Nawab replay log attached.' },
-      ],
+      value: {
+        comments: [
+          { authorName: 'Sam Lee', body: '@Amaan Nawab replay log attached.' },
+        ],
+      },
     });
   });
 
@@ -1247,8 +1249,55 @@ describe('comments', () => {
     // `[...cs, comment]`, so ascending is the contract.
     expect(result).toMatchObject({
       ok: true,
-      value: [{ id: '1' }, { id: '2' }, { id: '3' }],
+      value: { comments: [{ id: '1' }, { id: '2' }, { id: '3' }] },
     });
+  });
+
+  // The cap is only safe to keep because the caller is told it applied.
+  // Without `total`, a hundred-comment page and a complete thread are the
+  // same value, and the drawer renders both under a heading that just says
+  // "Comments".
+  it("reports Jira's own total, so a capped page can say so", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        total: 312,
+        comments: [
+          {
+            id: '312',
+            author: { displayName: 'Sam Lee' },
+            body: 'newest',
+            created: '2026-09-03T09:00:00.000+0000',
+          },
+        ],
+      }),
+    );
+
+    const result = await listComments('10421');
+
+    expect(call()[0]).toContain('maxResults=100');
+    expect(result).toMatchObject({ ok: true, value: { total: 312 } });
+  });
+
+  // A missing `total` is an unknown, and 0 is not a safe way to say unknown:
+  // it renders as "showing 3 of 0" and makes every short thread look
+  // truncated in the wrong direction.
+  it('falls back to the page length when Jira reports no total', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        comments: [
+          {
+            id: '1',
+            author: { displayName: 'Sam Lee' },
+            body: 'only',
+            created: '2026-09-01T09:00:00.000+0000',
+          },
+        ],
+      }),
+    );
+
+    const result = await listComments('10421');
+
+    expect(result).toMatchObject({ ok: true, value: { total: 1 } });
   });
 
   const PLAIN_ADF_BODY = {

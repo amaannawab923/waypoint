@@ -343,6 +343,31 @@ export interface JiraWireComment {
   createdAt: string;
 }
 
+/**
+ * One page of an issue's comments, and how many the issue actually has.
+ *
+ * Same lesson as JiraTicketQueryResult, in the one place it bites hardest.
+ * A comment read is capped at COMMENT_PAGE_SIZE, and a capped page and a
+ * complete thread were the same `JiraWireComment[]` — so a 300-comment
+ * incident ticket rendered its newest hundred under a heading that says
+ * "Comments", with nothing anywhere saying the other 200 exist. Reading a
+ * thread and believing you have seen all of it is worse than being told the
+ * thread is long.
+ *
+ * `total` is Jira's own count for the issue, not a derived one: unlike the
+ * ticket crawl, which can only ever know that *more* existed, the comment
+ * endpoint reports exactly how many there are, so the UI can say "the latest
+ * 100 of 312" instead of a vaguer "there are more".
+ */
+export interface JiraCommentPage {
+  /** Oldest-first, and at most COMMENT_PAGE_SIZE of them. */
+  comments: JiraWireComment[];
+  /** Every comment on the issue, per Jira. May exceed `comments.length`
+   *  both because of the page cap and because an unparseable comment is
+   *  dropped in mapping; "showing N of total" is true either way. */
+  total: number;
+}
+
 /** What `jira:status` answers with — a purely local read of the credential
  * store, never a network call, since the renderer asks for it on every mount
  * of the sidebar and the My Jira page. */

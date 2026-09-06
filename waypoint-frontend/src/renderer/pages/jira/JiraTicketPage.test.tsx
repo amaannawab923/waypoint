@@ -58,7 +58,7 @@ function ticket(overrides: Partial<JiraTicket> = {}): JiraTicket {
 function mountAt(key: string, tickets: JiraTicket[], truncated = false) {
   jest.mocked(listMyJiraTickets).mockResolvedValue({ tickets, truncated });
   jest.mocked(getJiraTransitions).mockResolvedValue([]);
-  jest.mocked(listJiraComments).mockResolvedValue([]);
+  jest.mocked(listJiraComments).mockResolvedValue({ comments: [], total: 0 });
   jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
   jest.mocked(useJiraConnection).mockReturnValue(undefined);
   return render(

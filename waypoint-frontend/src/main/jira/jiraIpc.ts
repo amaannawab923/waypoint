@@ -28,6 +28,7 @@ import type {
   JiraPriorityOption,
   JiraResult,
   JiraTicketQueryResult,
+  JiraCommentPage,
   JiraWireComment,
   JiraWireTicket,
   JiraWireTransition,
@@ -619,7 +620,7 @@ export function registerJiraIpc(getWindow: () => BrowserWindow | null): void {
     async (
       _event,
       rawTicketId: unknown,
-    ): Promise<JiraResult<JiraWireComment[]>> => {
+    ): Promise<JiraResult<JiraCommentPage>> => {
       const ticketId = readTicketId(rawTicketId);
       if (!ticketId) return failure('invalid_input', 'Unknown Jira issue.');
       return client.listComments(ticketId);

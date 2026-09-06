@@ -153,7 +153,7 @@ async function runDebounce() {
 beforeEach(() => {
   jest.useFakeTimers();
   jest.clearAllMocks();
-  jest.mocked(listJiraComments).mockResolvedValue([]);
+  jest.mocked(listJiraComments).mockResolvedValue({ comments: [], total: 0 });
   jest.mocked(useJiraConnection).mockReturnValue(CONNECTION);
   jest.mocked(searchJiraAssignableUsers).mockResolvedValue(ASSIGNABLE);
   jest.mocked(downloadJiraAttachment).mockResolvedValue({ canceled: false });
@@ -765,5 +765,64 @@ describe('the comment composer formatting toolbar', () => {
     await waitFor(() => expect(uploadJiraAttachment).toHaveBeenCalled());
     expect(box.value).toBe('see this: ');
     expect(onTicketUpdated).not.toHaveBeenCalled();
+  });
+});
+
+// The failure this guards against is silent by construction: a capped page
+// and a whole thread render identically, so a reader finishes 100 comments on
+// a 312-comment incident believing they have read the issue.
+describe('comment thread truncation', () => {
+  function threadComment(id: string) {
+    return {
+      id,
+      ticketId: '10421',
+      authorName: 'Sam Lee',
+      body: `comment ${id}`,
+      createdAt: '2026-09-01T09:00:00.000+0000',
+      postedByWaypoint: false,
+      disclosureText: null,
+    };
+  }
+
+  it('says how many of the thread it is showing when the page is capped', async () => {
+    jest
+      .mocked(listJiraComments)
+      .mockResolvedValue({ comments: [threadComment('1'), threadComment('2')], total: 312 });
+
+    renderDrawer();
+
+    // The real number, from Jira — not a vague "there are more".
+    expect(
+      await screen.findByText(/Showing the 2 most recent of 312 comments/),
+    ).toBeInTheDocument();
+  });
+
+  it('says nothing when the thread arrived whole', async () => {
+    jest
+      .mocked(listJiraComments)
+      .mockResolvedValue({ comments: [threadComment('1')], total: 1 });
+
+    renderDrawer();
+
+    await screen.findByText('comment 1');
+    expect(screen.queryByText(/most recent of/)).toBeNull();
+  });
+
+  // Posting grows the thread. Without the total growing with it, the notice
+  // counts a comment on the left of "of" that it never counted on the right.
+  it('keeps the notice honest after posting into a capped thread', async () => {
+    jest
+      .mocked(listJiraComments)
+      .mockResolvedValue({ comments: [threadComment('1')], total: 312 });
+    jest.mocked(postJiraComment).mockResolvedValue(threadComment('new'));
+    renderDrawer();
+    await screen.findByText(/most recent of 312/);
+
+    fireEvent.change(commentBox(), { target: { value: 'a reply' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+
+    expect(
+      await screen.findByText(/Showing the 2 most recent of 313 comments/),
+    ).toBeInTheDocument();
   });
 });

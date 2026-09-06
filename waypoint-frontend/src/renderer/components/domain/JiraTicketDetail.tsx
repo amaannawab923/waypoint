@@ -114,6 +114,10 @@ export function JiraTicketDetail({
 }) {
   const isDrawer = variant === 'drawer';
   const [comments, setComments] = useState<JiraComment[]>([]);
+  // Jira's own count for the issue, which `comments` can be a tail of. Held
+  // separately rather than derived, because it is the one number the read
+  // knows and the array cannot.
+  const [commentTotal, setCommentTotal] = useState(0);
   const [assigneeOpen, setAssigneeOpen] = useState(false);
   const [savingAssignee, setSavingAssignee] = useState(false);
   const [stateOpen, setStateOpen] = useState(false);
@@ -144,7 +148,9 @@ export function JiraTicketDetail({
     reload: reloadComments,
   } = useAsync(() => listJiraComments(ticket.id), [ticket.id]);
   useEffect(() => {
-    if (fetchedComments) setComments(fetchedComments);
+    if (!fetchedComments) return;
+    setComments(fetchedComments.comments);
+    setCommentTotal(fetchedComments.total);
   }, [fetchedComments]);
 
   // Both lazy reads follow JiraTicketRow's own shape exactly, including the
@@ -442,6 +448,17 @@ export function JiraTicketDetail({
           <div className="mt-6 mb-2 text-[11px] font-bold tracking-wide text-text-muted uppercase">
             Comments
           </div>
+          {/* Said before the thread, not after it: the whole failure this
+              fixes is a reader finishing a partial thread believing it was
+              the whole one. `total` comes from Jira rather than being
+              inferred, so this can name the real number instead of hedging
+              with "there are more". */}
+          {commentTotal > comments.length && (
+            <div className="mb-2.5 rounded-[var(--radius-sm)] border border-warning/30 bg-warning-bg px-3 py-2 text-[11.5px] leading-relaxed text-warning">
+              Showing the {comments.length} most recent of {commentTotal}{' '}
+              comments. Open this issue in Jira to read the rest.
+            </div>
+          )}
           <div className="mb-4 space-y-3.5">
             {comments.map((c) => (
               <div key={c.id} className="flex gap-2">
@@ -486,7 +503,13 @@ export function JiraTicketDetail({
             ticketKey={ticket.key}
             attachments={ticket.attachments}
             onTicketUpdated={onTicketUpdated}
-            onPosted={(comment) => setComments((cs) => [...cs, comment])}
+            onPosted={(comment) => {
+              setComments((cs) => [...cs, comment]);
+              // Otherwise posting into a truncated thread walks the notice's
+              // own numbers together ("101 most recent of 312"), and on a
+              // short thread it would invent a truncation that isn't there.
+              setCommentTotal((t) => t + 1);
+            }}
           />
         </div>
       </div>

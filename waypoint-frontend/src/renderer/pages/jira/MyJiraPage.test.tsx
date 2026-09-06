@@ -132,7 +132,7 @@ function mount() {
   jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
   jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
   jest.mocked(getJiraTransitions).mockResolvedValue([]);
-  jest.mocked(listJiraComments).mockResolvedValue([]);
+  jest.mocked(listJiraComments).mockResolvedValue({ comments: [], total: 0 });
   jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
   return render(
     <MemoryRouter>
@@ -244,7 +244,7 @@ function mountWith(tickets: JiraTicket[]) {
   jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
   jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
   jest.mocked(getJiraTransitions).mockResolvedValue([]);
-  jest.mocked(listJiraComments).mockResolvedValue([]);
+  jest.mocked(listJiraComments).mockResolvedValue({ comments: [], total: 0 });
   jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
   return render(
     <MemoryRouter>
@@ -658,7 +658,7 @@ describe('JiraTicketDrawer — description wrapping', () => {
     jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead([described]));
     jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
     jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
-    jest.mocked(listJiraComments).mockResolvedValue([]);
+    jest.mocked(listJiraComments).mockResolvedValue({ comments: [], total: 0 });
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
     jest.mocked(useJiraConnection).mockReturnValue(undefined);
     render(
@@ -776,7 +776,7 @@ describe('MyJiraPage — Copilot rail', () => {
     jest.mocked(getMyJiraProposal).mockResolvedValue(proposal());
     jest.mocked(getJiraDuplicateNudge).mockResolvedValue(nudge());
     jest.mocked(getJiraTransitions).mockResolvedValue([]);
-    jest.mocked(listJiraComments).mockResolvedValue([]);
+    jest.mocked(listJiraComments).mockResolvedValue({ comments: [], total: 0 });
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
     render(
       <MemoryRouter>

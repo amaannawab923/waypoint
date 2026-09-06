@@ -9,6 +9,7 @@ import type {
   JiraPriorityOption,
   JiraResult,
   JiraTicketQueryResult,
+  JiraCommentPage,
   JiraWireComment,
   JiraWireTicket,
   JiraWireTransition,
@@ -340,7 +341,7 @@ const electronHandler = {
     }): Promise<JiraResult<{ canceled: boolean; ticket?: JiraWireTicket }>> {
       return ipcRenderer.invoke('jira:attachments:upload', args);
     },
-    listComments(ticketId: string): Promise<JiraResult<JiraWireComment[]>> {
+    listComments(ticketId: string): Promise<JiraResult<JiraCommentPage>> {
       return ipcRenderer.invoke('jira:comments:list', ticketId);
     },
     postComment(args: {

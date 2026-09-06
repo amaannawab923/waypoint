@@ -383,11 +383,26 @@ export async function searchJiraAssignableUsers(
   return wire.map(toUserOption);
 }
 
+/**
+ * A comment read, carrying the fact that it may not be the whole thread.
+ *
+ * Same shape and the same reasoning as JiraQueueRead: returning the bare
+ * array would make the lossy call the convenient one, and "we only got the
+ * newest hundred" would go missing one call site at a time. There is one
+ * function, and its type makes the caveat impossible to not receive.
+ */
+export interface JiraCommentRead {
+  comments: JiraComment[];
+  /** Every comment on the issue per Jira, which `comments` may be a tail
+   *  of. Equal to `comments.length` when the thread is short. */
+  total: number;
+}
+
 export async function listJiraComments(
   ticketId: string,
-): Promise<JiraComment[]> {
-  const wire = unwrap(await bridge().listComments(ticketId));
-  return wire.map(toComment);
+): Promise<JiraCommentRead> {
+  const { comments, total } = unwrap(await bridge().listComments(ticketId));
+  return { comments: comments.map(toComment), total };
 }
 
 // The Copilot rail's proposal and its "Also queued" duplicate nudge. Both
