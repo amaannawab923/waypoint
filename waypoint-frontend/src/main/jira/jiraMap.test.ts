@@ -190,6 +190,54 @@ describe('adfToPlainText', () => {
       ).toBe('architecture diagram');
     });
 
+    // The suite was green while this was broken, because it only ever covered
+    // mediaSingle. mediaGroup is what the editor emits for MORE than one
+    // attachment, and without it every alt ran into the next and then into
+    // the following paragraph.
+    it('keeps images in a media group on their own lines', () => {
+      expect(
+        adfToPlainText({
+          type: 'doc',
+          content: [
+            {
+              type: 'paragraph',
+              content: [{ type: 'text', text: 'Login fails. See:' }],
+            },
+            {
+              type: 'mediaGroup',
+              content: [
+                { type: 'media', attrs: { alt: 'error toast' } },
+                { type: 'media', attrs: { alt: 'network tab' } },
+              ],
+            },
+            {
+              type: 'paragraph',
+              content: [{ type: 'text', text: 'Repro on staging only.' }],
+            },
+          ],
+        }).trim(),
+      ).toBe(
+        'Login fails. See:\nerror toast\nnetwork tab\nRepro on staging only.',
+      );
+    });
+
+    // A caption is a legal sibling of the media inside mediaSingle, and is not
+    // a block — so the image has to end its own line or the two run together.
+    it('does not run an image into its own caption', () => {
+      expect(
+        adfToPlainText({
+          type: 'mediaSingle',
+          content: [
+            { type: 'media', attrs: { alt: 'architecture diagram' } },
+            {
+              type: 'caption',
+              content: [{ type: 'text', text: 'Figure 1' }],
+            },
+          ],
+        }).trim(),
+      ).toBe('architecture diagram\nFigure 1');
+    });
+
     it('renders an inline image as its alt text', () => {
       expect(
         adfToPlainText({
@@ -250,6 +298,31 @@ describe('adfToPlainText', () => {
       };
       expect(() => adfToPlainText(doc)).not.toThrow();
       expect(adfToPlainText(doc).trim()).toBe('');
+    });
+
+    // Above year 9999 ISO 8601 uses the expanded form
+    // ("+010000-01-01T…"), and slicing ten characters off that gives
+    // "+010000-01" — a date with no day. A microsecond epoch (the same units
+    // mistake as nanoseconds, one order down) lands inside the range guard
+    // and rendered exactly that.
+    it.each([
+      ['a microsecond epoch', '1582152559000000'],
+      ['the year-10000 boundary', '253402300800000'],
+      ['the far negative end', '-8640000000000000'],
+    ])('renders nothing for %s rather than a date with no day', (_l, ts) => {
+      const out = adfToPlainText({
+        type: 'date',
+        attrs: { timestamp: ts },
+      });
+      expect(out).not.toContain('+');
+      expect(out).toBe('');
+    });
+
+    // The band that still has to work.
+    it('still renders an ordinary millisecond timestamp', () => {
+      expect(
+        adfToPlainText({ type: 'date', attrs: { timestamp: '1710460800000' } }),
+      ).toBe('2024-03-15');
     });
 
     it('keeps a collapsible section\u2019s title, which lives in attrs', () => {
@@ -1145,6 +1218,28 @@ describe('mapIssue', () => {
       ),
     ).toMatchObject({ id: 'ENG-7' });
   });
+
+  // Jira returns ids as STRINGS on every current API version, so validating
+  // only the number branch validated the shape that almost never arrives.
+  it.each([['1.5'], ['-3'], ['0'], ['1e21'], ['   ']])(
+    'falls back to the key for the implausible string id %p',
+    (id) => {
+      expect(
+        mapIssue(
+          {
+            id,
+            key: 'ENG-7',
+            fields: {
+              summary: 's',
+              project: { key: 'ENG' },
+              status: { name: 'To Do', statusCategory: { key: 'new' } },
+            },
+          },
+          ME,
+        ),
+      ).toMatchObject({ id: 'ENG-7' });
+    },
+  );
 
   it('keeps a large string id exactly, without number rounding', () => {
     expect(

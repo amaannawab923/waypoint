@@ -85,19 +85,20 @@ const ADF_BLOCK_TYPES = new Set([
   // entry above exists to fix.
   'blockTaskItem',
   'decisionItem',
-  // Block-level, so they end a line. They are handled as leaves below and
-  // return early, which is why they must ALSO be named here — see the
-  // newline note on `blockCardText`.
-  'blockCard',
-  'embedCard',
-  // A collapsible section is a block, and its title is usually the label the
-  // content beneath it belongs to.
-  'expand',
-  'nestedExpand',
+  // NOTE what is deliberately NOT here: blockCard, embedCard, expand,
+  // nestedExpand and media. Each is handled as a leaf below and RETURNS
+  // before this set is ever consulted, so listing them would be dead weight
+  // that misinforms the next reader about where their newline comes from —
+  // it comes from the explicit `\n` in their own branch. An earlier version
+  // listed them here with a comment claiming the early return was the reason
+  // to list them, which is exactly backwards.
+  //
+  // mediaSingle and mediaGroup are likewise absent: they are containers, and
+  // their `media` children now terminate their own lines. Leaving mediaSingle
+  // here would put a blank line after every image.
   'panel',
   'rule',
   'tableRow',
-  'mediaSingle',
 ]);
 
 /** Reads one string attr, the shape almost every leaf node here needs. */
@@ -165,12 +166,20 @@ function dateText(rawTimestamp: string): string {
   const raw = rawTimestamp.trim();
   if (!/^-?\d+$/.test(raw)) return '';
   const timestamp = Number(raw);
-  if (!Number.isFinite(timestamp) || Math.abs(timestamp) > MAX_TIMESTAMP_MS) {
-    return '';
-  }
+  if (Math.abs(timestamp) > MAX_TIMESTAMP_MS) return '';
+  const iso = new Date(timestamp).toISOString();
+  // The range check alone stops the THROW but not the wrong answer. Outside
+  // years 1000-9999 ISO 8601 switches to the expanded form
+  // ("+010000-01-01T00:00:00.000Z"), and slicing ten characters off that
+  // yields "+010000-01" — a string with no day in it. A microsecond epoch
+  // (the same units mistake as nanoseconds, one order down) lands inside the
+  // accepted range and rendered exactly that into a description. Testing the
+  // shape of the output is stricter than any numeric bound and needs no
+  // magic constant for the year-9999 boundary.
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(iso)) return '';
   // Date only, no time: an ADF date node carries no time of day, so
   // rendering one would invent precision the source does not have.
-  return new Date(timestamp).toISOString().slice(0, 10);
+  return iso.slice(0, 10);
 }
 
 export function adfToPlainText(node: unknown): string {
@@ -220,7 +229,17 @@ export function adfToPlainText(node: unknown): string {
   // uploader gave no alt, because inventing a filename would be worse than
   // saying nothing.
   if (type === 'media' || type === 'mediaInline') {
-    return attrString(record, 'alt');
+    const alt = attrString(record, 'alt');
+    if (!alt) return '';
+    // The image ends its own line, rather than relying on a wrapper to do it.
+    // Relying on the wrapper is what broke the first version: only
+    // `mediaSingle` was in the block set, so a `mediaGroup` — what the editor
+    // emits for MORE than one attachment — ran every alt into the next and
+    // then into the following paragraph ("error toastnetwork tabRepro on
+    // staging only"). That is the same run-together defect `taskItem` and
+    // `blockCard` are both here to prevent, shipped a third time. An inline
+    // image is inline, so it does not.
+    return type === 'mediaInline' ? alt : `${alt}\n`;
   }
   // A status lozenge ("BLOCKED") and an inline date are both words a reader
   // needs; both vanished entirely.
@@ -232,7 +251,13 @@ export function adfToPlainText(node: unknown): string {
     // criteria"), so losing it loses the label rather than the formatting.
     const title = attrString(record, 'title');
     const inner = adfToPlainText(record.content);
-    return title ? `${title}\n${inner}` : inner;
+    const body = title ? `${title}\n${inner}` : inner;
+    // Its own trailing newline, for the same reason as the cards above: this
+    // branch returns before the block set is consulted. It happened to look
+    // right only because an expand's children are usually paragraphs, which
+    // bring their own — luck, not a guard, and it failed the moment the child
+    // was a bare text node or a media group.
+    return body.endsWith('\n') ? body : `${body}\n`;
   }
 
   const inner = adfToPlainText(record.content);
@@ -566,16 +591,30 @@ function transitionFieldPayload(
  * fallback it replaced: `id: 1.5` used to degrade to the issue key, which
  * works as `issueIdOrKey` in every Jira URL, and instead became the literal
  * "1.5" — and since ticket.id keys every subsequent write, that turns a
- * graceful degradation into a 404 on the next transition or comment. It also
- * kept `String(1e21)` producing "1e+21". Anything that is not a plausible id
- * falls back to the key, as before.
+ * graceful degradation into a 404 on the next transition or comment.
+ *
+ * The SAME rule applies to strings, which is where it actually matters: Jira
+ * returns ids as strings on every current API version, so a version that
+ * validated only the number branch was validating the shape that almost never
+ * arrives. A string that looks numeric must be a positive integer; one that
+ * does not look numeric at all passes through, since this cannot know what a
+ * future or proxied id may legitimately look like.
  *
  * Precision beyond MAX_SAFE_INTEGER is not something this can fix: JSON.parse
- * has already rounded such a value before it arrives. A string id passes
- * through untouched, which is the shape that preserves it.
+ * has already rounded such a value before it arrives. A long digit STRING
+ * passes through exactly, which is the shape that preserves it.
  */
+const NUMERIC_SHAPED = /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i;
+
 function idOf(raw: unknown): string | null {
-  if (typeof raw === 'string') return raw.trim() || null;
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    if (!NUMERIC_SHAPED.test(trimmed)) return trimmed;
+    return /^\d+$/.test(trimmed) && trimmed !== '0'.repeat(trimmed.length)
+      ? trimmed
+      : null;
+  }
   if (typeof raw === 'number' && Number.isSafeInteger(raw) && raw > 0) {
     return String(raw);
   }
@@ -980,10 +1019,11 @@ export function mapComment(
     id: String(id),
     ticketId,
     authorName: displayNameOf(record.author, 'Unknown'),
-    body:
-      typeof record.body === 'string'
-        ? wikiMarkupToPlainText(record.body)
-        : tidyPlainText(adfToPlainText(record.body)),
+    // The shared helper, not a reinlined copy of it. `plainTextFromJiraBody`
+    // was extracted so a description and a comment "cannot drift apart
+    // again", and then this — the one function that comment names — kept its
+    // own duplicate of the ternary, leaving the drift the extraction was for.
+    body: plainTextFromJiraBody(record.body),
     createdAt:
       typeof record.created === 'string'
         ? record.created
