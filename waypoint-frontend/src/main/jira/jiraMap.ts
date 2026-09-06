@@ -74,11 +74,24 @@ const ADF_BLOCK_TYPES = new Set([
   'blockquote',
   'codeBlock',
   'listItem',
+  // Jira's "Action items" checklist. Its items are line-level exactly like
+  // listItem, and leaving them out ran a whole checklist together as one
+  // unbroken sentence — "buy milkbuy eggs" — which is not lost formatting but
+  // lost meaning: acceptance criteria stop being separate criteria.
+  'taskItem',
+  'decisionItem',
   'panel',
   'rule',
   'tableRow',
   'mediaSingle',
 ]);
+
+/** Reads one string attr, the shape almost every leaf node here needs. */
+function attrString(record: Record<string, unknown>, key: string): string {
+  const attrs = record.attrs as Record<string, unknown> | undefined;
+  const value = attrs?.[key];
+  return typeof value === 'string' ? value : '';
+}
 
 /**
  * Flattens an ADF document to plain text.
@@ -116,6 +129,29 @@ export function adfToPlainText(node: unknown): string {
     const attrs = record.attrs as Record<string, unknown> | undefined;
     if (typeof attrs?.text === 'string') return attrs.text;
     return typeof attrs?.shortName === 'string' ? attrs.shortName : '';
+  }
+  // Leaf nodes that carry their whole content in attrs and have no `content`
+  // array. Falling through to the generic branch below returned '' for each
+  // of them, which is content loss rather than lost formatting: Jira
+  // auto-converts a pasted Jira or Confluence link into an inlineCard, so a
+  // description consisting of one pasted link rendered completely empty.
+  if (type === 'inlineCard' || type === 'blockCard' || type === 'embedCard') {
+    return attrString(record, 'url');
+  }
+  // A status lozenge ("BLOCKED") and an inline date are both words a reader
+  // needs; both vanished entirely.
+  if (type === 'status') return attrString(record, 'text');
+  if (type === 'date') {
+    const raw = attrString(record, 'timestamp');
+    // Emptiness is checked rather than inferred from the parse: Number('') is
+    // 0, which would render a missing date as 1970-01-01 — a confident wrong
+    // answer where '' is the honest one.
+    if (!raw) return '';
+    const timestamp = Number(raw);
+    if (!Number.isFinite(timestamp)) return '';
+    // Date only, no time: an ADF date node carries no time of day, so
+    // rendering one would invent precision the source does not have.
+    return new Date(timestamp).toISOString().slice(0, 10);
   }
 
   const inner = adfToPlainText(record.content);
@@ -441,6 +477,14 @@ function transitionFieldPayload(
   return value;
 }
 
+/** A Jira id as a string, whether it arrived as one or as a number. Empty
+ *  and non-finite values are rejected rather than stringified. */
+function idOf(raw: unknown): string | null {
+  if (typeof raw === 'string') return raw.trim() || null;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return String(raw);
+  return null;
+}
+
 export function buildTransitionFieldsPayload(
   transitionRaw: unknown,
   fieldValues: Record<string, string>,
@@ -454,7 +498,17 @@ export function buildTransitionFieldsPayload(
       // dropped: an unknown field on a transition is a guaranteed 400 from
       // Jira, and a genuinely required field's absence produces a far clearer
       // message from Jira than a rejected unknown one would.
-      if (!value || !fields[key]) return payload;
+      // `hasOwnProperty.call`, not a bare `fields[key]`. The bracket read
+      // walks the prototype chain, so `constructor`, `__proto__`, `toString`,
+      // `valueOf`, `hasOwnProperty` and `isPrototypeOf` were all truthy and
+      // sailed past this guard — `{ constructor: "x" }` reached Jira as
+      // `{"fields":{"constructor":"x"}}`, a guaranteed 400 that the comment
+      // above says cannot happen. (No prototype pollution was possible: the
+      // accumulator uses a computed key in an object literal, which defines
+      // an own property. The defect was a false guard, not a write primitive.)
+      if (!value || !Object.prototype.hasOwnProperty.call(fields, key)) {
+        return payload;
+      }
       const resolved = transitionFieldPayload(asRecord(fields[key]), value);
       return resolved === undefined ? payload : { ...payload, [key]: resolved };
     },
@@ -649,7 +703,15 @@ function sprintNameOf(value: unknown): string | null {
   // An issue can sit in several sprints (a carried-over ticket); the active
   // one is what the user means by "the sprint", falling back to the last
   // listed when none is active.
-  const active = value.find((entry) => asRecord(entry).state === 'active');
+  // Lowercased before comparing, like every other string compare in this
+  // file. The Greenhopper-era sprint custom field serializes
+  // `ACTIVE|CLOSED|FUTURE`; only the modern object form is lower case. On a
+  // site returning the older shape no sprint matched, so a carried-over
+  // ticket fell through to "the last listed" and displayed the name of a
+  // CLOSED sprint — a wrong value, not a missing one.
+  const active = value.find(
+    (entry) => String(asRecord(entry).state ?? '').toLowerCase() === 'active',
+  );
   const chosen = asRecord(active ?? value[value.length - 1]);
   return typeof chosen.name === 'string' ? chosen.name : null;
 }
@@ -732,7 +794,13 @@ export function mapIssue(
   const priority = asRecord(fields.priority);
 
   return {
-    id: typeof issue.id === 'string' ? issue.id : key,
+    // Coerced rather than abandoned. A numeric `id` (older payloads, some
+    // proxies — the same shapes `priorityId` and `mapAttachments` already
+    // coerce for) silently fell back to the key, which works as
+    // `issueIdOrKey` everywhere but defeats the reason jiraTypes.ts gives for
+    // carrying an id at all: it survives an issue being moved to another
+    // project, and the key does not.
+    id: idOf(issue.id) ?? key,
     key,
     // The key's own prefix is the fallback: an issue key is always
     // PROJECT-NUMBER, so it carries the project key even if `fields.project`
