@@ -118,6 +118,24 @@ export function resetMyJiraQueueForTests(): void {
 }
 
 /**
+ * Forgets the remembered query. Called when the Jira connection goes away,
+ * because a filter is scoped to the account it was built against.
+ *
+ * The module-level cache is deliberate and stays (see `lastQuery` above),
+ * but "survives a remount" quietly became "survives a different person
+ * signing in": disconnecting and reconnecting as another account left the
+ * previous user's project filter and search text in place, so someone who
+ * had never touched a filter opened straight into "No tickets match these
+ * filters." over a queue that was not empty. `clearCache()` in jiraApi.ts
+ * already drops the tickets on disconnect; this is the same idea for the
+ * query that selects them, and it is exported rather than folded in there
+ * so the page-level concern stays owned by the page.
+ */
+export function clearMyJiraQuery(): void {
+  lastQuery = DEFAULT_QUERY;
+}
+
+/**
  * Whether anything is narrowing or reordering the list — i.e. whether "No
  * tickets match these filters." is the honest empty state rather than
  * "Nothing in your Jira queue."

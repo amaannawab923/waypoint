@@ -242,9 +242,9 @@ function ProjectRow({ project }: { project: Project }) {
  * flag is off or the mock connection isn't connected — no broken/disabled
  * nav item for a surface that isn't reachable.
  */
-function MyJiraNavItem() {
+function MyJiraNavLink() {
   const connection = useLoadedJiraConnection();
-  if (!MY_JIRA_ENABLED || !connection?.connected) return null;
+  if (!connection?.connected) return null;
   return (
     <NavLink to="/my-jira" className={navLinkClass}>
       <span className="flex size-[15px] shrink-0 items-center justify-center text-jira">
@@ -260,6 +260,19 @@ function MyJiraNavItem() {
       />
     </NavLink>
   );
+}
+
+function MyJiraNavItem() {
+  // The flag is checked before the hook, not after it. `useLoadedJiraConnection`
+  // fetches on mount, so checking afterwards meant a flag-off build still made
+  // an IPC round trip and a credential-file read on every launch before
+  // rendering nothing — a build with the feature disabled was not quite
+  // identical to one without the feature, which is the whole promise of the
+  // flag. Returning before any hook runs is safe here precisely because
+  // MY_JIRA_ENABLED is a build-time constant: it cannot change between
+  // renders, so this can never vary the hook order within a build.
+  if (!MY_JIRA_ENABLED) return null;
+  return <MyJiraNavLink />;
 }
 
 function LocalStatusStrip() {

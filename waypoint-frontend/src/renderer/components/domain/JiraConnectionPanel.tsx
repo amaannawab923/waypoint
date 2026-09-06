@@ -5,6 +5,7 @@ import {
   refreshJiraSync,
 } from '@/data/jiraApi';
 import { setJiraConnection } from '@/lib/jiraStore';
+import { clearMyJiraQuery } from '@/pages/jira/useMyJiraQueue';
 import { showErrorToast } from '@/lib/toast';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
@@ -26,8 +27,24 @@ import type { JiraConnectionStatus } from '@/types/jira';
  */
 export function JiraConnectionPanel({
   connection,
+  onRefresh,
 }: {
   connection: JiraConnectionStatus;
+  /**
+   * How the surrounding page re-reads its own data, when it has data of its
+   * own to re-read.
+   *
+   * Without this, Refresh updated the shared connection store — the sync
+   * clock, the issue and project counts — while the list of rows beside it
+   * kept whatever it fetched on mount. Pressing Refresh therefore produced a
+   * green, pulsing "synced 0s ago" over stale rows, and could put a fresh
+   * "98 issues" next to 97 visible ones. A control whose whole purpose is to
+   * make the screen current must not leave most of the screen behind.
+   *
+   * The page's own reader is used rather than a second refreshJiraSync()
+   * here, so Refresh stays exactly one network read.
+   */
+  onRefresh?: () => Promise<void>;
 }) {
   const [refreshing, setRefreshing] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
@@ -35,8 +52,15 @@ export function JiraConnectionPanel({
   async function handleRefresh() {
     setRefreshing(true);
     try {
-      const updated = await refreshJiraSync();
-      setJiraConnection(updated);
+      if (onRefresh) {
+        // The page re-reads, which repopulates the shared cache and stamps
+        // lastSyncAt; the status read that follows is local, so this is still
+        // one round trip to Jira.
+        await onRefresh();
+        setJiraConnection(await getJiraConnectionStatus());
+      } else {
+        setJiraConnection(await refreshJiraSync());
+      }
     } catch (err) {
       showErrorToast(
         err instanceof Error ? err.message : 'Could not refresh from Jira.',
@@ -50,6 +74,10 @@ export function JiraConnectionPanel({
     setDisconnecting(true);
     try {
       await disconnectJira();
+      // The tickets are dropped by disconnectJira's own clearCache; the
+      // filters that select them are held separately and would otherwise
+      // outlive the account they were built against.
+      clearMyJiraQuery();
       const updated = await getJiraConnectionStatus();
       setJiraConnection(updated);
     } catch (err) {

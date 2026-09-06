@@ -7,6 +7,7 @@ import {
 } from '@/data/jiraApi';
 import { setJiraConnection } from '@/lib/jiraStore';
 import type { JiraConnectionStatus } from '@/types/jira';
+import { clearMyJiraQuery } from '@/pages/jira/useMyJiraQueue';
 import { JiraConnectionPanel } from './JiraConnectionPanel';
 
 jest.mock('@/data/jiraApi', () => ({
@@ -15,6 +16,9 @@ jest.mock('@/data/jiraApi', () => ({
   getJiraConnectionStatus: jest.fn(),
 }));
 jest.mock('@/lib/jiraStore', () => ({ setJiraConnection: jest.fn() }));
+jest.mock('@/pages/jira/useMyJiraQueue', () => ({
+  clearMyJiraQuery: jest.fn(),
+}));
 
 function status(
   overrides: Partial<JiraConnectionStatus> = {},
@@ -38,6 +42,54 @@ beforeEach(() => {
 });
 
 describe('JiraConnectionPanel', () => {
+  // Refresh used to update only the shared connection store, so the sync
+  // clock and the counts went current while the rows beside them kept
+  // whatever they fetched on mount — a green "synced 0s ago" over a stale
+  // list, and a "98 issues" that could sit next to 97 visible rows.
+  describe('Refresh now', () => {
+    it("re-reads the surrounding page's data, not just the sync clock", async () => {
+      const onRefresh = jest.fn().mockResolvedValue(undefined);
+      jest.mocked(getJiraConnectionStatus).mockResolvedValue(status());
+      render(
+        <JiraConnectionPanel connection={status()} onRefresh={onRefresh} />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh now' }));
+
+      await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(1));
+      expect(setJiraConnection).toHaveBeenCalled();
+      // One round trip to Jira, not two: the page's read repopulates the
+      // cache and stamps lastSyncAt, and the status read after it is local.
+      expect(refreshJiraSync).not.toHaveBeenCalled();
+    });
+
+    it('falls back to its own read when it has no page to refresh', async () => {
+      jest.mocked(refreshJiraSync).mockResolvedValue(status());
+      render(<JiraConnectionPanel connection={status()} />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh now' }));
+
+      await waitFor(() => expect(refreshJiraSync).toHaveBeenCalledTimes(1));
+    });
+  });
+
+  // A filter belongs to the account it was built against. Disconnecting and
+  // reconnecting as someone else used to leave the previous user's project
+  // filter and search text in place, so a person who had never touched a
+  // filter opened onto "No tickets match these filters." over a queue that
+  // was not empty.
+  it('forgets the remembered query on disconnect', async () => {
+    jest.mocked(disconnectJira).mockResolvedValue(undefined);
+    jest.mocked(getJiraConnectionStatus).mockResolvedValue(
+      status({ connected: false, issueCount: 0 }),
+    );
+    render(<JiraConnectionPanel connection={status()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+
+    await waitFor(() => expect(clearMyJiraQuery).toHaveBeenCalledTimes(1));
+  });
+
   // A capped read used to render as a flat, confident "500 issues in your
   // queue" for a user with 900 — not a rounded number, a wrong one.
   it('renders a capped count as a floor, and says the queue is larger', () => {

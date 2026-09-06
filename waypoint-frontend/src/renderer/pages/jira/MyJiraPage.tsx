@@ -447,7 +447,10 @@ export default function MyJiraPage() {
       {tab === 'connection' && (
         <div className="mt-4 ml-[41px]">
           {connection ? (
-            <JiraConnectionPanel connection={connection} />
+            <JiraConnectionPanel
+              connection={connection}
+              onRefresh={reloadTickets}
+            />
           ) : (
             <SkeletonListRows />
           )}
