@@ -105,12 +105,29 @@ export function readStoredJiraCredential(): JiraCredential | null {
  * and report, not to let the failure escape as an unsettled IPC invoke (the
  * exact hazard copilotAuth.ts's save handler documents). */
 export function writeStoredJiraCredential(credential: JiraCredential): void {
+  // The refusal the module comment promises, in the module it describes.
+  // It lived only in the one IPC caller, so the store failed closed by
+  // accident rather than by construction — and a second caller added later
+  // would have inherited nothing. `readStoredJiraCredential` already checks
+  // the same thing on the way out; this is the matching half.
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error(
+      'Secure storage is unavailable on this device, so the Jira API token cannot be saved.',
+    );
+  }
+
   const encrypted = safeStorage
     .encryptString(JSON.stringify(credential))
     .toString('base64');
-  fs.writeFileSync(credentialFilePath(), JSON.stringify({ encrypted }), {
-    mode: 0o600,
-  });
+  const filePath = credentialFilePath();
+  fs.writeFileSync(filePath, JSON.stringify({ encrypted }), { mode: 0o600 });
+  // `mode` in writeFileSync applies only when the file is CREATED; on an
+  // existing file it is ignored outright, so a jira-auth.json left behind at
+  // 0644 by an earlier build, a restored backup, or a copy that did not
+  // preserve permissions kept that mode forever while this code read as
+  // though it were enforcing 0600. chmod every time makes the comment above
+  // true on the rewrite path as well as the create path.
+  fs.chmodSync(filePath, 0o600);
 }
 
 export function deleteStoredJiraCredential(): void {

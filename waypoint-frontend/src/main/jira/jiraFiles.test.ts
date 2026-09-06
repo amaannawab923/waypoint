@@ -77,7 +77,57 @@ beforeEach(() => {
  * `../../../.ssh/authorized_keys` is a name a real attachment can genuinely
  * have, and it arrives here verbatim.
  */
+/** A realistic Node fs error: an errno `code` and, crucially, the absolute
+ *  path embedded in `message` the way Node actually embeds it. The path is
+ *  what these tests exist to keep out of the renderer. */
+function fsError(code: string, message: string): NodeJS.ErrnoException {
+  const err = new Error(message) as NodeJS.ErrnoException;
+  err.code = code;
+  return err;
+}
+
 describe('safeBaseName', () => {
+  // A Jira attachment filename is chosen by anyone who can attach to an issue
+  // this account can see, and the save dialog is the authorization — so it is
+  // only as good as what it displays. Traversal was already defeated; the
+  // display was not.
+  describe('characters that forge what the dialog shows', () => {
+    it('strips a right-to-left override used to disguise an extension', () => {
+      // Renders as "invoicexe.png" in a native save sheet: the user confirms
+      // an image and an executable lands in Downloads.
+      const out = safeBaseName('invoice\u202Egnp.exe');
+      expect(out).not.toContain('\u202E');
+      expect(out).toBe('invoicegnp.exe');
+    });
+
+    it('strips control characters that push the extension out of view', () => {
+      expect(safeBaseName('a\r\nb\u0000c.png')).toBe('abc.png');
+    });
+
+    it('strips zero-width characters', () => {
+      expect(safeBaseName('inv\u200Boice.pdf')).toBe('invoice.pdf');
+    });
+  });
+
+  it('defuses a Windows reserved device name', () => {
+    // Writing to one of these does not create a file, it talks to a device.
+    expect(safeBaseName('CON')).toBe('_CON');
+    expect(safeBaseName('nul.txt')).toBe('_nul.txt');
+    expect(safeBaseName('COM1.log')).toBe('_COM1.log');
+    // Only the reserved names themselves — an ordinary name that merely
+    // starts with those letters is untouched.
+    expect(safeBaseName('console.log')).toBe('console.log');
+    expect(safeBaseName('nullable.ts')).toBe('nullable.ts');
+  });
+
+  it('caps a very long name while keeping its extension', () => {
+    const out = safeBaseName(`${'x'.repeat(400)}.png`);
+    expect(out.length).toBeLessThanOrEqual(200);
+    // The extension decides what opens the file, so it is the part that has
+    // to survive the truncation.
+    expect(out.endsWith('.png')).toBe(true);
+  });
+
   it('keeps an ordinary filename intact', () => {
     expect(safeBaseName('replay-log.txt')).toBe('replay-log.txt');
     expect(safeBaseName('Q3 report (final).pdf')).toBe('Q3 report (final).pdf');
@@ -240,7 +290,10 @@ describe('downloadAttachmentToDisk', () => {
   // disk wastes their time on someone else's problem.
   it('reports a failed write as file_error, distinctly from a Jira error', async () => {
     writeFileMock.mockRejectedValue(
-      new Error('ENOSPC: no space left on device'),
+      fsError(
+        'ENOSPC',
+        "ENOSPC: no space left on device, open '/Users/max/Downloads/replay-log.txt'",
+      ),
     );
 
     const result = await downloadAttachmentToDisk(
@@ -252,9 +305,32 @@ describe('downloadAttachmentToDisk', () => {
     expect(result).toMatchObject({
       ok: false,
       reason: 'file_error',
-      message: expect.stringContaining('ENOSPC'),
+      message: "Couldn't save that file \u2014 the disk is full",
     });
     expect(showItemInFolderMock).not.toHaveBeenCalled();
+  });
+
+  // This file's headline rule is that no filesystem path crosses IPC in
+  // either direction. The success path was carefully narrowed to honor it
+  // and the failure path was not: Node embeds the absolute path in every fs
+  // error message, and that message was returned verbatim as the user-facing
+  // JiraFailure, so a save into a private folder disclosed the folder.
+  it('never returns the absolute path inside a failure message', async () => {
+    writeFileMock.mockRejectedValue(
+      fsError(
+        'EACCES',
+        "EACCES: permission denied, open '/Users/max/clients/acme-acquisition/term-sheet.pdf'",
+      ),
+    );
+
+    const result = (await downloadAttachmentToDisk(
+      WINDOW,
+      '10050',
+      'term-sheet.pdf',
+    )) as { message: string };
+
+    expect(result.message).not.toContain('/Users/max');
+    expect(result.message).not.toContain('acme-acquisition');
   });
 
   // Documented to throw when the OS has no such directory. An undefined
@@ -416,13 +492,19 @@ describe('pickAndUploadAttachment', () => {
   // "Jira said no" and "your disk said no" are different facts about
   // different systems and need different sentences.
   it('reports an unreadable file as file_error, without uploading', async () => {
-    readFileMock.mockRejectedValue(new Error('EACCES: permission denied'));
+    readFileMock.mockRejectedValue(
+      fsError(
+        'EACCES',
+        "EACCES: permission denied, open '/Users/max/private/notes.txt'",
+      ),
+    );
 
-    expect(await pickAndUploadAttachment(WINDOW, '10421')).toMatchObject({
-      ok: false,
-      reason: 'file_error',
-      message: expect.stringContaining('EACCES'),
-    });
+    const result = await pickAndUploadAttachment(WINDOW, '10421');
+    expect(result).toMatchObject({ ok: false, reason: 'file_error' });
+    expect((result as { message: string }).message).toContain(
+      "isn't allowed",
+    );
+    expect((result as { message: string }).message).not.toContain('/Users/max');
     expect(uploadAttachmentMock).not.toHaveBeenCalled();
   });
 

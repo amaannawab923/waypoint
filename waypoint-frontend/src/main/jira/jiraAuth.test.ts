@@ -17,10 +17,12 @@ jest.mock('electron', () => ({
 const readFileSyncMock = jest.fn();
 const writeFileSyncMock = jest.fn();
 const unlinkSyncMock = jest.fn();
+const chmodSyncMock = jest.fn();
 jest.mock('fs', () => ({
   readFileSync: (...args: unknown[]) => readFileSyncMock(...args),
   writeFileSync: (...args: unknown[]) => writeFileSyncMock(...args),
   unlinkSync: (...args: unknown[]) => unlinkSyncMock(...args),
+  chmodSync: (...args: unknown[]) => chmodSyncMock(...args),
 }));
 
 // Same hazard documented in copilotAuth.test.ts: this file's own
@@ -63,6 +65,19 @@ beforeEach(() => {
 });
 
 describe('writeStoredJiraCredential', () => {
+  // The module comment has always promised "a hard refusal when
+  // isEncryptionAvailable() is false rather than a plaintext fallback". That
+  // refusal lived only in the IPC caller, so the store failed closed by
+  // accident; a second caller would have inherited nothing.
+  it('refuses to write at all when secure storage is unavailable', () => {
+    isEncryptionAvailableMock.mockReturnValue(false);
+
+    expect(() => writeStoredJiraCredential(CREDENTIAL)).toThrow(
+      /secure storage is unavailable/i,
+    );
+    expect(writeFileSyncMock).not.toHaveBeenCalled();
+  });
+
   it('encrypts the whole credential and writes it owner-only', () => {
     writeStoredJiraCredential(CREDENTIAL);
 
@@ -70,6 +85,15 @@ describe('writeStoredJiraCredential', () => {
     const [writtenPath, contents, options] = writeFileSyncMock.mock.calls[0];
     expect(writtenPath).toBe('/fake/userData/jira-auth.json');
     expect(options).toEqual({ mode: 0o600 });
+    // `mode` on writeFileSync applies only when the file is created; on an
+    // existing file it is ignored, so a jira-auth.json left at 0644 by an
+    // earlier build or a restored backup kept that mode forever while this
+    // code read as though it enforced 0600. The chmod is what makes the
+    // guarantee hold on the rewrite path too.
+    expect(chmodSyncMock).toHaveBeenCalledWith(
+      '/fake/userData/jira-auth.json',
+      0o600,
+    );
 
     const parsed = JSON.parse(contents as string) as { encrypted: string };
     expect(

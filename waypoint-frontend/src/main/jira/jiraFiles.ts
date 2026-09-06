@@ -22,6 +22,11 @@ import type { JiraFailure, JiraResult, JiraWireTicket } from './jiraTypes';
 //
 //   No filesystem path ever crosses IPC, in either direction.
 //
+// Including on the failure path, which is where it used to break: Node
+// embeds the absolute path in every fs error message, and returning
+// `err.message` verbatim disclosed the folder a user had just saved into or
+// uploaded from. `reasonOf` below maps errno to a fixed sentence instead.
+//
 // The renderer cannot name a file to upload and cannot name a place to save a
 // download. It asks for "let the user pick something to attach" or "let the
 // user save this attachment", and the entire picker → disk → network round
@@ -73,16 +78,60 @@ const NUL = String.fromCharCode(0);
  * is the only way to know it holds — a dialog default is not something a test
  * can easily read back out.
  */
+/**
+ * C0/C1 control characters, bidirectional overrides and zero-width
+ * characters — everything that changes how a name RENDERS without changing
+ * what it is. `no-control-regex` is disabled because matching them is the
+ * entire point: this is the expression that removes them.
+ */
+/* eslint-disable no-control-regex -- matching them is how they are removed */
+const FORGEABLE_DISPLAY_CHARS =
+  /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2066-\u2069]/g;
+/* eslint-enable no-control-regex */
+
+/** Comfortably inside the 255-byte limit common to APFS, ext4 and NTFS,
+ *  with room for the numeric suffix a save dialog may append. */
+const MAX_FILE_NAME_LENGTH = 200;
+
 export function safeBaseName(rawFileName: string): string {
   if (typeof rawFileName !== 'string') return FALLBACK_FILE_NAME;
 
   const withoutNulls = rawFileName.split(NUL).join('');
   const base = path.basename(withoutNulls.replace(/\\/g, '/').trim());
-  const scrubbed = base.replace(/[/\\:*?"<>|]/g, '_').trim();
+  const scrubbed = base
+    .replace(/[/\\:*?"<>|]/g, '_')
+    // Control, bidi-override and zero-width characters. Separators were the
+    // only thing scrubbed before, which defeated traversal but left the
+    // dialog's *display* forgeable — and the dialog is the authorization, so
+    // it is only as good as what it shows. A Jira attachment filename is
+    // chosen by anyone who can attach to an issue this account can see, and
+    // `invoice\u202Egnp.exe` renders as "invoicexe.png" in a native save
+    // sheet: the user confirms an image and an executable lands in
+    // Downloads. Embedded \r/\n similarly push the real extension out of
+    // view. None of these belong in a filename under any circumstances.
+    .replace(FORGEABLE_DISPLAY_CHARS, '')
+    .trim();
 
   // "." and ".." are directory entries, not names — and are what `basename`
   // hands back for a path made of nothing but separators and dots.
   if (!scrubbed || /^\.+$/.test(scrubbed)) return FALLBACK_FILE_NAME;
+
+  // Windows reserved device names, with or without an extension. Writing to
+  // one does not create a file; it talks to a device.
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(scrubbed)) {
+    return `_${scrubbed}`;
+  }
+
+  // A filename has a real limit (255 bytes on most filesystems) and a Jira
+  // one has no limit at all. Truncate from the front so the extension — the
+  // part that decides what opens the file — survives.
+  if (scrubbed.length > MAX_FILE_NAME_LENGTH) {
+    const extension = path.extname(scrubbed).slice(0, 16);
+    const stem = scrubbed
+      .slice(0, MAX_FILE_NAME_LENGTH - extension.length)
+      .trimEnd();
+    return `${stem}${extension}`;
+  }
   return scrubbed;
 }
 
@@ -91,8 +140,39 @@ function fileFailure(message: string): JiraFailure {
   return { ok: false, reason: 'file_error', message };
 }
 
+/**
+ * A local filesystem failure in terms the renderer can be told.
+ *
+ * Deliberately NOT `err.message`. Node embeds the full absolute path in
+ * every fs error — `ENOENT: no such file or directory, stat
+ * '/Users/max/clients/acme-acquisition/term-sheet.pdf'` — and that string
+ * was being returned as a JiraFailure message, crossing IPC and rendering in
+ * a toast. That silently falsified this file's own headline rule, which says
+ * no filesystem path crosses IPC in either direction: the success path was
+ * carefully narrowed to honor it, and the failure path walked straight
+ * through. The errno alone says what went wrong; the path it went wrong on
+ * is the user's business and the main process's log, not the renderer's.
+ */
 function reasonOf(err: unknown): string {
-  return err instanceof Error && err.message ? err.message : 'unknown error';
+  const code =
+    err && typeof err === 'object' && 'code' in err
+      ? String((err as { code: unknown }).code)
+      : '';
+  switch (code) {
+    case 'ENOENT':
+      return "that file isn't there any more";
+    case 'EACCES':
+    case 'EPERM':
+      return "this app isn't allowed to read or write there";
+    case 'ENOSPC':
+      return 'the disk is full';
+    case 'EISDIR':
+      return 'that path is a folder, not a file';
+    case 'EBUSY':
+      return 'that file is in use by another program';
+    default:
+      return code ? `the filesystem reported ${code}` : 'an unknown error';
+  }
 }
 
 /**
