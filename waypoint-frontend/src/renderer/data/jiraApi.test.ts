@@ -177,6 +177,31 @@ describe('listMyJiraTickets', () => {
     expect(await api.listMyJiraTickets()).toMatchObject({ truncated: true });
   });
 
+  // The counts on the Connection tab, the sidebar badge and the wizard are
+  // all derived from the same cached list, so they inherit its cap. Reporting
+  // a capped 500 as a flat "500 issues in your queue" is a specific wrong
+  // number in the one panel whose job is to say what Waypoint can see.
+  it('marks the derived counts as floors when the read was capped', async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue(ticketsResult([wireTicket()], true));
+    await api.listMyJiraTickets();
+
+    expect(await api.getJiraConnectionStatus()).toMatchObject({
+      issueCount: 1,
+      countsTruncated: true,
+    });
+  });
+
+  it('reports complete counts as complete', async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue(ticketsResult([wireTicket()], false));
+    await api.listMyJiraTickets();
+
+    expect(await api.getJiraConnectionStatus()).toMatchObject({
+      countsTruncated: false,
+    });
+  });
+
   // updatedAt crossed the wire from the first read and then went no further:
   // toTicket simply didn't copy it, which is why the list could only render
   // in whatever order the search happened to return. It is a sort key now, so

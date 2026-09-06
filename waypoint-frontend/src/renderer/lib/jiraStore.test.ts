@@ -25,6 +25,7 @@ function status(
     lastSyncAt: '2026-01-01T00:00:00.000Z',
     issueCount: 6,
     projectCount: 3,
+    countsTruncated: false,
     ...overrides,
   };
 }

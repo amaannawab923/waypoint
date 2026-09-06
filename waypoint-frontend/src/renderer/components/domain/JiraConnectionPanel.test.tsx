@@ -28,6 +28,7 @@ function status(
     lastSyncAt: '2026-01-01T00:00:00.000Z',
     issueCount: 6,
     projectCount: 3,
+    countsTruncated: false,
     ...overrides,
   };
 }
@@ -37,6 +38,30 @@ beforeEach(() => {
 });
 
 describe('JiraConnectionPanel', () => {
+  // A capped read used to render as a flat, confident "500 issues in your
+  // queue" for a user with 900 — not a rounded number, a wrong one.
+  it('renders a capped count as a floor, and says the queue is larger', () => {
+    render(
+      <JiraConnectionPanel
+        connection={status({ issueCount: 500, countsTruncated: true })}
+      />,
+    );
+
+    expect(screen.getByText('500+')).toBeInTheDocument();
+    expect(
+      screen.getByText('issues read (your queue is larger)'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('issues in your queue')).toBeNull();
+  });
+
+  it('leaves a complete count unqualified', () => {
+    render(<JiraConnectionPanel connection={status({ issueCount: 6 })} />);
+
+    expect(screen.getByText('6')).toBeInTheDocument();
+    expect(screen.queryByText('500+')).toBeNull();
+    expect(screen.getByText('issues in your queue')).toBeInTheDocument();
+  });
+
   it('renders the connected account row and live stats from the connection prop', () => {
     render(<JiraConnectionPanel connection={status()} />);
 

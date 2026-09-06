@@ -380,9 +380,14 @@ function ConfirmStep({
         <div>
           <b className="block font-mono text-[15px] font-bold text-text">
             {connectionStatus?.issueCount ?? 0}
+            {connectionStatus?.countsTruncated ? '+' : ''}
           </b>
+          {/* Both numbers come from the same capped read — a project whose
+              only issues fell past the cap is missing from the project count
+              too — so one marker covers the pair. */}
           <span className="text-[11.5px] text-text-muted">
-            issues, {connectionStatus?.projectCount ?? 0} projects
+            issues, {connectionStatus?.projectCount ?? 0}
+            {connectionStatus?.countsTruncated ? '+' : ''} projects
           </span>
         </div>
         <div>

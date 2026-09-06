@@ -246,8 +246,15 @@ function toComment(wire: JiraWireComment): JiraComment {
 let lastTickets: JiraTicket[] = [];
 let transitionsByTicketId = new Map<string, JiraTransition[]>();
 let lastSyncAt: string | null = null;
+//  - `lastReadTruncated` travels with `lastTickets` because the counts built
+//    from that array are only as complete as the read that filled it. It is
+//    set by the same function that sets the array, so the two cannot drift.
+let lastReadTruncated = false;
 
-function rememberTickets(wire: JiraWireTicket[]): JiraTicket[] {
+function rememberTickets(
+  wire: JiraWireTicket[],
+  truncated: boolean,
+): JiraTicket[] {
   const tickets = wire.map(toTicket);
   // Only tickets whose transitions actually came back are remembered. An
   // empty transitions array from the bulk search is ambiguous — it means
@@ -262,12 +269,14 @@ function rememberTickets(wire: JiraWireTicket[]): JiraTicket[] {
       .map((item) => [item.id, item.transitions.map(toTransition)]),
   );
   lastTickets = tickets;
+  lastReadTruncated = truncated;
   lastSyncAt = new Date().toISOString();
   return tickets;
 }
 
 function clearCache(): void {
   lastTickets = [];
+  lastReadTruncated = false;
   transitionsByTicketId = new Map();
 }
 
@@ -293,6 +302,7 @@ export async function getJiraConnectionStatus(): Promise<JiraConnectionStatus> {
     lastSyncAt,
     issueCount: lastTickets.length,
     projectCount: new Set(lastTickets.map((t) => t.projectKey)).size,
+    countsTruncated: lastReadTruncated,
   };
 }
 
@@ -316,7 +326,7 @@ export interface JiraQueueRead {
 
 export async function listMyJiraTickets(): Promise<JiraQueueRead> {
   const { tickets, truncated } = unwrap(await bridge().listTickets());
-  return { tickets: rememberTickets(tickets), truncated };
+  return { tickets: rememberTickets(tickets, truncated), truncated };
 }
 
 /**

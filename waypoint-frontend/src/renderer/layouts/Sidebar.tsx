@@ -52,11 +52,20 @@ const navLinkClass = ({ isActive }: { isActive: boolean }) =>
       : 'text-text-secondary hover:bg-surface-2 hover:text-text',
   );
 
-function CountBadge({ count }: { count: number }) {
+/** `atLeast` renders the count as a floor ("500+"). Optional because most
+ *  callers count something they can see all of; the Jira queue cannot. */
+function CountBadge({
+  count,
+  atLeast = false,
+}: {
+  count: number;
+  atLeast?: boolean;
+}) {
   if (count <= 0) return null;
   return (
     <span className="ml-auto rounded-full bg-surface-2 px-1.5 py-0.5 text-[10.5px] font-semibold text-text-secondary">
       {count}
+      {atLeast ? '+' : ''}
     </span>
   );
 }
@@ -242,7 +251,13 @@ function MyJiraNavItem() {
         <JiraMark size={13} />
       </span>
       <span className="truncate">My Jira</span>
-      <CountBadge count={connection.issueCount} />
+      {/* A capped read renders "500+", not "500". The badge is a glance, and
+          a glance that says a precise wrong number is worse than one that
+          says "at least this many". */}
+      <CountBadge
+        count={connection.issueCount}
+        atLeast={connection.countsTruncated}
+      />
     </NavLink>
   );
 }

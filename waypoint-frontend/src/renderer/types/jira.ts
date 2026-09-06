@@ -291,8 +291,23 @@ export interface JiraConnectionStatus {
    * representable.
    */
   lastSyncAt: string | null; // ISO
+  /** Issues in the last read of your queue — which is not the same as issues
+   *  in your queue whenever `countsTruncated` is true. */
   issueCount: number;
+  /** Distinct projects across that same read, and capped by it for the same
+   *  reason: a project whose only issues fell past the cap is not counted. */
   projectCount: number;
+  /**
+   * Whether the page cap cut the read these counts are derived from.
+   *
+   * Both numbers above come from the cached ticket list, and that list stops
+   * at MAX_PAGES × PAGE_SIZE. Without this bit, a user with 900 assigned
+   * issues was shown a flat "500 issues in your queue" — not a rounded
+   * number or an approximation, but a specific wrong one, in the panel whose
+   * entire job is to report what Waypoint can see of their Jira. The counts
+   * are floors, and this is what makes them render as floors.
+   */
+  countsTruncated: boolean;
 }
 // `pollIntervalSec` and `paused` used to live here, describing a background
 // poll that kept the queue "feeling live". Neither the fixture layer nor the

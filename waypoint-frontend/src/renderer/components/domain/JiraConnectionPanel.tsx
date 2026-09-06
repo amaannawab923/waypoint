@@ -91,9 +91,15 @@ export function JiraConnectionPanel({
           <div>
             <b className="block font-mono text-lg font-bold tabular-nums text-text">
               {connection.issueCount}
+              {connection.countsTruncated ? '+' : ''}
             </b>
+            {/* This panel's whole job is to report what Waypoint can see of
+                your Jira, so a capped read has to say it is capped rather
+                than round a 900-issue queue down to a confident "500". */}
             <span className="text-[11.5px] text-text-muted">
-              issues in your queue
+              {connection.countsTruncated
+                ? 'issues read (your queue is larger)'
+                : 'issues in your queue'}
             </span>
           </div>
           <div>

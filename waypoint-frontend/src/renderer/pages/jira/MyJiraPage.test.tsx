@@ -607,6 +607,7 @@ describe('MyJiraPage — sync indicator', () => {
       lastSyncAt,
       issueCount: 4,
       projectCount: 3,
+      countsTruncated: false,
     };
   }
 
