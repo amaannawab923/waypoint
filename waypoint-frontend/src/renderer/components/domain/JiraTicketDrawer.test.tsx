@@ -922,3 +922,91 @@ describe('mention spans survive ordinary editing', () => {
     expect(await postedMentionSlices()).toEqual([]);
   });
 });
+
+// MY_JIRA_IMPROVEMENTS.md §5: this used to be a `fixed inset-0 bg-black/40`
+// modal — a backdrop covering the whole window, unreachable-Copilot-toggle
+// bug included. De-modalized to CopilotPanel.tsx's own docked-panel shape.
+describe('de-modalized: no full-viewport backdrop', () => {
+  it('renders no backdrop element', () => {
+    renderDrawer();
+
+    expect(document.querySelector('.bg-black\\/40')).toBeNull();
+  });
+
+  it('marks its own root with data-ticket-drawer, same as the native TicketDrawer', () => {
+    renderDrawer();
+
+    expect(document.querySelector('[data-ticket-drawer]')).toBeInTheDocument();
+  });
+});
+
+// Escape used to call onClose() unconditionally, the instant it fired
+// anywhere in the document. Now gated on focus, matching CopilotPanel.tsx's
+// own Escape handler, for the same reason: keydown bubbles to `document`
+// regardless of what's actually focused.
+describe('Escape only closes when focus is inside the drawer', () => {
+  function renderWithClose(onClose: () => void) {
+    return render(
+      <MemoryRouter>
+        <JiraTicketDrawer
+          ticket={ticket()}
+          onTicketUpdated={onTicketUpdated}
+          onClose={onClose}
+        />
+      </MemoryRouter>,
+    );
+  }
+
+  it('does nothing when focus is outside the drawer', () => {
+    const onClose = jest.fn();
+    renderWithClose(onClose);
+    const outside = document.createElement('button');
+    document.body.appendChild(outside);
+    outside.focus();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(onClose).not.toHaveBeenCalled();
+    document.body.removeChild(outside);
+  });
+
+  it('closes when focus is inside the drawer', () => {
+    const onClose = jest.fn();
+    renderWithClose(onClose);
+    commentBox().focus();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Same fix as CopilotPanel.tsx's previousFocusRef: without it, closing the
+// drawer (via Escape, or its own × button) drops focus to <body> with
+// nothing to return it to.
+describe('focus restoration on close', () => {
+  it('restores focus to whatever was focused before the drawer opened', () => {
+    const trigger = document.createElement('button');
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    const { unmount } = render(
+      <MemoryRouter>
+        <JiraTicketDrawer
+          ticket={ticket()}
+          onTicketUpdated={onTicketUpdated}
+          onClose={jest.fn()}
+        />
+      </MemoryRouter>,
+    );
+
+    // The caller unmounts this component on close (see e.g. MyJiraPage.tsx's
+    // `{drawerTicket && <JiraTicketDrawer .../>}`) — this asserts the
+    // cleanup effect that runs on that unmount, not a call to onClose.
+    unmount();
+
+    expect(document.activeElement).toBe(trigger);
+    document.body.removeChild(trigger);
+  });
+});
+

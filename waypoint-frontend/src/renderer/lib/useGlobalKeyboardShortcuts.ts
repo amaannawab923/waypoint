@@ -103,20 +103,21 @@ function isShortcutSuppressed(
  * from the mockup's own priority-ordered `if`/`return` chain) mostly
  * doesn't need new coordination: Modal.tsx (which the new
  * KeyboardShortcutsModal is built on), the local Popover.tsx dropdowns, and
- * TicketDrawer.tsx already each close themselves on Escape via their own
- * effect, independently — that's this codebase's established convention
- * (every dismissable surface owns its own Escape listener), not something
- * this hook should centralize. What it DOES need is to know when one of
- * those already-self-closing surfaces is about to consume this same Escape
- * keypress, so its own fallback (clearing the active view's selection,
- * blurring a focused input) doesn't ALSO fire on the same keystroke — e.g.
- * closing a ticket peek drawer must not simultaneously wipe out an
- * unrelated bulk selection in the list underneath it. Two lightweight,
- * additive signals make that possible without moving any of that
- * close-logic:
- *   - a `[data-ticket-drawer]` marker on TicketDrawer.tsx's root (mount by
- *     definition means "open" — TicketsLayout/AllTicketsPage only render it
- *     while `peek` is set)
+ * TicketDrawer.tsx/JiraTicketDrawer.tsx already each close themselves on
+ * Escape via their own effect, independently — that's this codebase's
+ * established convention (every dismissable surface owns its own Escape
+ * listener), not something this hook should centralize. What it DOES need is
+ * to know when one of those already-self-closing surfaces is about to
+ * consume this same Escape keypress, so its own fallback (clearing the
+ * active view's selection, blurring a focused input) doesn't ALSO fire on
+ * the same keystroke — e.g. closing a ticket peek drawer must not
+ * simultaneously wipe out an unrelated bulk selection in the list
+ * underneath it. Two lightweight, additive signals make that possible
+ * without moving any of that close-logic:
+ *   - a `[data-ticket-drawer]` marker on TicketDrawer.tsx's AND
+ *     JiraTicketDrawer.tsx's root (mount by definition means "open" —
+ *     TicketsLayout/AllTicketsPage/MyJiraPage only render one while a peek
+ *     identifier is set)
  *   - a `[data-copilot-panel]` marker on CopilotPanel.tsx's root, read
  *     alongside the `copilotOpen` prop the same way CopilotPanel's OWN
  *     Escape handler already checks "is focus inside this panel" internally
