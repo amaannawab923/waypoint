@@ -1,7 +1,18 @@
 import '@testing-library/jest-dom';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { useCopilotOpenState } from '@/lib/copilotOpenStore';
 import { AppShell } from './AppShell';
+
+// A stand-in for a ticket drawer reading the same store TicketDrawer.tsx/
+// JiraTicketDrawer.tsx do (MY_JIRA_IMPROVEMENTS.md §5) — rendered as a
+// sibling of <AppShell/> rather than nested inside it, the same way a real
+// drawer can be mounted several route levels away from AppShell's own
+// state.
+function StoreProbe() {
+  const open = useCopilotOpenState();
+  return <span data-testid="store-copilot-open">{String(open)}</span>;
+}
 
 jest.mock('@/layouts/Sidebar', () => ({
   Sidebar: () => <div data-testid="sidebar" />,
@@ -62,6 +73,7 @@ function renderAppShell() {
   return render(
     <MemoryRouter>
       <AppShell />
+      <StoreProbe />
     </MemoryRouter>,
   );
 }
@@ -173,6 +185,35 @@ describe('AppShell', () => {
       fireEvent.keyDown(document, { key: 'Escape' });
 
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+  });
+
+  // MY_JIRA_IMPROVEMENTS.md §5: lib/copilotOpenStore.ts is how a ticket
+  // drawer mounted several route levels away (sometimes under
+  // ProjectLayout's own nested <Outlet> context, which would shadow
+  // react-router's useOutletContext) learns whether Copilot is open, so it
+  // can dock beside it instead of under it.
+  describe('lib/copilotOpenStore.ts synchronization', () => {
+    it('starts false, matching the panel closed by default', () => {
+      renderAppShell();
+
+      expect(screen.getByTestId('store-copilot-open')).toHaveTextContent(
+        'false',
+      );
+    });
+
+    it('flips true when the panel opens, and back on close', () => {
+      renderAppShell();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Toggle Copilot' }));
+      expect(screen.getByTestId('store-copilot-open')).toHaveTextContent(
+        'true',
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Toggle Copilot' }));
+      expect(screen.getByTestId('store-copilot-open')).toHaveTextContent(
+        'false',
+      );
     });
   });
 });

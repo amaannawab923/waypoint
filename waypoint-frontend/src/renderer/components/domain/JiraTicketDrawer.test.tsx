@@ -17,6 +17,7 @@ import {
 } from '@/data/jiraApi';
 import { useJiraConnection } from '@/lib/jiraStore';
 import { showErrorToast } from '@/lib/toast';
+import { useCopilotOpenState } from '@/lib/copilotOpenStore';
 import type {
   JiraAttachment,
   JiraComment,
@@ -40,6 +41,12 @@ jest.mock('@/data/jiraApi', () => ({
 }));
 jest.mock('@/lib/jiraStore', () => ({ useJiraConnection: jest.fn() }));
 jest.mock('@/lib/toast', () => ({ showErrorToast: jest.fn() }));
+// Defaults to closed so every existing test in this file (none of which
+// cares about Copilot) keeps rendering the drawer flush against the right
+// edge — only the "docks beside Copilot" describe block below overrides this.
+jest.mock('@/lib/copilotOpenStore', () => ({
+  useCopilotOpenState: jest.fn(() => false),
+}));
 
 const ME = 'acct-max';
 
@@ -154,6 +161,7 @@ async function runDebounce() {
 beforeEach(() => {
   jest.useFakeTimers();
   jest.clearAllMocks();
+  jest.mocked(useCopilotOpenState).mockReturnValue(false);
   jest.mocked(listJiraComments).mockResolvedValue({ comments: [], total: 0 });
   jest.mocked(useJiraConnection).mockReturnValue(CONNECTION);
   jest.mocked(searchJiraAssignableUsers).mockResolvedValue(ASSIGNABLE);
@@ -786,9 +794,10 @@ describe('comment thread truncation', () => {
   }
 
   it('says how many of the thread it is showing when the page is capped', async () => {
-    jest
-      .mocked(listJiraComments)
-      .mockResolvedValue({ comments: [threadComment('1'), threadComment('2')], total: 312 });
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [threadComment('1'), threadComment('2')],
+      total: 312,
+    });
 
     renderDrawer();
 
@@ -920,5 +929,117 @@ describe('mention spans survive ordinary editing', () => {
     fireEvent.change(box, { target: { value: 'hi XXXXXXXX ' } });
 
     expect(await postedMentionSlices()).toEqual([]);
+  });
+});
+
+// MY_JIRA_IMPROVEMENTS.md §5: this used to be a `fixed inset-0 bg-black/40`
+// modal — a backdrop covering the whole window, unreachable-Copilot-toggle
+// bug included. De-modalized to CopilotPanel.tsx's own docked-panel shape.
+describe('de-modalized: no full-viewport backdrop', () => {
+  it('renders no backdrop element', () => {
+    renderDrawer();
+
+    expect(document.querySelector('.bg-black\\/40')).toBeNull();
+  });
+
+  it('marks its own root with data-ticket-drawer, same as the native TicketDrawer', () => {
+    renderDrawer();
+
+    expect(document.querySelector('[data-ticket-drawer]')).toBeInTheDocument();
+  });
+});
+
+// Escape used to call onClose() unconditionally, the instant it fired
+// anywhere in the document. Now gated on focus, matching CopilotPanel.tsx's
+// own Escape handler, for the same reason: keydown bubbles to `document`
+// regardless of what's actually focused.
+describe('Escape only closes when focus is inside the drawer', () => {
+  function renderWithClose(onClose: () => void) {
+    return render(
+      <MemoryRouter>
+        <JiraTicketDrawer
+          ticket={ticket()}
+          onTicketUpdated={onTicketUpdated}
+          onClose={onClose}
+        />
+      </MemoryRouter>,
+    );
+  }
+
+  it('does nothing when focus is outside the drawer', () => {
+    const onClose = jest.fn();
+    renderWithClose(onClose);
+    const outside = document.createElement('button');
+    document.body.appendChild(outside);
+    outside.focus();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(onClose).not.toHaveBeenCalled();
+    document.body.removeChild(outside);
+  });
+
+  it('closes when focus is inside the drawer', () => {
+    const onClose = jest.fn();
+    renderWithClose(onClose);
+    commentBox().focus();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Same fix as CopilotPanel.tsx's previousFocusRef: without it, closing the
+// drawer (via Escape, or its own × button) drops focus to <body> with
+// nothing to return it to.
+describe('focus restoration on close', () => {
+  it('restores focus to whatever was focused before the drawer opened', () => {
+    const trigger = document.createElement('button');
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    const { unmount } = render(
+      <MemoryRouter>
+        <JiraTicketDrawer
+          ticket={ticket()}
+          onTicketUpdated={onTicketUpdated}
+          onClose={jest.fn()}
+        />
+      </MemoryRouter>,
+    );
+
+    // The caller unmounts this component on close (see e.g. MyJiraPage.tsx's
+    // `{drawerTicket && <JiraTicketDrawer .../>}`) — this asserts the
+    // cleanup effect that runs on that unmount, not a call to onClose.
+    unmount();
+
+    expect(document.activeElement).toBe(trigger);
+    document.body.removeChild(trigger);
+  });
+});
+
+// MY_JIRA_IMPROVEMENTS.md §5: once de-modalized, this drawer and CopilotPanel
+// can both be on screen at once — same coordination TicketDrawer.test.tsx
+// asserts for native tickets.
+describe('docks beside Copilot when it is open', () => {
+  function drawerRoot(): HTMLElement {
+    return document.querySelector('[data-ticket-drawer]') as HTMLElement;
+  }
+
+  it('sits flush against the right edge while Copilot is closed', () => {
+    jest.mocked(useCopilotOpenState).mockReturnValue(false);
+    renderDrawer();
+
+    expect(drawerRoot().className).toContain('right-0');
+    expect(drawerRoot().className).not.toContain('right-[400px]');
+  });
+
+  it('shifts left by Copilot panel width while Copilot is open', () => {
+    jest.mocked(useCopilotOpenState).mockReturnValue(true);
+    renderDrawer();
+
+    expect(drawerRoot().className).toContain('right-[400px]');
+    expect(drawerRoot().className).not.toContain('right-0');
   });
 });
