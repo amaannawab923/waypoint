@@ -511,22 +511,98 @@ export function JiraCommentComposer({
     );
   }
 
+  /**
+   * The wrap case, which `shiftMentionsForEdit` cannot express.
+   *
+   * Wrapping is not an edit that replaces a range — the selected text
+   * survives verbatim and only moves right by the prefix. Routing it through
+   * `shiftMentionsForEdit` got this wrong twice over: it passed a delta of
+   * `prefix + suffix + selectionLength` (the net change is only
+   * `prefix + suffix`, so every mention after the selection over-shifted by
+   * the selection's own length and sliced to garbage), and its
+   * overlap-means-drop rule discarded any mention *inside* the selection —
+   * so bolding a line that contained a mention silently stopped it
+   * notifying. Both failures were invisible: the comment still posted and
+   * still read `@Name` on screen.
+   *
+   * Three regions, each with a different correct answer. Only a span that
+   * straddles a selection edge is genuinely ambiguous, and only that one is
+   * dropped.
+   */
+  function shiftMentionsForWrap(
+    selStart: number,
+    selEnd: number,
+    prefixLength: number,
+    suffixLength: number,
+  ) {
+    const outerDelta = prefixLength + suffixLength;
+    setMentions((spans) =>
+      spans.flatMap((s) => {
+        if (s.end <= selStart) return [s];
+        if (s.start >= selEnd) {
+          return [
+            { ...s, start: s.start + outerDelta, end: s.end + outerDelta },
+          ];
+        }
+        if (s.start >= selStart && s.end <= selEnd) {
+          return [
+            { ...s, start: s.start + prefixLength, end: s.end + prefixLength },
+          ];
+        }
+        return [];
+      }),
+    );
+  }
+
+  /**
+   * Where an edit actually happened, by comparing the two drafts rather than
+   * by inferring it from the caret and a length delta.
+   *
+   * The inference this replaces was only correct for a pure insertion or a
+   * pure deletion at the caret. Any edit that removes *and* inserts — typing
+   * over a selection, pasting over one, select-all-and-replace — produced a
+   * region offset from the real one by the inserted length, which then
+   * "overlapped" mentions the user never touched and dropped them. Selecting
+   * `hi` in `hi @Sam Lee` and typing `hello` deleted the mention outright.
+   *
+   * A common-prefix/common-suffix diff needs no caret and no selection
+   * state, so it is also right for the cases a selection snapshot would
+   * still miss: undo, redo, drag-and-drop within the box, and an IME
+   * commit that rewrites several characters at once.
+   */
+  function computeEditRange(oldText: string, newText: string) {
+    const maxPrefix = Math.min(oldText.length, newText.length);
+    let prefix = 0;
+    while (prefix < maxPrefix && oldText[prefix] === newText[prefix]) {
+      prefix += 1;
+    }
+    const maxSuffix = maxPrefix - prefix;
+    let suffix = 0;
+    while (
+      suffix < maxSuffix &&
+      oldText[oldText.length - 1 - suffix] ===
+        newText[newText.length - 1 - suffix]
+    ) {
+      suffix += 1;
+    }
+    return {
+      editStart: prefix,
+      editEnd: oldText.length - suffix,
+      delta: newText.length - oldText.length,
+    };
+  }
+
   function handleChange(e: ChangeEvent<HTMLTextAreaElement>) {
     const newText = e.target.value;
     const oldText = draft;
-    const delta = newText.length - oldText.length;
     const caret = e.target.selectionStart;
 
-    if (delta !== 0) {
-      // A single edit point, anchored on the caret's position *after* the
-      // change — correct for every plain keystroke (the overwhelming
-      // majority of edits to this box) and for a paste that doesn't replace
-      // an existing selection. A paste that overwrites a multi-character
-      // selection can shift a span's offsets slightly wrong instead; see
-      // `shiftMentionsForEdit`'s own note on why that's an acceptable
-      // failure mode.
-      const editStart = delta > 0 ? caret - delta : caret;
-      const editEnd = delta > 0 ? caret : caret - delta;
+    // `!==`, not a length comparison. A same-length replacement (select two
+    // characters, type two others) changes the text while `delta` stays 0,
+    // and the old length-based guard skipped those edits entirely — leaving
+    // a mention's span pointing at characters that had been typed over.
+    if (newText !== oldText) {
+      const { editStart, editEnd, delta } = computeEditRange(oldText, newText);
       shiftMentionsForEdit(editStart, editEnd, delta);
     }
 
@@ -584,9 +660,8 @@ export function JiraCommentComposer({
     const before = draft.slice(0, selStart);
     const after = draft.slice(selEnd);
     const newDraft = `${before}${prefix}${selected}${suffix}${after}`;
-    const delta = prefix.length + suffix.length;
 
-    shiftMentionsForEdit(selStart, selEnd, delta + (selEnd - selStart));
+    shiftMentionsForWrap(selStart, selEnd, prefix.length, suffix.length);
     setDraft(newDraft);
     const newSelStart = selStart + prefix.length;
     const newSelEnd = newSelStart + selected.length;

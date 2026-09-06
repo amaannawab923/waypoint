@@ -827,3 +827,98 @@ describe('comment thread truncation', () => {
     ).toBeInTheDocument();
   });
 });
+
+// The gap that let two silent mention bugs ship. Every test that existed
+// inserted a mention and posted immediately; none of them EDITED the draft
+// afterwards, which is where both failures lived. The assertion that matters
+// is not "a span survived" but "the span still names the mention in the text
+// being posted" — a span that has drifted still looks like a span, and
+// buildCommentAdf silently degrades it to plain text, so the comment posts
+// looking correct and notifies nobody.
+describe('mention spans survive ordinary editing', () => {
+  async function draftWithMention() {
+    const box = commentBox();
+    fireEvent.change(box, { target: { value: 'hi @sa' } });
+    await runDebounce();
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'Sam Lee' }));
+    expect(box.value).toBe('hi @Sam Lee ');
+    return box;
+  }
+
+  /** What buildCommentAdf will check at serialization time, asserted here
+   *  against whatever the composer actually handed over. */
+  async function postedMentionSlices(): Promise<string[]> {
+    fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+    await waitFor(() => expect(postJiraComment).toHaveBeenCalled());
+    const [, text, mentions] = jest.mocked(postJiraComment).mock.calls[0];
+    return (mentions ?? []).map((m) => text.slice(m.start, m.end));
+  }
+
+  beforeEach(() => {
+    jest.mocked(postJiraComment).mockResolvedValue(comment());
+  });
+
+  // wrapSelection passed a delta of prefix+suffix+selectionLength; the net
+  // change is only prefix+suffix, so every mention after the selection
+  // over-shifted by the selection's own length. "@Sam Lee" sliced to
+  // "m Lee st".
+  it('keeps a mention intact when text before it is bolded', async () => {
+    renderDrawer();
+    const box = await draftWithMention();
+
+    box.setSelectionRange(0, 2); // "hi"
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'Bold' }));
+
+    expect(box.value).toBe('**hi** @Sam Lee ');
+    expect(await postedMentionSlices()).toEqual(['@Sam Lee']);
+  });
+
+  // A mention inside the wrapped range used to be dropped outright by the
+  // overlap-means-drop rule, so bolding a line containing a mention silently
+  // stopped it notifying.
+  it('keeps a mention intact when the selection wrapping it is bolded', async () => {
+    renderDrawer();
+    const box = await draftWithMention();
+
+    box.setSelectionRange(0, 12); // the whole draft, mention included
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'Bold' }));
+
+    expect(box.value).toBe('**hi @Sam Lee **');
+    expect(await postedMentionSlices()).toEqual(['@Sam Lee']);
+  });
+
+  // handleChange reverse-engineered the edited range from a length delta,
+  // which is wrong for any edit that both removes and inserts. This dropped
+  // the span entirely — the mention was never touched by the user.
+  it('keeps a mention intact when a word before it is selected and retyped', async () => {
+    renderDrawer();
+    const box = await draftWithMention();
+
+    fireEvent.change(box, { target: { value: 'hello @Sam Lee ' } });
+
+    expect(await postedMentionSlices()).toEqual(['@Sam Lee']);
+  });
+
+  // Same edit, shrinking instead of growing.
+  it('keeps a mention intact when text before it is shortened', async () => {
+    renderDrawer();
+    const box = await draftWithMention();
+
+    fireEvent.change(box, { target: { value: 'h @Sam Lee ' } });
+
+    expect(await postedMentionSlices()).toEqual(['@Sam Lee']);
+  });
+
+  // The old guard was `if (delta !== 0)`, so a same-length replacement
+  // changed the text while skipping the shift entirely, leaving the span
+  // pointing at characters that had been typed over.
+  it('drops a mention typed over by a same-length replacement', async () => {
+    renderDrawer();
+    const box = await draftWithMention();
+
+    // "@Sam Lee" replaced by 8 different characters: same length, no delta.
+    fireEvent.change(box, { target: { value: 'hi XXXXXXXX ' } });
+
+    expect(await postedMentionSlices()).toEqual([]);
+  });
+});
