@@ -195,6 +195,27 @@ describe('registerProposalApprovalIpc', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('refuses a bulk batch larger than the backend can ever hand back in one page', async () => {
+    // Matches the backend's MAX_REVIEW_QUEUE_LIMIT — without this cap an
+    // unbounded array becomes an unbounded sequential approve loop
+    // server-side (bulkApproveProposals has no batching of its own).
+    const tooMany = Array.from({ length: 101 }, (_, i) => `prop-${i.toString(36).padStart(7, 'a')}`);
+
+    await expect(
+      handlerFor('copilot:proposals:bulk-approve')(null, tooMany),
+    ).rejects.toThrow(/Invalid proposal ids/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts a batch right at the cap', async () => {
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ approved: 100 }) });
+    const atCap = Array.from({ length: 100 }, (_, i) => `prop-${i.toString(36).padStart(7, 'a')}`);
+
+    await expect(
+      handlerFor('copilot:proposals:bulk-approve')(null, atCap),
+    ).resolves.toEqual({ approved: 100 });
+  });
+
   it("surfaces the backend's own error message, which is what the renderer will show", async () => {
     fetchMock.mockResolvedValue({
       ok: false,

@@ -50,6 +50,14 @@ function apiBaseUrl(): string {
  */
 const PROPOSAL_ID = /^[a-z]+-[A-Za-z0-9]{1,64}$/;
 
+// Matches the backend's own MAX_REVIEW_QUEUE_LIMIT (proposals.service.ts) —
+// the review queue this bulk-approve acts on can never hand back more rows
+// than that in one page, so a caller has no legitimate reason to submit
+// more. Without a cap here, an unbounded array becomes an unbounded
+// sequential loop server-side (bulkApproveProposals approves one at a time),
+// which is a cheap denial-of-service on this endpoint from any local caller.
+const MAX_BULK_APPROVE_IDS = 100;
+
 function readProposalId(value: unknown): string | null {
   return typeof value === 'string' && PROPOSAL_ID.test(value) ? value : null;
 }
@@ -138,7 +146,11 @@ export function registerProposalApprovalIpc(): void {
   ipcMain.handle(
     'copilot:proposals:bulk-approve',
     async (_event, rawIds: unknown) => {
-      if (!Array.isArray(rawIds) || rawIds.length === 0) {
+      if (
+        !Array.isArray(rawIds) ||
+        rawIds.length === 0 ||
+        rawIds.length > MAX_BULK_APPROVE_IDS
+      ) {
         throw new Error('Invalid proposal ids.');
       }
       // Every id, or none. A batch that silently dropped the malformed ones
