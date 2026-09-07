@@ -2,35 +2,24 @@ import '@testing-library/jest-dom';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import {
-  dismissJiraDuplicateNudge,
-  getJiraDuplicateNudge,
   getJiraTransitions,
-  getMyJiraProposal,
   listJiraComments,
   listMyJiraTickets,
 } from '@/data/jiraApi';
 import { useJiraConnection, useLoadedJiraConnection } from '@/lib/jiraStore';
 import { JiraApiError } from '@/types/jira';
-import type {
-  JiraDuplicateNudge,
-  JiraProposal,
-  JiraTicket,
-  JiraTruncation,
-} from '@/types/jira';
+import type { JiraTicket, JiraTruncation } from '@/types/jira';
 import MyJiraPage from './MyJiraPage';
 import { resetMyJiraQueueForTests } from './useMyJiraQueue';
 
-// The "My work" tab pulls in JiraTicketRow, JiraTicketDrawer,
-// JiraCommentComposer, and JiraProposalCard, all of which import their own
-// slice of data/jiraApi — mocking the whole module here (rather than
-// per-component) is what makes it possible to render the real page tree.
+// The "My work" tab pulls in JiraTicketRow, JiraTicketDrawer and
+// JiraCommentComposer, all of which import their own slice of data/jiraApi —
+// mocking the whole module here (rather than per-component) is what makes it
+// possible to render the real page tree.
 jest.mock('@/data/jiraApi', () => ({
   listMyJiraTickets: jest.fn(),
   dismissJiraTombstone: jest.fn(),
   resolveJiraConflict: jest.fn(),
-  getMyJiraProposal: jest.fn(),
-  getJiraDuplicateNudge: jest.fn(),
-  dismissJiraDuplicateNudge: jest.fn(),
   getJiraTransitions: jest.fn(),
   transitionJiraTicket: jest.fn(),
   getJiraPriorityOptions: jest.fn(),
@@ -39,8 +28,6 @@ jest.mock('@/data/jiraApi', () => ({
   setJiraTicketAssignee: jest.fn(),
   listJiraComments: jest.fn(),
   postJiraComment: jest.fn(),
-  approveJiraProposal: jest.fn(),
-  rejectJiraProposal: jest.fn(),
 }));
 // useJiraConnection is here because the drawer and the comment composer both
 // read the connected account from the same store — the drawer to build the
@@ -133,8 +120,6 @@ const queueRead = (
 
 function mount() {
   jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(TICKETS));
-  jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
-  jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
   jest.mocked(getJiraTransitions).mockResolvedValue([]);
   jest.mocked(listJiraComments).mockResolvedValue({ comments: [], total: 0 });
   jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
@@ -245,8 +230,6 @@ function renderedKeys(): string[] {
 
 function mountWith(tickets: JiraTicket[]) {
   jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(tickets));
-  jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
-  jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
   jest.mocked(getJiraTransitions).mockResolvedValue([]);
   jest.mocked(listJiraComments).mockResolvedValue({ comments: [], total: 0 });
   jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
@@ -413,8 +396,6 @@ describe('MyJiraPage — empty queue is not the same as no match', () => {
     jest
       .mocked(listMyJiraTickets)
       .mockRejectedValue(new Error("Couldn't reach Jira."));
-    jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
-    jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
     render(
       <MemoryRouter>
@@ -501,8 +482,6 @@ describe('MyJiraPage — a page-capped read says so', () => {
     jest
       .mocked(listMyJiraTickets)
       .mockResolvedValue(queueRead(TICKETS, truncated));
-    jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
-    jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
     jest.mocked(getJiraTransitions).mockResolvedValue([]);
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
     return render(
@@ -562,8 +541,6 @@ describe('MyJiraPage — a page-capped read says so', () => {
 describe('MyJiraPage — a failed ticket read is not an empty queue', () => {
   function mountFailing(error: Error) {
     jest.mocked(listMyJiraTickets).mockRejectedValue(error);
-    jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
-    jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
     return render(
       <MemoryRouter>
@@ -631,8 +608,6 @@ describe('MyJiraPage — sync indicator', () => {
 
   it('says so plainly when nothing has synced yet', async () => {
     jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(TICKETS));
-    jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
-    jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
     jest.mocked(useLoadedJiraConnection).mockReturnValue(connection(null));
     render(
       <MemoryRouter>
@@ -646,8 +621,6 @@ describe('MyJiraPage — sync indicator', () => {
 
   it('reports a real age once a read has landed', async () => {
     jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(TICKETS));
-    jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
-    jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
     jest
       .mocked(useLoadedJiraConnection)
       .mockReturnValue(connection(new Date().toISOString()));
@@ -675,8 +648,6 @@ describe('JiraTicketDrawer — description wrapping', () => {
       description: 'First paragraph.\n\nSecond paragraph.\n- a bullet',
     });
     jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead([described]));
-    jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
-    jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
     jest.mocked(listJiraComments).mockResolvedValue({ comments: [], total: 0 });
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
     jest.mocked(useJiraConnection).mockReturnValue(undefined);
@@ -702,8 +673,6 @@ describe('JiraTicketDrawer — description wrapping', () => {
 describe('JiraTransitionPopover — escapes the list clipping container', () => {
   async function openPopoverOnLastRow() {
     jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(TICKETS));
-    jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
-    jest.mocked(getJiraDuplicateNudge).mockResolvedValue(undefined);
     jest.mocked(getJiraTransitions).mockResolvedValue([
       {
         id: '31',
@@ -752,90 +721,5 @@ describe('JiraTransitionPopover — escapes the list clipping container', () => 
     await waitFor(() =>
       expect(screen.queryByText('Move GRW-1 to')).not.toBeInTheDocument(),
     );
-  });
-});
-
-describe('MyJiraPage — Copilot rail', () => {
-  function proposal(overrides: Partial<JiraProposal> = {}): JiraProposal {
-    return {
-      id: 'jira-prop-eng-421',
-      ticketId: 't-eng-1',
-      ticketKey: 'ENG-1',
-      ticketProjectColor: 'var(--p-eng)',
-      status: 'proposed',
-      fromStateName: 'To Do',
-      fromStateColor: 'var(--text-muted)',
-      toStateName: 'In Review',
-      toStateColor: 'var(--accent)',
-      commentBody: 'A proposed comment.',
-      commentMentions: [],
-      repoPath: '~/code/northwind',
-      branch: 'fix/x',
-      commitCount: 1,
-      prNumber: 1,
-      prStatus: 'open',
-      createdAt: '2026-01-01T00:00:00.000Z',
-      resolvedAt: null,
-      ...overrides,
-    };
-  }
-
-  function nudge(): JiraDuplicateNudge {
-    return {
-      id: 'jira-dup-1',
-      ticketId: 't-grw-1',
-      ticketKey: 'GRW-1',
-      ticketProjectColor: 'var(--p-grw)',
-      duplicateOfKey: 'GRW-9',
-    };
-  }
-
-  it('renders the proposal card and the nudge card when both exist', async () => {
-    jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(TICKETS));
-    jest.mocked(getMyJiraProposal).mockResolvedValue(proposal());
-    jest.mocked(getJiraDuplicateNudge).mockResolvedValue(nudge());
-    jest.mocked(getJiraTransitions).mockResolvedValue([]);
-    jest.mocked(listJiraComments).mockResolvedValue({ comments: [], total: 0 });
-    jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
-    render(
-      <MemoryRouter>
-        <MyJiraPage />
-      </MemoryRouter>,
-    );
-
-    await screen.findByText('Needs your approval');
-    expect(screen.getByText('Also queued')).toBeInTheDocument();
-    expect(screen.getByText('GRW-9')).toBeInTheDocument();
-  });
-
-  it('dismissing the nudge calls the mock function and removes the card', async () => {
-    jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(TICKETS));
-    jest.mocked(getMyJiraProposal).mockResolvedValue(undefined);
-    jest.mocked(getJiraDuplicateNudge).mockResolvedValue(nudge());
-    jest.mocked(dismissJiraDuplicateNudge).mockResolvedValue(undefined);
-    jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
-    render(
-      <MemoryRouter>
-        <MyJiraPage />
-      </MemoryRouter>,
-    );
-
-    await screen.findByText('Also queued');
-    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
-
-    await waitFor(() =>
-      expect(dismissJiraDuplicateNudge).toHaveBeenCalledWith('jira-dup-1'),
-    );
-    await waitFor(() =>
-      expect(screen.queryByText('Also queued')).not.toBeInTheDocument(),
-    );
-  });
-
-  it('renders no rail at all when there is neither a proposal nor a nudge', async () => {
-    mount();
-    await screen.findByText('Eng assignee ticket');
-
-    expect(screen.queryByText('Also queued')).not.toBeInTheDocument();
-    expect(screen.queryByText('Needs your approval')).not.toBeInTheDocument();
   });
 });
