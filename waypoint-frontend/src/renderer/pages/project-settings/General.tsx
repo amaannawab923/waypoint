@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
 import { useProject } from '@/layouts/ProjectLayout';
+import { archiveConfirmMessage } from '@/lib/projectArchiveCopy';
 import { archiveProject, deleteProject, updateProject } from '@/data/api';
 
 function formatDate(iso: string): string {
@@ -61,13 +62,9 @@ export default function General() {
   async function handleArchive() {
     if (archiving) return;
     // Same reasoning as ProjectsList.tsx's own card-level archive button:
-    // one unconfirmed click shouldn't be able to do this, and the message
-    // states where the project goes, not just that it's reversible.
-    if (
-      !window.confirm(
-        `Archive "${project.name}"? It'll disappear from your sidebar and All Projects, but you can restore it any time from the Archive page.`,
-      )
-    ) {
+    // one unconfirmed click shouldn't be able to do this. Message is
+    // shared with that button — see projectArchiveCopy.ts for why.
+    if (!window.confirm(archiveConfirmMessage(project.name))) {
       return;
     }
     setArchiving(true);
