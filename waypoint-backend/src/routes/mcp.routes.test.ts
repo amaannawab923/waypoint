@@ -27,6 +27,18 @@ vi.mock('../services/comments.service.js');
 vi.mock('../services/members.service.js');
 vi.mock('../services/projects.service.js');
 vi.mock('../lib/actorNames.js');
+
+// Jira is deliberately left DISCONNECTED for every test in this file. The
+// read tools now consult the connection before deciding whether there is a
+// second place to look, and stubbing it here (rather than mocking the whole
+// provider) keeps all of the real provider and dispatch logic in play while
+// pinning the state under test to the one these assertions are about:
+// native-only behavior, unchanged. providers/jira.test.ts and the resolution
+// tests in ticketTools.test.ts cover the connected case.
+vi.mock('../services/jiraConnection.service.js', () => ({
+  JIRA_PROVIDER: 'jira',
+  getCredential: vi.fn(async () => null),
+}));
 const { db } = await import('../db/client.js');
 const ticketsService = await import('../services/tickets.service.js');
 const { resolveStateNames } = await import('../services/states.service.js');

@@ -6,7 +6,13 @@ import * as statesService from '../services/states.service.js';
 import * as membersService from '../services/members.service.js';
 import { resolveActorNames } from '../lib/actorNames.js';
 import { nativeProvider, normalizeNativeTickets } from '../providers/native.js';
-import type { NormalizedComment, NormalizedTicket } from '../providers/types.js';
+import { getJiraProvider, isExternalRef } from '../providers/jira.js';
+import {
+  ProviderUnavailableError,
+  type NormalizedComment,
+  type NormalizedTicket,
+  type TicketProvider,
+} from '../providers/types.js';
 
 export const PRIORITY = z.enum(['urgent', 'high', 'medium', 'low', 'none']);
 
@@ -78,6 +84,56 @@ function resolveLimit(limit: number | undefined): number {
 function page<T>(rows: T[], effectiveLimit: number): { items: T[]; truncated: boolean } {
   const truncated = rows.length > effectiveLimit;
   return { items: truncated ? rows.slice(0, effectiveLimit) : rows, truncated };
+}
+
+export const PROVIDER = z.enum(['native', 'jira']);
+
+const JIRA_NOT_CONNECTED =
+  'Jira is not connected for this workspace, so there are no Jira tickets to read. ' +
+  'Waypoint tickets are still available — omit the provider argument, or pass provider="native".';
+
+// Model-actionable failure, distinct from both notFoundResult (a real miss)
+// and withErrorSafetyNet's generic scrub (a genuine internal error). Same
+// shape and same reasoning as proposalTools.ts's validationErrorResult: the
+// message has to be specific enough for the model to correct itself on the
+// next call, because the model is the only thing that will read it.
+function validationErrorResult(message: string) {
+  return { content: [{ type: 'text' as const, text: message }], isError: true };
+}
+
+// "Could not find out" is not "found nothing", and the model needs the
+// difference: a timeout is worth retrying and a miss is not. Collapsing them
+// teaches it to give up on transient failures and to retry permanent ones.
+function unavailableResult(error: ProviderUnavailableError) {
+  return validationErrorResult(`Jira could not be reached: ${error.message}`);
+}
+
+// Null means Jira is not connected — never "Jira had nothing". Every caller
+// below treats it as "there is no second place to look", which is a claim
+// about configuration rather than about tickets.
+async function jiraProviderOrNull(): Promise<TicketProvider | null> {
+  return getJiraProvider();
+}
+
+type Outcome<T> = { status: 'ok'; value: T } | { status: 'failed'; error: ProviderUnavailableError };
+
+// "We did not ask", shaped as a success carrying nothing — which is what it
+// is: with Jira disconnected there is genuinely no Jira ticket to find, and
+// nothing failed.
+const NOT_ASKED: Outcome<null> = { status: 'ok', value: null };
+
+// Catches ONLY ProviderUnavailableError. Anything else is a bug rather than
+// an integration being unreachable, and is left to withErrorSafetyNet — which
+// logs it server-side and scrubs it out of the model's context. Swallowing
+// everything here would turn a real defect into a plausible-looking
+// "Jira could not be reached".
+async function settled<T>(run: () => Promise<T>): Promise<Outcome<T>> {
+  try {
+    return { status: 'ok', value: await run() };
+  } catch (error) {
+    if (error instanceof ProviderUnavailableError) return { status: 'failed', error };
+    throw error;
+  }
 }
 
 // Tickets returned from list/search are projected down to this summary
@@ -250,6 +306,16 @@ export function withErrorSafetyNet<Args extends Record<string, unknown>>(
     try {
       return await handler(args);
     } catch (error) {
+      // An unreachable external provider is not an internal error, and
+      // scrubbing it to one throws away the only part the model can act on:
+      // whether retrying is worth anything. This is the catch-all for the
+      // single-provider paths (an explicit provider="jira", or a tref id);
+      // the resolution algorithm handles its own failure via settled(),
+      // because there it must not abort the native lookup running alongside.
+      if (error instanceof ProviderUnavailableError) {
+        console.error(`MCP tool "${toolName}" could not reach a provider:`, error);
+        return unavailableResult(error);
+      }
       console.error(`MCP tool "${toolName}" failed:`, error);
       return { content: [{ type: 'text' as const, text: INTERNAL_ERROR_MESSAGE }], isError: true };
     }
@@ -293,31 +359,169 @@ export async function listTicketsHandler({
 // exist at all, rather than changing the underlying service functions'
 // REST-facing behavior (which other, non-MCP callers may depend on
 // including drafts).
+// Dispatches on the id's own prefix. A "tref-" id can only have come from a
+// ticket_refs row (lib/ids.ts mints internal ticket ids as "wi-"), so no
+// lookup is needed to know which provider owns it, and no provider argument
+// has to be threaded through every call that already carries an id.
 export async function getTicketHandler({ id }: { id: string }) {
+  if (isExternalRef(id)) {
+    const jira = await jiraProviderOrNull();
+    if (!jira) return validationErrorResult(JIRA_NOT_CONNECTED);
+    const item = await jira.getByRef(id);
+    return item ? jsonResult(toDetail(item)) : notFoundResult('ticket');
+  }
   const item = await nativeProvider.getByRef(id);
   if (!item) return notFoundResult('ticket');
   return jsonResult(toDetail(item));
 }
 
-export async function getTicketByIdentifierHandler({ identifier }: { identifier: string }) {
-  const item = await nativeProvider.getByIdentifier(identifier);
-  if (!item) return notFoundResult('ticket');
-  return jsonResult(toDetail(item));
+/**
+ * Identifier resolution.
+ *
+ * A human-typed identifier is the ONE place where a ticket's provider is
+ * genuinely ambiguous. Native identifiers are minted as
+ * `${project.identifier}-${sequence}` (tickets.service.ts) — the same
+ * PROJECT-NUMBER shape as a Jira issue key — so "ENG-4" can perfectly well
+ * name two different tickets in two different systems. Everywhere else the
+ * ambiguity is already gone: once any read tool has returned a ticket, its
+ * `id` is a prefixed internal handle ("wi-…" or "tref-…") and every
+ * downstream call dispatches on that instead of re-resolving a string.
+ *
+ * The ordering below is the part that matters, and it is deliberately not the
+ * obvious one:
+ *
+ *   BOTH lookups always run. A native hit does NOT short-circuit the Jira
+ *   check. Checking native first and returning early is the natural way to
+ *   write this and it is wrong — it resolves an ambiguous identifier to
+ *   whichever provider happened to be checked first, and nobody ever finds
+ *   out there was another ticket by that name. They are issued concurrently
+ *   so the property is structural rather than a fact about statement order
+ *   that a later edit could quietly undo.
+ *
+ * The Jira side is a live point-lookup for that exact key — not a scan, and
+ * not a cache read (see JiraProvider.getByIdentifier for why the ref cache
+ * cannot answer it). A cache miss therefore never means "must be native",
+ * which is the specific gap this shape exists to close.
+ *
+ * When both match, this refuses to guess. Picking one and hoping is the worst
+ * option available: right half the time, silently wrong the rest, and
+ * "confidently read the wrong ticket" is a failure nobody can detect from the
+ * answer.
+ */
+export async function getTicketByIdentifierHandler({
+  identifier,
+  provider,
+}: {
+  identifier: string;
+  provider?: z.infer<typeof PROVIDER>;
+}) {
+  // An explicit provider is an instruction, not a hint: look only there. It
+  // is also how a caller answers the ambiguity error below.
+  if (provider === 'native') {
+    const item = await nativeProvider.getByIdentifier(identifier);
+    return item ? jsonResult(toDetail(item)) : notFoundResult('ticket');
+  }
+  if (provider === 'jira') {
+    const jira = await jiraProviderOrNull();
+    if (!jira) return validationErrorResult(JIRA_NOT_CONNECTED);
+    const item = await jira.getByIdentifier(identifier);
+    return item ? jsonResult(toDetail(item)) : notFoundResult('ticket');
+  }
+
+  const jira = await jiraProviderOrNull();
+  // Both, concurrently — see the ordering note above.
+  const [nativeHit, jiraOutcome] = await Promise.all([
+    nativeProvider.getByIdentifier(identifier),
+    jira ? settled(() => jira.getByIdentifier(identifier)) : Promise.resolve(NOT_ASKED),
+  ]);
+
+  if (jiraOutcome.status === 'failed') {
+    // Jira failed to answer, so what it would have said is unknown.
+    //
+    // With a native hit, return it: an optional integration having a bad
+    // minute must not break a path that worked before Jira was ever
+    // connected. The residual risk is real and accepted — if that identifier
+    // also named a Jira issue, this silently resolves to native, which is
+    // exactly what happened before this feature existed.
+    //
+    // Without one, refuse. "Not found" would be a positive claim resting on a
+    // lookup that did not happen, and the model would act on it.
+    if (nativeHit) return jsonResult(toDetail(nativeHit));
+    return unavailableResult(jiraOutcome.error);
+  }
+
+  const jiraHit = jiraOutcome.value;
+  if (nativeHit && jiraHit) {
+    return validationErrorResult(
+      `"${identifier}" is ambiguous: it names a Waypoint ticket ("${nativeHit.title}") and a Jira issue ("${jiraHit.title}"). ` +
+        'Call get_ticket_by_identifier again with provider="native" or provider="jira" to say which you mean, ' +
+        `or use get_ticket with id="${nativeHit.ref}" or id="${jiraHit.ref}".`,
+    );
+  }
+  if (nativeHit) return jsonResult(toDetail(nativeHit));
+  if (jiraHit) return jsonResult(toDetail(jiraHit));
+  return notFoundResult('ticket');
 }
 
 export async function searchTicketsHandler({
   query,
   projectId,
   limit,
+  provider,
 }: {
   query: string;
   projectId?: string;
   limit?: number;
+  provider?: z.infer<typeof PROVIDER>;
 }) {
   const effectiveLimit = resolveLimit(limit);
-  const items = await nativeProvider.search(query, { projectId, limit: effectiveLimit + 1 });
-  const { items: pageItems, truncated } = page(items, effectiveLimit);
-  return jsonResult({ items: toSummaries(pageItems), truncated });
+  // limit + 1 PER SOURCE, so truncation is detected per provider rather than
+  // masked by the merge — a full page of native hits would otherwise hide
+  // that Jira had more to give.
+  const fetchLimit = effectiveLimit + 1;
+
+  if (provider === 'jira') {
+    const jira = await jiraProviderOrNull();
+    if (!jira) return validationErrorResult(JIRA_NOT_CONNECTED);
+    const found = page(await jira.search(query, { projectId, limit: fetchLimit }), effectiveLimit);
+    return jsonResult({ items: toSummaries(found.items), truncated: found.truncated });
+  }
+
+  const native = page(
+    await nativeProvider.search(query, { projectId, limit: fetchLimit }),
+    effectiveLimit,
+  );
+  if (provider === 'native') {
+    return jsonResult({ items: toSummaries(native.items), truncated: native.truncated });
+  }
+
+  const jira = await jiraProviderOrNull();
+  if (!jira) return jsonResult({ items: toSummaries(native.items), truncated: native.truncated });
+
+  // projectId means a native project id on one side and a Jira project key on
+  // the other. Passing it to both is still right: it is the caller's scope,
+  // and a provider that does not recognise it contributes nothing rather than
+  // contributing wrong rows.
+  const jiraOutcome = await settled(() => jira.search(query, { projectId, limit: fetchLimit }));
+  if (jiraOutcome.status === 'failed') {
+    // Degrade to native results rather than failing the search outright: half
+    // an answer is useful, and the alternative is a Jira outage breaking
+    // search over this app's own tickets.
+    console.error('MCP tool "search_tickets" could not search Jira:', jiraOutcome.error);
+    return jsonResult({
+      items: toSummaries(native.items),
+      truncated: native.truncated,
+      // Named explicitly so the model can say "I could not check Jira"
+      // instead of implying Jira had no matches.
+      jiraUnavailable: true,
+    });
+  }
+
+  const external = page(jiraOutcome.value, effectiveLimit);
+  return jsonResult({
+    items: [...toSummaries(native.items), ...toSummaries(external.items)],
+    truncated: native.truncated || external.truncated,
+  });
 }
 
 // Same draft-hiding requirement as getTicketHandler/getTicketByIdentifierHandler
@@ -331,14 +535,32 @@ export async function searchTicketsHandler({
 // (getTicket() also joins labels/assignees/links, none of which either
 // handler below uses), hence isTicketDraftOrMissing() instead of getTicket().
 export async function listCommentsHandler({ ticketId, limit }: { ticketId: string; limit?: number }) {
-  if (await ticketsService.isTicketDraftOrMissing(ticketId)) return notFoundResult('ticket');
   const effectiveLimit = resolveLimit(limit);
+  // Same prefix dispatch as get_ticket. The draft gate below is native-only
+  // by nature — drafts are this app's concept, and a Jira issue reachable by
+  // a ref has already been proven visible to the connected account.
+  if (isExternalRef(ticketId)) {
+    const jira = await jiraProviderOrNull();
+    if (!jira) return validationErrorResult(JIRA_NOT_CONNECTED);
+    const external = page(await jira.listComments(ticketId, effectiveLimit + 1), effectiveLimit);
+    return jsonResult({ items: external.items.map(toCommentJson), truncated: external.truncated });
+  }
+  if (await ticketsService.isTicketDraftOrMissing(ticketId)) return notFoundResult('ticket');
   const comments = await nativeProvider.listComments(ticketId, effectiveLimit + 1);
   const { items: pageItems, truncated } = page(comments, effectiveLimit);
   return jsonResult({ items: pageItems.map(toCommentJson), truncated });
 }
 
 export async function listActivityHandler({ ticketId, limit }: { ticketId: string; limit?: number }) {
+  // Deliberately native-only, and deliberately NOT a "not found": a Jira
+  // issue's change history is a real thing that exists and this tool cannot
+  // read it, which is a different fact from the ticket not being there.
+  // Saying so stops the model concluding a Jira issue has no history.
+  if (isExternalRef(ticketId)) {
+    return validationErrorResult(
+      'Activity history is not available for Jira issues — use list_comments for that ticket instead.',
+    );
+  }
   if (await ticketsService.isTicketDraftOrMissing(ticketId)) return notFoundResult('ticket');
   const effectiveLimit = resolveLimit(limit);
   const activity = await activityService.listActivity(ticketId, effectiveLimit + 1);
@@ -386,7 +608,9 @@ export function registerTicketTools(server: McpServer): void {
   server.registerTool(
     'get_ticket',
     {
-      description: 'Get the full details of one ticket by its internal id.',
+      description:
+        'Get the full details of one ticket by its internal id, as returned by search_tickets or get_ticket_by_identifier. ' +
+        'Works for both Waypoint tickets and Jira issues — the id says which, so nothing else is needed.',
       inputSchema: { id: z.string() },
     },
     withErrorSafetyNet('get_ticket', getTicketHandler),
@@ -395,8 +619,18 @@ export function registerTicketTools(server: McpServer): void {
   server.registerTool(
     'get_ticket_by_identifier',
     {
-      description: 'Get the full details of one ticket by its human-readable identifier, e.g. "WI-42".',
-      inputSchema: { identifier: z.string() },
+      description:
+        'Get the full details of one ticket by its human-readable identifier, e.g. "WI-42" or "ENG-4". ' +
+        'Waypoint tickets and Jira issues share the same PROJECT-NUMBER identifier format, so an identifier can name one of each; ' +
+        'when it does, this returns an error naming both and you should call it again with the provider argument set. ' +
+        'Prefer get_ticket with an id from an earlier result when you have one — an id is never ambiguous.',
+      inputSchema: {
+        identifier: z.string(),
+        provider: PROVIDER.optional().describe(
+          'Which system to look in. Omit to search both and be told if the identifier is ambiguous; ' +
+            'set it to resolve an ambiguity you were just told about.',
+        ),
+      },
     },
     withErrorSafetyNet('get_ticket_by_identifier', getTicketByIdentifierHandler),
   );
@@ -405,7 +639,10 @@ export function registerTicketTools(server: McpServer): void {
     'search_tickets',
     {
       description:
-        'Search tickets by a title keyword, optionally scoped to one project. Returns a summary per match. Results are capped (see limit) — check the truncated flag and narrow the query if it comes back true.',
+        'Search tickets by a title keyword, optionally scoped to one project. Searches both Waypoint tickets and, when Jira is connected, Jira issues; ' +
+        'each result carries the id to use for follow-up calls, and Jira results are marked with provider "jira" and a url. ' +
+        'Returns a summary per match. Results are capped (see limit) — check the truncated flag and narrow the query if it comes back true. ' +
+        'A jiraUnavailable flag in the result means Jira could not be searched, NOT that Jira had no matches.',
       inputSchema: {
         // .trim().min(1) — an empty (or whitespace-only, e.g. " ") query
         // otherwise matches every ticket's title (an unscoped
@@ -417,7 +654,11 @@ export function registerTicketTools(server: McpServer): void {
         // input — so the trimmed value is what actually reaches the ilike
         // pattern too, not just what min(1) validates against.
         query: z.string().trim().min(1),
-        projectId: z.string().optional(),
+        projectId: z
+          .string()
+          .optional()
+          .describe('A Waypoint project id, or a Jira project key when searching Jira.'),
+        provider: PROVIDER.optional().describe('Restrict the search to one system. Omit to search both.'),
         limit: LIMIT_SCHEMA,
       },
     },
@@ -428,7 +669,9 @@ export function registerTicketTools(server: McpServer): void {
     'list_comments',
     {
       description:
-        "List the comments on one ticket, with each comment's author name resolved. Results are capped (see limit) — check the truncated flag and narrow the query if it comes back true.",
+        "List the comments on one ticket, with each comment's author name resolved. Accepts the id of a Waypoint ticket or a Jira issue. " +
+        'Waypoint comments come back as bodyHtml; Jira comments come back as plain-text body with bodyFormat "text". ' +
+        'Results are capped (see limit) — check the truncated flag and narrow the query if it comes back true.',
       inputSchema: { ticketId: z.string(), limit: LIMIT_SCHEMA },
     },
     withErrorSafetyNet('list_comments', listCommentsHandler),
