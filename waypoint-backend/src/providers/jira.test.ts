@@ -507,16 +507,36 @@ describe('JiraProvider.postComment', () => {
     expect(jiraPost).toHaveBeenCalledWith(CREDENTIAL, '/rest/api/3/issue/ENG-4/comment', {
       body: ADF,
     });
-    expect(result).toEqual({ commentId: '10501' });
+    expect(result).toEqual({ ok: true, commentId: '10501' });
   });
 
-  it('is null on a real 404 — the issue is gone — and throws on anything else', async () => {
+  it('is null on a real 404 — the issue is gone', async () => {
     vi.mocked(jiraPost).mockResolvedValue(fail('not_found'));
     expect(await provider().postComment('tref-abc1234', ADF)).toBeNull();
-
-    vi.mocked(jiraPost).mockResolvedValue(fail('rate_limited'));
-    await expect(provider().postComment('tref-abc1234', ADF)).rejects.toBeInstanceOf(
-      ProviderUnavailableError,
-    );
   });
+
+  // Mirrors applyTransition's own split exactly: 'forbidden' and 'jira_error'
+  // are about THIS comment (no comment permission on the project, Jira
+  // rejected the body) and never get better by retrying, so they must come
+  // back as a user-actionable refusal rather than escape as an error that
+  // reverts the proposal to a card inviting the same failing click forever.
+  it.each([
+    ['forbidden', "The connected Jira account isn't allowed to do that."],
+    ['jira_error', 'Comment body failed validation.'],
+  ])('reports a %s as a user-actionable refusal carrying Jira’s own words', async (reason, message) => {
+    vi.mocked(jiraPost).mockResolvedValue(fail(reason, message));
+
+    expect(await provider().postComment('tref-abc1234', ADF)).toEqual({ ok: false, message });
+  });
+
+  it.each(['invalid_credentials', 'rate_limited', 'network', 'site_not_found'])(
+    'throws on a %s, because that one IS worth retrying',
+    async (reason) => {
+      vi.mocked(jiraPost).mockResolvedValue(fail(reason));
+
+      await expect(provider().postComment('tref-abc1234', ADF)).rejects.toBeInstanceOf(
+        ProviderUnavailableError,
+      );
+    },
+  );
 });

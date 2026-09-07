@@ -1012,7 +1012,7 @@ describe('approveProposal against a Jira issue', () => {
       getByRef: vi.fn(async () => ({ stateId: '10001', stateName: 'In Progress' })),
       listTransitions: vi.fn(async () => [{ id: '31', name: 'Done', group: 'completed' }]),
       applyTransition: vi.fn(async () => ({ ok: true })),
-      postComment: vi.fn(async () => ({ commentId: '10501' })),
+      postComment: vi.fn(async () => ({ ok: true, commentId: '10501' })),
       site: 'yourteam.atlassian.net',
       actorName: 'Max Chen',
     };
@@ -1205,6 +1205,29 @@ describe('approveProposal against a Jira issue', () => {
     // process does not.
     expect((finalize.set as Vfn).mock.calls[0][0].statusReason).toBe(
       'Transition id 31 is not valid for issue ENG-4.',
+    );
+  });
+
+  it('turns a forbidden/rejected comment into a stale card, not an infinitely-retryable one', async () => {
+    // A permission or content rejection on the comment itself (no "Add
+    // comments" permission on this project, or Jira rejecting the ADF body)
+    // never gets better on the next click. Before this fix, postComment threw
+    // ProviderUnavailableError for exactly this case, which approveProposal's
+    // generic catch reverts to 'proposed' — an Approve button that can only
+    // ever fail again, forever, within the 24h TTL.
+    const jira = connectJira();
+    jira.postComment.mockResolvedValue({
+      ok: false,
+      message: "The connected Jira account isn't allowed to do that.",
+    });
+    const row = jiraRow({ payload: { body: 'Reproduced on staging.' } });
+    const finalize = claimThenFinalize(row);
+
+    const view = await approveProposal('prop-abc1234');
+
+    expect(view.status).toBe('stale');
+    expect((finalize.set as Vfn).mock.calls[0][0].statusReason).toBe(
+      "The connected Jira account isn't allowed to do that.",
     );
   });
 

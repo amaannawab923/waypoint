@@ -520,7 +520,10 @@ export class JiraProvider implements TicketProvider {
    * This function's job is transport, and it deliberately cannot construct a
    * body of its own.
    */
-  async postComment(ref: string, adf: JiraAdfDoc): Promise<{ commentId: string } | null> {
+  async postComment(
+    ref: string,
+    adf: JiraAdfDoc,
+  ): Promise<{ ok: true; commentId: string } | { ok: false; message: string } | null> {
     const key = await this.resolveKey(ref);
     if (!key) return null;
 
@@ -531,9 +534,18 @@ export class JiraProvider implements TicketProvider {
     );
     if (!result.ok) {
       if (result.reason === 'not_found') return null;
+      // Same three reasons applyTransition treats as terminal, and for the
+      // same reason: a reviewer can act on "you don't have comment
+      // permission on this project" or "Jira rejected this comment body",
+      // but retrying the identical request never fixes either — only a
+      // genuine outage (auth, rate limit, network, a site that stopped
+      // resolving) is worth surfacing as retryable via ProviderUnavailableError.
+      if (result.reason === 'forbidden' || result.reason === 'jira_error') {
+        return { ok: false, message: result.message };
+      }
       unavailable(result);
     }
-    return { commentId: str(result.value?.id) };
+    return { ok: true, commentId: str(result.value?.id) };
   }
 
   /**

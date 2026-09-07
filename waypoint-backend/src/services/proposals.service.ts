@@ -27,10 +27,21 @@ export const MAX_PROPOSALS_PER_TURN = 10;
 export const MAX_PENDING_PER_CONVERSATION = 20;
 
 // A claim that's been sitting in 'executing' longer than this is a crashed
-// execute (the process died between claim and finalize), not one in flight
-// — real executions are single-digit-millisecond service calls. listProposals
-// reverts such rows to 'proposed' so the card becomes approvable again.
-const EXECUTING_STUCK_MS = 60 * 1000;
+// execute (the process died between claim and finalize), not one in flight.
+// listProposals reverts such rows to 'proposed' so the card becomes
+// approvable again.
+//
+// A native execute really is a single-digit-millisecond service call, but a
+// Jira execute is not: checkJiraStaleness alone can issue two sequential
+// requests (getByRef, listTransitions) before executeJiraProposal issues a
+// third (applyTransition or postComment), and each one is bounded by
+// REQUEST_TIMEOUT_MS (lib/jira/client.ts, 20s) rather than being instant. A
+// merely-slow-but-successful Jira approve can cross a 60s threshold while
+// the write is still in flight, which does not corrupt anything (a 'stale'
+// row can't be re-claimed — see finalize's status='executing' guard) but
+// mislabels a real write as interrupted. Set above the worst realistic case
+// of three sequential 20s-bounded Jira requests, with headroom.
+const EXECUTING_STUCK_MS = 120 * 1000;
 
 // Distinct from NotFoundError/ConflictError: this is a model-facing
 // validation failure — the MCP propose handlers catch it and return its
@@ -743,13 +754,19 @@ async function executeJiraProposal(
     case 'comment': {
       const { body } = row.payload as { body: string };
       const posted = await jira.postComment(ticketId, buildCopilotJiraCommentAdf(displayName, body));
-      if (!posted) {
+      if (posted === null) {
         throw new TerminalExecutionFailure(
           'stale',
           'That Jira issue no longer exists, so the comment was not posted',
         );
       }
-      return posted;
+      // A forbidden/jira_error result is terminal for the same reason a
+      // refused transition is (see applyTransition below): retrying an
+      // identical comment never fixes a permission or content rejection, so
+      // this must finalize the card rather than leave an Approve button that
+      // can only ever fail.
+      if (!posted.ok) throw new TerminalExecutionFailure('stale', posted.message);
+      return { commentId: posted.commentId };
     }
     case 'state_change': {
       // A Jira state_change payload's `stateId` is a TRANSITION id — see
