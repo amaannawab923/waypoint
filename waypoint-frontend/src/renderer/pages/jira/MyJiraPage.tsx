@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { clsx } from 'clsx';
 import {
   dismissJiraTombstone,
@@ -25,6 +26,15 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'work', label: 'My work' },
   { key: 'connection', label: 'Connection' },
 ];
+
+/** True only for a real `TabKey` — used to validate the `?tab=` param below
+ * against the actual union rather than trusting a string a link (this app's
+ * own `JiraConnectionCard`, or anything else) put in the URL. Built off
+ * `TABS` itself so a third tab added there is a third valid value here with
+ * no second list to keep in sync. */
+function isTabKey(value: string | null): value is TabKey {
+  return TABS.some((t) => t.key === value);
+}
 
 /**
  * Exported (not just page-local) because `JiraConnectionCard` on the
@@ -74,7 +84,18 @@ export function LiveSyncIndicator({
 }
 
 export default function MyJiraPage() {
-  const [tab, setTab] = useState<TabKey>('work');
+  // `JiraConnectionCard` on the All-Projects page links straight to the
+  // Connection tab (`/my-jira?tab=connection`) rather than always landing on
+  // My work — read once at mount, the same way TicketsLayout/AllTicketsPage
+  // seed state from their own query params. An absent or garbage value
+  // (someone hand-editing the URL, or a future link that gets the param
+  // wrong) falls back to 'work' via `isTabKey` rather than rendering neither
+  // tab's body.
+  const [searchParams] = useSearchParams();
+  const initialTab = searchParams.get('tab');
+  const [tab, setTab] = useState<TabKey>(
+    isTabKey(initialTab) ? initialTab : 'work',
+  );
   const [drawerTicketId, setDrawerTicketId] = useState<string | null>(null);
 
   const connection = useLoadedJiraConnection();

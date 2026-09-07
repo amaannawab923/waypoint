@@ -635,6 +635,74 @@ describe('MyJiraPage — sync indicator', () => {
   });
 });
 
+// `JiraConnectionCard` on the All-Projects page links straight here with
+// `?tab=connection` so the click lands on the tab it promised, not on "My
+// work" with the user left to find Connection themselves. These three cases
+// are the whole contract: a valid tab loads directly on it, and anything
+// else — no param at all, or a value nobody put there on purpose — falls
+// back to 'work' rather than rendering neither tab's body.
+describe('MyJiraPage — initial tab from the ?tab= query param', () => {
+  function connectionStatus() {
+    return {
+      connected: true,
+      accountName: 'Max Chen',
+      accountEmail: 'max@northwind.dev',
+      accountId: '5f8a',
+      site: 'waypoint123.atlassian.net',
+      lastSyncAt: '2026-09-01T00:00:00.000Z',
+      issueCount: 4,
+      projectCount: 3,
+      countsTruncated: false,
+    };
+  }
+
+  function mountAt(path: string) {
+    jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(TICKETS));
+    jest.mocked(getJiraTransitions).mockResolvedValue([]);
+    jest.mocked(useLoadedJiraConnection).mockReturnValue(connectionStatus());
+    return render(
+      <MemoryRouter initialEntries={[path]}>
+        <MyJiraPage />
+      </MemoryRouter>,
+    );
+  }
+
+  it('loads on the Connection tab when the param says so', async () => {
+    mountAt('/my-jira?tab=connection');
+
+    // "Refresh now" only exists inside JiraConnectionPanel, which the
+    // Connection tab is the only place that mounts.
+    expect(
+      await screen.findByRole('button', { name: 'Refresh now' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText('Search your Jira queue'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('falls back to My work when the param is absent', async () => {
+    mountAt('/my-jira');
+
+    expect(
+      await screen.findByLabelText('Search your Jira queue'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Refresh now' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('falls back to My work for a value that is not a real tab', async () => {
+    mountAt('/my-jira?tab=nonsense');
+
+    expect(
+      await screen.findByLabelText('Search your Jira queue'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Refresh now' }),
+    ).not.toBeInTheDocument();
+  });
+});
+
 // adfToPlainText emits a \n per ADF block — that newline is the only
 // structure that survives flattening a Jira description, so the drawer has to
 // honor it. jsdom does no layout, so the class is the observable.
