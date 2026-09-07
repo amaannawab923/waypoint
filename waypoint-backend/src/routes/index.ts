@@ -18,6 +18,7 @@ import { agentsRouter } from './agents.routes.js';
 import { copilotRouter } from './copilot.routes.js';
 import { proposalsRouter } from './proposals.routes.js';
 import { reviewQueueRouter } from './reviewQueue.routes.js';
+import { integrationsRouter } from './integrations.routes.js';
 import { mcpRouter } from './mcp.routes.js';
 import { devRouter } from './dev.routes.js';
 
@@ -42,6 +43,7 @@ apiRouter.use(agentsRouter);
 apiRouter.use(copilotRouter);
 apiRouter.use(proposalsRouter);
 apiRouter.use(reviewQueueRouter);
+apiRouter.use(integrationsRouter);
 apiRouter.use(mcpRouter);
 if (process.env.NODE_ENV !== 'production') {
   apiRouter.use(devRouter);
