@@ -1,5 +1,5 @@
 import { act, renderHook } from '@testing-library/react';
-import { getJiraConnectionStatus } from '@/data/jiraApi';
+import { ensureJiraSynced, getJiraConnectionStatus } from '@/data/jiraApi';
 import type { JiraConnectionStatus } from '@/types/jira';
 import {
   resetJiraStoreForTests,
@@ -11,6 +11,7 @@ import {
 
 jest.mock('@/data/jiraApi', () => ({
   getJiraConnectionStatus: jest.fn(),
+  ensureJiraSynced: jest.fn(),
 }));
 
 function status(
@@ -118,5 +119,50 @@ describe('jiraStore', () => {
     expect(getJiraConnectionStatus).toHaveBeenCalledTimes(2);
     expect(first.result.current?.issueCount).toBe(2);
     expect(second.result.current?.issueCount).toBe(2);
+  });
+
+  // Found in review: a connected account with real tickets showed "0
+  // issues" / "not synced yet" on the All Projects page's Jira tile
+  // indefinitely, because that tile's only read was the fast status
+  // check — which can correctly answer connected:true while never having
+  // triggered a real ticket read at all. These three pin the fix.
+  describe('useLoadedJiraConnection — ensures a real sync when connected but never synced', () => {
+    it('calls ensureJiraSynced and adopts its result when connected with no lastSyncAt yet', async () => {
+      jest
+        .mocked(getJiraConnectionStatus)
+        .mockResolvedValue(status({ connected: true, lastSyncAt: null, issueCount: 0 }));
+      jest
+        .mocked(ensureJiraSynced)
+        .mockResolvedValue(status({ connected: true, lastSyncAt: '2026-01-01T00:00:00.000Z', issueCount: 12 }));
+
+      const { result } = renderHook(() => useLoadedJiraConnection());
+      await act(async () => {});
+
+      expect(ensureJiraSynced).toHaveBeenCalledTimes(1);
+      expect(result.current?.issueCount).toBe(12);
+      expect(result.current?.lastSyncAt).not.toBeNull();
+    });
+
+    it('does not call ensureJiraSynced when the fast status already carries a real sync', async () => {
+      jest
+        .mocked(getJiraConnectionStatus)
+        .mockResolvedValue(status({ connected: true, lastSyncAt: '2026-01-01T00:00:00.000Z' }));
+
+      renderHook(() => useLoadedJiraConnection());
+      await act(async () => {});
+
+      expect(ensureJiraSynced).not.toHaveBeenCalled();
+    });
+
+    it('does not call ensureJiraSynced when nothing is connected', async () => {
+      jest
+        .mocked(getJiraConnectionStatus)
+        .mockResolvedValue(status({ connected: false, lastSyncAt: null }));
+
+      renderHook(() => useLoadedJiraConnection());
+      await act(async () => {});
+
+      expect(ensureJiraSynced).not.toHaveBeenCalled();
+    });
   });
 });

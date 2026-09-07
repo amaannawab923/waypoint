@@ -1,6 +1,9 @@
 import { useSyncExternalStore } from 'react';
 import { useAsync } from '@/lib/useAsync';
-import { getJiraConnectionStatus as fetchJiraConnectionStatus } from '@/data/jiraApi';
+import {
+  ensureJiraSynced,
+  getJiraConnectionStatus as fetchJiraConnectionStatus,
+} from '@/data/jiraApi';
 import type { JiraConnectionStatus } from '@/types/jira';
 
 // A minimal, scoped client cache for the My Jira connection status — same
@@ -70,16 +73,33 @@ export function useJiraConnection(): JiraConnectionStatus | undefined {
   );
 }
 
-/** Convenience hook for a top-level mount point (Sidebar, MyJiraPage): fetches
- * the connection status once and feeds it into the shared store, then reads
- * back the live value the same way `useJiraConnection` does. Safe to call
- * from multiple mounted components at once — each fires its own fetch, but
- * every fetch upserts the same row, so whichever resolves last just
- * overwrites with an equivalent value. */
+/** Convenience hook for a top-level mount point (Sidebar, MyJiraPage,
+ * JiraConnectionCard on All Projects): fetches the connection status once
+ * and feeds it into the shared store, then reads back the live value the
+ * same way `useJiraConnection` does. Safe to call from multiple mounted
+ * components at once — each fires its own fetch, but every fetch upserts
+ * the same row, so whichever resolves last just overwrites with an
+ * equivalent value.
+ *
+ * Found in review: the fast status fetch alone can legitimately answer
+ * `connected: true` with issueCount/projectCount stuck at 0 and
+ * lastSyncAt null indefinitely — nothing about calling it makes a real
+ * ticket read happen, so a surface that mounts before anything else has
+ * (the All Projects page's Jira tile, if that's the first place a session
+ * opens) showed "0 issues" / "not synced yet" forever. The fast status is
+ * still pushed first and immediately, so `connected`/`accountName`/`site`
+ * are known as fast as before; ensureJiraSynced only runs (and is only
+ * awaited) when the fast read says connected but not yet synced, and is
+ * itself deduplicated across every concurrent caller of this hook. */
 export function useLoadedJiraConnection(): JiraConnectionStatus | undefined {
   useAsync(async () => {
     const status = await fetchJiraConnectionStatus();
     setJiraConnection(status);
+    if (status.connected && !status.lastSyncAt) {
+      const synced = await ensureJiraSynced();
+      setJiraConnection(synced);
+      return synced;
+    }
     return status;
   }, []);
   return useJiraConnection();

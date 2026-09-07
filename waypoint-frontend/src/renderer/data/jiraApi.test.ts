@@ -626,6 +626,81 @@ describe('connect / status / disconnect', () => {
   });
 });
 
+// Found in review: a connected account with real tickets showed "0 issues"
+// / "not synced yet" on the All Projects page's Jira tile indefinitely,
+// because that tile only ever called the fast, count-blind
+// getJiraConnectionStatus() — nothing about landing on All Projects first
+// (rather than My Jira) ever triggered a real read. These pin
+// ensureJiraSynced, the fix jiraStore.ts's useLoadedJiraConnection now
+// routes through.
+describe('ensureJiraSynced', () => {
+  it('lists when connected but nothing has synced yet, and the result carries real counts', async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([wireTicket({ id: '1', projectKey: 'ENG' }), wireTicket({ id: '2', projectKey: 'OPS' })]),
+    );
+
+    const result = await api.ensureJiraSynced();
+
+    expect(bridge.listTickets).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ issueCount: 2, projectCount: 2 });
+    expect(result.lastSyncAt).not.toBeNull();
+  });
+
+  it('does not list again once a real sync has already happened this session', async () => {
+    const api = freshApi();
+    await api.listMyJiraTickets();
+    bridge.listTickets.mockClear();
+
+    await api.ensureJiraSynced();
+
+    expect(bridge.listTickets).not.toHaveBeenCalled();
+  });
+
+  it('does not attempt a list at all when nothing is connected', async () => {
+    const api = freshApi();
+    bridge.status.mockResolvedValue({ connected: false, identity: undefined });
+
+    const result = await api.ensureJiraSynced();
+
+    expect(bridge.listTickets).not.toHaveBeenCalled();
+    expect(result.connected).toBe(false);
+  });
+
+  // The actual bug this closes: several surfaces (Sidebar,
+  // JiraConnectionCard, MyJiraPage) can all mount within the same tick,
+  // each independently calling this — without single-flight dedup, a
+  // connected session would fire one real Jira search per surface instead
+  // of one for the whole app.
+  it('deduplicates concurrent callers into a single real list read', async () => {
+    const api = freshApi();
+
+    const [first, second, third] = await Promise.all([
+      api.ensureJiraSynced(),
+      api.ensureJiraSynced(),
+      api.ensureJiraSynced(),
+    ]);
+
+    expect(bridge.listTickets).toHaveBeenCalledTimes(1);
+    expect(first.lastSyncAt).toBe(second.lastSyncAt);
+    expect(second.lastSyncAt).toBe(third.lastSyncAt);
+  });
+
+  it('still resolves with a usable status, not a rejection, when the list read fails', async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue({
+      ok: false,
+      reason: 'network',
+      message: "Couldn't reach Jira. Check your connection and try again.",
+    });
+
+    const result = await api.ensureJiraSynced();
+
+    expect(result.connected).toBe(true);
+    expect(result.lastSyncAt).toBeNull();
+  });
+});
+
 describe('comments', () => {
   it('maps a posted comment, and never claims Jira knows it came from Waypoint', async () => {
     const api = freshApi();

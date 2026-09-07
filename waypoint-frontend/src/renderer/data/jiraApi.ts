@@ -294,7 +294,12 @@ function clearCache(): void {
  * without touching the network, because the sidebar and the My Jira page both
  * ask on every mount. The counts come from the last actual ticket read
  * (zero until one happens), which is why connectJira() and refreshJiraSync()
- * both list before returning a status.
+ * both list before returning a status — and why every OTHER mount point that
+ * shows these counts (the sidebar, JiraConnectionCard on All Projects)
+ * should route through ensureJiraSynced() below rather than calling this
+ * function alone: on its own, this one can legitimately return real
+ * `connected: true` next to zero counts for an arbitrarily long time,
+ * because nothing about calling it makes a real read happen.
  */
 export async function getJiraConnectionStatus(): Promise<JiraConnectionStatus> {
   const snapshot = await bridge().status();
@@ -327,6 +332,7 @@ export async function getJiraConnectionStatus(): Promise<JiraConnectionStatus> {
  * again one call site at a time. There is one function, and its type makes
  * the caveat impossible to not receive.
  */
+
 export interface JiraQueueRead {
   tickets: JiraTicket[];
   /** Falsy when this is the whole queue; otherwise WHY it is not — see
@@ -337,6 +343,51 @@ export interface JiraQueueRead {
 export async function listMyJiraTickets(): Promise<JiraQueueRead> {
   const { tickets, truncated } = unwrap(await bridge().listTickets());
   return { tickets: rememberTickets(tickets, truncated), truncated };
+}
+
+// Single-flight guard for ensureJiraSynced below — several surfaces
+// (Sidebar, JiraConnectionCard on All Projects, MyJiraPage) can all mount
+// within the same tick of each other, each independently calling
+// useLoadedJiraConnection. Without this, every one of them would fire its
+// own real JQL search the first time the app opens with Jira connected —
+// wasteful, and the exact kind of redundant network call this module's own
+// session-cache comment above already says it exists to avoid for the
+// cheap status read; a real search is the case that actually needs guarding.
+let syncOnceFlight: Promise<JiraConnectionStatus> | null = null;
+
+/**
+ * Guarantees at least one real ticket read has happened this session before
+ * resolving with a status whose counts can be trusted — a no-op the moment
+ * `lastSyncAt` is already set (whichever caller gets there first, including
+ * MyJiraPage's own "My work" read, satisfies every other caller too), and
+ * deduplicated via `syncOnceFlight` for the window before that.
+ *
+ * Found in review: a connected account with real tickets showed "0 issues" /
+ * "not synced yet" on the All Projects page's Jira tile indefinitely,
+ * because that tile calls useLoadedJiraConnection — which only ever called
+ * the cheap, count-blind getJiraConnectionStatus() above — and nothing about
+ * landing on All Projects first (rather than My Jira) ever triggered a real
+ * read. MyJiraPage's own fetchedRead effect already re-pushes a fresh
+ * status once ITS OWN read lands, which is why this was harder to notice
+ * from My Jira itself; the tile has no read of its own to piggyback on.
+ *
+ * Does not attempt a read at all when nothing is connected — bridge().status()
+ * already answers that for free, and a connect-less account has nothing a
+ * search would find.
+ */
+export async function ensureJiraSynced(): Promise<JiraConnectionStatus> {
+  if (lastSyncAt) return getJiraConnectionStatus();
+  const status = await getJiraConnectionStatus();
+  if (!status.connected) return status;
+  if (!syncOnceFlight) {
+    syncOnceFlight = listMyJiraTickets()
+      .then(() => getJiraConnectionStatus())
+      .catch(() => status)
+      .finally(() => {
+        syncOnceFlight = null;
+      });
+  }
+  return syncOnceFlight;
 }
 
 /**
