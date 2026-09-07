@@ -122,11 +122,19 @@ describe.skipIf(!REAL_DB)('ticketRefs against real Postgres', () => {
   });
 
   it('de-duplicates a batch containing the same (provider, site, externalId) twice, without erroring', async () => {
-    // Postgres rejects an ON CONFLICT statement that would affect the same
-    // row twice in one command ("cannot affect row a second time") — this
-    // is the exact case rememberMany's own de-duplication step exists to
-    // avoid. Without it, a Jira search page containing the same issue twice
-    // (a real thing that happens) would fail the whole search.
+    // What this test actually proves, precisely: rememberMany's own
+    // in-memory Map-based de-duplication runs BEFORE the batch ever reaches
+    // Postgres, so this never gives Postgres a real (provider, site,
+    // externalId) conflict within one command to reject — this test alone
+    // does not exercise Postgres's own "cannot affect row a second time"
+    // rule (found in review: an earlier version of this comment claimed
+    // that it did). What it DOES prove, and needs real Postgres for: that
+    // the de-duplication step this file's own header comment describes is
+    // actually wired in and actually prevents the whole batch from failing
+    // — a mocked db.insert could return success unconditionally regardless
+    // of whether de-duplication ran at all. Without the real step, a Jira
+    // search page containing the same issue twice (a real thing that
+    // happens) would fail the whole search.
     const rows = await service.rememberMany([
       { provider: 'jira', site, externalId: 'ENG-3', identifier: 'ENG-3', title: 'First sighting', url: null },
       { provider: 'jira', site, externalId: 'ENG-3', identifier: 'ENG-3', title: 'Second sighting, same page', url: null },
