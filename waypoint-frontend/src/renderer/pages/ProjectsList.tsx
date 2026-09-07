@@ -167,6 +167,23 @@ export default function ProjectsList() {
               onOpen={() => navigate(`/projects/${project.id}/tickets`)}
               onSettings={() => navigate(`/projects/${project.id}/settings`)}
               onArchive={async () => {
+                // Same window.confirm pattern ArchivedProjects.tsx already
+                // uses for its own (harder, permanent) delete action —
+                // matched here for a softer one too, since this button was
+                // a single, unconfirmed click next to Settings and easy to
+                // hit by mistake (found in review: a real project was lost
+                // this way, then recovered by hand from the database — this
+                // is what should have stopped that from the UI side). The
+                // message states where it goes, not just that it's
+                // reversible — "archived, but where?" was the second half
+                // of the same complaint.
+                if (
+                  !window.confirm(
+                    `Archive "${project.name}"? It'll disappear from this page, but you can restore it any time from Archive in the sidebar.`,
+                  )
+                ) {
+                  return;
+                }
                 await archiveProject(project.id);
                 reload();
               }}
