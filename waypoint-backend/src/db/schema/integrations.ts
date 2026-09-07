@@ -2,60 +2,22 @@ import { pgTable, text, timestamp, index, unique } from 'drizzle-orm/pg-core';
 
 // Everything this app knows about tickets that live in someone ELSE's
 // system. Kept in its own schema file rather than folded into tickets.ts
-// because none of it is a ticket: a row here is a pointer to a ticket, and
-// a credential for reaching the system holding it.
-
-// --------------------------------------------------------------------------
-// Backend-local provider credentials
-// --------------------------------------------------------------------------
-
-// Deliberately NOT the same credential the desktop app's My Jira sidebar
-// uses. That one lives in Electron main (waypoint-frontend/src/main/jira/
-// jiraAuth.ts, which explains in its own comments why it stays there), is
-// held by a different OS process, in a different npm project, with no shared
-// package and no IPC bridge between the two. Copilot's MCP tools run inside
-// THIS process, so a Jira read from a tool has no path to that credential —
-// hence a second, separate one the user connects here.
+// because none of it is a ticket: a row here is a pointer to a ticket.
 //
-// The accepted cost, stated plainly because it is a real regression and not
-// a detail: this process has no auth middleware (see app.ts — CORS origin
-// restriction and the loopback binding in docker-compose.yml are the only
-// controls), so anything that can already reach this API can drive Jira with
-// this credential. That is bounded by the same loopback assumption the whole
-// backend already rests on, and is revisited when a second provider justifies
-// building a real cross-process bridge to Electron main instead of a second
-// credential store. Until then the token is at least encrypted at rest (see
-// lib/secretBox.ts) rather than sitting in plaintext in a table anyone with a
-// psql prompt or a stray pg_dump can read.
+// Note what is deliberately NOT here: a credential. This file briefly held an
+// integration_credentials table, on the reasoning that Copilot's MCP tools
+// run in THIS process and so need a Jira credential this process can read.
+// That reasoning was right about the need and wrong about the answer — it
+// made the user connect Jira twice (once in the desktop app's My Jira
+// sidebar, once here) and put a live API token behind an HTTP surface with
+// no auth middleware in front of it.
 //
-// provider IS the primary key: exactly one connection per provider, so
-// "connect" is an upsert and "is Jira connected" is a single point read with
-// no ordering question and no way to accumulate a second, shadow credential
-// nobody knows is there. This is the singleton-settings shape this codebase
-// did not previously have one of — a `id: 'singleton'` sentinel column would
-// carry the same constraint while lying about what identifies the row.
-export const integrationCredentials = pgTable('integration_credentials', {
-  provider: text('provider').primaryKey(),
-  // Jira Cloud hostname, e.g. "yourteam.atlassian.net" — hostname only, no
-  // scheme and no path. Stored as typed rather than normalised into a URL:
-  // it is pinned into `https://${site}${path}` at request time, so keeping it
-  // a bare hostname is what makes it impossible for a stored value to
-  // redirect a request somewhere else.
-  site: text('site').notNull(),
-  // Half of the HTTP Basic pair (`email:apiToken`). Not a secret on its own,
-  // and shown back to the user to confirm which account is connected.
-  email: text('email').notNull(),
-  // The other half, AES-256-GCM sealed — never the raw token. See
-  // lib/secretBox.ts for the format and for what happens when the key is
-  // gone (the connection reads as "needs reconnecting", not as a crash).
-  sealedToken: text('sealed_token').notNull(),
-  // Proof the credential actually worked at connect time, captured from
-  // /rest/api/3/myself. Nullable only because a future provider may have no
-  // equivalent probe — the Jira connect flow always fills both.
-  accountId: text('account_id'),
-  displayName: text('display_name'),
-  connectedAt: timestamp('connected_at', { withTimezone: true }).notNull().defaultNow(),
-});
+// There is now exactly one persisted Jira credential, in Electron main where
+// the OS keychain protects it, and this process BORROWS it per request over
+// an MCP header (see lib/jira/credentialHeader.ts). Nothing here stores a
+// credential, which is why the migration that dropped this table has no
+// data-preservation step: there was nothing worth keeping, only something
+// worth not having.
 
 // --------------------------------------------------------------------------
 // External ticket references

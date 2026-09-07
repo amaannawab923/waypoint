@@ -170,41 +170,12 @@ export async function jiraGet<T>(
   }
 }
 
-export interface JiraIdentity {
-  accountId: string;
-  displayName: string;
-  email: string;
-}
-
-/**
- * Proves a credential works, and returns the identity it belongs to.
- *
- * `/myself` is the right probe: it needs no permission beyond being a valid
- * session, so a credential that passes here has genuinely authenticated
- * rather than merely failed to be rejected by an endpoint that 200s for
- * anyone.
- */
-export async function validateCredential(credential: JiraCredential): Promise<JiraResult<JiraIdentity>> {
-  const result = await jiraGet<Record<string, unknown>>(credential, '/rest/api/3/myself');
-  if (!result.ok) return result;
-
-  const me = result.value ?? {};
-  const accountId = typeof me.accountId === 'string' ? me.accountId : '';
-  if (!accountId) {
-    return failure(
-      'site_not_found',
-      'That address answered, but not like a Jira Cloud site — check the site address.',
-    );
-  }
-  return {
-    ok: true,
-    value: {
-      accountId,
-      // Atlassian hides emailAddress unless the account's profile visibility
-      // allows it, so the address the user typed is the reliable one to keep.
-      email: typeof me.emailAddress === 'string' && me.emailAddress ? me.emailAddress : credential.email,
-      displayName:
-        typeof me.displayName === 'string' && me.displayName ? me.displayName : credential.email,
-    },
-  };
-}
+// There is deliberately no validateCredential here any more.
+//
+// It existed to prove a credential at CONNECT time, and this process no
+// longer has a connect flow: the credential arrives already proven, borrowed
+// per request from the desktop app that owns the connect flow and validates
+// there (see lib/jira/credentialHeader.ts). Re-proving it here would mean an
+// extra /myself round trip on every single tool call, buying nothing — a
+// revoked or rotated token fails the real call with 'invalid_credentials'
+// either way, which is exactly what the caller needs to hear.
