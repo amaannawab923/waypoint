@@ -123,20 +123,9 @@ export default function ProjectsList() {
         </button>
       </div>
 
-      {/* Always visible when the flag is on — surfaces the app's single Jira
-          connection from where people look for their projects, without
-          pretending to be one itself. A full-width strip between the
-          toolbar and the grid, not a grid tile: see JiraConnectionCard's own
-          header for why. The not-connected state's click reuses this same
-          `setCreateOpen(true)` the "Add Project" button above already uses —
-          a second entry point into AddProjectWizard, not a second flow. */}
-      {MY_JIRA_ENABLED && (
-        <JiraConnectionCard onConnectClick={() => setCreateOpen(true)} />
-      )}
-
       {loading && !projects && <SkeletonCardGrid />}
 
-      {projects && visibleProjects.length === 0 && (
+      {projects && visibleProjects.length === 0 && !MY_JIRA_ENABLED && (
         <EmptyState
           icon={<IconFolder size={32} strokeWidth={1.5} />}
           title="No projects match this filter"
@@ -150,8 +139,16 @@ export default function ProjectsList() {
         />
       )}
 
-      {visibleProjects.length > 0 && (
+      {/* The Jira tile always renders in its own row when the flag is on,
+          even with zero real projects and even under a filter that would
+          otherwise hide everything — it isn't a Project row, so "0 results
+          for this filter" doesn't apply to it, and visibility/name/created
+          filtering only ever touches `visibleProjects` below. */}
+      {(visibleProjects.length > 0 || MY_JIRA_ENABLED) && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {MY_JIRA_ENABLED && (
+            <JiraConnectionCard onConnectClick={() => setCreateOpen(true)} />
+          )}
           {visibleProjects.map((project) => (
             <ProjectCard
               key={project.id}

@@ -54,6 +54,15 @@ function mount(status: JiraConnectionStatus | undefined) {
   return { onConnectClick };
 }
 
+// The tile is a single role="button" wrapper (matching ProjectCard's own
+// pattern exactly, per the product owner's explicit ask that this look like
+// a real project tile) with a nested, separately-clickable settings
+// IconButton inside it — so `getByRole('button')` alone is ambiguous. This
+// always picks the outer tile, never the inner settings control.
+function getTile() {
+  return screen.getAllByRole('button')[0];
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
 });
@@ -64,10 +73,12 @@ describe('JiraConnectionCard — connected', () => {
 
     expect(screen.getByText('Max Chen')).toBeInTheDocument();
     expect(screen.getByText('waypoint123.atlassian.net')).toBeInTheDocument();
+    expect(screen.getByText('Companion project')).toBeInTheDocument();
     expect(screen.getByTestId('live-sync-indicator')).toHaveTextContent(
       '2026-09-07T10:00:00.000Z',
     );
     expect(screen.getByText('12')).toBeInTheDocument();
+    expect(screen.getByText('issues')).toBeInTheDocument();
   });
 
   // Mirrors JiraConnectionPanel.tsx's own "+" suffix for a page-capped read
@@ -86,11 +97,30 @@ describe('JiraConnectionCard — connected', () => {
     expect(screen.getByText('12')).toBeInTheDocument();
   });
 
+  it('singularizes "issue" for a count of exactly one', () => {
+    mount(connection({ issueCount: 1, countsTruncated: false }));
+
+    expect(screen.getByText('issue')).toBeInTheDocument();
+    expect(screen.queryByText('issues')).not.toBeInTheDocument();
+  });
+
   it('navigates straight to the Connection tab on click', () => {
     mount(connection());
 
-    fireEvent.click(screen.getByRole('button'));
+    fireEvent.click(getTile());
 
+    expect(mockNavigate).toHaveBeenCalledWith('/my-jira?tab=connection');
+  });
+
+  // The settings button is a second, independently-clickable control inside
+  // the tile — matching ProjectCard's own settings/archive icon-button
+  // pattern exactly — and must not also trigger the tile's own outer click.
+  it('the settings button also opens the Connection tab, without double-firing', () => {
+    mount(connection());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Jira connection settings' }));
+
+    expect(mockNavigate).toHaveBeenCalledTimes(1);
     expect(mockNavigate).toHaveBeenCalledWith('/my-jira?tab=connection');
   });
 
@@ -107,18 +137,19 @@ describe('JiraConnectionCard — connected', () => {
 });
 
 describe('JiraConnectionCard — not connected', () => {
-  it('renders the muted "Connect Jira" slot when the store says disconnected', () => {
+  it('renders the muted "Connect Jira" tile when the store says disconnected', () => {
     mount(connection({ connected: false, accountName: '', site: '' }));
 
     expect(screen.getByText('Connect Jira')).toBeInTheDocument();
+    expect(screen.getByText('Companion project')).toBeInTheDocument();
     expect(screen.queryByText('Max Chen')).not.toBeInTheDocument();
     expect(screen.queryByTestId('live-sync-indicator')).not.toBeInTheDocument();
   });
 
   // Before the store's first fetch resolves, useLoadedJiraConnection returns
-  // `undefined` — this must render the same muted slot rather than nothing at
-  // all or a broken read of a connection that doesn't exist yet.
-  it('renders the same muted slot while the connection status is still loading', () => {
+  // `undefined` — this must render the same muted tile rather than nothing
+  // at all or a broken read of a connection that doesn't exist yet.
+  it('renders the same muted tile while the connection status is still loading', () => {
     mount(undefined);
 
     expect(screen.getByText('Connect Jira')).toBeInTheDocument();
@@ -127,9 +158,23 @@ describe('JiraConnectionCard — not connected', () => {
   it('opens the wizard via the passed-in handler instead of navigating', () => {
     const { onConnectClick } = mount(connection({ connected: false }));
 
-    fireEvent.click(screen.getByRole('button'));
+    fireEvent.click(getTile());
 
     expect(onConnectClick).toHaveBeenCalledTimes(1);
     expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  // The settings button still renders in the not-connected tile (matching a
+  // real ProjectCard's always-present settings icon) — clicking it opens the
+  // same Connection tab rather than the wizard, since "review the (lack of a)
+  // connection" and "start connecting" are different actions worth keeping
+  // distinct even before anything is connected.
+  it('the settings button still opens the Connection tab, not the wizard', () => {
+    const { onConnectClick } = mount(connection({ connected: false }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Jira connection settings' }));
+
+    expect(mockNavigate).toHaveBeenCalledWith('/my-jira?tab=connection');
+    expect(onConnectClick).not.toHaveBeenCalled();
   });
 });
