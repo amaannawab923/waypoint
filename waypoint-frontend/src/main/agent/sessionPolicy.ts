@@ -1,4 +1,8 @@
-import { readStoredJiraCredential } from '../jira/jiraAuth';
+import {
+  encodeJiraCredentialHeader,
+  readStoredJiraCredential,
+  JIRA_CREDENTIAL_HEADER,
+} from '../jira/jiraAuth';
 import { buildSystemPrompt } from './systemPrompt';
 
 // The policy-parameterised knobs claudeSession.ts's runSession() needs to
@@ -120,33 +124,10 @@ const CONVERSATION_ID_PATTERN = /^conv-[a-z0-9]{4,32}$/i;
 // reconnecting, or disconnecting Jira takes effect on the very next turn with
 // nothing to invalidate.
 //
-// Base64-of-JSON rather than raw JSON, and this is not decoration: an API
-// token and an email are arbitrary user-supplied strings, while an HTTP
-// header value may only carry visible ASCII (RFC 9110 field-value). A raw
-// JSON value would therefore be rejected outright by the transport for a
-// token with a non-ASCII character — or, worse, carry a newline into the
-// header block. Base64's alphabet is fixed and header-safe by construction,
-// which removes the escaping question rather than answering it. It is
-// ENCODING, not encryption: the token is in cleartext to anything that can
-// read this request, which is the same loopback trust boundary the MCP
-// endpoint already rests on.
-const JIRA_CREDENTIAL_HEADER = 'x-waypoint-jira-credential';
-
-// Only the three fields authenticating a request are sent. accountId,
-// displayName and avatarUrl are the desktop app's own identity display and
-// the backend has no use for them — a credential handed to another process
-// should carry what that process needs and nothing else.
-function encodeJiraCredential(): string | null {
-  const credential = readStoredJiraCredential();
-  if (!credential) return null;
-  return Buffer.from(
-    JSON.stringify({
-      site: credential.site,
-      email: credential.email,
-      apiToken: credential.apiToken,
-    }),
-  ).toString('base64');
-}
+// The header name and the encoding (base64 of JSON, and why it has to be)
+// now live with the encoder in jira/jiraAuth.ts, which this shares with the
+// approve path (copilot/proposalApproval.ts) so the two cannot drift into two
+// shapes the backend's one parser has to accept.
 
 // Each header is independent: an absent conversation id must not suppress the
 // Jira credential, and vice versa. Both absent means no `headers` key at all
@@ -161,7 +142,7 @@ function buildMcpHeaders(
   // No stored credential simply omits the header — there is nothing to
   // special-case downstream, because the backend has to handle "Jira not
   // connected" for the header-absent case regardless.
-  const jiraCredential = encodeJiraCredential();
+  const jiraCredential = encodeJiraCredentialHeader(readStoredJiraCredential());
   if (jiraCredential) headers[JIRA_CREDENTIAL_HEADER] = jiraCredential;
   return headers;
 }

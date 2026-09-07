@@ -895,14 +895,31 @@ export async function listCopilotProposals(
   );
 }
 
+// Approve/reject go through the main process rather than this file's own
+// fetch wrapper, and they are the only endpoints here that do.
+//
+// The reason is a credential, not a preference. Approving a proposal that
+// targets a Jira issue performs a real write to Jira, authenticated by an API
+// token that exists only in the Electron main process — encrypted by the OS
+// keychain, and never returned to this renderer by design (see
+// main/jira/jiraAuth.ts). A fetch() from here cannot carry it, so before this
+// change every Jira-targeted proposal was permanently unapprovable: the
+// backend saw no credential, and resolved the card as stale.
+//
+// Same names, same signatures, same return types — nothing downstream
+// (useCopilotProposals, proposalStore, any card) changed. Errors still arrive
+// as a rejected promise carrying the backend's own message, because an
+// ipcRenderer.invoke rejects when its handler throws. What is lost is
+// httpClient's automatic error toast, which those callers already replace
+// with their own handling.
 export async function approveCopilotProposal(
   id: string,
 ): Promise<ProposalView> {
-  return http.post<ProposalView>(`/copilot/proposals/${id}/approve`, {});
+  return window.electron.copilot.proposals.approve<ProposalView>(id);
 }
 
 export async function rejectCopilotProposal(id: string): Promise<ProposalView> {
-  return http.post<ProposalView>(`/copilot/proposals/${id}/reject`, {});
+  return window.electron.copilot.proposals.reject<ProposalView>(id);
 }
 
 export async function rejectAllCopilotProposals(
@@ -952,13 +969,16 @@ export interface BulkProposalResult {
   statusReason: string | null;
 }
 
+// Through main, same as the single-row approve above and for the same
+// reason: a batch can contain a Jira-targeted proposal. Bulk REJECT below
+// stays on the plain fetch path — a reject executes nothing, so it needs no
+// credential.
 export async function bulkApproveProposals(
   ids: string[],
 ): Promise<BulkProposalResult[]> {
-  const { results } = await http.post<{ results: BulkProposalResult[] }>(
-    '/proposals/bulk-approve',
-    { ids },
-  );
+  const { results } = await window.electron.copilot.proposals.bulkApprove<{
+    results: BulkProposalResult[];
+  }>(ids);
   return results;
 }
 

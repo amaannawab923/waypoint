@@ -244,6 +244,31 @@ const electronHandler = {
     detect(): Promise<CopilotDetectResult> {
       return ipcRenderer.invoke('copilot:detect');
     },
+    // Acting on a write proposal.
+    //
+    // These three are the odd ones out in this bridge: they are plain HTTP
+    // calls to waypoint-backend, which the renderer can perfectly well make
+    // itself — and did, through data/api.ts's fetch wrapper, until approving
+    // one could write to Jira. The Jira API token only ever exists in the
+    // main process (see main/jira/jiraAuth.ts), so the request has to be
+    // issued from where the credential is; the alternative would be handing
+    // a bearer credential for someone's whole Jira account to the renderer,
+    // which is the one thing that store exists to prevent.
+    //
+    // Nothing here takes or returns a credential. `T` is the caller's own
+    // declared result shape — the same unchecked assertion data/api.ts's
+    // http.post<T> already made about a JSON body, in the same place.
+    proposals: {
+      approve<T>(id: string): Promise<T> {
+        return ipcRenderer.invoke('copilot:proposals:approve', id);
+      },
+      reject<T>(id: string): Promise<T> {
+        return ipcRenderer.invoke('copilot:proposals:reject', id);
+      },
+      bulkApprove<T>(ids: string[]): Promise<T> {
+        return ipcRenderer.invoke('copilot:proposals:bulk-approve', ids);
+      },
+    },
   },
   // The My Jira companion's entire data path. Every one of these is
   // request/response rather than a stream — a Jira call produces exactly one

@@ -30,7 +30,12 @@ jest.mock('./copilotAuth', () => ({
 const readStoredJiraCredentialMock = jest.fn<JiraCredential | null, []>(
   () => null,
 );
+// Only the STORE is stubbed. encodeJiraCredentialHeader (and the header name
+// beside it) come through from the real module, so what these tests assert
+// about the header is the real encoding rather than a second copy of it
+// written here — see jiraAuth.test.ts for that function's own tests.
 jest.mock('../jira/jiraAuth', () => ({
+  ...jest.requireActual('../jira/jiraAuth'),
   readStoredJiraCredential: () => readStoredJiraCredentialMock(),
 }));
 
@@ -422,13 +427,16 @@ describe('registerCopilotIpc', () => {
       site: 'yourteam.atlassian.net',
       email: 'me@example.com',
       apiToken: 'jira-token',
+      displayName: 'Me',
     });
   });
 
-  // accountId/displayName/avatarUrl are the desktop app's own identity
-  // display. Sending them would hand another process more of the user's
-  // Atlassian account than it has any use for.
-  it('sends only the three fields that authenticate, never the stored identity fields', () => {
+  // accountId and avatarUrl are the desktop app's own identity display and
+  // the backend has no use for them. displayName IS sent, and only because
+  // the write path needs it: a proposal card has to say whose Jira account an
+  // approval will post as, which site/email/apiToken cannot answer in a form
+  // a person reads.
+  it('sends only the fields the backend needs, never the rest of the stored identity', () => {
     readStoredJiraCredentialMock.mockReturnValue({
       site: 'yourteam.atlassian.net',
       email: 'me@example.com',
@@ -451,6 +459,7 @@ describe('registerCopilotIpc', () => {
     ).toString('utf8');
     expect(Object.keys(JSON.parse(decoded)).sort()).toEqual([
       'apiToken',
+      'displayName',
       'email',
       'site',
     ]);

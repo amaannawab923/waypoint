@@ -139,6 +139,64 @@ export function deleteStoredJiraCredential(): void {
   }
 }
 
+/**
+ * The header the credential is lent over. Named here, beside the encoder, so
+ * a name and an encoding cannot be changed independently of each other.
+ *
+ * Duplicated on the backend (lib/jira/credentialHeader.ts) rather than
+ * shared: two npm projects, no shared package, no build that emits anything
+ * importable across them. The two are kept in step by that file's own test.
+ */
+export const JIRA_CREDENTIAL_HEADER = 'x-waypoint-jira-credential';
+
+/**
+ * The credential, encoded for the `x-waypoint-jira-credential` header, or
+ * null when nothing is connected.
+ *
+ * It lives here rather than at either call site because there are now TWO of
+ * them, and they must agree byte for byte: sessionPolicy.ts bakes this into
+ * the MCP config so Copilot's tools can READ Jira, and copilot/
+ * proposalApproval.ts attaches it to an approve POST so an approved proposal
+ * can WRITE. One encoder means the backend's single parser
+ * (lib/jira/credentialHeader.ts) has one shape to accept.
+ *
+ * Base64 of JSON, and the encoding is load-bearing rather than decorative: an
+ * HTTP header value may only carry visible ASCII (RFC 9110 field-value),
+ * while an email, a token and a person's own display name are arbitrary
+ * user-supplied strings. Raw JSON would be rejected outright by the transport
+ * for a non-ASCII value, or would carry a newline into the header block.
+ * Base64's alphabet is fixed and header-safe by construction, which removes
+ * the escaping question rather than answering it. It is ENCODING, NOT
+ * encryption — the token is cleartext to anything that can read the request,
+ * which is the loopback trust boundary the backend already rests on.
+ *
+ * Four fields, and no more. site/email/apiToken authenticate the request.
+ * displayName authenticates nothing: it is there so a write-approval card can
+ * say WHOSE Jira account a proposal will post as — "posts as Max Chen", not
+ * "posts as yourteam.atlassian.net" — which the other three cannot answer in
+ * a form a person reads. It is already held in memory beside the email that
+ * has always been sent, so this is not new exposure. accountId and avatarUrl
+ * stay behind: they are this app's own identity display and the backend has
+ * no use for them.
+ */
+export function encodeJiraCredentialHeader(
+  // Taken as an argument rather than read from the store inside, so that
+  // "which credential" stays visible at each call site and this stays a pure
+  // function of it — testable on its own terms, and impossible to make do a
+  // surprise disk read.
+  credential: JiraCredential | null,
+): string | null {
+  if (!credential) return null;
+  return Buffer.from(
+    JSON.stringify({
+      site: credential.site,
+      email: credential.email,
+      apiToken: credential.apiToken,
+      displayName: credential.displayName,
+    }),
+  ).toString('base64');
+}
+
 /** The renderer-safe projection of a credential. This is the ONLY shape that
  * ever crosses IPC: it is the credential minus `apiToken`, and keeping the
  * conversion in one named function is what makes "the token never leaves the
