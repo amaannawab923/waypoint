@@ -1,3 +1,4 @@
+import { readStoredJiraCredential } from '../jira/jiraAuth';
 import { buildSystemPrompt } from './systemPrompt';
 
 // The policy-parameterised knobs claudeSession.ts's runSession() needs to
@@ -29,8 +30,9 @@ export interface SessionPolicy {
    * repoLinked. */
   mcpTools: readonly string[];
   /** Static headers baked into the waypoint MCP server's config. Scope
-   * identity only (e.g. the conversation id) — never a tool input, so the
-   * model can never choose or spoof where its proposals land. */
+   * identity (the conversation id) and borrowed credentials (the Jira one)
+   * — never a tool input, so the model can never choose or spoof where its
+   * proposals land or whose Jira it reads. */
   mcpHeaders: Record<string, string>;
   /** Builds the system prompt for a given repoLinked value. A function,
    * not a precomputed string, for the same reason repoPath above is raw:
@@ -97,12 +99,71 @@ const MCP_TOOLS = [
 // than any kind of failure.
 const CONVERSATION_ID_PATTERN = /^conv-[a-z0-9]{4,32}$/i;
 
+// The Jira credential is LENT to the backend, per turn, over this header —
+// it is not a second connection the user has to make.
+//
+// There is exactly one persisted Jira credential in this product and it is
+// the one jiraAuth.ts holds: encrypted by the OS keychain, in the Electron
+// main process, behind IPC only this app's own renderer can speak. The
+// backend needs it because Copilot's MCP tools run in THAT process and a
+// Jira read from a tool has no other path to it — but "needs it for the
+// duration of a request" is not "should keep a copy of it", and the earlier
+// shape of this feature (a second credential the user connected separately,
+// stored in the backend's own Postgres) got that wrong in the way that costs
+// a user something real: connecting Jira twice, and a live API token sitting
+// on a local port with no auth in front of it.
+//
+// So it travels as a header on the MCP POST, and the backend parses it into
+// per-request context and never writes it anywhere. Sending it every turn is
+// what makes that possible AND what keeps it fresh: buildCopilotSessionPolicy
+// runs fresh inside every copilot:run (see copilotRunner.ts), so connecting,
+// reconnecting, or disconnecting Jira takes effect on the very next turn with
+// nothing to invalidate.
+//
+// Base64-of-JSON rather than raw JSON, and this is not decoration: an API
+// token and an email are arbitrary user-supplied strings, while an HTTP
+// header value may only carry visible ASCII (RFC 9110 field-value). A raw
+// JSON value would therefore be rejected outright by the transport for a
+// token with a non-ASCII character — or, worse, carry a newline into the
+// header block. Base64's alphabet is fixed and header-safe by construction,
+// which removes the escaping question rather than answering it. It is
+// ENCODING, not encryption: the token is in cleartext to anything that can
+// read this request, which is the same loopback trust boundary the MCP
+// endpoint already rests on.
+const JIRA_CREDENTIAL_HEADER = 'x-waypoint-jira-credential';
+
+// Only the three fields authenticating a request are sent. accountId,
+// displayName and avatarUrl are the desktop app's own identity display and
+// the backend has no use for them — a credential handed to another process
+// should carry what that process needs and nothing else.
+function encodeJiraCredential(): string | null {
+  const credential = readStoredJiraCredential();
+  if (!credential) return null;
+  return Buffer.from(
+    JSON.stringify({
+      site: credential.site,
+      email: credential.email,
+      apiToken: credential.apiToken,
+    }),
+  ).toString('base64');
+}
+
+// Each header is independent: an absent conversation id must not suppress the
+// Jira credential, and vice versa. Both absent means no `headers` key at all
+// (see claudeSession.ts's buildMcpServers), which is exactly V1's config.
 function buildMcpHeaders(
   conversationId: string | undefined,
 ): Record<string, string> {
-  return conversationId && CONVERSATION_ID_PATTERN.test(conversationId)
-    ? { 'x-waypoint-conversation-id': conversationId }
-    : {};
+  const headers: Record<string, string> = {};
+  if (conversationId && CONVERSATION_ID_PATTERN.test(conversationId)) {
+    headers['x-waypoint-conversation-id'] = conversationId;
+  }
+  // No stored credential simply omits the header — there is nothing to
+  // special-case downstream, because the backend has to handle "Jira not
+  // connected" for the header-absent case regardless.
+  const jiraCredential = encodeJiraCredential();
+  if (jiraCredential) headers[JIRA_CREDENTIAL_HEADER] = jiraCredential;
+  return headers;
 }
 
 export interface CopilotSessionPolicyInput {

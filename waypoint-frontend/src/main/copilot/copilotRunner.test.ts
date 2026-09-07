@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { BrowserWindow } from 'electron';
+import type { JiraCredential } from '../jira/jiraAuth';
 import type { Options, Query, SDKMessage } from './claudeSdkClient';
 
 const ipcMainOnMock = jest.fn();
@@ -17,6 +18,20 @@ jest.mock('electron', () => ({
 const getStoredSubscriptionTokenMock = jest.fn<string | null, []>(() => null);
 jest.mock('./copilotAuth', () => ({
   getStoredSubscriptionToken: () => getStoredSubscriptionTokenMock(),
+}));
+
+// Same default and same reasoning as the subscription token above: "Jira not
+// connected" (null) keeps every pre-existing assertion in this file
+// exercising the unchanged path, and the tests that care connect it
+// explicitly. Mocked rather than left to fall through the real jiraAuth,
+// which would return null here only by accident — its readFileSync throwing
+// ENOENT against this file's fake userData path — and would start reading a
+// developer's ACTUAL keychain the moment that accident stopped holding.
+const readStoredJiraCredentialMock = jest.fn<JiraCredential | null, []>(
+  () => null,
+);
+jest.mock('../jira/jiraAuth', () => ({
+  readStoredJiraCredential: () => readStoredJiraCredentialMock(),
 }));
 
 // The mocking seam for the whole SDK. claudeSdkClient.ts is the only module
@@ -211,6 +226,7 @@ beforeEach(() => {
   // here so test order can never leak a connected-token return value into a
   // test that assumes the default.
   getStoredSubscriptionTokenMock.mockReturnValue(null);
+  readStoredJiraCredentialMock.mockReturnValue(null);
   delete process.env.WAYPOINT_API_BASE_URL;
 });
 
@@ -371,6 +387,148 @@ describe('registerCopilotIpc', () => {
     expect(optionsAt(0).mcpServers).toEqual({
       waypoint: { type: 'http', url: 'http://localhost:14000/mcp/copilot' },
     });
+  });
+
+  // The one persisted Jira credential lives in main (jiraAuth.ts). The
+  // backend BORROWS it per turn over this header rather than keeping a
+  // second one of its own — so what is asserted here is the whole
+  // credential-sharing mechanism, and the base64 payload is the contract the
+  // backend's parseJiraCredentialHeader is written against.
+  it('lends the stored Jira credential to the backend as a base64 x-waypoint-jira-credential header', () => {
+    readStoredJiraCredentialMock.mockReturnValue({
+      site: 'yourteam.atlassian.net',
+      email: 'me@example.com',
+      apiToken: 'jira-token',
+      accountId: 'acc-1',
+      displayName: 'Me',
+      avatarUrl: null,
+    });
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi', conversationId: 'conv-abc1234' });
+
+    const { headers } = optionsAt(0).mcpServers!.waypoint as {
+      headers: Record<string, string>;
+    };
+    expect(headers['x-waypoint-conversation-id']).toBe('conv-abc1234');
+    expect(
+      JSON.parse(
+        Buffer.from(headers['x-waypoint-jira-credential'], 'base64').toString(
+          'utf8',
+        ),
+      ),
+    ).toEqual({
+      site: 'yourteam.atlassian.net',
+      email: 'me@example.com',
+      apiToken: 'jira-token',
+    });
+  });
+
+  // accountId/displayName/avatarUrl are the desktop app's own identity
+  // display. Sending them would hand another process more of the user's
+  // Atlassian account than it has any use for.
+  it('sends only the three fields that authenticate, never the stored identity fields', () => {
+    readStoredJiraCredentialMock.mockReturnValue({
+      site: 'yourteam.atlassian.net',
+      email: 'me@example.com',
+      apiToken: 'jira-token',
+      accountId: 'acc-secret',
+      displayName: 'Full Name',
+      avatarUrl: 'https://avatar.example.com/me.png',
+    });
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi' });
+
+    const { headers } = optionsAt(0).mcpServers!.waypoint as {
+      headers: Record<string, string>;
+    };
+    const decoded = Buffer.from(
+      headers['x-waypoint-jira-credential'],
+      'base64',
+    ).toString('utf8');
+    expect(Object.keys(JSON.parse(decoded)).sort()).toEqual([
+      'apiToken',
+      'email',
+      'site',
+    ]);
+    expect(decoded).not.toContain('acc-secret');
+    expect(decoded).not.toContain('avatar.example.com');
+  });
+
+  // The two headers are independent. A malformed conversation id must not
+  // take the Jira credential down with it, and no stored credential must not
+  // suppress the conversation id — each degrades on its own.
+  it('carries the Jira credential even when the conversationId is malformed', () => {
+    readStoredJiraCredentialMock.mockReturnValue({
+      site: 'yourteam.atlassian.net',
+      email: 'me@example.com',
+      apiToken: 'jira-token',
+      accountId: 'acc-1',
+      displayName: 'Me',
+      avatarUrl: null,
+    });
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi', conversationId: 'not-a-conv-id' });
+
+    const { headers } = optionsAt(0).mcpServers!.waypoint as {
+      headers: Record<string, string>;
+    };
+    expect(headers['x-waypoint-conversation-id']).toBeUndefined();
+    expect(headers['x-waypoint-jira-credential']).toEqual(expect.any(String));
+  });
+
+  // Jira not connected is a normal state, not a failure: the header is
+  // simply absent, and the backend's read tools report Jira as disconnected
+  // exactly as they do for a request that never carried one.
+  it('omits the Jira header entirely when no credential is stored', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi', conversationId: 'conv-abc1234' });
+
+    expect(optionsAt(0).mcpServers).toEqual({
+      waypoint: {
+        type: 'http',
+        url: 'http://localhost:14000/mcp/copilot',
+        headers: { 'x-waypoint-conversation-id': 'conv-abc1234' },
+      },
+    });
+  });
+
+  // Rebuilt per turn (buildCopilotSessionPolicy runs inside every
+  // copilot:run), so connecting Jira mid-conversation takes effect on the
+  // next turn with nothing to invalidate — and disconnecting stops the
+  // lending just as immediately.
+  it('re-reads the credential every turn, so connecting Jira mid-conversation takes effect next turn', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'first' });
+    readStoredJiraCredentialMock.mockReturnValue({
+      site: 'yourteam.atlassian.net',
+      email: 'me@example.com',
+      apiToken: 'jira-token',
+      accountId: 'acc-1',
+      displayName: 'Me',
+      avatarUrl: null,
+    });
+    run({ requestId: 'req-2', prompt: 'second' });
+
+    const first = optionsAt(0).mcpServers!.waypoint as {
+      headers?: Record<string, string>;
+    };
+    const second = optionsAt(1).mcpServers!.waypoint as {
+      headers: Record<string, string>;
+    };
+    expect(first.headers).toBeUndefined();
+    expect(second.headers['x-waypoint-jira-credential']).toEqual(
+      expect.any(String),
+    );
   });
 
   // The outcome preamble rides the prompt itself, never any option and never
