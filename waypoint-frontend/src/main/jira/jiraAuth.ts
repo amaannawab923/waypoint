@@ -39,20 +39,32 @@ import type { JiraIdentity } from './jiraTypes';
 // encryption above exists to defend against. Tracked as a known gap, not
 // something this module actually closes today.
 //
-// Two directions exist, and they close different parts of the gap. The
-// vendored CLI's own `--mcp-config <configs...>` accepts a path to a JSON
-// file, not only an inline JSON string (confirmed in its own bundled help
-// text, not assumed) — swapping to that would keep the credential out of
-// argv, closing cross-user visibility (`ps` on another account, a crash
-// reporter or APM tool that captures argv but not a temp file's contents).
-// It would NOT close the same-uid threat this comment opens with: a 0600
-// temp file is exactly as same-uid-readable as argv is. The other
-// direction — routing the credential through a short-lived redemption token
-// instead of baking the real value into the spawned config at all — is what
-// actually closes that threat, at the cost of a real design change (main
-// would need to hand the backend a way to redeem a token back to the real
-// credential, not just receive one). Neither is implemented yet; the
-// redemption token is the one worth doing if only one gets done.
+// Two directions exist, and they close different parts of the gap, at
+// different costs. The vendored CLI's own `--mcp-config <configs...>`
+// accepts a path to a JSON file, not only an inline JSON string (confirmed
+// in its own bundled help text, not assumed) — but reaching that path
+// is not a small swap: the SDK's typed `mcpServers` option always
+// JSON-stringifies inline (confirmed against its own argv-building code),
+// so using a file path means abandoning that option and routing through
+// the SDK's separate `extraArgs?: Record<string, string | null>` escape
+// hatch instead. Doing so would keep the credential out of argv, closing
+// cross-user visibility (`ps` on another account, a crash reporter or APM
+// tool that captures argv but not a temp file's contents) — but it would
+// NOT close the same-uid threat this comment opens with (a 0600 temp file
+// is exactly as same-uid-readable as argv is), and it is not free even for
+// what it does close: today the plaintext credential exists ONLY in this
+// process's memory and its own keychain-encrypted file; a temp file adds a
+// second, unencrypted on-disk copy for the life of each Copilot turn — a
+// new surface for a backup daemon, a tmp-scraping crash collector, or
+// forensic disk recovery, and one that survives past a crash if cleanup
+// doesn't run. The other direction — routing the credential through a
+// short-lived redemption token instead of baking the real value into the
+// spawned config at all — is what actually closes the same-uid threat, at
+// the cost of a real design change (main would need to hand the backend a
+// way to redeem a token back to the real credential, not just receive one).
+// Neither is implemented yet; the redemption token is the one worth doing
+// if only one gets done, and it has no on-disk-plaintext cost the file-path
+// swap does.
 
 const CREDENTIAL_FILE_NAME = 'jira-auth.json';
 
