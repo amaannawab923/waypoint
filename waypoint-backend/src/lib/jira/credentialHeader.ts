@@ -40,9 +40,20 @@ import type { JiraCredential } from './client.js';
  * which removes the escaping question rather than answering it.
  *
  * It is ENCODING, NOT ENCRYPTION. The token is cleartext to anything that can
- * read this request — which is the same loopback trust boundary the whole MCP
- * endpoint already rests on, and the reason a general auth boundary on this
- * API is worth having on its own terms rather than being half-implied here.
+ * read this request — which is at minimum the same loopback trust boundary
+ * the whole MCP endpoint already rests on, and the reason a general auth
+ * boundary on this API is worth having on its own terms rather than being
+ * half-implied here.
+ *
+ * It is also wider than loopback on the MCP session path specifically: the
+ * desktop app bakes this same encoded value into the Claude Agent SDK's MCP
+ * config, which the SDK serializes into the spawned CLI subprocess's own
+ * argv — readable by any same-uid local process, not just something that can
+ * intercept loopback traffic (see waypoint-frontend/src/main/jira/jiraAuth.ts
+ * for the full account of that gap; it is tracked, not fixed, as of this
+ * comment). The approve-path caller (copilot/proposalApproval.ts) does NOT
+ * have this problem — it attaches the header to a normal in-process fetch,
+ * never a subprocess argv.
  */
 export const JIRA_CREDENTIAL_HEADER = 'x-waypoint-jira-credential';
 
@@ -64,13 +75,24 @@ const MAX_HEADER_LENGTH = 4096;
  * interpolated into `https://${site}${path}` in lib/jira/client.ts, where the
  * API token rides in an Authorization header — so a "site" carrying a path, a
  * userinfo prefix, a port, or a `#` would silently retarget every
- * authenticated request, and an IP literal would point it at loopback or at
- * something on the internal network (this process as an SSRF proxy). Parsing
- * with the URL class and taking ONLY its hostname is what makes that
- * unrepresentable: `evil.com/x`, `good.atlassian.net@evil.com`, and
- * `evil.com#good.atlassian.net` all reduce to the host the browser would
- * really have contacted, and the check below then decides whether to accept
- * it.
+ * authenticated request. Parsing with the URL class and taking ONLY its
+ * hostname is what makes that unrepresentable: `evil.com/x`,
+ * `good.atlassian.net@evil.com`, and `evil.com#good.atlassian.net` all reduce
+ * to the host the browser would really have contacted, and the check below
+ * then decides whether to accept it.
+ *
+ * What this does NOT do: prevent this process from being pointed at an
+ * arbitrary internal host. The dotted-label + letter-in-last-label rule below
+ * excludes every IP literal (loopback included), but it accepts any
+ * DNS-resolvable hostname shape — `internal-service.corp.example`,
+ * `db.svc.cluster.local` — and this endpoint has no authentication in front
+ * of it, so any local process can already drive a request at whatever
+ * hostname it supplies (with its own Authorization header — this is a pivot,
+ * not a credential leak). Closing that fully needs an explicit allowlist
+ * (`*.atlassian.net` plus any configured custom Jira Cloud domains), which is
+ * a real product decision (Jira Cloud does support bringing your own domain)
+ * rather than something this function can safely default to. Tracked as a
+ * known gap, not a claim this check makes.
  */
 export function normalizeSite(raw: string): string | null {
   const trimmed = raw.trim();

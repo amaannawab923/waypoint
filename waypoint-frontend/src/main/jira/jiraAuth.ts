@@ -23,8 +23,25 @@ import type { JiraIdentity } from './jiraTypes';
 // renderer can speak.
 //
 // An API token is a real bearer credential for the user's whole Jira account.
-// It is never logged, never returned to the renderer, and never sent anywhere
-// but the one site hostname stored alongside it (see jiraClient.ts).
+// It is never logged, never returned to the renderer, and the only outbound
+// destination it is ever sent to (over HTTP) is the one site hostname stored
+// alongside it (see jiraClient.ts).
+//
+// That is NOT the same as "never exposed at all". agent/sessionPolicy.ts and
+// agent/claudeSession.ts bake the encoded credential into the MCP server
+// config handed to the Claude Agent SDK for every Copilot turn, and the SDK
+// serializes that config into the spawned CLI subprocess's own argv
+// (`--mcp-config <json>` — confirmed against the vendored SDK, not assumed).
+// Process arguments are readable by any other process running as the same
+// OS user (e.g. /proc/<pid>/cmdline on Linux, `ps -ww` on macOS) — a wider
+// boundary than the loopback HTTP traffic this module's other comments
+// describe, and same-uid local code is exactly the adversary the keychain
+// encryption above exists to defend against. Tracked as a known gap, not
+// something this module actually closes today: closing it needs either a
+// documented, verified CLI mechanism for keeping a header value out of argv,
+// or routing the credential through a short-lived redemption token instead
+// of baking the real value into the spawned config — both are a real design
+// change, not a one-line fix, and neither is implemented yet.
 
 const CREDENTIAL_FILE_NAME = 'jira-auth.json';
 
