@@ -33,6 +33,7 @@ const {
   searchTicketsHandler,
   listCommentsHandler,
   listActivityHandler,
+  listStatesHandler,
 } = await import('./ticketTools.js');
 
 const NATIVE_TICKET = {
@@ -76,6 +77,10 @@ function jiraStub() {
     getByIdentifier: vi.fn(async () => null),
     search: vi.fn(async () => []),
     listComments: vi.fn(async () => []),
+    // A write-adjacent read: list_states asks it, and nothing else here does.
+    listTransitions: vi.fn(async () => null as
+      | { id: string; name: string; group: string | undefined }[]
+      | null),
   };
 }
 
@@ -406,5 +411,63 @@ describe('the safety net and unreachable providers', () => {
     )({ id: 'tref-abc1234' });
 
     expect(result.content[0].text).toBe(INTERNAL_ERROR_MESSAGE);
+  });
+});
+
+describe('listStatesHandler over Jira', () => {
+  const TRANSITIONS = [
+    { id: '11', name: 'Start progress', group: 'started' },
+    { id: '31', name: 'Done', group: 'completed' },
+  ];
+
+  it('answers a tref id with that issue’s own live transitions', async () => {
+    connectJira().listTransitions.mockResolvedValue(TRANSITIONS);
+
+    const result = await listStatesHandler(jira, { ticketId: 'tref-abc1234' });
+
+    expect(connected().listTransitions).toHaveBeenCalledWith('tref-abc1234');
+    // Same {id, name, group} shape the native path returns, so the model
+    // needs no second concept — only the meaning of `id` differs, and the
+    // tool description is where that is said.
+    expect(parse(result)).toEqual(TRANSITIONS);
+  });
+
+  // The refusal that matters: a native id here is not a projectId, and
+  // silently redirecting it to the project lookup would hand the model a
+  // durable state id for a question whose only valid answer is a transition
+  // id — an id it would then propose with, and which can never apply.
+  it('refuses a native id rather than quietly answering a different question', async () => {
+    connectJira();
+
+    const result = await listStatesHandler(jira, { ticketId: 'wi-1' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('tref-');
+    expect(connected().listTransitions).not.toHaveBeenCalled();
+  });
+
+  it('refuses both arguments at once — they ask different questions', async () => {
+    connectJira();
+
+    const result = await listStatesHandler(jira, { projectId: 'proj-1', ticketId: 'tref-abc1234' });
+
+    expect(result.isError).toBe(true);
+    expect(connected().listTransitions).not.toHaveBeenCalled();
+  });
+
+  it('says Jira is not connected rather than reporting no transitions', async () => {
+    const result = await listStatesHandler(null, { ticketId: 'tref-abc1234' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Jira is not connected');
+  });
+
+  it('reports a gone issue as a miss, not as an empty transition list', async () => {
+    connectJira().listTransitions.mockResolvedValue(null);
+
+    const result = await listStatesHandler(jira, { ticketId: 'tref-abc1234' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('ticket');
   });
 });

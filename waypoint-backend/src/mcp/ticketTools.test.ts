@@ -437,10 +437,20 @@ describe('listStatesHandler', () => {
     const states = [{ id: 'st-1', projectId: 'proj-1', name: 'In Progress', group: 'started' as const, color: '#000', isDefault: false, sortOrder: 0 }];
     vi.mocked(statesService.listStates).mockResolvedValue(states);
 
-    const result = await listStatesHandler({ projectId: 'proj-1' });
+    const result = await listStatesHandler(null, { projectId: 'proj-1' });
 
     expect(statesService.listStates).toHaveBeenCalledWith('proj-1');
     expect(parseJsonContent(result)).toEqual(states);
+  });
+
+  // The native path is unchanged by the Jira branch's existence, including
+  // when Jira is connected — the argument the caller passed decides, not
+  // whether an integration happens to be on.
+  it('refuses a call with neither argument rather than guessing which was meant', async () => {
+    const result = await listStatesHandler(null, {});
+
+    expect(result.isError).toBe(true);
+    expect(statesService.listStates).not.toHaveBeenCalled();
   });
 });
 

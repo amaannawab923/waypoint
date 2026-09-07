@@ -7,12 +7,11 @@ import * as membersService from '../services/members.service.js';
 import { resolveActorNames } from '../lib/actorNames.js';
 import type { JiraCredential } from '../lib/jira/client.js';
 import { nativeProvider, normalizeNativeTickets } from '../providers/native.js';
-import { getJiraProvider, isExternalRef } from '../providers/jira.js';
+import { getJiraProvider, isExternalRef, type JiraProvider } from '../providers/jira.js';
 import {
   ProviderUnavailableError,
   type NormalizedComment,
   type NormalizedTicket,
-  type TicketProvider,
 } from '../providers/types.js';
 
 export const PRIORITY = z.enum(['urgent', 'high', 'medium', 'low', 'none']);
@@ -120,7 +119,12 @@ function unavailableResult(error: ProviderUnavailableError) {
 // Null means Jira is not connected for this request — never "Jira had
 // nothing". Every handler below treats it as "there is no second place to
 // look", which is a claim about configuration rather than about tickets.
-type Jira = TicketProvider | null;
+//
+// The concrete class rather than TicketProvider: list_states needs
+// listTransitions, which is deliberately not on the read interface (a
+// Waypoint ticket has states, not transitions — see getJiraProvider's own
+// note). Every read handler here still only touches TicketProvider members.
+type Jira = JiraProvider | null;
 
 type Outcome<T> = { status: 'ok'; value: T } | { status: 'failed'; error: ProviderUnavailableError };
 
@@ -582,7 +586,58 @@ export async function listActivityHandler({ ticketId, limit }: { ticketId: strin
   });
 }
 
-export async function listStatesHandler({ projectId }: { projectId: string }) {
+/**
+ * The states a ticket can be moved to — from a project, or from one issue.
+ *
+ * The two arguments are not two ways of asking the same question, and the
+ * asymmetry is Jira's, not this tool's. A Waypoint project has a fixed list
+ * of states and every ticket in it can reach any of them, so a projectId is
+ * the whole answer. A Jira issue has no such list: what it can reach is a set
+ * of TRANSITIONS, decided by its current status, its workflow, and the
+ * connected account's permissions — a property of the issue, not the project,
+ * and one that changes when anyone moves the issue.
+ *
+ * So `ticketId` is not a convenience alias for "the project this ticket is
+ * in". It is the only question that has an answer on the Jira side, which is
+ * why passing a native id to it is refused rather than quietly redirected to
+ * the project lookup: a model that got an answer from the wrong question here
+ * would go on to propose a state change with an id that can never apply.
+ *
+ * Both shapes return { id, name, group, ... }, so the model needs no second
+ * concept. What differs is what `id` MEANS — a durable state id for native, a
+ * transition id that is only valid for this issue right now for Jira — and
+ * that is said in the tool description, because it is the model that has to
+ * know it.
+ */
+export async function listStatesHandler(
+  jira: Jira,
+  { projectId, ticketId }: { projectId?: string; ticketId?: string },
+) {
+  if (projectId && ticketId) {
+    return validationErrorResult(
+      'Pass either projectId or ticketId, not both — they ask different questions. ' +
+        "Use ticketId for a Jira issue (its own available transitions) and projectId for a Waypoint project's states.",
+    );
+  }
+
+  if (ticketId) {
+    if (!isExternalRef(ticketId)) {
+      return validationErrorResult(
+        'ticketId is only for Jira issues (an id starting with "tref-"). ' +
+          "For a Waypoint ticket, call list_states with that ticket's projectId instead.",
+      );
+    }
+    if (!jira) return validationErrorResult(JIRA_NOT_CONNECTED);
+    const transitions = await jira.listTransitions(ticketId);
+    if (!transitions) return notFoundResult('ticket');
+    return jsonResult(transitions);
+  }
+
+  if (!projectId) {
+    return validationErrorResult(
+      'Pass a projectId (for a Waypoint project) or a ticketId (for a Jira issue).',
+    );
+  }
   return jsonResult(await statesService.listStates(projectId));
 }
 
@@ -722,10 +777,20 @@ export function registerTicketTools(server: McpServer, jiraCredential: JiraCrede
     'list_states',
     {
       description:
-        'List the workflow states (e.g. Backlog, In Progress, Done) configured for a project, in board order. Use this to resolve a ticket\'s stateId to a real name, or to find a stateId to filter list_tickets by.',
-      inputSchema: { projectId: z.string() },
+        "List the workflow states a ticket can be in. Pass projectId for a Waypoint project: the states (e.g. Backlog, In Progress, Done) configured for it, in board order — use this to resolve a ticket's stateId to a real name, or to find a stateId to filter list_tickets by. " +
+        'Pass ticketId (a "tref-" id) for a Jira issue instead: Jira has no per-project state list, only the transitions THAT issue can make right now, which depend on its current status and your permissions. ' +
+        'Both return {id, name, group}, but a Jira id is a transition id that is only valid for that issue right now — always call this again just before proposing a Jira state change rather than reusing an id from earlier in the conversation.',
+      inputSchema: {
+        projectId: z.string().optional().describe('A Waypoint project id. Omit when passing ticketId.'),
+        ticketId: z
+          .string()
+          .optional()
+          .describe('A Jira issue id ("tref-…"), as returned by search_tickets or get_ticket_by_identifier.'),
+      },
     },
-    withErrorSafetyNet('list_states', listStatesHandler),
+    withErrorSafetyNet('list_states', (args: { projectId?: string; ticketId?: string }) =>
+      listStatesHandler(jira, args),
+    ),
   );
 
   server.registerTool(
