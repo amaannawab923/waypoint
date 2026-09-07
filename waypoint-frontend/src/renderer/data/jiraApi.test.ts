@@ -686,8 +686,9 @@ describe('ensureJiraSynced', () => {
     expect(second.lastSyncAt).toBe(third.lastSyncAt);
   });
 
-  it('still resolves with a usable status, not a rejection, when the list read fails', async () => {
+  it('still resolves with a usable status, not a rejection, when the list read fails — but logs it', async () => {
     const api = freshApi();
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
     bridge.listTickets.mockResolvedValue({
       ok: false,
       reason: 'network',
@@ -698,6 +699,35 @@ describe('ensureJiraSynced', () => {
 
     expect(result.connected).toBe(true);
     expect(result.lastSyncAt).toBeNull();
+    // Found in review: the original version discarded the error entirely —
+    // a genuine connectivity failure and "just hasn't synced yet" were then
+    // indistinguishable from the outside, with no trace anywhere that a
+    // real read was even attempted and failed.
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    warnSpy.mockRestore();
+  });
+
+  // Found in review: an earlier version of ensureJiraSynced had its OWN
+  // single-flight guard, separate from listMyJiraTickets() — which
+  // deduplicated concurrent calls to ensureJiraSynced against each other,
+  // but NOT against a concurrent DIRECT call to listMyJiraTickets(), which
+  // is exactly what MyJiraPage's own foreground "My work" read is. Landing
+  // on My Jira with Jira connected and nothing synced yet could fire two
+  // real searches: MyJiraPage's own read, and the sidebar's
+  // useLoadedJiraConnection concurrently calling ensureJiraSynced. Moving
+  // the dedup into listMyJiraTickets() itself (shared by both call paths)
+  // closes this specific gap.
+  it('deduplicates a concurrent direct listMyJiraTickets() call against an in-flight ensureJiraSynced, not just against another ensureJiraSynced', async () => {
+    const api = freshApi();
+
+    const [fromEnsureSynced, fromDirectCall] = await Promise.all([
+      api.ensureJiraSynced(),
+      api.listMyJiraTickets(),
+    ]);
+
+    expect(bridge.listTickets).toHaveBeenCalledTimes(1);
+    expect(fromEnsureSynced.lastSyncAt).not.toBeNull();
+    expect(fromDirectCall.tickets).toEqual([]);
   });
 });
 
