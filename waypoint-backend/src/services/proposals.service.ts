@@ -140,7 +140,9 @@ export interface ProposalView {
   createdAt: Date;
   // --- new for W3.1's workspace-scoped widening -------------------------
   origin: ProposalOrigin;
-  projectId: string;
+  // Null for a proposal targeting an external ("tref-") issue — a Jira issue
+  // is not scoped to any Waypoint project. See the column's own comment.
+  projectId: string | null;
   agentId: string | null;
   agentRunId: string | null;
   sourceRequestId: string | null;
@@ -259,6 +261,14 @@ export async function createProposal(input: CreateProposalInput): Promise<Propos
     // target ticket's own project. Resolved as a correlated subquery
     // inside the same INSERT — not a separate tx.select — so this doesn't
     // add a round trip or change the transaction's query shape.
+    //
+    // The subquery yields NULL for a Jira ("tref-") ticketId, which matches
+    // no row in `tickets` — and that is the intended answer, not a miss: a
+    // Jira issue belongs to a Jira project, which has no `projects` row to
+    // point at. The column is nullable precisely for this carve-out, so the
+    // insert succeeds and the proposal lands with a null project. Such a
+    // proposal is correctly outside every project-filtered queue read and
+    // shows up under "All projects".
     const projectId =
       kind === 'create_ticket'
         ? (payload as CreateTicketProposalPayload).projectId

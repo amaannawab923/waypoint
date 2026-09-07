@@ -581,7 +581,8 @@ export interface ProposalView {
   createdAt: string;
   // --- workspace-scoped widening (architecture §4.2) --------------------
   origin: ProposalOrigin;
-  projectId: ID;
+  /** Null when the proposal targets an external ("tref-") Jira issue — such an issue has no Waypoint project. */
+  projectId: ID | null;
   agentId: ID | null;
   agentRunId: ID | null;
   sourceRequestId: ID | null;

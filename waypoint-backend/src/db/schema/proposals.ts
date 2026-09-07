@@ -72,12 +72,17 @@ export const proposals = pgTable(
     // join. No FK cascade: an agent deleted mid-review must leave its
     // proposals readable, the same reasoning ticketId already uses.
     agentId: text('agent_id'),
-    // Denormalised. NOT NULL. Every proposal belongs to exactly one
-    // project — create_ticket carries it in the payload, everything else
-    // via the ticket. This is what makes the Review queue's project filter
-    // one index scan. Deliberately not an FK, matching ticketId/agentId's
+    // Denormalised. Nullable as of the Copilot/Jira write pass: a proposal
+    // targeting an external ("tref-") issue has no Waypoint project to name
+    // — Jira issues live in a Jira project, which is not a row in `projects`
+    // — so the resolution below correctly yields NULL for them. Non-null for
+    // every native proposal: create_ticket carries it in the payload,
+    // everything else resolves it via the ticket. That's what keeps the
+    // Review queue's project filter one index scan; a NULL-project proposal
+    // is simply outside every project filter and only surfaces under "All
+    // projects". Deliberately not an FK, matching ticketId/agentId's
     // reasoning above.
-    projectId: text('project_id').notNull(),
+    projectId: text('project_id'),
     // Set when the proposal originated from triaging an incoming request.
     sourceRequestId: text('source_request_id').references(() => requests.id, { onDelete: 'set null' }),
 

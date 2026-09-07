@@ -71,6 +71,13 @@
       "when": 1788766599263,
       "tag": "0009_public_king_cobra",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1788774035068,
+      "tag": "0010_proposals_project_id_nullable",
+      "breakpoints": true
     }
   ]
 }
