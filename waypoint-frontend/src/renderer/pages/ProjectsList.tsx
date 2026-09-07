@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { ArrowUpDown } from 'lucide-react';
 import { IconSettings, IconPlus, IconArchive, IconFolder } from '@/components/icons';
 import { useAsync } from '@/lib/useAsync';
+import { archiveConfirmMessage } from '@/lib/projectArchiveCopy';
 import { listProjects, listMembers, listAllTickets, listSprints, archiveProject } from '@/data/api';
 import type { Project } from '@/types/entities';
 import { parseSprintDate } from '@/pages/sprints/sprint-utils';
@@ -189,15 +190,10 @@ export default function ProjectsList() {
                 // a single, unconfirmed click next to Settings and easy to
                 // hit by mistake (found in review: a real project was lost
                 // this way, then recovered by hand from the database — this
-                // is what should have stopped that from the UI side). The
-                // message states where it goes, not just that it's
-                // reversible — "archived, but where?" was the second half
-                // of the same complaint.
-                if (
-                  !window.confirm(
-                    `Archive "${project.name}"? It'll disappear from this page, but you can restore it any time from Archive in the sidebar.`,
-                  )
-                ) {
+                // is what should have stopped that from the UI side).
+                // Message is shared with project-settings/General.tsx's own
+                // archive button — see projectArchiveCopy.ts for why.
+                if (!window.confirm(archiveConfirmMessage(project.name))) {
                   return;
                 }
                 await archiveProject(project.id);
@@ -263,7 +259,15 @@ function ProjectCard({
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') onOpen();
+        // Found in review: without the target check, pressing Enter while
+        // the nested Archive or Settings button is focused (not the card
+        // itself) still bubbles here and fires onOpen() — navigating away
+        // BEFORE that button's own click-on-Enter default action runs, so
+        // window.confirm for archive pops up over a page you've already
+        // left. Only the card's own Enter should open it; a descendant's
+        // Enter is that descendant's business (e.target !== e.currentTarget
+        // is exactly "this keydown started somewhere inside me, not on me").
+        if (e.key === 'Enter' && e.target === e.currentTarget) onOpen();
       }}
       className="flex cursor-pointer flex-col overflow-hidden rounded-[var(--radius)] border border-border bg-surface transition-colors hover:border-border-strong"
     >
