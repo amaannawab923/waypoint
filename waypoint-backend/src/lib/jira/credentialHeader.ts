@@ -83,12 +83,18 @@ const MAX_HEADER_LENGTH = 4096;
  *
  * What this does NOT do: prevent this process from being pointed at an
  * arbitrary internal host. The dotted-label + letter-in-last-label rule below
- * excludes every IP literal (loopback included), but it accepts any
- * DNS-resolvable hostname shape — `internal-service.corp.example`,
- * `db.svc.cluster.local` — and this endpoint has no authentication in front
- * of it, so any local process can already drive a request at whatever
- * hostname it supplies (with its own Authorization header — this is a pivot,
- * not a credential leak). Closing that fully needs an explicit allowlist
+ * excludes every literal IP address (`127.0.0.1`, loopback included), but it
+ * accepts any DNS-resolvable hostname SHAPE regardless of what that name
+ * actually resolves to — an ordinary internal service name
+ * (`internal-service.corp.example`, `db.svc.cluster.local`), and just as
+ * much a name deliberately chosen to resolve to loopback or a link-local
+ * address (e.g. `127-0-0-1.nip.io`, or a name pointing at
+ * `169.254.169.254`) — this check has no way to tell those apart from a
+ * real Jira site's hostname, since it never resolves anything, only
+ * inspects shape. This endpoint has no authentication in front of it, so
+ * any local process can already drive a request at whatever hostname it
+ * supplies (with its own Authorization header — this is a pivot, not a
+ * credential leak). Closing that fully needs an explicit allowlist
  * (`*.atlassian.net` plus any configured custom Jira Cloud domains), which is
  * a real product decision (Jira Cloud does support bringing your own domain)
  * rather than something this function can safely default to. Tracked as a

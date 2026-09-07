@@ -37,11 +37,22 @@ import type { JiraIdentity } from './jiraTypes';
 // boundary than the loopback HTTP traffic this module's other comments
 // describe, and same-uid local code is exactly the adversary the keychain
 // encryption above exists to defend against. Tracked as a known gap, not
-// something this module actually closes today: closing it needs either a
-// documented, verified CLI mechanism for keeping a header value out of argv,
-// or routing the credential through a short-lived redemption token instead
-// of baking the real value into the spawned config — both are a real design
-// change, not a one-line fix, and neither is implemented yet.
+// something this module actually closes today.
+//
+// Two directions exist, and they close different parts of the gap. The
+// vendored CLI's own `--mcp-config <configs...>` accepts a path to a JSON
+// file, not only an inline JSON string (confirmed in its own bundled help
+// text, not assumed) — swapping to that would keep the credential out of
+// argv, closing cross-user visibility (`ps` on another account, a crash
+// reporter or APM tool that captures argv but not a temp file's contents).
+// It would NOT close the same-uid threat this comment opens with: a 0600
+// temp file is exactly as same-uid-readable as argv is. The other
+// direction — routing the credential through a short-lived redemption token
+// instead of baking the real value into the spawned config at all — is what
+// actually closes that threat, at the cost of a real design change (main
+// would need to hand the backend a way to redeem a token back to the real
+// credential, not just receive one). Neither is implemented yet; the
+// redemption token is the one worth doing if only one gets done.
 
 const CREDENTIAL_FILE_NAME = 'jira-auth.json';
 
