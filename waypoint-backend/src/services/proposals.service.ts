@@ -28,19 +28,25 @@ export const MAX_PENDING_PER_CONVERSATION = 20;
 
 // A claim that's been sitting in 'executing' longer than this is a crashed
 // execute (the process died between claim and finalize), not one in flight.
-// listProposals reverts such rows to 'proposed' so the card becomes
-// approvable again.
+// repairProposals parks such rows as 'stale' — never back to 'proposed',
+// where one more Approve click would run the write a second time, since
+// there is no way to tell whether the crash happened before or after the
+// underlying write ran.
 //
 // A native execute really is a single-digit-millisecond service call, but a
 // Jira execute is not: checkJiraStaleness alone can issue two sequential
-// requests (getByRef, listTransitions) before executeJiraProposal issues a
-// third (applyTransition or postComment), and each one is bounded by
-// REQUEST_TIMEOUT_MS (lib/jira/client.ts, 20s) rather than being instant. A
+// requests (getByRef, listTransitions, for a state_change proposal only)
+// before executeJiraProposal issues a third (applyTransition or
+// postComment), and each one is bounded by REQUEST_TIMEOUT_MS
+// (lib/jira/client.ts, 20s) rather than being instant. A
 // merely-slow-but-successful Jira approve can cross a 60s threshold while
-// the write is still in flight, which does not corrupt anything (a 'stale'
-// row can't be re-claimed — see finalize's status='executing' guard) but
-// mislabels a real write as interrupted. Set above the worst realistic case
-// of three sequential 20s-bounded Jira requests, with headroom.
+// the write is still in flight, which does not corrupt anything — a 'stale'
+// row can't be re-claimed, because the claim UPDATE itself is guarded on
+// `eq(proposals.status, 'proposed')`, and finalize's own status='executing'
+// guard separately stops a late-arriving execute from stomping the row
+// repairProposals already parked — but it does mislabel a real write as
+// interrupted. Set above the worst realistic case of three sequential
+// 20s-bounded Jira requests, with headroom.
 const EXECUTING_STUCK_MS = 120 * 1000;
 
 // Distinct from NotFoundError/ConflictError: this is a model-facing

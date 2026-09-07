@@ -185,7 +185,13 @@ export const JIRA_CREDENTIAL_HEADER = 'x-waypoint-jira-credential';
  * Base64's alphabet is fixed and header-safe by construction, which removes
  * the escaping question rather than answering it. It is ENCODING, NOT
  * encryption — the token is cleartext to anything that can read the request,
- * which is the loopback trust boundary the backend already rests on.
+ * which is AT MINIMUM the loopback trust boundary the backend already rests
+ * on. It is wider than that for this function's other caller specifically:
+ * sessionPolicy.ts bakes this same encoded value into the MCP config that
+ * ends up in the spawned Claude Code subprocess's own argv (see this file's
+ * module comment above for the full account) — proposalApproval.ts's caller
+ * does not have that problem, since it attaches the header to a normal
+ * in-process fetch.
  *
  * Four fields, and no more. site/email/apiToken authenticate the request.
  * displayName authenticates nothing: it is there so a write-approval card can
