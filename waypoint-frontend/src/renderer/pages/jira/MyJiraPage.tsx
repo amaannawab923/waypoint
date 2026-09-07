@@ -26,7 +26,17 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'connection', label: 'Connection' },
 ];
 
-function LiveSyncIndicator({ lastSyncAt }: { lastSyncAt: string | null }) {
+/**
+ * Exported (not just page-local) because `JiraConnectionCard` on the
+ * All-Projects page needs the identical "synced Ns ago" / "not synced yet"
+ * reading rather than a second implementation that could drift from this
+ * one — see that component's own header for why.
+ */
+export function LiveSyncIndicator({
+  lastSyncAt,
+}: {
+  lastSyncAt: string | null;
+}) {
   // Re-renders once a second purely so the "synced Ns ago" label keeps
   // advancing. `lastSyncAt` is genuinely the moment the JQL search last ran
   // against the connected site, so this age is real — but nothing refreshes

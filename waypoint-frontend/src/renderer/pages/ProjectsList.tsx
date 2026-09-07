@@ -11,6 +11,7 @@ import { AvatarStack } from '@/components/ui/Avatar';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { AddProjectWizard } from '@/components/domain/AddProjectWizard';
 import { CreateProjectModal } from '@/components/domain/CreateProjectModal';
+import { JiraConnectionCard } from '@/components/domain/JiraConnectionCard';
 import { MY_JIRA_ENABLED } from '@/lib/featureFlags';
 import { SkeletonCardGrid } from '@/components/ui/Skeleton';
 
@@ -121,6 +122,17 @@ export default function ProjectsList() {
           Sort: {sortKey === 'name' ? 'Name' : 'Created date'}
         </button>
       </div>
+
+      {/* Always visible when the flag is on — surfaces the app's single Jira
+          connection from where people look for their projects, without
+          pretending to be one itself. A full-width strip between the
+          toolbar and the grid, not a grid tile: see JiraConnectionCard's own
+          header for why. The not-connected state's click reuses this same
+          `setCreateOpen(true)` the "Add Project" button above already uses —
+          a second entry point into AddProjectWizard, not a second flow. */}
+      {MY_JIRA_ENABLED && (
+        <JiraConnectionCard onConnectClick={() => setCreateOpen(true)} />
+      )}
 
       {loading && !projects && <SkeletonCardGrid />}
 
