@@ -89,19 +89,30 @@ function classifyNetworkError(err: unknown): JiraResult<never> {
  * Every Jira call in this process goes through here, so there is exactly one
  * opinion about what each status code means.
  *
+ * GET and POST share this body rather than each owning a copy. That is not
+ * tidiness: the timeout discipline below is subtle and the status-code
+ * mapping is a security-adjacent contract (a 404 means something specific to
+ * the identifier resolution — see JiraFailureReason). Two copies would drift,
+ * and the write path is the copy that must not.
+ *
  * The abort timer covers the body read as well as the headers, not just the
  * fetch: `fetch` resolves as soon as headers arrive, so clearing the timer
  * there leaves a stalled body with no timeout at all — a hang with no error,
  * which is the worst shape a failure can take inside an MCP tool call because
  * the model just waits.
  */
-export async function jiraGet<T>(
+async function jiraRequest<T>(
   credential: JiraCredential,
-  path: string,
-  query?: Record<string, string>,
+  init: {
+    method: 'GET' | 'POST';
+    path: string;
+    query?: Record<string, string>;
+    /** JSON-serialized as the request body. POST only. */
+    body?: unknown;
+  },
 ): Promise<JiraResult<T>> {
-  const url = new URL(`https://${credential.site}${path}`);
-  for (const [key, value] of Object.entries(query ?? {})) url.searchParams.set(key, value);
+  const url = new URL(`https://${credential.site}${init.path}`);
+  for (const [key, value] of Object.entries(init.query ?? {})) url.searchParams.set(key, value);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -109,8 +120,16 @@ export async function jiraGet<T>(
   let response: Response;
   try {
     response = await fetch(url.toString(), {
-      method: 'GET',
-      headers: { Authorization: authorizationHeader(credential), Accept: 'application/json' },
+      method: init.method,
+      headers: {
+        Authorization: authorizationHeader(credential),
+        Accept: 'application/json',
+        // Only when there is a body: sending a content-type on a GET is
+        // harmless but dishonest, and Jira is picky enough elsewhere that
+        // "say exactly what this request is" is the better habit.
+        ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      },
+      ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
       signal: controller.signal,
     });
   } catch (err) {
@@ -168,6 +187,38 @@ export async function jiraGet<T>(
       'That address answered, but not like a Jira Cloud site — check the site address.',
     );
   }
+}
+
+export async function jiraGet<T>(
+  credential: JiraCredential,
+  path: string,
+  query?: Record<string, string>,
+): Promise<JiraResult<T>> {
+  return jiraRequest<T>(credential, { method: 'GET', path, query });
+}
+
+/**
+ * The write half. Same failure vocabulary as jiraGet, and that matters most
+ * for the two statuses a write can produce that a read effectively cannot:
+ *
+ *  - 400, which for a transition POST means "that transition is not legal
+ *    from this issue's current status" — a normal, user-actionable outcome
+ *    (someone moved the issue between propose and approve), carrying Jira's
+ *    own explanation via messageFromErrorBody. Callers turn it into a stale
+ *    proposal, not an error.
+ *  - 403, which on a write means the connected account may read this issue
+ *    but not change it — different from "no such issue" in the one way the
+ *    reviewer cares about.
+ *
+ * `T` is frequently `void`: Jira answers a transition POST with 204 and an
+ * empty body, which jiraRequest already returns as `{ ok: true }`.
+ */
+export async function jiraPost<T>(
+  credential: JiraCredential,
+  path: string,
+  body: unknown,
+): Promise<JiraResult<T>> {
+  return jiraRequest<T>(credential, { method: 'POST', path, body });
 }
 
 // There is deliberately no validateCredential here any more.

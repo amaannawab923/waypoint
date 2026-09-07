@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { adfToPlainText } from './adf.js';
+import { adfToPlainText, buildCopilotJiraCommentAdf } from './adf.js';
+import { COPILOT_DISCLOSURE } from '../commentHtml.js';
 
 const doc = (...content: unknown[]) => ({ type: 'doc', version: 1, content });
 const para = (...content: unknown[]) => ({ type: 'paragraph', content });
@@ -95,5 +96,70 @@ describe('adfToPlainText', () => {
     const result = adfToPlainText(doc(para(text('visible')), node));
     expect(result).toContain('visible');
     expect(result).not.toContain('buried');
+  });
+});
+
+describe('buildCopilotJiraCommentAdf', () => {
+  it('runs the shared self-disclosure inline into the first line, italic', () => {
+    const built = buildCopilotJiraCommentAdf('Max Chen', 'Reproduced on staging.');
+
+    expect(built).toEqual({
+      type: 'doc',
+      version: 1,
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: COPILOT_DISCLOSURE('Max Chen'), marks: [{ type: 'em' }] },
+            { type: 'text', text: 'Reproduced on staging.' },
+          ],
+        },
+      ],
+    });
+  });
+
+  // The SAME constant the Waypoint-comment path uses. One agent saying two
+  // different things depending on which system it posted to is exactly what
+  // sharing the constant prevents.
+  it('says the same sentence the native comment path says', () => {
+    const [first] = buildCopilotJiraCommentAdf('Max Chen', 'x').content;
+
+    expect(first.content[0].text).toBe(COPILOT_DISCLOSURE('Max Chen'));
+  });
+
+  it('gives each further line its own paragraph — ADF has no bare newline', () => {
+    const built = buildCopilotJiraCommentAdf('Max Chen', 'First.\nSecond.\n\nThird.');
+
+    expect(built.content).toHaveLength(3);
+    expect(built.content[1]).toEqual({
+      type: 'paragraph',
+      content: [{ type: 'text', text: 'Second.' }],
+    });
+    expect(built.content[2].content[0].text).toBe('Third.');
+  });
+
+  // An empty text node is invalid ADF and Jira 400s the whole comment, so a
+  // whitespace-only body has to leave the disclosure standing alone rather
+  // than emit `{ type: 'text', text: '' }` beside it.
+  it('emits no empty text node when there is no body to run into', () => {
+    const built = buildCopilotJiraCommentAdf('Max Chen', '   \n\n  ');
+
+    expect(built.content).toHaveLength(1);
+    expect(built.content[0].content).toHaveLength(1);
+  });
+
+  // ADF text is JSON, never markup: escaping here would put a literal
+  // "&amp;" into a real Jira comment, which is the bug this pins against.
+  it('does not entity-escape — that is the HTML path’s problem, not this one', () => {
+    const built = buildCopilotJiraCommentAdf('O’Brien & Co <ops>', 'a < b && c > d');
+
+    expect(built.content[0].content[1].text).toBe('a < b && c > d');
+    expect(built.content[0].content[0].text).toContain('O’Brien & Co <ops>');
+  });
+
+  it('round-trips through the reader in this same file', () => {
+    const built = buildCopilotJiraCommentAdf('Max Chen', 'First.\n\nSecond.');
+
+    expect(adfToPlainText(built)).toBe(`${COPILOT_DISCLOSURE('Max Chen')}First.\nSecond.`);
   });
 });

@@ -7,10 +7,11 @@ vi.mock('../lib/jira/client.js', async (importOriginal) => ({
   // reports a 404.
   ...(await importOriginal<typeof import('../lib/jira/client.js')>()),
   jiraGet: vi.fn(),
+  jiraPost: vi.fn(),
 }));
 vi.mock('../services/ticketRefs.service.js');
 
-const { jiraGet } = await import('../lib/jira/client.js');
+const { jiraGet, jiraPost } = await import('../lib/jira/client.js');
 const ticketRefs = await import('../services/ticketRefs.service.js');
 const { getJiraProvider, isExternalRef } = await import('./jira.js');
 const { ProviderUnavailableError } = await import('./types.js');
@@ -391,5 +392,131 @@ describe('field mapping', () => {
       assigneeIds: [],
       assigneeNames: [],
     });
+  });
+});
+
+// -----------------------------------------------------------------------
+// Writes. Unreachable from a tool call — an approved proposal is the only
+// caller (services/proposals.service.ts) — but the transport contract is
+// worth pinning here, where the failure classification is the real one.
+// -----------------------------------------------------------------------
+
+const TRANSITIONS = {
+  transitions: [
+    { id: '11', name: 'Start progress', to: { name: 'In Progress', statusCategory: { key: 'indeterminate' } } },
+    { id: '31', name: 'Done', to: { name: 'Done', statusCategory: { key: 'done' } } },
+  ],
+};
+
+const ADF = {
+  type: 'doc' as const,
+  version: 1 as const,
+  content: [{ type: 'paragraph' as const, content: [{ type: 'text' as const, text: 'hi' }] }],
+};
+
+describe('JiraProvider.listTransitions', () => {
+  it('returns transition ids — not status ids — with the destination status group', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(ok(TRANSITIONS));
+
+    const result = await provider().listTransitions('tref-abc1234');
+
+    expect(vi.mocked(jiraGet).mock.calls[0][1]).toBe('/rest/api/3/issue/ENG-4/transitions');
+    expect(result).toEqual([
+      { id: '11', name: 'Start progress', group: 'started' },
+      { id: '31', name: 'Done', group: 'completed' },
+    ]);
+  });
+
+  it('normalizes a numeric id to a string, so comparing against a stored one is total', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(ok({ transitions: [{ id: 11, name: 'Start progress' }] }));
+
+    const result = await provider().listTransitions('tref-abc1234');
+
+    expect(result).toEqual([{ id: '11', name: 'Start progress', group: undefined }]);
+  });
+
+  it('is null for a ref minted against a different site, so a reconnect cannot cross the streams', async () => {
+    vi.mocked(ticketRefs.findById).mockResolvedValue({ ...REF_ROW, externalSite: 'other.atlassian.net' });
+
+    expect(await provider().listTransitions('tref-abc1234')).toBeNull();
+    expect(jiraGet).not.toHaveBeenCalled();
+  });
+
+  it('throws rather than returning null when Jira could not answer at all', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(fail('network', "Couldn't reach Jira."));
+
+    await expect(provider().listTransitions('tref-abc1234')).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+  });
+});
+
+describe('JiraProvider.applyTransition', () => {
+  it('POSTs the transition id in the shape Jira expects', async () => {
+    vi.mocked(jiraPost).mockResolvedValue(ok(undefined));
+
+    const result = await provider().applyTransition('tref-abc1234', '31');
+
+    expect(jiraPost).toHaveBeenCalledWith(CREDENTIAL, '/rest/api/3/issue/ENG-4/transitions', {
+      transition: { id: '31' },
+    });
+    expect(result).toEqual({ ok: true });
+  });
+
+  // The three outcomes that are ABOUT this issue: they never get better by
+  // retrying, so they must not escape as an error that reverts the proposal
+  // to a card inviting the same failing click forever.
+  it.each([
+    ['not_found', 'Issue does not exist.'],
+    ['forbidden', "The connected Jira account isn't allowed to do that."],
+    ['jira_error', 'Transition id 31 is not valid for issue ENG-4.'],
+  ])('reports a %s as a user-actionable refusal carrying Jira’s own words', async (reason, message) => {
+    vi.mocked(jiraPost).mockResolvedValue(fail(reason, message));
+
+    expect(await provider().applyTransition('tref-abc1234', '31')).toEqual({ ok: false, message });
+  });
+
+  it.each(['invalid_credentials', 'rate_limited', 'network', 'site_not_found'])(
+    'throws on a %s, because that one IS worth retrying',
+    async (reason) => {
+      vi.mocked(jiraPost).mockResolvedValue(fail(reason));
+
+      await expect(provider().applyTransition('tref-abc1234', '31')).rejects.toBeInstanceOf(
+        ProviderUnavailableError,
+      );
+    },
+  );
+
+  it('refuses without a network call when the ref no longer resolves', async () => {
+    vi.mocked(ticketRefs.findById).mockResolvedValue(undefined);
+
+    expect(await provider().applyTransition('tref-abc1234', '31')).toEqual({
+      ok: false,
+      message: 'That Jira issue is no longer reachable from this workspace.',
+    });
+    expect(jiraPost).not.toHaveBeenCalled();
+  });
+});
+
+describe('JiraProvider.postComment', () => {
+  it('posts the caller-built ADF under a body key and returns the new comment id', async () => {
+    vi.mocked(jiraPost).mockResolvedValue(ok({ id: '10501' }));
+
+    const result = await provider().postComment('tref-abc1234', ADF);
+
+    expect(jiraPost).toHaveBeenCalledWith(CREDENTIAL, '/rest/api/3/issue/ENG-4/comment', {
+      body: ADF,
+    });
+    expect(result).toEqual({ commentId: '10501' });
+  });
+
+  it('is null on a real 404 — the issue is gone — and throws on anything else', async () => {
+    vi.mocked(jiraPost).mockResolvedValue(fail('not_found'));
+    expect(await provider().postComment('tref-abc1234', ADF)).toBeNull();
+
+    vi.mocked(jiraPost).mockResolvedValue(fail('rate_limited'));
+    await expect(provider().postComment('tref-abc1234', ADF)).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
   });
 });

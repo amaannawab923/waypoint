@@ -1,5 +1,16 @@
+import { COPILOT_DISCLOSURE } from '../commentHtml.js';
+
 /**
- * Atlassian Document Format → plain text.
+ * Atlassian Document Format ↔ this process.
+ *
+ * Two directions, deliberately in one file: reading (flattening an issue's
+ * description or a comment body to plain text for the model) and writing
+ * (building the ADF for a comment Copilot proposes). They share a format and
+ * nothing else, but keeping them together is what makes it checkable that
+ * the disclosure prefix this file writes is the one adfToPlainText would read
+ * back.
+ *
+ * --- read: ADF → plain text ---------------------------------------------
  *
  * Jira's v3 REST API returns descriptions and comment bodies as ADF: a
  * nested node tree, not a string. Something has to flatten it, and plain text
@@ -154,4 +165,94 @@ export function adfToPlainText(node: unknown): string {
 /** Collapses the ragged blank lines block flattening leaves behind. */
 function tidy(text: string): string {
   return text.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// -----------------------------------------------------------------------
+// The other direction: building an ADF document to POST.
+// -----------------------------------------------------------------------
+
+/**
+ * The minimum ADF this file emits. Deliberately not a general ADF type — the
+ * only document this process ever builds is a Copilot comment, which is
+ * paragraphs of plain text plus one italic disclosure run. Typing exactly
+ * that keeps it obvious that nothing here can construct a mention, a link, or
+ * anything else that would carry model-authored structure into Jira.
+ */
+export interface JiraAdfTextNode {
+  type: 'text';
+  text: string;
+  marks?: { type: 'em' }[];
+}
+
+export interface JiraAdfParagraph {
+  type: 'paragraph';
+  content: JiraAdfTextNode[];
+}
+
+export interface JiraAdfDoc {
+  type: 'doc';
+  version: 1;
+  content: JiraAdfParagraph[];
+}
+
+/**
+ * The ADF body for a Copilot-authored Jira comment.
+ *
+ * The exact counterpart of lib/commentHtml.ts's buildCopilotCommentHtml, and
+ * it borrows that function's whole discipline rather than re-deciding it:
+ *
+ *  - It runs at EXECUTE time, from the real acting account's display name.
+ *    The model's propose_comment schema takes a plain-text `body` only, so
+ *    the model can neither omit the self-disclosure nor spoof a different
+ *    name into it.
+ *  - It shares the SAME exported COPILOT_DISCLOSURE constant. A Jira comment
+ *    and a Waypoint comment made by the same agent must say the same thing;
+ *    two copies of that sentence is exactly how they would stop.
+ *
+ * What differs is escaping, and only because the target does. The HTML
+ * builder has to entity-escape both the body and the display name because
+ * they end up inside tags. ADF has no such hazard: text lives in a `text`
+ * node's JSON string and is never parsed as markup, so escaping here would
+ * put literal `&amp;` into a real Jira comment. The safety property is
+ * structural instead — this function only ever emits `paragraph` and `text`,
+ * so no input can become a node type it did not choose.
+ *
+ * One paragraph per non-empty line, matching what the desktop app's own
+ * composer does (waypoint-frontend's buildCommentAdf): ADF has no bare
+ * newline, so a `\n` that survives at all has to be a paragraph break.
+ */
+export function buildCopilotJiraCommentAdf(displayName: string, body: string): JiraAdfDoc {
+  const lines = body
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  const [first, ...rest] = lines;
+  // The disclosure is its own text node inside the FIRST paragraph, italic,
+  // running inline into the body — the same reading the HTML builder
+  // produces, so the two renderings of one agent's comment look alike.
+  //
+  // When the body is empty or whitespace-only there is no first line to run
+  // into, and the disclosure stands alone. The empty text node that a naive
+  // `text: first ?? ''` would emit is not merely ugly: ADF forbids an empty
+  // text node, and Jira rejects the whole comment with a 400.
+  const firstParagraph: JiraAdfParagraph = {
+    type: 'paragraph',
+    content: [
+      { type: 'text', text: COPILOT_DISCLOSURE(displayName), marks: [{ type: 'em' }] },
+      ...(first ? [{ type: 'text' as const, text: first }] : []),
+    ],
+  };
+
+  return {
+    type: 'doc',
+    version: 1,
+    content: [
+      firstParagraph,
+      ...rest.map((line): JiraAdfParagraph => ({
+        type: 'paragraph',
+        content: [{ type: 'text', text: line }],
+      })),
+    ],
+  };
 }

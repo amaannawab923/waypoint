@@ -1,5 +1,5 @@
-import { jiraGet, type JiraCredential, type JiraResult } from '../lib/jira/client.js';
-import { adfToPlainText } from '../lib/jira/adf.js';
+import { jiraGet, jiraPost, type JiraCredential, type JiraResult } from '../lib/jira/client.js';
+import { adfToPlainText, type JiraAdfDoc } from '../lib/jira/adf.js';
 import * as ticketRefs from '../services/ticketRefs.service.js';
 import {
   ProviderUnavailableError,
@@ -10,11 +10,20 @@ import {
 } from './types.js';
 
 /**
- * Jira Cloud, behind the TicketProvider interface.
+ * Jira Cloud, behind the TicketProvider interface — plus, now, the three
+ * writes an approved proposal can perform.
  *
- * Read-only by construction: there is no write path here, and that is the
- * whole shape of this slice — proving Copilot can genuinely read a Jira
- * ticket before anything is allowed to change one.
+ * The reads shipped and were proven against a real site first, on purpose.
+ * The writes below are additions to that same class rather than a second one:
+ * they authenticate the same way, fail the same way, and are reached through
+ * the same per-request borrowed credential. What they are NOT is reachable
+ * from a tool call — nothing here executes until a person clicks Approve
+ * (see services/proposals.service.ts), which is the invariant the whole
+ * propose/approve split exists to hold.
+ *
+ * Three writes and no more. There is no assignee change, no priority change,
+ * no issue creation: each of those needs its own live-field negotiation with
+ * a site's own schemes, and shipping one badly is worse than not shipping it.
  */
 
 export const JIRA_REF_PREFIX = 'tref-';
@@ -151,6 +160,22 @@ function issueUrl(site: string, key: string): string {
   return `https://${site}/browse/${encodeURIComponent(key)}`;
 }
 
+/**
+ * A transition's DESTINATION status category, in this app's state_group
+ * vocabulary — i.e. "where would this move the issue to".
+ *
+ * Separate from statusGroup below because the shape differs: an issue carries
+ * `fields.status.statusCategory`, while a transition carries
+ * `to.statusCategory`. Same mapping, one level deeper.
+ */
+function transitionGroup(transition: Record<string, unknown>): string | undefined {
+  const to = transition.to;
+  if (!to || typeof to !== 'object') return undefined;
+  const category = (to as Record<string, unknown>).statusCategory;
+  if (!category || typeof category !== 'object') return undefined;
+  return GROUP_BY_CATEGORY[str((category as Record<string, unknown>).key)];
+}
+
 function statusGroup(fields: Record<string, unknown>): string | undefined {
   const status = fields.status;
   if (!status || typeof status !== 'object') return undefined;
@@ -248,7 +273,7 @@ function unavailable(failure: Extract<JiraResult<never>, { ok: false }>): never 
   throw new ProviderUnavailableError(failure.message);
 }
 
-class JiraProvider implements TicketProvider {
+export class JiraProvider implements TicketProvider {
   readonly kind = 'jira' as const;
 
   constructor(private readonly credential: JiraCredential) {}
@@ -373,6 +398,137 @@ class JiraProvider implements TicketProvider {
     return comments.reverse();
   }
 
+  // ---------------------------------------------------------------------
+  // Writes. Reached only from an approved proposal, never from a tool call.
+  // ---------------------------------------------------------------------
+
+  /**
+   * The live transition list for one issue.
+   *
+   * The `id` in each entry is a Jira TRANSITION id, not a status id, and that
+   * distinction is the whole reason this exists rather than reusing the
+   * status id already on the ticket. Jira does not move an issue to a status;
+   * it applies a named transition, and which transitions exist depends on the
+   * issue's current status, its workflow, and this account's permissions. So
+   * a state_change proposal against Jira carries a transition id in its
+   * `stateId` payload — the only value applyTransition can act on.
+   *
+   * It also means the set is not stable between propose and approve: someone
+   * else moving the issue changes which transitions are legal. checkStaleness
+   * re-reads this list for exactly that reason.
+   *
+   * `name` is the transition's own label ("Start progress"), which is what a
+   * person picking one reads; `group` is the DESTINATION status's category,
+   * mapped to the same vocabulary a native state carries, so a caller can ask
+   * "does this finish the ticket" without knowing one site's workflow.
+   */
+  async listTransitions(
+    ref: string,
+  ): Promise<{ id: string; name: string; group: string | undefined }[] | null> {
+    const key = await this.resolveKey(ref);
+    if (!key) return null;
+
+    const result = await jiraGet<{ transitions?: unknown[] }>(
+      this.credential,
+      `/rest/api/3/issue/${encodeURIComponent(key)}/transitions`,
+    );
+    if (!result.ok) {
+      if (result.reason === 'not_found') return null;
+      unavailable(result);
+    }
+
+    return (result.value?.transitions ?? [])
+      .filter((t): t is Record<string, unknown> => !!t && typeof t === 'object')
+      .map((transition) => ({
+        // Jira answers with a string id, but it is a number in its own
+        // database and has been seen serialized both ways by proxies; String()
+        // makes the comparison in checkStaleness total rather than lucky.
+        id: String(transition.id ?? ''),
+        name: str(transition.name),
+        group: transitionGroup(transition),
+      }))
+      .filter((t) => t.id !== '');
+  }
+
+  /**
+   * Applies one transition.
+   *
+   * Returns `{ ok: false }` rather than throwing for every outcome that is
+   * about THIS issue and this account — a deleted issue, a transition that
+   * stopped being legal, a permission the account does not have. All three
+   * are things the reviewer can act on and none of them gets better by
+   * retrying, so they finalize the proposal (stale, with Jira's own words)
+   * instead of reverting it to a card that invites the same failing click
+   * forever. Only a genuine outage — auth, rate limit, network, a site that
+   * stopped resolving — throws, because that one IS worth retrying.
+   */
+  async applyTransition(
+    ref: string,
+    transitionId: string,
+  ): Promise<{ ok: true } | { ok: false; message: string }> {
+    const key = await this.resolveKey(ref);
+    if (!key) {
+      return { ok: false, message: 'That Jira issue is no longer reachable from this workspace.' };
+    }
+
+    // 204 with an empty body on success — jiraPost returns that as ok with an
+    // undefined value, which is why nothing here reads the result's value.
+    const result = await jiraPost<void>(
+      this.credential,
+      `/rest/api/3/issue/${encodeURIComponent(key)}/transitions`,
+      { transition: { id: transitionId } },
+    );
+    if (result.ok) return { ok: true };
+    // 'jira_error' is where an illegal transition lands: Jira answers 400 with
+    // its own explanation ("Transition id 31 is not valid for issue ENG-4"),
+    // which messageFromErrorBody has already lifted out for us — a better
+    // sentence than anything this file could invent about someone else's
+    // workflow.
+    if (result.reason === 'not_found' || result.reason === 'forbidden' || result.reason === 'jira_error') {
+      return { ok: false, message: result.message };
+    }
+    unavailable(result);
+  }
+
+  /**
+   * Posts one comment, and returns the id Jira minted for it.
+   *
+   * The ADF document is built by the caller (lib/jira/adf.ts) rather than
+   * here, so that the self-disclosure prefix is added at execute time from
+   * the real acting account — the same rule the native comment path follows.
+   * This function's job is transport, and it deliberately cannot construct a
+   * body of its own.
+   */
+  async postComment(ref: string, adf: JiraAdfDoc): Promise<{ commentId: string } | null> {
+    const key = await this.resolveKey(ref);
+    if (!key) return null;
+
+    const result = await jiraPost<{ id?: unknown }>(
+      this.credential,
+      `/rest/api/3/issue/${encodeURIComponent(key)}/comment`,
+      { body: adf },
+    );
+    if (!result.ok) {
+      if (result.reason === 'not_found') return null;
+      unavailable(result);
+    }
+    return { commentId: str(result.value?.id) };
+  }
+
+  /**
+   * A tref handle → the issue key it stands for, or null.
+   *
+   * The same two-part guard getByRef applies, and for the same reason it
+   * matters more here: a ref minted against a different site must not resolve
+   * against this one. On a read that would return someone else's issue; on a
+   * write it would CHANGE someone else's issue.
+   */
+  private async resolveKey(ref: string): Promise<string | null> {
+    const row = await ticketRefs.findById(ref);
+    if (!row || row.provider !== 'jira' || row.externalSite !== this.site) return null;
+    return row.externalId;
+  }
+
   private rememberInput(issue: JiraIssue, key: string): ticketRefs.RememberInput {
     return {
       provider: 'jira',
@@ -409,7 +565,17 @@ export function isExternalRef(id: string): boolean {
  * — the two are the same fact from here: there is no way to reach Jira.
  * Callers must read null as "Jira is off", never as "Jira had nothing", which
  * is the same distinction ProviderUnavailableError draws one level down.
+ *
+ * The return type is the concrete class rather than TicketProvider. That is a
+ * type-only widening with no behavior change — JiraProvider still implements
+ * TicketProvider, so every existing read caller is unaffected — and it exists
+ * because the writes are deliberately NOT on the TicketProvider interface:
+ * "a source of tickets" is a read abstraction the native provider also
+ * satisfies, and putting listTransitions/applyTransition/postComment on it
+ * would oblige the native provider to answer questions its own tickets do not
+ * have (a Waypoint ticket has states, not transitions). A caller that needs a
+ * Jira write asks for a Jira provider by name and gets a Jira-shaped API.
  */
-export function getJiraProvider(credential: JiraCredential | null): TicketProvider | null {
+export function getJiraProvider(credential: JiraCredential | null): JiraProvider | null {
   return credential ? new JiraProvider(credential) : null;
 }
