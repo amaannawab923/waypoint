@@ -112,6 +112,27 @@ describe('POST /copilot/proposals/:id/approve', () => {
 
     expect(res.status).toBe(404);
   });
+
+  // The audit line's whole purpose is a trustworthy trail to correlate an
+  // unexplained execution against — an id that can inject a second, fake
+  // log line defeats that. req.params.id is URL-decoded, unvalidated,
+  // attacker-reachable text (this endpoint has no auth boundary), so a
+  // %0A in the path becomes a real newline by the time it reaches
+  // console.log.
+  it('never lets a crafted id with an embedded newline forge a second log line', async () => {
+    vi.mocked(proposalsService.approveProposal).mockResolvedValue(proposalView());
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await request(buildTestApp())
+      .post('/copilot/proposals/prop-x%0A%5Bcopilot-proposals%5D%20forged/approve')
+      .send({});
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    const logged = logSpy.mock.calls[0][0] as string;
+    expect(logged.split('\n')).toHaveLength(1);
+    expect(logged).toContain('<malformed id>');
+    logSpy.mockRestore();
+  });
 });
 
 describe('POST /copilot/proposals/:id/reject', () => {

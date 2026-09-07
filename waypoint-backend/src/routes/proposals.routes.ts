@@ -15,6 +15,17 @@ import {
 
 export const proposalsRouter = Router();
 
+// Same shape the desktop app's own IPC boundary already enforces before an id
+// ever reaches this process (see proposalApproval.ts's PROPOSAL_ID) — applied
+// here too because this endpoint is reachable by anything on localhost, not
+// just this app's own main process. Used only to sanitize the audit line
+// below: an unvalidated req.params.id is URL-decoded, attacker-controlled
+// text, and interpolating it directly into a console.log format string lets
+// a crafted id (with an embedded newline) forge a second, fake-looking log
+// entry — defeating the audit trail's whole point of being a trustworthy
+// record to correlate an unexplained execution against.
+const PROPOSAL_ID_FOR_LOG = /^[a-z]+-[A-Za-z0-9]{1,64}$/;
+
 proposalsRouter.get(
   '/copilot/conversations/:id/proposals',
   asyncHandler(async (req, res) => {
@@ -55,7 +66,9 @@ proposalsRouter.post(
     // can fire this without a real click, but a write-approval endpoint
     // deserves a server-side trail regardless, so any future unexplained
     // execution has a timestamped record to correlate against).
-    console.log(`[copilot-proposals] approve requested: ${req.params.id}`);
+    console.log(
+      `[copilot-proposals] approve requested: ${PROPOSAL_ID_FOR_LOG.test(req.params.id) ? req.params.id : '<malformed id>'}`,
+    );
     res.json(
       await proposalsService.approveProposal(
         req.params.id,
