@@ -200,6 +200,18 @@ export const IconSun = makeIcon(
   </>,
 );
 
+// The theme toggle's dark-mode state — this app's own icon set had no moon
+// glyph at all (the mockup it was ported from always showed the sun
+// regardless of state), so Topbar.tsx's toggle used to render IconSun
+// unconditionally. Path data is lucide-react's own "moon" icon verbatim,
+// the same sourcing as IconSettings above, for the same reason: a
+// crescent's curve is easy to get subtly wrong hand-authored, and this app
+// already treats lucide-react's outline conventions as interchangeable
+// with this custom set.
+export const IconMoon = makeIcon(
+  <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401" />,
+);
+
 export const IconKeyboard = makeIcon(
   <>
     <rect x="2.5" y="6" width="19" height="12" rx="2" />
