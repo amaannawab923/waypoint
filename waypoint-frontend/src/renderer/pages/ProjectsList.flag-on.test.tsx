@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import {
   listProjects,
@@ -94,7 +94,15 @@ describe('ProjectsList — MY_JIRA_ENABLED on', () => {
   // this filter" message unconditionally whenever the flag was on, so
   // filtering to a bucket with zero matches showed only the persistent Jira
   // tile with no feedback that the filter itself was what emptied the grid.
-  it('still shows "no projects match this filter" when real projects exist but the filter excludes all of them', async () => {
+  //
+  // Updated in a later review round: this originally asserted the Jira tile
+  // stays visible alongside the empty-filter message — that was itself a
+  // bug (found live: filtering to "Private" with zero private projects
+  // showed a stray Jira tile sitting right under "No projects match this
+  // filter", even though the tile is neither public nor private and has no
+  // honest place under a filter about exactly that). The tile is now scoped
+  // to the 'all' filter only — see the sibling describe block below.
+  it('shows "no projects match this filter", with no stray Jira tile, when real projects exist but the filter excludes all of them', async () => {
     jest
       .mocked(listProjects)
       .mockResolvedValue([project({ id: 'proj-1', visibility: 'public' })]);
@@ -109,9 +117,7 @@ describe('ProjectsList — MY_JIRA_ENABLED on', () => {
     expect(
       await screen.findByText('No projects match this filter'),
     ).toBeInTheDocument();
-    // The Jira tile still renders alongside it — it isn't a Project row, so
-    // the filter mismatch and its own presence are independent facts.
-    expect(screen.getByTestId('jira-connection-card')).toBeInTheDocument();
+    expect(screen.queryByTestId('jira-connection-card')).not.toBeInTheDocument();
   });
 
   // The case the suppression was actually meant for: no projects exist at
@@ -126,5 +132,66 @@ describe('ProjectsList — MY_JIRA_ENABLED on', () => {
     expect(
       screen.queryByText('No projects match this filter'),
     ).not.toBeInTheDocument();
+  });
+});
+
+// Found in review: the Jira tile rendered unconditionally regardless of the
+// visibility filter, including under "Public" or "Private" specifically —
+// but it is a "Companion project" with no visibility of its own, so it has
+// no honest place under either of those two filters. Picking "Private" with
+// zero private projects showed the tile sitting right below a "No projects
+// match this filter" message, which read as the filter silently not
+// applying to everything on screen.
+describe('ProjectsList — the Jira tile only renders under the "all" visibility filter', () => {
+  it('shows the tile under "all" (the default) even with only public projects present', async () => {
+    jest
+      .mocked(listProjects)
+      .mockResolvedValue([project({ id: 'proj-1', visibility: 'public' })]);
+    mount();
+
+    expect(await screen.findByTestId('jira-connection-card')).toBeInTheDocument();
+  });
+
+  it('hides the tile under "Private" when only a public project exists', async () => {
+    jest
+      .mocked(listProjects)
+      .mockResolvedValue([project({ id: 'proj-1', visibility: 'public' })]);
+    mount();
+    await screen.findByTestId('jira-connection-card');
+
+    fireEvent.click(screen.getByRole('button', { name: 'private' }));
+
+    await waitFor(() =>
+      expect(screen.queryByTestId('jira-connection-card')).not.toBeInTheDocument(),
+    );
+  });
+
+  it('hides the tile under "Public" when only a private project exists', async () => {
+    jest
+      .mocked(listProjects)
+      .mockResolvedValue([project({ id: 'proj-1', visibility: 'private' })]);
+    mount();
+    await screen.findByTestId('jira-connection-card');
+
+    fireEvent.click(screen.getByRole('button', { name: 'public' }));
+
+    await waitFor(() =>
+      expect(screen.queryByTestId('jira-connection-card')).not.toBeInTheDocument(),
+    );
+  });
+
+  it('brings the tile back the moment the filter returns to "all"', async () => {
+    jest
+      .mocked(listProjects)
+      .mockResolvedValue([project({ id: 'proj-1', visibility: 'public' })]);
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: 'private' }));
+    await waitFor(() =>
+      expect(screen.queryByTestId('jira-connection-card')).not.toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'all' }));
+
+    expect(await screen.findByTestId('jira-connection-card')).toBeInTheDocument();
   });
 });
