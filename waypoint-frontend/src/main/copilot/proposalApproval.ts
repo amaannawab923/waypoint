@@ -50,13 +50,20 @@ function apiBaseUrl(): string {
  */
 const PROPOSAL_ID = /^[a-z]+-[A-Za-z0-9]{1,64}$/;
 
-// Matches the backend's own MAX_REVIEW_QUEUE_LIMIT (proposals.service.ts) —
-// the review queue this bulk-approve acts on can never hand back more rows
-// than that in one page, so a caller has no legitimate reason to submit
-// more. Without a cap here, an unbounded array becomes an unbounded
-// sequential loop server-side (bulkApproveProposals approves one at a time),
-// which is a cheap denial-of-service on this endpoint from any local caller.
-const MAX_BULK_APPROVE_IDS = 100;
+// Matches bulkProposalIdsSchema's own `.max(50)`
+// (waypoint-backend/src/validation/proposals.schema.ts) — NOT
+// MAX_REVIEW_QUEUE_LIMIT (100), which is a different cap on a different
+// endpoint (the review queue's own GET page size) and was wrongly used here
+// in an earlier version of this guard. That mismatch let a batch of 51-100
+// ids pass this check and then fail the real backend validation with an
+// opaque 400 — reachable in practice, since ReviewPage.tsx's "select all
+// visible" can exceed 50 after a couple of "load more" clicks. The backend
+// was never actually unbounded either: zod's `.max(50)` there (present
+// since d738d40, before this file's own bulk-approve support existed)
+// already rejects an over-cap request before bulkApproveProposals's loop
+// ever runs. This guard's only real job is failing fast, in the renderer,
+// with the SAME limit the backend already enforces.
+const MAX_BULK_APPROVE_IDS = 50;
 
 function readProposalId(value: unknown): string | null {
   return typeof value === 'string' && PROPOSAL_ID.test(value) ? value : null;
