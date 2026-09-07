@@ -544,6 +544,34 @@ async function checkJiraStaleness(
   return null;
 }
 
+// statusReason is stored (an unbounded `text` column) and rendered directly
+// on the review card. Most of the time it's a string this file wrote itself,
+// but two real paths hand it Jira's own error/refusal text verbatim (the
+// applyTransition/postComment failure messages in providers/jira.ts, and
+// checkJiraStaleness's messages, both deliberately "carried through" so the
+// reviewer sees Jira's own explanation) — text this process does not control
+// the length or shape of. Bounded at this one seam, the only place every
+// statusReason write passes through, rather than at each of those call
+// sites: a cap so a pathological response can't bloat a row or the render,
+// and a control-character strip (the same posture providers/jira.ts's
+// jqlQuoted already applies to model-supplied JQL) so nothing upstream can
+// smuggle formatting control sequences into a UI string.
+const STATUS_REASON_MAX_LENGTH = 500;
+
+function boundStatusReason(reason: string | null | undefined): string | null | undefined {
+  if (reason == null) return reason;
+  // Written as explicit \u escapes rather than a literal character class,
+  // the same rule providers/jira.ts's jqlQuoted applies and for the same
+  // reason: control characters are invisible in source, so a class typed
+  // literally is unreviewable and one keystroke away from silently becoming
+  // a printable range instead of a control-character one.
+  // eslint-disable-next-line no-control-regex
+  const stripped = reason.replace(/[\u0000-\u001F\u007F]/g, ' ').trim();
+  return stripped.length > STATUS_REASON_MAX_LENGTH
+    ? `${stripped.slice(0, STATUS_REASON_MAX_LENGTH - 1)}…`
+    : stripped;
+}
+
 async function finalize(
   id: string,
   patch: {
@@ -567,7 +595,7 @@ async function finalize(
   // history.
   const [row] = await db
     .update(proposals)
-    .set({ ...patch, resolvedAt: new Date() })
+    .set({ ...patch, statusReason: boundStatusReason(patch.statusReason), resolvedAt: new Date() })
     .where(and(eq(proposals.id, id), eq(proposals.status, 'executing')))
     .returning();
   if (row) return row;

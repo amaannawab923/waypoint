@@ -1208,6 +1208,33 @@ describe('approveProposal against a Jira issue', () => {
     );
   });
 
+  // Jira's own refusal text is carried through verbatim by design (the test
+  // above), but that text is upstream, attacker-adjacent input this process
+  // does not control the length or shape of — bounded at finalize's one
+  // seam rather than trusted as-is. Written with explicit \x escapes, not
+  // literal control bytes, for the same reviewability reason boundStatusReason's
+  // own comment gives.
+  it("bounds Jira's own refusal text before persisting it, rather than trusting its shape", async () => {
+    const jira = connectJira();
+    const rawMessage = `Transition\x00\x07 refused\x1b[31m \u2014 ${'x'.repeat(600)}`;
+    jira.applyTransition.mockResolvedValue({ ok: false, message: rawMessage });
+    const finalize = claimThenFinalize(
+      jiraRow({
+        kind: 'state_change',
+        payload: { stateId: '31' },
+        snapshot: { provider: 'jira', fromStateId: '10001' },
+      }),
+    );
+
+    await approveProposal('prop-abc1234');
+
+    const persisted = (finalize.set as Vfn).mock.calls[0][0].statusReason as string;
+    expect(persisted).not.toMatch(/[\x00-\x1F\x7F]/);
+    expect(persisted.length).toBeLessThanOrEqual(500);
+    expect(persisted.endsWith('\u2026')).toBe(true);
+    expect(persisted.startsWith('Transition')).toBe(true);
+  });
+
   it('turns a forbidden/rejected comment into a stale card, not an infinitely-retryable one', async () => {
     // A permission or content rejection on the comment itself (no "Add
     // comments" permission on this project, or Jira rejecting the ADF body)
@@ -1226,9 +1253,14 @@ describe('approveProposal against a Jira issue', () => {
     const view = await approveProposal('prop-abc1234');
 
     expect(view.status).toBe('stale');
-    expect((finalize.set as Vfn).mock.calls[0][0].statusReason).toBe(
-      "The connected Jira account isn't allowed to do that.",
-    );
+    const setArgs = (finalize.set as Vfn).mock.calls[0][0];
+    expect(setArgs.statusReason).toBe("The connected Jira account isn't allowed to do that.");
+    // Same provenance stamping every other TerminalExecutionFailure finalize
+    // gets (see executeJiraProposal's default-kind refusal and the native
+    // TerminalExecutionFailure cases): the failure decided this, not a
+    // person, so decidedBy='system' and decisionLatencyMs stays unset.
+    expect(setArgs.decidedBy).toBe('system');
+    expect(setArgs.decisionLatencyMs).toBeUndefined();
   });
 
   it('refuses a kind Jira has no implementation for, permanently rather than retryably', async () => {
