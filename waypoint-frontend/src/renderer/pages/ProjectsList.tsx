@@ -9,7 +9,9 @@ import { parseSprintDate } from '@/pages/sprints/sprint-utils';
 import { Button, IconButton } from '@/components/ui/Button';
 import { AvatarStack } from '@/components/ui/Avatar';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { AddProjectWizard } from '@/components/domain/AddProjectWizard';
 import { CreateProjectModal } from '@/components/domain/CreateProjectModal';
+import { MY_JIRA_ENABLED } from '@/lib/featureFlags';
 import { SkeletonCardGrid } from '@/components/ui/Skeleton';
 
 type SortKey = 'name' | 'created';
@@ -155,11 +157,23 @@ export default function ProjectsList() {
         </div>
       )}
 
-      <CreateProjectModal
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        onCreated={() => reload()}
-      />
+      {/* Mirrors Sidebar.tsx's own MY_JIRA_ENABLED branch exactly — this
+          page's "Add project" button had never been wired to the wizard at
+          all, so it was stuck offering only an independent project even
+          once the sidebar's "+" already offered the Companion option. */}
+      {MY_JIRA_ENABLED ? (
+        <AddProjectWizard
+          open={createOpen}
+          onClose={() => setCreateOpen(false)}
+          onCreated={() => reload()}
+        />
+      ) : (
+        <CreateProjectModal
+          open={createOpen}
+          onClose={() => setCreateOpen(false)}
+          onCreated={() => reload()}
+        />
+      )}
     </div>
   );
 }
