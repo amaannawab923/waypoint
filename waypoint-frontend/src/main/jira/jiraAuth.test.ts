@@ -31,6 +31,8 @@ jest.mock('fs', () => ({
 // eslint-disable-next-line import/order, import/first
 import {
   deleteStoredJiraCredential,
+  encodeJiraCredentialHeader,
+  JIRA_CREDENTIAL_HEADER,
   readStoredJiraCredential,
   toJiraIdentity,
   writeStoredJiraCredential,
@@ -192,5 +194,68 @@ describe('toJiraIdentity', () => {
       avatarUrl: CREDENTIAL.avatarUrl,
     });
     expect(JSON.stringify(identity)).not.toContain(CREDENTIAL.apiToken);
+  });
+});
+
+// The other function that decides what leaves this process — the credential
+// as another process receives it. Shared by the two callers that lend it: the
+// MCP config (agent/sessionPolicy.ts, so Copilot's tools can READ Jira) and
+// the approve POST (copilot/proposalApproval.ts, so an approved proposal can
+// WRITE). One encoder, so the backend's one parser has one shape to accept.
+describe('encodeJiraCredentialHeader', () => {
+  function decode(header: string): Record<string, unknown> {
+    return JSON.parse(Buffer.from(header, 'base64').toString('utf8'));
+  }
+
+  it('sends what authenticates the request, plus the name a person reads', () => {
+    const encoded = encodeJiraCredentialHeader(CREDENTIAL);
+
+    expect(decode(encoded as string)).toEqual({
+      site: CREDENTIAL.site,
+      email: CREDENTIAL.email,
+      apiToken: CREDENTIAL.apiToken,
+      // Not authentication. It is here so a write-approval card can say whose
+      // Jira account the write will post as — which the other three cannot
+      // answer in a form a person reads.
+      displayName: CREDENTIAL.displayName,
+    });
+  });
+
+  it('never sends the identity fields the backend has no use for', () => {
+    const decoded = decode(encodeJiraCredentialHeader(CREDENTIAL) as string);
+
+    expect(Object.keys(decoded).sort()).toEqual([
+      'apiToken',
+      'displayName',
+      'email',
+      'site',
+    ]);
+    expect(decoded).not.toHaveProperty('accountId');
+    expect(decoded).not.toHaveProperty('avatarUrl');
+  });
+
+  // Base64 is not decoration: an HTTP header value may carry only visible
+  // ASCII, while a token, an email and a person's own name are arbitrary
+  // user-supplied strings. Raw JSON would be rejected by the transport for a
+  // non-ASCII value — or would carry a newline into the header block.
+  it('produces a header-safe value even for a name with non-ASCII characters', () => {
+    const encoded = encodeJiraCredentialHeader({
+      ...CREDENTIAL,
+      displayName: 'Zoë Ó Briain \n injected: yes',
+    }) as string;
+
+    expect(encoded).toMatch(/^[A-Za-z0-9+/]+=*$/);
+    expect(decode(encoded).displayName).toBe('Zoë Ó Briain \n injected: yes');
+  });
+
+  it('is null when nothing is connected, so callers simply omit the header', () => {
+    expect(encodeJiraCredentialHeader(null)).toBeNull();
+  });
+
+  // The two projects share no package, so this constant and the backend's own
+  // are kept in step by nothing but this assertion and its counterpart in
+  // waypoint-backend's credentialHeader.test.ts.
+  it('names the header the backend actually parses', () => {
+    expect(JIRA_CREDENTIAL_HEADER).toBe('x-waypoint-jira-credential');
   });
 });

@@ -12,7 +12,24 @@ import {
 } from '../services/proposals.service.js';
 import { NotFoundError } from '../middleware/errors.js';
 import { resolveActorNames } from '../lib/actorNames.js';
-import { PRIORITY, ISO_DATE, jsonResult, notFoundResult, withErrorSafetyNet } from './ticketTools.js';
+import type { JiraCredential } from '../lib/jira/client.js';
+import { nativeProvider } from '../providers/native.js';
+import { getJiraProvider, isExternalRef, type JiraProvider } from '../providers/jira.js';
+import type { NormalizedTicket } from '../providers/types.js';
+import {
+  PRIORITY,
+  ISO_DATE,
+  JIRA_NOT_CONNECTED,
+  jsonResult,
+  notFoundResult,
+  withErrorSafetyNet,
+} from './ticketTools.js';
+
+// Same per-request shape (and same meaning of null) the read tools use — see
+// ticketTools.ts's own note on why this is a parameter rather than a lookup.
+// Nothing here writes through it: a propose tool reads Jira to confirm what
+// it is about to describe, and the write waits for an Approve click.
+type Jira = JiraProvider | null;
 
 // Model-actionable validation failure — same result shape as
 // notFoundResult, but with a message specific enough for the model to
@@ -68,74 +85,260 @@ async function submitProposal(input: {
 // Same draft-hiding requirement as ticketTools's get/list handlers: a
 // draft is invisible to every read tool, so proposing against one must read
 // as a plain miss, not confirm its existence.
+//
+// Still native-only, and still used by the three kinds that are native-only:
+// assignee, priority and create-ticket. Those need columns that are this
+// app's own (a member id, this app's priority vocabulary, a project's default
+// state), which is why they are not part of the Jira write path — see
+// refuseExternal below for how a Jira id reaching them is answered.
 async function getVisibleTicket(ticketId: string) {
   const item = await ticketsService.getTicket(ticketId);
   if (!item || item.isDraft) return undefined;
   return item;
 }
 
-function baseSnapshot(item: { identifier: string; title: string; updatedAt: Date }) {
+/**
+ * The ticket a proposal targets, whichever system it lives in.
+ *
+ * Dispatches on the id's own prefix, exactly as the read tools do (see
+ * getTicketHandler): a "tref-" id can only have come from a ticket_refs row,
+ * so no lookup is needed to know which provider owns it. The native branch
+ * goes through nativeProvider.getByRef rather than ticketsService directly —
+ * that wrapper already carries the draft gate and the batched name/state
+ * resolution, and a second copy of the draft rule here is exactly the kind of
+ * duplicate that goes stale.
+ *
+ * The three outcomes are kept apart because they mean different things to the
+ * model: 'missing' is a real miss, 'jira_off' is a configuration fact ("there
+ * is no second place to look"), and only 'found' carries a ticket.
+ */
+type TargetLookup =
+  | { status: 'found'; ticket: NormalizedTicket }
+  | { status: 'missing' }
+  | { status: 'jira_off' };
+
+async function resolveTarget(jira: Jira, ticketId: string): Promise<TargetLookup> {
+  if (isExternalRef(ticketId)) {
+    if (!jira) return { status: 'jira_off' };
+    const ticket = await jira.getByRef(ticketId);
+    return ticket ? { status: 'found', ticket } : { status: 'missing' };
+  }
+  const ticket = await nativeProvider.getByRef(ticketId);
+  return ticket ? { status: 'found', ticket } : { status: 'missing' };
+}
+
+/**
+ * The three proposal kinds that have no Jira implementation, answered as what
+ * they are.
+ *
+ * A plain not-found would be a lie with a plausible shape: the issue exists,
+ * the model just asked for something this integration cannot do. Told that,
+ * the model stops; told "no such ticket", it retries the lookup and asks
+ * again.
+ */
+function refuseExternal(what: string) {
+  return validationErrorResult(
+    `${what} is not supported for Jira issues yet — only comments and state changes can be proposed against Jira. ` +
+      'Tell the user this has to be done in Jira directly.',
+  );
+}
+
+/**
+ * The updated-at stamp, from whichever provider's detail record carries it.
+ *
+ * Native tickets hand back a Date (the column, spread straight through by
+ * providers/native.ts's passthrough detail projection); Jira hands back the
+ * ISO string its API returned. Normalizing here keeps the snapshot's
+ * itemUpdatedAt byte-identical to what the native path has always written.
+ */
+function updatedAtIso(ticket: NormalizedTicket): string | undefined {
+  const raw = ticket.detail?.updatedAt;
+  if (raw instanceof Date) return raw.toISOString();
+  return typeof raw === 'string' ? raw : undefined;
+}
+
+/**
+ * The three fields every proposal card renders regardless of kind.
+ *
+ * Takes either a normalized ticket (the provider-dispatched path) or a raw
+ * native row (the three native-only kinds, which never reach a provider).
+ * One function rather than two, because the card reads this shape uniformly
+ * and two producers of it is how the two would drift.
+ *
+ * `'provider' in item` is a safe discriminant: it is required on
+ * NormalizedTicket and does not exist on a native ticket row.
+ */
+function baseSnapshot(item: NormalizedTicket | ticketsService.Enriched) {
   return {
     identifier: item.identifier,
     title: item.title,
-    itemUpdatedAt: item.updatedAt.toISOString(),
+    itemUpdatedAt: 'provider' in item ? updatedAtIso(item) : item.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * What the approval card has to say before anyone clicks Approve on a write
+ * that leaves Waypoint: which system, which site, which issue, as whom, and
+ * who finds out.
+ *
+ * Every field is display-only. `provider` in particular decides nothing —
+ * executeProposal re-resolves a ticket's real provider from its own id and
+ * refuses to run if the two disagree, precisely so that a snapshot written at
+ * propose time can never be what routes a write.
+ */
+function externalSnapshot(jira: JiraProvider, ticket: NormalizedTicket) {
+  return {
+    provider: 'jira',
+    externalSite: jira.site,
+    externalUrl: ticket.url,
+    externalActorName: jira.actorName,
+    // Deliberately a description of Jira's behavior rather than a computed
+    // list of people. Jira decides who is notified from the issue's watchers,
+    // its assignee and the site's own notification scheme — resolving that
+    // truthfully would be an extra round trip per proposal (and still only a
+    // snapshot of it), while getting it subtly wrong would be worse than
+    // saying plainly what Jira does. The honest general sentence is the right
+    // trade here; a real recipient list is a later decision, not a cheaper
+    // one.
+    externalNotifiesLabel:
+      "the issue's watchers and assignee will be notified, per your Jira notification scheme",
   };
 }
 
 export async function proposeCommentHandler(
+  jira: Jira,
   conversationId: string | null,
   { ticketId, body }: { ticketId: string; body: string },
 ) {
   if (!conversationId) return validationErrorResult(UNAVAILABLE_MESSAGE);
-  const item = await getVisibleTicket(ticketId);
-  if (!item) return notFoundResult('ticket');
+  const found = await resolveTarget(jira, ticketId);
+  if (found.status === 'jira_off') return validationErrorResult(JIRA_NOT_CONNECTED);
+  if (found.status === 'missing') return notFoundResult('ticket');
+  const { ticket } = found;
+
+  const external = ticket.provider === 'jira' && jira ? externalSnapshot(jira, ticket) : {};
   return submitProposal({
     conversationId,
     kind: 'comment',
     ticketId,
     payload: { body },
-    snapshot: baseSnapshot(item),
-    summary: `Proposed: comment on ${item.identifier}`,
+    snapshot: { ...baseSnapshot(ticket), ...external },
+    summary: `Proposed: comment on ${ticket.identifier}`,
   });
 }
 
 export async function proposeStateChangeHandler(
+  jira: Jira,
   conversationId: string | null,
   { ticketId, stateId }: { ticketId: string; stateId: string },
 ) {
   if (!conversationId) return validationErrorResult(UNAVAILABLE_MESSAGE);
-  const item = await getVisibleTicket(ticketId);
-  if (!item) return notFoundResult('ticket');
+  const found = await resolveTarget(jira, ticketId);
+  if (found.status === 'jira_off') return validationErrorResult(JIRA_NOT_CONNECTED);
+  if (found.status === 'missing') return notFoundResult('ticket');
+  const { ticket } = found;
+
+  if (ticket.provider === 'jira') {
+    if (!jira) return validationErrorResult(JIRA_NOT_CONNECTED);
+    return proposeJiraTransition(jira, conversationId, ticket, ticketId, stateId);
+  }
+
   // Project-scoping check updateTicket itself lacks: its stateId column
   // FK only proves the state EXISTS, not that it belongs to this ticket's
   // project — approving a cross-project state would corrupt the board.
-  const states = await statesService.listStates(item.projectId);
+  const states = await statesService.listStates(ticket.projectId);
   const toState = states.find((s) => s.id === stateId);
   if (!toState) {
     return validationErrorResult(
       "That state does not belong to this ticket's project — use list_states with the ticket's projectId to find a valid one.",
     );
   }
-  if (stateId === item.stateId) {
+  if (stateId === ticket.stateId) {
     return validationErrorResult(
       `This ticket is already in ${toState.name} — there is no change to propose.`,
     );
   }
-  const fromState = states.find((s) => s.id === item.stateId);
+  const fromState = states.find((s) => s.id === ticket.stateId);
   return submitProposal({
     conversationId,
     kind: 'state_change',
     ticketId,
     payload: { stateId },
     snapshot: {
-      ...baseSnapshot(item),
-      fromStateId: item.stateId,
-      fromStateName: fromState?.name ?? item.stateId,
+      ...baseSnapshot(ticket),
+      fromStateId: ticket.stateId,
+      fromStateName: fromState?.name ?? ticket.stateId,
       fromStateColor: fromState?.color ?? null,
       toStateName: toState.name,
       toStateColor: toState.color,
     },
-    summary: `Proposed: move ${item.identifier} from ${fromState?.name ?? item.stateId} to ${toState.name}`,
+    summary: `Proposed: move ${ticket.identifier} from ${fromState?.name ?? ticket.stateId} to ${toState.name}`,
+  });
+}
+
+/**
+ * The Jira half of propose_state_change.
+ *
+ * The `stateId` the model passes is a TRANSITION id here, not a status id,
+ * and it is checked against the issue's live transition list rather than
+ * accepted on trust. That check is doing two jobs at once:
+ *
+ *  - it stops the model guessing. A Jira transition id is a small integer
+ *    ("31"), which is exactly the shape a model will happily invent; without
+ *    this, an invented id would sit in a proposal until someone approved it
+ *    and Jira answered 400. Refused here, with the tool to call instead
+ *    named, the model can correct itself on the next turn.
+ *  - it makes the snapshot honest. `toStateName` on the card is the
+ *    transition's own label as this site spells it, read live, not a name the
+ *    model supplied.
+ *
+ * There is no "already in that state" refusal to mirror the native branch's.
+ * A transition is not a status, and a legal Jira workflow can offer one that
+ * lands on the status the issue is already in — so refusing that would refuse
+ * something real. `fromStateId` still records the issue's current status id,
+ * which is what lets checkStaleness notice somebody else moved it.
+ */
+async function proposeJiraTransition(
+  jira: JiraProvider,
+  conversationId: string,
+  ticket: NormalizedTicket,
+  ticketId: string,
+  transitionId: string,
+) {
+  const transitions = await jira.listTransitions(ticketId);
+  if (!transitions) return notFoundResult('ticket');
+  const target = transitions.find((t) => t.id === transitionId);
+  if (!target) {
+    const available = transitions.length
+      ? `Available right now: ${transitions.map((t) => `${t.name} (${t.id})`).join(', ')}.`
+      : 'This issue currently has no transitions available to the connected account.';
+    return validationErrorResult(
+      `"${transitionId}" is not a transition this Jira issue can make right now. ` +
+        `Call list_states with ticketId="${ticketId}" to see what is actually available — ` +
+        'Jira transitions depend on the issue\'s current status and can change between turns. ' +
+        available,
+    );
+  }
+  return submitProposal({
+    conversationId,
+    kind: 'state_change',
+    ticketId,
+    payload: { stateId: transitionId },
+    snapshot: {
+      ...baseSnapshot(ticket),
+      // The issue's live STATUS id, not the transition's — this is the value
+      // checkStaleness re-reads to tell whether the issue moved underneath
+      // the proposal.
+      fromStateId: ticket.stateId,
+      fromStateName: ticket.stateName,
+      // Jira status colors are per-site theme data this process does not
+      // fetch; null renders as the card's neutral dot rather than a guess.
+      fromStateColor: null,
+      toStateName: target.name,
+      toStateColor: null,
+      ...externalSnapshot(jira, ticket),
+    },
+    summary: `Proposed: move ${ticket.identifier} from ${ticket.stateName} to ${target.name}`,
   });
 }
 
@@ -144,6 +347,7 @@ export async function proposeAssigneeChangeHandler(
   { ticketId, assigneeId, action }: { ticketId: string; assigneeId: string; action: 'add' | 'remove' },
 ) {
   if (!conversationId) return validationErrorResult(UNAVAILABLE_MESSAGE);
+  if (isExternalRef(ticketId)) return refuseExternal('Changing the assignee');
   const item = await getVisibleTicket(ticketId);
   if (!item) return notFoundResult('ticket');
   // The proposed assignee AND the item's current assignees resolve in one
@@ -186,6 +390,7 @@ export async function proposePriorityChangeHandler(
   { ticketId, priority }: { ticketId: string; priority: z.infer<typeof PRIORITY> },
 ) {
   if (!conversationId) return validationErrorResult(UNAVAILABLE_MESSAGE);
+  if (isExternalRef(ticketId)) return refuseExternal('Changing the priority');
   const item = await getVisibleTicket(ticketId);
   if (!item) return notFoundResult('ticket');
   if (priority === item.priority) {
@@ -304,35 +509,62 @@ const PROPOSAL_CONTRACT =
   'Never tell the user the change was made after calling this — say you proposed it and they must approve the card. ' +
   'The outcome (approved/rejected) arrives at the start of a later turn.';
 
-export function registerProposalTools(server: McpServer, conversationId: string | null): void {
+// The extra contract that applies only to a ticket living in another system.
+// Repeated in the two tool descriptions that can reach one, for the same
+// reason PROPOSAL_CONTRACT is: the description is the text the model re-reads
+// on every call.
+const EXTERNAL_CONTRACT =
+  'This also works on a Jira issue (an id starting with "tref-"). Approving one writes to the real Jira, ' +
+  "under the connected Jira account's name, where the issue's watchers are notified — say so when you propose it, " +
+  'and never imply it can be undone afterwards.';
+
+export function registerProposalTools(
+  server: McpServer,
+  conversationId: string | null,
+  jiraCredential: JiraCredential | null,
+): void {
+  // Resolved once per server — which is once per request, see mcp/server.ts.
+  // Construction does no I/O, and doing it here means every handler below
+  // sees one Jira for the whole request rather than each re-deriving it.
+  const jira = getJiraProvider(jiraCredential);
+
   server.registerTool(
     'propose_comment',
     {
       description:
         `Propose posting a comment on a ticket on the user's behalf. ${PROPOSAL_CONTRACT} ` +
         'Write the body as plain text (no markdown/HTML — it is escaped, not rendered). Waypoint automatically prefixes ' +
-        'the posted comment with a Copilot self-disclosure line — do not write one yourself.',
+        `the posted comment with a Copilot self-disclosure line — do not write one yourself. ${EXTERNAL_CONTRACT}`,
       inputSchema: {
         ticketId: z.string(),
         body: z.string().trim().min(1).max(8000),
       },
     },
     withErrorSafetyNet('propose_comment', (args: { ticketId: string; body: string }) =>
-      proposeCommentHandler(conversationId, args),
+      proposeCommentHandler(jira, conversationId, args),
     ),
   );
 
   server.registerTool(
     'propose_state_change',
     {
-      description: `Propose moving a ticket to a different workflow state. ${PROPOSAL_CONTRACT} Use list_states with the ticket's projectId to find valid state ids.`,
+      description:
+        `Propose moving a ticket to a different workflow state. ${PROPOSAL_CONTRACT} ` +
+        "For a Waypoint ticket, use list_states with the ticket's projectId to find valid state ids. " +
+        'For a Jira issue, use list_states with that ticket\'s id: Jira takes a TRANSITION id, which is only valid for that issue right now — ' +
+        `read it immediately before proposing rather than reusing one from earlier in the conversation. ${EXTERNAL_CONTRACT}`,
       inputSchema: {
         ticketId: z.string(),
-        stateId: z.string().describe("The target state's id — must belong to the ticket's own project."),
+        stateId: z
+          .string()
+          .describe(
+            "For a Waypoint ticket: the target state's id, which must belong to the ticket's own project. " +
+              "For a Jira issue: a transition id from list_states with that issue's ticketId.",
+          ),
       },
     },
     withErrorSafetyNet('propose_state_change', (args: { ticketId: string; stateId: string }) =>
-      proposeStateChangeHandler(conversationId, args),
+      proposeStateChangeHandler(jira, conversationId, args),
     ),
   );
 

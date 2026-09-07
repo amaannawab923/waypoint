@@ -9,3 +9,4 @@ export * from './misc.js';
 export * from './agents.js';
 export * from './copilot.js';
 export * from './proposals.js';
+export * from './integrations.js';

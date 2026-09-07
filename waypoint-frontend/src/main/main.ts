@@ -26,6 +26,7 @@ import {
   killAllCopilotConnectProcesses,
 } from './copilot/copilotConnect';
 import { registerCopilotDetectIpc } from './copilot/copilotDetect';
+import { registerProposalApprovalIpc } from './copilot/proposalApproval';
 import { registerJiraIpc } from './jira/jiraIpc';
 import { registerRepoLinkIpc } from './repoLink';
 
@@ -109,6 +110,12 @@ registerCopilotIpc(() => mainWindow);
 registerCopilotAuthIpc();
 registerCopilotConnectIpc(() => mainWindow);
 registerCopilotDetectIpc();
+// No window getter: approving a proposal is one HTTP round trip with one
+// settled answer, and nothing here pushes to a window or opens a dialog.
+// It lives in main at all — rather than staying a fetch() from the renderer,
+// where it was — because approving can now write to Jira, and the credential
+// that authorizes that never leaves this process (see jira/jiraAuth.ts).
+registerProposalApprovalIpc();
 // Every Jira channel is still request/response — none of them pushes to a
 // window the way the Copilot stream does. The getter is for the attachment
 // channels' native save/open dialogs, which parent to the window to be modal

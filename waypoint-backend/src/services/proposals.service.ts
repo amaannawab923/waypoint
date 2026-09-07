@@ -4,6 +4,9 @@ import { proposals, copilotConversations, copilotMessages, tickets } from '../db
 import { newId } from '../lib/ids.js';
 import { NotFoundError, ValidationError } from '../middleware/errors.js';
 import { buildCopilotCommentHtml, COPILOT_DISCLOSURE } from '../lib/commentHtml.js';
+import { buildCopilotJiraCommentAdf } from '../lib/jira/adf.js';
+import type { JiraCredential } from '../lib/jira/client.js';
+import { getJiraProvider, isExternalRef, type JiraProvider } from '../providers/jira.js';
 import * as ticketsService from './tickets.service.js';
 import * as commentsService from './comments.service.js';
 import * as statesService from './states.service.js';
@@ -24,10 +27,27 @@ export const MAX_PROPOSALS_PER_TURN = 10;
 export const MAX_PENDING_PER_CONVERSATION = 20;
 
 // A claim that's been sitting in 'executing' longer than this is a crashed
-// execute (the process died between claim and finalize), not one in flight
-// — real executions are single-digit-millisecond service calls. listProposals
-// reverts such rows to 'proposed' so the card becomes approvable again.
-const EXECUTING_STUCK_MS = 60 * 1000;
+// execute (the process died between claim and finalize), not one in flight.
+// repairProposals parks such rows as 'stale' — never back to 'proposed',
+// where one more Approve click would run the write a second time, since
+// there is no way to tell whether the crash happened before or after the
+// underlying write ran.
+//
+// A native execute really is a single-digit-millisecond service call, but a
+// Jira execute is not: checkJiraStaleness alone can issue two sequential
+// requests (getByRef, listTransitions, for a state_change proposal only)
+// before executeJiraProposal issues a third (applyTransition or
+// postComment), and each one is bounded by REQUEST_TIMEOUT_MS
+// (lib/jira/client.ts, 20s) rather than being instant. A
+// merely-slow-but-successful Jira approve can cross a 60s threshold while
+// the write is still in flight, which does not corrupt anything — a 'stale'
+// row can't be re-claimed, because the claim UPDATE itself is guarded on
+// `eq(proposals.status, 'proposed')`, and finalize's own status='executing'
+// guard separately stops a late-arriving execute from stomping the row
+// repairProposals already parked — but it does mislabel a real write as
+// interrupted. Set above the worst realistic case of three sequential
+// 20s-bounded Jira requests, with headroom.
+const EXECUTING_STUCK_MS = 120 * 1000;
 
 // Distinct from NotFoundError/ConflictError: this is a model-facing
 // validation failure — the MCP propose handlers catch it and return its
@@ -137,7 +157,9 @@ export interface ProposalView {
   createdAt: Date;
   // --- new for W3.1's workspace-scoped widening -------------------------
   origin: ProposalOrigin;
-  projectId: string;
+  // Null for a proposal targeting an external ("tref-") issue — a Jira issue
+  // is not scoped to any Waypoint project. See the column's own comment.
+  projectId: string | null;
   agentId: string | null;
   agentRunId: string | null;
   sourceRequestId: string | null;
@@ -256,6 +278,14 @@ export async function createProposal(input: CreateProposalInput): Promise<Propos
     // target ticket's own project. Resolved as a correlated subquery
     // inside the same INSERT — not a separate tx.select — so this doesn't
     // add a round trip or change the transaction's query shape.
+    //
+    // The subquery yields NULL for a Jira ("tref-") ticketId, which matches
+    // no row in `tickets` — and that is the intended answer, not a miss: a
+    // Jira issue belongs to a Jira project, which has no `projects` row to
+    // point at. The column is nullable precisely for this carve-out, so the
+    // insert succeeds and the proposal lands with a null project. Such a
+    // proposal is correctly outside every project-filtered queue read and
+    // shows up under "All projects".
     const projectId =
       kind === 'create_ticket'
         ? (payload as CreateTicketProposalPayload).projectId
@@ -314,7 +344,7 @@ export async function repairProposals(): Promise<void> {
     .update(proposals)
     .set({
       status: 'expired',
-      statusReason: 'This proposal expired before it was reviewed',
+      statusReason: boundStatusReason('This proposal expired before it was reviewed'),
       resolvedAt: now,
       decidedBy: 'system',
     })
@@ -323,8 +353,16 @@ export async function repairProposals(): Promise<void> {
     .update(proposals)
     .set({
       status: 'stale',
-      statusReason:
+      // Both literals here are self-authored and safe as written today — the
+      // point of routing them through boundStatusReason anyway is that
+      // finalize() being "the only seam" stays a TRUE claim rather than one
+      // that happens to hold only because nobody has changed these two
+      // literals to include upstream text yet (a real gap a review round
+      // caught: this file previously said finalize() was the only seam while
+      // these two writes bypassed it entirely).
+      statusReason: boundStatusReason(
         'Approval was interrupted — check the ticket before asking Copilot to propose this again.',
+      ),
       resolvedAt: now,
       decidedBy: 'system',
     })
@@ -372,13 +410,39 @@ interface StaleResult {
   reason: string;
 }
 
+/**
+ * Which system a proposal's ticket ACTUALLY lives in, from the id itself.
+ *
+ * The one authority on this question. A "tref-" id can only have come from a
+ * ticket_refs row and every native ticket id is minted "wi-" (lib/ids.ts), so
+ * the id alone settles it with no lookup — and, crucially, with nothing
+ * stored alongside it able to disagree. `snapshot.provider` exists for the
+ * card to render; this is what routes a write.
+ *
+ * Null only for a proposal with no ticket at all, i.e. create_ticket.
+ */
+function providerOf(ticketId: string | null): 'native' | 'jira' | null {
+  if (!ticketId) return null;
+  return isExternalRef(ticketId) ? 'jira' : 'native';
+}
+
 // Fresh reads against live data, run AFTER the claim so a passing check is
 // as close to execution as this design gets (ms-scale TOCTOU accepted — see
 // the architecture notes; refactoring the underlying service signatures for
 // perfect atomicity was explicitly ruled out).
-async function checkStaleness(row: ProposalRow): Promise<StaleResult | null> {
+async function checkStaleness(
+  row: ProposalRow,
+  jira: JiraProvider | null,
+): Promise<StaleResult | null> {
   const kind = row.kind as ProposalKind;
   const snapshot = row.snapshot as Record<string, unknown>;
+
+  // Dispatched on the id, before the native lookup — passing a "tref-" id to
+  // ticketsService.getTicket would find nothing and report "this ticket is no
+  // longer available" about an issue that is perfectly fine.
+  if (providerOf(row.ticketId) === 'jira') {
+    return checkJiraStaleness(row, jira);
+  }
 
   if (kind === 'create_ticket') {
     const payload = row.payload as CreateTicketProposalPayload;
@@ -435,6 +499,114 @@ async function checkStaleness(row: ProposalRow): Promise<StaleResult | null> {
   return null;
 }
 
+/**
+ * Staleness for a proposal targeting a Jira issue.
+ *
+ * Same job as the native checks — "does what the card shows still match
+ * reality" — but it has one more thing to re-read, and that one is easy to
+ * miss because it has no native counterpart.
+ *
+ * A native target state either exists or does not, and its existence does not
+ * depend on the ticket. A Jira TRANSITION is different: which transitions an
+ * issue can make is a function of the status it is in right now. So a
+ * proposal minted when the issue was "In Progress" can carry a transition id
+ * that was perfectly legal then and is meaningless now, without the issue
+ * having been deleted and without anything else looking wrong. Checking only
+ * "does the issue still exist" would sail past that, and the reviewer would
+ * find out from Jira's 400 after clicking Approve.
+ *
+ * A missing credential is stale, not a crash: Jira being disconnected between
+ * propose and approve is a thing a person does, and the proposal genuinely
+ * cannot be applied any more. It is the same shape as every other staleness —
+ * the card explains itself and nothing executes.
+ */
+async function checkJiraStaleness(
+  row: ProposalRow,
+  jira: JiraProvider | null,
+): Promise<StaleResult | null> {
+  if (!jira) {
+    return { stale: true, reason: 'Jira is no longer connected, so this change cannot be applied' };
+  }
+  const ticketId = row.ticketId as string;
+  const snapshot = row.snapshot as Record<string, unknown>;
+
+  const ticket = await jira.getByRef(ticketId);
+  if (!ticket) return { stale: true, reason: 'This Jira issue is no longer available' };
+
+  if ((row.kind as ProposalKind) === 'state_change') {
+    // The issue's own status, against the one captured at propose time — the
+    // exact native check, on the value that means the same thing here.
+    if (ticket.stateId !== snapshot.fromStateId) {
+      return { stale: true, reason: 'This issue changed since Copilot proposed this — ask again' };
+    }
+    const { stateId: transitionId } = row.payload as { stateId: string };
+    const transitions = await jira.listTransitions(ticketId);
+    if (!transitions?.some((t) => t.id === transitionId)) {
+      return {
+        stale: true,
+        reason: 'That move is no longer available on this Jira issue — ask again',
+      };
+    }
+  }
+
+  return null;
+}
+
+// statusReason is stored (an unbounded `text` column), rendered directly on
+// the review card, AND — for a 'stale' outcome only — read by
+// useCopilotProposals.ts's own outcomeSentence on the frontend to describe
+// what happened... except that function deliberately does NOT interpolate
+// it into the model-facing prompt (found in review: an earlier version of
+// its own header comment claimed no upstream text ever reached the model
+// while this exact value could). Most of the time statusReason is a string
+// this file wrote itself, but ONE real path hands it Jira's own
+// error/refusal text verbatim: the applyTransition/postComment failure
+// messages in providers/jira.ts, deliberately "carried through" so the
+// reviewer sees Jira's own explanation. checkJiraStaleness's own messages
+// (just above executeJiraProposal) are NOT in this category, despite an
+// earlier version of this comment claiming otherwise — every one of them is
+// a file-authored literal with no Jira interpolation; only the two
+// TerminalExecutionFailure paths through providers/jira.ts carry text this
+// process does not control the length or shape of. Bounded at this one
+// seam, the only place every statusReason write passes through (including
+// repairProposals's own two literal writes below — routed through here too
+// so this claim stays true by construction rather than by nobody having
+// changed those literals to include upstream text yet): a cap so a
+// pathological response can't bloat a row or the render, and a
+// control-character-and-formatting strip (C0, C1, DEL, and the Unicode
+// bidi/format controls a Trojan-Source-style attack would use to visually
+// reorder the approval banner a human reads before deciding) so nothing
+// upstream can smuggle formatting control sequences into a UI string.
+const STATUS_REASON_MAX_LENGTH = 500;
+
+function boundStatusReason(reason: string | null | undefined): string | null | undefined {
+  if (reason == null) return reason;
+  // Written as explicit \u escapes rather than a literal character class,
+  // the same rule providers/jira.ts's jqlQuoted applies and for the same
+  // reason: control characters are invisible in source, so a class typed
+  // literally is unreviewable and one keystroke away from silently becoming
+  // a printable range instead of a control-character one.
+  // C0 + DEL, C1, and the Unicode bidi/format controls (zero-width
+  // marks, embedding/override, isolates) a Trojan-Source-style attack
+  // would use to visually reorder this text in the banner a human reads
+  // before approving a write to their own Jira.
+  // eslint-disable-next-line no-control-regex
+  const stripped = reason
+    .replace(/[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2066-\u2069]/g, ' ')
+    .trim();
+  // A non-null reason that's entirely whitespace or control characters
+  // strips down to '' — which is falsy-adjacent but not null, so a
+  // caller's `statusReason ?? 'fallback text'` (CopilotProposalCard.tsx
+  // does exactly this) would never fire, and the card would render an
+  // empty banner instead of the fallback it was written to show.
+  // Normalized to null so every existing null-coalescing caller already
+  // does the right thing.
+  if (stripped.length === 0) return null;
+  return stripped.length > STATUS_REASON_MAX_LENGTH
+    ? `${stripped.slice(0, STATUS_REASON_MAX_LENGTH - 1)}…`
+    : stripped;
+}
+
 async function finalize(
   id: string,
   patch: {
@@ -458,7 +630,7 @@ async function finalize(
   // history.
   const [row] = await db
     .update(proposals)
-    .set({ ...patch, resolvedAt: new Date() })
+    .set({ ...patch, statusReason: boundStatusReason(patch.statusReason), resolvedAt: new Date() })
     .where(and(eq(proposals.id, id), eq(proposals.status, 'executing')))
     .returning();
   if (row) return row;
@@ -493,8 +665,47 @@ class TerminalExecutionFailure extends Error {
   }
 }
 
-async function executeProposal(row: ProposalRow, displayName: string): Promise<unknown> {
+async function executeProposal(
+  row: ProposalRow,
+  displayName: string,
+  jira: JiraProvider | null,
+): Promise<unknown> {
   const kind = row.kind as ProposalKind;
+
+  // THE ROUTING ASSERTION. Read this before changing anything below it.
+  //
+  // A proposal row carries two accounts of where its write should land: the
+  // ticket id, and `snapshot.provider`. Only the first is authoritative — the
+  // id is minted with a provider-distinguishing prefix and nothing can edit
+  // it out from under itself, while the snapshot is display data written once
+  // at propose time and never refreshed.
+  //
+  // So the provider is re-derived from the id here, live, and compared. If
+  // they disagree, something is wrong in a way this function cannot make
+  // safe: either a row was hand-edited, or a future propose handler wrote a
+  // snapshot that does not describe its own target — and the failure mode of
+  // guessing is writing to the wrong system. Nothing downstream reads
+  // `snapshot.provider` for anything but rendering, and this is what turns
+  // that from a convention someone could quietly violate into a fact the code
+  // enforces.
+  //
+  // A PLAIN Error, deliberately, not TerminalExecutionFailure: this is an
+  // invariant violation, not a user-facing outcome. It takes approveProposal's
+  // generic catch, which releases the claim and leaves the card pending — the
+  // right shape for something a fix could make work, and the wrong shape for
+  // something to be silently finalized away.
+  const actualProvider = providerOf(row.ticketId) ?? 'native';
+  const claimedProvider = (row.snapshot as Record<string, unknown>).provider;
+  // Absent is not a disagreement: every proposal minted before external
+  // writes existed has no `provider` in its snapshot, and is native.
+  if (claimedProvider !== undefined && claimedProvider !== actualProvider) {
+    throw new Error(
+      `proposal ${row.id}: snapshot claims provider "${String(claimedProvider)}" but ticket id "${String(row.ticketId)}" is ${actualProvider} — refusing to execute`,
+    );
+  }
+
+  if (actualProvider === 'jira') return executeJiraProposal(row, displayName, jira);
+
   switch (kind) {
     case 'comment': {
       const { body } = row.payload as { body: string };
@@ -568,7 +779,106 @@ async function executeProposal(row: ProposalRow, displayName: string): Promise<u
   }
 }
 
-export async function approveProposal(id: string): Promise<ProposalView> {
+/**
+ * The write half, for a ticket that lives in Jira.
+ *
+ * Mirrors the native switch's shape rather than extending it, because the two
+ * do genuinely different things with the same words: a native state_change is
+ * an UPDATE on a column, a Jira one applies a named transition whose legality
+ * Jira itself decides.
+ *
+ * Every refusal here is a TerminalExecutionFailure('stale'), never a plain
+ * throw, and that is the important part. A plain throw takes approveProposal's
+ * generic catch, which reverts the row to 'proposed' so the user can try
+ * again — right for a transient failure, and actively wrong for these: the
+ * issue is gone, or the transition is no longer legal, or Jira refused this
+ * account. None of those improves on the next click, and offering the click
+ * anyway is offering a button that can only fail. The genuinely transient
+ * cases never reach here at all — the provider throws
+ * ProviderUnavailableError for those, which IS the retryable shape.
+ *
+ * The self-disclosure uses the WAYPOINT user's display name, the same one the
+ * native path uses and the same one the card previewed (see ProposalView's
+ * disclosureText, whose whole contract is that the preview matches what gets
+ * written). Which Atlassian account the comment posts AS is a separate fact,
+ * and the card states it separately, in the external-write banner.
+ */
+async function executeJiraProposal(
+  row: ProposalRow,
+  displayName: string,
+  jira: JiraProvider | null,
+): Promise<unknown> {
+  // checkStaleness already resolves this to a stale card, so reaching here
+  // with no credential means it was revoked in the milliseconds between —
+  // same outcome, stated the same way, rather than an unhandled null.
+  if (!jira) {
+    throw new TerminalExecutionFailure(
+      'stale',
+      'Jira is no longer connected, so this change cannot be applied',
+    );
+  }
+  const ticketId = row.ticketId as string;
+
+  switch (row.kind as ProposalKind) {
+    case 'comment': {
+      const { body } = row.payload as { body: string };
+      const posted = await jira.postComment(ticketId, buildCopilotJiraCommentAdf(displayName, body));
+      if (posted === null) {
+        throw new TerminalExecutionFailure(
+          'stale',
+          'That Jira issue no longer exists, so the comment was not posted',
+        );
+      }
+      // A forbidden/jira_error result is terminal for the same reason a
+      // refused transition is (see applyTransition below): retrying an
+      // identical comment never fixes a permission or content rejection, so
+      // this must finalize the card rather than leave an Approve button that
+      // can only ever fail.
+      if (!posted.ok) throw new TerminalExecutionFailure('stale', posted.message);
+      return { commentId: posted.commentId };
+    }
+    case 'state_change': {
+      // A Jira state_change payload's `stateId` is a TRANSITION id — see
+      // proposalTools.ts's proposeJiraTransition for why the two are not
+      // interchangeable.
+      const { stateId: transitionId } = row.payload as { stateId: string };
+      const result = await jira.applyTransition(ticketId, transitionId);
+      // Jira's own sentence, carried through verbatim: it knows why a
+      // transition was refused and this process does not.
+      if (!result.ok) throw new TerminalExecutionFailure('stale', result.message);
+      return null;
+    }
+    default:
+      // assignee_change, priority_change, create_ticket and add_label. The
+      // propose tools refuse to mint these against a Jira id at all, so this
+      // is unreachable by any path that exists — but "unreachable" is a claim
+      // about today's callers, and falling through to the native switch would
+      // run a Waypoint write against a ticket id that is not a Waypoint
+      // ticket. Fail permanently and legibly instead.
+      throw new TerminalExecutionFailure(
+        'rejected',
+        'This kind of change is not supported for Jira issues.',
+      );
+  }
+}
+
+/**
+ * `jiraCredential` is borrowed for this request, exactly as the MCP endpoint
+ * borrows one — it arrives on the approve request's own header, having come
+ * from the desktop app's main process, which holds the only persisted copy
+ * (see lib/jira/credentialHeader.ts). It is threaded rather than looked up
+ * because there is nowhere in this process to look it up from, which is the
+ * property that makes it safe to hold at all.
+ *
+ * Null is a normal state, not an error: most proposals are native and never
+ * touch it, and a Jira proposal approved without one resolves as stale rather
+ * than crashing (see checkJiraStaleness).
+ */
+export async function approveProposal(
+  id: string,
+  jiraCredential: JiraCredential | null = null,
+): Promise<ProposalView> {
+  const jira = getJiraProvider(jiraCredential);
   const { displayName } = await membersService.getCurrentUser();
 
   // Claim: the conditional UPDATE is the single-execution guarantee — of N
@@ -604,7 +914,22 @@ export async function approveProposal(id: string): Promise<ProposalView> {
     return toView(finalized, displayName);
   }
 
-  const staleness = await checkStaleness(claimed);
+  // The staleness check can now make a NETWORK call (a Jira read), which the
+  // native-only version never could — so it can now fail transiently, and a
+  // throw from here used to leave the row parked in 'executing' until the
+  // stuck-claim repair swept it a minute later. Release the claim so the card
+  // stays pending and Approve stays clickable, then let errorHandler shape
+  // the response: a Jira outage should cost the user a retry, not a proposal.
+  let staleness: StaleResult | null;
+  try {
+    staleness = await checkStaleness(claimed, jira);
+  } catch (error) {
+    await db
+      .update(proposals)
+      .set({ status: 'proposed', resolvedAt: null })
+      .where(and(eq(proposals.id, id), eq(proposals.status, 'executing')));
+    throw error;
+  }
   if (staleness) {
     // HTTP 200 with status 'stale' — the status field IS the result; the
     // card re-renders it as a blocked/stale banner, not an error toast.
@@ -629,7 +954,7 @@ export async function approveProposal(id: string): Promise<ProposalView> {
 
   let resultInfo: unknown;
   try {
-    resultInfo = await executeProposal(claimed, displayName);
+    resultInfo = await executeProposal(claimed, displayName, jira);
   } catch (error) {
     // TerminalExecutionFailure (final review findings M1/M5): the generic
     // revert below must NOT run for this — reverting to 'proposed' would
@@ -1030,11 +1355,18 @@ async function currentProposalStatusOrNotFound(id: string): Promise<ProposalStat
 // and the rest of the batch must still run. Each id runs the EXISTING
 // single-row approveProposal, unmodified — this never reimplements the
 // claim/staleness/execute logic above.
-export async function bulkApproveProposals(ids: string[]): Promise<BulkProposalResult[]> {
+export async function bulkApproveProposals(
+  ids: string[],
+  // The same borrowed credential a single approve gets, handed to each row in
+  // turn. Threading it here rather than resolving one provider for the batch
+  // keeps this what its comment below says it is: single-row approveProposal,
+  // unmodified, in a loop.
+  jiraCredential: JiraCredential | null = null,
+): Promise<BulkProposalResult[]> {
   const results: BulkProposalResult[] = [];
   for (const id of ids) {
     try {
-      const view = await approveProposal(id);
+      const view = await approveProposal(id, jiraCredential);
       results.push({ id, status: view.status, statusReason: view.statusReason });
     } catch (error) {
       if (error instanceof NotFoundError) {

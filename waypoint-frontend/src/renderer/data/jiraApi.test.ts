@@ -1111,23 +1111,3 @@ describe('comment formatting', () => {
   });
 });
 
-describe('the Copilot rail', () => {
-  // These used to return a hand-written ENG-421 proposal from the design
-  // mockup. Against a live site that names an issue the user does not have,
-  // and its Approve button would report a state move and a comment that never
-  // reached Jira. Nothing generates one for real yet, so nothing is returned.
-  it('offers no proposal and no duplicate nudge, rather than an invented one', async () => {
-    const api = freshApi();
-
-    expect(await api.getMyJiraProposal()).toBeUndefined();
-    expect(await api.getJiraDuplicateNudge()).toBeUndefined();
-  });
-
-  it('refuses loudly if an approval is somehow attempted', async () => {
-    const api = freshApi();
-
-    await expect(api.approveJiraProposal('any')).rejects.toThrow(
-      /isn't built yet/,
-    );
-  });
-});

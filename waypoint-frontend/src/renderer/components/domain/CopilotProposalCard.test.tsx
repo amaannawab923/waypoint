@@ -419,4 +419,76 @@ describe('CopilotProposalCard', () => {
 
     expect(screen.getByText('Posted as you')).toBeInTheDocument();
   });
+  // The external-write banner (architecture: a Jira write is not undoable
+  // the way a native one is). Its rendering condition is the whole point of
+  // these three: an absent provider must look exactly like it did before
+  // external writes existed, and 'native' must too — the field is additive
+  // and every proposal already in a database predates it.
+  describe('the external-write banner', () => {
+    const EXTERNAL = {
+      identifier: 'ENG-421',
+      title: 'Checkout 500s on Safari 17.4',
+      provider: 'jira',
+      externalSite: 'yourteam.atlassian.net',
+      externalUrl: 'https://yourteam.atlassian.net/browse/ENG-421',
+      externalActorName: 'Max Chen',
+      externalNotifiesLabel:
+        "the issue's watchers and assignee will be notified, per your Jira notification scheme",
+    };
+
+    it('names the system, the issue, the site, the acting account and who gets told', () => {
+      renderCard(
+        proposal({
+          kind: 'comment',
+          payload: { body: 'Reproduced on staging.' },
+          snapshot: EXTERNAL,
+        }),
+      );
+
+      const banner = screen.getByText(
+        /Approving writes to the real Jira issue/,
+      );
+      expect(banner).toHaveTextContent('yourteam.atlassian.net');
+      expect(banner).toHaveTextContent('Max Chen');
+      expect(banner).toHaveTextContent(
+        /watchers and assignee will be notified/,
+      );
+      expect(
+        screen.getByRole('link', { name: 'Open ENG-421 in Jira' }),
+      ).toHaveAttribute(
+        'href',
+        'https://yourteam.atlassian.net/browse/ENG-421',
+      );
+    });
+
+    it('renders nothing when the snapshot carries no provider at all', () => {
+      renderCard(proposal());
+
+      expect(
+        screen.queryByText(/Approving writes to the real/),
+      ).not.toBeInTheDocument();
+    });
+
+    it("renders nothing for provider 'native'", () => {
+      renderCard(
+        proposal({ snapshot: { ...proposal().snapshot, provider: 'native' } }),
+      );
+
+      expect(
+        screen.queryByText(/Approving writes to the real/),
+      ).not.toBeInTheDocument();
+    });
+
+    it('stays generic: an unknown future provider gets the same banner', () => {
+      renderCard(
+        proposal({
+          snapshot: { identifier: 'LIN-9', title: 'T', provider: 'linear' },
+        }),
+      );
+
+      expect(
+        screen.getByText(/Approving writes to the real Linear issue/),
+      ).toBeInTheDocument();
+    });
+  });
 });

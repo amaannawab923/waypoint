@@ -1,10 +1,8 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { clsx } from 'clsx';
 import {
-  dismissJiraDuplicateNudge,
   dismissJiraTombstone,
-  getJiraDuplicateNudge,
-  getMyJiraProposal,
   listMyJiraTickets,
   resolveJiraConflict,
 } from '@/data/jiraApi';
@@ -12,19 +10,12 @@ import { showErrorToast } from '@/lib/toast';
 import { useAsync } from '@/lib/useAsync';
 import { useLoadedJiraConnection } from '@/lib/jiraStore';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
-import { Button } from '@/components/ui/Button';
 import { JiraMark } from '@/components/domain/JiraMark';
 import { JiraTicketRow } from '@/components/domain/JiraTicketRow';
 import { JiraTicketDrawer } from '@/components/domain/JiraTicketDrawer';
-import { JiraProposalCard } from '@/components/domain/JiraProposalCard';
 import { JiraLoadError } from '@/components/domain/JiraLoadError';
 import { JiraConnectionPanel } from '@/components/domain/JiraConnectionPanel';
-import type {
-  JiraDuplicateNudge,
-  JiraProposal,
-  JiraTicket,
-  JiraTruncation,
-} from '@/types/jira';
+import type { JiraTicket, JiraTruncation } from '@/types/jira';
 import MyJiraToolbar from './MyJiraToolbar';
 import MyJiraPager from './MyJiraPager';
 import { useMyJiraQueue } from './useMyJiraQueue';
@@ -36,7 +27,26 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'connection', label: 'Connection' },
 ];
 
-function LiveSyncIndicator({ lastSyncAt }: { lastSyncAt: string | null }) {
+/** True only for a real `TabKey` — used to validate the `?tab=` param below
+ * against the actual union rather than trusting a string a link (this app's
+ * own `JiraConnectionCard`, or anything else) put in the URL. Built off
+ * `TABS` itself so a third tab added there is a third valid value here with
+ * no second list to keep in sync. */
+function isTabKey(value: string | null): value is TabKey {
+  return TABS.some((t) => t.key === value);
+}
+
+/**
+ * Exported (not just page-local) because `JiraConnectionCard` on the
+ * All-Projects page needs the identical "synced Ns ago" / "not synced yet"
+ * reading rather than a second implementation that could drift from this
+ * one — see that component's own header for why.
+ */
+export function LiveSyncIndicator({
+  lastSyncAt,
+}: {
+  lastSyncAt: string | null;
+}) {
   // Re-renders once a second purely so the "synced Ns ago" label keeps
   // advancing. `lastSyncAt` is genuinely the moment the JQL search last ran
   // against the connected site, so this age is real — but nothing refreshes
@@ -73,87 +83,19 @@ function LiveSyncIndicator({ lastSyncAt }: { lastSyncAt: string | null }) {
   );
 }
 
-/**
- * The "My work" tab's Copilot rail — the proposal card plus the small
- * "Also queued" duplicate nudge underneath it (mockup's `.work-rail`).
- * Renders nothing when neither exists, so an empty rail never reserves
- * layout space next to the ticket list.
- */
-function CopilotRail({
-  proposal,
-  onProposalResolved,
-  nudge,
-  onOpenDrawer,
-  onNudgeDismissed,
-}: {
-  proposal: JiraProposal | null;
-  onProposalResolved: (updated: JiraProposal) => void;
-  nudge: JiraDuplicateNudge | null;
-  onOpenDrawer: (ticketId: string) => void;
-  onNudgeDismissed: () => void;
-}) {
-  const [dismissing, setDismissing] = useState(false);
-
-  async function handleDismiss() {
-    if (!nudge) return;
-    setDismissing(true);
-    try {
-      await dismissJiraDuplicateNudge(nudge.id);
-      onNudgeDismissed();
-    } catch (err) {
-      showErrorToast(
-        err instanceof Error ? err.message : 'Could not dismiss this.',
-      );
-    } finally {
-      setDismissing(false);
-    }
-  }
-
-  if (!proposal && !nudge) return null;
-
-  return (
-    <div className="flex w-full flex-col gap-3 sm:w-[292px] sm:min-w-[262px] sm:shrink-0">
-      {proposal && (
-        <JiraProposalCard proposal={proposal} onResolved={onProposalResolved} />
-      )}
-      {nudge && (
-        <div className="rounded-[var(--radius-sm)] border border-border bg-surface p-2.5 text-xs leading-relaxed text-text-secondary shadow-sm">
-          <b className="text-text">Also queued</b> — Copilot thinks{' '}
-          <span
-            className="font-mono font-semibold"
-            style={{ color: nudge.ticketProjectColor }}
-          >
-            {nudge.ticketKey}
-          </span>{' '}
-          duplicates{' '}
-          <span
-            className="font-mono font-semibold"
-            style={{ color: nudge.ticketProjectColor }}
-          >
-            {nudge.duplicateOfKey}
-          </span>{' '}
-          (same Safari 17.4 stack trace).
-          <div className="mt-2 flex gap-1.5">
-            <Button size="xs" onClick={() => onOpenDrawer(nudge.ticketId)}>
-              Review
-            </Button>
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={dismissing}
-              onClick={handleDismiss}
-            >
-              {dismissing ? 'Dismissing…' : 'Dismiss'}
-            </Button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function MyJiraPage() {
-  const [tab, setTab] = useState<TabKey>('work');
+  // `JiraConnectionCard` on the All-Projects page links straight to the
+  // Connection tab (`/my-jira?tab=connection`) rather than always landing on
+  // My work — read once at mount, the same way TicketsLayout/AllTicketsPage
+  // seed state from their own query params. An absent or garbage value
+  // (someone hand-editing the URL, or a future link that gets the param
+  // wrong) falls back to 'work' via `isTabKey` rather than rendering neither
+  // tab's body.
+  const [searchParams] = useSearchParams();
+  const initialTab = searchParams.get('tab');
+  const [tab, setTab] = useState<TabKey>(
+    isTabKey(initialTab) ? initialTab : 'work',
+  );
   const [drawerTicketId, setDrawerTicketId] = useState<string | null>(null);
 
   const connection = useLoadedJiraConnection();
@@ -181,43 +123,8 @@ export default function MyJiraPage() {
     setTruncated(fetchedRead.truncated);
   }, [fetchedRead]);
 
-  const { data: fetchedProposal } = useAsync(() => getMyJiraProposal(), []);
-  const [proposal, setProposal] = useState<JiraProposal | null>(null);
-  useEffect(() => {
-    if (fetchedProposal) setProposal(fetchedProposal);
-  }, [fetchedProposal]);
-
-  const { data: fetchedNudge, loading: nudgeLoading } = useAsync(
-    () => getJiraDuplicateNudge(),
-    [],
-  );
-  const [nudge, setNudge] = useState<JiraDuplicateNudge | null>(null);
-  useEffect(() => {
-    if (!nudgeLoading) setNudge(fetchedNudge ?? null);
-  }, [nudgeLoading, fetchedNudge]);
-
   function updateTicket(updated: JiraTicket) {
     setTickets((ts) => ts.map((t) => (t.id === updated.id ? updated : t)));
-  }
-
-  function handleProposalResolved(updated: JiraProposal) {
-    setProposal(updated);
-    // Approving moves the real ticket's state — reflect it in the row this
-    // page already has, exactly like every other write path here, rather
-    // than a full refetch.
-    if (updated.status === 'executed') {
-      setTickets((ts) =>
-        ts.map((t) =>
-          t.id === updated.ticketId
-            ? {
-                ...t,
-                stateName: updated.toStateName,
-                stateColor: updated.toStateColor,
-              }
-            : t,
-        ),
-      );
-    }
   }
 
   async function handleResolveConflict(ticketId: string) {
@@ -430,21 +337,18 @@ export default function MyJiraPage() {
 
                 <MyJiraPager queue={queue} />
 
+                {/* "see the rail" used to end this sentence, pointing at a
+                    Copilot proposal card that never had a producer and has
+                    been removed. Copilot's own Jira writes are still approved
+                    explicitly — they just surface as proposal cards in the
+                    Copilot panel, not beside this list. */}
                 <div className="mt-3 flex items-start gap-2 rounded-[var(--radius-sm)] border border-jira/30 bg-jira-bg px-3 py-2.5 text-[12.5px] text-jira">
                   <span>
                     Your own clicks write straight to Jira — no approval step,
-                    ~400ms. Copilot&apos;s don&apos;t: see the rail.
+                    ~400ms. Copilot&apos;s never do.
                   </span>
                 </div>
               </div>
-
-              <CopilotRail
-                proposal={proposal}
-                onProposalResolved={handleProposalResolved}
-                nudge={nudge}
-                onOpenDrawer={setDrawerTicketId}
-                onNudgeDismissed={() => setNudge(null)}
-              />
             </div>
           )}
         </div>

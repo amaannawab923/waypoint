@@ -27,7 +27,22 @@ vi.mock('../services/comments.service.js');
 vi.mock('../services/members.service.js');
 vi.mock('../services/projects.service.js');
 vi.mock('../lib/actorNames.js');
+
+// Jira is DISCONNECTED for every test except the header ones at the bottom,
+// and that needs no mock: a request that carries no x-waypoint-jira-credential
+// header simply has no Jira, all the way through the real route, the real
+// header parser, and the real provider wiring. Only the transport under the
+// Jira client is stubbed (in the header tests' own describe), so what those
+// prove is the whole borrowed-credential path rather than a mock of it.
+vi.mock('../lib/jira/client.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/jira/client.js')>()),
+  jiraGet: vi.fn(),
+}));
+vi.mock('../services/ticketRefs.service.js');
+
 const { db } = await import('../db/client.js');
+const { jiraGet } = await import('../lib/jira/client.js');
+const ticketRefs = await import('../services/ticketRefs.service.js');
 const ticketsService = await import('../services/tickets.service.js');
 const { resolveStateNames } = await import('../services/states.service.js');
 const commentsService = await import('../services/comments.service.js');
@@ -523,5 +538,158 @@ describe('POST /mcp/copilot — V2 write proposals', () => {
     expect(commentsService.addComment).toHaveBeenCalledTimes(1);
 
     await client.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The borrowed Jira credential — the same real-protocol standard as above.
+//
+// This is the one place the whole mechanism is proven end to end: a header
+// encoded exactly as waypoint-frontend's sessionPolicy.ts encodes it, through
+// the real route, the real parser, the real provider, and out as the
+// credential the Jira client would actually authenticate with. Nothing here
+// mocks the parse or the dispatch — only the HTTP call to Jira itself.
+//
+// It is also the only thing keeping this project's JIRA_CREDENTIAL_HEADER
+// constant and encoding in step with the desktop app's, since the two share
+// no package (see lib/jira/credentialHeader.ts).
+// ---------------------------------------------------------------------------
+
+const JIRA_CREDENTIAL = {
+  site: 'yourteam.atlassian.net',
+  email: 'me@example.com',
+  apiToken: 'jira-token',
+};
+
+/** Exactly what sessionPolicy.ts's encodeJiraCredential produces. */
+function jiraHeaders(credential: unknown = JIRA_CREDENTIAL) {
+  return {
+    'x-waypoint-jira-credential': Buffer.from(JSON.stringify(credential)).toString('base64'),
+  };
+}
+
+const JIRA_ISSUE = {
+  key: 'ENG-4',
+  fields: {
+    summary: 'Login times out',
+    status: { id: '10001', name: 'In Code Review', statusCategory: { key: 'indeterminate' } },
+    project: { key: 'ENG' },
+  },
+};
+
+describe('POST /mcp/copilot — the borrowed Jira credential', () => {
+  beforeEach(() => {
+    vi.mocked(ticketRefs.remember).mockResolvedValue({
+      id: 'tref-abc1234',
+      provider: 'jira',
+      externalId: 'ENG-4',
+      externalSite: JIRA_CREDENTIAL.site,
+      cachedIdentifier: 'ENG-4',
+      cachedTitle: 'Login times out',
+      cachedUrl: `https://${JIRA_CREDENTIAL.site}/browse/ENG-4`,
+      lastSeenAt: new Date('2026-08-20T00:00:00.000Z'),
+    } as never);
+  });
+
+  it('authenticates the Jira read with the credential the header carried, never a stored one', async () => {
+    vi.mocked(ticketsService.getTicketByIdentifier).mockResolvedValue(undefined as never);
+    vi.mocked(jiraGet).mockResolvedValue({ ok: true, value: JIRA_ISSUE } as never);
+    const client = await connectClient(jiraHeaders());
+
+    const result = await client.callTool({
+      name: 'get_ticket_by_identifier',
+      arguments: { identifier: 'ENG-4', provider: 'jira' },
+    });
+
+    expect(result.isError).toBeFalsy();
+    // The credential reaching the Jira client is the one this request lent,
+    // field for field — which is only possible if it travelled the header.
+    expect(vi.mocked(jiraGet).mock.calls[0][0]).toEqual(JIRA_CREDENTIAL);
+    expect(JSON.parse((result.content as { text: string }[])[0].text)).toMatchObject({
+      provider: 'jira',
+      identifier: 'ENG-4',
+    });
+
+    await client.close();
+  });
+
+  it('reports Jira as not connected when the request carries no credential header', async () => {
+    const client = await connectClient();
+
+    const result = await client.callTool({
+      name: 'get_ticket_by_identifier',
+      arguments: { identifier: 'ENG-4', provider: 'jira' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect((result.content as { text: string }[])[0].text).toMatch(/Jira is not connected/i);
+    expect(jiraGet).not.toHaveBeenCalled();
+
+    await client.close();
+  });
+
+  // A malformed header is the SAME outcome as an absent one, deliberately:
+  // this endpoint is reachable by anything on localhost, so garbage must
+  // degrade to a state the tools already handle rather than becoming an
+  // error the model has to interpret.
+  it('degrades a malformed credential header to not-connected, not to an error about the header', async () => {
+    const client = await connectClient({ 'x-waypoint-jira-credential': 'not-base64-json!!' });
+
+    const result = await client.callTool({
+      name: 'get_ticket_by_identifier',
+      arguments: { identifier: 'ENG-4', provider: 'jira' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect((result.content as { text: string }[])[0].text).toMatch(/Jira is not connected/i);
+    expect(jiraGet).not.toHaveBeenCalled();
+
+    await client.close();
+  });
+
+  // The SSRF control, proven where it matters: at the process boundary, on
+  // an endpoint anything on this host can POST to. A site that would point
+  // an authenticated request at loopback must never reach the Jira client.
+  it('refuses a credential whose site would retarget the token, without sending it anywhere', async () => {
+    const client = await connectClient(
+      jiraHeaders({ ...JIRA_CREDENTIAL, site: 'http://127.0.0.1:14000' }),
+    );
+
+    const result = await client.callTool({
+      name: 'get_ticket_by_identifier',
+      arguments: { identifier: 'ENG-4', provider: 'jira' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect((result.content as { text: string }[])[0].text).toMatch(/Jira is not connected/i);
+    expect(jiraGet).not.toHaveBeenCalled();
+
+    await client.close();
+  });
+
+  // Nothing persists the borrowed credential, and the way to prove that at
+  // this level is that a SECOND request with no header behaves as though the
+  // first never happened — no residue in this process to inherit.
+  it('keeps the credential to one request: a later request with no header sees no Jira', async () => {
+    vi.mocked(jiraGet).mockResolvedValue({ ok: true, value: JIRA_ISSUE } as never);
+    const lending = await connectClient(jiraHeaders());
+    await lending.callTool({
+      name: 'get_ticket_by_identifier',
+      arguments: { identifier: 'ENG-4', provider: 'jira' },
+    });
+    await lending.close();
+    vi.mocked(jiraGet).mockClear();
+
+    const later = await connectClient();
+    const result = await later.callTool({
+      name: 'get_ticket_by_identifier',
+      arguments: { identifier: 'ENG-4', provider: 'jira' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect((result.content as { text: string }[])[0].text).toMatch(/Jira is not connected/i);
+    expect(jiraGet).not.toHaveBeenCalled();
+
+    await later.close();
   });
 });

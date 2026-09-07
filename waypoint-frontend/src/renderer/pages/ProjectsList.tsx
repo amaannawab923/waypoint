@@ -9,7 +9,10 @@ import { parseSprintDate } from '@/pages/sprints/sprint-utils';
 import { Button, IconButton } from '@/components/ui/Button';
 import { AvatarStack } from '@/components/ui/Avatar';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { AddProjectWizard } from '@/components/domain/AddProjectWizard';
 import { CreateProjectModal } from '@/components/domain/CreateProjectModal';
+import { JiraConnectionCard } from '@/components/domain/JiraConnectionCard';
+import { MY_JIRA_ENABLED } from '@/lib/featureFlags';
 import { SkeletonCardGrid } from '@/components/ui/Skeleton';
 
 type SortKey = 'name' | 'created';
@@ -122,7 +125,16 @@ export default function ProjectsList() {
 
       {loading && !projects && <SkeletonCardGrid />}
 
-      {projects && visibleProjects.length === 0 && (
+      {/* Suppressed only for the genuinely-empty case with the flag on
+          (zero projects at all — the grid below still renders, with just
+          the Jira tile, which is a reasonable non-empty state on its own).
+          NOT suppressed when a filter is what hid everything: `projects.length
+          &gt; 0` here means real projects exist and the current visibility
+          filter excluded all of them, which deserves the same "no results"
+          feedback with the flag on as it always has with it off — the flag
+          used to suppress this unconditionally, silently dropping that
+          feedback for a filter that legitimately matched nothing. */}
+      {projects && visibleProjects.length === 0 && (projects.length > 0 || !MY_JIRA_ENABLED) && (
         <EmptyState
           icon={<IconFolder size={32} strokeWidth={1.5} />}
           title="No projects match this filter"
@@ -136,8 +148,16 @@ export default function ProjectsList() {
         />
       )}
 
-      {visibleProjects.length > 0 && (
+      {/* The Jira tile always renders in its own row when the flag is on,
+          even with zero real projects and even under a filter that would
+          otherwise hide everything — it isn't a Project row, so "0 results
+          for this filter" doesn't apply to it, and visibility/name/created
+          filtering only ever touches `visibleProjects` below. */}
+      {(visibleProjects.length > 0 || MY_JIRA_ENABLED) && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {MY_JIRA_ENABLED && (
+            <JiraConnectionCard onConnectClick={() => setCreateOpen(true)} />
+          )}
           {visibleProjects.map((project) => (
             <ProjectCard
               key={project.id}
@@ -155,11 +175,23 @@ export default function ProjectsList() {
         </div>
       )}
 
-      <CreateProjectModal
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        onCreated={() => reload()}
-      />
+      {/* Mirrors Sidebar.tsx's own MY_JIRA_ENABLED branch exactly — this
+          page's "Add project" button had never been wired to the wizard at
+          all, so it was stuck offering only an independent project even
+          once the sidebar's "+" already offered the Companion option. */}
+      {MY_JIRA_ENABLED ? (
+        <AddProjectWizard
+          open={createOpen}
+          onClose={() => setCreateOpen(false)}
+          onCreated={() => reload()}
+        />
+      ) : (
+        <CreateProjectModal
+          open={createOpen}
+          onClose={() => setCreateOpen(false)}
+          onCreated={() => reload()}
+        />
+      )}
     </div>
   );
 }

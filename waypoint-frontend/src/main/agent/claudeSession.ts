@@ -227,6 +227,17 @@ function buildEnv(): Record<string, string | undefined> {
 // rather than policy-parameterised: this app talks to exactly one MCP
 // server, so which server to reach isn't a per-caller decision the way
 // mcpHeaders (scope identity) or mcpTools (which of its tools to allow) are.
+//
+// KNOWN GAP, tracked rather than fixed: whatever this returns is serialized
+// by the SDK into the spawned `claude` subprocess's own argv (`--mcp-config
+// <json>`), so any header value here — including the Jira credential
+// buildMcpHeaders may have put in mcpHeaders — is readable by any other
+// process running as the same OS user for the lifetime of that argv, not
+// just by something that can intercept loopback HTTP. See jiraAuth.ts's
+// module comment for the full account. Closing it needs a real design
+// change (a verified argv-avoiding CLI mechanism, or redeeming a short-lived
+// token instead of baking the real credential in here) — not attempted in
+// this function.
 function buildMcpServers(
   mcpHeaders: Record<string, string>,
 ): Record<string, McpServerConfig> {

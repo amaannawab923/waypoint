@@ -64,6 +64,14 @@ vi.mock('./comments.service.js');
 vi.mock('./states.service.js');
 vi.mock('./members.service.js');
 vi.mock('./projects.service.js');
+// Only the provider FACTORY is mocked. isExternalRef stays the real one: the
+// id-prefix rule it encodes is what routes a write to the right system, and
+// the routing assertion below is precisely a test of that rule, so a mocked
+// version would let a broken one pass.
+vi.mock('../providers/jira.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../providers/jira.js')>()),
+  getJiraProvider: vi.fn(),
+}));
 
 const { proposals, copilotConversations } = await import('../db/schema/index.js');
 const ticketsService = await import('./tickets.service.js');
@@ -71,6 +79,7 @@ const commentsService = await import('./comments.service.js');
 const statesService = await import('./states.service.js');
 const membersService = await import('./members.service.js');
 const projectsService = await import('./projects.service.js');
+const { getJiraProvider } = await import('../providers/jira.js');
 const {
   createProposal,
   listProposals,
@@ -88,6 +97,9 @@ type Vfn = ReturnType<typeof vi.fn>;
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(membersService.getCurrentUser).mockResolvedValue({ displayName: 'Amaan' } as never);
+  // Jira disconnected unless a test connects it — the state almost every
+  // approve is in.
+  vi.mocked(getJiraProvider).mockReturnValue(null);
 });
 
 // ---------------------------------------------------------------------------
@@ -985,5 +997,351 @@ describe('listProposals', () => {
     );
     // No live staleness reads happen at list time — approve is authoritative.
     expect(ticketsService.getTicket).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Jira-targeted proposals
+// ---------------------------------------------------------------------------
+
+describe('approveProposal against a Jira issue', () => {
+  const JIRA_REF = 'tref-abc1234';
+
+  function jiraStub() {
+    return {
+      getByRef: vi.fn(async () => ({ stateId: '10001', stateName: 'In Progress' })),
+      listTransitions: vi.fn(async () => [{ id: '31', name: 'Done', group: 'completed' }]),
+      applyTransition: vi.fn(async () => ({ ok: true })),
+      postComment: vi.fn(async () => ({ ok: true, commentId: '10501' })),
+      site: 'yourteam.atlassian.net',
+      actorName: 'Max Chen',
+    };
+  }
+
+  function connectJira() {
+    const stub = jiraStub();
+    vi.mocked(getJiraProvider).mockReturnValue(stub as never);
+    return stub;
+  }
+
+  function jiraRow(overrides: Record<string, unknown> = {}) {
+    return proposalRow({
+      ticketId: JIRA_REF,
+      snapshot: {
+        identifier: 'ENG-4',
+        title: 'Checkout 500s',
+        provider: 'jira',
+        externalSite: 'yourteam.atlassian.net',
+      },
+      ...overrides,
+    });
+  }
+
+  function claimThenFinalize(row: Record<string, unknown>, finalStatus = 'stale') {
+    const finalizeChain = chainable([{ ...row, status: finalStatus }]);
+    db.update.mockReturnValueOnce(chainable([row])).mockReturnValueOnce(finalizeChain);
+    return finalizeChain;
+  }
+
+  // ---- the routing assertion -------------------------------------------
+  //
+  // The one invariant that must not be watered down: a snapshot is DISPLAY
+  // data, and the ticket id is the only thing that decides where a write
+  // goes. These two tests are what make that an enforced fact rather than a
+  // convention a later propose handler could quietly violate.
+
+  it('refuses to execute when the snapshot claims Jira but the ticket id is native', async () => {
+    // A native id with a Jira-claiming snapshot. Without the assertion this
+    // falls through to the native switch and posts a Waypoint comment on a
+    // ticket the card told the reviewer was a Jira issue.
+    const claimed = proposalRow({ ticketId: 'wi-1', snapshot: { provider: 'jira' } });
+    db.update
+      .mockReturnValueOnce(chainable([claimed]))
+      .mockReturnValueOnce(chainable([claimed]));
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
+
+    await expect(approveProposal('prop-abc1234')).rejects.toThrow(/refusing to execute/);
+
+    expect(commentsService.addComment).not.toHaveBeenCalled();
+    // A plain Error, not a TerminalExecutionFailure — so the generic catch
+    // RELEASES the claim and the card stays pending. This is fixable, and a
+    // fixable failure must not be finalized away.
+    const releaseSet = ((db.update.mock.results[1].value as ReturnType<typeof chainable>).set as Vfn)
+      .mock.calls[0][0];
+    expect(releaseSet).toEqual({ status: 'proposed', resolvedAt: null });
+  });
+
+  it('refuses to execute when the snapshot claims native but the ticket id is a Jira ref', async () => {
+    const jira = connectJira();
+    const claimed = proposalRow({ ticketId: JIRA_REF, snapshot: { provider: 'native' } });
+    db.update
+      .mockReturnValueOnce(chainable([claimed]))
+      .mockReturnValueOnce(chainable([claimed]));
+
+    await expect(approveProposal('prop-abc1234')).rejects.toThrow(/refusing to execute/);
+
+    expect(jira.postComment).not.toHaveBeenCalled();
+    expect(commentsService.addComment).not.toHaveBeenCalled();
+  });
+
+  it('executes a row whose snapshot carries no provider at all — every pre-existing proposal is one', async () => {
+    const claimed = proposalRow({ snapshot: { identifier: 'WI-1' } });
+    db.update
+      .mockReturnValueOnce(chainable([claimed]))
+      .mockReturnValueOnce(chainable([{ ...claimed, status: 'executed' }]));
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
+    vi.mocked(commentsService.addComment).mockResolvedValue({ id: 'cm-1' } as never);
+
+    const view = await approveProposal('prop-abc1234');
+
+    expect(view.status).toBe('executed');
+    expect(commentsService.addComment).toHaveBeenCalled();
+  });
+
+  // ---- staleness --------------------------------------------------------
+
+  it('re-checks that the proposed TRANSITION is still legal, not just that the issue exists', async () => {
+    // The failure mode with no native counterpart: the issue is fine and its
+    // status is unchanged, but somebody else's workflow edit (or a status
+    // move and back) means transition 31 is no longer on offer. Checking only
+    // existence sails past this and the reviewer learns about it from Jira's
+    // 400 after clicking Approve.
+    const jira = connectJira();
+    jira.listTransitions.mockResolvedValue([{ id: '11', name: 'Start progress', group: 'started' }]);
+    const finalize = claimThenFinalize(
+      jiraRow({
+        kind: 'state_change',
+        payload: { stateId: '31' },
+        snapshot: { provider: 'jira', fromStateId: '10001' },
+      }),
+    );
+
+    const view = await approveProposal('prop-abc1234');
+
+    expect(view.status).toBe('stale');
+    expect(jira.applyTransition).not.toHaveBeenCalled();
+    expect((finalize.set as Vfn).mock.calls[0][0].statusReason).toMatch(/no longer available/);
+  });
+
+  it('is stale when the issue itself moved since the proposal was made', async () => {
+    const jira = connectJira();
+    jira.getByRef.mockResolvedValue({ stateId: '10002', stateName: 'Done' });
+    const finalize = claimThenFinalize(
+      jiraRow({
+        kind: 'state_change',
+        payload: { stateId: '31' },
+        snapshot: { provider: 'jira', fromStateId: '10001' },
+      }),
+    );
+
+    await approveProposal('prop-abc1234');
+
+    expect(jira.applyTransition).not.toHaveBeenCalled();
+    expect((finalize.set as Vfn).mock.calls[0][0].statusReason).toMatch(/changed since Copilot/);
+  });
+
+  it('is stale — never a crash — when Jira was disconnected between propose and approve', async () => {
+    // getJiraProvider returns null (the beforeEach default): no credential
+    // reached this request. The card explains itself and nothing executes.
+    const finalize = claimThenFinalize(jiraRow());
+
+    const view = await approveProposal('prop-abc1234');
+
+    expect(view.status).toBe('stale');
+    expect((finalize.set as Vfn).mock.calls[0][0].statusReason).toMatch(/no longer connected/);
+  });
+
+  it('is stale when the Jira issue is gone', async () => {
+    const jira = connectJira();
+    jira.getByRef.mockResolvedValue(null);
+    const finalize = claimThenFinalize(jiraRow());
+
+    await approveProposal('prop-abc1234');
+
+    expect(jira.postComment).not.toHaveBeenCalled();
+    expect((finalize.set as Vfn).mock.calls[0][0].statusReason).toMatch(/no longer available/);
+  });
+
+  // ---- execution --------------------------------------------------------
+
+  it('posts a comment through Jira, never through the native comments service', async () => {
+    const jira = connectJira();
+    const row = jiraRow({ payload: { body: 'Reproduced on staging.' } });
+    db.update
+      .mockReturnValueOnce(chainable([row]))
+      .mockReturnValueOnce(chainable([{ ...row, status: 'executed' }]));
+
+    const view = await approveProposal('prop-abc1234');
+
+    expect(view.status).toBe('executed');
+    expect(commentsService.addComment).not.toHaveBeenCalled();
+    const [ref, adf] = jira.postComment.mock.calls[0];
+    expect(ref).toBe(JIRA_REF);
+    // The disclosure is added here, at execute time, from the real acting
+    // user — the model's body follows it.
+    expect(adf.content[0].content[0].text).toContain('Amaan');
+    expect(adf.content[0].content[1].text).toBe('Reproduced on staging.');
+  });
+
+  it('applies the transition, and turns Jira’s own refusal into a stale card', async () => {
+    const jira = connectJira();
+    jira.applyTransition.mockResolvedValue({
+      ok: false,
+      message: 'Transition id 31 is not valid for issue ENG-4.',
+    });
+    const finalize = claimThenFinalize(
+      jiraRow({
+        kind: 'state_change',
+        payload: { stateId: '31' },
+        snapshot: { provider: 'jira', fromStateId: '10001' },
+      }),
+    );
+
+    const view = await approveProposal('prop-abc1234');
+
+    expect(jira.applyTransition).toHaveBeenCalledWith(JIRA_REF, '31');
+    expect(view.status).toBe('stale');
+    // Jira's sentence, carried through verbatim — it knows why and this
+    // process does not.
+    expect((finalize.set as Vfn).mock.calls[0][0].statusReason).toBe(
+      'Transition id 31 is not valid for issue ENG-4.',
+    );
+  });
+
+  // Jira's own refusal text is carried through verbatim by design (the test
+  // above), but that text is upstream, attacker-adjacent input this process
+  // does not control the length or shape of — bounded at finalize's one
+  // seam rather than trusted as-is. Written with explicit \x escapes, not
+  // literal control bytes, for the same reviewability reason boundStatusReason's
+  // own comment gives.
+  it("bounds Jira's own refusal text before persisting it, rather than trusting its shape", async () => {
+    const jira = connectJira();
+    const rawMessage = `Transition\x00\x07 refused\x1b[31m \u2014 ${'x'.repeat(600)}`;
+    jira.applyTransition.mockResolvedValue({ ok: false, message: rawMessage });
+    const finalize = claimThenFinalize(
+      jiraRow({
+        kind: 'state_change',
+        payload: { stateId: '31' },
+        snapshot: { provider: 'jira', fromStateId: '10001' },
+      }),
+    );
+
+    await approveProposal('prop-abc1234');
+
+    const persisted = (finalize.set as Vfn).mock.calls[0][0].statusReason as string;
+    expect(persisted).not.toMatch(/[\x00-\x1F\x7F]/);
+    expect(persisted.length).toBeLessThanOrEqual(500);
+    expect(persisted.endsWith('\u2026')).toBe(true);
+    expect(persisted.startsWith('Transition')).toBe(true);
+  });
+
+  // Found in review: the original strip covered only C0 + DEL, which
+  // neutralizes ANSI escapes but not a Trojan-Source-style attack — Unicode
+  // bidi override/isolate characters and zero-width marks that would
+  // visually reorder or hide text in the approval banner a human reads
+  // before deciding, while leaving the underlying character sequence
+  // intact. This is the concrete threat: Jira's own error text is
+  // configurable by anyone with admin access to the target Jira project's
+  // workflow (a validator or condition's failure message), not by this app
+  // or its user.
+  it('strips Unicode bidi/format controls too, not just C0/DEL', async () => {
+    const jira = connectJira();
+    // U+202E (RIGHT-TO-LEFT OVERRIDE) then ordinary text then U+200B
+    // (ZERO WIDTH SPACE) — both survive the old, narrower strip untouched.
+    const rawMessage = 'Refused\u202E desrever yllausiv\u200B, not really';
+    jira.applyTransition.mockResolvedValue({ ok: false, message: rawMessage });
+    const finalize = claimThenFinalize(
+      jiraRow({
+        kind: 'state_change',
+        payload: { stateId: '31' },
+        snapshot: { provider: 'jira', fromStateId: '10001' },
+      }),
+    );
+
+    await approveProposal('prop-abc1234');
+
+    const persisted = (finalize.set as Vfn).mock.calls[0][0].statusReason as string;
+    expect(persisted).not.toContain('\u202E');
+    expect(persisted).not.toContain('\u200B');
+    expect(persisted).toBe('Refused  desrever yllausiv , not really');
+  });
+
+  it('normalizes a whitespace/control-only reason to null, not an empty string', async () => {
+    // A caller's `statusReason ?? 'fallback text'` (CopilotProposalCard.tsx
+    // does exactly this) never fires on '' — only on null/undefined.
+    const jira = connectJira();
+    jira.applyTransition.mockResolvedValue({ ok: false, message: '\x00\x1F\u200B  ' });
+    const finalize = claimThenFinalize(
+      jiraRow({
+        kind: 'state_change',
+        payload: { stateId: '31' },
+        snapshot: { provider: 'jira', fromStateId: '10001' },
+      }),
+    );
+
+    await approveProposal('prop-abc1234');
+
+    expect((finalize.set as Vfn).mock.calls[0][0].statusReason).toBeNull();
+  });
+
+  it('turns a forbidden/rejected comment into a stale card, not an infinitely-retryable one', async () => {
+    // A permission or content rejection on the comment itself (no "Add
+    // comments" permission on this project, or Jira rejecting the ADF body)
+    // never gets better on the next click. Before this fix, postComment threw
+    // ProviderUnavailableError for exactly this case, which approveProposal's
+    // generic catch reverts to 'proposed' — an Approve button that can only
+    // ever fail again, forever, within the 24h TTL.
+    const jira = connectJira();
+    jira.postComment.mockResolvedValue({
+      ok: false,
+      message: "The connected Jira account isn't allowed to do that.",
+    });
+    const row = jiraRow({ payload: { body: 'Reproduced on staging.' } });
+    const finalize = claimThenFinalize(row);
+
+    const view = await approveProposal('prop-abc1234');
+
+    expect(view.status).toBe('stale');
+    const setArgs = (finalize.set as Vfn).mock.calls[0][0];
+    expect(setArgs.statusReason).toBe("The connected Jira account isn't allowed to do that.");
+    // Same provenance stamping every other TerminalExecutionFailure finalize
+    // gets (see executeJiraProposal's default-kind refusal and the native
+    // TerminalExecutionFailure cases): the failure decided this, not a
+    // person, so decidedBy='system' and decisionLatencyMs stays unset.
+    expect(setArgs.decidedBy).toBe('system');
+    expect(setArgs.decisionLatencyMs).toBeUndefined();
+  });
+
+  it('refuses a kind Jira has no implementation for, permanently rather than retryably', async () => {
+    const jira = connectJira();
+    const row = jiraRow({ kind: 'priority_change', payload: { priority: 'high' } });
+    const finalize = chainable([{ ...row, status: 'rejected' }]);
+    db.update.mockReturnValueOnce(chainable([row])).mockReturnValueOnce(finalize);
+
+    await approveProposal('prop-abc1234');
+
+    expect(ticketsService.updateTicket).not.toHaveBeenCalled();
+    const setArgs = (finalize.set as Vfn).mock.calls[0][0];
+    // 'rejected', not a revert to 'proposed': re-approving could only fail
+    // the same way, forever.
+    expect(setArgs.status).toBe('rejected');
+    expect(setArgs.statusReason).toMatch(/not supported for Jira issues/);
+  });
+
+  it('releases the claim rather than parking the row when the staleness read itself fails', async () => {
+    // New with Jira: checkStaleness can now make a network call, so it can
+    // fail transiently. A throw used to leave the row in 'executing' until
+    // the stuck-claim sweep a minute later; a Jira outage should cost a
+    // retry, not a proposal.
+    const jira = connectJira();
+    jira.getByRef.mockRejectedValue(new Error('Jira took too long to respond.'));
+    const row = jiraRow();
+    db.update.mockReturnValueOnce(chainable([row])).mockReturnValueOnce(chainable([row]));
+
+    await expect(approveProposal('prop-abc1234')).rejects.toThrow(/too long/);
+
+    const releaseSet = ((db.update.mock.results[1].value as ReturnType<typeof chainable>).set as Vfn)
+      .mock.calls[0][0];
+    expect(releaseSet).toEqual({ status: 'proposed', resolvedAt: null });
   });
 });

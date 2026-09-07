@@ -13,6 +13,12 @@ vi.mock('../services/states.service.js');
 vi.mock('../services/members.service.js');
 vi.mock('../services/projects.service.js');
 vi.mock('../lib/actorNames.js');
+// The comment and state-change handlers now resolve their target through the
+// provider seam (a "tref-" id can name a Jira issue), so the native branch
+// goes through nativeProvider.getByRef — which is also what already carries
+// the draft gate. The three native-only kinds still call ticketsService
+// directly and are mocked as before.
+vi.mock('../providers/native.js');
 vi.mock('../services/proposals.service.js', async (importOriginal) => {
   // createProposal is mocked; ProposalValidationError must stay REAL so the
   // handlers' instanceof check exercises the actual class.
@@ -28,6 +34,7 @@ const statesService = await import('../services/states.service.js');
 const projectsService = await import('../services/projects.service.js');
 const proposalsService = await import('../services/proposals.service.js');
 const { resolveActorNames } = await import('../lib/actorNames.js');
+const { nativeProvider } = await import('../providers/native.js');
 const {
   proposeCommentHandler,
   proposeStateChangeHandler,
@@ -54,16 +61,40 @@ function ticket(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** The same ticket, as the provider seam hands it back. `detail` is the raw
+ *  row spread through (see providers/native.ts), which is where the snapshot's
+ *  itemUpdatedAt comes from. */
+function normalized(overrides: Record<string, unknown> = {}) {
+  const item = ticket(overrides);
+  return {
+    provider: 'native' as const,
+    ref: item.id,
+    identifier: item.identifier,
+    title: item.title,
+    projectId: item.projectId,
+    stateId: item.stateId,
+    stateName: 'In Progress',
+    stateGroup: 'started',
+    priority: item.priority,
+    dueDate: null,
+    assigneeIds: item.assigneeIds,
+    assigneeNames: [],
+    url: null,
+    detail: { ...item },
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(proposalsService.createProposal).mockResolvedValue({ id: 'prop-abc1234' } as never);
+  vi.mocked(nativeProvider.getByRef).mockResolvedValue(normalized() as never);
 });
 
 describe('conversation gating', () => {
   it('every propose handler refuses cleanly with no conversation id — read tools unaffected by design', async () => {
     const results = await Promise.all([
-      proposeCommentHandler(null, { ticketId: 'wi-1', body: 'hi' }),
-      proposeStateChangeHandler(null, { ticketId: 'wi-1', stateId: 'st-1' }),
+      proposeCommentHandler(null, null, { ticketId: 'wi-1', body: 'hi' }),
+      proposeStateChangeHandler(null, null, { ticketId: 'wi-1', stateId: 'st-1' }),
       proposeAssigneeChangeHandler(null, { ticketId: 'wi-1', assigneeId: 'mem-2', action: 'add' }),
       proposePriorityChangeHandler(null, { ticketId: 'wi-1', priority: 'high' }),
       proposeCreateTicketHandler(null, { projectId: 'proj-1', title: 'x' }),
@@ -74,15 +105,18 @@ describe('conversation gating', () => {
     }
     // Refused before any fetch — the gate is the first thing checked.
     expect(ticketsService.getTicket).not.toHaveBeenCalled();
+    expect(nativeProvider.getByRef).not.toHaveBeenCalled();
     expect(proposalsService.createProposal).not.toHaveBeenCalled();
   });
 });
 
 describe('proposeCommentHandler', () => {
   it('treats a draft ticket as not found, same as the read tools hide drafts', async () => {
-    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket({ isDraft: true }) as never);
+    // nativeProvider.getByRef is where the draft gate lives — it answers a
+    // draft with null, exactly as it does for a ticket that isn't there.
+    vi.mocked(nativeProvider.getByRef).mockResolvedValue(null);
 
-    const result = await proposeCommentHandler(CONV, { ticketId: 'wi-1', body: 'hi' });
+    const result = await proposeCommentHandler(null, CONV, { ticketId: 'wi-1', body: 'hi' });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toBe('ticket not found');
@@ -90,9 +124,7 @@ describe('proposeCommentHandler', () => {
   });
 
   it('creates the proposal with the plain-text body and the display snapshot, returning the pending shape', async () => {
-    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
-
-    const result = await proposeCommentHandler(CONV, { ticketId: 'wi-1', body: 'plain text' });
+    const result = await proposeCommentHandler(null, CONV, { ticketId: 'wi-1', body: 'plain text' });
 
     expect(proposalsService.createProposal).toHaveBeenCalledWith({
       conversationId: CONV,
@@ -111,24 +143,22 @@ describe('proposeCommentHandler', () => {
   });
 
   it("surfaces the cap's own ProposalValidationError message, not the generic scrub", async () => {
-    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
     vi.mocked(proposalsService.createProposal).mockRejectedValue(
       new proposalsService.ProposalValidationError(
         'Too many proposals this turn (max 10) — ask the user to act on the pending ones first.',
       ),
     );
 
-    const result = await proposeCommentHandler(CONV, { ticketId: 'wi-1', body: 'hi' });
+    const result = await proposeCommentHandler(null, CONV, { ticketId: 'wi-1', body: 'hi' });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/Too many proposals this turn/);
   });
 
   it('rethrows a non-validation createProposal failure for withErrorSafetyNet to scrub', async () => {
-    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
     vi.mocked(proposalsService.createProposal).mockRejectedValue(new Error('pg exploded'));
 
-    await expect(proposeCommentHandler(CONV, { ticketId: 'wi-1', body: 'hi' })).rejects.toThrow(
+    await expect(proposeCommentHandler(null, CONV, { ticketId: 'wi-1', body: 'hi' })).rejects.toThrow(
       'pg exploded',
     );
   });
@@ -139,11 +169,10 @@ describe('proposeCommentHandler', () => {
   // and got scrubbed by withErrorSafetyNet into an opaque internal-error
   // message instead of a clean not-found result.
   it('maps a NotFoundError from createProposal (a gone conversation) to a clean not-found result, not a rethrow', async () => {
-    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
     const { NotFoundError } = await import('../middleware/errors.js');
     vi.mocked(proposalsService.createProposal).mockRejectedValue(new NotFoundError('conversation'));
 
-    const result = await proposeCommentHandler(CONV, { ticketId: 'wi-1', body: 'hi' });
+    const result = await proposeCommentHandler(null, CONV, { ticketId: 'wi-1', body: 'hi' });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toBe('conversation not found');
@@ -152,12 +181,11 @@ describe('proposeCommentHandler', () => {
 
 describe('proposeStateChangeHandler', () => {
   it("rejects a stateId from a different project with a named validation error — the check updateTicket lacks", async () => {
-    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
     vi.mocked(statesService.listStates).mockResolvedValue([
       { id: 'st-progress', name: 'In Progress', color: '#f2c94c' },
     ] as never);
 
-    const result = await proposeStateChangeHandler(CONV, {
+    const result = await proposeStateChangeHandler(null, CONV, {
       ticketId: 'wi-1',
       stateId: 'st-other-project',
     });
@@ -168,12 +196,11 @@ describe('proposeStateChangeHandler', () => {
   });
 
   it('rejects a no-op move to the state the ticket is already in', async () => {
-    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
     vi.mocked(statesService.listStates).mockResolvedValue([
       { id: 'st-progress', name: 'In Progress', color: '#f2c94c' },
     ] as never);
 
-    const result = await proposeStateChangeHandler(CONV, { ticketId: 'wi-1', stateId: 'st-progress' });
+    const result = await proposeStateChangeHandler(null, CONV, { ticketId: 'wi-1', stateId: 'st-progress' });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/already in In Progress/);
@@ -181,13 +208,12 @@ describe('proposeStateChangeHandler', () => {
   });
 
   it('snapshots from/to names AND colors — the card must render names, never ids', async () => {
-    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
     vi.mocked(statesService.listStates).mockResolvedValue([
       { id: 'st-progress', name: 'In Progress', color: '#f2c94c' },
       { id: 'st-done', name: 'Done', color: '#157a3d' },
     ] as never);
 
-    const result = await proposeStateChangeHandler(CONV, { ticketId: 'wi-1', stateId: 'st-done' });
+    const result = await proposeStateChangeHandler(null, CONV, { ticketId: 'wi-1', stateId: 'st-done' });
 
     expect(proposalsService.createProposal).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -457,5 +483,128 @@ describe('listProjectsHandler', () => {
     expect(JSON.parse(result.content[0].text)).toEqual([
       { id: 'proj-1', name: 'Launch', identifier: 'LAUNCH' },
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Proposing against a Jira issue
+// ---------------------------------------------------------------------------
+
+describe('proposing against a Jira issue', () => {
+  const JIRA_REF = 'tref-abc1234';
+
+  const JIRA_TICKET = {
+    provider: 'jira' as const,
+    ref: JIRA_REF,
+    identifier: 'ENG-4',
+    title: 'Checkout 500s on Safari 17.4',
+    projectId: 'ENG',
+    stateId: '10001',
+    stateName: 'In Progress',
+    stateGroup: 'started',
+    priority: 'urgent',
+    dueDate: null,
+    assigneeIds: [],
+    assigneeNames: [],
+    url: 'https://yourteam.atlassian.net/browse/ENG-4',
+    detail: { updatedAt: '2026-01-02T03:04:05.000Z' },
+  };
+
+  function jiraStub() {
+    return {
+      getByRef: vi.fn(async () => JIRA_TICKET),
+      listTransitions: vi.fn(async () => [
+        { id: '11', name: 'Start progress', group: 'started' },
+        { id: '31', name: 'Done', group: 'completed' },
+      ]),
+      site: 'yourteam.atlassian.net',
+      actorName: 'Max Chen',
+    };
+  }
+
+  it('captures who, where and who-finds-out on the snapshot the approval card renders', async () => {
+    const jira = jiraStub();
+
+    await proposeCommentHandler(jira as never, CONV, {
+      ticketId: JIRA_REF,
+      body: 'Reproduced on staging.',
+    });
+
+    const { snapshot } = vi.mocked(proposalsService.createProposal).mock.calls[0][0];
+    expect(snapshot).toMatchObject({
+      identifier: 'ENG-4',
+      itemUpdatedAt: '2026-01-02T03:04:05.000Z',
+      provider: 'jira',
+      externalSite: 'yourteam.atlassian.net',
+      externalUrl: 'https://yourteam.atlassian.net/browse/ENG-4',
+      // The Jira account the comment will post AS — not the Waypoint user,
+      // and not the model.
+      externalActorName: 'Max Chen',
+    });
+    expect(snapshot.externalNotifiesLabel).toMatch(/watchers/);
+    // The native path is unchanged: no provider field, so an existing card
+    // renders exactly as it did.
+    expect(nativeProvider.getByRef).not.toHaveBeenCalled();
+  });
+
+  it('says Jira is not connected rather than reporting the issue missing', async () => {
+    const result = await proposeCommentHandler(null, CONV, { ticketId: JIRA_REF, body: 'hi' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Jira is not connected');
+    expect(proposalsService.createProposal).not.toHaveBeenCalled();
+  });
+
+  // A Jira transition id is a small integer, which is exactly the shape a
+  // model will invent. Caught here, with the tool to call named, it can
+  // correct itself next turn; accepted, it would sit in a proposal until
+  // somebody approved it and Jira answered 400.
+  it('refuses a transition id the issue cannot actually make right now', async () => {
+    const jira = jiraStub();
+
+    const result = await proposeStateChangeHandler(jira as never, CONV, {
+      ticketId: JIRA_REF,
+      stateId: '99',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('list_states');
+    expect(result.content[0].text).toContain(JIRA_REF);
+    // The live options, named, so the next call does not have to guess again.
+    expect(result.content[0].text).toContain('Done (31)');
+    expect(proposalsService.createProposal).not.toHaveBeenCalled();
+  });
+
+  it('stores the transition id as the payload and the live STATUS id as the from-state', async () => {
+    const jira = jiraStub();
+
+    await proposeStateChangeHandler(jira as never, CONV, { ticketId: JIRA_REF, stateId: '31' });
+
+    const call = vi.mocked(proposalsService.createProposal).mock.calls[0][0];
+    expect(call.payload).toEqual({ stateId: '31' });
+    expect(call.snapshot).toMatchObject({
+      // The issue's status id, NOT the transition id — this is what
+      // checkStaleness re-reads to notice somebody else moved the issue.
+      fromStateId: '10001',
+      fromStateName: 'In Progress',
+      // The transition's own label, read live from this site rather than
+      // supplied by the model.
+      toStateName: 'Done',
+      provider: 'jira',
+    });
+  });
+
+  it.each([
+    ['assignee', () => proposeAssigneeChangeHandler(CONV, { ticketId: JIRA_REF, assigneeId: 'mem-2', action: 'add' })],
+    ['priority', () => proposePriorityChangeHandler(CONV, { ticketId: JIRA_REF, priority: 'high' })],
+  ])('tells the model %s changes are unsupported for Jira, rather than reporting a miss', async (_kind, run) => {
+    const result = await run();
+
+    expect(result.isError).toBe(true);
+    // "not found" would be a lie with a plausible shape — the issue exists,
+    // and told that, the model would just look it up and ask again.
+    expect(result.content[0].text).toMatch(/not supported for Jira issues/);
+    expect(ticketsService.getTicket).not.toHaveBeenCalled();
+    expect(proposalsService.createProposal).not.toHaveBeenCalled();
   });
 });

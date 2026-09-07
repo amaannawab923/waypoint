@@ -3,6 +3,10 @@ import { asyncHandler } from '../middleware/asyncHandler.js';
 import * as proposalsService from '../services/proposals.service.js';
 import * as copilotService from '../services/copilot.service.js';
 import {
+  JIRA_CREDENTIAL_HEADER,
+  parseJiraCredentialHeader,
+} from '../lib/jira/credentialHeader.js';
+import {
   approveProposalSchema,
   rejectProposalSchema,
   rejectAllProposalsSchema,
@@ -10,6 +14,17 @@ import {
 } from '../validation/proposals.schema.js';
 
 export const proposalsRouter = Router();
+
+// Same shape the desktop app's own IPC boundary already enforces before an id
+// ever reaches this process (see proposalApproval.ts's PROPOSAL_ID) — applied
+// here too because this endpoint is reachable by anything on localhost, not
+// just this app's own main process. Used only to sanitize the audit line
+// below: an unvalidated req.params.id is URL-decoded, attacker-controlled
+// text, and interpolating it directly into a console.log format string lets
+// a crafted id (with an embedded newline) forge a second, fake-looking log
+// entry — defeating the audit trail's whole point of being a trustworthy
+// record to correlate an unexplained execution against.
+const PROPOSAL_ID_FOR_LOG = /^[a-z]+-[A-Za-z0-9]{1,64}$/;
 
 proposalsRouter.get(
   '/copilot/conversations/:id/proposals',
@@ -26,6 +41,22 @@ proposalsRouter.get(
 // response's `status` field IS the result, and the card renders whatever
 // came back. It's also idempotent: re-approving an already-resolved
 // proposal echoes the row with zero re-execution (see approveProposal).
+//
+// Approve is now the SECOND endpoint that borrows the Jira credential (the
+// MCP endpoint was the first), and for the same reason and on the same
+// terms: approving a Jira-targeted proposal performs a real write to Jira,
+// this process holds no Jira credential of its own, and the one that exists
+// lives in the desktop app's main process. It arrives per request, is parsed
+// into a value that lives as long as the request does, and is written
+// nowhere (see lib/jira/credentialHeader.ts).
+//
+// Absent parses to null, which is not an error condition: almost every
+// approve is of a native proposal and never touches it, and a Jira proposal
+// approved without one resolves as stale rather than failing.
+//
+// Reject deliberately does NOT read the header. A reject executes nothing,
+// so it needs no credential, and an endpoint that accepts one it cannot use
+// is a bigger surface for no benefit.
 proposalsRouter.post(
   '/copilot/proposals/:id/approve',
   asyncHandler(async (req, res) => {
@@ -35,8 +66,15 @@ proposalsRouter.post(
     // can fire this without a real click, but a write-approval endpoint
     // deserves a server-side trail regardless, so any future unexplained
     // execution has a timestamped record to correlate against).
-    console.log(`[copilot-proposals] approve requested: ${req.params.id}`);
-    res.json(await proposalsService.approveProposal(req.params.id));
+    console.log(
+      `[copilot-proposals] approve requested: ${PROPOSAL_ID_FOR_LOG.test(req.params.id) ? req.params.id : '<malformed id>'}`,
+    );
+    res.json(
+      await proposalsService.approveProposal(
+        req.params.id,
+        parseJiraCredentialHeader(req.header(JIRA_CREDENTIAL_HEADER)),
+      ),
+    );
   }),
 );
 

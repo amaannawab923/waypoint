@@ -24,9 +24,7 @@ import type {
   JiraAttachment,
   JiraComment,
   JiraConnectionStatus,
-  JiraDuplicateNudge,
   JiraPriorityOption,
-  JiraProposal,
   JiraTicket,
   JiraTransition,
   JiraUserOption,
@@ -425,27 +423,6 @@ export async function listJiraComments(
 ): Promise<JiraCommentRead> {
   const { comments, total } = unwrap(await bridge().listComments(ticketId));
   return { comments: comments.map(toComment), total };
-}
-
-// The Copilot rail's proposal and its "Also queued" duplicate nudge. Both
-// return nothing, always.
-//
-// Until this file talked to a real site, these returned a hand-written
-// ENG-421 proposal from the design mockup. Against a live Jira that fixture
-// is a fabrication: it names an issue the user does not have, and its Approve
-// button would report a state move and a posted comment that never reached
-// Jira at all. Generating one for real needs a Copilot→Jira pipeline that
-// does not exist yet, so nothing is returned rather than something invented —
-// MyJiraPage renders no rail at all when both are empty. JiraProposalCard and
-// the nudge markup are left in place for the phase that builds the pipeline.
-export async function getMyJiraProposal(): Promise<JiraProposal | undefined> {
-  return undefined;
-}
-
-export async function getJiraDuplicateNudge(): Promise<
-  JiraDuplicateNudge | undefined
-> {
-  return undefined;
 }
 
 // -----------------------------------------------------------------------
@@ -1218,24 +1195,6 @@ export async function postJiraComment(
   return toComment(unwrap(await bridge().postComment({ ticketId, body })));
 }
 
-// Approve/reject for the Copilot rail's proposal. Unreachable in this phase —
-// nothing ever produces a proposal for the card to render (see
-// getMyJiraProposal above) — and deliberately left throwing rather than
-// re-implemented against fixtures: a Jira write attributed to an approval
-// this app cannot actually perform is the one outcome worth being loud about
-// if the pipeline is ever wired up before these are.
-export async function approveJiraProposal(id: string): Promise<JiraProposal> {
-  throw new Error(
-    `Approving a Copilot proposal against Jira isn't built yet (${id}).`,
-  );
-}
-
-export async function rejectJiraProposal(id: string): Promise<JiraProposal> {
-  throw new Error(
-    `Rejecting a Copilot proposal against Jira isn't built yet (${id}).`,
-  );
-}
-
 // dismissJiraTombstone / resolveJiraConflict — MyJiraPage still wires both to
 // their rows, but no ticket is ever marked tombstoned or conflicted (see
 // toTicket), so neither strip renders and neither is reachable. Kept as the
@@ -1252,12 +1211,4 @@ export async function resolveJiraConflict(
   const found = tickets.find((t) => t.id === ticketId);
   if (!found) throw new Error('That issue is no longer in your queue.');
   return found;
-}
-
-// The id is still taken — it is the shape MyJiraPage's rail calls with, and
-// narrowing it would be churn for a function that exists only to satisfy that
-// contract until the proposal pipeline is built.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export async function dismissJiraDuplicateNudge(id: string): Promise<void> {
-  // No nudge is ever produced, so there is nothing to dismiss.
 }

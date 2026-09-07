@@ -82,7 +82,9 @@ describe('POST /copilot/proposals/:id/approve', () => {
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('stale');
     expect(res.body.statusReason).toMatch(/changed since Copilot/);
-    expect(proposalsService.approveProposal).toHaveBeenCalledWith('prop-abc1234');
+    // Second argument: the borrowed Jira credential, null when the request
+    // carried no header — the ordinary case for a native proposal.
+    expect(proposalsService.approveProposal).toHaveBeenCalledWith('prop-abc1234', null);
   });
 
   it('accepts an empty body with no content at all', async () => {
@@ -109,6 +111,43 @@ describe('POST /copilot/proposals/:id/approve', () => {
     const res = await request(buildTestApp()).post('/copilot/proposals/prop-missing/approve').send({});
 
     expect(res.status).toBe(404);
+  });
+
+  // The audit line's whole purpose is a trustworthy trail to correlate an
+  // unexplained execution against — an id that can inject a second, fake
+  // log line defeats that. req.params.id is URL-decoded, unvalidated,
+  // attacker-reachable text (this endpoint has no auth boundary), so a
+  // %0A in the path becomes a real newline by the time it reaches
+  // console.log.
+  it('never lets a crafted id with an embedded newline forge a second log line', async () => {
+    vi.mocked(proposalsService.approveProposal).mockResolvedValue(proposalView());
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await request(buildTestApp())
+      .post('/copilot/proposals/prop-x%0A%5Bcopilot-proposals%5D%20forged/approve')
+      .send({});
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    const logged = logSpy.mock.calls[0][0] as string;
+    expect(logged.split('\n')).toHaveLength(1);
+    expect(logged).toContain('<malformed id>');
+    logSpy.mockRestore();
+  });
+
+  // The positive path the test above doesn't cover: a well-formed id (the
+  // real generator's own shape, lib/ids.ts) must still be logged verbatim,
+  // not also redacted — the sanitization is against a crafted shape, not a
+  // blanket refusal to log the real id the audit trail exists to capture.
+  it('logs a well-formed id verbatim, unredacted', async () => {
+    vi.mocked(proposalsService.approveProposal).mockResolvedValue(proposalView());
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await request(buildTestApp()).post('/copilot/proposals/prop-abc1234/approve').send({});
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy.mock.calls[0][0]).toContain('prop-abc1234');
+    expect(logSpy.mock.calls[0][0]).not.toContain('<malformed id>');
+    logSpy.mockRestore();
   });
 });
 

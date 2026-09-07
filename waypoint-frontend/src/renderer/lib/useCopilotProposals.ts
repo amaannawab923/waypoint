@@ -35,8 +35,25 @@ const KIND_LABELS: Record<ProposalKind, string> = {
 
 // One outcome sentence per resolved proposal. Deliberately built from
 // nothing but the proposal's own status + snapshot identifiers — no
-// model-authored text beyond the ticket identifier ever flows back into
-// the next prompt, so a proposal can't be used to smuggle instructions.
+// upstream-controlled text ever flows back into the next prompt, so a
+// proposal can't be used to smuggle instructions.
+//
+// `statusReason` is deliberately NEVER interpolated into this sentence,
+// even for the `stale` case where it would read naturally. For a
+// Jira-targeted proposal, `statusReason` can carry Jira's own error/refusal
+// text verbatim (see waypoint-backend's TerminalExecutionFailure paths in
+// providers/jira.ts and proposals.service.ts) — text from a Jira workflow
+// validator or transition condition, which is configurable by anyone with
+// admin access to the target Jira project, not by this app or its user.
+// That makes it upstream-controlled input reaching the model's own prompt,
+// exactly the shape of thing this function's whole existence is meant to
+// prevent (found in review: an earlier version of this comment claimed that
+// guarantee while this exact branch violated it). The reviewer still sees
+// the real reason — it renders on the card via ProposalView.statusReason
+// directly, unrelated to this function — the model just doesn't need Jira's
+// prose to know a proposal went stale. `target` above stays safe to
+// interpolate: it's a ticket identifier, already constrained to a narrow
+// shape (PROJECT-NUMBER) wherever it's produced, not free text.
 function outcomeSentence(p: ProposalView): string {
   const target =
     p.snapshot.identifier ??
@@ -52,7 +69,7 @@ function outcomeSentence(p: ProposalView): string {
         ? `${label}: rejected by the user — nothing was posted.`
         : `${label}: rejected by the user — nothing ran.`;
     case 'stale':
-      return `${label}: blocked as stale — nothing ran${p.statusReason ? ` (${p.statusReason})` : ''}.`;
+      return `${label}: blocked as stale — nothing ran. See the card for why.`;
     case 'expired':
       return `${label}: expired unapproved — nothing ran.`;
     case 'superseded':

@@ -130,7 +130,7 @@ describe('POST /proposals/bulk-approve', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.results).toHaveLength(2);
-    expect(proposalsService.bulkApproveProposals).toHaveBeenCalledWith(['prop-1', 'prop-2']);
+    expect(proposalsService.bulkApproveProposals).toHaveBeenCalledWith(['prop-1', 'prop-2'], null);
   });
 
   it('rejects a batch over 50 ids with 400, never calling the service', async () => {

@@ -1,0 +1,126 @@
+import { and, eq, sql } from 'drizzle-orm';
+import { db } from '../db/client.js';
+import { ticketRefs } from '../db/schema/index.js';
+import { newId } from '../lib/ids.js';
+
+/**
+ * Local handles for tickets that live in another system.
+ *
+ * See db/schema/integrations.ts for what a row means. The rule this module
+ * exists to enforce, in one place: a given external ticket has exactly ONE
+ * local handle, forever. Minting a second would hand the model two ids for
+ * one ticket and make "is this the same ticket?" unanswerable.
+ */
+
+export type TicketRefRow = typeof ticketRefs.$inferSelect;
+
+export interface RememberInput {
+  provider: string;
+  site: string;
+  externalId: string;
+  identifier: string;
+  title: string;
+  url: string | null;
+}
+
+export async function findById(id: string): Promise<TicketRefRow | undefined> {
+  const [row] = await db.select().from(ticketRefs).where(eq(ticketRefs.id, id)).limit(1);
+  return row;
+}
+
+/**
+ * Has anything ever been seen under this identifier?
+ *
+ * The question get_ticket_by_identifier asks to decide whether an identifier
+ * is ambiguous. A hit is not evidence the ticket still exists — nothing here
+ * is refreshed except by a successful live read — so a caller must treat this
+ * as "worth asking Jira about", never as an answer.
+ */
+export async function findByIdentifier(
+  provider: string,
+  site: string,
+  identifier: string,
+): Promise<TicketRefRow | undefined> {
+  const [row] = await db
+    .select()
+    .from(ticketRefs)
+    .where(
+      and(
+        eq(ticketRefs.provider, provider),
+        eq(ticketRefs.externalSite, site),
+        eq(ticketRefs.cachedIdentifier, identifier),
+      ),
+    )
+    .limit(1);
+  return row;
+}
+
+/**
+ * Records what a live read just proved, returning the stable handle.
+ *
+ * An upsert keyed on (provider, site, externalId), and `id` is deliberately
+ * absent from the update set: seeing ENG-4 for the hundredth time refreshes
+ * its cached title, and keeps the handle the model may already be holding.
+ *
+ * Batched rather than one call per row because search results arrive in
+ * pages of up to 200: a per-row upsert would turn one search into 200
+ * sequential round trips, which is the difference between a tool call
+ * answering and a tool call timing out.
+ */
+export async function rememberMany(entries: RememberInput[]): Promise<Map<string, TicketRefRow>> {
+  if (entries.length === 0) return new Map();
+
+  const now = new Date();
+  // De-duplicate first: Postgres rejects an ON CONFLICT statement that would
+  // affect the same row twice in one command ("cannot affect row a second
+  // time"), and a Jira response containing the same key twice is not worth
+  // failing a whole search over.
+  //
+  // Keyed by the same triple as the unique constraint, via JSON.stringify
+  // rather than a joined string, so the key does not depend on some separator
+  // character being assumed absent from a hostname or an issue key.
+  const unique = new Map<string, RememberInput>();
+  for (const entry of entries) {
+    unique.set(JSON.stringify([entry.provider, entry.site, entry.externalId]), entry);
+  }
+
+  const rows = await db
+    .insert(ticketRefs)
+    .values(
+      [...unique.values()].map((entry) => ({
+        id: newId('tref'),
+        provider: entry.provider,
+        externalId: entry.externalId,
+        externalSite: entry.site,
+        cachedIdentifier: entry.identifier,
+        cachedTitle: entry.title,
+        cachedUrl: entry.url,
+        lastSeenAt: now,
+      })),
+    )
+    .onConflictDoUpdate({
+      target: [ticketRefs.provider, ticketRefs.externalSite, ticketRefs.externalId],
+      set: {
+        cachedIdentifier: sql`excluded.cached_identifier`,
+        cachedTitle: sql`excluded.cached_title`,
+        cachedUrl: sql`excluded.cached_url`,
+        lastSeenAt: sql`excluded.last_seen_at`,
+      },
+    })
+    .returning();
+
+  // Keyed by externalId: the caller has an issue key in hand and needs the
+  // handle for it. Matching on returned order would be wrong — an upsert's
+  // RETURNING order is not promised to match the VALUES order.
+  return new Map(rows.map((row) => [row.externalId, row]));
+}
+
+export async function remember(entry: RememberInput): Promise<TicketRefRow> {
+  const rows = await rememberMany([entry]);
+  const row = rows.get(entry.externalId);
+  // Unreachable in practice: the upsert either inserts or updates, and both
+  // RETURN. Throwing rather than asserting non-null keeps a silent undefined
+  // from becoming a ref of "undefined" somewhere downstream.
+  if (!row) throw new Error(`failed to record ticket ref for ${entry.externalId}`);
+  return row;
+}
