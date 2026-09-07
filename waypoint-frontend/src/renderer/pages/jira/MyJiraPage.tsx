@@ -3,12 +3,13 @@ import { useSearchParams } from 'react-router-dom';
 import { clsx } from 'clsx';
 import {
   dismissJiraTombstone,
+  getJiraConnectionStatus,
   listMyJiraTickets,
   resolveJiraConflict,
 } from '@/data/jiraApi';
 import { showErrorToast } from '@/lib/toast';
 import { useAsync } from '@/lib/useAsync';
-import { useLoadedJiraConnection } from '@/lib/jiraStore';
+import { setJiraConnection, useLoadedJiraConnection } from '@/lib/jiraStore';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
 import { JiraMark } from '@/components/domain/JiraMark';
 import { JiraTicketRow } from '@/components/domain/JiraTicketRow';
@@ -121,6 +122,22 @@ export default function MyJiraPage() {
     if (!fetchedRead) return;
     setTickets(fetchedRead.tickets);
     setTruncated(fetchedRead.truncated);
+    // Found in review: this list read and useLoadedJiraConnection's own
+    // status read both fire on mount, but the status read is a fast,
+    // purely-local file check (jiraApi.ts's own comment on
+    // getJiraConnectionStatus) while this one is a real network round trip
+    // to Jira — so the status read routinely wins the race and caches a
+    // connection object with issueCount/projectCount/lastSyncAt still at
+    // their zero/null defaults into the shared jiraStore, which nothing
+    // afterward ever refreshes. The visible bug: reconnect, restart, or
+    // land straight on the Connection tab, and it shows "Connected" next
+    // to "0 issues" / "not synced yet" even though this exact read (right
+    // here) has real numbers a moment later. getJiraConnectionStatus() is
+    // cheap to call again now — it only re-reads the in-memory counts this
+    // read just populated, no second network call — so re-push the shared
+    // store with the now-correct snapshot every time a read lands, not
+    // just on the very first mount.
+    getJiraConnectionStatus().then(setJiraConnection);
   }, [fetchedRead]);
 
   function updateTicket(updated: JiraTicket) {

@@ -160,10 +160,24 @@ h4 {
   letter-spacing: -0.01em;
 }
 
-::selection {
-  background: var(--accent-soft-bg);
-  color: var(--accent-soft-text);
-}
+/* Found in review: this app's own "soft" accent tint (--accent-soft-bg,
+   --accent-soft-text) was used as the global selection highlight, but
+   that pair is a near-exact color match for --surface-2 in both themes
+   (light: #f1f1f3 highlight vs #f4f4f6 bubble background; dark: #232328
+   vs #1c1c20) — verified live by actually drag-selecting text rendered on
+   a --surface-2 background (Copilot's own assistant chat bubble): the
+   text WAS genuinely selected (window.getSelection() returned it, copy
+   would have worked) but the highlight was visually imperceptible, which
+   is exactly why this read as "selection doesn't work" from the outside.
+   No single flat color from this app's own monochrome palette is safe
+   here either — anything dark enough to show on a light bubble
+   disappears just as invisibly on the near-black bg-accent bubble the
+   user's own sent messages use. Deliberately no override at all now:
+   the browser's native selection color has a real hue (not just a
+   luminance step), which is what makes it show up against both a light
+   surface and a near-black one — verified the same way, on both bubble
+   backgrounds, before removing this rule rather than guessing a
+   replacement. */
 
 /* Thin, unobtrusive scrollbars used across scroll surfaces */
 .thin-scroll {

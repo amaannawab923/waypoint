@@ -249,6 +249,18 @@ let lastSyncAt: string | null = null;
 //    from that array are only as complete as the read that filled it. It is
 //    set by the same function that sets the array, so the two cannot drift.
 let lastReadTruncated: JiraTruncation = false;
+//  - `listInFlight` dedupes genuinely CONCURRENT callers of
+//    listMyJiraTickets() into the one real network call already running —
+//    found in review: MyJiraPage's own foreground read and
+//    ensureJiraSynced's background one (below) could both land within the
+//    same tick on a fresh mount (Sidebar + MyJiraPage together), each
+//    calling listMyJiraTickets() directly, invisible to each other. This is
+//    intentionally NOT the same thing as "skip a read because one already
+//    happened this session" — that's lastSyncAt's job, checked separately
+//    below — so a later, genuinely distinct call (a real "Refresh now"
+//    click after the first read has already settled) still fires its own
+//    fresh request rather than being silently deduped away.
+let listInFlight: Promise<JiraQueueRead> | null = null;
 
 function rememberTickets(
   wire: JiraWireTicket[],
@@ -294,7 +306,12 @@ function clearCache(): void {
  * without touching the network, because the sidebar and the My Jira page both
  * ask on every mount. The counts come from the last actual ticket read
  * (zero until one happens), which is why connectJira() and refreshJiraSync()
- * both list before returning a status.
+ * both list before returning a status — and why every OTHER mount point that
+ * shows these counts (the sidebar, JiraConnectionCard on All Projects)
+ * should route through ensureJiraSynced() below rather than calling this
+ * function alone: on its own, this one can legitimately return real
+ * `connected: true` next to zero counts for an arbitrarily long time,
+ * because nothing about calling it makes a real read happen.
  */
 export async function getJiraConnectionStatus(): Promise<JiraConnectionStatus> {
   const snapshot = await bridge().status();
@@ -327,6 +344,7 @@ export async function getJiraConnectionStatus(): Promise<JiraConnectionStatus> {
  * again one call site at a time. There is one function, and its type makes
  * the caveat impossible to not receive.
  */
+
 export interface JiraQueueRead {
   tickets: JiraTicket[];
   /** Falsy when this is the whole queue; otherwise WHY it is not — see
@@ -335,8 +353,69 @@ export interface JiraQueueRead {
 }
 
 export async function listMyJiraTickets(): Promise<JiraQueueRead> {
-  const { tickets, truncated } = unwrap(await bridge().listTickets());
-  return { tickets: rememberTickets(tickets, truncated), truncated };
+  // See listInFlight's own comment above: sharing this promise across every
+  // genuinely concurrent caller (MyJiraPage's own foreground read,
+  // ensureJiraSynced's background one below, and each other) is what keeps
+  // two surfaces mounting in the same tick from firing two real searches —
+  // this is the ONE place that dedup can live where it covers every caller,
+  // direct or via ensureJiraSynced, without either of them needing to know
+  // about the other.
+  if (listInFlight) return listInFlight;
+  listInFlight = (async () => {
+    const { tickets, truncated } = unwrap(await bridge().listTickets());
+    return { tickets: rememberTickets(tickets, truncated), truncated };
+  })();
+  try {
+    return await listInFlight;
+  } finally {
+    listInFlight = null;
+  }
+}
+
+/**
+ * Guarantees at least one real ticket read has happened this session before
+ * resolving with a status whose counts can be trusted — a no-op the moment
+ * `lastSyncAt` is already set (whichever caller gets there first, including
+ * MyJiraPage's own "My work" read, satisfies every other caller too).
+ * Concurrent callers (this function or listMyJiraTickets() called directly)
+ * are deduplicated inside listMyJiraTickets() itself via listInFlight, not
+ * here — found in review: an earlier version of this function had its own,
+ * separate single-flight guard, which covered concurrent calls to
+ * ensureJiraSynced but NOT a concurrent direct call to listMyJiraTickets()
+ * (exactly what MyJiraPage's own foreground read is), so the two most
+ * common real-world concurrent callers could still both fire a real search.
+ *
+ * Found in review: a connected account with real tickets showed "0 issues" /
+ * "not synced yet" on the All Projects page's Jira tile indefinitely,
+ * because that tile calls useLoadedJiraConnection — which only ever called
+ * the cheap, count-blind getJiraConnectionStatus() above — and nothing about
+ * landing on All Projects first (rather than My Jira) ever triggered a real
+ * read. MyJiraPage's own fetchedRead effect already re-pushes a fresh
+ * status once ITS OWN read lands, which is why this was harder to notice
+ * from My Jira itself; the tile has no read of its own to piggyback on.
+ *
+ * Does not attempt a read at all when nothing is connected — bridge().status()
+ * already answers that for free, and a connect-less account has nothing a
+ * search would find. A failed read resolves with the pre-read (still
+ * accurate) connected/site/etc. status rather than rejecting — this is a
+ * best-effort background sync, not the user-facing "My work" read that
+ * already has its own error UI (JiraLoadError in MyJiraPage.tsx) — but the
+ * failure is not silently discarded: it's logged, so a real connectivity
+ * problem is at least discoverable instead of looking identical to "just
+ * hasn't synced yet" with no trace anywhere.
+ */
+export async function ensureJiraSynced(): Promise<JiraConnectionStatus> {
+  if (lastSyncAt) return getJiraConnectionStatus();
+  const status = await getJiraConnectionStatus();
+  if (!status.connected) return status;
+  try {
+    await listMyJiraTickets();
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[jira] background sync failed', err);
+    return status;
+  }
+  return getJiraConnectionStatus();
 }
 
 /**

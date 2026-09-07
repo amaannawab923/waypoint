@@ -57,7 +57,12 @@ export function JiraConnectionCard({
       tabIndex={0}
       onClick={connected ? openWork : onConnectClick}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') (connected ? openWork : onConnectClick)();
+        // Same fix as ProjectsList.tsx's ProjectCard: without the target
+        // check, Enter on the focused settings gear bubbles up and fires
+        // this too, double-handling one keypress as two different actions.
+        if (e.key === 'Enter' && e.target === e.currentTarget) {
+          (connected ? openWork : onConnectClick)();
+        }
       }}
       className={
         'flex cursor-pointer flex-col overflow-hidden rounded-[var(--radius)] border bg-surface transition-colors ' +

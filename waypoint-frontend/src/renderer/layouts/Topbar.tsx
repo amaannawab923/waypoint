@@ -6,6 +6,7 @@ import {
   IconSearch,
   IconPlus,
   IconSun,
+  IconMoon,
   IconKeyboard,
   IconBell,
   IconSparkles,
@@ -376,11 +377,20 @@ export function Topbar({
             aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
             className="flex size-8 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary hover:bg-surface-2 hover:text-text"
           >
-            {/* The mockup's theme button is icon-only and always shows the
-                sun glyph regardless of state (no moon icon exists in its
-                icon set) — matched literally rather than adding a
-                mockup-absent moon icon for a dynamic sun/moon toggle. */}
-            <IconSun size={16} />
+            {/* Shows the CURRENT theme, not the one clicking it switches to
+                (moon while dark, sun while light). The tooltip and
+                aria-label just above still describe the target action
+                ("Switch to X") rather than the current state — a
+                deliberate split, not an oversight: the icon is what a
+                sighted user glances at to answer "which theme am I in," and
+                the label is what a screen-reader user needs to answer
+                "what does activating this control do," and those are
+                genuinely different questions with different right answers
+                here. The mockup's own button always showed the sun
+                regardless of state (it had no moon glyph in its icon set);
+                IconMoon now exists, so this no longer needs to match that
+                gap literally. */}
+            {theme === 'dark' ? <IconMoon size={16} /> : <IconSun size={16} />}
           </button>
         </Tooltip>
 

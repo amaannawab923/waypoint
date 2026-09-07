@@ -2,11 +2,16 @@ import '@testing-library/jest-dom';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import {
+  getJiraConnectionStatus,
   getJiraTransitions,
   listJiraComments,
   listMyJiraTickets,
 } from '@/data/jiraApi';
-import { useJiraConnection, useLoadedJiraConnection } from '@/lib/jiraStore';
+import {
+  setJiraConnection,
+  useJiraConnection,
+  useLoadedJiraConnection,
+} from '@/lib/jiraStore';
 import { JiraApiError } from '@/types/jira';
 import type { JiraTicket, JiraTruncation } from '@/types/jira';
 import MyJiraPage from './MyJiraPage';
@@ -28,13 +33,20 @@ jest.mock('@/data/jiraApi', () => ({
   setJiraTicketAssignee: jest.fn(),
   listJiraComments: jest.fn(),
   postJiraComment: jest.fn(),
+  getJiraConnectionStatus: jest.fn(),
 }));
 // useJiraConnection is here because the drawer and the comment composer both
 // read the connected account from the same store — the drawer to build the
 // real "Open in Jira" link, the composer to name who a comment posts as.
+// setJiraConnection is here because the page's own ticket-list effect calls
+// it directly (see MyJiraPage.tsx's fetchedRead effect) to re-push a fresh
+// connection snapshot into the shared store once real counts are known —
+// fixing the race where useLoadedJiraConnection's fast, local-only status
+// read otherwise caches a zero-count snapshot that nothing ever refreshes.
 jest.mock('@/lib/jiraStore', () => ({
   useLoadedJiraConnection: jest.fn(),
   useJiraConnection: jest.fn(),
+  setJiraConnection: jest.fn(),
 }));
 
 function ticket(overrides: Partial<JiraTicket> = {}): JiraTicket {
@@ -132,6 +144,24 @@ function mount() {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // The fetchedRead effect calls getJiraConnectionStatus().then(...)
+  // unconditionally after every successful ticket-list read — an
+  // unconfigured jest.fn() would resolve `undefined` and `.then` on that is
+  // fine, but leaving it entirely unmocked (returning undefined itself,
+  // not a promise) would throw. A generic default here means individual
+  // tests only need their own mockResolvedValue when the exact returned
+  // shape matters to that test.
+  jest.mocked(getJiraConnectionStatus).mockResolvedValue({
+    connected: true,
+    accountName: 'Max Chen',
+    accountEmail: 'max@northwind.dev',
+    accountId: '5f8a',
+    site: 'waypoint123.atlassian.net',
+    lastSyncAt: new Date().toISOString(),
+    issueCount: 0,
+    projectCount: 0,
+    countsTruncated: false,
+  });
   // The query outlives the component on purpose — it is what survives the
   // drawer's Expand navigating away and back — which means it also outlives
   // an `it()` block unless something resets it. Without this line a test that
@@ -632,6 +662,75 @@ describe('MyJiraPage — sync indicator', () => {
 
     expect(await screen.findByText(/^synced \d+s ago$/)).toBeInTheDocument();
     expect(screen.queryByText('not synced yet')).not.toBeInTheDocument();
+  });
+});
+
+// Found in review: useLoadedJiraConnection's own status read is a fast,
+// purely-local file check, while the ticket-list read below is a real
+// network round trip — so the status read routinely lands first and caches
+// a connection snapshot with issueCount/projectCount/lastSyncAt still at
+// their zero/null defaults into the shared jiraStore, which nothing
+// afterward ever refreshed. Symptom: "Connected" next to "0 issues" / "not
+// synced yet" that never correct themselves, on every reconnect or app
+// restart, until something happens to visit "My work" or hit Refresh.
+describe('MyJiraPage — refreshes the shared connection snapshot once real counts are known', () => {
+  it('re-pushes the connection store with fresh counts as soon as the ticket list read lands', async () => {
+    jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(TICKETS));
+    // The stale snapshot useLoadedJiraConnection's own (mocked, in this
+    // test) fast path would have cached — zero counts, no sync time —
+    // exactly what the race produces in the real store.
+    jest.mocked(useLoadedJiraConnection).mockReturnValue({
+      connected: true,
+      accountName: 'Max Chen',
+      accountEmail: 'max@northwind.dev',
+      accountId: '5f8a',
+      site: 'waypoint123.atlassian.net',
+      lastSyncAt: null,
+      issueCount: 0,
+      projectCount: 0,
+      countsTruncated: false,
+    });
+    const freshStatus = {
+      connected: true,
+      accountName: 'Max Chen',
+      accountEmail: 'max@northwind.dev',
+      accountId: '5f8a',
+      site: 'waypoint123.atlassian.net',
+      lastSyncAt: new Date().toISOString(),
+      issueCount: TICKETS.length,
+      projectCount: 1,
+      countsTruncated: false,
+    };
+    jest.mocked(getJiraConnectionStatus).mockResolvedValue(freshStatus);
+
+    render(
+      <MemoryRouter>
+        <MyJiraPage />
+      </MemoryRouter>,
+    );
+
+    // The ticket list itself renders as proof the read actually landed —
+    // waiting on this is what makes the assertion below meaningful rather
+    // than a race against the effect that fires it.
+    await screen.findByText(TICKETS[0].title);
+
+    expect(getJiraConnectionStatus).toHaveBeenCalled();
+    expect(setJiraConnection).toHaveBeenCalledWith(freshStatus);
+  });
+
+  it('does not re-push the store on a render that carries no new read', () => {
+    jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(TICKETS));
+    jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
+
+    render(
+      <MemoryRouter>
+        <MyJiraPage />
+      </MemoryRouter>,
+    );
+
+    // Before the list read resolves, fetchedRead is still undefined — the
+    // effect's own early return must not call through regardless.
+    expect(setJiraConnection).not.toHaveBeenCalled();
   });
 });
 

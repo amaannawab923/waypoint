@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
 import { useProject } from '@/layouts/ProjectLayout';
+import { archiveConfirmMessage } from '@/lib/projectArchiveCopy';
 import { archiveProject, deleteProject, updateProject } from '@/data/api';
 
 function formatDate(iso: string): string {
@@ -60,6 +61,12 @@ export default function General() {
 
   async function handleArchive() {
     if (archiving) return;
+    // Same reasoning as ProjectsList.tsx's own card-level archive button:
+    // one unconfirmed click shouldn't be able to do this. Message is
+    // shared with that button — see projectArchiveCopy.ts for why.
+    if (!window.confirm(archiveConfirmMessage(project.name))) {
+      return;
+    }
     setArchiving(true);
     try {
       await archiveProject(project.id);
@@ -173,9 +180,18 @@ export default function General() {
       <div className="flex flex-col gap-3 rounded-[var(--radius)] border border-border-strong p-5">
         <div>
           <h2 className="font-display text-sm font-medium text-text">Archive project</h2>
+          {/* Found in review: this used to say "you'll still be able to
+              access it from the projects page" — false. Archived projects
+              are excluded from All Projects (and the sidebar, and search);
+              the only place they're listed is the separate Archive page,
+              which is where this now actually points. A real project got
+              archived by mistake, and the person who did it went looking
+              on the wrong page first because this text told them to. */}
           <p className="mt-1 text-sm text-text-secondary">
-            Archiving a project will unlist your project from your side navigation. You will still be able to
-            access it from the projects page, but it will no longer show up in the sidebar or be searchable.
+            Archiving a project unlists it from your side navigation, All
+            Projects, and search. It isn't deleted — find it again any
+            time on the Archive page (sidebar, below your projects), where
+            you can restore it in one click.
           </p>
         </div>
         <div>

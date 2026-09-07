@@ -145,10 +145,21 @@ export const IconFile = makeIcon(
   </>,
 );
 
+// Was the mockup's own thin 8-spoke asterisk glyph (a circle with straight
+// radiating lines, no actual teeth) — replaced with a real gear silhouette
+// because it didn't read as "settings" at a glance the way every other app's
+// cog does. Path data is lucide-react's own "settings" icon verbatim (see
+// node_modules/lucide-react/dist/esm/icons/settings.mjs) rather than
+// hand-authored: freehand gear-tooth geometry is easy to get subtly uneven,
+// and this app already treats lucide-react's outline conventions (24x24,
+// ~2px stroke, rounded caps) as visually interchangeable with this custom
+// set (see this file's own header comment) — reusing its exact path through
+// makeIcon keeps IconSettings a drop-in replacement for its 6 existing call
+// sites rather than requiring a separate lucide import at each one.
 export const IconSettings = makeIcon(
   <>
+    <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" />
     <circle cx="12" cy="12" r="3" />
-    <path d="M12 3v2.5M12 18.5V21M4.2 7l2.2 1.3M17.6 15.7l2.2 1.3M3 12h2.5M18.5 12H21M4.2 17l2.2-1.3M17.6 8.3l2.2-1.3" />
   </>,
 );
 
@@ -187,6 +198,18 @@ export const IconSun = makeIcon(
     <circle cx="12" cy="12" r="4" />
     <path d="M12 3v2M12 19v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M3 12h2M19 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4" />
   </>,
+);
+
+// The theme toggle's dark-mode state — this app's own icon set had no moon
+// glyph at all (the mockup it was ported from always showed the sun
+// regardless of state), so Topbar.tsx's toggle used to render IconSun
+// unconditionally. Path data is lucide-react's own "moon" icon verbatim,
+// the same sourcing as IconSettings above, for the same reason: a
+// crescent's curve is easy to get subtly wrong hand-authored, and this app
+// already treats lucide-react's outline conventions as interchangeable
+// with this custom set.
+export const IconMoon = makeIcon(
+  <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401" />,
 );
 
 export const IconKeyboard = makeIcon(

@@ -97,7 +97,12 @@ function ArchivedProjectCard({
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') onOpen();
+        // Same fix as ProjectsList.tsx's ProjectCard, and more consequential
+        // here: without the target check, Enter on the focused Delete
+        // button bubbles up and navigates away first, so the confirm()
+        // guarding a PERMANENT delete pops up over an already-abandoned
+        // page. Only the card's own Enter should open it.
+        if (e.key === 'Enter' && e.target === e.currentTarget) onOpen();
       }}
       className="group flex cursor-pointer flex-col overflow-hidden rounded-[var(--radius)] border border-border bg-surface opacity-80 transition-opacity hover:opacity-100"
     >

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { ArrowUpDown } from 'lucide-react';
 import { IconSettings, IconPlus, IconArchive, IconFolder } from '@/components/icons';
 import { useAsync } from '@/lib/useAsync';
+import { archiveConfirmMessage } from '@/lib/projectArchiveCopy';
 import { listProjects, listMembers, listAllTickets, listSprints, archiveProject } from '@/data/api';
 import type { Project } from '@/types/entities';
 import { parseSprintDate } from '@/pages/sprints/sprint-utils';
@@ -125,37 +126,53 @@ export default function ProjectsList() {
 
       {loading && !projects && <SkeletonCardGrid />}
 
-      {/* Suppressed only for the genuinely-empty case with the flag on
-          (zero projects at all — the grid below still renders, with just
-          the Jira tile, which is a reasonable non-empty state on its own).
-          NOT suppressed when a filter is what hid everything: `projects.length
-          &gt; 0` here means real projects exist and the current visibility
-          filter excluded all of them, which deserves the same "no results"
-          feedback with the flag on as it always has with it off — the flag
-          used to suppress this unconditionally, silently dropping that
-          feedback for a filter that legitimately matched nothing. */}
-      {projects && visibleProjects.length === 0 && (projects.length > 0 || !MY_JIRA_ENABLED) && (
-        <EmptyState
-          icon={<IconFolder size={32} strokeWidth={1.5} />}
-          title="No projects match this filter"
-          description="Try a different visibility filter, or create a new project."
-          action={
-            <Button variant="primary" onClick={() => setCreateOpen(true)}>
-              <IconPlus size={15} />
-              Add Project
-            </Button>
-          }
-        />
-      )}
+      {/* Suppressed only for the genuinely-empty case with the flag on AND
+          the visibility filter set to 'all' (zero projects at all, tile
+          about to render below as the grid's sole content — a reasonable
+          non-empty state on its own). NOT suppressed for 'public'/'private'
+          specifically, even with the flag on: the tile has no visibility of
+          its own (found in review: it used to render under every filter
+          regardless, so picking "Private" with zero private projects showed
+          a stray Jira tile sitting right below a "No projects match this
+          filter" message — a project that is neither public nor private
+          contradicting a filter about exactly that) — see the matching
+          `visibilityFilter === 'all'` guard on the tile itself below, which
+          is what removed that stray tile and is why this suppression must
+          equally stop applying once we are no longer on 'all'. And NOT
+          suppressed when a filter (of any kind) is what hid everything:
+          `projects.length &gt; 0` here means real projects exist and the
+          current visibility filter excluded all of them, which deserves the
+          same "no results" feedback with the flag on as it always has with
+          it off. */}
+      {projects &&
+        visibleProjects.length === 0 &&
+        (projects.length > 0 || !MY_JIRA_ENABLED || visibilityFilter !== 'all') && (
+          <EmptyState
+            icon={<IconFolder size={32} strokeWidth={1.5} />}
+            title="No projects match this filter"
+            description="Try a different visibility filter, or create a new project."
+            action={
+              <Button variant="primary" onClick={() => setCreateOpen(true)}>
+                <IconPlus size={15} />
+                Add Project
+              </Button>
+            }
+          />
+        )}
 
-      {/* The Jira tile always renders in its own row when the flag is on,
-          even with zero real projects and even under a filter that would
-          otherwise hide everything — it isn't a Project row, so "0 results
-          for this filter" doesn't apply to it, and visibility/name/created
-          filtering only ever touches `visibleProjects` below. */}
-      {(visibleProjects.length > 0 || MY_JIRA_ENABLED) && (
+      {/* The Jira tile renders only under the 'all' visibility filter — it
+          isn't a Project row and has no public/private visibility of its
+          own, so it has no honest place under either of the OTHER two
+          filters specifically (found in review: it used to render
+          unconditionally, including under "Private" with zero real private
+          projects, which read as a filter that silently didn't apply to
+          everything on screen). Under 'all' it still renders even with zero
+          real projects, and "0 results for this filter" doesn't apply to it
+          there either — visibility/name/created filtering only ever touches
+          `visibleProjects` below. */}
+      {(visibleProjects.length > 0 || (MY_JIRA_ENABLED && visibilityFilter === 'all')) && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {MY_JIRA_ENABLED && (
+          {MY_JIRA_ENABLED && visibilityFilter === 'all' && (
             <JiraConnectionCard onConnectClick={() => setCreateOpen(true)} />
           )}
           {visibleProjects.map((project) => (
@@ -167,6 +184,18 @@ export default function ProjectsList() {
               onOpen={() => navigate(`/projects/${project.id}/tickets`)}
               onSettings={() => navigate(`/projects/${project.id}/settings`)}
               onArchive={async () => {
+                // Same window.confirm pattern ArchivedProjects.tsx already
+                // uses for its own (harder, permanent) delete action —
+                // matched here for a softer one too, since this button was
+                // a single, unconfirmed click next to Settings and easy to
+                // hit by mistake (found in review: a real project was lost
+                // this way, then recovered by hand from the database — this
+                // is what should have stopped that from the UI side).
+                // Message is shared with project-settings/General.tsx's own
+                // archive button — see projectArchiveCopy.ts for why.
+                if (!window.confirm(archiveConfirmMessage(project.name))) {
+                  return;
+                }
                 await archiveProject(project.id);
                 reload();
               }}
@@ -230,7 +259,15 @@ function ProjectCard({
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') onOpen();
+        // Found in review: without the target check, pressing Enter while
+        // the nested Archive or Settings button is focused (not the card
+        // itself) still bubbles here and fires onOpen() — navigating away
+        // BEFORE that button's own click-on-Enter default action runs, so
+        // window.confirm for archive pops up over a page you've already
+        // left. Only the card's own Enter should open it; a descendant's
+        // Enter is that descendant's business (e.target !== e.currentTarget
+        // is exactly "this keydown started somewhere inside me, not on me").
+        if (e.key === 'Enter' && e.target === e.currentTarget) onOpen();
       }}
       className="flex cursor-pointer flex-col overflow-hidden rounded-[var(--radius)] border border-border bg-surface transition-colors hover:border-border-strong"
     >
