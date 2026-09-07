@@ -2,7 +2,12 @@ import { useRef, useState } from 'react';
 import { clsx } from 'clsx';
 import { ArrowRight } from 'lucide-react';
 import { IconAlert, IconCheck } from '@/components/icons';
-import type { ProposalView, ProposalKind, Priority } from '@/types/entities';
+import type {
+  ProposalView,
+  ProposalKind,
+  ProposalSnapshot,
+  Priority,
+} from '@/types/entities';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { PriorityIcon, PRIORITY_LABEL } from './PriorityIcon';
@@ -174,6 +179,74 @@ function ProposerBadge({
       />
       Posted as you
     </span>
+  );
+}
+
+/** "jira" → "Jira". The snapshot carries the provider's own lowercase key
+ *  (it is an identifier there, not a label), and a reviewer reading a
+ *  sentence needs a name. Deliberately mechanical rather than a lookup
+ *  table: a table would need editing before a provider added later could
+ *  render at all, and the mechanical answer is right for every provider key
+ *  that is one word — which is all of them, by construction. */
+function providerLabel(provider: string): string {
+  return provider.charAt(0).toUpperCase() + provider.slice(1);
+}
+
+/**
+ * The one thing this card cannot leave implicit: approving does not change a
+ * row in Waypoint, it writes to somebody else's system, under the reviewer's
+ * own name, where other people will see it and be notified.
+ *
+ * Every native proposal is undoable in the sense that matters — the ticket is
+ * right here and can be edited back. An external write is not: a posted Jira
+ * comment has already emailed the issue's watchers by the time anyone
+ * reconsiders. So the banner names all four facts a person needs before
+ * clicking: which system, which issue, on which site, as whom, and who finds
+ * out.
+ *
+ * GENERIC ON `provider`, deliberately. Nothing here reads 'jira' — a second
+ * provider gets this banner with no change to this file. The one Jira-shaped
+ * thing left is the color: --jira/--jira-bg are the only external-integration
+ * accent tokens this app has, so they stand in for "this write leaves
+ * Waypoint" until there is a second provider to need its own.
+ */
+function ExternalWriteBanner({ snapshot }: { snapshot: ProposalSnapshot }) {
+  const { provider } = snapshot;
+  // 'native' is not an external write, and an absent provider is every
+  // proposal minted before external writes existed — both mean no banner.
+  if (!provider || provider === 'native') return null;
+  const name = providerLabel(provider);
+  const identifier = snapshot.identifier ?? 'this issue';
+  return (
+    <div className="flex flex-col gap-1 rounded-[var(--radius-sm)] border border-jira/30 bg-jira-bg px-2.5 py-2 text-[11.5px] leading-relaxed text-jira">
+      <span>
+        Approving writes to the real {name} issue{' '}
+        <b className="font-mono font-semibold">{identifier}</b>
+        {snapshot.externalSite ? <> on {snapshot.externalSite}</> : null}
+        {snapshot.externalActorName ? (
+          <>
+            {' '}
+            as <b>{snapshot.externalActorName}</b>
+          </>
+        ) : null}
+        {snapshot.externalNotifiesLabel
+          ? ` — ${snapshot.externalNotifiesLabel}`
+          : '.'}
+      </span>
+      {/* The reviewer's escape hatch: read the real issue before deciding.
+          Opened through the app's normal external-link handling, not a bare
+          target — and only when propose time actually captured a URL. */}
+      {snapshot.externalUrl ? (
+        <a
+          href={snapshot.externalUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="w-fit font-semibold underline underline-offset-2"
+        >
+          Open {identifier} in {name}
+        </a>
+      ) : null}
+    </div>
   );
 }
 
@@ -448,6 +521,7 @@ export function CopilotProposalCard({
 
       <div className="flex flex-col gap-2.5 p-3">
         <ProposalBody proposal={proposal} agentName={agentName} />
+        <ExternalWriteBanner snapshot={proposal.snapshot} />
         {isStale && (
           <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-warning bg-warning-bg px-2.5 py-2 text-[12.5px] leading-snug font-medium text-warning">
             <IconAlert size={14} className="mt-0.5 shrink-0" />

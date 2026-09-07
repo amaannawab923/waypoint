@@ -531,6 +531,30 @@ export interface ProposalSnapshot {
   assigneeNames?: string[];
   labelName?: string; // add_label — best-effort, see ProposalPayload.labelId
   labelColor?: string | null; // add_label
+  // --- external-provider writes -----------------------------------------
+  // Present only when the proposal targets a ticket that lives in another
+  // system. Every field is optional and every one is DISPLAY ONLY: the
+  // backend re-resolves a ticket's real provider from its own id at approve
+  // time and refuses to execute if the two disagree (see
+  // proposals.service.ts's executeProposal), precisely so a snapshot field
+  // can never be what decides where a write lands.
+  //
+  // `provider` is a bare string rather than a union of the providers that
+  // exist today. It is read for one purpose — "is this a write that leaves
+  // Waypoint, and what is that place called" — and the banner that reads it
+  // is written to be true of a provider added later without this type or
+  // that component changing. Absent on every proposal minted before this
+  // shipped, which reads correctly as "native".
+  provider?: string;
+  /** The site the write lands on, e.g. "yourteam.atlassian.net". */
+  externalSite?: string;
+  /** A link to the real issue, for the reviewer to check before approving. */
+  externalUrl?: string;
+  /** WHOSE account the write posts as — the connected credential's own
+   *  display name, not the model's and not the ticket's assignee's. */
+  externalActorName?: string;
+  /** Who the external system will tell about this, in its own terms. */
+  externalNotifiesLabel?: string;
 }
 
 // One proposal card, wherever it renders (the Copilot panel transcript, and
