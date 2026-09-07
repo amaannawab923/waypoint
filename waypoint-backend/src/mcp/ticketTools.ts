@@ -1,11 +1,12 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import * as ticketsService from '../services/tickets.service.js';
-import * as commentsService from '../services/comments.service.js';
 import * as activityService from '../services/activity.service.js';
 import * as statesService from '../services/states.service.js';
 import * as membersService from '../services/members.service.js';
 import { resolveActorNames } from '../lib/actorNames.js';
+import { nativeProvider, normalizeNativeTickets } from '../providers/native.js';
+import type { NormalizedComment, NormalizedTicket } from '../providers/types.js';
 
 export const PRIORITY = z.enum(['urgent', 'high', 'medium', 'low', 'none']);
 
@@ -108,41 +109,83 @@ function page<T>(rows: T[], effectiveLimit: number): { items: T[]; truncated: bo
 // the name so a caller combining dueBefore with a completed-state result
 // can tell a shipped ticket apart from a genuinely open one, without a
 // second round trip.
-async function toSummaries(items: ticketsService.Enriched[]) {
-  const [assigneeNames, stateNames] = await Promise.all([
-    resolveActorNames(items.flatMap((item) => item.assigneeIds)),
-    statesService.resolveStateNames(items.map((item) => item.stateId)),
-  ]);
-  return items.map(({ id, identifier, title, projectId, stateId, priority, dueDate, assigneeIds }) => ({
-    id,
-    identifier,
-    title,
-    projectId,
-    stateId,
-    stateName: stateNames.get(stateId)?.name ?? stateId,
-    stateGroup: stateNames.get(stateId)?.group,
-    priority,
-    dueDate,
-    assigneeIds,
-    assigneeNames: assigneeIds.map((assigneeId) => assigneeNames.get(assigneeId) ?? assigneeId),
-  }));
+//
+// The batched name resolution described above now lives in the provider
+// layer (providers/native.ts), because it is part of turning a provider's
+// rows into a common shape rather than part of serializing them.
+// This function is what remains: the projection itself, applied to an
+// already-normalized ticket.
+//
+// The native branch below emits EXACTLY the eleven fields, with the same
+// names and in the same order, that this function emitted before providers
+// existed — that identity is asserted in providers/native.test.ts. A Jira
+// result adds two fields on top of it: `provider`, so the model is never left
+// inferring a ticket's origin from which fields happen to be present, and
+// `url`, which is the one genuinely useful thing an external ticket has that
+// a native one does not.
+//
+// Native results deliberately do NOT carry `provider: 'native'`, which is the
+// one place this file accepts an asymmetry it would otherwise avoid. Adding
+// it is a strictly better result shape and should happen the next time these
+// tool results change for another reason; doing it here would have meant an
+// output change to the path this whole refactor promises is unchanged, to buy
+// a cosmetic improvement in the same commit that has to prove it changed
+// nothing.
+function toSummary(item: NormalizedTicket) {
+  const summary = {
+    id: item.ref,
+    identifier: item.identifier,
+    title: item.title,
+    projectId: item.projectId,
+    stateId: item.stateId,
+    stateName: item.stateName,
+    stateGroup: item.stateGroup,
+    priority: item.priority,
+    dueDate: item.dueDate,
+    assigneeIds: item.assigneeIds,
+    assigneeNames: item.assigneeNames,
+  };
+  if (item.provider === 'native') return summary;
+  return { provider: item.provider, ...summary, url: item.url };
 }
 
-// Detail-path sibling of toSummaries — the full enriched record already
-// carries projectId (it's a plain column on tickets), but stateId still
-// needs the same batched resolution to a real name for the same reason
-// described above, so get_ticket(_by_identifier) isn't inconsistent
-// with list_tickets about whether a state is nameable.
-async function withResolvedNames<T extends { assigneeIds: string[]; stateId: string }>(item: T) {
-  const [assigneeNames, stateNames] = await Promise.all([
-    resolveActorNames(item.assigneeIds),
-    statesService.resolveStateNames([item.stateId]),
-  ]);
+function toSummaries(items: NormalizedTicket[]) {
+  return items.map(toSummary);
+}
+
+// The single-item detail projection. `detail` is the provider's own full
+// record (see NormalizedTicket.detail) — for a native ticket it is the entire
+// enriched row, exactly what get_ticket has always returned, which is why
+// this is a passthrough rather than a reconstruction.
+function toDetail(item: NormalizedTicket) {
+  return truncateDescription(item.detail ?? {});
+}
+
+// The comment projection. Native comments keep `bodyHtml` — the key
+// list_comments has always used, and still accurate, since a native comment
+// really is HTML. A Jira comment's body is ADF flattened to plain text, so
+// calling it bodyHtml would be a lie the model could act on (by, say, trying
+// to strip tags that aren't there); it gets `body` plus an explicit
+// `bodyFormat` instead.
+function toCommentJson(comment: NormalizedComment) {
+  if (comment.bodyFormat === 'html') {
+    return {
+      id: comment.id,
+      ticketId: comment.ticketId,
+      authorId: comment.authorId,
+      bodyHtml: comment.body,
+      createdAt: comment.createdAt,
+      authorName: comment.authorName,
+    };
+  }
   return {
-    ...item,
-    assigneeNames: item.assigneeIds.map((assigneeId) => assigneeNames.get(assigneeId) ?? assigneeId),
-    stateName: stateNames.get(item.stateId)?.name ?? item.stateId,
-    stateGroup: stateNames.get(item.stateId)?.group,
+    id: comment.id,
+    ticketId: comment.ticketId,
+    authorId: comment.authorId,
+    body: comment.body,
+    bodyFormat: comment.bodyFormat,
+    createdAt: comment.createdAt,
+    authorName: comment.authorName,
   };
 }
 
@@ -234,7 +277,9 @@ export async function listTicketsHandler({
     ? await ticketsService.listTickets(projectId, filters)
     : await ticketsService.listAllTickets(filters);
   const { items: pageItems, truncated } = page(items, effectiveLimit);
-  return jsonResult({ items: await toSummaries(pageItems), truncated });
+  // Native-only, deliberately — see normalizeNativeTickets on why a
+  // filter-based list has no meaningful cross-provider form.
+  return jsonResult({ items: toSummaries(await normalizeNativeTickets(pageItems)), truncated });
 }
 
 // Drafts are excluded from listTickets/listAllTickets/searchTickets
@@ -249,15 +294,15 @@ export async function listTicketsHandler({
 // REST-facing behavior (which other, non-MCP callers may depend on
 // including drafts).
 export async function getTicketHandler({ id }: { id: string }) {
-  const item = await ticketsService.getTicket(id);
-  if (!item || item.isDraft) return notFoundResult('ticket');
-  return jsonResult(truncateDescription(await withResolvedNames(item)));
+  const item = await nativeProvider.getByRef(id);
+  if (!item) return notFoundResult('ticket');
+  return jsonResult(toDetail(item));
 }
 
 export async function getTicketByIdentifierHandler({ identifier }: { identifier: string }) {
-  const item = await ticketsService.getTicketByIdentifier(identifier);
-  if (!item || item.isDraft) return notFoundResult('ticket');
-  return jsonResult(truncateDescription(await withResolvedNames(item)));
+  const item = await nativeProvider.getByIdentifier(identifier);
+  if (!item) return notFoundResult('ticket');
+  return jsonResult(toDetail(item));
 }
 
 export async function searchTicketsHandler({
@@ -270,9 +315,9 @@ export async function searchTicketsHandler({
   limit?: number;
 }) {
   const effectiveLimit = resolveLimit(limit);
-  const items = await ticketsService.searchTickets(query, projectId, effectiveLimit + 1);
+  const items = await nativeProvider.search(query, { projectId, limit: effectiveLimit + 1 });
   const { items: pageItems, truncated } = page(items, effectiveLimit);
-  return jsonResult({ items: await toSummaries(pageItems), truncated });
+  return jsonResult({ items: toSummaries(pageItems), truncated });
 }
 
 // Same draft-hiding requirement as getTicketHandler/getTicketByIdentifierHandler
@@ -288,13 +333,9 @@ export async function searchTicketsHandler({
 export async function listCommentsHandler({ ticketId, limit }: { ticketId: string; limit?: number }) {
   if (await ticketsService.isTicketDraftOrMissing(ticketId)) return notFoundResult('ticket');
   const effectiveLimit = resolveLimit(limit);
-  const comments = await commentsService.listComments(ticketId, effectiveLimit + 1);
+  const comments = await nativeProvider.listComments(ticketId, effectiveLimit + 1);
   const { items: pageItems, truncated } = page(comments, effectiveLimit);
-  const names = await resolveActorNames(pageItems.map((c) => c.authorId));
-  return jsonResult({
-    items: pageItems.map((c) => ({ ...c, authorName: names.get(c.authorId) ?? c.authorId })),
-    truncated,
-  });
+  return jsonResult({ items: pageItems.map(toCommentJson), truncated });
 }
 
 export async function listActivityHandler({ ticketId, limit }: { ticketId: string; limit?: number }) {

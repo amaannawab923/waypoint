@@ -283,8 +283,19 @@ describe('listCommentsHandler', () => {
     vi.mocked(ticketsService.isTicketDraftOrMissing).mockResolvedValue(false);
   });
 
+  // Every fixture below carries a real createdAt Date. The column is NOT
+  // NULL with a defaultNow() (see db/schema/tickets.ts), so a row without one
+  // is a shape commentsService can never actually return — the omission only
+  // survived because nothing read the field. The provider layer now converts
+  // it to an ISO string explicitly (Date#toJSON already did exactly that when
+  // JSON.stringify reached it, so the emitted JSON is unchanged), which is
+  // what turned an unfaithful mock into a visible failure.
+  const CREATED_AT = new Date('2026-08-27T10:00:00.000Z');
+
   it('calls commentsService.listComments with the default limit+1 and attaches each comment\'s resolved authorName', async () => {
-    const comments = [{ id: 'cm-1', ticketId: 'wi-1', authorId: 'mem-4', bodyHtml: '<p>hi</p>' }];
+    const comments = [
+      { id: 'cm-1', ticketId: 'wi-1', authorId: 'mem-4', bodyHtml: '<p>hi</p>', createdAt: CREATED_AT },
+    ];
     vi.mocked(commentsService.listComments).mockResolvedValue(comments);
     vi.mocked(resolveActorNames).mockResolvedValue(new Map([['mem-4', 'Lena']]));
 
@@ -294,11 +305,16 @@ describe('listCommentsHandler', () => {
     expect(ticketsService.getTicket).not.toHaveBeenCalled();
     expect(commentsService.listComments).toHaveBeenCalledWith('wi-1', DEFAULT_LIMIT_PLUS_ONE);
     expect(resolveActorNames).toHaveBeenCalledWith(['mem-4']);
-    expect(parseJsonContent(result)).toEqual({ items: [{ ...comments[0], authorName: 'Lena' }], truncated: false });
+    expect(parseJsonContent(result)).toEqual({
+      items: [{ ...comments[0], createdAt: CREATED_AT.toISOString(), authorName: 'Lena' }],
+      truncated: false,
+    });
   });
 
   it('falls back to the raw authorId when the name cannot be resolved', async () => {
-    const comments = [{ id: 'cm-1', ticketId: 'wi-1', authorId: 'mem-ghost', bodyHtml: '<p>hi</p>' }];
+    const comments = [
+      { id: 'cm-1', ticketId: 'wi-1', authorId: 'mem-ghost', bodyHtml: '<p>hi</p>', createdAt: CREATED_AT },
+    ];
     vi.mocked(commentsService.listComments).mockResolvedValue(comments);
 
     const result = await listCommentsHandler({ ticketId: 'wi-1' });
@@ -312,6 +328,7 @@ describe('listCommentsHandler', () => {
       ticketId: 'wi-1',
       authorId: 'mem-4',
       bodyHtml: '<p>hi</p>',
+      createdAt: CREATED_AT,
     }));
     vi.mocked(commentsService.listComments).mockResolvedValue(comments);
 
