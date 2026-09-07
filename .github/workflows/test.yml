@@ -59,9 +59,14 @@ jobs:
           cache: npm
           cache-dependency-path: waypoint-backend/package-lock.json
       - run: npm ci
-      # No Postgres setup here, unlike the e2e job below: every backend
+      # No Postgres setup here, unlike the e2e job below: almost every backend
       # *.test.ts file mocks its DB access rather than hitting a real
-      # database, so this job only needs the package installed and built.
+      # database. The one exception (proposals.service.integration.test.ts)
+      # skips itself when DATABASE_URL doesn't resolve — see databaseReachable
+      # in that file — so it is silently absent from this job's coverage; it
+      # runs for real in the e2e job below, which already stands up Postgres
+      # for a different reason. This job still needs the package installed
+      # and built.
       - run: npm run build
       - run: npm test
 
@@ -133,6 +138,14 @@ jobs:
           # symptom that happened not to be asserted on by the first 3
           # tests, not the real cause.
           npm run db:seed --if-present
+          # Real Postgres is up and seeded at this point in the job — the one
+          # thing proposals.service.integration.test.ts needs to stop
+          # skipping itself (see databaseReachable in that file). Run before
+          # `npm run build` deliberately: `test` is bare `vitest run`, with no
+          # dependency on the tsc build output, so a real regression here
+          # fails fast rather than after paying for a full frontend+backend
+          # build first.
+          npm test
           npm run build
           # Backgrounded and redirected explicitly: a step's own log
           # capture stops the moment the step ends (moving on to "Run E2E
