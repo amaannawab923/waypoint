@@ -82,7 +82,9 @@ describe('POST /copilot/proposals/:id/approve', () => {
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('stale');
     expect(res.body.statusReason).toMatch(/changed since Copilot/);
-    expect(proposalsService.approveProposal).toHaveBeenCalledWith('prop-abc1234');
+    // Second argument: the borrowed Jira credential, null when the request
+    // carried no header — the ordinary case for a native proposal.
+    expect(proposalsService.approveProposal).toHaveBeenCalledWith('prop-abc1234', null);
   });
 
   it('accepts an empty body with no content at all', async () => {

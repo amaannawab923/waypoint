@@ -88,7 +88,11 @@ function page<T>(rows: T[], effectiveLimit: number): { items: T[]; truncated: bo
 
 export const PROVIDER = z.enum(['native', 'jira']);
 
-const JIRA_NOT_CONNECTED =
+// Exported for proposalTools.ts: "Jira is not connected" has to read the
+// same whether the model was trying to read a Jira issue or to propose a
+// change to one, and two wordings of one configuration fact is how a model
+// learns to treat them as two different situations.
+export const JIRA_NOT_CONNECTED =
   'Jira is not connected for this workspace, so there are no Jira tickets to read. ' +
   'Waypoint tickets are still available — omit the provider argument, or pass provider="native".';
 

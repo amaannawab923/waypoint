@@ -19,6 +19,13 @@ export interface CopilotMcpContext {
    * in the desktop app's Electron main process — this holds a copy for the
    * life of one HTTP request and nothing writes it anywhere (see
    * lib/jira/credentialHeader.ts for why it works this way).
+   *
+   * It now reaches the PROPOSE tools as well as the read tools. That is not a
+   * widening of what a tool call can do: a propose tool uses it only to READ
+   * — to confirm the issue exists, to check the requested transition is
+   * currently legal, and to record which site and which account a write would
+   * land on. Nothing writes to Jira from a tool call; the write happens later,
+   * behind a person's Approve click, in services/proposals.service.ts.
    */
   jiraCredential: JiraCredential | null;
 }
@@ -40,6 +47,6 @@ export function createCopilotMcpServer(
   const server = new McpServer({ name: 'waypoint', version: '2.0.0' });
   registerTicketTools(server, context.jiraCredential);
   registerSprintTools(server);
-  registerProposalTools(server, context.conversationId);
+  registerProposalTools(server, context.conversationId, context.jiraCredential);
   return server;
 }

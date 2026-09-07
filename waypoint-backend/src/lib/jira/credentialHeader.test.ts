@@ -100,12 +100,36 @@ describe('parseJiraCredentialHeader', () => {
     }
   });
 
-  it('keeps only the three fields it needs, never anything else the header carried', () => {
+  it('keeps only the fields it needs, never anything else the header carried', () => {
     const parsed = parseJiraCredentialHeader(
       encode({ ...CREDENTIAL, accountId: 'acc-1', extra: { nested: true } }),
     );
     expect(parsed).toEqual(CREDENTIAL);
     expect(Object.keys(parsed ?? {}).sort()).toEqual(['apiToken', 'email', 'site']);
+  });
+
+  // displayName arrived with the write path: an approval card has to say
+  // WHOSE Jira account a proposal will post as, and site/email/apiToken
+  // cannot answer that in a form a person reads. It authenticates nothing.
+  it('carries displayName through when the header has one', () => {
+    const parsed = parseJiraCredentialHeader(encode({ ...CREDENTIAL, displayName: 'Max Chen' }));
+
+    expect(parsed).toEqual({ ...CREDENTIAL, displayName: 'Max Chen' });
+  });
+
+  // An older desktop build sends a header without it. That is a working
+  // credential, not a malformed one, so its absence must not reject the whole
+  // header — callers fall back to email.
+  it('accepts a header with no displayName rather than rejecting the credential', () => {
+    const parsed = parseJiraCredentialHeader(encode(CREDENTIAL));
+
+    expect(parsed).toEqual(CREDENTIAL);
+    expect(parsed).not.toHaveProperty('displayName');
+  });
+
+  it('drops a displayName that is not a non-empty string, rather than carrying a lie', () => {
+    expect(parseJiraCredentialHeader(encode({ ...CREDENTIAL, displayName: '' }))).toEqual(CREDENTIAL);
+    expect(parseJiraCredentialHeader(encode({ ...CREDENTIAL, displayName: 42 }))).toEqual(CREDENTIAL);
   });
 
   // Every one of these is the SAME outcome as no header at all — "Jira is not

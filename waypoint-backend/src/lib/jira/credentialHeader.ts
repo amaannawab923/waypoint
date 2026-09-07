@@ -145,7 +145,7 @@ export function parseJiraCredentialHeader(raw: string | undefined): JiraCredenti
   }
 
   if (!decoded || typeof decoded !== 'object') return null;
-  const { site, email, apiToken } = decoded as Record<string, unknown>;
+  const { site, email, apiToken, displayName } = decoded as Record<string, unknown>;
   if (!isNonEmptyString(site) || !isNonEmptyString(email) || !isNonEmptyString(apiToken)) {
     return null;
   }
@@ -156,5 +156,18 @@ export function parseJiraCredentialHeader(raw: string | undefined): JiraCredenti
   // Rebuilt field by field rather than spread: whatever else the header
   // carried does not become part of a credential this process then hands to
   // the Jira client.
-  return { site: normalizedSite, email, apiToken };
+  //
+  // displayName is the one field here that authenticates nothing. It arrived
+  // with the write path, which needs to tell a reviewer WHOSE Jira account a
+  // proposal will post as before they approve it — "posts as Max Chen", not
+  // "posts as yourteam.atlassian.net". It is NOT required: an older desktop
+  // build sends a header without it, and that is a working credential, not a
+  // malformed one, so its absence must not reject the whole header. Callers
+  // fall back to email.
+  return {
+    site: normalizedSite,
+    email,
+    apiToken,
+    ...(isNonEmptyString(displayName) ? { displayName } : {}),
+  };
 }

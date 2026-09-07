@@ -278,8 +278,29 @@ export class JiraProvider implements TicketProvider {
 
   constructor(private readonly credential: JiraCredential) {}
 
-  private get site() {
+  /** The site every read and write here goes to. Public because a proposal
+   *  has to record it: a reviewer approving a write is entitled to know which
+   *  Jira it lands on, and the propose handler is the only place that can
+   *  capture it truthfully. */
+  get site(): string {
     return this.credential.site;
+  }
+
+  /**
+   * Whose Jira account a write posts as.
+   *
+   * Falls back to the account's email when the borrowed credential carries no
+   * display name (an older desktop build) — a worse-reading answer to the
+   * same question, never a missing one, because "as whom" is not a field a
+   * write-approval banner may leave blank.
+   *
+   * Deliberately NOT the Waypoint user's name, which is a different fact:
+   * Copilot acts on behalf of the Waypoint user, but it authenticates as this
+   * Atlassian account, and it is the second one that the issue's watchers
+   * will see.
+   */
+  get actorName(): string {
+    return this.credential.displayName ?? this.credential.email;
   }
 
   /**

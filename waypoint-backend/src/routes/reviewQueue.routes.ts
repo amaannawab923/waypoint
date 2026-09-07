@@ -2,6 +2,10 @@ import { Router } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import * as proposalsService from '../services/proposals.service.js';
 import {
+  JIRA_CREDENTIAL_HEADER,
+  parseJiraCredentialHeader,
+} from '../lib/jira/credentialHeader.js';
+import {
   listReviewQueueQuerySchema,
   bulkProposalIdsSchema,
   ticketProposalsQuerySchema,
@@ -37,11 +41,20 @@ reviewQueueRouter.get(
   }),
 );
 
+// Reads the borrowed Jira credential for the same reason the single-row
+// approve does (see proposals.routes.ts's note on it): a batch can contain a
+// Jira-targeted proposal, and approving one performs a real Jira write. Bulk
+// REJECT below does not read it — a reject executes nothing.
 reviewQueueRouter.post(
   '/proposals/bulk-approve',
   asyncHandler(async (req, res) => {
     const { ids } = bulkProposalIdsSchema.parse(req.body ?? {});
-    res.json({ results: await proposalsService.bulkApproveProposals(ids) });
+    res.json({
+      results: await proposalsService.bulkApproveProposals(
+        ids,
+        parseJiraCredentialHeader(req.header(JIRA_CREDENTIAL_HEADER)),
+      ),
+    });
   }),
 );
 

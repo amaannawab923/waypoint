@@ -24,6 +24,19 @@ export interface JiraCredential {
   site: string;
   email: string;
   apiToken: string;
+  /**
+   * The connected account's own display name, for saying WHOSE account a
+   * write will post as before anyone approves it.
+   *
+   * Optional, and it has to be: the header is external input, and an older
+   * desktop build sends one without this field. Callers fall back to `email`,
+   * which names the same account less pleasantly rather than naming nothing.
+   *
+   * Nothing authenticates with this. It is here for the one thing a reviewer
+   * needs and the other three fields cannot tell them — reading "posts as
+   * yourteam.atlassian.net" is not the same as reading "posts as Max Chen".
+   */
+  displayName?: string;
 }
 
 export type JiraFailureReason =
