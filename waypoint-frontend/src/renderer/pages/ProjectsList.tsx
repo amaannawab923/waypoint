@@ -125,7 +125,16 @@ export default function ProjectsList() {
 
       {loading && !projects && <SkeletonCardGrid />}
 
-      {projects && visibleProjects.length === 0 && !MY_JIRA_ENABLED && (
+      {/* Suppressed only for the genuinely-empty case with the flag on
+          (zero projects at all — the grid below still renders, with just
+          the Jira tile, which is a reasonable non-empty state on its own).
+          NOT suppressed when a filter is what hid everything: `projects.length
+          &gt; 0` here means real projects exist and the current visibility
+          filter excluded all of them, which deserves the same "no results"
+          feedback with the flag on as it always has with it off — the flag
+          used to suppress this unconditionally, silently dropping that
+          feedback for a filter that legitimately matched nothing. */}
+      {projects && visibleProjects.length === 0 && (projects.length > 0 || !MY_JIRA_ENABLED) && (
         <EmptyState
           icon={<IconFolder size={32} strokeWidth={1.5} />}
           title="No projects match this filter"
