@@ -184,6 +184,23 @@ describe('JiraConnectionPanel', () => {
     expect(screen.getByText(/Creating issues/i)).toBeInTheDocument();
   });
 
+  // This bullet used to say "the approval rail exists, but nothing generates
+  // a proposal from your checkout yet" — false on both halves the moment
+  // proposeCommentHandler/proposeJiraTransition shipped and the rail itself
+  // was removed in favor of CopilotProposalCard. This pins the corrected
+  // claim (only comment/state-change proposals reach Jira) so a future write
+  // that lands here has to update this bullet in the same commit, the same
+  // rule the two tests above already enforce for the rest of the list.
+  it('no longer claims Copilot cannot propose against Jira at all', () => {
+    render(<JiraConnectionPanel connection={status()} />);
+
+    expect(screen.queryByText(/approval rail exists/i)).toBeNull();
+    expect(screen.queryByText(/nothing generates a proposal/i)).toBeNull();
+    expect(
+      screen.getByText(/only a comment or moving a ticket through its workflow/i),
+    ).toBeInTheDocument();
+  });
+
   // Comment formatting and emoji shipped in the same feature as the
   // @-mention picker -- this list must not still claim comments are
   // "plain text apart from an @-mention" once bold/italic/lists/etc. work.

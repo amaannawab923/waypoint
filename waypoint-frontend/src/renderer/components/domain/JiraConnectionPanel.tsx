@@ -230,8 +230,10 @@ export function JiraConnectionPanel({
             press Refresh — nothing polls in between.
           </li>
           <li>
-            Copilot proposals against Jira. The approval rail exists, but
-            nothing generates a proposal from your checkout yet.
+            Copilot proposing a priority change, a reassignment, or a new
+            issue against Jira — only a comment or moving a ticket through its
+            workflow can be proposed there today. (All three already work
+            against your own, non-Jira projects.)
           </li>
           <li>Creating issues, and Linear and Shortcut companions.</li>
         </ul>
