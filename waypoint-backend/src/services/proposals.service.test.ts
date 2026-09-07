@@ -1235,6 +1235,55 @@ describe('approveProposal against a Jira issue', () => {
     expect(persisted.startsWith('Transition')).toBe(true);
   });
 
+  // Found in review: the original strip covered only C0 + DEL, which
+  // neutralizes ANSI escapes but not a Trojan-Source-style attack — Unicode
+  // bidi override/isolate characters and zero-width marks that would
+  // visually reorder or hide text in the approval banner a human reads
+  // before deciding, while leaving the underlying character sequence
+  // intact. This is the concrete threat: Jira's own error text is
+  // configurable by anyone with admin access to the target Jira project's
+  // workflow (a validator or condition's failure message), not by this app
+  // or its user.
+  it('strips Unicode bidi/format controls too, not just C0/DEL', async () => {
+    const jira = connectJira();
+    // U+202E (RIGHT-TO-LEFT OVERRIDE) then ordinary text then U+200B
+    // (ZERO WIDTH SPACE) — both survive the old, narrower strip untouched.
+    const rawMessage = 'Refused\u202E desrever yllausiv\u200B, not really';
+    jira.applyTransition.mockResolvedValue({ ok: false, message: rawMessage });
+    const finalize = claimThenFinalize(
+      jiraRow({
+        kind: 'state_change',
+        payload: { stateId: '31' },
+        snapshot: { provider: 'jira', fromStateId: '10001' },
+      }),
+    );
+
+    await approveProposal('prop-abc1234');
+
+    const persisted = (finalize.set as Vfn).mock.calls[0][0].statusReason as string;
+    expect(persisted).not.toContain('\u202E');
+    expect(persisted).not.toContain('\u200B');
+    expect(persisted).toBe('Refused  desrever yllausiv , not really');
+  });
+
+  it('normalizes a whitespace/control-only reason to null, not an empty string', async () => {
+    // A caller's `statusReason ?? 'fallback text'` (CopilotProposalCard.tsx
+    // does exactly this) never fires on '' — only on null/undefined.
+    const jira = connectJira();
+    jira.applyTransition.mockResolvedValue({ ok: false, message: '\x00\x1F\u200B  ' });
+    const finalize = claimThenFinalize(
+      jiraRow({
+        kind: 'state_change',
+        payload: { stateId: '31' },
+        snapshot: { provider: 'jira', fromStateId: '10001' },
+      }),
+    );
+
+    await approveProposal('prop-abc1234');
+
+    expect((finalize.set as Vfn).mock.calls[0][0].statusReason).toBeNull();
+  });
+
   it('turns a forbidden/rejected comment into a stale card, not an infinitely-retryable one', async () => {
     // A permission or content rejection on the comment itself (no "Add
     // comments" permission on this project, or Jira rejecting the ADF body)

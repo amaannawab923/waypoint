@@ -344,7 +344,7 @@ export async function repairProposals(): Promise<void> {
     .update(proposals)
     .set({
       status: 'expired',
-      statusReason: 'This proposal expired before it was reviewed',
+      statusReason: boundStatusReason('This proposal expired before it was reviewed'),
       resolvedAt: now,
       decidedBy: 'system',
     })
@@ -353,8 +353,16 @@ export async function repairProposals(): Promise<void> {
     .update(proposals)
     .set({
       status: 'stale',
-      statusReason:
+      // Both literals here are self-authored and safe as written today — the
+      // point of routing them through boundStatusReason anyway is that
+      // finalize() being "the only seam" stays a TRUE claim rather than one
+      // that happens to hold only because nobody has changed these two
+      // literals to include upstream text yet (a real gap a review round
+      // caught: this file previously said finalize() was the only seam while
+      // these two writes bypassed it entirely).
+      statusReason: boundStatusReason(
         'Approval was interrupted — check the ticket before asking Copilot to propose this again.',
+      ),
       resolvedAt: now,
       decidedBy: 'system',
     })
@@ -544,18 +552,31 @@ async function checkJiraStaleness(
   return null;
 }
 
-// statusReason is stored (an unbounded `text` column) and rendered directly
-// on the review card. Most of the time it's a string this file wrote itself,
-// but two real paths hand it Jira's own error/refusal text verbatim (the
-// applyTransition/postComment failure messages in providers/jira.ts, and
-// checkJiraStaleness's messages, both deliberately "carried through" so the
-// reviewer sees Jira's own explanation) — text this process does not control
-// the length or shape of. Bounded at this one seam, the only place every
-// statusReason write passes through, rather than at each of those call
-// sites: a cap so a pathological response can't bloat a row or the render,
-// and a control-character strip (the same posture providers/jira.ts's
-// jqlQuoted already applies to model-supplied JQL) so nothing upstream can
-// smuggle formatting control sequences into a UI string.
+// statusReason is stored (an unbounded `text` column), rendered directly on
+// the review card, AND — for a 'stale' outcome only — read by
+// useCopilotProposals.ts's own outcomeSentence on the frontend to describe
+// what happened... except that function deliberately does NOT interpolate
+// it into the model-facing prompt (found in review: an earlier version of
+// its own header comment claimed no upstream text ever reached the model
+// while this exact value could). Most of the time statusReason is a string
+// this file wrote itself, but ONE real path hands it Jira's own
+// error/refusal text verbatim: the applyTransition/postComment failure
+// messages in providers/jira.ts, deliberately "carried through" so the
+// reviewer sees Jira's own explanation. checkJiraStaleness's own messages
+// (just above executeJiraProposal) are NOT in this category, despite an
+// earlier version of this comment claiming otherwise — every one of them is
+// a file-authored literal with no Jira interpolation; only the two
+// TerminalExecutionFailure paths through providers/jira.ts carry text this
+// process does not control the length or shape of. Bounded at this one
+// seam, the only place every statusReason write passes through (including
+// repairProposals's own two literal writes below — routed through here too
+// so this claim stays true by construction rather than by nobody having
+// changed those literals to include upstream text yet): a cap so a
+// pathological response can't bloat a row or the render, and a
+// control-character-and-formatting strip (C0, C1, DEL, and the Unicode
+// bidi/format controls a Trojan-Source-style attack would use to visually
+// reorder the approval banner a human reads before deciding) so nothing
+// upstream can smuggle formatting control sequences into a UI string.
 const STATUS_REASON_MAX_LENGTH = 500;
 
 function boundStatusReason(reason: string | null | undefined): string | null | undefined {
@@ -565,8 +586,22 @@ function boundStatusReason(reason: string | null | undefined): string | null | u
   // reason: control characters are invisible in source, so a class typed
   // literally is unreviewable and one keystroke away from silently becoming
   // a printable range instead of a control-character one.
+  // C0 + DEL, C1, and the Unicode bidi/format controls (zero-width
+  // marks, embedding/override, isolates) a Trojan-Source-style attack
+  // would use to visually reorder this text in the banner a human reads
+  // before approving a write to their own Jira.
   // eslint-disable-next-line no-control-regex
-  const stripped = reason.replace(/[\u0000-\u001F\u007F]/g, ' ').trim();
+  const stripped = reason
+    .replace(/[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2066-\u2069]/g, ' ')
+    .trim();
+  // A non-null reason that's entirely whitespace or control characters
+  // strips down to '' — which is falsy-adjacent but not null, so a
+  // caller's `statusReason ?? 'fallback text'` (CopilotProposalCard.tsx
+  // does exactly this) would never fire, and the card would render an
+  // empty banner instead of the fallback it was written to show.
+  // Normalized to null so every existing null-coalescing caller already
+  // does the right thing.
+  if (stripped.length === 0) return null;
   return stripped.length > STATUS_REASON_MAX_LENGTH
     ? `${stripped.slice(0, STATUS_REASON_MAX_LENGTH - 1)}…`
     : stripped;
