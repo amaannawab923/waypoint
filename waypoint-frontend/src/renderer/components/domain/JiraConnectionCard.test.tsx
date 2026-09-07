@@ -104,18 +104,25 @@ describe('JiraConnectionCard — connected', () => {
     expect(screen.queryByText('issues')).not.toBeInTheDocument();
   });
 
-  it('navigates straight to the Connection tab on click', () => {
+  // Matches ProjectCard's own split exactly: the tile's primary click opens
+  // CONTENT (there, /projects/:id/tickets; here, the work tab), and a
+  // separate settings gear is the only way to reach settings. This card used
+  // to route its primary click to the Connection/settings tab, identically
+  // to the gear beside it — contradicting both its own body copy ("mirrored
+  // live and writable from here") and its header comment's stated goal of
+  // being "found the same way a project is found."
+  it('opens the work tab — the content — on click, not settings', () => {
     mount(connection());
 
     fireEvent.click(getTile());
 
-    expect(mockNavigate).toHaveBeenCalledWith('/my-jira?tab=connection');
+    expect(mockNavigate).toHaveBeenCalledWith('/my-jira');
   });
 
   // The settings button is a second, independently-clickable control inside
   // the tile — matching ProjectCard's own settings/archive icon-button
   // pattern exactly — and must not also trigger the tile's own outer click.
-  it('the settings button also opens the Connection tab, without double-firing', () => {
+  it('the settings button opens the Connection tab, without double-firing', () => {
     mount(connection());
 
     fireEvent.click(screen.getByRole('button', { name: 'Jira connection settings' }));

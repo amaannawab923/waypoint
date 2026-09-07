@@ -41,14 +41,23 @@ export function JiraConnectionCard({
   const navigate = useNavigate();
   const connected = connection?.connected ?? false;
   const openSettings = () => navigate('/my-jira?tab=connection');
+  // The card's own copy ("Your own Jira work, mirrored live and writable
+  // from here") and its header comment's whole point — mirroring ProjectCard
+  // closely enough to be "found the same way a project is found" — both
+  // require the primary click to open CONTENT, the same way ProjectCard's
+  // own onClick opens /projects/:id/tickets rather than /projects/:id/settings.
+  // This used to route to the connection/settings tab instead, identically
+  // to the separate settings gear beside it — contradicting both. 'work' is
+  // MyJiraPage's default tab, so no query param is needed to land there.
+  const openWork = () => navigate('/my-jira');
 
   return (
     <div
       role="button"
       tabIndex={0}
-      onClick={connected ? openSettings : onConnectClick}
+      onClick={connected ? openWork : onConnectClick}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') (connected ? openSettings : onConnectClick)();
+        if (e.key === 'Enter') (connected ? openWork : onConnectClick)();
       }}
       className={
         'flex cursor-pointer flex-col overflow-hidden rounded-[var(--radius)] border bg-surface transition-colors ' +
