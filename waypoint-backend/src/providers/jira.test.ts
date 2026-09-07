@@ -515,6 +515,19 @@ describe('JiraProvider.postComment', () => {
     expect(await provider().postComment('tref-abc1234', ADF)).toBeNull();
   });
 
+  // Mirrors applyTransition's own test of the same pre-flight guard. The
+  // two providers report this differently (applyTransition returns a
+  // {ok:false} refusal with its own message; postComment collapses it into
+  // the same null a real 404 also returns) but the property worth pinning
+  // here is the same one: a ref that no longer resolves is refused without
+  // ever reaching the network, not treated as "unknown, ask Jira."
+  it('refuses without a network call when the ref no longer resolves', async () => {
+    vi.mocked(ticketRefs.findById).mockResolvedValue(undefined);
+
+    expect(await provider().postComment('tref-abc1234', ADF)).toBeNull();
+    expect(jiraPost).not.toHaveBeenCalled();
+  });
+
   // Mirrors applyTransition's own split exactly: 'forbidden' and 'jira_error'
   // are about THIS comment (no comment permission on the project, Jira
   // rejected the body) and never get better by retrying, so they must come

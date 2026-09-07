@@ -133,6 +133,22 @@ describe('POST /copilot/proposals/:id/approve', () => {
     expect(logged).toContain('<malformed id>');
     logSpy.mockRestore();
   });
+
+  // The positive path the test above doesn't cover: a well-formed id (the
+  // real generator's own shape, lib/ids.ts) must still be logged verbatim,
+  // not also redacted — the sanitization is against a crafted shape, not a
+  // blanket refusal to log the real id the audit trail exists to capture.
+  it('logs a well-formed id verbatim, unredacted', async () => {
+    vi.mocked(proposalsService.approveProposal).mockResolvedValue(proposalView());
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await request(buildTestApp()).post('/copilot/proposals/prop-abc1234/approve').send({});
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy.mock.calls[0][0]).toContain('prop-abc1234');
+    expect(logSpy.mock.calls[0][0]).not.toContain('<malformed id>');
+    logSpy.mockRestore();
+  });
 });
 
 describe('POST /copilot/proposals/:id/reject', () => {
