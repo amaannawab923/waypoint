@@ -145,10 +145,21 @@ export const IconFile = makeIcon(
   </>,
 );
 
+// Was the mockup's own thin 8-spoke asterisk glyph (a circle with straight
+// radiating lines, no actual teeth) — replaced with a real gear silhouette
+// because it didn't read as "settings" at a glance the way every other app's
+// cog does. Path data is lucide-react's own "settings" icon verbatim (see
+// node_modules/lucide-react/dist/esm/icons/settings.mjs) rather than
+// hand-authored: freehand gear-tooth geometry is easy to get subtly uneven,
+// and this app already treats lucide-react's outline conventions (24x24,
+// ~2px stroke, rounded caps) as visually interchangeable with this custom
+// set (see this file's own header comment) — reusing its exact path through
+// makeIcon keeps IconSettings a drop-in replacement for its 6 existing call
+// sites rather than requiring a separate lucide import at each one.
 export const IconSettings = makeIcon(
   <>
+    <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" />
     <circle cx="12" cy="12" r="3" />
-    <path d="M12 3v2.5M12 18.5V21M4.2 7l2.2 1.3M17.6 15.7l2.2 1.3M3 12h2.5M18.5 12H21M4.2 17l2.2-1.3M17.6 8.3l2.2-1.3" />
   </>,
 );
 
