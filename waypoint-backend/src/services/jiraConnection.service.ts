@@ -3,6 +3,10 @@ import { db } from '../db/client.js';
 import { integrationCredentials } from '../db/schema/index.js';
 import { seal, open } from '../lib/secretBox.js';
 import { validateCredential, type JiraCredential, type JiraResult } from '../lib/jira/client.js';
+// The site control moved to where the credential now enters this process —
+// the MCP header parser — since that is the only path a site still arrives
+// by. Imported rather than kept here so there is one definition of it.
+import { normalizeSite } from '../lib/jira/credentialHeader.js';
 
 /**
  * The backend's own Jira connection — separate by design from the one the
@@ -15,55 +19,6 @@ import { validateCredential, type JiraCredential, type JiraResult } from '../lib
 // never drift apart into a token that is stored under one name and sealed
 // against another.
 export const JIRA_PROVIDER = 'jira';
-
-/**
- * Reduces whatever a user pasted to a bare hostname, or rejects it.
- *
- * This is a security control, not a convenience. The stored value is
- * interpolated into `https://${site}${path}` in lib/jira/client.ts, where the
- * API token rides in an Authorization header — so a stored "site" carrying a
- * path, a userinfo prefix, a port, or a `#` would silently retarget every
- * authenticated request, and would send the token to whatever host actually
- * ended up at the front of that URL. Parsing with the URL class and taking
- * ONLY its hostname is what makes that unrepresentable: `evil.com/x`,
- * `good.atlassian.net@evil.com`, and `evil.com#good.atlassian.net` all reduce
- * to the host the browser would really have contacted, and the check below
- * then decides whether to accept it.
- */
-export function normalizeSite(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  let hostname: string;
-  try {
-    // A bare hostname has no scheme for the URL parser to work with, so give
-    // it one; an input that already carries http/https keeps its own, and
-    // anything with a different scheme fails the check below.
-    const parsed = new URL(/^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`);
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
-    // Reject rather than ignore credentials embedded in the URL: they are
-    // never legitimate here, and silently dropping them would accept an input
-    // whose obvious reading ("connect as this user") is not what happens.
-    if (parsed.username || parsed.password) return null;
-    hostname = parsed.hostname.toLowerCase();
-  } catch {
-    return null;
-  }
-  // A conservative hostname shape — labels of alphanumerics and hyphens,
-  // at least one dot. Deliberately excludes single-label hosts ("localhost"):
-  // this connects to Jira Cloud, whose sites are always
-  // <something>.atlassian.net or a customer domain, and a narrower accept is
-  // the right default for a value a token gets sent to.
-  if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(hostname)) return null;
-  // The dotted-label shape alone still admits "127.0.0.1", which is four
-  // perfectly legal labels — so an IP literal would pass as a site address
-  // and point the token at loopback or at something on the internal network.
-  // Requiring a letter in the last label is the general rule that excludes
-  // every IPv4 literal without special-casing address syntax (IPv6 literals
-  // are already out: URL keeps their brackets, which the shape rejects).
-  const lastLabel = hostname.slice(hostname.lastIndexOf('.') + 1);
-  if (!/[a-z]/.test(lastLabel)) return null;
-  return hostname;
-}
 
 export interface JiraConnectionStatus {
   connected: boolean;

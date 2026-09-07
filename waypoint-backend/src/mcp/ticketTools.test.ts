@@ -14,17 +14,14 @@ vi.mock('../services/states.service.js');
 vi.mock('../services/members.service.js');
 vi.mock('../lib/actorNames.js');
 
-// Jira is deliberately left DISCONNECTED for every test in this file. The
-// read tools now consult the connection before deciding whether there is a
-// second place to look, and stubbing it here (rather than mocking the whole
-// provider) keeps all of the real provider and dispatch logic in play while
-// pinning the state under test to the one these assertions are about:
-// native-only behavior, unchanged. providers/jira.test.ts and the resolution
-// tests in ticketTools.test.ts cover the connected case.
-vi.mock('../services/jiraConnection.service.js', () => ({
-  JIRA_PROVIDER: 'jira',
-  getCredential: vi.fn(async () => null),
-}));
+// Jira is deliberately left DISCONNECTED for every test in this file, which
+// no longer needs a mock to arrange: the read tools take the request's Jira
+// as their first argument, so NO_JIRA below IS the disconnected state — the
+// same one an absent x-waypoint-jira-credential header produces. That pins
+// these assertions to native-only behavior with no Jira code path available
+// to quietly satisfy them. providers/jira.test.ts and ticketTools.jira.test.ts
+// cover the connected case.
+const NO_JIRA = null;
 
 const ticketsService = await import('../services/tickets.service.js');
 const commentsService = await import('../services/comments.service.js');
@@ -189,7 +186,7 @@ describe('getTicketHandler', () => {
     vi.mocked(resolveActorNames).mockResolvedValue(new Map([['mem-4', 'Lena']]));
     vi.mocked(resolveStateNames).mockResolvedValue(new Map([['state-1', { name: 'In Progress', group: 'started' }]]));
 
-    const result = await getTicketHandler({ id: 'wi-1' });
+    const result = await getTicketHandler(NO_JIRA, { id: 'wi-1' });
 
     expect(ticketsService.getTicket).toHaveBeenCalledWith('wi-1');
     expect(resolveStateNames).toHaveBeenCalledWith(['state-1']);
@@ -204,7 +201,7 @@ describe('getTicketHandler', () => {
   it('returns an MCP error result, not a thrown exception, on a miss', async () => {
     vi.mocked(ticketsService.getTicket).mockResolvedValue(undefined);
 
-    const result = await getTicketHandler({ id: 'missing' });
+    const result = await getTicketHandler(NO_JIRA, { id: 'missing' });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/not found/i);
@@ -216,7 +213,7 @@ describe('getTicketHandler', () => {
   it('treats a draft item as not found, even though the service returned it', async () => {
     vi.mocked(ticketsService.getTicket).mockResolvedValue(DRAFT_ITEM);
 
-    const result = await getTicketHandler({ id: 'wi-draft' });
+    const result = await getTicketHandler(NO_JIRA, { id: 'wi-draft' });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/not found/i);
@@ -227,7 +224,7 @@ describe('getTicketByIdentifierHandler', () => {
   it('looks up by identifier and returns the full record plus assigneeNames and stateName on a hit', async () => {
     vi.mocked(ticketsService.getTicketByIdentifier).mockResolvedValue(FULL_ITEM);
 
-    const result = await getTicketByIdentifierHandler({ identifier: 'WI-1' });
+    const result = await getTicketByIdentifierHandler(NO_JIRA, { identifier: 'WI-1' });
 
     expect(ticketsService.getTicketByIdentifier).toHaveBeenCalledWith('WI-1');
     // No name/state resolved in this test (default empty maps from the top
@@ -239,7 +236,7 @@ describe('getTicketByIdentifierHandler', () => {
   it('returns an MCP error result on a miss', async () => {
     vi.mocked(ticketsService.getTicketByIdentifier).mockResolvedValue(undefined);
 
-    const result = await getTicketByIdentifierHandler({ identifier: 'WI-999' });
+    const result = await getTicketByIdentifierHandler(NO_JIRA, { identifier: 'WI-999' });
 
     expect(result.isError).toBe(true);
   });
@@ -250,7 +247,7 @@ describe('getTicketByIdentifierHandler', () => {
   it('treats a draft item as not found via identifier lookup too', async () => {
     vi.mocked(ticketsService.getTicketByIdentifier).mockResolvedValue(DRAFT_ITEM);
 
-    const result = await getTicketByIdentifierHandler({ identifier: 'WI-99' });
+    const result = await getTicketByIdentifierHandler(NO_JIRA, { identifier: 'WI-99' });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/not found/i);
@@ -261,7 +258,7 @@ describe('searchTicketsHandler', () => {
   it('calls searchTickets with the query, optional projectId, and default limit+1, returns a summary projection', async () => {
     vi.mocked(ticketsService.searchTickets).mockResolvedValue([FULL_ITEM]);
 
-    const result = await searchTicketsHandler({ query: 'login', projectId: 'proj-1' });
+    const result = await searchTicketsHandler(NO_JIRA, { query: 'login', projectId: 'proj-1' });
 
     expect(ticketsService.searchTickets).toHaveBeenCalledWith('login', 'proj-1', DEFAULT_LIMIT_PLUS_ONE);
     const parsed = parseJsonContent(result);
@@ -274,7 +271,7 @@ describe('searchTicketsHandler', () => {
     const items = Array.from({ length: 3 }, (_, i) => ({ ...FULL_ITEM, id: `wi-${i}`, identifier: `WI-${i}` }));
     vi.mocked(ticketsService.searchTickets).mockResolvedValue(items);
 
-    const result = await searchTicketsHandler({ query: 'login', limit: 2 });
+    const result = await searchTicketsHandler(NO_JIRA, { query: 'login', limit: 2 });
 
     const parsed = parseJsonContent(result);
     expect(parsed.truncated).toBe(true);
@@ -311,7 +308,7 @@ describe('listCommentsHandler', () => {
     vi.mocked(commentsService.listComments).mockResolvedValue(comments);
     vi.mocked(resolveActorNames).mockResolvedValue(new Map([['mem-4', 'Lena']]));
 
-    const result = await listCommentsHandler({ ticketId: 'wi-1' });
+    const result = await listCommentsHandler(NO_JIRA, { ticketId: 'wi-1' });
 
     expect(ticketsService.isTicketDraftOrMissing).toHaveBeenCalledWith('wi-1');
     expect(ticketsService.getTicket).not.toHaveBeenCalled();
@@ -329,7 +326,7 @@ describe('listCommentsHandler', () => {
     ];
     vi.mocked(commentsService.listComments).mockResolvedValue(comments);
 
-    const result = await listCommentsHandler({ ticketId: 'wi-1' });
+    const result = await listCommentsHandler(NO_JIRA, { ticketId: 'wi-1' });
 
     expect(parseJsonContent(result).items[0].authorName).toBe('mem-ghost');
   });
@@ -344,7 +341,7 @@ describe('listCommentsHandler', () => {
     }));
     vi.mocked(commentsService.listComments).mockResolvedValue(comments);
 
-    const result = await listCommentsHandler({ ticketId: 'wi-1', limit: 2 });
+    const result = await listCommentsHandler(NO_JIRA, { ticketId: 'wi-1', limit: 2 });
 
     expect(commentsService.listComments).toHaveBeenCalledWith('wi-1', 3);
     const parsed = parseJsonContent(result);
@@ -359,7 +356,7 @@ describe('listCommentsHandler', () => {
   it('treats a draft item as not found and never calls commentsService, even though the ticket exists', async () => {
     vi.mocked(ticketsService.isTicketDraftOrMissing).mockResolvedValue(true);
 
-    const result = await listCommentsHandler({ ticketId: 'wi-draft' });
+    const result = await listCommentsHandler(NO_JIRA, { ticketId: 'wi-draft' });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/not found/i);
@@ -369,7 +366,7 @@ describe('listCommentsHandler', () => {
   it('treats a missing ticket as not found and never calls commentsService', async () => {
     vi.mocked(ticketsService.isTicketDraftOrMissing).mockResolvedValue(true);
 
-    const result = await listCommentsHandler({ ticketId: 'missing' });
+    const result = await listCommentsHandler(NO_JIRA, { ticketId: 'missing' });
 
     expect(result.isError).toBe(true);
     expect(commentsService.listComments).not.toHaveBeenCalled();

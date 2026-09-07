@@ -17,17 +17,15 @@ vi.mock('../services/states.service.js');
 vi.mock('../services/members.service.js');
 vi.mock('../lib/actorNames.js');
 vi.mock('../providers/native.js');
-// Only getJiraProvider is replaced. isExternalRef stays REAL, because the id
-// prefix rule it encodes is one of the things under test — a mocked version
-// would let a broken rule pass.
-vi.mock('../providers/jira.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../providers/jira.js')>()),
-  getJiraProvider: vi.fn(),
-}));
+// providers/jira.js is NOT mocked at all any more. Jira reaches these
+// handlers as a plain first argument — the request's own provider, resolved
+// once in registerTicketTools from the credential the request borrowed — so
+// a stub is simply passed in, and isExternalRef stays the real one (the id
+// prefix rule it encodes is itself under test here, and a mocked version
+// would let a broken rule pass).
 
 const ticketsService = await import('../services/tickets.service.js');
 const { nativeProvider } = await import('../providers/native.js');
-const { getJiraProvider } = await import('../providers/jira.js');
 const { ProviderUnavailableError } = await import('../providers/types.js');
 const {
   getTicketHandler,
@@ -81,7 +79,10 @@ function jiraStub() {
   };
 }
 
-let jira: ReturnType<typeof jiraStub>;
+// What the handlers are handed as their Jira. Null (the beforeEach default)
+// is "this request carried no usable Jira credential" — the same state an
+// absent or malformed x-waypoint-jira-credential header produces.
+let jira: ReturnType<typeof jiraStub> | null;
 
 function parse(result: { content: { type: string; text: string }[] }) {
   return JSON.parse(result.content[0].text);
@@ -90,13 +91,19 @@ function parse(result: { content: { type: string; text: string }[] }) {
 /** Connects Jira for the test. Nothing is connected by default. */
 function connectJira() {
   jira = jiraStub();
-  vi.mocked(getJiraProvider).mockResolvedValue(jira);
+  return jira;
+}
+
+/** The connected stub, for assertions. Throws rather than silently asserting
+ *  against nothing if a test forgot to call connectJira(). */
+function connected() {
+  if (!jira) throw new Error('this test asserts on Jira but never called connectJira()');
   return jira;
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(getJiraProvider).mockResolvedValue(null);
+  jira = null;
   vi.mocked(nativeProvider.getByIdentifier).mockResolvedValue(null);
   vi.mocked(nativeProvider.getByRef).mockResolvedValue(null);
   vi.mocked(nativeProvider.search).mockResolvedValue([]);
@@ -109,7 +116,7 @@ describe('get_ticket_by_identifier resolution', () => {
     connectJira();
     vi.mocked(nativeProvider.getByIdentifier).mockResolvedValue(NATIVE_TICKET);
 
-    const result = await getTicketByIdentifierHandler({ identifier: 'ENG-4' });
+    const result = await getTicketByIdentifierHandler(jira, { identifier: 'ENG-4' });
 
     expect(result.isError).toBeFalsy();
     expect(parse(result)).toMatchObject({ id: 'wi-1', title: 'Native login bug' });
@@ -118,7 +125,7 @@ describe('get_ticket_by_identifier resolution', () => {
   it('returns the Jira issue when only Jira matches', async () => {
     connectJira().getByIdentifier.mockResolvedValue(JIRA_TICKET);
 
-    const result = await getTicketByIdentifierHandler({ identifier: 'ENG-4' });
+    const result = await getTicketByIdentifierHandler(jira, { identifier: 'ENG-4' });
 
     expect(result.isError).toBeFalsy();
     expect(parse(result)).toMatchObject({ provider: 'jira', id: 'tref-abc1234' });
@@ -132,16 +139,16 @@ describe('get_ticket_by_identifier resolution', () => {
     connectJira();
     vi.mocked(nativeProvider.getByIdentifier).mockResolvedValue(NATIVE_TICKET);
 
-    await getTicketByIdentifierHandler({ identifier: 'ENG-4' });
+    await getTicketByIdentifierHandler(jira, { identifier: 'ENG-4' });
 
-    expect(jira.getByIdentifier).toHaveBeenCalledWith('ENG-4');
+    expect(connected().getByIdentifier).toHaveBeenCalledWith('ENG-4');
   });
 
   it('refuses to guess when both match, and names both plus their ids', async () => {
     connectJira().getByIdentifier.mockResolvedValue(JIRA_TICKET);
     vi.mocked(nativeProvider.getByIdentifier).mockResolvedValue(NATIVE_TICKET);
 
-    const result = await getTicketByIdentifierHandler({ identifier: 'ENG-4' });
+    const result = await getTicketByIdentifierHandler(jira, { identifier: 'ENG-4' });
 
     expect(result.isError).toBe(true);
     const message = result.content[0].text;
@@ -160,7 +167,7 @@ describe('get_ticket_by_identifier resolution', () => {
   it('reports a real miss when neither matches', async () => {
     connectJira();
 
-    const result = await getTicketByIdentifierHandler({ identifier: 'ENG-999' });
+    const result = await getTicketByIdentifierHandler(jira, { identifier: 'ENG-999' });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/not found/i);
@@ -169,7 +176,7 @@ describe('get_ticket_by_identifier resolution', () => {
   it('asks only native when Jira is not connected, and does not error about it', async () => {
     vi.mocked(nativeProvider.getByIdentifier).mockResolvedValue(NATIVE_TICKET);
 
-    const result = await getTicketByIdentifierHandler({ identifier: 'ENG-4' });
+    const result = await getTicketByIdentifierHandler(jira, { identifier: 'ENG-4' });
 
     expect(result.isError).toBeFalsy();
     expect(parse(result)).toMatchObject({ id: 'wi-1' });
@@ -181,26 +188,26 @@ describe('get_ticket_by_identifier with an explicit provider', () => {
     connectJira();
     vi.mocked(nativeProvider.getByIdentifier).mockResolvedValue(NATIVE_TICKET);
 
-    const result = await getTicketByIdentifierHandler({ identifier: 'ENG-4', provider: 'native' });
+    const result = await getTicketByIdentifierHandler(jira, { identifier: 'ENG-4', provider: 'native' });
 
     expect(parse(result)).toMatchObject({ id: 'wi-1' });
     // An explicit provider is an instruction, not a hint: no second lookup,
     // and therefore no ambiguity error for an identifier already disambiguated.
-    expect(jira.getByIdentifier).not.toHaveBeenCalled();
+    expect(connected().getByIdentifier).not.toHaveBeenCalled();
   });
 
   it('looks only in Jira when told jira', async () => {
     connectJira().getByIdentifier.mockResolvedValue(JIRA_TICKET);
     vi.mocked(nativeProvider.getByIdentifier).mockResolvedValue(NATIVE_TICKET);
 
-    const result = await getTicketByIdentifierHandler({ identifier: 'ENG-4', provider: 'jira' });
+    const result = await getTicketByIdentifierHandler(jira, { identifier: 'ENG-4', provider: 'jira' });
 
     expect(parse(result)).toMatchObject({ id: 'tref-abc1234' });
     expect(nativeProvider.getByIdentifier).not.toHaveBeenCalled();
   });
 
   it('explains that Jira is not connected rather than reporting a miss', async () => {
-    const result = await getTicketByIdentifierHandler({ identifier: 'ENG-4', provider: 'jira' });
+    const result = await getTicketByIdentifierHandler(jira, { identifier: 'ENG-4', provider: 'jira' });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('not connected');
@@ -215,7 +222,7 @@ describe('get_ticket_by_identifier when Jira cannot answer', () => {
     connectJira().getByIdentifier.mockRejectedValue(new ProviderUnavailableError('Jira took too long to respond.'));
     vi.mocked(nativeProvider.getByIdentifier).mockResolvedValue(NATIVE_TICKET);
 
-    const result = await getTicketByIdentifierHandler({ identifier: 'ENG-4' });
+    const result = await getTicketByIdentifierHandler(jira, { identifier: 'ENG-4' });
 
     expect(result.isError).toBeFalsy();
     expect(parse(result)).toMatchObject({ id: 'wi-1' });
@@ -227,7 +234,7 @@ describe('get_ticket_by_identifier when Jira cannot answer', () => {
     // act on it and tell the user the ticket does not exist.
     connectJira().getByIdentifier.mockRejectedValue(new ProviderUnavailableError('Jira took too long to respond.'));
 
-    const result = await getTicketByIdentifierHandler({ identifier: 'ENG-4' });
+    const result = await getTicketByIdentifierHandler(jira, { identifier: 'ENG-4' });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('could not be reached');
@@ -237,7 +244,7 @@ describe('get_ticket_by_identifier when Jira cannot answer', () => {
   it('lets a genuine bug through to the safety net instead of dressing it as a Jira outage', async () => {
     connectJira().getByIdentifier.mockRejectedValue(new TypeError('undefined is not a function'));
 
-    await expect(getTicketByIdentifierHandler({ identifier: 'ENG-4' })).rejects.toThrow(TypeError);
+    await expect(getTicketByIdentifierHandler(jira, { identifier: 'ENG-4' })).rejects.toThrow(TypeError);
   });
 });
 
@@ -246,11 +253,11 @@ describe('id prefix dispatch', () => {
     connectJira().getByRef.mockResolvedValue(JIRA_TICKET);
     vi.mocked(nativeProvider.getByRef).mockResolvedValue(NATIVE_TICKET);
 
-    expect(parse(await getTicketHandler({ id: 'tref-abc1234' }))).toMatchObject({ id: 'tref-abc1234' });
-    expect(jira.getByRef).toHaveBeenCalledWith('tref-abc1234');
+    expect(parse(await getTicketHandler(jira, { id: 'tref-abc1234' }))).toMatchObject({ id: 'tref-abc1234' });
+    expect(connected().getByRef).toHaveBeenCalledWith('tref-abc1234');
     expect(nativeProvider.getByRef).not.toHaveBeenCalled();
 
-    expect(parse(await getTicketHandler({ id: 'wi-1' }))).toMatchObject({ id: 'wi-1' });
+    expect(parse(await getTicketHandler(jira, { id: 'wi-1' }))).toMatchObject({ id: 'wi-1' });
     expect(nativeProvider.getByRef).toHaveBeenCalledWith('wi-1');
   });
 
@@ -267,9 +274,9 @@ describe('id prefix dispatch', () => {
       },
     ]);
 
-    const result = parse(await listCommentsHandler({ ticketId: 'tref-abc1234' }));
+    const result = parse(await listCommentsHandler(jira, { ticketId: 'tref-abc1234' }));
 
-    expect(jira.listComments).toHaveBeenCalledWith('tref-abc1234', 51);
+    expect(connected().listComments).toHaveBeenCalledWith('tref-abc1234', 51);
     // A Jira comment is flattened ADF, so it carries body + bodyFormat rather
     // than bodyHtml. Calling it bodyHtml would be a lie the model could act on.
     expect(result.items[0]).toMatchObject({ body: 'Still failing', bodyFormat: 'text' });
@@ -281,7 +288,7 @@ describe('id prefix dispatch', () => {
     // ticket_refs id in the tickets table, miss, and report "not found" for a
     // Jira issue that is perfectly readable.
     connectJira();
-    await listCommentsHandler({ ticketId: 'tref-abc1234' });
+    await listCommentsHandler(jira, { ticketId: 'tref-abc1234' });
     expect(ticketsService.isTicketDraftOrMissing).not.toHaveBeenCalled();
   });
 
@@ -303,7 +310,7 @@ describe('search_tickets across providers', () => {
     connectJira().search.mockResolvedValue([JIRA_TICKET]);
     vi.mocked(nativeProvider.search).mockResolvedValue([NATIVE_TICKET]);
 
-    const result = parse(await searchTicketsHandler({ query: 'login' }));
+    const result = parse(await searchTicketsHandler(jira, { query: 'login' }));
 
     expect(result.items).toHaveLength(2);
     // Native results keep exactly the shape they always had, with no
@@ -319,9 +326,9 @@ describe('search_tickets across providers', () => {
 
   it('asks each provider for limit + 1, so truncation is detected per source', async () => {
     connectJira();
-    await searchTicketsHandler({ query: 'login', limit: 2 });
+    await searchTicketsHandler(jira, { query: 'login', limit: 2 });
     expect(nativeProvider.search).toHaveBeenCalledWith('login', { projectId: undefined, limit: 3 });
-    expect(jira.search).toHaveBeenCalledWith('login', { projectId: undefined, limit: 3 });
+    expect(connected().search).toHaveBeenCalledWith('login', { projectId: undefined, limit: 3 });
   });
 
   it('marks the result truncated when either source had more', async () => {
@@ -329,7 +336,7 @@ describe('search_tickets across providers', () => {
     connectJira().search.mockResolvedValue([JIRA_TICKET, JIRA_TICKET, JIRA_TICKET]);
     vi.mocked(nativeProvider.search).mockResolvedValue([NATIVE_TICKET]);
 
-    const result = parse(await searchTicketsHandler({ query: 'login', limit: 2 }));
+    const result = parse(await searchTicketsHandler(jira, { query: 'login', limit: 2 }));
 
     expect(result.truncated).toBe(true);
   });
@@ -338,7 +345,7 @@ describe('search_tickets across providers', () => {
     connectJira().search.mockRejectedValue(new ProviderUnavailableError('Jira is rate-limiting this account.'));
     vi.mocked(nativeProvider.search).mockResolvedValue([NATIVE_TICKET]);
 
-    const result = parse(await searchTicketsHandler({ query: 'login' }));
+    const result = parse(await searchTicketsHandler(jira, { query: 'login' }));
 
     // Half an answer beats none: a Jira outage must not break searching this
     // app's own tickets.
@@ -351,7 +358,7 @@ describe('search_tickets across providers', () => {
   it('does not set the unavailable flag when Jira is merely not connected', async () => {
     vi.mocked(nativeProvider.search).mockResolvedValue([NATIVE_TICKET]);
 
-    const result = parse(await searchTicketsHandler({ query: 'login' }));
+    const result = parse(await searchTicketsHandler(jira, { query: 'login' }));
 
     expect(result.jiraUnavailable).toBeUndefined();
   });
@@ -360,11 +367,11 @@ describe('search_tickets across providers', () => {
     connectJira().search.mockResolvedValue([JIRA_TICKET]);
     vi.mocked(nativeProvider.search).mockResolvedValue([NATIVE_TICKET]);
 
-    const nativeOnly = parse(await searchTicketsHandler({ query: 'login', provider: 'native' }));
+    const nativeOnly = parse(await searchTicketsHandler(jira, { query: 'login', provider: 'native' }));
     expect(nativeOnly.items).toHaveLength(1);
-    expect(jira.search).not.toHaveBeenCalled();
+    expect(connected().search).not.toHaveBeenCalled();
 
-    const jiraOnly = parse(await searchTicketsHandler({ query: 'login', provider: 'jira' }));
+    const jiraOnly = parse(await searchTicketsHandler(jira, { query: 'login', provider: 'jira' }));
     expect(jiraOnly.items).toEqual([expect.objectContaining({ provider: 'jira' })]);
   });
 });
@@ -378,7 +385,11 @@ describe('the safety net and unreachable providers', () => {
     const { withErrorSafetyNet, INTERNAL_ERROR_MESSAGE } = await import('./ticketTools.js');
     connectJira().getByRef.mockRejectedValue(new ProviderUnavailableError('Jira took too long to respond.'));
 
-    const wrapped = withErrorSafetyNet('get_ticket', getTicketHandler);
+    // Bound the same way registerTicketTools binds it — the request's Jira
+    // closed over, args from the model.
+    const wrapped = withErrorSafetyNet('get_ticket', (args: { id: string }) =>
+      getTicketHandler(jira, args),
+    );
     const result = await wrapped({ id: 'tref-abc1234' });
 
     expect(result.isError).toBe(true);
@@ -390,7 +401,9 @@ describe('the safety net and unreachable providers', () => {
     const { withErrorSafetyNet, INTERNAL_ERROR_MESSAGE } = await import('./ticketTools.js');
     connectJira().getByRef.mockRejectedValue(new TypeError('undefined is not a function'));
 
-    const result = await withErrorSafetyNet('get_ticket', getTicketHandler)({ id: 'tref-abc1234' });
+    const result = await withErrorSafetyNet('get_ticket', (args: { id: string }) =>
+      getTicketHandler(jira, args),
+    )({ id: 'tref-abc1234' });
 
     expect(result.content[0].text).toBe(INTERNAL_ERROR_MESSAGE);
   });

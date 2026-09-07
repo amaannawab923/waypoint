@@ -5,6 +5,7 @@ import * as activityService from '../services/activity.service.js';
 import * as statesService from '../services/states.service.js';
 import * as membersService from '../services/members.service.js';
 import { resolveActorNames } from '../lib/actorNames.js';
+import type { JiraCredential } from '../lib/jira/client.js';
 import { nativeProvider, normalizeNativeTickets } from '../providers/native.js';
 import { getJiraProvider, isExternalRef } from '../providers/jira.js';
 import {
@@ -108,12 +109,18 @@ function unavailableResult(error: ProviderUnavailableError) {
   return validationErrorResult(`Jira could not be reached: ${error.message}`);
 }
 
-// Null means Jira is not connected — never "Jira had nothing". Every caller
-// below treats it as "there is no second place to look", which is a claim
-// about configuration rather than about tickets.
-async function jiraProviderOrNull(): Promise<TicketProvider | null> {
-  return getJiraProvider();
-}
+// Every handler that can reach Jira takes it as its FIRST parameter, the same
+// shape proposalTools.ts uses for the conversation id and for the same
+// reason: it is per-request context, resolved once in registerTicketTools
+// from the credential this request borrowed, and threaded explicitly rather
+// than looked up from module scope. There is nowhere to look it up FROM — no
+// Jira credential is stored in this process (see lib/jira/credentialHeader.ts)
+// — so the parameter is not a style choice, it is the only honest signature.
+//
+// Null means Jira is not connected for this request — never "Jira had
+// nothing". Every handler below treats it as "there is no second place to
+// look", which is a claim about configuration rather than about tickets.
+type Jira = TicketProvider | null;
 
 type Outcome<T> = { status: 'ok'; value: T } | { status: 'failed'; error: ProviderUnavailableError };
 
@@ -363,9 +370,8 @@ export async function listTicketsHandler({
 // ticket_refs row (lib/ids.ts mints internal ticket ids as "wi-"), so no
 // lookup is needed to know which provider owns it, and no provider argument
 // has to be threaded through every call that already carries an id.
-export async function getTicketHandler({ id }: { id: string }) {
+export async function getTicketHandler(jira: Jira, { id }: { id: string }) {
   if (isExternalRef(id)) {
-    const jira = await jiraProviderOrNull();
     if (!jira) return validationErrorResult(JIRA_NOT_CONNECTED);
     const item = await jira.getByRef(id);
     return item ? jsonResult(toDetail(item)) : notFoundResult('ticket');
@@ -408,13 +414,16 @@ export async function getTicketHandler({ id }: { id: string }) {
  * "confidently read the wrong ticket" is a failure nobody can detect from the
  * answer.
  */
-export async function getTicketByIdentifierHandler({
-  identifier,
-  provider,
-}: {
-  identifier: string;
-  provider?: z.infer<typeof PROVIDER>;
-}) {
+export async function getTicketByIdentifierHandler(
+  jira: Jira,
+  {
+    identifier,
+    provider,
+  }: {
+    identifier: string;
+    provider?: z.infer<typeof PROVIDER>;
+  },
+) {
   // An explicit provider is an instruction, not a hint: look only there. It
   // is also how a caller answers the ambiguity error below.
   if (provider === 'native') {
@@ -422,13 +431,11 @@ export async function getTicketByIdentifierHandler({
     return item ? jsonResult(toDetail(item)) : notFoundResult('ticket');
   }
   if (provider === 'jira') {
-    const jira = await jiraProviderOrNull();
     if (!jira) return validationErrorResult(JIRA_NOT_CONNECTED);
     const item = await jira.getByIdentifier(identifier);
     return item ? jsonResult(toDetail(item)) : notFoundResult('ticket');
   }
 
-  const jira = await jiraProviderOrNull();
   // Both, concurrently — see the ordering note above.
   const [nativeHit, jiraOutcome] = await Promise.all([
     nativeProvider.getByIdentifier(identifier),
@@ -463,17 +470,20 @@ export async function getTicketByIdentifierHandler({
   return notFoundResult('ticket');
 }
 
-export async function searchTicketsHandler({
-  query,
-  projectId,
-  limit,
-  provider,
-}: {
-  query: string;
-  projectId?: string;
-  limit?: number;
-  provider?: z.infer<typeof PROVIDER>;
-}) {
+export async function searchTicketsHandler(
+  jira: Jira,
+  {
+    query,
+    projectId,
+    limit,
+    provider,
+  }: {
+    query: string;
+    projectId?: string;
+    limit?: number;
+    provider?: z.infer<typeof PROVIDER>;
+  },
+) {
   const effectiveLimit = resolveLimit(limit);
   // limit + 1 PER SOURCE, so truncation is detected per provider rather than
   // masked by the merge — a full page of native hits would otherwise hide
@@ -481,7 +491,6 @@ export async function searchTicketsHandler({
   const fetchLimit = effectiveLimit + 1;
 
   if (provider === 'jira') {
-    const jira = await jiraProviderOrNull();
     if (!jira) return validationErrorResult(JIRA_NOT_CONNECTED);
     const found = page(await jira.search(query, { projectId, limit: fetchLimit }), effectiveLimit);
     return jsonResult({ items: toSummaries(found.items), truncated: found.truncated });
@@ -495,7 +504,6 @@ export async function searchTicketsHandler({
     return jsonResult({ items: toSummaries(native.items), truncated: native.truncated });
   }
 
-  const jira = await jiraProviderOrNull();
   if (!jira) return jsonResult({ items: toSummaries(native.items), truncated: native.truncated });
 
   // projectId means a native project id on one side and a Jira project key on
@@ -534,13 +542,15 @@ export async function searchTicketsHandler({
 // needs to be a cheap existence/isDraft check, not the full enriched fetch
 // (getTicket() also joins labels/assignees/links, none of which either
 // handler below uses), hence isTicketDraftOrMissing() instead of getTicket().
-export async function listCommentsHandler({ ticketId, limit }: { ticketId: string; limit?: number }) {
+export async function listCommentsHandler(
+  jira: Jira,
+  { ticketId, limit }: { ticketId: string; limit?: number },
+) {
   const effectiveLimit = resolveLimit(limit);
   // Same prefix dispatch as get_ticket. The draft gate below is native-only
   // by nature — drafts are this app's concept, and a Jira issue reachable by
   // a ref has already been proven visible to the connected account.
   if (isExternalRef(ticketId)) {
-    const jira = await jiraProviderOrNull();
     if (!jira) return validationErrorResult(JIRA_NOT_CONNECTED);
     const external = page(await jira.listComments(ticketId, effectiveLimit + 1), effectiveLimit);
     return jsonResult({ items: external.items.map(toCommentJson), truncated: external.truncated });
@@ -585,7 +595,14 @@ export async function listMembersHandler() {
   return jsonResult(members.map(({ id, displayName, role }) => ({ id, displayName, role })));
 }
 
-export function registerTicketTools(server: McpServer): void {
+// The credential is resolved into a provider ONCE per server (which is once
+// per request — see mcp/server.ts), rather than per tool call: construction
+// does no I/O, so there is nothing to defer, and doing it here means every
+// handler below sees the same Jira for the whole request instead of each one
+// re-deriving it.
+export function registerTicketTools(server: McpServer, jiraCredential: JiraCredential | null): void {
+  const jira = getJiraProvider(jiraCredential);
+
   server.registerTool(
     'list_tickets',
     {
@@ -613,7 +630,7 @@ export function registerTicketTools(server: McpServer): void {
         'Works for both Waypoint tickets and Jira issues — the id says which, so nothing else is needed.',
       inputSchema: { id: z.string() },
     },
-    withErrorSafetyNet('get_ticket', getTicketHandler),
+    withErrorSafetyNet('get_ticket', (args: { id: string }) => getTicketHandler(jira, args)),
   );
 
   server.registerTool(
@@ -632,7 +649,11 @@ export function registerTicketTools(server: McpServer): void {
         ),
       },
     },
-    withErrorSafetyNet('get_ticket_by_identifier', getTicketByIdentifierHandler),
+    withErrorSafetyNet(
+      'get_ticket_by_identifier',
+      (args: { identifier: string; provider?: z.infer<typeof PROVIDER> }) =>
+        getTicketByIdentifierHandler(jira, args),
+    ),
   );
 
   server.registerTool(
@@ -662,7 +683,15 @@ export function registerTicketTools(server: McpServer): void {
         limit: LIMIT_SCHEMA,
       },
     },
-    withErrorSafetyNet('search_tickets', searchTicketsHandler),
+    withErrorSafetyNet(
+      'search_tickets',
+      (args: {
+        query: string;
+        projectId?: string;
+        provider?: z.infer<typeof PROVIDER>;
+        limit?: number;
+      }) => searchTicketsHandler(jira, args),
+    ),
   );
 
   server.registerTool(
@@ -674,7 +703,9 @@ export function registerTicketTools(server: McpServer): void {
         'Results are capped (see limit) — check the truncated flag and narrow the query if it comes back true.',
       inputSchema: { ticketId: z.string(), limit: LIMIT_SCHEMA },
     },
-    withErrorSafetyNet('list_comments', listCommentsHandler),
+    withErrorSafetyNet('list_comments', (args: { ticketId: string; limit?: number }) =>
+      listCommentsHandler(jira, args),
+    ),
   );
 
   server.registerTool(

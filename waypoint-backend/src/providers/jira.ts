@@ -1,6 +1,5 @@
 import { jiraGet, type JiraCredential, type JiraResult } from '../lib/jira/client.js';
 import { adfToPlainText } from '../lib/jira/adf.js';
-import * as jiraConnection from '../services/jiraConnection.service.js';
 import * as ticketRefs from '../services/ticketRefs.service.js';
 import {
   ProviderUnavailableError,
@@ -396,15 +395,21 @@ export function isExternalRef(id: string): boolean {
 }
 
 /**
- * The Jira provider, or null when Jira is not connected.
+ * The Jira provider for one request's borrowed credential, or null.
  *
- * Null covers both "never connected" and "the stored credential cannot be
- * opened" (see jiraConnection.getCredential) — the two are the same fact from
- * here: there is no way to reach Jira. Callers must read null as "Jira is
- * off", never as "Jira had nothing", which is the same distinction
- * ProviderUnavailableError draws one level down.
+ * The credential is a PARAMETER, not something this looks up: it belongs to
+ * the request, arriving on a header from the desktop app that holds the one
+ * persisted copy (see lib/jira/credentialHeader.ts). Nothing in this process
+ * stores it, so there is nowhere for this to read it from — which is the
+ * point, and also why this is now synchronous. Construction does no I/O; the
+ * first network call happens when a tool actually asks for something.
+ *
+ * Null covers both "the request carried no credential" and "it carried one
+ * this process refused to use" (malformed, or a site that does not normalize)
+ * — the two are the same fact from here: there is no way to reach Jira.
+ * Callers must read null as "Jira is off", never as "Jira had nothing", which
+ * is the same distinction ProviderUnavailableError draws one level down.
  */
-export async function getJiraProvider(): Promise<TicketProvider | null> {
-  const credential = await jiraConnection.getCredential();
+export function getJiraProvider(credential: JiraCredential | null): TicketProvider | null {
   return credential ? new JiraProvider(credential) : null;
 }
