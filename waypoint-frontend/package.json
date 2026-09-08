@@ -21,7 +21,7 @@
     "url": "git+https://github.com/amaannawab923/waypoint.git",
     "directory": "waypoint-frontend"
   },
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "author": {
     "name": "Amaan Nawab",
     "url": "https://github.com/amaannawab923"
