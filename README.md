@@ -102,4 +102,6 @@ webpack (via `electron-react-boilerplate`'s toolchain).
 
 ## License
 
-MIT — see [`LICENSE`](./LICENSE).
+AGPL-3.0 — see [`LICENSE`](./LICENSE). If you run a modified version of this
+project as a network service, section 13 requires you to make the modified
+source available to users of that service.
