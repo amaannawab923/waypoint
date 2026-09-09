@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { eq, and, isNull, isNotNull, inArray, sql, getTableColumns, type SQL } from 'drizzle-orm';
+import { asc, eq, and, isNull, isNotNull, inArray, sql, getTableColumns, type SQL } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import {
   projects,
@@ -187,7 +187,11 @@ async function selectProjectsWithCounts(where: SQL | undefined, limit?: number):
     .leftJoin(docsSub, eq(docsSub.projectId, projects.id))
     .leftJoin(requestsSub, eq(requestsSub.projectId, projects.id))
     .leftJoin(requestsPendingSub, eq(requestsPendingSub.projectId, projects.id))
-    .where(where);
+    .where(where)
+    // Deterministic order matters once `limit` is in play below — with none,
+    // which rows survive a LIMIT is whatever order Postgres happens to
+    // return, which can shift between two otherwise-identical calls.
+    .orderBy(asc(projects.name), asc(projects.id));
   // Not applied as a post-fetch slice — see tickets.service.ts's
   // listTickets/listAllTickets for the same convention: the caller
   // (list_projects in proposalTools.ts) requests effectiveLimit + 1 so it

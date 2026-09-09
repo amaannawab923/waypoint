@@ -501,11 +501,14 @@ export async function proposeCreateTicketHandler(
 //
 // Naturally bounded by however many projects exist in the workspace — lower
 // severity than list_sprints' own unbounded-fan-out problem — but capped the
-// same way for consistency with every other list-style MCP tool, and because
-// projectsService.listProjects() is not cheap per row: each project's
-// primitiveCounts (sprints/workstreams/views/docs/requests) comes from five
-// grouped-count subqueries joined onto the projects table, work an unbounded
-// caller has no way to avoid paying for on a workspace with many projects.
+// same way for consistency with every other list-style MCP tool. The cap
+// does NOT reduce projectsService.listProjects()'s own query cost: its five
+// primitiveCounts subqueries (sprints/workstreams/views/docs/requests) are
+// uncorrelated GROUP BYs joined onto the whole projects table, so Postgres
+// can't push an outer LIMIT into them — they run in full regardless of how
+// many rows this handler asks for. What the cap actually bounds is the
+// number of rows returned to the model and held in its context, which is
+// the real reason this exists.
 export async function listProjectsHandler({ limit }: { limit?: number } = {}) {
   const effectiveLimit = resolveLimit(limit);
   const rows = await projectsService.listProjects(effectiveLimit + 1);
