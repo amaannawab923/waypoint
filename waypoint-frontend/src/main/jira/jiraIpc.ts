@@ -1,6 +1,7 @@
 import { ipcMain, type BrowserWindow } from 'electron';
 import {
   deleteStoredJiraCredential,
+  isJiraCredentialMarkedInvalid,
   isJiraSecureStorageAvailable,
   readStoredJiraCredential,
   toJiraIdentity,
@@ -362,12 +363,27 @@ export function registerJiraIpc(getWindow: () => BrowserWindow | null): void {
   // mount, and "is an account connected" is answered by the file on disk;
   // making it a request to Atlassian would put a network call in front of
   // rendering a nav item.
+  //
+  // "The file is there" alone used to be the whole answer, so a token
+  // revoked or expired on Atlassian's side left this reporting `connected:
+  // true` forever — nothing here ever asked Jira again. The second file this
+  // now checks isn't a network call either: jiraClient.ts's performRequest
+  // sets it the moment any REAL Jira request elsewhere in the app comes back
+  // 401 (see jiraAuth.ts's markJiraCredentialInvalid), and this is where that
+  // fact finally reaches the renderer — on the next read after it happened,
+  // same as any other purely local state change here.
+  //
+  // Reported as fully disconnected rather than as a third "connected but
+  // broken" state: nothing downstream (the sidebar nav item, this panel,
+  // JiraConnectionCard) has a UI for a connection that is both present and
+  // dead, and "no identity, not connected" is exactly the state that already
+  // points a user at reconnecting.
   ipcMain.handle('jira:status', (): JiraConnectionSnapshot => {
     const credential = readStoredJiraCredential();
-    return {
-      connected: credential !== null,
-      identity: credential ? toJiraIdentity(credential) : null,
-    };
+    if (!credential || isJiraCredentialMarkedInvalid()) {
+      return { connected: false, identity: null };
+    }
+    return { connected: true, identity: toJiraIdentity(credential) };
   });
 
   ipcMain.handle(

@@ -1,8 +1,12 @@
 import type { JiraCredential } from './jiraAuth';
 
 const readStoredJiraCredentialMock = jest.fn<JiraCredential | null, []>();
+const markJiraCredentialInvalidMock = jest.fn();
+const clearJiraCredentialInvalidMarkerMock = jest.fn();
 jest.mock('./jiraAuth', () => ({
   readStoredJiraCredential: () => readStoredJiraCredentialMock(),
+  markJiraCredentialInvalid: () => markJiraCredentialInvalidMock(),
+  clearJiraCredentialInvalidMarker: () => clearJiraCredentialInvalidMarkerMock(),
 }));
 
 // eslint-disable-next-line import/order, import/first
@@ -167,6 +171,34 @@ describe('validateCredential', () => {
       ok: false,
       reason: 'invalid_credentials',
     });
+  });
+
+  // ROAD-16: this probes a CANDIDATE the connect form just typed in, not the
+  // credential jira:status reports on — nothing is stored yet at this point,
+  // and a mistyped token here is not "a previously good connection just
+  // stopped working". Flagging the connection here would either mark an
+  // unrelated credential from an earlier session, or write a marker with no
+  // credential behind it at all.
+  it('does not flag the stored connection over a rejected CANDIDATE credential', async () => {
+    fetchMock.mockResolvedValue(emptyResponse(401));
+
+    await validateCredential(CREDENTIAL);
+
+    expect(markJiraCredentialInvalidMock).not.toHaveBeenCalled();
+  });
+
+  // The same opt-out, the other direction: a candidate probe SUCCEEDING says
+  // nothing about whether the credential actually stored on disk (a
+  // different email/token, from an earlier session) is still good — so it
+  // must not clear that stored credential's marker either.
+  it('does not clear the stored connection marker over a successful CANDIDATE credential', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ accountId: CREDENTIAL.accountId, emailAddress: CREDENTIAL.email }),
+    );
+
+    await validateCredential(CREDENTIAL);
+
+    expect(clearJiraCredentialInvalidMarkerMock).not.toHaveBeenCalled();
   });
 
   // The connect form has to say something completely different for "Jira said
@@ -1562,5 +1594,68 @@ describe('comments', () => {
       ok: false,
       reason: 'forbidden',
     });
+  });
+});
+
+// ROAD-16: `jira:status` used to be a purely local file read that never
+// noticed a token revoked or expired on Atlassian's side, so it reported
+// `connected: true` forever. Every REAL, authenticated call this client
+// makes — the stored credential `requireCredential` reads, not a candidate
+// being probed — must flag that on a 401, so the next `jira:status` read
+// tells the truth. `listMyTickets` stands in for the whole family here
+// rather than repeating this once per exported function: they all funnel
+// through the same `performRequest`, which is what actually decides this,
+// and that single choke point is exactly what `request building` above
+// already leans on for the same reason.
+describe('flagging the connection dead on a real 401 (ROAD-16)', () => {
+  it('flags the stored credential when an authenticated call is rejected', async () => {
+    fetchMock.mockResolvedValue(emptyResponse(401));
+
+    await listMyTickets();
+
+    expect(markJiraCredentialInvalidMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not flag anything on a successful call', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+
+    await listMyTickets();
+
+    expect(markJiraCredentialInvalidMock).not.toHaveBeenCalled();
+  });
+
+  // 403/429 are a real, live credential Jira is choosing not to honor for
+  // this call — a permission or a rate limit, not "this token is dead". Only
+  // 401 is Jira's own word that authentication itself failed.
+  it('does not flag the connection on 403 or 429, only on 401', async () => {
+    fetchMock.mockResolvedValueOnce(emptyResponse(403));
+    await listMyTickets();
+    fetchMock.mockResolvedValueOnce(emptyResponse(429));
+    await listMyTickets();
+
+    expect(markJiraCredentialInvalidMock).not.toHaveBeenCalled();
+  });
+
+  // A single transient or spurious 401 (an Atlassian auth-service blip, a
+  // briefly-locked account) must not pin jira:status to "not connected"
+  // forever once the same credential goes on to work again — the marker has
+  // to be self-healing, not just settable.
+  it('clears a stale marker the moment the same credential succeeds again', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+
+    await listMyTickets();
+
+    expect(clearJiraCredentialInvalidMarkerMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not clear anything on a failed call', async () => {
+    fetchMock.mockResolvedValueOnce(emptyResponse(401));
+    await listMyTickets();
+    fetchMock.mockResolvedValueOnce(emptyResponse(403));
+    await listMyTickets();
+    fetchMock.mockResolvedValueOnce(emptyResponse(429));
+    await listMyTickets();
+
+    expect(clearJiraCredentialInvalidMarkerMock).not.toHaveBeenCalled();
   });
 });

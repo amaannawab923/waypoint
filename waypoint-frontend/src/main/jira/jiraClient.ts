@@ -1,4 +1,9 @@
-import { readStoredJiraCredential, type JiraCredential } from './jiraAuth';
+import {
+  clearJiraCredentialInvalidMarker,
+  markJiraCredentialInvalid,
+  readStoredJiraCredential,
+  type JiraCredential,
+} from './jiraAuth';
 import {
   buildTransitionFieldsPayload,
   mapComment,
@@ -153,6 +158,9 @@ interface JiraRequest {
   path: string;
   query?: Record<string, string>;
   body?: unknown;
+  /** Forwarded to `performRequest` verbatim — see `RawJiraRequest`'s own
+   * field for what this actually controls. */
+  invalidateStoredCredentialOn401?: boolean;
 }
 
 /** What `performRequest` needs, once a caller has decided how the body is
@@ -175,6 +183,23 @@ interface RawJiraRequest {
    * sent is a union a reader can check against the call sites. */
   body?: string | FormData;
   timeoutMs: number;
+  /**
+   * Whether a 401 on THIS call should flag the stored credential as dead for
+   * the next `jira:status` read (see jiraAuth.ts's markJiraCredentialInvalid).
+   * True unless a caller says otherwise, because that is the right answer
+   * for every real, authenticated call this client makes against the
+   * credential the app already trusts to be connected.
+   *
+   * `validateCredential` is the one caller that says otherwise. It probes a
+   * CANDIDATE email/token pair — typed into the connect form, not yet
+   * written to disk — and a 401 there means "this token was never good," not
+   * "a previously-connected one just stopped working." There is also,
+   * concretely, nothing stored yet to flag: flipping the marker before
+   * `jira:connect` has written anything would either flag an unrelated
+   * credential from a previous session or write a marker with no credential
+   * behind it at all.
+   */
+  invalidateStoredCredentialOn401?: boolean;
 }
 
 /**
@@ -253,6 +278,16 @@ async function performRequest(
 
   if (response.status === 401) {
     release();
+    // A live credential this app already trusted just stopped working —
+    // revoked or expired on Atlassian's side, not merely typed wrong (see
+    // this interface field's own comment for why `validateCredential`'s
+    // probe of an unstored candidate opts out). Flagging it here, at the one
+    // place every request's response is classified, is what lets the next
+    // `jira:status` read stop claiming a connection Atlassian has already
+    // ended — see jiraAuth.ts's markJiraCredentialInvalid.
+    if (request.invalidateStoredCredentialOn401 !== false) {
+      markJiraCredentialInvalid();
+    }
     return failure(
       'invalid_credentials',
       'Jira rejected that email and API token. Check both, and that the token was generated for this Atlassian account.',
@@ -261,6 +296,17 @@ async function performRequest(
   if (response.status === 403) {
     release();
     return failure('forbidden', "Your Jira account isn't allowed to do that.");
+  }
+
+  // The self-heal to markJiraCredentialInvalid's own 401 branch above: a
+  // marker set by one transient or spurious 401 (an Atlassian auth-service
+  // blip, a briefly-locked account) must not pin `jira:status` to "not
+  // connected" forever once the very same credential goes on to work again.
+  // Same opt-out as marking it, for the same reason: `validateCredential`'s
+  // probe of a not-yet-stored candidate succeeding says nothing about
+  // whether the credential actually on disk (if any) is still good.
+  if (response.ok && request.invalidateStoredCredentialOn401 !== false) {
+    clearJiraCredentialInvalidMarker();
   }
 
   if (!response.ok) {
@@ -346,6 +392,7 @@ async function jiraFetch<T>(
         : undefined,
     body: request.body !== undefined ? JSON.stringify(request.body) : undefined,
     timeoutMs: REQUEST_TIMEOUT_MS,
+    invalidateStoredCredentialOn401: request.invalidateStoredCredentialOn401,
   });
   if (!sent.ok) return sent;
   return readJsonBody<T>(sent.value);
@@ -467,6 +514,11 @@ export async function validateCredential(
   const result = await jiraFetch<Record<string, unknown>>(candidate, {
     method: 'GET',
     path: '/rest/api/3/myself',
+    // See RawJiraRequest's own field comment: this probes a candidate that
+    // is not (yet) the stored credential, so a 401 here must not flag
+    // whatever credential the connect flow already had on disk before this
+    // attempt.
+    invalidateStoredCredentialOn401: false,
   });
   if (!result.ok) return result;
 

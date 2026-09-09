@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   disconnectJira,
   getJiraConnectionStatus,
@@ -10,7 +11,30 @@ import { showErrorToast } from '@/lib/toast';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { IconAlert, IconCircleDot } from '@/components/icons';
+import { JiraMark } from '@/components/domain/JiraMark';
+import { AddProjectWizard } from '@/components/domain/AddProjectWizard';
 import type { JiraConnectionStatus } from '@/types/jira';
+
+/**
+ * What a disconnect actually does, in the terms a confirm dialog has to be
+ * honest about: `jira:disconnect` (jiraIpc.ts) deletes the stored API token
+ * outright, immediately, with no undo — unlike archiving a project, there is
+ * no Archive page to restore this from. A standalone function within this
+ * file, the same shape `lib/projectArchiveCopy.ts` gives its own confirm
+ * text (as a dedicated file there, since `archiveConfirmMessage` has a
+ * second call site `ProjectCard` doesn't own), even though this one is so
+ * far a single call site — "what this button actually does" is worth
+ * stating once either way, so a second call site showing up later has it
+ * ready rather than reinventing the wording.
+ */
+export function disconnectJiraConfirmMessage(accountEmail: string): string {
+  return (
+    `Disconnect ${accountEmail || 'this Jira account'}? Waypoint deletes the ` +
+    `stored API token from this device immediately — your issues, comments ` +
+    `and everything else stay exactly as they are in Jira. You can ` +
+    `reconnect any time.`
+  );
+}
 
 /**
  * MyJiraPage's "Connection" tab. Both actions here reach the real site:
@@ -46,8 +70,10 @@ export function JiraConnectionPanel({
    */
   onRefresh?: () => Promise<void>;
 }) {
+  const navigate = useNavigate();
   const [refreshing, setRefreshing] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [showConnectWizard, setShowConnectWizard] = useState(false);
 
   async function handleRefresh() {
     setRefreshing(true);
@@ -71,6 +97,13 @@ export function JiraConnectionPanel({
   }
 
   async function handleDisconnect() {
+    // Deletes the stored token immediately with no undo (see
+    // disconnectJiraConfirmMessage's own comment) — matches this repo's
+    // established confirm() guard on every other irreversible action
+    // (ProjectsList's archiveConfirmMessage).
+    if (!window.confirm(disconnectJiraConfirmMessage(connection.accountEmail))) {
+      return;
+    }
     setDisconnecting(true);
     try {
       await disconnectJira();
@@ -93,15 +126,43 @@ export function JiraConnectionPanel({
     <div>
       <div className="overflow-hidden rounded-[var(--radius)] border border-border bg-surface shadow-sm">
         <div className="flex items-center gap-3 border-b border-border px-4.5 py-3.5">
-          <Avatar name={connection.accountName} size={34} />
-          <div className="min-w-0">
-            <b className="block text-[13.5px] font-semibold text-text">
-              {connection.accountName}
-            </b>
-            <div className="mt-0.5 truncate text-[12.5px] text-text-muted">
-              {connection.accountEmail} · {connection.site}
-            </div>
-          </div>
+          {connection.connected ? (
+            <>
+              <Avatar name={connection.accountName} size={34} />
+              <div className="min-w-0">
+                <b className="block text-[13.5px] font-semibold text-text">
+                  {connection.accountName}
+                </b>
+                <div className="mt-0.5 truncate text-[12.5px] text-text-muted">
+                  {connection.accountEmail} · {connection.site}
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <span className="flex size-[34px] shrink-0 items-center justify-center rounded-full bg-surface-2 text-jira">
+                <JiraMark size={18} />
+              </span>
+              <div className="min-w-0">
+                <b className="block text-[13.5px] font-semibold text-text">
+                  Not connected
+                </b>
+                {/* Replaces what used to render here with nothing on either
+                    side of it — accountEmail and site both collapse to '' the
+                    moment jira:status stops reporting a connection, so
+                    `{email} · {site}` rendered a bare " · " with no way back
+                    into the app. This is that way back: the same connect flow
+                    JiraConnectionCard already opens from All-Projects. */}
+                <button
+                  type="button"
+                  onClick={() => setShowConnectWizard(true)}
+                  className="mt-0.5 text-[12.5px] font-semibold text-accent hover:underline"
+                >
+                  Connect to Jira
+                </button>
+              </div>
+            </>
+          )}
           {connection.connected ? (
             <span className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-full bg-success-bg py-1 pr-2.5 pl-2 text-[11.5px] font-bold text-success">
               <span className="size-1.5 shrink-0 rounded-full bg-success" />
@@ -148,10 +209,20 @@ export function JiraConnectionPanel({
           >
             {refreshing ? 'Refreshing…' : 'Refresh now'}
           </Button>
+          {/* Not gated on connection.connected, unlike Refresh: once a
+              credential is flagged invalid after a 401 (see jiraAuth.ts's
+              markJiraCredentialInvalid), jira:status reports connected:false
+              even though the dead token is still on disk — and Disconnect is
+              the only control that removes it. Gating this the same way
+              Refresh is gated would make that token permanently
+              undeletable from the UI the moment it goes bad.
+              disconnectJira is already a safe no-op when nothing is
+              stored, so enabling this with no credential present costs
+              nothing. */}
           <Button
             size="xs"
             className="text-danger"
-            disabled={disconnecting || !connection.connected}
+            disabled={disconnecting}
             onClick={handleDisconnect}
           >
             {disconnecting ? 'Disconnecting…' : 'Disconnect'}
@@ -238,6 +309,24 @@ export function JiraConnectionPanel({
           <li>Creating issues, and Linear and Shortcut companions.</li>
         </ul>
       </div>
+
+      {/* The same wizard JiraConnectionCard opens from All-Projects. Mounted
+          only while open, not unconditionally: AddProjectWizard calls
+          useNavigate() on every render regardless of its own `open` prop,
+          so an always-mounted copy would require a Router ancestor for
+          this whole panel even while the wizard is closed and untouched.
+          Step 1 still offers "Independent project" here, same as from
+          All-Projects — a real project can come out of this reconnect
+          entry point, not only a Jira reconnect, so onCreated navigates to
+          it the same way ProjectsList's own "Add project" button does
+          rather than silently doing nothing with it. */}
+      {showConnectWizard && (
+        <AddProjectWizard
+          open={showConnectWizard}
+          onClose={() => setShowConnectWizard(false)}
+          onCreated={(project) => navigate(`/projects/${project.id}/tickets`)}
+        />
+      )}
     </div>
   );
 }

@@ -68,6 +68,77 @@ import type { JiraIdentity } from './jiraTypes';
 
 const CREDENTIAL_FILE_NAME = 'jira-auth.json';
 
+// A second, deliberately UNENCRYPTED file beside the credential itself. It
+// carries no secret — just the fact "the last real Jira call against this
+// credential came back 401" — so encrypting it would buy nothing while
+// costing every write a safeStorage round trip on the hot path of a failed
+// request. See jiraClient.ts's performRequest for the one place that sets it
+// and jiraIpc.ts's `jira:status` handler for the one place that reads it:
+// a purely local file is still what answers `jira:status`, this just gives
+// that file a second thing to say ("connected" is no longer good enough once
+// Atlassian has revoked the token out from under it).
+const INVALID_MARKER_FILE_NAME = 'jira-auth-invalid.json';
+
+function invalidMarkerFilePath(): string {
+  return path.join(app.getPath('userData'), INVALID_MARKER_FILE_NAME);
+}
+
+/**
+ * Flags the stored credential as no longer good, without touching the
+ * credential itself. Called the moment a real Jira API call gets a 401 back
+ * (see jiraClient.ts) — a revoked or expired token isn't rediscovered until
+ * the next such call, but from that moment on `jira:status` must stop saying
+ * "connected" about a site that has already said no.
+ *
+ * Deliberately does not delete the credential the way `jira:disconnect`
+ * does: a 401 is Jira's word today, not the user's decision, and the
+ * connect form on reconnect still wants the site/email this credential
+ * remembers rather than an admin retyping them from scratch.
+ *
+ * Best-effort: a write failure here (full disk, read-only userData) must not
+ * turn a 401 into a crash of the request that surfaced it. Worst case, the
+ * next `jira:status` read is stale by one call and this same 401 recurs on
+ * the next real request, which tries again.
+ */
+export function markJiraCredentialInvalid(): void {
+  try {
+    fs.writeFileSync(
+      invalidMarkerFilePath(),
+      JSON.stringify({ invalid: true }),
+    );
+  } catch {
+    // See the function comment: best-effort, not load-bearing for the
+    // request that triggered it.
+  }
+}
+
+/** Clears the 401 flag. Called wherever a credential becomes trustworthy
+ * again — `jira:connect`'s own write on a freshly validated credential — so
+ * a marker left over from a dead token does not outlive the token it was
+ * about. */
+export function clearJiraCredentialInvalidMarker(): void {
+  try {
+    fs.unlinkSync(invalidMarkerFilePath());
+  } catch {
+    // Already gone — the common case, since most credentials never get
+    // flagged at all.
+  }
+}
+
+/** Whether the stored credential has been flagged since it was last written.
+ * Absence of the marker file — no read, ENOENT, malformed JSON — all mean
+ * "not flagged," matching `readStoredJiraCredential`'s own collapse of every
+ * failure mode to the same "nothing to report" answer. */
+export function isJiraCredentialMarkedInvalid(): boolean {
+  try {
+    const raw = fs.readFileSync(invalidMarkerFilePath(), 'utf8');
+    const parsed = JSON.parse(raw) as { invalid?: boolean };
+    return parsed.invalid === true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Everything needed to authenticate as this user, stored as a single
  * encrypted blob. `email` is in here rather than in plaintext next to the
@@ -161,6 +232,14 @@ export function writeStoredJiraCredential(credential: JiraCredential): void {
     .toString('base64');
   const filePath = credentialFilePath();
   fs.writeFileSync(filePath, JSON.stringify({ encrypted }), { mode: 0o600 });
+  // A credential only reaches here after jiraIpc.ts's `jira:connect` has
+  // already proven it live against `/myself` — so whatever the PREVIOUS
+  // credential's 401 flag said is now stale information about a token this
+  // one has replaced. Cleared before the chmod below, deliberately: the new
+  // credential is already on disk and already good at this point, and a
+  // chmod failure must not leave a stale "invalid" marker sitting over a
+  // credential that just proved itself live.
+  clearJiraCredentialInvalidMarker();
   // `mode` in writeFileSync applies only when the file is CREATED; on an
   // existing file it is ignored outright, so a jira-auth.json left behind at
   // 0644 by an earlier build, a restored backup, or a copy that did not
@@ -177,6 +256,9 @@ export function deleteStoredJiraCredential(): void {
     // Already gone — disconnecting an already-disconnected account is a
     // no-op, not an error.
   }
+  // A flag about a credential that no longer exists is nothing worth
+  // keeping around for the next one.
+  clearJiraCredentialInvalidMarker();
 }
 
 /**
