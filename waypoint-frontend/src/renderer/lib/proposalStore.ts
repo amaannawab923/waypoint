@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
 import { approveCopilotProposal, rejectCopilotProposal } from '@/data/api';
 import type { ProposalView } from '@/types/entities';
 
@@ -159,5 +159,30 @@ export function useAllProposals(): ProposalView[] {
     subscribeProposals,
     getAllSnapshot,
     getAllSnapshot,
+  );
+}
+
+/**
+ * React binding: how many proposals currently held by the store are still
+ * `proposed` — the sidebar's Review badge (ROAD-13) and anything else that
+ * wants a live "waiting on you" count without rendering the rows
+ * themselves. Built on `useAllProposals`, same as `useReviewQueue`'s and
+ * `useCopilotProposals`' own derived lists, so it shares one subscription
+ * to the store rather than opening a second one — no store mechanism is
+ * reinvented here.
+ *
+ * Like the rest of this module, this counts only what the store currently
+ * holds. The store never fetches on its own (see the module-level comment),
+ * so whichever surface wants an accurate count owns seeding it first — e.g.
+ * the sidebar fetching the workspace-wide 'proposed' queue once on mount
+ * and upserting it here — after which every approve/reject/upsert from any
+ * mounted surface (Copilot panel, Review screen, ticket drawer, this store's
+ * own approveProposal/rejectProposal) updates this count with no refetch.
+ */
+export function usePendingProposalCount(): number {
+  const proposals = useAllProposals();
+  return useMemo(
+    () => proposals.filter((p) => p.status === 'proposed').length,
+    [proposals],
   );
 }
