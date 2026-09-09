@@ -146,3 +146,48 @@ describe('ParentTicketPicker selection wiring (finding 2a)', () => {
     expect(option).toHaveTextContent('current');
   });
 });
+
+// M2: this panel used to render every filtered match with no cap — fine
+// for a typical project, but a large/unfiltered project's ticket list
+// could dump hundreds of rows into an unvirtualized scroll container.
+describe('ParentTicketPicker result cap (M2)', () => {
+  function manyTickets(count: number) {
+    return Array.from({ length: count }, (_, i) =>
+      ticket({ id: `t-${i}`, identifier: `CW-${i}`, title: `Ticket ${i}` }),
+    );
+  }
+
+  it('renders no more than 100 options even when more than 100 match', () => {
+    renderPicker({ tickets: manyTickets(150) });
+
+    // trigger + "No parent" + 100 capped options = 102.
+    expect(screen.getAllByRole('button')).toHaveLength(102);
+    expect(screen.getByText('Ticket 0')).toBeInTheDocument();
+    expect(screen.getByText('Ticket 99')).toBeInTheDocument();
+    expect(screen.queryByText('Ticket 100')).not.toBeInTheDocument();
+  });
+
+  it('shows a "refine your search" hint only when truncated', () => {
+    renderPicker({ tickets: manyTickets(150) });
+    expect(screen.getByText(/refine your search/)).toBeInTheDocument();
+  });
+
+  it('shows no truncation hint when the result count is at or under the cap', () => {
+    renderPicker({ tickets: manyTickets(100) });
+
+    expect(screen.getAllByRole('button')).toHaveLength(102);
+    expect(screen.queryByText(/refine your search/)).not.toBeInTheDocument();
+  });
+
+  it('narrowing the search below the cap removes the hint and reveals the rest', () => {
+    renderPicker({ tickets: manyTickets(150) });
+    expect(screen.getByText(/refine your search/)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText('Search tickets…'), {
+      target: { value: 'Ticket 14' }, // matches "Ticket 14" and "Ticket 140".."Ticket 149" — well under 100
+    });
+
+    expect(screen.queryByText(/refine your search/)).not.toBeInTheDocument();
+    expect(screen.getByText('Ticket 14')).toBeInTheDocument();
+  });
+});

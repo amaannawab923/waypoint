@@ -5,6 +5,12 @@ import type { Ticket } from '@/types/entities';
 
 const PANEL_WIDTH = 280;
 const PANEL_HEIGHT_ESTIMATE = 280;
+// M2: this panel renders every filtered match with no cap — fine for a
+// typical project, but a large/unfiltered project's ticket list could dump
+// hundreds of rows into an unvirtualized scroll container. Capped at a flat
+// 100 with a "refine your search" hint when truncated, matching this
+// panel's own empty-state pattern below rather than adding a new one.
+const MAX_VISIBLE_OPTIONS = 100;
 
 /**
  * The "set a parent" menu for CreateTicketModal's new "Parent" field
@@ -63,6 +69,10 @@ export function ParentTicketPicker({
           t.title.toLowerCase().includes(q),
       );
   }, [tickets, query, excludeTicketId]);
+  const visibleOptions = useMemo(
+    () => options.slice(0, MAX_VISIBLE_OPTIONS),
+    [options],
+  );
 
   const { panelProps } = useFloatingPanel({
     triggerRef,
@@ -124,7 +134,7 @@ export function ParentTicketPicker({
               : 'No parentless tickets in this project.'}
           </div>
         )}
-        {options.map((t) => (
+        {visibleOptions.map((t) => (
           <button
             key={t.id}
             type="button"
@@ -141,6 +151,12 @@ export function ParentTicketPicker({
             )}
           </button>
         ))}
+        {options.length > MAX_VISIBLE_OPTIONS && (
+          <div className="px-3 py-2 text-xs text-text-muted">
+            Showing {MAX_VISIBLE_OPTIONS} of {options.length} — refine your
+            search to narrow this down.
+          </div>
+        )}
       </div>
     </div>,
     document.body,
