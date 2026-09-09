@@ -309,20 +309,32 @@ describe('listReviewQueue', () => {
   // disconnected Jira, an interrupted approve — rather than the future
   // agent_runs.status='blocked' design, which isn't built yet.
   it('blocked segment: filters by status=stale, same shape as the proposed segment', async () => {
+    const pageChain = chainable([
+      proposalRow({ id: 'prop-stale', status: 'stale', statusReason: 'ticket moved' }),
+    ]);
     db.select
       .mockReturnValueOnce(chainable([{ n: 0 }])) // counts: proposed
       .mockReturnValueOnce(chainable([{ n: 1 }])) // counts: blocked
       .mockReturnValueOnce(chainable([{ n: 0 }])) // counts: recent
-      .mockReturnValueOnce(
-        chainable([proposalRow({ id: 'prop-stale', status: 'stale', statusReason: 'ticket moved' })]),
-      );
+      .mockReturnValueOnce(pageChain); // the page itself
 
     const result = await listReviewQueue({ status: 'blocked' });
 
     expect(result.proposals).toHaveLength(1);
     expect(result.proposals[0].id).toBe('prop-stale');
     expect(result.counts).toEqual({ proposed: 0, blocked: 1, recent: 0 });
-    expect(eq).toHaveBeenCalledWith(proposals.status, 'stale');
+    // `expect(eq).toHaveBeenCalledWith(...)` alone only proves 'stale' was
+    // passed to eq() SOMEWHERE — computeReviewQueueCounts's own blocked
+    // COUNT makes that exact call on every segment, proposed or blocked
+    // alike, so that assertion can't tell the fix from the bug it fixed.
+    // Capturing the PAGE query's own chain and asserting on what its own
+    // where() actually received is what proves the page, not just the
+    // count, is filtering by 'stale'. and(...conditions) is production's
+    // real call shape even for this single-condition case (listReviewQueue
+    // always wraps conditions in and()), so the expected value has to match
+    // that — a bare eq(...) here would compare and()'s SQL wrapper against
+    // eq()'s own unwrapped result and never match.
+    expect(pageChain.where).toHaveBeenCalledWith(and(eq(proposals.status, 'stale')));
     expect(db.select).toHaveBeenCalledTimes(4);
   });
 
@@ -339,19 +351,29 @@ describe('listReviewQueue', () => {
     expect(result.counts).toEqual({ proposed: 0, blocked: 0, recent: 0 });
   });
 
-  it('proposed/recent segments never include a stale row, even when one exists', async () => {
-    // Guards against a regression that widens 'proposed' or 'recent' back
-    // to include 'stale' — a stale row belongs in 'blocked' only.
+  it('proposed segment: filters strictly by status=proposed, never widened to include stale', async () => {
+    // Guards against a regression that widens 'proposed' back to include
+    // 'stale' — a stale row belongs in 'blocked' only. A mocked page-query
+    // result of [] alone would pass this regardless of what the query
+    // actually filtered on, so this asserts the PAGE query's own where()
+    // args directly: exactly and(eq(status, 'proposed')), never anything
+    // that also names 'stale'.
+    const pageChain = chainable([]);
     db.select
       .mockReturnValueOnce(chainable([{ n: 0 }]))
       .mockReturnValueOnce(chainable([{ n: 1 }]))
       .mockReturnValueOnce(chainable([{ n: 0 }]))
-      .mockReturnValueOnce(chainable([])); // 'proposed' query itself matches no stale rows
+      .mockReturnValueOnce(pageChain);
 
     const result = await listReviewQueue({ status: 'proposed' });
 
     expect(result.proposals).toEqual([]);
     expect(result.counts.blocked).toBe(1);
+    // toHaveBeenCalledWith requires an exact structural match on SOME call —
+    // if a regression ever widened this to inArray(status, ['proposed',
+    // 'stale']) or similar, the actual where() argument would no longer
+    // deep-equal this and the assertion would fail.
+    expect(pageChain.where).toHaveBeenCalledWith(and(eq(proposals.status, 'proposed')));
   });
 
   it('paginates with a keyset cursor and reports nextCursor only when a further page exists', async () => {

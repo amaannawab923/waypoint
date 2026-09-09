@@ -81,7 +81,7 @@ function emptyStateFor(segment: ReviewQueueSegment): {
     return {
       title: 'Nothing blocked',
       description:
-        'When a proposal gets stuck — a Jira transition refused, its ticket moved, Jira disconnected — it lands here until you dismiss it.',
+        'When a proposal gets stuck — a Jira transition refused, its ticket moved, Jira disconnected, an approval interrupted mid-claim, or a ticket created but a follow-up write like its due date failed — it lands here until you dismiss it.',
     };
   }
   if (segment === 'recent') {

@@ -81,10 +81,10 @@ export type ProposalStatus =
   | 'expired'
   | 'superseded'
   | 'reverted';
-// Terminal statuses only — used by the review queue's "recent" segment and
-// the sidebar's resolved-in-24h count. 'executing' is deliberately
-// excluded: resolvedAt doubles as its claim timestamp (see EXECUTING_STUCK_MS
-// above), so a row mid-claim must never be counted as "resolved".
+// Terminal statuses only — the full set RECENT_SEGMENT_STATUSES below
+// narrows from (its only consumer). 'executing' is deliberately excluded:
+// resolvedAt doubles as its claim timestamp (see EXECUTING_STUCK_MS above),
+// so a row mid-claim must never be counted as "resolved".
 const TERMINAL_PROPOSAL_STATUSES: ProposalStatus[] = [
   'executed',
   'rejected',
@@ -1155,32 +1155,33 @@ function decodeCursor(raw: string): Cursor {
 // listed inside the selected tab.
 async function computeReviewQueueCounts(): Promise<ReviewQueueCounts> {
   const cutoff = new Date(Date.now() - RECENT_WINDOW_MS);
-  const [{ n: proposedCount }] = await db
-    .select({ n: count() })
-    .from(proposals)
-    .where(eq(proposals.status, 'proposed'));
-  // ROAD-14: "Blocked" was designed to project a future agent_runs.status
-  // ='blocked' into this same card shape (architecture §4.4) — that table
-  // doesn't exist yet (agent-run infrastructure is deferred per the
-  // founder's Copilot-freeze scope decision). In the meantime, every
-  // 'stale' proposal (a Jira transition refusal, a ticket moved out from
-  // under a proposal, a disconnected Jira, an interrupted approve — see
-  // checkStaleness/checkJiraStaleness above) IS a real, present-day blocked
-  // item: something that needs a human's attention and has no other
-  // aggregate home. Not time-windowed like 'recent' — a stale row stays
-  // "blocked" until someone dismisses it, however long that takes.
-  const [{ n: blockedCount }] = await db
-    .select({ n: count() })
-    .from(proposals)
-    .where(eq(proposals.status, 'stale'));
-  const [{ n: recentCount }] = await db
-    .select({ n: count() })
-    .from(proposals)
-    .where(and(inArray(proposals.status, RECENT_SEGMENT_STATUSES), gte(proposals.resolvedAt, cutoff)));
+  // Three independent counts, run concurrently rather than one after
+  // another: this runs on every listReviewQueue call (including every
+  // "Load more" page) and every refreshCounts poll after an approve/reject,
+  // so it's one of this app's hottest reads, and none of the three queries
+  // depends on another's result.
+  const [proposedRow, blockedRow, recentRow] = await Promise.all([
+    db.select({ n: count() }).from(proposals).where(eq(proposals.status, 'proposed')),
+    // ROAD-14: "Blocked" was designed to project a future agent_runs.status
+    // ='blocked' into this same card shape (architecture §4.4) — that table
+    // doesn't exist yet (agent-run infrastructure is deferred per the
+    // founder's Copilot-freeze scope decision). In the meantime, every
+    // 'stale' proposal (a Jira transition refusal, a ticket moved out from
+    // under a proposal, a disconnected Jira, an interrupted approve — see
+    // checkStaleness/checkJiraStaleness above) IS a real, present-day
+    // blocked item: something that needs a human's attention and has no
+    // other aggregate home. Not time-windowed like 'recent' — a stale row
+    // stays "blocked" until someone dismisses it, however long that takes.
+    db.select({ n: count() }).from(proposals).where(eq(proposals.status, 'stale')),
+    db
+      .select({ n: count() })
+      .from(proposals)
+      .where(and(inArray(proposals.status, RECENT_SEGMENT_STATUSES), gte(proposals.resolvedAt, cutoff))),
+  ]);
   return {
-    proposed: proposedCount,
-    blocked: blockedCount,
-    recent: recentCount,
+    proposed: proposedRow[0].n,
+    blocked: blockedRow[0].n,
+    recent: recentRow[0].n,
   };
 }
 
