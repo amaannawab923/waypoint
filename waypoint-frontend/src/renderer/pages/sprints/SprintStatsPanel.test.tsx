@@ -94,4 +94,26 @@ describe('SprintStatsPanel → burndown banner', () => {
       screen.queryByText(CAPABILITIES['sprints.burndown'].note!),
     ).not.toBeInTheDocument();
   });
+
+  // Caught in review: an earlier version of this fix only branched
+  // active-vs-completed, so a sprint that hasn't started yet — reachable
+  // from SprintDetailPage for any sprint, not just the currently-active one
+  // — still fell through to the active-sprint copy and claimed a "today"
+  // measurement that doesn't exist for it (buildBurndownData clamps its one
+  // real point onto the sprint's own start day, not today).
+  it("tells an upcoming sprint's banner it hasn't started yet, never today or the completed copy", () => {
+    const upcomingSprint = sprint({ startDate: daysFromNow(30), endDate: daysFromNow(44) });
+
+    render(<SprintStatsPanel sprint={upcomingSprint} items={TICKETS} states={STATES} />);
+
+    expect(
+      screen.getByText(CAPABILITIES['sprints.burndownUpcoming'].note!),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(CAPABILITIES['sprints.burndown'].note!),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(CAPABILITIES['sprints.burndownCompleted'].note!),
+    ).not.toBeInTheDocument();
+  });
 });

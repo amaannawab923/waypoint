@@ -32,10 +32,20 @@ export function SprintStatsPanel({
   const breakdown = useMemo(() => computeBreakdown(items, states), [items, states]);
   const burndown = useMemo(() => buildBurndownData(sprint, items, states), [sprint, items, states]);
   const total = items.length;
-  // A completed sprint's "current" point is clamped onto its own close day
-  // (see buildBurndownData), not onto today — so the banner explaining the
-  // two dots must describe the sprint's own timeline instead of "today".
-  const isCompleted = useMemo(() => getSprintStatus(sprint) === 'completed', [sprint]);
+  // A completed sprint's "current" point is clamped onto its own close day,
+  // and an upcoming sprint's onto its own start day (see buildBurndownData)
+  // — neither is "today" — so the banner explaining the dots has one variant
+  // per status instead of assuming the sprint is active. Caught in review:
+  // an earlier version of this fix only branched active-vs-completed and
+  // left upcoming sprints (reachable from SprintDetailPage for any sprint,
+  // not just the active one) showing the same false "today" copy this
+  // ticket exists to remove.
+  const burndownCapability = useMemo(() => {
+    const status = getSprintStatus(sprint);
+    if (status === 'completed') return 'sprints.burndownCompleted' as const;
+    if (status === 'upcoming') return 'sprints.burndownUpcoming' as const;
+    return 'sprints.burndown' as const;
+  }, [sprint]);
 
   return (
     <div className="flex flex-col gap-5">
@@ -111,10 +121,11 @@ export function SprintStatsPanel({
                     labelStyle={{ color: 'var(--text)' }}
                   />
                   <Line type="monotone" dataKey="ideal" name="Ideal" stroke="var(--text-muted)" strokeDasharray="4 3" strokeWidth={2} dot={false} isAnimationActive={false} />
-                  {/* No `connectNulls`: only the sprint-start and today counts are real, and
-                      joining them into a line would read as daily tracking that was never
-                      recorded. `dot` marks just those two points; `strokeWidth={0}` keeps
-                      recharts from drawing any segment between them. */}
+                  {/* No `connectNulls`: only the real measured point(s) — one or two,
+                      see buildBurndownData — are non-null, and joining them into a line
+                      would read as daily tracking that was never recorded. `dot` marks
+                      just those points; `strokeWidth={0}` keeps recharts from drawing
+                      any segment between them. */}
                   <Line
                     type="monotone"
                     dataKey="current"
@@ -128,7 +139,7 @@ export function SprintStatsPanel({
               </ResponsiveContainer>
             </div>
             <div className="mt-3">
-              <NotWired capability={isCompleted ? 'sprints.burndownCompleted' : 'sprints.burndown'} />
+              <NotWired capability={burndownCapability} />
             </div>
           </div>
         </>
