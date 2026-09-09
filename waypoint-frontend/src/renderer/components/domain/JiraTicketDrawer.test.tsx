@@ -158,6 +158,15 @@ async function runDebounce() {
   });
 }
 
+// jsdom doesn't implement scrollIntoView — JiraCommentComposer's mention
+// popover calls it on the newly-highlighted option so keyboard/mouse
+// highlight movement stays visible, otherwise harmless in a real browser
+// but throwing as an unhandled exception under jsdom. Same fix as
+// TicketList.test.tsx's own j/k focus movement.
+beforeAll(() => {
+  Element.prototype.scrollIntoView = jest.fn();
+});
+
 beforeEach(() => {
   jest.useFakeTimers();
   jest.clearAllMocks();
@@ -602,9 +611,9 @@ describe('mentions in the comment composer', () => {
     fireEvent.change(commentBox(), { target: { value: '@' } });
     await runDebounce();
 
-    expect(screen.getByRole('button', { name: 'Sam Lee' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Sam Lee' })).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: 'Priya Raman' }),
+      screen.getByRole('option', { name: 'Priya Raman' }),
     ).toBeInTheDocument();
   });
 
@@ -641,7 +650,7 @@ describe('mentions in the comment composer', () => {
     // The suggestion row is picked on mousedown, not click — a click on a
     // button the textarea already lost focus to would arrive after the
     // textarea has blurred, by which point the trigger it needs is gone.
-    fireEvent.mouseDown(screen.getByRole('button', { name: 'Sam Lee' }));
+    fireEvent.mouseDown(screen.getByRole('option', { name: 'Sam Lee' }));
 
     expect(box.value).toBe('hi @Sam Lee ');
 
@@ -659,12 +668,12 @@ describe('mentions in the comment composer', () => {
 
     fireEvent.change(box, { target: { value: '@sa' } });
     await runDebounce();
-    expect(screen.getByRole('button', { name: 'Sam Lee' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Sam Lee' })).toBeInTheDocument();
 
     fireEvent.keyDown(box, { key: 'Escape' });
 
     expect(
-      screen.queryByRole('button', { name: 'Sam Lee' }),
+      screen.queryByRole('option', { name: 'Sam Lee' }),
     ).not.toBeInTheDocument();
     // The drawer itself is still open — Escape only closed the popover.
     expect(box).toBeInTheDocument();
@@ -849,7 +858,7 @@ describe('mention spans survive ordinary editing', () => {
     const box = commentBox();
     fireEvent.change(box, { target: { value: 'hi @sa' } });
     await runDebounce();
-    fireEvent.mouseDown(screen.getByRole('button', { name: 'Sam Lee' }));
+    fireEvent.mouseDown(screen.getByRole('option', { name: 'Sam Lee' }));
     expect(box.value).toBe('hi @Sam Lee ');
     return box;
   }

@@ -401,6 +401,50 @@ export function JiraCommentComposer({
 
   const popoverOpen = trigger !== null;
 
+  // The listbox's own id (for the textarea's aria-controls) and a stable id
+  // per option row (for aria-activedescendant and each option's own id) —
+  // scoped by ticketId so two comment composers open on the page at once
+  // (unlikely today, but cheap to get right) never collide.
+  const mentionListboxId = `jira-comment-mention-listbox-${ticketId}`;
+  function mentionOptionId(accountId: string) {
+    return `jira-comment-mention-option-${ticketId}-${accountId}`;
+  }
+
+  // Whether there are real option rows to show right now — the ONE guard
+  // both the row-rendering block below and highlightedOptionId read, so the
+  // two can never independently drift out of agreement (they used to repeat
+  // this same three-way condition as two separate expressions, which
+  // happened to agree by inspection rather than by construction). False
+  // while loading, erroring, or genuinely empty — those states render no
+  // option rows, so nothing should claim to be the active one.
+  const optionsVisible =
+    popoverOpen && !loadingSuggestions && !suggestionsError && suggestions.length > 0;
+
+  // The one option row a screen reader should be told is current —
+  // deliberately read from the exact same `suggestions`/`highlighted` pair
+  // that decides the row's visual highlight below, so the two can never
+  // drift apart. Unset (rather than pointing at a row that doesn't exist
+  // yet) whenever optionsVisible is false — a dangling aria-activedescendant
+  // would name nothing.
+  const highlightedOptionId =
+    optionsVisible && suggestions[highlighted]
+      ? mentionOptionId(suggestions[highlighted].accountId)
+      : undefined;
+
+  // Keeps the active option in view as arrow keys move `highlighted` past
+  // whatever the popover's fixed height can show at once
+  // (POPOVER_MAX_VISIBLE_ROWS rows, while up to a full page of results can
+  // come back). Without this, aria-activedescendant could correctly name an
+  // option that ArrowDown had scrolled clean out of the popover's clipped
+  // area — matching what the highlight state says is current, but not what
+  // a sighted user (or a screen reader user tracking the highlight visually)
+  // can actually see. 'nearest' rather than 'center': centering on every
+  // keypress would cause visible jumpiness for a short jump of one row.
+  useEffect(() => {
+    if (!highlightedOptionId) return;
+    document.getElementById(highlightedOptionId)?.scrollIntoView({ block: 'nearest' });
+  }, [highlightedOptionId]);
+
   // The search itself. Debounced, cancellable, and re-run per keystroke of
   // the query — the same shape as JiraAssigneePicker's own search effect,
   // reusing the exact same endpoint (searchJiraAssignableUsers): this app has
@@ -1024,6 +1068,23 @@ export function JiraCommentComposer({
           }}
           placeholder="Comment… (@ to mention someone)"
           rows={3}
+          // The @-mention popover turns this textarea into an autocomplete
+          // widget: typing "@" opens a list of matches, arrow keys move a
+          // highlight through it, and Enter/Tab picks one. Deliberately NOT
+          // role="combobox" — ARIA in HTML permits no role override on
+          // <textarea> (it's fixed to the implicit "textbox" role, exactly
+          // what a multi-line composer needs screen readers to keep
+          // announcing), and role="combobox" is invalid there regardless of
+          // what it would otherwise buy. aria-expanded, aria-controls,
+          // aria-activedescendant and aria-autocomplete are all valid on
+          // plain textbox and carry the same popup contract without the
+          // invalid role. aria-controls/aria-activedescendant are only set
+          // while the popover is actually open, since neither should point
+          // at an element that isn't in the DOM.
+          aria-expanded={popoverOpen}
+          aria-controls={popoverOpen ? mentionListboxId : undefined}
+          aria-activedescendant={highlightedOptionId}
+          aria-autocomplete="list"
           className="w-full resize-none bg-transparent px-2.5 py-2 text-[12.5px] leading-relaxed text-text outline-none"
         />
         <div className="flex items-center gap-2 border-t border-border px-2 py-1.5">
@@ -1058,14 +1119,24 @@ export function JiraCommentComposer({
         createPortal(
           <div
             ref={popoverRef}
-            role="listbox"
-            aria-label={`Mention someone on ${ticketKey}`}
+            id={mentionListboxId}
+            // role="listbox" only when there are real option children —
+            // the ARIA listbox role requires owned option/group children,
+            // and assistive tech commonly drops non-option content (the
+            // loading/error/empty states below) from a listbox entirely,
+            // leaving a screen reader user with an expanded, empty listbox
+            // and no explanation. aria-live carries those three states
+            // instead, the same way the visible text already does for a
+            // sighted user.
+            role={optionsVisible ? 'listbox' : undefined}
+            aria-label={optionsVisible ? `Mention someone on ${ticketKey}` : undefined}
+            aria-live={optionsVisible ? undefined : 'polite'}
             style={{
               top: placement.top,
               left: placement.left,
               height: popoverHeight,
             }}
-            className="fixed z-[60] w-[240px] overflow-hidden rounded-[var(--radius)] border border-border-strong bg-surface text-left shadow-2xl"
+            className="thin-scroll fixed z-[60] w-[240px] overflow-y-auto rounded-[var(--radius)] border border-border-strong bg-surface text-left shadow-2xl"
           >
             {loadingSuggestions && (
               <div className="px-3 py-2 text-xs text-text-muted">
@@ -1088,12 +1159,22 @@ export function JiraCommentComposer({
                     : 'No teammates found on this issue.'}
                 </div>
               )}
-            {!loadingSuggestions &&
-              !suggestionsError &&
+            {optionsVisible &&
               suggestions.map((user, i) => (
                 <button
                   key={user.accountId}
+                  id={mentionOptionId(user.accountId)}
                   type="button"
+                  role="option"
+                  aria-selected={i === highlighted}
+                  // Not a Tab stop: this popover follows the
+                  // aria-activedescendant combobox pattern, where the
+                  // textarea keeps real focus throughout and arrow keys move
+                  // a *virtual* highlight through the options instead. A row
+                  // that could also take real focus via Tab would give a
+                  // keyboard user two disagreeing ways to move through the
+                  // same list.
+                  tabIndex={-1}
                   // onMouseDown, not onClick: a click fires after the
                   // textarea has already blurred from the mousedown above,
                   // and by then `trigger` and the caret this reads are gone.
