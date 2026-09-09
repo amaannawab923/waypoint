@@ -432,6 +432,26 @@ describe('TicketDetailPage → Story points field (finding 7a)', () => {
       expect(updateTicket).toHaveBeenCalledWith('wi-1', { estimatePoints: 3 }),
     );
   });
+
+  // M5: `min="0"` on the <input type="number"> only constrains the stepper
+  // arrows/native form validation, not a value typed via the keyboard and
+  // committed through this blur-save handler — a probe confirmed a typed
+  // "-5" reached updateTicket unrejected before this fix. Rejected the same
+  // way as an unparseable draft (see savePoints' own comment): reverted to
+  // the last saved value instead of persisted.
+  it('rejects a typed negative value on blur, reverting the draft instead of persisting it', async () => {
+    mount([], [], [], { ...ITEM, estimatePoints: 8 });
+
+    const input = (await screen.findByDisplayValue('8')) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '-5' } });
+    fireEvent.blur(input);
+
+    // Give any (incorrect) async updateTicket call a turn to fire before
+    // asserting it never did.
+    await Promise.resolve();
+    expect(updateTicket).not.toHaveBeenCalled();
+    expect(input.value).toBe('8');
+  });
 });
 
 function subItem(overrides: Partial<Ticket> = {}): Ticket {

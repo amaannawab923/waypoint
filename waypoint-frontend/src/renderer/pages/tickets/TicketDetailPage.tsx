@@ -734,6 +734,12 @@ export function TicketDetailContent({
   // just "-" or ".") is treated the same way saveTitle treats an
   // all-whitespace title — reverted to the last saved value instead of
   // persisted.
+  //
+  // M5: a negative value (e.g. typed "-5") is rejected the same way — the
+  // input's `min="0"` only constrains the stepper arrows/native form
+  // validation, not a typed keyboard value flowing through this blur-save
+  // handler, so a negative number parsed here as perfectly finite and was
+  // persisted via updateTicket without this explicit check.
   async function savePoints() {
     if (!item) return;
     const trimmed = pointsDraft.trim();
@@ -744,7 +750,7 @@ export function TicketDetailContent({
       return;
     }
     const parsed = Number(trimmed);
-    if (!Number.isFinite(parsed)) {
+    if (!Number.isFinite(parsed) || parsed < 0) {
       setPointsDraft(item.estimatePoints === null ? '' : String(item.estimatePoints));
       return;
     }
