@@ -8,7 +8,15 @@ import { repairProposals } from './services/proposals.service.js';
 const port = Number(process.env.PORT ?? 14000);
 const app = createApp();
 
-app.listen(port, () => {
+// 127.0.0.1, not the default all-interfaces bind — this process has no auth
+// (see app.ts's CORS comment), so binding 0.0.0.0 in the documented
+// `npm run dev` flow (Postgres in Docker, API on the host) would put every
+// GET /proposals read and every POST /copilot/proposals/:id/approve write on
+// the LAN for any non-browser client, which sends no Origin header and so
+// isn't stopped by CORS at all. Docker's own network namespace already
+// contains the containerized path (see docker-compose.yml's 127.0.0.1
+// publish rule) independently of this.
+app.listen(port, '127.0.0.1', () => {
   console.log(`waypoint-server listening on http://localhost:${port}`);
 });
 
