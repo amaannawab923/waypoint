@@ -1,4 +1,5 @@
 import {
+  clearJiraCredentialInvalidMarker,
   markJiraCredentialInvalid,
   readStoredJiraCredential,
   type JiraCredential,
@@ -295,6 +296,17 @@ async function performRequest(
   if (response.status === 403) {
     release();
     return failure('forbidden', "Your Jira account isn't allowed to do that.");
+  }
+
+  // The self-heal to markJiraCredentialInvalid's own 401 branch above: a
+  // marker set by one transient or spurious 401 (an Atlassian auth-service
+  // blip, a briefly-locked account) must not pin `jira:status` to "not
+  // connected" forever once the very same credential goes on to work again.
+  // Same opt-out as marking it, for the same reason: `validateCredential`'s
+  // probe of a not-yet-stored candidate succeeding says nothing about
+  // whether the credential actually on disk (if any) is still good.
+  if (response.ok && request.invalidateStoredCredentialOn401 !== false) {
+    clearJiraCredentialInvalidMarker();
   }
 
   if (!response.ok) {

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   disconnectJira,
   getJiraConnectionStatus,
@@ -18,11 +19,13 @@ import type { JiraConnectionStatus } from '@/types/jira';
  * What a disconnect actually does, in the terms a confirm dialog has to be
  * honest about: `jira:disconnect` (jiraIpc.ts) deletes the stored API token
  * outright, immediately, with no undo — unlike archiving a project, there is
- * no Archive page to restore this from. Its own file, matching
- * projectArchiveCopy.ts's shape, even though this is (so far) a single call
- * site — a second one showing up later should not have to reinvent the
- * wording, and "what this button actually does" is worth stating once
- * either way.
+ * no Archive page to restore this from. A standalone function within this
+ * file, the same shape `lib/projectArchiveCopy.ts` gives its own confirm
+ * text (as a dedicated file there, since `archiveConfirmMessage` has a
+ * second call site `ProjectCard` doesn't own), even though this one is so
+ * far a single call site — "what this button actually does" is worth
+ * stating once either way, so a second call site showing up later has it
+ * ready rather than reinventing the wording.
  */
 export function disconnectJiraConfirmMessage(accountEmail: string): string {
   return (
@@ -67,6 +70,7 @@ export function JiraConnectionPanel({
    */
   onRefresh?: () => Promise<void>;
 }) {
+  const navigate = useNavigate();
   const [refreshing, setRefreshing] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [showConnectWizard, setShowConnectWizard] = useState(false);
@@ -205,10 +209,20 @@ export function JiraConnectionPanel({
           >
             {refreshing ? 'Refreshing…' : 'Refresh now'}
           </Button>
+          {/* Not gated on connection.connected, unlike Refresh: once a
+              credential is flagged invalid after a 401 (see jiraAuth.ts's
+              markJiraCredentialInvalid), jira:status reports connected:false
+              even though the dead token is still on disk — and Disconnect is
+              the only control that removes it. Gating this the same way
+              Refresh is gated would make that token permanently
+              undeletable from the UI the moment it goes bad.
+              disconnectJira is already a safe no-op when nothing is
+              stored, so enabling this with no credential present costs
+              nothing. */}
           <Button
             size="xs"
             className="text-danger"
-            disabled={disconnecting || !connection.connected}
+            disabled={disconnecting}
             onClick={handleDisconnect}
           >
             {disconnecting ? 'Disconnecting…' : 'Disconnect'}
@@ -296,16 +310,23 @@ export function JiraConnectionPanel({
         </ul>
       </div>
 
-      {/* The same wizard JiraConnectionCard opens from All-Projects — a
-          reconnect only needs handleFinishCompanion's re-read-and-navigate
-          path (the 'independent'/CreateProjectModal phase never renders a
-          onCreated callback for the companion flow at all), so a no-op here
-          is correct, not a stub. */}
-      <AddProjectWizard
-        open={showConnectWizard}
-        onClose={() => setShowConnectWizard(false)}
-        onCreated={() => {}}
-      />
+      {/* The same wizard JiraConnectionCard opens from All-Projects. Mounted
+          only while open, not unconditionally: AddProjectWizard calls
+          useNavigate() on every render regardless of its own `open` prop,
+          so an always-mounted copy would require a Router ancestor for
+          this whole panel even while the wizard is closed and untouched.
+          Step 1 still offers "Independent project" here, same as from
+          All-Projects — a real project can come out of this reconnect
+          entry point, not only a Jira reconnect, so onCreated navigates to
+          it the same way ProjectsList's own "Add project" button does
+          rather than silently doing nothing with it. */}
+      {showConnectWizard && (
+        <AddProjectWizard
+          open={showConnectWizard}
+          onClose={() => setShowConnectWizard(false)}
+          onCreated={(project) => navigate(`/projects/${project.id}/tickets`)}
+        />
+      )}
     </div>
   );
 }

@@ -2,9 +2,11 @@ import type { JiraCredential } from './jiraAuth';
 
 const readStoredJiraCredentialMock = jest.fn<JiraCredential | null, []>();
 const markJiraCredentialInvalidMock = jest.fn();
+const clearJiraCredentialInvalidMarkerMock = jest.fn();
 jest.mock('./jiraAuth', () => ({
   readStoredJiraCredential: () => readStoredJiraCredentialMock(),
   markJiraCredentialInvalid: () => markJiraCredentialInvalidMock(),
+  clearJiraCredentialInvalidMarker: () => clearJiraCredentialInvalidMarkerMock(),
 }));
 
 // eslint-disable-next-line import/order, import/first
@@ -183,6 +185,20 @@ describe('validateCredential', () => {
     await validateCredential(CREDENTIAL);
 
     expect(markJiraCredentialInvalidMock).not.toHaveBeenCalled();
+  });
+
+  // The same opt-out, the other direction: a candidate probe SUCCEEDING says
+  // nothing about whether the credential actually stored on disk (a
+  // different email/token, from an earlier session) is still good — so it
+  // must not clear that stored credential's marker either.
+  it('does not clear the stored connection marker over a successful CANDIDATE credential', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ accountId: CREDENTIAL.accountId, emailAddress: CREDENTIAL.email }),
+    );
+
+    await validateCredential(CREDENTIAL);
+
+    expect(clearJiraCredentialInvalidMarkerMock).not.toHaveBeenCalled();
   });
 
   // The connect form has to say something completely different for "Jira said
@@ -1618,5 +1634,28 @@ describe('flagging the connection dead on a real 401 (ROAD-16)', () => {
     await listMyTickets();
 
     expect(markJiraCredentialInvalidMock).not.toHaveBeenCalled();
+  });
+
+  // A single transient or spurious 401 (an Atlassian auth-service blip, a
+  // briefly-locked account) must not pin jira:status to "not connected"
+  // forever once the same credential goes on to work again — the marker has
+  // to be self-healing, not just settable.
+  it('clears a stale marker the moment the same credential succeeds again', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+
+    await listMyTickets();
+
+    expect(clearJiraCredentialInvalidMarkerMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not clear anything on a failed call', async () => {
+    fetchMock.mockResolvedValueOnce(emptyResponse(401));
+    await listMyTickets();
+    fetchMock.mockResolvedValueOnce(emptyResponse(403));
+    await listMyTickets();
+    fetchMock.mockResolvedValueOnce(emptyResponse(429));
+    await listMyTickets();
+
+    expect(clearJiraCredentialInvalidMarkerMock).not.toHaveBeenCalled();
   });
 });

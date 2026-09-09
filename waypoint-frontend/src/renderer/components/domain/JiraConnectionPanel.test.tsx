@@ -258,12 +258,28 @@ describe('JiraConnectionPanel', () => {
     );
   });
 
-  it('sync actions are disabled once disconnected', () => {
+  it('disables Refresh once disconnected, but keeps Disconnect enabled', () => {
     renderPanel(<JiraConnectionPanel connection={status({ connected: false })} />);
 
     expect(screen.getByRole('button', { name: 'Refresh now' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Disconnect' })).toBeDisabled();
+    // A credential flagged invalid after a 401 (ROAD-16) reports
+    // connected: false while the dead token is still on disk — Disconnect
+    // is the only control that removes it, so gating it the same way
+    // Refresh is gated would make that token permanently undeletable.
+    expect(screen.getByRole('button', { name: 'Disconnect' })).toBeEnabled();
     expect(screen.getByText('Disconnected')).toBeInTheDocument();
+  });
+
+  it('still calls disconnectJira when clicked while already disconnected', async () => {
+    jest.mocked(disconnectJira).mockResolvedValue(undefined);
+    jest
+      .mocked(getJiraConnectionStatus)
+      .mockResolvedValue(status({ connected: false }));
+    renderPanel(<JiraConnectionPanel connection={status({ connected: false })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+
+    await waitFor(() => expect(disconnectJira).toHaveBeenCalledTimes(1));
   });
 
   // Disconnect deletes the stored token immediately with no undo, so it

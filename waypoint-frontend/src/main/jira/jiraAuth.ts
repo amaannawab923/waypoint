@@ -232,6 +232,14 @@ export function writeStoredJiraCredential(credential: JiraCredential): void {
     .toString('base64');
   const filePath = credentialFilePath();
   fs.writeFileSync(filePath, JSON.stringify({ encrypted }), { mode: 0o600 });
+  // A credential only reaches here after jiraIpc.ts's `jira:connect` has
+  // already proven it live against `/myself` — so whatever the PREVIOUS
+  // credential's 401 flag said is now stale information about a token this
+  // one has replaced. Cleared before the chmod below, deliberately: the new
+  // credential is already on disk and already good at this point, and a
+  // chmod failure must not leave a stale "invalid" marker sitting over a
+  // credential that just proved itself live.
+  clearJiraCredentialInvalidMarker();
   // `mode` in writeFileSync applies only when the file is CREATED; on an
   // existing file it is ignored outright, so a jira-auth.json left behind at
   // 0644 by an earlier build, a restored backup, or a copy that did not
@@ -239,11 +247,6 @@ export function writeStoredJiraCredential(credential: JiraCredential): void {
   // though it were enforcing 0600. chmod every time makes the comment above
   // true on the rewrite path as well as the create path.
   fs.chmodSync(filePath, 0o600);
-  // A credential only reaches here after jiraIpc.ts's `jira:connect` has
-  // already proven it live against `/myself` — so whatever the PREVIOUS
-  // credential's 401 flag said is now stale information about a token this
-  // one has replaced.
-  clearJiraCredentialInvalidMarker();
 }
 
 export function deleteStoredJiraCredential(): void {
