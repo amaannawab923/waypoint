@@ -144,6 +144,38 @@ describe('ReviewPage', () => {
     expect(await screen.findByText('Nothing blocked')).toBeInTheDocument();
   });
 
+  // The "nothing blocked" test above was equally true while ROAD-14's bug
+  // existed (an always-empty Blocked tab never renders anything else
+  // either) — this is the one that actually proves a real stale card shows
+  // up: a Dismiss button, not the empty state.
+  it('switching to Blocked with real stale rows renders them, not the empty state', async () => {
+    jest.mocked(listReviewQueue).mockImplementation(async ({ status }) => {
+      if (status === 'blocked') {
+        return {
+          proposals: [
+            proposal({
+              id: 'prop-stale-1',
+              status: 'stale',
+              statusReason: 'Jira refused this transition.',
+            }),
+          ],
+          counts: { proposed: 0, blocked: 1, recent: 0 },
+          nextCursor: null,
+        };
+      }
+      return { proposals: [], counts: { proposed: 0, blocked: 1, recent: 0 }, nextCursor: null };
+    });
+    render(<ReviewPage />);
+    await waitFor(() => expect(listReviewQueue).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('tab', { name: /Blocked/ }));
+
+    expect(await screen.findByText('LAUNCH-3')).toBeInTheDocument();
+    expect(screen.getByText('Jira refused this transition.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument();
+    expect(screen.queryByText('Nothing blocked')).not.toBeInTheDocument();
+  });
+
   it('the health strip shows "not enough decisions" below the 10-decision floor', async () => {
     render(<ReviewPage />);
     expect(

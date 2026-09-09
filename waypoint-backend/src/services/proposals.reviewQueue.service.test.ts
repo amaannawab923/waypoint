@@ -174,14 +174,16 @@ describe('maybeRepairProposals', () => {
 // ---------------------------------------------------------------------------
 
 describe('getProposalCounts', () => {
-  it('counts proposed and recently-resolved (last 24h) rows, with blocked stubbed to 0', async () => {
+  it('counts proposed, blocked (stale), and recently-resolved (last 24h) rows', async () => {
     db.select
-      .mockReturnValueOnce(chainable([{ n: 4 }]))
-      .mockReturnValueOnce(chainable([{ n: 9 }]));
+      .mockReturnValueOnce(chainable([{ n: 4 }])) // proposed
+      .mockReturnValueOnce(chainable([{ n: 2 }])) // blocked (stale)
+      .mockReturnValueOnce(chainable([{ n: 9 }])); // recent
 
     const counts = await getProposalCounts();
 
-    expect(counts).toEqual({ proposed: 4, blocked: 0, recent: 9 });
+    expect(counts).toEqual({ proposed: 4, blocked: 2, recent: 9 });
+    expect(eq).toHaveBeenCalledWith(proposals.status, 'stale');
   });
 });
 
@@ -256,9 +258,13 @@ describe('getReviewHealthStats', () => {
 });
 
 describe('listReviewQueue', () => {
+  // Every case below pays for computeReviewQueueCounts's three count
+  // selects (proposed, blocked, recent — in that order) before the
+  // segment's own page select.
   it('proposed segment: filters by status=proposed plus optional agentId/projectId/kind', async () => {
     db.select
       .mockReturnValueOnce(chainable([{ n: 1 }])) // counts: proposed
+      .mockReturnValueOnce(chainable([{ n: 0 }])) // counts: blocked
       .mockReturnValueOnce(chainable([{ n: 0 }])) // counts: recent
       .mockReturnValueOnce(chainable([proposalRow()])); // the page itself
 
@@ -273,11 +279,12 @@ describe('listReviewQueue', () => {
     expect(result.nextCursor).toBeNull();
   });
 
-  it('recent segment: resolved in the last 24h, terminal statuses only (not executing)', async () => {
+  it('recent segment: resolved in the last 24h, terminal statuses minus stale (not executing, not stale)', async () => {
     const { inArray, gte } = await import('drizzle-orm');
     db.select
-      .mockReturnValueOnce(chainable([{ n: 0 }]))
-      .mockReturnValueOnce(chainable([{ n: 1 }]))
+      .mockReturnValueOnce(chainable([{ n: 0 }])) // counts: proposed
+      .mockReturnValueOnce(chainable([{ n: 0 }])) // counts: blocked
+      .mockReturnValueOnce(chainable([{ n: 1 }])) // counts: recent
       .mockReturnValueOnce(chainable([proposalRow({ status: 'executed', resolvedAt: new Date() })]));
 
     const result = await listReviewQueue({ status: 'recent' });
@@ -285,26 +292,88 @@ describe('listReviewQueue', () => {
     expect(result.proposals).toHaveLength(1);
     expect(vi.mocked(inArray)).toHaveBeenCalledWith(
       proposals.status,
-      expect.arrayContaining(['executed', 'rejected', 'stale', 'expired', 'superseded', 'reverted']),
+      expect.arrayContaining(['executed', 'rejected', 'expired', 'superseded', 'reverted']),
     );
     // 'executing' must never appear in the terminal-status list — a row
-    // mid-claim is not "recent", it's still pending.
+    // mid-claim is not "recent", it's still pending. ROAD-14: 'stale' must
+    // not appear either — it now lives in 'blocked' instead, not double-
+    // counted here.
     const terminalCall = vi.mocked(inArray).mock.calls.find((c) => c[0] === proposals.status);
     expect(terminalCall?.[1]).not.toContain('executing');
+    expect(terminalCall?.[1]).not.toContain('stale');
     expect(vi.mocked(gte)).toHaveBeenCalledWith(proposals.resolvedAt, expect.any(Date));
   });
 
-  it('blocked segment: returns an empty array without querying agent_runs (which does not exist)', async () => {
+  // ROAD-14: the Blocked segment now surfaces real 'stale' proposals — a
+  // Jira transition refusal, a ticket moved out from under a proposal, a
+  // disconnected Jira, an interrupted approve — rather than the future
+  // agent_runs.status='blocked' design, which isn't built yet.
+  it('blocked segment: filters by status=stale, same shape as the proposed segment', async () => {
+    const pageChain = chainable([
+      proposalRow({ id: 'prop-stale', status: 'stale', statusReason: 'ticket moved' }),
+    ]);
     db.select
-      .mockReturnValueOnce(chainable([{ n: 2 }]))
-      .mockReturnValueOnce(chainable([{ n: 0 }]));
+      .mockReturnValueOnce(chainable([{ n: 0 }])) // counts: proposed
+      .mockReturnValueOnce(chainable([{ n: 1 }])) // counts: blocked
+      .mockReturnValueOnce(chainable([{ n: 0 }])) // counts: recent
+      .mockReturnValueOnce(pageChain); // the page itself
+
+    const result = await listReviewQueue({ status: 'blocked' });
+
+    expect(result.proposals).toHaveLength(1);
+    expect(result.proposals[0].id).toBe('prop-stale');
+    expect(result.counts).toEqual({ proposed: 0, blocked: 1, recent: 0 });
+    // `expect(eq).toHaveBeenCalledWith(...)` alone only proves 'stale' was
+    // passed to eq() SOMEWHERE — computeReviewQueueCounts's own blocked
+    // COUNT makes that exact call on every segment, proposed or blocked
+    // alike, so that assertion can't tell the fix from the bug it fixed.
+    // Capturing the PAGE query's own chain and asserting on what its own
+    // where() actually received is what proves the page, not just the
+    // count, is filtering by 'stale'. and(...conditions) is production's
+    // real call shape even for this single-condition case (listReviewQueue
+    // always wraps conditions in and()), so the expected value has to match
+    // that — a bare eq(...) here would compare and()'s SQL wrapper against
+    // eq()'s own unwrapped result and never match.
+    expect(pageChain.where).toHaveBeenCalledWith(and(eq(proposals.status, 'stale')));
+    expect(db.select).toHaveBeenCalledTimes(4);
+  });
+
+  it('blocked segment: an empty result is a real empty page, not a hardcoded stub', async () => {
+    db.select
+      .mockReturnValueOnce(chainable([{ n: 0 }]))
+      .mockReturnValueOnce(chainable([{ n: 0 }]))
+      .mockReturnValueOnce(chainable([{ n: 0 }]))
+      .mockReturnValueOnce(chainable([]));
 
     const result = await listReviewQueue({ status: 'blocked' });
 
     expect(result.proposals).toEqual([]);
-    expect(result.counts).toEqual({ proposed: 2, blocked: 0, recent: 0 });
-    // Only the two count queries ran — no third select for a page.
-    expect(db.select).toHaveBeenCalledTimes(2);
+    expect(result.counts).toEqual({ proposed: 0, blocked: 0, recent: 0 });
+  });
+
+  it('proposed segment: filters strictly by status=proposed, never widened to include stale', async () => {
+    // Guards against a regression that widens 'proposed' back to include
+    // 'stale' — a stale row belongs in 'blocked' only. A mocked page-query
+    // result of [] alone would pass this regardless of what the query
+    // actually filtered on, so this asserts the PAGE query's own where()
+    // args directly: exactly and(eq(status, 'proposed')), never anything
+    // that also names 'stale'.
+    const pageChain = chainable([]);
+    db.select
+      .mockReturnValueOnce(chainable([{ n: 0 }]))
+      .mockReturnValueOnce(chainable([{ n: 1 }]))
+      .mockReturnValueOnce(chainable([{ n: 0 }]))
+      .mockReturnValueOnce(pageChain);
+
+    const result = await listReviewQueue({ status: 'proposed' });
+
+    expect(result.proposals).toEqual([]);
+    expect(result.counts.blocked).toBe(1);
+    // toHaveBeenCalledWith requires an exact structural match on SOME call —
+    // if a regression ever widened this to inArray(status, ['proposed',
+    // 'stale']) or similar, the actual where() argument would no longer
+    // deep-equal this and the assertion would fail.
+    expect(pageChain.where).toHaveBeenCalledWith(and(eq(proposals.status, 'proposed')));
   });
 
   it('paginates with a keyset cursor and reports nextCursor only when a further page exists', async () => {
@@ -313,6 +382,7 @@ describe('listReviewQueue', () => {
     );
     db.select
       .mockReturnValueOnce(chainable([{ n: 3 }]))
+      .mockReturnValueOnce(chainable([{ n: 0 }]))
       .mockReturnValueOnce(chainable([{ n: 0 }]))
       .mockReturnValueOnce(chainable(rows)); // limit+1 = 3 returned for a limit of 2
 
@@ -324,6 +394,7 @@ describe('listReviewQueue', () => {
     // Round-trips through decodeCursor without throwing on the next call.
     db.select
       .mockReturnValueOnce(chainable([{ n: 3 }]))
+      .mockReturnValueOnce(chainable([{ n: 0 }]))
       .mockReturnValueOnce(chainable([{ n: 0 }]))
       .mockReturnValueOnce(chainable([]));
     const nextPage = await listReviewQueue({ status: 'proposed', limit: 2, cursor: result.nextCursor! });
