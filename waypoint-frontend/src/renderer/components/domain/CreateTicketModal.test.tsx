@@ -81,6 +81,56 @@ beforeEach(() => {
   jest.mocked(ensureAgentAssignments).mockResolvedValue(undefined as never);
 });
 
+// H1: the modal is always mounted at every call site (Modal's `open` prop
+// just gates visibility, not whether CreateTicketModal itself is in the
+// tree) — so an ungated listTickets(projectId) call fired on every
+// navigation everywhere in the app, including from global chrome
+// (Topbar.tsx), whether or not the modal was ever opened. It was also
+// stale: since nothing remounts this component, a ticket created during
+// one open wasn't offered as a parent option the next time the modal
+// opened, without a full page reload.
+describe('CreateTicketModal → parent-picker fetch is gated on `open` (H1)', () => {
+  it('does not fetch the project ticket list while closed', async () => {
+    render(<CreateTicketModal open={false} onClose={jest.fn()} projectId="proj-1" onCreated={jest.fn()} />);
+
+    // Give any stray effect a tick to fire, then confirm it never did.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(listTickets).not.toHaveBeenCalled();
+  });
+
+  it('fetches fresh data on every open, not just once — a ticket created during a prior open is offered next time', async () => {
+    jest.mocked(listTickets).mockResolvedValueOnce([]);
+
+    const { rerender } = render(
+      <CreateTicketModal open={false} onClose={jest.fn()} projectId="proj-1" onCreated={jest.fn()} />,
+    );
+    expect(listTickets).not.toHaveBeenCalled();
+
+    // First open: no tickets exist yet.
+    rerender(<CreateTicketModal open onClose={jest.fn()} projectId="proj-1" onCreated={jest.fn()} />);
+    await waitFor(() => expect(listTickets).toHaveBeenCalledTimes(1));
+
+    // Simulate a ticket being created elsewhere while the modal is closed
+    // (e.g. via this same modal on a prior open, or another view) — the
+    // next open's fetch must see it, not a cached result from the first.
+    jest.mocked(listTickets).mockResolvedValueOnce([
+      ticket({ id: 'new-1', identifier: 'CW-9', title: 'Just created' }),
+    ]);
+
+    // Close, then re-open — this is exactly what toggling the toolbar's
+    // "Add ticket" button twice does; the component never unmounts.
+    rerender(<CreateTicketModal open={false} onClose={jest.fn()} projectId="proj-1" onCreated={jest.fn()} />);
+    rerender(<CreateTicketModal open onClose={jest.fn()} projectId="proj-1" onCreated={jest.fn()} />);
+
+    await waitFor(() => expect(listTickets).toHaveBeenCalledTimes(2));
+
+    fireEvent.click(await screen.findByText('Parent'));
+    expect(await screen.findByText('Just created')).toBeInTheDocument();
+  });
+});
+
 describe('CreateTicketModal → Parent field (finding 2a)', () => {
   it('offers only parentless tickets, not one that already has a parent', async () => {
     jest.mocked(listTickets).mockResolvedValue([

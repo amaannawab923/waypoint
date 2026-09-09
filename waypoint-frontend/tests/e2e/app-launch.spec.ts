@@ -59,8 +59,12 @@ test('creates a subtask via the parent picker and shows it nested under its pare
     await window.getByPlaceholder('Ticket title').fill(childMarker);
     // Opens the new ParentTicketPicker and searches/selects through it —
     // not a pre-filled defaultParentId (that's the separate "Add subtask"
-    // flow from the ticket detail page).
-    await window.getByText('Parent', { exact: true }).click();
+    // flow from the ticket detail page). A role-scoped locator, not
+    // getByText('Parent', { exact: true }) — that text also appears as
+    // sr-only content inside a ticket row's parent-chip (and, after M1, its
+    // nested-indent branch too), so a plain text locator could match a row
+    // rendered behind this modal instead of the modal's own trigger button.
+    await window.getByRole('button', { name: /Parent/ }).click();
     await window.getByPlaceholder('Search tickets…').fill(parentMarker);
     await window.getByText(parentMarker, { exact: true }).click();
     await window.getByRole('button', { name: 'Create ticket' }).click();

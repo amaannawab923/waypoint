@@ -102,7 +102,22 @@ export function CreateTicketModal({
   const { data: members } = useAsync(() => listMembers(), []);
   const { data: agents } = useAsync(() => listAgents(), []);
   const { data: labels } = useAsync(() => listLabels(projectId), [projectId]);
-  const { data: projectTickets } = useAsync(() => listTickets(projectId), [projectId]);
+  // H1: this modal is always mounted at every call site (`open` gates
+  // visibility via the `Modal` component below, not whether this
+  // component itself is in the tree) — Topbar.tsx renders it from global
+  // chrome, so an ungated fetch here fired a full project ticket-list
+  // request on every navigation everywhere in the app, whether or not the
+  // modal was ever opened. Gating on `open` (in both the fetch itself and
+  // the dep array) fixes that AND fixes a staleness bug it was hiding: since
+  // nothing ever remounts this component, a ticket created during one open
+  // of the modal wouldn't have shown up as a parent option the next time it
+  // was opened without a full page reload — `open` flipping back to `true`
+  // now re-triggers this fetch every time, so the parent picker's candidate
+  // list is always current as of the moment it's opened.
+  const { data: projectTickets } = useAsync(
+    () => (open ? listTickets(projectId) : Promise.resolve([])),
+    [projectId, open],
+  );
   const scopedAgents = (agents ?? []).filter(
     (a) => a.isActive && (a.scopeProjectIds.length === 0 || a.scopeProjectIds.includes(projectId)),
   );
