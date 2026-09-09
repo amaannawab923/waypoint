@@ -64,6 +64,53 @@ export default function BoardView({
     [view.labels],
   );
 
+  // Bug 3 fix: every item's "subtree root" — the topmost ancestor reached by
+  // walking the nesting-parent chain (view.nestedChildIds + item.parentId)
+  // while it stays inside the SAME rendered kept-together block. Two items
+  // that share a root are both part of one contiguous "parent + all its
+  // descendants" run produced by useTicketsView's appendDescendants (see
+  // that function's own comment) — the gap between any two such items can
+  // never actually be represented in the raw reorder data, no matter how
+  // deep the nesting or whether the pair is a direct parent/child or two
+  // siblings under a shared ancestor. The previous version of this check
+  // (H2, 54e9e6b) only compared a card against its immediate
+  // prevItem/nextItem's parentId, which caught a direct parent/child pair
+  // but missed a gap between two siblings (or two deeper descendants) that
+  // share a common ancestor without being adjacent to each other in the
+  // parent/child sense — see this file's own drag-over handler for how this
+  // map is used.
+  const subtreeRootId = useMemo(() => {
+    const byId = new Map(view.items.map((i) => [i.id, i]));
+    const roots = new Map<string, string>();
+    function resolve(item: Ticket, visiting: Set<string>): string {
+      const cached = roots.get(item.id);
+      if (cached) return cached;
+      const { parentId } = item;
+      if (!view.nestedChildIds.has(item.id) || !parentId || visiting.has(item.id)) {
+        roots.set(item.id, item.id);
+        return item.id;
+      }
+      const parent = byId.get(parentId);
+      if (!parent) {
+        roots.set(item.id, item.id);
+        return item.id;
+      }
+      visiting.add(item.id);
+      const root = resolve(parent, visiting);
+      roots.set(item.id, root);
+      return root;
+    }
+    view.items.forEach((item) => resolve(item, new Set()));
+    return roots;
+  }, [view.items, view.nestedChildIds]);
+
+  // Whether the gap between two rendered-adjacent items falls strictly
+  // inside a shared subtree — see subtreeRootId's own comment above.
+  function isBoundaryGap(a: Ticket | undefined, b: Ticket | undefined): boolean {
+    if (!a || !b) return false;
+    return (subtreeRootId.get(a.id) ?? a.id) === (subtreeRootId.get(b.id) ?? b.id);
+  }
+
   // A ticket's first agent id (if any) drives the board badge — the seed
   // data only ever pairs one agent per ticket, and a single status chip per
   // card keeps the badge row from overflowing.
@@ -258,20 +305,18 @@ export default function BoardView({
               // whose parent landed in a different group keeps 2c's parent
               // chip as the only pointer instead.
               const isNested = view.nestedChildIds.has(item.id);
-              // H2: the two positions that would ask to drop something
-              // between THIS item and its already-adjacent nested
-              // parent/child — 'after' this item when the next card is its
-              // own nested child, or 'before' this item when it's itself
-              // nested directly under the previous card. Both are refused
+              // H2/Bug 3: the two gaps immediately around THIS item that
+              // would ask to drop something inside a subtree it's part of —
+              // 'after' this item when the next card shares its subtree
+              // root, or 'before' this item when the previous card does.
+              // Covers a direct parent/child pair AND a gap between two
+              // siblings (or deeper descendants) under the same ancestor —
+              // see subtreeRootId's own comment above. Both are refused
               // below (see onDragOver's own comment for why).
               const prevItem = group.items[index - 1];
               const nextItem = group.items[index + 1];
-              const boundaryAfter = Boolean(
-                nextItem && nextItem.parentId === item.id && view.nestedChildIds.has(nextItem.id),
-              );
-              const boundaryBefore = Boolean(
-                prevItem && isNested && item.parentId === prevItem.id,
-              );
+              const boundaryAfter = isBoundaryGap(item, nextItem);
+              const boundaryBefore = isBoundaryGap(prevItem, item);
               return (
                 <button
                   key={item.id}
@@ -298,30 +343,37 @@ export default function BoardView({
                       e.clientY < rect.top + rect.height / 2
                         ? 'before'
                         : 'after';
-                    // H2 (documented decision, not a silent no-op): a drop
-                    // 'after' this card when it's immediately followed by
-                    // its own nested child, or 'before' this card when it's
-                    // itself nested directly under the previous one, is
-                    // asking to insert something between an already-
-                    // adjacent parent/child pair. The same-group nesting
-                    // resort (useTicketsView.ts's orderedItems) always
-                    // re-splices a nested child directly after its parent
-                    // regardless of raw list order, so that drop can never
-                    // actually land there — reorderItemLocally would still
-                    // mutate the raw order and reorderTicket would still
-                    // persist it server-side, but the rendered result would
-                    // snap right back, a silent no-op that leaves persisted
-                    // and rendered order disagreeing (see
-                    // reorderItemLocally's own comment in useTicketsView.ts
-                    // for the full mechanism). Implementing a real "insert
-                    // between nested parent/child" reorder is out of scope
-                    // for this pass, so instead: no preventDefault (the
-                    // browser refuses the drop outright) and no indicator,
-                    // so the UI never implies a drop here will do anything.
+                    // H2/Bug 1 (documented decision, not a silent no-op): a
+                    // drop 'after' this card when the next card shares its
+                    // subtree root, or 'before' this card when the previous
+                    // one does, is asking to insert something at a gap
+                    // strictly inside a kept-together parent+descendants
+                    // block. The same-group nesting resort
+                    // (useTicketsView.ts's orderedItems) always re-splices a
+                    // nested child directly after its parent regardless of
+                    // raw list order, so that drop can never actually land
+                    // there — reorderItemLocally would still mutate the raw
+                    // order and reorderTicket would still persist it
+                    // server-side, but the rendered result would snap right
+                    // back, a silent no-op that leaves persisted and
+                    // rendered order disagreeing (see reorderItemLocally's
+                    // own comment in useTicketsView.ts for the full
+                    // mechanism). Implementing a real "insert inside a kept-
+                    // together subtree" reorder is out of scope for this
+                    // pass, so instead: no indicator, AND — this is the part
+                    // an earlier version of this comment got wrong —
+                    // e.stopPropagation() so the bubbled column-level
+                    // onDragOver (which calls e.preventDefault()
+                    // unconditionally) never gets a chance to re-enable the
+                    // drop the browser would otherwise refuse. onDrop below
+                    // re-checks the same predicate independently, as defense
+                    // in depth against a drop event reaching it by some
+                    // other path.
                     if (
                       (position === 'after' && boundaryAfter) ||
                       (position === 'before' && boundaryBefore)
                     ) {
+                      e.stopPropagation();
                       setDragOverCard((c) => (c?.id === item.id ? null : c));
                       return;
                     }
@@ -339,6 +391,32 @@ export default function BoardView({
                   onDrop={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
+                    // Bug 1/2 defense in depth: re-derive the drop position
+                    // from the event itself (mirroring onDragOver's own
+                    // computation) and re-check the same boundary predicate
+                    // here, rather than relying solely on dragOverCard state
+                    // (which the refusal branch above already nulls out).
+                    // Without this, a drop event that reached this handler
+                    // by some other path than a preceding onDragOver — or
+                    // one where dragOverCard was null for any other reason —
+                    // would fall through to handleCardDrop's `dragOverCard
+                    // ?.position ?? 'after'` fallback, silently persisting a
+                    // guessed 'after' even when the user was aiming for
+                    // 'before' (or vice versa) at a boundary that can't be
+                    // represented at all.
+                    if (!canReorderPersist || !draggingId || draggingId === item.id) return;
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const position =
+                      e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+                    if (
+                      (position === 'after' && boundaryAfter) ||
+                      (position === 'before' && boundaryBefore)
+                    ) {
+                      setDragOverGroup(null);
+                      setDragOverCard(null);
+                      setDraggingId(null);
+                      return;
+                    }
                     handleCardDrop(item.id);
                   }}
                   className={clsx(

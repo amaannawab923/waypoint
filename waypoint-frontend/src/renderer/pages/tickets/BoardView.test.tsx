@@ -7,6 +7,7 @@ import {
   listMembers,
   listStates,
   listTickets,
+  reorderTicket,
 } from '@/data/api';
 import type { Ticket, TicketState } from '@/types/entities';
 import type { TicketGroup, TicketsView } from './useTicketsView';
@@ -136,6 +137,7 @@ beforeEach(() => {
   jest.mocked(listMembers).mockResolvedValue([]);
   jest.mocked(listStates).mockResolvedValue([state()]);
   jest.mocked(listTickets).mockResolvedValue([]);
+  jest.mocked(reorderTicket).mockResolvedValue({} as Ticket);
 });
 
 describe('BoardView epic badge (finding 2b)', () => {
@@ -327,6 +329,122 @@ describe('BoardView drag-over boundary suppression (H2)', () => {
     dragOverWithClientY(parentCard, -10); // 'before' — not a boundary
 
     expect(parentCard.className).toContain('border-t-2');
+  });
+});
+
+// Bugs 1-3 (code review follow-up on 54e9e6b): the H2 boundary tests above
+// only ever asserted that the drop *indicator* was suppressed — they never
+// checked whether the drop itself was actually blocked. That gap is exactly
+// why three real bugs shipped: (1) the card-level onDragOver refusal branch
+// didn't call e.stopPropagation(), so the bubbled column-level onDragOver
+// still called e.preventDefault() unconditionally and the browser still
+// allowed the drop; (2) with dragOverCard nulled at a refused boundary,
+// handleCardDrop's `dragOverCard?.position ?? 'after'` fallback silently
+// reinterpreted a 'before' drop as 'after' and persisted THAT instead; (3)
+// the boundary predicate only ever compared an item against its immediate
+// prevItem/nextItem's parentId, so a gap between two siblings under the same
+// parent (or any other non-adjacent pair inside one subtree) wasn't refused
+// at all. Every test below asserts the actual persisted side effect
+// (reorderTicket), not just a CSS class.
+function dropWithClientY(el: HTMLElement, clientY: number) {
+  const event = createEvent.drop(el);
+  Object.defineProperty(event, 'clientY', { value: clientY, configurable: true });
+  fireEvent(el, event);
+}
+
+describe('BoardView drag-drop boundary refusal actually blocks the drop (bugs 1-3)', () => {
+  it('bug 1: does not call reorderTicket when dropped at the direct parent/child boundary', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent' });
+    const other = ticket({ id: 'other', identifier: 'CW-3' });
+    const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [parent, child, other] }];
+    const nestedChildIds = new Set(['child']);
+    render(
+      <BoardView
+        view={fakeView({ items: [parent, child, other], groups, nestedChildIds })}
+        projectId="proj-1"
+        onOpenItem={jest.fn()}
+      />,
+    );
+    const parentCard = (await screen.findByText('CW-1')).closest('button') as HTMLElement;
+    const otherCard = (await screen.findByText('CW-3')).closest('button') as HTMLElement;
+
+    fireEvent.dragStart(otherCard);
+    dropWithClientY(parentCard, 10); // 'after' parent — the parent/child boundary
+
+    expect(reorderTicket).not.toHaveBeenCalled();
+  });
+
+  it('bug 1: a refused boundary drag-over calls stopPropagation, so the bubbled column handler never preventDefaults', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent' });
+    const other = ticket({ id: 'other', identifier: 'CW-3' });
+    const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [parent, child, other] }];
+    const nestedChildIds = new Set(['child']);
+    render(
+      <BoardView
+        view={fakeView({ items: [parent, child, other], groups, nestedChildIds })}
+        projectId="proj-1"
+        onOpenItem={jest.fn()}
+      />,
+    );
+    const parentCard = (await screen.findByText('CW-1')).closest('button') as HTMLElement;
+    const otherCard = (await screen.findByText('CW-3')).closest('button') as HTMLElement;
+
+    fireEvent.dragStart(otherCard);
+    const event = createEvent.dragOver(parentCard);
+    Object.defineProperty(event, 'clientY', { value: 10, configurable: true });
+    fireEvent(parentCard, event);
+
+    // The column-level onDragOver (which bubbled events would reach) calls
+    // e.preventDefault() unconditionally — so this only stays false if the
+    // card-level handler's refusal branch stopped the event from bubbling.
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it('bug 3: does not call reorderTicket when dropped between two siblings inside the same subtree (a,b,c nested)', async () => {
+    const a = ticket({ id: 'a', identifier: 'CW-1' });
+    const b = ticket({ id: 'b', identifier: 'CW-2', parentId: 'a' });
+    const c = ticket({ id: 'c', identifier: 'CW-3', parentId: 'a' });
+    const other = ticket({ id: 'other', identifier: 'CW-4' });
+    const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [a, b, c, other] }];
+    const nestedChildIds = new Set(['b', 'c']);
+    render(
+      <BoardView
+        view={fakeView({ items: [a, b, c, other], groups, nestedChildIds })}
+        projectId="proj-1"
+        onOpenItem={jest.fn()}
+      />,
+    );
+    const bCard = (await screen.findByText('CW-2')).closest('button') as HTMLElement;
+    const otherCard = (await screen.findByText('CW-4')).closest('button') as HTMLElement;
+
+    fireEvent.dragStart(otherCard);
+    dropWithClientY(bCard, 10); // 'after' b — between b and c, inside a's subtree
+
+    expect(reorderTicket).not.toHaveBeenCalled();
+  });
+
+  it('false-positive check: still calls reorderTicket with the right args for a legitimate non-boundary drop', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent' });
+    const other = ticket({ id: 'other', identifier: 'CW-3' });
+    const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [parent, child, other] }];
+    const nestedChildIds = new Set(['child']);
+    render(
+      <BoardView
+        view={fakeView({ items: [parent, child, other], groups, nestedChildIds })}
+        projectId="proj-1"
+        onOpenItem={jest.fn()}
+      />,
+    );
+    const childCard = (await screen.findByText('CW-2')).closest('button') as HTMLElement;
+    const otherCard = (await screen.findByText('CW-3')).closest('button') as HTMLElement;
+
+    fireEvent.dragStart(otherCard);
+    dropWithClientY(childCard, 10); // 'after' child — not a boundary (child has no child of its own)
+
+    expect(reorderTicket).toHaveBeenCalledWith('other', 'child', 'after');
   });
 });
 
