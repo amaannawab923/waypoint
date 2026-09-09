@@ -709,9 +709,11 @@ export function TicketDetailContent({
     reloadItem();
   }
 
-  async function handleSubItemCreated(newItem: Ticket) {
-    if (!item) return;
-    await updateTicket(newItem.id, { parentId: item.id });
+  // The new ticket is created with parentId already set (via
+  // CreateTicketModal's defaultParentId prop below) — no follow-up PATCH
+  // needed here anymore, unlike the create-then-updateTicket workaround
+  // this used to be.
+  function handleSubItemCreated() {
     reloadSubItems();
   }
 
@@ -1485,6 +1487,7 @@ export function TicketDetailContent({
         open={createSubOpen}
         onClose={() => setCreateSubOpen(false)}
         projectId={item.projectId}
+        defaultParentId={item.id}
         onCreated={handleSubItemCreated}
       />
     </div>

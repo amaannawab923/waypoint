@@ -19,6 +19,7 @@ import {
   listWorkstreams,
   listStates,
   listSubItems,
+  listTickets,
   listTicketProposals,
   rejectCopilotProposal,
   removeTicketLink,
@@ -57,6 +58,10 @@ jest.mock('@/data/api', () => ({
   listStates: jest.fn(),
   listSubItems: jest.fn(),
   listTicketProposals: jest.fn(),
+  // Not called by this page directly — CreateTicketModal (rendered for
+  // the "Add subtask" flow) calls it to populate the new Parent field
+  // (finding 2a).
+  listTickets: jest.fn(),
   removeTicketLink: jest.fn(),
   takeBackOverFromAgent: jest.fn(),
   toggleTicketAgent: jest.fn(),
@@ -209,6 +214,7 @@ function mount(comments: Comment[], agents: Agent[] = [], proposals: ProposalVie
   jest.mocked(listAgents).mockResolvedValue(agents);
   jest.mocked(listAgentAssignments).mockResolvedValue([]);
   jest.mocked(listSubItems).mockResolvedValue([]);
+  jest.mocked(listTickets).mockResolvedValue([]);
   jest.mocked(listActivity).mockResolvedValue([]);
   jest.mocked(listComments).mockResolvedValue(comments);
   jest.mocked(getTicket).mockResolvedValue(ITEM);

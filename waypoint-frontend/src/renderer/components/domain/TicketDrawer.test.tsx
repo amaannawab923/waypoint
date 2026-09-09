@@ -15,6 +15,7 @@ import {
   listWorkstreams,
   listStates,
   listSubItems,
+  listTickets,
   listTicketProposals,
   updateTicket,
 } from '@/data/api';
@@ -50,6 +51,10 @@ jest.mock('@/data/api', () => ({
   listWorkstreams: jest.fn(),
   listStates: jest.fn(),
   listSubItems: jest.fn(),
+  // Not called by TicketDrawer/TicketDetailContent directly — CreateTicketModal
+  // (mounted, though closed, for the "Add subtask" flow) calls it to
+  // populate the new Parent field (finding 2a).
+  listTickets: jest.fn(),
   listTicketProposals: jest.fn(),
   removeTicketLink: jest.fn(),
   takeBackOverFromAgent: jest.fn(),
@@ -157,6 +162,7 @@ function mountDrawer(onClose: () => void = jest.fn()) {
   jest.mocked(listAgents).mockResolvedValue([]);
   jest.mocked(listAgentAssignments).mockResolvedValue([]);
   jest.mocked(listSubItems).mockResolvedValue([]);
+  jest.mocked(listTickets).mockResolvedValue([]);
   jest.mocked(listActivity).mockResolvedValue([]);
   jest.mocked(listComments).mockResolvedValue([]);
   jest.mocked(getTicket).mockResolvedValue(ITEM);
