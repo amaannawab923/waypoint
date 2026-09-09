@@ -556,6 +556,60 @@ describe('useTicketsView collapsedParents (ROAD-39: collapsible hierarchy)', () 
     expect(group?.items.map((i) => i.id)).toEqual(['parent', 'other']);
   });
 
+  // ROAD-39 follow-up: collapse was removed from Board after manual QA, but
+  // every view shares ONE hook instance — so without this gate a parent
+  // collapsed in List would stay collapsed on Board, where no disclosure
+  // control exists to bring its children back. The children must be visible
+  // on Board even while the parent is still in `collapsedParents`.
+  it('collapseEnabled: false leaves the subtree visible even while the parent is collapsed', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1', stateId: 'st-proj-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent', stateId: 'st-proj-1' });
+    const other = ticket({ id: 'other', identifier: 'CW-3', stateId: 'st-proj-1' });
+    jest.mocked(listTickets).mockResolvedValue([parent, child, other]);
+
+    const { result } = renderHook(() =>
+      useTicketsView({ projectId: 'proj-1', defaultGroupBy: 'state', collapseEnabled: false }),
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => {
+      result.current.toggleParentCollapsed('parent');
+    });
+
+    // The set still records the intent (so List restores it on the way
+    // back), but nothing is filtered out of the rendered list.
+    expect(result.current.collapsedParents.has('parent')).toBe(true);
+    expect(result.current.items.map((i) => i.id)).toEqual(['parent', 'child', 'other']);
+    const group = result.current.groupedItems.find((g) => g.key === 'st-proj-1');
+    expect(group?.items.map((i) => i.id)).toEqual(['parent', 'child', 'other']);
+  });
+
+  it('re-enabling collapse re-applies a set collapsed while it was disabled (List -> Board -> List)', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1', stateId: 'st-proj-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent', stateId: 'st-proj-1' });
+    jest.mocked(listTickets).mockResolvedValue([parent, child]);
+
+    const { result, rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) =>
+        useTicketsView({ projectId: 'proj-1', defaultGroupBy: 'state', collapseEnabled: enabled }),
+      { initialProps: { enabled: true } },
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => {
+      result.current.toggleParentCollapsed('parent');
+    });
+    await waitFor(() => expect(result.current.items.map((i) => i.id)).toEqual(['parent']));
+
+    // Switch to Board: the child comes back, uncollapsed.
+    rerender({ enabled: false });
+    expect(result.current.items.map((i) => i.id)).toEqual(['parent', 'child']);
+
+    // Switch back to List: the user's collapse survives the round trip.
+    rerender({ enabled: true });
+    expect(result.current.items.map((i) => i.id)).toEqual(['parent']);
+  });
+
   it('toggling a second time re-expands, restoring the subtree', async () => {
     const parent = ticket({ id: 'parent', identifier: 'CW-1', stateId: 'st-proj-1' });
     const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent', stateId: 'st-proj-1' });

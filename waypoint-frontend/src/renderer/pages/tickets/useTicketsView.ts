@@ -165,6 +165,16 @@ export interface TicketsViewOptions {
   /** Defaults to 'state', matching every project-scoped caller today. The
    * workspace scope passes 'project' (mockup: buildTicketView's atView). */
   defaultGroupBy?: GroupBy;
+  /**
+   * ROAD-39: whether `collapsedParents` actually filters `orderedItems`.
+   * Defaults to true (List's behavior). TicketsLayout passes false while
+   * Board is the active view, because Board has no disclosure control to
+   * expand a parent again — see its own comment there. The collapsed SET is
+   * deliberately still tracked while this is false, so toggling back to
+   * List restores the user's collapse state rather than silently resetting
+   * it.
+   */
+  collapseEnabled?: boolean;
 }
 
 /**
@@ -193,7 +203,12 @@ export interface TicketsViewOptions {
  * re-filters `items` client-side on top of the server-side result.
  */
 export function useTicketsView(options: TicketsViewOptions = {}) {
-  const { projectId, defaultFilters, defaultGroupBy = 'state' } = options;
+  const {
+    projectId,
+    defaultFilters,
+    defaultGroupBy = 'state',
+    collapseEnabled = true,
+  } = options;
   // Merged once per distinct `defaultFilters` identity — the view's own
   // baseline scope (e.g. YourWork's `{ assigneeId: ['@me'] }`). Exposed
   // below (as `defaultFilters`) so consumers can restore it via
@@ -677,7 +692,7 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
     // this hook's `items`/`orderedItems` — a hidden ticket is genuinely
     // absent from every one of them, not merely hidden by a display-layer
     // filter downstream that the reorder math never sees.
-    if (collapsedParents.size === 0) {
+    if (!collapseEnabled || collapsedParents.size === 0) {
       return { orderedItems: result, nestedChildIds: nested, nestedDescendantCountByParent };
     }
     const hiddenByCollapse = new Set<string>();
@@ -703,7 +718,7 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
       nestedDescendantCountByParent,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resolvedItems, groupBy, collapsedParents]);
+  }, [resolvedItems, groupBy, collapsedParents, collapseEnabled]);
 
   const groupedItems: TicketGroup[] = useMemo(() => {
     function build(

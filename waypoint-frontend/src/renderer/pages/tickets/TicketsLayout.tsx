@@ -26,12 +26,24 @@ const VIEW_TABS: { key: ViewKind; label: string }[] = [
 
 export default function TicketsLayout() {
   const { project } = useProject();
-  const view = useTicketsView({ projectId: project.id });
   const [searchParams, setSearchParams] = useSearchParams();
   const [createOpen, setCreateOpen] = useState(false);
 
   const currentView: ViewKind =
     (searchParams.get('view') as ViewKind | null) ?? 'list';
+  // ROAD-39: collapse is a List-only affordance. Board deliberately has no
+  // disclosure control (a board column means "status", so a collapsed
+  // parent's children are cards that legitimately live in OTHER columns —
+  // there is nothing coherent for a control on this card to hide or
+  // reveal). Because every view shares ONE hook instance, the collapse
+  // filter has to be switched off for Board explicitly, or a parent
+  // collapsed in List would silently keep its children hidden here with no
+  // way to bring them back. Gated rather than cleared so List -> Board ->
+  // List still restores exactly what the user had collapsed.
+  const view = useTicketsView({
+    projectId: project.id,
+    collapseEnabled: currentView === 'list',
+  });
   const peekIdentifier = searchParams.get('peek');
 
   // Sparse-project behavior (architecture §P5's own section title, "Sparse
