@@ -4,7 +4,14 @@ import type { Sprint, Ticket, TicketState } from '@/types/entities';
 import { STATE_GROUP_LABEL } from '@/components/domain/StateIcon';
 import { Dot } from '@/components/ui/Badge';
 import { NotWired } from '@/components/ui/NotWired';
-import { BREAKDOWN_ORDER, buildBurndownData, computeBreakdown, computeProgress, stateGroupColor } from './sprint-utils';
+import {
+  BREAKDOWN_ORDER,
+  buildBurndownData,
+  computeBreakdown,
+  computeProgress,
+  getSprintStatus,
+  stateGroupColor,
+} from './sprint-utils';
 
 /**
  * Progress ring + state-group breakdown + burndown chart for a single sprint's tickets.
@@ -25,6 +32,10 @@ export function SprintStatsPanel({
   const breakdown = useMemo(() => computeBreakdown(items, states), [items, states]);
   const burndown = useMemo(() => buildBurndownData(sprint, items, states), [sprint, items, states]);
   const total = items.length;
+  // A completed sprint's "current" point is clamped onto its own close day
+  // (see buildBurndownData), not onto today — so the banner explaining the
+  // two dots must describe the sprint's own timeline instead of "today".
+  const isCompleted = useMemo(() => getSprintStatus(sprint) === 'completed', [sprint]);
 
   return (
     <div className="flex flex-col gap-5">
@@ -117,7 +128,7 @@ export function SprintStatsPanel({
               </ResponsiveContainer>
             </div>
             <div className="mt-3">
-              <NotWired capability="sprints.burndown" />
+              <NotWired capability={isCompleted ? 'sprints.burndownCompleted' : 'sprints.burndown'} />
             </div>
           </div>
         </>

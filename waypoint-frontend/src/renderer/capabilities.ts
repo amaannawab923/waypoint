@@ -51,6 +51,10 @@ export const CAPABILITIES = {
     state: 'partial',
     note: 'Two measured points — today and the sprint start. No daily history is recorded yet.',
   },
+  'sprints.burndownCompleted': {
+    state: 'partial',
+    note: 'Two measured points — sprint start and close. No daily history is recorded yet.',
+  },
   'tickets.drafts': {
     state: 'not-wired',
     note: 'Nothing saves a draft yet, so this list cannot fill.',
