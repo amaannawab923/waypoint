@@ -71,7 +71,7 @@ export default function SpreadsheetView({
   const { items, loading, stateFor, labels, workstreams, sprints } = view;
   const { data: members } = useAsync(() => listMembers(), []);
   const [sortKey, setSortKey] = useState<SortKey>('createdAt');
-  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [visible, setVisible] = useState<Set<Exclude<SortKey, 'title'>>>(new Set(DEFAULT_VISIBLE));
 
   const memberById = useMemo(() => new Map((members ?? []).map((m) => [m.id, m])), [members]);
