@@ -94,6 +94,18 @@ const TERMINAL_PROPOSAL_STATUSES: ProposalStatus[] = [
   'reverted',
 ];
 
+// ROAD-14: 'recent' excludes 'stale'. A stale row now has its own permanent
+// home in the 'blocked' segment (not time-windowed — see
+// computeReviewQueueCounts/listReviewQueue below), so counting/listing it
+// under 'recent' too would double it up across two tabs and mislabel it
+// "handled overnight, no action needed" when dismissing it is exactly the
+// action still outstanding. Every other terminal status here really is
+// done (approved/rejected/expired/superseded/reverted) with nothing left
+// to act on, so those stay in 'recent' unchanged.
+const RECENT_SEGMENT_STATUSES: ProposalStatus[] = TERMINAL_PROPOSAL_STATUSES.filter(
+  (status) => status !== 'stale',
+);
+
 export type ProposalOrigin = 'copilot' | 'agent_run';
 export type ProposalDecidedBy = 'user' | 'trust_grant' | 'system';
 
@@ -1147,18 +1159,27 @@ async function computeReviewQueueCounts(): Promise<ReviewQueueCounts> {
     .select({ n: count() })
     .from(proposals)
     .where(eq(proposals.status, 'proposed'));
+  // ROAD-14: "Blocked" was designed to project a future agent_runs.status
+  // ='blocked' into this same card shape (architecture §4.4) — that table
+  // doesn't exist yet (agent-run infrastructure is deferred per the
+  // founder's Copilot-freeze scope decision). In the meantime, every
+  // 'stale' proposal (a Jira transition refusal, a ticket moved out from
+  // under a proposal, a disconnected Jira, an interrupted approve — see
+  // checkStaleness/checkJiraStaleness above) IS a real, present-day blocked
+  // item: something that needs a human's attention and has no other
+  // aggregate home. Not time-windowed like 'recent' — a stale row stays
+  // "blocked" until someone dismisses it, however long that takes.
+  const [{ n: blockedCount }] = await db
+    .select({ n: count() })
+    .from(proposals)
+    .where(eq(proposals.status, 'stale'));
   const [{ n: recentCount }] = await db
     .select({ n: count() })
     .from(proposals)
-    .where(and(inArray(proposals.status, TERMINAL_PROPOSAL_STATUSES), gte(proposals.resolvedAt, cutoff)));
+    .where(and(inArray(proposals.status, RECENT_SEGMENT_STATUSES), gte(proposals.resolvedAt, cutoff)));
   return {
     proposed: proposedCount,
-    // "Blocked" projects agent_runs.status='blocked' into the same card
-    // shape (architecture §4.4) — agent_runs doesn't exist as a table yet
-    // (agent-run infrastructure is deferred per the founder's
-    // Copilot-freeze scope decision), so this is 0 rather than a query
-    // against a table that isn't there.
-    blocked: 0,
+    blocked: blockedCount,
     recent: recentCount,
   };
 }
@@ -1276,27 +1297,26 @@ export async function listReviewQueue(params: ReviewQueueParams): Promise<Review
   await maybeRepairProposals();
   const counts = await computeReviewQueueCounts();
 
-  if (params.status === 'blocked') {
-    // See computeReviewQueueCounts's comment: the Blocked segment has
-    // nothing to project from until agent_runs exists. The query-param/
-    // segment shape stays real (this branch exists and is reachable) —
-    // it just has no rows to return today.
-    return { proposals: [], counts, nextCursor: null };
-  }
-
   const limit = Math.min(params.limit ?? DEFAULT_REVIEW_QUEUE_LIMIT, MAX_REVIEW_QUEUE_LIMIT);
 
   const conditions =
     params.status === 'proposed'
       ? [eq(proposals.status, 'proposed')]
-      : [
-          // 'recent': resolved in the last 24h. Explicitly the terminal
-          // statuses, not "resolvedAt set" — 'executing' also stamps
-          // resolvedAt (it doubles as the claim timestamp), and a row
-          // mid-claim is not "recent", it's still pending.
-          inArray(proposals.status, TERMINAL_PROPOSAL_STATUSES),
-          gte(proposals.resolvedAt, new Date(Date.now() - RECENT_WINDOW_MS)),
-        ];
+      : params.status === 'blocked'
+        ? // ROAD-14: see computeReviewQueueCounts's comment — 'stale' is the
+          // real, present-day Blocked segment (not time-windowed, unlike
+          // 'recent'), pending the future agent_runs.status='blocked' work.
+          [eq(proposals.status, 'stale')]
+        : [
+            // 'recent': resolved in the last 24h. Explicitly the terminal
+            // statuses (minus 'stale', which now lives in 'blocked'
+            // instead — see RECENT_SEGMENT_STATUSES), not "resolvedAt set"
+            // — 'executing' also stamps resolvedAt (it doubles as the
+            // claim timestamp), and a row mid-claim is not "recent", it's
+            // still pending.
+            inArray(proposals.status, RECENT_SEGMENT_STATUSES),
+            gte(proposals.resolvedAt, new Date(Date.now() - RECENT_WINDOW_MS)),
+          ];
 
   if (params.agentId) conditions.push(eq(proposals.agentId, params.agentId));
   if (params.projectId) conditions.push(eq(proposals.projectId, params.projectId));

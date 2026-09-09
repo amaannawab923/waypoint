@@ -122,15 +122,20 @@ export function useReviewQueue(
   // filters on the row's live status — a proposal approved/rejected from
   // this screen (or from anywhere else, e.g. the Copilot panel) drops out
   // of "Waiting on you" the instant the store updates, with no refetch.
-  // 'recent'/'blocked' rows are already resolved (or the segment is always
-  // empty), so no equivalent live filter applies there.
+  // 'blocked' needs the same live filter (ROAD-14): a stale card's only
+  // affordance is Dismiss (reject), and once that fires the row's status
+  // moves off 'stale' — it must drop out of "Blocked" immediately, not
+  // linger there showing a "Dismissed" badge until the next refetch.
+  // 'recent' rows are already resolved and never change again from here,
+  // so no equivalent live filter applies there.
   const proposals = useMemo(() => {
     const rows = ids
       .map((id) => byId.get(id))
       .filter((p): p is ProposalView => Boolean(p));
-    return segment === 'proposed'
-      ? rows.filter((p) => p.status === 'proposed')
-      : rows;
+    if (segment === 'proposed')
+      return rows.filter((p) => p.status === 'proposed');
+    if (segment === 'blocked') return rows.filter((p) => p.status === 'stale');
+    return rows;
   }, [ids, byId, segment]);
 
   return {
