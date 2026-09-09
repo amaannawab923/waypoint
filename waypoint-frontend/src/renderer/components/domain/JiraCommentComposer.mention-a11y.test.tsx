@@ -62,6 +62,15 @@ async function runDebounce() {
   });
 }
 
+// jsdom doesn't implement scrollIntoView — the composer calls it on the
+// newly-highlighted mention option so keyboard/mouse highlight movement
+// stays visible, otherwise harmless in a real browser but throwing as an
+// unhandled exception under jsdom. Same fix as TicketList.test.tsx's own
+// j/k focus movement.
+beforeAll(() => {
+  Element.prototype.scrollIntoView = jest.fn();
+});
+
 beforeEach(() => {
   jest.useFakeTimers();
   jest.clearAllMocks();
@@ -83,11 +92,18 @@ afterEach(() => {
 });
 
 describe('mention combobox wiring on the textarea', () => {
-  it('is a combobox that starts collapsed with no listbox or active option wired up', () => {
+  // Deliberately not role="combobox": ARIA in HTML permits no role
+  // override on <textarea> (it's fixed to the implicit "textbox" role),
+  // and overriding it would risk losing multi-line textbox semantics for
+  // screen readers navigating this composer. aria-expanded/aria-controls/
+  // aria-activedescendant/aria-autocomplete are all valid on plain textbox
+  // and carry the same popup contract without an invalid role.
+  it('carries the popup contract with no role override, starting collapsed with no listbox or active option wired up', () => {
     renderComposer();
 
     const box = commentBox();
-    expect(box).toHaveAttribute('role', 'combobox');
+    expect(box).not.toHaveAttribute('role');
+    expect(box).toHaveAttribute('aria-autocomplete', 'list');
     expect(box).toHaveAttribute('aria-expanded', 'false');
     expect(box).not.toHaveAttribute('aria-controls');
     expect(box).not.toHaveAttribute('aria-activedescendant');
@@ -119,6 +135,26 @@ describe('mention combobox wiring on the textarea', () => {
     expect(box).toHaveAttribute('aria-expanded', 'true');
 
     fireEvent.keyDown(box, { key: 'Escape' });
+
+    expect(box).toHaveAttribute('aria-expanded', 'false');
+    expect(box).not.toHaveAttribute('aria-controls');
+    expect(box).not.toHaveAttribute('aria-activedescendant');
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+  });
+
+  // Escape is covered above; picking a mention is the OTHER way the
+  // popover closes, and it has to drop the same wiring — an unpicked
+  // Escape and a genuinely-completed pick are both "the popover is gone
+  // now" as far as the combobox contract is concerned.
+  it('collapses aria-expanded and drops aria-controls/aria-activedescendant on picking a mention', async () => {
+    renderComposer();
+    const box = commentBox();
+
+    fireEvent.change(box, { target: { value: '@sa' } });
+    await runDebounce();
+    expect(box).toHaveAttribute('aria-expanded', 'true');
+
+    fireEvent.mouseDown(screen.getByRole('option', { name: 'Sam Lee' }));
 
     expect(box).toHaveAttribute('aria-expanded', 'false');
     expect(box).not.toHaveAttribute('aria-controls');
@@ -237,6 +273,31 @@ describe('aria-activedescendant tracks the same highlight arrow keys move', () =
     // Deliberately not running the debounce timer: the popover is open with
     // its "Searching teammates…" state and no option rows exist yet, so
     // aria-activedescendant must not dangle on a nonexistent id.
+    expect(box).toHaveAttribute('aria-expanded', 'true');
+    expect(box).not.toHaveAttribute('aria-activedescendant');
+    expect(screen.queryByRole('option')).not.toBeInTheDocument();
+  });
+
+  // The test above passes even without the loadingSuggestions check, since
+  // suggestions is still genuinely [] the first time a query is typed. The
+  // search effect does NOT clear suggestions on every keystroke, only when
+  // trigger goes null entirely — so a RE-query (the query text changes
+  // while a previous result set is already showing) is the case that
+  // actually exercises loadingSuggestions: suggestions still holds the old
+  // rows while loadingSuggestions flips back to true, and only the
+  // loadingSuggestions check stops aria-activedescendant/the option rows
+  // from carrying on pointing at that stale result set mid-fetch.
+  it('has no active option while re-querying, even though the previous results are still in state', async () => {
+    renderComposer();
+    const box = commentBox();
+
+    fireEvent.change(box, { target: { value: '@' } });
+    await runDebounce();
+    expect(screen.getByRole('option', { name: 'Sam Lee' })).toBeInTheDocument();
+
+    fireEvent.change(box, { target: { value: '@sa' } });
+    // Deliberately not running the debounce timer for this second query.
+
     expect(box).toHaveAttribute('aria-expanded', 'true');
     expect(box).not.toHaveAttribute('aria-activedescendant');
     expect(screen.queryByRole('option')).not.toBeInTheDocument();

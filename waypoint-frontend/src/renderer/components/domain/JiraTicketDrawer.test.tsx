@@ -158,6 +158,15 @@ async function runDebounce() {
   });
 }
 
+// jsdom doesn't implement scrollIntoView — JiraCommentComposer's mention
+// popover calls it on the newly-highlighted option so keyboard/mouse
+// highlight movement stays visible, otherwise harmless in a real browser
+// but throwing as an unhandled exception under jsdom. Same fix as
+// TicketList.test.tsx's own j/k focus movement.
+beforeAll(() => {
+  Element.prototype.scrollIntoView = jest.fn();
+});
+
 beforeEach(() => {
   jest.useFakeTimers();
   jest.clearAllMocks();
