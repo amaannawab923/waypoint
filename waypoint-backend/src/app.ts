@@ -13,8 +13,13 @@ export function createApp() {
   // header — Origin is a forbidden header name, set by the browser itself
   // and not writable from page JS — so it's a real control against
   // browser-based attackers specifically (curl and other non-browser
-  // clients bypass it by sending no Origin at all; the loopback binding in
-  // docker-compose.yml is what actually stops those).
+  // clients bypass it by sending no Origin at all; what actually stops
+  // those is HOST-gated bind behavior in index.ts's
+  // app.listen(port, host, ...): the documented `npm run dev` path defaults
+  // HOST to 127.0.0.1, closing it to the LAN outright, while
+  // docker-compose.yml sets HOST=0.0.0.0 for the api container — that
+  // container binds wide, but stays off the LAN via that same compose
+  // file's 127.0.0.1 publish rule instead of via its own bind address).
   //
   // Two legitimate origins, not one: the webpack dev server
   // (http://localhost:11212 — moved off webpack-dev-server's conventional
