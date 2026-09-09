@@ -1,0 +1,2 @@
+ALTER TABLE "projects" ADD COLUMN "next_sequence_id" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+UPDATE "projects" p SET "next_sequence_id" = COALESCE((SELECT MAX(t."sequence_id") FROM "tickets" t WHERE t."project_id" = p."id"), 0);
