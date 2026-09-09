@@ -37,6 +37,7 @@ jest.mock('./jiraClient', () => ({
 // eslint-disable-next-line import/order, import/first
 import {
   downloadAttachmentToDisk,
+  inFlightTransferCountForTests,
   mimeTypeForFileName,
   pickAndUploadAttachment,
   safeBaseName,
@@ -69,6 +70,17 @@ beforeEach(() => {
   writeFileMock.mockResolvedValue(undefined);
   statMock.mockResolvedValue({ size: BYTES.byteLength });
   readFileMock.mockResolvedValue(BYTES);
+});
+
+// Every test in this file awaits its transfer to completion, so the
+// `finally` in downloadAttachmentToDisk/pickAndUploadAttachment already
+// empties the module-level guard between tests — but a future test that
+// starts a transfer against a mock that never resolves, without awaiting
+// it, would silently poison every later test claiming the same key. This
+// turns that into a clear assertion failure in the test that caused it,
+// rather than a mysterious transfer_in_progress somewhere else in the file.
+afterEach(() => {
+  expect(inFlightTransferCountForTests()).toBe(0);
 });
 
 /**
@@ -348,15 +360,15 @@ describe('downloadAttachmentToDisk', () => {
     });
   });
 
-  // The only guard before this one was a `downloading` boolean in
-  // JiraTicketDetail.tsx's own React state, and that component mounts
-  // twice at once (drawer + full page) with fully independent state — so
-  // neither copy can see a download the other kicked off. These tests
-  // exercise the module-level guard that both IPC calls now pass through
-  // instead, by starting two calls without awaiting the first: an async
-  // function runs synchronously up to its first `await`, so the guard is
-  // claimed (or found already claimed) before either call has a chance to
-  // interleave with the other.
+  // A rendered `disabled={downloading !== null}` on the renderer's own
+  // Download button is not a guard on the network call and file write this
+  // module actually performs — it does nothing about a click that lands
+  // before that state update commits. These tests exercise the
+  // module-level guard the IPC call now passes through instead, by starting
+  // two calls without awaiting the first: an async function runs
+  // synchronously up to its first `await`, so the guard is claimed (or
+  // found already claimed) before either call has a chance to interleave
+  // with the other.
   describe('the single-flight guard', () => {
     it('refuses a second download of the same attachment while the first is in flight', async () => {
       const first = downloadAttachmentToDisk(WINDOW, '10050', 'replay-log.txt');
@@ -378,6 +390,46 @@ describe('downloadAttachmentToDisk', () => {
       // The refused call never touched Jira, the dialog or the filesystem.
       expect(downloadAttachmentMock).toHaveBeenCalledTimes(1);
       expect(showSaveDialogMock).toHaveBeenCalledTimes(1);
+    });
+
+    // The test above only proves the guard holds across the initial Jira
+    // fetch — the first `await` a download hits. The save dialog is fully
+    // interactive while it's open (more so with no parent window, where it
+    // isn't even modal), so a duplicate click is at least as likely to land
+    // there as during the fetch. This defers the save dialog's own promise
+    // so the second call is made while the first is genuinely parked on it,
+    // not on the fetch.
+    it('refuses a second download while the first is suspended at the save dialog', async () => {
+      let resolveSaveDialog!: (value: {
+        canceled: boolean;
+        filePath?: string;
+      }) => void;
+      showSaveDialogMock.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveSaveDialog = resolve;
+        }),
+      );
+
+      const first = downloadAttachmentToDisk(WINDOW, '10050', 'replay-log.txt');
+      // Let the first call run up through the Jira fetch and reach the
+      // (still-pending) save dialog before the second call is made.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const second = await downloadAttachmentToDisk(
+        WINDOW,
+        '10050',
+        'replay-log.txt',
+      );
+      expect(second).toMatchObject({ ok: false, reason: 'transfer_in_progress' });
+      expect(downloadAttachmentMock).toHaveBeenCalledTimes(1);
+
+      resolveSaveDialog({
+        canceled: false,
+        filePath: '/Users/max/Downloads/replay-log.txt',
+      });
+      const firstResult = await first;
+      expect(firstResult).toMatchObject({ ok: true, value: { canceled: false } });
     });
 
     it('allows a later download of the same attachment once the first has finished', async () => {

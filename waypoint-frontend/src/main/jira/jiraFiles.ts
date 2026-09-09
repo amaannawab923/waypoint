@@ -145,16 +145,23 @@ function fileFailure(message: string): JiraFailure {
  * genuinely collide if two ran at once.
  *
  * The only guard against a duplicate transfer before this was a
- * `downloading`/`uploading` boolean in `JiraTicketDetail.tsx`'s own React
- * state — and that component mounts twice at once, once in the drawer and
- * once on the full ticket page, each with fully independent state. Two
- * clicks landing milliseconds apart from those two mounts would run two
- * downloads of the same attachment (or two uploads to the same ticket)
- * concurrently: each buffers up to `MAX_TRANSFER_BYTES` whole into this
- * process's heap, and a second upload additionally stacks a second native
- * picker on top of the first. Neither renderer copy can see the other's
- * state; only a guard here, which both IPC calls pass through on their way
- * to the filesystem and the network, can.
+ * `downloading`/`uploading` boolean in each renderer component's own React
+ * state, surfaced purely as a `disabled` attribute on the trigger button —
+ * and a rendered `disabled` attribute is exactly the wrong thing to have as
+ * the only guard on a network-and-disk operation this process actually
+ * performs. Two concrete paths reach `uploadJiraAttachment(ticketId)` for
+ * the same ticket with fully independent `uploading`/`attaching` state:
+ * `JiraTicketDetail.tsx`'s own "Attach a file" button and
+ * `JiraCommentComposer.tsx`'s toolbar attach button, both mounted together
+ * on the same open ticket. Neither can see the other's state, so two clicks
+ * landing milliseconds apart — one per control — could run two uploads to
+ * the same ticket concurrently, stacking a second native file picker on top
+ * of the first. Main must not depend on which renderer buttons happen to be
+ * disabled to protect a resource (the filesystem, the heap, a native
+ * dialog) that only main actually touches; only a guard here, which every
+ * IPC call for a transfer passes through on its way to the filesystem and
+ * the network, can make that true regardless of how many renderer controls
+ * exist or what state each thinks it's in.
  *
  * One `Set` rather than two, but never one bare id in it: a download and an
  * upload draw their keys from separate id spaces (an attachment id, a
@@ -164,7 +171,11 @@ function fileFailure(message: string): JiraFailure {
  * not a single "any Jira transfer" lock — so that downloading two
  * *different* attachments, or uploading to two *different* tickets, at the
  * same time is still allowed. Only a duplicate request for the exact same
- * thing is refused.
+ * thing is refused. (The ticket-level upload key does not, by itself, stop
+ * two stacked native pickers for two *different* tickets — a native dialog
+ * is modal per-window, and this app has one window — but preventing that
+ * would mean one upload at a time for the whole app, a stricter tradeoff
+ * than this guard makes.)
  */
 const inFlightTransfers = new Set<string>();
 
@@ -181,6 +192,18 @@ function beginTransfer(key: string): boolean {
 
 function endTransfer(key: string): void {
   inFlightTransfers.delete(key);
+}
+
+/** Test-only escape hatch onto the module-level `Set` above. Every current
+ * test awaits its transfer to completion, so the `finally` in
+ * `downloadAttachmentToDisk`/`pickAndUploadAttachment` already empties it
+ * between tests — but the first future test that starts a transfer against
+ * a mock that never resolves, without awaiting it, would silently poison
+ * every later test on that key. Asserted empty in `jiraFiles.test.ts`'s
+ * `afterEach` so that failure mode surfaces as an obvious assertion instead
+ * of a mysterious `transfer_in_progress` in an unrelated test. */
+export function inFlightTransferCountForTests(): number {
+  return inFlightTransfers.size;
 }
 
 /** What a caller is told when it lost the race for `beginTransfer`. */
@@ -264,9 +287,12 @@ function downloadsDirectory(): string | null {
  *
  * Single-flight per attachment id, via `beginTransfer`/`endTransfer` above:
  * a second call for the same `attachmentId` while this one is still running
- * is refused with `transfer_in_progress` rather than started, so two
- * independently-mounted copies of `JiraTicketDetail.tsx` clicking "Download"
- * for the same attachment cannot end up buffering it twice.
+ * is refused with `transfer_in_progress` rather than started. The renderer's
+ * own `disabled={downloading !== null}` on the Download button is the first
+ * line of defense, but a rendered `disabled` attribute is a UI affordance,
+ * not a guard on the network call and file write this function actually
+ * performs — it does nothing about a click that lands before that state
+ * update commits. This is the guard that is actually load-bearing.
  */
 export async function downloadAttachmentToDisk(
   win: BrowserWindow | null,
@@ -390,11 +416,16 @@ export function mimeTypeForFileName(fileName: string): string {
  *
  * Single-flight per ticket id, via `beginTransfer`/`endTransfer` above: a
  * second call for the same `ticketId` while this one is still running is
- * refused with `transfer_in_progress` before it ever opens a picker, so two
- * independently-mounted copies of `JiraTicketDetail.tsx` clicking "Attach a
- * file" for the same ticket cannot stack a second native dialog on top of
- * the first. Keyed on the ticket rather than the file, since no file is even
- * chosen until after the guard is claimed.
+ * refused with `transfer_in_progress` before it ever opens a picker. This is
+ * the guard that actually matters here, not the renderer's own
+ * `uploading`/`attaching` booleans: `JiraTicketDetail.tsx`'s "Attach a file"
+ * button and `JiraCommentComposer.tsx`'s toolbar attach button are two
+ * separate controls, mounted together on the same open ticket, each with
+ * fully independent React state — neither can see whether the other is
+ * mid-upload, so two clicks landing milliseconds apart, one per control,
+ * could stack a second native dialog on top of the first with nothing in
+ * the renderer able to stop it. Keyed on the ticket rather than the file,
+ * since no file is even chosen until after the guard is claimed.
  */
 export async function pickAndUploadAttachment(
   win: BrowserWindow | null,
