@@ -250,11 +250,21 @@ export function compareTickets(
     if (byPriority !== 0) return byPriority;
   }
   if (sort === 'updated') {
-    const byUpdated = Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
-    // An unparseable timestamp yields NaN, and a comparator that returns NaN
-    // produces an order that is not merely wrong but inconsistent between
-    // runs. Falling through to the key tiebreak is the deterministic answer.
-    if (Number.isFinite(byUpdated) && byUpdated !== 0) return byUpdated;
+    // A null updatedAt means Jira never said when the issue last changed —
+    // not that it just did. Sorting it as if `Date.parse(null)`'s NaN fell
+    // through to the key tiebreak would still scatter it among tickets with
+    // a real timestamp; putting it after every known timestamp instead is
+    // the "unknown, not now" a reader actually wants from this sort.
+    if (a.updatedAt === null || b.updatedAt === null) {
+      if (a.updatedAt !== b.updatedAt) return a.updatedAt === null ? 1 : -1;
+    } else {
+      const byUpdated = Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
+      // An unparseable timestamp yields NaN, and a comparator that returns
+      // NaN produces an order that is not merely wrong but inconsistent
+      // between runs. Falling through to the key tiebreak is the
+      // deterministic answer.
+      if (Number.isFinite(byUpdated) && byUpdated !== 0) return byUpdated;
+    }
   }
   return compareIssueKeys(a.key, b.key);
 }

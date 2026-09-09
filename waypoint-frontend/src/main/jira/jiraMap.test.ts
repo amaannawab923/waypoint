@@ -924,6 +924,23 @@ describe('mapIssue', () => {
     });
   });
 
+  // The queue's default sort keys on this field (useMyJiraQueue.ts's
+  // compareTickets), so a fabricated "now" here used to pin an untouched
+  // issue to the top of every refresh.
+  describe('updatedAt, when Jira omits `updated`', () => {
+    it('maps null rather than the current time', () => {
+      expect(mapIssue(issue({ updated: undefined }), ME)).toMatchObject({
+        updatedAt: null,
+      });
+    });
+
+    it('still carries a real `updated` through untouched', () => {
+      expect(
+        mapIssue(issue({ updated: '2026-09-01T10:00:00.000+0000' }), ME),
+      ).toMatchObject({ updatedAt: '2026-09-01T10:00:00.000+0000' });
+    });
+  });
+
   // The same split priority already has between its display word and its
   // writable id: `assigneeName` is a label (and "Unassigned" is this app's own
   // fallback, not something Jira said), while the account id is the only thing
@@ -1574,6 +1591,24 @@ describe('mapComment', () => {
       authorName: 'Sam Lee',
       body: 'Replay log attached.',
       createdAt: '2026-09-01T09:00:00.000+0000',
+    });
+  });
+
+  // JiraTicketDetail.tsx's formatRelativeTime renders this field, and a
+  // fabricated "now" would have shown a freshly-omitted `created` as
+  // "just now" rather than the honest "Unknown".
+  it('maps null, not the current time, when Jira omits `created`', () => {
+    expect(
+      mapComment(
+        { id: '10502', author: { displayName: 'Sam Lee' }, body: 'No date.' },
+        '10421',
+      ),
+    ).toEqual({
+      id: '10502',
+      ticketId: '10421',
+      authorName: 'Sam Lee',
+      body: 'No date.',
+      createdAt: null,
     });
   });
 

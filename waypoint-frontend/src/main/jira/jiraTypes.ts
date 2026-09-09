@@ -225,7 +225,11 @@ export interface JiraWireTicket {
    * comment for why that fallback is not optional.
    */
   transitions: JiraWireTransition[];
-  updatedAt: string;
+  /** When Jira last changed this issue (ISO), or null when Jira's payload
+   * omitted `updated`. Null, not "now" — jiraMap.ts's mapIssue used to
+   * fabricate the current time for a missing field, which pinned an
+   * untouched issue to the top of every "recently updated" sort. */
+  updatedAt: string | null;
 }
 
 /**
@@ -361,7 +365,10 @@ export interface JiraWireComment {
   ticketId: string;
   authorName: string;
   body: string;
-  createdAt: string;
+  /** When the comment was posted (ISO), or null when Jira's payload omitted
+   * `created` — see JiraWireTicket's updatedAt for why this is null rather
+   * than a fabricated "now". */
+  createdAt: string | null;
 }
 
 /**

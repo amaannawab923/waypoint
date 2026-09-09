@@ -54,7 +54,12 @@ import type {
 // again matching the native ticket, whose expand button leaves the drawer
 // for /projects/:projectId/tickets/:identifier.
 
-function formatRelativeTime(iso: string): string {
+// `iso` is null when Jira's payload omitted the comment's `created` — see
+// JiraComment's own doc comment. Computing a duration against `null` would
+// either throw or, worse, silently render some arbitrary elapsed time as
+// truth; "Unknown" is the honest answer for a timestamp this app never had.
+function formatRelativeTime(iso: string | null): string {
+  if (iso === null) return 'Unknown';
   const diffMs = Date.now() - new Date(iso).getTime();
   const diffSec = Math.round(diffMs / 1000);
   if (diffSec < 45) return 'just now';
