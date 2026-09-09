@@ -245,7 +245,7 @@ export default function BoardView({
           </div>
 
           <div className="thin-scroll flex min-h-[40px] flex-1 flex-col gap-2 overflow-y-auto px-2 pb-3">
-            {group.items.map((item) => {
+            {group.items.map((item, index) => {
               const state = view.stateFor(item);
               const labels = item.labelIds
                 .map((id) => labelById.get(id))
@@ -258,6 +258,20 @@ export default function BoardView({
               // whose parent landed in a different group keeps 2c's parent
               // chip as the only pointer instead.
               const isNested = view.nestedChildIds.has(item.id);
+              // H2: the two positions that would ask to drop something
+              // between THIS item and its already-adjacent nested
+              // parent/child — 'after' this item when the next card is its
+              // own nested child, or 'before' this item when it's itself
+              // nested directly under the previous card. Both are refused
+              // below (see onDragOver's own comment for why).
+              const prevItem = group.items[index - 1];
+              const nextItem = group.items[index + 1];
+              const boundaryAfter = Boolean(
+                nextItem && nextItem.parentId === item.id && view.nestedChildIds.has(nextItem.id),
+              );
+              const boundaryBefore = Boolean(
+                prevItem && isNested && item.parentId === prevItem.id,
+              );
               return (
                 <button
                   key={item.id}
@@ -279,13 +293,40 @@ export default function BoardView({
                       draggingId === item.id
                     )
                       return;
-                    e.preventDefault();
-                    e.stopPropagation();
                     const rect = e.currentTarget.getBoundingClientRect();
                     const position =
                       e.clientY < rect.top + rect.height / 2
                         ? 'before'
                         : 'after';
+                    // H2 (documented decision, not a silent no-op): a drop
+                    // 'after' this card when it's immediately followed by
+                    // its own nested child, or 'before' this card when it's
+                    // itself nested directly under the previous one, is
+                    // asking to insert something between an already-
+                    // adjacent parent/child pair. The same-group nesting
+                    // resort (useTicketsView.ts's orderedItems) always
+                    // re-splices a nested child directly after its parent
+                    // regardless of raw list order, so that drop can never
+                    // actually land there — reorderItemLocally would still
+                    // mutate the raw order and reorderTicket would still
+                    // persist it server-side, but the rendered result would
+                    // snap right back, a silent no-op that leaves persisted
+                    // and rendered order disagreeing (see
+                    // reorderItemLocally's own comment in useTicketsView.ts
+                    // for the full mechanism). Implementing a real "insert
+                    // between nested parent/child" reorder is out of scope
+                    // for this pass, so instead: no preventDefault (the
+                    // browser refuses the drop outright) and no indicator,
+                    // so the UI never implies a drop here will do anything.
+                    if (
+                      (position === 'after' && boundaryAfter) ||
+                      (position === 'before' && boundaryBefore)
+                    ) {
+                      setDragOverCard((c) => (c?.id === item.id ? null : c));
+                      return;
+                    }
+                    e.preventDefault();
+                    e.stopPropagation();
                     setDragOverCard((c) =>
                       c?.id === item.id && c.position === position
                         ? c

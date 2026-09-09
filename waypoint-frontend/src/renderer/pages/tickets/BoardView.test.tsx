@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom';
-import { render, screen } from '@testing-library/react';
+import { createEvent, fireEvent, render, screen } from '@testing-library/react';
 import {
   listAgentAssignments,
   listAgents,
@@ -217,6 +217,93 @@ describe('BoardView same-group nesting (finding 2e)', () => {
 
     const childCard = (await screen.findByText('CW-2')).closest('button') as HTMLElement;
     expect(childCard.className).not.toContain('ml-3');
+  });
+});
+
+// H2: dropping between an already-adjacent nested parent/child pair used to
+// be a silent no-op — the same-group nesting resort always re-splices a
+// nested child directly after its parent regardless of where the drop
+// tried to insert something, so the rendered order snapped right back even
+// though reorderTicket had already told the server the move happened. Since
+// a full "insert between nested parent/child" reorder is out of scope for
+// this pass, the fix suppresses the drop-indicator (and refuses the drop)
+// at exactly that boundary, so the UI never implies a drop there will do
+// anything.
+//
+// jsdom's getBoundingClientRect returns an all-zero rect for every element,
+// so `clientY < 0` reliably yields 'before' and `clientY > 0` reliably
+// yields 'after' here, regardless of which card is targeted — but jsdom's
+// DragEvent does NOT pick up `clientY` from fireEvent's init dict (it comes
+// back `undefined`, silently always yielding 'after'), so these tests build
+// the event via `createEvent.dragOver` and set `clientY` directly on it
+// before dispatching.
+function dragOverWithClientY(el: HTMLElement, clientY: number) {
+  const event = createEvent.dragOver(el);
+  Object.defineProperty(event, 'clientY', { value: clientY, configurable: true });
+  fireEvent(el, event);
+}
+
+describe('BoardView drag-over boundary suppression (H2)', () => {
+  const parent = ticket({ id: 'parent', identifier: 'CW-1' });
+  const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent' });
+  const other = ticket({ id: 'other', identifier: 'CW-3' });
+
+  function renderBoard() {
+    const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [parent, child, other] }];
+    const nestedChildIds = new Set(['child']);
+    return render(
+      <BoardView
+        view={fakeView({ items: [parent, child, other], groups, nestedChildIds })}
+        projectId="proj-1"
+        onOpenItem={jest.fn()}
+      />,
+    );
+  }
+
+  it('shows no drop indicator dropping "other" AFTER "parent" (parent/child boundary, from the parent side)', async () => {
+    renderBoard();
+    const parentCard = (await screen.findByText('CW-1')).closest('button') as HTMLElement;
+    const otherCard = (await screen.findByText('CW-3')).closest('button') as HTMLElement;
+
+    fireEvent.dragStart(otherCard);
+    dragOverWithClientY(parentCard, 10); // 'after'
+
+    expect(parentCard.className).not.toContain('border-b-2');
+    expect(parentCard.className).not.toContain('border-t-2');
+  });
+
+  it('shows no drop indicator dropping "other" BEFORE "child" (same boundary, from the child side)', async () => {
+    renderBoard();
+    const childCard = (await screen.findByText('CW-2')).closest('button') as HTMLElement;
+    const otherCard = (await screen.findByText('CW-3')).closest('button') as HTMLElement;
+
+    fireEvent.dragStart(otherCard);
+    dragOverWithClientY(childCard, -10); // 'before'
+
+    expect(childCard.className).not.toContain('border-t-2');
+    expect(childCard.className).not.toContain('border-b-2');
+  });
+
+  it('still shows the indicator for a non-boundary drop (after "child", which has no nested child of its own)', async () => {
+    renderBoard();
+    const childCard = (await screen.findByText('CW-2')).closest('button') as HTMLElement;
+    const otherCard = (await screen.findByText('CW-3')).closest('button') as HTMLElement;
+
+    fireEvent.dragStart(otherCard);
+    dragOverWithClientY(childCard, 10); // 'after' — not a boundary
+
+    expect(childCard.className).toContain('border-b-2');
+  });
+
+  it('still shows the indicator for a non-boundary drop (before "parent", the first card in the column)', async () => {
+    renderBoard();
+    const parentCard = (await screen.findByText('CW-1')).closest('button') as HTMLElement;
+    const otherCard = (await screen.findByText('CW-3')).closest('button') as HTMLElement;
+
+    fireEvent.dragStart(otherCard);
+    dragOverWithClientY(parentCard, -10); // 'before' — not a boundary
+
+    expect(parentCard.className).toContain('border-t-2');
   });
 });
 
