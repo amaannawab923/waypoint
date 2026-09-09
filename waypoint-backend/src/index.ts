@@ -6,7 +6,7 @@ import { repairProposals } from './services/proposals.service.js';
 // comment for why (avoids a local-machine port conflict with another
 // project). Only the fallback moved; PORT itself still wins when set.
 const port = Number(process.env.PORT ?? 14000);
-const host = process.env.HOST ?? '127.0.0.1';
+const host = process.env.HOST || '127.0.0.1';
 const app = createApp();
 
 // 127.0.0.1 by default, not the default all-interfaces bind — this process
