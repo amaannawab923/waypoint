@@ -317,8 +317,11 @@ export function Sidebar() {
   const { data: workspace } = useAsync(() => getWorkspace(), []);
   // Seeds the shared proposalStore with the workspace-wide 'proposed' queue
   // once on mount — the same fetch useReviewQueue makes for the Review
-  // screen's own 'proposed' segment (lib/useReviewQueue.ts) — then reads the
-  // badge count live off that store via usePendingProposalCount below.
+  // screen's own 'proposed' segment (lib/useReviewQueue.ts), capped at the
+  // backend's own MAX_REVIEW_QUEUE_LIMIT (proposals.service.ts) rather than
+  // its default page size, since this seed's only job is to make the count
+  // correct, not to page through results — then reads the badge count live
+  // off that store via usePendingProposalCount below.
   // ROAD-13: this used to be a one-shot `getProposalCounts()` whose result
   // never changed after mount, so the badge froze at whatever the count was
   // at app launch. Seeding the store instead of local state means the badge
@@ -327,9 +330,11 @@ export function Sidebar() {
   // no refetch of its own, matching how those surfaces already read the
   // store live.
   useAsync(async () => {
-    const { proposals } = await listReviewQueue({ status: 'proposed' });
+    const { proposals } = await listReviewQueue({
+      status: 'proposed',
+      limit: 100,
+    });
     upsertProposals(proposals);
-    return proposals;
   }, []);
   const pendingProposalCount = usePendingProposalCount();
   const { data: notifications } = useAsync(() => listNotifications(), []);

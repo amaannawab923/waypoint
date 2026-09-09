@@ -163,4 +163,25 @@ describe('Sidebar Review badge — live off the shared proposal store (ROAD-13)'
 
     expect(reviewBadgeText()).toBeNull();
   });
+
+  // Caught in review: the seed originally called listReviewQueue({ status:
+  // 'proposed' }) with no limit, silently falling back to the backend's
+  // 25-row default page size — so with more than 25 real pending proposals,
+  // this badge under-counted while every other surface in the app (Home's
+  // "N proposals waiting on you", the Review screen's own segment tabs) kept
+  // showing the exact count from the same response's `counts.proposed`.
+  it("requests the backend's max page size, not its default, so the count stays exact past 25 pending proposals", () => {
+    jest.mocked(listReviewQueue).mockResolvedValue({
+      proposals: [],
+      counts: { proposed: 0, blocked: 0, recent: 0 },
+      nextCursor: null,
+    });
+
+    mount();
+
+    expect(listReviewQueue).toHaveBeenCalledWith({
+      status: 'proposed',
+      limit: 100,
+    });
+  });
 });
