@@ -200,11 +200,16 @@ function proposal(overrides: Partial<ProposalView> = {}): ProposalView {
   };
 }
 
-function mount(comments: Comment[], agents: Agent[] = [], proposals: ProposalView[] = []) {
+function mount(
+  comments: Comment[],
+  agents: Agent[] = [],
+  proposals: ProposalView[] = [],
+  item: Ticket = ITEM,
+) {
   jest
     .mocked(useProject)
     .mockReturnValue({ project: PROJECT, reloadProject: jest.fn() });
-  jest.mocked(getTicketByIdentifier).mockResolvedValue(ITEM);
+  jest.mocked(getTicketByIdentifier).mockResolvedValue(item);
   jest.mocked(listStates).mockResolvedValue([]);
   jest.mocked(listLabels).mockResolvedValue([]);
   jest.mocked(listWorkstreams).mockResolvedValue([]);
@@ -320,6 +325,56 @@ describe('TicketDetailPage → title truncation (finding 3)', () => {
 
     await waitFor(() =>
       expect(updateTicket).toHaveBeenCalledWith('wi-1', { title: longTitle }),
+    );
+  });
+});
+
+// Finding 7a: estimatePoints (a free, unconstrained numeric field) had no
+// UI surface at all — distinct from estimateValue (constrained to the
+// project's configured Fibonacci/T-shirt preset). Deliberately always
+// visible, unlike the existing Estimate row, so it must render correctly
+// even with project.estimate: null — the PROJSET-06-adjacent defensive
+// test the proposal called for near this historically fragile area.
+describe('TicketDetailPage → Story points field (finding 7a)', () => {
+  it('renders even when the project has no configured estimate system', async () => {
+    mount([]);
+
+    // Waits on the input itself, not the 'Story points' label text — the
+    // loading skeleton renders that same label too (it's now unconditional
+    // there, matching this row's own always-visible behavior), so a wait
+    // keyed on the label alone would resolve prematurely against it.
+    const input = (await screen.findByPlaceholderText('No estimate')) as HTMLInputElement;
+    expect(screen.getByText('Story points')).toBeInTheDocument();
+    expect(input).toHaveAttribute('type', 'number');
+    expect(input).toHaveAttribute('step', '0.5');
+    expect(input.value).toBe('');
+  });
+
+  it('calls updateTicket with the new estimatePoints value on edit', async () => {
+    mount([]);
+
+    const input = await screen.findByPlaceholderText('No estimate');
+    fireEvent.change(input, { target: { value: '17.5' } });
+
+    await waitFor(() =>
+      expect(updateTicket).toHaveBeenCalledWith('wi-1', { estimatePoints: 17.5 }),
+    );
+  });
+
+  it('clears estimatePoints back to null when the field is emptied', async () => {
+    // Seeded with a real starting value (not mount()'s default null) — the
+    // input is a plain controlled field bound straight to
+    // item.estimatePoints with no local draft state, so React's
+    // controlled-input value tracking treats a same-value
+    // fireEvent.change as a no-op; starting from a real number makes
+    // "clear the field" a genuine, detectable value change.
+    mount([], [], [], { ...ITEM, estimatePoints: 8 });
+
+    const input = (await screen.findByDisplayValue('8')) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '' } });
+
+    await waitFor(() =>
+      expect(updateTicket).toHaveBeenCalledWith('wi-1', { estimatePoints: null }),
     );
   });
 });

@@ -519,6 +519,7 @@ export function TicketDetailContent({
       'State',
       'Assignees',
       'Priority',
+      'Story points',
       ...(project?.estimate ? ['Estimate'] : []),
       'Created by',
       'Start date',
@@ -1264,6 +1265,26 @@ export function TicketDetailContent({
               </div>
             )}
           </Dropdown>
+        </PropertyRow>
+
+        {/* Finding 7a: `estimatePoints` is a free, unconstrained numeric
+            field — distinct from `estimateValue` below (constrained to the
+            project's configured Fibonacci/T-shirt preset) — so it's real
+            data can be non-Fibonacci values like 17.5. Deliberately always
+            visible, unlike the Estimate row below, since it doesn't depend
+            on `project.estimate` being configured at all. */}
+        <PropertyRow label="Story points">
+          <input
+            type="number"
+            step="0.5"
+            value={item.estimatePoints ?? ''}
+            onChange={(e) => {
+              const raw = e.target.value;
+              patchItem({ estimatePoints: raw.trim() === '' ? null : Number(raw) });
+            }}
+            placeholder="No estimate"
+            className="h-8 w-full rounded-[var(--radius-sm)] border border-border-strong bg-bg px-2 text-sm text-text outline-none focus:border-accent"
+          />
         </PropertyRow>
 
         {estimateSystem && (
