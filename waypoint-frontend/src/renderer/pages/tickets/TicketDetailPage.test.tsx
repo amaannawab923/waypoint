@@ -289,6 +289,35 @@ describe('TicketDetailPage → description auto-grow (finding 1)', () => {
   });
 });
 
+// Finding 3: the title input used to clip mid-word with no ellipsis
+// (overflow: clip). It now truncates visually at rest — native input
+// behavior already scrolls to the caret while focused, so this only
+// changes the unfocused display, never what's actually saved.
+describe('TicketDetailPage → title truncation (finding 3)', () => {
+  it('truncates the title input at rest instead of clipping mid-word', async () => {
+    mount([]);
+
+    const title = await screen.findByDisplayValue(ITEM.title);
+    expect(title).toHaveClass('truncate');
+  });
+
+  it('still saves and round-trips a long title in full through updateTicket()', async () => {
+    mount([]);
+    const longTitle =
+      'A very long ticket title that would visually clip mid-word before this fix landed and must still be saved in full';
+
+    const title = (await screen.findByDisplayValue(
+      ITEM.title,
+    )) as HTMLInputElement;
+    fireEvent.change(title, { target: { value: longTitle } });
+    fireEvent.blur(title);
+
+    await waitFor(() =>
+      expect(updateTicket).toHaveBeenCalledWith('wi-1', { title: longTitle }),
+    );
+  });
+});
+
 describe('TicketDetailPage → comment rendering (stored XSS fix)', () => {
   it('renders a comment containing an <img onerror> payload as visible text, not a live element', async () => {
     mount([commentWith(XSS_PAYLOAD)]);

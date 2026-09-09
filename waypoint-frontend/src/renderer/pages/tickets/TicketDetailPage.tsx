@@ -858,7 +858,7 @@ export function TicketDetailContent({
               if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
             }}
             placeholder="Ticket title"
-            className="-mx-2 w-full rounded-[var(--radius-sm)] border border-transparent bg-transparent px-2 py-1 font-display text-xl font-semibold text-text outline-none focus:border-border-strong focus:bg-surface-2"
+            className="-mx-2 w-full truncate rounded-[var(--radius-sm)] border border-transparent bg-transparent px-2 py-1 font-display text-xl font-semibold text-text outline-none focus:border-border-strong focus:bg-surface-2"
           />
         </div>
 
