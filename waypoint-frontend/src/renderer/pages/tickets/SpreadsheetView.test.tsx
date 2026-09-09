@@ -121,6 +121,8 @@ function fakeView(items: Ticket[]): TicketsView {
     groupedItems: [],
     showEmptyGroups: true,
     setShowEmptyGroups: jest.fn(),
+    collapsedParents: new Set(),
+    toggleParentCollapsed: jest.fn(),
     stateFor: () => undefined,
     projectFor: () => undefined,
   };

@@ -78,6 +78,8 @@ function fakeView(opts: {
   parentById?: Map<string, Ticket>;
   subItemCountByParent?: Map<string, { total: number; done: number }>;
   nestedChildIds?: Set<string>;
+  collapsedParents?: Set<string>;
+  toggleParentCollapsed?: (id: string) => void;
 }): TicketsView {
   return {
     projectId: 'proj-1',
@@ -124,6 +126,8 @@ function fakeView(opts: {
     groupedItems: opts.groups,
     showEmptyGroups: true,
     setShowEmptyGroups: jest.fn(),
+    collapsedParents: opts.collapsedParents ?? new Set(),
+    toggleParentCollapsed: opts.toggleParentCollapsed ?? jest.fn(),
     stateFor: (item) => (item.stateId === 'st-1' ? state() : undefined),
     projectFor: () => undefined,
   };
@@ -466,6 +470,193 @@ describe('BoardView description preview (finding 4)', () => {
 
     await screen.findByText('CW-1');
     expect(document.querySelectorAll('.line-clamp-2.text-text-muted').length).toBe(0);
+  });
+});
+
+// ROAD-39: collapsible parent/child hierarchy. A Board card is a single
+// <button draggable> with no room for a second interactive element inside
+// it — the connector is a sibling row ("N subtasks"), between the parent
+// card and its children, never nested inside the card.
+describe('BoardView collapsible hierarchy connector (ROAD-39)', () => {
+  it('renders a "N subtasks" connector button, expanded by default, when a card has sub-items', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'ROAD-2' });
+    const child = ticket({ id: 'child', identifier: 'ROAD-3', parentId: 'parent' });
+    const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [parent, child] }];
+    const nestedChildIds = new Set(['child']);
+    const subItemCountByParent = new Map([['parent', { total: 1, done: 0 }]]);
+
+    render(
+      <BoardView
+        view={fakeView({ items: [parent, child], groups, nestedChildIds, subItemCountByParent })}
+        projectId="proj-1"
+        onOpenItem={jest.fn()}
+      />,
+    );
+
+    const connector = await screen.findByRole('button', { name: 'Collapse 1 subtask' });
+    expect(connector).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('renders no connector for a card with zero sub-items', async () => {
+    const item = ticket({ id: 'a', identifier: 'CW-1' });
+    const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [item] }];
+
+    render(<BoardView view={fakeView({ items: [item], groups })} projectId="proj-1" onOpenItem={jest.fn()} />);
+
+    await screen.findByText('CW-1');
+    expect(screen.queryByRole('button', { name: /subtask/ })).not.toBeInTheDocument();
+  });
+
+  it('is a sibling of the card button, not nested inside it', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'ROAD-2' });
+    const child = ticket({ id: 'child', identifier: 'ROAD-3', parentId: 'parent' });
+    const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [parent, child] }];
+    const nestedChildIds = new Set(['child']);
+    const subItemCountByParent = new Map([['parent', { total: 1, done: 0 }]]);
+
+    render(
+      <BoardView
+        view={fakeView({ items: [parent, child], groups, nestedChildIds, subItemCountByParent })}
+        projectId="proj-1"
+        onOpenItem={jest.fn()}
+      />,
+    );
+
+    const connector = await screen.findByRole('button', { name: 'Collapse 1 subtask' });
+    const parentCard = (await screen.findByText('ROAD-2')).closest('button') as HTMLElement;
+    expect(parentCard.contains(connector)).toBe(false);
+    expect(parentCard).not.toBe(connector);
+  });
+
+  it('clicking the connector calls toggleParentCollapsed with the parent id', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'ROAD-2' });
+    const child = ticket({ id: 'child', identifier: 'ROAD-3', parentId: 'parent' });
+    const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [parent, child] }];
+    const nestedChildIds = new Set(['child']);
+    const subItemCountByParent = new Map([['parent', { total: 1, done: 0 }]]);
+    const toggleParentCollapsed = jest.fn();
+
+    render(
+      <BoardView
+        view={fakeView({
+          items: [parent, child],
+          groups,
+          nestedChildIds,
+          subItemCountByParent,
+          toggleParentCollapsed,
+        })}
+        projectId="proj-1"
+        onOpenItem={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Collapse 1 subtask' }));
+    expect(toggleParentCollapsed).toHaveBeenCalledWith('parent');
+  });
+
+  it('when collapsed (collapsedParents has the parent id), shows a right chevron and "Expand" label, and the child card is already absent from `items`', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'ROAD-2' });
+    // Simulates what useTicketsView actually does once collapsed: the child
+    // is removed from `items`/`groupedItems` entirely (see
+    // useTicketsView.test.ts's own coverage of that removal) — BoardView
+    // itself never re-filters `view.items`, so this fixture reflects that.
+    const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [parent] }];
+    const subItemCountByParent = new Map([['parent', { total: 1, done: 0 }]]);
+    const collapsedParents = new Set(['parent']);
+
+    render(
+      <BoardView
+        view={fakeView({ items: [parent], groups, subItemCountByParent, collapsedParents })}
+        projectId="proj-1"
+        onOpenItem={jest.fn()}
+      />,
+    );
+
+    const connector = await screen.findByRole('button', { name: 'Expand 1 subtask' });
+    expect(connector).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('ROAD-3')).not.toBeInTheDocument();
+  });
+
+  it('keeps the Epic badge visible on the parent card while collapsed', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'ROAD-2' });
+    const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [parent] }];
+    const subItemCountByParent = new Map([['parent', { total: 1, done: 0 }]]);
+    const collapsedParents = new Set(['parent']);
+
+    render(
+      <BoardView
+        view={fakeView({ items: [parent], groups, subItemCountByParent, collapsedParents })}
+        projectId="proj-1"
+        onOpenItem={jest.fn()}
+      />,
+    );
+
+    expect(await screen.findByText('Epic · 0/1')).toBeInTheDocument();
+  });
+
+  // Open decision (documented in the commit message): a drop onto a
+  // collapsed parent's connector is refused outright, the same way the
+  // existing parent/child boundary predicates refuse a drop inside a
+  // subtree — no auto-expand-on-hover, no silent append. The connector has
+  // no onDragStart/draggable of its own; onDragOver/onDrop below just
+  // stopPropagation() without ever calling preventDefault(), so the
+  // browser's default "refuse this drop" applies and the bubbled
+  // column-level onDragOver (which would otherwise preventDefault()
+  // unconditionally) never gets a chance to re-enable it. This test
+  // asserts the actual persisted side effect (reorderTicket), not just a
+  // CSS class or the connector's own state — see BoardView.test.tsx's H2
+  // tests above for why that distinction matters.
+  it('a drop onto a collapsed parent\'s connector does not call reorderTicket', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'ROAD-2' });
+    const other = ticket({ id: 'other', identifier: 'CW-3' });
+    const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [parent, other] }];
+    const subItemCountByParent = new Map([['parent', { total: 1, done: 0 }]]);
+    const collapsedParents = new Set(['parent']);
+
+    render(
+      <BoardView
+        view={fakeView({ items: [parent, other], groups, subItemCountByParent, collapsedParents })}
+        projectId="proj-1"
+        onOpenItem={jest.fn()}
+      />,
+    );
+
+    const connector = await screen.findByRole('button', { name: 'Expand 1 subtask' });
+    const otherCard = (await screen.findByText('CW-3')).closest('button') as HTMLElement;
+
+    fireEvent.dragStart(otherCard);
+    fireEvent.dragOver(connector);
+    fireEvent.drop(connector);
+
+    expect(reorderTicket).not.toHaveBeenCalled();
+  });
+
+  it('the drop-onto-connector refusal stops propagation, so the bubbled column handler never preventDefaults', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'ROAD-2' });
+    const other = ticket({ id: 'other', identifier: 'CW-3' });
+    const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [parent, other] }];
+    const subItemCountByParent = new Map([['parent', { total: 1, done: 0 }]]);
+    const collapsedParents = new Set(['parent']);
+
+    render(
+      <BoardView
+        view={fakeView({ items: [parent, other], groups, subItemCountByParent, collapsedParents })}
+        projectId="proj-1"
+        onOpenItem={jest.fn()}
+      />,
+    );
+
+    const connector = await screen.findByRole('button', { name: 'Expand 1 subtask' });
+    const otherCard = (await screen.findByText('CW-3')).closest('button') as HTMLElement;
+
+    fireEvent.dragStart(otherCard);
+    const dragOverEvent = createEvent.dragOver(connector);
+    fireEvent(connector, dragOverEvent);
+    expect(dragOverEvent.defaultPrevented).toBe(false);
+
+    const dropEvent = createEvent.drop(connector);
+    fireEvent(connector, dropEvent);
+    expect(dropEvent.defaultPrevented).toBe(false);
   });
 });
 

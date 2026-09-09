@@ -413,6 +413,28 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
   const [groupBy, setGroupBy] = useState<GroupBy>(defaultGroupBy);
   const [showEmptyGroups, setShowEmptyGroups] = useState(true);
 
+  // ROAD-39: which parent tickets are collapsed in List/Board's disclosure
+  // control — session-only, in-memory, default-expanded (nothing collapsed
+  // until the user acts), never persisted per-ticket. Deliberately the same
+  // shape/mechanism as TicketList.tsx's own `collapsedGroups` state, just
+  // keyed by ticket id instead of group key, and lifted up here (rather than
+  // kept local to TicketList) so List and Board — both built on the same
+  // hook instance for a given scope — share one collapse state, and so the
+  // filter below can run upstream of groupedItems/orderedItems where the
+  // drag-reorder math (BoardView's reorderItemLocally/handleCardDrop) can
+  // see it too, instead of a display-only filter those functions can't see.
+  const [collapsedParents, setCollapsedParents] = useState<Set<string>>(
+    () => new Set(),
+  );
+  function toggleParentCollapsed(id: string) {
+    setCollapsedParents((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
   const stateById = useMemo(
     () => new Map(states.map((s) => [s.id, s])),
     [states],
@@ -604,9 +626,46 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
       result.push(item);
       appendDescendants(item.id, result, new Set([item.id]));
     }
-    return { orderedItems: result, nestedChildIds: nested };
+
+    // ROAD-39: a collapsed parent hides its ENTIRE nested subtree, arbitrarily
+    // deep — not just its direct children — matching appendDescendants'
+    // own recursion above (a collapsed ticket's descendants are exactly the
+    // contiguous run that function spliced in right after it). Walked via
+    // `childrenByParent` (already acyclic — cyclic ids are excluded from
+    // ever becoming a nested child above) rather than re-deriving nesting
+    // from `collapsedParents` some other way, so this can never disagree
+    // with what appendDescendants actually spliced in. This filters the
+    // same array `groupedItems`, `nestedChildIds`, and BoardView's
+    // drag-reorder math (subtreeRootId, reorderItemLocally) all read from
+    // this hook's `items`/`orderedItems` — a hidden ticket is genuinely
+    // absent from every one of them, not merely hidden by a display-layer
+    // filter downstream that the reorder math never sees.
+    if (collapsedParents.size === 0) {
+      return { orderedItems: result, nestedChildIds: nested };
+    }
+    const hiddenByCollapse = new Set<string>();
+    function hideDescendants(parentId: string, visiting: Set<string>) {
+      const kids = childrenByParent.get(parentId);
+      if (!kids) return;
+      for (const kid of kids) {
+        if (visiting.has(kid.id)) continue;
+        visiting.add(kid.id);
+        hiddenByCollapse.add(kid.id);
+        hideDescendants(kid.id, visiting);
+      }
+    }
+    for (const collapsedId of collapsedParents) {
+      hideDescendants(collapsedId, new Set([collapsedId]));
+    }
+    if (hiddenByCollapse.size === 0) {
+      return { orderedItems: result, nestedChildIds: nested };
+    }
+    return {
+      orderedItems: result.filter((item) => !hiddenByCollapse.has(item.id)),
+      nestedChildIds: nested,
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resolvedItems, groupBy]);
+  }, [resolvedItems, groupBy, collapsedParents]);
 
   const groupedItems: TicketGroup[] = useMemo(() => {
     function build(
@@ -805,6 +864,8 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
     groupedItems,
     showEmptyGroups,
     setShowEmptyGroups,
+    collapsedParents,
+    toggleParentCollapsed,
     stateFor,
     projectFor,
   };

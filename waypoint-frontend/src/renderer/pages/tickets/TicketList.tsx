@@ -535,6 +535,13 @@ export default function TicketList({
                 // parent landed in a different group keeps 2c's parent chip
                 // as the only pointer instead.
                 const isNested = view.nestedChildIds.has(item.id);
+                // ROAD-39: keyed off the same subItemCountByParent-style
+                // signal the "Epic · N/M" badge already uses (subTotal > 0)
+                // — inheriting that badge's own "any parent with a child, not
+                // just a 'real' epic" ambiguity rather than resolving it
+                // here (there's no ticket-type field at all; see ROAD-29).
+                const hasChildren = subTotal > 0;
+                const isCollapsed = view.collapsedParents.has(item.id);
                 return (
                   <div
                     key={item.id}
@@ -557,6 +564,35 @@ export default function TicketList({
                       onChange={() => toggleSelected(item.id)}
                       aria-label={`Select ${item.identifier}`}
                     />
+                    {/* ROAD-39: a real sibling <button>, not nested inside
+                        the row's own open-ticket button below — this
+                        codebase has a documented history of nested-
+                        interactive-element bugs (see ArchivedProjects.tsx's
+                        e.target === e.currentTarget guard). Every row
+                        reserves this same 18px gutter, with or without
+                        children, so identifiers stay column-aligned —
+                        matching docs/design/mockups/collapsible-hierarchy/
+                        list-view.html. */}
+                    {hasChildren ? (
+                      <button
+                        type="button"
+                        onClick={() => view.toggleParentCollapsed(item.id)}
+                        aria-expanded={!isCollapsed}
+                        aria-label={`${isCollapsed ? 'Expand' : 'Collapse'} ${item.identifier} and its subtasks`}
+                        className="flex size-[18px] shrink-0 cursor-pointer items-center justify-center rounded-[4px] text-text-muted hover:bg-surface-2 hover:text-text"
+                      >
+                        {isCollapsed ? (
+                          <IconChevronRight size={14} />
+                        ) : (
+                          <IconChevron size={14} />
+                        )}
+                      </button>
+                    ) : (
+                      <span
+                        aria-hidden="true"
+                        className="inline-block size-[18px] shrink-0"
+                      />
+                    )}
                     <button
                       type="button"
                       onClick={() => {

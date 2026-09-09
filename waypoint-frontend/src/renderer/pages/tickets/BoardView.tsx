@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import { Kanban, ListChecks, Link2, Terminal } from 'lucide-react';
-import { IconPlus } from '@/components/icons';
+import { IconChevron, IconChevronRight, IconPlus } from '@/components/icons';
 import { clsx } from 'clsx';
 import { useAsync } from '@/lib/useAsync';
 import {
@@ -317,9 +317,14 @@ export default function BoardView({
               const nextItem = group.items[index + 1];
               const boundaryAfter = isBoundaryGap(item, nextItem);
               const boundaryBefore = isBoundaryGap(prevItem, item);
+              // ROAD-39: same subItemCountByParent-style signal as the
+              // "Epic · N/M" badge below (see TicketList.tsx's identical
+              // comment on this same inherited ambiguity).
+              const hasChildren = subTotal > 0;
+              const isCollapsed = view.collapsedParents.has(item.id);
               return (
+                <Fragment key={item.id}>
                 <button
-                  key={item.id}
                   type="button"
                   onClick={() => onOpenItem(item.identifier)}
                   draggable={canReorderPersist}
@@ -528,6 +533,46 @@ export default function BoardView({
                     <AvatarStack people={assigneesFor(item)} size={20} />
                   </div>
                 </button>
+                {/* ROAD-39: a Board card is one single <button draggable> —
+                    there's no room inside it for a second interactive
+                    element without invalid nested-button HTML or fighting
+                    the drag handlers above. This connector is a sibling of
+                    the card's button (not a descendant), sitting between the
+                    parent card and its children, matching
+                    docs/design/mockups/collapsible-hierarchy/board-view.html.
+                    No draggable/onDragStart — it isn't a drop target either:
+                    onDragOver/onDrop below stop the event from bubbling to
+                    the column's own onDragOver (which otherwise calls
+                    e.preventDefault() unconditionally) without ever calling
+                    preventDefault() themselves, so the browser's default
+                    "refuse this drop" applies here, the same
+                    stopPropagation-without-preventDefault shape the
+                    parent/child boundary refusal above already uses. See
+                    this file's own risk note in the ROAD-39 commit message
+                    for why a collapsed parent's connector is treated as not
+                    a valid drop target at all, rather than auto-expanding on
+                    hover or silently appending. */}
+                {hasChildren && (
+                  <button
+                    type="button"
+                    onClick={() => view.toggleParentCollapsed(item.id)}
+                    onDragOver={(e) => e.stopPropagation()}
+                    onDrop={(e) => e.stopPropagation()}
+                    aria-expanded={!isCollapsed}
+                    aria-label={`${isCollapsed ? 'Expand' : 'Collapse'} ${subTotal} subtask${subTotal === 1 ? '' : 's'}`}
+                    className="ml-3 flex w-[calc(100%-12px)] cursor-pointer items-center gap-1.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-xs text-text-muted hover:bg-surface hover:text-text-secondary"
+                  >
+                    {isCollapsed ? (
+                      <IconChevronRight size={14} />
+                    ) : (
+                      <IconChevron size={14} />
+                    )}
+                    <span>
+                      {subTotal} subtask{subTotal === 1 ? '' : 's'}
+                    </span>
+                  </button>
+                )}
+                </Fragment>
               );
             })}
             <button

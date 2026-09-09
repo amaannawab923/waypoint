@@ -514,3 +514,125 @@ describe('useTicketsView groupedItems totals the same as items (count-line invar
     },
   );
 });
+
+// ROAD-39: collapsible parent/child hierarchy. `collapsedParents` and
+// `toggleParentCollapsed` are session-only, in-memory, default-expanded —
+// nothing is collapsed until the user acts, and nothing here is persisted.
+// The filter runs upstream of both `items`/`orderedItems` AND
+// `groupedItems` (the same array BoardView's drag-reorder math reads via
+// `view.items`), so a collapsed subtree is genuinely absent from every
+// consumer of this hook, not merely hidden by a display-layer filter the
+// reorder math can't see.
+describe('useTicketsView collapsedParents (ROAD-39: collapsible hierarchy)', () => {
+  it('defaults to fully expanded — collapsedParents starts empty and nothing is hidden', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1', stateId: 'st-proj-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent', stateId: 'st-proj-1' });
+    jest.mocked(listTickets).mockResolvedValue([parent, child]);
+
+    const { result } = renderHook(() => useTicketsView({ projectId: 'proj-1', defaultGroupBy: 'state' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.collapsedParents.size).toBe(0);
+    expect(result.current.items.map((i) => i.id)).toEqual(['parent', 'child']);
+  });
+
+  it('toggleParentCollapsed removes the whole subtree from items (and groupedItems) — not merely a visual hide', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1', stateId: 'st-proj-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent', stateId: 'st-proj-1' });
+    const other = ticket({ id: 'other', identifier: 'CW-3', stateId: 'st-proj-1' });
+    jest.mocked(listTickets).mockResolvedValue([parent, child, other]);
+
+    const { result } = renderHook(() => useTicketsView({ projectId: 'proj-1', defaultGroupBy: 'state' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.items.map((i) => i.id)).toEqual(['parent', 'child', 'other']);
+
+    act(() => {
+      result.current.toggleParentCollapsed('parent');
+    });
+
+    await waitFor(() => expect(result.current.items.map((i) => i.id)).toEqual(['parent', 'other']));
+    expect(result.current.collapsedParents.has('parent')).toBe(true);
+    const group = result.current.groupedItems.find((g) => g.key === 'st-proj-1');
+    expect(group?.items.map((i) => i.id)).toEqual(['parent', 'other']);
+  });
+
+  it('toggling a second time re-expands, restoring the subtree', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1', stateId: 'st-proj-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent', stateId: 'st-proj-1' });
+    jest.mocked(listTickets).mockResolvedValue([parent, child]);
+
+    const { result } = renderHook(() => useTicketsView({ projectId: 'proj-1', defaultGroupBy: 'state' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => {
+      result.current.toggleParentCollapsed('parent');
+    });
+    await waitFor(() => expect(result.current.items.map((i) => i.id)).toEqual(['parent']));
+
+    act(() => {
+      result.current.toggleParentCollapsed('parent');
+    });
+    await waitFor(() => expect(result.current.items.map((i) => i.id)).toEqual(['parent', 'child']));
+    expect(result.current.collapsedParents.has('parent')).toBe(false);
+  });
+
+  it('collapses a 3-level chain (A→B→C) entirely from the top, not one level at a time', async () => {
+    const a = ticket({ id: 'a', identifier: 'CW-1', stateId: 'st-proj-1' });
+    const b = ticket({ id: 'b', identifier: 'CW-2', parentId: 'a', stateId: 'st-proj-1' });
+    const c = ticket({ id: 'c', identifier: 'CW-3', parentId: 'b', stateId: 'st-proj-1' });
+    jest.mocked(listTickets).mockResolvedValue([a, b, c]);
+
+    const { result } = renderHook(() => useTicketsView({ projectId: 'proj-1', defaultGroupBy: 'state' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.items.map((i) => i.id)).toEqual(['a', 'b', 'c']);
+
+    act(() => {
+      result.current.toggleParentCollapsed('a');
+    });
+
+    // Both B and C vanish in one toggle — collapsing hides the whole
+    // subtree at once, not one level at a time (appendDescendants already
+    // splices arbitrarily-deep chains into one contiguous run; this is the
+    // hiding side of that same mechanism).
+    await waitFor(() => expect(result.current.items.map((i) => i.id)).toEqual(['a']));
+  });
+
+  it('does not affect subItemCountByParent — the Epic badge stays accurate (true total) while collapsed', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1', stateId: 'st-proj-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent', stateId: 'st-proj-1' });
+    jest.mocked(listTickets).mockResolvedValue([parent, child]);
+
+    const { result } = renderHook(() => useTicketsView({ projectId: 'proj-1', defaultGroupBy: 'state' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => {
+      result.current.toggleParentCollapsed('parent');
+    });
+    await waitFor(() => expect(result.current.items.map((i) => i.id)).toEqual(['parent']));
+
+    // subItemCountByParent is built from `unfilteredItems`, independent of
+    // both the active filter AND (now) collapse state — the badge's
+    // "N/M" must not go stale just because the subtree is hidden.
+    expect(result.current.subItemCountByParent.get('parent')).toEqual({ total: 1, done: 0 });
+  });
+
+  it('collapsing a parent whose children are NOT nested (different group) hides nothing — inherited from the same-group nesting rule', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1', priority: 'low' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent', priority: 'urgent' });
+    jest.mocked(listTickets).mockResolvedValue([parent, child]);
+
+    const { result } = renderHook(() => useTicketsView({ projectId: 'proj-1', defaultGroupBy: 'priority' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.nestedChildIds.has('child')).toBe(false);
+
+    act(() => {
+      result.current.toggleParentCollapsed('parent');
+    });
+
+    // Nothing to hide — the child never rendered adjacent to the parent in
+    // the first place (finding 2e's parent chip points at it from its own
+    // group instead), so toggling collapse is a documented no-op here.
+    await waitFor(() => expect(result.current.collapsedParents.has('parent')).toBe(true));
+    expect(result.current.items.map((i) => i.id).sort()).toEqual(['child', 'parent']);
+  });
+});
