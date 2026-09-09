@@ -13,7 +13,7 @@ import {
   useLoadedJiraConnection,
 } from '@/lib/jiraStore';
 import { JiraApiError } from '@/types/jira';
-import type { JiraTicket, JiraTruncation } from '@/types/jira';
+import type { JiraComment, JiraTicket, JiraTruncation } from '@/types/jira';
 import MyJiraPage from './MyJiraPage';
 import { resetMyJiraQueueForTests } from './useMyJiraQueue';
 
@@ -828,6 +828,46 @@ describe('JiraTicketDrawer — description wrapping', () => {
 
     const body = await screen.findByText(/First paragraph\./);
     expect(body).toHaveClass('whitespace-pre-wrap');
+  });
+});
+
+// jiraMap.ts (main) maps a comment's missing `created` to null rather than
+// fabricating "now" — see its own comment for why. This is the other half of
+// that fix: the drawer has to render the null honestly rather than computing
+// a bogus duration against it or crashing.
+describe('JiraTicketDrawer — comment timestamps', () => {
+  it('shows "Unknown" for a comment whose created date Jira omitted', async () => {
+    const undated = ticket({
+      id: 't-undated-comment',
+      key: 'ENG-11',
+      projectKey: 'ENG',
+      title: 'Ticket with an undated comment',
+    });
+    const comment: JiraComment = {
+      id: 'c-1',
+      ticketId: 't-undated-comment',
+      authorName: 'Sam Lee',
+      body: 'Replay log attached.',
+      createdAt: null,
+      postedByWaypoint: false,
+      disclosureText: null,
+    };
+    jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead([undated]));
+    jest
+      .mocked(listJiraComments)
+      .mockResolvedValue({ comments: [comment], total: 1 });
+    jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
+    jest.mocked(useJiraConnection).mockReturnValue(undefined);
+    render(
+      <MemoryRouter>
+        <MyJiraPage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByText('Ticket with an undated comment'));
+
+    expect(await screen.findByText('Replay log attached.')).toBeInTheDocument();
+    expect(screen.getByText('Unknown', { exact: false })).toBeInTheDocument();
   });
 });
 

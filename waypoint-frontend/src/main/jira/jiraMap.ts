@@ -1008,10 +1008,15 @@ export function mapIssue(
     sprintName: sprintNameOf(sprintRaw),
     attachments: mapAttachments(fields.attachment),
     transitions: mapTransitions(issue.transitions),
-    updatedAt:
-      typeof fields.updated === 'string'
-        ? fields.updated
-        : new Date().toISOString(),
+    // Fall back to null rather than to "now". `listComments`'s `total`
+    // fallback (jiraClient.ts) states the one thing still known to be true
+    // when Jira omits a field; there is no equivalent honest guess for a
+    // missing `updated` — the issue was not, in fact, just touched, and
+    // stamping it with the current time is a claim this file cannot back up.
+    // The renderer's sort (useMyJiraQueue.ts's compareTickets) treats null as
+    // "unknown", not "most recent", so a trimmed payload no longer pins an
+    // untouched issue to the top of the queue.
+    updatedAt: typeof fields.updated === 'string' ? fields.updated : null,
   };
 }
 
@@ -1040,9 +1045,10 @@ export function mapComment(
     // again", and then this — the one function that comment names — kept its
     // own duplicate of the ternary, leaving the drift the extraction was for.
     body: plainTextFromJiraBody(record.body),
-    createdAt:
-      typeof record.created === 'string'
-        ? record.created
-        : new Date().toISOString(),
+    // Same reasoning as mapIssue's updatedAt: null, not "now". A comment
+    // whose `created` Jira omitted was not just posted, and a fabricated
+    // timestamp would tell JiraTicketDetail.tsx's formatRelativeTime a lie it
+    // would happily render as "just now".
+    createdAt: typeof record.created === 'string' ? record.created : null,
   };
 }
