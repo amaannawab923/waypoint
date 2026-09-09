@@ -610,7 +610,7 @@ export default function TicketList({
                           </Badge>
                         )}
                       </div>
-                      <PriorityIcon priority={item.priority} />
+                      <PriorityIcon priority={item.priority} label={PRIORITY_LABEL[item.priority]} />
                       <AvatarStack people={assigneesFor(item)} />
                     </button>
                   </div>

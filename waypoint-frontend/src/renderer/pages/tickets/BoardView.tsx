@@ -14,7 +14,7 @@ import { Badge, Dot } from '@/components/ui/Badge';
 import { AvatarStack } from '@/components/ui/Avatar';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { StateIcon } from '@/components/domain/StateIcon';
-import { PriorityIcon } from '@/components/domain/PriorityIcon';
+import { PriorityIcon, PRIORITY_LABEL } from '@/components/domain/PriorityIcon';
 import { AGENT_STATUS_CONFIG } from '@/components/domain/AgentStatusBadge';
 import { CreateTicketModal } from '@/components/domain/CreateTicketModal';
 import {
@@ -317,7 +317,7 @@ export default function BoardView({
                       </span>
                     )}
                     <span className="flex items-center gap-1 rounded-full bg-surface-2 px-1.5 py-0.5 text-xs text-text-secondary">
-                      <PriorityIcon priority={item.priority} size={12} />
+                      <PriorityIcon priority={item.priority} size={12} label={PRIORITY_LABEL[item.priority]} />
                     </span>
                     {labels.map((l) => (
                       <Badge key={l.id} tone="neutral">
