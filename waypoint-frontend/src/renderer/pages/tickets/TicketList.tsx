@@ -24,6 +24,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { StateIcon } from '@/components/domain/StateIcon';
 import {
   PriorityIcon,
+  PRIORITY_COLOR,
   PRIORITY_LABEL,
   PRIORITY_ORDER,
 } from '@/components/domain/PriorityIcon';
@@ -535,8 +536,14 @@ export default function TicketList({
                     id={`ticket-row-${item.id}`}
                     className={clsx(
                       'flex w-full items-center gap-3 border-b border-border px-6 py-2.5 text-left text-sm hover:bg-surface-2',
+                      item.priority !== 'none' && 'border-l-2',
                       isFocused && 'bg-surface-2 ring-1 ring-inset ring-accent',
                     )}
+                    style={
+                      item.priority !== 'none'
+                        ? { borderLeftColor: PRIORITY_COLOR[item.priority] }
+                        : undefined
+                    }
                   >
                     <input
                       type="checkbox"

@@ -14,7 +14,7 @@ import { Badge, Dot } from '@/components/ui/Badge';
 import { AvatarStack } from '@/components/ui/Avatar';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { StateIcon } from '@/components/domain/StateIcon';
-import { PriorityIcon, PRIORITY_LABEL } from '@/components/domain/PriorityIcon';
+import { PriorityIcon, PRIORITY_COLOR, PRIORITY_LABEL } from '@/components/domain/PriorityIcon';
 import { AGENT_STATUS_CONFIG } from '@/components/domain/AgentStatusBadge';
 import { CreateTicketModal } from '@/components/domain/CreateTicketModal';
 import {
@@ -297,6 +297,7 @@ export default function BoardView({
                   }}
                   className={clsx(
                     'flex flex-col gap-2 rounded-[var(--radius-sm)] border border-border bg-surface p-3 text-left text-sm shadow-sm hover:border-border-strong',
+                    item.priority !== 'none' && 'border-l-2',
                     draggingId === item.id && 'opacity-50',
                     dragOverCard?.id === item.id &&
                       dragOverCard.position === 'before' &&
@@ -305,6 +306,11 @@ export default function BoardView({
                       dragOverCard.position === 'after' &&
                       'border-b-2 border-b-accent',
                   )}
+                  style={
+                    item.priority !== 'none'
+                      ? { borderLeftColor: PRIORITY_COLOR[item.priority] }
+                      : undefined
+                  }
                 >
                   <span className="font-mono text-xs text-text-muted">
                     {item.identifier}

@@ -175,3 +175,29 @@ describe('BoardView parent chip (finding 2c)', () => {
     expect(screen.queryByText('↳')).not.toBeInTheDocument();
   });
 });
+
+describe('BoardView priority border (finding 5)', () => {
+  it('gives a non-none priority card a colored left border', async () => {
+    const item = ticket({ id: 'a', identifier: 'CW-1', priority: 'urgent' });
+    const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [item] }];
+
+    render(<BoardView view={fakeView({ items: [item], groups })} projectId="proj-1" onOpenItem={jest.fn()} />);
+
+    // jsdom's CSSOM silently drops a `var(--x)` inline color value, so the
+    // border's actual color can't be asserted here — only the border-l-2
+    // class that turns the accent on (see TicketList.test.tsx's identical
+    // note).
+    const card = (await screen.findByText('CW-1')).closest('button') as HTMLElement;
+    expect(card.className).toContain('border-l-2');
+  });
+
+  it('renders no accent border for "none" priority', async () => {
+    const item = ticket({ id: 'a', identifier: 'CW-1', priority: 'none' });
+    const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [item] }];
+
+    render(<BoardView view={fakeView({ items: [item], groups })} projectId="proj-1" onOpenItem={jest.fn()} />);
+
+    const card = (await screen.findByText('CW-1')).closest('button') as HTMLElement;
+    expect(card.className).not.toContain('border-l-2');
+  });
+});

@@ -267,6 +267,27 @@ describe('TicketList parent chip (finding 2c)', () => {
   });
 });
 
+describe('TicketList priority border (finding 5)', () => {
+  it('gives a non-none priority row a colored left border', async () => {
+    await renderList([ticket({ id: 'a', identifier: 'CW-1', priority: 'urgent' })]);
+
+    // jsdom's CSSOM silently drops a `var(--x)` inline color value (it
+    // rejects it as an unparseable color rather than preserving it as
+    // text), so the border's actual color can't be asserted here — this
+    // checks the only thing jsdom lets us see: the border-l-2 class that
+    // turns the accent on.
+    const row = (await screen.findByText('CW-1')).closest('[id^="ticket-row-"]') as HTMLElement;
+    expect(row.className).toContain('border-l-2');
+  });
+
+  it('renders no accent border for "none" priority', async () => {
+    await renderList([ticket({ id: 'a', identifier: 'CW-1', priority: 'none' })]);
+
+    const row = (await screen.findByText('CW-1')).closest('[id^="ticket-row-"]') as HTMLElement;
+    expect(row.className).not.toContain('border-l-2');
+  });
+});
+
 describe('TicketList bulk select + bulk actions', () => {
   it('checking rows and choosing "Set priority" PATCHes every selected ticket, not a bulk endpoint', async () => {
     const fixture = [ticket({ id: 'a', identifier: 'CW-1' }), ticket({ id: 'b', identifier: 'CW-2' })];
