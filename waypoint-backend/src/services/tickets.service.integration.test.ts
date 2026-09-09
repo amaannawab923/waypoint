@@ -128,4 +128,78 @@ describe.skipIf(!REAL_DB)('createTicket sequenceId allocation against real Postg
     expect(d!.sequenceId).toBeGreaterThan(c!.sequenceId);
     expect([a!.identifier, b!.identifier, c!.identifier]).not.toContain(d!.identifier);
   });
+
+  // Caught in review, and reproduced against a real disposable Postgres
+  // before this fix landed: db/seed.ts bulk-inserts its demo tickets
+  // directly via tx.insert(schema.tickets) — the same bypass-createTicket
+  // shape this test replicates below — which never touched
+  // projects.nextSequenceId, left at its schema default of 0. The very
+  // first ticket created through the app after a real `npm run db:seed`
+  // then collided with the seed data's own CW-1/PL-1 on the identifier's
+  // unique constraint, and every create after that kept failing forever —
+  // a failed insert rolls the whole transaction back before the counter
+  // could ever advance, so it never self-healed. seed.ts now backfills
+  // projects.nextSequenceId to the highest sequenceId it just inserted,
+  // once, right after the bulk insert — this test proves that pattern
+  // actually closes the gap, without calling the real seed() function
+  // itself (which truncates every table and would destroy whatever real
+  // data this integration suite's target database holds).
+  it('lets a ticket be created after a seed-style bulk insert, once the seeded project\'s counter is backfilled', async () => {
+    // Own project, not the describe block's shared one — the shared project
+    // already has real tickets from the tests above by the time this one
+    // runs (RIT-1/2/3, A/B/C/D), so a hardcoded low identifier here would
+    // collide with THEIR rows, not with the bug this test exists to prove.
+    const seedProjectId = `proj-itest-seed-${Date.now()}`;
+    const seedStateId = `st-itest-seed-${Date.now()}`;
+    const seedTicketId = `wi-seedstyle-${Date.now()}`;
+    await db.insert(schema.projects).values({
+      id: seedProjectId,
+      workspaceId,
+      name: 'ROAD-38 seed-backfill integration test project',
+      identifier: 'SBK',
+      icon: 'folder',
+      coverGradientStart: '#000000',
+      coverGradientEnd: '#ffffff',
+      timezone: 'UTC',
+      automations: {},
+    });
+    await db.insert(schema.ticketStates).values({
+      id: seedStateId,
+      projectId: seedProjectId,
+      name: 'Todo',
+      group: 'unstarted',
+      color: '#000000',
+      isDefault: true,
+    });
+
+    // Mirrors seed.ts's own tx.insert(schema.tickets).values(...) shape: a
+    // direct insert bypassing createTicket(), so the persistent counter is
+    // never touched by this statement — exactly the seed.ts bug.
+    await db.insert(schema.tickets).values({
+      id: seedTicketId,
+      projectId: seedProjectId,
+      identifier: 'SBK-1',
+      sequenceId: 1,
+      stateId: seedStateId,
+      title: 'Bulk-inserted, seed-style',
+      createdById: 'mem-1',
+    });
+
+    const [beforeBackfill] = await db.select().from(schema.projects).where(eq(schema.projects.id, seedProjectId));
+    expect(beforeBackfill.nextSequenceId).toBe(0);
+
+    // The fix under test: seed.ts's own backfill statement, reproduced
+    // verbatim rather than invoked, since the real seed() is destructive.
+    await db.update(schema.projects).set({ nextSequenceId: 1 }).where(eq(schema.projects.id, seedProjectId));
+
+    const afterSeed = await service.createTicket({
+      projectId: seedProjectId,
+      title: 'Created after a seed-style bulk insert',
+      stateId: seedStateId,
+    });
+
+    expect(afterSeed!.sequenceId).toBe(2);
+    expect(afterSeed!.identifier).toBe('SBK-2');
+    expect(afterSeed!.identifier).not.toBe('SBK-1');
+  });
 });

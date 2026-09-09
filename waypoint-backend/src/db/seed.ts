@@ -17,7 +17,7 @@
 // see the comments at each such spot below.
 import { db } from './client.js';
 import * as schema from './schema/index.js';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 
 const now = new Date();
 function daysAgo(n: number): Date {
@@ -668,6 +668,21 @@ export async function seed() {
         sortOrder: String(i * 1000),
       };
     }),
+  );
+
+  // ROAD-38: createTicket() now allocates identifiers off projects.nextSequenceId
+  // (an atomic UPDATE ... RETURNING) instead of scanning tickets for MAX(sequenceId)
+  // — a real DB counter, not derived from the rows above. Seeding tickets directly
+  // via tx.insert(), as this function does, bypasses that allocator entirely, so
+  // the counter is left at its schema default (0) unless backfilled here. Without
+  // this, the very first ticket created through the app after a fresh seed collides
+  // with CW-1/PL-1 on the identifier's unique constraint, and every create after
+  // that keeps colliding forever — the counter never self-heals, since a failed
+  // insert rolls the whole transaction back before it could advance.
+  await Promise.all(
+    [...wiByProjectSeq.entries()].map(([projectId, count]) =>
+      tx.update(schema.projects).set({ nextSequenceId: count }).where(eq(schema.projects.id, projectId)),
+    ),
   );
 
   const labelRows = wiSeeds.flatMap((w) => (w.labelIds ?? []).map((labelId) => ({ ticketId: w.id, labelId })));
