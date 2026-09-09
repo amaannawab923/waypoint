@@ -51,7 +51,26 @@ export type JiraFailureReason =
    * to their own disk, and telling them the first when the second happened
    * wastes their time on someone else's system.
    */
-  | 'file_error';
+  | 'file_error'
+  /**
+   * A transfer of the exact same attachment (download) or to the exact same
+   * ticket (upload) is already running, and this request was refused rather
+   * than allowed to double up.
+   *
+   * The renderer's own per-control `downloading`/`uploading` booleans are
+   * not enough to prevent this on their own: an upload to a ticket can be
+   * started from two separate controls mounted together on the same open
+   * ticket — `JiraTicketDetail.tsx`'s "Attach a file" button and
+   * `JiraCommentComposer.tsx`'s toolbar attach button — each tracking its
+   * own state with no visibility into the other's. Only a guard in main,
+   * which every IPC call for a transfer passes through, can make "one
+   * transfer of this attachment/ticket at a time" actually true. Separate
+   * from `file_error` and `jira_error` for the same reason those are
+   * separate from each other: this is neither the local disk nor Jira
+   * refusing anything, so the sentence has to say what actually happened —
+   * try again once the first transfer finishes.
+   */
+  | 'transfer_in_progress';
 
 export interface JiraFailure {
   ok: false;

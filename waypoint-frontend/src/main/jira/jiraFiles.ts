@@ -141,6 +141,77 @@ function fileFailure(message: string): JiraFailure {
 }
 
 /**
+ * Attachment transfers currently in flight, keyed by whatever would
+ * genuinely collide if two ran at once.
+ *
+ * The only guard against a duplicate transfer before this was a
+ * `downloading`/`uploading` boolean in each renderer component's own React
+ * state, surfaced purely as a `disabled` attribute on the trigger button —
+ * and a rendered `disabled` attribute is exactly the wrong thing to have as
+ * the only guard on a network-and-disk operation this process actually
+ * performs. Two concrete paths reach `uploadJiraAttachment(ticketId)` for
+ * the same ticket with fully independent `uploading`/`attaching` state:
+ * `JiraTicketDetail.tsx`'s own "Attach a file" button and
+ * `JiraCommentComposer.tsx`'s toolbar attach button, both mounted together
+ * on the same open ticket. Neither can see the other's state, so two clicks
+ * landing milliseconds apart — one per control — could run two uploads to
+ * the same ticket concurrently, stacking a second native file picker on top
+ * of the first. Main must not depend on which renderer buttons happen to be
+ * disabled to protect a resource (the filesystem, the heap, a native
+ * dialog) that only main actually touches; only a guard here, which every
+ * IPC call for a transfer passes through on its way to the filesystem and
+ * the network, can make that true regardless of how many renderer controls
+ * exist or what state each thinks it's in.
+ *
+ * One `Set` rather than two, but never one bare id in it: a download and an
+ * upload draw their keys from separate id spaces (an attachment id, a
+ * ticket id) that could otherwise collide on the same string, so every key
+ * carries a `download:`/`upload:` prefix naming which space it came from.
+ * A download is keyed on the attachment id and an upload on the ticket id —
+ * not a single "any Jira transfer" lock — so that downloading two
+ * *different* attachments, or uploading to two *different* tickets, at the
+ * same time is still allowed. Only a duplicate request for the exact same
+ * thing is refused. (The ticket-level upload key does not, by itself, stop
+ * two stacked native pickers for two *different* tickets — a native dialog
+ * is modal per-window, and this app has one window — but preventing that
+ * would mean one upload at a time for the whole app, a stricter tradeoff
+ * than this guard makes.)
+ */
+const inFlightTransfers = new Set<string>();
+
+/** Claims `key` for the duration of a transfer, or refuses if it is already
+ * claimed. Pair with `endTransfer` in a `finally` so the claim is released
+ * whether the transfer succeeds, fails, or is cancelled by the user — a
+ * lock that outlived its transfer would permanently block every later one
+ * for the same attachment or ticket. */
+function beginTransfer(key: string): boolean {
+  if (inFlightTransfers.has(key)) return false;
+  inFlightTransfers.add(key);
+  return true;
+}
+
+function endTransfer(key: string): void {
+  inFlightTransfers.delete(key);
+}
+
+/** Test-only escape hatch onto the module-level `Set` above. Every current
+ * test awaits its transfer to completion, so the `finally` in
+ * `downloadAttachmentToDisk`/`pickAndUploadAttachment` already empties it
+ * between tests — but the first future test that starts a transfer against
+ * a mock that never resolves, without awaiting it, would silently poison
+ * every later test on that key. Asserted empty in `jiraFiles.test.ts`'s
+ * `afterEach` so that failure mode surfaces as an obvious assertion instead
+ * of a mysterious `transfer_in_progress` in an unrelated test. */
+export function inFlightTransferCountForTests(): number {
+  return inFlightTransfers.size;
+}
+
+/** What a caller is told when it lost the race for `beginTransfer`. */
+function transferInProgress(message: string): JiraFailure {
+  return { ok: false, reason: 'transfer_in_progress', message };
+}
+
+/**
  * A local filesystem failure in terms the renderer can be told.
  *
  * Deliberately NOT `err.message`. Node embeds the full absolute path in
@@ -213,39 +284,62 @@ function downloadsDirectory(): string | null {
  * here because this app's toast system has no success channel — there is no
  * way to say "saved" except by showing the user the saved file. Revealing it
  * in Finder/Explorer is the confirmation, and it needs no new UI.
+ *
+ * Single-flight per attachment id, via `beginTransfer`/`endTransfer` above:
+ * a second call for the same `attachmentId` while this one is still running
+ * is refused with `transfer_in_progress` rather than started. The renderer's
+ * own `disabled={downloading !== null}` on the Download button is the first
+ * line of defense, but a rendered `disabled` attribute is a UI affordance,
+ * not a guard on the network call and file write this function actually
+ * performs — it does nothing about a click that lands before that state
+ * update commits. This is the guard that is actually load-bearing.
  */
 export async function downloadAttachmentToDisk(
   win: BrowserWindow | null,
   attachmentId: string,
   suggestedFileName: string,
 ): Promise<JiraResult<{ canceled: boolean; savedPath?: string }>> {
-  const fetched = await client.downloadAttachment(attachmentId);
-  if (!fetched.ok) return fetched;
-
-  const folder = downloadsDirectory();
-  const fileName = safeBaseName(suggestedFileName);
-  const options = {
-    defaultPath: folder ? path.join(folder, fileName) : fileName,
-  };
-  // Two real overloads, not a cast — the same shape repoLink.ts uses:
-  // parenting the sheet to the window is what makes it modal on macOS, and
-  // there genuinely may be no window, in which case a free-floating dialog is
-  // the right answer rather than an error.
-  const chosen = win
-    ? await dialog.showSaveDialog(win, options)
-    : await dialog.showSaveDialog(options);
-  if (chosen.canceled || !chosen.filePath) {
-    return { ok: true, value: { canceled: true } };
+  const transferKey = `download:${attachmentId}`;
+  if (!beginTransfer(transferKey)) {
+    return transferInProgress(
+      'That attachment is already downloading — wait for it to finish before downloading it again.',
+    );
   }
 
   try {
-    await fs.promises.writeFile(chosen.filePath, fetched.value.bytes);
-  } catch (err) {
-    return fileFailure(`Couldn't save that file — ${reasonOf(err)}`);
-  }
+    const fetched = await client.downloadAttachment(attachmentId);
+    if (!fetched.ok) return fetched;
 
-  shell.showItemInFolder(chosen.filePath);
-  return { ok: true, value: { canceled: false, savedPath: chosen.filePath } };
+    const folder = downloadsDirectory();
+    const fileName = safeBaseName(suggestedFileName);
+    const options = {
+      defaultPath: folder ? path.join(folder, fileName) : fileName,
+    };
+    // Two real overloads, not a cast — the same shape repoLink.ts uses:
+    // parenting the sheet to the window is what makes it modal on macOS, and
+    // there genuinely may be no window, in which case a free-floating dialog is
+    // the right answer rather than an error.
+    const chosen = win
+      ? await dialog.showSaveDialog(win, options)
+      : await dialog.showSaveDialog(options);
+    if (chosen.canceled || !chosen.filePath) {
+      return { ok: true, value: { canceled: true } };
+    }
+
+    try {
+      await fs.promises.writeFile(chosen.filePath, fetched.value.bytes);
+    } catch (err) {
+      return fileFailure(`Couldn't save that file — ${reasonOf(err)}`);
+    }
+
+    shell.showItemInFolder(chosen.filePath);
+    return {
+      ok: true,
+      value: { canceled: false, savedPath: chosen.filePath },
+    };
+  } finally {
+    endTransfer(transferKey);
+  }
 }
 
 /**
@@ -319,54 +413,78 @@ export function mimeTypeForFileName(fileName: string): string {
  * A cancel is `{ ok: true, value: { canceled: true } }`, never a failure, for
  * the same reason as the download: the renderer turns every `ok: false` into
  * an error toast, and closing a file picker is not an error.
+ *
+ * Single-flight per ticket id, via `beginTransfer`/`endTransfer` above: a
+ * second call for the same `ticketId` while this one is still running is
+ * refused with `transfer_in_progress` before it ever opens a picker. This is
+ * the guard that actually matters here, not the renderer's own
+ * `uploading`/`attaching` booleans: `JiraTicketDetail.tsx`'s "Attach a file"
+ * button and `JiraCommentComposer.tsx`'s toolbar attach button are two
+ * separate controls, mounted together on the same open ticket, each with
+ * fully independent React state — neither can see whether the other is
+ * mid-upload, so two clicks landing milliseconds apart, one per control,
+ * could stack a second native dialog on top of the first with nothing in
+ * the renderer able to stop it. Keyed on the ticket rather than the file,
+ * since no file is even chosen until after the guard is claimed.
  */
 export async function pickAndUploadAttachment(
   win: BrowserWindow | null,
   ticketId: string,
 ): Promise<JiraResult<{ canceled: boolean; ticket?: JiraWireTicket }>> {
-  // `['openFile']` with no `multiSelections`, which is what makes this
-  // single-select — the same call repoLink.ts makes for a folder.
-  const picked = win
-    ? await dialog.showOpenDialog(win, { properties: ['openFile'] })
-    : await dialog.showOpenDialog({ properties: ['openFile'] });
-  if (picked.canceled || picked.filePaths.length === 0) {
-    return { ok: true, value: { canceled: true } };
-  }
-  const [filePath] = picked.filePaths;
-
-  let size: number;
-  try {
-    size = (await fs.promises.stat(filePath)).size;
-  } catch (err) {
-    return fileFailure(`Couldn't read that file — ${reasonOf(err)}`);
-  }
-  if (size > client.MAX_TRANSFER_BYTES) {
-    return fileFailure(
-      `That file is ${Math.round(size / (1024 * 1024))}MB, past the ${Math.round(
-        client.MAX_TRANSFER_BYTES / (1024 * 1024),
-      )}MB this app will upload. Your Jira site's own limit is likely lower still — attach it in Jira if it needs to go up.`,
+  const transferKey = `upload:${ticketId}`;
+  if (!beginTransfer(transferKey)) {
+    return transferInProgress(
+      'An upload to this ticket is already in progress — wait for it to finish before attaching another file.',
     );
   }
 
-  let bytes: Buffer;
   try {
-    bytes = await fs.promises.readFile(filePath);
-  } catch (err) {
-    return fileFailure(`Couldn't read that file — ${reasonOf(err)}`);
+    // `['openFile']` with no `multiSelections`, which is what makes this
+    // single-select — the same call repoLink.ts makes for a folder.
+    const picked = win
+      ? await dialog.showOpenDialog(win, { properties: ['openFile'] })
+      : await dialog.showOpenDialog({ properties: ['openFile'] });
+    if (picked.canceled || picked.filePaths.length === 0) {
+      return { ok: true, value: { canceled: true } };
+    }
+    const [filePath] = picked.filePaths;
+
+    let size: number;
+    try {
+      size = (await fs.promises.stat(filePath)).size;
+    } catch (err) {
+      return fileFailure(`Couldn't read that file — ${reasonOf(err)}`);
+    }
+    if (size > client.MAX_TRANSFER_BYTES) {
+      return fileFailure(
+        `That file is ${Math.round(size / (1024 * 1024))}MB, past the ${Math.round(
+          client.MAX_TRANSFER_BYTES / (1024 * 1024),
+        )}MB this app will upload. Your Jira site's own limit is likely lower still — attach it in Jira if it needs to go up.`,
+      );
+    }
+
+    let bytes: Buffer;
+    try {
+      bytes = await fs.promises.readFile(filePath);
+    } catch (err) {
+      return fileFailure(`Couldn't read that file — ${reasonOf(err)}`);
+    }
+
+    // `path.basename`, not `safeBaseName`: this name came from the OS's own
+    // picker rather than from a Jira payload, so it needs stripping of its
+    // directory and nothing else — scrubbing it would mangle a legitimate
+    // filename the user chose.
+    const fileName = path.basename(filePath);
+    const uploaded = await client.uploadAttachment(
+      ticketId,
+      fileName,
+      bytes,
+      mimeTypeForFileName(fileName),
+    );
+    if (!uploaded.ok) return uploaded;
+
+    return { ok: true, value: { canceled: false, ticket: uploaded.value } };
+  } finally {
+    endTransfer(transferKey);
   }
-
-  // `path.basename`, not `safeBaseName`: this name came from the OS's own
-  // picker rather than from a Jira payload, so it needs stripping of its
-  // directory and nothing else — scrubbing it would mangle a legitimate
-  // filename the user chose.
-  const fileName = path.basename(filePath);
-  const uploaded = await client.uploadAttachment(
-    ticketId,
-    fileName,
-    bytes,
-    mimeTypeForFileName(fileName),
-  );
-  if (!uploaded.ok) return uploaded;
-
-  return { ok: true, value: { canceled: false, ticket: uploaded.value } };
 }
