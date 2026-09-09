@@ -78,16 +78,31 @@ function fakeView(opts: {
   parentById?: Map<string, Ticket>;
   subItemCountByParent?: Map<string, { total: number; done: number }>;
   nestedChildIds?: Set<string>;
+  nestedDescendantCountByParent?: Map<string, number>;
   collapsedParents?: Set<string>;
   toggleParentCollapsed?: (id: string) => void;
 }): TicketsView {
+  const nestedChildIds = opts.nestedChildIds ?? new Set<string>();
+  // Derived the same way the real hook derives it (childrenByParent's keys)
+  // rather than defaulted to empty, so a fixture that sets up real nesting
+  // automatically gets the parent side of it too and can't drift from what
+  // useTicketsView would actually produce for the same data.
+  const derivedNestedCounts = new Map<string, number>();
+  opts.items
+    .filter((i) => nestedChildIds.has(i.id) && i.parentId)
+    .forEach((i) => {
+      const pid = i.parentId as string;
+      derivedNestedCounts.set(pid, (derivedNestedCounts.get(pid) ?? 0) + 1);
+    });
   return {
     projectId: 'proj-1',
     items: opts.items,
     allItems: opts.items,
     subItemCountByParent: opts.subItemCountByParent ?? new Map(),
     parentById: opts.parentById ?? new Map(),
-    nestedChildIds: opts.nestedChildIds ?? new Set(),
+    nestedChildIds,
+    nestedDescendantCountByParent:
+      opts.nestedDescendantCountByParent ?? derivedNestedCounts,
     loading: false,
     isRefetching: false,
     reload: jest.fn(),
@@ -229,6 +244,36 @@ describe('BoardView same-group nesting (finding 2e)', () => {
     await screen.findByText('CW-2');
     expect(screen.getByText('Subtask of CW-1')).toBeInTheDocument();
     expect(screen.getByText('Subtask of CW-1')).toHaveClass('sr-only');
+  });
+
+  // Found by manual testing: the board scrolled ~6000px past its content into
+  // dead whitespace. Cause was these sr-only spans — Tailwind's sr-only is
+  // `position: absolute`, so with no positioned ancestor its containing block
+  // is the document, which means it escapes the column's overflow clipping
+  // and contributes its static position to the DOCUMENT's scroll height.
+  // Measured live: documentElement.scrollHeight 7240px against a 1080px
+  // viewport; making each card a containing block took it to 1080px exactly.
+  // jsdom has no layout, so the structural invariant is what's pinned here —
+  // if a card ever loses `relative`, the overflow silently comes back.
+  it('gives every card a local containing block, so its absolutely-positioned sr-only labels cannot escape the column scroller', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent' });
+    const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [parent, child] }];
+    const nestedChildIds = new Set(['child']);
+    const parentById = new Map([['child', parent]]);
+
+    render(
+      <BoardView
+        view={fakeView({ items: [parent, child], groups, nestedChildIds, parentById })}
+        projectId="proj-1"
+        onOpenItem={jest.fn()}
+      />,
+    );
+
+    const srLabel = await screen.findByText('Subtask of CW-1');
+    const card = srLabel.closest('button');
+    expect(card).not.toBeNull();
+    expect(card).toHaveClass('relative');
   });
 
   it('does not indent a card whose parent is in a different group (no entry in nestedChildIds)', async () => {
@@ -563,10 +608,14 @@ describe('BoardView collapsible hierarchy connector (ROAD-39)', () => {
     const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [parent] }];
     const subItemCountByParent = new Map([['parent', { total: 1, done: 0 }]]);
     const collapsedParents = new Set(['parent']);
+    // The real hook keeps a collapsed parent's nested count even though its
+    // child is filtered out of `items` — otherwise the connector would
+    // vanish on collapse and strand the subtree.
+    const nestedDescendantCountByParent = new Map([['parent', 1]]);
 
     render(
       <BoardView
-        view={fakeView({ items: [parent], groups, subItemCountByParent, collapsedParents })}
+        view={fakeView({ items: [parent], groups, subItemCountByParent, collapsedParents, nestedDescendantCountByParent })}
         projectId="proj-1"
         onOpenItem={jest.fn()}
       />,
@@ -582,10 +631,14 @@ describe('BoardView collapsible hierarchy connector (ROAD-39)', () => {
     const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [parent] }];
     const subItemCountByParent = new Map([['parent', { total: 1, done: 0 }]]);
     const collapsedParents = new Set(['parent']);
+    // The real hook keeps a collapsed parent's nested count even though its
+    // child is filtered out of `items` — otherwise the connector would
+    // vanish on collapse and strand the subtree.
+    const nestedDescendantCountByParent = new Map([['parent', 1]]);
 
     render(
       <BoardView
-        view={fakeView({ items: [parent], groups, subItemCountByParent, collapsedParents })}
+        view={fakeView({ items: [parent], groups, subItemCountByParent, collapsedParents, nestedDescendantCountByParent })}
         projectId="proj-1"
         onOpenItem={jest.fn()}
       />,
@@ -612,10 +665,14 @@ describe('BoardView collapsible hierarchy connector (ROAD-39)', () => {
     const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [parent, other] }];
     const subItemCountByParent = new Map([['parent', { total: 1, done: 0 }]]);
     const collapsedParents = new Set(['parent']);
+    // The real hook keeps a collapsed parent's nested count even though its
+    // child is filtered out of `items` — otherwise the connector would
+    // vanish on collapse and strand the subtree.
+    const nestedDescendantCountByParent = new Map([['parent', 1]]);
 
     render(
       <BoardView
-        view={fakeView({ items: [parent, other], groups, subItemCountByParent, collapsedParents })}
+        view={fakeView({ items: [parent, other], groups, subItemCountByParent, collapsedParents, nestedDescendantCountByParent })}
         projectId="proj-1"
         onOpenItem={jest.fn()}
       />,
@@ -637,10 +694,14 @@ describe('BoardView collapsible hierarchy connector (ROAD-39)', () => {
     const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [parent, other] }];
     const subItemCountByParent = new Map([['parent', { total: 1, done: 0 }]]);
     const collapsedParents = new Set(['parent']);
+    // The real hook keeps a collapsed parent's nested count even though its
+    // child is filtered out of `items` — otherwise the connector would
+    // vanish on collapse and strand the subtree.
+    const nestedDescendantCountByParent = new Map([['parent', 1]]);
 
     render(
       <BoardView
-        view={fakeView({ items: [parent, other], groups, subItemCountByParent, collapsedParents })}
+        view={fakeView({ items: [parent, other], groups, subItemCountByParent, collapsedParents, nestedDescendantCountByParent })}
         projectId="proj-1"
         onOpenItem={jest.fn()}
       />,

@@ -541,7 +541,7 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
   // shared ancestor chain is never re-walked, keeping this linear rather
   // than quadratic) and marks every id in a detected cycle as ineligible
   // for nesting — those tickets render top-level instead of disappearing.
-  const { orderedItems, nestedChildIds } = useMemo(() => {
+  const { orderedItems, nestedChildIds, nestedDescendantCountByParent } = useMemo(() => {
     const byId = new Map(resolvedItems.map((i) => [i.id, i]));
 
     // The candidate nesting-parent edge for `item` — its own `parentId`,
@@ -595,8 +595,45 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
       siblings.push(item);
       childrenByParent.set(parent.id, siblings);
     }
+    // ROAD-39: how many rows collapsing each parent would actually remove —
+    // its full nested subtree in THIS view, counted transitively because
+    // collapse hides descendants at every depth (see appendDescendants).
+    //
+    // Deliberately NOT subItemCountByParent, which the Epic badge uses and
+    // which counts a ticket's children workspace-wide. Nesting only ever
+    // happens within a group (nestingParent() returns undefined across
+    // groups), so those two numbers routinely disagree — a parent in Todo
+    // with all 29 of its children in Backlog nests none of them. Using the
+    // workspace-wide number here produced both bugs found in manual QA: a
+    // disclosure control on a parent with nothing nested under it (which
+    // toggled and visibly did nothing), and a connector reading
+    // "29 subtasks" above a single nested card.
+    //
+    // Built from `childrenByParent`, which is derived from resolvedItems
+    // BEFORE the collapse filter below — so a collapsed parent keeps its
+    // count and can still be expanded again.
+    const nestedDescendantCountByParent = new Map<string, number>();
+    for (const parentId of childrenByParent.keys()) {
+      let count = 0;
+      const stack = [parentId];
+      const seen = new Set<string>([parentId]);
+      while (stack.length) {
+        const currentId = stack.pop() as string;
+        for (const child of childrenByParent.get(currentId) ?? []) {
+          if (seen.has(child.id)) continue;
+          seen.add(child.id);
+          count += 1;
+          stack.push(child.id);
+        }
+      }
+      nestedDescendantCountByParent.set(parentId, count);
+    }
     if (nested.size === 0)
-      return { orderedItems: resolvedItems, nestedChildIds: nested };
+      return {
+        orderedItems: resolvedItems,
+        nestedChildIds: nested,
+        nestedDescendantCountByParent,
+      };
 
     // Recursively splices `parentId`'s own nested children in directly
     // after it, then each child's own nested children directly after IT,
@@ -641,7 +678,7 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
     // absent from every one of them, not merely hidden by a display-layer
     // filter downstream that the reorder math never sees.
     if (collapsedParents.size === 0) {
-      return { orderedItems: result, nestedChildIds: nested };
+      return { orderedItems: result, nestedChildIds: nested, nestedDescendantCountByParent };
     }
     const hiddenByCollapse = new Set<string>();
     function hideDescendants(parentId: string, visiting: Set<string>) {
@@ -658,11 +695,12 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
       hideDescendants(collapsedId, new Set([collapsedId]));
     }
     if (hiddenByCollapse.size === 0) {
-      return { orderedItems: result, nestedChildIds: nested };
+      return { orderedItems: result, nestedChildIds: nested, nestedDescendantCountByParent };
     }
     return {
       orderedItems: result.filter((item) => !hiddenByCollapse.has(item.id)),
       nestedChildIds: nested,
+      nestedDescendantCountByParent,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resolvedItems, groupBy, collapsedParents]);
@@ -844,6 +882,7 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
     subItemCountByParent,
     parentById,
     nestedChildIds,
+    nestedDescendantCountByParent,
     loading,
     isRefetching,
     reload,

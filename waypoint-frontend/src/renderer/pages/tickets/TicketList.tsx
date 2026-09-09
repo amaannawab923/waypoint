@@ -535,19 +535,36 @@ export default function TicketList({
                 // parent landed in a different group keeps 2c's parent chip
                 // as the only pointer instead.
                 const isNested = view.nestedChildIds.has(item.id);
-                // ROAD-39: keyed off the same subItemCountByParent-style
-                // signal the "Epic · N/M" badge already uses (subTotal > 0)
-                // — inheriting that badge's own "any parent with a child, not
-                // just a 'real' epic" ambiguity rather than resolving it
-                // here (there's no ticket-type field at all; see ROAD-29).
-                const hasChildren = subTotal > 0;
+                // ROAD-39: gated on whether this parent has children nested
+                // UNDER IT in this view (nestedDescendantCountByParent), NOT on whether it
+                // has children at all (subTotal, which the Epic badge uses
+                // and which counts them workspace-wide). Nesting only happens
+                // within a group, so a parent sitting in a different group
+                // than its children — e.g. ROAD-1 in Todo with all 29
+                // children in Backlog — has nothing nested to hide, and a
+                // control there would flip the chevron and visibly do
+                // nothing. The badge still shows the true total in that
+                // case; the children still point back via their own
+                // "Parent ROAD-1" chips.
+                const hasNestedChildren =
+                  (view.nestedDescendantCountByParent.get(item.id) ?? 0) > 0;
                 const isCollapsed = view.collapsedParents.has(item.id);
                 return (
                   <div
                     key={item.id}
                     id={`ticket-row-${item.id}`}
                     className={clsx(
-                      'flex w-full items-center gap-3 border-b border-border px-6 py-2.5 text-left text-sm hover:bg-surface-2',
+                      // `relative` is load-bearing, not cosmetic: this row
+                      // contains `sr-only` spans, and Tailwind's sr-only is
+                      // `position: absolute`. With no positioned ancestor its
+                      // containing block becomes the document, so it escapes
+                      // the surrounding scroll container's clipping and
+                      // contributes its static position to the DOCUMENT's
+                      // scroll height — which stretched the page by ~6000px
+                      // of dead whitespace on a long list/board. Making the
+                      // row a containing block keeps every sr-only inside it
+                      // clipped by the same scroller as the row itself.
+                      'relative flex w-full items-center gap-3 border-b border-border px-6 py-2.5 text-left text-sm hover:bg-surface-2',
                       item.priority !== 'none' && 'border-l-2',
                       isFocused && 'bg-surface-2 ring-1 ring-inset ring-accent',
                     )}
@@ -573,7 +590,7 @@ export default function TicketList({
                         children, so identifiers stay column-aligned —
                         matching docs/design/mockups/collapsible-hierarchy/
                         list-view.html. */}
-                    {hasChildren ? (
+                    {hasNestedChildren ? (
                       <button
                         type="button"
                         onClick={() => view.toggleParentCollapsed(item.id)}

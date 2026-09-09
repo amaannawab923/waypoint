@@ -317,10 +317,14 @@ export default function BoardView({
               const nextItem = group.items[index + 1];
               const boundaryAfter = isBoundaryGap(item, nextItem);
               const boundaryBefore = isBoundaryGap(prevItem, item);
-              // ROAD-39: same subItemCountByParent-style signal as the
-              // "Epic · N/M" badge below (see TicketList.tsx's identical
-              // comment on this same inherited ambiguity).
-              const hasChildren = subTotal > 0;
+              // ROAD-39: both the presence AND the count come from what is
+              // actually nested under this card in THIS column — never from
+              // subTotal (the Epic badge's workspace-wide total). A parent
+              // whose children all sit in other columns gets no connector at
+              // all, and one with 23 of its 29 children here reads
+              // "23 subtasks", because that is exactly what collapsing hides.
+              const nestedCount = view.nestedDescendantCountByParent.get(item.id) ?? 0;
+              const hasNestedChildren = nestedCount > 0;
               const isCollapsed = view.collapsedParents.has(item.id);
               return (
                 <Fragment key={item.id}>
@@ -425,7 +429,15 @@ export default function BoardView({
                     handleCardDrop(item.id);
                   }}
                   className={clsx(
-                    'flex flex-col gap-2 rounded-[var(--radius-sm)] border border-border bg-surface p-3 text-left text-sm shadow-sm hover:border-border-strong',
+                    // `relative` is load-bearing, not cosmetic — see
+                    // TicketList.tsx's identical comment: this card contains
+                    // `sr-only` spans, Tailwind's sr-only is
+                    // `position: absolute`, and without a positioned ancestor
+                    // its containing block is the document, so it escapes the
+                    // column's overflow clipping and inflates the DOCUMENT's
+                    // scroll height (~6000px of dead whitespace below a long
+                    // board column).
+                    'relative flex flex-col gap-2 rounded-[var(--radius-sm)] border border-border bg-surface p-3 text-left text-sm shadow-sm hover:border-border-strong',
                     item.priority !== 'none' && 'border-l-2',
                     isNested && 'ml-3',
                     draggingId === item.id && 'opacity-50',
@@ -552,14 +564,14 @@ export default function BoardView({
                     for why a collapsed parent's connector is treated as not
                     a valid drop target at all, rather than auto-expanding on
                     hover or silently appending. */}
-                {hasChildren && (
+                {hasNestedChildren && (
                   <button
                     type="button"
                     onClick={() => view.toggleParentCollapsed(item.id)}
                     onDragOver={(e) => e.stopPropagation()}
                     onDrop={(e) => e.stopPropagation()}
                     aria-expanded={!isCollapsed}
-                    aria-label={`${isCollapsed ? 'Expand' : 'Collapse'} ${subTotal} subtask${subTotal === 1 ? '' : 's'}`}
+                    aria-label={`${isCollapsed ? 'Expand' : 'Collapse'} ${nestedCount} subtask${nestedCount === 1 ? '' : 's'}`}
                     className="ml-3 flex w-[calc(100%-12px)] cursor-pointer items-center gap-1.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-xs text-text-muted hover:bg-surface hover:text-text-secondary"
                   >
                     {isCollapsed ? (
@@ -568,7 +580,7 @@ export default function BoardView({
                       <IconChevron size={14} />
                     )}
                     <span>
-                      {subTotal} subtask{subTotal === 1 ? '' : 's'}
+                      {nestedCount} subtask{nestedCount === 1 ? '' : 's'}
                     </span>
                   </button>
                 )}
