@@ -1,6 +1,9 @@
 import '@testing-library/jest-dom';
+import type { ReactElement } from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import {
+  connectJira,
   disconnectJira,
   getJiraConnectionStatus,
   refreshJiraSync,
@@ -8,9 +11,10 @@ import {
 import { setJiraConnection } from '@/lib/jiraStore';
 import type { JiraConnectionStatus } from '@/types/jira';
 import { clearMyJiraQuery } from '@/pages/jira/useMyJiraQueue';
-import { JiraConnectionPanel } from './JiraConnectionPanel';
+import { JiraConnectionPanel, disconnectJiraConfirmMessage } from './JiraConnectionPanel';
 
 jest.mock('@/data/jiraApi', () => ({
+  connectJira: jest.fn(),
   refreshJiraSync: jest.fn(),
   disconnectJira: jest.fn(),
   getJiraConnectionStatus: jest.fn(),
@@ -19,6 +23,14 @@ jest.mock('@/lib/jiraStore', () => ({ setJiraConnection: jest.fn() }));
 jest.mock('@/pages/jira/useMyJiraQueue', () => ({
   clearMyJiraQuery: jest.fn(),
 }));
+
+// AddProjectWizard is always mounted here (it's the Connect CTA's target),
+// and it calls useNavigate() unconditionally on every render regardless of
+// its own `open` prop — so every render needs a Router ancestor, not just
+// the tests that open the wizard.
+function renderPanel(ui: ReactElement) {
+  return render(<MemoryRouter>{ui}</MemoryRouter>);
+}
 
 function status(
   overrides: Partial<JiraConnectionStatus> = {},
@@ -39,6 +51,11 @@ function status(
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // Disconnect now gates on window.confirm; default every test to the
+  // "user confirmed" path so the pre-existing tests below (written before
+  // that guard existed) keep exercising what happens after confirmation,
+  // and the guard itself gets its own dedicated test below.
+  jest.spyOn(window, 'confirm').mockReturnValue(true);
 });
 
 describe('JiraConnectionPanel', () => {
@@ -50,7 +67,7 @@ describe('JiraConnectionPanel', () => {
     it("re-reads the surrounding page's data, not just the sync clock", async () => {
       const onRefresh = jest.fn().mockResolvedValue(undefined);
       jest.mocked(getJiraConnectionStatus).mockResolvedValue(status());
-      render(
+      renderPanel(
         <JiraConnectionPanel connection={status()} onRefresh={onRefresh} />,
       );
 
@@ -65,7 +82,7 @@ describe('JiraConnectionPanel', () => {
 
     it('falls back to its own read when it has no page to refresh', async () => {
       jest.mocked(refreshJiraSync).mockResolvedValue(status());
-      render(<JiraConnectionPanel connection={status()} />);
+      renderPanel(<JiraConnectionPanel connection={status()} />);
 
       fireEvent.click(screen.getByRole('button', { name: 'Refresh now' }));
 
@@ -83,7 +100,7 @@ describe('JiraConnectionPanel', () => {
     jest.mocked(getJiraConnectionStatus).mockResolvedValue(
       status({ connected: false, issueCount: 0 }),
     );
-    render(<JiraConnectionPanel connection={status()} />);
+    renderPanel(<JiraConnectionPanel connection={status()} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
 
@@ -93,7 +110,7 @@ describe('JiraConnectionPanel', () => {
   // A capped read used to render as a flat, confident "500 issues in your
   // queue" for a user with 900 — not a rounded number, a wrong one.
   it('renders a capped count as a floor, and says the queue is larger', () => {
-    render(
+    renderPanel(
       <JiraConnectionPanel
         connection={status({ issueCount: 500, countsTruncated: true })}
       />,
@@ -107,7 +124,7 @@ describe('JiraConnectionPanel', () => {
   });
 
   it('leaves a complete count unqualified', () => {
-    render(<JiraConnectionPanel connection={status({ issueCount: 6 })} />);
+    renderPanel(<JiraConnectionPanel connection={status({ issueCount: 6 })} />);
 
     expect(screen.getByText('6')).toBeInTheDocument();
     expect(screen.queryByText('500+')).toBeNull();
@@ -115,7 +132,7 @@ describe('JiraConnectionPanel', () => {
   });
 
   it('renders the connected account row and live stats from the connection prop', () => {
-    render(<JiraConnectionPanel connection={status()} />);
+    renderPanel(<JiraConnectionPanel connection={status()} />);
 
     expect(screen.getByText('Max Chen')).toBeInTheDocument();
     expect(
@@ -131,7 +148,7 @@ describe('JiraConnectionPanel', () => {
   // the fixture layer or the real one, ever re-read the list. They are gone
   // rather than left describing behavior the app does not have.
   it('advertises no poll interval and offers no pause, because nothing polls', () => {
-    render(<JiraConnectionPanel connection={status()} />);
+    renderPanel(<JiraConnectionPanel connection={status()} />);
 
     expect(screen.queryByText(/poll interval/i)).not.toBeInTheDocument();
     expect(
@@ -148,7 +165,7 @@ describe('JiraConnectionPanel', () => {
   // that the count on screen matches the count in the data layer, in either
   // direction.
   it('names exactly the five writes that exist, attaching among them', () => {
-    render(<JiraConnectionPanel connection={status()} />);
+    renderPanel(<JiraConnectionPanel connection={status()} />);
 
     expect(
       screen.getByText(
@@ -165,7 +182,7 @@ describe('JiraConnectionPanel', () => {
   // the same reason: "those four are the whole set" left standing after a
   // fifth write shipped would be just as wrong.
   it('no longer says attachments cannot be uploaded, because they can', () => {
-    render(<JiraConnectionPanel connection={status()} />);
+    renderPanel(<JiraConnectionPanel connection={status()} />);
 
     expect(screen.queryByText(/Uploading attachments/i)).toBeNull();
     expect(screen.queryByText(/those two are the whole set/i)).toBeNull();
@@ -176,7 +193,7 @@ describe('JiraConnectionPanel', () => {
   // What is still genuinely missing stays listed. Removing one true entry
   // from this list must not turn into quietly emptying it.
   it('still says plainly what is not built', () => {
-    render(<JiraConnectionPanel connection={status()} />);
+    renderPanel(<JiraConnectionPanel connection={status()} />);
 
     expect(screen.getByText(/Tables and panels/i)).toBeInTheDocument();
     expect(screen.getByText(/real inline image/i)).toBeInTheDocument();
@@ -192,7 +209,7 @@ describe('JiraConnectionPanel', () => {
   // that lands here has to update this bullet in the same commit, the same
   // rule the two tests above already enforce for the rest of the list.
   it('no longer claims Copilot cannot propose against Jira at all', () => {
-    render(<JiraConnectionPanel connection={status()} />);
+    renderPanel(<JiraConnectionPanel connection={status()} />);
 
     expect(screen.queryByText(/approval rail exists/i)).toBeNull();
     expect(screen.queryByText(/nothing generates a proposal/i)).toBeNull();
@@ -205,7 +222,7 @@ describe('JiraConnectionPanel', () => {
   // @-mention picker -- this list must not still claim comments are
   // "plain text apart from an @-mention" once bold/italic/lists/etc. work.
   it('no longer claims comments are plain text apart from mentions', () => {
-    render(<JiraConnectionPanel connection={status()} />);
+    renderPanel(<JiraConnectionPanel connection={status()} />);
 
     expect(
       screen.queryByText(/plain text apart from an @-mention/i),
@@ -215,7 +232,7 @@ describe('JiraConnectionPanel', () => {
   it('Refresh now calls refreshJiraSync and pushes the result into jiraStore', async () => {
     const refreshed = status({ lastSyncAt: '2026-01-01T00:05:00.000Z' });
     jest.mocked(refreshJiraSync).mockResolvedValue(refreshed);
-    render(<JiraConnectionPanel connection={status()} />);
+    renderPanel(<JiraConnectionPanel connection={status()} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Refresh now' }));
 
@@ -229,7 +246,7 @@ describe('JiraConnectionPanel', () => {
     jest
       .mocked(getJiraConnectionStatus)
       .mockResolvedValue(status({ connected: false }));
-    render(<JiraConnectionPanel connection={status()} />);
+    renderPanel(<JiraConnectionPanel connection={status()} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
 
@@ -242,10 +259,66 @@ describe('JiraConnectionPanel', () => {
   });
 
   it('sync actions are disabled once disconnected', () => {
-    render(<JiraConnectionPanel connection={status({ connected: false })} />);
+    renderPanel(<JiraConnectionPanel connection={status({ connected: false })} />);
 
     expect(screen.getByRole('button', { name: 'Refresh now' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Disconnect' })).toBeDisabled();
     expect(screen.getByText('Disconnected')).toBeInTheDocument();
+  });
+
+  // Disconnect deletes the stored token immediately with no undo, so it
+  // gets the same confirm() guard as every other irreversible action in
+  // this app (ProjectsList's archiveConfirmMessage).
+  describe('Disconnect confirmation', () => {
+    it('asks before disconnecting, naming the account being disconnected', () => {
+      renderPanel(<JiraConnectionPanel connection={status()} />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+
+      expect(window.confirm).toHaveBeenCalledWith(
+        disconnectJiraConfirmMessage('max@northwind.dev'),
+      );
+    });
+
+    it('does not disconnect when the confirmation is cancelled', () => {
+      jest.mocked(window.confirm).mockReturnValue(false);
+      renderPanel(<JiraConnectionPanel connection={status()} />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+
+      expect(disconnectJira).not.toHaveBeenCalled();
+      expect(setJiraConnection).not.toHaveBeenCalled();
+    });
+  });
+
+  // The header used to render `{accountEmail} · {site}` unconditionally —
+  // both collapse to '' once disconnected, leaving a bare " · " with no way
+  // back into the app.
+  describe('Connect CTA', () => {
+    it('shows a real Connect action instead of a bare separator once disconnected', () => {
+      renderPanel(<JiraConnectionPanel connection={status({ connected: false })} />);
+
+      expect(screen.queryByText('·')).not.toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: 'Connect to Jira' }),
+      ).toBeInTheDocument();
+    });
+
+    it('does not show the Connect action while already connected', () => {
+      renderPanel(<JiraConnectionPanel connection={status()} />);
+
+      expect(
+        screen.queryByRole('button', { name: 'Connect to Jira' }),
+      ).not.toBeInTheDocument();
+    });
+
+    it('opens the same connect wizard All-Projects uses, on click', () => {
+      renderPanel(<JiraConnectionPanel connection={status({ connected: false })} />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Connect to Jira' }));
+
+      expect(screen.getByText('Add project')).toBeInTheDocument();
+      expect(connectJira).not.toHaveBeenCalled();
+    });
   });
 });

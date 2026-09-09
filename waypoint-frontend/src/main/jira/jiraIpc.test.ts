@@ -23,11 +23,13 @@ const readStoredJiraCredentialMock = jest.fn<JiraCredential | null, []>();
 const writeStoredJiraCredentialMock = jest.fn();
 const deleteStoredJiraCredentialMock = jest.fn();
 const isJiraSecureStorageAvailableMock = jest.fn(() => true);
+const isJiraCredentialMarkedInvalidMock = jest.fn(() => false);
 jest.mock('./jiraAuth', () => ({
   readStoredJiraCredential: () => readStoredJiraCredentialMock(),
   writeStoredJiraCredential: (c: unknown) => writeStoredJiraCredentialMock(c),
   deleteStoredJiraCredential: () => deleteStoredJiraCredentialMock(),
   isJiraSecureStorageAvailable: () => isJiraSecureStorageAvailableMock(),
+  isJiraCredentialMarkedInvalid: () => isJiraCredentialMarkedInvalidMock(),
   toJiraIdentity: (c: JiraCredential) => ({
     site: c.site,
     accountId: c.accountId,
@@ -132,6 +134,7 @@ beforeEach(() => {
   jest.resetAllMocks();
   readStoredJiraCredentialMock.mockReturnValue(null);
   isJiraSecureStorageAvailableMock.mockReturnValue(true);
+  isJiraCredentialMarkedInvalidMock.mockReturnValue(false);
   getWindowMock.mockReturnValue(WINDOW);
   registerJiraIpc(getWindowMock);
 });
@@ -155,6 +158,22 @@ describe('jira:status', () => {
 
     expect(result).toEqual({ connected: true, identity: IDENTITY });
     expect(JSON.stringify(result)).not.toContain(CREDENTIAL.apiToken);
+  });
+
+  // ROAD-16: a credential file sitting on disk used to be the whole answer,
+  // so a token revoked or expired on Atlassian's side reported `connected:
+  // true` forever — nothing here ever asked Jira again. jiraClient.ts flags
+  // the credential (see jiraAuth.ts's markJiraCredentialInvalid) the moment a
+  // real request elsewhere comes back 401; this is where that fact has to
+  // reach the renderer.
+  it('reports disconnected once the credential has been flagged by a 401 elsewhere', async () => {
+    readStoredJiraCredentialMock.mockReturnValue(CREDENTIAL);
+    isJiraCredentialMarkedInvalidMock.mockReturnValue(true);
+
+    expect(await getHandler('jira:status')({})).toEqual({
+      connected: false,
+      identity: null,
+    });
   });
 });
 
