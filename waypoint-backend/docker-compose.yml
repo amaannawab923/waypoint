@@ -48,6 +48,15 @@ services:
       # say the same number — nothing internal needs 4000 specifically the
       # way postgres's default port is baked into the image/healthcheck.
       PORT: 14000
+      # 0.0.0.0, not index.ts's loopback default — a process bound to
+      # 127.0.0.1 *inside* this container is unreachable through the
+      # 127.0.0.1:14000:14000 publish rule below (that rule forwards to the
+      # container's internal network, not to loopback inside it). This is
+      # safe here for the same reason the postgres service above binds wide
+      # inside its own container: Docker's network namespace plus this
+      # service's own host-side 127.0.0.1 publish rule are what actually
+      # keep it off the LAN, not the in-container bind address.
+      HOST: 0.0.0.0
     ports:
       - '127.0.0.1:14000:14000'
     depends_on:
