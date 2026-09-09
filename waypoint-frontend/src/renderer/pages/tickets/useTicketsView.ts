@@ -486,37 +486,117 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
     }
   }
 
-  // Finding 2e: sorts a child to sit directly after its own parent, but
-  // ONLY when they land in the same group under the active groupBy —
-  // otherwise 2c's parent chip does the pointing instead. Applied UPSTREAM
-  // of groupedItems' own build() below (not as a separate step inside it),
-  // and exposed as this hook's own `items`/`allItems` — not just fed into
-  // groupedItems — specifically so a consumer that computes drag-drop
-  // insertion order (BoardView's reorderItemLocally, via this hook) and
-  // whatever groupedItems renders always read the SAME underlying order by
-  // construction, with no separate reconciliation step that could drift
-  // out of sync with this one.
+  // Finding 2e: sorts a child to sit directly after its own parent (and,
+  // recursively, a grandchild directly after ITS parent, arbitrarily deep —
+  // B1: this used to splice only one level, which silently dropped a
+  // grandchild from `items`/`orderedItems` entirely, since it was marked
+  // "nested" — and therefore skipped in the main pass below — but nothing
+  // ever spliced it back in, because only a non-nested item's own direct
+  // children were appended), but ONLY when a ticket and its nesting parent
+  // land in the same group under the active groupBy — otherwise 2c's parent
+  // chip does the pointing instead. Applied UPSTREAM of groupedItems' own
+  // build() below (not as a separate step inside it), and exposed as this
+  // hook's own `items`/`allItems` — not just fed into groupedItems —
+  // specifically so a consumer that computes drag-drop insertion order
+  // (BoardView's reorderItemLocally, via this hook) has a stable, single
+  // source for what "nested" means. NOTE this does NOT mean
+  // reorderItemLocally reads or writes this same `orderedItems` array — see
+  // that function's own comment below for the real (id-relative, raw-order)
+  // mechanism, and BoardView.tsx's handleCardDrop for the one case (a drop
+  // between an already-adjacent nested parent/child) where that raw-order
+  // operation and this rendered order can disagree.
+  //
+  // Invariant this logic must never violate: `orderedItems.length ===
+  // resolvedItems.length` — no ticket may ever be dropped, full stop. Two
+  // failure modes matter here: (1) a chain deeper than one level (fixed by
+  // the recursive splice below), and (2) a parent-chain CYCLE (A.parent=B,
+  // B.parent=A, or a ticket parented to itself) — without a guard, every
+  // ticket in the cycle would mark itself "nested" (waiting to be spliced
+  // in under a parent that's ALSO nested and therefore never visited at the
+  // top level), so none of them would ever be spliced in anywhere and the
+  // whole cycle would silently vanish from `items`. The guard below walks
+  // each ticket's nesting-parent chain once (memoized per ticket id so a
+  // shared ancestor chain is never re-walked, keeping this linear rather
+  // than quadratic) and marks every id in a detected cycle as ineligible
+  // for nesting — those tickets render top-level instead of disappearing.
   const { orderedItems, nestedChildIds } = useMemo(() => {
     const byId = new Map(resolvedItems.map((i) => [i.id, i]));
+
+    // The candidate nesting-parent edge for `item` — its own `parentId`,
+    // but only when that parent is present in `resolvedItems` and shares
+    // `item`'s group under the active groupBy. Same rule as before B1,
+    // factored out so both the cycle guard and the splice pass below walk
+    // identical edges.
+    function nestingParent(item: Ticket): Ticket | undefined {
+      if (!item.parentId) return undefined;
+      const parent = byId.get(item.parentId);
+      if (!parent) return undefined;
+      if (groupKeyFor(item, groupBy) !== groupKeyFor(parent, groupBy)) return undefined;
+      return parent;
+    }
+
+    // Cycle guard (see this hook's own comment above). `chainState` tracks
+    // each ticket's status while walking: 'visiting' means it's on the
+    // current walk's path (a repeat hit while 'visiting' is a cycle);
+    // 'done' means its chain was already fully resolved (safe to stop
+    // walking through it, whether or not it's itself cyclic).
+    const chainState = new Map<string, 'visiting' | 'done'>();
+    const cyclic = new Set<string>();
+    for (const start of resolvedItems) {
+      if (chainState.has(start.id)) continue;
+      const path: string[] = [];
+      let current: Ticket | undefined = start;
+      while (current) {
+        const status = chainState.get(current.id);
+        if (status === 'done') break;
+        if (status === 'visiting') {
+          const cycleStart = path.indexOf(current.id);
+          for (const id of path.slice(cycleStart)) cyclic.add(id);
+          break;
+        }
+        chainState.set(current.id, 'visiting');
+        path.push(current.id);
+        current = nestingParent(current);
+      }
+      for (const id of path) chainState.set(id, 'done');
+    }
+
     const childrenByParent = new Map<string, Ticket[]>();
     const nested = new Set<string>();
     for (const item of resolvedItems) {
-      if (!item.parentId) continue;
-      const parent = byId.get(item.parentId);
-      if (!parent) continue;
-      if (groupKeyFor(item, groupBy) !== groupKeyFor(parent, groupBy)) continue;
+      if (cyclic.has(item.id)) continue; // rendered top-level, never as a child
+      const parent = nestingParent(item);
+      if (!parent || cyclic.has(parent.id)) continue;
       nested.add(item.id);
-      const siblings = childrenByParent.get(item.parentId) ?? [];
+      const siblings = childrenByParent.get(parent.id) ?? [];
       siblings.push(item);
-      childrenByParent.set(item.parentId, siblings);
+      childrenByParent.set(parent.id, siblings);
     }
     if (nested.size === 0) return { orderedItems: resolvedItems, nestedChildIds: nested };
+
+    // Recursively splices `parentId`'s own nested children in directly
+    // after it, then each child's own nested children directly after IT,
+    // arbitrarily deep — the fix for B1's one-level-only splice. `visiting`
+    // is an extra, redundant safety net against `childrenByParent` itself
+    // ever containing a cycle (it shouldn't, since `cyclic` ids above are
+    // excluded from ever becoming a child) — cheap insurance against this
+    // invariant being violated by a future edit to the guard above.
+    function appendDescendants(parentId: string, out: Ticket[], visiting: Set<string>) {
+      const children = childrenByParent.get(parentId);
+      if (!children) return;
+      for (const child of children) {
+        if (visiting.has(child.id)) continue;
+        visiting.add(child.id);
+        out.push(child);
+        appendDescendants(child.id, out, visiting);
+      }
+    }
+
     const result: Ticket[] = [];
     for (const item of resolvedItems) {
-      if (nested.has(item.id)) continue; // spliced in right after its parent below instead
+      if (nested.has(item.id)) continue; // spliced in under its parent below instead
       result.push(item);
-      const children = childrenByParent.get(item.id);
-      if (children) result.push(...children);
+      appendDescendants(item.id, result, new Set([item.id]));
     }
     return { orderedItems: result, nestedChildIds: nested };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -644,6 +724,35 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
    * mirrors data/api.ts's reorderTicket so dragging a card to a specific
    * spot (not just onto a column) reflects instantly instead of waiting on
    * a reload. Adopts the target's state too, matching the server behavior.
+   *
+   * H2 correction: this operates on `setItems`'s RAW list — the same flat,
+   * un-nested order `resolvedItems` is built from, upstream of the
+   * same-group nesting resort above — not on `orderedItems`/`items` (the
+   * NESTED, rendered order this hook exposes). It splices `id` in
+   * id-relative to `targetId` (found by id, not by rendered index) within
+   * that raw list. That id-relative-on-raw-order mechanism is what actually
+   * makes this safe for an ordinary same-group reorder — not, as an earlier
+   * version of this comment claimed, because this function reads/writes
+   * "the same ordered array" groupedItems renders. Concretely: after this
+   * runs, `resolvedItems` (and therefore `orderedItems`) is recomputed from
+   * the mutated raw list, and the nesting resort re-splices every nested
+   * child directly after its parent regardless of where this function put
+   * it in the raw list.
+   *
+   * That last point is also the source of a known, deliberate gap: nesting
+   * ALWAYS re-splices a child directly after its parent in the rendered
+   * order, no matter where this function positions it in the raw list — so
+   * a drop that asks to insert something between a parent and its
+   * already-adjacent nested child can't actually land there. The rendered
+   * order snaps right back to parent-then-child every time, even though
+   * this function (and the `reorderTicket` persistence call next to it in
+   * BoardView.tsx's handleCardDrop) already ran and changed the RAW/
+   * persisted order — so the visible result is a silent no-op while the
+   * server has already been told the move happened. Rather than implement a
+   * real "insert between nested parent/child" reorder in this pass,
+   * BoardView.tsx suppresses the drop-indicator (and refuses the drop
+   * itself) for exactly that boundary case — see its onDragOver handler's
+   * own comment.
    */
   function reorderItemLocally(
     id: string,
