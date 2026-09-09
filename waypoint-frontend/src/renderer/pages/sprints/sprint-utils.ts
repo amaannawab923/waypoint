@@ -105,11 +105,17 @@ export interface BurndownPoint {
 
 /**
  * Ideal line: linear decrease from total item count on day 0 to 0 on the sprint's last day.
- * Current: exactly two real, unconnected data points — the sprint's starting total on day 0,
- * and today's actual remaining/non-completed count on today's index. There is no per-day
- * history recorded, so the chart (SprintStatsPanel) must render these as isolated markers,
- * never joined into a line — a joined line would read as daily tracking that doesn't exist.
- * See CAPABILITIES['sprints.burndown'].
+ * Current: the sprint's starting total on day 0, plus "today"'s actual remaining/non-completed
+ * count on today's index — clamped onto the sprint's own [start, end] range, since "today" can
+ * fall outside it. For an active sprint that's two distinct, unconnected points. For a sprint
+ * that hasn't started yet, today clamps onto day 0 too, so there is only ONE point, and its
+ * value is the remaining count (not the starting total — the two assignments below both target
+ * index 0, and the remaining-count one runs second). For a completed sprint, today clamps onto
+ * the last day, giving two points again but neither of them is "today". There is no per-day
+ * history recorded in any case, so the chart (SprintStatsPanel) must render these as isolated
+ * markers, never joined into a line — a joined line would read as daily tracking that doesn't
+ * exist. SprintStatsPanel picks the matching CAPABILITIES['sprints.burndown*'] entry per status
+ * so the caption never claims "today" for a sprint that hasn't started or already ended.
  */
 export function buildBurndownData(sprint: Sprint, items: Ticket[], states: TicketState[], today: Date = new Date()): BurndownPoint[] {
   const stateById = new Map(states.map((s) => [s.id, s]));

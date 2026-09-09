@@ -13,6 +13,8 @@ const EXPECTED_KEYS: CapabilityKey[] = [
   'preferences.firstDayOfWeek',
   'requests.publicForm',
   'sprints.burndown',
+  'sprints.burndownCompleted',
+  'sprints.burndownUpcoming',
   'tickets.drafts',
   'agents.runtime',
   'scratchpad.editing',
@@ -21,7 +23,7 @@ const EXPECTED_KEYS: CapabilityKey[] = [
 ];
 
 describe('CAPABILITIES', () => {
-  it('has exactly the thirteen registered surfaces, and nothing else', () => {
+  it('has exactly the fifteen registered surfaces, and nothing else', () => {
     expect(Object.keys(CAPABILITIES).sort()).toEqual([...EXPECTED_KEYS].sort());
   });
 
@@ -29,7 +31,7 @@ describe('CAPABILITIES', () => {
     const entries: Capability[] = Object.values(CAPABILITIES);
     const nonShipped = entries.filter((entry) => entry.state !== 'shipped');
 
-    // All thirteen are non-shipped today — guards against this test quietly
+    // All fifteen are non-shipped today — guards against this test quietly
     // asserting nothing if the register is ever pared down to zero.
     expect(nonShipped.length).toBe(entries.length);
 
