@@ -531,7 +531,8 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
       if (!item.parentId) return undefined;
       const parent = byId.get(item.parentId);
       if (!parent) return undefined;
-      if (groupKeyFor(item, groupBy) !== groupKeyFor(parent, groupBy)) return undefined;
+      if (groupKeyFor(item, groupBy) !== groupKeyFor(parent, groupBy))
+        return undefined;
       return parent;
     }
 
@@ -572,7 +573,8 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
       siblings.push(item);
       childrenByParent.set(parent.id, siblings);
     }
-    if (nested.size === 0) return { orderedItems: resolvedItems, nestedChildIds: nested };
+    if (nested.size === 0)
+      return { orderedItems: resolvedItems, nestedChildIds: nested };
 
     // Recursively splices `parentId`'s own nested children in directly
     // after it, then each child's own nested children directly after IT,
@@ -581,7 +583,11 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
     // ever containing a cycle (it shouldn't, since `cyclic` ids above are
     // excluded from ever becoming a child) — cheap insurance against this
     // invariant being violated by a future edit to the guard above.
-    function appendDescendants(parentId: string, out: Ticket[], visiting: Set<string>) {
+    function appendDescendants(
+      parentId: string,
+      out: Ticket[],
+      visiting: Set<string>,
+    ) {
       const children = childrenByParent.get(parentId);
       if (!children) return;
       for (const child of children) {

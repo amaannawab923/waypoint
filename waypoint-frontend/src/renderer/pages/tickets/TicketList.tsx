@@ -574,7 +574,10 @@ export default function TicketList({
                     >
                       {isNested && (
                         <>
-                          <span aria-hidden="true" className="shrink-0 text-text-muted">
+                          <span
+                            aria-hidden="true"
+                            className="shrink-0 text-text-muted"
+                          >
                             ↳
                           </span>
                           {/* M1: the parent-chip case below already carries
@@ -585,7 +588,11 @@ export default function TicketList({
                               nothing else, so a screen-reader user got no
                               indication at all that this row has a parent,
                               worse than the chip case. */}
-                          {parent && <span className="sr-only">Subtask of {parent.identifier}</span>}
+                          {parent && (
+                            <span className="sr-only">
+                              Subtask of {parent.identifier}
+                            </span>
+                          )}
                         </>
                       )}
                       <span className="w-16 shrink-0 font-mono text-xs text-text-muted">
@@ -593,9 +600,13 @@ export default function TicketList({
                       </span>
                       {state && <StateIcon state={state} />}
                       <div className="min-w-0 flex-1">
-                        <span className="block truncate text-text">{item.title}</span>
+                        <span className="block truncate text-text">
+                          {item.title}
+                        </span>
                         {item.description && (
-                          <span className="block truncate text-xs text-text-muted">{item.description}</span>
+                          <span className="block truncate text-xs text-text-muted">
+                            {item.description}
+                          </span>
                         )}
                       </div>
                       {project && (
@@ -657,7 +668,10 @@ export default function TicketList({
                           </Badge>
                         )}
                       </div>
-                      <PriorityIcon priority={item.priority} label={PRIORITY_LABEL[item.priority]} />
+                      <PriorityIcon
+                        priority={item.priority}
+                        label={PRIORITY_LABEL[item.priority]}
+                      />
                       <AvatarStack people={assigneesFor(item)} />
                     </button>
                   </div>
