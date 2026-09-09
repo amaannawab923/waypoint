@@ -65,8 +65,18 @@ test('creates a subtask via the parent picker and shows it nested under its pare
     // nested-indent branch too), so a plain text locator could match a row
     // rendered behind this modal instead of the modal's own trigger button.
     await window.getByRole('button', { name: /Parent/ }).click();
-    await window.getByPlaceholder('Search tickets…').fill(parentMarker);
-    await window.getByText(parentMarker, { exact: true }).click();
+    // Scoped to the picker's own dialog (ParentTicketPicker renders
+    // role="dialog" aria-label="Set parent ticket" via useFloatingPanel),
+    // not the whole page: the parent ticket just created is, by this point,
+    // ALSO its own row in the ticket list sitting behind this modal, so an
+    // unscoped getByText(parentMarker) matches both that row and the
+    // picker's own option row — a real strict-mode failure caught by CI,
+    // not just a hypothetical one.
+    const parentPicker = window.getByRole('dialog', {
+      name: 'Set parent ticket',
+    });
+    await parentPicker.getByPlaceholder('Search tickets…').fill(parentMarker);
+    await parentPicker.getByText(parentMarker, { exact: true }).click();
     await window.getByRole('button', { name: 'Create ticket' }).click();
     await expect(
       window.getByRole('button', { name: 'Create ticket' }),
