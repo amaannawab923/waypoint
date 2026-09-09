@@ -407,6 +407,16 @@ export function TicketDetailContent({
 
   const [titleDraft, setTitleDraft] = useState('');
   const [descDraft, setDescDraft] = useState('');
+  // B2: local draft state for Story points, matching titleDraft/descDraft's
+  // own shape — a string (not a number) so an in-progress "17." is
+  // representable at all. The field used to be a controlled input bound
+  // straight to `item.estimatePoints`, saving via patchItem() on every
+  // keystroke; patchItem awaits updateTicket() then reloads the item, and
+  // that reload landed mid-keystroke, so typing "17.5" got overwritten by
+  // the reloaded `17` (Number("17.") === 17) before "5" could ever be
+  // typed — the decimal point was unreachable. Draft-plus-blur, same as the
+  // title/description fields below, fixes that.
+  const [pointsDraft, setPointsDraft] = useState('');
   const [commentDraft, setCommentDraft] = useState('');
   const [postingComment, setPostingComment] = useState(false);
   const [createSubOpen, setCreateSubOpen] = useState(false);
@@ -425,6 +435,7 @@ export function TicketDetailContent({
     if (item) {
       setTitleDraft(item.title);
       setDescDraft(item.description);
+      setPointsDraft(item.estimatePoints === null ? '' : String(item.estimatePoints));
     }
     // Only reset drafts when a *different* item loads, not on every reload after a save.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -713,6 +724,32 @@ export function TicketDetailContent({
     if (!item) return;
     if (descDraft === item.description) return;
     await updateTicket(item.id, { description: descDraft });
+    reloadItem();
+  }
+
+  // B2: commits the Story points draft on blur, same shape as saveTitle/
+  // saveDescription above. An empty draft clears the field back to null,
+  // matching the field's pre-existing clear-on-empty behavior; anything
+  // that doesn't parse to a finite number (e.g. a draft left mid-edit as
+  // just "-" or ".") is treated the same way saveTitle treats an
+  // all-whitespace title — reverted to the last saved value instead of
+  // persisted.
+  async function savePoints() {
+    if (!item) return;
+    const trimmed = pointsDraft.trim();
+    if (trimmed === '') {
+      if (item.estimatePoints === null) return;
+      await updateTicket(item.id, { estimatePoints: null });
+      reloadItem();
+      return;
+    }
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed)) {
+      setPointsDraft(item.estimatePoints === null ? '' : String(item.estimatePoints));
+      return;
+    }
+    if (parsed === item.estimatePoints) return;
+    await updateTicket(item.id, { estimatePoints: parsed });
     reloadItem();
   }
 
@@ -1284,10 +1321,12 @@ export function TicketDetailContent({
           <input
             type="number"
             step="0.5"
-            value={item.estimatePoints ?? ''}
-            onChange={(e) => {
-              const raw = e.target.value;
-              patchItem({ estimatePoints: raw.trim() === '' ? null : Number(raw) });
+            min="0"
+            value={pointsDraft}
+            onChange={(e) => setPointsDraft(e.target.value)}
+            onBlur={savePoints}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
             }}
             placeholder="No estimate"
             className="h-8 w-full rounded-[var(--radius-sm)] border border-border-strong bg-bg px-2 text-sm text-text outline-none focus:border-accent"

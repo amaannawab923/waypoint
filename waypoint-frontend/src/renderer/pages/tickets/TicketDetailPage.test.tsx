@@ -348,34 +348,88 @@ describe('TicketDetailPage → Story points field (finding 7a)', () => {
     expect(screen.getByText('Story points')).toBeInTheDocument();
     expect(input).toHaveAttribute('type', 'number');
     expect(input).toHaveAttribute('step', '0.5');
+    expect(input).toHaveAttribute('min', '0');
     expect(input.value).toBe('');
   });
 
-  it('calls updateTicket with the new estimatePoints value on edit', async () => {
+  // B2: the field used to be a plain controlled input bound straight to
+  // item.estimatePoints, saving on every keystroke via patchItem() (which
+  // awaits updateTicket() then reloads) — typing "17.5" got the reload's
+  // Number("17.") === 17 written back into the input before "5" could ever
+  // be typed, so a decimal was unreachable by typing. Now it's local draft
+  // state committed on blur, matching the title/description fields' own
+  // pattern — nothing commits until blur.
+  it('does NOT call updateTicket while still typing (before blur)', async () => {
     mount([]);
 
     const input = await screen.findByPlaceholderText('No estimate');
+    fireEvent.change(input, { target: { value: '17' } });
+    fireEvent.change(input, { target: { value: '17.' } });
     fireEvent.change(input, { target: { value: '17.5' } });
+
+    expect(updateTicket).not.toHaveBeenCalled();
+  });
+
+  it('commits the full decimal value on blur, not truncated at the last whole digit typed', async () => {
+    mount([]);
+
+    const input = (await screen.findByPlaceholderText('No estimate')) as HTMLInputElement;
+    // Character-by-character, as a real typed "17.5" would arrive: each
+    // fireEvent.change reflects one more character landing in the field.
+    fireEvent.change(input, { target: { value: '1' } });
+    fireEvent.change(input, { target: { value: '17' } });
+    fireEvent.change(input, { target: { value: '17.' } });
+    fireEvent.change(input, { target: { value: '17.5' } });
+    expect(input.value).toBe('17.5');
+
+    fireEvent.blur(input);
 
     await waitFor(() =>
       expect(updateTicket).toHaveBeenCalledWith('wi-1', { estimatePoints: 17.5 }),
     );
   });
 
-  it('clears estimatePoints back to null when the field is emptied', async () => {
-    // Seeded with a real starting value (not mount()'s default null) — the
-    // input is a plain controlled field bound straight to
-    // item.estimatePoints with no local draft state, so React's
-    // controlled-input value tracking treats a same-value
-    // fireEvent.change as a no-op; starting from a real number makes
-    // "clear the field" a genuine, detectable value change.
+  it('calls updateTicket with the new estimatePoints value on blur', async () => {
+    mount([]);
+
+    const input = await screen.findByPlaceholderText('No estimate');
+    fireEvent.change(input, { target: { value: '17.5' } });
+    fireEvent.blur(input);
+
+    await waitFor(() =>
+      expect(updateTicket).toHaveBeenCalledWith('wi-1', { estimatePoints: 17.5 }),
+    );
+  });
+
+  it('clears estimatePoints back to null when the field is emptied and blurred', async () => {
+    // Seeded with a real starting value (not mount()'s default null) so
+    // "clear the field" is a genuine, detectable change from the draft's
+    // initial sync.
     mount([], [], [], { ...ITEM, estimatePoints: 8 });
 
     const input = (await screen.findByDisplayValue('8')) as HTMLInputElement;
     fireEvent.change(input, { target: { value: '' } });
+    fireEvent.blur(input);
 
     await waitFor(() =>
       expect(updateTicket).toHaveBeenCalledWith('wi-1', { estimatePoints: null }),
+    );
+  });
+
+  it('saves on Enter, matching the title field convention', async () => {
+    mount([]);
+
+    const input = (await screen.findByPlaceholderText('No estimate')) as HTMLInputElement;
+    // The handler saves via `e.target.blur()`, which only fires a real
+    // blur event when the element is actually focused first — mirrors a
+    // real user's flow (focus, type, hit Enter) rather than jsdom's default
+    // of not focusing anything on a bare fireEvent.change.
+    input.focus();
+    fireEvent.change(input, { target: { value: '3' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() =>
+      expect(updateTicket).toHaveBeenCalledWith('wi-1', { estimatePoints: 3 }),
     );
   });
 });
