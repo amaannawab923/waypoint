@@ -401,6 +401,29 @@ export function JiraCommentComposer({
 
   const popoverOpen = trigger !== null;
 
+  // The listbox's own id (for the textarea's aria-controls) and a stable id
+  // per option row (for aria-activedescendant and each option's own id) —
+  // scoped by ticketId so two comment composers open on the page at once
+  // (unlikely today, but cheap to get right) never collide.
+  const mentionListboxId = `jira-comment-mention-listbox-${ticketId}`;
+  function mentionOptionId(accountId: string) {
+    return `jira-comment-mention-option-${ticketId}-${accountId}`;
+  }
+
+  // The one option row a screen reader should be told is current — deliberately
+  // read from the exact same `suggestions`/`highlighted` pair that decides the
+  // row's visual highlight below, so the two can never drift apart. Unset
+  // (rather than pointing at a row that doesn't exist yet) while the popover
+  // is loading, erroring, or empty — those states render no option rows at
+  // all, and a dangling aria-activedescendant would name nothing.
+  const highlightedOptionId =
+    popoverOpen &&
+    !loadingSuggestions &&
+    !suggestionsError &&
+    suggestions[highlighted]
+      ? mentionOptionId(suggestions[highlighted].accountId)
+      : undefined;
+
   // The search itself. Debounced, cancellable, and re-run per keystroke of
   // the query — the same shape as JiraAssigneePicker's own search effect,
   // reusing the exact same endpoint (searchJiraAssignableUsers): this app has
@@ -1024,6 +1047,17 @@ export function JiraCommentComposer({
           }}
           placeholder="Comment… (@ to mention someone)"
           rows={3}
+          // The @-mention popover turns this textarea into a combobox: typing
+          // "@" opens a list of matches, arrow keys move a highlight through
+          // it, and Enter/Tab picks one — the same contract a single-line
+          // autocomplete input would advertise, just hosted on a multi-line
+          // box instead of an <input>. `aria-controls`/`aria-activedescendant`
+          // are only set while the popover is actually open, since neither
+          // should point at an element that isn't in the DOM.
+          role="combobox"
+          aria-expanded={popoverOpen}
+          aria-controls={popoverOpen ? mentionListboxId : undefined}
+          aria-activedescendant={highlightedOptionId}
           className="w-full resize-none bg-transparent px-2.5 py-2 text-[12.5px] leading-relaxed text-text outline-none"
         />
         <div className="flex items-center gap-2 border-t border-border px-2 py-1.5">
@@ -1058,6 +1092,7 @@ export function JiraCommentComposer({
         createPortal(
           <div
             ref={popoverRef}
+            id={mentionListboxId}
             role="listbox"
             aria-label={`Mention someone on ${ticketKey}`}
             style={{
@@ -1093,7 +1128,18 @@ export function JiraCommentComposer({
               suggestions.map((user, i) => (
                 <button
                   key={user.accountId}
+                  id={mentionOptionId(user.accountId)}
                   type="button"
+                  role="option"
+                  aria-selected={i === highlighted}
+                  // Not a Tab stop: this popover follows the
+                  // aria-activedescendant combobox pattern, where the
+                  // textarea keeps real focus throughout and arrow keys move
+                  // a *virtual* highlight through the options instead. A row
+                  // that could also take real focus via Tab would give a
+                  // keyboard user two disagreeing ways to move through the
+                  // same list.
+                  tabIndex={-1}
                   // onMouseDown, not onClick: a click fires after the
                   // textarea has already blurred from the mousedown above,
                   // and by then `trigger` and the caret this reads are gone.
