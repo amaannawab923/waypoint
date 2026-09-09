@@ -82,6 +82,7 @@ function fakeView(items: Ticket[]): TicketsView {
     allItems: items,
     subItemCountByParent: new Map(),
     parentById: new Map(),
+    nestedChildIds: new Set(),
     loading: false,
     isRefetching: false,
     reload: jest.fn(),

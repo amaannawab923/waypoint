@@ -238,17 +238,25 @@ describe('TicketList epic badge (finding 2b)', () => {
 });
 
 describe('TicketList parent chip (finding 2c)', () => {
-  it("shows the parent's identifier on a child row", async () => {
-    const parent = ticket({ id: 'parent', identifier: 'CW-1' });
-    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent' });
+  // Parent and child land in DIFFERENT state groups here on purpose: 2c's
+  // chip is specifically for when they DON'T share a group (finding 2e's
+  // same-group nesting replaces the chip with an indent instead — see
+  // useTicketsView.test.ts's own coverage for that split).
+  beforeEach(() => {
+    jest.mocked(listStates).mockResolvedValue([state(), state({ id: 'st-2', name: 'In Progress' })]);
+  });
+
+  it("shows the parent's identifier on a child row in a different group", async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1', stateId: 'st-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent', stateId: 'st-2' });
     await renderList([parent, child]);
 
     expect(screen.getByText('CW-1', { selector: 'span.font-mono' })).toBeInTheDocument();
   });
 
   it('hides the connector glyph from the accessibility tree, exposing "Parent <identifier>" as the accessible text', async () => {
-    const parent = ticket({ id: 'parent', identifier: 'ROAD-2' });
-    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent' });
+    const parent = ticket({ id: 'parent', identifier: 'ROAD-2', stateId: 'st-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent', stateId: 'st-2' });
     await renderList([parent, child]);
 
     const glyph = screen.getByText('↳');
@@ -264,6 +272,30 @@ describe('TicketList parent chip (finding 2c)', () => {
 
     await screen.findByText('CW-1');
     expect(screen.queryByText('↳')).not.toBeInTheDocument();
+  });
+
+  it('renders no parent chip (an indent instead) when parent and child share a group', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1', stateId: 'st-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent', stateId: 'st-1' });
+    await renderList([parent, child]);
+
+    await screen.findByText('CW-2');
+    // The glyph still renders (as an indent marker), but not inside a
+    // Badge carrying "Parent <identifier>" — 2e's nesting owns the pointer.
+    expect(screen.queryByText(`Parent CW-1`, { exact: false })).not.toBeInTheDocument();
+  });
+});
+
+describe('TicketList same-group nesting (finding 2e)', () => {
+  it('indents a nested child row and marks its connector glyph decorative', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1', stateId: 'st-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent', stateId: 'st-1' });
+    await renderList([parent, child]);
+
+    const childRow = (await screen.findByText('CW-2')).closest('button') as HTMLElement;
+    expect(childRow.className).toContain('pl-5');
+    const glyph = screen.getByText('↳');
+    expect(glyph).toHaveAttribute('aria-hidden', 'true');
   });
 });
 

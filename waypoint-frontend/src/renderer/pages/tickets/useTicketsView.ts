@@ -461,6 +461,67 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
     return map;
   }, [unfilteredItems]);
 
+  // Finding 2e: which named group a ticket would land in under the ACTIVE
+  // groupBy — MUST mirror groupedItems' own per-groupBy partition logic
+  // below exactly (same key per case), since "same group" for nesting
+  // purposes has to mean the same group a child would actually render in.
+  // A pure function of the item + groupBy alone (no lookups needed): every
+  // case below already keys off a field the item carries directly.
+  function groupKeyFor(item: Ticket, currentGroupBy: GroupBy): string {
+    switch (currentGroupBy) {
+      case 'state':
+        return item.stateId;
+      case 'priority':
+        return item.priority;
+      case 'workstream':
+        return item.workstreamId ?? 'none';
+      case 'sprint':
+        return item.sprintId ?? 'none';
+      case 'assignee':
+        return item.assigneeIds.length > 0 ? 'assigned' : 'unassigned';
+      case 'project':
+        return item.projectId;
+      default:
+        return 'all';
+    }
+  }
+
+  // Finding 2e: sorts a child to sit directly after its own parent, but
+  // ONLY when they land in the same group under the active groupBy —
+  // otherwise 2c's parent chip does the pointing instead. Applied UPSTREAM
+  // of groupedItems' own build() below (not as a separate step inside it),
+  // and exposed as this hook's own `items`/`allItems` — not just fed into
+  // groupedItems — specifically so a consumer that computes drag-drop
+  // insertion order (BoardView's reorderItemLocally, via this hook) and
+  // whatever groupedItems renders always read the SAME underlying order by
+  // construction, with no separate reconciliation step that could drift
+  // out of sync with this one.
+  const { orderedItems, nestedChildIds } = useMemo(() => {
+    const byId = new Map(resolvedItems.map((i) => [i.id, i]));
+    const childrenByParent = new Map<string, Ticket[]>();
+    const nested = new Set<string>();
+    for (const item of resolvedItems) {
+      if (!item.parentId) continue;
+      const parent = byId.get(item.parentId);
+      if (!parent) continue;
+      if (groupKeyFor(item, groupBy) !== groupKeyFor(parent, groupBy)) continue;
+      nested.add(item.id);
+      const siblings = childrenByParent.get(item.parentId) ?? [];
+      siblings.push(item);
+      childrenByParent.set(item.parentId, siblings);
+    }
+    if (nested.size === 0) return { orderedItems: resolvedItems, nestedChildIds: nested };
+    const result: Ticket[] = [];
+    for (const item of resolvedItems) {
+      if (nested.has(item.id)) continue; // spliced in right after its parent below instead
+      result.push(item);
+      const children = childrenByParent.get(item.id);
+      if (children) result.push(...children);
+    }
+    return { orderedItems: result, nestedChildIds: nested };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resolvedItems, groupBy]);
+
   const groupedItems: TicketGroup[] = useMemo(() => {
     function build(
       key: string,
@@ -468,7 +529,7 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
       color: string | undefined,
       predicate: (i: Ticket) => boolean,
     ): TicketGroup {
-      return { key, label, color, items: resolvedItems.filter(predicate) };
+      return { key, label, color, items: orderedItems.filter(predicate) };
     }
 
     let groups: TicketGroup[];
@@ -537,7 +598,7 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
 
     return showEmptyGroups ? groups : groups.filter((g) => g.items.length > 0);
   }, [
-    resolvedItems,
+    orderedItems,
     groupBy,
     states,
     workstreams,
@@ -604,10 +665,11 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
 
   return {
     projectId,
-    items: resolvedItems,
-    allItems: resolvedItems,
+    items: orderedItems,
+    allItems: orderedItems,
     subItemCountByParent,
     parentById,
+    nestedChildIds,
     loading,
     isRefetching,
     reload,

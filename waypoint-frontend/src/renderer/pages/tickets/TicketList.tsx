@@ -530,6 +530,11 @@ export default function TicketList({
                 const agentAssignment = primaryAgentAssignment(item);
                 const isFocused = focusId === item.id;
                 const parent = view.parentById.get(item.id);
+                // Finding 2e: only indented when nested directly under its
+                // parent in THIS group (view.nestedChildIds) — a child whose
+                // parent landed in a different group keeps 2c's parent chip
+                // as the only pointer instead.
+                const isNested = view.nestedChildIds.has(item.id);
                 return (
                   <div
                     key={item.id}
@@ -562,8 +567,16 @@ export default function TicketList({
                               `/projects/${item.projectId}/tickets/${item.identifier}`,
                             );
                       }}
-                      className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left"
+                      className={clsx(
+                        'flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left',
+                        isNested && 'pl-5',
+                      )}
                     >
+                      {isNested && (
+                        <span aria-hidden="true" className="shrink-0 text-text-muted">
+                          ↳
+                        </span>
+                      )}
                       <span className="w-16 shrink-0 font-mono text-xs text-text-muted">
                         {item.identifier}
                       </span>
@@ -590,7 +603,10 @@ export default function TicketList({
                             </Badge>
                           </span>
                         )}
-                        {parent && (
+                        {/* Finding 2e's indent already points at the parent
+                            visually when they share a group — this chip is
+                            only needed when they don't (isNested false). */}
+                        {parent && !isNested && (
                           <span title={`Parent ${parent.identifier}`}>
                             <Badge tone="neutral">
                               <span aria-hidden="true">↳</span>

@@ -76,6 +76,7 @@ function fakeView(opts: {
   groups: TicketGroup[];
   parentById?: Map<string, Ticket>;
   subItemCountByParent?: Map<string, { total: number; done: number }>;
+  nestedChildIds?: Set<string>;
 }): TicketsView {
   return {
     projectId: 'proj-1',
@@ -83,6 +84,7 @@ function fakeView(opts: {
     allItems: opts.items,
     subItemCountByParent: opts.subItemCountByParent ?? new Map(),
     parentById: opts.parentById ?? new Map(),
+    nestedChildIds: opts.nestedChildIds ?? new Set(),
     loading: false,
     isRefetching: false,
     reload: jest.fn(),
@@ -173,6 +175,48 @@ describe('BoardView parent chip (finding 2c)', () => {
 
     await screen.findByText('CW-1');
     expect(screen.queryByText('↳')).not.toBeInTheDocument();
+  });
+});
+
+describe('BoardView same-group nesting (finding 2e)', () => {
+  it('indents a nested child card and marks its connector glyph decorative', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent' });
+    const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [parent, child] }];
+    const nestedChildIds = new Set(['child']);
+
+    render(
+      <BoardView
+        view={fakeView({ items: [parent, child], groups, nestedChildIds })}
+        projectId="proj-1"
+        onOpenItem={jest.fn()}
+      />,
+    );
+
+    const childCard = (await screen.findByText('CW-2')).closest('button') as HTMLElement;
+    expect(childCard.className).toContain('ml-3');
+    const glyph = screen.getByText('↳');
+    expect(glyph).toHaveAttribute('aria-hidden', 'true');
+
+    // No separate "Parent" chip when nested — the indent is the pointer.
+    expect(screen.queryByText('Parent CW-1', { exact: false })).not.toBeInTheDocument();
+  });
+
+  it('does not indent a card whose parent is in a different group (no entry in nestedChildIds)', async () => {
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent' });
+    const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [child] }];
+    const parentById = new Map([['child', ticket({ id: 'parent', identifier: 'CW-1' })]]);
+
+    render(
+      <BoardView
+        view={fakeView({ items: [child], groups, parentById })}
+        projectId="proj-1"
+        onOpenItem={jest.fn()}
+      />,
+    );
+
+    const childCard = (await screen.findByText('CW-2')).closest('button') as HTMLElement;
+    expect(childCard.className).not.toContain('ml-3');
   });
 });
 

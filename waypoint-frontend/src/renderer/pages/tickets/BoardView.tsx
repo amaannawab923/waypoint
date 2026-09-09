@@ -253,6 +253,11 @@ export default function BoardView({
               const { total: subTotal, done: subDone } = subItemStats(item);
               const agentAssignment = primaryAgentAssignment(item);
               const parent = view.parentById.get(item.id);
+              // Finding 2e: only indented when nested directly under its
+              // parent in THIS column/group (view.nestedChildIds) — a card
+              // whose parent landed in a different group keeps 2c's parent
+              // chip as the only pointer instead.
+              const isNested = view.nestedChildIds.has(item.id);
               return (
                 <button
                   key={item.id}
@@ -298,6 +303,7 @@ export default function BoardView({
                   className={clsx(
                     'flex flex-col gap-2 rounded-[var(--radius-sm)] border border-border bg-surface p-3 text-left text-sm shadow-sm hover:border-border-strong',
                     item.priority !== 'none' && 'border-l-2',
+                    isNested && 'ml-3',
                     draggingId === item.id && 'opacity-50',
                     dragOverCard?.id === item.id &&
                       dragOverCard.position === 'before' &&
@@ -313,6 +319,7 @@ export default function BoardView({
                   }
                 >
                   <span className="font-mono text-xs text-text-muted">
+                    {isNested && <span aria-hidden="true">↳ </span>}
                     {item.identifier}
                   </span>
                   <span className="line-clamp-2 text-text">{item.title}</span>
@@ -350,7 +357,7 @@ export default function BoardView({
                       </Badge>
                     )}
                   </div>
-                  {(subTotal > 0 || Boolean(parent) || item.linkCount > 0) && (
+                  {(subTotal > 0 || Boolean(parent && !isNested) || item.linkCount > 0) && (
                     <div className="flex flex-wrap items-center gap-1.5">
                       {subTotal > 0 && (
                         <span
@@ -362,7 +369,10 @@ export default function BoardView({
                           </Badge>
                         </span>
                       )}
-                      {parent && (
+                      {/* Finding 2e's indent already points at the parent
+                          visually when they share a group — this chip is
+                          only needed when they don't (isNested false). */}
+                      {parent && !isNested && (
                         <span title={`Parent ${parent.identifier}`}>
                           <Badge tone="neutral">
                             <span aria-hidden="true">↳</span>
