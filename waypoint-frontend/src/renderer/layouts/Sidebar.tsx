@@ -5,7 +5,7 @@ import { useAsync } from '@/lib/useAsync';
 import {
   getWorkspace,
   listProjects,
-  getProposalCounts,
+  listReviewQueue,
   listNotifications,
   listDraftTickets,
   detectLocalClaudeCode,
@@ -15,6 +15,7 @@ import {
   upsertProjects,
   useAllProjects,
 } from '@/lib/projectsStore';
+import { upsertProposals, usePendingProposalCount } from '@/lib/proposalStore';
 import { useLoadedJiraConnection } from '@/lib/jiraStore';
 import { MY_JIRA_ENABLED } from '@/lib/featureFlags';
 import type { Project } from '@/types/entities';
@@ -314,7 +315,28 @@ export function Sidebar() {
   }, []);
   const projects = useAllProjects();
   const { data: workspace } = useAsync(() => getWorkspace(), []);
-  const { data: proposalCounts } = useAsync(() => getProposalCounts(), []);
+  // Seeds the shared proposalStore with the workspace-wide 'proposed' queue
+  // once on mount — the same fetch useReviewQueue makes for the Review
+  // screen's own 'proposed' segment (lib/useReviewQueue.ts), capped at the
+  // backend's own MAX_REVIEW_QUEUE_LIMIT (proposals.service.ts) rather than
+  // its default page size, since this seed's only job is to make the count
+  // correct, not to page through results — then reads the badge count live
+  // off that store via usePendingProposalCount below.
+  // ROAD-13: this used to be a one-shot `getProposalCounts()` whose result
+  // never changed after mount, so the badge froze at whatever the count was
+  // at app launch. Seeding the store instead of local state means the badge
+  // now updates immediately on every approve/reject/new-proposal upsert from
+  // ANY mounted surface (Copilot panel, Review screen, ticket drawer) with
+  // no refetch of its own, matching how those surfaces already read the
+  // store live.
+  useAsync(async () => {
+    const { proposals } = await listReviewQueue({
+      status: 'proposed',
+      limit: 100,
+    });
+    upsertProposals(proposals);
+  }, []);
+  const pendingProposalCount = usePendingProposalCount();
   const { data: notifications } = useAsync(() => listNotifications(), []);
   const { data: drafts } = useAsync(() => listDraftTickets(), []);
   const [createOpen, setCreateOpen] = useState(false);
@@ -387,7 +409,7 @@ export function Sidebar() {
         <NavLink to="/review" className={navLinkClass}>
           <IconReview size={15} />
           Review
-          <AlertBadge count={proposalCounts?.proposed ?? 0} />
+          <AlertBadge count={pendingProposalCount} />
         </NavLink>
       </nav>
 
