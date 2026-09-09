@@ -7,14 +7,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 vi.mock('../db/client.js', () => ({ db: {} }));
 vi.mock('../services/sprints.service.js');
 vi.mock('../services/tickets.service.js');
-vi.mock('../services/states.service.js');
 vi.mock('../lib/actorNames.js');
 
 const sprintsService = await import('../services/sprints.service.js');
 const ticketsService = await import('../services/tickets.service.js');
-const statesService = await import('../services/states.service.js');
 const { resolveActorNames } = await import('../lib/actorNames.js');
-const { resolveStateNames } = statesService;
 const { listSprintsHandler, getSprintHandler } = await import('./sprintTools.js');
 
 function parseJsonContent(result: { content: { type: string; text: string }[] }) {
@@ -34,8 +31,7 @@ const SPRINT = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(ticketsService.listTicketsByFilter).mockResolvedValue([]);
-  vi.mocked(resolveStateNames).mockResolvedValue(new Map());
+  vi.mocked(ticketsService.countTicketsBySprintIds).mockResolvedValue(new Map());
   vi.mocked(resolveActorNames).mockResolvedValue(new Map());
   // Fixed "now" so daysLeft — computed server-side precisely so the model
   // never has to guess today's date itself (see sprintTools.ts's own
@@ -51,22 +47,32 @@ afterEach(() => {
 });
 
 describe('listSprintsHandler', () => {
-  it('calls listAllSprints when no projectId is given', async () => {
+  it('calls listAllSprints with limit + 1 when no projectId is given', async () => {
     vi.mocked(sprintsService.listAllSprints).mockResolvedValue([SPRINT]);
 
     await listSprintsHandler({});
 
-    expect(sprintsService.listAllSprints).toHaveBeenCalled();
+    // DEFAULT_LIST_LIMIT (50) + 1 — see ticketTools.ts's own page()/
+    // resolveLimit() convention, reused here for exactly this reason.
+    expect(sprintsService.listAllSprints).toHaveBeenCalledWith(51);
     expect(sprintsService.listSprints).not.toHaveBeenCalled();
   });
 
-  it('calls listSprints(projectId) when a projectId is given', async () => {
+  it('calls listSprints(projectId, limit + 1) when a projectId is given', async () => {
     vi.mocked(sprintsService.listSprints).mockResolvedValue([SPRINT]);
 
     await listSprintsHandler({ projectId: 'proj-1' });
 
-    expect(sprintsService.listSprints).toHaveBeenCalledWith('proj-1');
+    expect(sprintsService.listSprints).toHaveBeenCalledWith('proj-1', 51);
     expect(sprintsService.listAllSprints).not.toHaveBeenCalled();
+  });
+
+  it('respects an explicit limit, requesting limit + 1 rows', async () => {
+    vi.mocked(sprintsService.listAllSprints).mockResolvedValue([SPRINT]);
+
+    await listSprintsHandler({ limit: 5 });
+
+    expect(sprintsService.listAllSprints).toHaveBeenCalledWith(6);
   });
 
   it('returns a summary with dates, lead, and members for each sprint — this is the tool that lets Copilot see sprints exist at all', async () => {
@@ -75,22 +81,25 @@ describe('listSprintsHandler', () => {
 
     const result = await listSprintsHandler({});
 
-    expect(parseJsonContent(result)).toEqual([
-      {
-        id: 'sp-1',
-        name: 'Sprint 12',
-        description: 'Auth cleanup',
-        projectId: 'proj-1',
-        startDate: '2026-08-25',
-        endDate: '2026-09-08',
-        daysLeft: 7,
-        leadId: 'mem-1',
-        leadName: 'Priya',
-        memberIds: ['mem-1', 'mem-2'],
-        ticketCount: 0,
-        doneCount: 0,
-      },
-    ]);
+    expect(parseJsonContent(result)).toEqual({
+      items: [
+        {
+          id: 'sp-1',
+          name: 'Sprint 12',
+          description: 'Auth cleanup',
+          projectId: 'proj-1',
+          startDate: '2026-08-25',
+          endDate: '2026-09-08',
+          daysLeft: 7,
+          leadId: 'mem-1',
+          leadName: 'Priya',
+          memberIds: ['mem-1', 'mem-2'],
+          ticketCount: 0,
+          doneCount: 0,
+        },
+      ],
+      truncated: false,
+    });
   });
 
   it('computes daysLeft server-side rather than handing the model raw dates to subtract itself', async () => {
@@ -100,7 +109,8 @@ describe('listSprintsHandler', () => {
       { ...SPRINT, id: 'sp-past', endDate: '2026-08-20' },
     ]);
 
-    const [future, today, past] = parseJsonContent(await listSprintsHandler({}));
+    const { items } = parseJsonContent(await listSprintsHandler({}));
+    const [future, today, past] = items;
 
     expect(future.daysLeft).toBe(9);
     expect(today.daysLeft).toBe(0);
@@ -112,33 +122,76 @@ describe('listSprintsHandler', () => {
     vi.mocked(sprintsService.listAllSprints).mockResolvedValue([SPRINT, { ...SPRINT, id: 'sp-2', leadId: null }]);
     vi.mocked(resolveActorNames).mockResolvedValue(new Map());
 
-    const [withLead, withoutLead] = parseJsonContent(await listSprintsHandler({}));
+    const { items } = parseJsonContent(await listSprintsHandler({}));
+    const [withLead, withoutLead] = items;
 
     expect(withLead.leadName).toBe('mem-1');
     expect(withoutLead.leadName).toBeNull();
   });
 
-  it('fetches the sprint\'s tickets via listTicketsByFilter(sprintIds) and counts ticketCount/doneCount from resolved state groups', async () => {
-    vi.mocked(sprintsService.listAllSprints).mockResolvedValue([SPRINT]);
-    vi.mocked(ticketsService.listTicketsByFilter).mockResolvedValue([
-      { id: 'wi-1', stateId: 'st-done' },
-      { id: 'wi-2', stateId: 'st-progress' },
-      { id: 'wi-3', stateId: 'st-done' },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ] as any);
-    vi.mocked(resolveStateNames).mockResolvedValue(
+  it('resolves lead names in one batched call across every sprint on the page, not one call per sprint', async () => {
+    vi.mocked(sprintsService.listAllSprints).mockResolvedValue([
+      SPRINT,
+      { ...SPRINT, id: 'sp-2', leadId: 'mem-2' },
+      { ...SPRINT, id: 'sp-3', leadId: null },
+    ]);
+
+    await listSprintsHandler({});
+
+    expect(resolveActorNames).toHaveBeenCalledTimes(1);
+    expect(resolveActorNames).toHaveBeenCalledWith(['mem-1', 'mem-2']);
+  });
+
+  it('gets ticketCount/doneCount from a single batched countTicketsBySprintIds call, not per-sprint materialization', async () => {
+    vi.mocked(sprintsService.listAllSprints).mockResolvedValue([SPRINT, { ...SPRINT, id: 'sp-2', leadId: null }]);
+    vi.mocked(ticketsService.countTicketsBySprintIds).mockResolvedValue(
       new Map([
-        ['st-done', { name: 'Done', group: 'completed' }],
-        ['st-progress', { name: 'In Progress', group: 'started' }],
+        ['sp-1', { total: 3, done: 2 }],
+        ['sp-2', { total: 1, done: 0 }],
       ]),
     );
 
     const result = await listSprintsHandler({});
 
-    expect(ticketsService.listTicketsByFilter).toHaveBeenCalledWith({ sprintIds: ['sp-1'] });
-    const parsed = parseJsonContent(result)[0];
-    expect(parsed.ticketCount).toBe(3);
-    expect(parsed.doneCount).toBe(2);
+    expect(ticketsService.countTicketsBySprintIds).toHaveBeenCalledTimes(1);
+    expect(ticketsService.countTicketsBySprintIds).toHaveBeenCalledWith(['sp-1', 'sp-2']);
+    const { items } = parseJsonContent(result);
+    expect(items[0].ticketCount).toBe(3);
+    expect(items[0].doneCount).toBe(2);
+    expect(items[1].ticketCount).toBe(1);
+    expect(items[1].doneCount).toBe(0);
+  });
+
+  it('reports 0/0 for a sprint absent from the counts map, rather than throwing', async () => {
+    vi.mocked(sprintsService.listAllSprints).mockResolvedValue([SPRINT]);
+    vi.mocked(ticketsService.countTicketsBySprintIds).mockResolvedValue(new Map());
+
+    const { items } = parseJsonContent(await listSprintsHandler({}));
+
+    expect(items[0].ticketCount).toBe(0);
+    expect(items[0].doneCount).toBe(0);
+  });
+
+  // Same convention as ticketTools.ts's own list tools: the query layer
+  // fetches one row past the effective limit, and a genuinely full page is
+  // told apart from a truncated one by whether that extra row came back —
+  // not by counting every sprint in the workspace.
+  it('caps the page and reports truncated:true when more sprints exist than the limit', async () => {
+    const sprints = Array.from({ length: 51 }, (_, i) => ({ ...SPRINT, id: `sp-${i}` }));
+    vi.mocked(sprintsService.listAllSprints).mockResolvedValue(sprints);
+
+    const { items, truncated } = parseJsonContent(await listSprintsHandler({}));
+
+    expect(truncated).toBe(true);
+    expect(items).toHaveLength(50);
+  });
+
+  it('reports truncated:false when the result fits within the limit', async () => {
+    vi.mocked(sprintsService.listAllSprints).mockResolvedValue([SPRINT]);
+
+    const { truncated } = parseJsonContent(await listSprintsHandler({}));
+
+    expect(truncated).toBe(false);
   });
 });
 
@@ -173,5 +226,24 @@ describe('getSprintHandler', () => {
       ticketCount: 0,
       doneCount: 0,
     });
+  });
+
+  // The regression this whole ticket exists to fix, exercised end-to-end
+  // through the handler: a sprint with 2 done tickets and 3 not-done ones
+  // (5 total) must still report ticketCount:5, doneCount:2 now that the
+  // count comes from a real COUNT(*) (ticketsService.countTicketsBySprintIds)
+  // instead of materializing every ticket row and filtering/counting in JS.
+  it('reports correct ticketCount/doneCount for a sprint with 2 done and 3 not-done tickets', async () => {
+    vi.mocked(sprintsService.getSprint).mockResolvedValue(SPRINT);
+    vi.mocked(ticketsService.countTicketsBySprintIds).mockResolvedValue(
+      new Map([['sp-1', { total: 5, done: 2 }]]),
+    );
+
+    const result = await getSprintHandler({ id: 'sp-1' });
+
+    expect(ticketsService.countTicketsBySprintIds).toHaveBeenCalledWith(['sp-1']);
+    const parsed = parseJsonContent(result);
+    expect(parsed.ticketCount).toBe(5);
+    expect(parsed.doneCount).toBe(2);
   });
 });

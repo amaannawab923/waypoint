@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // not real Postgres filtering behavior.
 function chainable(resolvedValue: unknown) {
   const chain: Record<string, unknown> = {};
-  const methods = ['from', 'where', 'orderBy', 'limit', 'innerJoin'];
+  const methods = ['from', 'where', 'orderBy', 'limit', 'innerJoin', 'groupBy'];
   for (const method of methods) {
     chain[method] = vi.fn(() => chain);
   }
@@ -35,8 +35,14 @@ vi.mock('drizzle-orm', async (importOriginal) => {
 });
 
 const { tickets, ticketAssignees, ticketLabels, ticketStates } = await import('../db/schema/index.js');
-const { searchTickets, listAllTickets, listTickets, listTicketsByFilter, buildTypedFilterConditions } =
-  await import('./tickets.service.js');
+const {
+  searchTickets,
+  listAllTickets,
+  listTickets,
+  listTicketsByFilter,
+  buildTypedFilterConditions,
+  countTicketsBySprintIds,
+} = await import('./tickets.service.js');
 const { eq, and, or, ilike, lte, gte, inArray, notInArray } = await import('drizzle-orm');
 
 beforeEach(() => {
@@ -407,5 +413,56 @@ describe('listTicketsByFilter', () => {
     expect(inArray).toHaveBeenCalledWith(tickets.stateId, ['st-1']);
     expect(mainChain.orderBy).toHaveBeenCalled();
     expect(result).toEqual([{ id: 'wi-1', assigneeIds: [], labelIds: [], links: [] }]);
+  });
+});
+
+describe('countTicketsBySprintIds', () => {
+  it('returns an empty map for no sprint ids, without querying', async () => {
+    const result = await countTicketsBySprintIds([]);
+
+    expect(result.size).toBe(0);
+    expect(db.select).not.toHaveBeenCalled();
+  });
+
+  it('runs one grouped query joined on ticket_states, filtered to non-draft tickets in the given sprints', async () => {
+    const chain = chainable([]);
+    db.select.mockReturnValueOnce(chain);
+
+    await countTicketsBySprintIds(['sp-1', 'sp-2']);
+
+    expect(chain.from).toHaveBeenCalledWith(tickets);
+    expect(chain.innerJoin).toHaveBeenCalled();
+    expect(inArray).toHaveBeenCalledWith(tickets.sprintId, ['sp-1', 'sp-2']);
+    expect(eq).toHaveBeenCalledWith(tickets.isDraft, false);
+    expect(chain.groupBy).toHaveBeenCalledWith(tickets.sprintId);
+  });
+
+  // The regression this function exists to fix: list_sprints/get_sprint
+  // (src/mcp/sprintTools.ts) used to materialize every ticket in a sprint
+  // via listTicketsByFilter and count in JS just to get these same two
+  // numbers. A sprint with 2 done tickets and 3 not-done ones (5 total)
+  // must still come out as { total: 5, done: 2 } now that the count is a
+  // real COUNT(*)/FILTER the database runs, grouped across every sprint id
+  // requested in one query rather than one query per sprint.
+  it('maps each grouped row to { total, done } keyed by sprintId', async () => {
+    db.select.mockReturnValueOnce(
+      chainable([
+        { sprintId: 'sp-1', total: 5, done: 2 },
+        { sprintId: 'sp-2', total: 1, done: 1 },
+      ]),
+    );
+
+    const result = await countTicketsBySprintIds(['sp-1', 'sp-2']);
+
+    expect(result.get('sp-1')).toEqual({ total: 5, done: 2 });
+    expect(result.get('sp-2')).toEqual({ total: 1, done: 1 });
+  });
+
+  it('omits a sprint id with no matching rows from the map, rather than a zeroed entry', async () => {
+    db.select.mockReturnValueOnce(chainable([]));
+
+    const result = await countTicketsBySprintIds(['sp-empty']);
+
+    expect(result.has('sp-empty')).toBe(false);
   });
 });

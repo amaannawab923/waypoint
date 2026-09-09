@@ -23,6 +23,9 @@ import {
   jsonResult,
   notFoundResult,
   withErrorSafetyNet,
+  LIMIT_SCHEMA,
+  resolveLimit,
+  page,
 } from './ticketTools.js';
 
 // Same per-request shape (and same meaning of null) the read tools use — see
@@ -495,9 +498,22 @@ export async function proposeCreateTicketHandler(
 // read set had no way to list projects). Projected to id/name/identifier —
 // a project row carries config (automations, gradients, lead) that's noise
 // in the model's context.
-export async function listProjectsHandler() {
-  const projects = await projectsService.listProjects();
-  return jsonResult(projects.map(({ id, name, identifier }) => ({ id, name, identifier })));
+//
+// Naturally bounded by however many projects exist in the workspace — lower
+// severity than list_sprints' own unbounded-fan-out problem — but capped the
+// same way for consistency with every other list-style MCP tool, and because
+// projectsService.listProjects() is not cheap per row: each project's
+// primitiveCounts (sprints/workstreams/views/docs/requests) comes from five
+// grouped-count subqueries joined onto the projects table, work an unbounded
+// caller has no way to avoid paying for on a workspace with many projects.
+export async function listProjectsHandler({ limit }: { limit?: number } = {}) {
+  const effectiveLimit = resolveLimit(limit);
+  const rows = await projectsService.listProjects(effectiveLimit + 1);
+  const { items, truncated } = page(rows, effectiveLimit);
+  return jsonResult({
+    items: items.map(({ id, name, identifier }) => ({ id, name, identifier })),
+    truncated,
+  });
 }
 
 // Every propose_* description repeats the same contract on purpose — the
@@ -635,8 +651,9 @@ export function registerProposalTools(
     'list_projects',
     {
       description:
-        'List the projects in the workspace (id, name, identifier). Use this to find a projectId for propose_create_ticket or to scope other tools.',
-      inputSchema: {},
+        'List the projects in the workspace (id, name, identifier). Use this to find a projectId for propose_create_ticket or to scope other tools. ' +
+        'Results are capped (see limit) — check the truncated flag and narrow the query if it comes back true.',
+      inputSchema: { limit: LIMIT_SCHEMA },
     },
     withErrorSafetyNet('list_projects', listProjectsHandler),
   );

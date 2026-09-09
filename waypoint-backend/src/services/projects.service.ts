@@ -125,7 +125,7 @@ async function withPrimitiveCounts(entity: ProjectEntity, executor: Tx | typeof 
 // in this file's existing Drizzle query-builder style rather than a raw SQL
 // escape hatch — there is no existing multi-join precedent elsewhere in
 // this file or tickets.service.ts to match instead.
-async function selectProjectsWithCounts(where: SQL | undefined): Promise<ProjectWithCounts[]> {
+async function selectProjectsWithCounts(where: SQL | undefined, limit?: number): Promise<ProjectWithCounts[]> {
   // Each subquery's count column gets its own name (not a shared "n") —
   // Drizzle's outer SELECT list doesn't qualify these with their subquery
   // alias, so five identically-named columns from five joined subqueries
@@ -170,7 +170,7 @@ async function selectProjectsWithCounts(where: SQL | undefined): Promise<Project
   // below handles; wrapping in sql`coalesce(...)` doesn't carry the
   // subquery's alias into the fragment, which is its own path to the same
   // ambiguous-column error.
-  const rows = await db
+  const baseQuery = db
     .select({
       ...getTableColumns(projects),
       sprintsCount: sprintsSub.n,
@@ -188,6 +188,12 @@ async function selectProjectsWithCounts(where: SQL | undefined): Promise<Project
     .leftJoin(requestsSub, eq(requestsSub.projectId, projects.id))
     .leftJoin(requestsPendingSub, eq(requestsPendingSub.projectId, projects.id))
     .where(where);
+  // Not applied as a post-fetch slice — see tickets.service.ts's
+  // listTickets/listAllTickets for the same convention: the caller
+  // (list_projects in proposalTools.ts) requests effectiveLimit + 1 so it
+  // can tell a truncated result apart from one that happened to end exactly
+  // at the cap.
+  const rows = limit ? await baseQuery.limit(limit) : await baseQuery;
 
   const bareRows: ProjectRow[] = rows.map(
     ({
@@ -222,8 +228,8 @@ const DEFAULT_STATE_TEMPLATE = [
   { name: 'Cancelled', group: 'cancelled' as const, color: '#b7332a', sortOrder: 4 },
 ];
 
-export async function listProjects(): Promise<ProjectWithCounts[]> {
-  return selectProjectsWithCounts(isNull(projects.archivedAt));
+export async function listProjects(limit?: number): Promise<ProjectWithCounts[]> {
+  return selectProjectsWithCounts(isNull(projects.archivedAt), limit);
 }
 
 export async function listArchivedProjects(): Promise<ProjectWithCounts[]> {

@@ -15,13 +15,20 @@ async function attachMemberIds<T extends { id: string }>(rows: T[]): Promise<(T 
   return rows.map((r) => ({ ...r, memberIds: bySprint.get(r.id) ?? [] }));
 }
 
-export async function listSprints(projectId: string) {
-  const rows = await db.select().from(sprints).where(eq(sprints.projectId, projectId));
+// `limit`, when given, is passed straight to the query's own .limit() — not
+// applied as a post-fetch slice — matching tickets.service.ts's
+// listTickets/listAllTickets convention. The MCP list_sprints tool
+// (src/mcp/sprintTools.ts) requests effectiveLimit + 1 so it can tell a
+// truncated result apart from one that happened to end exactly at the cap.
+export async function listSprints(projectId: string, limit?: number) {
+  const query = db.select().from(sprints).where(eq(sprints.projectId, projectId));
+  const rows = limit ? await query.limit(limit) : await query;
   return attachMemberIds(rows);
 }
 
-export async function listAllSprints() {
-  const rows = await db.select().from(sprints);
+export async function listAllSprints(limit?: number) {
+  const query = db.select().from(sprints);
+  const rows = limit ? await query.limit(limit) : await query;
   return attachMemberIds(rows);
 }
 

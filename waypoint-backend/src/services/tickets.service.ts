@@ -331,6 +331,41 @@ export async function searchTickets(query: string, projectId?: string, limit?: n
   return attachRelations(rows);
 }
 
+// Batched sibling to listTicketsByFilter({ sprintIds: [id] }), for callers
+// that only ever wanted two integers (a total and a "done" count) out of a
+// sprint's tickets — the MCP list_sprints/get_sprint tools
+// (src/mcp/sprintTools.ts) used to call listTicketsByFilter per sprint and
+// then filter the returned rows by resolved state group in JS, which
+// materialized every ticket row (with attachRelations' labels/assignees/
+// links joins) plus a resolveStateNames call, all just to run
+// `.length`/`.filter(...).length` on the result. A single grouped COUNT(*)
+// (with a FILTER for the "completed" state group) across every sprint being
+// summarized replaces all of that with one query whose cost is
+// O(sprints-being-summarized), not O(tickets-in-those-sprints). Drafts are
+// excluded the same way listTicketsByFilter's default (includeDrafts:
+// false) already did, so a sprint's draft tickets don't inflate its counts.
+export interface SprintTicketCounts {
+  total: number;
+  done: number;
+}
+
+export async function countTicketsBySprintIds(sprintIds: string[]): Promise<Map<string, SprintTicketCounts>> {
+  if (sprintIds.length === 0) return new Map();
+  const rows = await db
+    .select({
+      sprintId: tickets.sprintId,
+      total: sql<number>`count(*)::int`,
+      done: sql<number>`count(*) filter (where ${ticketStates.group} = 'completed')::int`,
+    })
+    .from(tickets)
+    .innerJoin(ticketStates, eq(ticketStates.id, tickets.stateId))
+    .where(and(inArray(tickets.sprintId, sprintIds), eq(tickets.isDraft, false)))
+    .groupBy(tickets.sprintId);
+  return new Map(
+    rows.filter((row): row is typeof row & { sprintId: string } => row.sprintId !== null).map((row) => [row.sprintId, { total: row.total, done: row.done }]),
+  );
+}
+
 export async function listDraftTickets() {
   const rows = await db
     .select()
