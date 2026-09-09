@@ -648,6 +648,12 @@ export function TicketDetailContent({
   const subItemsList = subItems ?? [];
   const doneSubItems = subItemsList.filter((c) => statesById.get(c.stateId)?.group === 'completed').length;
   const subItemsProgress = subItemsList.length > 0 ? Math.round((doneSubItems / subItemsList.length) * 100) : 0;
+  // Finding 7c: sum of estimatePoints across this ticket's own subItems —
+  // already fetched for the list below, no new request. Only shown when at
+  // least one subtask actually carries a point value, so a plain checklist
+  // of unestimated subtasks doesn't grow a misleading "· 0 pts" suffix.
+  const subItemsWithPoints = subItemsList.filter((c) => c.estimatePoints !== null);
+  const subItemsPointsTotal = subItemsWithPoints.reduce((sum, c) => sum + (c.estimatePoints ?? 0), 0);
 
   async function patchItem(patch: Partial<Ticket>) {
     if (!item) return;
@@ -944,6 +950,7 @@ export function TicketDetailContent({
           <div className="mt-6 px-6 md:px-8">
             <h3 className="mb-2 font-display text-sm font-medium text-text">
               Subtasks ({subItems.length})
+              {subItemsWithPoints.length > 0 && ` · ${subItemsPointsTotal} pts`}
             </h3>
             <div className="mb-2 flex items-center gap-2">
               <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-2">

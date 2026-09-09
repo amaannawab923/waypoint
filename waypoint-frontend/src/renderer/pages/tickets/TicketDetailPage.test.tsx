@@ -205,6 +205,7 @@ function mount(
   agents: Agent[] = [],
   proposals: ProposalView[] = [],
   item: Ticket = ITEM,
+  subItemsList: Ticket[] = [],
 ) {
   jest
     .mocked(useProject)
@@ -218,7 +219,7 @@ function mount(
   jest.mocked(getCurrentUser).mockResolvedValue(MEMBER);
   jest.mocked(listAgents).mockResolvedValue(agents);
   jest.mocked(listAgentAssignments).mockResolvedValue([]);
-  jest.mocked(listSubItems).mockResolvedValue([]);
+  jest.mocked(listSubItems).mockResolvedValue(subItemsList);
   jest.mocked(listTickets).mockResolvedValue([]);
   jest.mocked(listActivity).mockResolvedValue([]);
   jest.mocked(listComments).mockResolvedValue(comments);
@@ -376,6 +377,57 @@ describe('TicketDetailPage → Story points field (finding 7a)', () => {
     await waitFor(() =>
       expect(updateTicket).toHaveBeenCalledWith('wi-1', { estimatePoints: null }),
     );
+  });
+});
+
+function subItem(overrides: Partial<Ticket> = {}): Ticket {
+  return { ...ITEM, id: 'sub-1', identifier: 'LAUNCH-4', title: 'Subtask', parentId: 'wi-1', ...overrides };
+}
+
+// Finding 7c: sums estimatePoints across a ticket's already-fetched
+// subItems, shown next to the existing Subtasks progress bar. Only the
+// ticket-detail roll-up is in scope here — no workspace-wide List/Board
+// epic-total roll-up.
+describe('TicketDetailPage → subtask points roll-up (finding 7c)', () => {
+  it('shows the summed points suffix when at least one subtask carries a point value', async () => {
+    mount(
+      [],
+      [],
+      [],
+      ITEM,
+      [subItem({ id: 's1', estimatePoints: 5 }), subItem({ id: 's2', estimatePoints: 8 })],
+    );
+
+    expect(await screen.findByText('Subtasks (2) · 13 pts')).toBeInTheDocument();
+  });
+
+  it('omits the suffix entirely when no subtask has a point value', async () => {
+    mount(
+      [],
+      [],
+      [],
+      ITEM,
+      [subItem({ id: 's1', estimatePoints: null }), subItem({ id: 's2', estimatePoints: null })],
+    );
+
+    expect(await screen.findByText('Subtasks (2)')).toBeInTheDocument();
+    expect(screen.queryByText(/pts/)).not.toBeInTheDocument();
+  });
+
+  it('sums only the subtasks that carry a point value, ignoring unestimated ones', async () => {
+    mount(
+      [],
+      [],
+      [],
+      ITEM,
+      [
+        subItem({ id: 's1', estimatePoints: 3 }),
+        subItem({ id: 's2', estimatePoints: null }),
+        subItem({ id: 's3', estimatePoints: 2.5 }),
+      ],
+    );
+
+    expect(await screen.findByText('Subtasks (3) · 5.5 pts')).toBeInTheDocument();
   });
 });
 
