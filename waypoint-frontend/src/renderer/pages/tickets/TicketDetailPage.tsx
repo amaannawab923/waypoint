@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { clsx } from 'clsx';
 import {
@@ -64,6 +64,12 @@ import {
   upsertProposals,
   useAllProposals,
 } from '@/lib/proposalStore';
+
+// Cap for the description textarea's auto-grow (finding 1) — past this it
+// becomes a normal scrollable region (thin-scroll, the same capped-scroll
+// utility every other bounded container in this app uses, e.g. TicketDrawer)
+// instead of growing the page indefinitely.
+const DESCRIPTION_MAX_HEIGHT = 400;
 
 const TRIGGER_CLASS =
   'flex h-8 w-full items-center gap-1.5 rounded-[var(--radius-sm)] px-2 text-sm text-text hover:bg-surface-2';
@@ -406,6 +412,14 @@ export function TicketDetailContent({
   const [createSubOpen, setCreateSubOpen] = useState(false);
   // Stable focus target for handlePostComment below — see its own comment.
   const commentFormRef = useRef<HTMLDivElement>(null);
+  // Finding 1: the description field used to be a fixed rows={4} textarea
+  // that silently clipped anything past 4 lines, with only a manual
+  // resize-y drag handle (easy to miss) as the way out. This measures the
+  // element's own scrollHeight and grows it to fit on mount and on every
+  // content change, capped at DESCRIPTION_MAX_HEIGHT — past that the
+  // textarea itself scrolls (see its className below) instead of growing
+  // forever.
+  const descTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (item) {
@@ -415,6 +429,16 @@ export function TicketDetailContent({
     // Only reset drafts when a *different* item loads, not on every reload after a save.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item?.id]);
+
+  useLayoutEffect(() => {
+    const el = descTextareaRef.current;
+    if (!el) return;
+    // Reset to 'auto' first so scrollHeight reports the content's real
+    // height rather than whatever height was previously forced — otherwise
+    // deleting text would never shrink the textarea back down.
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, DESCRIPTION_MAX_HEIGHT)}px`;
+  }, [descDraft]);
 
   // Completes the "+ Create new agent" round trip: land back on this ticket
   // with the newly created agent auto-assigned, instead of leaving the user
@@ -841,12 +865,13 @@ export function TicketDetailContent({
         {/* Description */}
         <div className="mt-2 px-6 md:px-8">
           <textarea
+            ref={descTextareaRef}
             value={descDraft}
             onChange={(e) => setDescDraft(e.target.value)}
             onBlur={saveDescription}
             placeholder="Add description…"
-            rows={4}
-            className="-mx-2 w-full resize-y rounded-[var(--radius-sm)] border border-transparent bg-transparent px-2 py-1.5 text-sm text-text-secondary outline-none focus:border-border-strong focus:bg-surface-2"
+            className="thin-scroll -mx-2 w-full resize-none overflow-y-auto rounded-[var(--radius-sm)] border border-transparent bg-transparent px-2 py-1.5 text-sm text-text-secondary outline-none focus:border-border-strong focus:bg-surface-2"
+            style={{ maxHeight: DESCRIPTION_MAX_HEIGHT }}
           />
         </div>
 

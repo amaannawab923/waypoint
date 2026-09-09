@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom';
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import {
   addComment,
@@ -237,6 +237,56 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+});
+
+// Finding 1: the description field used to be a fixed rows={4} textarea
+// that silently clipped anything past 4 lines. It now measures its own
+// scrollHeight and grows to fit, capped at 400px.
+describe('TicketDetailPage → description auto-grow (finding 1)', () => {
+  it('is no longer a fixed rows={4} textarea', async () => {
+    mount([]);
+
+    const textarea = (await screen.findByPlaceholderText(
+      'Add description…',
+    )) as HTMLTextAreaElement;
+    expect(textarea).not.toHaveAttribute('rows');
+  });
+
+  it('grows the textarea height to fit content, up to the 400px cap', async () => {
+    mount([]);
+
+    const textarea = (await screen.findByPlaceholderText(
+      'Add description…',
+    )) as HTMLTextAreaElement;
+    Object.defineProperty(textarea, 'scrollHeight', {
+      configurable: true,
+      value: 250,
+    });
+
+    await act(async () => {
+      fireEvent.change(textarea, { target: { value: 'line\n'.repeat(20) } });
+    });
+
+    expect(textarea.style.height).toBe('250px');
+  });
+
+  it('caps the grown height at 400px so it scrolls instead of growing forever', async () => {
+    mount([]);
+
+    const textarea = (await screen.findByPlaceholderText(
+      'Add description…',
+    )) as HTMLTextAreaElement;
+    Object.defineProperty(textarea, 'scrollHeight', {
+      configurable: true,
+      value: 900,
+    });
+
+    await act(async () => {
+      fireEvent.change(textarea, { target: { value: 'line\n'.repeat(100) } });
+    });
+
+    expect(textarea.style.height).toBe('400px');
+  });
 });
 
 describe('TicketDetailPage → comment rendering (stored XSS fix)', () => {
