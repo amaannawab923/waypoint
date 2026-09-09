@@ -316,6 +316,9 @@ export default function BoardView({
                     {item.identifier}
                   </span>
                   <span className="line-clamp-2 text-text">{item.title}</span>
+                  {item.description && (
+                    <span className="line-clamp-2 text-xs text-text-muted">{item.description}</span>
+                  )}
                   <div className="flex flex-wrap items-center gap-1.5">
                     {state && (
                       <span className="flex items-center gap-1 rounded-full bg-surface-2 px-1.5 py-0.5 text-xs text-text-secondary">

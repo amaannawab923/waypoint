@@ -568,9 +568,12 @@ export default function TicketList({
                         {item.identifier}
                       </span>
                       {state && <StateIcon state={state} />}
-                      <span className="flex-1 truncate text-text">
-                        {item.title}
-                      </span>
+                      <div className="min-w-0 flex-1">
+                        <span className="block truncate text-text">{item.title}</span>
+                        {item.description && (
+                          <span className="block truncate text-xs text-text-muted">{item.description}</span>
+                        )}
+                      </div>
                       {project && (
                         <span className="shrink-0 truncate text-xs text-text-muted">
                           {project.icon} {project.name}

@@ -267,6 +267,21 @@ describe('TicketList parent chip (finding 2c)', () => {
   });
 });
 
+describe('TicketList description preview (finding 4)', () => {
+  it('shows a truncated single-line description preview under the title when present', async () => {
+    await renderList([ticket({ id: 'a', identifier: 'CW-1', description: 'A short description' })]);
+
+    expect(await screen.findByText('A short description')).toBeInTheDocument();
+  });
+
+  it('renders no preview when the ticket has no description', async () => {
+    await renderList([ticket({ id: 'a', identifier: 'CW-1', description: '' })]);
+
+    await screen.findByText('CW-1');
+    expect(document.querySelectorAll('.text-text-muted.truncate').length).toBe(0);
+  });
+});
+
 describe('TicketList priority border (finding 5)', () => {
   it('gives a non-none priority row a colored left border', async () => {
     await renderList([ticket({ id: 'a', identifier: 'CW-1', priority: 'urgent' })]);

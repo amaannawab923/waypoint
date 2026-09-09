@@ -176,6 +176,27 @@ describe('BoardView parent chip (finding 2c)', () => {
   });
 });
 
+describe('BoardView description preview (finding 4)', () => {
+  it('shows a two-line-clamped description preview on the card when present', async () => {
+    const item = ticket({ id: 'a', identifier: 'CW-1', description: 'Cards need more context' });
+    const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [item] }];
+
+    render(<BoardView view={fakeView({ items: [item], groups })} projectId="proj-1" onOpenItem={jest.fn()} />);
+
+    expect(await screen.findByText('Cards need more context')).toBeInTheDocument();
+  });
+
+  it('renders no preview when the card has no description', async () => {
+    const item = ticket({ id: 'a', identifier: 'CW-1', description: '' });
+    const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [item] }];
+
+    render(<BoardView view={fakeView({ items: [item], groups })} projectId="proj-1" onOpenItem={jest.fn()} />);
+
+    await screen.findByText('CW-1');
+    expect(document.querySelectorAll('.line-clamp-2.text-text-muted').length).toBe(0);
+  });
+});
+
 describe('BoardView priority border (finding 5)', () => {
   it('gives a non-none priority card a colored left border', async () => {
     const item = ticket({ id: 'a', identifier: 'CW-1', priority: 'urgent' });
