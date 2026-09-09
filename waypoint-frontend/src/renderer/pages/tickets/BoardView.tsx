@@ -252,6 +252,7 @@ export default function BoardView({
                 .filter((l): l is NonNullable<typeof l> => Boolean(l));
               const { total: subTotal, done: subDone } = subItemStats(item);
               const agentAssignment = primaryAgentAssignment(item);
+              const parent = view.parentById.get(item.id);
               return (
                 <button
                   key={item.id}
@@ -340,15 +341,24 @@ export default function BoardView({
                       </Badge>
                     )}
                   </div>
-                  {(subTotal > 0 || item.linkCount > 0) && (
+                  {(subTotal > 0 || Boolean(parent) || item.linkCount > 0) && (
                     <div className="flex flex-wrap items-center gap-1.5">
                       {subTotal > 0 && (
                         <span
-                          title={`${subDone} of ${subTotal} sub-items done`}
+                          title={`Epic: ${subDone} of ${subTotal} sub-items done`}
                         >
-                          <Badge tone="neutral">
+                          <Badge tone="accent">
                             <ListChecks size={11} />
-                            {subDone}/{subTotal}
+                            Epic · {subDone}/{subTotal}
+                          </Badge>
+                        </span>
+                      )}
+                      {parent && (
+                        <span title={`Parent ${parent.identifier}`}>
+                          <Badge tone="neutral">
+                            <span aria-hidden="true">↳</span>
+                            <span className="sr-only">Parent</span>
+                            {parent.identifier}
                           </Badge>
                         </span>
                       )}

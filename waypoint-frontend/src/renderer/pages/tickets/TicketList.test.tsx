@@ -219,6 +219,54 @@ describe('TicketList count line', () => {
   });
 });
 
+describe('TicketList epic badge (finding 2b)', () => {
+  it('shows an accent-toned "Epic · done/total" badge for a ticket with sub-items', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent' });
+    await renderList([parent, child]);
+
+    const badge = screen.getByText('Epic · 0/1');
+    expect(badge.closest('span')?.className).toContain('bg-accent-soft-bg');
+  });
+
+  it('renders no badge at all for a plain ticket with zero sub-items', async () => {
+    await renderList([ticket({ id: 'a', identifier: 'CW-1' })]);
+
+    await screen.findByText('CW-1');
+    expect(screen.queryByText(/Epic ·/)).not.toBeInTheDocument();
+  });
+});
+
+describe('TicketList parent chip (finding 2c)', () => {
+  it("shows the parent's identifier on a child row", async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent' });
+    await renderList([parent, child]);
+
+    expect(screen.getByText('CW-1', { selector: 'span.font-mono' })).toBeInTheDocument();
+  });
+
+  it('hides the connector glyph from the accessibility tree, exposing "Parent <identifier>" as the accessible text', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'ROAD-2' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent' });
+    await renderList([parent, child]);
+
+    const glyph = screen.getByText('↳');
+    expect(glyph).toHaveAttribute('aria-hidden', 'true');
+
+    const chip = glyph.closest('span.inline-flex');
+    expect(chip).toHaveTextContent('Parent');
+    expect(chip).toHaveTextContent('ROAD-2');
+  });
+
+  it('renders no parent chip for a ticket with no parent', async () => {
+    await renderList([ticket({ id: 'a', identifier: 'CW-1', parentId: null })]);
+
+    await screen.findByText('CW-1');
+    expect(screen.queryByText('↳')).not.toBeInTheDocument();
+  });
+});
+
 describe('TicketList bulk select + bulk actions', () => {
   it('checking rows and choosing "Set priority" PATCHes every selected ticket, not a bulk endpoint', async () => {
     const fixture = [ticket({ id: 'a', identifier: 'CW-1' }), ticket({ id: 'b', identifier: 'CW-2' })];

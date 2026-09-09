@@ -528,6 +528,7 @@ export default function TicketList({
                 const { total: subTotal, done: subDone } = subItemStats(item);
                 const agentAssignment = primaryAgentAssignment(item);
                 const isFocused = focusId === item.id;
+                const parent = view.parentById.get(item.id);
                 return (
                   <div
                     key={item.id}
@@ -568,14 +569,23 @@ export default function TicketList({
                           {project.icon} {project.name}
                         </span>
                       )}
-                      <div className="flex shrink-0 items-center gap-1.5">
+                      <div className="flex flex-wrap shrink-0 items-center gap-1.5">
                         {subTotal > 0 && (
                           <span
-                            title={`${subDone} of ${subTotal} sub-items done`}
+                            title={`Epic: ${subDone} of ${subTotal} sub-items done`}
                           >
-                            <Badge tone="neutral">
+                            <Badge tone="accent">
                               <ListChecks size={11} />
-                              {subDone}/{subTotal}
+                              Epic · {subDone}/{subTotal}
+                            </Badge>
+                          </span>
+                        )}
+                        {parent && (
+                          <span title={`Parent ${parent.identifier}`}>
+                            <Badge tone="neutral">
+                              <span aria-hidden="true">↳</span>
+                              <span className="sr-only">Parent</span>
+                              {parent.identifier}
                             </Badge>
                           </span>
                         )}

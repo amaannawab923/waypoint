@@ -441,6 +441,26 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
     return map;
   }, [unfilteredItems, stateById]);
 
+  // Finding 2c: a child ticket's own parent, keyed by the CHILD's id —
+  // "alongside the existing subItemCountByParent map" per the same
+  // reasoning: sourced from `unfilteredItems` (not the filtered
+  // `items`/`allItems`), so a parent chip on a child row doesn't disappear
+  // just because the active filter narrowed the visible list. Needs no
+  // special-case handling for a parent later being cleared server-side
+  // (parentId is ON DELETE SET NULL) — this app has no realtime push, so a
+  // nulled parent is picked up automatically on the next reload, same as
+  // any other changed field.
+  const parentById = useMemo(() => {
+    const byId = new Map((unfilteredItems ?? []).map((t) => [t.id, t]));
+    const map = new Map<string, Ticket>();
+    for (const wi of unfilteredItems ?? []) {
+      if (!wi.parentId) continue;
+      const parent = byId.get(wi.parentId);
+      if (parent) map.set(wi.id, parent);
+    }
+    return map;
+  }, [unfilteredItems]);
+
   const groupedItems: TicketGroup[] = useMemo(() => {
     function build(
       key: string,
@@ -587,6 +607,7 @@ export function useTicketsView(options: TicketsViewOptions = {}) {
     items: resolvedItems,
     allItems: resolvedItems,
     subItemCountByParent,
+    parentById,
     loading,
     isRefetching,
     reload,

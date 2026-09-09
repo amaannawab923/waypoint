@@ -250,6 +250,43 @@ describe('useTicketsView subItemCountByParent (true totals regardless of the act
   });
 });
 
+describe('useTicketsView parentById (finding 2c)', () => {
+  it("maps a child ticket's id to its parent ticket, regardless of the active filter", async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1', priority: 'low' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent', priority: 'urgent' });
+    const all = [parent, child];
+
+    jest.mocked(listTickets).mockImplementation(async (_projectId, filter) => {
+      if (!filter?.priorities) return all;
+      return all.filter((t) => filter.priorities?.includes(t.priority));
+    });
+
+    const { result } = renderHook(() => useTicketsView({ projectId: 'proj-1' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.parentById.get('child')).toEqual(child.parentId ? parent : undefined);
+    expect(result.current.parentById.get('child')?.identifier).toBe('CW-1');
+
+    act(() => {
+      result.current.setFilters((f) => ({ ...f, priority: ['urgent'] }));
+    });
+    // The filtered `items` no longer includes the parent...
+    await waitFor(() => expect(result.current.items).toEqual([child]));
+    // ...but parentById still resolves it, since it's sourced from the
+    // unfiltered dataset, same as subItemCountByParent.
+    expect(result.current.parentById.get('child')?.identifier).toBe('CW-1');
+  });
+
+  it('has no entry for a parentless ticket', async () => {
+    jest.mocked(listTickets).mockResolvedValue([ticket({ id: 'a', parentId: null })]);
+
+    const { result } = renderHook(() => useTicketsView({ projectId: 'proj-1' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.parentById.has('a')).toBe(false);
+  });
+});
+
 describe('useTicketsView groupedItems totals the same as items (count-line invariant)', () => {
   // stateId matches the per-project state id the listStates mock above
   // generates (`st-${projectId}`) so 'state' grouping has somewhere real
