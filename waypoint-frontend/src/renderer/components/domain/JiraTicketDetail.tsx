@@ -61,6 +61,12 @@ import type {
 function formatRelativeTime(iso: string | null): string {
   if (iso === null) return 'Unknown';
   const diffMs = Date.now() - new Date(iso).getTime();
+  // A present-but-unparseable string (Date.parse -> NaN) is the same
+  // "unknown, not now" case as a genuinely missing one — without this,
+  // every `<` comparison below is false on NaN and it falls out the bottom
+  // as 'a while ago', silently claiming an elapsed time this app does not
+  // actually know, exactly what the null check above exists to avoid.
+  if (!Number.isFinite(diffMs)) return 'Unknown';
   const diffSec = Math.round(diffMs / 1000);
   if (diffSec < 45) return 'just now';
   const diffMin = Math.round(diffSec / 60);
