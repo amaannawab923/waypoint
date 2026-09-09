@@ -28,3 +28,76 @@ test('the packaged main process is not running in dev mode', async () => {
     await app.close();
   }
 });
+
+// Ticket UX pass, findings 2a/2e: covers the new ParentTicketPicker end to
+// end against the real backend — creating a ticket, opening the picker,
+// searching/selecting a parent, and seeing it render nested (not just a
+// parent-chip pointer) in the SAME session, no reload. Runs against the
+// real shared dev backend (localhost:14000), so both tickets use
+// timestamped markers rather than fixed titles.
+test('creates a subtask via the parent picker and shows it nested under its parent without a reload', async () => {
+  const { app, window } = await launchApp();
+  try {
+    await window.getByText('Tickets', { exact: true }).first().click();
+
+    const parentMarker = `e2e parent ${Date.now()}`;
+    const childMarker = `e2e child ${Date.now()}`;
+
+    // Both created through the same toolbar "Add ticket" button, with no
+    // column/group context — each falls back to the project's own default
+    // (first "unstarted") state, so they land in the SAME group under the
+    // default 'state' groupBy without depending on any pre-existing seed
+    // ticket's state.
+    await window.getByRole('button', { name: 'Add ticket' }).click();
+    await window.getByPlaceholder('Ticket title').fill(parentMarker);
+    await window.getByRole('button', { name: 'Create ticket' }).click();
+    await expect(
+      window.getByRole('button', { name: 'Create ticket' }),
+    ).toHaveCount(0);
+
+    await window.getByRole('button', { name: 'Add ticket' }).click();
+    await window.getByPlaceholder('Ticket title').fill(childMarker);
+    // Opens the new ParentTicketPicker and searches/selects through it —
+    // not a pre-filled defaultParentId (that's the separate "Add subtask"
+    // flow from the ticket detail page). A role-scoped locator, not
+    // getByText('Parent', { exact: true }) — that text also appears as
+    // sr-only content inside a ticket row's parent-chip (and, after M1, its
+    // nested-indent branch too), so a plain text locator could match a row
+    // rendered behind this modal instead of the modal's own trigger button.
+    await window.getByRole('button', { name: /Parent/ }).click();
+    // Scoped to the picker's own dialog (ParentTicketPicker renders
+    // role="dialog" aria-label="Set parent ticket" via useFloatingPanel),
+    // not the whole page: the parent ticket just created is, by this point,
+    // ALSO its own row in the ticket list sitting behind this modal, so an
+    // unscoped getByText(parentMarker) matches both that row and the
+    // picker's own option row — a real strict-mode failure caught by CI,
+    // not just a hypothetical one.
+    const parentPicker = window.getByRole('dialog', {
+      name: 'Set parent ticket',
+    });
+    await parentPicker.getByPlaceholder('Search tickets…').fill(parentMarker);
+    await parentPicker.getByText(parentMarker, { exact: true }).click();
+    await window.getByRole('button', { name: 'Create ticket' }).click();
+    await expect(
+      window.getByRole('button', { name: 'Create ticket' }),
+    ).toHaveCount(0);
+
+    // Both visible in the same List, in the same session — no reload
+    // anywhere above — with the child rendered directly under its parent
+    // and indented (finding 2e's same-group nesting), not merely
+    // somewhere in the list.
+    const parentRow = window.getByText(parentMarker, { exact: true });
+    const childRow = window.getByText(childMarker, { exact: true });
+    await expect(parentRow).toBeVisible();
+    await expect(childRow).toBeVisible();
+
+    const parentBox = await parentRow.boundingBox();
+    const childBox = await childRow.boundingBox();
+    expect(parentBox).not.toBeNull();
+    expect(childBox).not.toBeNull();
+    expect(childBox!.y).toBeGreaterThan(parentBox!.y);
+    expect(childBox!.x).toBeGreaterThan(parentBox!.x);
+  } finally {
+    await app.close();
+  }
+});

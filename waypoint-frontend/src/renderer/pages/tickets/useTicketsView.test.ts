@@ -250,6 +250,247 @@ describe('useTicketsView subItemCountByParent (true totals regardless of the act
   });
 });
 
+describe('useTicketsView parentById (finding 2c)', () => {
+  it("maps a child ticket's id to its parent ticket, regardless of the active filter", async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1', priority: 'low' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent', priority: 'urgent' });
+    const all = [parent, child];
+
+    jest.mocked(listTickets).mockImplementation(async (_projectId, filter) => {
+      if (!filter?.priorities) return all;
+      return all.filter((t) => filter.priorities?.includes(t.priority));
+    });
+
+    const { result } = renderHook(() => useTicketsView({ projectId: 'proj-1' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    // `child.parentId` is a hardcoded constant on this fixture (always
+    // 'parent'), so a ternary keyed on it here was always-true dead weight —
+    // assert the resolved value directly instead.
+    expect(result.current.parentById.get('child')).toEqual(parent);
+    expect(result.current.parentById.get('child')?.identifier).toBe('CW-1');
+
+    act(() => {
+      result.current.setFilters((f) => ({ ...f, priority: ['urgent'] }));
+    });
+    // The filtered `items` no longer includes the parent...
+    await waitFor(() => expect(result.current.items).toEqual([child]));
+    // ...but parentById still resolves it, since it's sourced from the
+    // unfiltered dataset, same as subItemCountByParent.
+    expect(result.current.parentById.get('child')?.identifier).toBe('CW-1');
+  });
+
+  it('has no entry for a parentless ticket', async () => {
+    jest.mocked(listTickets).mockResolvedValue([ticket({ id: 'a', parentId: null })]);
+
+    const { result } = renderHook(() => useTicketsView({ projectId: 'proj-1' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.parentById.has('a')).toBe(false);
+  });
+});
+
+describe('useTicketsView same-group parent/child nesting (finding 2e)', () => {
+  it('sorts a child to sit directly after its parent when they share a group, upstream of groupedItems', async () => {
+    // Both land in the same 'st-proj-1' state group (per the per-project
+    // listStates mock in beforeEach) — parent listed first in raw fetch
+    // order, with an unrelated ticket sitting between them.
+    const parent = ticket({ id: 'parent', identifier: 'CW-1', stateId: 'st-proj-1' });
+    const unrelated = ticket({ id: 'unrelated', identifier: 'CW-2', stateId: 'st-proj-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-3', parentId: 'parent', stateId: 'st-proj-1' });
+    jest.mocked(listTickets).mockResolvedValue([parent, unrelated, child]);
+
+    const { result } = renderHook(() => useTicketsView({ projectId: 'proj-1', defaultGroupBy: 'state' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    // The critical assertion: `items` itself (not just groupedItems) is
+    // reordered — reorderItemLocally computes drag-drop insertion against
+    // this SAME array, so both must read the same order by construction.
+    expect(result.current.items.map((i) => i.id)).toEqual(['parent', 'child', 'unrelated']);
+    expect(result.current.nestedChildIds.has('child')).toBe(true);
+
+    const group = result.current.groupedItems.find((g) => g.key === 'st-proj-1');
+    expect(group?.items.map((i) => i.id)).toEqual(['parent', 'child', 'unrelated']);
+  });
+
+  it('does NOT nest a child under its parent when they land in different groups', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1', priority: 'low' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent', priority: 'urgent' });
+    jest.mocked(listTickets).mockResolvedValue([parent, child]);
+
+    const { result } = renderHook(() => useTicketsView({ projectId: 'proj-1', defaultGroupBy: 'priority' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.nestedChildIds.has('child')).toBe(false);
+    // Untouched order — 2c's parent chip does the pointing here instead.
+    expect(result.current.items.map((i) => i.id)).toEqual(['parent', 'child']);
+  });
+
+  // Manual QA per the proposal's own risk note: a real drag-drop of a Board
+  // card was checked by hand against the running app (a parent/child pair
+  // in the same board column, dropped elsewhere in that column, landed
+  // exactly where dropped). This is the automated companion — it exercises
+  // reorderItemLocally (what a real card drop calls) directly against a
+  // same-group parent/child pair, and asserts `items` and `groupedItems`
+  // still agree afterward, i.e. no reconciliation gap between what the
+  // resort produced and what a drag-drop mutates.
+  it('reorderItemLocally still agrees with the nested render order after a drag-drop-style move', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1', stateId: 'st-proj-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent', stateId: 'st-proj-1' });
+    const other = ticket({ id: 'other', identifier: 'CW-3', stateId: 'st-proj-1' });
+    jest.mocked(listTickets).mockResolvedValue([parent, child, other]);
+
+    const { result } = renderHook(() => useTicketsView({ projectId: 'proj-1', defaultGroupBy: 'state' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    // Pre-drag: parent, child (nested right after it), other.
+    expect(result.current.items.map((i) => i.id)).toEqual(['parent', 'child', 'other']);
+
+    // Simulate dragging "other" to drop directly after "child" — exactly
+    // what BoardView's handleCardDrop calls with the ids/position it read
+    // off the rendered (nested) DOM.
+    act(() => {
+      result.current.reorderItemLocally('other', 'child', 'after');
+    });
+
+    await waitFor(() => expect(result.current.items.map((i) => i.id)).toEqual(['parent', 'child', 'other']));
+    const group = result.current.groupedItems.find((g) => g.key === 'st-proj-1');
+    expect(group?.items.map((i) => i.id)).toEqual(result.current.items.map((i) => i.id));
+  });
+
+  it("nests every parent/child pair when groupBy is 'none' (a single group)", async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1' });
+    const unrelated = ticket({ id: 'unrelated', identifier: 'CW-2' });
+    const child = ticket({ id: 'child', identifier: 'CW-3', parentId: 'parent' });
+    jest.mocked(listTickets).mockResolvedValue([parent, unrelated, child]);
+
+    const { result } = renderHook(() => useTicketsView({ projectId: 'proj-1', defaultGroupBy: 'none' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.items.map((i) => i.id)).toEqual(['parent', 'child', 'unrelated']);
+  });
+
+  // H3: the pre-existing regression test for reorderItemLocally moved an
+  // item to a position it was already in ('other' dropped 'after' 'child',
+  // when 'other' was already right after 'child') — "nothing changed"
+  // passes trivially under a wide range of broken implementations. This is
+  // the real 'before' case: dropping "other" directly BEFORE "child" asks
+  // to insert it between "child" and its nesting parent "parent". Per H2's
+  // documented (not silently left implicit) decision, that's a known no-op
+  // at the rendered-order level — reorderItemLocally mutates the RAW list
+  // (parent, other, child after this call), but the same-group nesting
+  // resort always re-splices "child" directly after "parent" regardless, so
+  // `items` renders identically to how it did before the call. BoardView's
+  // onDragOver suppresses the drag-over indicator (and refuses the drop)
+  // for exactly this boundary so a user is never invited to drop there in
+  // the first place — this test covers the hook-level mechanism that
+  // suppression exists to route around.
+  it("reorderItemLocally dropping 'before' an already-adjacent nested child is a documented no-op in the rendered order", async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1', stateId: 'st-proj-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent', stateId: 'st-proj-1' });
+    const other = ticket({ id: 'other', identifier: 'CW-3', stateId: 'st-proj-1' });
+    jest.mocked(listTickets).mockResolvedValue([parent, child, other]);
+
+    const { result } = renderHook(() => useTicketsView({ projectId: 'proj-1', defaultGroupBy: 'state' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.items.map((i) => i.id)).toEqual(['parent', 'child', 'other']);
+
+    act(() => {
+      result.current.reorderItemLocally('other', 'child', 'before');
+    });
+
+    // The rendered order is unchanged — "other" never visibly lands between
+    // "parent" and "child", because the nesting resort always re-splices
+    // "child" directly after "parent" no matter where the raw list now
+    // holds "other".
+    await waitFor(() =>
+      expect(result.current.items.map((i) => i.id)).toEqual(['parent', 'child', 'other']),
+    );
+    const group = result.current.groupedItems.find((g) => g.key === 'st-proj-1');
+    expect(group?.items.map((i) => i.id)).toEqual(result.current.items.map((i) => i.id));
+  });
+});
+
+// B1 (blocking): the nesting logic used to splice children under their
+// parent only one level deep, so a grandchild (created via this PR's own
+// "Add subtask" flow, two levels in) was marked "nested" — and therefore
+// skipped in the main splice pass — but never spliced in anywhere, since
+// only a top-level item's own DIRECT children were appended. It silently
+// vanished from `items`, which feeds List, Board, and Spreadsheet alike, so
+// there was no view left that showed it. A parent-chain cycle (A.parent=B,
+// B.parent=A, or a self-parented ticket) was worse: every ticket in the
+// cycle marked itself "nested" and none of them were ever visited at the
+// top level, so `orderedItems` came out empty.
+describe('useTicketsView B1: deep nesting and cycle safety (no ticket may ever be dropped)', () => {
+  it('never drops a ticket from orderedItems — orderedItems.length === resolvedItems.length always', async () => {
+    // A mix of a 3-level chain, an unrelated ticket, and a 2-cycle, all in
+    // the same group — exactly the shape that used to lose tickets.
+    const a = ticket({ id: 'a', identifier: 'CW-1', stateId: 'st-proj-1' });
+    const b = ticket({ id: 'b', identifier: 'CW-2', parentId: 'a', stateId: 'st-proj-1' });
+    const c = ticket({ id: 'c', identifier: 'CW-3', parentId: 'b', stateId: 'st-proj-1' });
+    const unrelated = ticket({ id: 'unrelated', identifier: 'CW-4', stateId: 'st-proj-1' });
+    const cycleX = ticket({ id: 'cycle-x', identifier: 'CW-5', parentId: 'cycle-y', stateId: 'st-proj-1' });
+    const cycleY = ticket({ id: 'cycle-y', identifier: 'CW-6', parentId: 'cycle-x', stateId: 'st-proj-1' });
+    const fixture = [a, b, c, unrelated, cycleX, cycleY];
+    jest.mocked(listTickets).mockResolvedValue(fixture);
+
+    const { result } = renderHook(() => useTicketsView({ projectId: 'proj-1', defaultGroupBy: 'state' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.items).toHaveLength(fixture.length);
+    expect(new Set(result.current.items.map((i) => i.id))).toEqual(
+      new Set(fixture.map((i) => i.id)),
+    );
+  });
+
+  it('nests a 3-level chain (A→B→C, same group) in order, with all three present', async () => {
+    const a = ticket({ id: 'a', identifier: 'CW-1', stateId: 'st-proj-1' });
+    const b = ticket({ id: 'b', identifier: 'CW-2', parentId: 'a', stateId: 'st-proj-1' });
+    const c = ticket({ id: 'c', identifier: 'CW-3', parentId: 'b', stateId: 'st-proj-1' });
+    jest.mocked(listTickets).mockResolvedValue([a, b, c]);
+
+    const { result } = renderHook(() => useTicketsView({ projectId: 'proj-1', defaultGroupBy: 'state' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    // All three present, nested in the correct depth-first order: A, then
+    // its child B directly after it, then B's own child C directly after B.
+    expect(result.current.items.map((i) => i.id)).toEqual(['a', 'b', 'c']);
+    expect(result.current.nestedChildIds.has('b')).toBe(true);
+    expect(result.current.nestedChildIds.has('c')).toBe(true);
+
+    const group = result.current.groupedItems.find((g) => g.key === 'st-proj-1');
+    expect(group?.items.map((i) => i.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('treats a 2-ticket parent cycle (A.parent=B, B.parent=A) as top-level rather than dropping both', async () => {
+    const a = ticket({ id: 'a', identifier: 'CW-1', parentId: 'b', stateId: 'st-proj-1' });
+    const b = ticket({ id: 'b', identifier: 'CW-2', parentId: 'a', stateId: 'st-proj-1' });
+    jest.mocked(listTickets).mockResolvedValue([a, b]);
+
+    const { result } = renderHook(() => useTicketsView({ projectId: 'proj-1', defaultGroupBy: 'state' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    // Neither ticket vanishes — both render, un-nested (the cycle guard
+    // excludes both from ever being treated as a nested child).
+    expect(result.current.items).toHaveLength(2);
+    expect(new Set(result.current.items.map((i) => i.id))).toEqual(new Set(['a', 'b']));
+    expect(result.current.nestedChildIds.has('a')).toBe(false);
+    expect(result.current.nestedChildIds.has('b')).toBe(false);
+  });
+
+  it('treats a self-parented ticket the same way — top-level, not dropped', async () => {
+    const selfParented = ticket({ id: 'a', identifier: 'CW-1', parentId: 'a', stateId: 'st-proj-1' });
+    jest.mocked(listTickets).mockResolvedValue([selfParented]);
+
+    const { result } = renderHook(() => useTicketsView({ projectId: 'proj-1', defaultGroupBy: 'state' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.items.map((i) => i.id)).toEqual(['a']);
+    expect(result.current.nestedChildIds.has('a')).toBe(false);
+  });
+});
+
 describe('useTicketsView groupedItems totals the same as items (count-line invariant)', () => {
   // stateId matches the per-project state id the listStates mock above
   // generates (`st-${projectId}`) so 'state' grouping has somewhere real

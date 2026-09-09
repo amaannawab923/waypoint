@@ -19,9 +19,26 @@ export const PRIORITY_COLOR: Record<Priority, string> = {
 
 export const PRIORITY_ORDER: Priority[] = ['urgent', 'high', 'medium', 'low', 'none'];
 
-export function PriorityIcon({ priority, size = 14 }: { priority: Priority; size?: number }) {
+export function PriorityIcon({
+  priority,
+  size = 14,
+  label,
+}: {
+  priority: Priority;
+  size?: number;
+  /**
+   * Real accessible name for a call site where this icon is the ONLY
+   * signal of priority (no adjacent visible text, e.g. List/Board's bare
+   * icon usage) — most call sites already sit next to a visible
+   * PRIORITY_LABEL string, so this defaults to undefined (decorative,
+   * aria-hidden) rather than every icon needing one.
+   */
+  label?: string;
+}) {
   const color = PRIORITY_COLOR[priority];
-  const props = { size, color, strokeWidth: 2.2 };
+  const props = label
+    ? { size, color, strokeWidth: 2.2, role: 'img' as const, 'aria-label': label }
+    : { size, color, strokeWidth: 2.2, 'aria-hidden': true as const };
   switch (priority) {
     case 'urgent':
       return <AlertTriangle {...props} />;

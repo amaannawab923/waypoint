@@ -24,6 +24,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { StateIcon } from '@/components/domain/StateIcon';
 import {
   PriorityIcon,
+  PRIORITY_COLOR,
   PRIORITY_LABEL,
   PRIORITY_ORDER,
 } from '@/components/domain/PriorityIcon';
@@ -528,14 +529,26 @@ export default function TicketList({
                 const { total: subTotal, done: subDone } = subItemStats(item);
                 const agentAssignment = primaryAgentAssignment(item);
                 const isFocused = focusId === item.id;
+                const parent = view.parentById.get(item.id);
+                // Finding 2e: only indented when nested directly under its
+                // parent in THIS group (view.nestedChildIds) — a child whose
+                // parent landed in a different group keeps 2c's parent chip
+                // as the only pointer instead.
+                const isNested = view.nestedChildIds.has(item.id);
                 return (
                   <div
                     key={item.id}
                     id={`ticket-row-${item.id}`}
                     className={clsx(
                       'flex w-full items-center gap-3 border-b border-border px-6 py-2.5 text-left text-sm hover:bg-surface-2',
+                      item.priority !== 'none' && 'border-l-2',
                       isFocused && 'bg-surface-2 ring-1 ring-inset ring-accent',
                     )}
+                    style={
+                      item.priority !== 'none'
+                        ? { borderLeftColor: PRIORITY_COLOR[item.priority] }
+                        : undefined
+                    }
                   >
                     <input
                       type="checkbox"
@@ -554,28 +567,73 @@ export default function TicketList({
                               `/projects/${item.projectId}/tickets/${item.identifier}`,
                             );
                       }}
-                      className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left"
+                      className={clsx(
+                        'flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left',
+                        isNested && 'pl-5',
+                      )}
                     >
+                      {isNested && (
+                        <>
+                          <span
+                            aria-hidden="true"
+                            className="shrink-0 text-text-muted"
+                          >
+                            ↳
+                          </span>
+                          {/* M1: the parent-chip case below already carries
+                              an sr-only "Parent" label alongside its
+                              aria-hidden glyph — this nested-indent branch
+                              (parent/child adjacent, connector rendered
+                              inline) had only the aria-hidden glyph and
+                              nothing else, so a screen-reader user got no
+                              indication at all that this row has a parent,
+                              worse than the chip case. */}
+                          {parent && (
+                            <span className="sr-only">
+                              Subtask of {parent.identifier}
+                            </span>
+                          )}
+                        </>
+                      )}
                       <span className="w-16 shrink-0 font-mono text-xs text-text-muted">
                         {item.identifier}
                       </span>
                       {state && <StateIcon state={state} />}
-                      <span className="flex-1 truncate text-text">
-                        {item.title}
-                      </span>
+                      <div className="min-w-0 flex-1">
+                        <span className="block truncate text-text">
+                          {item.title}
+                        </span>
+                        {item.description && (
+                          <span className="block truncate text-xs text-text-muted">
+                            {item.description}
+                          </span>
+                        )}
+                      </div>
                       {project && (
                         <span className="shrink-0 truncate text-xs text-text-muted">
                           {project.icon} {project.name}
                         </span>
                       )}
-                      <div className="flex shrink-0 items-center gap-1.5">
+                      <div className="flex flex-wrap shrink-0 items-center gap-1.5">
                         {subTotal > 0 && (
                           <span
-                            title={`${subDone} of ${subTotal} sub-items done`}
+                            title={`Epic: ${subDone} of ${subTotal} sub-items done`}
                           >
-                            <Badge tone="neutral">
+                            <Badge tone="accent">
                               <ListChecks size={11} />
-                              {subDone}/{subTotal}
+                              Epic · {subDone}/{subTotal}
+                            </Badge>
+                          </span>
+                        )}
+                        {/* Finding 2e's indent already points at the parent
+                            visually when they share a group — this chip is
+                            only needed when they don't (isNested false). */}
+                        {parent && !isNested && (
+                          <span title={`Parent ${parent.identifier}`}>
+                            <Badge tone="neutral">
+                              <span aria-hidden="true">↳</span>
+                              <span className="sr-only">Parent</span>
+                              {parent.identifier}
                             </Badge>
                           </span>
                         )}
@@ -610,7 +668,10 @@ export default function TicketList({
                           </Badge>
                         )}
                       </div>
-                      <PriorityIcon priority={item.priority} />
+                      <PriorityIcon
+                        priority={item.priority}
+                        label={PRIORITY_LABEL[item.priority]}
+                      />
                       <AvatarStack people={assigneesFor(item)} />
                     </button>
                   </div>

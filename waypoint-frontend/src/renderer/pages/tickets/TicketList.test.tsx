@@ -219,6 +219,139 @@ describe('TicketList count line', () => {
   });
 });
 
+describe('TicketList epic badge (finding 2b)', () => {
+  it('shows an accent-toned "Epic · done/total" badge for a ticket with sub-items', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent' });
+    await renderList([parent, child]);
+
+    const badge = screen.getByText('Epic · 0/1');
+    expect(badge.closest('span')?.className).toContain('bg-accent-soft-bg');
+  });
+
+  it('renders no badge at all for a plain ticket with zero sub-items', async () => {
+    await renderList([ticket({ id: 'a', identifier: 'CW-1' })]);
+
+    await screen.findByText('CW-1');
+    expect(screen.queryByText(/Epic ·/)).not.toBeInTheDocument();
+  });
+});
+
+describe('TicketList parent chip (finding 2c)', () => {
+  // Parent and child land in DIFFERENT state groups here on purpose: 2c's
+  // chip is specifically for when they DON'T share a group (finding 2e's
+  // same-group nesting replaces the chip with an indent instead — see
+  // useTicketsView.test.ts's own coverage for that split).
+  beforeEach(() => {
+    jest.mocked(listStates).mockResolvedValue([state(), state({ id: 'st-2', name: 'In Progress' })]);
+  });
+
+  it("shows the parent's identifier on a child row in a different group", async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1', stateId: 'st-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent', stateId: 'st-2' });
+    await renderList([parent, child]);
+
+    expect(screen.getByText('CW-1', { selector: 'span.font-mono' })).toBeInTheDocument();
+  });
+
+  it('hides the connector glyph from the accessibility tree, exposing "Parent <identifier>" as the accessible text', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'ROAD-2', stateId: 'st-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent', stateId: 'st-2' });
+    await renderList([parent, child]);
+
+    const glyph = screen.getByText('↳');
+    expect(glyph).toHaveAttribute('aria-hidden', 'true');
+
+    const chip = glyph.closest('span.inline-flex');
+    expect(chip).toHaveTextContent('Parent');
+    expect(chip).toHaveTextContent('ROAD-2');
+  });
+
+  it('renders no parent chip for a ticket with no parent', async () => {
+    await renderList([ticket({ id: 'a', identifier: 'CW-1', parentId: null })]);
+
+    await screen.findByText('CW-1');
+    expect(screen.queryByText('↳')).not.toBeInTheDocument();
+  });
+
+  it('renders no parent chip (an indent instead) when parent and child share a group', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1', stateId: 'st-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent', stateId: 'st-1' });
+    await renderList([parent, child]);
+
+    await screen.findByText('CW-2');
+    // The glyph still renders (as an indent marker), but not inside a
+    // Badge carrying "Parent <identifier>" — 2e's nesting owns the pointer.
+    expect(screen.queryByText(`Parent CW-1`, { exact: false })).not.toBeInTheDocument();
+  });
+});
+
+describe('TicketList same-group nesting (finding 2e)', () => {
+  it('indents a nested child row and marks its connector glyph decorative', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1', stateId: 'st-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent', stateId: 'st-1' });
+    await renderList([parent, child]);
+
+    const childRow = (await screen.findByText('CW-2')).closest('button') as HTMLElement;
+    expect(childRow.className).toContain('pl-5');
+    const glyph = screen.getByText('↳');
+    expect(glyph).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  // M1: the parent-chip branch (finding 2c, above) already carries an
+  // sr-only "Parent <identifier>" label alongside its aria-hidden glyph.
+  // This nested-indent branch (parent/child adjacent — the more COMMON
+  // case, since it's what same-group nesting produces) had only the
+  // aria-hidden glyph and nothing else, so a screen-reader user got no
+  // signal at all that a nested row has a parent — strictly worse than the
+  // chip case it's meant to replace visually.
+  it("exposes an sr-only \"Subtask of <parent identifier>\" label on a nested row", async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1', stateId: 'st-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent', stateId: 'st-1' });
+    await renderList([parent, child]);
+
+    await screen.findByText('CW-2');
+    expect(screen.getByText('Subtask of CW-1')).toBeInTheDocument();
+    expect(screen.getByText('Subtask of CW-1')).toHaveClass('sr-only');
+  });
+});
+
+describe('TicketList description preview (finding 4)', () => {
+  it('shows a truncated single-line description preview under the title when present', async () => {
+    await renderList([ticket({ id: 'a', identifier: 'CW-1', description: 'A short description' })]);
+
+    expect(await screen.findByText('A short description')).toBeInTheDocument();
+  });
+
+  it('renders no preview when the ticket has no description', async () => {
+    await renderList([ticket({ id: 'a', identifier: 'CW-1', description: '' })]);
+
+    await screen.findByText('CW-1');
+    expect(document.querySelectorAll('.text-text-muted.truncate').length).toBe(0);
+  });
+});
+
+describe('TicketList priority border (finding 5)', () => {
+  it('gives a non-none priority row a colored left border', async () => {
+    await renderList([ticket({ id: 'a', identifier: 'CW-1', priority: 'urgent' })]);
+
+    // jsdom's CSSOM silently drops a `var(--x)` inline color value (it
+    // rejects it as an unparseable color rather than preserving it as
+    // text), so the border's actual color can't be asserted here — this
+    // checks the only thing jsdom lets us see: the border-l-2 class that
+    // turns the accent on.
+    const row = (await screen.findByText('CW-1')).closest('[id^="ticket-row-"]') as HTMLElement;
+    expect(row.className).toContain('border-l-2');
+  });
+
+  it('renders no accent border for "none" priority', async () => {
+    await renderList([ticket({ id: 'a', identifier: 'CW-1', priority: 'none' })]);
+
+    const row = (await screen.findByText('CW-1')).closest('[id^="ticket-row-"]') as HTMLElement;
+    expect(row.className).not.toContain('border-l-2');
+  });
+});
+
 describe('TicketList bulk select + bulk actions', () => {
   it('checking rows and choosing "Set priority" PATCHes every selected ticket, not a bulk endpoint', async () => {
     const fixture = [ticket({ id: 'a', identifier: 'CW-1' }), ticket({ id: 'b', identifier: 'CW-2' })];

@@ -1,5 +1,5 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react';
-import { Tag, UserPlus } from 'lucide-react';
+import { GitBranch, Tag, UserPlus } from 'lucide-react';
 import { IconCheck, IconChevron } from '@/components/icons';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
@@ -7,7 +7,16 @@ import { Avatar, AvatarStack } from '@/components/ui/Avatar';
 import { Dot } from '@/components/ui/Badge';
 import { PRIORITY_LABEL, PRIORITY_ORDER, PriorityIcon } from '@/components/domain/PriorityIcon';
 import { StateIcon } from '@/components/domain/StateIcon';
-import { createTicket, ensureAgentAssignments, listAgents, listLabels, listMembers, listStates } from '@/data/api';
+import { ParentTicketPicker } from '@/components/domain/ParentTicketPicker';
+import {
+  createTicket,
+  ensureAgentAssignments,
+  listAgents,
+  listLabels,
+  listMembers,
+  listStates,
+  listTickets,
+} from '@/data/api';
 import { useAsync } from '@/lib/useAsync';
 import { agentLabel } from '@/lib/agentLabel';
 import type { Priority, Ticket } from '@/types/entities';
@@ -66,12 +75,17 @@ export function CreateTicketModal({
   onClose,
   projectId,
   defaultStateId,
+  defaultParentId,
   onCreated,
 }: {
   open: boolean;
   onClose: () => void;
   projectId: string;
   defaultStateId?: string;
+  /** Seeds the "Parent" field — e.g. TicketDetailPage's "Add subtask" passes
+   * the current ticket's own id, so the new ticket is born with the right
+   * parent already set instead of the old create-then-PATCH workaround. */
+  defaultParentId?: string;
   onCreated: (item: Ticket) => void;
 }) {
   const [title, setTitle] = useState('');
@@ -80,11 +94,30 @@ export function CreateTicketModal({
   const [priority, setPriority] = useState<Priority>('none');
   const [assigneeIds, setAssigneeIds] = useState<string[]>([]);
   const [labelIds, setLabelIds] = useState<string[]>([]);
+  const [parentIdOverride, setParentIdOverride] = useState<string | null | undefined>(undefined);
+  const [parentPickerOpen, setParentPickerOpen] = useState(false);
+  const parentTriggerRef = useRef<HTMLButtonElement>(null);
   const [submitting, setSubmitting] = useState(false);
   const { data: states } = useAsync(() => listStates(projectId), [projectId]);
   const { data: members } = useAsync(() => listMembers(), []);
   const { data: agents } = useAsync(() => listAgents(), []);
   const { data: labels } = useAsync(() => listLabels(projectId), [projectId]);
+  // H1: this modal is always mounted at every call site (`open` gates
+  // visibility via the `Modal` component below, not whether this
+  // component itself is in the tree) — Topbar.tsx renders it from global
+  // chrome, so an ungated fetch here fired a full project ticket-list
+  // request on every navigation everywhere in the app, whether or not the
+  // modal was ever opened. Gating on `open` (in both the fetch itself and
+  // the dep array) fixes that AND fixes a staleness bug it was hiding: since
+  // nothing ever remounts this component, a ticket created during one open
+  // of the modal wouldn't have shown up as a parent option the next time it
+  // was opened without a full page reload — `open` flipping back to `true`
+  // now re-triggers this fetch every time, so the parent picker's candidate
+  // list is always current as of the moment it's opened.
+  const { data: projectTickets } = useAsync(
+    () => (open ? listTickets(projectId) : Promise.resolve([])),
+    [projectId, open],
+  );
   const scopedAgents = (agents ?? []).filter(
     (a) => a.isActive && (a.scopeProjectIds.length === 0 || a.scopeProjectIds.includes(projectId)),
   );
@@ -94,6 +127,15 @@ export function CreateTicketModal({
   // falls back to the project's first unstarted state once it loads.
   const resolvedStateId = stateId ?? defaultStateId ?? states?.find((s) => s.group === 'unstarted')?.id ?? states?.[0]?.id;
   const currentState = states?.find((s) => s.id === resolvedStateId);
+  // Same pattern as resolvedStateId above, with one difference `??` can't
+  // express: `parentIdOverride` must distinguish "untouched" (undefined —
+  // keep tracking defaultParentId) from "explicitly cleared to no parent"
+  // (null) — `??` treats both null and undefined as absent, which would
+  // silently fall back to defaultParentId the moment a user picked "No
+  // parent" on a ticket opened with one seeded.
+  const resolvedParentId =
+    parentIdOverride !== undefined ? parentIdOverride : (defaultParentId ?? null);
+  const currentParent = (projectTickets ?? []).find((t) => t.id === resolvedParentId);
   const selectedActors = [
     ...(members ?? [])
       .filter((m) => assigneeIds.includes(m.id))
@@ -111,6 +153,7 @@ export function CreateTicketModal({
     setPriority('none');
     setAssigneeIds([]);
     setLabelIds([]);
+    setParentIdOverride(undefined);
   }
 
   function toggleAssignee(memberId: string) {
@@ -133,6 +176,7 @@ export function CreateTicketModal({
         priority,
         assigneeIds,
         labelIds,
+        parentId: resolvedParentId,
       });
       const agentIds = assigneeIds.filter((id) => scopedAgents.some((a) => a.id === id));
       if (agentIds.length > 0) await ensureAgentAssignments(item.id, agentIds);
@@ -332,6 +376,42 @@ export function CreateTicketModal({
               </div>
             )}
           </Dropdown>
+
+          {/* Finding 2a: not the ad-hoc local `Dropdown` above (self-contained,
+              closed-over open state) — ParentTicketPicker is portaled and
+              positioned via useFloatingPanel, so the trigger's open state and
+              ref live here instead. */}
+          <button
+            ref={parentTriggerRef}
+            type="button"
+            onClick={() => setParentPickerOpen((o) => !o)}
+            aria-expanded={parentPickerOpen}
+            aria-haspopup="dialog"
+            className={CHIP_CLASS}
+          >
+            {currentParent ? (
+              <span className="min-w-0 truncate">
+                {currentParent.identifier} — {currentParent.title}
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 text-text-muted">
+                <GitBranch size={14} /> Parent
+              </span>
+            )}
+            <IconChevron size={13} className="shrink-0 text-text-muted" />
+          </button>
+          {parentPickerOpen && (
+            <ParentTicketPicker
+              tickets={projectTickets ?? []}
+              value={resolvedParentId}
+              triggerRef={parentTriggerRef}
+              onSelect={(ticketId) => {
+                setParentIdOverride(ticketId);
+                setParentPickerOpen(false);
+              }}
+              onClose={() => setParentPickerOpen(false)}
+            />
+          )}
         </div>
       </div>
     </Modal>

@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { clsx } from 'clsx';
 import {
@@ -64,6 +64,12 @@ import {
   upsertProposals,
   useAllProposals,
 } from '@/lib/proposalStore';
+
+// Cap for the description textarea's auto-grow (finding 1) — past this it
+// becomes a normal scrollable region (thin-scroll, the same capped-scroll
+// utility every other bounded container in this app uses, e.g. TicketDrawer)
+// instead of growing the page indefinitely.
+const DESCRIPTION_MAX_HEIGHT = 400;
 
 const TRIGGER_CLASS =
   'flex h-8 w-full items-center gap-1.5 rounded-[var(--radius-sm)] px-2 text-sm text-text hover:bg-surface-2';
@@ -401,20 +407,49 @@ export function TicketDetailContent({
 
   const [titleDraft, setTitleDraft] = useState('');
   const [descDraft, setDescDraft] = useState('');
+  // B2: local draft state for Story points, matching titleDraft/descDraft's
+  // own shape — a string (not a number) so an in-progress "17." is
+  // representable at all. The field used to be a controlled input bound
+  // straight to `item.estimatePoints`, saving via patchItem() on every
+  // keystroke; patchItem awaits updateTicket() then reloads the item, and
+  // that reload landed mid-keystroke, so typing "17.5" got overwritten by
+  // the reloaded `17` (Number("17.") === 17) before "5" could ever be
+  // typed — the decimal point was unreachable. Draft-plus-blur, same as the
+  // title/description fields below, fixes that.
+  const [pointsDraft, setPointsDraft] = useState('');
   const [commentDraft, setCommentDraft] = useState('');
   const [postingComment, setPostingComment] = useState(false);
   const [createSubOpen, setCreateSubOpen] = useState(false);
   // Stable focus target for handlePostComment below — see its own comment.
   const commentFormRef = useRef<HTMLDivElement>(null);
+  // Finding 1: the description field used to be a fixed rows={4} textarea
+  // that silently clipped anything past 4 lines, with only a manual
+  // resize-y drag handle (easy to miss) as the way out. This measures the
+  // element's own scrollHeight and grows it to fit on mount and on every
+  // content change, capped at DESCRIPTION_MAX_HEIGHT — past that the
+  // textarea itself scrolls (see its className below) instead of growing
+  // forever.
+  const descTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (item) {
       setTitleDraft(item.title);
       setDescDraft(item.description);
+      setPointsDraft(item.estimatePoints === null ? '' : String(item.estimatePoints));
     }
     // Only reset drafts when a *different* item loads, not on every reload after a save.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item?.id]);
+
+  useLayoutEffect(() => {
+    const el = descTextareaRef.current;
+    if (!el) return;
+    // Reset to 'auto' first so scrollHeight reports the content's real
+    // height rather than whatever height was previously forced — otherwise
+    // deleting text would never shrink the textarea back down.
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, DESCRIPTION_MAX_HEIGHT)}px`;
+  }, [descDraft]);
 
   // Completes the "+ Create new agent" round trip: land back on this ticket
   // with the newly created agent auto-assigned, instead of leaving the user
@@ -495,6 +530,7 @@ export function TicketDetailContent({
       'State',
       'Assignees',
       'Priority',
+      'Story points',
       ...(project?.estimate ? ['Estimate'] : []),
       'Created by',
       'Start date',
@@ -623,6 +659,12 @@ export function TicketDetailContent({
   const subItemsList = subItems ?? [];
   const doneSubItems = subItemsList.filter((c) => statesById.get(c.stateId)?.group === 'completed').length;
   const subItemsProgress = subItemsList.length > 0 ? Math.round((doneSubItems / subItemsList.length) * 100) : 0;
+  // Finding 7c: sum of estimatePoints across this ticket's own subItems —
+  // already fetched for the list below, no new request. Only shown when at
+  // least one subtask actually carries a point value, so a plain checklist
+  // of unestimated subtasks doesn't grow a misleading "· 0 pts" suffix.
+  const subItemsWithPoints = subItemsList.filter((c) => c.estimatePoints !== null);
+  const subItemsPointsTotal = subItemsWithPoints.reduce((sum, c) => sum + (c.estimatePoints ?? 0), 0);
 
   async function patchItem(patch: Partial<Ticket>) {
     if (!item) return;
@@ -685,9 +727,43 @@ export function TicketDetailContent({
     reloadItem();
   }
 
-  async function handleSubItemCreated(newItem: Ticket) {
+  // B2: commits the Story points draft on blur, same shape as saveTitle/
+  // saveDescription above. An empty draft clears the field back to null,
+  // matching the field's pre-existing clear-on-empty behavior; anything
+  // that doesn't parse to a finite number (e.g. a draft left mid-edit as
+  // just "-" or ".") is treated the same way saveTitle treats an
+  // all-whitespace title — reverted to the last saved value instead of
+  // persisted.
+  //
+  // M5: a negative value (e.g. typed "-5") is rejected the same way — the
+  // input's `min="0"` only constrains the stepper arrows/native form
+  // validation, not a typed keyboard value flowing through this blur-save
+  // handler, so a negative number parsed here as perfectly finite and was
+  // persisted via updateTicket without this explicit check.
+  async function savePoints() {
     if (!item) return;
-    await updateTicket(newItem.id, { parentId: item.id });
+    const trimmed = pointsDraft.trim();
+    if (trimmed === '') {
+      if (item.estimatePoints === null) return;
+      await updateTicket(item.id, { estimatePoints: null });
+      reloadItem();
+      return;
+    }
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      setPointsDraft(item.estimatePoints === null ? '' : String(item.estimatePoints));
+      return;
+    }
+    if (parsed === item.estimatePoints) return;
+    await updateTicket(item.id, { estimatePoints: parsed });
+    reloadItem();
+  }
+
+  // The new ticket is created with parentId already set (via
+  // CreateTicketModal's defaultParentId prop below) — no follow-up PATCH
+  // needed here anymore, unlike the create-then-updateTicket workaround
+  // this used to be.
+  function handleSubItemCreated() {
     reloadSubItems();
   }
 
@@ -834,19 +910,20 @@ export function TicketDetailContent({
               if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
             }}
             placeholder="Ticket title"
-            className="-mx-2 w-full rounded-[var(--radius-sm)] border border-transparent bg-transparent px-2 py-1 font-display text-xl font-semibold text-text outline-none focus:border-border-strong focus:bg-surface-2"
+            className="-mx-2 w-full truncate rounded-[var(--radius-sm)] border border-transparent bg-transparent px-2 py-1 font-display text-xl font-semibold text-text outline-none focus:border-border-strong focus:bg-surface-2"
           />
         </div>
 
         {/* Description */}
         <div className="mt-2 px-6 md:px-8">
           <textarea
+            ref={descTextareaRef}
             value={descDraft}
             onChange={(e) => setDescDraft(e.target.value)}
             onBlur={saveDescription}
             placeholder="Add description…"
-            rows={4}
-            className="-mx-2 w-full resize-y rounded-[var(--radius-sm)] border border-transparent bg-transparent px-2 py-1.5 text-sm text-text-secondary outline-none focus:border-border-strong focus:bg-surface-2"
+            className="thin-scroll -mx-2 w-full resize-none overflow-y-auto rounded-[var(--radius-sm)] border border-transparent bg-transparent px-2 py-1.5 text-sm text-text-secondary outline-none focus:border-border-strong focus:bg-surface-2"
+            style={{ maxHeight: DESCRIPTION_MAX_HEIGHT }}
           />
         </div>
 
@@ -916,6 +993,7 @@ export function TicketDetailContent({
           <div className="mt-6 px-6 md:px-8">
             <h3 className="mb-2 font-display text-sm font-medium text-text">
               Subtasks ({subItems.length})
+              {subItemsWithPoints.length > 0 && ` · ${subItemsPointsTotal} pts`}
             </h3>
             <div className="mb-2 flex items-center gap-2">
               <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-2">
@@ -1239,6 +1317,28 @@ export function TicketDetailContent({
           </Dropdown>
         </PropertyRow>
 
+        {/* Finding 7a: `estimatePoints` is a free, unconstrained numeric
+            field — distinct from `estimateValue` below (constrained to the
+            project's configured Fibonacci/T-shirt preset) — so it's real
+            data can be non-Fibonacci values like 17.5. Deliberately always
+            visible, unlike the Estimate row below, since it doesn't depend
+            on `project.estimate` being configured at all. */}
+        <PropertyRow label="Story points">
+          <input
+            type="number"
+            step="0.5"
+            min="0"
+            value={pointsDraft}
+            onChange={(e) => setPointsDraft(e.target.value)}
+            onBlur={savePoints}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+            }}
+            placeholder="No estimate"
+            className="h-8 w-full rounded-[var(--radius-sm)] border border-border-strong bg-bg px-2 text-sm text-text outline-none focus:border-accent"
+          />
+        </PropertyRow>
+
         {estimateSystem && (
           <PropertyRow label="Estimate">
             <Dropdown
@@ -1460,6 +1560,7 @@ export function TicketDetailContent({
         open={createSubOpen}
         onClose={() => setCreateSubOpen(false)}
         projectId={item.projectId}
+        defaultParentId={item.id}
         onCreated={handleSubItemCreated}
       />
     </div>
