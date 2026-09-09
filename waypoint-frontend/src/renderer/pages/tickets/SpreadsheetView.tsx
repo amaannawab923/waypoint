@@ -26,7 +26,8 @@ type SortKey =
   | 'dueDate'
   | 'workstreams'
   | 'sprint'
-  | 'estimate';
+  | 'estimate'
+  | 'points';
 
 type SortDir = 'asc' | 'desc';
 
@@ -34,7 +35,13 @@ const DATE_FORMAT = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'num
 
 const TITLE_COLUMN = { key: 'title' as const, label: 'Ticket' };
 
-/** Columns available through the "Columns" toggle, beyond the always-shown "Ticket" column. */
+/**
+ * Columns available through the "Columns" toggle, beyond the always-shown
+ * "Ticket" column. "Points" (finding 7b, sourced from estimatePoints) lives
+ * here unconditionally — unlike "Estimate" (estimateValue) below, which is
+ * only offered when the project has a configured estimate system, Points
+ * is a free, unconstrained field with no such gate.
+ */
 const OPTIONAL_COLUMNS: { key: Exclude<SortKey, 'title'>; label: string }[] = [
   { key: 'state', label: 'State' },
   { key: 'priority', label: 'Priority' },
@@ -45,6 +52,7 @@ const OPTIONAL_COLUMNS: { key: Exclude<SortKey, 'title'>; label: string }[] = [
   { key: 'dueDate', label: 'Due date' },
   { key: 'workstreams', label: 'Workstreams' },
   { key: 'sprint', label: 'Sprint' },
+  { key: 'points', label: 'Points' },
 ];
 
 const DEFAULT_VISIBLE: Exclude<SortKey, 'title'>[] = ['state', 'priority', 'assignees', 'createdAt'];
@@ -128,6 +136,15 @@ export default function SpreadsheetView({
         }
         case 'estimate':
           return (a.estimateValue ?? '').localeCompare(b.estimateValue ?? '');
+        case 'points':
+          // A real numeric comparator, not the localeCompare-based one
+          // "estimate" above uses (a pre-existing bug there — numeric
+          // strings sort lexicographically, e.g. "13" before "5" — out of
+          // scope to fix on that existing column, but not one to propagate
+          // onto this new one). Nulls sort last in both directions: -Infinity
+          // as the missing value means "smaller than everything real" under
+          // ascending order and "put at the end" once reversed for descending.
+          return (a.estimatePoints ?? -Infinity) - (b.estimatePoints ?? -Infinity);
         case 'createdAt':
         default:
           return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
@@ -194,7 +211,7 @@ export default function SpreadsheetView({
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
-        <table className="w-full min-w-[880px] border-collapse text-sm">
+        <table className="w-full min-w-[980px] border-collapse text-sm">
           <thead className="sticky top-0 z-10 bg-surface">
             <tr className="border-b border-border">
               {columns.map((col) => {
@@ -316,6 +333,11 @@ export default function SpreadsheetView({
                   {hasEstimates && visible.has('estimate') && (
                     <td className="whitespace-nowrap px-4 py-2.5 text-text-secondary">
                       {item.estimateValue ?? <span className="text-text-muted">—</span>}
+                    </td>
+                  )}
+                  {visible.has('points') && (
+                    <td className="whitespace-nowrap px-4 py-2.5 text-text-secondary">
+                      {item.estimatePoints ?? <span className="text-text-muted">—</span>}
                     </td>
                   )}
                 </tr>

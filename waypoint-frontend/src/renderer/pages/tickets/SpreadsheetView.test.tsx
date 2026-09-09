@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { listMembers } from '@/data/api';
 import { useProject } from '@/layouts/ProjectLayout';
 import type { Project, Ticket } from '@/types/entities';
@@ -141,6 +141,52 @@ describe('SpreadsheetView default sort (polish item 2)', () => {
 
     const rows = await screen.findAllByText(/CW-\d/);
     expect(rows.map((r) => r.textContent)).toEqual(['CW-1', 'CW-2']);
+  });
+});
+
+describe('SpreadsheetView Points column (finding 7b)', () => {
+  it('is offered in the Columns menu even when the project has no configured estimate system', async () => {
+    render(<SpreadsheetView view={fakeView([ticket()])} onOpenItem={jest.fn()} />);
+
+    await screen.findByText('CW-1');
+    fireEvent.click(screen.getByRole('button', { name: 'Columns' }));
+
+    expect(screen.getByText('Points')).toBeInTheDocument();
+    // "Estimate" is the OTHER optional column, gated on project.estimate —
+    // this fakeView's project() fixture has estimate: null, so it must be
+    // absent while Points (ungated) is present.
+    expect(screen.queryByText('Estimate')).not.toBeInTheDocument();
+  });
+
+  it('sorts numerically by estimatePoints, not lexicographically', async () => {
+    const low = ticket({ id: 'a', identifier: 'CW-1', estimatePoints: 2 });
+    const high = ticket({ id: 'b', identifier: 'CW-2', estimatePoints: 13 });
+    const none = ticket({ id: 'c', identifier: 'CW-3', estimatePoints: null });
+
+    render(<SpreadsheetView view={fakeView([high, none, low])} onOpenItem={jest.fn()} />);
+
+    await screen.findByText('CW-1');
+    fireEvent.click(screen.getByRole('button', { name: 'Columns' }));
+    fireEvent.click(screen.getByText('Points'));
+
+    // Ascending (the default, per polish item 2 above): the null-estimate
+    // ticket sorts first (?? -Infinity), then 2, then 13 — a
+    // localeCompare-based sort would instead read "13" as less than "2".
+    fireEvent.click(screen.getByRole('button', { name: /Points/ }));
+
+    const rows = await screen.findAllByText(/CW-\d/);
+    expect(rows.map((r) => r.textContent)).toEqual(['CW-3', 'CW-1', 'CW-2']);
+  });
+
+  it('renders an em dash for a ticket with no estimatePoints', async () => {
+    render(<SpreadsheetView view={fakeView([ticket({ id: 'a', identifier: 'CW-1', estimatePoints: null })])} onOpenItem={jest.fn()} />);
+
+    await screen.findByText('CW-1');
+    fireEvent.click(screen.getByRole('button', { name: 'Columns' }));
+    fireEvent.click(screen.getByText('Points'));
+
+    const row = (await screen.findByText('CW-1')).closest('tr') as HTMLElement;
+    expect(row).toHaveTextContent('—');
   });
 });
 
