@@ -360,7 +360,19 @@ export default function BoardView({
                   }
                 >
                   <span className="font-mono text-xs text-text-muted">
-                    {isNested && <span aria-hidden="true">↳ </span>}
+                    {isNested && (
+                      <>
+                        <span aria-hidden="true">↳ </span>
+                        {/* M1: mirrors TicketList.tsx's nested-indent
+                            branch — the parent-chip case below already has
+                            an sr-only "Parent" label alongside its
+                            aria-hidden glyph; this branch (parent/child
+                            adjacent, connector rendered inline) had only
+                            the aria-hidden glyph, no signal at all for a
+                            screen-reader user. */}
+                        {parent && <span className="sr-only">Subtask of {parent.identifier}</span>}
+                      </>
+                    )}
                     {item.identifier}
                   </span>
                   <span className="line-clamp-2 text-text">{item.title}</span>

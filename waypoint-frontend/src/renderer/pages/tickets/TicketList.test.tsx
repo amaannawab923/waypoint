@@ -297,6 +297,23 @@ describe('TicketList same-group nesting (finding 2e)', () => {
     const glyph = screen.getByText('↳');
     expect(glyph).toHaveAttribute('aria-hidden', 'true');
   });
+
+  // M1: the parent-chip branch (finding 2c, above) already carries an
+  // sr-only "Parent <identifier>" label alongside its aria-hidden glyph.
+  // This nested-indent branch (parent/child adjacent — the more COMMON
+  // case, since it's what same-group nesting produces) had only the
+  // aria-hidden glyph and nothing else, so a screen-reader user got no
+  // signal at all that a nested row has a parent — strictly worse than the
+  // chip case it's meant to replace visually.
+  it("exposes an sr-only \"Subtask of <parent identifier>\" label on a nested row", async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1', stateId: 'st-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent', stateId: 'st-1' });
+    await renderList([parent, child]);
+
+    await screen.findByText('CW-2');
+    expect(screen.getByText('Subtask of CW-1')).toBeInTheDocument();
+    expect(screen.getByText('Subtask of CW-1')).toHaveClass('sr-only');
+  });
 });
 
 describe('TicketList description preview (finding 4)', () => {

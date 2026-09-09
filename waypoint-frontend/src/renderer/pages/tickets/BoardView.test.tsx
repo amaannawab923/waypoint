@@ -202,6 +202,29 @@ describe('BoardView same-group nesting (finding 2e)', () => {
     expect(screen.queryByText('Parent CW-1', { exact: false })).not.toBeInTheDocument();
   });
 
+  // M1: mirrors TicketList.test.tsx's coverage of the same gap — the
+  // aria-hidden glyph alone gave a screen-reader user no signal that this
+  // card has a parent.
+  it("exposes an sr-only \"Subtask of <parent identifier>\" label on a nested card", async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent' });
+    const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [parent, child] }];
+    const nestedChildIds = new Set(['child']);
+    const parentById = new Map([['child', parent]]);
+
+    render(
+      <BoardView
+        view={fakeView({ items: [parent, child], groups, nestedChildIds, parentById })}
+        projectId="proj-1"
+        onOpenItem={jest.fn()}
+      />,
+    );
+
+    await screen.findByText('CW-2');
+    expect(screen.getByText('Subtask of CW-1')).toBeInTheDocument();
+    expect(screen.getByText('Subtask of CW-1')).toHaveClass('sr-only');
+  });
+
   it('does not indent a card whose parent is in a different group (no entry in nestedChildIds)', async () => {
     const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent' });
     const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [child] }];

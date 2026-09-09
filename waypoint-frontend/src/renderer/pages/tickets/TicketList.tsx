@@ -573,9 +573,20 @@ export default function TicketList({
                       )}
                     >
                       {isNested && (
-                        <span aria-hidden="true" className="shrink-0 text-text-muted">
-                          ↳
-                        </span>
+                        <>
+                          <span aria-hidden="true" className="shrink-0 text-text-muted">
+                            ↳
+                          </span>
+                          {/* M1: the parent-chip case below already carries
+                              an sr-only "Parent" label alongside its
+                              aria-hidden glyph — this nested-indent branch
+                              (parent/child adjacent, connector rendered
+                              inline) had only the aria-hidden glyph and
+                              nothing else, so a screen-reader user got no
+                              indication at all that this row has a parent,
+                              worse than the chip case. */}
+                          {parent && <span className="sr-only">Subtask of {parent.identifier}</span>}
+                        </>
                       )}
                       <span className="w-16 shrink-0 font-mono text-xs text-text-muted">
                         {item.identifier}
