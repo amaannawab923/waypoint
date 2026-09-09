@@ -51,7 +51,22 @@ export type JiraFailureReason =
    * to their own disk, and telling them the first when the second happened
    * wastes their time on someone else's system.
    */
-  | 'file_error';
+  | 'file_error'
+  /**
+   * A transfer of the exact same attachment (download) or to the exact same
+   * ticket (upload) is already running, and this request was refused rather
+   * than allowed to double up.
+   *
+   * `JiraTicketDetail.tsx` mounts twice at once — the drawer and the full
+   * ticket page keep fully independent React state — so the per-component
+   * `downloading`/`uploading` boolean each copy tracks cannot coordinate
+   * with the other copy; only a guard in main, which both IPC calls pass
+   * through, can. Separate from `file_error` and `jira_error` for the same
+   * reason those are separate from each other: this is neither the local
+   * disk nor Jira refusing anything, so the sentence has to say what
+   * actually happened — try again once the first transfer finishes.
+   */
+  | 'transfer_in_progress';
 
 export interface JiraFailure {
   ok: false;
