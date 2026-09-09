@@ -1,4 +1,4 @@
-import { eq, inArray } from 'drizzle-orm';
+import { asc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { sprints, sprintMembers } from '../db/schema/index.js';
 import { NotFoundError, ConflictError } from '../middleware/errors.js';
@@ -15,13 +15,29 @@ async function attachMemberIds<T extends { id: string }>(rows: T[]): Promise<(T 
   return rows.map((r) => ({ ...r, memberIds: bySprint.get(r.id) ?? [] }));
 }
 
-export async function listSprints(projectId: string) {
-  const rows = await db.select().from(sprints).where(eq(sprints.projectId, projectId));
+// `limit`, when given, is passed straight to the query's own .limit() — not
+// applied as a post-fetch slice — matching tickets.service.ts's
+// listTickets/listAllTickets convention. The MCP list_sprints tool
+// (src/mcp/sprintTools.ts) requests effectiveLimit + 1 so it can tell a
+// truncated result apart from one that happened to end exactly at the cap.
+// A deterministic ORDER BY matters specifically because of that cap: with
+// no order, which rows survive a LIMIT is whatever order Postgres happens
+// to return, which can shift between two otherwise-identical calls — the
+// exact nondeterminism ticketTools.ts's own capped queries already order
+// around.
+export async function listSprints(projectId: string, limit?: number) {
+  const query = db
+    .select()
+    .from(sprints)
+    .where(eq(sprints.projectId, projectId))
+    .orderBy(asc(sprints.startDate), asc(sprints.id));
+  const rows = limit ? await query.limit(limit) : await query;
   return attachMemberIds(rows);
 }
 
-export async function listAllSprints() {
-  const rows = await db.select().from(sprints);
+export async function listAllSprints(limit?: number) {
+  const query = db.select().from(sprints).orderBy(asc(sprints.startDate), asc(sprints.id));
+  const rows = limit ? await query.limit(limit) : await query;
   return attachMemberIds(rows);
 }
 

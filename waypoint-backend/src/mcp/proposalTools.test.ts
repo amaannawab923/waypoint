@@ -480,9 +480,46 @@ describe('listProjectsHandler', () => {
 
     const result = await listProjectsHandler();
 
-    expect(JSON.parse(result.content[0].text)).toEqual([
-      { id: 'proj-1', name: 'Launch', identifier: 'LAUNCH' },
-    ]);
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      items: [{ id: 'proj-1', name: 'Launch', identifier: 'LAUNCH' }],
+      truncated: false,
+    });
+  });
+
+  // Same cap-at-the-query-layer convention as every other list tool
+  // (see ticketTools.ts's DEFAULT_LIST_LIMIT/page): listProjects() is asked
+  // for effectiveLimit + 1 rows, and a full extra row coming back means
+  // there was more to find — reported via `truncated`, not by silently
+  // materializing every project in the workspace.
+  it('caps results and reports truncated:true when the underlying set is larger than the limit', async () => {
+    const rows = Array.from({ length: 3 }, (_, i) => ({
+      id: `proj-${i}`,
+      name: `Project ${i}`,
+      identifier: `P${i}`,
+      automations: {},
+      coverGradient: ['#000', '#fff'],
+      memberIds: [],
+    }));
+    vi.mocked(projectsService.listProjects).mockResolvedValue(rows as never);
+
+    const result = await listProjectsHandler({ limit: 2 });
+
+    expect(projectsService.listProjects).toHaveBeenCalledWith(3);
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.truncated).toBe(true);
+    expect(parsed.items).toHaveLength(2);
+  });
+
+  it('reports truncated:false when the result fits within the limit', async () => {
+    vi.mocked(projectsService.listProjects).mockResolvedValue([
+      { id: 'proj-1', name: 'Launch', identifier: 'LAUNCH', automations: {}, coverGradient: ['#000', '#fff'], memberIds: [] },
+    ] as never);
+
+    const result = await listProjectsHandler({ limit: 5 });
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.truncated).toBe(false);
+    expect(parsed.items).toHaveLength(1);
   });
 });
 

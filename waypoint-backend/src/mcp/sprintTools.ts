@@ -2,9 +2,16 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import * as sprintsService from '../services/sprints.service.js';
 import * as ticketsService from '../services/tickets.service.js';
-import * as statesService from '../services/states.service.js';
+import type { SprintTicketCounts } from '../services/tickets.service.js';
 import { resolveActorNames } from '../lib/actorNames.js';
-import { jsonResult, notFoundResult, withErrorSafetyNet } from './ticketTools.js';
+import {
+  jsonResult,
+  notFoundResult,
+  withErrorSafetyNet,
+  LIMIT_SCHEMA,
+  resolveLimit,
+  page,
+} from './ticketTools.js';
 
 // Sprints had no MCP read tool at all before this file, which is why
 // Copilot would confidently claim "this workspace doesn't use a sprint/
@@ -15,15 +22,15 @@ import { jsonResult, notFoundResult, withErrorSafetyNet } from './ticketTools.js
 
 // A sprint row on its own (name, start/endDate) doesn't say anything about
 // how it's going — the exact question the bug report's example ("what's
-// the current state of Sprint 12") is actually asking. done/ticketCount are
-// computed the same way waypoint-frontend/src/renderer/pages/Home.tsx's
-// findActiveSprint already does for the Home "active sprint" card: fetch
-// the sprint's tickets via the typed filter query (sprintIds is only
-// supported there, not by ticketsService.TicketFilters/list_tickets' own
-// simpler filter set — see that file's withFilters), then count how many
-// sit in a "completed"-group state. Kept local to this file rather than
-// extracted to a shared helper: the two call sites (Home.tsx, here) are on
-// opposite sides of the frontend/backend boundary and can't share code.
+// the current state of Sprint 12") is actually asking. done/ticketCount used
+// to be computed the same way waypoint-frontend/src/renderer/pages/Home.tsx's
+// findActiveSprint does for the Home "active sprint" card: fetch the
+// sprint's tickets via the typed filter query, then count how many sit in a
+// "completed"-group state. That's still true for Home.tsx (a single sprint,
+// already materializing tickets for other reasons), but this file summarizes
+// every sprint in a workspace at once — walking every ticket in every sprint
+// just to run `.length` on the result doesn't scale, so here the two counts
+// come from a real COUNT(*) instead (ticketsService.countTicketsBySprintIds).
 // LLM date arithmetic is unreliable (no live clock, easy off-by-one/off-by-
 // timezone errors) — a real repro: Copilot told a user "6 days remaining"
 // for a sprint the Home dashboard correctly showed 8 days left for, on the
@@ -35,13 +42,18 @@ function daysLeft(endDate: string, now: Date = new Date()): number {
   return Math.max(0, Math.ceil((new Date(endDate).getTime() - now.getTime()) / 86_400_000));
 }
 
-async function toSprintSummary(sprint: Awaited<ReturnType<typeof sprintsService.listAllSprints>>[number]) {
-  const [tickets, leadNames] = await Promise.all([
-    ticketsService.listTicketsByFilter({ sprintIds: [sprint.id] }),
-    resolveActorNames(sprint.leadId ? [sprint.leadId] : []),
-  ]);
-  const stateNames = await statesService.resolveStateNames(tickets.map((t) => t.stateId));
-  const doneCount = tickets.filter((t) => stateNames.get(t.stateId)?.group === 'completed').length;
+// ticketCounts/leadNames are resolved ONCE, batched across every sprint in
+// the page being summarized (see listSprintsHandler/getSprintHandler below)
+// — not per sprint — so this function itself does no I/O and needs no
+// Promise/await. A sprint missing from ticketCounts (zero matching tickets)
+// reads as 0/0, which is correct: "no tickets" and "not summarized" look the
+// same from here.
+function toSprintSummary(
+  sprint: Awaited<ReturnType<typeof sprintsService.listAllSprints>>[number],
+  ticketCounts: Map<string, SprintTicketCounts>,
+  leadNames: Map<string, string>,
+) {
+  const counts = ticketCounts.get(sprint.id) ?? { total: 0, done: 0 };
   return {
     id: sprint.id,
     name: sprint.name,
@@ -55,20 +67,37 @@ async function toSprintSummary(sprint: Awaited<ReturnType<typeof sprintsService.
     leadId: sprint.leadId,
     leadName: sprint.leadId ? (leadNames.get(sprint.leadId) ?? sprint.leadId) : null,
     memberIds: sprint.memberIds,
-    ticketCount: tickets.length,
-    doneCount,
+    ticketCount: counts.total,
+    doneCount: counts.done,
   };
 }
 
-export async function listSprintsHandler({ projectId }: { projectId?: string }) {
-  const rows = projectId ? await sprintsService.listSprints(projectId) : await sprintsService.listAllSprints();
-  return jsonResult(await Promise.all(rows.map(toSprintSummary)));
+export async function listSprintsHandler({ projectId, limit }: { projectId?: string; limit?: number }) {
+  const effectiveLimit = resolveLimit(limit);
+  const fetchLimit = effectiveLimit + 1;
+  const rows = projectId
+    ? await sprintsService.listSprints(projectId, fetchLimit)
+    : await sprintsService.listAllSprints(fetchLimit);
+  const { items: pageItems, truncated } = page(rows, effectiveLimit);
+
+  const [ticketCounts, leadNames] = await Promise.all([
+    ticketsService.countTicketsBySprintIds(pageItems.map((s) => s.id)),
+    resolveActorNames(pageItems.flatMap((s) => (s.leadId ? [s.leadId] : []))),
+  ]);
+  return jsonResult({
+    items: pageItems.map((sprint) => toSprintSummary(sprint, ticketCounts, leadNames)),
+    truncated,
+  });
 }
 
 export async function getSprintHandler({ id }: { id: string }) {
   const sprint = await sprintsService.getSprint(id);
   if (!sprint) return notFoundResult('sprint');
-  return jsonResult(await toSprintSummary(sprint));
+  const [ticketCounts, leadNames] = await Promise.all([
+    ticketsService.countTicketsBySprintIds([sprint.id]),
+    resolveActorNames(sprint.leadId ? [sprint.leadId] : []),
+  ]);
+  return jsonResult(toSprintSummary(sprint, ticketCounts, leadNames));
 }
 
 export function registerSprintTools(server: McpServer): void {
@@ -76,9 +105,10 @@ export function registerSprintTools(server: McpServer): void {
     'list_sprints',
     {
       description:
-        'List sprints (a.k.a. cycles), optionally scoped to one project. Returns each sprint\'s name, date range, lead, and a ticketCount/doneCount progress summary. Use this before answering any question that names a specific sprint (e.g. "Sprint 12") — do not assume sprints are unsupported without checking here first. When reporting how much time is left on a sprint, always use the returned `daysLeft` number as-is — never compute it yourself from startDate/endDate, since you do not reliably know today\'s date.',
+        'List sprints (a.k.a. cycles), optionally scoped to one project. Returns each sprint\'s name, date range, lead, and a ticketCount/doneCount progress summary. Use this before answering any question that names a specific sprint (e.g. "Sprint 12") — do not assume sprints are unsupported without checking here first. When reporting how much time is left on a sprint, always use the returned `daysLeft` number as-is — never compute it yourself from startDate/endDate, since you do not reliably know today\'s date. Results are capped (see limit) — check the truncated flag and narrow the query (e.g. add projectId) if it comes back true.',
       inputSchema: {
         projectId: z.string().optional().describe('If given, only list sprints in this project.'),
+        limit: LIMIT_SCHEMA,
       },
     },
     withErrorSafetyNet('list_sprints', listSprintsHandler),

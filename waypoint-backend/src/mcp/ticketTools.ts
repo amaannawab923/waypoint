@@ -63,9 +63,13 @@ export const ISO_DATE = z
 // commentsService/activityService below), not sliced off after fetching
 // everything — a post-fetch slice would still pay the cost (and the
 // context-window risk of ever materializing) the limit exists to avoid.
-const DEFAULT_LIST_LIMIT = 50;
-const MAX_LIST_LIMIT = 200;
-const LIMIT_SCHEMA = z
+// Exported for sprintTools.ts/proposalTools.ts: list_sprints and
+// list_projects follow the exact same cap-at-the-query-layer convention as
+// every list tool in this file, so they reuse this file's own
+// limit/truncation machinery rather than re-deriving it.
+export const DEFAULT_LIST_LIMIT = 50;
+export const MAX_LIST_LIMIT = 200;
+export const LIMIT_SCHEMA = z
   .number()
   .int()
   .positive()
@@ -73,7 +77,7 @@ const LIMIT_SCHEMA = z
   .optional()
   .describe(`Max rows to return (default ${DEFAULT_LIST_LIMIT}, max ${MAX_LIST_LIMIT}). If the result is truncated, narrow the query (e.g. add a filter) rather than raising this.`);
 
-function resolveLimit(limit: number | undefined): number {
+export function resolveLimit(limit: number | undefined): number {
   return Math.min(limit ?? DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
 }
 
@@ -81,7 +85,7 @@ function resolveLimit(limit: number | undefined): number {
 // the service call above each use of this) so a genuinely full page can be
 // told apart from a truncated one without a separate count query — if more
 // than `effectiveLimit` rows came back, there was more to find.
-function page<T>(rows: T[], effectiveLimit: number): { items: T[]; truncated: boolean } {
+export function page<T>(rows: T[], effectiveLimit: number): { items: T[]; truncated: boolean } {
   const truncated = rows.length > effectiveLimit;
   return { items: truncated ? rows.slice(0, effectiveLimit) : rows, truncated };
 }
