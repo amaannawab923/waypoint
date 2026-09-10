@@ -17,6 +17,8 @@ function comment(overrides: Partial<JiraComment> = {}): JiraComment {
     ticketId: '10421',
     authorName: 'Sam Lee',
     authorAccountId: 'acct-sam',
+    updatedAt: null,
+    updateAuthorName: null,
     body: 'a comment',
     createdAt: '2026-09-01T09:00:00.000Z',
     parentId: null,

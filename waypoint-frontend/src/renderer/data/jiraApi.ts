@@ -341,6 +341,8 @@ function toComment(wire: JiraWireComment): JiraComment {
     ticketId: wire.ticketId,
     authorName: wire.authorName,
     authorAccountId: wire.authorAccountId,
+    updatedAt: wire.updatedAt,
+    updateAuthorName: wire.updateAuthorName,
     body: wire.body,
     createdAt: wire.createdAt,
     // Straight off the wire, deliberately never off what a write asked for —

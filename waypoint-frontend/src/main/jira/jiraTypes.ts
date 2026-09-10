@@ -432,6 +432,17 @@ export interface JiraWireComment {
    * offered for an author Jira did not identify.
    */
   authorAccountId: string | null;
+  /**
+   * When Jira last changed this comment, and who did. Both are on every
+   * comment in the payload and were being dropped.
+   *
+   * They are the freshness signal an edit needs: the thread is read once on
+   * mount, so without re-checking this before saving, editing a comment
+   * someone else changed in the meantime silently overwrites their words.
+   * Null when Jira omits it - never fabricated, same rule as createdAt.
+   */
+  updatedAt: string | null;
+  updateAuthorName: string | null;
   body: string;
   /** When the comment was posted (ISO), or null when Jira's payload omitted
    * `created` — see JiraWireTicket's updatedAt for why this is null rather

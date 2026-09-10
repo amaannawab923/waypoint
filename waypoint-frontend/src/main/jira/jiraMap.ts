@@ -1173,6 +1173,12 @@ export function mapComment(
     // Same helper the ticket's assignee id goes through, so the two cannot
     // disagree about what counts as a usable account id.
     authorAccountId: accountIdOf(record.author),
+    // ROAD-41 contract: declared and defaulted so every consumer compiles
+    // against the final shape. Implemented for real alongside the freshness
+    // check - a default that silently stayed would claim a comment has never
+    // been edited, which is exactly the lie this field exists to prevent.
+    updatedAt: null,
+    updateAuthorName: null,
     // The shared helper, not a reinlined copy of it. `plainTextFromJiraBody`
     // was extracted so a description and a comment "cannot drift apart
     // again", and then this — the one function that comment names — kept its

@@ -1807,6 +1807,8 @@ describe('mapComment', () => {
       ticketId: '10421',
       authorName: 'Sam Lee',
       authorAccountId: null,
+      updatedAt: null,
+      updateAuthorName: null,
       body: 'Replay log attached.',
       // A v2-shaped string body is legacy wiki markup, never a document tree
       // — see `adfBodyOf`'s own comment for why the string branch degrades
@@ -1831,6 +1833,8 @@ describe('mapComment', () => {
       ticketId: '10421',
       authorName: 'Sam Lee',
       authorAccountId: null,
+      updatedAt: null,
+      updateAuthorName: null,
       body: 'No date.',
       bodyAdf: null,
       createdAt: null,
