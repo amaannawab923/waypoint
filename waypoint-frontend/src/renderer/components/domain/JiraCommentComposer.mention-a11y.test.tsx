@@ -319,3 +319,70 @@ describe('the listbox has an accessible name', () => {
     ).toBeInTheDocument();
   });
 });
+
+// ROAD-41: JiraTicketDetail.tsx now mounts a second JiraCommentComposer on
+// the same ticket at once — one above the comment thread (new comments and
+// replies) and a second inline, in place of whichever comment is being
+// edited (see that component's renderComment). Both used to derive their
+// mention listbox id and each option's id from `ticketId` alone, which two
+// instances on the same ticket share — so two mounted together collided on
+// the same DOM ids, and aria-activedescendant/aria-controls on one could
+// resolve to the OTHER instance's listbox rather than its own, depending on
+// whichever element the browser returned first for that duplicate id. This
+// is the isolated proof that useId() (JiraCommentComposer.tsx) fixes it;
+// JiraTicketDrawer.test.tsx's "two composers open at once" suite covers the
+// same guarantee through the real top-composer + inline-edit integration.
+describe('two composer instances mounted on the same ticket at once', () => {
+  it("keeps each instance's listbox id, and its textarea's aria-controls/aria-activedescendant, distinct from the other's", async () => {
+    render(
+      <>
+        <JiraCommentComposer
+          ticketId="10421"
+          ticketKey="ENG-421"
+          attachments={[]}
+          onPosted={jest.fn()}
+          onTicketUpdated={jest.fn()}
+        />
+        <JiraCommentComposer
+          ticketId="10421"
+          ticketKey="ENG-421"
+          attachments={[]}
+          onPosted={jest.fn()}
+          onTicketUpdated={jest.fn()}
+        />
+      </>,
+    );
+    const [boxA, boxB] = screen.getAllByPlaceholderText(
+      /Comment…/i,
+    ) as HTMLTextAreaElement[];
+    expect(boxA).not.toBe(boxB);
+
+    fireEvent.change(boxA, { target: { value: '@' } });
+    fireEvent.change(boxB, { target: { value: '@' } });
+    await runDebounce();
+
+    const controlsA = boxA.getAttribute('aria-controls');
+    const controlsB = boxB.getAttribute('aria-controls');
+    expect(controlsA).toBeTruthy();
+    expect(controlsB).toBeTruthy();
+    // The actual collision this fixes: a ticketId-only id would make these
+    // equal, since both instances share the same ticketId.
+    expect(controlsA).not.toBe(controlsB);
+
+    const listboxA = document.getElementById(controlsA as string);
+    const listboxB = document.getElementById(controlsB as string);
+    expect(listboxA).not.toBeNull();
+    expect(listboxB).not.toBeNull();
+    expect(listboxA).not.toBe(listboxB);
+
+    // Each textarea's own aria-activedescendant names an option living
+    // inside ITS OWN listbox, never the other instance's.
+    const optionA = listboxA?.querySelector('[role="option"]');
+    const optionB = listboxB?.querySelector('[role="option"]');
+    expect(optionA?.id).toBeTruthy();
+    expect(optionB?.id).toBeTruthy();
+    expect(optionA?.id).not.toBe(optionB?.id);
+    expect(boxA).toHaveAttribute('aria-activedescendant', optionA?.id);
+    expect(boxB).toHaveAttribute('aria-activedescendant', optionB?.id);
+  });
+});

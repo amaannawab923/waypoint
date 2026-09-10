@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type ChangeEvent,
@@ -397,6 +398,7 @@ export function JiraCommentComposer({
   pendingEdit,
   onEditConsumed,
   onEdited,
+  onEditCancelled,
 }: {
   ticketId: string;
   /** Jira's assignable-user search is specified in terms of the issue KEY,
@@ -407,7 +409,12 @@ export function JiraCommentComposer({
    * can tell which one it just added — see `handleAttach` — without the
    * composer keeping its own second copy of the list. */
   attachments: JiraAttachment[];
-  onPosted: (comment: JiraComment) => void;
+  /** Fired after a genuinely new (non-edit) comment posts. Optional because
+   * an instance mounted only to edit an existing comment in place (see
+   * JiraTicketDetail.tsx's renderComment) never takes this branch of
+   * handlePost — editingCommentId being set returns out of handlePost via
+   * onEdited before this would ever be called. */
+  onPosted?: (comment: JiraComment) => void;
   /** Attaching a file from the composer attaches it to the issue, the same
    * write `JiraTicketDrawer`'s own "Attach a file" button makes — so the
    * re-read ticket goes up through the same callback that keeps the
@@ -443,6 +450,13 @@ export function JiraCommentComposer({
    * response-not-request rule `onPosted` already follows for a new
    * comment. */
   onEdited?: (comment: JiraComment) => void;
+  /** Fired when Cancel is clicked while editing — after `cancelEdit` has
+   * already cleared this component's own draft/mentions/editingCommentId,
+   * so a caller that unmounts this instance in response (the inline case in
+   * JiraTicketDetail.tsx's renderComment, which exists only while its own
+   * comment is being edited) isn't discarding state this component still
+   * needed. */
+  onEditCancelled?: () => void;
 }) {
   const [draft, setDraft] = useState('');
   const [mentions, setMentions] = useState<JiraMentionSpan[]>([]);
@@ -493,12 +507,19 @@ export function JiraCommentComposer({
   const popoverOpen = trigger !== null;
 
   // The listbox's own id (for the textarea's aria-controls) and a stable id
-  // per option row (for aria-activedescendant and each option's own id) —
-  // scoped by ticketId so two comment composers open on the page at once
-  // (unlikely today, but cheap to get right) never collide.
-  const mentionListboxId = `jira-comment-mention-listbox-${ticketId}`;
+  // per option row (for aria-activedescendant and each option's own id).
+  // Scoped by useId(), not ticketId: JiraTicketDetail.tsx now genuinely
+  // mounts two of these on the same ticket at once — the composer above the
+  // thread (new comments and replies) and a second instance inline wherever
+  // a comment is being edited (see its renderComment) — so a ticketId-keyed
+  // id would collide between them and leave one instance's
+  // aria-activedescendant/aria-controls resolving to the other's listbox.
+  // useId() is unique per mounted instance regardless of how many share a
+  // ticket.
+  const instanceId = useId();
+  const mentionListboxId = `jira-comment-mention-listbox-${instanceId}`;
   function mentionOptionId(accountId: string) {
-    return `jira-comment-mention-option-${ticketId}-${accountId}`;
+    return `jira-comment-mention-option-${instanceId}-${accountId}`;
   }
 
   // Whether there are real option rows to show right now — the ONE guard
@@ -880,6 +901,7 @@ export function JiraCommentComposer({
     setEditingCommentId(null);
     setDraft('');
     setMentions([]);
+    onEditCancelled?.();
   }
 
   /** Wraps the current selection in a delimiter pair — **bold**, _em_,
@@ -1137,7 +1159,7 @@ export function JiraCommentComposer({
       const comment = replyParentId
         ? await postJiraComment(ticketId, draft, mentions, replyParentId)
         : await postJiraComment(ticketId, draft, mentions);
-      onPosted(comment);
+      onPosted?.(comment);
       setDraft('');
       setMentions([]);
       setReplyParentId(null);

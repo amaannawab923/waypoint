@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react';
 import {
   deleteJiraComment,
@@ -184,11 +185,45 @@ function commentBox(): HTMLTextAreaElement {
   return screen.getByPlaceholderText(/Comment…/i) as HTMLTextAreaElement;
 }
 
+/**
+ * ROAD-41: JiraTicketDetail now mounts a second JiraCommentComposer inline,
+ * in place of whichever comment is being edited, alongside the one always
+ * mounted above the thread — so while an edit is open, `commentBox()`'s own
+ * placeholder match is no longer unique and throws. This picks out the
+ * inline one specifically by the one thing only it ever shows: a Save
+ * button, scoped up to that composer's own root (`[data-shortcut-guard]`,
+ * the same attribute JiraCommentComposer's global-shortcut guard already
+ * relies on, not a test-only marker) so the query never has to guess which
+ * of the two rendered "Comment…" boxes goes with which Save button.
+ */
+function inlineEditBox(): HTMLTextAreaElement {
+  const saveButton = screen.getByRole('button', { name: 'Save' });
+  const composerRoot = saveButton.closest(
+    '[data-shortcut-guard]',
+  ) as HTMLElement;
+  return within(composerRoot).getByPlaceholderText(
+    /Comment…/i,
+  ) as HTMLTextAreaElement;
+}
+
 /** The picker debounces its search by ~250ms; nothing arrives until the timers
  * this advances have run. */
 async function runDebounce() {
   await act(async () => {
     jest.advanceTimersByTime(300);
+  });
+}
+
+/** Flushes a pending `requestAnimationFrame` callback under this file's fake
+ * timers — needed after an action (Cancel, or a saved edit) that schedules a
+ * focus-restore via rAF, the same "focus after a state-driven re-render"
+ * pattern JiraCommentComposer.tsx already uses throughout (selecting a
+ * mention, loading a reply/edit prefill, …). Fake timers replace rAF with a
+ * timer-backed stand-in, so nothing scheduled through it runs until timers
+ * are advanced, same as a real setTimeout under this same mock. */
+async function flushFrame() {
+  await act(async () => {
+    jest.advanceTimersByTime(50);
   });
 }
 
@@ -1308,7 +1343,16 @@ describe('editing a comment', () => {
     expect(editInJira).toHaveAttribute('target', '_blank');
   });
 
-  it('loads the proven-safe prefill into the composer on click', async () => {
+  // ROAD-41: Edit used to load the comment's text into the one composer
+  // shared with new-comment/reply, at the bottom of the page, while the
+  // comment itself kept rendering unchanged up in the thread — editing in
+  // one place, looking at the stale original somewhere else. It now opens a
+  // second JiraCommentComposer instance in that comment's own spot,
+  // replacing its body and action row directly (matching Jira's own inline
+  // edit, verified live against ENG-84) — these tests cover that placement
+  // and the thread staying put around it; `inlineEditBox()` is what picks
+  // that second instance out from the one still sitting above the thread.
+  it('loads the proven-safe prefill into the composer on click, in the comment’s own spot', async () => {
     jest.mocked(getJiraCommentPermissions).mockResolvedValue({
       deleteAll: false,
       deleteOwn: false,
@@ -1330,8 +1374,51 @@ describe('editing a comment', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
 
-    expect(commentBox().value).toBe('Can you take a look? Thanks @Sam Lee');
+    expect(inlineEditBox().value).toBe('Can you take a look? Thanks @Sam Lee');
     expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
+    // The original, unedited body is gone from the thread — not still
+    // rendered somewhere else while the editor also shows it, the exact
+    // defect this replaces.
+    expect(screen.queryByText('Can you take a look?')).not.toBeInTheDocument();
+  });
+
+  it('keeps every other comment exactly where it was while one is being edited', async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: false,
+      deleteOwn: false,
+      editAll: true,
+      editOwn: false,
+    });
+    jest.mocked(prepareJiraCommentEdit).mockReturnValue(EDIT_PREVIEW);
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({ id: 'c1', body: 'original text' }),
+        comment({
+          id: 'c2',
+          authorAccountId: 'acct-sam',
+          authorName: 'Sam Lee',
+          body: 'an unrelated comment',
+        }),
+      ],
+      total: 2,
+    });
+    renderDrawer();
+    await screen.findByText('original text');
+    await screen.findByText('an unrelated comment');
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0]);
+
+    // c1's body is swapped for its editor; c2 — not being edited — still
+    // renders exactly as a plain comment, unaffected by its neighbor's edit.
+    // "original text" now appears exactly once in the whole document — the
+    // editor's own textarea, whose live value happens to read the same as
+    // the prefill it loaded — and NOT a second time as c1's own static body
+    // still sitting there behind it, which is the defect being fixed.
+    const matches = screen.getAllByText('original text');
+    expect(matches).toHaveLength(1);
+    expect(matches[0].tagName).toBe('TEXTAREA');
+    expect(screen.getByText('an unrelated comment')).toBeInTheDocument();
+    expect(inlineEditBox().value).toBe('original text');
   });
 
   it('saves the edit through updateJiraComment and replaces the row with the response', async () => {
@@ -1353,7 +1440,7 @@ describe('editing a comment', () => {
     await screen.findByText('original text');
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
-    fireEvent.change(commentBox(), {
+    fireEvent.change(inlineEditBox(), {
       target: { value: 'edited text' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -1379,9 +1466,15 @@ describe('editing a comment', () => {
     // pins for the read count.
     expect(screen.getByText('edited text')).toBeInTheDocument();
     expect(listJiraComments).toHaveBeenCalledTimes(1);
+    // The inline editor is gone — a save is one of the two ways out of edit
+    // mode, same as Cancel — and it isn't a save that leaves the reader
+    // clicking Edit into a phantom empty editor.
+    expect(
+      screen.queryByRole('button', { name: 'Save' }),
+    ).not.toBeInTheDocument();
   });
 
-  it('discards the loaded edit and clears the composer on Cancel', async () => {
+  it('discards the loaded edit and restores the comment on Cancel, without saving', async () => {
     jest.mocked(getJiraCommentPermissions).mockResolvedValue({
       deleteAll: false,
       deleteOwn: false,
@@ -1397,13 +1490,134 @@ describe('editing a comment', () => {
     await screen.findByText('original text');
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
-    expect(commentBox().value).toBe('original text');
+    expect(inlineEditBox().value).toBe('original text');
 
+    fireEvent.change(inlineEditBox(), { target: { value: 'a stray edit' } });
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await flushFrame();
 
-    expect(commentBox().value).toBe('');
     expect(updateJiraComment).not.toHaveBeenCalled();
+    // Restored to the comment's real, unedited body — "a stray edit" was
+    // never saved and isn't shown anywhere.
     expect(screen.getByText('original text')).toBeInTheDocument();
+    expect(screen.queryByText('a stray edit')).not.toBeInTheDocument();
+    // The inline editor itself is gone, not just visually blanked.
+    expect(
+      screen.queryByRole('button', { name: 'Save' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Cancel' }),
+    ).not.toBeInTheDocument();
+    // Focus lands back on this comment's own Edit button rather than
+    // falling to <body> once the editor that held it unmounts.
+    expect(screen.getByRole('button', { name: 'Edit' })).toHaveFocus();
+  });
+});
+
+// ROAD-41: two real JiraCommentComposer instances can now be mounted on the
+// same ticket at once — the one above the thread, and a second wherever a
+// comment is being edited (see the "editing a comment" block above). Both
+// used to derive their mention popover's DOM ids from ticketId alone, which
+// two instances on the same ticket share; this is the integration-level
+// proof (JiraCommentComposer.mention-a11y.test.tsx has the isolated one)
+// that they no longer collide once both are genuinely open together.
+describe('two composers open at once (the top composer and an inline edit)', () => {
+  it("gives the top composer's and the inline editor's mention popovers distinct listbox ids", async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: false,
+      deleteOwn: false,
+      editAll: true,
+      editOwn: false,
+    });
+    jest.mocked(prepareJiraCommentEdit).mockReturnValue({
+      text: 'hi @Sam Lee',
+      mentions: [
+        { start: 3, end: 11, accountId: 'acct-sam', displayName: 'Sam Lee' },
+      ],
+    });
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [comment({ id: 'c1', body: 'hi @Sam Lee' })],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('hi @Sam Lee');
+
+    // Opens the inline editor on c1 — a second composer, independent of the
+    // one already sitting above the thread for a genuinely new comment.
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const editBox = inlineEditBox();
+    expect(editBox.value).toBe('hi @Sam Lee');
+
+    // A plain top-level draft, not a Reply — compatible with an inline edit
+    // open elsewhere in the thread (only Reply and Edit are mutually
+    // exclusive; see JiraTicketDetail.tsx's renderComment). commentBox()
+    // itself assumes a single match, which no longer holds now that both
+    // composers are genuinely mounted together — the exact scenario this
+    // test exists to cover — so the top one is picked out by exclusion.
+    const boxes = screen.getAllByPlaceholderText(
+      /Comment…/i,
+    ) as HTMLTextAreaElement[];
+    expect(boxes).toHaveLength(2);
+    const topBox = boxes.find((b) => b !== editBox) as HTMLTextAreaElement;
+    expect(topBox).not.toBe(editBox);
+
+    fireEvent.change(topBox, { target: { value: 'new @sa' } });
+    fireEvent.change(editBox, { target: { value: 'hi @sa' } });
+    await runDebounce();
+
+    const topControls = topBox.getAttribute('aria-controls');
+    const editControls = editBox.getAttribute('aria-controls');
+    expect(topControls).toBeTruthy();
+    expect(editControls).toBeTruthy();
+    expect(topControls).not.toBe(editControls);
+
+    const topListbox = document.getElementById(topControls as string);
+    const editListbox = document.getElementById(editControls as string);
+    expect(topListbox).not.toBeNull();
+    expect(editListbox).not.toBeNull();
+    expect(topListbox).not.toBe(editListbox);
+
+    // Each textarea's own aria-activedescendant resolves to an option
+    // inside ITS OWN listbox, not the other instance's — the exact failure
+    // a shared, ticketId-only id would silently produce.
+    const topOption = topListbox?.querySelector('[role="option"]');
+    const editOption = editListbox?.querySelector('[role="option"]');
+    expect(topOption?.id).toBeTruthy();
+    expect(editOption?.id).toBeTruthy();
+    expect(topOption?.id).not.toBe(editOption?.id);
+    expect(topBox.getAttribute('aria-activedescendant')).toBe(topOption?.id);
+    expect(editBox.getAttribute('aria-activedescendant')).toBe(editOption?.id);
+  });
+});
+
+// ROAD-41: Jira's own "Add a comment…" box sits at the top of the activity
+// thread, directly under the tabs, above every existing comment (verified
+// live against ENG-84) — Waypoint's used to sit after the whole list
+// instead.
+describe('the comment composer sits above the thread', () => {
+  it('renders before every existing comment in the DOM, not after them', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({ id: 'c1', body: 'first comment' }),
+        comment({ id: 'c2', body: 'second comment' }),
+      ],
+      total: 2,
+    });
+    renderDrawer();
+    await screen.findByText('first comment');
+    await screen.findByText('second comment');
+
+    const box = commentBox();
+    const firstComment = screen.getByText('first comment');
+    // Neither element is an ancestor of the other (the composer and the
+    // thread are siblings under the same panel), so this comparison can
+    // only ever come back as exactly DOCUMENT_POSITION_FOLLOWING — no other
+    // bit can be set — when `firstComment` comes after `box` in the
+    // document. A strict equality check says that without a bitwise `&`,
+    // which this project's eslint config disallows outright.
+    expect(box.compareDocumentPosition(firstComment)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
   });
 });
 

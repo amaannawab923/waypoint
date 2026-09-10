@@ -312,19 +312,57 @@ export function JiraTicketDetail({
   // "Saving…".
   const [downloading, setDownloading] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  // Set by a comment's Reply action and consumed by JiraCommentComposer's
-  // own prefill effect (see that component's onReplyConsumed) — a fresh
-  // object every click, deliberately, so a second Reply click (even to the
-  // same author) is a real state change the composer's effect will see.
+  // Set by a comment's Reply action and consumed by the composer above the
+  // thread's own prefill effect (see JiraCommentComposer's onReplyConsumed)
+  // — a fresh object every click, deliberately, so a second Reply click
+  // (even to the same author) is a real state change the composer's effect
+  // will see. Reply always targets that one composer — see JiraCommentComposer
+  // itself for why a reply is a new (if nested) comment, not an edit.
   const [pendingReply, setPendingReply] = useState<JiraReplyTarget | null>(
     null,
   );
-  // Set by a comment's Edit action and consumed by JiraCommentComposer's own
-  // edit-prefill effect — same "fresh object every click" contract as
-  // pendingReply just above, and mutually exclusive with it (see both
-  // components' own handlers): only ever one of "replying to" or "editing"
-  // a comment is in flight on this one shared composer at a time.
+  // Which comment currently has its OWN inline JiraCommentComposer mounted
+  // in place of its body (see renderComment below), and what to prefill it
+  // with. Unlike pendingReply, this is not a one-shot signal consumed the
+  // instant it's loaded: it stays set for the whole editing session, because
+  // it doubles as the render condition that keeps that one comment's inline
+  // editor mounted. It is cleared — unmounting the editor and restoring the
+  // comment's own rendered body — by closeInlineEdit below, on Cancel or on
+  // a successful save.
+  //
+  // Mutually exclusive with pendingReply, the same property the two shared
+  // on one composer before this composer split in two: starting an Edit
+  // clears pendingReply (see the Edit handler in renderComment) and bumps
+  // editGeneration to reset the reply composer's own draft, and starting a
+  // Reply clears pendingEdit (unmounting whatever comment's inline editor
+  // was open, discarding any unsaved edit there).
   const [pendingEdit, setPendingEdit] = useState<JiraEditTarget | null>(null);
+  // Remounts the composer above the thread (via its `key` below) whenever an
+  // Edit starts, so that composer's own in-progress draft — a reply prefill
+  // or a plain typed comment — is abandoned rather than left showing behind
+  // an unrelated inline edit. Mirrors exactly what this component's single
+  // shared composer already did before the split: loading an edit always
+  // replaced that composer's whole draft, regardless of what was in it.
+  const [editGeneration, setEditGeneration] = useState(0);
+  // One comment's own Edit trigger button, by comment id — read by
+  // closeInlineEdit so Cancel (and a successful Save) can put focus back on
+  // it rather than letting it fall to <body> once the inline editor
+  // unmounts and takes the focus that was inside it along with it.
+  const editButtonRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+
+  /** Unmounts whichever comment's inline editor is open and returns focus to
+   * that comment's own Edit button — the shared ending for both Cancel and a
+   * successful Save, since both leave the thread with nothing being edited
+   * and nowhere obvious for focus to land on its own. Deferred a frame so the
+   * Edit button this focuses has already been re-rendered: it doesn't exist
+   * in the DOM until the state update below removes the inline editor that
+   * was standing in its place. */
+  function closeInlineEdit(commentId: string) {
+    setPendingEdit(null);
+    requestAnimationFrame(() => {
+      editButtonRefs.current.get(commentId)?.focus();
+    });
+  }
   // Which comment's permalink was just copied, by id — mirrors
   // RequestsPage.tsx's own linkCopied flag, the one other "Copy link"
   // affordance in this app: this app's toast channel is error-only (see
@@ -634,6 +672,12 @@ export function JiraTicketDetail({
    * PropertyRow above does NOT need to, because PropertyRow needs none of
    * them. */
   function renderComment(c: JiraComment) {
+    // Whether THIS comment's own inline editor is the one pendingEdit
+    // names — pendingEdit is a single value, so at most one comment in the
+    // whole thread ever satisfies this at a time. See pendingEdit's own
+    // comment above for why this stays true for the whole editing session
+    // rather than going null the instant the prefill loads.
+    const isEditing = pendingEdit?.commentId === c.id;
     return (
       <div key={c.id} className="group flex gap-2">
         <Avatar name={c.authorName} size={22} />
@@ -650,110 +694,165 @@ export function JiraTicketDetail({
               {c.disclosureText}
             </div>
           )}
-          <div className="text-[12.5px] leading-relaxed whitespace-pre-wrap text-text-secondary">
-            {c.body}
-          </div>
-          {/* Four of Jira's five comment-row actions now: Reply, Edit,
-              Copy link, and Delete — permission-gated per comment
-              (see canDeleteComment/canEditComment above) rather than
-              always shown, since Jira's own comment menu only ever
-              offers delete/edit on a comment you may actually change.
-              Reactions have no public API at all and remain the one
-              honest gap. Opacity-revealed on hover exactly like
-              ProjectViewsPage.tsx's own row actions, and
-              group-focus-within (not group-hover alone) is what keeps
-              a keyboard user from needing a mouse to ever see these —
-              a Tab landing on any of these buttons already reveals the
-              row before it needs to be clicked.
+          {isEditing && pendingEdit ? (
+            // Replaces this one comment's own body and action row with a
+            // real composer, right where the comment already sits — matching
+            // Jira's own inline edit (verified live against ENG-84: Edit
+            // swaps the comment's body for an editor in place, not a shared
+            // box elsewhere in the thread). Everything else in the thread,
+            // including every other comment's own position, is untouched.
+            //
+            // A fresh JiraCommentComposer instance, mounted only while
+            // isEditing is true for this one comment: it gets no
+            // onEditConsumed (nothing here needs pendingEdit nulled the
+            // instant the prefill loads — closeInlineEdit, wired to Cancel
+            // and to a successful Save below, is what unmounts this) and no
+            // pendingReply (Reply always targets the composer above the
+            // thread, never this one — see that composer's own JSX below).
+            <JiraCommentComposer
+              ticketId={ticket.id}
+              ticketKey={ticket.key}
+              attachments={ticket.attachments}
+              onTicketUpdated={onTicketUpdated}
+              pendingEdit={pendingEdit}
+              onEdited={(comment) => {
+                // Same "trust the response, not the request" rule the
+                // composer above the thread already follows for onPosted:
+                // replaces the row with whatever Jira's own write response
+                // describes, not the text this instance happened to submit.
+                setComments((cs) =>
+                  cs.map((x) => (x.id === comment.id ? comment : x)),
+                );
+                closeInlineEdit(c.id);
+              }}
+              onEditCancelled={() => closeInlineEdit(c.id)}
+            />
+          ) : (
+            <>
+              <div className="text-[12.5px] leading-relaxed whitespace-pre-wrap text-text-secondary">
+                {c.body}
+              </div>
+              {/* Four of Jira's five comment-row actions now: Reply, Edit,
+                  Copy link, and Delete — permission-gated per comment
+                  (see canDeleteComment/canEditComment above) rather than
+                  always shown, since Jira's own comment menu only ever
+                  offers delete/edit on a comment you may actually change.
+                  Reactions have no public API at all and remain the one
+                  honest gap. Opacity-revealed on hover exactly like
+                  ProjectViewsPage.tsx's own row actions, and
+                  group-focus-within (not group-hover alone) is what keeps
+                  a keyboard user from needing a mouse to ever see these —
+                  a Tab landing on any of these buttons already reveals the
+                  row before it needs to be clicked.
 
-              Edit itself is gated twice, deliberately at two different
-              layers: `canEditComment` decides whether Edit may be
-              OFFERED at all (a permissions question), and
-              `prepareJiraCommentEdit` — called only once permission
-              says yes, since the round trip it performs is not free —
-              decides whether THIS comment's own content can be edited
-              without changing it (a losslessness question). A comment
-              that fails the second check still gets an honest answer
-              in this row rather than Edit silently vanishing as though
-              the feature didn't exist for it. */}
-          <div className="mt-1 flex items-center gap-2.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-            {c.authorAccountId !== null && (
-              <button
-                type="button"
-                onClick={() => {
-                  setPendingEdit(null);
-                  setPendingReply({
-                    commentId: c.id,
-                    accountId: c.authorAccountId as string,
-                    displayName: c.authorName,
-                  });
-                }}
-                className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
-              >
-                Reply
-              </button>
-            )}
-            {canEditComment(c) &&
-              (() => {
-                const editPreview = prepareJiraCommentEdit(c);
-                if (editPreview) {
-                  return (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPendingReply(null);
-                        setPendingEdit({ commentId: c.id, ...editPreview });
-                      }}
-                      className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
-                    >
-                      Edit
-                    </button>
-                  );
-                }
-                // Refused, honestly — see this block's own header comment.
-                // Jira's `focusedCommentId` permalink is the one real path
-                // left to change this comment's content at all.
-                return jiraUrl ? (
-                  <span
-                    className="text-[10.5px] text-text-muted"
-                    title="Waypoint can't rebuild this comment's formatting without changing it, so editing it here is refused rather than risking that."
+                  Edit itself is gated twice, deliberately at two different
+                  layers: `canEditComment` decides whether Edit may be
+                  OFFERED at all (a permissions question), and
+                  `prepareJiraCommentEdit` — called only once permission
+                  says yes, since the round trip it performs is not free —
+                  decides whether THIS comment's own content can be edited
+                  without changing it (a losslessness question). A comment
+                  that fails the second check still gets an honest answer
+                  in this row rather than Edit silently vanishing as though
+                  the feature didn't exist for it. */}
+              <div className="mt-1 flex items-center gap-2.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                {c.authorAccountId !== null && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // Reply targets the composer above the thread, never
+                      // this comment's own spot — so any inline edit open
+                      // elsewhere in the thread is abandoned rather than
+                      // left open alongside a reply-in-progress.
+                      setPendingEdit(null);
+                      setPendingReply({
+                        commentId: c.id,
+                        accountId: c.authorAccountId as string,
+                        displayName: c.authorName,
+                      });
+                    }}
+                    className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
                   >
-                    Can&apos;t edit here ·{' '}
-                    <a
-                      href={buildJiraCommentPermalink(
-                        connection?.site ?? '',
-                        ticket.key,
-                        c.id,
-                      )}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="font-semibold text-text-muted hover:text-text hover:underline"
-                    >
-                      Edit in Jira
-                    </a>
-                  </span>
-                ) : null;
-              })()}
-            {jiraUrl && (
-              <button
-                type="button"
-                onClick={() => handleCopyCommentLink(c.id)}
-                className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
-              >
-                {copiedCommentId === c.id ? 'Copied' : 'Copy link'}
-              </button>
-            )}
-            {canDeleteComment(c) && (
-              <button
-                type="button"
-                disabled={deletingCommentId === c.id}
-                onClick={() => handleDeleteComment(c)}
-                className="rounded text-[10.5px] font-semibold text-text-muted hover:text-danger hover:underline disabled:opacity-60"
-              >
-                {deletingCommentId === c.id ? 'Deleting…' : 'Delete'}
-              </button>
-            )}
-          </div>
+                    Reply
+                  </button>
+                )}
+                {canEditComment(c) &&
+                  (() => {
+                    const editPreview = prepareJiraCommentEdit(c);
+                    if (editPreview) {
+                      return (
+                        <button
+                          type="button"
+                          ref={(el) => {
+                            // Read by closeInlineEdit to return focus here
+                            // once Cancel or a successful Save unmounts this
+                            // comment's own inline editor — see that
+                            // function's own comment.
+                            if (el) editButtonRefs.current.set(c.id, el);
+                            else editButtonRefs.current.delete(c.id);
+                          }}
+                          onClick={() => {
+                            // Edit targets this comment's own inline spot,
+                            // never the composer above the thread — so any
+                            // reply in progress there is abandoned (cleared
+                            // here, and editGeneration below remounts that
+                            // composer to actually drop its own draft).
+                            setPendingReply(null);
+                            setEditGeneration((g) => g + 1);
+                            setPendingEdit({ commentId: c.id, ...editPreview });
+                          }}
+                          className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
+                        >
+                          Edit
+                        </button>
+                      );
+                    }
+                    // Refused, honestly — see this block's own header comment.
+                    // Jira's `focusedCommentId` permalink is the one real path
+                    // left to change this comment's content at all.
+                    return jiraUrl ? (
+                      <span
+                        className="text-[10.5px] text-text-muted"
+                        title="Waypoint can't rebuild this comment's formatting without changing it, so editing it here is refused rather than risking that."
+                      >
+                        Can&apos;t edit here ·{' '}
+                        <a
+                          href={buildJiraCommentPermalink(
+                            connection?.site ?? '',
+                            ticket.key,
+                            c.id,
+                          )}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-semibold text-text-muted hover:text-text hover:underline"
+                        >
+                          Edit in Jira
+                        </a>
+                      </span>
+                    ) : null;
+                  })()}
+                {jiraUrl && (
+                  <button
+                    type="button"
+                    onClick={() => handleCopyCommentLink(c.id)}
+                    className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
+                  >
+                    {copiedCommentId === c.id ? 'Copied' : 'Copy link'}
+                  </button>
+                )}
+                {canDeleteComment(c) && (
+                  <button
+                    type="button"
+                    disabled={deletingCommentId === c.id}
+                    onClick={() => handleDeleteComment(c)}
+                    className="rounded text-[10.5px] font-semibold text-text-muted hover:text-danger hover:underline disabled:opacity-60"
+                  >
+                    {deletingCommentId === c.id ? 'Deleting…' : 'Delete'}
+                  </button>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </div>
     );
@@ -1013,18 +1112,49 @@ export function JiraTicketDetail({
           <div className="mt-6 mb-2 text-[11px] font-bold tracking-wide text-text-muted uppercase">
             Comments
           </div>
+          {/* Above the thread, not below it — matching Jira's own layout
+              (verified live against ENG-84: "Add a comment…" sits directly
+              under the Comments tab, above every existing comment, not
+              after the last one). `key`s this composer to editGeneration so
+              starting an Edit elsewhere (see renderComment's Edit handler)
+              remounts it, abandoning whatever draft — a reply prefill or a
+              plain typed comment — was in progress here; the same "loading
+              an edit replaces the whole draft" behavior this composer had
+              before Edit moved to its own inline spot, just triggered from
+              outside now that the two are separate instances. No
+              pendingEdit/onEditConsumed/onEdited here: this instance never
+              edits anything, only posts new (possibly nested, via
+              pendingReply) comments — see renderComment for the second
+              instance that does edit, mounted per comment rather than once
+              here. */}
+          <JiraCommentComposer
+            key={editGeneration}
+            ticketId={ticket.id}
+            ticketKey={ticket.key}
+            attachments={ticket.attachments}
+            onTicketUpdated={onTicketUpdated}
+            pendingReply={pendingReply}
+            onReplyConsumed={() => setPendingReply(null)}
+            onPosted={(comment) => {
+              setComments((cs) => [...cs, comment]);
+              // Otherwise posting into a truncated thread walks the notice's
+              // own numbers together ("101 most recent of 312"), and on a
+              // short thread it would invent a truncation that isn't there.
+              setCommentTotal((t) => t + 1);
+            }}
+          />
           {/* Said before the thread, not after it: the whole failure this
               fixes is a reader finishing a partial thread believing it was
               the whole one. `total` comes from Jira rather than being
               inferred, so this can name the real number instead of hedging
               with "there are more". */}
           {commentTotal > comments.length && (
-            <div className="mb-2.5 rounded-[var(--radius-sm)] border border-warning/30 bg-warning-bg px-3 py-2 text-[11.5px] leading-relaxed text-warning">
+            <div className="mt-3 rounded-[var(--radius-sm)] border border-warning/30 bg-warning-bg px-3 py-2 text-[11.5px] leading-relaxed text-warning">
               Showing the {comments.length} most recent of {commentTotal}{' '}
               comments. Open this issue in Jira to read the rest.
             </div>
           )}
-          <div className="mb-4 space-y-3.5">
+          <div className="mt-3 space-y-3.5">
             {/* Nested, not flat: Jira genuinely threads comments (verified
                 live against ENG-84 — see JiraWireComment.parentId's own
                 comment), so a reply now renders under the comment it
@@ -1059,38 +1189,6 @@ export function JiraTicketDetail({
               <p className="text-[12.5px] text-text-muted">No comments yet.</p>
             )}
           </div>
-
-          <JiraCommentComposer
-            ticketId={ticket.id}
-            ticketKey={ticket.key}
-            attachments={ticket.attachments}
-            onTicketUpdated={onTicketUpdated}
-            pendingReply={pendingReply}
-            onReplyConsumed={() => setPendingReply(null)}
-            pendingEdit={pendingEdit}
-            onEditConsumed={() => setPendingEdit(null)}
-            onEdited={(comment) => {
-              // Replaces the edited row in place — `.map()`, not a refetch,
-              // matching deleteJiraComment's own reasoning just above:
-              // updateJiraComment already told Jira to overwrite the
-              // comment, and this module holds no separate cache of the
-              // thread to reconcile against. The comment used here is
-              // whatever `comment` carries — Jira's own response, not the
-              // request that was sent (see JiraCommentComposer's onEdited
-              // prop and updateJiraComment's own comment) — so a parentId
-              // Jira still reports keeps this row nested where it was.
-              setComments((cs) =>
-                cs.map((c) => (c.id === comment.id ? comment : c)),
-              );
-            }}
-            onPosted={(comment) => {
-              setComments((cs) => [...cs, comment]);
-              // Otherwise posting into a truncated thread walks the notice's
-              // own numbers together ("101 most recent of 312"), and on a
-              // short thread it would invent a truncation that isn't there.
-              setCommentTotal((t) => t + 1);
-            }}
-          />
         </div>
       </div>
 
