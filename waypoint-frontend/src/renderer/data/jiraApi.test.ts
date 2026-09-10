@@ -1773,6 +1773,41 @@ describe('prepareJiraCommentEdit', () => {
     };
   }
 
+  // Captured verbatim from the founder's real Jira (ENG-84, comment 10192,
+  // created by Jira's own Reply button). Jira's editor stamps identity-only
+  // attrs this app never emits — localId on every node it creates, and
+  // accessLevel on a mention — so a strict compare refused every comment
+  // authored in Jira rather than in Waypoint. Replies always hit it because
+  // Jira's Reply always produces one.
+  it('accepts a real Jira-authored reply, whose nodes carry localId and accessLevel', () => {
+    const api = freshApi();
+    const adf = {
+      type: 'doc',
+      version: 1,
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            {
+              type: 'mention',
+              attrs: {
+                id: '712020:05c45d40-ca2a-4829-84ad-df1f5429a4d0',
+                text: '@Amaan Nawab',
+                accessLevel: '',
+                localId: '6fec578becdd',
+              },
+            },
+            { type: 'text', text: ' Reply Should be like this ' },
+          ],
+          attrs: { localId: '633aec66e054' },
+        },
+      ],
+    };
+
+    const result = api.prepareJiraCommentEdit(commentWithAdf(adf));
+    expect(result).not.toBeNull();
+  });
+
   it('refuses a comment whose bodyAdf is null — nothing to run the proof against', () => {
     const api = freshApi();
 

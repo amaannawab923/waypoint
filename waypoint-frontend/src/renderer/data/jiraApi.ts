@@ -1800,7 +1800,36 @@ function normalizeAdfForCompare(value: unknown): unknown {
       if (key === 'marks' && Array.isArray(rec[key]) && rec[key].length === 0) {
         continue;
       }
+      // Jira's own editor stamps identity-only attrs onto everything it
+      // creates: a `localId` on each node, and `accessLevel` on a mention.
+      // Neither carries anything the author wrote - they are editor
+      // bookkeeping - but this app's builder never emits them, so comparing
+      // them refused every comment composed in Jira rather than in Waypoint.
+      // Replies always hit it, because Jira's Reply always produces a
+      // mention. Captured from a real one: ENG-84 comment 10192.
+      //
+      // Ignored for the comparison only, and safe to drop from the saved
+      // body for the same reason: they identify nodes to Jira's editor
+      // rather than encoding content, and Jira reissues them. Everything
+      // that does encode content - text, marks, a mention's id, a link's
+      // href - is still compared exactly, so this widens which comments are
+      // editable without weakening what "lossless" means.
+      if (key === 'localId') continue;
+      if (key === 'accessLevel' && rec[key] === '') continue;
       out[key] = normalizeAdfForCompare(rec[key]);
+    }
+    // A node whose only attrs were identity-only is left with an empty attrs
+    // object, where the builder emits no attrs key at all. Treat those as
+    // the same rather than failing on a difference that is now empty by
+    // definition.
+    const attrs = out.attrs;
+    if (
+      attrs &&
+      typeof attrs === 'object' &&
+      !Array.isArray(attrs) &&
+      Object.keys(attrs as Record<string, unknown>).length === 0
+    ) {
+      delete out.attrs;
     }
     return out;
   }
