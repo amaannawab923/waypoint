@@ -49,6 +49,7 @@ const searchAssignableUsersMock = jest.fn();
 const setTicketAssigneeMock = jest.fn();
 const listCommentsMock = jest.fn();
 const postCommentMock = jest.fn();
+const updateCommentMock = jest.fn();
 const deleteCommentMock = jest.fn();
 const getMyPermissionsMock = jest.fn();
 const downloadAttachmentMock = jest.fn();
@@ -68,6 +69,7 @@ jest.mock('./jiraClient', () => ({
   setTicketAssignee: (...args: unknown[]) => setTicketAssigneeMock(...args),
   listComments: (...args: unknown[]) => listCommentsMock(...args),
   postComment: (...args: unknown[]) => postCommentMock(...args),
+  updateComment: (...args: unknown[]) => updateCommentMock(...args),
   deleteComment: (...args: unknown[]) => deleteCommentMock(...args),
   getMyPermissions: (...args: unknown[]) => getMyPermissionsMock(...args),
 }));
@@ -847,6 +849,74 @@ describe('per-ticket channels', () => {
         ),
       ).toMatchObject({ ok: false, reason: 'invalid_input' });
       expect(postCommentMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('jira:comments:update', () => {
+    const ADF_TEXT_ONLY = {
+      type: 'doc',
+      version: 1,
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'Edited.' }] },
+      ],
+    };
+
+    it('refuses a ticket id that is not one, before any client call', async () => {
+      expect(
+        await getHandler('jira:comments:update')(
+          {},
+          { ticketId: '../../etc/passwd', commentId: '10500', body: ADF_TEXT_ONLY },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(updateCommentMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses a comment id that is not one, before any client call', async () => {
+      expect(
+        await getHandler('jira:comments:update')(
+          {},
+          { ticketId: '10421', commentId: '../../etc/passwd', body: ADF_TEXT_ONLY },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(updateCommentMock).not.toHaveBeenCalled();
+    });
+
+    // The same body validator `jira:comments:post` uses, reused rather than
+    // re-implemented — this is the one representative case (a doc of only
+    // empty paragraphs), not the full suite `jira:comments:post` already
+    // covers for the same `readCommentBody`/`commentBodyHasContent` pair.
+    it('refuses a doc made only of empty paragraphs', async () => {
+      expect(
+        await getHandler('jira:comments:update')(
+          {},
+          {
+            ticketId: '10421',
+            commentId: '10500',
+            body: {
+              type: 'doc',
+              version: 1,
+              content: [{ type: 'paragraph', content: [] }],
+            },
+          },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(updateCommentMock).not.toHaveBeenCalled();
+    });
+
+    it('delegates a valid triple to the client', async () => {
+      updateCommentMock.mockResolvedValue({ ok: true, value: { id: '10500' } });
+
+      const result = await getHandler('jira:comments:update')(
+        {},
+        { ticketId: '10421', commentId: '10500', body: ADF_TEXT_ONLY },
+      );
+
+      expect(updateCommentMock).toHaveBeenCalledWith(
+        '10421',
+        '10500',
+        ADF_TEXT_ONLY,
+      );
+      expect(result).toEqual({ ok: true, value: { id: '10500' } });
     });
   });
 

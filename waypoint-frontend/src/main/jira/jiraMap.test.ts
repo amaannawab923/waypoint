@@ -1808,6 +1808,10 @@ describe('mapComment', () => {
       authorName: 'Sam Lee',
       authorAccountId: null,
       body: 'Replay log attached.',
+      // A v2-shaped string body is legacy wiki markup, never a document tree
+      // — see `adfBodyOf`'s own comment for why the string branch degrades
+      // to null here exactly like a missing field would.
+      bodyAdf: null,
       createdAt: '2026-09-01T09:00:00.000+0000',
       parentId: null,
     });
@@ -1828,6 +1832,7 @@ describe('mapComment', () => {
       authorName: 'Sam Lee',
       authorAccountId: null,
       body: 'No date.',
+      bodyAdf: null,
       createdAt: null,
       parentId: null,
     });
@@ -1889,6 +1894,35 @@ describe('mapComment', () => {
         '10421',
       )?.body,
     ).toBe('Taking it.');
+  });
+
+  // `bodyAdf` is what the comment editor's losslessness round-trip (see
+  // jiraApi.ts) reads instead of trying to re-derive structure from the
+  // flattened `body` string above — carried alongside it, not in place of
+  // it, same as mapIssue's own descriptionAdf.
+  it('carries the raw ADF alongside the flattened body', () => {
+    const adf = {
+      type: 'doc',
+      version: 1,
+      content: [
+        {
+          type: 'paragraph',
+          content: [{ type: 'text', text: 'Taking it.' }],
+        },
+      ],
+    };
+
+    expect(
+      mapComment(
+        {
+          id: '10501',
+          author: { displayName: 'Max Chen' },
+          body: adf,
+          created: '2026-09-01T09:30:00.000+0000',
+        },
+        '10421',
+      )?.bodyAdf,
+    ).toEqual(adf);
   });
 
   // A string body is legacy wiki markup, not plain text. Before this, the

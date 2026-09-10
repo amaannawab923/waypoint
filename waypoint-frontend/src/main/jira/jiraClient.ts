@@ -1228,6 +1228,52 @@ export async function deleteComment(
   });
 }
 
+/**
+ * Overwrites one comment's body outright, as the connected user — the one
+ * write in this client with no confirmation of its own and no undo on
+ * Jira's side either. `body` is real ADF built the same way postComment's
+ * is (see jiraApi.ts's `buildCommentAdf` and, for the edit path
+ * specifically, its inverse and the round-trip proof that gates whether
+ * this is ever called at all): this function trusts its caller to have
+ * already decided the edit is safe to send, the same way postComment
+ * trusts the composer to have already produced valid ADF.
+ *
+ * Answers with the updated comment, same shape as postComment — Jira's
+ * PUT on this endpoint returns the full comment, not 204 — so the caller
+ * maps the RESPONSE through the same `mapComment` every read uses rather
+ * than assembling one from what was sent. That is what lets `parentId`
+ * survive an edit honestly: this function never asks Jira to change it and
+ * never fabricates it locally, so an edited reply keeps whatever thread
+ * position the response says it still has.
+ */
+export async function updateComment(
+  ticketId: string,
+  commentId: string,
+  body: JiraCommentBody,
+): Promise<JiraResult<JiraWireComment>> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+
+  const result = await jiraFetch<Record<string, unknown>>(
+    credentialResult.value,
+    {
+      method: 'PUT',
+      path: `${COMMENT_PATH(ticketId)}/${encodeURIComponent(commentId)}`,
+      body: { body },
+    },
+  );
+  if (!result.ok) return result;
+
+  const mapped = mapComment(result.value, ticketId);
+  if (!mapped) {
+    return failure(
+      'jira_error',
+      "The comment was edited, but Jira didn't return it — reopen the ticket to see the change.",
+    );
+  }
+  return { ok: true, value: mapped };
+}
+
 // -----------------------------------------------------------------------
 // 8. Comment permissions
 // -----------------------------------------------------------------------

@@ -383,6 +383,19 @@ const electronHandler = {
     }): Promise<JiraResult<JiraWireComment>> {
       return ipcRenderer.invoke('jira:comments:post', args);
     },
+    // Overwrites one comment's body outright — the answer carries the
+    // updated comment straight off Jira's own PUT response, like postComment
+    // above and unlike deleteComment below, so a caller reads `parentId` and
+    // every other field off what Jira actually reports rather than
+    // assembling one from what was sent (see jiraClient.ts's own
+    // updateComment for why that matters for an edited reply).
+    updateComment(args: {
+      ticketId: string;
+      commentId: string;
+      body: JiraCommentBody;
+    }): Promise<JiraResult<JiraWireComment>> {
+      return ipcRenderer.invoke('jira:comments:update', args);
+    },
     // No re-read on success, unlike every write above: a deleted comment has
     // no state left to fetch back. `void` is the honest payload for that —
     // the renderer already holds the comment it just asked to delete and can

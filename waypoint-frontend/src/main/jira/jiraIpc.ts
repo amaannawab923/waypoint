@@ -721,6 +721,33 @@ export function registerJiraIpc(getWindow: () => BrowserWindow | null): void {
   );
 
   /**
+   * Overwrites one comment's body outright. Same boundary rule as
+   * `jira:comments:post` above — the renderer's own composer builds this
+   * shape (see jiraApi.ts's `buildCommentAdf`, the ADF <-> markdown-lite
+   * pair, and the round-trip proof that decides whether a comment is
+   * offered for editing at all), and `readCommentBody` is reused unchanged
+   * rather than re-validated here, so a body this channel accepts is
+   * provably the same shape `jira:comments:post` already accepts. There is
+   * no confirmation step in this handler either, matching delete — that
+   * belongs in the renderer, before this channel is ever invoked.
+   */
+  ipcMain.handle(
+    'jira:comments:update',
+    async (_event, args: unknown): Promise<JiraResult<JiraWireComment>> => {
+      const input = (args ?? {}) as Record<string, unknown>;
+      const ticketId = readTicketId(input.ticketId);
+      const commentId = readCommentId(input.commentId);
+      const body = readCommentBody(input.body);
+      if (!ticketId) return failure('invalid_input', 'Unknown Jira issue.');
+      if (!commentId) return failure('invalid_input', 'Unknown Jira comment.');
+      if (!body || !commentBodyHasContent(body)) {
+        return failure('invalid_input', 'Write something first.');
+      }
+      return client.updateComment(ticketId, commentId, body);
+    },
+  );
+
+  /**
    * Deletes one comment outright. There is no confirmation step in this
    * handler — that belongs in the renderer, before this channel is ever
    * invoked — but there is also no undo once it is: Jira answers 204 and the

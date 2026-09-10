@@ -457,6 +457,20 @@ export interface JiraWireComment {
    * not "Jira didn't say".
    */
   parentId: string | null;
+  /**
+   * The comment's raw ADF, carried ALONGSIDE the flattened `body` — same
+   * shape and same reason as `JiraWireTicket.descriptionAdf`: `body` stays
+   * the safe, always-rendering plain-text surface, and this is what an
+   * editor needing the real document tree (see jiraApi.ts's ADF <->
+   * markdown-lite pair, `buildCommentAdf`'s inverse) reads instead of trying
+   * to re-derive structure from flattened text. Null whenever Jira sent this
+   * comment as its legacy wiki-markup string rather than v3's real ADF (see
+   * `plainTextFromJiraBody`) — there is no document tree to carry in that
+   * case, only the string `body` already holds. A comment whose `bodyAdf` is
+   * null can never be offered for in-place editing: there is nothing to run
+   * the losslessness round-trip against.
+   */
+  bodyAdf: unknown | null;
 }
 
 /**

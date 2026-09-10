@@ -24,6 +24,7 @@ import {
   setTicketAssignee,
   setTicketPriority,
   transitionTicket,
+  updateComment,
   uploadAttachment,
   validateCredential,
 } from './jiraClient';
@@ -1748,6 +1749,92 @@ describe('deleteComment', () => {
     readStoredJiraCredentialMock.mockReturnValue(null);
 
     const result = await deleteComment('10421', '10500');
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: false, reason: 'not_connected' });
+  });
+});
+
+describe('updateComment', () => {
+  const EDITED_ADF_BODY = {
+    type: 'doc' as const,
+    version: 1 as const,
+    content: [
+      {
+        type: 'paragraph' as const,
+        content: [{ type: 'text' as const, text: 'Edited text.' }],
+      },
+    ],
+  };
+
+  it('PUTs the exact issue/comment path with the new body', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        id: '10500',
+        author: { displayName: 'Sam Lee' },
+        body: EDITED_ADF_BODY,
+        created: '2026-09-01T09:00:00.000+0000',
+      }),
+    );
+
+    await updateComment('10421', '10500', EDITED_ADF_BODY);
+
+    const [url, init] = call();
+    expect(init.method).toBe('PUT');
+    expect(url).toContain('/rest/api/3/issue/10421/comment/10500');
+    expect(JSON.parse(init.body as string)).toEqual({ body: EDITED_ADF_BODY });
+  });
+
+  // The whole safety property an edit is built on, same as postComment's own
+  // reply-nesting test just above: the returned comment reflects what JIRA
+  // reported for THIS comment, never fields assembled from the request. A
+  // parentId here comes only from the response, so an edited reply keeps
+  // whatever thread position Jira still reports for it.
+  it("maps the response's own comment, not one assembled from the request", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        id: '10500',
+        author: { displayName: 'Sam Lee' },
+        body: EDITED_ADF_BODY,
+        created: '2026-09-01T09:00:00.000+0000',
+        parentId: 10158,
+      }),
+    );
+
+    const result = await updateComment('10421', '10500', EDITED_ADF_BODY);
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: { id: '10500', body: 'Edited text.', parentId: '10158' },
+    });
+  });
+
+  it('reports a permission failure as forbidden, not as bad credentials', async () => {
+    fetchMock.mockResolvedValue(emptyResponse(403));
+
+    expect(
+      await updateComment('10421', '10500', EDITED_ADF_BODY),
+    ).toMatchObject({ ok: false, reason: 'forbidden' });
+  });
+
+  it('reports a not-found comment as a Jira error, in Jira’s own words', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ errorMessages: ['The comment could not be found.'] }, 404),
+    );
+
+    expect(
+      await updateComment('10421', '10500', EDITED_ADF_BODY),
+    ).toMatchObject({
+      ok: false,
+      reason: 'jira_error',
+      message: 'The comment could not be found.',
+    });
+  });
+
+  it('refuses without a stored credential rather than calling out unauthenticated', async () => {
+    readStoredJiraCredentialMock.mockReturnValue(null);
+
+    const result = await updateComment('10421', '10500', EDITED_ADF_BODY);
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result).toMatchObject({ ok: false, reason: 'not_connected' });

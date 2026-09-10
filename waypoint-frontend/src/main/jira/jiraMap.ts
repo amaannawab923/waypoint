@@ -1016,18 +1016,19 @@ export function mapIssueLinks(value: unknown): JiraWireIssueLink[] {
 }
 
 /**
- * The description field's raw ADF node, carried alongside the flattened
- * `description` string rather than replacing it — see `JiraWireTicket`'s own
- * comment for why both travel together.
+ * A body field's raw ADF node, carried alongside its flattened plain-text
+ * sibling rather than replacing it — see `JiraWireTicket.descriptionAdf` and
+ * `JiraWireComment.bodyAdf` for why both travel together in each of the two
+ * places this is used (an issue's description, a comment's body).
  *
- * Only the object shape counts. A string `fields.description` is legacy wiki
- * markup (see `plainTextFromJiraBody`), not ADF, and handing that string back
- * under `descriptionAdf` would mislabel it as a document tree a rich renderer
- * could walk. `null` — Jira's own shape for "no description" — and a missing
- * field both degrade to null here, same as the string branch: none of the
- * three is an ADF document.
+ * Only the object shape counts. A string body is legacy wiki markup (see
+ * `plainTextFromJiraBody`), not ADF, and handing that string back under an
+ * `*Adf` field would mislabel it as a document tree a rich renderer (or the
+ * comment editor's losslessness round-trip) could walk. `null` — Jira's own
+ * shape for "nothing here" — and a missing field both degrade to null here,
+ * same as the string branch: none of the three is an ADF document.
  */
-function descriptionAdfOf(value: unknown): unknown | null {
+function adfBodyOf(value: unknown): unknown | null {
   if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
     return value;
   }
@@ -1134,7 +1135,7 @@ export function mapIssue(
         : null,
     subtasks: mapSubtasks(fields.subtasks),
     links: mapIssueLinks(fields.issuelinks),
-    descriptionAdf: descriptionAdfOf(fields.description),
+    descriptionAdf: adfBodyOf(fields.description),
     attachments: mapAttachments(fields.attachment),
     transitions: mapTransitions(issue.transitions),
     // Fall back to null rather than to "now". `listComments`'s `total`
@@ -1177,6 +1178,10 @@ export function mapComment(
     // again", and then this — the one function that comment names — kept its
     // own duplicate of the ternary, leaving the drift the extraction was for.
     body: plainTextFromJiraBody(record.body),
+    // The same helper mapIssue's own descriptionAdf goes through, kept in
+    // sync for the same reason plainTextFromJiraBody is shared just above —
+    // see JiraWireComment.bodyAdf's own comment for what this feeds.
+    bodyAdf: adfBodyOf(record.body),
     // Same reasoning as mapIssue's updatedAt: null, not "now". A comment
     // whose `created` Jira omitted was not just posted, and a fabricated
     // timestamp would tell JiraTicketDetail.tsx's formatRelativeTime a lie it

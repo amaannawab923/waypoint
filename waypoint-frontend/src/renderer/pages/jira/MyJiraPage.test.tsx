@@ -33,9 +33,16 @@ jest.mock('@/data/jiraApi', () => ({
   setJiraTicketAssignee: jest.fn(),
   listJiraComments: jest.fn(),
   postJiraComment: jest.fn(),
+  // Never actually called: getJiraCommentPermissions below resolves closed,
+  // so canEditComment (JiraTicketDetail.tsx) never reaches this. Present
+  // anyway so JiraCommentComposer's own import of it is never undefined —
+  // same reasoning as every other export named here.
+  prepareJiraCommentEdit: jest.fn(),
+  updateJiraComment: jest.fn(),
   deleteJiraComment: jest.fn(async () => undefined),
-  // Permissions resolve closed here: these suites are not about Delete, and a
-  // closed default keeps its button out of their queries entirely.
+  // Permissions resolve closed here: these suites are not about Delete or
+  // Edit, and a closed default keeps both buttons out of their queries
+  // entirely.
   getJiraCommentPermissions: jest.fn(async () => ({
     deleteAll: false,
     deleteOwn: false,
@@ -868,6 +875,7 @@ describe('JiraTicketDrawer — comment timestamps', () => {
       parentId: null,
       postedByWaypoint: false,
       disclosureText: null,
+      bodyAdf: null,
     };
     jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead([undated]));
     jest

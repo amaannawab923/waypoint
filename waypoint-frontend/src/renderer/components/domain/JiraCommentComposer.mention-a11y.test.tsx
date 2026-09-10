@@ -15,6 +15,7 @@ import { JiraCommentComposer } from './JiraCommentComposer';
 jest.mock('@/data/jiraApi', () => ({
   postJiraComment: jest.fn(),
   searchJiraAssignableUsers: jest.fn(),
+  updateJiraComment: jest.fn(),
   uploadJiraAttachment: jest.fn(),
 }));
 jest.mock('@/lib/jiraStore', () => ({ useJiraConnection: jest.fn() }));
@@ -86,6 +87,7 @@ beforeEach(() => {
     parentId: null,
     postedByWaypoint: false,
     disclosureText: null,
+    bodyAdf: null,
   });
 });
 

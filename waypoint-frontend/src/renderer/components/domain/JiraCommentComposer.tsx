@@ -12,6 +12,7 @@ import { createPortal } from 'react-dom';
 import {
   postJiraComment,
   searchJiraAssignableUsers,
+  updateJiraComment,
   uploadJiraAttachment,
 } from '@/data/jiraApi';
 import type { JiraMentionSpan } from '@/data/jiraApi';
@@ -366,6 +367,25 @@ export interface JiraReplyTarget {
   displayName: string;
 }
 
+/**
+ * What a comment row's Edit action hands the composer: which comment is
+ * being edited, and the prefill already proven safe to round-trip — see
+ * `prepareJiraCommentEdit` (data/jiraApi.ts), the one function allowed to
+ * decide that, called once by JiraTicketDetail.tsx before this is ever set.
+ *
+ * `text`/`mentions` are handed over already deserialized rather than the
+ * comment's raw ADF, so this composer has exactly one thing to do with
+ * them: load them into the same `draft`/`mentions` state a typed comment
+ * already uses. That keeps this component from ever needing to know ADF is
+ * involved at all — same reason `pendingReply` above carries plain fields
+ * rather than a `JiraComment`.
+ */
+export interface JiraEditTarget {
+  commentId: string;
+  text: string;
+  mentions: JiraMentionSpan[];
+}
+
 export function JiraCommentComposer({
   ticketId,
   ticketKey,
@@ -374,6 +394,9 @@ export function JiraCommentComposer({
   onTicketUpdated,
   pendingReply,
   onReplyConsumed,
+  pendingEdit,
+  onEditConsumed,
+  onEdited,
 }: {
   ticketId: string;
   /** Jira's assignable-user search is specified in terms of the issue KEY,
@@ -406,6 +429,20 @@ export function JiraCommentComposer({
    * the click that sets it back to a same-shaped object still counts as a
    * real change there. */
   onReplyConsumed?: () => void;
+  /** Set by JiraTicketDetail when a comment's Edit action is clicked, on a
+   * comment `prepareJiraCommentEdit` has already proven safe to round-trip
+   * — see `JiraEditTarget`'s own comment. New object every click, same
+   * contract as `pendingReply`. */
+  pendingEdit?: JiraEditTarget | null;
+  /** Fired the instant `pendingEdit` has been loaded into the draft, same
+   * contract as `onReplyConsumed`. */
+  onEditConsumed?: () => void;
+  /** Fired when an edit is saved, with the comment Jira's own response
+   * describes — a caller replaces the edited row with this rather than
+   * assuming the request's own text landed verbatim, the same
+   * response-not-request rule `onPosted` already follows for a new
+   * comment. */
+  onEdited?: (comment: JiraComment) => void;
 }) {
   const [draft, setDraft] = useState('');
   const [mentions, setMentions] = useState<JiraMentionSpan[]>([]);
@@ -416,6 +453,14 @@ export function JiraCommentComposer({
   // the reply, the same way Jira's own composer keeps a reply threaded even
   // if the mention is edited out of it afterwards.
   const [replyParentId, setReplyParentId] = useState<string | null>(null);
+  // The comment the next post should overwrite rather than create — same
+  // lifecycle as `replyParentId`, and mutually exclusive with it: loading an
+  // edit clears any pending reply and vice versa (see the two prefill
+  // effects below), since this composer can only be doing one of "reply to"
+  // or "overwrite" at a time.
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(
+    null,
+  );
   const [posting, setPosting] = useState(false);
   const [attaching, setAttaching] = useState(false);
   const [trigger, setTrigger] = useState<{
@@ -765,6 +810,11 @@ export function JiraCommentComposer({
     ]);
     setDraft((d) => insertText + d);
     setReplyParentId(pendingReply.commentId);
+    // Reply and Edit are mutually exclusive states on this one shared
+    // composer — starting a Reply while an Edit was in progress abandons
+    // the edit rather than leaving `editingCommentId` set on a draft that
+    // is no longer that comment's own text.
+    setEditingCommentId(null);
     onReplyConsumed?.();
 
     const el = textareaRef.current;
@@ -782,6 +832,55 @@ export function JiraCommentComposer({
     // for the same reason.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingReply]);
+
+  /**
+   * Edit, loaded: replaces the whole draft with `pendingEdit`'s already-
+   * proven-safe prefill, rather than inserting at the caret or prepending
+   * the way Reply's own effect above does — Reply adds to whatever was
+   * already being typed, but Edit's whole point is to load a SPECIFIC
+   * comment's own content in place of it, so anything already in the
+   * composer is replaced, not merged with.
+   *
+   * `pendingEdit.mentions` are used exactly as `prepareJiraCommentEdit`
+   * returned them — no shifting, no re-validation here — because they were
+   * already proven, together with `pendingEdit.text`, to round-trip through
+   * `buildCommentAdf` back to this comment's own original ADF. Editing the
+   * loaded text further (or deleting a mention out of it) is fine: the same
+   * re-validation `buildCommentAdf` already does for a typed reply (a stale
+   * span that no longer reads "@" + displayName is dropped) applies here
+   * too, at `handlePost` time, the same as any other draft.
+   */
+  useEffect(() => {
+    if (!pendingEdit) return;
+    setDraft(pendingEdit.text);
+    setMentions(pendingEdit.mentions);
+    setEditingCommentId(pendingEdit.commentId);
+    // See the reply effect's own note just above: the two are mutually
+    // exclusive on this one composer.
+    setReplyParentId(null);
+    onEditConsumed?.();
+
+    const el = textareaRef.current;
+    const newCaret = pendingEdit.text.length;
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(newCaret, newCaret);
+    });
+    // Same "runs once per click" trade as the reply effect above, for the
+    // same reason.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingEdit]);
+
+  /** Discards the loaded edit and clears the composer — the only way out of
+   * edit mode besides saving. Clearing the draft outright, rather than
+   * restoring whatever was being typed before Edit was clicked, matches
+   * this composer's existing "Edit replaces the draft" contract above: there
+   * is no snapshot of the pre-edit draft to restore to. */
+  function cancelEdit() {
+    setEditingCommentId(null);
+    setDraft('');
+    setMentions([]);
+  }
 
   /** Wraps the current selection in a delimiter pair — **bold**, _em_,
    * ~~strike~~, `code` — or, with nothing selected, inserts an empty pair
@@ -1018,6 +1117,19 @@ export function JiraCommentComposer({
     formRef.current?.focus();
     setPosting(true);
     try {
+      if (editingCommentId) {
+        const comment = await updateJiraComment(
+          ticketId,
+          editingCommentId,
+          draft,
+          mentions,
+        );
+        onEdited?.(comment);
+        setDraft('');
+        setMentions([]);
+        setEditingCommentId(null);
+        return;
+      }
       // A plain 3-arg call when this isn't a reply, rather than always
       // passing a 4th `null` — the same "presence of the argument, not just
       // its value" shape jiraClient.ts's own postComment uses for the same
@@ -1033,7 +1145,9 @@ export function JiraCommentComposer({
       showErrorToast(
         err instanceof Error
           ? err.message
-          : 'Could not post this comment to Jira.',
+          : editingCommentId
+            ? 'Could not save this edit to Jira.'
+            : 'Could not post this comment to Jira.',
       );
     } finally {
       setPosting(false);
@@ -1194,15 +1308,33 @@ export function JiraCommentComposer({
               posted as that person, and the label has to be able to say who
               that is rather than the fixture name it used to hardcode. */}
           <span className="flex-1 text-[10.5px] text-text-muted">
-            Posts to Jira as {connection?.accountName || 'you'}
+            {editingCommentId
+              ? `Saves the edit to Jira as ${connection?.accountName || 'you'}`
+              : `Posts to Jira as ${connection?.accountName || 'you'}`}
           </span>
+          {editingCommentId && (
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={posting}
+              onClick={cancelEdit}
+            >
+              Cancel
+            </Button>
+          )}
           <Button
             size="xs"
             variant="primary"
             disabled={!draft.trim() || posting}
             onClick={handlePost}
           >
-            {posting ? 'Posting…' : 'Comment'}
+            {editingCommentId
+              ? posting
+                ? 'Saving…'
+                : 'Save'
+              : posting
+                ? 'Posting…'
+                : 'Comment'}
           </Button>
         </div>
       </div>

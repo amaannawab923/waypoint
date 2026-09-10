@@ -361,6 +361,9 @@ function toComment(wire: JiraWireComment): JiraComment {
     // just a comment, whoever typed it.
     postedByWaypoint: false,
     disclosureText: null,
+    // Straight off the wire, same as descriptionAdf on toTicket above — see
+    // JiraComment.bodyAdf's own comment for what reads this.
+    bodyAdf: wire.bodyAdf,
   };
 }
 
@@ -1443,6 +1446,404 @@ export function buildCommentAdf(
   return { type: 'doc', version: 1, content };
 }
 
+// -----------------------------------------------------------------------
+// Comment body: ADF -> the lightweight-markdown subset (buildCommentAdf's
+// inverse, for editing an existing comment)
+// -----------------------------------------------------------------------
+//
+// Editing a real comment means: read its ADF, turn it into text a person can
+// edit in the SAME composer that writes comments, then turn that text back
+// into ADF and overwrite the original in Jira. That last step has no
+// approval gate and no undo, so "turn it back into text" cannot be a best-
+// effort flattener the way `main/jira/jiraMap.ts`'s `adfToPlainText` is —
+// that function is allowed to lose formatting on the read-only display path
+// (a bold run renders as plain text; nobody's data changes). Losing
+// formatting HERE means the edit silently rewrites the comment's structure
+// the moment it's saved: a table becomes stray paragraphs, a literal
+// asterisk the author typed becomes real bold. Both are real, irreversible
+// data loss in the founder's own Jira.
+//
+// So this file does not trust a whitelist of "node types the composer can
+// produce" to decide a comment is safe to edit, even though
+// `deserializeJiraCommentAdf` below IS built narrowly around exactly what
+// `blockToAdf`/`groupLinesIntoBlocks` above can produce (paragraphs,
+// headings, bullet/ordered lists, blockquotes, code blocks, mentions, and
+// text carrying at most one of strong/em/strike/code/link). A node-type
+// whitelist alone cannot catch the case that matters most: plain, unmarked
+// prose that happens to contain a literal `*`, `_` or backtick. That text
+// deserializes untouched (there is nothing to reject —
+// every node is a supported type) and then RE-serializes differently, because
+// `buildCommentAdf` has no way to know those characters weren't meant as
+// delimiters. The only way to catch that is to actually do the round trip and
+// compare the result: `prepareJiraCommentEdit` below is the one function
+// anything in this app is allowed to trust for "is this comment safe to edit
+// in place" — never `deserializeJiraCommentAdf`'s success alone.
+
+function isAdfRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** A mention span with no dependency on the source text's own offsets —
+ * `deserializeJiraCommentAdf` builds these directly from the ADF tree it is
+ * walking, then shifts them into whole-document offsets once every block's
+ * text is known (see the caller). */
+interface RelativeMentionSpan {
+  start: number;
+  end: number;
+  accountId: string;
+  displayName: string;
+}
+
+/**
+ * One inline run's markdown-lite spelling, or `null` when `mark` isn't one
+ * `buildCommentAdf`'s own `INLINE_PATTERNS`/`markForRun` can ever produce —
+ * an unsupported mark type, or a `link` mark with no usable `href`. `null`
+ * here is what makes an unsupported mark surface as "not editable" rather
+ * than as formatting silently dropped: the caller that receives it bails out
+ * of deserializing the whole comment (see `inlineContentToLineText`) instead
+ * of emitting `raw` unmarked, which would be exactly the kind of guess this
+ * feature exists to refuse to make.
+ */
+function wrapWithMark(raw: string, mark: unknown): string | null {
+  if (!isAdfRecord(mark) || typeof mark.type !== 'string') return null;
+  switch (mark.type) {
+    case 'strong':
+      return `**${raw}**`;
+    case 'em':
+      return `_${raw}_`;
+    case 'strike':
+      return `~~${raw}~~`;
+    case 'code':
+      return `\`${raw}\``;
+    case 'link': {
+      const attrs = mark.attrs;
+      const href = isAdfRecord(attrs) ? attrs.href : undefined;
+      return typeof href === 'string' && href ? `[${raw}](${href})` : null;
+    }
+    default:
+      return null;
+  }
+}
+
+/** `marks`, read the same lenient way `main/jira/jiraIpc.ts`'s own
+ * `readOptionalMarks` reads it on the write boundary: absent and an explicit
+ * empty array both mean "no marks" (Jira's own read responses use both
+ * shapes for the same plain text node), so treating them differently here
+ * would refuse editing ordinary, unformatted comments — the common case —
+ * over a distinction that carries no real difference in meaning. `null`
+ * means the value present isn't a marks array at all, which IS a real
+ * "cannot represent this" case. */
+function readMarksList(raw: unknown): unknown[] | null {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) return null;
+  return raw;
+}
+
+/**
+ * One line's worth of inline content — a paragraph's, a heading's, one list
+ * item's, one blockquote line's — turned into markdown-lite text plus the
+ * mention spans found in it, relative to this line's own start (`prefix`
+ * included, so a mention after "- " or "## " already accounts for it).
+ *
+ * `null` on anything `blockToAdf`'s own inline pipeline cannot produce: a
+ * mention carrying marks (forbidden on the write side — see
+ * `JiraAdfMentionNode`'s own comment in main/jira/jiraTypes.ts), an inline
+ * node that isn't `text` or `mention` (a real Jira comment can carry an
+ * `emoji`, `hardBreak`, `inlineCard`, `status`, or `date` node the composer's
+ * toolbar has no way to type), a text node whose `marks` carries more than
+ * one entry (the composer never produces compound marks — see
+ * `parseInlineRange`'s own comment on why bold-and-italic-together isn't
+ * detected as one span), or a mark this file doesn't recognize.
+ */
+function inlineContentToLineText(
+  content: unknown,
+  prefix: string,
+): { text: string; mentions: RelativeMentionSpan[] } | null {
+  if (!Array.isArray(content)) return null;
+  let text = prefix;
+  const mentions: RelativeMentionSpan[] = [];
+  for (const node of content) {
+    if (!isAdfRecord(node) || typeof node.type !== 'string') return null;
+    if (node.type === 'mention') {
+      if (node.marks !== undefined) return null;
+      const attrs = node.attrs;
+      if (
+        !isAdfRecord(attrs) ||
+        typeof attrs.id !== 'string' ||
+        typeof attrs.text !== 'string'
+      ) {
+        return null;
+      }
+      const displayName = attrs.text.startsWith('@')
+        ? attrs.text.slice(1)
+        : attrs.text;
+      if (!displayName) return null;
+      const label = `@${displayName}`;
+      mentions.push({
+        start: text.length,
+        end: text.length + label.length,
+        accountId: attrs.id,
+        displayName,
+      });
+      text += label;
+      continue;
+    }
+    if (node.type === 'text' && typeof node.text === 'string') {
+      const marks = readMarksList(node.marks);
+      if (marks === null || marks.length > 1) return null;
+      const wrapped =
+        marks.length === 0 ? node.text : wrapWithMark(node.text, marks[0]);
+      if (wrapped === null) return null;
+      text += wrapped;
+      continue;
+    }
+    return null;
+  }
+  return { text, mentions };
+}
+
+/** One block's worth of output lines — a paragraph or heading is exactly
+ * one, a list or blockquote is one per item, a code block is its fenced
+ * lines — each paired with that same line's own mentions (relative to the
+ * line, same contract as `inlineContentToLineText`'s return). `null` for
+ * anything outside `blockToAdf`'s own range: a `table`, `panel`, `rule`,
+ * `mediaSingle`/`media` (an embedded image or file — the one shape the
+ * founder's own real corpus was refused for), a list item spanning more than
+ * one paragraph, or any block whose inline content itself failed to
+ * deserialize. */
+function blockToLines(
+  raw: unknown,
+): { lines: string[]; lineMentions: RelativeMentionSpan[][] } | null {
+  if (!isAdfRecord(raw) || typeof raw.type !== 'string') return null;
+
+  if (raw.type === 'paragraph') {
+    const inline = inlineContentToLineText(raw.content, '');
+    return inline && { lines: [inline.text], lineMentions: [inline.mentions] };
+  }
+
+  if (raw.type === 'heading') {
+    const attrs = raw.attrs;
+    const level = isAdfRecord(attrs) ? attrs.level : undefined;
+    if (level !== 1 && level !== 2 && level !== 3) return null;
+    const inline = inlineContentToLineText(
+      raw.content,
+      `${'#'.repeat(level)} `,
+    );
+    return inline && { lines: [inline.text], lineMentions: [inline.mentions] };
+  }
+
+  if (raw.type === 'bulletList' || raw.type === 'orderedList') {
+    if (!Array.isArray(raw.content)) return null;
+    const lines: string[] = [];
+    const lineMentions: RelativeMentionSpan[][] = [];
+    for (let i = 0; i < raw.content.length; i += 1) {
+      const item = raw.content[i];
+      if (
+        !isAdfRecord(item) ||
+        item.type !== 'listItem' ||
+        !Array.isArray(item.content) ||
+        item.content.length !== 1
+      ) {
+        return null;
+      }
+      const paragraph = item.content[0];
+      if (!isAdfRecord(paragraph) || paragraph.type !== 'paragraph') {
+        return null;
+      }
+      // ADF's own list-item shape carries no per-item number to preserve
+      // (see JiraAdfOrderedList's own comment: `blockToAdf` never writes
+      // one either), so this synthesizes sequential numbers purely for a
+      // readable draft — `groupLinesIntoBlocks`' ordered-line regex accepts
+      // any digits, and re-encoding discards them the same way regardless
+      // of which ones are here, so the round trip cannot be sensitive to
+      // this choice.
+      const prefix = raw.type === 'bulletList' ? '- ' : `${i + 1}. `;
+      const inline = inlineContentToLineText(paragraph.content, prefix);
+      if (!inline) return null;
+      lines.push(inline.text);
+      lineMentions.push(inline.mentions);
+    }
+    return { lines, lineMentions };
+  }
+
+  if (raw.type === 'blockquote') {
+    if (!Array.isArray(raw.content)) return null;
+    const lines: string[] = [];
+    const lineMentions: RelativeMentionSpan[][] = [];
+    for (const paragraph of raw.content) {
+      if (!isAdfRecord(paragraph) || paragraph.type !== 'paragraph') {
+        return null;
+      }
+      const inline = inlineContentToLineText(paragraph.content, '> ');
+      if (!inline) return null;
+      lines.push(inline.text);
+      lineMentions.push(inline.mentions);
+    }
+    return { lines, lineMentions };
+  }
+
+  if (raw.type === 'codeBlock') {
+    if (!Array.isArray(raw.content)) return null;
+    let combined = '';
+    for (const node of raw.content) {
+      if (!isAdfRecord(node) || node.type !== 'text') return null;
+      if (typeof node.text !== 'string') return null;
+      const marks = readMarksList(node.marks);
+      if (marks === null || marks.length > 0) return null;
+      combined += node.text;
+    }
+    const fenceLines = ['```', ...combined.split('\n'), '```'];
+    return { lines: fenceLines, lineMentions: fenceLines.map(() => []) };
+  }
+
+  // Everything else — table, panel, expand, rule, mediaSingle/media, and
+  // any node this dialect never grew a spelling for — is refused here
+  // rather than approximated. There is no markdown-lite text this file's
+  // dialect can represent it as.
+  return null;
+}
+
+/**
+ * ADF document -> markdown-lite text + mention spans, or `null` for a
+ * document this narrow dialect cannot represent at all.
+ *
+ * This is `buildCommentAdf`'s inverse in the sense that every shape
+ * `groupLinesIntoBlocks`/`blockToAdf` can produce, this can read back — but
+ * it is NOT, on its own, a promise that the result re-serializes to the same
+ * document. A `null` return here is one honest signal ("this comment can't
+ * even be represented"); a non-null return is not yet a second one ("this
+ * comment can be edited without changing it") — only `prepareJiraCommentEdit`
+ * below, which actually performs the round trip, gets to say that. See this
+ * section's own header comment for why the distinction matters: the literal-
+ * delimiter case deserializes here just fine and is caught one step later.
+ */
+function deserializeJiraCommentAdf(
+  raw: unknown,
+): { text: string; mentions: JiraMentionSpan[] } | null {
+  if (!isAdfRecord(raw) || raw.type !== 'doc' || !Array.isArray(raw.content)) {
+    return null;
+  }
+
+  const blockResults = raw.content.map(blockToLines);
+  if (blockResults.some((r) => r === null)) return null;
+
+  const lines: string[] = [];
+  const lineMentions: RelativeMentionSpan[][] = [];
+  for (const result of blockResults as NonNullable<
+    ReturnType<typeof blockToLines>
+  >[]) {
+    lines.push(...result.lines);
+    lineMentions.push(...result.lineMentions);
+  }
+
+  let cursor = 0;
+  const mentions: JiraMentionSpan[] = [];
+  lines.forEach((line, i) => {
+    for (const m of lineMentions[i]) {
+      mentions.push({
+        start: m.start + cursor,
+        end: m.end + cursor,
+        accountId: m.accountId,
+        displayName: m.displayName,
+      });
+    }
+    cursor += line.length + 1; // +1 for the '\n' joining this line to the next
+  });
+
+  return { text: lines.join('\n'), mentions };
+}
+
+/**
+ * A recursive structural equality over two ADF (sub)trees, order-sensitive
+ * on arrays (content order is real document order and must match exactly)
+ * and order-insensitive on object keys.
+ *
+ * One normalization, not a general fuzzy match: `marks: []` and an absent
+ * `marks` key compare equal (see `normalizeAdfForCompare` below), for the
+ * same reason `readMarksList` above treats them alike on the read side —
+ * Jira's own responses use both shapes for the same plain text node, and a
+ * strict raw-JSON comparison would refuse editing on that alone, which would
+ * mean refusing nearly every ordinary, unformatted comment rather than the
+ * rare structurally-different one this proof exists to catch.
+ */
+function deepEqualAdf(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) {
+      return false;
+    }
+    return a.every((v, i) => deepEqualAdf(v, b[i]));
+  }
+  if (a && b && typeof a === 'object' && typeof b === 'object') {
+    const aRec = a as Record<string, unknown>;
+    const bRec = b as Record<string, unknown>;
+    const aKeys = Object.keys(aRec).sort();
+    const bKeys = Object.keys(bRec).sort();
+    if (aKeys.length !== bKeys.length) return false;
+    return aKeys.every(
+      (k, i) => k === bKeys[i] && deepEqualAdf(aRec[k], bRec[k]),
+    );
+  }
+  return false;
+}
+
+/** See `deepEqualAdf`'s own comment — this is the one normalization it
+ * applies before comparing: an empty `marks` array is dropped so it compares
+ * equal to the key being absent entirely, on any object anywhere in the
+ * tree. */
+function normalizeAdfForCompare(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(normalizeAdfForCompare);
+  if (value && typeof value === 'object') {
+    const rec = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(rec)) {
+      if (key === 'marks' && Array.isArray(rec[key]) && rec[key].length === 0) {
+        continue;
+      }
+      out[key] = normalizeAdfForCompare(rec[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * The one function anything in this app may trust to decide whether a
+ * comment can be edited in place without changing it — see this section's
+ * own header comment for why a node-type whitelist alone (which
+ * `deserializeJiraCommentAdf` above effectively is) cannot make that call by
+ * itself.
+ *
+ * The proof, exactly: deserialize `comment.bodyAdf` to markdown-lite text,
+ * run that text back through `buildCommentAdf` — the SAME function that
+ * posts a real comment, not a copy of its logic — and deep-compare the
+ * result against the original. Anything other than an exact match, including
+ * a `null` from the deserializer itself, means "not editable": there is no
+ * partial-fidelity fallback, because a partial-fidelity editor is worse than
+ * no Edit button at all (see this app's own comment permissions model for
+ * the same shape of decision: `getJiraCommentPermissions`' `editOwn`/
+ * `editAll` decide whether Edit may be OFFERED; this decides whether it can
+ * be SAFELY offered for this particular comment's own content).
+ *
+ * Returns the prefill a caller hands the composer on success — the same
+ * `text`/`mentions` shape `postJiraComment` already takes — so a caller
+ * never has to deserialize a second time to get what it just proved safe.
+ */
+export function prepareJiraCommentEdit(
+  comment: JiraComment,
+): { text: string; mentions: JiraMentionSpan[] } | null {
+  if (comment.bodyAdf == null) return null;
+  const deserialized = deserializeJiraCommentAdf(comment.bodyAdf);
+  if (!deserialized) return null;
+
+  const rebuilt = buildCommentAdf(deserialized.text, deserialized.mentions);
+  const matches = deepEqualAdf(
+    normalizeAdfForCompare(rebuilt),
+    normalizeAdfForCompare(comment.bodyAdf),
+  );
+  return matches ? deserialized : null;
+}
+
 /**
  * The permalink Jira's own comment menu produces for one comment: the
  * issue's browse URL with `focusedCommentId` naming a specific comment.
@@ -1517,6 +1918,58 @@ export async function postJiraComment(
   // absorb it identically, because nothing in the payload distinguishes
   // "updated moved because of me" from "because of me AND someone else". The
   // trade is a rare missed warning against a constant false one.
+  lastTickets = lastTickets.map((t) =>
+    t.id === ticketId ? { ...t, updatedAt: null } : t,
+  );
+  return comment;
+}
+
+/**
+ * Overwrites a real comment's body outright, as the connected user.
+ *
+ * Callers must never reach this function without first proving the edit is
+ * safe with `prepareJiraCommentEdit` — that is what decides whether `text`
+ * and `mentions` came from a comment whose ADF this app can actually
+ * reconstruct losslessly. This function itself does not re-check that; it
+ * trusts its caller the same way `postJiraComment` trusts the composer to
+ * have produced a real draft, not because the stakes are lower (they are
+ * higher — this overwrites something that already exists, with no undo) but
+ * because the proof is expensive to redo per keystroke and belongs at the
+ * one point that decides whether Edit is even offered.
+ *
+ * `text`/`mentions` go through the exact same `buildCommentAdf` every other
+ * write in this file uses — the whole point of round-tripping through it
+ * during the proof is that the write path and the proof path can never
+ * disagree, because they are the same function call.
+ *
+ * The returned comment comes straight off Jira's response, through the same
+ * `toComment(unwrap(...))` every read and every other write uses — never
+ * assembled from what was sent. That is what lets `parentId` survive an
+ * edit honestly: this function never asks Jira to change it and never
+ * fabricates it locally (see `JiraComment.parentId`'s own comment), so an
+ * edited reply keeps whatever thread position Jira's response says it still
+ * has, the same guarantee `postJiraComment` makes for a brand-new reply.
+ */
+export async function updateJiraComment(
+  ticketId: string,
+  commentId: string,
+  text: string,
+  mentions: JiraMentionSpan[] = [],
+): Promise<JiraComment> {
+  const body = buildCommentAdf(text, mentions);
+  const comment = toComment(
+    unwrap(await bridge().updateComment({ ticketId, commentId, body })),
+  );
+
+  // Same trap as postJiraComment/deleteJiraComment, solved the same way:
+  // editing a comment moves the ISSUE's `updated` in Jira too, not just the
+  // comment's own. Left alone, the next queue read would compare a stale
+  // cached timestamp against a value this module's own edit just moved,
+  // report "Someone changed this" about the user's own action, and disable
+  // every other write until they reloaded. Dropping the cached timestamp
+  // states the honest position — this module no longer holds a baseline it
+  // can compare — and detectConflict already reads an unknown timestamp as
+  // "no conflict" rather than guessing, so this needs no new branch there.
   lastTickets = lastTickets.map((t) =>
     t.id === ticketId ? { ...t, updatedAt: null } : t,
   );

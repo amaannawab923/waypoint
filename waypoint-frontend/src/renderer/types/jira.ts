@@ -314,6 +314,18 @@ export interface JiraComment {
    * approval flow) — null for a plain, user-typed comment like every one
    * this phase's composer posts. */
   disclosureText: string | null;
+  /**
+   * The comment's raw ADF, carried straight off `JiraWireComment.bodyAdf`
+   * (main/jira/jiraTypes.ts) — see that field's own comment for why it
+   * travels alongside the flattened `body` above rather than replacing it.
+   *
+   * This is what `prepareJiraCommentEdit` (data/jiraApi.ts) reads to decide
+   * whether Edit can be offered for this comment at all: null here means
+   * there is no document tree to run the losslessness round-trip against
+   * (a legacy wiki-markup body, or a read that predates this field), and
+   * that comment is never editable in place regardless of permissions.
+   */
+  bodyAdf: unknown | null;
 }
 
 /**

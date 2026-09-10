@@ -8,6 +8,7 @@ import {
   getJiraPriorityOptions,
   getJiraTransitions,
   listJiraComments,
+  prepareJiraCommentEdit,
   setJiraTicketAssignee,
   setJiraTicketPriority,
   transitionJiraTicket,
@@ -34,6 +35,7 @@ import {
 } from '@/components/domain/JiraTransitionPopover';
 import {
   JiraCommentComposer,
+  type JiraEditTarget,
   type JiraReplyTarget,
 } from '@/components/domain/JiraCommentComposer';
 import { JiraLoadError } from '@/components/domain/JiraLoadError';
@@ -317,6 +319,12 @@ export function JiraTicketDetail({
   const [pendingReply, setPendingReply] = useState<JiraReplyTarget | null>(
     null,
   );
+  // Set by a comment's Edit action and consumed by JiraCommentComposer's own
+  // edit-prefill effect — same "fresh object every click" contract as
+  // pendingReply just above, and mutually exclusive with it (see both
+  // components' own handlers): only ever one of "replying to" or "editing"
+  // a comment is in flight on this one shared composer at a time.
+  const [pendingEdit, setPendingEdit] = useState<JiraEditTarget | null>(null);
   // Which comment's permalink was just copied, by id — mirrors
   // RequestsPage.tsx's own linkCopied flag, the one other "Copy link"
   // affordance in this app: this app's toast channel is error-only (see
@@ -550,6 +558,35 @@ export function JiraTicketDetail({
   }
 
   /**
+   * Whether Edit should render for this particular comment at all — the
+   * same shape as `canDeleteComment` just above, and for the same reason:
+   * Jira's comment payload carries no per-comment permission hint, so this
+   * is the project-level own/all answer plus whether the signed-in account
+   * actually wrote this one.
+   *
+   * `editAll` and `editOwn` can both be true on the same account — the
+   * common shape for whoever is testing this against their own Jira,
+   * INCLUDING the account this feature was developed on — so the
+   * `editOwn` branch below is checked on its own rather than assumed from
+   * "editAll is false", the one case this machine's own account cannot
+   * exercise by accident.
+   *
+   * This decides only whether Edit may be OFFERED. Whether it's SAFE to
+   * offer for this comment's own content — whether it can be turned back
+   * into ADF without changing it — is a separate question `canEditComment`
+   * does not answer; see `prepareJiraCommentEdit` in renderComment below.
+   */
+  function canEditComment(comment: JiraComment): boolean {
+    if (!commentPermissions) return false;
+    if (commentPermissions.editAll) return true;
+    if (!commentPermissions.editOwn) return false;
+    return (
+      comment.authorAccountId !== null &&
+      comment.authorAccountId === connection?.accountId
+    );
+  }
+
+  /**
    * Deletes one comment outright, after a confirm() naming exactly what that
    * does (see `deleteJiraCommentConfirmMessage`) — this repo's established
    * guard on every irreversible action, matching Disconnect's own
@@ -616,36 +653,87 @@ export function JiraTicketDetail({
           <div className="text-[12.5px] leading-relaxed whitespace-pre-wrap text-text-secondary">
             {c.body}
           </div>
-          {/* Three of Jira's five comment-row actions now: Reply and
-              Copy link, and Delete alongside them — permission-gated
-              per comment (see canDeleteComment above) rather than
+          {/* Four of Jira's five comment-row actions now: Reply, Edit,
+              Copy link, and Delete — permission-gated per comment
+              (see canDeleteComment/canEditComment above) rather than
               always shown, since Jira's own comment menu only ever
-              offers delete on a comment you may actually remove.
-              Edit still needs a capability this phase deliberately
-              doesn't have, and reactions have no public API at all —
-              those two remain the honest gap. Opacity-revealed on
-              hover exactly like ProjectViewsPage.tsx's own row
-              actions, and group-focus-within (not group-hover alone)
-              is what keeps a keyboard user from needing a mouse to
-              ever see these — a Tab landing on any of these buttons
-              already reveals the row before it needs to be
-              clicked. */}
+              offers delete/edit on a comment you may actually change.
+              Reactions have no public API at all and remain the one
+              honest gap. Opacity-revealed on hover exactly like
+              ProjectViewsPage.tsx's own row actions, and
+              group-focus-within (not group-hover alone) is what keeps
+              a keyboard user from needing a mouse to ever see these —
+              a Tab landing on any of these buttons already reveals the
+              row before it needs to be clicked.
+
+              Edit itself is gated twice, deliberately at two different
+              layers: `canEditComment` decides whether Edit may be
+              OFFERED at all (a permissions question), and
+              `prepareJiraCommentEdit` — called only once permission
+              says yes, since the round trip it performs is not free —
+              decides whether THIS comment's own content can be edited
+              without changing it (a losslessness question). A comment
+              that fails the second check still gets an honest answer
+              in this row rather than Edit silently vanishing as though
+              the feature didn't exist for it. */}
           <div className="mt-1 flex items-center gap-2.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
             {c.authorAccountId !== null && (
               <button
                 type="button"
-                onClick={() =>
+                onClick={() => {
+                  setPendingEdit(null);
                   setPendingReply({
                     commentId: c.id,
                     accountId: c.authorAccountId as string,
                     displayName: c.authorName,
-                  })
-                }
+                  });
+                }}
                 className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
               >
                 Reply
               </button>
             )}
+            {canEditComment(c) &&
+              (() => {
+                const editPreview = prepareJiraCommentEdit(c);
+                if (editPreview) {
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPendingReply(null);
+                        setPendingEdit({ commentId: c.id, ...editPreview });
+                      }}
+                      className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
+                    >
+                      Edit
+                    </button>
+                  );
+                }
+                // Refused, honestly — see this block's own header comment.
+                // Jira's `focusedCommentId` permalink is the one real path
+                // left to change this comment's content at all.
+                return jiraUrl ? (
+                  <span
+                    className="text-[10.5px] text-text-muted"
+                    title="Waypoint can't rebuild this comment's formatting without changing it, so editing it here is refused rather than risking that."
+                  >
+                    Can&apos;t edit here ·{' '}
+                    <a
+                      href={buildJiraCommentPermalink(
+                        connection?.site ?? '',
+                        ticket.key,
+                        c.id,
+                      )}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-semibold text-text-muted hover:text-text hover:underline"
+                    >
+                      Edit in Jira
+                    </a>
+                  </span>
+                ) : null;
+              })()}
             {jiraUrl && (
               <button
                 type="button"
@@ -979,6 +1067,22 @@ export function JiraTicketDetail({
             onTicketUpdated={onTicketUpdated}
             pendingReply={pendingReply}
             onReplyConsumed={() => setPendingReply(null)}
+            pendingEdit={pendingEdit}
+            onEditConsumed={() => setPendingEdit(null)}
+            onEdited={(comment) => {
+              // Replaces the edited row in place — `.map()`, not a refetch,
+              // matching deleteJiraComment's own reasoning just above:
+              // updateJiraComment already told Jira to overwrite the
+              // comment, and this module holds no separate cache of the
+              // thread to reconcile against. The comment used here is
+              // whatever `comment` carries — Jira's own response, not the
+              // request that was sent (see JiraCommentComposer's onEdited
+              // prop and updateJiraComment's own comment) — so a parentId
+              // Jira still reports keeps this row nested where it was.
+              setComments((cs) =>
+                cs.map((c) => (c.id === comment.id ? comment : c)),
+              );
+            }}
             onPosted={(comment) => {
               setComments((cs) => [...cs, comment]);
               // Otherwise posting into a truncated thread walks the notice's

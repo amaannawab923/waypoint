@@ -22,6 +22,7 @@ function comment(overrides: Partial<JiraComment> = {}): JiraComment {
     parentId: null,
     postedByWaypoint: false,
     disclosureText: null,
+    bodyAdf: null,
     ...overrides,
   };
 }

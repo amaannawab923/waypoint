@@ -161,21 +161,21 @@ describe('JiraConnectionPanel', () => {
 
   // This assertion is the capability register, not decoration. The banner
   // once listed a priority write that did not exist, which this test was
-  // originally written to pin shut. jiraApi.ts now genuinely exposes six
-  // writes — transitionJiraTicket, postJiraComment, deleteJiraComment,
-  // setJiraTicketPriority, setJiraTicketAssignee and uploadJiraAttachment —
-  // so the banner names six, and the check moves with it rather than being
-  // deleted: what it guards is that the count on screen matches the count in
-  // the data layer, in either direction.
-  it('names exactly the six writes that exist, deleting a comment among them', () => {
+  // originally written to pin shut. jiraApi.ts now genuinely exposes seven
+  // writes — transitionJiraTicket, postJiraComment, updateJiraComment,
+  // deleteJiraComment, setJiraTicketPriority, setJiraTicketAssignee and
+  // uploadJiraAttachment — so the banner names seven, and the check moves
+  // with it rather than being deleted: what it guards is that the count on
+  // screen matches the count in the data layer, in either direction.
+  it('names exactly the seven writes that exist, editing and deleting a comment among them', () => {
     renderPanel(<JiraConnectionPanel connection={status()} />);
 
     expect(
       screen.getByText(
-        /moving a ticket through its workflow, posting a comment \(a reply included\), deleting a comment you have permission to remove, changing its priority, reassigning it, and attaching a file/i,
+        /moving a ticket through its workflow, posting a comment \(a reply included\), editing one you have permission to change, deleting one you have permission to remove, changing a ticket's priority, reassigning it, and attaching a file/i,
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText(/those six are the whole set/i)).toBeVisible();
+    expect(screen.getByText(/those seven are the whole set/i)).toBeVisible();
   });
 
   // Reply and Copy link shipped alongside Delete (ROAD-41's comment-actions
@@ -185,19 +185,36 @@ describe('JiraConnectionPanel', () => {
   // threads comments, verified live against ENG-84; see
   // JiraTicketDetail.tsx's groupCommentsIntoThreads for how nesting is
   // decided from Jira's response, never from the request), and Copy link
-  // sends nothing to Jira at all. The register must not count either as a
-  // seventh write, and must not claim a comment can be edited — that
-  // affordance does not exist.
-  it('does not count Reply or Copy link as their own writes, and does not claim comments can be edited', () => {
+  // sends nothing to Jira at all. The register must not count either as an
+  // eighth write.
+  it('does not count Reply or Copy link as their own writes', () => {
     renderPanel(<JiraConnectionPanel connection={status()} />);
 
-    expect(screen.queryByText(/those seven are the whole set/i)).toBeNull();
+    expect(screen.queryByText(/those eight are the whole set/i)).toBeNull();
     expect(
       screen.getByText(
         /including copying a comment's link, is read-only here/i,
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/editing a comment/i)).toBeNull();
+  });
+
+  // Edit is real now, but not unconditionally — the register must say both
+  // halves honestly: that editing a comment is one of the seven writes, AND
+  // that it is refused rather than offered on a comment Waypoint can't
+  // rebuild without changing it (the losslessness proof this whole feature
+  // is built on — see jiraApi.ts's prepareJiraCommentEdit). A register that
+  // claimed Edit unconditionally would be just as wrong as the old "there is
+  // no Edit" it replaced.
+  it('claims editing exists and says plainly when it is refused', () => {
+    renderPanel(<JiraConnectionPanel connection={status()} />);
+
+    expect(
+      screen.getByText(/editing one you have permission to change/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/editing is refused rather than offered/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/there is no edit/i)).toBeNull();
   });
 
   // The other direction of the same defect. Uploading an attachment IS built
@@ -214,6 +231,7 @@ describe('JiraConnectionPanel', () => {
     expect(screen.queryByText(/those three are the whole set/i)).toBeNull();
     expect(screen.queryByText(/those four are the whole set/i)).toBeNull();
     expect(screen.queryByText(/those five are the whole set/i)).toBeNull();
+    expect(screen.queryByText(/those six are the whole set/i)).toBeNull();
   });
 
   // What is still genuinely missing stays listed. Removing one true entry

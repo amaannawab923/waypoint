@@ -1,4 +1,5 @@
 import type { JiraTruncation, JiraWireTicket } from '../../main/jira/jiraTypes';
+import type { JiraComment } from '@/types/jira';
 
 // Each test gets its OWN fresh copy of this module via freshApi(). jiraApi.ts
 // keeps a small module-level session cache (the last ticket list, the
@@ -21,6 +22,7 @@ const bridge = {
   setAssignee: jest.fn(),
   listComments: jest.fn(),
   postComment: jest.fn(),
+  updateComment: jest.fn(),
   deleteComment: jest.fn(),
   getCommentPermissions: jest.fn(),
 };
@@ -1676,5 +1678,779 @@ describe('comment formatting', () => {
         content: [{ type: 'text', text: 'no closing fence' }],
       },
     ]);
+  });
+});
+
+describe('listJiraComments — bodyAdf', () => {
+  it('carries the raw ADF through alongside the flattened body', async () => {
+    const api = freshApi();
+    const adf = {
+      type: 'doc',
+      version: 1,
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'Taking it.' }] },
+      ],
+    };
+    bridge.listComments.mockResolvedValue({
+      ok: true,
+      value: {
+        comments: [
+          {
+            id: 'c1',
+            ticketId: '10421',
+            authorName: 'Max Chen',
+            authorAccountId: 'acct-max',
+            body: 'Taking it.',
+            bodyAdf: adf,
+            createdAt: '2026-09-01T10:00:00.000Z',
+            parentId: null,
+          },
+        ],
+        total: 1,
+      },
+    });
+
+    const { comments } = await api.listJiraComments('10421');
+
+    expect(comments[0].bodyAdf).toEqual(adf);
+  });
+
+  it('maps a null bodyAdf through unchanged, for a legacy wiki-markup comment', async () => {
+    const api = freshApi();
+    bridge.listComments.mockResolvedValue({
+      ok: true,
+      value: {
+        comments: [
+          {
+            id: 'c1',
+            ticketId: '10421',
+            authorName: 'Max Chen',
+            authorAccountId: 'acct-max',
+            body: 'Taking it.',
+            bodyAdf: null,
+            createdAt: '2026-09-01T10:00:00.000Z',
+            parentId: null,
+          },
+        ],
+        total: 1,
+      },
+    });
+
+    const { comments } = await api.listJiraComments('10421');
+
+    expect(comments[0].bodyAdf).toBeNull();
+  });
+});
+
+/**
+ * `prepareJiraCommentEdit` is the one function anything in this app may
+ * trust to decide whether a real comment can be edited in place without
+ * changing it — see that function's own header comment in jiraApi.ts for
+ * the full reasoning. Every "round-trips" test below proves fidelity the
+ * same way the function itself does: deserialize, then feed the result
+ * back through the REAL, exported `buildCommentAdf` (not a re-implementation
+ * of its logic) and assert the result matches the original ADF exactly —
+ * so a regression in either half of the pair fails a test here rather than
+ * silently drifting the two apart.
+ */
+describe('prepareJiraCommentEdit', () => {
+  function commentWithAdf(
+    adf: unknown,
+    overrides: Partial<JiraComment> = {},
+  ): JiraComment {
+    return {
+      id: 'c1',
+      ticketId: '10421',
+      authorName: 'Max Chen',
+      authorAccountId: 'acct-max',
+      body: 'irrelevant to this function — it reads bodyAdf, not body',
+      createdAt: '2026-09-01T10:00:00.000Z',
+      parentId: null,
+      postedByWaypoint: false,
+      disclosureText: null,
+      bodyAdf: adf,
+      ...overrides,
+    };
+  }
+
+  it('refuses a comment whose bodyAdf is null — nothing to run the proof against', () => {
+    const api = freshApi();
+
+    expect(api.prepareJiraCommentEdit(commentWithAdf(null))).toBeNull();
+  });
+
+  describe('round-trips every node type and mark the composer can produce', () => {
+    it('a plain paragraph', () => {
+      const api = freshApi();
+      const adf = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'paragraph',
+            content: [{ type: 'text', text: 'Taking it.' }],
+          },
+        ],
+      };
+
+      const result = api.prepareJiraCommentEdit(commentWithAdf(adf));
+      if (!result) throw new Error('expected the round trip to succeed');
+
+      expect(result.text).toBe('Taking it.');
+      expect(api.buildCommentAdf(result.text, result.mentions)).toEqual(adf);
+    });
+
+    it.each([1, 2, 3] as const)('a level-%d heading', (level) => {
+      const api = freshApi();
+      const adf = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'heading',
+            attrs: { level },
+            content: [{ type: 'text', text: 'Rollout plan' }],
+          },
+        ],
+      };
+
+      const result = api.prepareJiraCommentEdit(commentWithAdf(adf));
+      if (!result) throw new Error('expected the round trip to succeed');
+
+      expect(result.text).toBe(`${'#'.repeat(level)} Rollout plan`);
+      expect(api.buildCommentAdf(result.text, result.mentions)).toEqual(adf);
+    });
+
+    it('a bullet list', () => {
+      const api = freshApi();
+      const adf = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'bulletList',
+            content: [
+              {
+                type: 'listItem',
+                content: [
+                  {
+                    type: 'paragraph',
+                    content: [{ type: 'text', text: 'first' }],
+                  },
+                ],
+              },
+              {
+                type: 'listItem',
+                content: [
+                  {
+                    type: 'paragraph',
+                    content: [{ type: 'text', text: 'second' }],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+
+      const result = api.prepareJiraCommentEdit(commentWithAdf(adf));
+      if (!result) throw new Error('expected the round trip to succeed');
+
+      expect(result.text).toBe('- first\n- second');
+      expect(api.buildCommentAdf(result.text, result.mentions)).toEqual(adf);
+    });
+
+    it('an ordered list', () => {
+      const api = freshApi();
+      const adf = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'orderedList',
+            content: [
+              {
+                type: 'listItem',
+                content: [
+                  {
+                    type: 'paragraph',
+                    content: [{ type: 'text', text: 'first' }],
+                  },
+                ],
+              },
+              {
+                type: 'listItem',
+                content: [
+                  {
+                    type: 'paragraph',
+                    content: [{ type: 'text', text: 'second' }],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+
+      const result = api.prepareJiraCommentEdit(commentWithAdf(adf));
+      if (!result) throw new Error('expected the round trip to succeed');
+
+      // ADF's own orderedList carries no per-item number to preserve, so the
+      // exact digits synthesized here are not the point — the round trip
+      // through buildCommentAdf is.
+      expect(api.buildCommentAdf(result.text, result.mentions)).toEqual(adf);
+    });
+
+    it('a blockquote', () => {
+      const api = freshApi();
+      const adf = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'blockquote',
+            content: [
+              {
+                type: 'paragraph',
+                content: [{ type: 'text', text: 'they said no' }],
+              },
+            ],
+          },
+        ],
+      };
+
+      const result = api.prepareJiraCommentEdit(commentWithAdf(adf));
+      if (!result) throw new Error('expected the round trip to succeed');
+
+      expect(result.text).toBe('> they said no');
+      expect(api.buildCommentAdf(result.text, result.mentions)).toEqual(adf);
+    });
+
+    it('a fenced code block, verbatim', () => {
+      const api = freshApi();
+      const adf = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'codeBlock',
+            content: [{ type: 'text', text: 'const x = **not bold**;' }],
+          },
+        ],
+      };
+
+      const result = api.prepareJiraCommentEdit(commentWithAdf(adf));
+      if (!result) throw new Error('expected the round trip to succeed');
+
+      expect(result.text).toBe('```\nconst x = **not bold**;\n```');
+      expect(api.buildCommentAdf(result.text, result.mentions)).toEqual(adf);
+    });
+
+    const RAW_TEXT_FOR_MARK: Record<string, string> = {
+      strong: 'important',
+      em: 'today',
+      strike: 'gone',
+      code: 'npm test',
+    };
+
+    it.each([
+      ['strong', '**important**'],
+      ['em', '_today_'],
+      ['strike', '~~gone~~'],
+      ['code', '`npm test`'],
+    ] as const)('a %s-marked run', (markType, expectedText) => {
+      const api = freshApi();
+      const raw = RAW_TEXT_FOR_MARK[markType];
+      const adf = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'paragraph',
+            content: [{ type: 'text', text: raw, marks: [{ type: markType }] }],
+          },
+        ],
+      };
+
+      const result = api.prepareJiraCommentEdit(commentWithAdf(adf));
+      if (!result) throw new Error('expected the round trip to succeed');
+
+      expect(result.text).toBe(expectedText);
+      expect(api.buildCommentAdf(result.text, result.mentions)).toEqual(adf);
+    });
+
+    it('a link mark', () => {
+      const api = freshApi();
+      const adf = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              {
+                type: 'text',
+                text: 'docs',
+                marks: [
+                  { type: 'link', attrs: { href: 'https://example.com' } },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+
+      const result = api.prepareJiraCommentEdit(commentWithAdf(adf));
+      if (!result) throw new Error('expected the round trip to succeed');
+
+      expect(result.text).toBe('[docs](https://example.com)');
+      expect(api.buildCommentAdf(result.text, result.mentions)).toEqual(adf);
+    });
+
+    // The one place fidelity means more than "renders the same": a mention
+    // must survive an edit as the exact same real ADF mention node,
+    // accountId included, not as literal "@Sam Lee" text that would notify
+    // nobody.
+    it('a mention, surviving unchanged', () => {
+      const api = freshApi();
+      const adf = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              {
+                type: 'mention',
+                attrs: { id: 'acct-sam', text: '@Sam Lee' },
+              },
+              { type: 'text', text: ' can you take this?' },
+            ],
+          },
+        ],
+      };
+
+      const result = api.prepareJiraCommentEdit(commentWithAdf(adf));
+      if (!result) throw new Error('expected the round trip to succeed');
+
+      expect(result.text).toBe('@Sam Lee can you take this?');
+      expect(result.mentions).toEqual([
+        { start: 0, end: 8, accountId: 'acct-sam', displayName: 'Sam Lee' },
+      ]);
+      expect(api.buildCommentAdf(result.text, result.mentions)).toEqual(adf);
+    });
+
+    // A mention inside a bold run: the mark applies only to the text either
+    // side of it (Jira's comment-create endpoint 400s on a marked mention —
+    // see JiraAdfMentionNode's own comment in main/jira/jiraTypes.ts), and
+    // this is the one case where the composer's own write path already
+    // produces that exact split. Proves the deserializer reconstructs the
+    // same split rather than merging the mention into the marked run.
+    it('a mention beside a marked run, in the same paragraph', () => {
+      const api = freshApi();
+      const adf = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: 'hi ', marks: [{ type: 'strong' }] },
+              { type: 'mention', attrs: { id: 'acct-sam', text: '@Sam Lee' } },
+            ],
+          },
+        ],
+      };
+
+      const result = api.prepareJiraCommentEdit(commentWithAdf(adf));
+      if (!result) throw new Error('expected the round trip to succeed');
+
+      expect(api.buildCommentAdf(result.text, result.mentions)).toEqual(adf);
+    });
+
+    // A real Jira response can carry an explicit `marks: []` on an
+    // otherwise-plain text node (the same shape main/jira/jiraIpc.ts's own
+    // readOptionalMarks already treats as equivalent to the key being
+    // absent). Without normalizing that away before comparing, nearly every
+    // ordinary, unformatted comment would spuriously fail the round trip —
+    // buildCommentAdf never writes an empty `marks` array — which would mean
+    // refusing the common case rather than the rare one this proof exists
+    // to catch.
+    it('a plain text node carrying an explicit empty marks array', () => {
+      const api = freshApi();
+      const adf = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'paragraph',
+            content: [{ type: 'text', text: 'Taking it.', marks: [] }],
+          },
+        ],
+      };
+
+      const result = api.prepareJiraCommentEdit(commentWithAdf(adf));
+
+      expect(result).not.toBeNull();
+      expect(result?.text).toBe('Taking it.');
+    });
+
+    it('a multi-block document mixing headings, a list, a mention and a code block', () => {
+      const api = freshApi();
+      const adf = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'heading',
+            attrs: { level: 2 },
+            content: [{ type: 'text', text: 'Rollout plan' }],
+          },
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: 'Assigned to ' },
+              { type: 'mention', attrs: { id: 'acct-sam', text: '@Sam Lee' } },
+            ],
+          },
+          {
+            type: 'bulletList',
+            content: [
+              {
+                type: 'listItem',
+                content: [
+                  {
+                    type: 'paragraph',
+                    content: [{ type: 'text', text: 'ship it' }],
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            type: 'codeBlock',
+            content: [{ type: 'text', text: 'npm run deploy' }],
+          },
+        ],
+      };
+
+      const result = api.prepareJiraCommentEdit(commentWithAdf(adf));
+      if (!result) throw new Error('expected the round trip to succeed');
+
+      expect(api.buildCommentAdf(result.text, result.mentions)).toEqual(adf);
+    });
+  });
+
+  describe('refuses what it cannot losslessly rebuild', () => {
+    it('a table', () => {
+      const api = freshApi();
+      const adf = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'table',
+            content: [
+              {
+                type: 'tableRow',
+                content: [
+                  {
+                    type: 'tableCell',
+                    content: [
+                      {
+                        type: 'paragraph',
+                        content: [{ type: 'text', text: 'cell' }],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+
+      expect(api.prepareJiraCommentEdit(commentWithAdf(adf))).toBeNull();
+    });
+
+    it('a panel', () => {
+      const api = freshApi();
+      const adf = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'panel',
+            attrs: { panelType: 'info' },
+            content: [
+              {
+                type: 'paragraph',
+                content: [{ type: 'text', text: 'heads up' }],
+              },
+            ],
+          },
+        ],
+      };
+
+      expect(api.prepareJiraCommentEdit(commentWithAdf(adf))).toBeNull();
+    });
+
+    // The one real failure in the founder's own corpus (27 of 28 comments
+    // passed this proof; the sole holdout was exactly this shape).
+    it('an embedded image (mediaSingle/media)', () => {
+      const api = freshApi();
+      const adf = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'mediaSingle',
+            attrs: { layout: 'center' },
+            content: [{ type: 'media', attrs: { id: 'att-1', type: 'file' } }],
+          },
+        ],
+      };
+
+      expect(api.prepareJiraCommentEdit(commentWithAdf(adf))).toBeNull();
+    });
+
+    // The case a node-type whitelist alone cannot catch: every node here is
+    // a plain, unmarked "text" node — a shape this dialect fully supports —
+    // and the deserializer produces text with nothing to reject. Only
+    // actually re-running it through buildCommentAdf and comparing catches
+    // that the literal `**` pairs would be read back as real bold.
+    it('prose containing a literal double-asterisk pair, misread as bold on the way back', () => {
+      const api = freshApi();
+      const adf = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'paragraph',
+            content: [{ type: 'text', text: 'score is **10** out of **20**' }],
+          },
+        ],
+      };
+
+      expect(api.prepareJiraCommentEdit(commentWithAdf(adf))).toBeNull();
+    });
+
+    // Same trap, with a single-character delimiter: `_` is ordinary in a
+    // filename or identifier, and nothing about a plain text node marks it
+    // as "don't read this as italic."
+    it('prose containing a literal underscore, misread as italic on the way back', () => {
+      const api = freshApi();
+      const adf = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: 'the file is named my_file_name.txt' },
+            ],
+          },
+        ],
+      };
+
+      expect(api.prepareJiraCommentEdit(commentWithAdf(adf))).toBeNull();
+    });
+
+    // Same trap again, with a backtick: ordinary in prose that mentions a
+    // command or a filename without meaning to mark it as code.
+    it('prose containing a literal backtick, misread as code on the way back', () => {
+      const api = freshApi();
+      const adf = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: 'run `npm test` in your terminal' },
+            ],
+          },
+        ],
+      };
+
+      expect(api.prepareJiraCommentEdit(commentWithAdf(adf))).toBeNull();
+    });
+
+    // A mention carrying a mark is not a shape the composer's own write path
+    // can ever produce (Jira's comment-create endpoint 400s on one — see
+    // JiraAdfMentionNode's own comment) — refused rather than silently
+    // stripping the mark, which would be exactly the kind of guess this
+    // feature exists to refuse to make.
+    it('a mention that improperly carries a mark', () => {
+      const api = freshApi();
+      const adf = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              {
+                type: 'mention',
+                attrs: { id: 'acct-sam', text: '@Sam Lee' },
+                marks: [{ type: 'strong' }],
+              },
+            ],
+          },
+        ],
+      };
+
+      expect(api.prepareJiraCommentEdit(commentWithAdf(adf))).toBeNull();
+    });
+
+    // A link mark whose href this app cannot post (see buildCommentAdf's own
+    // postableHref) is not the same failure as a missing href, but it is
+    // still a real mark this dialect cannot round-trip.
+    it('a link mark with a scheme this app never posts', () => {
+      const api = freshApi();
+      const adf = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              {
+                type: 'text',
+                text: 'call me',
+                marks: [{ type: 'link', attrs: { href: 'tel:+15551234567' } }],
+              },
+            ],
+          },
+        ],
+      };
+
+      expect(api.prepareJiraCommentEdit(commentWithAdf(adf))).toBeNull();
+    });
+  });
+});
+
+describe('updateJiraComment', () => {
+  it('sends the ADF built from text and mentions to the bridge, with the ticket and comment id', async () => {
+    const api = freshApi();
+    bridge.updateComment.mockResolvedValue({
+      ok: true,
+      value: {
+        id: 'c1',
+        ticketId: '10421',
+        authorName: 'Max Chen',
+        body: 'edited text',
+        createdAt: '2026-09-01T10:00:00.000Z',
+      },
+    });
+
+    await api.updateJiraComment('10421', 'c1', 'edited text');
+
+    expect(bridge.updateComment).toHaveBeenCalledWith({
+      ticketId: '10421',
+      commentId: 'c1',
+      body: {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'paragraph',
+            content: [{ type: 'text', text: 'edited text' }],
+          },
+        ],
+      },
+    });
+  });
+
+  it('maps the response through the same toComment every read and write uses', async () => {
+    const api = freshApi();
+    bridge.updateComment.mockResolvedValue({
+      ok: true,
+      value: {
+        id: 'c1',
+        ticketId: '10421',
+        authorName: 'Max Chen',
+        body: 'edited text',
+        createdAt: '2026-09-01T10:00:00.000Z',
+      },
+    });
+
+    const comment = await api.updateJiraComment('10421', 'c1', 'edited text');
+
+    expect(comment).toMatchObject({
+      id: 'c1',
+      body: 'edited text',
+      postedByWaypoint: false,
+      disclosureText: null,
+    });
+  });
+
+  // The whole safety property this shares with postJiraComment's own reply
+  // handling: parentId comes from Jira's RESPONSE, never fabricated from
+  // what this function already knew locally — an edited reply keeps
+  // whatever thread position Jira's response still reports for it.
+  it("preserves the response's own parentId, so an edited reply does not jump out of its thread", async () => {
+    const api = freshApi();
+    bridge.updateComment.mockResolvedValue({
+      ok: true,
+      value: {
+        id: 'c2',
+        ticketId: '10421',
+        authorName: 'Max Chen',
+        body: 'edited reply',
+        createdAt: '2026-09-01T10:00:00.000Z',
+        parentId: '10158',
+      },
+    });
+
+    const comment = await api.updateJiraComment('10421', 'c2', 'edited reply');
+
+    expect(comment.parentId).toBe('10158');
+  });
+
+  it("throws with Jira's own message on failure, same as every other write", async () => {
+    const api = freshApi();
+    bridge.updateComment.mockResolvedValue({
+      ok: false,
+      reason: 'jira_error',
+      message: 'You do not have permission to edit this comment.',
+    });
+
+    await expect(
+      api.updateJiraComment('10421', 'c1', 'edited text'),
+    ).rejects.toThrow('You do not have permission to edit this comment.');
+  });
+
+  // The same trap postJiraComment and deleteJiraComment already solve:
+  // editing a comment moves the ISSUE's `updated` in Jira too. Left
+  // unhandled, the very next queue read would compare a stale cached
+  // timestamp against a value the user's own edit moved and report "Someone
+  // changed this" about their own action.
+  it("does not flag the user's own edit as a third-party change", async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([wireTicket({ updatedAt: '2026-09-01T10:00:00.000Z' })]),
+    );
+    await api.listMyJiraTickets();
+
+    bridge.updateComment.mockResolvedValue({
+      ok: true,
+      value: {
+        id: 'c1',
+        ticketId: '10421',
+        authorName: 'Max Chen',
+        body: 'edited text',
+        createdAt: '2026-09-01T10:00:00.000Z',
+      },
+    });
+    await api.updateJiraComment('10421', 'c1', 'edited text');
+
+    // Jira now reports a later `updated` — moved by our own edit.
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([wireTicket({ updatedAt: '2026-09-01T10:05:00.000Z' })]),
+    );
+    const { tickets } = await api.listMyJiraTickets();
+
+    expect(tickets[0]).toMatchObject({ hasConflict: false, conflict: null });
   });
 });

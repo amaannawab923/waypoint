@@ -13,8 +13,10 @@ import {
   getJiraCommentPermissions,
   listJiraComments,
   postJiraComment,
+  prepareJiraCommentEdit,
   searchJiraAssignableUsers,
   setJiraTicketAssignee,
+  updateJiraComment,
   uploadJiraAttachment,
 } from '@/data/jiraApi';
 import { useJiraConnection } from '@/lib/jiraStore';
@@ -48,8 +50,15 @@ jest.mock('@/data/jiraApi', () => ({
   getJiraCommentPermissions: jest.fn(),
   listJiraComments: jest.fn(),
   postJiraComment: jest.fn(),
+  // Real logic (the round-trip losslessness proof) is not re-run here — this
+  // suite is about who gets Edit rendered and what happens when they click
+  // it, exactly the same "trust the data layer's own contract, test this
+  // component against it" split `getJiraCommentPermissions` already draws.
+  // jiraApi.test.ts is where the actual proof is pinned.
+  prepareJiraCommentEdit: jest.fn(),
   searchJiraAssignableUsers: jest.fn(),
   setJiraTicketAssignee: jest.fn(),
+  updateJiraComment: jest.fn(),
   uploadJiraAttachment: jest.fn(),
 }));
 jest.mock('@/lib/jiraStore', () => ({ useJiraConnection: jest.fn() }));
@@ -120,6 +129,11 @@ function comment(overrides: Partial<JiraComment> = {}): JiraComment {
     parentId: null,
     postedByWaypoint: false,
     disclosureText: null,
+    // Null by default: this suite mocks prepareJiraCommentEdit's own
+    // decision directly rather than exercising the real ADF round-trip (see
+    // that mock's own comment above), so no fixture here needs a real
+    // document tree behind it.
+    bodyAdf: null,
     ...overrides,
   };
 }
@@ -201,6 +215,11 @@ beforeEach(() => {
     editAll: false,
     editOwn: false,
   });
+  // Fails closed the same way: no test outside "editing a comment" below
+  // grants edit permission, so none of them should ever call this, but a
+  // stray call defaulting to "not editable" is still the safe answer rather
+  // than an unmocked-function crash.
+  jest.mocked(prepareJiraCommentEdit).mockReturnValue(null);
   jest.mocked(useJiraConnection).mockReturnValue(CONNECTION);
   jest.mocked(searchJiraAssignableUsers).mockResolvedValue(ASSIGNABLE);
   jest.mocked(downloadJiraAttachment).mockResolvedValue({ canceled: false });
@@ -1149,6 +1168,245 @@ describe('deleting a comment', () => {
   });
 });
 
+// Edit's own visibility gate mirrors Delete's exactly (canEditComment in
+// JiraTicketDetail.tsx) — same reason the editOwn-only case against someone
+// ELSE's comment gets its own dedicated coverage below rather than being
+// inferred from editAll: editAll and editOwn can both be true on the
+// connected/test account at once, which is the shape this machine's own
+// account cannot reveal a bug in by accident. Separate from permission
+// entirely is whether prepareJiraCommentEdit says THIS comment's own content
+// can be edited without changing it — that function is mocked in this file
+// (see its own comment at the top), so these tests are only about what
+// JiraTicketDetail does with a true/false/null answer, never about the real
+// round-trip proof.
+describe('editing a comment', () => {
+  const EDIT_PREVIEW = { text: 'original text', mentions: [] };
+
+  it('offers no Edit when the connected account holds neither edit permission', async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: false,
+      deleteOwn: false,
+      editAll: false,
+      editOwn: false,
+    });
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [comment({ id: 'c1', authorAccountId: ME, body: 'mine' })],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('mine');
+
+    expect(
+      screen.queryByRole('button', { name: 'Edit' }),
+    ).not.toBeInTheDocument();
+    expect(prepareJiraCommentEdit).not.toHaveBeenCalled();
+  });
+
+  it('offers Edit on my own comment when only editOwn is granted', async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: false,
+      deleteOwn: false,
+      editAll: false,
+      editOwn: true,
+    });
+    jest.mocked(prepareJiraCommentEdit).mockReturnValue(EDIT_PREVIEW);
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [comment({ id: 'c1', authorAccountId: ME, body: 'mine' })],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('mine');
+
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+  });
+
+  it("offers no Edit on someone else's comment when only editOwn is granted", async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: false,
+      deleteOwn: false,
+      editAll: false,
+      editOwn: true,
+    });
+    jest.mocked(prepareJiraCommentEdit).mockReturnValue(EDIT_PREVIEW);
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          authorAccountId: 'acct-sam',
+          authorName: 'Sam Lee',
+          body: 'not mine',
+        }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('not mine');
+
+    expect(
+      screen.queryByRole('button', { name: 'Edit' }),
+    ).not.toBeInTheDocument();
+    // The permission gate must short-circuit before the round-trip proof is
+    // ever asked to run on a comment this account isn't even allowed to
+    // touch.
+    expect(prepareJiraCommentEdit).not.toHaveBeenCalled();
+  });
+
+  it('offers Edit on any comment when editAll is granted', async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: false,
+      deleteOwn: false,
+      editAll: true,
+      editOwn: false,
+    });
+    jest.mocked(prepareJiraCommentEdit).mockReturnValue(EDIT_PREVIEW);
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          authorAccountId: 'acct-sam',
+          authorName: 'Sam Lee',
+          body: 'not mine either',
+        }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('not mine either');
+
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+  });
+
+  // The heart of the safety property, at the UI layer: permission alone is
+  // not enough. A comment this account may edit but that fails the
+  // losslessness round trip gets an honest refusal, not a silently missing
+  // Edit button and not a button that opens the composer anyway.
+  it('refuses Edit and offers "Edit in Jira" instead when the comment fails the round trip', async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: false,
+      deleteOwn: false,
+      editAll: true,
+      editOwn: false,
+    });
+    jest.mocked(prepareJiraCommentEdit).mockReturnValue(null);
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({ id: 'c1', body: 'has a table Waypoint cannot rebuild' }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('has a table Waypoint cannot rebuild');
+
+    expect(
+      screen.queryByRole('button', { name: 'Edit' }),
+    ).not.toBeInTheDocument();
+    const editInJira = screen.getByRole('link', { name: 'Edit in Jira' });
+    expect(editInJira).toHaveAttribute(
+      'href',
+      'https://waypoint123.atlassian.net/browse/ENG-421?focusedCommentId=c1',
+    );
+    expect(editInJira).toHaveAttribute('target', '_blank');
+  });
+
+  it('loads the proven-safe prefill into the composer on click', async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: false,
+      deleteOwn: false,
+      editAll: true,
+      editOwn: false,
+    });
+    jest.mocked(prepareJiraCommentEdit).mockReturnValue({
+      text: 'Can you take a look? Thanks @Sam Lee',
+      mentions: [
+        { start: 29, end: 37, accountId: 'acct-sam', displayName: 'Sam Lee' },
+      ],
+    });
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [comment({ id: 'c1', body: 'Can you take a look?' })],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('Can you take a look?');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+    expect(commentBox().value).toBe('Can you take a look? Thanks @Sam Lee');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
+  });
+
+  it('saves the edit through updateJiraComment and replaces the row with the response', async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: false,
+      deleteOwn: false,
+      editAll: true,
+      editOwn: false,
+    });
+    jest.mocked(prepareJiraCommentEdit).mockReturnValue(EDIT_PREVIEW);
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [comment({ id: 'c1', body: 'original text' })],
+      total: 1,
+    });
+    jest
+      .mocked(updateJiraComment)
+      .mockResolvedValue(comment({ id: 'c1', body: 'edited text' }));
+    renderDrawer();
+    await screen.findByText('original text');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(commentBox(), {
+      target: { value: 'edited text' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(updateJiraComment).toHaveBeenCalledWith(
+        '10421',
+        'c1',
+        'edited text',
+        [],
+      ),
+    );
+    // Waits for the OLD text to vanish, not for the new text to appear —
+    // matching deleteJiraComment's own test above (`queryByText('noted')` to
+    // become null), and deliberately not the other way around: the
+    // composer's own textarea still literally contains "edited text" the
+    // whole time (that's what was typed into it), so asserting on that
+    // string appearing would pass immediately without ever proving the
+    // async write actually completed and the read-only row updated.
+    await waitFor(() => expect(screen.queryByText('original text')).toBeNull());
+    // Replaced in place, not appended and not refetched — same "trust the
+    // response, not the request" shape deleteJiraComment's own test above
+    // pins for the read count.
+    expect(screen.getByText('edited text')).toBeInTheDocument();
+    expect(listJiraComments).toHaveBeenCalledTimes(1);
+  });
+
+  it('discards the loaded edit and clears the composer on Cancel', async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: false,
+      deleteOwn: false,
+      editAll: true,
+      editOwn: false,
+    });
+    jest.mocked(prepareJiraCommentEdit).mockReturnValue(EDIT_PREVIEW);
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [comment({ id: 'c1', body: 'original text' })],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('original text');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(commentBox().value).toBe('original text');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(commentBox().value).toBe('');
+    expect(updateJiraComment).not.toHaveBeenCalled();
+    expect(screen.getByText('original text')).toBeInTheDocument();
+  });
+});
+
 describe('the comment composer formatting toolbar', () => {
   function selectAll(box: HTMLTextAreaElement) {
     box.setSelectionRange(0, box.value.length);
@@ -1256,6 +1514,7 @@ describe('comment thread truncation', () => {
       parentId: null,
       postedByWaypoint: false,
       disclosureText: null,
+      bodyAdf: null,
     };
   }
 
