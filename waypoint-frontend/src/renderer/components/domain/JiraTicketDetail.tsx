@@ -2,7 +2,9 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { clsx } from 'clsx';
 import {
   buildJiraCommentPermalink,
+  deleteJiraComment,
   downloadJiraAttachment,
+  getJiraCommentPermissions,
   getJiraPriorityOptions,
   getJiraTransitions,
   listJiraComments,
@@ -10,6 +12,7 @@ import {
   setJiraTicketPriority,
   transitionJiraTicket,
   uploadJiraAttachment,
+  type JiraCommentPermissions,
 } from '@/data/jiraApi';
 import { showErrorToast } from '@/lib/toast';
 import { useAsync } from '@/lib/useAsync';
@@ -126,6 +129,30 @@ function groupLinksByRelation(
   return Array.from(grouped.entries());
 }
 
+/**
+ * What a comment delete actually does, in the terms a confirm dialog has to
+ * be honest about: `jira:comments:delete` (jiraIpc.ts -> jiraClient.ts's
+ * `deleteComment`) removes the comment from the real issue outright, with no
+ * undo on either side — Jira answers a plain 204 and there is nothing left
+ * to restore it from. A standalone, exported function, the same shape
+ * `disconnectJiraConfirmMessage` gives its own confirm text just below in
+ * JiraConnectionPanel.tsx (and `archiveConfirmMessage` in
+ * lib/projectArchiveCopy.ts before that) — "what this button actually does"
+ * is worth stating once, and testably, rather than inlined at the one call
+ * site that happens to exist today.
+ *
+ * Says plainly that this reaches Jira, not just Waypoint's own view of it:
+ * a reader who has only ever seen this app delete rows locally (there is no
+ * such feature here, but nothing stops the assumption) needs the sentence
+ * that rules that reading out.
+ */
+export function deleteJiraCommentConfirmMessage(): string {
+  return (
+    'Delete this comment? This removes it from the real issue in Jira, not ' +
+    'just from Waypoint, for anyone who has it open — and there is no undo.'
+  );
+}
+
 /** Label + value, on the same 104px label column TicketDetailPage's own
  * PropertyRow uses — the two panels sit one route apart and should line up. */
 function PropertyRow({
@@ -209,6 +236,12 @@ export function JiraTicketDetail({
   // showErrorToast), so a copy's own success has nowhere else to say so.
   // Cleared after the same 1500ms RequestsPage uses.
   const [copiedCommentId, setCopiedCommentId] = useState<string | null>(null);
+  // Which comment is mid-delete, by id — same "one row, not a page-wide
+  // boolean" shape as `downloading` above, since several rows could in
+  // principle be clicked before the first confirm() resolves.
+  const [deletingCommentId, setDeletingCommentId] = useState<string | null>(
+    null,
+  );
   const assigneeChipRef = useRef<HTMLButtonElement>(null);
   const stateChipRef = useRef<HTMLButtonElement>(null);
   const priorityChipRef = useRef<HTMLButtonElement>(null);
@@ -224,6 +257,19 @@ export function JiraTicketDetail({
     setComments(fetchedComments.comments);
     setCommentTotal(fetchedComments.total);
   }, [fetchedComments]);
+
+  // Delete's own visibility gate. `undefined` (not yet loaded, or the read
+  // failed) means "no evidence of permission" and canDeleteComment below
+  // reads it as false — fails closed, the same choice
+  // getMyPermissions/havePermission already make in main for a permission
+  // key Jira's own answer omitted. There is no error UI for this read: the
+  // one thing a failure changes is that a destructive button stays hidden,
+  // which is the safe direction to fail in and not worth a retry banner of
+  // its own alongside the comment thread's real one.
+  const { data: commentPermissions } = useAsync<JiraCommentPermissions>(
+    () => getJiraCommentPermissions(ticket.key),
+    [ticket.key],
+  );
 
   // Both lazy reads follow JiraTicketRow's own shape exactly, including the
   // `.catch()`: without one, a broken connection renders as "no transitions
@@ -376,7 +422,11 @@ export function JiraTicketDetail({
    */
   async function handleCopyCommentLink(commentId: string) {
     if (!connection?.site) return;
-    const url = buildJiraCommentPermalink(connection.site, ticket.key, commentId);
+    const url = buildJiraCommentPermalink(
+      connection.site,
+      ticket.key,
+      commentId,
+    );
     try {
       await navigator.clipboard.writeText(url);
       setCopiedCommentId(commentId);
@@ -386,6 +436,63 @@ export function JiraTicketDetail({
       // channel to report to and the address is not shown anywhere else in
       // this row for the user to fall back to reading it, unlike
       // RequestsPage's own input field — there is simply nothing more to do.
+    }
+  }
+
+  /**
+   * Whether Delete should render for this particular comment — a client-side
+   * decision, since Jira's comment payload carries no per-comment permission
+   * hint (see `commentPermissions`'s own comment above): the project-level
+   * own/all answer, plus whether the signed-in account actually wrote this
+   * one.
+   *
+   * `deleteAll` and `deleteOwn` can both be true on the same account (the
+   * common shape for whoever is testing this against their own Jira, and NOT
+   * the common shape a real non-admin sees) — so the `deleteOwn` branch below
+   * is checked on its own rather than assumed from "deleteAll is false", the
+   * one case this machine's own account cannot exercise by accident.
+   */
+  function canDeleteComment(comment: JiraComment): boolean {
+    if (!commentPermissions) return false;
+    if (commentPermissions.deleteAll) return true;
+    if (!commentPermissions.deleteOwn) return false;
+    return (
+      comment.authorAccountId !== null &&
+      comment.authorAccountId === connection?.accountId
+    );
+  }
+
+  /**
+   * Deletes one comment outright, after a confirm() naming exactly what that
+   * does (see `deleteJiraCommentConfirmMessage`) — this repo's established
+   * guard on every irreversible action, matching Disconnect's own
+   * `window.confirm` in JiraConnectionPanel.tsx.
+   *
+   * On success the row is dropped from local state directly — `.filter()`,
+   * not a refetch — because deleteJiraComment already told Jira to remove
+   * it and this module holds no cache of the thread to reconcile against; a
+   * refetch would just be a slower way to arrive at the same array. A
+   * failure surfaces through the same error-only toast channel every other
+   * write in this component uses, naming Jira's own message (a 403 from a
+   * permission that changed since this comment's permissions were fetched,
+   * or a 404 from someone else already deleting it) rather than pretending
+   * nothing happened.
+   */
+  async function handleDeleteComment(comment: JiraComment) {
+    if (!window.confirm(deleteJiraCommentConfirmMessage())) return;
+    setDeletingCommentId(comment.id);
+    try {
+      await deleteJiraComment(ticket.id, comment.id);
+      setComments((cs) => cs.filter((c) => c.id !== comment.id));
+      setCommentTotal((t) => Math.max(0, t - 1));
+    } catch (err) {
+      showErrorToast(
+        err instanceof Error
+          ? err.message
+          : 'Could not delete that comment in Jira.',
+      );
+    } finally {
+      setDeletingCommentId(null);
     }
   }
 
@@ -599,7 +706,9 @@ export function JiraTicketDetail({
                         <span
                           className="shrink-0 font-mono text-[11px] font-semibold"
                           style={{
-                            color: jiraProjectColor(link.key.split('-')[0] ?? ''),
+                            color: jiraProjectColor(
+                              link.key.split('-')[0] ?? '',
+                            ),
                           }}
                         >
                           {link.key}
@@ -677,16 +786,20 @@ export function JiraTicketDetail({
                   <div className="text-[12.5px] leading-relaxed whitespace-pre-wrap text-text-secondary">
                     {c.body}
                   </div>
-                  {/* Two of Jira's five comment-row actions — Edit and
-                      Delete need capabilities this phase deliberately
-                      doesn't have (see this component's own header comment
-                      on why), and reactions have no public API at all.
-                      Opacity-revealed on hover exactly like
-                      ProjectViewsPage.tsx's own row actions, and
-                      group-focus-within (not group-hover alone) is what
-                      keeps a keyboard user from needing a mouse to ever see
-                      these — a Tab landing on either button already reveals
-                      the row before it needs to be clicked. */}
+                  {/* Three of Jira's five comment-row actions now: Reply and
+                      Copy link, and Delete alongside them — permission-gated
+                      per comment (see canDeleteComment above) rather than
+                      always shown, since Jira's own comment menu only ever
+                      offers delete on a comment you may actually remove.
+                      Edit still needs a capability this phase deliberately
+                      doesn't have, and reactions have no public API at all —
+                      those two remain the honest gap. Opacity-revealed on
+                      hover exactly like ProjectViewsPage.tsx's own row
+                      actions, and group-focus-within (not group-hover alone)
+                      is what keeps a keyboard user from needing a mouse to
+                      ever see these — a Tab landing on any of these buttons
+                      already reveals the row before it needs to be
+                      clicked. */}
                   <div className="mt-1 flex items-center gap-2.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                     {c.authorAccountId !== null && (
                       <button
@@ -709,6 +822,16 @@ export function JiraTicketDetail({
                         className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
                       >
                         {copiedCommentId === c.id ? 'Copied' : 'Copy link'}
+                      </button>
+                    )}
+                    {canDeleteComment(c) && (
+                      <button
+                        type="button"
+                        disabled={deletingCommentId === c.id}
+                        onClick={() => handleDeleteComment(c)}
+                        className="rounded text-[10.5px] font-semibold text-text-muted hover:text-danger hover:underline disabled:opacity-60"
+                      >
+                        {deletingCommentId === c.id ? 'Deleting…' : 'Delete'}
                       </button>
                     )}
                   </div>

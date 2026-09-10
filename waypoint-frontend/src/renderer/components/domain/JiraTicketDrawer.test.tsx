@@ -8,7 +8,9 @@ import {
   waitFor,
 } from '@testing-library/react';
 import {
+  deleteJiraComment,
   downloadJiraAttachment,
+  getJiraCommentPermissions,
   listJiraComments,
   postJiraComment,
   searchJiraAssignableUsers,
@@ -36,9 +38,14 @@ jest.mock('@/data/jiraApi', () => ({
   // formula with no IPC behind it (unlike every other export here), and the
   // "exact permalink" test below is only meaningful if this is the same
   // formula jiraApi.test.ts pins directly.
-  buildJiraCommentPermalink: (site: string, issueKey: string, commentId: string) =>
-    `https://${site}/browse/${issueKey}?focusedCommentId=${commentId}`,
+  buildJiraCommentPermalink: (
+    site: string,
+    issueKey: string,
+    commentId: string,
+  ) => `https://${site}/browse/${issueKey}?focusedCommentId=${commentId}`,
+  deleteJiraComment: jest.fn(),
   downloadJiraAttachment: jest.fn(),
+  getJiraCommentPermissions: jest.fn(),
   listJiraComments: jest.fn(),
   postJiraComment: jest.fn(),
   searchJiraAssignableUsers: jest.fn(),
@@ -184,6 +191,15 @@ beforeEach(() => {
   jest.clearAllMocks();
   jest.mocked(useCopilotOpenState).mockReturnValue(false);
   jest.mocked(listJiraComments).mockResolvedValue({ comments: [], total: 0 });
+  // Fails closed by default, same as canDeleteComment's own handling of an
+  // unresolved read: no test outside the "deleting a comment" block below is
+  // about Delete, so none of them should see it render.
+  jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+    deleteAll: false,
+    deleteOwn: false,
+    editAll: false,
+    editOwn: false,
+  });
   jest.mocked(useJiraConnection).mockReturnValue(CONNECTION);
   jest.mocked(searchJiraAssignableUsers).mockResolvedValue(ASSIGNABLE);
   jest.mocked(downloadJiraAttachment).mockResolvedValue({ canceled: false });
@@ -849,6 +865,187 @@ describe("copying a comment's permalink", () => {
     expect(
       await screen.findByRole('button', { name: 'Copied' }),
     ).toBeInTheDocument();
+  });
+});
+
+// Delete's own visibility is a client-side decision (canDeleteComment in
+// JiraTicketDetail.tsx): the project-level own/all answer Jira reports for
+// the connected account, plus whether that account actually wrote the
+// comment in question. deleteAll and deleteOwn can both be true on the
+// connected/test account at once — the common shape for whoever is testing
+// this against their own Jira, and deliberately NOT the shape most
+// non-admins see — so the deleteOwn-only case against someone ELSE's
+// comment gets its own dedicated coverage below rather than being inferred
+// from the deleteAll case, since this machine's own account cannot reveal
+// that gap by accident.
+describe('deleting a comment', () => {
+  beforeEach(() => {
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
+  });
+
+  it('offers no Delete when the connected account holds neither delete permission', async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: false,
+      deleteOwn: false,
+      editAll: false,
+      editOwn: false,
+    });
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [comment({ id: 'c1', authorAccountId: ME, body: 'mine' })],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('mine');
+
+    expect(
+      screen.queryByRole('button', { name: 'Delete' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('offers Delete on my own comment when only deleteOwn is granted', async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: false,
+      deleteOwn: true,
+      editAll: false,
+      editOwn: false,
+    });
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [comment({ id: 'c1', authorAccountId: ME, body: 'mine' })],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('mine');
+
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+  });
+
+  it("offers no Delete on someone else's comment when only deleteOwn is granted", async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: false,
+      deleteOwn: true,
+      editAll: false,
+      editOwn: false,
+    });
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          authorAccountId: 'acct-sam',
+          authorName: 'Sam Lee',
+          body: 'not mine',
+        }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('not mine');
+
+    expect(
+      screen.queryByRole('button', { name: 'Delete' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('offers Delete on any comment when deleteAll is granted', async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: true,
+      deleteOwn: false,
+      editAll: false,
+      editOwn: false,
+    });
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          authorAccountId: 'acct-sam',
+          authorName: 'Sam Lee',
+          body: 'not mine either',
+        }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('not mine either');
+
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+  });
+
+  it('asks before deleting, and does nothing at all when the confirmation is cancelled', async () => {
+    jest.mocked(window.confirm).mockReturnValue(false);
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: true,
+      deleteOwn: false,
+      editAll: false,
+      editOwn: false,
+    });
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [comment({ id: 'c1', body: 'noted' })],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('noted');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    expect(window.confirm).toHaveBeenCalled();
+    expect(deleteJiraComment).not.toHaveBeenCalled();
+    expect(screen.getByText('noted')).toBeInTheDocument();
+  });
+
+  it('removes the row on success, without a refetch of the thread', async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: true,
+      deleteOwn: false,
+      editAll: false,
+      editOwn: false,
+    });
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [comment({ id: 'c1', body: 'noted' })],
+      total: 1,
+    });
+    jest.mocked(deleteJiraComment).mockResolvedValue(undefined);
+    renderDrawer();
+    await screen.findByText('noted');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() =>
+      expect(deleteJiraComment).toHaveBeenCalledWith('10421', 'c1'),
+    );
+    await waitFor(() => expect(screen.queryByText('noted')).toBeNull());
+    // Exactly one read of the thread — the row is gone from local state, not
+    // from a second listJiraComments() call.
+    expect(listJiraComments).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces a 403 honestly rather than failing silently, and leaves the row in place', async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: true,
+      deleteOwn: false,
+      editAll: false,
+      editOwn: false,
+    });
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [comment({ id: 'c1', body: 'noted' })],
+      total: 1,
+    });
+    jest
+      .mocked(deleteJiraComment)
+      .mockRejectedValue(
+        new Error('You do not have permission to delete this comment.'),
+      );
+    renderDrawer();
+    await screen.findByText('noted');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() =>
+      expect(showErrorToast).toHaveBeenCalledWith(
+        'You do not have permission to delete this comment.',
+      ),
+    );
+    // The failed delete did not remove the row — the real Jira comment is
+    // still there, and the screen must not claim otherwise.
+    expect(screen.getByText('noted')).toBeInTheDocument();
   });
 });
 

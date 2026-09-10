@@ -21,6 +21,8 @@ const bridge = {
   setAssignee: jest.fn(),
   listComments: jest.fn(),
   postComment: jest.fn(),
+  deleteComment: jest.fn(),
+  getCommentPermissions: jest.fn(),
 };
 
 function freshApi(): JiraApiModule {
@@ -284,7 +286,7 @@ describe('conflict detection', () => {
   // cached timestamp the very next refresh would tell the user "Someone
   // changed this" about their own comment — and disable every other write
   // until they reloaded. This is the regression guard for that.
-  it('does not flag the user\'s own comment as a third-party edit', async () => {
+  it("does not flag the user's own comment as a third-party edit", async () => {
     const api = freshApi();
     bridge.listTickets.mockResolvedValue(
       ticketsResult([wireTicket({ updatedAt: '2026-09-01T10:00:00.000Z' })]),
@@ -431,10 +433,7 @@ describe('conflict detection', () => {
         assigneeAccountId: 'acct-sam',
       }),
     });
-    const afterAssignee = await api.setJiraTicketAssignee(
-      '10421',
-      'acct-sam',
-    );
+    const afterAssignee = await api.setJiraTicketAssignee('10421', 'acct-sam');
     expect(afterAssignee).toMatchObject({ hasConflict: false });
   });
 
@@ -862,7 +861,10 @@ describe('ensureJiraSynced', () => {
   it('lists when connected but nothing has synced yet, and the result carries real counts', async () => {
     const api = freshApi();
     bridge.listTickets.mockResolvedValue(
-      ticketsResult([wireTicket({ id: '1', projectKey: 'ENG' }), wireTicket({ id: '2', projectKey: 'OPS' })]),
+      ticketsResult([
+        wireTicket({ id: '1', projectKey: 'ENG' }),
+        wireTicket({ id: '2', projectKey: 'OPS' }),
+      ]),
     );
 
     const result = await api.ensureJiraSynced();
@@ -1094,6 +1096,115 @@ describe('comments', () => {
         ],
       },
     });
+  });
+});
+
+describe('deleteJiraComment', () => {
+  it('calls the bridge with the ticket and comment id', async () => {
+    const api = freshApi();
+    bridge.deleteComment.mockResolvedValue({ ok: true, value: undefined });
+
+    await api.deleteJiraComment('10421', 'c1');
+
+    expect(bridge.deleteComment).toHaveBeenCalledWith({
+      ticketId: '10421',
+      commentId: 'c1',
+    });
+  });
+
+  it("throws with Jira's own message on failure, same as every other write", async () => {
+    const api = freshApi();
+    bridge.deleteComment.mockResolvedValue({
+      ok: false,
+      reason: 'jira_error',
+      message: 'You do not have permission to delete this comment.',
+    });
+
+    await expect(api.deleteJiraComment('10421', 'c1')).rejects.toThrow(
+      'You do not have permission to delete this comment.',
+    );
+  });
+
+  // A 403 (permission revoked since it was checked) or a 404 (someone else
+  // already deleted it) must surface honestly rather than fail silently —
+  // this app's toast channel is error-only, and `reason` is what a caller
+  // above this layer could use to tell those apart, the same carried value
+  // `unwrap` already preserves for every other write.
+  it('carries a permission failure reason rather than a generic one', async () => {
+    const api = freshApi();
+    bridge.deleteComment.mockResolvedValue({
+      ok: false,
+      reason: 'jira_error',
+      message: 'The comment could not be found. It may already be deleted.',
+    });
+
+    await expect(api.deleteJiraComment('10421', 'c1')).rejects.toMatchObject({
+      name: 'JiraApiError',
+      message: 'The comment could not be found. It may already be deleted.',
+    });
+  });
+
+  // The same trap postJiraComment already solves, on the other side of the
+  // same write: deleting a comment moves the ISSUE's `updated` in Jira too,
+  // and this call gets nothing back to re-baseline from (main answers a
+  // plain 204). Left unhandled, the very next queue read would compare a
+  // stale cached timestamp against a value the user's own delete moved and
+  // report "Someone changed this" about their own action.
+  it("does not flag the user's own delete as a third-party edit", async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([wireTicket({ updatedAt: '2026-09-01T10:00:00.000Z' })]),
+    );
+    await api.listMyJiraTickets();
+
+    bridge.deleteComment.mockResolvedValue({ ok: true, value: undefined });
+    await api.deleteJiraComment('10421', 'c1');
+
+    // Jira now reports a later `updated` — moved by our own delete.
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([wireTicket({ updatedAt: '2026-09-01T10:05:00.000Z' })]),
+    );
+    const { tickets } = await api.listMyJiraTickets();
+
+    expect(tickets[0]).toMatchObject({ hasConflict: false, conflict: null });
+  });
+});
+
+describe('getJiraCommentPermissions', () => {
+  it('maps the four permission booleans through, unchanged', async () => {
+    const api = freshApi();
+    bridge.getCommentPermissions.mockResolvedValue({
+      ok: true,
+      value: {
+        deleteAll: false,
+        deleteOwn: true,
+        editAll: false,
+        editOwn: true,
+      },
+    });
+
+    const permissions = await api.getJiraCommentPermissions('ENG-421');
+
+    expect(bridge.getCommentPermissions).toHaveBeenCalledWith('ENG-421');
+    expect(permissions).toEqual({
+      deleteAll: false,
+      deleteOwn: true,
+      editAll: false,
+      editOwn: true,
+    });
+  });
+
+  it("throws with Jira's own message on failure", async () => {
+    const api = freshApi();
+    bridge.getCommentPermissions.mockResolvedValue({
+      ok: false,
+      reason: 'jira_error',
+      message: 'Could not read permissions.',
+    });
+
+    await expect(api.getJiraCommentPermissions('ENG-421')).rejects.toThrow(
+      'Could not read permissions.',
+    );
   });
 });
 
@@ -1462,4 +1573,3 @@ describe('comment formatting', () => {
     ]);
   });
 });
-

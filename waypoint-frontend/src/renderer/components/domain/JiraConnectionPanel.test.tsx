@@ -11,7 +11,10 @@ import {
 import { setJiraConnection } from '@/lib/jiraStore';
 import type { JiraConnectionStatus } from '@/types/jira';
 import { clearMyJiraQuery } from '@/pages/jira/useMyJiraQueue';
-import { JiraConnectionPanel, disconnectJiraConfirmMessage } from './JiraConnectionPanel';
+import {
+  JiraConnectionPanel,
+  disconnectJiraConfirmMessage,
+} from './JiraConnectionPanel';
 
 jest.mock('@/data/jiraApi', () => ({
   connectJira: jest.fn(),
@@ -97,9 +100,9 @@ describe('JiraConnectionPanel', () => {
   // was not empty.
   it('forgets the remembered query on disconnect', async () => {
     jest.mocked(disconnectJira).mockResolvedValue(undefined);
-    jest.mocked(getJiraConnectionStatus).mockResolvedValue(
-      status({ connected: false, issueCount: 0 }),
-    );
+    jest
+      .mocked(getJiraConnectionStatus)
+      .mockResolvedValue(status({ connected: false, issueCount: 0 }));
     renderPanel(<JiraConnectionPanel connection={status()} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
@@ -158,29 +161,48 @@ describe('JiraConnectionPanel', () => {
 
   // This assertion is the capability register, not decoration. The banner
   // once listed a priority write that did not exist, which this test was
-  // originally written to pin shut. jiraApi.ts now genuinely exposes five
-  // writes — transitionJiraTicket, postJiraComment, setJiraTicketPriority,
-  // setJiraTicketAssignee and uploadJiraAttachment — so the banner names five,
-  // and the check moves with it rather than being deleted: what it guards is
-  // that the count on screen matches the count in the data layer, in either
-  // direction.
-  it('names exactly the five writes that exist, attaching among them', () => {
+  // originally written to pin shut. jiraApi.ts now genuinely exposes six
+  // writes — transitionJiraTicket, postJiraComment, deleteJiraComment,
+  // setJiraTicketPriority, setJiraTicketAssignee and uploadJiraAttachment —
+  // so the banner names six, and the check moves with it rather than being
+  // deleted: what it guards is that the count on screen matches the count in
+  // the data layer, in either direction.
+  it('names exactly the six writes that exist, deleting a comment among them', () => {
     renderPanel(<JiraConnectionPanel connection={status()} />);
 
     expect(
       screen.getByText(
-        /moving a ticket through its workflow, posting a comment, changing its priority, reassigning it, and attaching a file/i,
+        /moving a ticket through its workflow, posting a comment \(a reply included\), deleting a comment you have permission to remove, changing its priority, reassigning it, and attaching a file/i,
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText(/those five are the whole set/i)).toBeVisible();
+    expect(screen.getByText(/those six are the whole set/i)).toBeVisible();
+  });
+
+  // Reply and Copy link shipped alongside Delete (ROAD-41's comment-actions
+  // phase) but neither is a write of its own — Reply posts through the same
+  // postJiraComment as any other comment (just prefilled with a mention;
+  // Jira comments don't thread, so this is an ordinary top-level comment,
+  // not a new capability), and Copy link sends nothing to Jira at all. The
+  // register must not count either as a seventh write, and must not claim a
+  // comment can be edited — that affordance does not exist.
+  it('does not count Reply or Copy link as their own writes, and does not claim comments can be edited', () => {
+    renderPanel(<JiraConnectionPanel connection={status()} />);
+
+    expect(screen.queryByText(/those seven are the whole set/i)).toBeNull();
+    expect(
+      screen.getByText(
+        /including copying a comment's link, is read-only here/i,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/editing a comment/i)).toBeNull();
   });
 
   // The other direction of the same defect. Uploading an attachment IS built
   // now, so the "Not built yet" list must no longer say it isn't — a list of
   // missing capabilities that has gone stale misleads exactly as much as a
   // banner claiming one that does not exist. The old counts are checked for
-  // the same reason: "those four are the whole set" left standing after a
-  // fifth write shipped would be just as wrong.
+  // the same reason: an earlier "those N are the whole set" left standing
+  // after another write shipped would be just as wrong.
   it('no longer says attachments cannot be uploaded, because they can', () => {
     renderPanel(<JiraConnectionPanel connection={status()} />);
 
@@ -188,6 +210,7 @@ describe('JiraConnectionPanel', () => {
     expect(screen.queryByText(/those two are the whole set/i)).toBeNull();
     expect(screen.queryByText(/those three are the whole set/i)).toBeNull();
     expect(screen.queryByText(/those four are the whole set/i)).toBeNull();
+    expect(screen.queryByText(/those five are the whole set/i)).toBeNull();
   });
 
   // What is still genuinely missing stays listed. Removing one true entry
@@ -214,7 +237,9 @@ describe('JiraConnectionPanel', () => {
     expect(screen.queryByText(/approval rail exists/i)).toBeNull();
     expect(screen.queryByText(/nothing generates a proposal/i)).toBeNull();
     expect(
-      screen.getByText(/only a comment or moving a ticket through its workflow/i),
+      screen.getByText(
+        /only a comment or moving a ticket through its workflow/i,
+      ),
     ).toBeInTheDocument();
   });
 
@@ -259,7 +284,9 @@ describe('JiraConnectionPanel', () => {
   });
 
   it('disables Refresh once disconnected, but keeps Disconnect enabled', () => {
-    renderPanel(<JiraConnectionPanel connection={status({ connected: false })} />);
+    renderPanel(
+      <JiraConnectionPanel connection={status({ connected: false })} />,
+    );
 
     expect(screen.getByRole('button', { name: 'Refresh now' })).toBeDisabled();
     // A credential flagged invalid after a 401 (ROAD-16) reports
@@ -275,7 +302,9 @@ describe('JiraConnectionPanel', () => {
     jest
       .mocked(getJiraConnectionStatus)
       .mockResolvedValue(status({ connected: false }));
-    renderPanel(<JiraConnectionPanel connection={status({ connected: false })} />);
+    renderPanel(
+      <JiraConnectionPanel connection={status({ connected: false })} />,
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
 
@@ -312,7 +341,9 @@ describe('JiraConnectionPanel', () => {
   // back into the app.
   describe('Connect CTA', () => {
     it('shows a real Connect action instead of a bare separator once disconnected', () => {
-      renderPanel(<JiraConnectionPanel connection={status({ connected: false })} />);
+      renderPanel(
+        <JiraConnectionPanel connection={status({ connected: false })} />,
+      );
 
       expect(screen.queryByText('·')).not.toBeInTheDocument();
       expect(
@@ -329,7 +360,9 @@ describe('JiraConnectionPanel', () => {
     });
 
     it('opens the same connect wizard All-Projects uses, on click', () => {
-      renderPanel(<JiraConnectionPanel connection={status({ connected: false })} />);
+      renderPanel(
+        <JiraConnectionPanel connection={status({ connected: false })} />,
+      );
 
       fireEvent.click(screen.getByRole('button', { name: 'Connect to Jira' }));
 

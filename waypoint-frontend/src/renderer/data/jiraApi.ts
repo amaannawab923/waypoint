@@ -52,6 +52,15 @@ import type {
   JiraWireTransition,
   JiraWireUser,
 } from '../../main/jira/jiraTypes';
+// `JiraCommentPermissions` lives in jiraClient.ts rather than jiraTypes.ts
+// alongside the rest of the wire shapes above (it's the mapped answer from
+// `/rest/api/3/mypermissions`, not a piece of the issue/comment payload) —
+// same file preload.ts's own ElectronHandler type already reaches into for
+// this exact type. Renamed on import for the same reason every other wire
+// import above keeps main's shapes from leaking past this file: `toComment`
+// -> `JiraComment`, and here `JiraWireCommentPermissions` -> the renderer's
+// own `JiraCommentPermissions` below.
+import type { JiraCommentPermissions as JiraWireCommentPermissions } from '../../main/jira/jiraClient';
 
 // -----------------------------------------------------------------------
 // The bridge
@@ -195,6 +204,19 @@ function toUserOption(wire: JiraWireUser): JiraUserOption {
     accountId: wire.accountId,
     displayName: wire.displayName,
     avatarUrl: wire.avatarUrl,
+  };
+}
+
+/** Same story as toPriorityOption — nothing to translate, but main's shapes
+ * stop at this file. */
+function toCommentPermissions(
+  wire: JiraWireCommentPermissions,
+): JiraCommentPermissions {
+  return {
+    deleteAll: wire.deleteAll,
+    deleteOwn: wire.deleteOwn,
+    editAll: wire.editAll,
+    editOwn: wire.editOwn,
   };
 }
 
@@ -617,6 +639,44 @@ export async function listJiraComments(
 ): Promise<JiraCommentRead> {
   const { comments, total } = unwrap(await bridge().listComments(ticketId));
   return { comments: comments.map(toComment), total };
+}
+
+/**
+ * The project-level answer to "may I delete/edit my own comments" and "may I
+ * delete/edit anyone's" on this issue — see jiraClient.ts's own
+ * `getMyPermissions` for why this is project-level rather than a field on
+ * the comment itself: Jira's comment payload carries no per-comment
+ * permission hint, live-confirmed against the real API. Deciding whether one
+ * particular comment's Delete button should render is this app's own job:
+ * this answer, plus whether that comment's `authorAccountId` equals the
+ * connected account's own (`JiraConnectionStatus.accountId`).
+ *
+ * `deleteAll` and `deleteOwn` are not mutually exclusive — the connected
+ * account can hold both at once, which is the common shape for an admin
+ * testing this feature against their own account. It is NOT the common
+ * shape a real non-admin sees, so a caller gating "may I delete my own
+ * comment" must check `deleteOwn` on its own rather than inferring it from
+ * "not deleteAll".
+ */
+export interface JiraCommentPermissions {
+  deleteAll: boolean;
+  deleteOwn: boolean;
+  editAll: boolean;
+  editOwn: boolean;
+}
+
+/**
+ * Uncached, like getJiraPriorityOptions and for the same reason: a
+ * project's comment permission scheme is something an admin can change
+ * underneath a long-lived session, and the honest thing for a destructive
+ * action's own gate is to check what is true right when it might be used,
+ * not what was true when the drawer first opened.
+ */
+export async function getJiraCommentPermissions(
+  issueKey: string,
+): Promise<JiraCommentPermissions> {
+  const wire = unwrap(await bridge().getCommentPermissions(issueKey));
+  return toCommentPermissions(wire);
 }
 
 // -----------------------------------------------------------------------
@@ -1405,7 +1465,9 @@ export async function postJiraComment(
   mentions: JiraMentionSpan[] = [],
 ): Promise<JiraComment> {
   const body = buildCommentAdf(text, mentions);
-  const comment = toComment(unwrap(await bridge().postComment({ ticketId, body })));
+  const comment = toComment(
+    unwrap(await bridge().postComment({ ticketId, body })),
+  );
 
   // Posting a comment moves the ISSUE's `updated` in Jira, not just the
   // comment's own. Unlike the four writes above this path gets a comment back
@@ -1431,6 +1493,38 @@ export async function postJiraComment(
     t.id === ticketId ? { ...t, updatedAt: null } : t,
   );
   return comment;
+}
+
+/**
+ * Deletes a real comment outright, as the connected user. No undo on either
+ * side of this call: main's `deleteComment` (jiraClient.ts) answers a plain
+ * 204 with no body, so — unlike every write above — there is no fresh
+ * comment or ticket coming back to re-read or re-baseline from.
+ *
+ * Same trap as postJiraComment, solved the same way: deleting a comment
+ * moves the ISSUE's `updated` in Jira too, not just the comment's own. Left
+ * alone, the next queue read would compare a stale cached timestamp against
+ * a value this module's own delete just moved, report "Someone changed
+ * this" about the user's own action, and disable every other write until
+ * they reloaded. Dropping the cached timestamp states the honest position —
+ * this module no longer holds a baseline it can compare — and
+ * detectConflict already reads an unknown timestamp as "no conflict" rather
+ * than guessing, so this needs no new branch there either.
+ *
+ * Removing the row from whatever list a comment thread renders from is the
+ * caller's job, not this module's: unlike `lastTickets` and
+ * `transitionsByTicketId` above, this file keeps no cache of a ticket's
+ * comments — `listJiraComments` is read straight through — so there is no
+ * local state here for a delete to drop the row out of.
+ */
+export async function deleteJiraComment(
+  ticketId: string,
+  commentId: string,
+): Promise<void> {
+  unwrap(await bridge().deleteComment({ ticketId, commentId }));
+  lastTickets = lastTickets.map((t) =>
+    t.id === ticketId ? { ...t, updatedAt: null } : t,
+  );
 }
 
 // dismissJiraTombstone — no ticket is ever marked tombstoned (see toTicket's

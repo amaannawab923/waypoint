@@ -33,6 +33,16 @@ jest.mock('@/data/jiraApi', () => ({
   setJiraTicketAssignee: jest.fn(),
   listJiraComments: jest.fn(),
   postJiraComment: jest.fn(),
+  deleteJiraComment: jest.fn(async () => undefined),
+  // Permissions resolve closed here: these suites are not about Delete, and a
+  // closed default keeps its button out of their queries entirely.
+  getJiraCommentPermissions: jest.fn(async () => ({
+    deleteAll: false,
+    deleteOwn: false,
+    editAll: false,
+    editOwn: false,
+  })),
+  buildJiraCommentPermalink: jest.fn(() => 'https://example.invalid/browse/ENG-1?focusedCommentId=1'),
   getJiraConnectionStatus: jest.fn(),
 }));
 // useJiraConnection is here because the drawer and the comment composer both

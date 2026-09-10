@@ -101,7 +101,9 @@ export function JiraConnectionPanel({
     // disconnectJiraConfirmMessage's own comment) — matches this repo's
     // established confirm() guard on every other irreversible action
     // (ProjectsList's archiveConfirmMessage).
-    if (!window.confirm(disconnectJiraConfirmMessage(connection.accountEmail))) {
+    if (
+      !window.confirm(disconnectJiraConfirmMessage(connection.accountEmail))
+    ) {
       return;
     }
     setDisconnecting(true);
@@ -244,17 +246,30 @@ export function JiraConnectionPanel({
               straight through. Attaching joins it now for the same reason:
               uploadJiraAttachment is real, and the drawer's Attachments
               header has a button that opens a native file picker and sends
-              what the user chooses. jiraApi.ts's whole write surface is
-              transitionJiraTicket, postJiraComment, setJiraTicketPriority,
-              setJiraTicketAssignee and uploadJiraAttachment — five, and this
-              sentence names five. (downloadJiraAttachment is not among them:
-              it changes nothing about the issue.) */}
+              what the user chooses. Deleting a comment joins it now for the
+              same reason again: deleteJiraComment is real, gated on the
+              real per-project delete permission Jira reports for the
+              signed-in account (see jiraApi.ts's getJiraCommentPermissions),
+              never shown on a comment the account may not remove.
+              jiraApi.ts's whole write surface is transitionJiraTicket,
+              postJiraComment, deleteJiraComment, setJiraTicketPriority,
+              setJiraTicketAssignee and uploadJiraAttachment — six, and this
+              sentence names six. (downloadJiraAttachment is not among them:
+              it changes nothing about the issue. Nor is a comment's Reply
+              action a write of its own — it posts through the same
+              postJiraComment as any other comment, just prefilled with a
+              mention; Jira comments don't thread, so a "reply" is an
+              ordinary top-level comment naming who it's answering, not a
+              new capability. Nor is Copy link: it copies an address to the
+              clipboard and sends nothing to Jira. And there is no Edit —
+              this phase doesn't have it, for a comment or anything else.) */}
           <span>
             <b>Your</b> edits — moving a ticket through its workflow, posting a
-            comment, changing its priority, reassigning it, and attaching a file
-            — write straight to Jira the moment you make them, as you. Those
-            five are the whole set; everything else about an issue is read-only
-            here.
+            comment (a reply included), deleting a comment you have permission
+            to remove, changing its priority, reassigning it, and attaching a
+            file — write straight to Jira the moment you make them, as you.
+            Those six are the whole set; everything else about an issue,
+            including copying a comment&apos;s link, is read-only here.
           </span>
         </div>
         <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-warning/30 bg-warning-bg px-3 py-2.5 text-[12.5px] leading-relaxed text-warning">
@@ -301,8 +316,8 @@ export function JiraConnectionPanel({
             press Refresh — nothing polls in between.
           </li>
           <li>
-            Copilot proposing a priority change, a reassignment, or a new
-            issue against Jira — only a comment or moving a ticket through its
+            Copilot proposing a priority change, a reassignment, or a new issue
+            against Jira — only a comment or moving a ticket through its
             workflow can be proposed there today. (All three already work
             against your own, non-Jira projects.)
           </li>
