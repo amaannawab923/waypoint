@@ -1785,6 +1785,19 @@ describe('prepareJiraCommentEdit', () => {
   // accessLevel on a mention — so a strict compare refused every comment
   // authored in Jira rather than in Waypoint. Replies always hit it because
   // Jira's Reply always produces one.
+  //
+  // This is the one fixture standing behind normalizeAdfForCompare's
+  // localId/accessLevel exemption — the decision that lets real,
+  // Jira-authored comments be edited at all — so `not.toBeNull()` alone
+  // proved too little: it only shows deserializing didn't fail, not that
+  // what came out is the right text or that reposting it reproduces the
+  // original. Every assertion below is checked against this same fixture
+  // the way its sibling round-trip tests check theirs: the deserialized
+  // text and mentions exactly, then the ADF `buildCommentAdf` — the real
+  // posting function, not a copy of its logic — produces from them, which
+  // must equal the original `adf` with exactly `localId` and the empty
+  // `accessLevel` removed (the only two things normalizeAdfForCompare is
+  // documented to ignore) and nothing else different.
   it('accepts a real Jira-authored reply, whose nodes carry localId and accessLevel', () => {
     const api = freshApi();
     const adf = {
@@ -1811,7 +1824,43 @@ describe('prepareJiraCommentEdit', () => {
     };
 
     const result = api.prepareJiraCommentEdit(commentWithAdf(adf));
-    expect(result).not.toBeNull();
+    if (!result) throw new Error('expected the round trip to succeed');
+
+    expect(result.text).toBe('@Amaan Nawab Reply Should be like this ');
+    expect(result.mentions).toEqual([
+      {
+        start: 0,
+        end: '@Amaan Nawab'.length,
+        accountId: '712020:05c45d40-ca2a-4829-84ad-df1f5429a4d0',
+        displayName: 'Amaan Nawab',
+      },
+    ]);
+    // The original `adf` minus exactly what normalizeAdfForCompare is
+    // documented to ignore: the mention's `localId` and its empty
+    // `accessLevel`, and the paragraph's own `localId` (which leaves it
+    // with no `attrs` at all, matching what `blockToAdf` actually emits for
+    // a paragraph). Everything that encodes real content — the mention's
+    // `id` and `text`, and the reply text itself — must still match
+    // exactly.
+    expect(api.buildCommentAdf(result.text, result.mentions)).toEqual({
+      type: 'doc',
+      version: 1,
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            {
+              type: 'mention',
+              attrs: {
+                id: '712020:05c45d40-ca2a-4829-84ad-df1f5429a4d0',
+                text: '@Amaan Nawab',
+              },
+            },
+            { type: 'text', text: ' Reply Should be like this ' },
+          ],
+        },
+      ],
+    });
   });
 
   it('refuses a comment whose bodyAdf is null — nothing to run the proof against', () => {
@@ -2360,6 +2409,37 @@ describe('prepareJiraCommentEdit', () => {
                 type: 'text',
                 text: 'call me',
                 marks: [{ type: 'link', attrs: { href: 'tel:+15551234567' } }],
+              },
+            ],
+          },
+        ],
+      };
+
+      expect(api.prepareJiraCommentEdit(commentWithAdf(adf))).toBeNull();
+    });
+
+    // A relative Jira-internal link — real: Jira's own editor produces
+    // `/browse/ENG-1` when a user types or pastes an issue key, and
+    // JiraRichText.tsx's `safeHref` renders it fine. But this app's composer
+    // dialect only ever posts a web address or an email (see postableHref's
+    // own comment, and main/jira/jiraIpc.ts's matching `isPostableHref` on
+    // the real network boundary) — a relative href is not one, so this is
+    // refused the same honest way an unpostable scheme is, rather than
+    // deserializing successfully and failing the round trip two steps later
+    // for a reason nothing states.
+    it('a link mark with a Jira-relative href', () => {
+      const api = freshApi();
+      const adf = {
+        type: 'doc',
+        version: 1,
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              {
+                type: 'text',
+                text: 'ENG-1',
+                marks: [{ type: 'link', attrs: { href: '/browse/ENG-1' } }],
               },
             ],
           },

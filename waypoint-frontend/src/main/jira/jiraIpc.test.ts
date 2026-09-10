@@ -48,6 +48,7 @@ const setTicketPriorityMock = jest.fn();
 const searchAssignableUsersMock = jest.fn();
 const setTicketAssigneeMock = jest.fn();
 const listCommentsMock = jest.fn();
+const getCommentMock = jest.fn();
 const postCommentMock = jest.fn();
 const updateCommentMock = jest.fn();
 const deleteCommentMock = jest.fn();
@@ -68,6 +69,7 @@ jest.mock('./jiraClient', () => ({
     searchAssignableUsersMock(...args),
   setTicketAssignee: (...args: unknown[]) => setTicketAssigneeMock(...args),
   listComments: (...args: unknown[]) => listCommentsMock(...args),
+  getComment: (...args: unknown[]) => getCommentMock(...args),
   postComment: (...args: unknown[]) => postCommentMock(...args),
   updateComment: (...args: unknown[]) => updateCommentMock(...args),
   deleteComment: (...args: unknown[]) => deleteCommentMock(...args),
@@ -470,7 +472,7 @@ describe('per-ticket channels', () => {
       expect(postCommentMock).not.toHaveBeenCalled();
     });
 
-    it('refuses a doc made only of empty paragraphs', async () => {
+    it('refuses a doc made only of empty paragraphs, with "Write something first."', async () => {
       expect(
         await getHandler('jira:comments:post')(
           {},
@@ -483,7 +485,48 @@ describe('per-ticket channels', () => {
             },
           },
         ),
-      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      ).toMatchObject({
+        ok: false,
+        reason: 'invalid_input',
+        message: 'Write something first.',
+      });
+      expect(postCommentMock).not.toHaveBeenCalled();
+    });
+
+    // The finding this test pins: a comment body carrying a relative link
+    // (`/browse/ENG-1`, say) fails `isPostableHref`'s scheme check — same as
+    // any other structurally-invalid draft — and used to be refused with
+    // "Write something first.", which is simply false: the user wrote
+    // plenty. The policy itself (only http(s)/mailto links are postable) is
+    // untouched here; only the message must stop lying about why.
+    it('refuses a body with an unpostable link, and does not claim the user wrote nothing', async () => {
+      const result = await getHandler('jira:comments:post')(
+        {},
+        {
+          ticketId: '10421',
+          body: {
+            type: 'doc',
+            version: 1,
+            content: [
+              {
+                type: 'paragraph',
+                content: [
+                  {
+                    type: 'text',
+                    text: 'See ENG-1',
+                    marks: [{ type: 'link', attrs: { href: '/browse/ENG-1' } }],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      );
+
+      expect(result).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect((result as { message: string }).message).not.toBe(
+        'Write something first.',
+      );
       expect(postCommentMock).not.toHaveBeenCalled();
     });
 
@@ -917,6 +960,45 @@ describe('per-ticket channels', () => {
         ADF_TEXT_ONLY,
       );
       expect(result).toEqual({ ok: true, value: { id: '10500' } });
+    });
+  });
+
+  describe('jira:comments:get', () => {
+    it('refuses a ticket id that is not one, before any client call', async () => {
+      expect(
+        await getHandler('jira:comments:get')(
+          {},
+          { ticketId: '../../etc/passwd', commentId: '10500' },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(getCommentMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses a comment id that is not one, before any client call', async () => {
+      expect(
+        await getHandler('jira:comments:get')(
+          {},
+          { ticketId: '10421', commentId: '../../etc/passwd' },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(getCommentMock).not.toHaveBeenCalled();
+    });
+
+    it('delegates a valid pair to the client', async () => {
+      const comment = {
+        id: '10500',
+        updatedAt: '2026-09-03T08:15:00.000+0000',
+        updateAuthorName: 'Priya Raman',
+      };
+      getCommentMock.mockResolvedValue({ ok: true, value: comment });
+
+      const result = await getHandler('jira:comments:get')(
+        {},
+        { ticketId: '10421', commentId: '10500' },
+      );
+
+      expect(getCommentMock).toHaveBeenCalledWith('10421', '10500');
+      expect(result).toEqual({ ok: true, value: comment });
     });
   });
 

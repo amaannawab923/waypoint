@@ -385,6 +385,40 @@ function commentBodyHasContent(body: JiraCommentBody): boolean {
 }
 
 /**
+ * Turns a comment channel's raw `body` into either a validated, non-empty ADF
+ * doc or the one accurate reason to refuse it — shared by `jira:comments:post`
+ * and `jira:comments:update` so the two channels cannot drift onto different
+ * wording for the same two failures.
+ *
+ * The two failures are different facts and need different sentences.
+ * `readCommentBody` returning null means the draft failed structural
+ * validation — an unrecognized node, a mention carrying marks, or (the case a
+ * review actually found) a link whose href isn't `http(s):`/`mailto:`, which
+ * `isPostableHref` above rejects even though `JiraRichText.tsx`'s own
+ * `safeHref` happily renders a relative Jira-internal link like
+ * `/browse/ENG-1` for READING a comment. That policy gap is real but is not
+ * this function's to close — narrowing or widening what this channel accepts
+ * is jiraApi.ts's call. What this function owns is only that the message
+ * matches the failure: "Write something first." is a lie when the draft had
+ * content that simply didn't validate, so that sentence is now reserved for
+ * the one case it is true of — `commentBodyHasContent` finding nothing to
+ * send once the doc *did* parse.
+ */
+function validateCommentBody(raw: unknown): JiraResult<JiraCommentBody> {
+  const body = readCommentBody(raw);
+  if (!body) {
+    return failure(
+      'invalid_input',
+      "That comment includes a link or formatting Jira can't accept here — only full http(s):// or mailto: links are supported. Remove or fix it and try again.",
+    );
+  }
+  if (!commentBodyHasContent(body)) {
+    return failure('invalid_input', 'Write something first.');
+  }
+  return { ok: true, value: body };
+}
+
+/**
  * `getWindow` is a getter rather than a window, matching `registerRepoLinkIpc`
  * and `registerCopilotIpc` exactly and for their reason: registration happens
  * once at module load, when `mainWindow` is still null, and a window closed and
@@ -699,17 +733,34 @@ export function registerJiraIpc(getWindow: () => BrowserWindow | null): void {
     },
   );
 
+  /**
+   * Re-reads one comment, fresh — the freshness check an edit needs
+   * immediately before saving (see `client.getComment`'s own comment for why
+   * this is its own channel rather than the renderer re-running
+   * `jira:comments:list` and searching the page for the id it already has).
+   */
+  ipcMain.handle(
+    'jira:comments:get',
+    async (_event, args: unknown): Promise<JiraResult<JiraWireComment>> => {
+      const input = (args ?? {}) as Record<string, unknown>;
+      const ticketId = readTicketId(input.ticketId);
+      const commentId = readCommentId(input.commentId);
+      if (!ticketId) return failure('invalid_input', 'Unknown Jira issue.');
+      if (!commentId) return failure('invalid_input', 'Unknown Jira comment.');
+      return client.getComment(ticketId, commentId);
+    },
+  );
+
   ipcMain.handle(
     'jira:comments:post',
     async (_event, args: unknown): Promise<JiraResult<JiraWireComment>> => {
       const input = (args ?? {}) as Record<string, unknown>;
       const ticketId = readTicketId(input.ticketId);
-      const body = readCommentBody(input.body);
       const parentId = readParentId(input.parentId);
       if (!ticketId) return failure('invalid_input', 'Unknown Jira issue.');
-      if (!body || !commentBodyHasContent(body)) {
-        return failure('invalid_input', 'Write something first.');
-      }
+      const validated = validateCommentBody(input.body);
+      if (!validated.ok) return validated;
+      const body = validated.value;
       // Two-arg call when there is nothing to thread under, rather than
       // always passing a third `null` — see jiraClient.ts's own postComment
       // for why the presence of the argument, not just its value, is what
@@ -737,13 +788,11 @@ export function registerJiraIpc(getWindow: () => BrowserWindow | null): void {
       const input = (args ?? {}) as Record<string, unknown>;
       const ticketId = readTicketId(input.ticketId);
       const commentId = readCommentId(input.commentId);
-      const body = readCommentBody(input.body);
       if (!ticketId) return failure('invalid_input', 'Unknown Jira issue.');
       if (!commentId) return failure('invalid_input', 'Unknown Jira comment.');
-      if (!body || !commentBodyHasContent(body)) {
-        return failure('invalid_input', 'Write something first.');
-      }
-      return client.updateComment(ticketId, commentId, body);
+      const validated = validateCommentBody(input.body);
+      if (!validated.ok) return validated;
+      return client.updateComment(ticketId, commentId, validated.value);
     },
   );
 

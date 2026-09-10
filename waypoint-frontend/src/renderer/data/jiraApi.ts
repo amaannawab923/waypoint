@@ -1050,9 +1050,30 @@ function findInlineRuns(
  * a URL: posted as-is Jira treats it as a relative link that goes nowhere.
  * Assuming https for something that plainly looks like a host is what the
  * user meant. Anything else with a scheme this app does not post (javascript:,
- * data:, file:) loses the mark and keeps its text, which is the honest
- * outcome: the words the user typed still appear, and nothing pretends to be
- * a link that this app would not follow.
+ * data:, file:), OR anything scheme-less that isn't host-shaped — including a
+ * Jira-relative path like `/browse/ENG-1` — loses the mark and keeps its
+ * text, which is the honest outcome: the words the user typed still appear,
+ * and nothing pretends to be a link that this app would not follow.
+ *
+ * This is the one "is this href postable" test in this file, and both
+ * directions use it: `parseInlineRange` below calls it when turning typed
+ * `[text](url)` into a real `link` mark, and `wrapWithMark` further down
+ * calls it when turning an existing comment's `link` mark back into
+ * `[text](url)` text for editing. Giving the read direction its own, looser
+ * idea of "postable" is exactly the bug this function's shared use prevents:
+ * a relative href would deserialize into text that reads fine, then fail
+ * silently when that same text tried to repost, surfacing as an inexplicable
+ * "not editable" days later instead of a comment that plainly can't be
+ * represented today. The real, live boundary this must never be more
+ * permissive than is `isPostableHref` in main/jira/jiraIpc.ts, which is the
+ * last check before a request actually reaches Jira; this function only ever
+ * verifies an https/http/mailto address unchanged or upgrades a bare host to
+ * one, so it can never produce something that check would reject.
+ *
+ * `safeHref` in JiraRichText.tsx is allowed to disagree with this in the
+ * other direction — it renders a comment that already exists, including a
+ * relative `/browse/...` link Jira's own UI can produce, and rendering an
+ * existing link is not the same claim as being able to repost it.
  */
 function postableHref(raw: string | undefined): string | null {
   const href = (raw ?? '').trim();
@@ -1499,12 +1520,24 @@ interface RelativeMentionSpan {
 /**
  * One inline run's markdown-lite spelling, or `null` when `mark` isn't one
  * `buildCommentAdf`'s own `INLINE_PATTERNS`/`markForRun` can ever produce —
- * an unsupported mark type, or a `link` mark with no usable `href`. `null`
- * here is what makes an unsupported mark surface as "not editable" rather
- * than as formatting silently dropped: the caller that receives it bails out
- * of deserializing the whole comment (see `inlineContentToLineText`) instead
- * of emitting `raw` unmarked, which would be exactly the kind of guess this
- * feature exists to refuse to make.
+ * an unsupported mark type, or a `link` mark whose `href` this same file
+ * would never post. `null` here is what makes an unsupported mark surface as
+ * "not editable" rather than as formatting silently dropped: the caller that
+ * receives it bails out of deserializing the whole comment (see
+ * `inlineContentToLineText`) instead of emitting `raw` unmarked, which would
+ * be exactly the kind of guess this feature exists to refuse to make.
+ *
+ * A `link` mark's `href` is judged by `postableHref` — the same test
+ * `parseInlineRange` applies when posting — rather than merely checking it's
+ * a non-empty string. A relative Jira link like `/browse/ENG-1` (real,
+ * Jira's own UI produces these) is non-empty but not postable: accepting it
+ * here would let this function claim a comment can be edited, only for the
+ * repost half of the round trip to silently drop the mark and fail the
+ * proof in `prepareJiraCommentEdit` — "not editable" either way, but for a
+ * reason nothing here states. Rejecting it here instead makes the refusal
+ * immediate and honest: this comment's link can't be represented in the
+ * composer's dialect, full stop, rather than an inequality buried in a deep
+ * ADF comparison two functions away.
  */
 function wrapWithMark(raw: string, mark: unknown): string | null {
   if (!isAdfRecord(mark) || typeof mark.type !== 'string') return null;
@@ -1519,8 +1552,10 @@ function wrapWithMark(raw: string, mark: unknown): string | null {
       return `\`${raw}\``;
     case 'link': {
       const attrs = mark.attrs;
-      const href = isAdfRecord(attrs) ? attrs.href : undefined;
-      return typeof href === 'string' && href ? `[${raw}](${href})` : null;
+      const rawHref = isAdfRecord(attrs) ? attrs.href : undefined;
+      const href =
+        typeof rawHref === 'string' ? postableHref(rawHref) : null;
+      return href ? `[${raw}](${href})` : null;
     }
     default:
       return null;
@@ -1972,6 +2007,23 @@ export async function postJiraComment(
  * write in this file uses — the whole point of round-tripping through it
  * during the proof is that the write path and the proof path can never
  * disagree, because they are the same function call.
+ *
+ * That also means a save here is not byte-for-byte the original body, even
+ * when `text`/`mentions` came back from `prepareJiraCommentEdit` unedited:
+ * `buildCommentAdf` never emits `localId` or a mention's `accessLevel`
+ * (see `normalizeAdfForCompare`'s own comment on why the proof ignores
+ * both), so a genuinely no-op save still posts a body missing them.
+ * Deliberately not carried forward from the original ADF: every occurrence
+ * of `accessLevel` seen in the founder's real corpus is `""`, meaning there
+ * is no author-written content in it to lose, and threading the original
+ * per-node value back through here would mean matching rebuilt nodes back
+ * to their source nodes one-for-one — real complexity, for a field this
+ * file has no way to confirm is even still correct at save time (whatever
+ * `accessLevel` reflects, it is not something the user typed, and this app
+ * has no live way to verify a stale copy of it is still accurate). Dropping
+ * it is the same call already made for `localId`, for the same reason: this
+ * file only claims to preserve what the author wrote, and neither attr is
+ * that.
  *
  * The returned comment comes straight off Jira's response, through the same
  * `toComment(unwrap(...))` every read and every other write uses — never

@@ -406,6 +406,18 @@ const electronHandler = {
     }): Promise<JiraResult<void>> {
       return ipcRenderer.invoke('jira:comments:delete', args);
     },
+    // One comment, read fresh. Exists for the edit path's freshness check:
+    // the thread is read once when a ticket opens, so without re-reading the
+    // single comment about to be overwritten, an edit can silently replace a
+    // change someone else made in Jira since. listComments cannot answer that
+    // reliably — it is capped at the 100 newest, so an older comment on a
+    // busy thread may not be in it at all.
+    getComment(args: {
+      ticketId: string;
+      commentId: string;
+    }): Promise<JiraResult<JiraWireComment>> {
+      return ipcRenderer.invoke('jira:comments:get', args);
+    },
     // The project-level own/all answer the Delete/Edit affordance decides its
     // visibility from, since a comment itself carries no per-comment
     // permission hint (see jiraClient.ts's `getMyPermissions`). Per issue key,

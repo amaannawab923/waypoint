@@ -1173,12 +1173,21 @@ export function mapComment(
     // Same helper the ticket's assignee id goes through, so the two cannot
     // disagree about what counts as a usable account id.
     authorAccountId: accountIdOf(record.author),
-    // ROAD-41 contract: declared and defaulted so every consumer compiles
-    // against the final shape. Implemented for real alongside the freshness
-    // check - a default that silently stayed would claim a comment has never
-    // been edited, which is exactly the lie this field exists to prevent.
-    updatedAt: null,
-    updateAuthorName: null,
+    // Same two-branch guard createdAt uses just below, and for the same
+    // reason: a missing `updated` means Jira did not say, not that the
+    // comment was edited "now". A fabricated value here would tell the edit
+    // path a comment is unchanged when it might not be, or vice versa — the
+    // one failure this field exists to prevent.
+    updatedAt: typeof record.updated === 'string' ? record.updated : null,
+    // Only resolved when Jira actually sent an updateAuthor object; guarding
+    // on that first (rather than handing `record.updateAuthor` straight to
+    // displayNameOf) matters because displayNameOf's own fallback would
+    // otherwise invent an editor's name — "Unknown" — for a comment nobody
+    // has ever edited, which is a worse lie than the null it replaces.
+    updateAuthorName:
+      record.updateAuthor != null
+        ? displayNameOf(record.updateAuthor, 'Unknown')
+        : null,
     // The shared helper, not a reinlined copy of it. `plainTextFromJiraBody`
     // was extracted so a description and a comment "cannot drift apart
     // again", and then this — the one function that comment names — kept its

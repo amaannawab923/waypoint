@@ -1158,6 +1158,47 @@ export async function listComments(
 }
 
 /**
+ * Reads exactly one comment, fresh — not the thread it sits in.
+ *
+ * Added for the freshness check an edit needs immediately before saving:
+ * `updatedAt`/`updateAuthorName` (see `JiraWireComment`'s own comment) exist
+ * so the renderer can tell whether a comment changed since the thread was
+ * read on mount, and re-running `listComments` to answer that one question
+ * is both more than the check needs — mapping up to `COMMENT_PAGE_SIZE`
+ * comments to read one field off one of them — and not reliably enough:
+ * `listComments` is capped at `COMMENT_PAGE_SIZE`, newest-first, so a
+ * comment older than that page is simply absent from it, and a busy thread
+ * can cross that cap while the edit dialog sits open. This endpoint names
+ * the one comment being checked and cannot miss it, and is exactly the read
+ * Jira exposes for that shape of question.
+ */
+export async function getComment(
+  ticketId: string,
+  commentId: string,
+): Promise<JiraResult<JiraWireComment>> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+
+  const result = await jiraFetch<Record<string, unknown>>(
+    credentialResult.value,
+    {
+      method: 'GET',
+      path: `${COMMENT_PATH(ticketId)}/${encodeURIComponent(commentId)}`,
+    },
+  );
+  if (!result.ok) return result;
+
+  const mapped = mapComment(result.value, ticketId);
+  if (!mapped) {
+    return failure(
+      'jira_error',
+      "Jira returned this comment in a shape Waypoint couldn't read.",
+    );
+  }
+  return { ok: true, value: mapped };
+}
+
+/**
  * `parentId`, when given, asks Jira to thread this comment under the one
  * named — the same field `mapComment` already reads back off a comment
  * that has a parent (see JiraWireComment.parentId's own comment on why this

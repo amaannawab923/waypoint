@@ -13,6 +13,7 @@ jest.mock('./jiraAuth', () => ({
 import {
   deleteComment,
   downloadAttachment,
+  getComment,
   getMyPermissions,
   getTicket,
   listComments,
@@ -1749,6 +1750,86 @@ describe('deleteComment', () => {
     readStoredJiraCredentialMock.mockReturnValue(null);
 
     const result = await deleteComment('10421', '10500');
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: false, reason: 'not_connected' });
+  });
+});
+
+describe('getComment', () => {
+  it('GETs the exact issue/comment path', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        id: '10500',
+        author: { displayName: 'Sam Lee' },
+        body: 'Original text.',
+        created: '2026-09-01T09:00:00.000+0000',
+        updated: '2026-09-03T08:15:00.000+0000',
+        updateAuthor: { displayName: 'Priya Raman' },
+      }),
+    );
+
+    await getComment('10421', '10500');
+
+    const [url, init] = call();
+    expect(init.method).toBe('GET');
+    expect(url).toContain('/rest/api/3/issue/10421/comment/10500');
+  });
+
+  // The whole reason this channel exists: `listComments` is capped and
+  // newest-first, so it cannot reliably answer "what is this ONE comment's
+  // updated/updateAuthor right now" for an old comment on a busy thread. This
+  // pins that the mapped result carries the freshness fields, not just id
+  // and body.
+  it('maps the freshness fields off the single comment Jira returns', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        id: '10500',
+        author: { displayName: 'Sam Lee' },
+        body: 'Original text.',
+        created: '2026-09-01T09:00:00.000+0000',
+        updated: '2026-09-03T08:15:00.000+0000',
+        updateAuthor: { displayName: 'Priya Raman' },
+      }),
+    );
+
+    expect(await getComment('10421', '10500')).toMatchObject({
+      ok: true,
+      value: {
+        id: '10500',
+        updatedAt: '2026-09-03T08:15:00.000+0000',
+        updateAuthorName: 'Priya Raman',
+      },
+    });
+  });
+
+  it('reports a permission failure as forbidden, not as bad credentials', async () => {
+    fetchMock.mockResolvedValue(emptyResponse(403));
+
+    expect(await getComment('10421', '10500')).toMatchObject({
+      ok: false,
+      reason: 'forbidden',
+    });
+  });
+
+  // The comment was deleted (by someone else, or in another tab) between the
+  // thread being read on mount and the freshness check running.
+  it('reports a deleted comment as a Jira error, in Jira’s own words', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ errorMessages: ['The comment could not be found.'] }, 404),
+    );
+
+    expect(await getComment('10421', '10500')).toMatchObject({
+      ok: false,
+      reason: 'jira_error',
+      message: 'The comment could not be found.',
+    });
+  });
+
+  it('refuses without a stored credential rather than calling out unauthenticated', async () => {
+    readStoredJiraCredentialMock.mockReturnValue(null);
+
+    const result = await getComment('10421', '10500');
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result).toMatchObject({ ok: false, reason: 'not_connected' });

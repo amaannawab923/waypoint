@@ -1929,6 +1929,110 @@ describe('mapComment', () => {
     ).toEqual(adf);
   });
 
+  // Comment freshness: `updated`/`updateAuthor` are the signal an edit needs
+  // to know whether the thread it read on mount is still current. Jira sends
+  // both on every comment, mirroring `created`/`author`, and they must be
+  // mapped for real — see jiraMap.ts's own note on why a fabricated value
+  // here is worse than a missing one.
+  describe('updatedAt / updateAuthorName', () => {
+    it('maps `updated` and `updateAuthor` when Jira sends them', () => {
+      expect(
+        mapComment(
+          {
+            id: '10504',
+            author: { displayName: 'Sam Lee' },
+            body: 'Original text.',
+            created: '2026-09-01T09:00:00.000+0000',
+            updated: '2026-09-02T14:30:00.000+0000',
+            updateAuthor: { displayName: 'Priya Raman' },
+          },
+          '10421',
+        ),
+      ).toMatchObject({
+        updatedAt: '2026-09-02T14:30:00.000+0000',
+        updateAuthorName: 'Priya Raman',
+      });
+    });
+
+    // The common case, live-confirmed: an edited comment's `updated` differs
+    // from its `created`, and the two must not be conflated into one field.
+    it('maps `updated` distinctly from `created` when a comment was edited after posting', () => {
+      const mapped = mapComment(
+        {
+          id: '10505',
+          author: { displayName: 'Sam Lee' },
+          body: 'Edited text.',
+          created: '2026-09-01T09:00:00.000+0000',
+          updated: '2026-09-03T08:15:00.000+0000',
+          updateAuthor: { displayName: 'Sam Lee' },
+        },
+        '10421',
+      );
+      expect(mapped?.createdAt).toBe('2026-09-01T09:00:00.000+0000');
+      expect(mapped?.updatedAt).toBe('2026-09-03T08:15:00.000+0000');
+      expect(mapped?.updatedAt).not.toBe(mapped?.createdAt);
+    });
+
+    it('maps a missing `updated` to null, not to `created` or the current time', () => {
+      expect(
+        mapComment(
+          {
+            id: '10506',
+            author: { displayName: 'Sam Lee' },
+            body: 'No update timestamp.',
+            created: '2026-09-01T09:00:00.000+0000',
+          },
+          '10421',
+        ),
+      ).toMatchObject({ updatedAt: null, updateAuthorName: null });
+    });
+
+    // `updateAuthor` absent must not fall back to "Unknown": that fallback
+    // exists for authorName, where every comment genuinely has an author, but
+    // handing it to a comment with no update author at all would invent an
+    // editor for a comment nobody has edited.
+    it('maps a missing `updateAuthor` to null rather than "Unknown"', () => {
+      expect(
+        mapComment(
+          {
+            id: '10507',
+            author: { displayName: 'Sam Lee' },
+            body: 'Edited, but Jira sent no updateAuthor.',
+            created: '2026-09-01T09:00:00.000+0000',
+            updated: '2026-09-01T09:10:00.000+0000',
+          },
+          '10421',
+        ),
+      ).toMatchObject({
+        updatedAt: '2026-09-01T09:10:00.000+0000',
+        updateAuthorName: null,
+      });
+    });
+
+    // An `updateAuthor` object that is present but carries no displayName
+    // still gets the same "Unknown" fallback authorName uses — the object
+    // itself says someone edited this comment, so null here would misreport
+    // "never edited" rather than "edited by someone this payload didn't name".
+    it('falls back to "Unknown" for an updateAuthor with no displayName', () => {
+      expect(
+        mapComment(
+          {
+            id: '10508',
+            author: { displayName: 'Sam Lee' },
+            body: 'Edited by someone unnamed.',
+            created: '2026-09-01T09:00:00.000+0000',
+            updated: '2026-09-01T09:10:00.000+0000',
+            updateAuthor: {},
+          },
+          '10421',
+        ),
+      ).toMatchObject({
+        updatedAt: '2026-09-01T09:10:00.000+0000',
+        updateAuthorName: 'Unknown',
+      });
+    });
+  });
+
   // A string body is legacy wiki markup, not plain text. Before this, the
   // string branch returned it verbatim, which is how a real Jira @mention
   // reached the screen as `[~accountid:...]`.
