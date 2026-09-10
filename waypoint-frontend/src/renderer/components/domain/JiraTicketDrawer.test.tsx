@@ -32,6 +32,12 @@ import { JiraTicketDrawer } from './JiraTicketDrawer';
 // real portaled panel render together, exactly as JiraTicketRow.test.tsx does
 // for the priority flow.
 jest.mock('@/data/jiraApi', () => ({
+  // The real implementation, not a jest.fn() stub: it's a pure string
+  // formula with no IPC behind it (unlike every other export here), and the
+  // "exact permalink" test below is only meaningful if this is the same
+  // formula jiraApi.test.ts pins directly.
+  buildJiraCommentPermalink: (site: string, issueKey: string, commentId: string) =>
+    `https://${site}/browse/${issueKey}?focusedCommentId=${commentId}`,
   downloadJiraAttachment: jest.fn(),
   listJiraComments: jest.fn(),
   postJiraComment: jest.fn(),
@@ -697,6 +703,152 @@ describe('mentions in the comment composer', () => {
     await waitFor(() =>
       expect(postJiraComment).toHaveBeenCalledWith('10421', 'Taking it.', []),
     );
+  });
+});
+
+// Jira's own "Reply" on a comment is not threading — the comment schema has
+// no parent field, verified live — it just opens the composer with an
+// @author mention prefilled, producing an ordinary top-level comment. These
+// tests cover exactly that: the prefill reuses the composer's real mention
+// machinery (same spans, same buildCommentAdf path selectMention already
+// exercises above), not a second, parallel way of inserting text.
+describe('replying to a comment', () => {
+  it('prefills a real mention of the comment author at the front of the draft', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          authorName: 'Sam Lee',
+          authorAccountId: 'acct-sam',
+          body: 'Can you take a look?',
+        }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('Can you take a look?');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+
+    expect(commentBox().value).toBe('@Sam Lee ');
+  });
+
+  it('posts the prefilled mention as a real ADF mention node, not literal text', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          authorName: 'Sam Lee',
+          authorAccountId: 'acct-sam',
+          body: 'Can you take a look?',
+        }),
+      ],
+      total: 1,
+    });
+    jest.mocked(postJiraComment).mockResolvedValue(comment({ id: 'c2' }));
+    renderDrawer();
+    await screen.findByText('Can you take a look?');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+    fireEvent.change(commentBox(), {
+      target: { value: '@Sam Lee on it now' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+
+    await waitFor(() => expect(postJiraComment).toHaveBeenCalled());
+    expect(postJiraComment).toHaveBeenCalledWith(
+      '10421',
+      '@Sam Lee on it now',
+      [{ start: 0, end: 8, accountId: 'acct-sam', displayName: 'Sam Lee' }],
+    );
+  });
+
+  it('prefills again on a second Reply click, including a second Reply to the same author', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          authorName: 'Sam Lee',
+          authorAccountId: 'acct-sam',
+          body: 'first',
+        }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('first');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+    expect(commentBox().value).toBe('@Sam Lee ');
+
+    // Clear the draft, then reply again — a stale "already prefilled" guard
+    // keyed on the accountId/displayName values (rather than a fresh object
+    // per click) would make this second click a no-op.
+    fireEvent.change(commentBox(), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+
+    expect(commentBox().value).toBe('@Sam Lee ');
+  });
+
+  it("does not offer Reply when Jira withheld the author's account id", async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          authorName: 'Deleted User',
+          authorAccountId: null,
+          body: 'ghost comment',
+        }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('ghost comment');
+
+    expect(
+      screen.queryByRole('button', { name: 'Reply' }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("copying a comment's permalink", () => {
+  beforeEach(() => {
+    // jsdom has no Clipboard API by default.
+    Object.assign(navigator, {
+      clipboard: { writeText: jest.fn().mockResolvedValue(undefined) },
+    });
+  });
+
+  it('copies the exact permalink Jira itself uses for that comment', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [comment({ id: 'c9', body: 'noted' })],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('noted');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy link' }));
+
+    await waitFor(() =>
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+        'https://waypoint123.atlassian.net/browse/ENG-421?focusedCommentId=c9',
+      ),
+    );
+  });
+
+  it('confirms success by flipping the button label to "Copied" — this app has no success-toast channel', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [comment({ id: 'c9', body: 'noted' })],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('noted');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy link' }));
+
+    expect(
+      await screen.findByRole('button', { name: 'Copied' }),
+    ).toBeInTheDocument();
   });
 });
 

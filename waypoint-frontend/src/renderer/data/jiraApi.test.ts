@@ -1097,6 +1097,28 @@ describe('comments', () => {
   });
 });
 
+describe('buildJiraCommentPermalink', () => {
+  // Verified against live Jira: this is the exact URL shape its own "Copy
+  // link" on a comment produces, and JiraTicketDetail.tsx's Copy link action
+  // trusts this function for the string it hands to the clipboard —
+  // asserted exactly, not as a substring match, since a stray slash or the
+  // wrong query key would still "look like a link" while pointing nowhere
+  // useful.
+  it('builds the exact permalink Jira itself uses for a comment', () => {
+    const api = freshApi();
+
+    expect(
+      api.buildJiraCommentPermalink(
+        'waypoint123.atlassian.net',
+        'ENG-421',
+        '10502',
+      ),
+    ).toBe(
+      'https://waypoint123.atlassian.net/browse/ENG-421?focusedCommentId=10502',
+    );
+  });
+});
+
 // buildCommentAdf's markdown-lite subset -- what JiraCommentComposer.tsx's
 // toolbar produces, not general Markdown. Exercised through postJiraComment
 // like every other case above, so a regression here is caught at the same

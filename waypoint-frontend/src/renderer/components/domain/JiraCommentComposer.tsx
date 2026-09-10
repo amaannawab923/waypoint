@@ -345,12 +345,23 @@ function JiraCommentEmojiPicker({
   );
 }
 
+/** What a comment row's Reply action hands the composer: the author it
+ * should prefill a mention of. Not threading — see this component's own
+ * header comment and JiraTicketDetail.tsx's Reply button for why a
+ * `parentCommentId` is deliberately not part of this shape. */
+export interface JiraReplyTarget {
+  accountId: string;
+  displayName: string;
+}
+
 export function JiraCommentComposer({
   ticketId,
   ticketKey,
   attachments,
   onPosted,
   onTicketUpdated,
+  pendingReply,
+  onReplyConsumed,
 }: {
   ticketId: string;
   /** Jira's assignable-user search is specified in terms of the issue KEY,
@@ -367,6 +378,22 @@ export function JiraCommentComposer({
    * re-read ticket goes up through the same callback that keeps the
    * drawer's Attachments section in sync. */
   onTicketUpdated: (updated: JiraTicket) => void;
+  /** Set by JiraTicketDetail when a comment's Reply action is clicked. A new
+   * object every click (even a second Reply on the same author) — see the
+   * prefill effect below, which is keyed on this reference changing rather
+   * than on the accountId/displayName values themselves, so two Replies to
+   * the same person in a row both prefill instead of the second being a
+   * no-op identical-value update React would skip. */
+  pendingReply?: JiraReplyTarget | null;
+  /** Fired the instant `pendingReply` has been prefilled, so the parent can
+   * reset it to null — required for the "new object every click" contract
+   * above to keep working: while `pendingReply` is still the object from
+   * the last click, a second click on that same comment would construct an
+   * identical-looking object, but it is JiraTicketDetail's own state update
+   * (not this effect) that has to see pendingReply go null first, otherwise
+   * the click that sets it back to a same-shaped object still counts as a
+   * real change there. */
+  onReplyConsumed?: () => void;
 }) {
   const [draft, setDraft] = useState('');
   const [mentions, setMentions] = useState<JiraMentionSpan[]>([]);
@@ -688,6 +715,53 @@ export function JiraCommentComposer({
       el?.setSelectionRange(newCaret, newCaret);
     });
   }
+
+  /**
+   * Reply, prefilled: inserts a real mention of `pendingReply` at the very
+   * start of the draft, the same span shape `selectMention` produces for a
+   * typed "@" pick — one write path, so a prefilled mention is
+   * indistinguishable from a typed one all the way to `buildCommentAdf`.
+   *
+   * Always prepends rather than inserting at the caret. Reply is a fresh
+   * "who is this comment addressed to" action on a composer that is usually
+   * empty, not an edit at wherever the cursor happened to be left from
+   * whatever this composer was doing before — the same reason Jira's own
+   * Reply always lands the mention at the front regardless of caret
+   * position.
+   */
+  useEffect(() => {
+    if (!pendingReply) return;
+    const mentionText = `@${pendingReply.displayName}`;
+    const insertText = `${mentionText} `;
+
+    shiftMentionsForEdit(0, 0, insertText.length);
+    setMentions((spans) => [
+      {
+        start: 0,
+        end: mentionText.length,
+        accountId: pendingReply.accountId,
+        displayName: pendingReply.displayName,
+      },
+      ...spans,
+    ]);
+    setDraft((d) => insertText + d);
+    onReplyConsumed?.();
+
+    const el = textareaRef.current;
+    const newCaret = insertText.length;
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(newCaret, newCaret);
+    });
+    // Deliberately keyed on `pendingReply` alone. `shiftMentionsForEdit` and
+    // `onReplyConsumed` are recreated every render (the former closes over
+    // `draft`/`mentions` via their setters' functional form, so it does not
+    // actually need to be a dependency to stay correct) and including them
+    // would defeat the "runs once per click" contract this effect exists
+    // for — the same trade the mention-search effect above already makes,
+    // for the same reason.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingReply]);
 
   /** Wraps the current selection in a delimiter pair — **bold**, _em_,
    * ~~strike~~, `code` — or, with nothing selected, inserts an empty pair

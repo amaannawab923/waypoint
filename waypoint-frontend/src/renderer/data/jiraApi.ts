@@ -1372,6 +1372,25 @@ export function buildCommentAdf(
 }
 
 /**
+ * The permalink Jira's own comment menu produces for one comment: the
+ * issue's browse URL with `focusedCommentId` naming a specific comment.
+ *
+ * Verified against live Jira: opening this URL scrolls straight to that
+ * comment and highlights it in the timeline. `site` is the bare host the
+ * connection identity already carries (no scheme), so the `https://` is
+ * added here once rather than re-typed at every call site — the same reason
+ * `jiraUrl` in JiraTicketDetail.tsx builds its own plain browse URL the same
+ * way.
+ */
+export function buildJiraCommentPermalink(
+  site: string,
+  issueKey: string,
+  commentId: string,
+): string {
+  return `https://${site}/browse/${issueKey}?focusedCommentId=${commentId}`;
+}
+
+/**
  * Posts a comment as the connected user.
  *
  * `mentions` are the spans over `text` the composer's @-popover produced

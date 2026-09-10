@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { clsx } from 'clsx';
 import {
+  buildJiraCommentPermalink,
   downloadJiraAttachment,
   getJiraPriorityOptions,
   getJiraTransitions,
@@ -28,7 +29,10 @@ import {
   JiraStateChip,
   JiraTransitionPopover,
 } from '@/components/domain/JiraTransitionPopover';
-import { JiraCommentComposer } from '@/components/domain/JiraCommentComposer';
+import {
+  JiraCommentComposer,
+  type JiraReplyTarget,
+} from '@/components/domain/JiraCommentComposer';
 import { JiraLoadError } from '@/components/domain/JiraLoadError';
 import { JiraRichText } from '@/components/domain/JiraRichText';
 import { jiraProjectColor } from '@/types/jira';
@@ -192,6 +196,19 @@ export function JiraTicketDetail({
   // "Saving…".
   const [downloading, setDownloading] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  // Set by a comment's Reply action and consumed by JiraCommentComposer's
+  // own prefill effect (see that component's onReplyConsumed) — a fresh
+  // object every click, deliberately, so a second Reply click (even to the
+  // same author) is a real state change the composer's effect will see.
+  const [pendingReply, setPendingReply] = useState<JiraReplyTarget | null>(
+    null,
+  );
+  // Which comment's permalink was just copied, by id — mirrors
+  // RequestsPage.tsx's own linkCopied flag, the one other "Copy link"
+  // affordance in this app: this app's toast channel is error-only (see
+  // showErrorToast), so a copy's own success has nowhere else to say so.
+  // Cleared after the same 1500ms RequestsPage uses.
+  const [copiedCommentId, setCopiedCommentId] = useState<string | null>(null);
   const assigneeChipRef = useRef<HTMLButtonElement>(null);
   const stateChipRef = useRef<HTMLButtonElement>(null);
   const priorityChipRef = useRef<HTMLButtonElement>(null);
@@ -345,6 +362,30 @@ export function JiraTicketDetail({
       );
     } finally {
       setUploading(false);
+    }
+  }
+
+  /**
+   * Copies one comment's real Jira permalink — verified live: this exact URL
+   * shape scrolls Jira's own issue view straight to that comment. Silent on
+   * failure, matching RequestsPage.tsx's own Copy link: clipboard access can
+   * fail (unsupported browser, no permission), and there is nowhere for this
+   * app's error-only toast channel to send a fabricated success in its
+   * place — a mid-air "could not copy" for something this low-stakes is
+   * worse than the button just staying "Copy link".
+   */
+  async function handleCopyCommentLink(commentId: string) {
+    if (!connection?.site) return;
+    const url = buildJiraCommentPermalink(connection.site, ticket.key, commentId);
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedCommentId(commentId);
+      setTimeout(() => setCopiedCommentId(null), 1500);
+    } catch {
+      // See the function's own comment above: a failed copy has no error
+      // channel to report to and the address is not shown anywhere else in
+      // this row for the user to fall back to reading it, unlike
+      // RequestsPage's own input field — there is simply nothing more to do.
     }
   }
 
@@ -618,7 +659,7 @@ export function JiraTicketDetail({
           )}
           <div className="mb-4 space-y-3.5">
             {comments.map((c) => (
-              <div key={c.id} className="flex gap-2">
+              <div key={c.id} className="group flex gap-2">
                 <Avatar name={c.authorName} size={22} />
                 <div className="min-w-0 flex-1">
                   <div className="mb-0.5 text-xs">
@@ -635,6 +676,41 @@ export function JiraTicketDetail({
                   )}
                   <div className="text-[12.5px] leading-relaxed whitespace-pre-wrap text-text-secondary">
                     {c.body}
+                  </div>
+                  {/* Two of Jira's five comment-row actions — Edit and
+                      Delete need capabilities this phase deliberately
+                      doesn't have (see this component's own header comment
+                      on why), and reactions have no public API at all.
+                      Opacity-revealed on hover exactly like
+                      ProjectViewsPage.tsx's own row actions, and
+                      group-focus-within (not group-hover alone) is what
+                      keeps a keyboard user from needing a mouse to ever see
+                      these — a Tab landing on either button already reveals
+                      the row before it needs to be clicked. */}
+                  <div className="mt-1 flex items-center gap-2.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                    {c.authorAccountId !== null && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPendingReply({
+                            accountId: c.authorAccountId as string,
+                            displayName: c.authorName,
+                          })
+                        }
+                        className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
+                      >
+                        Reply
+                      </button>
+                    )}
+                    {jiraUrl && (
+                      <button
+                        type="button"
+                        onClick={() => handleCopyCommentLink(c.id)}
+                        className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
+                      >
+                        {copiedCommentId === c.id ? 'Copied' : 'Copy link'}
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -660,6 +736,8 @@ export function JiraTicketDetail({
             ticketKey={ticket.key}
             attachments={ticket.attachments}
             onTicketUpdated={onTicketUpdated}
+            pendingReply={pendingReply}
+            onReplyConsumed={() => setPendingReply(null)}
             onPosted={(comment) => {
               setComments((cs) => [...cs, comment]);
               // Otherwise posting into a truncated thread walks the notice's
