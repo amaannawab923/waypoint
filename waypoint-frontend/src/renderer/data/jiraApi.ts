@@ -25,6 +25,7 @@ import type {
   JiraSubtask,
   JiraIssueLink,
   JiraComment,
+  JiraConflictInfo,
   JiraConnectionStatus,
   JiraPriorityOption,
   JiraTicket,
@@ -197,7 +198,68 @@ function toUserOption(wire: JiraWireUser): JiraUserOption {
   };
 }
 
-function toTicket(wire: JiraWireTicket): JiraTicket {
+/**
+ * Whether `wire` looks like it drifted since `previous` — the same ticket,
+ * last mapped from an earlier real read, or `undefined` when this is the
+ * first time this module has ever seen the id (nothing to compare against,
+ * so nothing to flag: a ticket new to the queue is not "changed under you").
+ *
+ * The signal is Jira's own `updated` timestamp, and only that. It is the one
+ * field that moves whenever ANY field on the issue does, so it is the
+ * cheapest true thing to compare — the alternative, diffing every field this
+ * app reads (title, description, priority, assignee, ...), would both cost
+ * more and still miss a field this app doesn't happen to read.
+ *
+ * `updatedAt` is nullable on both sides (Jira can omit `updated`, and a
+ * fabricated stand-in was deliberately removed — see JiraTicket.updatedAt's
+ * own comment). Either side being null means "unknown", and unknown must
+ * resolve to "no conflict" rather than either extreme: it is not proof
+ * nothing changed, but it is even less a case for accusing the ticket of
+ * drift it cannot be shown to have. A conflict strip that fires on missing
+ * data is exactly the kind of false positive that gets a safety feature
+ * turned off — see this file's own note by the isTombstoned/hasConflict
+ * fields below on the same principle applied to tombstoning.
+ */
+function detectConflict(
+  wire: JiraWireTicket,
+  previous: JiraTicket | undefined,
+): JiraConflictInfo | null {
+  if (!previous) return null;
+  if (previous.updatedAt === null || wire.updatedAt === null) return null;
+  if (previous.updatedAt === wire.updatedAt) return null;
+  return {
+    // Jira's issue payload carries no "who last touched this" — that lives
+    // in the changelog, a separate endpoint this client does not read (see
+    // JiraWireTicket.updatedAt: only the timestamp crosses the wire). Naming
+    // a person here would mean guessing, which is exactly what got `updated`
+    // itself de-fabricated elsewhere in this file. "Someone" says plainly
+    // that the identity is unknown rather than inventing one that reads as
+    // authoritative.
+    changedBy: 'Someone',
+    changedAt: wire.updatedAt,
+  };
+}
+
+/**
+ * `previous` is the same ticket as last mapped from a real read, when the
+ * caller has one to offer — see detectConflict just above for what it's
+ * used for and why a missing one is never treated as a conflict.
+ *
+ * Every write in this file below (transitionJiraTicket, setJiraTicketPriority,
+ * setJiraTicketAssignee, uploadJiraAttachment) calls this with ONE argument,
+ * deliberately: the wire ticket a write just got back is this module's own
+ * new "last known truth", not a rival value to compare against the stale
+ * pre-write cache. Passing it through detectConflict there would compare
+ * this module's own action against itself — the ticket's `updated` moved
+ * because Waypoint just moved it — and flag the user's own transition,
+ * priority change, reassignment or attachment upload as someone else's
+ * conflicting edit. That is the false positive that would make the whole
+ * feature intolerable (see the header note above isTombstoned/hasConflict).
+ * Only rememberTickets, which backs a genuine queue re-read and never a
+ * write's own response, passes a `previous` and gets a real comparison.
+ */
+function toTicket(wire: JiraWireTicket, previous?: JiraTicket): JiraTicket {
+  const conflict = detectConflict(wire, previous);
   return {
     id: wire.id,
     key: wire.key,
@@ -225,17 +287,29 @@ function toTicket(wire: JiraWireTicket): JiraTicket {
     descriptionAdf: wire.descriptionAdf,
     attachments: wire.attachments.map(toAttachment),
     // Both of these describe drift between what this app last read and what
-    // Jira holds now — a tombstone is "this was reassigned away from you", a
-    // conflict is "someone else moved it while you were looking". Detecting
-    // either needs a persisted previous read to compare against, which this
-    // phase has no store for, so nothing fabricates one: no ticket is ever
-    // marked tombstoned or conflicted, and the strips that render them simply
-    // never appear. The components stay, ready for the phase that adds the
-    // comparison.
+    // Jira holds now. `conflict` is genuinely detected — see detectConflict
+    // above — from `previous`, the same ticket as last mapped from a real
+    // queue read (rememberTickets is the only caller that supplies one).
+    //
+    // `isTombstoned` stays false, unconditionally, and that is a deliberate
+    // decision rather than an unfinished one. A tombstone claims something
+    // specific — "this was reassigned away from you" — and the only signal
+    // available for it is a ticket's id disappearing from one queue read to
+    // the next. That absence is genuinely ambiguous: the "my work" JQL drops
+    // an issue on reassignment, but also on resolution (the query matches
+    // assignee/reporter/watcher AND resolution — see setJiraTicketPriority's
+    // own note), and a page-cap-truncated read (see JiraTruncation) can make
+    // an untouched issue vanish for a reason that has nothing to do with the
+    // issue at all. Nothing this module reads distinguishes those cases, and
+    // guessing "reassigned" for what might be "resolved" or "just fell past
+    // the crawl cap" is worse than the strip never appearing — a false "this
+    // was taken from you" erodes trust the same way a false conflict would.
+    // If a later phase adds a way to tell those apart (an id lookup after a
+    // ticket goes missing, say), this is where it would plug in.
     isTombstoned: false,
     tombstone: null,
-    hasConflict: false,
-    conflict: null,
+    hasConflict: conflict !== null,
+    conflict,
   };
 }
 
@@ -299,7 +373,14 @@ function rememberTickets(
   wire: JiraWireTicket[],
   truncated: JiraTruncation,
 ): JiraTicket[] {
-  const tickets = wire.map(toTicket);
+  // The baseline detectConflict compares against: whatever this module had
+  // cached for each id BEFORE this read overwrites it below. Read this off
+  // the OLD `lastTickets`, not the new `wire` array — captured up front,
+  // since `lastTickets` is reassigned at the end of this function and a
+  // lookup built after that point would just compare the new read against
+  // itself.
+  const previousById = new Map(lastTickets.map((t) => [t.id, t]));
+  const tickets = wire.map((item) => toTicket(item, previousById.get(item.id)));
   // Only tickets whose transitions actually came back are remembered. An
   // empty transitions array from the bulk search is ambiguous — it means
   // either "this issue has no legal moves" or "the bulk expand didn't
@@ -1307,15 +1388,26 @@ export async function postJiraComment(
   return toComment(unwrap(await bridge().postComment({ ticketId, body })));
 }
 
-// dismissJiraTombstone / resolveJiraConflict — MyJiraPage still wires both to
-// their rows, but no ticket is ever marked tombstoned or conflicted (see
-// toTicket), so neither strip renders and neither is reachable. Kept as the
-// callbacks those components' props require, doing the only honest thing
-// available: dropping the row locally, and re-reading the issue from Jira.
+// dismissJiraTombstone — no ticket is ever marked tombstoned (see toTicket's
+// own note on why that stays false), so this strip never renders and this
+// function is unreachable from the UI today. Kept as the callback
+// JiraTicketRow's props require, doing the only honest thing available if it
+// ever does fire: dropping the row locally rather than pretending to un-do a
+// reassignment this module cannot undo.
 export async function dismissJiraTombstone(ticketId: string): Promise<void> {
   lastTickets = lastTickets.filter((t) => t.id !== ticketId);
 }
 
+// resolveJiraConflict backs the conflict strip's "Reload" button — the one
+// user action a real hasConflict:true is reachable from. A full re-read is
+// the whole fix: rememberTickets recomputes every ticket's conflict against
+// what THIS read returns as the new baseline (see its own comment), so a
+// ticket whose drift is not ongoing — the common case, since the strip's own
+// copy calls it "your first conflict in 3 weeks" — comes back with
+// hasConflict:false and writes unblock. A ticket still actively racing
+// (rare) simply flags again on whatever read notices it next; there is
+// nothing to acknowledge here beyond "look again", which is exactly what a
+// re-read is.
 export async function resolveJiraConflict(
   ticketId: string,
 ): Promise<JiraTicket> {

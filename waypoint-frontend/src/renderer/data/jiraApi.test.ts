@@ -155,10 +155,13 @@ describe('listMyJiraTickets', () => {
     ]);
   });
 
-  // Tombstones and conflicts describe drift between a previous read and the
-  // current one. There is no store to compare against in this phase, so
-  // nothing invents them.
-  it('never marks a real ticket as tombstoned or conflicted', async () => {
+  // Tombstones and conflicts both describe drift between a previous read
+  // and the current one. The very first time this module ever sees a ticket
+  // id there is nothing to compare against, so "new to the queue" must never
+  // read as "changed under you" — and tombstoning stays unconditionally
+  // false regardless (see toTicket's own note on why absence from a JQL read
+  // can never honestly be called a reassignment).
+  it('never marks a ticket as tombstoned, and never conflicted on its first read', async () => {
     const api = freshApi();
     bridge.listTickets.mockResolvedValue(ticketsResult([wireTicket()]));
 
@@ -243,6 +246,187 @@ describe('listMyJiraTickets', () => {
     const { tickets } = await api.listMyJiraTickets();
 
     expect(tickets[0].updatedAt).toBe('2026-03-04T05:06:07.008Z');
+  });
+});
+
+describe('conflict detection', () => {
+  // The core positive case: a real re-read reports a later `updated` than
+  // the one this module cached from the previous read, with nothing of
+  // Waypoint's own in between. That is exactly "someone else moved it while
+  // you were looking" — the case the whole feature exists for.
+  it('flags a genuine third-party edit between two reads', async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([wireTicket({ updatedAt: '2026-09-01T10:00:00.000Z' })]),
+    );
+    await api.listMyJiraTickets();
+
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([wireTicket({ updatedAt: '2026-09-01T10:05:00.000Z' })]),
+    );
+    const { tickets } = await api.listMyJiraTickets();
+
+    expect(tickets[0]).toMatchObject({
+      hasConflict: true,
+      conflict: { changedAt: '2026-09-01T10:05:00.000Z' },
+    });
+    // The identity is genuinely unknown — Jira's issue payload carries no
+    // changelog author, only the timestamp — so this must not read as a
+    // real name. `changedBy` still has to be a non-empty string (the type
+    // requires it), but it must not be fabricated to look authoritative.
+    expect(tickets[0].conflict?.changedBy).toBeTruthy();
+    expect(tickets[0].conflict?.changedBy).not.toMatch(/@|\d/);
+  });
+
+  // Re-reading with nothing having actually changed must not flag — the
+  // ordinary "Refresh now" / background sync case, run far more often than
+  // any real conflict.
+  it('does not flag when a re-read reports the same updated time', async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([wireTicket({ updatedAt: '2026-09-01T10:00:00.000Z' })]),
+    );
+    await api.listMyJiraTickets();
+
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([wireTicket({ updatedAt: '2026-09-01T10:00:00.000Z' })]),
+    );
+    const { tickets } = await api.listMyJiraTickets();
+
+    expect(tickets[0]).toMatchObject({ hasConflict: false, conflict: null });
+  });
+
+  // Either side's updatedAt can legitimately be null (Jira omitted `updated`
+  // — see JiraTicket.updatedAt's own comment on why this module refuses to
+  // fabricate a timestamp). Unknown must resolve to "no conflict", not to
+  // "unchanged" and not to "conflicted": there is no honest basis for either
+  // claim, and a strip that fires on missing data is the false positive that
+  // gets a safety feature switched off.
+  it.each([
+    ['2026-09-01T10:00:00.000Z', null],
+    [null, '2026-09-01T10:05:00.000Z'],
+    [null, null],
+  ])(
+    'does not flag when either side of the comparison is unknown (%s -> %s)',
+    async (firstUpdatedAt, secondUpdatedAt) => {
+      const api = freshApi();
+      bridge.listTickets.mockResolvedValue(
+        ticketsResult([wireTicket({ updatedAt: firstUpdatedAt })]),
+      );
+      await api.listMyJiraTickets();
+
+      bridge.listTickets.mockResolvedValue(
+        ticketsResult([wireTicket({ updatedAt: secondUpdatedAt })]),
+      );
+      const { tickets } = await api.listMyJiraTickets();
+
+      expect(tickets[0]).toMatchObject({ hasConflict: false, conflict: null });
+    },
+  );
+
+  // The false-positive case the whole design is built around: Waypoint's
+  // own transition just moved `updated` on the real issue, and the very
+  // next re-read must not mistake that for a rival edit. transitionJiraTicket
+  // patches the cache with the write's own response directly (toTicket
+  // called with no `previous`), so that response becomes the new baseline
+  // rather than a value compared against the stale one.
+  it('does not flag Waypoint’s own write on the next re-read', async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([
+        wireTicket({
+          updatedAt: '2026-09-01T10:00:00.000Z',
+          transitions: [
+            {
+              id: '21',
+              targetStateName: 'In Review',
+              targetStateCategory: 'in-progress',
+              requiresFields: [],
+            },
+          ],
+        }),
+      ]),
+    );
+    await api.listMyJiraTickets();
+
+    // The transition itself moves Jira's `updated` — a later time than what
+    // was just cached — exactly as a real write does.
+    bridge.transition.mockResolvedValue({
+      ok: true,
+      value: wireTicket({ updatedAt: '2026-09-01T10:00:05.000Z' }),
+    });
+    const written = await api.transitionJiraTicket('10421', '21', {});
+    expect(written).toMatchObject({ hasConflict: false, conflict: null });
+
+    // A background sync right after sees the same time the write already
+    // landed — no drift since Waypoint's own change was cached.
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([wireTicket({ updatedAt: '2026-09-01T10:00:05.000Z' })]),
+    );
+    const { tickets } = await api.listMyJiraTickets();
+
+    expect(tickets[0]).toMatchObject({ hasConflict: false, conflict: null });
+  });
+
+  // Same false-positive shape, for setJiraTicketPriority and
+  // setJiraTicketAssignee — every write in this file follows the identical
+  // "patch the cache with the write's own response" pattern.
+  it('does not flag Waypoint’s own priority or assignee write', async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([wireTicket({ updatedAt: '2026-09-01T10:00:00.000Z' })]),
+    );
+    await api.listMyJiraTickets();
+
+    bridge.setPriority.mockResolvedValue({
+      ok: true,
+      value: wireTicket({
+        updatedAt: '2026-09-01T10:00:05.000Z',
+        priorityId: '3',
+      }),
+    });
+    const afterPriority = await api.setJiraTicketPriority('10421', '3');
+    expect(afterPriority).toMatchObject({ hasConflict: false });
+
+    bridge.setAssignee.mockResolvedValue({
+      ok: true,
+      value: wireTicket({
+        updatedAt: '2026-09-01T10:00:10.000Z',
+        assigneeAccountId: 'acct-sam',
+      }),
+    });
+    const afterAssignee = await api.setJiraTicketAssignee(
+      '10421',
+      'acct-sam',
+    );
+    expect(afterAssignee).toMatchObject({ hasConflict: false });
+  });
+
+  // resolveJiraConflict's whole job: a real re-read after the user clicks
+  // "Reload" recomputes against the just-flagged read as its new baseline,
+  // so a conflict that isn't still actively racing clears rather than
+  // sticking forever.
+  it('resolveJiraConflict clears a flagged conflict once the re-read settles', async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([wireTicket({ updatedAt: '2026-09-01T10:00:00.000Z' })]),
+    );
+    await api.listMyJiraTickets();
+
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([wireTicket({ updatedAt: '2026-09-01T10:05:00.000Z' })]),
+    );
+    const { tickets: flagged } = await api.listMyJiraTickets();
+    expect(flagged[0].hasConflict).toBe(true);
+
+    // Nothing further changed in Jira between the flagged read and the
+    // user's click.
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([wireTicket({ updatedAt: '2026-09-01T10:05:00.000Z' })]),
+    );
+    const resolved = await api.resolveJiraConflict('10421');
+
+    expect(resolved).toMatchObject({ hasConflict: false, conflict: null });
   });
 });
 
