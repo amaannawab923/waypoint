@@ -30,10 +30,12 @@ import {
 } from '@/components/domain/JiraTransitionPopover';
 import { JiraCommentComposer } from '@/components/domain/JiraCommentComposer';
 import { JiraLoadError } from '@/components/domain/JiraLoadError';
+import { JiraRichText } from '@/components/domain/JiraRichText';
 import { jiraProjectColor } from '@/types/jira';
 import type {
   JiraAttachment,
   JiraComment,
+  JiraIssueLink,
   JiraPriorityOption,
   JiraTicket,
   JiraTransition,
@@ -76,6 +78,48 @@ function formatRelativeTime(iso: string | null): string {
   const diffDay = Math.round(diffHour / 24);
   if (diffDay < 30) return `${diffDay}d ago`;
   return 'a while ago';
+}
+
+/**
+ * `ticket.dueDate` is date-only ("2026-09-14"), never a timestamp — see the
+ * field's own doc comment on `JiraTicket`. Parsing it with `new Date(iso)`
+ * reads it as UTC midnight, and `toLocaleDateString` then renders that in the
+ * viewer's own zone, which rolls the date back a full day for anyone west of
+ * UTC. Splitting the components and building a local `Date` from them keeps
+ * the date Jira actually said rather than a zone-shifted neighbor of it.
+ */
+function formatDueDate(dateOnly: string): string {
+  const parts = dateOnly.split('-').map(Number);
+  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) {
+    return dateOnly;
+  }
+  const [year, month, day] = parts;
+  const date = new Date(year, month - 1, day);
+  if (Number.isNaN(date.getTime())) return dateOnly;
+  return date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+/** Groups links by their already-resolved relation phrase ("blocks", "is
+ * blocked by", …), preserving each relation's first-seen order rather than
+ * sorting alphabetically — so the section reads in whatever order Jira's own
+ * response listed the relations, not a reshuffled one. */
+function groupLinksByRelation(
+  links: JiraIssueLink[],
+): Array<[string, JiraIssueLink[]]> {
+  const grouped = new Map<string, JiraIssueLink[]>();
+  for (const link of links) {
+    const existing = grouped.get(link.relation);
+    if (existing) {
+      existing.push(link);
+    } else {
+      grouped.set(link.relation, [link]);
+    }
+  }
+  return Array.from(grouped.entries());
 }
 
 /** Label + value, on the same 104px label column TicketDetailPage's own
@@ -389,14 +433,16 @@ export function JiraTicketDetail({
             {ticket.title}
           </h3>
 
-          {/* `whitespace-pre-wrap`, matching the comment bodies below.
-              adfToPlainText already emits a \n per ADF block, which is the
-              only structure that survives the flatten — and rendering it in
-              a plain <p> collapsed every one of them. */}
-          {ticket.description ? (
-            <p className="mb-6 text-[13px] leading-relaxed whitespace-pre-wrap text-text-secondary">
-              {ticket.description}
-            </p>
+          {/* `whitespace-pre-wrap`, matching the comment bodies below —
+              JiraRichText's own plain-text fallback is adfToPlainText's
+              output, which emits a \n per ADF block, the only structure that
+              survives the flatten. */}
+          {ticket.description || ticket.descriptionAdf ? (
+            <JiraRichText
+              adf={ticket.descriptionAdf}
+              fallback={ticket.description}
+              className="mb-6 text-[13px] leading-relaxed whitespace-pre-wrap text-text-secondary"
+            />
           ) : (
             <p className="mb-6 text-[13px] text-text-muted">No description.</p>
           )}
@@ -455,6 +501,88 @@ export function JiraTicketDetail({
               )}
             </div>
           ))}
+
+          <div className="mb-2 text-[11px] font-bold tracking-wide text-text-muted uppercase">
+            Subtasks
+          </div>
+          {ticket.subtasks.length === 0 ? (
+            <p className="mb-6 text-[12.5px] text-text-muted">No subtasks.</p>
+          ) : (
+            <div className="mb-6 space-y-2">
+              {ticket.subtasks.map((s) => (
+                <div
+                  key={s.id}
+                  className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-border bg-bg-inset px-2.5 py-2 text-[11.5px] text-text-secondary"
+                >
+                  <span className="shrink-0 font-mono text-[11px] font-semibold text-text-muted">
+                    {s.key}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-text">
+                    {s.title}
+                  </span>
+                  <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                    <span
+                      aria-hidden="true"
+                      className="size-1.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: s.stateColor }}
+                    />
+                    <span className="text-[10.5px] font-semibold text-text-muted">
+                      {s.stateName}
+                    </span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="mb-2 text-[11px] font-bold tracking-wide text-text-muted uppercase">
+            Linked work items
+          </div>
+          {ticket.links.length === 0 ? (
+            <p className="mb-6 text-[12.5px] text-text-muted">
+              No linked work items.
+            </p>
+          ) : (
+            <div className="mb-6 space-y-3">
+              {groupLinksByRelation(ticket.links).map(([relation, group]) => (
+                <div key={relation}>
+                  <div className="mb-1.5 text-[11px] font-semibold text-text-secondary capitalize">
+                    {relation}
+                  </div>
+                  <div className="space-y-2">
+                    {group.map((link) => (
+                      <div
+                        key={link.id}
+                        className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-border bg-bg-inset px-2.5 py-2 text-[11.5px] text-text-secondary"
+                      >
+                        <span
+                          className="shrink-0 font-mono text-[11px] font-semibold"
+                          style={{
+                            color: jiraProjectColor(link.key.split('-')[0] ?? ''),
+                          }}
+                        >
+                          {link.key}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-text">
+                          {link.title}
+                        </span>
+                        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                          <span
+                            aria-hidden="true"
+                            className="size-1.5 shrink-0 rounded-full"
+                            style={{ backgroundColor: link.stateColor }}
+                          />
+                          <span className="text-[10.5px] font-semibold text-text-muted">
+                            {link.stateName}
+                          </span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* No "Pending proposals" section here, unlike TicketDetailContent's
               native-ticket equivalent (MY_JIRA_IMPROVEMENTS.md §5 asked for
@@ -636,6 +764,25 @@ export function JiraTicketDetail({
           </div>
         </PropertyRow>
 
+        <PropertyRow label="Labels">
+          {ticket.labels.length === 0 ? (
+            <ReadOnlyValue>
+              <span className="text-text-muted">None</span>
+            </ReadOnlyValue>
+          ) : (
+            <div className="flex flex-wrap items-center gap-1 px-2 py-1.5">
+              {ticket.labels.map((label) => (
+                <span
+                  key={label}
+                  className="rounded bg-surface-3 px-1.5 py-0.5 text-[11px] font-medium text-text-secondary"
+                >
+                  {label}
+                </span>
+              ))}
+            </div>
+          )}
+        </PropertyRow>
+
         <PropertyRow label="Reporter">
           <ReadOnlyValue>
             <span className="flex items-center gap-2">
@@ -663,6 +810,16 @@ export function JiraTicketDetail({
           <ReadOnlyValue>
             {ticket.storyPoints ?? (
               <span className="text-text-muted">No estimate</span>
+            )}
+          </ReadOnlyValue>
+        </PropertyRow>
+
+        <PropertyRow label="Due date">
+          <ReadOnlyValue>
+            {ticket.dueDate ? (
+              formatDueDate(ticket.dueDate)
+            ) : (
+              <span className="text-text-muted">None</span>
             )}
           </ReadOnlyValue>
         </PropertyRow>

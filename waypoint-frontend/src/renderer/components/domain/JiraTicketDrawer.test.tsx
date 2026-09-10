@@ -946,6 +946,120 @@ describe('mention spans survive ordinary editing', () => {
   });
 });
 
+// ROAD-41: subtasks, linked work items, labels and a due date all landed on
+// JiraTicket with the read side of the ticket detail as their only consumer
+// so far — the data-layer fill for these fields is a separate, parallel
+// change, so every fixture in this file (via `ticket()`'s own defaults)
+// leaves them empty, which is exactly the common case these tests pin: a
+// section with nothing in it renders an explicit "nothing here" line rather
+// than a bare heading over blank space, matching how Attachments and
+// Comments already handle emptiness in this same component.
+describe('subtasks, linked work items, labels and due date (ROAD-41)', () => {
+  it('renders an explicit empty state for each, not a bare heading', () => {
+    renderDrawer();
+
+    expect(screen.getByText('No subtasks.')).toBeInTheDocument();
+    expect(screen.getByText('No linked work items.')).toBeInTheDocument();
+    // Epic, Sprint, Labels and Due date all render "None" on this fixture —
+    // one more "None" than before this change pins that Labels joined them
+    // rather than silently falling back to a blank cell.
+    expect(screen.getAllByText('None')).toHaveLength(4);
+  });
+
+  it('lists subtasks with their key, title and current state', () => {
+    renderDrawer({
+      subtasks: [
+        {
+          id: 'st-1',
+          key: 'ENG-422',
+          title: 'Add a retry queue',
+          stateName: 'To Do',
+          stateColor: 'var(--text-muted)',
+        },
+        {
+          id: 'st-2',
+          key: 'ENG-423',
+          title: 'Backfill dropped events',
+          stateName: 'Done',
+          stateColor: 'var(--success)',
+        },
+      ],
+    });
+
+    expect(screen.getByText('ENG-422')).toBeInTheDocument();
+    expect(screen.getByText('Add a retry queue')).toBeInTheDocument();
+    expect(screen.getByText('To Do')).toBeInTheDocument();
+    expect(screen.getByText('ENG-423')).toBeInTheDocument();
+    expect(screen.getByText('Backfill dropped events')).toBeInTheDocument();
+    expect(screen.getByText('Done')).toBeInTheDocument();
+    expect(screen.queryByText('No subtasks.')).toBeNull();
+  });
+
+  it('groups linked work items under their own relation, not one flat list', () => {
+    renderDrawer({
+      links: [
+        {
+          id: 'l-1',
+          relation: 'blocks',
+          key: 'ENG-500',
+          title: 'Rate limiter rollout',
+          stateName: 'In Progress',
+          stateColor: 'var(--warning)',
+        },
+        {
+          id: 'l-2',
+          relation: 'is blocked by',
+          key: 'OPS-12',
+          title: 'Provision the queue cluster',
+          stateName: 'To Do',
+          stateColor: 'var(--text-muted)',
+        },
+      ],
+    });
+
+    expect(screen.getByText('blocks')).toBeInTheDocument();
+    expect(screen.getByText('ENG-500')).toBeInTheDocument();
+    expect(screen.getByText('Rate limiter rollout')).toBeInTheDocument();
+    expect(screen.getByText('is blocked by')).toBeInTheDocument();
+    expect(screen.getByText('OPS-12')).toBeInTheDocument();
+    expect(screen.getByText('Provision the queue cluster')).toBeInTheDocument();
+    expect(screen.queryByText('No linked work items.')).toBeNull();
+  });
+
+  it('renders labels as chips instead of the empty placeholder', () => {
+    renderDrawer({ labels: ['flaky-test', 'needs-design'] });
+
+    expect(screen.getByText('flaky-test')).toBeInTheDocument();
+    expect(screen.getByText('needs-design')).toBeInTheDocument();
+    // Epic, Sprint and Due date still fall back to "None" on this fixture —
+    // Labels no longer does, so the count drops back to the pre-Labels three.
+    expect(screen.getAllByText('None')).toHaveLength(3);
+  });
+
+  // dueDate is date-only ("2026-09-14"), never a timestamp — parsing it as a
+  // UTC instant and formatting in a western-of-UTC test runner would print
+  // the day before it. This pins the literal calendar date, not just "some
+  // non-empty string".
+  it("renders the due date as Jira's own calendar date, not a UTC-shifted one", () => {
+    renderDrawer({ dueDate: '2026-09-14' });
+
+    expect(screen.getByText('Sep 14, 2026')).toBeInTheDocument();
+    expect(screen.queryByText('2026-09-14')).toBeNull();
+  });
+
+  // The description already had a plain-text path before this change;
+  // JiraRichText is a stub today (adf is unread, it renders `fallback`), so
+  // this pins that the switch to it did not regress the plain-text render
+  // this file's other tests were never written to cover directly.
+  it('still shows the plain-text description through JiraRichText', () => {
+    renderDrawer({ description: 'Retries should back off exponentially.' });
+
+    expect(
+      screen.getByText('Retries should back off exponentially.'),
+    ).toBeInTheDocument();
+  });
+});
+
 // MY_JIRA_IMPROVEMENTS.md §5: this used to be a `fixed inset-0 bg-black/40`
 // modal — a backdrop covering the whole window, unreachable-Copilot-toggle
 // bug included. De-modalized to CopilotPanel.tsx's own docked-panel shape.
