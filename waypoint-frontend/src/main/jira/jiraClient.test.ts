@@ -12,6 +12,7 @@ jest.mock('./jiraAuth', () => ({
 // eslint-disable-next-line import/order, import/first
 import {
   downloadAttachment,
+  getTicket,
   listComments,
   listMyTickets,
   listPriorityOptions,
@@ -111,6 +112,33 @@ describe('request building', () => {
     fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
 
     await listMyTickets();
+
+    const params = new URL(call()[0]).searchParams;
+    expect(params.get('fields')).toBe('*all');
+    expect(params.get('expand')).toContain('names');
+  });
+
+  // ROAD-41: settles the dispute over whether labels, duedate, subtasks and
+  // issuelinks are requested. `*all` is Jira's own "every field, standard and
+  // custom" value — not a curated subset — so all four (and `description`,
+  // already read for the plain-text flatten) were already arriving in the
+  // response on both the bulk search above and the single-issue read below.
+  // Nothing about the request changed for ROAD-41; only jiraMap.ts's mapIssue
+  // started reading what was already there.
+  it('requests every field on a single-issue read too, the same way the search does', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        id: '10421',
+        key: 'ENG-421',
+        fields: {
+          summary: 's',
+          project: { key: 'ENG' },
+          status: { name: 'To Do', statusCategory: { key: 'new' } },
+        },
+      }),
+    );
+
+    await getTicket('10421');
 
     const params = new URL(call()[0]).searchParams;
     expect(params.get('fields')).toBe('*all');

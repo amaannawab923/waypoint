@@ -5,6 +5,8 @@ import type {
   JiraTicketRole,
   JiraWireAttachment,
   JiraWireComment,
+  JiraWireIssueLink,
+  JiraWireSubtask,
   JiraWireTicket,
   JiraWireTransition,
   JiraWireTransitionField,
@@ -919,6 +921,119 @@ export function mapAttachments(value: unknown): JiraWireAttachment[] {
   });
 }
 
+/**
+ * One entry from `fields.labels`, reduced to a plain string array.
+ *
+ * Jira's own shape for this field already IS `string[]` — unlike almost
+ * everything else in this mapper, there is no per-site variance to defend
+ * against here. The filter exists only for a trimmed or proxied payload that
+ * slipped something else into the array; it is not evidence any real site
+ * does that.
+ */
+function mapLabels(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((label): label is string => typeof label === 'string');
+}
+
+/**
+ * One entry from `fields.subtasks`, reduced to exactly what `JiraWireSubtask`
+ * declares.
+ *
+ * Jira returns a subtask as a flat summary object on the PARENT issue's own
+ * payload — `id`, `key`, and a `fields` object carrying only `summary` and
+ * `status` (never the full issue shape `mapIssue` reads), so this reads
+ * nothing beyond what is actually there. A full subtask fetch would need a
+ * request per subtask, which this app does not do.
+ */
+function mapSubtask(raw: unknown): JiraWireSubtask | null {
+  const record = asRecord(raw);
+  const key = typeof record.key === 'string' ? record.key : null;
+  if (!key) return null;
+  const fields = asRecord(record.fields);
+  const status = asRecord(fields.status);
+  return {
+    // Same coercion `mapIssue`'s own `id` uses, for the same reason: an older
+    // or proxied payload can hand this back as a number, and the key is a
+    // worse handle to fall back to only because nothing else here needs to.
+    id: idOf(record.id) ?? key,
+    key,
+    title: typeof fields.summary === 'string' ? fields.summary : key,
+    stateName: typeof status.name === 'string' ? status.name : 'Unknown',
+    stateCategory: mapStateCategory(asRecord(status.statusCategory).key),
+  };
+}
+
+export function mapSubtasks(value: unknown): JiraWireSubtask[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(mapSubtask)
+    .filter((subtask): subtask is JiraWireSubtask => subtask !== null);
+}
+
+/**
+ * One entry from `fields.issuelinks`, flattened to the OTHER issue plus the
+ * phrase describing THIS issue's relationship to it.
+ *
+ * Jira nests a link asymmetrically: `type.inward`/`type.outward` are a site's
+ * own words for the two directions ("blocks" / "is blocked by", and so on for
+ * every link type this site has, including ones this app has never seen), and
+ * exactly one of `inwardIssue`/`outwardIssue` is present per entry — never
+ * both — naming which direction THIS link was found in. Reading the phrase
+ * off Jira's own `type` object rather than hardcoding a table of link names is
+ * what makes this correct for a renamed or custom link type, not just the
+ * default set.
+ *
+ * An entry with neither side present, or whose other issue carries no key, is
+ * dropped rather than shown as a link to nothing.
+ */
+function mapIssueLink(raw: unknown): JiraWireIssueLink | null {
+  const record = asRecord(raw);
+  const type = asRecord(record.type);
+  const isInward = record.inwardIssue != null;
+  const other = asRecord(isInward ? record.inwardIssue : record.outwardIssue);
+  const key = typeof other.key === 'string' ? other.key : null;
+  if (!key) return null;
+
+  const phrase = isInward ? type.inward : type.outward;
+  const otherFields = asRecord(other.fields);
+  const status = asRecord(otherFields.status);
+
+  return {
+    id: idOf(other.id) ?? key,
+    relation: typeof phrase === 'string' && phrase ? phrase : 'relates to',
+    key,
+    title: typeof otherFields.summary === 'string' ? otherFields.summary : key,
+    stateName: typeof status.name === 'string' ? status.name : 'Unknown',
+    stateCategory: mapStateCategory(asRecord(status.statusCategory).key),
+  };
+}
+
+export function mapIssueLinks(value: unknown): JiraWireIssueLink[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(mapIssueLink)
+    .filter((link): link is JiraWireIssueLink => link !== null);
+}
+
+/**
+ * The description field's raw ADF node, carried alongside the flattened
+ * `description` string rather than replacing it — see `JiraWireTicket`'s own
+ * comment for why both travel together.
+ *
+ * Only the object shape counts. A string `fields.description` is legacy wiki
+ * markup (see `plainTextFromJiraBody`), not ADF, and handing that string back
+ * under `descriptionAdf` would mislabel it as a document tree a rich renderer
+ * could walk. `null` — Jira's own shape for "no description" — and a missing
+ * field both degrade to null here, same as the string branch: none of the
+ * three is an ADF document.
+ */
+function descriptionAdfOf(value: unknown): unknown | null {
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    return value;
+  }
+  return null;
+}
+
 export function mapIssue(
   raw: unknown,
   myAccountId: string,
@@ -1006,15 +1121,20 @@ export function mapIssue(
         ? storyPointsRaw
         : null,
     sprintName: sprintNameOf(sprintRaw),
-    // ROAD-41 contract: declared and defaulted here so every consumer compiles
-    // against the final shape while each field's real mapping lands separately.
-    // A default that silently stayed would be a lie about the issue, so each
-    // one is either implemented or removed - never left as an empty array.
-    labels: [],
-    dueDate: null,
-    subtasks: [],
-    links: [],
-    descriptionAdf: null,
+    labels: mapLabels(fields.labels),
+    // Jira's `duedate` is a date-only string ("2026-09-18"), not a timestamp —
+    // carried through exactly as given rather than coerced into an ISO
+    // datetime, which would fabricate a time of day and a timezone Jira never
+    // supplied. Missing or non-string degrades to null, the same "we don't
+    // know" this file uses everywhere else, never today's date or any other
+    // invented value.
+    dueDate:
+      typeof fields.duedate === 'string' && fields.duedate
+        ? fields.duedate
+        : null,
+    subtasks: mapSubtasks(fields.subtasks),
+    links: mapIssueLinks(fields.issuelinks),
+    descriptionAdf: descriptionAdfOf(fields.description),
     attachments: mapAttachments(fields.attachment),
     transitions: mapTransitions(issue.transitions),
     // Fall back to null rather than to "now". `listComments`'s `total`

@@ -1384,6 +1384,223 @@ describe('mapIssue', () => {
   it('returns null for a payload that is not an issue', () => {
     expect(mapIssue({ nope: true }, ME)).toBeNull();
   });
+
+  // ROAD-41 parity fields: labels, dueDate, subtasks, links, descriptionAdf.
+  // `fields: '*all'` (jiraClient.ts) already asks Jira for every one of
+  // these on both the search and the single-issue read, so the shapes below
+  // are exactly what a real response carries — nothing here required a new
+  // request parameter, only a mapping.
+  describe('labels', () => {
+    it('maps a real label list', () => {
+      expect(
+        mapIssue(issue({ labels: ['backend', 'needs-design'] }), ME),
+      ).toMatchObject({ labels: ['backend', 'needs-design'] });
+    });
+
+    it('degrades to an empty array rather than throwing when labels are absent', () => {
+      expect(mapIssue(issue({ labels: undefined }), ME)).toMatchObject({
+        labels: [],
+      });
+    });
+  });
+
+  describe('dueDate', () => {
+    // Jira's own shape for this field: a calendar date, no time, no offset.
+    it('carries the date-only string through exactly as Jira sent it', () => {
+      expect(mapIssue(issue({ duedate: '2026-09-18' }), ME)).toMatchObject({
+        dueDate: '2026-09-18',
+      });
+    });
+
+    // Not "today", not an ISO datetime with a fabricated time-of-day — see
+    // this file's own note on updatedAt for why an invented value is worse
+    // than an honest null.
+    it('maps a missing duedate to null, never a fabricated date', () => {
+      expect(mapIssue(issue({ duedate: undefined }), ME)).toMatchObject({
+        dueDate: null,
+      });
+      expect(mapIssue(issue({ duedate: null }), ME)).toMatchObject({
+        dueDate: null,
+      });
+    });
+  });
+
+  describe('subtasks', () => {
+    it('maps exactly what JiraWireSubtask declares, nothing invented', () => {
+      expect(
+        mapIssue(
+          issue({
+            subtasks: [
+              {
+                id: '10501',
+                key: 'ENG-422',
+                fields: {
+                  summary: 'Add a migration',
+                  status: {
+                    name: 'Done',
+                    statusCategory: { key: 'done' },
+                  },
+                },
+              },
+            ],
+          }),
+          ME,
+        ),
+      ).toMatchObject({
+        subtasks: [
+          {
+            id: '10501',
+            key: 'ENG-422',
+            title: 'Add a migration',
+            stateName: 'Done',
+            stateCategory: 'done',
+          },
+        ],
+      });
+    });
+
+    it('maps an issue with no subtasks to an empty array, not null', () => {
+      expect(mapIssue(issue({ subtasks: undefined }), ME)).toMatchObject({
+        subtasks: [],
+      });
+      expect(mapIssue(issue({ subtasks: [] }), ME)).toMatchObject({
+        subtasks: [],
+      });
+    });
+  });
+
+  describe('links', () => {
+    // Jira nests inward/outward asymmetrically: only one side is present per
+    // entry, and it names the direction THIS link was found in — the phrase
+    // has to come from that side's own word, not the other one.
+    it('reads the outward phrase and issue when found on the outward side', () => {
+      expect(
+        mapIssue(
+          issue({
+            issuelinks: [
+              {
+                id: '10900',
+                type: { name: 'Blocks', inward: 'is blocked by', outward: 'blocks' },
+                outwardIssue: {
+                  id: '10422',
+                  key: 'ENG-423',
+                  fields: {
+                    summary: 'Ship the migration',
+                    status: {
+                      name: 'To Do',
+                      statusCategory: { key: 'new' },
+                    },
+                  },
+                },
+              },
+            ],
+          }),
+          ME,
+        ),
+      ).toMatchObject({
+        links: [
+          {
+            id: '10422',
+            relation: 'blocks',
+            key: 'ENG-423',
+            title: 'Ship the migration',
+            stateName: 'To Do',
+            stateCategory: 'todo',
+          },
+        ],
+      });
+    });
+
+    it('reads the inward phrase and issue when found on the inward side', () => {
+      expect(
+        mapIssue(
+          issue({
+            issuelinks: [
+              {
+                id: '10901',
+                type: { name: 'Blocks', inward: 'is blocked by', outward: 'blocks' },
+                inwardIssue: {
+                  id: '10424',
+                  key: 'ENG-425',
+                  fields: {
+                    summary: 'Cut the release',
+                    status: {
+                      name: 'In Progress',
+                      statusCategory: { key: 'indeterminate' },
+                    },
+                  },
+                },
+              },
+            ],
+          }),
+          ME,
+        ),
+      ).toMatchObject({
+        links: [
+          {
+            id: '10424',
+            relation: 'is blocked by',
+            key: 'ENG-425',
+            title: 'Cut the release',
+            stateName: 'In Progress',
+            stateCategory: 'in-progress',
+          },
+        ],
+      });
+    });
+
+    it('maps an issue with no links to an empty array, not null', () => {
+      expect(mapIssue(issue({ issuelinks: undefined }), ME)).toMatchObject({
+        links: [],
+      });
+      expect(mapIssue(issue({ issuelinks: [] }), ME)).toMatchObject({
+        links: [],
+      });
+    });
+  });
+
+  describe('descriptionAdf', () => {
+    it('carries the raw ADF node alongside the flattened description', () => {
+      const adf = {
+        type: 'doc',
+        content: [
+          { type: 'paragraph', content: [{ type: 'text', text: 'Details.' }] },
+        ],
+      };
+      expect(mapIssue(issue({ description: adf }), ME)).toMatchObject({
+        description: 'Details.',
+        descriptionAdf: adf,
+      });
+    });
+
+    // A description that is absent entirely — not present on the payload at
+    // all, the trimmed-response case, distinct from an explicit null.
+    it('maps null when the description is absent entirely', () => {
+      expect(mapIssue(issue({ description: undefined }), ME)).toMatchObject({
+        description: '',
+        descriptionAdf: null,
+      });
+    });
+
+    it('maps null when Jira explicitly returns no description', () => {
+      expect(mapIssue(issue({ description: null }), ME)).toMatchObject({
+        description: '',
+        descriptionAdf: null,
+      });
+    });
+
+    // Legacy wiki markup is a string, not an ADF document tree — carrying it
+    // under descriptionAdf would mislabel it as something a rich renderer
+    // could walk as a node.
+    it('does not carry legacy wiki-markup text as if it were ADF', () => {
+      expect(
+        mapIssue(issue({ description: 'a *bold* word' }), ME),
+      ).toMatchObject({
+        description: 'a bold word',
+        descriptionAdf: null,
+      });
+    });
+  });
 });
 
 describe('mapTransitions', () => {

@@ -95,6 +95,18 @@ const MY_WORK_JQL =
 // `transitions` is requested here as an optimization only — see listMyTickets.
 const SEARCH_EXPAND = 'renderedFields,transitions,transitions.fields,names';
 
+// `*all` already requests every field Jira has for an issue — standard AND
+// custom — not a subset. That means labels, duedate, subtasks and issuelinks
+// were already arriving on every search and every getTicket response before
+// ROAD-41's parity fields existed; the gap was entirely on the mapping side
+// (see jiraMap.ts's mapIssue), never the request. Likewise `description`
+// under API v3 is already Atlassian Document Format, so the raw node
+// jiraMap.ts now carries as `descriptionAdf` needs no separate ask either —
+// it's the same `fields.description` `description` has always been read
+// from. Naming this constant is what keeps the two calls in sync rather than
+// each hand-typing '*all' and drifting.
+const ISSUE_FIELDS = '*all';
+
 type Credentialish = Pick<JiraCredential, 'site' | 'email' | 'apiToken'>;
 
 /**
@@ -592,7 +604,7 @@ export async function listMyTickets(): Promise<
   for (let page = 0; page < MAX_PAGES && hasNextPage; page += 1) {
     const query: Record<string, string> = {
       jql: MY_WORK_JQL,
-      fields: '*all',
+      fields: ISSUE_FIELDS,
       expand: SEARCH_EXPAND,
       maxResults: String(PAGE_SIZE),
     };
@@ -776,7 +788,7 @@ export async function getTicket(
   const result = await jiraFetch<Record<string, unknown>>(credential, {
     method: 'GET',
     path: `/rest/api/3/issue/${encodeURIComponent(ticketId)}`,
-    query: { fields: '*all', expand: SEARCH_EXPAND },
+    query: { fields: ISSUE_FIELDS, expand: SEARCH_EXPAND },
   });
   if (!result.ok) return result;
 
