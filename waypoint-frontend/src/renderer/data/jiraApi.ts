@@ -1385,7 +1385,32 @@ export async function postJiraComment(
   mentions: JiraMentionSpan[] = [],
 ): Promise<JiraComment> {
   const body = buildCommentAdf(text, mentions);
-  return toComment(unwrap(await bridge().postComment({ ticketId, body })));
+  const comment = toComment(unwrap(await bridge().postComment({ ticketId, body })));
+
+  // Posting a comment moves the ISSUE's `updated` in Jira, not just the
+  // comment's own. Unlike the four writes above this path gets a comment back
+  // rather than a ticket, so there is no fresh ticket to re-baseline from —
+  // and left alone, the next queue read compares a stale cached timestamp
+  // against a value this module's own comment moved, reports "Someone changed
+  // this", and disables the priority/assignee/transition/attachment writes
+  // until the user reloads. A safety banner that fires on the user's own
+  // action is how a safety feature gets learned-ignored.
+  //
+  // Dropping the cached timestamp states the honest position — this module no
+  // longer holds a baseline it can compare — and detectConflict already reads
+  // an unknown timestamp as "no conflict" rather than guessing, so this needs
+  // no new branch there. The next real read re-establishes the baseline.
+  //
+  // It does mean a third party editing in the window between this comment and
+  // the next read is absorbed silently rather than flagged. That is not a
+  // regression against the alternative: re-reading the ticket here would
+  // absorb it identically, because nothing in the payload distinguishes
+  // "updated moved because of me" from "because of me AND someone else". The
+  // trade is a rare missed warning against a constant false one.
+  lastTickets = lastTickets.map((t) =>
+    t.id === ticketId ? { ...t, updatedAt: null } : t,
+  );
+  return comment;
 }
 
 // dismissJiraTombstone — no ticket is ever marked tombstoned (see toTicket's

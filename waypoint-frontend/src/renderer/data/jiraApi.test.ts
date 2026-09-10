@@ -278,6 +278,42 @@ describe('conflict detection', () => {
     expect(tickets[0].conflict?.changedBy).not.toMatch(/@|\d/);
   });
 
+  // Our OWN comment moves the issue's `updated` in Jira. The four
+  // ticket-returning writes re-baseline from the ticket they get back;
+  // posting a comment gets a comment back, so without dropping the stale
+  // cached timestamp the very next refresh would tell the user "Someone
+  // changed this" about their own comment — and disable every other write
+  // until they reloaded. This is the regression guard for that.
+  it('does not flag the user\'s own comment as a third-party edit', async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([wireTicket({ updatedAt: '2026-09-01T10:00:00.000Z' })]),
+    );
+    await api.listMyJiraTickets();
+
+    bridge.postComment.mockResolvedValue({
+      ok: true,
+      value: {
+        id: 'c1',
+        ticketId: '10421',
+        authorName: 'Amaan Nawab',
+        body: 'a comment',
+        createdAt: '2026-09-01T10:05:00.000Z',
+        postedByWaypoint: true,
+        disclosureText: null,
+      },
+    });
+    await api.postJiraComment('10421', 'a comment');
+
+    // Jira now reports a later `updated` — moved by our own comment.
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([wireTicket({ updatedAt: '2026-09-01T10:05:00.000Z' })]),
+    );
+    const { tickets } = await api.listMyJiraTickets();
+
+    expect(tickets[0]).toMatchObject({ hasConflict: false, conflict: null });
+  });
+
   // Re-reading with nothing having actually changed must not flag — the
   // ordinary "Refresh now" / background sync case, run far more often than
   // any real conflict.
