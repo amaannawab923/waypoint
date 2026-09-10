@@ -11,7 +11,9 @@ jest.mock('./jiraAuth', () => ({
 
 // eslint-disable-next-line import/order, import/first
 import {
+  deleteComment,
   downloadAttachment,
+  getMyPermissions,
   getTicket,
   listComments,
   listMyTickets,
@@ -1622,6 +1624,171 @@ describe('comments', () => {
       ok: false,
       reason: 'forbidden',
     });
+  });
+});
+
+describe('deleteComment', () => {
+  it('DELETEs the exact issue/comment path', async () => {
+    fetchMock.mockResolvedValue(emptyResponse(204));
+
+    await deleteComment('10421', '10500');
+
+    const [url, init] = call();
+    expect(init.method).toBe('DELETE');
+    expect(url).toContain('/rest/api/3/issue/10421/comment/10500');
+  });
+
+  // Jira's documented answer on success: 204, no body. `readJsonBody`'s
+  // existing 204 branch resolves this to `undefined` without attempting a
+  // body read, which is what makes `JiraResult<void>` true rather than
+  // something this function had to special-case.
+  it('reports success on a 204 with no body', async () => {
+    fetchMock.mockResolvedValue(emptyResponse(204));
+
+    expect(await deleteComment('10421', '10500')).toEqual({
+      ok: true,
+      value: undefined,
+    });
+  });
+
+  it('reports a permission failure as forbidden, not as bad credentials', async () => {
+    fetchMock.mockResolvedValue(emptyResponse(403));
+
+    expect(await deleteComment('10421', '10500')).toMatchObject({
+      ok: false,
+      reason: 'forbidden',
+    });
+  });
+
+  // Someone else's tab already deleted the same comment, or it never existed.
+  // Jira reports that as a 404 carrying its own error body, same as every
+  // other write here — surfaced through the shared classification rather
+  // than a bespoke branch.
+  it('reports an already-deleted comment as a Jira error, in Jira’s own words', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ errorMessages: ['The comment could not be found.'] }, 404),
+    );
+
+    expect(await deleteComment('10421', '10500')).toMatchObject({
+      ok: false,
+      reason: 'jira_error',
+      message: 'The comment could not be found.',
+    });
+  });
+
+  it('refuses without a stored credential rather than calling out unauthenticated', async () => {
+    readStoredJiraCredentialMock.mockReturnValue(null);
+
+    const result = await deleteComment('10421', '10500');
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: false, reason: 'not_connected' });
+  });
+});
+
+describe('getMyPermissions', () => {
+  function permissionsResponse(
+    have: Partial<
+      Record<
+        | 'DELETE_ALL_COMMENTS'
+        | 'DELETE_OWN_COMMENTS'
+        | 'EDIT_ALL_COMMENTS'
+        | 'EDIT_OWN_COMMENTS',
+        boolean
+      >
+    >,
+  ) {
+    const keys = [
+      'DELETE_ALL_COMMENTS',
+      'DELETE_OWN_COMMENTS',
+      'EDIT_ALL_COMMENTS',
+      'EDIT_OWN_COMMENTS',
+    ] as const;
+    return {
+      permissions: Object.fromEntries(
+        keys.map((key) => [key, { havePermission: have[key] === true }]),
+      ),
+    };
+  }
+
+  it('asks mypermissions for exactly the four comment permissions, scoped to the issue', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(permissionsResponse({})));
+
+    await getMyPermissions('ENG-421');
+
+    const params = new URL(call()[0]).searchParams;
+    expect(call()[0]).toContain('/rest/api/3/mypermissions');
+    expect(params.get('issueKey')).toBe('ENG-421');
+    expect(params.get('permissions')).toBe(
+      'DELETE_ALL_COMMENTS,DELETE_OWN_COMMENTS,EDIT_ALL_COMMENTS,EDIT_OWN_COMMENTS',
+    );
+  });
+
+  // The common real-site case: a non-admin may remove their own remarks but
+  // not moderate everyone else's.
+  it('parses a site where the user may delete/edit only their own comments', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        permissionsResponse({
+          DELETE_OWN_COMMENTS: true,
+          EDIT_OWN_COMMENTS: true,
+        }),
+      ),
+    );
+
+    expect(await getMyPermissions('ENG-421')).toEqual({
+      ok: true,
+      value: {
+        deleteAll: false,
+        deleteOwn: true,
+        editAll: false,
+        editOwn: true,
+      },
+    });
+  });
+
+  it('parses a project admin who may delete/edit anyone’s comments', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        permissionsResponse({
+          DELETE_ALL_COMMENTS: true,
+          DELETE_OWN_COMMENTS: true,
+          EDIT_ALL_COMMENTS: true,
+          EDIT_OWN_COMMENTS: true,
+        }),
+      ),
+    );
+
+    expect(await getMyPermissions('ENG-421')).toEqual({
+      ok: true,
+      value: { deleteAll: true, deleteOwn: true, editAll: true, editOwn: true },
+    });
+  });
+
+  // A key Jira's answer omits entirely is not evidence the user holds it —
+  // read closed, not open, the same direction every other unknown in this
+  // client degrades toward.
+  it('reads a permission Jira omitted from its answer as false, not true', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ permissions: {} }));
+
+    expect(await getMyPermissions('ENG-421')).toEqual({
+      ok: true,
+      value: {
+        deleteAll: false,
+        deleteOwn: false,
+        editAll: false,
+        editOwn: false,
+      },
+    });
+  });
+
+  it('refuses without a stored credential rather than calling out unauthenticated', async () => {
+    readStoredJiraCredentialMock.mockReturnValue(null);
+
+    const result = await getMyPermissions('ENG-421');
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: false, reason: 'not_connected' });
   });
 });
 

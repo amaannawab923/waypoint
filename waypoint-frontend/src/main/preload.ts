@@ -2,6 +2,7 @@
 /* eslint no-unused-vars: off */
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import type { CopilotDetectResult } from './copilot/copilotDetect';
+import type { JiraCommentPermissions } from './jira/jiraClient';
 import type {
   JiraCommentBody,
   JiraConnectionSnapshot,
@@ -374,6 +375,25 @@ const electronHandler = {
       body: JiraCommentBody;
     }): Promise<JiraResult<JiraWireComment>> {
       return ipcRenderer.invoke('jira:comments:post', args);
+    },
+    // No re-read on success, unlike every write above: a deleted comment has
+    // no state left to fetch back. `void` is the honest payload for that —
+    // the renderer already holds the comment it just asked to delete and can
+    // drop it from its own list on `ok: true`.
+    deleteComment(args: {
+      ticketId: string;
+      commentId: string;
+    }): Promise<JiraResult<void>> {
+      return ipcRenderer.invoke('jira:comments:delete', args);
+    },
+    // The project-level own/all answer the Delete/Edit affordance decides its
+    // visibility from, since a comment itself carries no per-comment
+    // permission hint (see jiraClient.ts's `getMyPermissions`). Per issue key,
+    // like `searchAssignableUsers` above.
+    getCommentPermissions(
+      issueKey: string,
+    ): Promise<JiraResult<JiraCommentPermissions>> {
+      return ipcRenderer.invoke('jira:comments:permissions', issueKey);
     },
   },
   // Top-level, not nested under `copilot`: "point me at a local folder" is

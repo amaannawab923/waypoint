@@ -164,8 +164,10 @@ function classifyNetworkError(err: unknown): JiraFailure {
 interface JiraRequest {
   // PUT is Jira's verb for editing an issue's own fields — the transition
   // endpoint is a POST because a move is an action, but changing a priority
-  // is an edit of the issue itself.
-  method: 'GET' | 'POST' | 'PUT';
+  // is an edit of the issue itself. DELETE is its own verb for the same
+  // reason PUT is: removing a comment is not a POSTed action against the
+  // issue, it is Jira's own documented verb for the comment resource itself.
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   /** Absolute REST path, e.g. "/rest/api/3/myself". */
   path: string;
   query?: Record<string, string>;
@@ -181,7 +183,7 @@ interface JiraRequest {
  * whatever this particular flavour of request adds on top of the two every
  * Jira call carries. */
 interface RawJiraRequest {
-  method: 'GET' | 'POST' | 'PUT';
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   path: string;
   query?: Record<string, string>;
   /** Merged over `Authorization` and `Accept`. Deliberately optional and
@@ -1180,4 +1182,112 @@ export async function postComment(
     );
   }
   return { ok: true, value: mapped };
+}
+
+/**
+ * Deletes one comment outright. There is no undo on either side of this call:
+ * Jira answers 204 with no body, and there is nothing to re-read afterward —
+ * unlike every write above, a deleted comment has no state to fetch back.
+ *
+ * `readJsonBody`'s existing 204 branch is what makes `JiraResult<void>` the
+ * honest return type here rather than something this function has to
+ * special-case: a 204 already resolves to `{ ok: true, value: undefined }`
+ * with no body read attempted, which is exactly what a delete answers with on
+ * success.
+ */
+export async function deleteComment(
+  ticketId: string,
+  commentId: string,
+): Promise<JiraResult<void>> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+
+  return jiraFetch<void>(credentialResult.value, {
+    method: 'DELETE',
+    path: `${COMMENT_PATH(ticketId)}/${encodeURIComponent(commentId)}`,
+  });
+}
+
+// -----------------------------------------------------------------------
+// 8. Comment permissions
+// -----------------------------------------------------------------------
+
+/**
+ * The four comment permissions the Delete/Edit affordance actually needs,
+ * per Jira's own own/all distinction on comment permissions.
+ *
+ * The comment payload itself carries no per-comment permission hint — live-
+ * confirmed against the real API — so there is nothing to read off a comment
+ * that would say "you may delete this one." What Jira does expose is a
+ * project-level answer to "may this user delete/edit their OWN comments" and
+ * "may this user delete/edit ANYONE's comments," which is exactly what
+ * `/rest/api/3/mypermissions` reports. Deleting/editing a specific comment is
+ * then a client-side decision — this project-level answer, plus whether the
+ * comment's author is the signed-in account (see `JiraIdentity.accountId`
+ * against a comment's own author id) — not a value Jira states per comment.
+ */
+export interface JiraCommentPermissions {
+  deleteAll: boolean;
+  deleteOwn: boolean;
+  editAll: boolean;
+  editOwn: boolean;
+}
+
+const COMMENT_PERMISSION_KEYS =
+  'DELETE_ALL_COMMENTS,DELETE_OWN_COMMENTS,EDIT_ALL_COMMENTS,EDIT_OWN_COMMENTS';
+
+interface MyPermissionsResponse {
+  permissions?: Record<string, { havePermission?: unknown }>;
+}
+
+/** One permission key's boolean, defaulting closed. A permission Jira didn't
+ * mention in its answer is not a permission this app has any evidence the
+ * user holds, so it is read as `false` rather than left `undefined` —
+ * offering a destructive button on the strength of a missing key would be
+ * exactly the silent-403 outcome this whole read exists to prevent. */
+function havePermission(
+  permissions: Record<string, { havePermission?: unknown }>,
+  key: string,
+): boolean {
+  return permissions[key]?.havePermission === true;
+}
+
+/**
+ * Whether the signed-in user may delete or edit their own comments, or
+ * everyone's, on this specific issue — the project-level answer the
+ * Delete/Edit affordance decides its own visibility from, since the comment
+ * payload carries no equivalent hint (see `JiraCommentPermissions`'s own
+ * comment).
+ *
+ * Per-issue, like `listPriorityOptions` and `searchAssignableUsers` before
+ * it: Jira's comment permissions are granted per PROJECT, and an issue key is
+ * what lets `mypermissions` resolve which project's scheme applies, the same
+ * way `issueKey` does on the assignable-users search.
+ */
+export async function getMyPermissions(
+  issueKey: string,
+): Promise<JiraResult<JiraCommentPermissions>> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+
+  const result = await jiraFetch<MyPermissionsResponse>(
+    credentialResult.value,
+    {
+      method: 'GET',
+      path: '/rest/api/3/mypermissions',
+      query: { issueKey, permissions: COMMENT_PERMISSION_KEYS },
+    },
+  );
+  if (!result.ok) return result;
+
+  const permissions = result.value?.permissions ?? {};
+  return {
+    ok: true,
+    value: {
+      deleteAll: havePermission(permissions, 'DELETE_ALL_COMMENTS'),
+      deleteOwn: havePermission(permissions, 'DELETE_OWN_COMMENTS'),
+      editAll: havePermission(permissions, 'EDIT_ALL_COMMENTS'),
+      editOwn: havePermission(permissions, 'EDIT_OWN_COMMENTS'),
+    },
+  };
 }

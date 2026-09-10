@@ -8,6 +8,7 @@ import {
   writeStoredJiraCredential,
 } from './jiraAuth';
 import * as client from './jiraClient';
+import type { JiraCommentPermissions } from './jiraClient';
 import * as files from './jiraFiles';
 import { normalizeJiraSite } from './jiraMap';
 import type {
@@ -81,6 +82,24 @@ function readTicketId(value: unknown): string | null {
  * proxy or future API version whose ids are not purely numeric.
  */
 function readAttachmentId(value: unknown): string | null {
+  const id = readString(value);
+  return /^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$/.test(id) ? id : null;
+}
+
+/**
+ * Guards the comment-delete channel's id.
+ *
+ * Its own function rather than a reuse of `readAttachmentId`, for the same
+ * reason `readAttachmentId` isn't a reuse of `readTicketId`: naming which
+ * channel a guard belongs to is what keeps a future change meant for one id
+ * kind from silently loosening another. The character class is identical to
+ * `readAttachmentId`'s because the shape is identical — a Jira Cloud comment
+ * id is a small integer as a string ("10500"), the same as an attachment id —
+ * and, as with that guard, deliberately not pinned to digits only: the
+ * property this actually defends is that nothing caller-supplied reaches a
+ * REST path unchecked, which holds for any value in this character class.
+ */
+function readCommentId(value: unknown): string | null {
   const id = readString(value);
   return /^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$/.test(id) ? id : null;
 }
@@ -673,6 +692,40 @@ export function registerJiraIpc(getWindow: () => BrowserWindow | null): void {
         return failure('invalid_input', 'Write something first.');
       }
       return client.postComment(ticketId, body);
+    },
+  );
+
+  /**
+   * Deletes one comment outright. There is no confirmation step in this
+   * handler — that belongs in the renderer, before this channel is ever
+   * invoked — but there is also no undo once it is: Jira answers 204 and the
+   * comment is gone.
+   */
+  ipcMain.handle(
+    'jira:comments:delete',
+    async (_event, args: unknown): Promise<JiraResult<void>> => {
+      const input = (args ?? {}) as Record<string, unknown>;
+      const ticketId = readTicketId(input.ticketId);
+      const commentId = readCommentId(input.commentId);
+      if (!ticketId) return failure('invalid_input', 'Unknown Jira issue.');
+      if (!commentId) return failure('invalid_input', 'Unknown Jira comment.');
+      return client.deleteComment(ticketId, commentId);
+    },
+  );
+
+  // The issue KEY, matching `jira:tickets:assignable-users` immediately
+  // above it in spirit: `mypermissions` resolves against a project via
+  // `issueKey`, so `readTicketId` — already shaped for PROJECT-NUMBER — is
+  // the right guard here too.
+  ipcMain.handle(
+    'jira:comments:permissions',
+    async (
+      _event,
+      rawIssueKey: unknown,
+    ): Promise<JiraResult<JiraCommentPermissions>> => {
+      const issueKey = readTicketId(rawIssueKey);
+      if (!issueKey) return failure('invalid_input', 'Unknown Jira issue.');
+      return client.getMyPermissions(issueKey);
     },
   );
 }

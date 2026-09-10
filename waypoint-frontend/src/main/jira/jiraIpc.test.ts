@@ -49,6 +49,8 @@ const searchAssignableUsersMock = jest.fn();
 const setTicketAssigneeMock = jest.fn();
 const listCommentsMock = jest.fn();
 const postCommentMock = jest.fn();
+const deleteCommentMock = jest.fn();
+const getMyPermissionsMock = jest.fn();
 const downloadAttachmentMock = jest.fn();
 const uploadAttachmentMock = jest.fn();
 jest.mock('./jiraClient', () => ({
@@ -66,6 +68,8 @@ jest.mock('./jiraClient', () => ({
   setTicketAssignee: (...args: unknown[]) => setTicketAssigneeMock(...args),
   listComments: (...args: unknown[]) => listCommentsMock(...args),
   postComment: (...args: unknown[]) => postCommentMock(...args),
+  deleteComment: (...args: unknown[]) => deleteCommentMock(...args),
+  getMyPermissions: (...args: unknown[]) => getMyPermissionsMock(...args),
 }));
 
 // jiraFiles is deliberately NOT mocked: it is the thing on the other side of
@@ -798,6 +802,67 @@ describe('per-ticket channels', () => {
         ),
       ).toMatchObject({ ok: false, reason: 'invalid_input' });
       expect(postCommentMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('jira:comments:delete', () => {
+    it('refuses a ticket id that is not one, before any client call', async () => {
+      expect(
+        await getHandler('jira:comments:delete')(
+          {},
+          { ticketId: '../../etc/passwd', commentId: '10500' },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(deleteCommentMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses a comment id that is not one, before any client call', async () => {
+      expect(
+        await getHandler('jira:comments:delete')(
+          {},
+          { ticketId: '10421', commentId: '../../etc/passwd' },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(deleteCommentMock).not.toHaveBeenCalled();
+    });
+
+    it('delegates a valid pair to the client', async () => {
+      deleteCommentMock.mockResolvedValue({ ok: true, value: undefined });
+
+      const result = await getHandler('jira:comments:delete')(
+        {},
+        { ticketId: '10421', commentId: '10500' },
+      );
+
+      expect(deleteCommentMock).toHaveBeenCalledWith('10421', '10500');
+      expect(result).toEqual({ ok: true, value: undefined });
+    });
+  });
+
+  describe('jira:comments:permissions', () => {
+    it('refuses an issue key that is not one, before any client call', async () => {
+      expect(
+        await getHandler('jira:comments:permissions')({}, '../../etc/passwd'),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(getMyPermissionsMock).not.toHaveBeenCalled();
+    });
+
+    it('delegates a valid issue key to the client', async () => {
+      const permissions = {
+        deleteAll: false,
+        deleteOwn: true,
+        editAll: false,
+        editOwn: true,
+      };
+      getMyPermissionsMock.mockResolvedValue({ ok: true, value: permissions });
+
+      const result = await getHandler('jira:comments:permissions')(
+        {},
+        'ENG-421',
+      );
+
+      expect(getMyPermissionsMock).toHaveBeenCalledWith('ENG-421');
+      expect(result).toEqual({ ok: true, value: permissions });
     });
   });
 
