@@ -11,6 +11,7 @@ import {
 import {
   deleteJiraComment,
   downloadJiraAttachment,
+  getJiraComment,
   getJiraCommentPermissions,
   listJiraComments,
   postJiraComment,
@@ -48,6 +49,13 @@ jest.mock('@/data/jiraApi', () => ({
   ) => `https://${site}/browse/${issueKey}?focusedCommentId=${commentId}`,
   deleteJiraComment: jest.fn(),
   downloadJiraAttachment: jest.fn(),
+  // The single-comment read every freshness guard now decides on, kept
+  // deliberately separate from `listJiraComments` — and that separation is
+  // the whole point of the guard tests below. The list is capped at the
+  // newest 100 comments, so a comment missing from it may only have scrolled
+  // off a busy thread; this read names one comment and resolves to null only
+  // when Jira actually answered 404 for that comment.
+  getJiraComment: jest.fn(),
   getJiraCommentPermissions: jest.fn(),
   listJiraComments: jest.fn(),
   postJiraComment: jest.fn(),
@@ -257,6 +265,20 @@ beforeEach(() => {
   // stray call defaulting to "not editable" is still the safe answer rather
   // than an unmocked-function crash.
   jest.mocked(prepareJiraCommentEdit).mockReturnValue(null);
+  // Defaults to "that comment is still there, and hasn't drifted": the id
+  // asked for comes back, with `updatedAt: null`, which every freshness guard
+  // reads as "unknown, therefore no evidence of drift" (see the guards' own
+  // comments on why a refusal on missing data is the false positive that gets
+  // a safety feature learned-ignored). Deliberately NOT left unmocked: an
+  // unmocked call resolves undefined, which a guard would read as "Jira
+  // answered 404" and refuse on — turning every unrelated test in this file
+  // into a confusing refusal instead of an obvious crash. Tests that are
+  // actually about drift or a 404 override this per case.
+  jest
+    .mocked(getJiraComment)
+    .mockImplementation(async (_ticketId, commentId) =>
+      comment({ id: commentId }),
+    );
   jest.mocked(useJiraConnection).mockReturnValue(CONNECTION);
   jest.mocked(searchJiraAssignableUsers).mockResolvedValue(ASSIGNABLE);
   jest.mocked(downloadJiraAttachment).mockResolvedValue({ canceled: false });
@@ -881,6 +903,50 @@ describe('replying to a comment', () => {
     );
   });
 
+  // ROAD-41: replyParentId used to survive the prefilled "@Name " being
+  // edited or deleted out of the draft entirely, on the strength of an
+  // unverified claim about Jira's own composer (see replyParentId's own
+  // comment in JiraCommentComposer.tsx). A draft that no longer mentions
+  // the person being replied to now un-threads instead, matching what the
+  // draft on screen actually says.
+  it('un-threads the reply once the prefilled mention is fully removed from the draft', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          authorName: 'Sam Lee',
+          authorAccountId: 'acct-sam',
+          updatedAt: null,
+          updateAuthorName: null,
+          body: 'Can you take a look?',
+        }),
+      ],
+      total: 1,
+    });
+    jest.mocked(postJiraComment).mockResolvedValue(comment({ id: 'c2' }));
+    renderDrawer();
+    await screen.findByText('Can you take a look?');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+    expect(commentBox().value).toBe('@Sam Lee ');
+
+    // Replaces the whole draft, including the prefilled mention — nothing
+    // left in the box names Sam Lee any more.
+    fireEvent.change(commentBox(), { target: { value: 'unrelated note' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+
+    // The 3-arg call, with no parentId — same shape the "no Reply click"
+    // test above pins, but reached here via a Reply that was actively
+    // un-threaded rather than one that never started.
+    await waitFor(() =>
+      expect(postJiraComment).toHaveBeenCalledWith(
+        '10421',
+        'unrelated note',
+        [],
+      ),
+    );
+  });
+
   it('prefills again on a second Reply click, including a second Reply to the same author', async () => {
     jest.mocked(listJiraComments).mockResolvedValue({
       comments: [
@@ -1161,7 +1227,14 @@ describe('deleting a comment', () => {
     expect(screen.getByText('noted')).toBeInTheDocument();
   });
 
-  it('removes the row on success, without a refetch of the thread', async () => {
+  // ROAD-41: deleting a comment used to trust whatever local state already
+  // said about it, with no check that it was still current — the most
+  // destructive comment write on the branch was also the least protected
+  // one. handleDeleteComment now re-reads the thread live, immediately
+  // before the actual delete call, and refuses (see the test below this
+  // one) rather than remove content nobody looking at this screen has
+  // actually seen.
+  it('re-reads the thread immediately before deleting, then removes the row from that live read', async () => {
     jest.mocked(getJiraCommentPermissions).mockResolvedValue({
       deleteAll: true,
       deleteOwn: false,
@@ -1182,9 +1255,163 @@ describe('deleting a comment', () => {
       expect(deleteJiraComment).toHaveBeenCalledWith('10421', 'c1'),
     );
     await waitFor(() => expect(screen.queryByText('noted')).toBeNull());
-    // Exactly one read of the thread — the row is gone from local state, not
-    // from a second listJiraComments() call.
-    expect(listJiraComments).toHaveBeenCalledTimes(1);
+    // Once for the initial load, once for the live freshness re-check
+    // handleDeleteComment now does right before the delete call (see its
+    // own comment) — and no THIRD read after a successful delete: the row
+    // is dropped, locally, from the array that re-check already returned.
+    expect(listJiraComments).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses to delete a comment that changed in Jira since it was last read, and shows the latest version instead', async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: true,
+      deleteOwn: false,
+      editAll: false,
+      editOwn: false,
+    });
+    jest
+      .mocked(listJiraComments)
+      .mockResolvedValueOnce({
+        comments: [
+          comment({
+            id: 'c1',
+            body: 'noted',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          }),
+        ],
+        total: 1,
+      })
+      .mockResolvedValueOnce({
+        comments: [
+          comment({
+            id: 'c1',
+            body: 'noted, but edited by someone else first',
+            updatedAt: '2026-01-02T00:00:00.000Z',
+          }),
+        ],
+        total: 1,
+      });
+    // The verdict comes from the named read; the thread read above is only
+    // what makes "the thread above now shows the latest version" true.
+    jest.mocked(getJiraComment).mockResolvedValue(
+      comment({
+        id: 'c1',
+        body: 'noted, but edited by someone else first',
+        updatedAt: '2026-01-02T00:00:00.000Z',
+      }),
+    );
+    renderDrawer();
+    await screen.findByText('noted');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('noted, but edited by someone else first'),
+      ).toBeInTheDocument(),
+    );
+    expect(deleteJiraComment).not.toHaveBeenCalled();
+    expect(showErrorToast).toHaveBeenCalledWith(
+      expect.stringContaining('changed in Jira'),
+    );
+  });
+
+  // The regression the named read exists to prevent, on the destructive
+  // path. `listJiraComments` returns only the newest 100 comments, so a
+  // comment can drop off it purely because other people kept commenting.
+  // The old guard read that absence as "already gone" and returned in
+  // silence — leaving someone who had just confirmed an irreversible delete
+  // with no idea whether it happened, and the comment still in Jira.
+  it('deletes a comment that has scrolled off the capped thread page', async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: true,
+      deleteOwn: false,
+      editAll: false,
+      editOwn: false,
+    });
+    jest
+      .mocked(listJiraComments)
+      .mockResolvedValueOnce({
+        comments: [comment({ id: 'c1', body: 'noted' })],
+        total: 1,
+      })
+      // The re-read on Delete: a hundred newer comments have arrived and c1
+      // is no longer on the page, though it is very much still in Jira.
+      .mockResolvedValue({
+        comments: [comment({ id: 'c-newer', body: 'a newer comment' })],
+        total: 101,
+      });
+    jest
+      .mocked(getJiraComment)
+      .mockResolvedValue(comment({ id: 'c1', body: 'noted' }));
+    renderDrawer();
+    await screen.findByText('noted');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() =>
+      expect(deleteJiraComment).toHaveBeenCalledWith('10421', 'c1'),
+    );
+    expect(showErrorToast).not.toHaveBeenCalled();
+  });
+
+  it('tells the user nothing was deleted when Jira will not show the comment, rather than returning in silence', async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: true,
+      deleteOwn: false,
+      editAll: false,
+      editOwn: false,
+    });
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [comment({ id: 'c1', body: 'noted' })],
+      total: 1,
+    });
+    jest.mocked(getJiraComment).mockResolvedValue(null);
+    renderDrawer();
+    await screen.findByText('noted');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(showErrorToast).toHaveBeenCalled());
+    expect(deleteJiraComment).not.toHaveBeenCalled();
+    const [message] = jest.mocked(showErrorToast).mock.calls[0] as [string];
+    // Says nothing was deleted by this click — the one thing the person who
+    // just confirmed an irreversible action actually needs to know.
+    expect(message).toContain('Nothing was deleted just now');
+    // And does not assert a deletion it never observed: a 404 is equally
+    // what a lost browse permission looks like.
+    expect(message).not.toMatch(/was deleted in Jira/);
+  });
+
+  // A failed request is not evidence a comment is gone. If it were folded
+  // into the same 'unavailable' branch, an offline laptop would tell the
+  // user their comment no longer exists.
+  it('surfaces a failed freshness read as that failure, not as a missing comment', async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: true,
+      deleteOwn: false,
+      editAll: false,
+      editOwn: false,
+    });
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [comment({ id: 'c1', body: 'noted' })],
+      total: 1,
+    });
+    jest
+      .mocked(getJiraComment)
+      .mockRejectedValue(new Error('Could not reach Jira.'));
+    renderDrawer();
+    await screen.findByText('noted');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() =>
+      expect(showErrorToast).toHaveBeenCalledWith('Could not reach Jira.'),
+    );
+    expect(deleteJiraComment).not.toHaveBeenCalled();
+    // The comment is still on screen: nothing about a failed read justifies
+    // removing the row.
+    expect(screen.getByText('noted')).toBeInTheDocument();
   });
 
   it('surfaces a 403 honestly rather than failing silently, and leaves the row in place', async () => {
@@ -1394,12 +1621,133 @@ describe('editing a comment', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
 
-    expect(inlineEditBox().value).toBe('Can you take a look? Thanks @Sam Lee');
+    // Edit's own click handler now re-reads the thread live before opening
+    // the editor (see JiraTicketDetail.tsx's Edit handler) — no longer the
+    // synchronous, purely-local decision it used to be, so this waits for
+    // that round trip to settle rather than asserting immediately.
+    await waitFor(() =>
+      expect(inlineEditBox().value).toBe(
+        'Can you take a look? Thanks @Sam Lee',
+      ),
+    );
     expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
     // The original, unedited body is gone from the thread — not still
     // rendered somewhere else while the editor also shows it, the exact
     // defect this replaces.
     expect(screen.queryByText('Can you take a look?')).not.toBeInTheDocument();
+  });
+
+  it('refuses to open the editor on a comment that changed since the copy on screen, and shows the latest version instead', async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: false,
+      deleteOwn: false,
+      editAll: true,
+      editOwn: false,
+    });
+    jest.mocked(prepareJiraCommentEdit).mockReturnValue(EDIT_PREVIEW);
+    jest
+      .mocked(listJiraComments)
+      .mockResolvedValueOnce({
+        comments: [
+          comment({
+            id: 'c1',
+            body: 'original text',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          }),
+        ],
+        total: 1,
+      })
+      .mockResolvedValueOnce({
+        comments: [
+          comment({
+            id: 'c1',
+            body: 'someone else changed this',
+            updatedAt: '2026-01-02T00:00:00.000Z',
+          }),
+        ],
+        total: 1,
+      });
+    jest.mocked(getJiraComment).mockResolvedValue(
+      comment({
+        id: 'c1',
+        body: 'someone else changed this',
+        updatedAt: '2026-01-02T00:00:00.000Z',
+      }),
+    );
+    renderDrawer();
+    await screen.findByText('original text');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+    await waitFor(() =>
+      expect(screen.getByText('someone else changed this')).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Save' }),
+    ).not.toBeInTheDocument();
+    expect(showErrorToast).toHaveBeenCalledWith(
+      expect.stringContaining('changed in Jira'),
+    );
+  });
+
+  // Same regression as the delete path's, on the Edit button: a comment that
+  // has scrolled off the newest-100 page is still perfectly editable, and
+  // the old guard refused it with "this comment was removed in Jira".
+  it('opens the editor on a comment that has scrolled off the capped thread page', async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: false,
+      deleteOwn: false,
+      editAll: true,
+      editOwn: false,
+    });
+    jest.mocked(prepareJiraCommentEdit).mockReturnValue(EDIT_PREVIEW);
+    jest
+      .mocked(listJiraComments)
+      .mockResolvedValueOnce({
+        comments: [comment({ id: 'c1', body: 'original text' })],
+        total: 1,
+      })
+      .mockResolvedValue({
+        comments: [comment({ id: 'c-newer', body: 'a newer comment' })],
+        total: 101,
+      });
+    jest
+      .mocked(getJiraComment)
+      .mockResolvedValue(comment({ id: 'c1', body: 'original text' }));
+    renderDrawer();
+    await screen.findByText('original text');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+    await waitFor(() => expect(inlineEditBox().value).toBe('original text'));
+    expect(showErrorToast).not.toHaveBeenCalled();
+  });
+
+  it('refuses to open the editor when Jira will not show the comment, without claiming it was deleted', async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: false,
+      deleteOwn: false,
+      editAll: true,
+      editOwn: false,
+    });
+    jest.mocked(prepareJiraCommentEdit).mockReturnValue(EDIT_PREVIEW);
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [comment({ id: 'c1', body: 'original text' })],
+      total: 1,
+    });
+    jest.mocked(getJiraComment).mockResolvedValue(null);
+    renderDrawer();
+    await screen.findByText('original text');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+    await waitFor(() => expect(showErrorToast).toHaveBeenCalled());
+    expect(
+      screen.queryByRole('button', { name: 'Save' }),
+    ).not.toBeInTheDocument();
+    const [message] = jest.mocked(showErrorToast).mock.calls[0] as [string];
+    expect(message).toContain('no longer have permission');
+    expect(message).not.toMatch(/was removed in Jira/);
   });
 
   it('keeps every other comment exactly where it was while one is being edited', async () => {
@@ -1429,6 +1777,7 @@ describe('editing a comment', () => {
     await screen.findByText('an unrelated comment');
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0]);
+    await waitFor(() => expect(inlineEditBox().value).toBe('original text'));
 
     // c1's body is swapped for its editor; c2 — not being edited — still
     // renders exactly as a plain comment, unaffected by its neighbor's edit.
@@ -1440,7 +1789,6 @@ describe('editing a comment', () => {
     expect(matches).toHaveLength(1);
     expect(matches[0].tagName).toBe('TEXTAREA');
     expect(screen.getByText('an unrelated comment')).toBeInTheDocument();
-    expect(inlineEditBox().value).toBe('original text');
   });
 
   it('saves the edit through updateJiraComment and replaces the row with the response', async () => {
@@ -1462,6 +1810,7 @@ describe('editing a comment', () => {
     await screen.findByText('original text');
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    await waitFor(() => expect(inlineEditBox().value).toBe('original text'));
     fireEvent.change(inlineEditBox(), {
       target: { value: 'edited text' },
     });
@@ -1487,12 +1836,199 @@ describe('editing a comment', () => {
     // response, not the request" shape deleteJiraComment's own test above
     // pins for the read count.
     expect(screen.getByText('edited text')).toBeInTheDocument();
-    expect(listJiraComments).toHaveBeenCalledTimes(1);
+    // Two thread reads and two named reads, and the split between them is
+    // the point. Thread reads: the initial mount, and the one Edit fires so
+    // the thread on screen really is current when its message says so.
+    // Named reads: Edit's own freshness check before the editor opens
+    // (JiraTicketDetail.tsx) and Save's immediately before the overwrite
+    // (JiraCommentComposer.tsx's handlePost) — every freshness *verdict*
+    // comes from the read that names the comment, never from searching a
+    // capped page for it. And no read of either kind after the save
+    // succeeded: the row is replaced from Jira's write response rather than
+    // fetched again.
+    expect(listJiraComments).toHaveBeenCalledTimes(2);
+    expect(getJiraComment).toHaveBeenCalledTimes(2);
     // The inline editor is gone — a save is one of the two ways out of edit
     // mode, same as Cancel — and it isn't a save that leaves the reader
     // clicking Edit into a phantom empty editor.
     expect(
       screen.queryByRole('button', { name: 'Save' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('refuses to save an edit when the comment changed in Jira after the editor opened, and keeps the typed draft', async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: false,
+      deleteOwn: false,
+      editAll: true,
+      editOwn: false,
+    });
+    jest.mocked(prepareJiraCommentEdit).mockReturnValue(EDIT_PREVIEW);
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          body: 'original text',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        }),
+      ],
+      total: 1,
+    });
+    jest
+      .mocked(getJiraComment)
+      // Edit's own open-time re-check — still current, so the editor opens.
+      .mockResolvedValueOnce(
+        comment({
+          id: 'c1',
+          body: 'original text',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        }),
+      )
+      // Save's own re-check — someone else edited it while the editor sat
+      // open.
+      .mockResolvedValueOnce(
+        comment({
+          id: 'c1',
+          body: 'original text, edited by someone else',
+          updatedAt: '2026-01-02T00:00:00.000Z',
+          updateAuthorName: 'Priya Raman',
+        }),
+      );
+    renderDrawer();
+    await screen.findByText('original text');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    await waitFor(() => expect(inlineEditBox().value).toBe('original text'));
+
+    fireEvent.change(inlineEditBox(), {
+      target: { value: 'my careful edit' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/changed in Jira/)).toBeInTheDocument(),
+    );
+    expect(updateJiraComment).not.toHaveBeenCalled();
+    // The user's own typed text is still right there in the box, unsaved
+    // but not lost — the whole point of refusing rather than either
+    // silently overwriting Priya's edit or clearing the draft outright.
+    expect(inlineEditBox().value).toBe('my careful edit');
+  });
+
+  it('refuses to save an edit when Jira stops showing the comment while the editor is open, and keeps the typed draft', async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: false,
+      deleteOwn: false,
+      editAll: true,
+      editOwn: false,
+    });
+    jest.mocked(prepareJiraCommentEdit).mockReturnValue(EDIT_PREVIEW);
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          body: 'original text',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        }),
+      ],
+      total: 1,
+    });
+    jest
+      .mocked(getJiraComment)
+      // Edit's own open-time check — still there, unchanged, so the editor
+      // opens.
+      .mockResolvedValueOnce(
+        comment({
+          id: 'c1',
+          body: 'original text',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        }),
+      )
+      // Save's own check — Jira now answers 404 for it.
+      .mockResolvedValueOnce(null);
+    renderDrawer();
+    await screen.findByText('original text');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    await waitFor(() => expect(inlineEditBox().value).toBe('original text'));
+
+    fireEvent.change(inlineEditBox(), {
+      target: { value: 'my careful edit' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/won.t show this comment any more/),
+      ).toBeInTheDocument(),
+    );
+    expect(updateJiraComment).not.toHaveBeenCalled();
+    expect(inlineEditBox().value).toBe('my careful edit');
+    // A 404 is not proof anyone deleted anything — Jira answers it the same
+    // way for a comment this account may no longer browse. The banner must
+    // not state a deletion it never observed.
+    expect(screen.queryByText(/was deleted in Jira/)).not.toBeInTheDocument();
+  });
+
+  // The regression this whole seam exists to prevent. `listJiraComments` is
+  // capped at the newest 100 comments, so on a busy thread the comment being
+  // edited can simply scroll off the page it returns — other people still
+  // commenting, nobody deleting anything. The old guard searched that page
+  // for the id and treated a miss as a deletion, which meant a perfectly
+  // valid Save was refused with "this comment was deleted in Jira" on the
+  // screen. Here the thread read comes back WITHOUT c1 while the named read
+  // still finds it, and the save must go through.
+  it('saves an edit to a comment that has scrolled off the capped thread page', async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: false,
+      deleteOwn: false,
+      editAll: true,
+      editOwn: false,
+    });
+    jest.mocked(prepareJiraCommentEdit).mockReturnValue(EDIT_PREVIEW);
+    jest
+      .mocked(listJiraComments)
+      // Mount: c1 is on the page, so it renders and can be clicked.
+      .mockResolvedValueOnce({
+        comments: [
+          comment({
+            id: 'c1',
+            body: 'original text',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          }),
+        ],
+        total: 1,
+      })
+      // Every later thread read: a hundred newer comments arrived, and c1 is
+      // no longer among them. `total` stays honest about there being more.
+      .mockResolvedValue({
+        comments: [comment({ id: 'c-newer', body: 'a newer comment' })],
+        total: 101,
+      });
+    jest.mocked(getJiraComment).mockResolvedValue(
+      comment({
+        id: 'c1',
+        body: 'original text',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      }),
+    );
+    jest
+      .mocked(updateJiraComment)
+      .mockResolvedValue(comment({ id: 'c1', body: 'my careful edit' }));
+    renderDrawer();
+    await screen.findByText('original text');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    await waitFor(() => expect(inlineEditBox().value).toBe('original text'));
+
+    fireEvent.change(inlineEditBox(), {
+      target: { value: 'my careful edit' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(updateJiraComment).toHaveBeenCalled());
+    expect(
+      screen.queryByText(/won.t show this comment any more/),
     ).not.toBeInTheDocument();
   });
 
@@ -1512,7 +2048,7 @@ describe('editing a comment', () => {
     await screen.findByText('original text');
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
-    expect(inlineEditBox().value).toBe('original text');
+    await waitFor(() => expect(inlineEditBox().value).toBe('original text'));
 
     fireEvent.change(inlineEditBox(), { target: { value: 'a stray edit' } });
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -1567,6 +2103,7 @@ describe('two composers open at once (the top composer and an inline edit)', () 
     // Opens the inline editor on c1 — a second composer, independent of the
     // one already sitting above the thread for a genuinely new comment.
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    await waitFor(() => expect(inlineEditBox().value).toBe('hi @Sam Lee'));
     const editBox = inlineEditBox();
     expect(editBox.value).toBe('hi @Sam Lee');
 

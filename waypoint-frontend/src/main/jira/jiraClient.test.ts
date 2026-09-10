@@ -1225,14 +1225,14 @@ describe('downloadAttachment', () => {
     expect(await downloadAttachment('10050')).toMatchObject({ ok: true });
   });
 
-  it('reports a deleted attachment as a Jira error, in Jira’s own words', async () => {
+  it('reports a deleted attachment as not_found, in Jira’s own words', async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({ errorMessages: ['Attachment does not exist.'] }, 404),
     );
 
     expect(await downloadAttachment('10050')).toMatchObject({
       ok: false,
-      reason: 'jira_error',
+      reason: 'not_found',
       message: 'Attachment does not exist.',
     });
   });
@@ -1730,18 +1730,18 @@ describe('deleteComment', () => {
     });
   });
 
-  // Someone else's tab already deleted the same comment, or it never existed.
-  // Jira reports that as a 404 carrying its own error body, same as every
-  // other write here — surfaced through the shared classification rather
-  // than a bespoke branch.
-  it('reports an already-deleted comment as a Jira error, in Jira’s own words', async () => {
+  // Someone else's tab already deleted the same comment, it never existed, or
+  // this account may no longer browse it. Jira reports all three as the same
+  // 404 carrying its own error body, same as every other write here —
+  // surfaced through the shared classification rather than a bespoke branch.
+  it('reports an already-deleted comment as not_found, in Jira’s own words', async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({ errorMessages: ['The comment could not be found.'] }, 404),
     );
 
     expect(await deleteComment('10421', '10500')).toMatchObject({
       ok: false,
-      reason: 'jira_error',
+      reason: 'not_found',
       message: 'The comment could not be found.',
     });
   });
@@ -1813,15 +1813,20 @@ describe('getComment', () => {
   });
 
   // The comment was deleted (by someone else, or in another tab) between the
-  // thread being read on mount and the freshness check running.
-  it('reports a deleted comment as a Jira error, in Jira’s own words', async () => {
+  // thread being read on mount and the freshness check running — or this
+  // account lost permission to browse it, which Jira answers identically.
+  // `not_found` rather than `jira_error` is the whole point of this path:
+  // it is the signal the renderer's freshness guards branch on, and the
+  // only evidence they are allowed to treat as "this is really gone" (see
+  // jiraTypes.ts's own comment on the reason).
+  it('reports a comment Jira will not show as not_found, in Jira’s own words', async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({ errorMessages: ['The comment could not be found.'] }, 404),
     );
 
     expect(await getComment('10421', '10500')).toMatchObject({
       ok: false,
-      reason: 'jira_error',
+      reason: 'not_found',
       message: 'The comment could not be found.',
     });
   });
@@ -1898,7 +1903,7 @@ describe('updateComment', () => {
     ).toMatchObject({ ok: false, reason: 'forbidden' });
   });
 
-  it('reports a not-found comment as a Jira error, in Jira’s own words', async () => {
+  it('reports a not-found comment as not_found, in Jira’s own words', async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({ errorMessages: ['The comment could not be found.'] }, 404),
     );
@@ -1907,7 +1912,7 @@ describe('updateComment', () => {
       await updateComment('10421', '10500', EDITED_ADF_BODY),
     ).toMatchObject({
       ok: false,
-      reason: 'jira_error',
+      reason: 'not_found',
       message: 'The comment could not be found.',
     });
   });

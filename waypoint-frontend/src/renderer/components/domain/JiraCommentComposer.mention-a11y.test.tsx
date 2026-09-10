@@ -13,6 +13,12 @@ import { JiraCommentComposer } from './JiraCommentComposer';
 // (posting, formatting, attachments, ...), which is already exercised through
 // JiraTicketDrawer.test.tsx.
 jest.mock('@/data/jiraApi', () => ({
+  // The composer's Save-time freshness read. This suite never enters edit
+  // mode, so it is never called — named here only so the composer's own
+  // import of it is never undefined. Note that null is this function's
+  // "Jira answered 404" answer, so an edit test added here would have to
+  // override this default before Save could get past the guard.
+  getJiraComment: jest.fn(async () => null),
   postJiraComment: jest.fn(),
   searchJiraAssignableUsers: jest.fn(),
   updateJiraComment: jest.fn(),

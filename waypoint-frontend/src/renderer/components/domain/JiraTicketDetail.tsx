@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { clsx } from 'clsx';
 import {
   buildJiraCommentPermalink,
   deleteJiraComment,
   downloadJiraAttachment,
+  getJiraComment,
   getJiraCommentPermissions,
   getJiraPriorityOptions,
   getJiraTransitions,
@@ -14,6 +15,7 @@ import {
   transitionJiraTicket,
   uploadJiraAttachment,
   type JiraCommentPermissions,
+  type JiraMentionSpan,
 } from '@/data/jiraApi';
 import { showErrorToast } from '@/lib/toast';
 import { useAsync } from '@/lib/useAsync';
@@ -242,6 +244,20 @@ export function deleteJiraCommentConfirmMessage(): string {
   );
 }
 
+/**
+ * What `refreshAndFindComment` below can conclude about one named comment.
+ *
+ * `'unavailable'` means exactly what `getJiraComment` returning `null`
+ * means, and nothing more: Jira answered 404 for this comment. It is NOT
+ * "this comment was deleted" — Atlassian answers 404 rather than 403 for a
+ * comment the account may no longer browse (see `getJiraComment`'s own doc
+ * comment in data/jiraApi.ts), so a permission change and a real deletion
+ * are indistinguishable from here. Every message built on this status has
+ * to allow for both causes rather than asserting the first as fact.
+ */
+type CommentFreshness =
+  { status: 'found'; comment: JiraComment } | { status: 'unavailable' };
+
 /** Label + value, on the same 104px label column TicketDetailPage's own
  * PropertyRow uses — the two panels sit one route apart and should line up. */
 function PropertyRow({
@@ -371,10 +387,19 @@ export function JiraTicketDetail({
   const [copiedCommentId, setCopiedCommentId] = useState<string | null>(null);
   // Which comment is mid-delete, by id — same "one row, not a page-wide
   // boolean" shape as `downloading` above, since several rows could in
-  // principle be clicked before the first confirm() resolves.
+  // principle be clicked before the first confirm() resolves. Also covers
+  // the live freshness re-read handleDeleteComment now does before the
+  // actual delete call (see that function's own comment) — from the user's
+  // perspective both are the same "Deleting…" operation.
   const [deletingCommentId, setDeletingCommentId] = useState<string | null>(
     null,
   );
+  // Which comment's Edit click is mid-flight, by id — the live re-read
+  // handleEditClick (in renderComment below) does before opening the inline
+  // editor, same "one row" shape as `deletingCommentId` above. Read by the
+  // Edit button itself to show "Checking…" rather than nothing while the
+  // network round trip it now requires is in flight.
+  const [checkingEditId, setCheckingEditId] = useState<string | null>(null);
   const assigneeChipRef = useRef<HTMLButtonElement>(null);
   const stateChipRef = useRef<HTMLButtonElement>(null);
   const priorityChipRef = useRef<HTMLButtonElement>(null);
@@ -403,6 +428,97 @@ export function JiraTicketDetail({
     () => getJiraCommentPermissions(ticket.key),
     [ticket.key],
   );
+
+  /**
+   * The freshness re-check both the Edit-open guard and the Delete guard
+   * below share — see those two call sites for why each needs one, and
+   * renderComment's own comment by the action row below for why neither
+   * trusts `ticket.hasConflict` for it instead (too blunt: that flag trips
+   * on ANY field on the ISSUE drifting, including one with nothing to do
+   * with this comment, and blocking every comment action over an unrelated
+   * priority change would be exactly the false-positive pattern that gets a
+   * safety feature learned-ignored).
+   *
+   * Two reads, for two different jobs, fired together. The verdict on THIS
+   * comment — still there, or Jira won't show it any more — comes from
+   * `getJiraComment`, which names the comment and therefore cannot miss it.
+   * It used to come from searching the array `listJiraComments` returns,
+   * but that read is capped at the newest COMMENT_PAGE_SIZE (100) comments,
+   * so "absent from the page" was produced by two completely different
+   * situations — a real deletion, and a comment that simply scrolled off a
+   * busy thread — and this function told the caller the first no matter
+   * which one had actually happened. `listJiraComments` still runs
+   * alongside it, because it is the only read that keeps the on-screen
+   * thread itself current, and both call sites' "gone" messages want to say
+   * "the thread above now shows the latest version" and have that be true.
+   *
+   * This only ever runs from an explicit user action (an Edit click, a
+   * confirmed Delete), never on render, so paying for both reads at once is
+   * worth it — but they are deliberately `Promise.allSettled`, not a bare
+   * `Promise.all`. A bare `Promise.all` rejects the instant `getJiraComment`
+   * rejects and would lose a `listJiraComments` result that had already come
+   * back fine, silently dropping a real thread refresh for a reason that has
+   * nothing to do with the refresh itself. `allSettled` keeps the two
+   * outcomes independent: the thread refresh below is applied whenever ITS
+   * OWN read succeeded, regardless of what happened to the other one, and
+   * each read's own failure is re-thrown from here so it still reaches the
+   * caller's existing catch/showErrorToast path — including a failed
+   * `listJiraComments`, since a "the thread above now shows the latest
+   * version" message would itself be false if that read never landed.
+   */
+  async function refreshAndFindComment(
+    commentId: string,
+  ): Promise<CommentFreshness> {
+    const [listResult, commentResult] = await Promise.allSettled([
+      listJiraComments(ticket.id),
+      getJiraComment(ticket.id, commentId),
+    ]);
+
+    // Resolved before the refresh below, because it decides what that
+    // refresh is allowed to drop. Only a comment the named read actually
+    // returned counts here — a rejected read is not evidence of anything
+    // (it re-throws a few lines down) and must not be read as "gone".
+    const named =
+      commentResult.status === 'fulfilled' ? commentResult.value : null;
+
+    if (listResult.status === 'fulfilled') {
+      const page = listResult.value.comments;
+      // The page and the named comment can genuinely disagree: the page is
+      // the newest COMMENT_PAGE_SIZE comments, so the very comment being
+      // edited or deleted can be missing from it while unmistakably still
+      // existing — which is the whole reason the named read was added. When
+      // that happens, showing the page verbatim would make the comment
+      // vanish from the thread the instant its Edit button was clicked, and
+      // leave the in-place editor (which renders inside that comment's own
+      // row) with nowhere to appear. Worse, a comment disappearing on click
+      // reads as "it was deleted" just as strongly as the message this
+      // whole change removed — so keeping it is the honest render, not a
+      // convenience: it is there, and this is its current content.
+      //
+      // Prepended rather than inserted at a guessed index: comments are
+      // ordered oldest-first, and a comment absent from the newest page is
+      // necessarily older than every comment on it.
+      const missingFromPage =
+        named !== null && !page.some((c) => c.id === named.id);
+      setComments(missingFromPage && named ? [named, ...page] : page);
+      setCommentTotal(listResult.value.total);
+    }
+
+    // Both failures propagate rather than resolving to 'unavailable' — that
+    // status is reserved for the one specific fact a `null` from
+    // getJiraComment proves (Jira answered 404), never for "the request
+    // failed", which is a completely different situation with its own
+    // error-toast path already in place at both call sites below.
+    if (commentResult.status === 'rejected') {
+      throw commentResult.reason;
+    }
+    if (listResult.status === 'rejected') {
+      throw listResult.reason;
+    }
+
+    const comment = commentResult.value;
+    return comment ? { status: 'found', comment } : { status: 'unavailable' };
+  }
 
   // Both lazy reads follow JiraTicketRow's own shape exactly, including the
   // `.catch()`: without one, a broken connection renders as "no transitions
@@ -625,25 +741,99 @@ export function JiraTicketDetail({
   }
 
   /**
+   * `prepareJiraCommentEdit`'s own answer per comment, computed once per
+   * `comments` array change rather than inline in `renderComment` on every
+   * render — found in review: that ran on every render, for every comment
+   * whose author may edit it, walking and re-serialising that comment's
+   * whole ADF tree even when nothing about the comment or the render had
+   * anything to do with editing (a hover, an unrelated picker opening, a
+   * download finishing, ...). `comments` only gets a new array reference
+   * when its content actually changes (a post, an edit landing, a delete, or
+   * one of the live freshness re-reads below), so this recomputes exactly as
+   * often as there is new data for it to be computed from.
+   *
+   * Gated on `canEditComment`, matching `renderComment`'s own gating below:
+   * a comment nobody may edit is never worth the round trip through this
+   * function, and callers that assert `prepareJiraCommentEdit` is never
+   * invoked for a permission-denied comment depend on that staying true.
+   */
+  const editPreviewsByCommentId = useMemo(() => {
+    const map = new Map<
+      string,
+      { text: string; mentions: JiraMentionSpan[] } | null
+    >();
+    comments
+      .filter((c) => canEditComment(c))
+      .forEach((c) => map.set(c.id, prepareJiraCommentEdit(c)));
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [comments, commentPermissions, connection?.accountId]);
+
+  /**
    * Deletes one comment outright, after a confirm() naming exactly what that
    * does (see `deleteJiraCommentConfirmMessage`) — this repo's established
    * guard on every irreversible action, matching Disconnect's own
    * `window.confirm` in JiraConnectionPanel.tsx.
    *
-   * On success the row is dropped from local state directly — `.filter()`,
-   * not a refetch — because deleteJiraComment already told Jira to remove
-   * it and this module holds no cache of the thread to reconcile against; a
-   * refetch would just be a slower way to arrive at the same array. A
-   * failure surfaces through the same error-only toast channel every other
-   * write in this component uses, naming Jira's own message (a 403 from a
-   * permission that changed since this comment's permissions were fetched,
-   * or a 404 from someone else already deleting it) rather than pretending
-   * nothing happened.
+   * Re-checks the comment is still what's on screen immediately before the
+   * actual delete call, via `refreshAndFindComment` — the same guard, and
+   * the same reasoning, as the Edit save path in JiraCommentComposer.tsx's
+   * handlePost: delete has no undo (see `deleteJiraCommentConfirmMessage`),
+   * so a comment whose content changed in the window between this row
+   * rendering and the confirm dialog closing may no longer be the content
+   * the person confirming actually saw. Checked here rather than before
+   * `window.confirm`, deliberately: the network round trip is only worth
+   * paying once the user has actually said yes, not on every render or on a
+   * confirm they're about to cancel.
+   *
+   * On success the row is dropped from local state directly — `.filter()`
+   * over the just-refreshed array, not a second refetch — because
+   * deleteJiraComment already told Jira to remove it. A failure surfaces
+   * through the same error-only toast channel every other write in this
+   * component uses, naming Jira's own message (a 403 from a permission that
+   * changed since this comment's permissions were fetched, or a 404 — which
+   * says only that Jira will not show this comment, not that someone else
+   * already deleted it; see CommentFreshness's own comment) rather than
+   * pretending nothing happened.
    */
   async function handleDeleteComment(comment: JiraComment) {
     if (!window.confirm(deleteJiraCommentConfirmMessage())) return;
     setDeletingCommentId(comment.id);
     try {
+      const freshness = await refreshAndFindComment(comment.id);
+      if (freshness.status === 'unavailable') {
+        // Jira answered 404 for this exact comment — not "absent from a
+        // capped listJiraComments page", which is what this guard used to
+        // infer deletion from and which a busy thread produces just as
+        // easily by scrolling the comment off the newest 100. Even a named
+        // 404 doesn't prove a deletion happened (see CommentFreshness's own
+        // comment: Atlassian answers 404 for a permission change too), so
+        // this can't claim one either way. What it CAN say: nothing was
+        // deleted by this click, and the user who just confirmed a
+        // destructive action deserves to hear that rather than silence —
+        // silently returning here used to leave them with no idea whether
+        // their delete went through.
+        showErrorToast(
+          "Jira won't show this comment any more — it was deleted, or you no longer have permission to see it. Nothing was deleted just now; the thread above shows the latest version.",
+        );
+        return;
+      }
+      const freshComment = freshness.comment;
+      if (
+        comment.updatedAt !== null &&
+        freshComment.updatedAt !== null &&
+        freshComment.updatedAt !== comment.updatedAt
+      ) {
+        // Either side being null means "unknown", which this file's own
+        // hasConflict gating already treats as no evidence of drift rather
+        // than proof of it — the same call made here, for the same reason:
+        // a false refusal on missing data is the false positive that gets a
+        // safety feature learned-ignored.
+        showErrorToast(
+          'This comment changed in Jira since you opened this view, so the delete was stopped rather than remove content you have not seen. The thread above now shows the latest version — delete again if you still want to.',
+        );
+        return;
+      }
       await deleteJiraComment(ticket.id, comment.id);
       setComments((cs) => cs.filter((c) => c.id !== comment.id));
       setCommentTotal((t) => Math.max(0, t - 1));
@@ -745,16 +935,44 @@ export function JiraTicketDetail({
                   a Tab landing on any of these buttons already reveals the
                   row before it needs to be clicked.
 
-                  Edit itself is gated twice, deliberately at two different
-                  layers: `canEditComment` decides whether Edit may be
-                  OFFERED at all (a permissions question), and
-                  `prepareJiraCommentEdit` — called only once permission
-                  says yes, since the round trip it performs is not free —
+                  Edit itself is gated three times, deliberately at three
+                  different layers: `canEditComment` decides whether Edit
+                  may be OFFERED at all (a permissions question);
+                  `editPreviewsByCommentId` (from `prepareJiraCommentEdit`)
                   decides whether THIS comment's own content can be edited
-                  without changing it (a losslessness question). A comment
-                  that fails the second check still gets an honest answer
-                  in this row rather than Edit silently vanishing as though
-                  the feature didn't exist for it. */}
+                  without changing it (a losslessness question) — a comment
+                  that fails it still gets an honest answer in this row
+                  rather than Edit silently vanishing as though the feature
+                  didn't exist for it; and the Edit button's own onClick
+                  below re-checks, live, whether the comment has actually
+                  changed since `c` (a freshness question) before it will
+                  open an editor over it at all — see that handler's own
+                  comment, and JiraCommentComposer.tsx's handlePost for the
+                  second half of the same guard, immediately before Save.
+                  Delete gets the same freshness re-check, immediately
+                  before its own irreversible call — see
+                  handleDeleteComment's own comment.
+
+                  Reply does not: it posts a brand-new comment rather than
+                  overwriting one, so a stale parent is a stale-looking
+                  thread at worst, never lost content — see handlePost's own
+                  comment in JiraCommentComposer.tsx for the full reasoning.
+
+                  None of the three re-checks reads `ticket.hasConflict`,
+                  and that is deliberate too, not an oversight matching the
+                  pickers/attachment-upload gating elsewhere on this page.
+                  That flag is this ticket's own cached `updated` timestamp
+                  having moved for ANY reason — a priority change, a
+                  relabel, someone else's comment on an entirely different
+                  part of the thread — and the pickers gate on it only
+                  because they have no finer-grained signal available at
+                  all. Comments do: `updatedAt` on the one comment actually
+                  being touched, re-read live at the moment it matters.
+                  Gating comments on `hasConflict` too would only add false
+                  positives on top of that real check — blocking Reply/Edit/
+                  Delete over drift in a field no comment action even
+                  reads — not add any safety a precise, per-comment,
+                  live-verified check doesn't already provide. */}
               <div className="mt-1 flex items-center gap-2.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                 {c.authorAccountId !== null && (
                   <button
@@ -778,11 +996,14 @@ export function JiraTicketDetail({
                 )}
                 {canEditComment(c) &&
                   (() => {
-                    const editPreview = prepareJiraCommentEdit(c);
+                    const editPreview =
+                      editPreviewsByCommentId.get(c.id) ?? null;
                     if (editPreview) {
+                      const checking = checkingEditId === c.id;
                       return (
                         <button
                           type="button"
+                          disabled={checking}
                           ref={(el) => {
                             // Read by closeInlineEdit to return focus here
                             // once Cancel or a successful Save unmounts this
@@ -791,19 +1012,90 @@ export function JiraTicketDetail({
                             if (el) editButtonRefs.current.set(c.id, el);
                             else editButtonRefs.current.delete(c.id);
                           }}
-                          onClick={() => {
+                          onClick={async () => {
                             // Edit targets this comment's own inline spot,
                             // never the composer above the thread — so any
-                            // reply in progress there is abandoned (cleared
-                            // here, and editGeneration below remounts that
-                            // composer to actually drop its own draft).
+                            // reply in progress there is abandoned here
+                            // (editGeneration below remounts that composer
+                            // to actually drop its own draft once the
+                            // editor for THIS comment actually opens).
                             setPendingReply(null);
-                            setEditGeneration((g) => g + 1);
-                            setPendingEdit({ commentId: c.id, ...editPreview });
+                            setCheckingEditId(c.id);
+                            try {
+                              // Live re-check before opening an editor over
+                              // whatever `c` currently shows — found in
+                              // review: comments load once when the ticket
+                              // opens, and nothing before this re-verified
+                              // them were still current by the time Edit was
+                              // actually clicked, arbitrarily long after
+                              // that load. `refreshAndFindComment` is the
+                              // same freshness guard handleDeleteComment
+                              // uses, for the same reason: `updatedAt` is the
+                              // one signal this app already treats as "did
+                              // this comment change" (see toComment's own
+                              // comment on it), and it costs nothing extra
+                              // to check it here, before committing to an
+                              // editor, rather than only at Save.
+                              const freshness = await refreshAndFindComment(
+                                c.id,
+                              );
+                              if (freshness.status === 'unavailable') {
+                                // A named 404 for this comment, not an
+                                // inference from it being missing off a
+                                // capped listJiraComments page — see
+                                // CommentFreshness's own comment for why
+                                // that used to be unusable evidence. A 404
+                                // still doesn't prove a deletion (could be a
+                                // permission change instead), so this can
+                                // only say Jira won't show it, not that it
+                                // was removed.
+                                showErrorToast(
+                                  "Jira won't show this comment any more — it was deleted, or you no longer have permission to see it. The thread above now shows the latest version.",
+                                );
+                                return;
+                              }
+                              const freshComment = freshness.comment;
+                              if (
+                                c.updatedAt !== null &&
+                                freshComment.updatedAt !== null &&
+                                freshComment.updatedAt !== c.updatedAt
+                              ) {
+                                showErrorToast(
+                                  'This comment changed in Jira since you last saw it. The thread above now shows the latest version — click Edit again to edit it.',
+                                );
+                                return;
+                              }
+                              // Recomputed against the fresh read rather than
+                              // reused from `editPreviewsByCommentId` above:
+                              // that map was built from `c`, the copy on
+                              // screen before this click, and the whole
+                              // point of the re-check just above is that this
+                              // fresh comment is the one actually safe to
+                              // trust now — even though, when `updatedAt`
+                              // matches as it just did, the two are the same
+                              // content by this app's own definition of
+                              // "changed" (see JiraWireComment.updatedAt).
+                              const freshPreview =
+                                prepareJiraCommentEdit(freshComment);
+                              if (!freshPreview) {
+                                showErrorToast(
+                                  "Waypoint can't rebuild this comment's formatting without changing it, so editing it here is refused.",
+                                );
+                                return;
+                              }
+                              setEditGeneration((g) => g + 1);
+                              setPendingEdit({
+                                commentId: c.id,
+                                updatedAt: freshComment.updatedAt,
+                                ...freshPreview,
+                              });
+                            } finally {
+                              setCheckingEditId(null);
+                            }
                           }}
-                          className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
+                          className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline disabled:opacity-60"
                         >
-                          Edit
+                          {checking ? 'Checking…' : 'Edit'}
                         </button>
                       );
                     }

@@ -40,6 +40,13 @@ jest.mock('@/data/jiraApi', () => ({
   prepareJiraCommentEdit: jest.fn(),
   updateJiraComment: jest.fn(),
   deleteJiraComment: jest.fn(async () => undefined),
+  // Same reason as prepareJiraCommentEdit above: never reached with
+  // permissions closed, but named here so the freshness guards' import of
+  // it is never undefined. Note for anyone who later writes an Edit or
+  // Delete test in this file: null is this function's "Jira answered 404"
+  // answer, so a guard reaching this default would refuse rather than
+  // proceed — override it with a comment before exercising either path.
+  getJiraComment: jest.fn(async () => null),
   // Permissions resolve closed here: these suites are not about Delete or
   // Edit, and a closed default keeps both buttons out of their queries
   // entirely.

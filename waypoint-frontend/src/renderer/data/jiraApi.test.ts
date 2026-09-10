@@ -21,6 +21,7 @@ const bridge = {
   searchAssignableUsers: jest.fn(),
   setAssignee: jest.fn(),
   listComments: jest.fn(),
+  getComment: jest.fn(),
   postComment: jest.fn(),
   updateComment: jest.fn(),
   deleteComment: jest.fn(),
@@ -1312,6 +1313,106 @@ describe('getJiraCommentPermissions', () => {
     await expect(api.getJiraCommentPermissions('ENG-421')).rejects.toThrow(
       'Could not read permissions.',
     );
+  });
+});
+
+// This function exists so the comment freshness guards stop inferring "this
+// was deleted" from a comment being absent from `listJiraComments`. That list
+// is capped at the newest 100 comments, so absence is equally well explained
+// by other people simply having kept commenting — and the guards were telling
+// users their comment had been deleted on that evidence. These tests pin the
+// one distinction the guards depend on: null means Jira actually answered
+// 404 for this exact comment, and nothing else ever produces null.
+describe('getJiraComment', () => {
+  function wireComment(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'c1',
+      ticketId: '10421',
+      authorName: 'Max Chen',
+      authorAccountId: 'acct-max',
+      updatedAt: '2026-09-02T11:00:00.000Z',
+      updateAuthorName: 'Max Chen',
+      body: 'Taking it.',
+      bodyAdf: null,
+      createdAt: '2026-09-01T10:00:00.000Z',
+      parentId: null,
+      ...overrides,
+    };
+  }
+
+  it('names the one comment it is asking about, rather than reading the thread', async () => {
+    const api = freshApi();
+    bridge.getComment.mockResolvedValue({ ok: true, value: wireComment() });
+
+    await api.getJiraComment('10421', 'c1');
+
+    expect(bridge.getComment).toHaveBeenCalledWith({
+      ticketId: '10421',
+      commentId: 'c1',
+    });
+    // The whole point: this answer cannot depend on where the comment sits
+    // in a thread, so the capped thread read must not be involved at all.
+    expect(bridge.listComments).not.toHaveBeenCalled();
+  });
+
+  it('carries the freshness fields the guards actually compare', async () => {
+    const api = freshApi();
+    bridge.getComment.mockResolvedValue({
+      ok: true,
+      value: wireComment({
+        updatedAt: '2026-09-03T08:00:00.000Z',
+        updateAuthorName: 'Priya Raman',
+      }),
+    });
+
+    const comment = await api.getJiraComment('10421', 'c1');
+
+    expect(comment).toMatchObject({
+      id: 'c1',
+      updatedAt: '2026-09-03T08:00:00.000Z',
+      updateAuthorName: 'Priya Raman',
+    });
+  });
+
+  it('answers null when Jira answered 404, and only then', async () => {
+    const api = freshApi();
+    bridge.getComment.mockResolvedValue({
+      ok: false,
+      reason: 'not_found',
+      message: 'The comment could not be found.',
+    });
+
+    await expect(api.getJiraComment('10421', 'c1')).resolves.toBeNull();
+  });
+
+  // The defect this whole seam exists to prevent, in its most dangerous
+  // form: a failure that is NOT a 404 must never reach a guard as null. A
+  // guard reading null refuses a Save or a Delete and tells the user their
+  // comment is gone — so collapsing "we could not reach Jira" into the same
+  // answer would put that sentence on screen for an offline laptop.
+  it.each([
+    ['network', 'Could not reach Jira.'],
+    ['invalid_credentials', 'Jira rejected that email and API token.'],
+    ['forbidden', "Your Jira account isn't allowed to do that."],
+    ['jira_error', 'Jira returned 500.'],
+  ])('throws rather than answering null on %s', async (reason, message) => {
+    const api = freshApi();
+    bridge.getComment.mockResolvedValue({ ok: false, reason, message });
+
+    await expect(api.getJiraComment('10421', 'c1')).rejects.toThrow(message);
+  });
+
+  it('carries the failure reason on the thrown error, same as every other call', async () => {
+    const api = freshApi();
+    bridge.getComment.mockResolvedValue({
+      ok: false,
+      reason: 'invalid_credentials',
+      message: 'Jira rejected that email and API token.',
+    });
+
+    await expect(api.getJiraComment('10421', 'c1')).rejects.toMatchObject({
+      reason: 'invalid_credentials',
+    });
   });
 });
 

@@ -41,6 +41,27 @@ export type JiraFailureReason =
   | 'storage_unavailable'
   | 'jira_error'
   /**
+   * Jira answered 404 for the thing this request named.
+   *
+   * Split out of `jira_error` because one caller has to branch on it rather
+   * than just print it: the comment freshness guards (see `getComment`)
+   * decide whether to refuse a Save or a Delete on whether the comment they
+   * are about to overwrite still exists. Before this reason existed those
+   * guards inferred "gone" from the comment being absent from
+   * `listComments`' newest-`COMMENT_PAGE_SIZE` page — which is also exactly
+   * what a comment scrolling off a busy thread looks like, so they could
+   * tell someone their comment had been deleted when nothing of the sort
+   * had happened.
+   *
+   * Read this as "Jira will not show you this", never as "this was
+   * deleted". Atlassian deliberately answers 404 rather than 403 for an
+   * issue or comment the account may not browse, so a permission that
+   * changed under you and a real deletion arrive here identically. Every
+   * message built on this reason has to allow for both — that is the
+   * strongest claim the response actually supports.
+   */
+  | 'not_found'
+  /**
    * The local filesystem said no — the disk is full, the chosen folder is not
    * writable, the picked file vanished between the dialog and the read.
    *

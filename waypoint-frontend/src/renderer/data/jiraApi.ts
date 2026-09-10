@@ -659,6 +659,43 @@ export async function listJiraComments(
 }
 
 /**
+ * Reads one named comment, fresh — the read the comment freshness guards
+ * have to use, and the reason `not_found` exists as its own failure reason.
+ *
+ * `null` means one specific thing and nothing else: **Jira answered 404 for
+ * this comment.** Every other failure still throws, exactly like every other
+ * function in this module, so a caller cannot mistake "the request failed"
+ * for "the comment is gone" — which is precisely the mistake `null` is here
+ * to make impossible.
+ *
+ * Why this exists at all, when `listJiraComments` already returns comments:
+ * that call is capped at the newest `COMMENT_PAGE_SIZE` (100) comments, so
+ * on a busy thread a comment simply scrolls out of the page it returns.
+ * Searching that page for an id and treating a miss as a deletion — which is
+ * what the guards did before this function — tells someone their comment was
+ * deleted when all that happened is that other people kept commenting. This
+ * read names the comment and cannot miss it.
+ *
+ * What `null` still does NOT prove is that anyone deleted anything.
+ * Atlassian answers 404 rather than 403 for a comment the account may no
+ * longer browse, so a permission change and a real deletion are
+ * indistinguishable here (see `not_found`'s own comment in
+ * main/jira/jiraTypes.ts). Any message a caller builds on `null` has to
+ * allow for both.
+ */
+export async function getJiraComment(
+  ticketId: string,
+  commentId: string,
+): Promise<JiraComment | null> {
+  const result = await bridge().getComment({ ticketId, commentId });
+  if (!result.ok) {
+    if (result.reason === 'not_found') return null;
+    throw new JiraApiError(result.message, result.reason);
+  }
+  return toComment(result.value);
+}
+
+/**
  * The project-level answer to "may I delete/edit my own comments" and "may I
  * delete/edit anyone's" on this issue — see jiraClient.ts's own
  * `getMyPermissions` for why this is project-level rather than a field on

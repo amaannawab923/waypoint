@@ -344,7 +344,13 @@ async function performRequest(
       release();
     }
     return failure(
-      'jira_error',
+      // 404 is the one status a caller acts on rather than prints — see
+      // `not_found`'s own comment in jiraTypes.ts. Classified here, at the
+      // single place every response is judged, so it means the same thing on
+      // every path rather than each caller re-deciding what a 404 was. The
+      // message is still Jira's own: this only changes what the failure is
+      // called, never what it says.
+      response.status === 404 ? 'not_found' : 'jira_error',
       messageFromErrorBody(parsed, `Jira returned ${response.status}.`),
     );
   }
