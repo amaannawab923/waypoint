@@ -1006,6 +1006,15 @@ export function mapIssue(
         ? storyPointsRaw
         : null,
     sprintName: sprintNameOf(sprintRaw),
+    // ROAD-41 contract: declared and defaulted here so every consumer compiles
+    // against the final shape while each field's real mapping lands separately.
+    // A default that silently stayed would be a lie about the issue, so each
+    // one is either implemented or removed - never left as an empty array.
+    labels: [],
+    dueDate: null,
+    subtasks: [],
+    links: [],
+    descriptionAdf: null,
     attachments: mapAttachments(fields.attachment),
     transitions: mapTransitions(issue.transitions),
     // Fall back to null rather than to "now". `listComments`'s `total`

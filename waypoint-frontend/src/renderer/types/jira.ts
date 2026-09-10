@@ -195,6 +195,25 @@ export interface JiraConflictInfo {
   changedAt: string; // ISO
 }
 
+/** Renderer mirror of `JiraWireSubtask` (main/jira/jiraTypes.ts). */
+export interface JiraSubtask {
+  id: string;
+  key: string;
+  title: string;
+  stateName: string;
+  stateColor: string;
+}
+
+/** Renderer mirror of `JiraWireIssueLink` (main/jira/jiraTypes.ts). */
+export interface JiraIssueLink {
+  id: string;
+  relation: string;
+  key: string;
+  title: string;
+  stateName: string;
+  stateColor: string;
+}
+
 export interface JiraTicket {
   id: ID;
   key: string; // e.g. "ENG-421"
@@ -243,6 +262,12 @@ export interface JiraTicket {
    * "unknown", sorting it to the bottom rather than the top.
    */
   updatedAt: string | null;
+  labels: string[];
+  dueDate: string | null;
+  subtasks: JiraSubtask[];
+  links: JiraIssueLink[];
+  /** See `JiraWireTicket.descriptionAdf` - raw ADF beside the plain text. */
+  descriptionAdf: unknown | null;
   attachments: JiraAttachment[];
   isTombstoned: boolean;
   tombstone: JiraTombstoneInfo | null;

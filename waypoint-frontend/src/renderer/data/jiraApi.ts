@@ -22,6 +22,8 @@
 import { JiraApiError } from '@/types/jira';
 import type {
   JiraAttachment,
+  JiraSubtask,
+  JiraIssueLink,
   JiraComment,
   JiraConnectionStatus,
   JiraPriorityOption,
@@ -42,6 +44,8 @@ import type {
   JiraPriorityOption as JiraWirePriorityOption,
   JiraTruncation,
   JiraWireAttachment,
+  JiraWireSubtask,
+  JiraWireIssueLink,
   JiraWireComment,
   JiraWireTicket,
   JiraWireTransition,
@@ -149,6 +153,29 @@ function toPriorityOption(wire: JiraWirePriorityOption): JiraPriorityOption {
  * wire shape ever grows one. A download is addressed by `id` and performed
  * entirely in main.
  */
+/** ROAD-41 contract: wire subtask -> renderer subtask. */
+function toSubtask(wire: JiraWireSubtask): JiraSubtask {
+  return {
+    id: wire.id,
+    key: wire.key,
+    title: wire.title,
+    stateName: wire.stateName,
+    stateColor: stateColor(wire.stateCategory),
+  };
+}
+
+/** ROAD-41 contract: wire issue link -> renderer issue link. */
+function toIssueLink(wire: JiraWireIssueLink): JiraIssueLink {
+  return {
+    id: wire.id,
+    relation: wire.relation,
+    key: wire.key,
+    title: wire.title,
+    stateName: wire.stateName,
+    stateColor: stateColor(wire.stateCategory),
+  };
+}
+
 function toAttachment(wire: JiraWireAttachment): JiraAttachment {
   return {
     id: wire.id,
@@ -190,6 +217,12 @@ function toTicket(wire: JiraWireTicket): JiraTicket {
     storyPoints: wire.storyPoints,
     sprintName: wire.sprintName,
     updatedAt: wire.updatedAt,
+    // ROAD-41 contract - see jiraMap.ts's matching note.
+    labels: wire.labels,
+    dueDate: wire.dueDate,
+    subtasks: wire.subtasks.map(toSubtask),
+    links: wire.links.map(toIssueLink),
+    descriptionAdf: wire.descriptionAdf,
     attachments: wire.attachments.map(toAttachment),
     // Both of these describe drift between what this app last read and what
     // Jira holds now — a tombstone is "this was reassigned away from you", a

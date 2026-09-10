@@ -198,6 +198,34 @@ export interface JiraWireAttachment {
   uploaderName: string;
 }
 
+/**
+ * A subtask as Jira reports it on the parent's `fields.subtasks`. Deliberately
+ * a flat summary, not a full JiraWireTicket: Jira returns only these fields
+ * inline, and pretending to more would mean a fetch per subtask.
+ */
+export interface JiraWireSubtask {
+  id: string;
+  key: string;
+  title: string;
+  stateName: string;
+  stateCategory: JiraStateCategory;
+}
+
+/**
+ * One issue link, already flattened to the OTHER issue plus the phrase that
+ * describes this issue's relationship to it ("blocks", "is blocked by", ...).
+ * Jira nests inward/outward differently; that asymmetry is resolved in the
+ * mapper so the renderer never has to know which side it was on.
+ */
+export interface JiraWireIssueLink {
+  id: string;
+  relation: string;
+  key: string;
+  title: string;
+  stateName: string;
+  stateCategory: JiraStateCategory;
+}
+
 export interface JiraWireTicket {
   /** Jira's numeric issue id, not the key. Both work as `issueIdOrKey` in
    * every REST path this uses, but the id survives an issue being moved to
@@ -235,6 +263,17 @@ export interface JiraWireTicket {
   epicName: string | null;
   storyPoints: number | null;
   sprintName: string | null;
+  labels: string[];
+  dueDate: string | null;
+  subtasks: JiraWireSubtask[];
+  links: JiraWireIssueLink[];
+  /**
+   * The description's raw ADF, carried ALONGSIDE the flattened `description`
+   * rather than replacing it. Keeping both is what lets the rich renderer land
+   * without a flag day: surfaces that still read `description` keep working
+   * unchanged, and null here simply means "render the plain text".
+   */
+  descriptionAdf: unknown | null;
   attachments: JiraWireAttachment[];
   /**
    * Whatever the bulk search's `expand=transitions` actually returned for
