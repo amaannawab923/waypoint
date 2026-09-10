@@ -345,11 +345,23 @@ function JiraCommentEmojiPicker({
   );
 }
 
-/** What a comment row's Reply action hands the composer: the author it
- * should prefill a mention of. Not threading — see this component's own
- * header comment and JiraTicketDetail.tsx's Reply button for why a
- * `parentCommentId` is deliberately not part of this shape. */
+/**
+ * What a comment row's Reply action hands the composer: which comment is
+ * being answered, and the author to prefill a mention of.
+ *
+ * Verified live against the founder's own Jira (issue ENG-84) that Jira's
+ * own Reply button does both at once — it sets a real `parentId` on the new
+ * comment AND prefills an `@author` mention — so `commentId` travels
+ * alongside `accountId`/`displayName` rather than being left out the way an
+ * earlier version of this interface did, back when this app believed (based
+ * on the same live check, misread) that Jira comments don't thread at all.
+ * `commentId` becomes the write's own `parentId` (see `postJiraComment`);
+ * whether the new comment actually lands nested is decided by what Jira's
+ * response says, never by this value — see JiraTicketDetail.tsx's
+ * groupCommentsIntoThreads and jiraApi.ts's toComment.
+ */
 export interface JiraReplyTarget {
+  commentId: string;
   accountId: string;
   displayName: string;
 }
@@ -397,6 +409,13 @@ export function JiraCommentComposer({
 }) {
   const [draft, setDraft] = useState('');
   const [mentions, setMentions] = useState<JiraMentionSpan[]>([]);
+  // The parentId the next post should carry — set alongside the mention
+  // prefill below, cleared once that post succeeds, the same lifecycle
+  // `draft`/`mentions` already have. Deliberately independent of the mention
+  // text itself: editing or deleting the prefilled "@Name " does not cancel
+  // the reply, the same way Jira's own composer keeps a reply threaded even
+  // if the mention is edited out of it afterwards.
+  const [replyParentId, setReplyParentId] = useState<string | null>(null);
   const [posting, setPosting] = useState(false);
   const [attaching, setAttaching] = useState(false);
   const [trigger, setTrigger] = useState<{
@@ -745,6 +764,7 @@ export function JiraCommentComposer({
       ...spans,
     ]);
     setDraft((d) => insertText + d);
+    setReplyParentId(pendingReply.commentId);
     onReplyConsumed?.();
 
     const el = textareaRef.current;
@@ -998,10 +1018,17 @@ export function JiraCommentComposer({
     formRef.current?.focus();
     setPosting(true);
     try {
-      const comment = await postJiraComment(ticketId, draft, mentions);
+      // A plain 3-arg call when this isn't a reply, rather than always
+      // passing a 4th `null` — the same "presence of the argument, not just
+      // its value" shape jiraClient.ts's own postComment uses for the same
+      // field, kept consistent end to end.
+      const comment = replyParentId
+        ? await postJiraComment(ticketId, draft, mentions, replyParentId)
+        : await postJiraComment(ticketId, draft, mentions);
       onPosted(comment);
       setDraft('');
       setMentions([]);
+      setReplyParentId(null);
     } catch (err) {
       showErrorToast(
         err instanceof Error

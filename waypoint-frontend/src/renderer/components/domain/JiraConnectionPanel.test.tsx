@@ -180,11 +180,14 @@ describe('JiraConnectionPanel', () => {
 
   // Reply and Copy link shipped alongside Delete (ROAD-41's comment-actions
   // phase) but neither is a write of its own — Reply posts through the same
-  // postJiraComment as any other comment (just prefilled with a mention;
-  // Jira comments don't thread, so this is an ordinary top-level comment,
-  // not a new capability), and Copy link sends nothing to Jira at all. The
-  // register must not count either as a seventh write, and must not claim a
-  // comment can be edited — that affordance does not exist.
+  // postJiraComment as any other comment (now prefilled with a mention AND
+  // carrying the replied-to comment's id as parentId — Jira genuinely
+  // threads comments, verified live against ENG-84; see
+  // JiraTicketDetail.tsx's groupCommentsIntoThreads for how nesting is
+  // decided from Jira's response, never from the request), and Copy link
+  // sends nothing to Jira at all. The register must not count either as a
+  // seventh write, and must not claim a comment can be edited — that
+  // affordance does not exist.
   it('does not count Reply or Copy link as their own writes, and does not claim comments can be edited', () => {
     renderPanel(<JiraConnectionPanel connection={status()} />);
 

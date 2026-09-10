@@ -257,10 +257,19 @@ export function JiraConnectionPanel({
               sentence names six. (downloadJiraAttachment is not among them:
               it changes nothing about the issue. Nor is a comment's Reply
               action a write of its own — it posts through the same
-              postJiraComment as any other comment, just prefilled with a
-              mention; Jira comments don't thread, so a "reply" is an
-              ordinary top-level comment naming who it's answering, not a
-              new capability. Nor is Copy link: it copies an address to the
+              postJiraComment as any other comment, now carrying both a
+              prefilled mention AND the replied-to comment's id as the
+              write's parentId. Jira genuinely threads comments — verified
+              live against ENG-84, where Jira's own Reply set a real
+              parentId alongside the mention this app already prefilled —
+              so this is no longer "Jira has no parent field", the belief an
+              earlier version of this comment shipped under. Whether a reply
+              actually nests is decided by Jira's own response, never by
+              what Reply sent (see JiraTicketDetail.tsx's
+              groupCommentsIntoThreads and jiraApi.ts's toComment) — the
+              write endpoint accepting parentId at all is undocumented.
+              Either way it is still postJiraComment, not a seventh
+              capability. Nor is Copy link: it copies an address to the
               clipboard and sends nothing to Jira. And there is no Edit —
               this phase doesn't have it, for a comment or anything else.) */}
           <span>

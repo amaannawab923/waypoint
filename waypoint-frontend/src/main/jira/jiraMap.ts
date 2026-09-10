@@ -1182,5 +1182,13 @@ export function mapComment(
     // timestamp would tell JiraTicketDetail.tsx's formatRelativeTime a lie it
     // would happily render as "just now".
     createdAt: typeof record.created === 'string' ? record.created : null,
+    // The same `idOf` every other id on this wire goes through — Jira sends
+    // this one as a JSON number while `id` itself is a string, and `idOf`
+    // already exists to coerce exactly that asymmetry consistently rather
+    // than at each call site. Null both when Jira omitted the key (a
+    // top-level comment) and when it sent something `idOf` can't validate as
+    // an id — see JiraWireComment.parentId's own comment for why the field is
+    // trusted at all despite appearing nowhere in Atlassian's published spec.
+    parentId: idOf(record.parentId),
   };
 }

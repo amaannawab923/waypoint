@@ -865,6 +865,7 @@ describe('JiraTicketDrawer — comment timestamps', () => {
       authorAccountId: 'acct-1',
       body: 'Replay log attached.',
       createdAt: null,
+      parentId: null,
       postedByWaypoint: false,
       disclosureText: null,
     };

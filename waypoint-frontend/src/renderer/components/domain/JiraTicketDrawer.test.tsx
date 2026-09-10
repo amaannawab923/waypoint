@@ -117,6 +117,7 @@ function comment(overrides: Partial<JiraComment> = {}): JiraComment {
     authorAccountId: 'acct-max',
     body: 'hi @Sam Lee',
     createdAt: '2026-01-01T00:00:00.000Z',
+    parentId: null,
     postedByWaypoint: false,
     disclosureText: null,
     ...overrides,
@@ -722,12 +723,17 @@ describe('mentions in the comment composer', () => {
   });
 });
 
-// Jira's own "Reply" on a comment is not threading — the comment schema has
-// no parent field, verified live — it just opens the composer with an
-// @author mention prefilled, producing an ordinary top-level comment. These
-// tests cover exactly that: the prefill reuses the composer's real mention
+// Jira's own "Reply" on a comment does two things at once, verified live
+// against the founder's own Jira (ENG-84): it prefills an @author mention AND
+// sets a real parentId that nests the new comment under the one it answers —
+// Jira genuinely threads comments, which an earlier version of this suite
+// believed it did not. Waypoint's own Reply does both now too. These tests
+// cover the mention half: the prefill reuses the composer's real mention
 // machinery (same spans, same buildCommentAdf path selectMention already
-// exercises above), not a second, parallel way of inserting text.
+// exercises above), not a second, parallel way of inserting text. The
+// parentId half — what postJiraComment is called with, and how nesting is
+// decided from Jira's response rather than the request — is covered in
+// jiraApi.test.ts and JiraTicketDetail.test.tsx (groupCommentsIntoThreads).
 describe('replying to a comment', () => {
   it('prefills a real mention of the comment author at the front of the draft', async () => {
     jest.mocked(listJiraComments).mockResolvedValue({
@@ -776,6 +782,40 @@ describe('replying to a comment', () => {
       '10421',
       '@Sam Lee on it now',
       [{ start: 0, end: 8, accountId: 'acct-sam', displayName: 'Sam Lee' }],
+      // The replied-to comment's own id, threaded through as the write's
+      // parentId — see JiraCommentComposer.tsx's replyParentId.
+      'c1',
+    );
+  });
+
+  it("sends the replied-to comment's id as parentId, and nothing on an ordinary comment", async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          authorName: 'Sam Lee',
+          authorAccountId: 'acct-sam',
+          body: 'Can you take a look?',
+        }),
+      ],
+      total: 1,
+    });
+    jest.mocked(postJiraComment).mockResolvedValue(comment({ id: 'c2' }));
+    renderDrawer();
+    await screen.findByText('Can you take a look?');
+
+    // An ordinary comment, no Reply click first: the 3-arg call every other
+    // posting test in this file already exercises must stay exactly that —
+    // no fourth `undefined`/`null` argument tagging along regardless.
+    fireEvent.change(commentBox(), { target: { value: 'unrelated note' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+
+    await waitFor(() =>
+      expect(postJiraComment).toHaveBeenCalledWith(
+        '10421',
+        'unrelated note',
+        [],
+      ),
     );
   });
 
@@ -824,6 +864,66 @@ describe('replying to a comment', () => {
     expect(
       screen.queryByRole('button', { name: 'Reply' }),
     ).not.toBeInTheDocument();
+  });
+});
+
+// Integration coverage for groupCommentsIntoThreads (JiraTicketDetail.tsx),
+// which has its own thorough unit tests — this just confirms the real
+// component renders every comment, nested or not, rather than the grouping
+// logic being right in isolation but never actually reaching the DOM.
+describe('nested comment rendering', () => {
+  it('renders a reply alongside its parent, not just the parent', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({ id: 'c1', body: 'Hello', authorName: 'Sam Lee' }),
+        comment({
+          id: 'c2',
+          body: 'Reply should be like this',
+          authorName: 'Priya Raman',
+          parentId: 'c1',
+        }),
+      ],
+      total: 2,
+    });
+    renderDrawer();
+
+    expect(await screen.findByText('Hello')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Reply should be like this'),
+    ).toBeInTheDocument();
+  });
+
+  // The reply's parent fell outside the 100-comment page this read from —
+  // it must still render rather than vanish.
+  it('still renders an orphaned reply whose parent is not on this page', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c2',
+          body: 'Reply to something not loaded',
+          parentId: 'c-not-loaded',
+        }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+
+    expect(
+      await screen.findByText('Reply to something not loaded'),
+    ).toBeInTheDocument();
+  });
+
+  // Malformed data the real component must survive, not just the pure
+  // function in isolation: a self-referencing parentId must not hang the
+  // render or blank the thread.
+  it('renders, without hanging, a comment whose parentId points at itself', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [comment({ id: 'c1', body: 'Odd data', parentId: 'c1' })],
+      total: 1,
+    });
+    renderDrawer();
+
+    expect(await screen.findByText('Odd data')).toBeInTheDocument();
   });
 });
 
@@ -1153,6 +1253,7 @@ describe('comment thread truncation', () => {
       authorAccountId: 'acct-sam',
       body: `comment ${id}`,
       createdAt: '2026-09-01T09:00:00.000+0000',
+      parentId: null,
       postedByWaypoint: false,
       disclosureText: null,
     };

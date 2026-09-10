@@ -129,6 +129,93 @@ function groupLinksByRelation(
   return Array.from(grouped.entries());
 }
 
+/** One top-level comment plus every reply grouped under it, flattened to
+ * exactly one level — see `groupCommentsIntoThreads`'s own comment for why
+ * this shape has no further nesting inside `replies`. */
+export interface JiraCommentThread {
+  root: JiraComment;
+  replies: JiraComment[];
+}
+
+/**
+ * Groups a comment page into threads by `parentId`, capped at one visible
+ * level of nesting — a root, plus every comment that traces back to it, all
+ * rendered as direct replies regardless of how many hops deep the real chain
+ * is. That matches what Jira itself shows (the founder's own ENG-84
+ * screenshot has one level of nesting, not an indent per reply-to-a-reply),
+ * and it is what keeps a long or malformed chain from pushing content off
+ * the right edge of the panel one indent at a time.
+ *
+ * Two things this must never do, because the 100-comment page it reads from
+ * (COMMENT_PAGE_SIZE in jiraClient.ts) is exactly where both happen:
+ *
+ *  - Drop a comment whose parent isn't on this page. A reply's `parentId`
+ *    can name a real comment that simply fell outside the cap — that comment
+ *    renders as its own root instead of vanishing. A dropped comment is a
+ *    bug; being placed one level higher than Jira's own view shows it is
+ *    cosmetic.
+ *  - Hang, or drop every comment in it, on a cyclic or self-referencing
+ *    `parentId`. The data is never assumed well-formed: `findRootId` below
+ *    walks at most `comments.length` hops and gives up the moment it would
+ *    revisit a comment already in its own walk, at which point the comment
+ *    the walk STARTED from becomes its own root. Every member of an N-comment
+ *    cycle ends up a root of its own with no replies — flat, not nested in an
+ *    arbitrary or wrong order, and never a hang.
+ */
+export function groupCommentsIntoThreads(
+  comments: JiraComment[],
+): JiraCommentThread[] {
+  const byId = new Map(comments.map((c) => [c.id, c]));
+
+  function findRootId(start: JiraComment): string {
+    // Every comment visited on THIS walk, so a repeat means a cycle rather
+    // than a coincidence — two different comments having replied to the same
+    // parent is normal and must not trip this.
+    const seen = new Set<string>([start.id]);
+    let current = start;
+    // A second, independent bound on top of the cycle check above: even a
+    // bug in that check cannot turn this into an infinite loop, since a walk
+    // this long has already visited every comment there is.
+    for (let steps = 0; steps < comments.length; steps += 1) {
+      if (!current.parentId) return current.id;
+      const parent = byId.get(current.parentId);
+      // The named parent isn't on this page — an orphan. `current`, not
+      // `start`, is the root: everything already walked between them is
+      // still a real, resolvable chain and stays grouped together under
+      // this same boundary.
+      if (!parent) return current.id;
+      // A parent already seen on this walk closes a cycle. There is no
+      // well-defined "real" root inside one, so this breaks it at the
+      // comment the walk started from rather than guessing which member of
+      // the cycle deserves to be treated as the top.
+      if (seen.has(parent.id)) return start.id;
+      seen.add(parent.id);
+      current = parent;
+    }
+    return start.id;
+  }
+
+  const rootOrder: string[] = [];
+  const repliesByRoot = new Map<string, JiraComment[]>();
+
+  comments.forEach((c) => {
+    const rootId = findRootId(c);
+    if (rootId === c.id) {
+      rootOrder.push(c.id);
+    } else {
+      const existing = repliesByRoot.get(rootId);
+      if (existing) existing.push(c);
+      else repliesByRoot.set(rootId, [c]);
+    }
+  });
+
+  return rootOrder.map((id) => ({
+    // Non-null: `id` only ever entered rootOrder as some comment's own id.
+    root: byId.get(id) as JiraComment,
+    replies: repliesByRoot.get(id) ?? [],
+  }));
+}
+
 /**
  * What a comment delete actually does, in the terms a confirm dialog has to
  * be honest about: `jira:comments:delete` (jiraIpc.ts -> jiraClient.ts's
@@ -501,6 +588,89 @@ export function JiraTicketDetail({
     ? `https://${connection.site}/browse/${ticket.key}`
     : null;
 
+  /** One comment row — the whole per-comment block `groupCommentsIntoThreads`
+   * below renders twice over (once for a thread's root, once per reply in
+   * it), pulled out so both call sites stay identical rather than drifting
+   * apart the way a root row and a reply row easily could if this were
+   * inlined twice. Not module-scope: it closes over this render's handlers
+   * and state (canDeleteComment, copiedCommentId, ...) the same way
+   * PropertyRow above does NOT need to, because PropertyRow needs none of
+   * them. */
+  function renderComment(c: JiraComment) {
+    return (
+      <div key={c.id} className="group flex gap-2">
+        <Avatar name={c.authorName} size={22} />
+        <div className="min-w-0 flex-1">
+          <div className="mb-0.5 text-xs">
+            <b className="font-semibold text-text">{c.authorName}</b>{' '}
+            <span className="text-text-muted">
+              {formatRelativeTime(c.createdAt)}
+              {c.postedByWaypoint ? ' · via Waypoint' : ''}
+            </span>
+          </div>
+          {c.disclosureText && (
+            <div className="mb-1 inline-block rounded bg-jira-bg px-1.5 py-0.5 text-[11px] text-jira">
+              {c.disclosureText}
+            </div>
+          )}
+          <div className="text-[12.5px] leading-relaxed whitespace-pre-wrap text-text-secondary">
+            {c.body}
+          </div>
+          {/* Three of Jira's five comment-row actions now: Reply and
+              Copy link, and Delete alongside them — permission-gated
+              per comment (see canDeleteComment above) rather than
+              always shown, since Jira's own comment menu only ever
+              offers delete on a comment you may actually remove.
+              Edit still needs a capability this phase deliberately
+              doesn't have, and reactions have no public API at all —
+              those two remain the honest gap. Opacity-revealed on
+              hover exactly like ProjectViewsPage.tsx's own row
+              actions, and group-focus-within (not group-hover alone)
+              is what keeps a keyboard user from needing a mouse to
+              ever see these — a Tab landing on any of these buttons
+              already reveals the row before it needs to be
+              clicked. */}
+          <div className="mt-1 flex items-center gap-2.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+            {c.authorAccountId !== null && (
+              <button
+                type="button"
+                onClick={() =>
+                  setPendingReply({
+                    commentId: c.id,
+                    accountId: c.authorAccountId as string,
+                    displayName: c.authorName,
+                  })
+                }
+                className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
+              >
+                Reply
+              </button>
+            )}
+            {jiraUrl && (
+              <button
+                type="button"
+                onClick={() => handleCopyCommentLink(c.id)}
+                className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
+              >
+                {copiedCommentId === c.id ? 'Copied' : 'Copy link'}
+              </button>
+            )}
+            {canDeleteComment(c) && (
+              <button
+                type="button"
+                disabled={deletingCommentId === c.id}
+                onClick={() => handleDeleteComment(c)}
+                className="rounded text-[10.5px] font-semibold text-text-muted hover:text-danger hover:underline disabled:opacity-60"
+              >
+                {deletingCommentId === c.id ? 'Deleting…' : 'Delete'}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className={clsx(
@@ -767,75 +937,23 @@ export function JiraTicketDetail({
             </div>
           )}
           <div className="mb-4 space-y-3.5">
-            {comments.map((c) => (
-              <div key={c.id} className="group flex gap-2">
-                <Avatar name={c.authorName} size={22} />
-                <div className="min-w-0 flex-1">
-                  <div className="mb-0.5 text-xs">
-                    <b className="font-semibold text-text">{c.authorName}</b>{' '}
-                    <span className="text-text-muted">
-                      {formatRelativeTime(c.createdAt)}
-                      {c.postedByWaypoint ? ' · via Waypoint' : ''}
-                    </span>
+            {/* Nested, not flat: Jira genuinely threads comments (verified
+                live against ENG-84 — see JiraWireComment.parentId's own
+                comment), so a reply now renders under the comment it
+                answers instead of beside it. `groupCommentsIntoThreads`
+                is what decides the grouping, and it decides it from
+                `parentId` as JIRA REPORTED IT on each comment — never from
+                which button the user clicked — so a reply Jira didn't
+                actually nest (the write endpoint accepting `parentId` is
+                unverified) renders flat here too, honestly. */}
+            {groupCommentsIntoThreads(comments).map(({ root, replies }) => (
+              <div key={root.id}>
+                {renderComment(root)}
+                {replies.length > 0 && (
+                  <div className="mt-2 ml-7 space-y-3 border-l border-border pl-3">
+                    {replies.map((reply) => renderComment(reply))}
                   </div>
-                  {c.disclosureText && (
-                    <div className="mb-1 inline-block rounded bg-jira-bg px-1.5 py-0.5 text-[11px] text-jira">
-                      {c.disclosureText}
-                    </div>
-                  )}
-                  <div className="text-[12.5px] leading-relaxed whitespace-pre-wrap text-text-secondary">
-                    {c.body}
-                  </div>
-                  {/* Three of Jira's five comment-row actions now: Reply and
-                      Copy link, and Delete alongside them — permission-gated
-                      per comment (see canDeleteComment above) rather than
-                      always shown, since Jira's own comment menu only ever
-                      offers delete on a comment you may actually remove.
-                      Edit still needs a capability this phase deliberately
-                      doesn't have, and reactions have no public API at all —
-                      those two remain the honest gap. Opacity-revealed on
-                      hover exactly like ProjectViewsPage.tsx's own row
-                      actions, and group-focus-within (not group-hover alone)
-                      is what keeps a keyboard user from needing a mouse to
-                      ever see these — a Tab landing on any of these buttons
-                      already reveals the row before it needs to be
-                      clicked. */}
-                  <div className="mt-1 flex items-center gap-2.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-                    {c.authorAccountId !== null && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setPendingReply({
-                            accountId: c.authorAccountId as string,
-                            displayName: c.authorName,
-                          })
-                        }
-                        className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
-                      >
-                        Reply
-                      </button>
-                    )}
-                    {jiraUrl && (
-                      <button
-                        type="button"
-                        onClick={() => handleCopyCommentLink(c.id)}
-                        className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
-                      >
-                        {copiedCommentId === c.id ? 'Copied' : 'Copy link'}
-                      </button>
-                    )}
-                    {canDeleteComment(c) && (
-                      <button
-                        type="button"
-                        disabled={deletingCommentId === c.id}
-                        onClick={() => handleDeleteComment(c)}
-                        className="rounded text-[10.5px] font-semibold text-text-muted hover:text-danger hover:underline disabled:opacity-60"
-                      >
-                        {deletingCommentId === c.id ? 'Deleting…' : 'Delete'}
-                      </button>
-                    )}
-                  </div>
-                </div>
+                )}
               </div>
             ))}
             {commentsError && (

@@ -1099,6 +1099,111 @@ describe('comments', () => {
   });
 });
 
+// A reply's own request, and what jiraApi.ts is honest about once Jira
+// answers it. Jira genuinely threads comments (verified live against ENG-84
+// — see JiraWireComment.parentId's own comment), but the public write
+// endpoint accepting `parentId` at all was never confirmed, so the whole
+// safety property of this feature is that the returned comment's own
+// `parentId` comes from Jira's RESPONSE, never from what was asked for.
+describe('postJiraComment — replying', () => {
+  it('includes parentId in the bridge call when replying', async () => {
+    const api = freshApi();
+    bridge.postComment.mockResolvedValue({
+      ok: true,
+      value: {
+        id: 'c2',
+        ticketId: '10421',
+        authorName: 'Max Chen',
+        body: '@Sam Lee on it',
+        createdAt: '2026-09-01T10:00:00.000Z',
+        parentId: '10158',
+      },
+    });
+
+    await api.postJiraComment('10421', '@Sam Lee on it', [], '10158');
+
+    expect(bridge.postComment).toHaveBeenCalledWith({
+      ticketId: '10421',
+      body: expect.anything(),
+      parentId: '10158',
+    });
+  });
+
+  // No `parentId` key at all on an ordinary comment — matching every
+  // pre-existing test above this describe block, none of which passes a
+  // fourth argument and none of which expects the key in the bridge call.
+  it('omits parentId from the bridge call for an ordinary comment', async () => {
+    const api = freshApi();
+    bridge.postComment.mockResolvedValue({
+      ok: true,
+      value: {
+        id: 'c1',
+        ticketId: '10421',
+        authorName: 'Max Chen',
+        body: 'Taking it.',
+        createdAt: '2026-09-01T10:00:00.000Z',
+      },
+    });
+
+    await api.postJiraComment('10421', 'Taking it.');
+
+    const call = bridge.postComment.mock.calls[0][0];
+    expect(Object.prototype.hasOwnProperty.call(call, 'parentId')).toBe(false);
+  });
+
+  // The whole safety property this feature is built on. Never construct the
+  // returned comment's own parentId from the request — only from what Jira's
+  // response actually reported.
+  it('renders flat when the response carries no parentId, even though the request asked for one', async () => {
+    const api = freshApi();
+    bridge.postComment.mockResolvedValue({
+      ok: true,
+      value: {
+        id: 'c2',
+        ticketId: '10421',
+        authorName: 'Max Chen',
+        body: '@Sam Lee on it',
+        createdAt: '2026-09-01T10:00:00.000Z',
+        // No parentId: Jira either doesn't recognize the field or silently
+        // dropped it — this response is the honest, undocumented-API answer.
+      },
+    });
+
+    const comment = await api.postJiraComment(
+      '10421',
+      '@Sam Lee on it',
+      [],
+      '10158',
+    );
+
+    expect(comment.parentId).toBeNull();
+  });
+
+  it("maps the response's own parentId when Jira genuinely nested the reply", async () => {
+    const api = freshApi();
+    bridge.postComment.mockResolvedValue({
+      ok: true,
+      value: {
+        id: 'c2',
+        ticketId: '10421',
+        authorName: 'Max Chen',
+        body: '@Sam Lee on it',
+        createdAt: '2026-09-01T10:00:00.000Z',
+        parentId: '10158',
+      },
+    });
+
+    const comment = await api.postJiraComment(
+      '10421',
+      '@Sam Lee on it',
+      [],
+      '10158',
+    );
+
+    expect(comment.parentId).toBe('10158');
+  });
+});
+
 describe('deleteJiraComment', () => {
   it('calls the bridge with the ticket and comment id', async () => {
     const api = freshApi();

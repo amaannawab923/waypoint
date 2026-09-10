@@ -1809,6 +1809,7 @@ describe('mapComment', () => {
       authorAccountId: null,
       body: 'Replay log attached.',
       createdAt: '2026-09-01T09:00:00.000+0000',
+      parentId: null,
     });
   });
 
@@ -1828,7 +1829,43 @@ describe('mapComment', () => {
       authorAccountId: null,
       body: 'No date.',
       createdAt: null,
+      parentId: null,
     });
+  });
+
+  // Live-confirmed against ENG-84: Jira sends `parentId` as a JSON number on
+  // a comment that has a parent (`id` itself is a string on the very same
+  // payload) — the same asymmetry `idOf` already exists to paper over for
+  // every other id `mapIssue`/`mapComment` coerce.
+  it("coerces a numeric parentId to a string, matching id's own coercion", () => {
+    expect(
+      mapComment(
+        {
+          id: '10192',
+          author: { displayName: 'Sam Lee' },
+          body: 'Reply should be like this.',
+          created: '2026-09-01T09:05:00.000+0000',
+          parentId: 10158,
+        },
+        '10421',
+      ),
+    ).toMatchObject({ id: '10192', parentId: '10158' });
+  });
+
+  // Jira only includes the key at all on a comment that HAS a parent — it is
+  // absent, not present-and-null, on a top-level comment.
+  it('maps a missing parentId to null, not to a fabricated top-level answer', () => {
+    expect(
+      mapComment(
+        {
+          id: '10158',
+          author: { displayName: 'Sam Lee' },
+          body: 'Hello',
+          created: '2026-09-01T09:00:00.000+0000',
+        },
+        '10421',
+      ),
+    ).toMatchObject({ id: '10158', parentId: null });
   });
 
   // Defensive: a v3-shaped body must not render as "[object Object]".

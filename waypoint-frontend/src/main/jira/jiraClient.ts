@@ -1157,9 +1157,29 @@ export async function listComments(
   return { ok: true, value: { comments, total } };
 }
 
+/**
+ * `parentId`, when given, asks Jira to thread this comment under the one
+ * named — the same field `mapComment` already reads back off a comment
+ * that has a parent (see JiraWireComment.parentId's own comment on why this
+ * undocumented field is trusted at all). Omitted from the request body
+ * entirely rather than sent as `null` when absent: there is no confirmation
+ * this public endpoint even recognizes the key, so the honest request for
+ * an ordinary comment is one that doesn't mention it.
+ *
+ * Whether Jira actually honoured it is never decided here. The one
+ * documented, verified fact is that `mapComment` maps a comment's own
+ * `parentId` faithfully off whatever Jira's response says — so a caller
+ * that wants to know whether this reply nested must read `mapped.parentId`
+ * on the value this function returns, never assume it from the `parentId`
+ * it passed in. Three real outcomes are possible on an undocumented field
+ * like this — Jira honours it, silently ignores an unknown field (common
+ * for REST APIs), or rejects the request outright — and only the response
+ * can say which one happened.
+ */
 export async function postComment(
   ticketId: string,
   body: JiraCommentBody,
+  parentId?: string | null,
 ): Promise<JiraResult<JiraWireComment>> {
   const credentialResult = requireCredential();
   if (!credentialResult.ok) return credentialResult;
@@ -1169,7 +1189,7 @@ export async function postComment(
     {
       method: 'POST',
       path: COMMENT_PATH(ticketId),
-      body: { body },
+      body: parentId ? { body, parentId } : { body },
     },
   );
   if (!result.ok) return result;

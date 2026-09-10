@@ -537,6 +537,51 @@ describe('per-ticket channels', () => {
       expect(postCommentMock).toHaveBeenCalledWith('10421', ADF_TEXT_ONLY);
     });
 
+    it('forwards a well-formed parentId as a third argument', async () => {
+      postCommentMock.mockResolvedValue({ ok: true, value: { id: '10509' } });
+
+      await getHandler('jira:comments:post')(
+        {},
+        { ticketId: '10421', body: ADF_TEXT_ONLY, parentId: '10158' },
+      );
+
+      expect(postCommentMock).toHaveBeenCalledWith(
+        '10421',
+        ADF_TEXT_ONLY,
+        '10158',
+      );
+    });
+
+    // The exact two-argument call every other test in this block already
+    // asserts — pinned explicitly here so a future change that starts always
+    // passing a third `null`/`undefined` argument is caught as the
+    // regression it would be for those tests.
+    it('calls postComment with only two arguments when parentId is absent', async () => {
+      postCommentMock.mockResolvedValue({ ok: true, value: { id: '10502' } });
+
+      await getHandler('jira:comments:post')(
+        {},
+        { ticketId: '10421', body: ADF_TEXT_ONLY },
+      );
+
+      expect(postCommentMock.mock.calls[0]).toHaveLength(2);
+    });
+
+    // Guards the same REST-path-injection property `readCommentId` already
+    // guards for the delete channel — nothing caller-supplied reaches
+    // `client.postComment`'s network call unchecked, parentId included.
+    it('drops a malformed parentId rather than forwarding it', async () => {
+      postCommentMock.mockResolvedValue({ ok: true, value: { id: '10502' } });
+
+      await getHandler('jira:comments:post')(
+        {},
+        { ticketId: '10421', body: ADF_TEXT_ONLY, parentId: 'not valid!' },
+      );
+
+      expect(postCommentMock).toHaveBeenCalledWith('10421', ADF_TEXT_ONLY);
+      expect(postCommentMock.mock.calls[0]).toHaveLength(2);
+    });
+
     it('passes a body carrying a real mention node straight through', async () => {
       postCommentMock.mockResolvedValue({ ok: true, value: { id: '10503' } });
       const mentionBody = {

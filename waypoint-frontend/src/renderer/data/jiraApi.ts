@@ -343,6 +343,18 @@ function toComment(wire: JiraWireComment): JiraComment {
     authorAccountId: wire.authorAccountId,
     body: wire.body,
     createdAt: wire.createdAt,
+    // Straight off the wire, deliberately never off what a write asked for —
+    // see JiraComment.parentId's own comment. `postJiraComment` below builds
+    // this from the SAME toComment(unwrap(...)) path every read uses, so a
+    // reply's own return value already tells the truth about whether Jira
+    // actually nested it, with no separate code path that could disagree.
+    // `?? null`, not a bare pass-through: main's own mapComment never sends
+    // `undefined` (it already coerces a missing key to null — see
+    // JiraWireComment.parentId), but this field feeds directly into
+    // groupCommentsIntoThreads' `!current.parentId` check, where `undefined`
+    // and `null` behave identically anyway — this just keeps the type this
+    // module promises (`string | null`) true rather than trusting the wire.
+    parentId: wire.parentId ?? null,
     // Jira has no concept of "this comment came from Waypoint" — there's no
     // property on a comment to carry it and this app doesn't keep its own
     // record of what it posted. A comment read back from Jira is therefore
@@ -1458,15 +1470,31 @@ export function buildJiraCommentPermalink(
  * real ADF `mention` nodes. A draft with no mentions goes through the same
  * builder as a single-run paragraph, so there is one write path rather than
  * a plain-text one and a separate mention-aware one.
+ *
+ * `parentId`, when given, is the comment this one is replying to — set by
+ * JiraCommentComposer's Reply flow, and omitted from the IPC call entirely
+ * (rather than sent as an explicit `null`) for anything else, since the
+ * public comment-create endpoint accepting this field at all is undocumented
+ * and unverified; sending nothing is the honest request for "no parent
+ * asked". Whatever Jira actually did with it is read back off the response
+ * through the same `toComment` every other read uses — this function must
+ * never construct the returned comment's own `parentId` from this argument,
+ * because that is exactly the claim this feature cannot make on the
+ * request's word alone. See JiraComment.parentId's own comment.
  */
 export async function postJiraComment(
   ticketId: string,
   text: string,
   mentions: JiraMentionSpan[] = [],
+  parentId: string | null = null,
 ): Promise<JiraComment> {
   const body = buildCommentAdf(text, mentions);
   const comment = toComment(
-    unwrap(await bridge().postComment({ ticketId, body })),
+    unwrap(
+      await bridge().postComment(
+        parentId ? { ticketId, body, parentId } : { ticketId, body },
+      ),
+    ),
   );
 
   // Posting a comment moves the ISSUE's `updated` in Jira, not just the

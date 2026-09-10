@@ -437,6 +437,26 @@ export interface JiraWireComment {
    * `created` — see JiraWireTicket's updatedAt for why this is null rather
    * than a fabricated "now". */
   createdAt: string | null;
+  /**
+   * The id of the comment this one replies to, or null when it has none.
+   *
+   * Real and genuinely undocumented: verified live against the founder's own
+   * Jira (issue ENG-84) that a comment posted through Jira's own Reply button
+   * comes back carrying `parentId`, even though Atlassian's published OpenAPI
+   * spec names no such field on a comment, for reading or for writing. Treat
+   * the spec's silence as exactly that — silence, not proof the field isn't
+   * real.
+   *
+   * `parentId` arrives as a JSON **number** on the wire, unlike `id`, which
+   * Jira sends as a string — the same asymmetry `mapComment`'s `String(id)`
+   * already exists to paper over for `id` itself. Coerced to a string here for
+   * the same reason: two representations of the same kind of value invite a
+   * `===` that silently never matches. Jira also only ever includes this key
+   * on a comment that HAS a parent — it is absent, not present-and-null, on
+   * every top-level comment — so null here means exactly that, "no parent",
+   * not "Jira didn't say".
+   */
+  parentId: string | null;
 }
 
 /**

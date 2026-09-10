@@ -370,9 +370,16 @@ const electronHandler = {
     listComments(ticketId: string): Promise<JiraResult<JiraCommentPage>> {
       return ipcRenderer.invoke('jira:comments:list', ticketId);
     },
+    // `parentId`, when present, is the comment this one replies to — see
+    // JiraWireComment.parentId's own comment on why this undocumented field
+    // is trusted at all. Optional and omitted (not sent as an explicit
+    // `null`) for an ordinary, non-reply comment: jiraApi.ts's
+    // postJiraComment only puts the key in `args` at all when it has a real
+    // value to put there.
     postComment(args: {
       ticketId: string;
       body: JiraCommentBody;
+      parentId?: string;
     }): Promise<JiraResult<JiraWireComment>> {
       return ipcRenderer.invoke('jira:comments:post', args);
     },

@@ -1625,6 +1625,74 @@ describe('comments', () => {
       reason: 'forbidden',
     });
   });
+
+  // The one thing the founder's live check could NOT confirm: whether this
+  // public write endpoint accepts `parentId` at all. This only pins what
+  // Waypoint sends, never what Jira does with it — see postComment's own
+  // comment and jiraApi.ts's toComment for why the RESPONSE, not this
+  // request, is what ever gets trusted about whether a reply actually nested.
+  it('includes parentId in the request body when replying', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        id: '10510',
+        author: { displayName: 'Max Chen' },
+        body: PLAIN_ADF_BODY,
+        created: '2026-09-01T10:10:00.000+0000',
+      }),
+    );
+
+    await postComment('10421', PLAIN_ADF_BODY, '10158');
+
+    const [, init] = call();
+    expect(JSON.parse(init.body as string)).toEqual({
+      body: PLAIN_ADF_BODY,
+      parentId: '10158',
+    });
+  });
+
+  // Not `parentId: null` or `parentId: undefined` on the wire — the field is
+  // omitted outright for an ordinary comment, the same "say nothing rather
+  // than send an empty claim" choice this codebase makes elsewhere for an
+  // undocumented or partially-known field.
+  it('omits parentId entirely for an ordinary, non-reply comment', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        id: '10511',
+        author: { displayName: 'Max Chen' },
+        body: PLAIN_ADF_BODY,
+        created: '2026-09-01T10:11:00.000+0000',
+      }),
+    );
+
+    await postComment('10421', PLAIN_ADF_BODY, null);
+
+    const [, init] = call();
+    const sent = JSON.parse(init.body as string);
+    expect(sent).toEqual({ body: PLAIN_ADF_BODY });
+    expect(Object.prototype.hasOwnProperty.call(sent, 'parentId')).toBe(false);
+  });
+
+  // The whole safety property this feature is built on: a reply's own
+  // returned comment reflects what JIRA reported, not what was requested. If
+  // Jira silently ignored the field (undocumented, unverified — see
+  // postComment's own comment), the response carries no parentId and the
+  // mapped comment must say so honestly.
+  it("maps the response's own parentId, not the one that was requested", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        id: '10512',
+        author: { displayName: 'Max Chen' },
+        body: PLAIN_ADF_BODY,
+        created: '2026-09-01T10:12:00.000+0000',
+        // No `parentId` here — Jira's honest answer when it declined (or
+        // never recognized) the field this request asked for.
+      }),
+    );
+
+    const result = await postComment('10421', PLAIN_ADF_BODY, '10158');
+
+    expect(result).toMatchObject({ ok: true, value: { parentId: null } });
+  });
 });
 
 describe('deleteComment', () => {

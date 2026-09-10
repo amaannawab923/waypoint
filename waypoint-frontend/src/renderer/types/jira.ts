@@ -294,6 +294,21 @@ export interface JiraComment {
    * `created` — see JiraTicket's updatedAt for why this is null rather than
    * a fabricated "now". */
   createdAt: string | null;
+  /**
+   * The id of the comment this one replies to, or null when it has none —
+   * renderer mirror of `JiraWireComment.parentId` (main/jira/jiraTypes.ts),
+   * which has the full story on why this real, if undocumented, field is
+   * trusted at all.
+   *
+   * Always read off what Jira's own response reported for THIS comment,
+   * never off what a post asked for: JiraTicketDetail.tsx's
+   * groupCommentsIntoThreads nests a comment under its parent using exactly
+   * this value, so a reply Jira silently declined to nest (the public
+   * comment-create endpoint accepting `parentId` is unverified) renders flat
+   * here too, honestly, rather than nested on the strength of a request that
+   * may not have done anything.
+   */
+  parentId: string | null;
   postedByWaypoint: boolean;
   /** Self-disclosure prefix for a Copilot-authored comment (phase 2's
    * approval flow) — null for a plain, user-typed comment like every one

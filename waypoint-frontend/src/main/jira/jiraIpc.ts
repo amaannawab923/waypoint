@@ -104,6 +104,24 @@ function readCommentId(value: unknown): string | null {
   return /^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$/.test(id) ? id : null;
 }
 
+/**
+ * Guards the comment-post channel's optional `parentId` — the comment a
+ * reply is threaded under (see JiraWireComment.parentId's own comment for
+ * why this undocumented field is trusted at all).
+ *
+ * Same character class as `readCommentId`, deliberately: a parent id is a
+ * comment id, and the shape check exists for the same reason it does there
+ * — nothing caller-supplied reaches a real network request unchecked — even
+ * though this one lands in `postComment`'s JSON body rather than a REST path.
+ * `null` for anything absent or malformed, never an empty string: the caller
+ * (jiraClient.ts's postComment) treats `null` as "omit the field entirely",
+ * which is the honest request when nothing usable was sent.
+ */
+function readParentId(value: unknown): string | null {
+  const id = readString(value);
+  return /^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$/.test(id) ? id : null;
+}
+
 /** Only string-valued entries survive: the transition popover collects text
  * and select values, and anything else arriving under this key is not
  * something the renderer sends. */
@@ -687,11 +705,18 @@ export function registerJiraIpc(getWindow: () => BrowserWindow | null): void {
       const input = (args ?? {}) as Record<string, unknown>;
       const ticketId = readTicketId(input.ticketId);
       const body = readCommentBody(input.body);
+      const parentId = readParentId(input.parentId);
       if (!ticketId) return failure('invalid_input', 'Unknown Jira issue.');
       if (!body || !commentBodyHasContent(body)) {
         return failure('invalid_input', 'Write something first.');
       }
-      return client.postComment(ticketId, body);
+      // Two-arg call when there is nothing to thread under, rather than
+      // always passing a third `null` — see jiraClient.ts's own postComment
+      // for why the presence of the argument, not just its value, is what
+      // decides whether the field reaches Jira at all.
+      return parentId
+        ? client.postComment(ticketId, body, parentId)
+        : client.postComment(ticketId, body);
     },
   );
 
