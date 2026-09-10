@@ -852,6 +852,7 @@ describe('JiraTicketDrawer — comment timestamps', () => {
       id: 'c-1',
       ticketId: 't-undated-comment',
       authorName: 'Sam Lee',
+      authorAccountId: 'acct-1',
       body: 'Replay log attached.',
       createdAt: null,
       postedByWaypoint: false,

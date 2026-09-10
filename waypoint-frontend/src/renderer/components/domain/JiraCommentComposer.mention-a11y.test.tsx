@@ -80,6 +80,7 @@ beforeEach(() => {
     id: 'c1',
     ticketId: '10421',
     authorName: 'Max Chen',
+    authorAccountId: 'acct-max',
     body: 'hi @Sam Lee',
     createdAt: '2026-01-01T00:00:00.000Z',
     postedByWaypoint: false,

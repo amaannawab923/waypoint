@@ -1806,6 +1806,7 @@ describe('mapComment', () => {
       id: '10500',
       ticketId: '10421',
       authorName: 'Sam Lee',
+      authorAccountId: null,
       body: 'Replay log attached.',
       createdAt: '2026-09-01T09:00:00.000+0000',
     });
@@ -1824,6 +1825,7 @@ describe('mapComment', () => {
       id: '10502',
       ticketId: '10421',
       authorName: 'Sam Lee',
+      authorAccountId: null,
       body: 'No date.',
       createdAt: null,
     });

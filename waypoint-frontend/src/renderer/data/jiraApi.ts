@@ -318,6 +318,7 @@ function toComment(wire: JiraWireComment): JiraComment {
     id: wire.id,
     ticketId: wire.ticketId,
     authorName: wire.authorName,
+    authorAccountId: wire.authorAccountId,
     body: wire.body,
     createdAt: wire.createdAt,
     // Jira has no concept of "this comment came from Waypoint" — there's no

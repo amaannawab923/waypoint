@@ -286,6 +286,9 @@ export interface JiraComment {
   id: ID;
   ticketId: ID;
   authorName: string;
+  /** See `JiraWireComment.authorAccountId` — required to build a Reply's
+   * ADF mention of the author; null when Jira withheld it. */
+  authorAccountId: string | null;
   body: string;
   /** When the comment was posted (ISO), or null when Jira's payload omitted
    * `created` — see JiraTicket's updatedAt for why this is null rather than

@@ -422,6 +422,16 @@ export interface JiraWireComment {
   id: string;
   ticketId: string;
   authorName: string;
+  /**
+   * The author's Atlassian account id, or null when Jira withheld it.
+   *
+   * Needed because a "Reply" prefills a real ADF mention of the author, and
+   * an ADF mention node is keyed on accountId — a display name cannot build
+   * one, and guessing an id from a name would be wrong on any site with two
+   * people called Sam. Null is honest here: a mention simply cannot be
+   * offered for an author Jira did not identify.
+   */
+  authorAccountId: string | null;
   body: string;
   /** When the comment was posted (ISO), or null when Jira's payload omitted
    * `created` — see JiraWireTicket's updatedAt for why this is null rather

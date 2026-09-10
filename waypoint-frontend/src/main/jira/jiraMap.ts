@@ -1169,6 +1169,9 @@ export function mapComment(
     id: String(id),
     ticketId,
     authorName: displayNameOf(record.author, 'Unknown'),
+    // Same helper the ticket's assignee id goes through, so the two cannot
+    // disagree about what counts as a usable account id.
+    authorAccountId: accountIdOf(record.author),
     // The shared helper, not a reinlined copy of it. `plainTextFromJiraBody`
     // was extracted so a description and a comment "cannot drift apart
     // again", and then this — the one function that comment names — kept its
