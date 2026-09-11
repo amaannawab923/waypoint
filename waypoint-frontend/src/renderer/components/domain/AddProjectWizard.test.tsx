@@ -282,7 +282,7 @@ describe('AddProjectWizard — confirm and finish', () => {
 
     expect(screen.queryByText(/API call/)).not.toBeInTheDocument();
     expect(screen.getByText('No polling')).toBeInTheDocument();
-    expect(screen.getByText('after this connects')).toBeInTheDocument();
+    expect(screen.getByText('once connected')).toBeInTheDocument();
   });
 
   it('finishing re-reads the status, closes the wizard and navigates to /my-jira', async () => {

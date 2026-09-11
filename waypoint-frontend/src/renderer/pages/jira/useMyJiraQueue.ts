@@ -24,13 +24,16 @@ import type { JiraProjectKey, JiraTicket, JiraTicketRole } from '@/types/jira';
  *  3. The transitions cache would thrash. `rememberTickets` rebuilds
  *     `transitionsByTicketId` from each search, so a search per keystroke
  *     would mean a per-issue transitions round trip per keystroke behind it.
- *  4. The on-screen copy is a contract. "refresh re-reads the whole queue"
+ *  4. The on-screen copy is a contract. "refresh re-runs the search"
  *     (MyJiraPage.tsx) was written deliberately to replace a false "polls
  *     every 15s" — and later a false "one API call", since a queue over
- *     PAGE_SIZE pages the same search across several (ROAD-22). What it
- *     still promises is that nothing reads again on its own between one
- *     Refresh and the next; a toolbar that quietly issued a request per
- *     interaction would make it false again.
+ *     PAGE_SIZE pages the same search across several, and then a false
+ *     "re-reads the whole queue", since it stops at MAX_PAGES (ROAD-22).
+ *     What it promises is that the search runs only when the page opens
+ *     (MyJiraPage and JiraTicketPage both read on mount) or Refresh is
+ *     pressed, and never from this toolbar: a filter, sort or page change
+ *     that quietly issued a request would make it false again. This hook
+ *     imports nothing from data/jiraApi, which is what keeps that true.
  *
  * The cost is real and is stated rather than hidden. listMyTickets caps its
  * crawl at MAX_PAGES × PAGE_SIZE = 500, so these filters and sorts apply to

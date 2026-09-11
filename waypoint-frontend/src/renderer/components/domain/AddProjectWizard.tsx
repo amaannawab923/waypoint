@@ -406,7 +406,7 @@ function ConfirmStep({
             No polling
           </b>
           <span className="text-[11.5px] text-text-muted">
-            after this connects
+            once connected
           </span>
         </div>
       </div>
