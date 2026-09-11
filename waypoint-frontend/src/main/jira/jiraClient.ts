@@ -540,7 +540,54 @@ export async function validateCredential(
     // attempt.
     invalidateStoredCredentialOn401: false,
   });
-  if (!result.ok) return result;
+  if (!result.ok) {
+    // Every OTHER caller in this file wants `not_found` left exactly as
+    // `jiraFetch` classified it — see `not_found`'s own doc comment in
+    // jiraTypes.ts and the 404 branch in `performRequest`: it is the signal
+    // the renderer's comment-freshness guards branch on, and turning it into
+    // something else anywhere else would break that. This probe is the one
+    // exception, because a 404 here isn't Jira telling us a resource is
+    // gone — it's the ANSWER ITSELF that decides whether a candidate site
+    // exists at all, and "Jira returned 404." (or whatever HTML title
+    // `messageFromErrorBody` fell back past) is not a sentence the connect
+    // form should ever show next to an address field.
+    //
+    // Only ONE fact is available to decide which of the two already-written
+    // messages fits: the hostname the user typed, which is all
+    // `validateCredential` ever had going in — the response carries nothing
+    // else to go on; a typo'd `*.atlassian.net` subdomain and a real,
+    // unrelated host both come back as a bare 404, frequently with an HTML
+    // body neither this function nor `messageFromErrorBody` needs to parse,
+    // because the classification never looks at it.
+    //
+    // The rule: if the candidate host itself ends in `.atlassian.net`, the
+    // 404 came from ATLASSIAN'S OWN EDGE answering for a subdomain nothing
+    // is registered under — the same fact ENOTFOUND reports for a domain
+    // that doesn't resolve at all, so it gets that message. Any other host
+    // DID resolve and answered something, just not a Jira Cloud API, so it
+    // gets the second message instead.
+    //
+    // What this gets wrong, on purpose: a real Jira Data Center install on
+    // its own custom domain that 404s `/myself` for an unrelated reason (a
+    // reverse-proxy path rewrite, the REST API disabled at the edge) reads
+    // as "not like a Jira Cloud site" even though a real Jira is sitting
+    // right there. Accepted, because this client only ever speaks to Jira
+    // Cloud (see this file's own header comment on why Data Center/OAuth is
+    // a separate, later mechanism) — a message that says "check the site
+    // address" is still pointing a Data Center admin at the right next
+    // step, reconfirming the address, even when the underlying cause is
+    // actually server-side.
+    if (result.reason === 'not_found') {
+      const hostIsAtlassianDomain = /\.atlassian\.net$/i.test(candidate.site);
+      return failure(
+        'site_not_found',
+        hostIsAtlassianDomain
+          ? "That site doesn't exist — check the address (e.g. yourteam.atlassian.net)."
+          : 'That address answered, but not like a Jira Cloud site — check the site address.',
+      );
+    }
+    return result;
+  }
 
   const me = result.value ?? {};
   const accountId = typeof me.accountId === 'string' ? me.accountId : '';

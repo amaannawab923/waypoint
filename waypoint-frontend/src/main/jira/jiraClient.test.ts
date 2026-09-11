@@ -285,6 +285,70 @@ describe('validateCredential', () => {
       reason: 'site_not_found',
     });
   });
+
+  // ROAD-21: a typo'd *.atlassian.net subdomain never reaches a Jira site at
+  // all — Atlassian's own edge answers a real 404 for it, which is the same
+  // underlying fact ENOTFOUND reports for a domain that doesn't resolve.
+  // Before this, `jiraFetch` still classified it `not_found` (correct for
+  // every OTHER caller — see jiraTypes.ts) and the connect form showed
+  // whatever `messageFromErrorBody` fell back to, e.g. "Jira returned 404."
+  it('translates a 404 from a *.atlassian.net host to "site doesn\'t exist"', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ errorMessages: ['Site does not exist.'] }, 404),
+    );
+
+    expect(await validateCredential(CREDENTIAL)).toEqual({
+      ok: false,
+      reason: 'site_not_found',
+      message:
+        "That site doesn't exist — check the address (e.g. yourteam.atlassian.net).",
+    });
+  });
+
+  // A host outside atlassian.net that 404s DID resolve and answered
+  // something — just not a Jira Cloud API — so it gets the other
+  // already-written message rather than "that site doesn't exist".
+  it('translates a 404 from a non-atlassian.net host to "not like a Jira Cloud site"', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ errorMessages: ['Not Found'] }, 404),
+    );
+
+    expect(
+      await validateCredential({ ...CREDENTIAL, site: 'jira.northwind.dev' }),
+    ).toEqual({
+      ok: false,
+      reason: 'site_not_found',
+      message:
+        'That address answered, but not like a Jira Cloud site — check the site address.',
+    });
+  });
+
+  // Atlassian's edge answers an unregistered subdomain with an HTML page,
+  // not JSON — `messageFromErrorBody` never gets a body it can read, and the
+  // classification here doesn't need one: it decides from the candidate
+  // hostname alone, so nothing from that HTML page can leak into the
+  // message shown next to the address field.
+  it('classifies an HTML 404 body the same way, without leaking HTML into the message', async () => {
+    fetchMock.mockResolvedValue({
+      status: 404,
+      ok: false,
+      text: async () =>
+        '<!doctype html><title>Oops, this site doesn’t exist</title>',
+    } as unknown as Response);
+
+    const result = await validateCredential(CREDENTIAL);
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'site_not_found',
+      message:
+        "That site doesn't exist — check the address (e.g. yourteam.atlassian.net).",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).not.toMatch(/<|doctype|html/i);
+    }
+  });
 });
 
 describe('listMyTickets', () => {
