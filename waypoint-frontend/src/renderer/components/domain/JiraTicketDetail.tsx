@@ -22,7 +22,7 @@ import { useAsync } from '@/lib/useAsync';
 import { useJiraConnection } from '@/lib/jiraStore';
 import { Avatar } from '@/components/ui/Avatar';
 import { Maximize2 } from 'lucide-react';
-import { IconChevronRight, IconX } from '@/components/icons';
+import { IconChevronRight, IconLock, IconX } from '@/components/icons';
 import {
   JiraAssigneeChip,
   JiraAssigneePicker,
@@ -46,6 +46,7 @@ import { jiraProjectColor } from '@/types/jira';
 import type {
   JiraAttachment,
   JiraComment,
+  JiraCommentVisibility,
   JiraIssueLink,
   JiraPriorityOption,
   JiraTicket,
@@ -221,6 +222,78 @@ export function groupCommentsIntoThreads(
 }
 
 /**
+ * ROAD-24: the comment header's small restricted-visibility indicator — text
+ * plus an (optional, never load-bearing) lock glyph. See
+ * `JiraCommentVisibility`'s own doc comment (types/jira.ts) for what `type`
+ * can be and why `null` — handled by the caller, never passed here — is the
+ * only "nothing to show" case.
+ *
+ * Before this, a role/group-restricted comment rendered identically to a
+ * public one: no icon, no label, nothing to distinguish them, which is the
+ * defect the ticket names. An icon-only fix would still fail anyone not
+ * hovering it (a touch user, someone scanning quickly), so `text` is always
+ * real, visible words, and `title` repeats the same information for a mouse
+ * user rather than adding something new only they would ever see.
+ *
+ * `'role'` and `'group'` deliberately share one label: Jira's own
+ * comment-visibility UI ("Viewable by: <name>") doesn't distinguish a
+ * project role from a group either, so inventing that distinction here would
+ * be a claim about the restriction's kind that even Jira's own UI doesn't
+ * make.
+ *
+ * `'restricted'` is the one case with no real value to show — see
+ * `mapCommentVisibility`'s own comment (main/jira/jiraMap.ts) for why Jira
+ * having sent SOME visibility restriction is preserved even when this app
+ * couldn't parse what it restricts to. The bare word still says the one
+ * true thing this app actually knows (this comment is restricted); `title`
+ * says the rest, since it's honestly a different, longer fact than the
+ * `text` a role/group restriction gets.
+ */
+function commentVisibilityLabel(visibility: JiraCommentVisibility): {
+  text: string;
+  title: string;
+} {
+  if (visibility.type === 'restricted') {
+    return {
+      text: 'Restricted',
+      title:
+        "Jira restricted this comment, but Waypoint couldn't read which role or group.",
+    };
+  }
+  const text = `Restricted to ${visibility.value}`;
+  return { text, title: text };
+}
+
+/**
+ * ROAD-24: the warning shown near the thread-level composer while it is
+ * replying to a restricted comment — see `activeReplyTarget`'s own comment
+ * on JiraTicketDetail for why that is tracked separately from
+ * `pendingReply`, and for the decision this warning exists to implement at
+ * all (leave the composer able to reply, but say honestly what happens).
+ *
+ * The reply itself carries no visibility of its own: JiraCommentComposer.tsx
+ * has no visibility control and `postJiraComment` never sends one, so a
+ * reply to a restricted comment posts fully public regardless of what it
+ * replies to — a person could reasonably answer something meant to stay
+ * internal in the open, which is exactly the harm ROAD-24 names. This file
+ * owns JiraTicketDetail.tsx only, not the composer or the write path, so it
+ * cannot change that; this only says so before it happens, honestly, rather
+ * than staying silent about a real risk or refusing Reply outright.
+ */
+function replyVisibilityWarning(visibility: JiraCommentVisibility): string {
+  if (visibility.type === 'restricted') {
+    return (
+      "Replying publicly — the comment you're replying to is restricted, " +
+      "but Waypoint couldn't read who to. This reply won't be restricted."
+    );
+  }
+  return (
+    `Replying publicly — the comment you're replying to is restricted to ` +
+    `${visibility.value}, but this reply won't be.`
+  );
+}
+
+/**
  * What a comment delete actually does, in the terms a confirm dialog has to
  * be honest about: `jira:comments:delete` (jiraIpc.ts -> jiraClient.ts's
  * `deleteComment`) removes the comment from the real issue outright, with no
@@ -337,6 +410,26 @@ export function JiraTicketDetail({
   const [pendingReply, setPendingReply] = useState<JiraReplyTarget | null>(
     null,
   );
+  // ROAD-24: the comment currently being replied to, kept for the "replying
+  // publicly" warning near the composer (see replyVisibilityWarning) — a
+  // deliberately separate, longer-lived copy of the same click that sets
+  // pendingReply above, not a read of pendingReply itself. pendingReply is a
+  // one-shot signal JiraCommentComposer.tsx's own prefill effect consumes
+  // and nulls again within the same render pass it arrived in (see that
+  // effect, keyed on the object reference alone) — a warning gated on it
+  // would flash for under a frame and be gone before anyone reading the
+  // panel could see it. This is set on the exact same Reply click and stays
+  // set for as long as the reply is genuinely in progress: cleared when that
+  // reply actually posts (onPosted below) or when a different Reply/Edit
+  // starts elsewhere (mirroring pendingReply's own clearing in both those
+  // spots). It does NOT track the user manually deleting the prefilled
+  // @mention from the composer's own draft, which un-threads the reply
+  // inside JiraCommentComposer.tsx (see its own replyParentId effect)
+  // without this component ever finding out — closing that gap needs either
+  // reading or changing that composer's internal state, and this file owns
+  // JiraTicketDetail.tsx only, not JiraCommentComposer.tsx.
+  const [activeReplyTarget, setActiveReplyTarget] =
+    useState<JiraComment | null>(null);
   // Which comment currently has its OWN inline JiraCommentComposer mounted
   // in place of its body (see renderComment below), and what to prefill it
   // with. Unlike pendingReply, this is not a one-shot signal consumed the
@@ -878,6 +971,21 @@ export function JiraTicketDetail({
               {formatRelativeTime(c.createdAt)}
               {c.postedByWaypoint ? ' · via Waypoint' : ''}
             </span>
+            {/* ROAD-24: Jira's own restriction on who can see this comment,
+                or nothing when `c.visibility` is null (fully public) — see
+                commentVisibilityLabel's own comment for the copy and icon
+                reasoning. Same muted-secondary-text idiom as the timestamp
+                just above, so a restricted comment reads as "one more fact
+                about this comment" rather than a jarring warning color. */}
+            {c.visibility && (
+              <span
+                title={commentVisibilityLabel(c.visibility).title}
+                className="ml-1 inline-flex items-center gap-0.5 align-middle text-text-muted"
+              >
+                <IconLock size={10} />
+                {commentVisibilityLabel(c.visibility).text}
+              </span>
+            )}
           </div>
           {c.disclosureText && (
             <div className="mb-1 inline-block rounded bg-jira-bg px-1.5 py-0.5 text-[11px] text-jira">
@@ -988,6 +1096,11 @@ export function JiraTicketDetail({
                         accountId: c.authorAccountId as string,
                         displayName: c.authorName,
                       });
+                      // ROAD-24: the longer-lived copy the "replying
+                      // publicly" warning reads — see activeReplyTarget's
+                      // own comment for why this can't just read
+                      // pendingReply above.
+                      setActiveReplyTarget(c);
                     }}
                     className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
                   >
@@ -1020,6 +1133,10 @@ export function JiraTicketDetail({
                             // to actually drop its own draft once the
                             // editor for THIS comment actually opens).
                             setPendingReply(null);
+                            // ROAD-24: same "Edit abandons any reply in
+                            // progress" rule as the line above, extended to
+                            // the longer-lived copy the reply warning reads.
+                            setActiveReplyTarget(null);
                             setCheckingEditId(c.id);
                             try {
                               // Live re-check before opening an editor over
@@ -1419,6 +1536,22 @@ export function JiraTicketDetail({
               pendingReply) comments — see renderComment for the second
               instance that does edit, mounted per comment rather than once
               here. */}
+          {/* ROAD-24: this composer has no visibility control and
+              postJiraComment never sends one, so a reply to a restricted
+              comment posts fully public regardless of what it's replying
+              to — the exact "reply in the open to something meant to stay
+              internal" risk the ticket names. Rather than silently letting
+              that happen, or refusing Reply outright (which would also
+              block a legitimate public follow-up quoting a restricted
+              comment's content), this says so honestly, right where the
+              reply is being typed. See replyVisibilityWarning's own
+              comment for the wording, and activeReplyTarget's own comment
+              for exactly when this is and isn't shown. */}
+          {activeReplyTarget?.visibility && (
+            <div className="mb-2 rounded-[var(--radius-sm)] border border-warning/30 bg-warning-bg px-3 py-2 text-[11.5px] leading-relaxed text-warning">
+              {replyVisibilityWarning(activeReplyTarget.visibility)}
+            </div>
+          )}
           <JiraCommentComposer
             key={editGeneration}
             ticketId={ticket.id}
@@ -1433,6 +1566,10 @@ export function JiraTicketDetail({
               // own numbers together ("101 most recent of 312"), and on a
               // short thread it would invent a truncation that isn't there.
               setCommentTotal((t) => t + 1);
+              // ROAD-24: whatever reply was in progress actually went out,
+              // so the warning above (if it was showing) no longer applies
+              // to anything still on screen.
+              setActiveReplyTarget(null);
             }}
           />
           {/* Said before the thread, not after it: the whole failure this

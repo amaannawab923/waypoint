@@ -1004,6 +1004,173 @@ describe('replying to a comment', () => {
   });
 });
 
+// ROAD-24: mapComment (main/jira/jiraMap.ts) already turns Jira's own
+// `visibility` field into `JiraComment.visibility` (see that mapper's own
+// tests) — this is the render half, covering the two things that field now
+// drives: the per-comment restricted indicator, and the "replying publicly"
+// warning near the thread-level composer.
+describe('restricted comments (ROAD-24)', () => {
+  it('shows "Restricted to <value>" on a role-restricted comment, and only on that comment', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({ id: 'c1', body: 'Public one', authorName: 'Sam Lee' }),
+        comment({
+          id: 'c2',
+          body: 'Internal only',
+          authorName: 'Priya Raman',
+          visibility: { type: 'role', value: 'Developers' },
+        }),
+      ],
+      total: 2,
+    });
+    renderDrawer();
+    await screen.findByText('Internal only');
+
+    const restrictedRow = screen
+      .getByText('Internal only')
+      .closest('.group') as HTMLElement;
+    expect(
+      within(restrictedRow).getByText('Restricted to Developers'),
+    ).toBeInTheDocument();
+
+    const publicRow = screen
+      .getByText('Public one')
+      .closest('.group') as HTMLElement;
+    expect(within(publicRow).queryByText(/Restricted/)).not.toBeInTheDocument();
+  });
+
+  it('shows the same "Restricted to <value>" shape on a group-restricted comment — Jira\'s own UI does not distinguish the two either', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          body: 'Internal only',
+          visibility: { type: 'group', value: 'Support Engineers' },
+        }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('Internal only');
+
+    expect(
+      screen.getByText('Restricted to Support Engineers'),
+    ).toBeInTheDocument();
+  });
+
+  it('shows bare "Restricted" — never "Restricted to" — when Jira sent a visibility this app could not fully read', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          body: 'Mystery restriction',
+          visibility: { type: 'restricted', value: '' },
+        }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('Mystery restriction');
+
+    expect(screen.getByText('Restricted', { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText(/Restricted to/)).not.toBeInTheDocument();
+  });
+
+  it('shows no restricted indicator anywhere for a public (visibility: null) comment', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({ id: 'c1', body: 'Totally public', visibility: null }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('Totally public');
+
+    expect(screen.queryByText(/Restricted/)).not.toBeInTheDocument();
+  });
+
+  it('warns that the reply will post publicly when replying to a restricted comment', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          authorName: 'Sam Lee',
+          authorAccountId: 'acct-sam',
+          body: 'Internal only',
+          visibility: { type: 'role', value: 'Developers' },
+        }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('Internal only');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+
+    expect(
+      screen.getByText(
+        /Replying publicly.*restricted to Developers.*this reply won't be/,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('shows no "replying publicly" warning when replying to a public comment', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          authorName: 'Sam Lee',
+          authorAccountId: 'acct-sam',
+          body: 'Public one',
+          visibility: null,
+        }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('Public one');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+
+    expect(screen.queryByText(/Replying publicly/)).not.toBeInTheDocument();
+  });
+
+  it('clears the "replying publicly" warning once the reply actually posts', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          authorName: 'Sam Lee',
+          authorAccountId: 'acct-sam',
+          body: 'Internal only',
+          visibility: { type: 'role', value: 'Developers' },
+        }),
+      ],
+      total: 1,
+    });
+    jest.mocked(postJiraComment).mockResolvedValue(comment({ id: 'c2' }));
+    renderDrawer();
+    await screen.findByText('Internal only');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+    expect(screen.getByText(/Replying publicly/)).toBeInTheDocument();
+
+    fireEvent.change(commentBox(), {
+      target: { value: '@Sam Lee on it now' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+
+    await waitFor(() => expect(postJiraComment).toHaveBeenCalled());
+    // onPosted (JiraTicketDetail.tsx) clears activeReplyTarget once the
+    // write's own response comes back — a further tick after the mock
+    // resolves, not something `waitFor(() => expect(postJiraComment)...)`
+    // above already waited out.
+    await waitFor(() =>
+      expect(screen.queryByText(/Replying publicly/)).not.toBeInTheDocument(),
+    );
+  });
+});
+
 // Integration coverage for groupCommentsIntoThreads (JiraTicketDetail.tsx),
 // which has its own thorough unit tests — this just confirms the real
 // component renders every comment, nested or not, rather than the grouping
