@@ -1152,12 +1152,16 @@ export function mapIssue(
 }
 
 /**
- * `record.visibility` -> `JiraCommentVisibility | null`. `null` only when
- * the key itself is missing or explicitly `null` — the one shape Jira's own
- * docs describe as "this comment is public" and the only case this function
- * treats as "nothing to show".
+ * `record.visibility` and `record.jsdPublic` -> `JiraCommentVisibility |
+ * null`. `null` only when NEITHER says the comment is restricted: no
+ * `visibility` key (or an explicit `null`) AND `jsdPublic` is not `false` —
+ * the one combination Jira's own docs describe as "this comment is public",
+ * and the only case this function treats as "nothing to show".
  *
- * Anything else present under `visibility` — a well-formed `{ type, value }`
+ * `visibility` is checked first and, when present, wins outright — see this
+ * function's own note on precedence below for why a payload carrying both
+ * is even possible and why role/group is the one that gets shown in that
+ * case. Anything present under `visibility` — a well-formed `{ type, value }`
  * object, an object with a `type` this app has never seen, even a shape too
  * malformed to read a `type`/`value` out of at all — maps to a real
  * `JiraCommentVisibility` rather than to `null`. That is a deliberate
@@ -1172,15 +1176,47 @@ export function mapIssue(
  * degrades a non-object `visibility` to `{}`, so `rawType`/`rawValue` are
  * simply undefined in that case and fall through to the same 'restricted' /
  * `''` fallbacks a recognized-but-incomplete object would get.
+ *
+ * `jsdPublic === false` is checked only once `visibility` has ruled itself
+ * out, and maps to `{ type: 'internal', value: '' }` — see
+ * `JiraCommentVisibility`'s own comment (jiraTypes.ts) for the full story on
+ * why this axis was folded in (JSDSERVER-1261: a genuine JSM internal note
+ * carries no `visibility` object at all, so this is not a fallback for a
+ * parsing gap, it is the ONLY signal that case ever sends) and why reading
+ * it can't false-positive off a JSM project (the v3 spec's own documented
+ * `true` default). Any other value — `true`, `undefined`, anything that
+ * isn't the literal `false` — says nothing, the same "absence is not
+ * evidence" rule this file applies to `fields.watches.isWatching` in
+ * `roleOf` above.
+ *
+ * Precedence when a payload somehow carries both a `visibility` restriction
+ * and `jsdPublic: false`: `visibility` wins. Per JSDSERVER-1261 the two are
+ * not supposed to co-occur — real internal notes have no `visibility` at
+ * all — so a payload with both is already an unusual shape this app has not
+ * verified against a real site (a proxy, a scripted write, a future Jira
+ * behavior). Between the two readings available for it, `visibility` is the
+ * more specific, nameable fact ("Restricted to Administrators" against a
+ * generic "Internal note"), and preferring the more specific true statement
+ * this function can make is the same call `mapIssue`'s `isEpicIssueType`
+ * and this very function's own `'restricted'` fallback already make
+ * elsewhere in this file.
  */
-function mapCommentVisibility(value: unknown): JiraCommentVisibility | null {
-  if (value == null) return null;
-  const record = asRecord(value);
-  const { type: rawType, value: rawValue } = record;
-  return {
-    type: rawType === 'role' || rawType === 'group' ? rawType : 'restricted',
-    value: typeof rawValue === 'string' ? rawValue : '',
-  };
+function mapCommentVisibility(
+  visibility: unknown,
+  jsdPublic: unknown,
+): JiraCommentVisibility | null {
+  if (visibility != null) {
+    const record = asRecord(visibility);
+    const { type: rawType, value: rawValue } = record;
+    return {
+      type: rawType === 'role' || rawType === 'group' ? rawType : 'restricted',
+      value: typeof rawValue === 'string' ? rawValue : '',
+    };
+  }
+  if (jsdPublic === false) {
+    return { type: 'internal', value: '' };
+  }
+  return null;
 }
 
 /** Comments are read AND written through v3 (see jiraClient.ts) — this
@@ -1244,7 +1280,8 @@ export function mapComment(
     // trusted at all despite appearing nowhere in Atlassian's published spec.
     parentId: idOf(record.parentId),
     // See mapCommentVisibility's own comment for the null-vs-'restricted'
-    // decision — and JiraCommentVisibility's for why this is never `jsdPublic`.
-    visibility: mapCommentVisibility(record.visibility),
+    // decision, the `jsdPublic` -> 'internal' mapping, and the precedence
+    // when a payload carries both.
+    visibility: mapCommentVisibility(record.visibility, record.jsdPublic),
   };
 }

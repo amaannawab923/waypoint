@@ -283,12 +283,15 @@ export interface JiraTicket {
 // with empty placeholders.
 
 /** Renderer mirror of `JiraCommentVisibility` (main/jira/jiraTypes.ts), which
- * has the full story — what each state means, why an unrecognized `type`
- * still resolves to `'restricted'` rather than being dropped, and why this
- * is deliberately not JSM's separate `jsdPublic` flag. Carried through
- * jiraApi.ts's `toComment` unchanged; this app has no UI that writes it. */
+ * has the full story — what each `type` means, why an unrecognized `type`
+ * still resolves to `'restricted'` rather than being dropped, why
+ * `'internal'` is built from JSM's separate `jsdPublic` flag rather than
+ * dropped the way an earlier version of that file did, and the precedence
+ * when a comment carries both a role/group restriction and `jsdPublic:
+ * false`. Carried through jiraApi.ts's `toComment` unchanged; this app has
+ * no UI that writes it. */
 export interface JiraCommentVisibility {
-  type: 'role' | 'group' | 'restricted';
+  type: 'role' | 'group' | 'restricted' | 'internal';
   value: string;
 }
 

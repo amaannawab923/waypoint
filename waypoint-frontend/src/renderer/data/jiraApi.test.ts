@@ -1927,6 +1927,25 @@ describe('listJiraComments — visibility', () => {
 
     expect(comments[0].visibility).toBeNull();
   });
+
+  // ROAD-24 review finding #1: main now maps a JSM internal note's
+  // `jsdPublic: false` to `{ type: 'internal', value: '' }` (jiraMap.ts) —
+  // this is the same pure pass-through proof as the role/group cases above,
+  // just for the new variant.
+  it('carries an internal-note visibility through unchanged', async () => {
+    const api = freshApi();
+    bridge.listComments.mockResolvedValue({
+      ok: true,
+      value: {
+        comments: [wireCommentWithVisibility({ type: 'internal', value: '' })],
+        total: 1,
+      },
+    });
+
+    const { comments } = await api.listJiraComments('10421');
+
+    expect(comments[0].visibility).toEqual({ type: 'internal', value: '' });
+  });
 });
 
 /**
