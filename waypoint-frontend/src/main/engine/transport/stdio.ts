@@ -7,10 +7,16 @@ import type {
 
 // The stdio-mode transport (ROAD-50): Waypoint spawns `<launcher> serve
 // --stdio` itself and speaks Wire over the child's stdin/stdout. The daemon
-// is a child here, not a peer — it lives and dies with this process. On
-// macOS and Linux the socket mode is what ships; this mode exists so Windows
-// (no Unix sockets) is a packaging task later rather than an architecture
-// change (types.ts, section 3, and ROAD-99).
+// is a child here, not a peer: `close()` ends it, and a clean Waypoint quit
+// ends it. What does NOT end it is a SIGKILLed or crashed Waypoint — the
+// child is spawned non-detached with pipes, and emdash's `serveStdio`
+// (`apps/workspace-server/src/wire/serve-stdio.ts`) does not exit on stdin
+// EOF; it dies on its next write to the closed pipe, which may be never
+// (found in review, L3). Dormant on macOS, where the socket mode ships;
+// live on Windows, where this mode is the plan (ROAD-99) and orphan
+// reaping at the next launch (a pid breadcrumb) is part of that ticket.
+// This mode exists so Windows — no Unix sockets — is a packaging task
+// later rather than an architecture change (types.ts, section 3).
 //
 // Like socket.ts this moves bytes and reports the end of the connection
 // once. It additionally owns the child's lifetime — that is the one thing

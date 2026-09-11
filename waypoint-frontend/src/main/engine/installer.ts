@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
-import { promisify } from 'node:util';
 import { ENGINE_PIN, type EnginePaths } from './types';
 
 /**
@@ -10,9 +9,11 @@ import { ENGINE_PIN, type EnginePaths } from './types';
  * test can pin a fixture archive under its own real sha256. Production
  * always passes ENGINE_PIN itself.
  */
-export type EnginePin = {
-  [K in keyof typeof ENGINE_PIN]: string;
-};
+// `Record<keyof …>` rather than a mapped `{ [K in keyof …]: string }`: the
+// same type, but this repo's @typescript-eslint crashes on a TSMappedType
+// over `keyof typeof` (no-unused-vars, collectUnusedVariables.ts:152), and
+// a lint step that throws is a lint step nobody reads.
+export type EnginePin = Record<keyof typeof ENGINE_PIN, string>;
 
 /**
  * Turns the archive Waypoint ships into an engine the supervisor can run —
@@ -32,8 +33,6 @@ export type EnginePin = {
  * against the pin after. The supervisor never starts a launcher this module
  * has not vouched for.
  */
-
-const execFileAsync = promisify(execFile);
 
 export type EngineInstallResult =
   | { ok: true; installDir: string; manifest: EngineManifest }
@@ -81,11 +80,6 @@ export function bundledArchivePath(
   pin: EnginePin = ENGINE_PIN,
 ): string {
   return path.join(deps.bundledArchiveDir, archiveFileName(pin));
-}
-
-async function sha256Of(file: string): Promise<string> {
-  const buf = await fs.readFile(file);
-  return createHash('sha256').update(buf).digest('hex');
 }
 
 async function exists(p: string): Promise<boolean> {
@@ -176,7 +170,14 @@ export async function installEngine(
       message: `Engine archive not found at ${archive}. In development run \`npm run engine:fetch\`.`,
     };
   }
-  const actual = await sha256Of(archive);
+  // Read once, hash those bytes, extract those same bytes — never re-read
+  // the path. Found in review (L7): hashing the file and then handing the
+  // *path* to tar left a window in which a same-user writer could swap
+  // the archive between the check and the extraction. The threat model is
+  // thin (same-user write to the app bundle is game over regardless), but
+  // the fix costs nothing: tar reads the buffer from stdin.
+  const archiveBytes = await fs.readFile(archive);
+  const actual = createHash('sha256').update(archiveBytes).digest('hex');
   if (actual !== pin.sha256) {
     return {
       ok: false,
@@ -190,9 +191,23 @@ export async function installEngine(
   await fs.rm(paths.installDir, { recursive: true, force: true });
   await fs.mkdir(paths.installDir, { recursive: true });
   try {
-    // macOS ships bsdtar as `tar`; `-xzf … -C dir` is the same on GNU tar,
-    // so this also holds for the Linux targets (ROAD-102) when they come.
-    await execFileAsync('tar', ['-xzf', archive, '-C', paths.installDir]);
+    // `/usr/bin/tar` by absolute path — one fewer thing PATH can change.
+    // macOS ships bsdtar there; `-xzf - -C dir` reads the archive from
+    // stdin identically on GNU tar, so this holds for the Linux targets
+    // (ROAD-102) when they come. The archive is trusted ONLY because its
+    // hash matched the pin a moment ago: bsdtar without `-P` refuses
+    // absolute and `..` entries, and the pinned archive was inspected
+    // (959 entries, none of either), but neither of those is why this is
+    // safe — the hash is.
+    await new Promise<void>((resolve, reject) => {
+      const child = execFile(
+        '/usr/bin/tar',
+        ['-xzf', '-', '-C', paths.installDir],
+        (error) => (error ? reject(error) : resolve()),
+      );
+      child.stdin?.on('error', reject);
+      child.stdin?.end(archiveBytes);
+    });
   } catch (err) {
     return {
       ok: false,

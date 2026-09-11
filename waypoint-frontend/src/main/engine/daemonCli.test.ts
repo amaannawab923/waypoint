@@ -4,7 +4,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { runDaemonCommand } from './daemonCli';
+import { engineRuntimeEnv, runDaemonCommand } from './daemonCli';
 
 // runDaemonCommand against a fake launcher: a `sh` script that execs node
 // on a script, the same shape as the real archive's launcher (emdash
@@ -299,6 +299,29 @@ describe('runDaemonCommand', () => {
       expect(result).toMatchObject({
         failure: { message: expect.stringContaining('ENOENT') },
       });
+    });
+  });
+});
+
+describe('engineRuntimeEnv', () => {
+  // Review finding H1: under `npm start` Electron main inherits the renderer
+  // dev server's NODE_OPTIONS="-r ts-node/register"; the launcher's bundled
+  // node then fails to resolve that preload from the install dir and dies
+  // before printing anything. Reproduced with the real launcher.
+  it('strips the variables that would reconfigure the daemon’s own node', () => {
+    const out = engineRuntimeEnv({
+      HOME: '/Users/x',
+      PATH: '/usr/bin',
+      NODE_OPTIONS: '-r ts-node/register --no-warnings',
+      NODE_PATH: '/somewhere',
+      ELECTRON_RUN_AS_NODE: '1',
+      NODE_ENV: 'development',
+      GH_TOKEN: 'keep-me-this-is-ROAD-88-not-here',
+    });
+    expect(out).toEqual({
+      HOME: '/Users/x',
+      PATH: '/usr/bin',
+      GH_TOKEN: 'keep-me-this-is-ROAD-88-not-here',
     });
   });
 });

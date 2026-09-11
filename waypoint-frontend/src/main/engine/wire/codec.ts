@@ -58,14 +58,15 @@ const BINARY_BODY_LENGTH_BYTES = 4;
 
 /**
  * Big-endian u32 read/write, via `DataView` rather than hand-rolled shifts.
- * `stream.ts`'s own `writeU32`/`readU32` build the same four bytes with
- * `>>>`/`<<`/`&`, which works but also silently depends on `<<`'s signed
- * 32-bit behavior in JS (a length with its top bit set would read back
- * negative) — a footgun `DataView.setUint32`/`getUint32` simply doesn't
- * have, since reading/writing "a big-endian u32 at this byte offset" is
- * exactly what they are for, via the `littleEndian` parameter rather than
- * manual shifting. This also happens to keep this file's own `no-bitwise`
- * lint rule genuinely satisfied rather than suppressed.
+ * `stream.ts`'s own `writeU32`/`readU32` (`stream.ts:186-191`) build the
+ * same four bytes by hand, and do it correctly: the top byte is multiplied
+ * (`* 0x1000000`), so only the low 24 bits ever go through `<<` and a
+ * length with its top bit set reads back positive. (An earlier version of
+ * this comment claimed the opposite about upstream; it was wrong — found
+ * in review.) `DataView.getUint32`/`setUint32` are used here because
+ * reading "a big-endian u32 at this byte offset" is exactly what they are
+ * for, and because it keeps this file's `no-bitwise` lint genuinely
+ * satisfied rather than suppressed — not because upstream has a bug.
  *
  * `target.buffer`/`source.buffer` may be a `SharedArrayBuffer` (part of
  * `ArrayBufferLike`, the type every `Uint8Array` in this file carries) —
@@ -183,7 +184,23 @@ export function createFrameDecoder(): FrameDecoder {
           const text = textDecoder.decode(
             buffer.subarray(headerStart, headerEnd),
           );
-          messages.push(JSON.parse(text) as WireMessage);
+          const parsed: unknown = JSON.parse(text);
+          // A non-object body (`null`, a number, a string) is valid JSON
+          // and not a message; pushing it would put `null` into the
+          // client's router, which reads `.kind` off it inside the
+          // transport's data listener — an uncaught TypeError in Electron
+          // main (found in review, L4). emdash guards the same way with
+          // `isWireMessage`. A frame that parses but is not a message is a
+          // peer that is not speaking Wire; the decoder throws, and the
+          // client closes the transport rather than desync.
+          if (
+            parsed === null ||
+            typeof parsed !== 'object' ||
+            typeof (parsed as { kind?: unknown }).kind !== 'string'
+          ) {
+            throw new Error('Wire frame body is not a message object');
+          }
+          messages.push(parsed as WireMessage);
           offset = headerEnd;
           continue;
         }

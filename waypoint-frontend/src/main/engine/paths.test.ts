@@ -94,7 +94,8 @@ describe('resolveEnginePaths — socket path length', () => {
   });
 
   it('accepts a typical macOS userData path', () => {
-    const typical = '/Users/amaannawab/Library/Application Support/waypoint-frontend';
+    const typical =
+      '/Users/amaannawab/Library/Application Support/waypoint-frontend';
     expect(() => resolveEnginePaths(typical)).not.toThrow();
   });
 });

@@ -304,6 +304,12 @@ export function createWireClient(transport: EngineTransport): WireClient {
         kind: 'error',
         message: error instanceof Error ? error.message : String(error),
       });
+      // And actually hang up: handleClose settles this client's own state,
+      // but the socket would otherwise stay open to a peer we have decided
+      // not to trust (found in review, L4). The supervisor happened to
+      // compensate on both paths it used; the client's `close` contract
+      // should not depend on that.
+      transport.close();
       return;
     }
     for (const message of messages) routeMessage(message);

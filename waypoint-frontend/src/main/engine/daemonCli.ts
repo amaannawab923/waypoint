@@ -50,14 +50,24 @@ export interface RunDaemonCommandOptions {
    */
   socketPath: string;
   /**
-   * Added on top of `process.env` for the command. Nothing is removed and
-   * nothing is filtered: for `start`, this environment IS the long-lived
-   * daemon's environment — `start` spawns `serve` with its own
-   * `process.env` (`start.ts:112`, `index.ts:100` passes no override) — and
-   * the daemon needs HOME, PATH, and whatever the user's login state is to
-   * find and run the agent CLIs it hosts. Scrubbing what a *session* may
-   * see is a different concern with a different owner (ROAD-88, at
-   * session start), not something to do to the engine's process.
+   * Added on top of the inherited environment for the command. For `start`,
+   * this environment IS the long-lived daemon's environment — `start`
+   * spawns `serve` with its own `process.env` (`start.ts:112`, `index.ts:100`
+   * passes no override) — and the daemon needs HOME, PATH, and whatever the
+   * user's login state is to find and run the agent CLIs it hosts.
+   *
+   * Two different kinds of stripping are deliberately kept apart:
+   *
+   *  - What a *session* may see (tokens, ssh-agent, cloud keys) is ROAD-88's
+   *    scrub at session time. Not here.
+   *  - What would break the daemon's *own runtime* is removed here, in
+   *    `engineRuntimeEnv()` — found in review (H1): under `npm start` the
+   *    renderer dev server sets `NODE_OPTIONS="-r ts-node/register"` and
+   *    Electron main inherits it; the launcher execs the daemon's bundled
+   *    `node`, which resolves that preload from its cwd (the install dir,
+   *    no node_modules) and dies with "Cannot find module 'ts-node/register'"
+   *    before printing anything the parser knows. A Waypoint-dev-process
+   *    artefact, not something the daemon should ever inherit.
    */
   env?: Record<string, string | undefined>;
   /**
@@ -264,6 +274,29 @@ function parseOutcome(
  * (`index.ts:147-152`). The lines, not the codes, carry the meaning, so
  * parsing is line-first and the code is reported alongside.
  */
+/**
+ * The inherited environment minus the variables that would reconfigure the
+ * daemon's own Node runtime. Exported for the test and for the stdio
+ * transport, which spawns the same launcher.
+ *
+ *  - NODE_OPTIONS / NODE_PATH: preloads and module paths meant for
+ *    Waypoint's dev process, not for a bundled node in a bare directory.
+ *  - ELECTRON_RUN_AS_NODE: set by Electron for its own forked helpers; the
+ *    launcher runs a real node binary and must not be told it is Electron.
+ *  - NODE_ENV: Waypoint's build mode ('development') is not the daemon's;
+ *    the daemon reads its own config and never keys on this.
+ */
+export function engineRuntimeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const {
+    NODE_OPTIONS: _nodeOptions,
+    NODE_PATH: _nodePath,
+    ELECTRON_RUN_AS_NODE: _electronRunAsNode,
+    NODE_ENV: _nodeEnv,
+    ...rest
+  } = env;
+  return rest;
+}
+
 export function runDaemonCommand<C extends DaemonManagementCommand>(
   launcherPath: string,
   command: C,
@@ -294,7 +327,7 @@ export function runDaemonCommand<C extends DaemonManagementCommand>(
     };
 
     const child = spawn(launcherPath, [command, '--socket', socketPath], {
-      env: { ...process.env, ...options.env },
+      env: { ...engineRuntimeEnv(process.env), ...options.env },
       cwd: options.cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
     });

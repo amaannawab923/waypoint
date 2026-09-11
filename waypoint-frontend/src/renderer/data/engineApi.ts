@@ -29,8 +29,9 @@ export function getEngineStatus(): Promise<EngineStatus> {
   return bridge().status();
 }
 
-/** Verifies an already-extracted install against the pinned build. This is
- *  the call MachinePage makes on mount to get a truthful first status. */
+/** Installs if needed (extracting the bundled archive), verifies, and probes
+ *  the socket — the call MachinePage makes on mount to get a truthful first
+ *  status, which may be `running` if a daemon outlived the last Waypoint. */
 export function installEngine(): Promise<EngineStatus> {
   return bridge().install();
 }

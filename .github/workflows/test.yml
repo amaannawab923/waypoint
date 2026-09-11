@@ -20,6 +20,11 @@ jobs:
           cache: npm
           cache-dependency-path: waypoint-frontend/package-lock.json
       - run: npm ci
+        # postinstall fetches the pinned agent-engine archive from this repo's
+        # own release via `gh` (scripts/fetch-engine.mjs); the workflow token
+        # has contents:read on the repo, which is all that download needs.
+        env:
+          GH_TOKEN: ${{ github.token }}
       - run: npm run typecheck --if-present
       # continue-on-error, not a hard gate: this is the first time lint has
       # ever run in CI for this repo (no workflow existed before this PR),
@@ -59,6 +64,11 @@ jobs:
           cache: npm
           cache-dependency-path: waypoint-backend/package-lock.json
       - run: npm ci
+        # postinstall fetches the pinned agent-engine archive from this repo's
+        # own release via `gh` (scripts/fetch-engine.mjs); the workflow token
+        # has contents:read on the repo, which is all that download needs.
+        env:
+          GH_TOKEN: ${{ github.token }}
       # No Postgres setup here, unlike the e2e job below: almost every backend
       # *.test.ts file mocks its DB access rather than hitting a real
       # database. The one exception (proposals.service.integration.test.ts)
@@ -93,6 +103,8 @@ jobs:
           cache-dependency-path: waypoint-frontend/package-lock.json
       - name: Install frontend deps
         run: npm ci
+        env:
+          GH_TOKEN: ${{ github.token }}
       - name: Set up Postgres (Homebrew, no Docker on this runner)
         run: |
           brew install postgresql@16

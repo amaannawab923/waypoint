@@ -142,7 +142,7 @@ describe('MachinePage — Agent engine section', () => {
     expect(installEngine).toHaveBeenCalledTimes(1);
   });
 
-  it('not-installed: shows "Not installed at <dir>" and a Check installation action', async () => {
+  it('not-installed: shows "Not installed at <dir>" and an Install action', async () => {
     jest.mocked(installEngine).mockResolvedValue(NOT_INSTALLED);
     await mount();
 
@@ -150,7 +150,7 @@ describe('MachinePage — Agent engine section', () => {
       await screen.findByText(`Not installed at ${NOT_INSTALLED.installDir}`),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: 'Check installation' }),
+      screen.getByRole('button', { name: 'Install' }),
     ).toBeInTheDocument();
   });
 
@@ -172,14 +172,16 @@ describe('MachinePage — Agent engine section', () => {
     expect(startEngine).toHaveBeenCalledTimes(1);
   });
 
-  it('running: shows version and uptime, and a Stop action that calls stopEngine()', async () => {
+  it('running: shows version and when it connected, and a Stop action that calls stopEngine()', async () => {
     jest.mocked(installEngine).mockResolvedValue(RUNNING);
     jest.mocked(stopEngine).mockResolvedValue(STOPPED);
     await mount();
 
-    // 65_000ms = 1m 5s.
+    // Not the daemon's uptime: that is a snapshot from the handshake and
+    // nothing refreshes it, so "up for 1m 5s" would be false one second
+    // after render (review, M5). The connection time stays true.
     expect(
-      await screen.findByText('Running · version 0.1.0 · up for 1m 5s'),
+      await screen.findByText(/^Running · version 0\.1\.0 · connected \d{1,2}:\d{2}/),
     ).toBeInTheDocument();
     const stopButton = screen.getByRole('button', { name: 'Stop' });
 

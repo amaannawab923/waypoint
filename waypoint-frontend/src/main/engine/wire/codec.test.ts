@@ -338,3 +338,21 @@ describe('createFrameDecoder', () => {
     expect(decoder.push(bytes.subarray(2))).toEqual([message]);
   });
 });
+
+describe('createFrameDecoder — non-message bodies', () => {
+  // Review finding L4: `null` is valid JSON and would have reached the
+  // client's router, which reads `.kind` off it inside the transport's
+  // data listener — an uncaught TypeError in Electron main.
+  it.each([['null'], ['42'], ['"a string"'], ['{"no":"kind"}']])(
+    'throws (so the client closes) on a JSON frame whose body is %s',
+    (body) => {
+      const decoder = createFrameDecoder();
+      const bytes = Buffer.from(body, 'utf8');
+      const frame = Buffer.alloc(5 + bytes.length);
+      frame[0] = 0x00;
+      frame.writeUInt32BE(bytes.length, 1);
+      bytes.copy(frame, 5);
+      expect(() => decoder.push(frame)).toThrow(/not a message object/);
+    },
+  );
+});

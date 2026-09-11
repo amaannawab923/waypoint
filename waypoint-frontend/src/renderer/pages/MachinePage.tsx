@@ -20,16 +20,16 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 
-// Whole seconds only: sub-second precision on an uptime nobody is watching
-// tick by the millisecond would be noise, not information.
-function formatUptime(uptimeMs: number): string {
-  const totalSeconds = Math.max(0, Math.floor(uptimeMs / 1000));
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  if (minutes > 0) return `${minutes}m ${seconds}s`;
-  return `${seconds}s`;
+// The wall-clock time the supervisor completed the handshake — a fact that
+// stays true however long the page sits open, unlike a snapshot of the
+// daemon's uptime (which nothing refreshes and would be wrong a second
+// after render). Local time, hours and minutes: this is "when did I
+// connect", not a stopwatch.
+function formatClock(epochMs: number): string {
+  return new Date(epochMs).toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 type EngineStatusTone = 'neutral' | 'info' | 'success' | 'danger';
@@ -61,7 +61,10 @@ function describeEngineStatus(status: EngineStatus): {
       return { sentence: 'Starting…', tone: 'info' };
     case 'running':
       return {
-        sentence: `Running · version ${status.health.version} · up for ${formatUptime(status.health.uptimeMs)}`,
+        // `health.uptimeMs` is a snapshot from the handshake and nothing
+        // refreshes it, so "up for N s" would be false a second later
+        // (review, M5). The connection time is a fact that stays true.
+        sentence: `Running · version ${status.health.version} · connected ${formatClock(status.since)}`,
         tone: 'success',
       };
     case 'stopping':
@@ -126,11 +129,12 @@ function EngineActionsCell({
  * The one action this row can honestly offer for `status`, or `null` when
  * none applies — `starting`/`stopping` have no action (already in
  * progress), and a protocol-incompatible failure has no retry that could
- * ever succeed (supervisor.ts's own "upgrade, don't retry"). A `failed` at
- * stage `install` gets the same recheck action as `not-installed`: both are
- * answered by install()'s own verification, which is honestly all this
- * task's scope can offer here — see engineApi.ts's own comment on
- * installEngine() for why this never triggers real extraction (ROAD-47).
+ * ever succeed (supervisor.ts's own "upgrade, don't retry"). `not-installed`
+ * offers "Install" because install() really does extract the bundled
+ * archive when nothing usable is on disk (found in review: an earlier
+ * "Check installation" label understated a 62 MB write). A `failed` at
+ * stage `install` offers the same, since a re-run is the one thing that
+ * can change a broken install.
  */
 function primaryEngineAction(
   status: EngineStatus,
@@ -138,7 +142,7 @@ function primaryEngineAction(
 ): { label: string; run: () => void } | null {
   switch (status.kind) {
     case 'not-installed':
-      return { label: 'Check installation', run: handlers.onCheck };
+      return { label: 'Install', run: handlers.onCheck };
     case 'stopped':
       return { label: 'Start', run: handlers.onStart };
     case 'running':
@@ -149,7 +153,7 @@ function primaryEngineAction(
     case 'failed':
       if (status.incompatible) return null;
       if (status.stage === 'install')
-        return { label: 'Check installation', run: handlers.onCheck };
+        return { label: 'Install', run: handlers.onCheck };
       if (status.stage === 'stop')
         return { label: 'Retry stop', run: handlers.onStop };
       return { label: 'Retry', run: handlers.onStart };

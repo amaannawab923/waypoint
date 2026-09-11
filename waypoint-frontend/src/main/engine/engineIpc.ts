@@ -66,8 +66,42 @@ function bundledArchiveDir(): string {
     : path.join(app.getAppPath(), 'engine');
 }
 
+/**
+ * A supervisor that can only ever report one thing: the reason the real
+ * one could not be built. Found in review (M2): `resolveEnginePaths`
+ * throws on a socket path over macOS's 104-byte limit, and it ran at
+ * module load of main.ts — so a long userData path crashed Waypoint at
+ * boot with no window, instead of the engine card saying so. A broken
+ * engine is a status, never a reason the app cannot open.
+ */
+function unavailableEngineSupervisor(message: string): EngineSupervisor {
+  const status: EngineStatus = {
+    kind: 'failed',
+    since: Date.now(),
+    stage: 'install',
+    message,
+  };
+  const same = async (): Promise<EngineStatus> => status;
+  return {
+    getStatus: () => status,
+    install: same,
+    start: same,
+    stop: same,
+    health: async () => null,
+    onStatusChange: () => () => {},
+    dispose: () => {},
+  };
+}
+
 export function createDefaultEngineSupervisor(): EngineSupervisor {
-  const paths = resolveEnginePaths(app.getPath('userData'));
+  let paths;
+  try {
+    paths = resolveEnginePaths(app.getPath('userData'));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error('engine unavailable', { message });
+    return unavailableEngineSupervisor(message);
+  }
   const installerDeps = { bundledArchiveDir: bundledArchiveDir() };
   return createEngineSupervisor({
     paths,

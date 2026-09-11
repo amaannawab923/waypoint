@@ -94,21 +94,31 @@ export interface EnginePaths {
   socketPath: string;
   /**
    * The directory holding the socket. Observed live: the daemon writes
-   * `<socket>.pid` (mode 0600), `<socket>.log`, and — not configurable, it
-   * follows the socket — its SQLite stores in `<runDir>/state/*.db`
+   * `<socket>.pid` (mode 0600) and `<socket>.log` beside the socket, and —
+   * not configurable, it follows the socket — its SQLite stores
    * (`workspace-registry.db`, `conversations.db`, `automations.db`,
-   * `file-search.db`).
+   * `file-search.db`) under `stateDir` below.
    */
   runDir: string;
-  /** `<runDir>/state`. Derived, never chosen: the daemon decides. */
+  /**
+   * Where the daemon keeps its SQLite stores. Derived, never chosen: emdash's
+   * `workspaceServerRuntimePaths` (`apps/workspace-server/src/runtime/paths.ts:19-22`)
+   * strips a trailing `run` segment from the socket's directory and appends
+   * `state` — so with `runDir = <engine>/run` this is `<engine>/state`, a
+   * sibling of `run`, not inside it. `paths.ts` and its test pin exactly
+   * that; the first draft of this comment said `<runDir>/state` and was wrong.
+   */
   stateDir: string;
   /** Where Waypoint keeps the engine's stdout/stderr when it spawns it. */
   logPath: string;
 }
 
 /**
- * `sun_path` is 104 bytes on macOS (108 on Linux). Counted in bytes of the
- * UTF-8 path, including the NUL, so 103 usable characters on macOS.
+ * `sun_path` is 104 bytes on macOS (108 on Linux). Measured in review on
+ * this macOS with the same libuv the bundled node uses: a 104-byte path
+ * binds and connects, 105 fails with EINVAL — so 104 usable bytes, and
+ * `paths.ts` counts the path plus one for the terminating NUL against this
+ * limit, which is conservative by exactly one byte. In the safe direction.
  */
 export const MAX_UNIX_SOCKET_PATH = 104;
 
@@ -322,7 +332,12 @@ export class EngineCallError extends Error {
   readonly code: WireErrorCode;
   readonly path: string;
   readonly cause?: unknown;
-  constructor(path: string, code: WireErrorCode, message: string, cause?: unknown) {
+  constructor(
+    path: string,
+    code: WireErrorCode,
+    message: string,
+    cause?: unknown,
+  ) {
     super(message);
     this.name = 'EngineCallError';
     this.code = code;
@@ -355,7 +370,10 @@ export interface WireClient {
       onSnapshot: (value: unknown) => void;
       onUpdate: (update: unknown) => void;
       onGap?: () => void;
-      onError?: (error: WireTopicErrorMessage['error'], retrying: boolean) => void;
+      onError?: (
+        error: WireTopicErrorMessage['error'],
+        retrying: boolean,
+      ) => void;
     },
   ): Promise<Unsubscribe>;
   onDisconnect(cb: (reason: EngineTransportCloseReason) => void): Unsubscribe;
@@ -375,7 +393,9 @@ export interface WireClient {
  * (`Probe<T>`, never a fabricated status).
  */
 export type EngineStatus =
-  /** No archive at `installDir` (or its sha256 does not match the pin). */
+  /** Nothing runnable at `installDir` and nothing to extract it from. (An
+   *  archive whose sha256 does not match the pin is `failed`/`install`,
+   *  not this: that is a fact to show, not an absence.) */
   | { kind: 'not-installed'; installDir: string }
   /** Installed; no daemon answering on the socket; not asked to start. */
   | { kind: 'stopped'; installDir: string; version: string }

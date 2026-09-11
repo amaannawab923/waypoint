@@ -16,14 +16,24 @@
 // source) — still hash-checked, because a wrong local build is the exact
 // thing the pin exists to catch.
 //
-// Apple Silicon only in this release (ROAD-46/ROAD-101); on any other
-// platform this prints what is missing and exits 0, because a Linux or
-// Windows developer must still be able to `npm install` and work on
-// everything that is not the engine.
+// This script never fails `npm install`. Apple Silicon only in this release
+// (ROAD-46/ROAD-101): on any other platform, and on a machine that cannot
+// reach the release (no `gh`, not logged in, offline), it prints what is
+// missing and exits 0 — the app then reports the engine as "not installed",
+// which is the truth, while everything that is not the engine keeps working.
+// The one thing that DOES fail is a downloaded or supplied archive whose
+// sha256 is not the pinned one: that is never allowed to exist in ./engine/.
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -64,19 +74,54 @@ if (local) {
   const tag = target.release.split('/').pop();
   console.log(`[engine] downloading ${target.file} from release ${tag} …`);
   // `gh release download` writes into --dir under the asset's own name.
-  execFileSync(
-    'gh',
-    ['release', 'download', tag, '--repo', 'amaannawab923/waypoint', '--pattern', target.file, '--dir', outDir, '--clobber'],
-    { stdio: 'inherit' },
-  );
+  // Found in review (H2): this ran inside postinstall with no guard, so a
+  // machine without `gh`, or with `gh` not logged in (CI without
+  // GH_TOKEN), failed the whole `npm install` with a stack trace. The
+  // engine being absent is a *status* the app can show ("not installed");
+  // it must never be a reason `npm install` cannot finish.
+  try {
+    execFileSync(
+      'gh',
+      [
+        'release',
+        'download',
+        tag,
+        '--repo',
+        'amaannawab923/waypoint',
+        '--pattern',
+        target.file,
+        '--dir',
+        outDir,
+        '--clobber',
+      ],
+      { stdio: ['ignore', 'inherit', 'pipe'] },
+    );
+  } catch (err) {
+    const detail =
+      err && err.stderr
+        ? String(err.stderr).trim().split('\n').slice(-2).join(' ')
+        : err && err.code === 'ENOENT'
+          ? '`gh` is not installed'
+          : String(err);
+    console.log(
+      `[engine] could not download ${target.file}: ${detail}\n` +
+        '[engine] Skipping — the agent engine will report "not installed" until you run `npm run engine:fetch` ' +
+        'with `gh auth login` done (or set WAYPOINT_ENGINE_ARCHIVE to a local build).',
+    );
+    process.exit(0);
+  }
   renameSync(dest, tmp);
 }
 
 const actual = sha256(tmp);
 if (actual !== target.sha256) {
   unlinkSync(tmp);
-  console.error(`[engine] sha256 mismatch for ${target.file}\n  expected ${target.sha256}\n  actual   ${actual}\nRefusing to keep it.`);
+  console.error(
+    `[engine] sha256 mismatch for ${target.file}\n  expected ${target.sha256}\n  actual   ${actual}\nRefusing to keep it.`,
+  );
   process.exit(1);
 }
 renameSync(tmp, dest);
-console.log(`[engine] ${target.file} verified (${target.sha256.slice(0, 12)}…) → ${dest}`);
+console.log(
+  `[engine] ${target.file} verified (${target.sha256.slice(0, 12)}…) → ${dest}`,
+);

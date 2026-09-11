@@ -12,6 +12,7 @@ import type {
   DaemonCommandFailure,
   DaemonCommandResult,
   DaemonManagementCommand,
+  DaemonStatusOutcome,
   RunDaemonCommandOptions,
 } from './daemonCli';
 import {
@@ -93,6 +94,33 @@ function stoppedResult(): DaemonCommandResult<{
   return { ok: true, value: { status: 'stopped' }, stdout: '', stderr: '' };
 }
 
+/** What `status` answers on a machine where nothing is on the socket —
+ *  the answer every start() gets from its pre-flight look unless a test
+ *  says otherwise. */
+function notRunningResult(): DaemonCommandResult<DaemonStatusOutcome> {
+  return {
+    ok: true,
+    value: {
+      running: false,
+      reason: 'not-running',
+      message: 'daemon not running',
+    },
+    stdout: '',
+    stderr: '',
+  };
+}
+
+/** What `status` answers when a daemon from before is still serving —
+ *  the restart-survival case install() exists to notice. */
+function runningResult(): DaemonCommandResult<DaemonStatusOutcome> {
+  return {
+    ok: true,
+    value: { running: true, version: '0.1.0', uptimeMs: 60_000 },
+    stdout: '',
+    stderr: '',
+  };
+}
+
 function daemonFailure(
   failure: DaemonCommandFailure,
 ): DaemonCommandResult<never> {
@@ -102,17 +130,29 @@ function daemonFailure(
 /** Builds a `runDaemonCommand` override with the cast this file's `makeDeps`
  *  default also needs — RunDaemonCommand's own generic `<C extends
  *  DaemonManagementCommand>` signature does not structurally match a plain
- *  jest mock, and every real call site here only ever passes a literal
- *  'start' or 'stop' anyway, so the cast is one place instead of one per
- *  test. */
+ *  jest mock, and every real call site here passes a literal 'start',
+ *  'stop' or 'status' anyway, so the cast is one place instead of one per
+ *  test. An override must answer 'status' too: start() looks at the
+ *  socket before it starts anything, so an impl that ignores the command
+ *  and fails everything fails the look, not the start. */
 function mockRunDaemonCommand(
   impl: (
     launcherPath: string,
     command: DaemonManagementCommand,
     options: RunDaemonCommandOptions,
-  ) => Promise<DaemonCommandResult<{ status: string }>>,
+  ) => Promise<DaemonCommandResult<{ status: string } | DaemonStatusOutcome>>,
 ): RunDaemonCommand {
   return jest.fn(impl) as unknown as RunDaemonCommand;
+}
+
+/** The common override shape: `status` says nothing is running, and the
+ *  `start` that follows answers with `startAnswer`. */
+function failingStart(
+  startAnswer: () => Promise<DaemonCommandResult<{ status: string }>>,
+): RunDaemonCommand {
+  return mockRunDaemonCommand((_launcher, command) =>
+    command === 'status' ? Promise.resolve(notRunningResult()) : startAnswer(),
+  );
 }
 
 /** A fake transport whose onClose is exposed as `fireClose` so a test can
@@ -183,11 +223,19 @@ function makeDeps(overrides: Partial<EngineSupervisorDeps> = {}): {
 } {
   // Cast at the boundary rather than fighting RunDaemonCommand's own
   // generic `<C extends DaemonManagementCommand>` signature through
-  // jest.fn's generics — every real call site passes a literal 'start' or
-  // 'stop', and this default answers each correctly by branching on it.
+  // jest.fn's generics — every real call site passes a literal 'start',
+  // 'stop' or 'status', and this default answers each correctly by
+  // branching on it. The default world: nothing on the socket, and every
+  // start/stop succeeds.
   const runDaemonCommand = jest.fn(
     (_launcherPath: string, command: DaemonManagementCommand) =>
-      Promise.resolve(command === 'stop' ? stoppedResult() : startedResult()),
+      Promise.resolve(
+        command === 'stop'
+          ? stoppedResult()
+          : command === 'status'
+            ? notRunningResult()
+            : startedResult(),
+      ),
   ) as unknown as jest.MockedFunction<RunDaemonCommand>;
   const connectSocketTransport = jest.fn<
     ReturnType<ConnectSocketTransport>,
@@ -316,6 +364,102 @@ describe('createEngineSupervisor', () => {
       });
     });
 
+    // Found in review (M1): the first draft reported `stopped` from the
+    // files alone. `stopped` is a claim about the socket, so install()
+    // asks the daemon's own `status` — and attaches when a daemon from
+    // before is still serving, which is the restart-survival case this
+    // architecture exists for.
+    it('attaches to a daemon that outlived the last Waypoint: starting -> running, no start issued', async () => {
+      const client = fakeClient();
+      successfulInitializeAndHealth(client);
+      const { deps, runDaemonCommand } = makeDeps({
+        createWireClient: jest.fn(() => client),
+        runDaemonCommand: mockRunDaemonCommand((_l, command) =>
+          Promise.resolve(
+            command === 'status' ? runningResult() : startedResult(),
+          ),
+        ),
+      });
+      const supervisor = createEngineSupervisor(deps);
+      const seen: string[] = [];
+      supervisor.onStatusChange((s) => seen.push(s.kind));
+
+      const status = await supervisor.install();
+
+      expect(status.kind).toBe('running');
+      expect(seen).toEqual(['starting', 'running']);
+      expect(
+        (runDaemonCommand as unknown as jest.Mock).mock.calls.map((c) => c[1]),
+      ).toEqual(['status']);
+      expect(client.call).toHaveBeenCalledWith('health');
+    });
+
+    it('reports failed, stage health, when something answers the socket but not health — never stopped', async () => {
+      const { deps } = makeDeps({
+        runDaemonCommand: mockRunDaemonCommand((_l, command) =>
+          Promise.resolve(
+            command === 'status'
+              ? {
+                  ok: true,
+                  value: {
+                    running: false,
+                    reason: 'unhealthy',
+                    message: 'health probe failed: TIMEOUT',
+                  },
+                  stdout: '',
+                  stderr: '',
+                }
+              : startedResult(),
+          ),
+        ),
+      });
+      const supervisor = createEngineSupervisor(deps);
+
+      const status = await supervisor.install();
+
+      expect(status).toMatchObject({
+        kind: 'failed',
+        stage: 'health',
+        message: 'health probe failed: TIMEOUT',
+      });
+    });
+
+    it('reports failed, stage health, when the status probe itself cannot run', async () => {
+      const { deps } = makeDeps({
+        runDaemonCommand: mockRunDaemonCommand((_l, command) =>
+          Promise.resolve(
+            command === 'status'
+              ? daemonFailure({ kind: 'timeout', timeoutMs: 5_000 })
+              : startedResult(),
+          ),
+        ),
+      });
+      const supervisor = createEngineSupervisor(deps);
+
+      const status = await supervisor.install();
+
+      expect(status).toMatchObject({
+        kind: 'failed',
+        stage: 'health',
+        message: 'The engine command did not finish within 5000ms.',
+      });
+    });
+
+    it('answers two concurrent install() calls with one look', async () => {
+      const { deps, verifyInstalledEngine, runDaemonCommand } = makeDeps();
+      const supervisor = createEngineSupervisor(deps);
+
+      const [a, b] = await Promise.all([
+        supervisor.install(),
+        supervisor.install(),
+      ]);
+
+      expect(a).toEqual(b);
+      expect(a.kind).toBe('stopped');
+      expect(verifyInstalledEngine).toHaveBeenCalledTimes(1);
+      expect(runDaemonCommand).toHaveBeenCalledTimes(1);
+    });
+
     // The review finding this guards: install() must never clobber a live
     // 'running' status with a stale disk read from a second call (a
     // MachinePage remount, say).
@@ -351,6 +495,8 @@ describe('createEngineSupervisor', () => {
         createWireClient: jest.fn(() => client),
       });
       const supervisor = createEngineSupervisor(deps);
+      // MachinePage's real order: install() on mount, start() on click.
+      await supervisor.install();
       const seen: string[] = [];
       supervisor.onStatusChange((s) => seen.push(s.kind));
 
@@ -384,9 +530,59 @@ describe('createEngineSupervisor', () => {
       expect(seen).toEqual(['starting', 'running']);
     });
 
+    // Found in review (L6): a start() from the never-observed placeholder
+    // used to reach the CLI without ever verifying the files or asking
+    // the socket. It looks first now — and the look is what sees a daemon
+    // that outlived the last Waypoint (M1), so a cold start() must never
+    // issue `start` over one that is already serving.
+    it('from cold, looks before it starts: verify, status, then start — and reports stopped on the way', async () => {
+      const client = fakeClient();
+      successfulInitializeAndHealth(client);
+      const { deps, runDaemonCommand, verifyInstalledEngine } = makeDeps({
+        createWireClient: jest.fn(() => client),
+      });
+      const supervisor = createEngineSupervisor(deps);
+      const seen: string[] = [];
+      supervisor.onStatusChange((s) => seen.push(s.kind));
+
+      const status = await supervisor.start();
+
+      expect(status.kind).toBe('running');
+      expect(seen).toEqual(['stopped', 'starting', 'running']);
+      expect(verifyInstalledEngine).toHaveBeenCalledTimes(1);
+      expect(runDaemonCommand.mock.calls.map((c) => c[1])).toEqual([
+        'status',
+        'start',
+      ]);
+    });
+
+    it('from cold, attaches to a daemon already serving instead of issuing start', async () => {
+      const client = fakeClient();
+      successfulInitializeAndHealth(client);
+      const { deps, runDaemonCommand } = makeDeps({
+        createWireClient: jest.fn(() => client),
+        runDaemonCommand: mockRunDaemonCommand((_l, command) =>
+          Promise.resolve(
+            command === 'status' ? runningResult() : startedResult(),
+          ),
+        ),
+      });
+      const supervisor = createEngineSupervisor(deps);
+      const seen: string[] = [];
+      supervisor.onStatusChange((s) => seen.push(s.kind));
+
+      const status = await supervisor.start();
+
+      expect(status.kind).toBe('running');
+      expect(seen).toEqual(['starting', 'running']);
+      expect(
+        (runDaemonCommand as unknown as jest.Mock).mock.calls.map((c) => c[1]),
+      ).toEqual(['status']);
+    });
+
     it('fails at stage start when runDaemonCommand answers ok:false (the launcher could not run)', async () => {
       const { deps } = makeDeps({
-        runDaemonCommand: mockRunDaemonCommand(() =>
+        runDaemonCommand: failingStart(() =>
           Promise.resolve(
             daemonFailure({
               kind: 'launcher',
@@ -410,7 +606,7 @@ describe('createEngineSupervisor', () => {
 
     it('fails at stage start when runDaemonCommand answers ok:false with a timeout', async () => {
       const { deps } = makeDeps({
-        runDaemonCommand: mockRunDaemonCommand(() =>
+        runDaemonCommand: failingStart(() =>
           Promise.resolve(
             daemonFailure({ kind: 'timeout', timeoutMs: 20_000 }),
           ),
@@ -432,7 +628,7 @@ describe('createEngineSupervisor', () => {
     // violation rather than the realistic failure path above.
     it('fails at stage start if runDaemonCommand itself ever rejects, despite its documented contract', async () => {
       const { deps } = makeDeps({
-        runDaemonCommand: mockRunDaemonCommand(() =>
+        runDaemonCommand: failingStart(() =>
           Promise.reject(new Error('spawn ENOENT')),
         ),
       });
@@ -452,7 +648,7 @@ describe('createEngineSupervisor', () => {
       successfulInitializeAndHealth(client);
       const { deps } = makeDeps({
         createWireClient: jest.fn(() => client),
-        runDaemonCommand: mockRunDaemonCommand(() =>
+        runDaemonCommand: failingStart(() =>
           Promise.resolve({
             ok: true,
             value: { status: 'already-running' },
@@ -554,18 +750,46 @@ describe('createEngineSupervisor', () => {
         createWireClient: jest.fn(() => client),
       });
       const supervisor = createEngineSupervisor(deps);
+      await supervisor.install();
+      runDaemonCommand.mockClear();
 
       const first = supervisor.start();
       // Called synchronously, before `first` has had a chance to resolve —
       // status is already 'starting' by this point (set synchronously
-      // before start()'s first await), so this must short-circuit rather
-      // than kick off a second runDaemonCommand/connect/initialize sequence.
+      // before start()'s first await, now that install() has looked), so
+      // this must short-circuit rather than kick off a second
+      // runDaemonCommand/connect/initialize sequence.
       const second = await supervisor.start();
       expect(second.kind).toBe('starting');
 
       const firstResult = await first;
       expect(firstResult.kind).toBe('running');
       expect(runDaemonCommand).toHaveBeenCalledTimes(1);
+    });
+
+    it('two cold start() calls share one look and issue one start', async () => {
+      const client = fakeClient();
+      successfulInitializeAndHealth(client);
+      const { deps, runDaemonCommand, verifyInstalledEngine } = makeDeps({
+        createWireClient: jest.fn(() => client),
+      });
+      const supervisor = createEngineSupervisor(deps);
+
+      const [first, second] = await Promise.all([
+        supervisor.start(),
+        supervisor.start(),
+      ]);
+
+      // Whichever resumed first owns the start; the other saw 'starting'
+      // and stepped aside. Neither fabricated a second look or a second
+      // `start` over the first one's socket.
+      expect([first.kind, second.kind].sort()).toEqual(['running', 'starting']);
+      expect(verifyInstalledEngine).toHaveBeenCalledTimes(1);
+      expect(runDaemonCommand.mock.calls.map((c) => c[1])).toEqual([
+        'status',
+        'start',
+      ]);
+      expect(supervisor.getStatus().kind).toBe('running');
     });
 
     it('short-circuits a start() called again once already running', async () => {
@@ -608,6 +832,7 @@ describe('createEngineSupervisor', () => {
         'stop',
         {
           socketPath: PATHS.socketPath,
+          cwd: PATHS.installDir,
         },
       );
       expect(client.close).toHaveBeenCalledTimes(1);

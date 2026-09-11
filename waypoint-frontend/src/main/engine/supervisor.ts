@@ -119,8 +119,13 @@ export interface EngineSupervisor {
    *  observation — never a fresh check. Synchronous and never throws,
    *  matching `ENGINE_IPC.status`'s own contract in `types.ts`. */
   getStatus(): EngineStatus;
-  /** Verifies an already-extracted install against the pin. Never triggers
-   *  extraction itself (ROAD-47, the lead's) — see this file's header. */
+  /**
+   * Looks and reports: verifies the install on disk (extracting the
+   * bundled archive if nothing usable is there — that can write 62 MB and
+   * run `tar`), then probes the socket. Ends in `stopped`, `running` (a
+   * daemon from before, attached to), `not-installed`, or `failed`. See
+   * install() itself for why the socket probe is not optional.
+   */
   install(): Promise<EngineStatus>;
   start(): Promise<EngineStatus>;
   stop(): Promise<EngineStatus>;
@@ -237,7 +242,7 @@ export function createEngineSupervisor(
   }
 
   function failedStatus(
-    stage: 'install' | 'start' | 'connect' | 'initialize' | 'health' | 'stop',
+    stage: Extract<EngineStatus, { kind: 'failed' }>['stage'],
     messageOrError: unknown,
   ): EngineStatus {
     const message =
@@ -258,115 +263,42 @@ export function createEngineSupervisor(
     current?.close();
   }
 
-  async function install(): Promise<EngineStatus> {
-    // A live connection or an in-flight start/stop is a stronger fact than
-    // a disk read — a second install() call (MachinePage remounting, a
-    // periodic refresh) must never clobber 'running' with a stale
-    // "well, the files are there" claim. See this file's own report for the
-    // review finding this guards: without it, calling install() again while
-    // already running was a real path to a false "stopped" status.
-    if (isLiveOrTransitioning(status)) return status;
+  // A generation counter — found in review (M3). Every user-initiated
+  // transition (install/start/stop/dispose) bumps it, and every `await`
+  // inside start()/install() re-checks it afterwards: if the world moved on
+  // while we were waiting (a Stop click during a 5 s `start`, dispose()
+  // mid-handshake), the stale continuation abandons rather than writing a
+  // status the user did not ask for. Without it, Start-then-Stop ended in
+  // "Failed" for a daemon the user had just stopped, and dispose() could
+  // leave a completed handshake holding a live socket.
+  let generation = 0;
+  const bump = (): number => {
+    generation += 1;
+    return generation;
+  };
+  const stale = (gen: number): boolean => gen !== generation;
 
-    let result: EngineInstallResult;
-    try {
-      result = await deps.verifyInstalledEngine(deps.paths);
-      // Nothing usable on disk and we know how to put it there: extract the
-      // bundled archive (installer.ts — sha256 before, manifest after).
-      // Only for a plain absence or a broken install; a `sha256-mismatch`
-      // or `unsupported-platform` from the installer is a fact to show,
-      // not a reason to try again.
-      if (!result.ok && deps.installEngine) {
-        result = await deps.installEngine();
-      }
-    } catch (error) {
-      installedVersion = null;
-      setStatus(failedStatus('install', error));
-      return status;
-    }
-
-    if (!result.ok) {
-      installedVersion = null;
-      if (result.reason === 'extract-failed' && !deps.installEngine) {
-        // Without an installer wired in, installer.ts's
-        // verifyInstalledEngine answers this reason only when
-        // `paths.launcherPath` does not exist — i.e. nothing here yet.
-        setStatus({ kind: 'not-installed', installDir: deps.paths.installDir });
-      } else if (result.reason === 'archive-missing') {
-        // The installer looked and found no archive to extract. That is the
-        // developer-machine case (`npm run engine:fetch` not run) and is
-        // exactly what not-installed means to a user.
-        setStatus({ kind: 'not-installed', installDir: deps.paths.installDir });
-      } else {
-        setStatus(failedStatus('install', result.message));
-      }
-      return status;
-    }
-
-    installedVersion = result.manifest.version;
-    setStatus({
-      kind: 'stopped',
-      installDir: deps.paths.installDir,
-      version: result.manifest.version,
-    });
-    return status;
-  }
-
-  async function start(): Promise<EngineStatus> {
-    // Idempotent: a start already in flight is not re-attempted, and a
-    // start while stopping is racing is refused rather than interleaved
-    // with it — a caller that wants to restart waits for stop() to settle.
-    if (isLiveOrTransitioning(status)) return status;
-
-    setStatus({ kind: 'starting', since: deps.clock() });
-
-    // Found live (ROAD-50's read of emdash `daemon/lock.ts:23-53`): `start`
-    // takes `<socket>.lock` and only releases it in a `finally` — a `start`
-    // killed mid-flight (Waypoint quit, a crash) leaves the file behind, and
-    // the lock has no liveness check, so every later `start` fails with a
-    // 5 s `lock` error until someone deletes it. We are that someone: no
-    // start of ours is in flight here (the guard above), and a daemon that
-    // is genuinely running does not need the lock to keep running — the
-    // lock only serialises *starts*. So a leftover lock is always stale
-    // from this vantage point, and removing it is safe.
-    await deps.removeStaleStartLock?.(`${deps.paths.socketPath}.lock`);
-
-    try {
-      const startResult = await deps.runDaemonCommand(
-        deps.paths.launcherPath,
-        'start',
-        {
-          socketPath: deps.paths.socketPath,
-          // The daemon reads a `.env` in its cwd for `EMDASH_WS_*` overrides
-          // (emdash `config.ts:6`); Electron main's cwd is wherever the app
-          // was launched from. Pin it to the install so nothing outside
-          // Waypoint's own directory can reconfigure the engine.
-          cwd: deps.paths.installDir,
-        },
-      );
-      if (!startResult.ok) {
-        setStatus(
-          failedStatus('start', describeDaemonFailure(startResult.failure)),
-        );
-        return status;
-      }
-      // `started` (we spawned it) and `already-running` (the CLI's own
-      // probe found one) are both success — see DaemonStartOutcome's own
-      // comment in daemonCli.ts.
-    } catch (error) {
-      // Defense in depth: runDaemonCommand's documented contract "resolves
-      // always" (daemonCli.ts's own comment), so this branch is not
-      // expected to run against the real implementation. It exists so a
-      // contract violation here becomes an honest 'failed' status instead
-      // of an unhandled rejection in Waypoint's main process.
-      setStatus(failedStatus('start', error));
-      return status;
-    }
-
+  /**
+   * Connect to a daemon that is already serving on the socket and complete
+   * the handshake — the part of "start" that is also the whole of
+   * "re-attach to a daemon that outlived the last Waypoint". Shared by
+   * start() and install() so the two cannot drift. Returns the status it
+   * observed; sets it unless the generation moved.
+   */
+  async function attach(
+    gen: number,
+    failStage: 'connect' | 'initialize' | 'health',
+  ): Promise<EngineStatus> {
     let transport: EngineTransport;
     try {
       transport = await deps.connectSocketTransport(deps.paths.socketPath);
     } catch (error) {
+      if (stale(gen)) return status;
       setStatus(failedStatus('connect', error));
+      return status;
+    }
+    if (stale(gen)) {
+      transport.close();
       return status;
     }
 
@@ -393,10 +325,18 @@ export function createEngineSupervisor(
     };
     let initResult: EngineInitializeResult;
     try {
-      initResult = await newClient.call<EngineInitializeResult>('initialize', hello);
+      initResult = await newClient.call<EngineInitializeResult>(
+        'initialize',
+        hello,
+      );
     } catch (error) {
       newClient.close();
+      if (stale(gen)) return status;
       setStatus(failedStatus('initialize', error));
+      return status;
+    }
+    if (stale(gen)) {
+      newClient.close();
       return status;
     }
 
@@ -404,7 +344,7 @@ export function createEngineSupervisor(
       newClient.close();
       // Upgrade, don't retry — types.ts's own EngineStatus comment on
       // `incompatible`. A major bump on the daemon side is a deliberate
-      // upgrade, never a float (types.ts §4's note on CLIENT_PROTOCOL_VERSION),
+      // upgrade, never a float (types.ts §1's note on CLIENT_PROTOCOL_VERSION),
       // so nothing here schedules a retry of the same mismatched call.
       setStatus({
         kind: 'failed',
@@ -421,7 +361,14 @@ export function createEngineSupervisor(
       startupHealth = await newClient.call<EngineHealth>('health');
     } catch (error) {
       newClient.close();
-      setStatus(failedStatus('health', error));
+      if (stale(gen)) return status;
+      setStatus(
+        failedStatus(failStage === 'connect' ? 'health' : failStage, error),
+      );
+      return status;
+    }
+    if (stale(gen)) {
+      newClient.close();
       return status;
     }
 
@@ -452,14 +399,200 @@ export function createEngineSupervisor(
     return status;
   }
 
+  /**
+   * Looks — at the disk AND at the socket — and reports what it found.
+   *
+   * The first draft reported `stopped` from the files alone. Found in
+   * review (M1): that fabricates "not running" in the one scenario this
+   * architecture exists for — a daemon that outlived the last Waypoint and
+   * is still serving when the next one launches — and it also silently
+   * replaced a `failed` status with `stopped` on every MachinePage remount.
+   * `stopped` now means what types.ts says it means: the daemon's own
+   * `status` command said not-running. A daemon found serving is attached
+   * to, so the card shows `running` for a daemon that is running.
+   */
+  // One look at a time. Two callers that ask "what is on disk and on the
+  // socket?" while the first look is still in flight (MachinePage mounting
+  // while start() is doing its own pre-flight look, a double-click on
+  // Install) want the same answer, and running the look twice would make
+  // the first caller's continuation stale and hand it a status it never
+  // observed. They share the promise instead.
+  let inflightLook: Promise<EngineStatus> | null = null;
+
+  async function install(): Promise<EngineStatus> {
+    // A live connection or an in-flight start/stop is a stronger fact than
+    // a fresh look — a second install() call (MachinePage remounting, a
+    // periodic refresh) must never clobber 'running' or interrupt a
+    // transition.
+    if (isLiveOrTransitioning(status)) return status;
+    if (inflightLook) return inflightLook;
+    inflightLook = look().finally(() => {
+      inflightLook = null;
+    });
+    return inflightLook;
+  }
+
+  async function look(): Promise<EngineStatus> {
+    const gen = bump();
+
+    let result: EngineInstallResult;
+    try {
+      result = await deps.verifyInstalledEngine(deps.paths);
+      // Nothing usable on disk and we know how to put it there: extract the
+      // bundled archive (installer.ts — sha256 before, manifest after).
+      // installEngine() itself decides which refusals are final
+      // (`sha256-mismatch`, `unsupported-platform`) and which are worth an
+      // extraction attempt; it never re-extracts over a valid install.
+      if (!result.ok && deps.installEngine) {
+        result = await deps.installEngine();
+      }
+    } catch (error) {
+      if (stale(gen)) return status;
+      installedVersion = null;
+      setStatus(failedStatus('install', error));
+      return status;
+    }
+    if (stale(gen)) return status;
+
+    if (!result.ok) {
+      installedVersion = null;
+      if (
+        result.reason === 'archive-missing' ||
+        (result.reason === 'extract-failed' && !deps.installEngine)
+      ) {
+        // Nothing to run and nothing to extract it from: on a developer
+        // machine, `npm run engine:fetch` has not been run. That is exactly
+        // what not-installed means to a user.
+        setStatus({ kind: 'not-installed', installDir: deps.paths.installDir });
+      } else {
+        setStatus(failedStatus('install', result.message));
+      }
+      return status;
+    }
+    installedVersion = result.manifest.version;
+
+    // The files are right. Now the socket: is a daemon already serving?
+    let probe;
+    try {
+      probe = await deps.runDaemonCommand(deps.paths.launcherPath, 'status', {
+        socketPath: deps.paths.socketPath,
+        cwd: deps.paths.installDir,
+      });
+    } catch (error) {
+      if (stale(gen)) return status;
+      setStatus(failedStatus('health', error));
+      return status;
+    }
+    if (stale(gen)) return status;
+
+    if (!probe.ok) {
+      setStatus(failedStatus('health', describeDaemonFailure(probe.failure)));
+      return status;
+    }
+    if (probe.value.running) {
+      // A daemon from before — the restart-survival case. Attach to it
+      // rather than telling the user it is stopped.
+      setStatus({ kind: 'starting', since: deps.clock() });
+      return attach(gen, 'connect');
+    }
+    if (probe.value.reason === 'unhealthy') {
+      // Something answers the socket but not `health`. That is a fact to
+      // show, not "stopped": the daemon's own `start` refuses to replace it
+      // (ROAD-50's read of start.ts:60-65), so a Start click would fail
+      // too, and the user needs to know which.
+      setStatus(failedStatus('health', probe.value.message));
+      return status;
+    }
+    setStatus({
+      kind: 'stopped',
+      installDir: deps.paths.installDir,
+      version: installedVersion,
+    });
+    return status;
+  }
+
+  async function start(): Promise<EngineStatus> {
+    // Idempotent: a start already in flight is not re-attempted, and a
+    // start while stopping is racing is refused rather than interleaved
+    // with it — a caller that wants to restart waits for stop() to settle.
+    if (isLiveOrTransitioning(status)) return status;
+
+    // Never start what has not been looked at. install() verifies the
+    // files and probes the socket; if a daemon is already serving it
+    // attaches and we are done, and if the install is broken we get the
+    // honest failure instead of a `start` CLI error about a missing
+    // launcher. (Found in review, L6: start() from the never-observed
+    // placeholder used to reach the CLI.)
+    if (installedVersion === null || status.kind !== 'stopped') {
+      const looked = await install();
+      if (looked.kind !== 'stopped') return looked;
+      // Two start() calls can share one look (see install()); the first to
+      // resume past it owns the start, the other sees 'starting' here.
+      if (isLiveOrTransitioning(status)) return status;
+    }
+    const gen = bump();
+
+    setStatus({ kind: 'starting', since: deps.clock() });
+
+    // Found live (ROAD-50's read of emdash `daemon/lock.ts:23-53`): `start`
+    // takes `<socket>.lock` and only releases it in a `finally` — a `start`
+    // killed mid-flight (Waypoint quit, a crash) leaves the file behind, and
+    // the lock has no liveness check, so every later `start` fails with a
+    // 5 s `lock` error until someone deletes it. We are that someone —
+    // but only now that install() has just observed `not-running` on the
+    // socket: a lock left by a daemon that IS running is not stale, and a
+    // second Waypoint instance's in-flight start (main.ts holds no
+    // single-instance lock — a known gap, see the commit) would be the one
+    // case this still gets wrong.
+    await deps.removeStaleStartLock?.(`${deps.paths.socketPath}.lock`);
+    if (stale(gen)) return status;
+
+    try {
+      const startResult = await deps.runDaemonCommand(
+        deps.paths.launcherPath,
+        'start',
+        {
+          socketPath: deps.paths.socketPath,
+          // The daemon reads a `.env` in its cwd for `EMDASH_WS_*` overrides
+          // (emdash `config.ts:6`); Electron main's cwd is wherever the app
+          // was launched from. Pin it to the install so nothing outside
+          // Waypoint's own directory can reconfigure the engine.
+          cwd: deps.paths.installDir,
+        },
+      );
+      if (stale(gen)) return status;
+      if (!startResult.ok) {
+        setStatus(
+          failedStatus('start', describeDaemonFailure(startResult.failure)),
+        );
+        return status;
+      }
+      // `started` (we spawned it) and `already-running` (the CLI's own
+      // probe found one) are both success — see DaemonStartOutcome's own
+      // comment in daemonCli.ts.
+    } catch (error) {
+      // Defense in depth: runDaemonCommand's documented contract "resolves
+      // always" (daemonCli.ts's own comment), so this branch is not
+      // expected to run against the real implementation. It exists so a
+      // contract violation here becomes an honest 'failed' status instead
+      // of an unhandled rejection in Waypoint's main process.
+      if (stale(gen)) return status;
+      setStatus(failedStatus('start', error));
+      return status;
+    }
+
+    return attach(gen, 'connect');
+  }
+
   async function stop(): Promise<EngineStatus> {
     if (
-      status.kind === 'not-installed' ||
+      status.kind === 'stopping' ||
       status.kind === 'stopped' ||
-      status.kind === 'stopping'
+      status.kind === 'not-installed'
     ) {
       return status;
     }
+    const gen = bump();
 
     setStatus({ kind: 'stopping', since: deps.clock() });
     // Torn down before the CLI call, not after: this stops us reacting to
@@ -474,8 +607,10 @@ export function createEngineSupervisor(
         'stop',
         {
           socketPath: deps.paths.socketPath,
+          cwd: deps.paths.installDir,
         },
       );
+      if (stale(gen)) return status;
       if (!stopResult.ok) {
         setStatus(
           failedStatus('stop', describeDaemonFailure(stopResult.failure)),
@@ -487,14 +622,21 @@ export function createEngineSupervisor(
       // "the daemon is stopped", which is what was asked.
     } catch (error) {
       // Same defense-in-depth reasoning as start()'s own catch above.
+      if (stale(gen)) return status;
       setStatus(failedStatus('stop', error));
       return status;
     }
 
+    if (installedVersion === null) {
+      // Stopped a daemon we never verified the files for (raw IPC before
+      // any install()). Rather than report a version we assumed, look.
+      setStatus({ kind: 'not-installed', installDir: deps.paths.installDir });
+      return install();
+    }
     setStatus({
       kind: 'stopped',
       installDir: deps.paths.installDir,
-      version: installedVersion ?? ENGINE_PIN.version,
+      version: installedVersion,
     });
     return status;
   }
@@ -504,6 +646,11 @@ export function createEngineSupervisor(
     try {
       return await client.call<EngineHealth>('health');
     } catch (error) {
+      // Found in review (L5): a `health` already in flight when stop()
+      // tears the client down rejects DISCONNECTED and used to push a
+      // spurious `failed` in front of the `stopped` that followed. Only a
+      // running engine that stops answering is a failure.
+      if (status.kind !== 'running') return null;
       teardownClient();
       setStatus(failedStatus('health', error));
       return null;
@@ -520,6 +667,7 @@ export function createEngineSupervisor(
   }
 
   function dispose(): void {
+    bump();
     teardownClient();
     listeners.clear();
   }
