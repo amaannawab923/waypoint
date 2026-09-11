@@ -1,6 +1,6 @@
 {
   "name": "waypoint-frontend",
-  "description": "Waypoint's native Electron desktop app — the client for a project management tool that ships as a real desktop application instead of a browser tab.",
+  "description": "Waypoint's native Electron desktop app \u2014 the client for a project management tool that ships as a real desktop application instead of a browser tab.",
   "engines": {
     "node": ">=22"
   },
@@ -32,7 +32,7 @@
     "build:dll": "cross-env NODE_ENV=development TS_NODE_TRANSPILE_ONLY=true NODE_OPTIONS=\"-r ts-node/register --no-warnings\" webpack --config ./.erb/configs/webpack.config.renderer.dev.dll.ts",
     "build:main": "cross-env NODE_ENV=production TS_NODE_TRANSPILE_ONLY=true NODE_OPTIONS=\"-r ts-node/register --no-warnings\" webpack --config ./.erb/configs/webpack.config.main.prod.ts",
     "build:renderer": "cross-env NODE_ENV=production TS_NODE_TRANSPILE_ONLY=true NODE_OPTIONS=\"-r ts-node/register --no-warnings\" webpack --config ./.erb/configs/webpack.config.renderer.prod.ts",
-    "postinstall": "ts-node .erb/scripts/check-native-dep.js && electron-builder install-app-deps && npm run build:dll",
+    "postinstall": "ts-node .erb/scripts/check-native-dep.js && electron-builder install-app-deps && npm run build:dll && node scripts/fetch-engine.mjs",
     "lint": "cross-env NODE_ENV=development eslint . --ext .js,.jsx,.ts,.tsx",
     "lint:fix": "cross-env NODE_ENV=development eslint . --ext .js,.jsx,.ts,.tsx --fix",
     "lint:honesty": "eslint --no-eslintrc -c eslint-rules/honesty.eslintrc.js --rulesdir eslint-rules --ext .ts,.tsx src/renderer",
@@ -46,7 +46,8 @@
     "start:qa": "cross-env ELECTRON_QA_DEBUG_PORT=19222 WAYPOINT_FEATURE_COPILOT=true npm run start",
     "qa:electron": "ts-node -T scripts/qa/electron-cdp.ts",
     "test": "jest",
-    "test:e2e": "cross-env WAYPOINT_FEATURE_COPILOT=true npm run build && playwright test"
+    "test:e2e": "cross-env WAYPOINT_FEATURE_COPILOT=true npm run build && playwright test",
+    "engine:fetch": "node scripts/fetch-engine.mjs"
   },
   "browserslist": [
     "extends browserslist-config-erb"
@@ -258,7 +259,8 @@
       "output": "release/build"
     },
     "extraResources": [
-      "./assets/**"
+      "./assets/**",
+      "./engine/**"
     ],
     "publish": {
       "provider": "github",

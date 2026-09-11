@@ -1,0 +1,17 @@
+{
+  "$comment": "The pinned agent-engine build Waypoint ships (ROAD-46). Machine-readable twin of ENGINE_PIN in src/main/engine/types.ts; the two must agree, and installer.ts refuses an archive that matches neither. Change both together, never one.",
+  "name": "emdash-workspace-server",
+  "version": "0.1.0",
+  "protocolVersion": "1.0.0",
+  "sourceRepo": "https://github.com/generalaction/emdash",
+  "sourceCommit": "9b102a5f3",
+  "license": "Apache-2.0",
+  "builtWith": "pnpm run package --target darwin-arm64 --verify (apps/workspace-server, 2026-09-11)",
+  "targets": {
+    "darwin-arm64": {
+      "file": "emdash-workspace-server-0.1.0-darwin-arm64.tar.gz",
+      "sha256": "1fa9056e65fcc000c9aaec1c397ec85a97d41a9adedbfdd3b18f5af5dc02b9a6",
+      "release": "https://github.com/amaannawab923/waypoint/releases/tag/engine-0.1.0-9b102a5f3"
+    }
+  }
+}
