@@ -97,6 +97,14 @@ function getElectronHandler() {
         { canceled: true } | { canceled: false; path: string }
       >;
     };
+    engine: {
+      status: () => Promise<unknown>;
+      install: () => Promise<unknown>;
+      start: () => Promise<unknown>;
+      stop: () => Promise<unknown>;
+      health: () => Promise<unknown>;
+      onStatusChanged: (cb: (status: unknown) => void) => () => void;
+    };
   };
 }
 
@@ -242,7 +250,9 @@ describe('electronHandler.copilot.runPrompt', () => {
       { onChunk: jest.fn(), onDone: jest.fn(), onError: jest.fn() },
     );
 
-    expect(ipcRendererMock.send.mock.calls[0][1]).not.toHaveProperty('repoPath');
+    expect(ipcRendererMock.send.mock.calls[0][1]).not.toHaveProperty(
+      'repoPath',
+    );
   });
 
   it('routes a matching error event to onError, defaulting kind and message when absent', () => {
@@ -404,6 +414,74 @@ describe('electronHandler.repo.chooseFolder', () => {
 
     await expect(electronHandler.repo.chooseFolder()).resolves.toEqual({
       canceled: true,
+    });
+  });
+});
+
+// ROAD-48/51: the agent-engine bridge. Every call below invokes the exact
+// literal channel name engineIpc.ts registers (main/engine/types.ts's
+// ENGINE_IPC) — pinned here as string literals so a channel rename on
+// either side that isn't mirrored on the other fails this test rather than
+// silently going unnoticed at runtime.
+describe('electronHandler.engine', () => {
+  const STATUS = {
+    kind: 'stopped',
+    installDir: '/userdata/engine/0.1.0',
+    version: '0.1.0',
+  };
+
+  it.each([
+    ['status', 'engine:status'],
+    ['install', 'engine:install'],
+    ['start', 'engine:start'],
+    ['stop', 'engine:stop'],
+  ] as const)(
+    '%s invokes %s and returns its resolved EngineStatus',
+    async (method, channel) => {
+      ipcRendererMock.invoke.mockResolvedValue(STATUS);
+
+      const result = await electronHandler.engine[method]();
+
+      expect(ipcRendererMock.invoke).toHaveBeenCalledWith(channel);
+      expect(result).toEqual(STATUS);
+    },
+  );
+
+  it('health invokes engine:health and returns whatever it resolves, including null', async () => {
+    ipcRendererMock.invoke.mockResolvedValue(null);
+
+    const result = await electronHandler.engine.health();
+
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith('engine:health');
+    expect(result).toBeNull();
+  });
+
+  describe('onStatusChanged', () => {
+    it('registers an engine:status-changed listener and routes a pushed status to the callback', () => {
+      const cb = jest.fn();
+
+      electronHandler.engine.onStatusChanged(cb);
+      const [, listener] = ipcRendererMock.on.mock.calls.find(
+        (c) => c[0] === 'engine:status-changed',
+      )!;
+
+      listener({}, STATUS);
+
+      expect(cb).toHaveBeenCalledWith(STATUS);
+    });
+
+    it('returns an unsubscribe function that removes exactly the listener it registered', () => {
+      const unsubscribe = electronHandler.engine.onStatusChanged(jest.fn());
+      const [, registeredListener] = ipcRendererMock.on.mock.calls.find(
+        (c) => c[0] === 'engine:status-changed',
+      )!;
+
+      unsubscribe();
+
+      expect(ipcRendererMock.removeListener).toHaveBeenCalledWith(
+        'engine:status-changed',
+        registeredListener,
+      );
     });
   });
 });
