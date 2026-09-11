@@ -708,11 +708,14 @@ describe('JiraRichText', () => {
   // a base64 blob, or a long URL with no spaces must wrap instead of forcing
   // the drawer to scroll sideways. jsdom does not lay out text, so this
   // cannot prove a long token actually wraps at any real width — it only
-  // proves the class that makes wrapping possible (`break-words`, i.e.
-  // `overflow-wrap: break-word`) is present on the root, on both the
+  // proves the class that makes wrapping possible (`wrap-anywhere`, i.e.
+  // `overflow-wrap: anywhere`) is present on the root, on both the
   // rendered-ADF path and the plain-text fallback path, since a document
   // that fails to parse as ADF must not lose this either. This is a class
-  // assertion, not a layout measurement.
+  // assertion, not a layout measurement. (Previously asserted `break-words`;
+  // switched to `wrap-anywhere` — see the root doc comment above
+  // `JiraRichText` for why `anywhere`, not `break-word`, is the value this
+  // renderer actually needs.)
   it('carries the overflow-wrap class on its root on both the rendered and fallback paths', () => {
     const { rerender, container } = render(
       <JiraRichText
@@ -725,9 +728,49 @@ describe('JiraRichText', () => {
         fallback="x"
       />,
     );
-    expect(container.firstElementChild).toHaveClass('break-words');
+    expect(container.firstElementChild).toHaveClass('wrap-anywhere');
     rerender(<JiraRichText adf={null} fallback="x" />);
-    expect(container.firstElementChild).toHaveClass('break-words');
+    expect(container.firstElementChild).toHaveClass('wrap-anywhere');
+  });
+
+  // ROAD-27: belt-and-braces coverage for the task-item span fix — see the
+  // comment on that span in JiraRichText.tsx. A class assertion, not a
+  // layout measurement: jsdom cannot prove a 300-char unbroken token
+  // actually wraps at any real width, only that the span carries `min-w-0`
+  // (and `flex-1`), which is what lets it shrink below that token's
+  // min-content width in a real browser instead of refusing to and forcing
+  // the row wider regardless of the root's overflow-wrap value.
+  it('gives a task item’s text span min-w-0 so a long unbroken token can still shrink', () => {
+    const longToken = 'a'.repeat(300);
+    render(
+      <JiraRichText
+        adf={{
+          type: 'doc',
+          content: [
+            {
+              type: 'taskList',
+              content: [
+                {
+                  type: 'taskItem',
+                  attrs: { state: 'TODO' },
+                  content: [
+                    {
+                      type: 'paragraph',
+                      content: [{ type: 'text', text: longToken }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        }}
+        fallback={longToken}
+      />,
+    );
+    const textSpan = screen.getByText(longToken).closest('li > span');
+    expect(textSpan).not.toBeNull();
+    expect(textSpan).toHaveClass('min-w-0');
+    expect(textSpan).toHaveClass('flex-1');
   });
 
   // ROAD-27: the one exception to that same wrap rule. A code block must

@@ -304,7 +304,7 @@ export function JiraStateChip({
       title={disabled ? disabledTitle : undefined}
       onClick={onClick}
       className={clsx(
-        'inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border-strong bg-surface px-2.5 py-1 text-xs font-semibold whitespace-nowrap text-text transition-opacity',
+        'inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border-strong bg-surface px-2.5 py-1 text-xs font-semibold text-text transition-opacity',
         open && 'border-accent',
         (disabled || saving) && 'cursor-not-allowed opacity-50',
       )}
@@ -313,7 +313,22 @@ export function JiraStateChip({
         className="size-[7px] shrink-0 rounded-full"
         style={{ background: stateColor }}
       />
-      {saving ? 'Saving…' : stateName}
+      {/* ROAD-27 / JIRA-157: this label used to have no width bound at all,
+          so it was the one genuinely unbounded contributor to the ~600px row
+          overflow — an admin's own custom workflow state name flows straight
+          through into chip width. "Waiting for customer response" measures
+          ~190px of label text alone (~225px total chip, with the dot/gap/
+          padding/border overhead below), which is what pushes the row
+          failure from ~600px up to ~850px viewports (see the arithmetic in
+          JiraTicketRow.tsx above its badge wrapper). `max-w-[80px]` +
+          `truncate` bounds it: 80px is roomy enough that every ordinary
+          short/medium Jira state ("Done", "To Do", "In Review", even
+          "In Progress" at ~72px) still renders in full — only a genuinely
+          long custom name gets clipped, and `title` carries the untruncated
+          name for a user who needs it. */}
+      <span className="max-w-[80px] truncate" title={stateName}>
+        {saving ? 'Saving…' : stateName}
+      </span>
     </button>
   );
 }
