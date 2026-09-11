@@ -145,6 +145,11 @@ function comment(overrides: Partial<JiraComment> = {}): JiraComment {
     // that mock's own comment above), so no fixture here needs a real
     // document tree behind it.
     bodyAdf: null,
+    // Null (no restriction) by default, same as every other "unknown ->
+    // treat as the unrestricted/no-evidence case" default in this file
+    // (see updatedAt above) — no test in this file is about a
+    // role/group-restricted comment.
+    visibility: null,
     ...overrides,
   };
 }
@@ -2290,6 +2295,7 @@ describe('comment thread truncation', () => {
       postedByWaypoint: false,
       disclosureText: null,
       bodyAdf: null,
+      visibility: null,
     };
   }
 

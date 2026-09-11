@@ -1,4 +1,5 @@
 import type {
+  JiraCommentVisibility,
   JiraPriority,
   JiraPriorityOption,
   JiraStateCategory,
@@ -1150,6 +1151,38 @@ export function mapIssue(
   };
 }
 
+/**
+ * `record.visibility` -> `JiraCommentVisibility | null`. `null` only when
+ * the key itself is missing or explicitly `null` — the one shape Jira's own
+ * docs describe as "this comment is public" and the only case this function
+ * treats as "nothing to show".
+ *
+ * Anything else present under `visibility` — a well-formed `{ type, value }`
+ * object, an object with a `type` this app has never seen, even a shape too
+ * malformed to read a `type`/`value` out of at all — maps to a real
+ * `JiraCommentVisibility` rather than to `null`. That is a deliberate
+ * asymmetry, not laziness: Jira only ever sends this key at all when a
+ * comment IS restricted, so its presence is itself the fact that matters
+ * most, and it is the one fact this function can always preserve even when
+ * the details underneath cannot be parsed. Getting the label wrong (an
+ * empty `value`, a generic `'restricted'` type) is a cosmetic problem;
+ * getting the lock icon wrong — showing none on a comment Jira told us was
+ * restricted — is the exact defect ROAD-24 was filed for, just moved from
+ * "missing field" to "field we couldn't fully parse". `asRecord` already
+ * degrades a non-object `visibility` to `{}`, so `rawType`/`rawValue` are
+ * simply undefined in that case and fall through to the same 'restricted' /
+ * `''` fallbacks a recognized-but-incomplete object would get.
+ */
+function mapCommentVisibility(value: unknown): JiraCommentVisibility | null {
+  if (value == null) return null;
+  const record = asRecord(value);
+  const { type: rawType, value: rawValue } = record;
+  return {
+    type: rawType === 'role' || rawType === 'group' ? rawType : 'restricted',
+    value: typeof rawValue === 'string' ? rawValue : '',
+  };
+}
+
 /** Comments are read AND written through v3 (see jiraClient.ts) — this
  * comment used to say writes went through v2, which stopped being true when
  * the composer started sending real ADF, and a stale claim about which API
@@ -1210,5 +1243,8 @@ export function mapComment(
     // an id — see JiraWireComment.parentId's own comment for why the field is
     // trusted at all despite appearing nowhere in Atlassian's published spec.
     parentId: idOf(record.parentId),
+    // See mapCommentVisibility's own comment for the null-vs-'restricted'
+    // decision — and JiraCommentVisibility's for why this is never `jsdPublic`.
+    visibility: mapCommentVisibility(record.visibility),
   };
 }

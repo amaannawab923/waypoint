@@ -96,6 +96,7 @@ beforeEach(() => {
     postedByWaypoint: false,
     disclosureText: null,
     bodyAdf: null,
+    visibility: null,
   });
 });
 

@@ -1847,6 +1847,88 @@ describe('listJiraComments — bodyAdf', () => {
   });
 });
 
+// ROAD-24: toComment must not lose main's restriction signal on the way to
+// the renderer — see JiraCommentVisibility's own comment (types/jira.ts) for
+// what these states mean. This is a pure pass-through, so these tests only
+// need to prove `toComment` forwards whatever mapComment already decided,
+// not re-litigate mapComment's own role/group/'restricted'/null decisions —
+// those live in main/jira/jiraMap.test.ts, against the real wire function.
+describe('listJiraComments — visibility', () => {
+  function wireCommentWithVisibility(visibility: unknown) {
+    return {
+      id: 'c1',
+      ticketId: '10421',
+      authorName: 'Max Chen',
+      authorAccountId: 'acct-max',
+      updatedAt: null,
+      updateAuthorName: null,
+      body: 'Only the support team should see this.',
+      bodyAdf: null,
+      createdAt: '2026-09-01T10:00:00.000Z',
+      parentId: null,
+      visibility,
+    };
+  }
+
+  it('carries a role restriction through unchanged', async () => {
+    const api = freshApi();
+    bridge.listComments.mockResolvedValue({
+      ok: true,
+      value: {
+        comments: [
+          wireCommentWithVisibility({ type: 'role', value: 'Administrators' }),
+        ],
+        total: 1,
+      },
+    });
+
+    const { comments } = await api.listJiraComments('10421');
+
+    expect(comments[0].visibility).toEqual({
+      type: 'role',
+      value: 'Administrators',
+    });
+  });
+
+  it('carries a group restriction through unchanged', async () => {
+    const api = freshApi();
+    bridge.listComments.mockResolvedValue({
+      ok: true,
+      value: {
+        comments: [
+          wireCommentWithVisibility({
+            type: 'group',
+            value: 'Service Desk Team',
+          }),
+        ],
+        total: 1,
+      },
+    });
+
+    const { comments } = await api.listJiraComments('10421');
+
+    expect(comments[0].visibility).toEqual({
+      type: 'group',
+      value: 'Service Desk Team',
+    });
+  });
+
+  it('maps a null visibility through unchanged, for a fully public comment', async () => {
+    const api = freshApi();
+    bridge.listComments.mockResolvedValue({
+      ok: true,
+      value: {
+        comments: [wireCommentWithVisibility(null)],
+        total: 1,
+      },
+    });
+
+    const { comments } = await api.listJiraComments('10421');
+
+    expect(comments[0].visibility).toBeNull();
+  });
+});
+
 /**
  * `prepareJiraCommentEdit` is the one function anything in this app may
  * trust to decide whether a real comment can be edited in place without
@@ -1873,6 +1955,7 @@ describe('prepareJiraCommentEdit', () => {
       body: 'irrelevant to this function — it reads bodyAdf, not body',
       createdAt: '2026-09-01T10:00:00.000Z',
       parentId: null,
+      visibility: null,
       postedByWaypoint: false,
       disclosureText: null,
       bodyAdf: adf,

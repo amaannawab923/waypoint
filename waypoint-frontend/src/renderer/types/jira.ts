@@ -282,6 +282,16 @@ export interface JiraTicket {
 // names — so keeping them would have meant shipping fields permanently filled
 // with empty placeholders.
 
+/** Renderer mirror of `JiraCommentVisibility` (main/jira/jiraTypes.ts), which
+ * has the full story — what each state means, why an unrecognized `type`
+ * still resolves to `'restricted'` rather than being dropped, and why this
+ * is deliberately not JSM's separate `jsdPublic` flag. Carried through
+ * jiraApi.ts's `toComment` unchanged; this app has no UI that writes it. */
+export interface JiraCommentVisibility {
+  type: 'role' | 'group' | 'restricted';
+  value: string;
+}
+
 export interface JiraComment {
   id: ID;
   ticketId: ID;
@@ -313,6 +323,9 @@ export interface JiraComment {
    * may not have done anything.
    */
   parentId: string | null;
+  /** See `JiraCommentVisibility` above — Jira's restriction on who can see
+   * this comment, or null when it is fully public. */
+  visibility: JiraCommentVisibility | null;
   postedByWaypoint: boolean;
   /** Self-disclosure prefix for a Copilot-authored comment (phase 2's
    * approval flow) — null for a plain, user-typed comment like every one

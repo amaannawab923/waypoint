@@ -25,6 +25,8 @@ function comment(overrides: Partial<JiraComment> = {}): JiraComment {
     postedByWaypoint: false,
     disclosureText: null,
     bodyAdf: null,
+    // Public unless a test says otherwise — ROAD-24 maps Jira's restriction.
+    visibility: null,
     ...overrides,
   };
 }

@@ -439,6 +439,64 @@ export interface JiraCommentBody {
   content: JiraAdfBlockNode[];
 }
 
+/**
+ * A restriction Jira placed on a comment — present on `JiraWireComment.visibility`
+ * only when the comment is NOT visible to everyone who can otherwise see the
+ * ticket. Read straight off the comment's own `visibility` object (Jira REST
+ * v3's `Comment.visibility`, e.g. `{ type: "role", value: "Administrators" }`);
+ * absent on the raw payload means the comment is fully public, which is why
+ * `JiraWireComment.visibility` is `null` in that case rather than this type
+ * with some "none" variant.
+ *
+ * This app can only ever READ this field. JiraCommentComposer.tsx has no
+ * control for restricting a reply, so every comment this app posts is fully
+ * public no matter what it is replying to. See ROAD-24, which this type
+ * exists to fix: without it, a comment restricted to a project role rendered
+ * indistinguishably from a public one, and a reasonable reply typed in the
+ * open could land on something that was meant to stay internal — worst on
+ * Jira Service Management projects, where "internal" is a real access
+ * boundary, not just a convention.
+ *
+ * Deliberately not `jsdPublic`, JSM's own separate public/internal-note flag
+ * for a customer-facing portal. That is a different axis — agent-only vs.
+ * customer-visible on a service-desk request — from this one — open to the
+ * whole ticket vs. restricted to a role or group — and Atlassian's own
+ * tracker (JSDCLOUD-15406, open as of this writing) says the platform
+ * comment-read endpoints this client calls do not reliably return it. Surfacing
+ * a field that is frequently just missing would mean a lock icon that is
+ * wrong as often as it's right, which is worse than not having one; that
+ * belongs in a ticket of its own once the read gap is closed, not folded into
+ * this one.
+ */
+export interface JiraCommentVisibility {
+  /**
+   * Jira's own two restriction kinds are 'role' and 'group'. 'restricted' is
+   * never sent by Jira — mapComment (jiraMap.ts) falls back to it for any
+   * `type` this app doesn't recognize, so a restriction scheme this app has
+   * never seen still reads as "hidden from someone" instead of silently
+   * degrading to the unmarked, fully-public `null` case on
+   * `JiraWireComment.visibility`. Treating an unrecognized restriction as
+   * "public" would reproduce the exact bug this type exists to fix, just
+   * triggered by an unfamiliar shape instead of a missing field — so that
+   * direction of failure is the one this app cannot afford, even though it
+   * means occasionally locking a comment whose restriction we can't fully
+   * describe.
+   */
+  type: 'role' | 'group' | 'restricted';
+  /**
+   * The role or group name Jira restricted this comment to — "Administrators",
+   * "Service Desk Team". Empty when Jira sent a `visibility` object without a
+   * usable `value`; the comment still renders as restricted, just without a
+   * name to label it with.
+   *
+   * Jira's payload also carries a deprecated `identifier` (the role/group's
+   * id) alongside this. Not carried here: nothing in this app writes
+   * visibility — there is no call an id would ever feed — and Jira's own
+   * spec already marks that field deprecated in favor of `value`.
+   */
+  value: string;
+}
+
 export interface JiraWireComment {
   id: string;
   ticketId: string;
@@ -489,6 +547,11 @@ export interface JiraWireComment {
    * not "Jira didn't say".
    */
   parentId: string | null;
+  /** Jira's restriction on who can see this comment, or `null` when it is
+   * fully public. See `JiraCommentVisibility` above for what each state
+   * means, why an unrecognized restriction never resolves to `null`, and why
+   * `jsdPublic` is deliberately not this field. */
+  visibility: JiraCommentVisibility | null;
   /**
    * The comment's raw ADF, carried ALONGSIDE the flattened `body` — same
    * shape and same reason as `JiraWireTicket.descriptionAdf`: `body` stays

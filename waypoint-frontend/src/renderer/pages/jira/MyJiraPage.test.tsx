@@ -885,6 +885,7 @@ describe('JiraTicketDrawer — comment timestamps', () => {
       postedByWaypoint: false,
       disclosureText: null,
       bodyAdf: null,
+      visibility: null,
     };
     jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead([undated]));
     jest

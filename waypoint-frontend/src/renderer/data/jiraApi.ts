@@ -357,6 +357,10 @@ function toComment(wire: JiraWireComment): JiraComment {
     // and `null` behave identically anyway — this just keeps the type this
     // module promises (`string | null`) true rather than trusting the wire.
     parentId: wire.parentId ?? null,
+    // Straight off the wire, unchanged — see JiraCommentVisibility's own
+    // comment (renderer/types/jira.ts) for what null vs. a real value means
+    // and why this app never builds one itself, only ever displays it.
+    visibility: wire.visibility,
     // Jira has no concept of "this comment came from Waypoint" — there's no
     // property on a comment to carry it and this app doesn't keep its own
     // record of what it posted. A comment read back from Jira is therefore
