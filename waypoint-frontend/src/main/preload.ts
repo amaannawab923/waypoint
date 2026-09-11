@@ -29,6 +29,10 @@ import {
   ENGINE_IPC,
   type EngineHealth,
   type EngineStatus,
+  type LiveSnapshot,
+  type LiveUpdate,
+  type TopicClosedReason,
+  type TopicSubscription,
 } from './engine/types';
 
 // The global Web Crypto API, not Node's `crypto` module: this preload script
@@ -485,6 +489,65 @@ const electronHandler = {
       return () => {
         ipcRenderer.removeListener(ENGINE_IPC.statusChanged, subscription);
       };
+    },
+    // ROAD-60: live topics for the sessions panel. `subscribeTopic` is
+    // request/response for the first snapshot, then push for every update
+    // and for the close — both dispatched here by subscription id, so the
+    // renderer holds one listener per subscription and nothing else sees
+    // its traffic. Main refuses a topic outside its allowlist with a
+    // rejected promise carrying the sentence; that is the whole contract.
+    async subscribeTopic(
+      topic: string,
+      handlers: {
+        onUpdate: (update: LiveUpdate) => void;
+        onClosed: (reason: TopicClosedReason) => void;
+      },
+    ): Promise<{
+      subscriptionId: string;
+      snapshot: LiveSnapshot;
+      unsubscribe: () => void;
+    }> {
+      const { subscriptionId, snapshot } = (await ipcRenderer.invoke(
+        ENGINE_IPC.topicSubscribe,
+        topic,
+      )) as TopicSubscription;
+      const onUpdate = (
+        _event: IpcRendererEvent,
+        payload: { subscriptionId: string; update: LiveUpdate },
+      ) => {
+        if (payload.subscriptionId === subscriptionId)
+          handlers.onUpdate(payload.update);
+      };
+      const onClosed = (
+        _event: IpcRendererEvent,
+        payload: { subscriptionId: string; reason: TopicClosedReason },
+      ) => {
+        if (payload.subscriptionId !== subscriptionId) return;
+        stop();
+        handlers.onClosed(payload.reason);
+      };
+      const stop = () => {
+        ipcRenderer.removeListener(ENGINE_IPC.topicUpdate, onUpdate);
+        ipcRenderer.removeListener(ENGINE_IPC.topicClosed, onClosed);
+      };
+      ipcRenderer.on(ENGINE_IPC.topicUpdate, onUpdate);
+      ipcRenderer.on(ENGINE_IPC.topicClosed, onClosed);
+      return {
+        subscriptionId,
+        snapshot,
+        unsubscribe: () => {
+          stop();
+          void ipcRenderer.invoke(ENGINE_IPC.topicUnsubscribe, subscriptionId);
+        },
+      };
+    },
+    /** A fresh snapshot of an existing subscription's topic — the follower's resync. */
+    snapshotTopic(subscriptionId: string): Promise<LiveSnapshot> {
+      return ipcRenderer.invoke(ENGINE_IPC.topicSnapshot, subscriptionId);
+    },
+    /** One of the allowlisted daemon procedures (engine/types.ts ALLOWED_PROCEDURES). */
+    call(procedure: string, input: unknown): Promise<unknown> {
+      return ipcRenderer.invoke(ENGINE_IPC.call, procedure, input);
     },
   },
 };

@@ -451,4 +451,78 @@ export const ENGINE_IPC = {
   health: 'engine:health',
   /** Push channel: every EngineStatus transition, in order. */
   statusChanged: 'engine:status-changed',
+
+  // --- Live topics and calls for the sessions panel (ROAD-60) ------------
+  // The renderer never sees the Wire client. It asks main for a topic by
+  // name; main attaches on the live connection, answers with the first
+  // snapshot, and pushes every update — each renderer subscription is one
+  // daemon attachment, identified by the `subscriptionId` main mints.
+  // Only topics matching ALLOWED_TOPIC (a run's ACP session states, the
+  // session list, the workspace records) and procedures in
+  // ALLOWED_PROCEDURES can cross: the bridge stays as narrow as what the
+  // panel needs, and a conversation that is not one of our runs is not
+  // reachable from the renderer at all.
+  /** (topic) → { subscriptionId, snapshot }. Throws when not running or not allowed. */
+  topicSubscribe: 'engine:topic:subscribe',
+  /** (subscriptionId) → void. Idempotent. */
+  topicUnsubscribe: 'engine:topic:unsubscribe',
+  /** (subscriptionId) → a fresh snapshot of the same topic (resync). */
+  topicSnapshot: 'engine:topic:snapshot',
+  /** Push: { subscriptionId, update: LiveUpdate }. */
+  topicUpdate: 'engine:topic:update',
+  /** Push: { subscriptionId, reason } — the topic is gone (daemon away, topic failed). */
+  topicClosed: 'engine:topic:closed',
+  /** (procedure, input) → the daemon's answer, for ALLOWED_PROCEDURES only. */
+  call: 'engine:call',
 } as const;
+
+/**
+ * A live model's snapshot as the daemon answers it (`@emdash/wire`
+ * `LiveSnapshot`), and an update (`LiveUpdate`): `delta` is a list of
+ * Immer patches applied to the previous state; `baseSequence` must equal
+ * the sequence the client holds, and `generation` must match the
+ * snapshot's, else the client re-snapshots. Observed live in W2's probes.
+ */
+export interface LiveSnapshot<T = unknown> {
+  generation: number;
+  sequence: number;
+  timestamp: number;
+  data: T;
+}
+export interface LiveUpdate {
+  generation: number;
+  baseSequence: number;
+  sequence: number;
+  timestamp: number;
+  delta: unknown;
+  mutationIds?: string[];
+}
+
+export interface TopicSubscription<T = unknown> {
+  subscriptionId: string;
+  snapshot: LiveSnapshot<T>;
+}
+export type TopicClosedReason =
+  | { kind: 'disconnected' }
+  | { kind: 'topic-error'; code: WireErrorCode; message: string }
+  | { kind: 'unsubscribed' };
+
+/** Our runs' conversation ids — the daemon's conversationId IS the run id (ROAD-55). */
+const RUN_CONVERSATION = 'run-[A-Za-z0-9]{1,64}';
+export const ALLOWED_TOPIC = new RegExp(
+  '^(' +
+    ['acp\\.sessions\\.list', 'workspaceRegistry\\.records\\.list'].join('|') +
+    `|acp\\.session\\.(state|config|usage|plan|agents|activeTurn|draft|terminals|mcpServers)\\|\\{"conversationId":"${RUN_CONVERSATION}"\\}` +
+    ')$',
+);
+/** Procedures the renderer may call, and the check each one's input must pass. */
+export const ALLOWED_PROCEDURES: Record<string, (input: unknown) => boolean> = {
+  'acp.getHistory': (input) =>
+    typeof input === 'object' &&
+    input !== null &&
+    typeof (input as { conversationId?: unknown }).conversationId ===
+      'string' &&
+    new RegExp(`^${RUN_CONVERSATION}$`).test(
+      (input as { conversationId: string }).conversationId,
+    ),
+};

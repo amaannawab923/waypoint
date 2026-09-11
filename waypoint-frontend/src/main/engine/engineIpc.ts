@@ -9,6 +9,7 @@ import * as path from 'node:path';
 import { installEngine, verifyInstalledEngine } from './installer';
 import { runDaemonCommand } from './daemonCli';
 import { registerBootReconcile } from './runs/bootReconcile';
+import { registerTopicsIpc } from './topicsIpc';
 
 // ROAD-48: the IPC surface over the engine supervisor.
 //
@@ -152,6 +153,19 @@ export function registerEngineIpc(
   // connection. A fake supervisor with no client (every engineIpc test)
   // makes this a no-op.
   registerBootReconcile({ supervisor, logger });
+
+  // ROAD-60: the renderer's live topics and allowlisted calls, on the
+  // same connection. Electron's ipcMain/webContents are handed in as the
+  // two functions topicsIpc.ts needs, so it stays unit-testable.
+  registerTopicsIpc({
+    supervisor,
+    host: {
+      handle: (channel, handler) =>
+        ipcMain.handle(channel, (_event, ...args) => handler(...args)),
+      send,
+    },
+    logger,
+  });
 
   // → EngineStatus, never throws — a broken engine is a status, not an IPC
   // error (ENGINE_IPC.status's own comment in types.ts). getStatus() is

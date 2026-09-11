@@ -10,7 +10,13 @@
 // surfaces as an EngineStatus with `kind: 'failed'`, not a rejected
 // promise. There is nothing for this file to catch and rethrow.
 
-import type { EngineHealth, EngineStatus } from '@/types/engine';
+import type {
+  EngineHealth,
+  EngineStatus,
+  LiveSnapshot,
+  LiveUpdate,
+  TopicClosedReason,
+} from '@/types/engine';
 
 function bridge() {
   const api = window.electron?.engine;
@@ -58,3 +64,44 @@ export function onEngineStatusChanged(
 ): () => void {
   return bridge().onStatusChanged(cb);
 }
+
+// ---------------------------------------------------------------------------
+// Live topics and allowlisted calls (ROAD-60) — the bridge the session
+// followers (data/live/) are built on. Same window.electron.engine
+// surface; wrapped here so nothing in components/ reaches for the preload
+// object directly, and so a test can hand a follower a fake.
+// ---------------------------------------------------------------------------
+
+export function subscribeEngineTopic(
+  topic: string,
+  handlers: {
+    onUpdate: (update: LiveUpdate) => void;
+    onClosed: (reason: TopicClosedReason) => void;
+  },
+): Promise<{
+  subscriptionId: string;
+  snapshot: LiveSnapshot;
+  unsubscribe: () => void;
+}> {
+  return bridge().subscribeTopic(topic, handlers);
+}
+
+export function snapshotEngineTopic(
+  subscriptionId: string,
+): Promise<LiveSnapshot> {
+  return bridge().snapshotTopic(subscriptionId);
+}
+
+export function callEngine(
+  procedure: string,
+  input: unknown,
+): Promise<unknown> {
+  return bridge().call(procedure, input);
+}
+
+/** The three functions above, as the object data/live/ expects. */
+export const engineSessionBridge = {
+  subscribeTopic: subscribeEngineTopic,
+  snapshotTopic: snapshotEngineTopic,
+  call: callEngine,
+};

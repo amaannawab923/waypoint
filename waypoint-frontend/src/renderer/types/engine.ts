@@ -16,6 +16,9 @@ export type {
   EngineTransportMode,
   EngineInitializeOk,
   EngineInitializeError,
+  LiveSnapshot,
+  LiveUpdate,
+  TopicClosedReason,
 } from '../../main/engine/types';
 
 // A value export, unlike everything above — deliberately, and for the same
