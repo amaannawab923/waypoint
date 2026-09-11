@@ -78,14 +78,31 @@ function fakeView(opts: {
   parentById?: Map<string, Ticket>;
   subItemCountByParent?: Map<string, { total: number; done: number }>;
   nestedChildIds?: Set<string>;
+  nestedDescendantCountByParent?: Map<string, number>;
+  collapsedParents?: Set<string>;
+  toggleParentCollapsed?: (id: string) => void;
 }): TicketsView {
+  const nestedChildIds = opts.nestedChildIds ?? new Set<string>();
+  // Derived the same way the real hook derives it (childrenByParent's keys)
+  // rather than defaulted to empty, so a fixture that sets up real nesting
+  // automatically gets the parent side of it too and can't drift from what
+  // useTicketsView would actually produce for the same data.
+  const derivedNestedCounts = new Map<string, number>();
+  opts.items
+    .filter((i) => nestedChildIds.has(i.id) && i.parentId)
+    .forEach((i) => {
+      const pid = i.parentId as string;
+      derivedNestedCounts.set(pid, (derivedNestedCounts.get(pid) ?? 0) + 1);
+    });
   return {
     projectId: 'proj-1',
     items: opts.items,
     allItems: opts.items,
     subItemCountByParent: opts.subItemCountByParent ?? new Map(),
     parentById: opts.parentById ?? new Map(),
-    nestedChildIds: opts.nestedChildIds ?? new Set(),
+    nestedChildIds,
+    nestedDescendantCountByParent:
+      opts.nestedDescendantCountByParent ?? derivedNestedCounts,
     loading: false,
     isRefetching: false,
     reload: jest.fn(),
@@ -124,6 +141,8 @@ function fakeView(opts: {
     groupedItems: opts.groups,
     showEmptyGroups: true,
     setShowEmptyGroups: jest.fn(),
+    collapsedParents: opts.collapsedParents ?? new Set(),
+    toggleParentCollapsed: opts.toggleParentCollapsed ?? jest.fn(),
     stateFor: (item) => (item.stateId === 'st-1' ? state() : undefined),
     projectFor: () => undefined,
   };
@@ -225,6 +244,36 @@ describe('BoardView same-group nesting (finding 2e)', () => {
     await screen.findByText('CW-2');
     expect(screen.getByText('Subtask of CW-1')).toBeInTheDocument();
     expect(screen.getByText('Subtask of CW-1')).toHaveClass('sr-only');
+  });
+
+  // Found by manual testing: the board scrolled ~6000px past its content into
+  // dead whitespace. Cause was these sr-only spans — Tailwind's sr-only is
+  // `position: absolute`, so with no positioned ancestor its containing block
+  // is the document, which means it escapes the column's overflow clipping
+  // and contributes its static position to the DOCUMENT's scroll height.
+  // Measured live: documentElement.scrollHeight 7240px against a 1080px
+  // viewport; making each card a containing block took it to 1080px exactly.
+  // jsdom has no layout, so the structural invariant is what's pinned here —
+  // if a card ever loses `relative`, the overflow silently comes back.
+  it('gives every card a local containing block, so its absolutely-positioned sr-only labels cannot escape the column scroller', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent' });
+    const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [parent, child] }];
+    const nestedChildIds = new Set(['child']);
+    const parentById = new Map([['child', parent]]);
+
+    render(
+      <BoardView
+        view={fakeView({ items: [parent, child], groups, nestedChildIds, parentById })}
+        projectId="proj-1"
+        onOpenItem={jest.fn()}
+      />,
+    );
+
+    const srLabel = await screen.findByText('Subtask of CW-1');
+    const card = srLabel.closest('button');
+    expect(card).not.toBeNull();
+    expect(card).toHaveClass('relative');
   });
 
   it('does not indent a card whose parent is in a different group (no entry in nestedChildIds)', async () => {
@@ -466,6 +515,53 @@ describe('BoardView description preview (finding 4)', () => {
 
     await screen.findByText('CW-1');
     expect(document.querySelectorAll('.line-clamp-2.text-text-muted').length).toBe(0);
+  });
+});
+
+// ROAD-39: collapse is deliberately List-ONLY. It shipped on Board first
+// and was removed after manual QA. A board column means "status", so a
+// parent's children are frequently cards that legitimately live in OTHER
+// columns, and a per-card control could neither hide nor reveal those. The
+// count was honest but the affordance was not: a "23 subtasks" strip under
+// a card in Backlog vanished entirely the moment that card moved to Todo.
+// TicketList keeps the feature — under groupBy 'none' every child nests
+// under its parent regardless of state, so there the control always has
+// something real to act on.
+describe('BoardView has no collapse affordance (ROAD-39, removed)', () => {
+  it('renders no disclosure control on a card that has nested children', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'ROAD-2' });
+    const child = ticket({ id: 'child', identifier: 'ROAD-3', parentId: 'parent' });
+    const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [parent, child] }];
+    const view = fakeView({
+      items: [parent, child],
+      groups,
+      nestedChildIds: new Set(['child']),
+      subItemCountByParent: new Map([['parent', { total: 29, done: 5 }]]),
+    });
+
+    render(<BoardView view={view} projectId="proj-1" onOpenItem={() => {}} />);
+    await screen.findByText('ROAD-2');
+
+    expect(
+      screen.queryByRole('button', { name: /subtask/i }),
+    ).not.toBeInTheDocument();
+    // The child is still rendered and still nested — only the control is
+    // gone. Removing the affordance must not remove the hierarchy itself.
+    expect(screen.getByText('ROAD-3')).toBeInTheDocument();
+  });
+
+  it('still shows the Epic badge, which is a separate workspace-wide signal', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'ROAD-2' });
+    const groups: TicketGroup[] = [{ key: 'st-1', label: 'Todo', items: [parent] }];
+    const view = fakeView({
+      items: [parent],
+      groups,
+      subItemCountByParent: new Map([['parent', { total: 29, done: 5 }]]),
+    });
+
+    render(<BoardView view={view} projectId="proj-1" onOpenItem={() => {}} />);
+
+    expect(await screen.findByText('Epic · 5/29')).toBeInTheDocument();
   });
 });
 

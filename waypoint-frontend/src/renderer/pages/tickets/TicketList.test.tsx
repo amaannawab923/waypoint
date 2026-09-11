@@ -314,6 +314,22 @@ describe('TicketList same-group nesting (finding 2e)', () => {
     expect(screen.getByText('Subtask of CW-1')).toBeInTheDocument();
     expect(screen.getByText('Subtask of CW-1')).toHaveClass('sr-only');
   });
+
+  // See BoardView.test.tsx's twin for the full write-up: Tailwind's sr-only
+  // is `position: absolute`, so without a positioned ancestor it escapes the
+  // surrounding scroller's clipping and inflates the document's scroll
+  // height. jsdom has no layout, so the containing block is pinned
+  // structurally instead.
+  it('gives every row a local containing block, so its sr-only labels cannot escape the surrounding scroller', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'CW-1', stateId: 'st-1' });
+    const child = ticket({ id: 'child', identifier: 'CW-2', parentId: 'parent', stateId: 'st-1' });
+    await renderList([parent, child]);
+
+    const srLabel = await screen.findByText('Subtask of CW-1');
+    const row = srLabel.closest('[id^="ticket-row-"]');
+    expect(row).not.toBeNull();
+    expect(row).toHaveClass('relative');
+  });
 });
 
 describe('TicketList description preview (finding 4)', () => {
@@ -437,6 +453,125 @@ describe('TicketList j/k/x keyboard', () => {
 // useGlobalKeyboardShortcuts.test.tsx exercises ⌘A's dispatch), rather than
 // mounting the whole global hook, to keep this file's own accept criteria
 // isolated from that hook's.
+// ROAD-39: collapsible parent/child hierarchy. The control is a real
+// sibling <button> between the checkbox and the row's own open-ticket
+// button — not nested inside it (this codebase has a documented history of
+// nested-interactive-element bugs; see ArchivedProjects.tsx's e.target ===
+// e.currentTarget guard) — keyed off the same subItemCountByParent-style
+// signal the "Epic · N/M" badge already uses.
+// Found by manual testing on real data (ROAD-1 sat in Todo while all 29 of
+// its children sat in Backlog): the disclosure control still rendered there —
+// it was gated on "has children anywhere" — so clicking it flipped the
+// chevron and visibly did nothing, because nothing was nested beneath it.
+describe('TicketList collapsible hierarchy — parent and children in different groups (ROAD-39)', () => {
+  beforeEach(() => {
+    jest.mocked(listStates).mockResolvedValue([state(), state({ id: 'st-2', name: 'In Progress' })]);
+  });
+
+  it('renders no disclosure control when nothing is nested under the parent', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'ROAD-1', stateId: 'st-1' });
+    const child = ticket({ id: 'child', identifier: 'ROAD-2', parentId: 'parent', stateId: 'st-2' });
+    await renderList([parent, child]);
+
+    expect(
+      screen.queryByRole('button', { name: 'Collapse ROAD-1 and its subtasks' }),
+    ).not.toBeInTheDocument();
+    // The relationship is still surfaced — by the child's own parent chip,
+    // from its own group, rather than by nesting.
+    expect(screen.getByText('↳')).toBeInTheDocument();
+  });
+});
+
+describe('TicketList collapsible hierarchy (ROAD-39)', () => {
+  it('renders the disclosure control expanded by default, with aria-expanded and an accessible name', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'ROAD-1', stateId: 'st-1' });
+    const child = ticket({ id: 'child', identifier: 'ROAD-2', parentId: 'parent', stateId: 'st-1' });
+    await renderList([parent, child]);
+
+    const toggle = await screen.findByRole('button', { name: 'Collapse ROAD-1 and its subtasks' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('renders no disclosure control (just a reserved gutter) for a ticket with zero sub-items', async () => {
+    await renderList([ticket({ id: 'a', identifier: 'CW-1' })]);
+
+    await screen.findByText('CW-1');
+    expect(screen.queryByRole('button', { name: /and its subtasks/ })).not.toBeInTheDocument();
+  });
+
+  it('is a real sibling button, not nested inside the row\'s open-ticket button', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'ROAD-1', stateId: 'st-1' });
+    const child = ticket({ id: 'child', identifier: 'ROAD-2', parentId: 'parent', stateId: 'st-1' });
+    await renderList([parent, child]);
+
+    const toggle = await screen.findByRole('button', { name: 'Collapse ROAD-1 and its subtasks' });
+    const openRowButton = (await screen.findByText('ROAD-1')).closest('button') as HTMLElement;
+    // The toggle must not be a descendant of the row's own open-ticket
+    // button (that would be an invalid nested <button>) — it's a sibling.
+    expect(openRowButton.contains(toggle)).toBe(false);
+    expect(openRowButton).not.toBe(toggle);
+  });
+
+  it('clicking the control collapses the row, removing the whole subtree from the DOM — not just hiding it', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'ROAD-1', stateId: 'st-1' });
+    const child = ticket({ id: 'child', identifier: 'ROAD-2', parentId: 'parent', stateId: 'st-1' });
+    await renderList([parent, child]);
+
+    expect(screen.getByText('2 tickets')).toBeInTheDocument();
+    expect(screen.getByText('ROAD-2')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse ROAD-1 and its subtasks' }));
+
+    await waitFor(() => expect(screen.queryByText('ROAD-2')).not.toBeInTheDocument());
+    // The count line (view.items.length) reflects the removal too — the
+    // child is genuinely gone from the rendered set, not just display:none.
+    expect(screen.getByText('1 ticket')).toBeInTheDocument();
+    expect(screen.getAllByRole('checkbox')).toHaveLength(1);
+  });
+
+  it('the epic badge stays visible while collapsed — the count that makes someone want to expand', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'ROAD-1', stateId: 'st-1' });
+    const child = ticket({ id: 'child', identifier: 'ROAD-2', parentId: 'parent', stateId: 'st-1' });
+    await renderList([parent, child]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse ROAD-1 and its subtasks' }));
+
+    await waitFor(() => expect(screen.queryByText('ROAD-2')).not.toBeInTheDocument());
+    expect(screen.getByText('Epic · 0/1')).toBeInTheDocument();
+  });
+
+  it('toggling again expands and restores the subtree', async () => {
+    const parent = ticket({ id: 'parent', identifier: 'ROAD-1', stateId: 'st-1' });
+    const child = ticket({ id: 'child', identifier: 'ROAD-2', parentId: 'parent', stateId: 'st-1' });
+    await renderList([parent, child]);
+
+    const toggle = () => screen.getByRole('button', { name: /ROAD-1 and its subtasks/ });
+    fireEvent.click(toggle());
+    await waitFor(() => expect(screen.queryByText('ROAD-2')).not.toBeInTheDocument());
+
+    fireEvent.click(toggle());
+    await waitFor(() => expect(screen.getByText('ROAD-2')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Collapse ROAD-1 and its subtasks' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+  });
+
+  it('collapses a 3-level chain entirely from the top', async () => {
+    const a = ticket({ id: 'a', identifier: 'ROAD-1', stateId: 'st-1' });
+    const b = ticket({ id: 'b', identifier: 'ROAD-2', parentId: 'a', stateId: 'st-1' });
+    const c = ticket({ id: 'c', identifier: 'ROAD-3', parentId: 'b', stateId: 'st-1' });
+    await renderList([a, b, c]);
+
+    expect(screen.getByText('3 tickets')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse ROAD-1 and its subtasks' }));
+
+    await waitFor(() => expect(screen.getByText('1 ticket')).toBeInTheDocument());
+    expect(screen.queryByText('ROAD-2')).not.toBeInTheDocument();
+    expect(screen.queryByText('ROAD-3')).not.toBeInTheDocument();
+  });
+});
+
 describe('TicketList active-view registration (W5.4)', () => {
   it('registers a view whose selectAll selects every visible row', async () => {
     const fixture = [ticket({ id: 'a', identifier: 'CW-1' }), ticket({ id: 'b', identifier: 'CW-2' })];

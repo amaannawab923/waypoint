@@ -83,6 +83,7 @@ function fakeView(items: Ticket[]): TicketsView {
     subItemCountByParent: new Map(),
     parentById: new Map(),
     nestedChildIds: new Set(),
+    nestedDescendantCountByParent: new Map(),
     loading: false,
     isRefetching: false,
     reload: jest.fn(),
@@ -121,6 +122,8 @@ function fakeView(items: Ticket[]): TicketsView {
     groupedItems: [],
     showEmptyGroups: true,
     setShowEmptyGroups: jest.fn(),
+    collapsedParents: new Set(),
+    toggleParentCollapsed: jest.fn(),
     stateFor: () => undefined,
     projectFor: () => undefined,
   };

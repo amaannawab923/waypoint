@@ -420,7 +420,15 @@ export default function BoardView({
                     handleCardDrop(item.id);
                   }}
                   className={clsx(
-                    'flex flex-col gap-2 rounded-[var(--radius-sm)] border border-border bg-surface p-3 text-left text-sm shadow-sm hover:border-border-strong',
+                    // `relative` is load-bearing, not cosmetic — see
+                    // TicketList.tsx's identical comment: this card contains
+                    // `sr-only` spans, Tailwind's sr-only is
+                    // `position: absolute`, and without a positioned ancestor
+                    // its containing block is the document, so it escapes the
+                    // column's overflow clipping and inflates the DOCUMENT's
+                    // scroll height (~6000px of dead whitespace below a long
+                    // board column).
+                    'relative flex flex-col gap-2 rounded-[var(--radius-sm)] border border-border bg-surface p-3 text-left text-sm shadow-sm hover:border-border-strong',
                     item.priority !== 'none' && 'border-l-2',
                     isNested && 'ml-3',
                     draggingId === item.id && 'opacity-50',
