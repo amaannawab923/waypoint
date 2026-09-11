@@ -15,13 +15,25 @@ export const agentAutonomyEnum = pgEnum('agent_autonomy', [
   'ask-before-pr',
   'full-auto',
 ]);
+// Shared by agent_assignments.status (a projection of the latest run —
+// architecture §5.4) and agent_runs.status (the run itself, ROAD-53). The
+// four values migration 0012 added — provisioning, finishing, interrupted,
+// cancelled — are the coding-run lifecycle; what each means, and which
+// moves between them are legal, is documented on agentRuns.ts and enforced
+// by runStatusMachine.ts. Order here is display order, not enum order:
+// Postgres appends ADD VALUE where the migration says, and nothing sorts
+// on this column.
 export const agentRunStatusEnum = pgEnum('agent_run_status', [
   'queued',
+  'provisioning',
   'running',
-  'needs-review',
   'blocked',
+  'finishing',
+  'needs-review',
   'done',
+  'interrupted',
   'failed',
+  'cancelled',
 ]);
 
 export const agents = pgTable('agents', {
