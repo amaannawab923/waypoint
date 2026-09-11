@@ -28,6 +28,24 @@ import {
  * never uses `dangerouslySetInnerHTML` — every node becomes real React
  * elements, and every link `href` is scheme-checked before it can become a
  * clickable `<a>` (see `safeHref` below).
+ *
+ * `break-words` (`overflow-wrap: break-word`) is baked into this component's
+ * own root, on both the rendered and fallback paths, rather than left to
+ * each caller's own `className` — so every consumer gets it, including any
+ * future one. It's `break-word`, not the more aggressive
+ * `[overflow-wrap:anywhere]`: break-word only splits an otherwise-unbreakable
+ * run — a pasted stack trace frame, a base64 blob, a long URL, exactly the
+ * content docs/qa/manual-test-cases.md's JIRA-155 flags as untested — when
+ * there is truly nowhere else to break, so ordinary prose still wraps at
+ * whitespace the way a reader expects. `anywhere` would break a URL or
+ * identifier mid-word even where a nearby space could already do the job,
+ * and it also changes how the browser computes this element's min-content
+ * size — a difference that matters for a grid/table track, not for a plain
+ * block like this one. `codeBlock` is the one exception: it keeps its own
+ * `overflow-x-auto` scroll instead of wrapping at all (see the `codeBlock`
+ * case below), matching the `table` node's own scroll container — wrapping
+ * a stack trace's indentation-sensitive lines would make them harder to
+ * read, not easier.
  */
 export function JiraRichText({
   adf,
@@ -43,7 +61,7 @@ export function JiraRichText({
     return (
       <div
         className={clsx(
-          'text-[13px] leading-relaxed whitespace-pre-wrap text-text-secondary',
+          'text-[13px] leading-relaxed whitespace-pre-wrap break-words text-text-secondary',
           className,
         )}
       >
@@ -51,7 +69,7 @@ export function JiraRichText({
       </div>
     );
   }
-  return <div className={className}>{rendered}</div>;
+  return <div className={clsx('break-words', className)}>{rendered}</div>;
 }
 
 // -----------------------------------------------------------------------
@@ -460,6 +478,12 @@ function renderNode(node: unknown, key: string): ReactNode {
         </li>
       );
 
+    // A code block scrolls horizontally inside its own <pre>, the same
+    // pattern the `table` node below uses, rather than inheriting the root's
+    // `break-words` behavior in any way that would matter: `<pre>`'s own
+    // `white-space: pre` already keeps a long line intact regardless, and
+    // wrapping a stack trace or a diff mid-line would scramble its
+    // indentation instead of just scrolling to see the rest of it.
     case 'codeBlock': {
       const language = typeof attrs.language === 'string' ? attrs.language : '';
       return (

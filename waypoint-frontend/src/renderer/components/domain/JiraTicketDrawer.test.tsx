@@ -1059,6 +1059,28 @@ describe('nested comment rendering', () => {
   });
 });
 
+// ROAD-27 / docs/qa/manual-test-cases.md's JIRA-155: a comment body renders
+// as plain text (never through JiraRichText), so it needs its own
+// overflow-wrap class or a pasted stack trace / base64 blob / long URL with
+// no spaces forces the drawer to scroll sideways instead of wrapping. jsdom
+// does not lay out text, so this cannot prove the long token actually wraps
+// at any real width — only that the class making wrapping possible is on
+// the element holding the body. This is a class assertion, not a layout
+// measurement.
+describe('comment body wrapping (ROAD-27)', () => {
+  it('renders the comment body with the overflow-wrap class', async () => {
+    const longUrl = `https://example.com/${'a'.repeat(300)}`;
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [comment({ id: 'c1', body: longUrl })],
+      total: 1,
+    });
+    renderDrawer();
+
+    const body = await screen.findByText(longUrl);
+    expect(body).toHaveClass('break-words');
+  });
+});
+
 describe("copying a comment's permalink", () => {
   beforeEach(() => {
     // jsdom has no Clipboard API by default.

@@ -703,4 +703,57 @@ describe('JiraRichText', () => {
     rerender(<JiraRichText adf={null} fallback="x" className="my-class" />);
     expect(container.firstElementChild).toHaveClass('my-class');
   });
+
+  // ROAD-27 / docs/qa/manual-test-cases.md's JIRA-155: a pasted stack trace,
+  // a base64 blob, or a long URL with no spaces must wrap instead of forcing
+  // the drawer to scroll sideways. jsdom does not lay out text, so this
+  // cannot prove a long token actually wraps at any real width — it only
+  // proves the class that makes wrapping possible (`break-words`, i.e.
+  // `overflow-wrap: break-word`) is present on the root, on both the
+  // rendered-ADF path and the plain-text fallback path, since a document
+  // that fails to parse as ADF must not lose this either. This is a class
+  // assertion, not a layout measurement.
+  it('carries the overflow-wrap class on its root on both the rendered and fallback paths', () => {
+    const { rerender, container } = render(
+      <JiraRichText
+        adf={{
+          type: 'doc',
+          content: [
+            { type: 'paragraph', content: [{ type: 'text', text: 'x' }] },
+          ],
+        }}
+        fallback="x"
+      />,
+    );
+    expect(container.firstElementChild).toHaveClass('break-words');
+    rerender(<JiraRichText adf={null} fallback="x" />);
+    expect(container.firstElementChild).toHaveClass('break-words');
+  });
+
+  // ROAD-27: the one exception to that same wrap rule. A code block must
+  // never wrap — it would scramble a stack trace's or a diff's indentation —
+  // it scrolls horizontally inside its own container instead, the same
+  // pattern already proven above for `table`. Also a class assertion, not a
+  // layout measurement, for the same jsdom reason.
+  it('scrolls a code block horizontally inside its own container instead of wrapping', () => {
+    render(
+      <JiraRichText
+        adf={{
+          type: 'doc',
+          content: [
+            {
+              type: 'codeBlock',
+              attrs: { language: 'text' },
+              content: [{ type: 'text', text: 'a'.repeat(300) }],
+            },
+          ],
+        }}
+        fallback={'a'.repeat(300)}
+      />,
+    );
+    const code = screen.getByText('a'.repeat(300));
+    const pre = code.closest('pre');
+    expect(pre).not.toBeNull();
+    expect(pre).toHaveClass('overflow-x-auto');
+  });
 });

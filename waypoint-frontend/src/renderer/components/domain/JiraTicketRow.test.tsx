@@ -208,3 +208,40 @@ describe('choosing a priority', () => {
     expect(onTicketUpdated).not.toHaveBeenCalled();
   });
 });
+
+// ROAD-27 / docs/qa/manual-test-cases.md's JIRA-157: at ~600px this row's
+// priority icon and assignee avatar must hold their size and the title must
+// be what gives way first, rather than the row silently overflowing past the
+// viewport with no reflow or scroll. jsdom does not do layout, so none of
+// the three tests below can prove the row actually survives a squeeze at any
+// real width — each is a class assertion, not a layout measurement, and only
+// proves the CSS guarantee (`shrink-0` / `min-w-0`) is present in the
+// rendered output; the real ~600px check happens live in the app. The
+// priority chip's `shrink-0` comes from JiraPriorityPicker.tsx's own
+// JiraPriorityChip root class, and the avatar's from Avatar.tsx's own root
+// class, not from anything this file sets — these two are regression locks
+// on a guarantee owned elsewhere, not new protection added here.
+describe('the row survives a narrow width (ROAD-27)', () => {
+  it('gives the priority chip shrink-0 so it holds its size instead of collapsing', () => {
+    renderRow();
+
+    expect(priorityChip()).toHaveClass('shrink-0');
+  });
+
+  it('gives the assignee avatar shrink-0 so it holds its size instead of collapsing', () => {
+    renderRow();
+
+    expect(screen.getByTitle('Max Chen')).toHaveClass('shrink-0');
+  });
+
+  it('lets the title column shrink to nothing first, before the fixed-size chips do', () => {
+    renderRow();
+
+    const title = screen.getByRole('button', {
+      name: 'Webhook receiver drops events past 500/min',
+    });
+    expect(title).toHaveClass('min-w-0');
+    expect(title).toHaveClass('flex-1');
+    expect(title).toHaveClass('truncate');
+  });
+});

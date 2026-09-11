@@ -919,7 +919,19 @@ export function JiraTicketDetail({
             />
           ) : (
             <>
-              <div className="text-[12.5px] leading-relaxed whitespace-pre-wrap text-text-secondary">
+              {/* ROAD-27 / docs/qa/manual-test-cases.md's JIRA-155: a comment
+                  body is plain text (not routed through JiraRichText, unlike
+                  the description below), so it needs its own `break-words`
+                  — same choice and same reasoning as JiraRichText's root
+                  (prefers a whitespace break, only splits a pasted stack
+                  trace / base64 blob / long URL mid-token when there is
+                  nowhere else to break). It only takes effect because the
+                  comment's own column above is already `min-w-0 flex-1`
+                  (see renderComment's outer div) — without that, this flex
+                  item would refuse to shrink below the unbroken token's
+                  width in the first place, and break-words would have
+                  nothing to work with. */}
+              <div className="text-[12.5px] leading-relaxed whitespace-pre-wrap break-words text-text-secondary">
                 {c.body}
               </div>
               {/* Four of Jira's five comment-row actions now: Reply, Edit,
