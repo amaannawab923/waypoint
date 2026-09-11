@@ -31,6 +31,7 @@ const PATHS: EnginePaths = {
   runDir: '/userdata/engine/run',
   socketPath: '/userdata/engine/run/workspace.sock',
   stateDir: '/userdata/engine/state',
+  worktreesDir: '/userdata/engine/worktrees',
   logPath: '/userdata/engine/engine.log',
 };
 
@@ -942,6 +943,23 @@ describe('createEngineSupervisor', () => {
       client.fireDisconnect({ kind: 'peer-closed' });
 
       expect(seen).toEqual(['stopping', 'stopped']);
+    });
+  });
+
+  describe('client()', () => {
+    it('is null until running, the live client while running, null again after stop()', async () => {
+      const client = fakeClient();
+      successfulInitializeAndHealth(client);
+      const { deps } = makeDeps({ createWireClient: jest.fn(() => client) });
+      const supervisor = createEngineSupervisor(deps);
+
+      expect(supervisor.client()).toBeNull();
+      await supervisor.install();
+      expect(supervisor.client()).toBeNull();
+      await supervisor.start();
+      expect(supervisor.client()).toBe(client);
+      await supervisor.stop();
+      expect(supervisor.client()).toBeNull();
     });
   });
 

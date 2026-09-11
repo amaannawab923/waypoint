@@ -80,5 +80,6 @@ export function resolveEnginePaths(
     socketPath,
     stateDir: path.join(engineRoot, 'state'),
     logPath: path.join(engineRoot, 'engine.log'),
+    worktreesDir: path.join(engineRoot, 'worktrees'),
   };
 }

@@ -61,6 +61,18 @@ describe('resolveEnginePaths', () => {
     expect(paths.logPath).toBe(path.join(USER_DATA, 'engine', 'engine.log'));
   });
 
+  it('puts run worktrees under the engine root, outside every linked checkout (ROAD-55)', () => {
+    const paths = resolveEnginePaths(USER_DATA);
+
+    expect(paths.worktreesDir).toBe(
+      path.join(USER_DATA, 'engine', 'worktrees'),
+    );
+    // Not inside the install (an upgrade replaces that directory) and not
+    // inside runDir (the daemon's socket directory).
+    expect(paths.worktreesDir.startsWith(paths.installDir)).toBe(false);
+    expect(paths.worktreesDir.startsWith(paths.runDir)).toBe(false);
+  });
+
   it('is pure: the same inputs always produce the same paths', () => {
     expect(resolveEnginePaths(USER_DATA)).toEqual(
       resolveEnginePaths(USER_DATA),

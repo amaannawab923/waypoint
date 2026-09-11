@@ -111,6 +111,13 @@ export interface EnginePaths {
   stateDir: string;
   /** Where Waypoint keeps the engine's stdout/stderr when it spawns it. */
   logPath: string;
+  /**
+   * Where a run's worktree goes: `<engine>/worktrees/<run id>` (ROAD-55).
+   * Outside every linked checkout — the daemon's own path safety refuses a
+   * worktree inside its repository — and inside Waypoint's data directory,
+   * so what Waypoint created, Waypoint can account for and remove.
+   */
+  worktreesDir: string;
 }
 
 /**

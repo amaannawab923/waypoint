@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import { pgTable, text, timestamp, pgEnum, bigint, jsonb, index, integer } from 'drizzle-orm/pg-core';
 import { copilotConversations } from './copilot.js';
 import { requests } from './requests.js';
+import { agentRuns } from './agentRuns.js';
 
 // Renamed from copilot_proposals/copilot_proposal_kind/copilot_proposal_status
 // (P3 W3.1 — see docs/design/waypoint-revamp-architecture.md §4.2). The
@@ -61,13 +62,12 @@ export const proposals = pgTable(
     // NOW NULLABLE (was required). Non-null only for origin='copilot'
     // (transcript anchor) — max(copilot_messages.seq) at propose time.
     anchorSeq: bigint('anchor_seq', { mode: 'number' }),
-    // Non-null only for origin='agent_run'. Plain column, no FK: agent_runs
-    // doesn't exist as a table yet — agent-run infrastructure is deferred
-    // per the founder's Copilot-freeze scope decision (this P3 pass does not
-    // build agent runtime). A later commit that introduces agent_runs
-    // should add `.references(() => agentRuns.id, { onDelete: 'set null' })`
-    // here.
-    agentRunId: text('agent_run_id'),
+    // Non-null only for origin='agent_run'. The FK the previous comment
+    // here told the next engineer to add once agent_runs existed (ROAD-53,
+    // migration 0012). `set null`, not cascade: a deleted run must leave
+    // its proposals readable in the review queue — the same reasoning
+    // ticketId already uses below.
+    agentRunId: text('agent_run_id').references(() => agentRuns.id, { onDelete: 'set null' }),
     // Denormalised from the run/agent so the queue can filter without a
     // join. No FK cascade: an agent deleted mid-review must leave its
     // proposals readable, the same reasoning ticketId already uses.
