@@ -194,11 +194,24 @@ export function JiraConnectionPanel({
             </span>
           </div>
           <div>
+            {/* Same honesty as the issue count beside it, and the same flag:
+                countsTruncated marks BOTH numbers, because both come from the
+                one capped ticket read — see JiraConnectionStatus's own
+                comment on projectCount in types/jira.ts ("a project whose
+                only issues fell past the cap is not counted"), and
+                AddProjectWizard.tsx's ConfirmStep, which already applies this
+                same marker to its own copy of these two counts. Rendering
+                this one as a bare exact number while the issue count right
+                next to it carries a "+" and a caveat would say the two are
+                different kinds of fact when they are the same read. */}
             <b className="block font-mono text-lg font-bold tabular-nums text-text">
               {connection.projectCount}
+              {connection.countsTruncated ? '+' : ''}
             </b>
             <span className="text-[11.5px] text-text-muted">
-              Jira projects represented
+              {connection.countsTruncated
+                ? 'Jira projects seen (your queue is larger)'
+                : 'Jira projects represented'}
             </span>
           </div>
         </div>

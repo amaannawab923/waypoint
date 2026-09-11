@@ -251,8 +251,25 @@ export default function MyJiraPage() {
                   </span>
                   {/* This used to read "polls every 15s". Nothing polls —
                       the list is read on mount and on the Connection tab's
-                      Refresh — so it now says what actually happens. */}
-                  {connection && <span>one API call · refresh to re-read</span>}
+                      Refresh — so it now says what actually happens.
+                      It briefly read "one API call" next, which is only
+                      true when the queue fits on the first page — see
+                      jiraClient.ts's listMyTickets: PAGE_SIZE is 100 and
+                      MAX_PAGES is 5, so a queue over 100 issues pages the
+                      same JQL search across more than one request, and
+                      there is no fixed count honest to print here. It then
+                      briefly read "re-reads the whole queue", which is false
+                      for exactly the users the truncation strip below is
+                      for: listMyTickets stops at MAX_PAGES × PAGE_SIZE, so
+                      on a queue past 500 a refresh re-reads the first 500,
+                      and the strip says so 25 lines down. What is stable,
+                      and what this sentence actually means, is that the
+                      search only runs when this page opens or Refresh is
+                      pressed — nothing polls in between (the Connection
+                      tab's own "Not built yet" list states the same
+                      contract). "Re-runs the search" is true in every
+                      state, truncated or not. */}
+                  {connection && <span>refresh re-runs the search</span>}
                 </div>
 
                 {/* A standing fact about the list below, not an event — so a
@@ -358,11 +375,29 @@ export default function MyJiraPage() {
                     Copilot proposal card that never had a producer and has
                     been removed. Copilot's own Jira writes are still approved
                     explicitly — they just surface as proposal cards in the
-                    Copilot panel, not beside this list. */}
+                    Copilot panel, not beside this list.
+
+                    This used to also claim "~400ms" for a click's own write.
+                    Nothing in this app measures that number — it was invented,
+                    the same defect commit e9e1ec9 exists to catch — and the one
+                    real measurement on record (this ticket's own) is 1752ms for
+                    a full My Jira LOAD, not a write, which the line was not even
+                    describing. Removed rather than replaced with a different
+                    unmeasured guess. The two claims that remain are both true
+                    and checkable: no approval step (this click writes directly,
+                    with nothing in between — see the writes this panel's own
+                    Connection tab enumerates), and Copilot's own writes are
+                    never direct — see CopilotProposalCard.tsx's
+                    ExternalWriteBanner, which is shown before every external
+                    write and is not optional, and proposalApproval.ts, where
+                    the Jira credential is attached to exactly two channels —
+                    'copilot:proposals:approve' and
+                    'copilot:proposals:bulk-approve' — both of them an
+                    explicit click, and to nothing else. */}
                 <div className="mt-3 flex items-start gap-2 rounded-[var(--radius-sm)] border border-jira/30 bg-jira-bg px-3 py-2.5 text-[12.5px] text-jira">
                   <span>
-                    Your own clicks write straight to Jira — no approval step,
-                    ~400ms. Copilot&apos;s never do.
+                    Your own clicks write straight to Jira — no approval
+                    step. Copilot&apos;s never do.
                   </span>
                 </div>
               </div>
