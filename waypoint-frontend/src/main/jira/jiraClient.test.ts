@@ -6,7 +6,8 @@ const clearJiraCredentialInvalidMarkerMock = jest.fn();
 jest.mock('./jiraAuth', () => ({
   readStoredJiraCredential: () => readStoredJiraCredentialMock(),
   markJiraCredentialInvalid: () => markJiraCredentialInvalidMock(),
-  clearJiraCredentialInvalidMarker: () => clearJiraCredentialInvalidMarkerMock(),
+  clearJiraCredentialInvalidMarker: () =>
+    clearJiraCredentialInvalidMarkerMock(),
 }));
 
 // eslint-disable-next-line import/order, import/first
@@ -225,7 +226,10 @@ describe('validateCredential', () => {
   // must not clear that stored credential's marker either.
   it('does not clear the stored connection marker over a successful CANDIDATE credential', async () => {
     fetchMock.mockResolvedValue(
-      jsonResponse({ accountId: CREDENTIAL.accountId, emailAddress: CREDENTIAL.email }),
+      jsonResponse({
+        accountId: CREDENTIAL.accountId,
+        emailAddress: CREDENTIAL.email,
+      }),
     );
 
     await validateCredential(CREDENTIAL);
@@ -338,17 +342,47 @@ describe('validateCredential', () => {
 
     const result = await validateCredential(CREDENTIAL);
 
+    // The exact-string match above is what proves no HTML leaked; this is
+    // just the same fact stated in the terms the test name uses.
     expect(result).toEqual({
       ok: false,
       reason: 'site_not_found',
       message:
         "That site doesn't exist — check the address (e.g. yourteam.atlassian.net).",
     });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.message).not.toMatch(/<|doctype|html/i);
-    }
   });
+
+  // Found in review: the two host cases above cannot tell an end-anchored
+  // `/\.atlassian\.net$/` from `.includes('.atlassian.net')` or from a
+  // rule missing the leading dot — every candidate gave the same answer
+  // under all three. These two hosts are the ones that disagree.
+  it.each([
+    // `.atlassian.net` appears in the middle: only an end-anchored rule
+    // says this is NOT Atlassian's own domain.
+    [
+      'foo.atlassian.net.evil.io',
+      'That address answered, but not like a Jira Cloud site — check the site address.',
+    ],
+    // No dot before "atlassian.net": only a rule that requires the dot
+    // says this is NOT an Atlassian subdomain.
+    [
+      'myatlassian.net',
+      'That address answered, but not like a Jira Cloud site — check the site address.',
+    ],
+  ])(
+    'pins the rule to a real *.atlassian.net suffix for %s',
+    async (site, message) => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({ errorMessages: ['Not Found'] }, 404),
+      );
+
+      expect(await validateCredential({ ...CREDENTIAL, site })).toEqual({
+        ok: false,
+        reason: 'site_not_found',
+        message,
+      });
+    },
+  );
 });
 
 describe('listMyTickets', () => {
