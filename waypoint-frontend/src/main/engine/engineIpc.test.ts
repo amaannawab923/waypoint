@@ -112,6 +112,10 @@ describe('registerEngineIpc', () => {
     it('answers synchronously from supervisor.getStatus(), never throwing', () => {
       const supervisor = fakeSupervisor(STOPPED);
       registerEngineIpc(getWindowMock, supervisor);
+      // Registration itself looks once (the boot reconcile checks whether
+      // the daemon is already connected); the handler's own call is what
+      // this test counts.
+      (supervisor.getStatus as jest.Mock).mockClear();
 
       const result = getHandler(ENGINE_IPC.status)({});
 

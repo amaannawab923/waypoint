@@ -180,7 +180,11 @@ function assertRunId(id: string): void {
 
 export function createLedgerClient(deps: LedgerClientDeps = {}): LedgerClient {
   const baseUrl = (deps.baseUrl ?? defaultBaseUrl()).replace(/\/$/, '');
-  const doFetch = deps.fetch ?? fetch;
+  // Resolved per call, not at construction: the global `fetch` is
+  // Electron main's at runtime but is absent in the jest environment that
+  // imports engineIpc.ts, and a client nobody calls must cost nothing.
+  const doFetch: typeof fetch = (input, init) =>
+    (deps.fetch ?? fetch)(input, init);
 
   async function request<T>(
     method: 'GET' | 'POST' | 'PATCH',

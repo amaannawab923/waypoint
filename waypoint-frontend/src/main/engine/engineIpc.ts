@@ -8,6 +8,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { installEngine, verifyInstalledEngine } from './installer';
 import { runDaemonCommand } from './daemonCli';
+import { registerBootReconcile } from './runs/bootReconcile';
 
 // ROAD-48: the IPC surface over the engine supervisor.
 //
@@ -145,6 +146,12 @@ export function registerEngineIpc(
   };
 
   supervisor.onStatusChange((status) => send(ENGINE_IPC.statusChanged, status));
+
+  // ROAD-57: every time the supervisor reaches the daemon, the ledger's
+  // live runs are reconciled against the daemon's live sessions — once per
+  // connection. A fake supervisor with no client (every engineIpc test)
+  // makes this a no-op.
+  registerBootReconcile({ supervisor, logger });
 
   // → EngineStatus, never throws — a broken engine is a status, not an IPC
   // error (ENGINE_IPC.status's own comment in types.ts). getStatus() is
