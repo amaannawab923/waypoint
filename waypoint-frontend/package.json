@@ -32,7 +32,7 @@
     "build:dll": "cross-env NODE_ENV=development TS_NODE_TRANSPILE_ONLY=true NODE_OPTIONS=\"-r ts-node/register --no-warnings\" webpack --config ./.erb/configs/webpack.config.renderer.dev.dll.ts",
     "build:main": "cross-env NODE_ENV=production TS_NODE_TRANSPILE_ONLY=true NODE_OPTIONS=\"-r ts-node/register --no-warnings\" webpack --config ./.erb/configs/webpack.config.main.prod.ts",
     "build:renderer": "cross-env NODE_ENV=production TS_NODE_TRANSPILE_ONLY=true NODE_OPTIONS=\"-r ts-node/register --no-warnings\" webpack --config ./.erb/configs/webpack.config.renderer.prod.ts",
-    "postinstall": "ts-node .erb/scripts/check-native-dep.js && electron-builder install-app-deps && npm run build:dll && node scripts/fetch-engine.mjs",
+    "postinstall": "ts-node .erb/scripts/check-native-dep.js && electron-builder install-app-deps && npm run build:dll && node scripts/fetch-engine.mjs && node scripts/fetch-chat-ui.mjs",
     "lint": "cross-env NODE_ENV=development eslint . --ext .js,.jsx,.ts,.tsx",
     "lint:fix": "cross-env NODE_ENV=development eslint . --ext .js,.jsx,.ts,.tsx --fix",
     "lint:honesty": "eslint --no-eslintrc -c eslint-rules/honesty.eslintrc.js --rulesdir eslint-rules --ext .ts,.tsx src/renderer",
@@ -47,7 +47,8 @@
     "qa:electron": "ts-node -T scripts/qa/electron-cdp.ts",
     "test": "jest",
     "test:e2e": "cross-env WAYPOINT_FEATURE_COPILOT=true npm run build && playwright test",
-    "engine:fetch": "node scripts/fetch-engine.mjs"
+    "engine:fetch": "node scripts/fetch-engine.mjs",
+    "chat-ui:fetch": "node scripts/fetch-chat-ui.mjs"
   },
   "browserslist": [
     "extends browserslist-config-erb"
@@ -82,7 +83,9 @@
     "moduleNameMapper": {
       "\\.(jpg|jpeg|png|gif|eot|otf|webp|svg|ttf|woff|woff2|mp4|webm|wav|mp3|m4a|aac|oga)$": "<rootDir>/.erb/mocks/fileMock.js",
       "\\.(css|less|sass|scss)$": "identity-obj-proxy",
-      "^@/(.*)$": "<rootDir>/src/renderer/$1"
+      "^@/(.*)$": "<rootDir>/src/renderer/$1",
+      "^(\\.{1,2}/)*chatUiRuntime$": "<rootDir>/.erb/mocks/chatUiRuntimeMock.ts",
+      "^@emdash/chat-ui$": "<rootDir>/.erb/mocks/chatUiRuntimeMock.ts"
     },
     "setupFiles": [
       "./.erb/scripts/check-build-exists.ts"
@@ -124,10 +127,12 @@
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.2",
     "recharts": "^3.10.1",
+    "solid-js": "1.9.13",
     "uuid": "^14.0.1",
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@chenglou/pretext": "0.0.8",
     "@electron/rebuild": "^3.7.1",
     "@playwright/test": "^1.62.1",
     "@pmmmwh/react-refresh-webpack-plugin": "^0.5.15",
@@ -197,7 +202,8 @@
     "webpack-cli": "^6.0.1",
     "webpack-dev-server": "^5.2.0",
     "webpack-merge": "^6.0.1",
-    "ws": "^8.21.3"
+    "ws": "^8.21.3",
+    "zod": "4.4.3"
   },
   "build": {
     "productName": "ElectronReact",
@@ -260,7 +266,16 @@
     },
     "extraResources": [
       "./assets/**",
-      "./engine/**"
+      "./engine/**",
+      {
+        "from": "./vendor/emdash-chat-ui",
+        "to": "licenses/emdash-chat-ui",
+        "filter": [
+          "LICENSE.md",
+          "NOTICE",
+          "manifest.json"
+        ]
+      }
     ],
     "publish": {
       "provider": "github",
