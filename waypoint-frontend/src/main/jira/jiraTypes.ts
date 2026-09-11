@@ -439,6 +439,96 @@ export interface JiraCommentBody {
   content: JiraAdfBlockNode[];
 }
 
+/**
+ * A restriction Jira placed on a comment — present on `JiraWireComment.visibility`
+ * only when the comment is NOT visible to everyone who can otherwise see the
+ * ticket. Read straight off the comment's own `visibility` object (Jira REST
+ * v3's `Comment.visibility`, e.g. `{ type: "role", value: "Administrators" }`);
+ * absent on the raw payload means the comment is fully public, which is why
+ * `JiraWireComment.visibility` is `null` in that case rather than this type
+ * with some "none" variant.
+ *
+ * This app can only ever READ this field. JiraCommentComposer.tsx has no
+ * control for restricting a reply, so every comment this app posts is fully
+ * public no matter what it is replying to. See ROAD-24, which this type
+ * exists to fix: without it, a comment restricted to a project role rendered
+ * indistinguishably from a public one, and a reasonable reply typed in the
+ * open could land on something that was meant to stay internal — worst on
+ * Jira Service Management projects, where "internal" is a real access
+ * boundary, not just a convention.
+ *
+ * `jsdPublic` — JSM's own separate public/internal-note flag for a
+ * customer-facing portal request — now DOES feed this type, as the
+ * `'internal'` variant below. That is a correction, not the original design:
+ * an earlier version of this file skipped `jsdPublic` on the strength of
+ * Atlassian's JSDCLOUD-15406, misread as saying the platform comment-read
+ * endpoints this client calls (`GET /rest/api/3/issue/{id}/comment`, see
+ * jiraClient.ts) don't reliably return it. That ticket is actually about the
+ * Automation web-request Issue Data payload, a different surface entirely,
+ * and its own reporter states plainly that `/rest/api/3/issue/` DOES return
+ * `jsdPublic`. The current v3 OpenAPI spec documents `Comment.jsdPublic` (a
+ * `readOnly` boolean) on the exact `Comment` schema this endpoint returns,
+ * and says it "defaults to true … when the project isn't a Jira Service
+ * Desk project" — so reading it can never false-positive an internal note on
+ * a non-JSM project; an absent or `true` value is simply not this case.
+ *
+ * The reason this couldn't stay a separate, unsurfaced axis: Atlassian's own
+ * JSDSERVER-1261 documents that a genuine JSM internal note — added through
+ * the service desk comment box's own "Add internal note" toggle, the
+ * everyday "meant to stay internal" case on a JSM project, far more common
+ * than a role/group restriction — comes back with NO `visibility` object at
+ * all. It is distinguished only by `jsdPublic: false`. Leaving that out left
+ * exactly the harm ROAD-24 names unaddressed on the project type where it
+ * bites hardest: no lock, no label, on the ordinary case, not just an edge
+ * one.
+ */
+export interface JiraCommentVisibility {
+  /**
+   * Jira's own two `visibility`-based restriction kinds are 'role' and
+   * 'group'. 'restricted' is never sent by Jira — mapComment (jiraMap.ts)
+   * falls back to it for any `visibility.type` this app doesn't recognize,
+   * so a restriction scheme this app has never seen still reads as "hidden
+   * from someone" instead of silently degrading to the unmarked,
+   * fully-public `null` case on `JiraWireComment.visibility`. Treating an
+   * unrecognized restriction as "public" would reproduce the exact bug this
+   * type exists to fix, just triggered by an unfamiliar shape instead of a
+   * missing field — so that direction of failure is the one this app cannot
+   * afford, even though it means occasionally locking a comment whose
+   * restriction we can't fully describe.
+   *
+   * 'internal' is a fourth kind this app adds, never sent by Jira as a
+   * `visibility.type` at all — see this interface's own comment above for
+   * why it exists and JSDSERVER-1261 for why a real `visibility` object is
+   * never present on the payload that produces it. `mapCommentVisibility`
+   * (jiraMap.ts) builds it from `jsdPublic === false` instead, and its own
+   * comment there has the precedence rule for the rare case a payload
+   * carries both.
+   */
+  type: 'role' | 'group' | 'restricted' | 'internal';
+  /**
+   * The role or group name Jira restricted this comment to — "Administrators",
+   * "Service Desk Team". Empty when Jira sent a `visibility` object without a
+   * usable `value`, or when `type` is `'internal'` — a JSM internal note has
+   * no role or group name to carry here; its own fixed label ("Internal
+   * note") is rendered directly, not built from this field. A `'restricted'`
+   * or empty-value comment still renders as restricted, just without a name
+   * to label it with.
+   *
+   * Jira's payload also carries `identifier`, the role/group's own id,
+   * alongside this. Not carried here — but not because it is deprecated: an
+   * earlier version of this comment claimed the v3 spec deprecates
+   * `identifier` in favor of `value`, which is backwards. The spec's actual
+   * wording, on `value` itself, is "the name of a group is mutable, to
+   * reliably identify a group use `identifier`" — `identifier` is the
+   * *stable* handle and `value` is the display name that can drift out from
+   * under it. Still left off this wire type regardless of which one is more
+   * durable: nothing in this app writes visibility, so there is no call an
+   * id would ever feed, and a read-only label needs a name to show, not an
+   * id to write back.
+   */
+  value: string;
+}
+
 export interface JiraWireComment {
   id: string;
   ticketId: string;
@@ -489,6 +579,15 @@ export interface JiraWireComment {
    * not "Jira didn't say".
    */
   parentId: string | null;
+  /** Jira's restriction on who can see this comment, or `null` when it is
+   * fully public. See `JiraCommentVisibility` above for what each `type`
+   * means — including `'internal'`, built from this comment's own
+   * `jsdPublic` rather than from a real `visibility` object, which Jira
+   * never sends for that case (JSDSERVER-1261) — and why an unrecognized
+   * `visibility.type` never resolves to `null`. `mapCommentVisibility`
+   * (jiraMap.ts) has the precedence rule for the rare payload carrying both
+   * a `visibility` restriction and `jsdPublic: false` at once. */
+  visibility: JiraCommentVisibility | null;
   /**
    * The comment's raw ADF, carried ALONGSIDE the flattened `body` — same
    * shape and same reason as `JiraWireTicket.descriptionAdf`: `body` stays

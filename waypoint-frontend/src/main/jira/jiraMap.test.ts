@@ -1816,6 +1816,8 @@ describe('mapComment', () => {
       bodyAdf: null,
       createdAt: '2026-09-01T09:00:00.000+0000',
       parentId: null,
+      // No `visibility` on the raw payload — a fully public comment.
+      visibility: null,
     });
   });
 
@@ -1839,6 +1841,7 @@ describe('mapComment', () => {
       bodyAdf: null,
       createdAt: null,
       parentId: null,
+      visibility: null,
     });
   });
 
@@ -2147,5 +2150,229 @@ describe('mapComment', () => {
 
     expect(body).toBe('@a teammate see this patch');
     expect(body).not.toContain('accountid');
+  });
+
+  // ROAD-24: mapComment ignored `visibility` entirely, so a comment
+  // restricted to a project role or group came through indistinguishable
+  // from a fully public one — no lock icon, no label, nothing to stop
+  // someone replying in the open to a comment that was meant to stay
+  // internal. See JiraCommentVisibility's own comment (jiraTypes.ts) for
+  // the full reasoning behind each of these mappings, in particular why an
+  // unrecognized `type` resolves to `'restricted'` rather than to `null`.
+  describe('visibility', () => {
+    it('maps a role restriction', () => {
+      expect(
+        mapComment(
+          {
+            id: '10510',
+            author: { displayName: 'Sam Lee' },
+            body: 'Only admins should see this.',
+            created: '2026-09-01T09:00:00.000+0000',
+            visibility: { type: 'role', value: 'Administrators' },
+          },
+          '10421',
+        )?.visibility,
+      ).toEqual({ type: 'role', value: 'Administrators' });
+    });
+
+    it('maps a group restriction', () => {
+      expect(
+        mapComment(
+          {
+            id: '10511',
+            author: { displayName: 'Sam Lee' },
+            body: 'Only the service desk team should see this.',
+            created: '2026-09-01T09:00:00.000+0000',
+            visibility: { type: 'group', value: 'Service Desk Team' },
+          },
+          '10421',
+        )?.visibility,
+      ).toEqual({ type: 'group', value: 'Service Desk Team' });
+    });
+
+    it('maps a missing visibility to null — a fully public comment', () => {
+      expect(
+        mapComment(
+          {
+            id: '10512',
+            author: { displayName: 'Sam Lee' },
+            body: 'Anyone on the ticket can see this.',
+            created: '2026-09-01T09:00:00.000+0000',
+          },
+          '10421',
+        )?.visibility,
+      ).toBeNull();
+    });
+
+    // Explicit `null` on the raw payload is the same fact as the key being
+    // absent entirely — both mean Jira reported no restriction.
+    it('maps an explicit null visibility to null', () => {
+      expect(
+        mapComment(
+          {
+            id: '10513',
+            author: { displayName: 'Sam Lee' },
+            body: 'Also public.',
+            created: '2026-09-01T09:00:00.000+0000',
+            visibility: null,
+          },
+          '10421',
+        )?.visibility,
+      ).toBeNull();
+    });
+
+    // A restriction scheme this app has never seen must still lock the
+    // comment — falling through to null here would silently reproduce the
+    // exact bug this field exists to fix, just triggered by an unfamiliar
+    // `type` instead of a missing field.
+    it("falls back to 'restricted' for an unrecognized type, rather than dropping it", () => {
+      expect(
+        mapComment(
+          {
+            id: '10514',
+            author: { displayName: 'Sam Lee' },
+            body: 'Some future restriction scheme.',
+            created: '2026-09-01T09:00:00.000+0000',
+            visibility: { type: 'project', value: 'ENG' },
+          },
+          '10421',
+        )?.visibility,
+      ).toEqual({ type: 'restricted', value: 'ENG' });
+    });
+
+    // Jira always sends a `visibility` object as `{ type, value }`, but this
+    // still must not throw or silently drop the restriction when it doesn't
+    // — a comment IS restricted here (the key is present), just in a shape
+    // this function cannot fully read.
+    it('falls back to restricted/empty for a visibility object missing both fields', () => {
+      expect(
+        mapComment(
+          {
+            id: '10515',
+            author: { displayName: 'Sam Lee' },
+            body: 'Malformed visibility.',
+            created: '2026-09-01T09:00:00.000+0000',
+            visibility: {},
+          },
+          '10421',
+        )?.visibility,
+      ).toEqual({ type: 'restricted', value: '' });
+    });
+
+    // A `visibility` that is not even an object at all — defensive against
+    // the general shape of a hand-rolled proxy or an unexpected API version,
+    // same posture the rest of this file takes toward every other field.
+    it('falls back to restricted/empty for a non-object visibility', () => {
+      expect(
+        mapComment(
+          {
+            id: '10516',
+            author: { displayName: 'Sam Lee' },
+            body: 'Visibility sent as a bare string.',
+            created: '2026-09-01T09:00:00.000+0000',
+            visibility: 'role',
+          },
+          '10421',
+        )?.visibility,
+      ).toEqual({ type: 'restricted', value: '' });
+    });
+
+    // A recognized type with a non-string value keeps the type Jira actually
+    // sent, and only the unreadable part (value) degrades.
+    it('keeps a recognized type when only value is unreadable', () => {
+      expect(
+        mapComment(
+          {
+            id: '10517',
+            author: { displayName: 'Sam Lee' },
+            body: 'Value sent as the wrong shape.',
+            created: '2026-09-01T09:00:00.000+0000',
+            visibility: { type: 'role', value: 42 },
+          },
+          '10421',
+        )?.visibility,
+      ).toEqual({ type: 'role', value: '' });
+    });
+
+    // ROAD-24 review finding #1: `jsdPublic` was originally skipped
+    // entirely, on the strength of a misread Atlassian ticket. JSDSERVER-1261
+    // documents that a genuine JSM internal note carries NO `visibility`
+    // object at all — `jsdPublic: false` is the only signal it ever sends —
+    // so this is not an edge case layered on top of `visibility`, it is the
+    // ordinary shape of the everyday "meant to stay internal" comment on a
+    // JSM project.
+    describe('jsdPublic (ROAD-24 review finding #1)', () => {
+      it("maps jsdPublic: false, with no visibility object, to type 'internal'", () => {
+        expect(
+          mapComment(
+            {
+              id: '10520',
+              author: { displayName: 'Sam Lee' },
+              body: 'Only agents should see this.',
+              created: '2026-09-01T09:00:00.000+0000',
+              jsdPublic: false,
+            },
+            '10421',
+          )?.visibility,
+        ).toEqual({ type: 'internal', value: '' });
+      });
+
+      it('maps jsdPublic: true to null — a fully public comment', () => {
+        expect(
+          mapComment(
+            {
+              id: '10521',
+              author: { displayName: 'Sam Lee' },
+              body: 'Visible to the customer.',
+              created: '2026-09-01T09:00:00.000+0000',
+              jsdPublic: true,
+            },
+            '10421',
+          )?.visibility,
+        ).toBeNull();
+      });
+
+      // The v3 spec's own documented default — "defaults to true … when the
+      // project isn't a Jira Service Desk project" — is exactly why an
+      // absent `jsdPublic` must read the same as an explicit `true` rather
+      // than as "unknown, so lock it defensively": the defensive-lock
+      // instinct `mapCommentVisibility` applies to an unrecognized
+      // `visibility.type` would misfire here and mark every ordinary
+      // non-JSM comment "Internal note".
+      it('maps a missing jsdPublic to null, not to internal', () => {
+        expect(
+          mapComment(
+            {
+              id: '10522',
+              author: { displayName: 'Sam Lee' },
+              body: 'An ordinary software-project comment.',
+              created: '2026-09-01T09:00:00.000+0000',
+            },
+            '10421',
+          )?.visibility,
+        ).toBeNull();
+      });
+
+      // Precedence: `visibility` wins over `jsdPublic: false` when a payload
+      // somehow carries both. JSDSERVER-1261 says the two aren't supposed to
+      // co-occur on a real internal note, so this is already an unusual
+      // shape — and between the two readings available for it, the
+      // role/group restriction is the more specific, nameable fact.
+      it('prefers a role/group visibility over jsdPublic: false when a payload carries both', () => {
+        expect(
+          mapComment(
+            {
+              id: '10523',
+              author: { displayName: 'Sam Lee' },
+              body: 'Restricted AND flagged internal.',
+              created: '2026-09-01T09:00:00.000+0000',
+              visibility: { type: 'role', value: 'Administrators' },
+              jsdPublic: false,
+            },
+            '10421',
+          )?.visibility,
+        ).toEqual({ type: 'role', value: 'Administrators' });
+      });
+    });
   });
 });

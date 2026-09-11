@@ -145,6 +145,11 @@ function comment(overrides: Partial<JiraComment> = {}): JiraComment {
     // that mock's own comment above), so no fixture here needs a real
     // document tree behind it.
     bodyAdf: null,
+    // Null (no restriction) by default, same as every other "unknown ->
+    // treat as the unrestricted/no-evidence case" default in this file
+    // (see updatedAt above) — no test in this file is about a
+    // role/group-restricted comment.
+    visibility: null,
     ...overrides,
   };
 }
@@ -996,6 +1001,539 @@ describe('replying to a comment', () => {
     expect(
       screen.queryByRole('button', { name: 'Reply' }),
     ).not.toBeInTheDocument();
+  });
+});
+
+// ROAD-24: mapComment (main/jira/jiraMap.ts) already turns Jira's own
+// `visibility` field, and now also `jsdPublic`, into `JiraComment.visibility`
+// (see that mapper's own tests) — this is the render half, covering the
+// things that field now drives: the per-comment restricted/internal
+// indicator, and the "replying publicly"/"replying to the customer" warning
+// near the thread-level composer.
+describe('restricted comments (ROAD-24)', () => {
+  it('shows "Restricted to <value>" on a role-restricted comment, and only on that comment', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({ id: 'c1', body: 'Public one', authorName: 'Sam Lee' }),
+        comment({
+          id: 'c2',
+          body: 'Internal only',
+          authorName: 'Priya Raman',
+          visibility: { type: 'role', value: 'Developers' },
+        }),
+      ],
+      total: 2,
+    });
+    renderDrawer();
+    await screen.findByText('Internal only');
+
+    // Scoped by `data-comment-id`, not `.closest('.group')` — `group` is
+    // load-bearing Tailwind (it drives the hover-reveal action row), not a
+    // row identifier, and `data-comment-id` is the honest hook that actually
+    // names which comment this is.
+    const restrictedRow = screen
+      .getByText('Internal only')
+      .closest('[data-comment-id="c2"]') as HTMLElement;
+    expect(
+      within(restrictedRow).getByText('Restricted to Developers'),
+    ).toBeInTheDocument();
+
+    const publicRow = screen
+      .getByText('Public one')
+      .closest('[data-comment-id="c1"]') as HTMLElement;
+    expect(
+      within(publicRow).queryByText(/Restricted|Internal/),
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows the same "Restricted to <value>" shape on a group-restricted comment — Jira\'s own UI does not distinguish the two either', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          body: 'Internal only',
+          visibility: { type: 'group', value: 'Support Engineers' },
+        }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('Internal only');
+
+    expect(
+      screen.getByText('Restricted to Support Engineers'),
+    ).toBeInTheDocument();
+  });
+
+  it('shows bare "Restricted" — never "Restricted to" — when Jira sent a visibility this app could not fully read', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          body: 'Mystery restriction',
+          visibility: { type: 'restricted', value: '' },
+        }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('Mystery restriction');
+
+    expect(screen.getByText('Restricted', { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText(/Restricted to/)).not.toBeInTheDocument();
+  });
+
+  // Review finding #4: commentVisibilityLabel used to guard the bare
+  // "Restricted" case on `type === 'restricted'` alone, so a *recognized*
+  // `'role'`/`'group'` type with an unreadable (empty) value — a real shape
+  // `mapComment` produces (see jiraMap.test.ts's "keeps a recognized type
+  // when only value is unreadable") — fell through to "Restricted to " with
+  // nothing after it. The guard is on the empty value now, not the type.
+  it('shows bare "Restricted" — not "Restricted to " with nothing after it — for a recognized type with an unreadable value', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          body: 'Value sent as the wrong shape',
+          visibility: { type: 'role', value: '' },
+        }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('Value sent as the wrong shape');
+
+    expect(screen.getByText('Restricted', { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText(/Restricted to/)).not.toBeInTheDocument();
+  });
+
+  // Review finding #5: the "couldn't read which role or group" explanation
+  // used to live only in `title`, which is mouse-only — a screen-reader user
+  // hears just the visible text ("Restricted"), never the fuller fact this
+  // app actually knows. `toHaveAccessibleName` computes what assistive tech
+  // actually announces (title, then aria-label, per the accname algorithm),
+  // so this fails the same way a screen reader would have been failed.
+  it('puts the "couldn\'t read which role or group" explanation somewhere assistive tech can reach, not only in title', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          body: 'Mystery restriction',
+          visibility: { type: 'restricted', value: '' },
+        }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('Mystery restriction');
+
+    expect(
+      screen.getByText('Restricted', { exact: true }),
+    ).toHaveAccessibleName(
+      "Jira restricted this comment, but Waypoint couldn't read which role or group.",
+    );
+  });
+
+  // ROAD-24 review finding #1: mapComment now reads a JSM internal note's
+  // `jsdPublic: false` into `{ type: 'internal', value: '' }` — this is the
+  // render half, using JSM's own term for the case rather than the
+  // "Restricted to …" phrasing a role/group restriction gets.
+  it('shows "Internal note" — JSM\'s own term — on a comment Jira flagged internal', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({ id: 'c1', body: 'Public one', authorName: 'Sam Lee' }),
+        comment({
+          id: 'c2',
+          body: 'Only agents should see this',
+          authorName: 'Priya Raman',
+          visibility: { type: 'internal', value: '' },
+        }),
+      ],
+      total: 2,
+    });
+    renderDrawer();
+    await screen.findByText('Only agents should see this');
+
+    const internalRow = screen
+      .getByText('Only agents should see this')
+      .closest('[data-comment-id="c2"]') as HTMLElement;
+    expect(within(internalRow).getByText('Internal note')).toBeInTheDocument();
+
+    const publicRow = screen
+      .getByText('Public one')
+      .closest('[data-comment-id="c1"]') as HTMLElement;
+    expect(
+      within(publicRow).queryByText(/Internal|Restricted/),
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows no restricted indicator anywhere for a public (visibility: null) comment', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({ id: 'c1', body: 'Totally public', visibility: null }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('Totally public');
+
+    expect(screen.queryByText(/Restricted/)).not.toBeInTheDocument();
+  });
+
+  it('warns that the reply will post publicly when replying to a restricted comment', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          authorName: 'Sam Lee',
+          authorAccountId: 'acct-sam',
+          body: 'Internal only',
+          visibility: { type: 'role', value: 'Developers' },
+        }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('Internal only');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+
+    expect(
+      screen.getByText(
+        /Replying publicly.*restricted to Developers.*this reply won't be/,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  // Review finding #3: the warning `<div>` had no `role`, and it appears
+  // only as a reaction to clicking Reply, after which focus moves straight
+  // into the composer's textarea — nothing here ever receives focus on its
+  // own — so a screen-reader user never encountered it. `role="status"` is
+  // the advisory level this warrants: it reports a consequence of an action
+  // already taken, not an error that should interrupt.
+  it('marks the "replying publicly" warning with role="status" so assistive tech reaches it', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          authorName: 'Sam Lee',
+          authorAccountId: 'acct-sam',
+          body: 'Internal only',
+          visibility: { type: 'role', value: 'Developers' },
+        }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('Internal only');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      /Replying publicly.*restricted to Developers/,
+    );
+  });
+
+  // (A) build: the sharper, JSM-specific copy for an internal note — see
+  // replyVisibilityWarning's own comment for what this app could and
+  // couldn't confirm about a Waypoint reply's default visibility on a JSM
+  // project.
+  it('warns about posting to the customer portal when replying to a JSM internal note', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          authorName: 'Sam Lee',
+          authorAccountId: 'acct-sam',
+          body: 'Only agents should see this',
+          visibility: { type: 'internal', value: '' },
+        }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('Only agents should see this');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+
+    expect(
+      screen.getByText(
+        /Replying to the customer.*is internal.*visible on the customer portal/,
+      ),
+    ).toBeInTheDocument();
+    // Never the role/group phrasing for this case.
+    expect(screen.queryByText(/Replying publicly/)).not.toBeInTheDocument();
+  });
+
+  it('shows no "replying publicly" warning when replying to a public comment', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          authorName: 'Sam Lee',
+          authorAccountId: 'acct-sam',
+          body: 'Public one',
+          visibility: null,
+        }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+    await screen.findByText('Public one');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+
+    expect(screen.queryByText(/Replying publicly/)).not.toBeInTheDocument();
+  });
+
+  // Test gap: every other test in this block starts from "no reply in
+  // progress" and either shows or doesn't show the warning. This is the one
+  // that proves activeReplyTarget actually tracks the CURRENT reply target
+  // rather than latching "once restricted, always warn" — clicking Reply a
+  // second time, on an ordinary public comment, must replace the warning
+  // with nothing, not leave the first comment's warning stuck on screen.
+  it('clears the "replying publicly" warning when Reply is clicked again on a public comment', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          authorName: 'Sam Lee',
+          authorAccountId: 'acct-sam',
+          body: 'Internal only',
+          visibility: { type: 'role', value: 'Developers' },
+        }),
+        comment({
+          id: 'c2',
+          authorName: 'Priya Raman',
+          authorAccountId: 'acct-priya',
+          body: 'Public one',
+          visibility: null,
+        }),
+      ],
+      total: 2,
+    });
+    renderDrawer();
+    await screen.findByText('Internal only');
+
+    const replyButtons = screen.getAllByRole('button', { name: 'Reply' });
+    fireEvent.click(replyButtons[0]);
+    expect(screen.getByText(/Replying publicly/)).toBeInTheDocument();
+
+    fireEvent.click(replyButtons[1]);
+    expect(screen.queryByText(/Replying publicly/)).not.toBeInTheDocument();
+  });
+
+  // Rewritten from a plain `mockResolvedValue` to a deferred promise: the
+  // old version could only prove the warning was gone by the time the test
+  // got around to checking, not that it survived while the request was
+  // genuinely still in flight — the exact moment the warning is supposed to
+  // still be honest. Also asserts the 4-arg `postJiraComment` call, so this
+  // test proves the post that clears the warning was actually the threaded
+  // reply, not an unrelated post racing the same assertion.
+  it('keeps the "replying publicly" warning up while the reply is in flight, and clears it once it actually posts', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          authorName: 'Sam Lee',
+          authorAccountId: 'acct-sam',
+          body: 'Internal only',
+          visibility: { type: 'role', value: 'Developers' },
+        }),
+      ],
+      total: 1,
+    });
+    let resolvePost: (posted: JiraComment) => void = () => {};
+    jest.mocked(postJiraComment).mockImplementation(
+      () =>
+        new Promise<JiraComment>((resolve) => {
+          resolvePost = resolve;
+        }),
+    );
+    renderDrawer();
+    await screen.findByText('Internal only');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+    expect(screen.getByText(/Replying publicly/)).toBeInTheDocument();
+
+    fireEvent.change(commentBox(), {
+      target: { value: '@Sam Lee on it now' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+
+    await waitFor(() =>
+      expect(postJiraComment).toHaveBeenCalledWith(
+        '10421',
+        '@Sam Lee on it now',
+        [{ start: 0, end: 8, accountId: 'acct-sam', displayName: 'Sam Lee' }],
+        // The restricted comment's own id, threaded through as parentId —
+        // proof this was the genuine reply the warning is about, not some
+        // other post.
+        'c1',
+      ),
+    );
+    // Still up: the request the button click started hasn't resolved yet.
+    expect(screen.getByText(/Replying publicly/)).toBeInTheDocument();
+
+    resolvePost(comment({ id: 'c2' }));
+
+    // onPosted (JiraTicketDetail.tsx) clears activeReplyTarget once the
+    // write's own response comes back.
+    await waitFor(() =>
+      expect(screen.queryByText(/Replying publicly/)).not.toBeInTheDocument(),
+    );
+  });
+
+  // Test gap: nothing previously proved the warning SURVIVES a failed post —
+  // only that it clears on success. onPosted (which clears
+  // activeReplyTarget) is never reached when postJiraComment rejects, so the
+  // warning staying up is the composer honestly still being threaded to the
+  // reply that did not, in fact, go anywhere.
+  it('keeps the "replying publicly" warning up when the reply fails to post', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          authorName: 'Sam Lee',
+          authorAccountId: 'acct-sam',
+          body: 'Internal only',
+          visibility: { type: 'role', value: 'Developers' },
+        }),
+      ],
+      total: 1,
+    });
+    jest
+      .mocked(postJiraComment)
+      .mockRejectedValue(new Error('Jira rejected the comment.'));
+    renderDrawer();
+    await screen.findByText('Internal only');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+    expect(screen.getByText(/Replying publicly/)).toBeInTheDocument();
+
+    fireEvent.change(commentBox(), {
+      target: { value: '@Sam Lee on it now' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+
+    await waitFor(() =>
+      expect(showErrorToast).toHaveBeenCalledWith('Jira rejected the comment.'),
+    );
+    expect(screen.getByText(/Replying publicly/)).toBeInTheDocument();
+  });
+
+  // Review finding #2, the regression test: before the fix,
+  // `setActiveReplyTarget(null)` ran at the TOP of the Edit click handler,
+  // before the live freshness re-check — so the warning cleared the instant
+  // Edit was clicked, on every early exit (this 404 path included), even
+  // though `editGeneration` never bumped and the composer above never
+  // remounted. The composer stayed genuinely threaded to the restricted
+  // reply; only the warning saying so had disappeared. Writing this against
+  // the 404 early exit specifically (rather than the changed-since-load or
+  // round-trip-refusal exits, which fail the same way) is what the review
+  // asked for — this is the path `getJiraComment` resolving `null` reaches.
+  it('keeps the "replying publicly" warning up when Edit 404s on a different comment', async () => {
+    jest.mocked(getJiraCommentPermissions).mockResolvedValue({
+      deleteAll: false,
+      deleteOwn: false,
+      editAll: true,
+      editOwn: false,
+    });
+    jest
+      .mocked(prepareJiraCommentEdit)
+      .mockReturnValue({ text: 'x', mentions: [] });
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          authorName: 'Sam Lee',
+          authorAccountId: 'acct-sam',
+          body: 'Internal only',
+          visibility: { type: 'role', value: 'Developers' },
+        }),
+        // No authorAccountId, deliberately: this row must offer no Reply
+        // button of its own, so the single "Reply" query below stays
+        // unambiguous while "Edit" (editAll grants it on every comment)
+        // still renders on both rows and has to be scoped to this one.
+        comment({
+          id: 'c2',
+          authorAccountId: null,
+          body: 'a comment Jira will 404 on Edit',
+        }),
+      ],
+      total: 2,
+    });
+    jest.mocked(getJiraComment).mockResolvedValue(null);
+    renderDrawer();
+    await screen.findByText('Internal only');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+    expect(screen.getByText(/Replying publicly/)).toBeInTheDocument();
+
+    const c2Row = screen
+      .getByText('a comment Jira will 404 on Edit')
+      .closest('[data-comment-id="c2"]') as HTMLElement;
+    fireEvent.click(within(c2Row).getByRole('button', { name: 'Edit' }));
+
+    await waitFor(() => expect(showErrorToast).toHaveBeenCalled());
+    expect(
+      screen.queryByRole('button', { name: 'Save' }),
+    ).not.toBeInTheDocument();
+    // The pre-fix bug: this had already cleared here, even though nothing
+    // about the reply in progress had actually changed.
+    expect(screen.getByText(/Replying publicly/)).toBeInTheDocument();
+  });
+
+  // Review finding #7: activeReplyTarget is never reset on `ticket.id`
+  // changing, and this component isn't remounted between two tickets shown
+  // in the same drawer/page — only the render guard
+  // (`activeReplyTarget.ticketId === ticket.id`) stops a reply left in
+  // progress on one ticket from rendering its warning against a different
+  // one.
+  it('does not show the reply-in-progress warning after switching to a different ticket', async () => {
+    jest
+      .mocked(listJiraComments)
+      .mockResolvedValueOnce({
+        comments: [
+          comment({
+            id: 'c1',
+            authorName: 'Sam Lee',
+            authorAccountId: 'acct-sam',
+            body: 'Internal only',
+            visibility: { type: 'role', value: 'Developers' },
+          }),
+        ],
+        total: 1,
+      })
+      .mockResolvedValueOnce({ comments: [], total: 0 });
+    const { rerender } = render(
+      <MemoryRouter>
+        <JiraTicketDrawer
+          ticket={ticket()}
+          onTicketUpdated={onTicketUpdated}
+          onClose={jest.fn()}
+        />
+      </MemoryRouter>,
+    );
+    await screen.findByText('Internal only');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+    expect(screen.getByText(/Replying publicly/)).toBeInTheDocument();
+
+    rerender(
+      <MemoryRouter>
+        <JiraTicketDrawer
+          ticket={ticket({ id: '99999', key: 'ENG-999' })}
+          onTicketUpdated={onTicketUpdated}
+          onClose={jest.fn()}
+        />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() =>
+      expect(listJiraComments).toHaveBeenLastCalledWith('99999'),
+    );
+    expect(screen.queryByText(/Replying publicly/)).not.toBeInTheDocument();
   });
 });
 
@@ -2290,6 +2828,7 @@ describe('comment thread truncation', () => {
       postedByWaypoint: false,
       disclosureText: null,
       bodyAdf: null,
+      visibility: null,
     };
   }
 
