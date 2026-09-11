@@ -35,6 +35,11 @@ function ticket(overrides: Partial<JiraTicket> = {}): JiraTicket {
     storyPoints: null,
     sprintName: null,
     updatedAt: '2026-09-01T10:00:00.000Z',
+    labels: [],
+    dueDate: null,
+    subtasks: [],
+    links: [],
+    descriptionAdf: null,
     attachments: [],
     isTombstoned: false,
     tombstone: null,
@@ -162,6 +167,59 @@ describe('compareTickets', () => {
     ].sort((a, b) => compareTickets(a, b, 'updated'));
 
     expect(sorted.map((t) => t.key)).toEqual(['ENG-4', 'ENG-30']);
+  });
+
+  // The bug this sort exists to not repeat: a ticket whose payload omitted
+  // `updated` (updatedAt: null) is unknown, not recent, and must not win a
+  // "most recently updated" sort against a ticket Jira actually reports as
+  // stale.
+  it('sorts a null (unknown) updatedAt after every real timestamp, not before', () => {
+    const shuffled = [
+      ticket({ key: 'ENG-1', updatedAt: null }),
+      ticket({ key: 'ENG-2', updatedAt: '2020-01-01T00:00:00.000Z' }),
+      ticket({ key: 'ENG-3', updatedAt: '2026-09-01T00:00:00.000Z' }),
+    ];
+
+    expect(
+      shuffled
+        .sort((a, b) => compareTickets(a, b, 'updated'))
+        .map((t) => t.key),
+    ).toEqual(['ENG-3', 'ENG-2', 'ENG-1']);
+  });
+
+  it('breaks a null-vs-null tie on the issue key, not on input order', () => {
+    const a = ticket({ id: 'a', key: 'ENG-9', updatedAt: null });
+    const b = ticket({ id: 'b', key: 'ENG-2', updatedAt: null });
+
+    const forwards = [a, b].sort((x, y) => compareTickets(x, y, 'updated'));
+    const backwards = [b, a].sort((x, y) => compareTickets(x, y, 'updated'));
+
+    expect(forwards.map((t) => t.key)).toEqual(['ENG-2', 'ENG-9']);
+    expect(backwards.map((t) => t.key)).toEqual(['ENG-2', 'ENG-9']);
+  });
+
+  // A PRESENT but unparseable updatedAt (Date.parse -> NaN) is "unknown" in
+  // exactly the same sense a genuinely missing one is, even though the type
+  // is still a string. Before this, falling through to the key tiebreak on
+  // NaN scattered it among real dates in a way that isn't just wrong, it
+  // makes the comparator intransitive — a real Array.prototype.sort
+  // correctness bug, not only a display quirk. This reproduces the exact
+  // three-item cycle: by key ENG-1 < ENG-2 < ENG-3, but by date (treating
+  // the malformed one as if it fell through) ENG-3's real date would beat
+  // ENG-1's real date while ENG-2's malformed one sits arbitrarily between
+  // them on the key tiebreak alone.
+  it('treats an unparseable (but non-null) updatedAt the same as null: after every real timestamp', () => {
+    const shuffled = [
+      ticket({ key: 'ENG-1', updatedAt: '2020-01-01T00:00:00.000Z' }),
+      ticket({ key: 'ENG-2', updatedAt: 'not-a-real-date' }),
+      ticket({ key: 'ENG-3', updatedAt: '2026-09-01T00:00:00.000Z' }),
+    ];
+
+    expect(
+      shuffled
+        .sort((a, b) => compareTickets(a, b, 'updated'))
+        .map((t) => t.key),
+    ).toEqual(['ENG-3', 'ENG-1', 'ENG-2']);
   });
 });
 

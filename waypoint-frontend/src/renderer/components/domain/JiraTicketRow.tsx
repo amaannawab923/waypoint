@@ -234,24 +234,28 @@ export function JiraTicketRow({
           <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium text-text-muted line-through decoration-border-strong">
             {ticket.title}
           </span>
-          <span className="shrink-0 rounded bg-surface-3 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-text-muted uppercase">
-            {roleLabel(ticket)}
-          </span>
-          <JiraStateChip
-            stateName={ticket.stateName}
-            stateColor={ticket.stateColor}
-            disabled
-            disabledTitle="Not yours to move any more"
-            onClick={() => {}}
-          />
-          <JiraPriorityChip
-            priority={ticket.priority}
-            priorityName={ticket.priorityName}
-            disabled
-            disabledTitle="Not yours to change any more"
-            onClick={() => {}}
-          />
-          <Avatar name={ticket.assigneeName} size={22} />
+          {/* Same reflow fix as the live row below — see the ROAD-27 /
+              JIRA-157 arithmetic on its badge wrapper for the full numbers. */}
+          <div className="flex flex-wrap items-center justify-end gap-2.5">
+            <span className="shrink-0 rounded bg-surface-3 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-text-muted uppercase">
+              {roleLabel(ticket)}
+            </span>
+            <JiraStateChip
+              stateName={ticket.stateName}
+              stateColor={ticket.stateColor}
+              disabled
+              disabledTitle="Not yours to move any more"
+              onClick={() => {}}
+            />
+            <JiraPriorityChip
+              priority={ticket.priority}
+              priorityName={ticket.priorityName}
+              disabled
+              disabledTitle="Not yours to change any more"
+              onClick={() => {}}
+            />
+            <Avatar name={ticket.assigneeName} size={22} />
+          </div>
         </div>
       </div>
     );
@@ -291,30 +295,87 @@ export function JiraTicketRow({
         >
           {ticket.title}
         </button>
-        <span className="shrink-0 rounded bg-surface-3 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-text-muted uppercase">
-          {roleLabel(ticket)}
-        </span>
-        <JiraStateChip
-          stateName={ticket.stateName}
-          stateColor={ticket.stateColor}
-          disabled={ticket.hasConflict}
-          disabledTitle="Write paused until reloaded"
-          saving={saving}
-          open={popoverOpen}
-          buttonRef={stateChipRef}
-          onClick={() => setPopoverOpen((o) => !o)}
-        />
-        <JiraPriorityChip
-          priority={ticket.priority}
-          priorityName={ticket.priorityName}
-          disabled={ticket.hasConflict}
-          disabledTitle="Write paused until reloaded"
-          saving={savingPriority}
-          open={priorityOpen}
-          buttonRef={priorityChipRef}
-          onClick={() => setPriorityOpen((o) => !o)}
-        />
-        <Avatar name={ticket.assigneeName} size={22} />
+        {/*
+         * ROAD-27 / JIRA-157: at a 600px viewport this row's content box is
+         * only ~222px (600 − 256 sidebar `w-64` − 48 the page's `p-6` − 41
+         * `ml-[41px]` − 2 MyJiraPage.tsx's list-wrapper border − 3 this row's
+         * own borderLeft − 28 this row's own `px-3.5`). Before this fix, the
+         * six children here (key, title, role tag, state chip, priority
+         * chip, avatar) were all direct siblings on one non-wrapping flex
+         * row: the five `shrink-0` children plus five `gap-2.5` gaps alone
+         * summed to ~300px ("Done") – ~344px ("In Progress"), which already
+         * exceeds the 222px content box even with the title (`min-w-0
+         * flex-1 truncate`) collapsed to 0 — the row silently overflowed by
+         * 80-120px and was clipped by the list wrapper's `overflow-hidden`.
+         * An unbounded custom workflow state name ("Waiting for customer
+         * response", ~225px) pushed the failure as high as ~850px
+         * viewports.
+         *
+         * Two changes fix it together — bounding the chip alone cannot: even
+         * shrinking the state chip to 0 width, the other four `shrink-0`
+         * children plus their gaps still sum to ~227px, already over the
+         * 222px budget.
+         *
+         * (1) JiraTransitionPopover.tsx's JiraStateChip now bounds its label
+         * to `max-w-[80px]` + `truncate`, removing the one unbounded
+         * contributor — ordinary state names stay fully visible ("In
+         * Progress"'s label is ~72px, under the cap).
+         *
+         * (2) The four trailing badges below are grouped into their own
+         * `flex flex-wrap` sub-row instead of being direct children of this
+         * non-wrapping outer row. On a wide window they still lay out on one
+         * line — the wrapper has no `flex-grow`, so it only ever claims the
+         * width its content needs. Once the outer row runs out of space, the
+         * wrapper is squeezed toward its own min-content width, and for a
+         * *wrapping* flex container that min-content width is the width of
+         * its single widest child (not the sum of all four) — so the badges
+         * wrap onto their own lines inside it instead of being clipped by
+         * the list wrapper.
+         *
+         * Re-running the arithmetic for the worst realistic case (state "In
+         * Progress", role "ASSIGNEE", chip unclipped since its 72px label is
+         * under the 80px cap): the wrapper's min-content width is
+         * max(role ~65, chip ~107, priority ~24, avatar ~22) = ~107px.
+         * Minimum row width with the title at 0 is key 76 + wrapper 107 + 2
+         * remaining `gap-2.5` (20) = 203px of content box, i.e. a ~581px
+         * viewport (203 + 378 non-content chrome) — under the 600px target,
+         * leaving ~19px for the title itself at exactly 600px. The
+         * pathological long-name case (chip clipped to its 80px-label cap,
+         * ~115px total) needs 76 + 115 + 20 = 211px content box, a ~589px
+         * viewport — still under 600. Every fixed child stays visible in
+         * both cases; nothing here is hidden.
+         *
+         * This is a predicted, not measured, arithmetic — jsdom does no
+         * layout, so it cannot be proven from these tests. The class
+         * assertions below pin the pieces this depends on; the live 600px
+         * check happens in the running app.
+         */}
+        <div className="flex flex-wrap items-center justify-end gap-2.5">
+          <span className="shrink-0 rounded bg-surface-3 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-text-muted uppercase">
+            {roleLabel(ticket)}
+          </span>
+          <JiraStateChip
+            stateName={ticket.stateName}
+            stateColor={ticket.stateColor}
+            disabled={ticket.hasConflict}
+            disabledTitle="Write paused until reloaded"
+            saving={saving}
+            open={popoverOpen}
+            buttonRef={stateChipRef}
+            onClick={() => setPopoverOpen((o) => !o)}
+          />
+          <JiraPriorityChip
+            priority={ticket.priority}
+            priorityName={ticket.priorityName}
+            disabled={ticket.hasConflict}
+            disabledTitle="Write paused until reloaded"
+            saving={savingPriority}
+            open={priorityOpen}
+            buttonRef={priorityChipRef}
+            onClick={() => setPriorityOpen((o) => !o)}
+          />
+          <Avatar name={ticket.assigneeName} size={22} />
+        </div>
 
         {priorityOpen && (
           <JiraPriorityPicker

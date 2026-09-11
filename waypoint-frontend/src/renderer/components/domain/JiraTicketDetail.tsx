@@ -1,21 +1,28 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { clsx } from 'clsx';
 import {
+  buildJiraCommentPermalink,
+  deleteJiraComment,
   downloadJiraAttachment,
+  getJiraComment,
+  getJiraCommentPermissions,
   getJiraPriorityOptions,
   getJiraTransitions,
   listJiraComments,
+  prepareJiraCommentEdit,
   setJiraTicketAssignee,
   setJiraTicketPriority,
   transitionJiraTicket,
   uploadJiraAttachment,
+  type JiraCommentPermissions,
+  type JiraMentionSpan,
 } from '@/data/jiraApi';
 import { showErrorToast } from '@/lib/toast';
 import { useAsync } from '@/lib/useAsync';
 import { useJiraConnection } from '@/lib/jiraStore';
 import { Avatar } from '@/components/ui/Avatar';
 import { Maximize2 } from 'lucide-react';
-import { IconChevronRight, IconX } from '@/components/icons';
+import { IconChevronRight, IconLock, IconX } from '@/components/icons';
 import {
   JiraAssigneeChip,
   JiraAssigneePicker,
@@ -28,12 +35,19 @@ import {
   JiraStateChip,
   JiraTransitionPopover,
 } from '@/components/domain/JiraTransitionPopover';
-import { JiraCommentComposer } from '@/components/domain/JiraCommentComposer';
+import {
+  JiraCommentComposer,
+  type JiraEditTarget,
+  type JiraReplyTarget,
+} from '@/components/domain/JiraCommentComposer';
 import { JiraLoadError } from '@/components/domain/JiraLoadError';
+import { JiraRichText } from '@/components/domain/JiraRichText';
 import { jiraProjectColor } from '@/types/jira';
 import type {
   JiraAttachment,
   JiraComment,
+  JiraCommentVisibility,
+  JiraIssueLink,
   JiraPriorityOption,
   JiraTicket,
   JiraTransition,
@@ -54,8 +68,19 @@ import type {
 // again matching the native ticket, whose expand button leaves the drawer
 // for /projects/:projectId/tickets/:identifier.
 
-function formatRelativeTime(iso: string): string {
+// `iso` is null when Jira's payload omitted the comment's `created` — see
+// JiraComment's own doc comment. Computing a duration against `null` would
+// either throw or, worse, silently render some arbitrary elapsed time as
+// truth; "Unknown" is the honest answer for a timestamp this app never had.
+function formatRelativeTime(iso: string | null): string {
+  if (iso === null) return 'Unknown';
   const diffMs = Date.now() - new Date(iso).getTime();
+  // A present-but-unparseable string (Date.parse -> NaN) is the same
+  // "unknown, not now" case as a genuinely missing one — without this,
+  // every `<` comparison below is false on NaN and it falls out the bottom
+  // as 'a while ago', silently claiming an elapsed time this app does not
+  // actually know, exactly what the null check above exists to avoid.
+  if (!Number.isFinite(diffMs)) return 'Unknown';
   const diffSec = Math.round(diffMs / 1000);
   if (diffSec < 45) return 'just now';
   const diffMin = Math.round(diffSec / 60);
@@ -66,6 +91,299 @@ function formatRelativeTime(iso: string): string {
   if (diffDay < 30) return `${diffDay}d ago`;
   return 'a while ago';
 }
+
+/**
+ * `ticket.dueDate` is date-only ("2026-09-14"), never a timestamp — see the
+ * field's own doc comment on `JiraTicket`. Parsing it with `new Date(iso)`
+ * reads it as UTC midnight, and `toLocaleDateString` then renders that in the
+ * viewer's own zone, which rolls the date back a full day for anyone west of
+ * UTC. Splitting the components and building a local `Date` from them keeps
+ * the date Jira actually said rather than a zone-shifted neighbor of it.
+ */
+function formatDueDate(dateOnly: string): string {
+  const parts = dateOnly.split('-').map(Number);
+  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) {
+    return dateOnly;
+  }
+  const [year, month, day] = parts;
+  const date = new Date(year, month - 1, day);
+  if (Number.isNaN(date.getTime())) return dateOnly;
+  return date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+/** Groups links by their already-resolved relation phrase ("blocks", "is
+ * blocked by", …), preserving each relation's first-seen order rather than
+ * sorting alphabetically — so the section reads in whatever order Jira's own
+ * response listed the relations, not a reshuffled one. */
+function groupLinksByRelation(
+  links: JiraIssueLink[],
+): Array<[string, JiraIssueLink[]]> {
+  const grouped = new Map<string, JiraIssueLink[]>();
+  for (const link of links) {
+    const existing = grouped.get(link.relation);
+    if (existing) {
+      existing.push(link);
+    } else {
+      grouped.set(link.relation, [link]);
+    }
+  }
+  return Array.from(grouped.entries());
+}
+
+/** One top-level comment plus every reply grouped under it, flattened to
+ * exactly one level — see `groupCommentsIntoThreads`'s own comment for why
+ * this shape has no further nesting inside `replies`. */
+export interface JiraCommentThread {
+  root: JiraComment;
+  replies: JiraComment[];
+}
+
+/**
+ * Groups a comment page into threads by `parentId`, capped at one visible
+ * level of nesting — a root, plus every comment that traces back to it, all
+ * rendered as direct replies regardless of how many hops deep the real chain
+ * is. That matches what Jira itself shows (the founder's own ENG-84
+ * screenshot has one level of nesting, not an indent per reply-to-a-reply),
+ * and it is what keeps a long or malformed chain from pushing content off
+ * the right edge of the panel one indent at a time.
+ *
+ * Two things this must never do, because the 100-comment page it reads from
+ * (COMMENT_PAGE_SIZE in jiraClient.ts) is exactly where both happen:
+ *
+ *  - Drop a comment whose parent isn't on this page. A reply's `parentId`
+ *    can name a real comment that simply fell outside the cap — that comment
+ *    renders as its own root instead of vanishing. A dropped comment is a
+ *    bug; being placed one level higher than Jira's own view shows it is
+ *    cosmetic.
+ *  - Hang, or drop every comment in it, on a cyclic or self-referencing
+ *    `parentId`. The data is never assumed well-formed: `findRootId` below
+ *    walks at most `comments.length` hops and gives up the moment it would
+ *    revisit a comment already in its own walk, at which point the comment
+ *    the walk STARTED from becomes its own root. Every member of an N-comment
+ *    cycle ends up a root of its own with no replies — flat, not nested in an
+ *    arbitrary or wrong order, and never a hang.
+ */
+export function groupCommentsIntoThreads(
+  comments: JiraComment[],
+): JiraCommentThread[] {
+  const byId = new Map(comments.map((c) => [c.id, c]));
+
+  function findRootId(start: JiraComment): string {
+    // Every comment visited on THIS walk, so a repeat means a cycle rather
+    // than a coincidence — two different comments having replied to the same
+    // parent is normal and must not trip this.
+    const seen = new Set<string>([start.id]);
+    let current = start;
+    // A second, independent bound on top of the cycle check above: even a
+    // bug in that check cannot turn this into an infinite loop, since a walk
+    // this long has already visited every comment there is.
+    for (let steps = 0; steps < comments.length; steps += 1) {
+      if (!current.parentId) return current.id;
+      const parent = byId.get(current.parentId);
+      // The named parent isn't on this page — an orphan. `current`, not
+      // `start`, is the root: everything already walked between them is
+      // still a real, resolvable chain and stays grouped together under
+      // this same boundary.
+      if (!parent) return current.id;
+      // A parent already seen on this walk closes a cycle. There is no
+      // well-defined "real" root inside one, so this breaks it at the
+      // comment the walk started from rather than guessing which member of
+      // the cycle deserves to be treated as the top.
+      if (seen.has(parent.id)) return start.id;
+      seen.add(parent.id);
+      current = parent;
+    }
+    return start.id;
+  }
+
+  const rootOrder: string[] = [];
+  const repliesByRoot = new Map<string, JiraComment[]>();
+
+  comments.forEach((c) => {
+    const rootId = findRootId(c);
+    if (rootId === c.id) {
+      rootOrder.push(c.id);
+    } else {
+      const existing = repliesByRoot.get(rootId);
+      if (existing) existing.push(c);
+      else repliesByRoot.set(rootId, [c]);
+    }
+  });
+
+  return rootOrder.map((id) => ({
+    // Non-null: `id` only ever entered rootOrder as some comment's own id.
+    root: byId.get(id) as JiraComment,
+    replies: repliesByRoot.get(id) ?? [],
+  }));
+}
+
+/**
+ * ROAD-24: the comment header's small restricted-visibility indicator — text
+ * plus an (optional, never load-bearing) lock glyph. See
+ * `JiraCommentVisibility`'s own doc comment (types/jira.ts) for what `type`
+ * can be and why `null` — handled by the caller, never passed here — is the
+ * only "nothing to show" case.
+ *
+ * Before this, a role/group-restricted comment rendered identically to a
+ * public one: no icon, no label, nothing to distinguish them, which is the
+ * defect the ticket names. An icon-only fix would still fail anyone not
+ * hovering it (a touch user, someone scanning quickly), so `text` is always
+ * real, visible words, and `title` repeats the same information for a mouse
+ * user rather than adding something new only they would ever see. `title`
+ * alone is never enough on its own, though — see `ariaLabel` below.
+ *
+ * `'role'` and `'group'` deliberately share one label: Jira's own
+ * comment-visibility UI's own restricted-comment header reads "Restricted
+ * to <name>", the same words this app uses, and does not distinguish a
+ * project role from a group either — so inventing that distinction here
+ * would be a claim about the restriction's kind that even Jira's own UI
+ * doesn't make. (An earlier version of this comment cited that header as
+ * "Viewable by: <name>", which was never Jira's actual wording — corrected
+ * here, not just in the citation: the label below already said "Restricted
+ * to", so the fix is admitting it matches Jira rather than changing it.)
+ *
+ * The bare-word "Restricted" case — no name after it — is guarded on
+ * `!visibility.value` now, not on `visibility.type === 'restricted'`.
+ * `mapCommentVisibility` (main/jira/jiraMap.ts) can hand back a recognized
+ * `'role'`/`'group'` type with an empty `value` too (Jira sent a
+ * `visibility` object with no usable name), and checking `type` alone
+ * rendered "Restricted to " with nothing after it for that case — a
+ * trailing-space label that names a defect just as real as the one this
+ * function exists to fix, just one step further into the value instead of
+ * the type. The fuller explanation ("couldn't read which role or group")
+ * goes in both `title` AND `ariaLabel` for this one case: `title` is
+ * mouse-only, and the visible text ("Restricted") alone says less than this
+ * app actually knows, which is exactly the gap `ariaLabel` closes for
+ * assistive tech.
+ *
+ * `'internal'` is JSM's own case, added when `mapCommentVisibility` reads
+ * `jsdPublic === false` — see that function's own comment (jiraMap.ts) and
+ * `JiraCommentVisibility`'s (jiraTypes.ts) for the full story. "Internal
+ * note" is JSM's own term for it: its comment box's own toggle reads "Reply
+ * to customer" / "Add internal note", not "restrict to a role", so this
+ * reuses Jira's own word rather than forcing the "Restricted to …" phrasing
+ * onto a restriction that isn't a role or group at all.
+ */
+function commentVisibilityLabel(visibility: JiraCommentVisibility): {
+  text: string;
+  title: string;
+  ariaLabel?: string;
+} {
+  if (visibility.type === 'internal') {
+    return {
+      text: 'Internal note',
+      title:
+        'A Jira Service Management internal note — visible to agents, not to the customer on the portal.',
+    };
+  }
+  if (!visibility.value) {
+    const title =
+      "Jira restricted this comment, but Waypoint couldn't read which role or group.";
+    return { text: 'Restricted', title, ariaLabel: title };
+  }
+  const text = `Restricted to ${visibility.value}`;
+  return { text, title: text };
+}
+
+/**
+ * ROAD-24: the warning shown near the thread-level composer while it is
+ * replying to a restricted comment — see `activeReplyTarget`'s own comment
+ * on JiraTicketDetail for why that is tracked separately from
+ * `pendingReply`, and for the decision this warning exists to implement at
+ * all (leave the composer able to reply, but say honestly what happens).
+ *
+ * The reply itself carries no visibility of its own: JiraCommentComposer.tsx
+ * has no visibility control and `postJiraComment` never sends one, so a
+ * reply to a role/group-restricted comment posts fully public regardless of
+ * what it replies to — a person could reasonably answer something meant to
+ * stay internal in the open, which is exactly the harm ROAD-24 names. This
+ * file owns JiraTicketDetail.tsx only, not the composer or the write path,
+ * so it cannot change that; this only says so before it happens, honestly,
+ * rather than staying silent about a real risk or refusing Reply outright.
+ *
+ * The `'internal'` case (a JSM internal note — see `commentVisibilityLabel`'s
+ * own comment) gets its own, sharper copy, because the consequence is worse
+ * and more specific than "restricted": on a Jira Service Management project,
+ * every comment lands as agent-only or customer-visible, never both, and
+ * this app's reply has no way to ask for agent-only. What this comment CAN
+ * confirm, read-only, straight off `postComment` (jiraClient.ts): the POST
+ * body it sends is `parentId ? { body, parentId } : { body }` — no
+ * `properties` array, so `sd.public.comment` is never set on anything this
+ * app posts. What it can also confirm from the v3 spec (already cited on
+ * `JiraCommentVisibility`, jiraTypes.ts): `jsdPublic` "defaults to true"
+ * when unset. Read together, a reply posted from here should land
+ * customer-visible on a JSM project — corroborated, not proven from a
+ * single authoritative Atlassian statement about this exact case, by a
+ * third-party integration bug report (atlassian/atlassian-mcp-server#139)
+ * showing a comment posted with no `sd.public.comment` property coming back
+ * `jsdPublic: true` even when a role-based `visibility` was set on the same
+ * request. No stronger, first-party confirmation of the JSM default was
+ * found, which is why the copy below says what was actually verified
+ * (Waypoint sends no visibility property at all) alongside the corroborated,
+ * not independently-proven, consequence, rather than asserting the second
+ * half as flatly as the first.
+ */
+function replyVisibilityWarning(visibility: JiraCommentVisibility): string {
+  if (visibility.type === 'internal') {
+    return (
+      "Replying to the customer — the note you're replying to is internal, " +
+      "and Waypoint's reply sends no visibility of its own, so it will be " +
+      'visible on the customer portal.'
+    );
+  }
+  if (!visibility.value) {
+    return (
+      "Replying publicly — the comment you're replying to is restricted, " +
+      "but Waypoint couldn't read who to. This reply won't be restricted."
+    );
+  }
+  return (
+    `Replying publicly — the comment you're replying to is restricted to ` +
+    `${visibility.value}, but this reply won't be.`
+  );
+}
+
+/**
+ * What a comment delete actually does, in the terms a confirm dialog has to
+ * be honest about: `jira:comments:delete` (jiraIpc.ts -> jiraClient.ts's
+ * `deleteComment`) removes the comment from the real issue outright, with no
+ * undo on either side — Jira answers a plain 204 and there is nothing left
+ * to restore it from. A standalone, exported function, the same shape
+ * `disconnectJiraConfirmMessage` gives its own confirm text just below in
+ * JiraConnectionPanel.tsx (and `archiveConfirmMessage` in
+ * lib/projectArchiveCopy.ts before that) — "what this button actually does"
+ * is worth stating once, and testably, rather than inlined at the one call
+ * site that happens to exist today.
+ *
+ * Says plainly that this reaches Jira, not just Waypoint's own view of it:
+ * a reader who has only ever seen this app delete rows locally (there is no
+ * such feature here, but nothing stops the assumption) needs the sentence
+ * that rules that reading out.
+ */
+export function deleteJiraCommentConfirmMessage(): string {
+  return (
+    'Delete this comment? This removes it from the real issue in Jira, not ' +
+    'just from Waypoint, for anyone who has it open — and there is no undo.'
+  );
+}
+
+/**
+ * What `refreshAndFindComment` below can conclude about one named comment.
+ *
+ * `'unavailable'` means exactly what `getJiraComment` returning `null`
+ * means, and nothing more: Jira answered 404 for this comment. It is NOT
+ * "this comment was deleted" — Atlassian answers 404 rather than 403 for a
+ * comment the account may no longer browse (see `getJiraComment`'s own doc
+ * comment in data/jiraApi.ts), so a permission change and a real deletion
+ * are indistinguishable from here. Every message built on this status has
+ * to allow for both causes rather than asserting the first as fact.
+ */
+type CommentFreshness =
+  { status: 'found'; comment: JiraComment } | { status: 'unavailable' };
 
 /** Label + value, on the same 104px label column TicketDetailPage's own
  * PropertyRow uses — the two panels sit one route apart and should line up. */
@@ -137,6 +455,114 @@ export function JiraTicketDetail({
   // "Saving…".
   const [downloading, setDownloading] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  // Set by a comment's Reply action and consumed by the composer above the
+  // thread's own prefill effect (see JiraCommentComposer's onReplyConsumed)
+  // — a fresh object every click, deliberately, so a second Reply click
+  // (even to the same author) is a real state change the composer's effect
+  // will see. Reply always targets that one composer — see JiraCommentComposer
+  // itself for why a reply is a new (if nested) comment, not an edit.
+  const [pendingReply, setPendingReply] = useState<JiraReplyTarget | null>(
+    null,
+  );
+  // ROAD-24: the comment currently being replied to, kept for the "replying
+  // publicly" warning near the composer (see replyVisibilityWarning) — a
+  // deliberately separate, longer-lived copy of the same click that sets
+  // pendingReply above, not a read of pendingReply itself. pendingReply is a
+  // one-shot signal JiraCommentComposer.tsx's own prefill effect consumes
+  // and nulls again within the same render pass it arrived in (see that
+  // effect, keyed on the object reference alone) — a warning gated on it
+  // would flash for under a frame and be gone before anyone reading the
+  // panel could see it. This is set on the exact same Reply click and stays
+  // set for as long as the reply is genuinely in progress: cleared when that
+  // reply actually posts (onPosted below) or when a different Edit actually
+  // opens elsewhere (the renderComment Edit handler, right beside the
+  // `setEditGeneration` that remounts this composer — see review finding #2,
+  // fixed here: an early exit from that handler — a 404, a changed-since-load
+  // refusal, a round-trip refusal, or a throw — must NOT clear this, because
+  // none of those remount the composer, so the reply this warns about is
+  // still genuinely threaded underneath it). It does NOT track the user
+  // manually deleting the prefilled @mention from the composer's own draft,
+  // which un-threads the reply inside JiraCommentComposer.tsx (see its own
+  // replyParentId effect) without this component ever finding out — closing
+  // that gap needs either reading or changing that composer's internal
+  // state, and this file owns JiraTicketDetail.tsx only, not
+  // JiraCommentComposer.tsx.
+  //
+  // Also never reset on a ticket switch by itself — this component is not
+  // remounted between two different Jira issues shown in the same drawer
+  // (review finding #7), so a reply in progress on one ticket could
+  // otherwise still be "in progress" the instant a different ticket's own
+  // thread renders. The composer below is `key`d to `editGeneration`, not to
+  // `ticket.id`, so switching tickets doesn't remount it either. The render
+  // site (below, near JiraCommentComposer) guards on
+  // `activeReplyTarget.ticketId === ticket.id` instead, which is enough: a
+  // stale `activeReplyTarget` from a previous ticket simply stops matching
+  // and the warning stops rendering, with no extra state or effect needed.
+  const [activeReplyTarget, setActiveReplyTarget] =
+    useState<JiraComment | null>(null);
+  // Which comment currently has its OWN inline JiraCommentComposer mounted
+  // in place of its body (see renderComment below), and what to prefill it
+  // with. Unlike pendingReply, this is not a one-shot signal consumed the
+  // instant it's loaded: it stays set for the whole editing session, because
+  // it doubles as the render condition that keeps that one comment's inline
+  // editor mounted. It is cleared — unmounting the editor and restoring the
+  // comment's own rendered body — by closeInlineEdit below, on Cancel or on
+  // a successful save.
+  //
+  // Mutually exclusive with pendingReply, the same property the two shared
+  // on one composer before this composer split in two: starting an Edit
+  // clears pendingReply (see the Edit handler in renderComment) and bumps
+  // editGeneration to reset the reply composer's own draft, and starting a
+  // Reply clears pendingEdit (unmounting whatever comment's inline editor
+  // was open, discarding any unsaved edit there).
+  const [pendingEdit, setPendingEdit] = useState<JiraEditTarget | null>(null);
+  // Remounts the composer above the thread (via its `key` below) whenever an
+  // Edit starts, so that composer's own in-progress draft — a reply prefill
+  // or a plain typed comment — is abandoned rather than left showing behind
+  // an unrelated inline edit. Mirrors exactly what this component's single
+  // shared composer already did before the split: loading an edit always
+  // replaced that composer's whole draft, regardless of what was in it.
+  const [editGeneration, setEditGeneration] = useState(0);
+  // One comment's own Edit trigger button, by comment id — read by
+  // closeInlineEdit so Cancel (and a successful Save) can put focus back on
+  // it rather than letting it fall to <body> once the inline editor
+  // unmounts and takes the focus that was inside it along with it.
+  const editButtonRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+
+  /** Unmounts whichever comment's inline editor is open and returns focus to
+   * that comment's own Edit button — the shared ending for both Cancel and a
+   * successful Save, since both leave the thread with nothing being edited
+   * and nowhere obvious for focus to land on its own. Deferred a frame so the
+   * Edit button this focuses has already been re-rendered: it doesn't exist
+   * in the DOM until the state update below removes the inline editor that
+   * was standing in its place. */
+  function closeInlineEdit(commentId: string) {
+    setPendingEdit(null);
+    requestAnimationFrame(() => {
+      editButtonRefs.current.get(commentId)?.focus();
+    });
+  }
+  // Which comment's permalink was just copied, by id — mirrors
+  // RequestsPage.tsx's own linkCopied flag, the one other "Copy link"
+  // affordance in this app: this app's toast channel is error-only (see
+  // showErrorToast), so a copy's own success has nowhere else to say so.
+  // Cleared after the same 1500ms RequestsPage uses.
+  const [copiedCommentId, setCopiedCommentId] = useState<string | null>(null);
+  // Which comment is mid-delete, by id — same "one row, not a page-wide
+  // boolean" shape as `downloading` above, since several rows could in
+  // principle be clicked before the first confirm() resolves. Also covers
+  // the live freshness re-read handleDeleteComment now does before the
+  // actual delete call (see that function's own comment) — from the user's
+  // perspective both are the same "Deleting…" operation.
+  const [deletingCommentId, setDeletingCommentId] = useState<string | null>(
+    null,
+  );
+  // Which comment's Edit click is mid-flight, by id — the live re-read
+  // handleEditClick (in renderComment below) does before opening the inline
+  // editor, same "one row" shape as `deletingCommentId` above. Read by the
+  // Edit button itself to show "Checking…" rather than nothing while the
+  // network round trip it now requires is in flight.
+  const [checkingEditId, setCheckingEditId] = useState<string | null>(null);
   const assigneeChipRef = useRef<HTMLButtonElement>(null);
   const stateChipRef = useRef<HTMLButtonElement>(null);
   const priorityChipRef = useRef<HTMLButtonElement>(null);
@@ -152,6 +578,110 @@ export function JiraTicketDetail({
     setComments(fetchedComments.comments);
     setCommentTotal(fetchedComments.total);
   }, [fetchedComments]);
+
+  // Delete's own visibility gate. `undefined` (not yet loaded, or the read
+  // failed) means "no evidence of permission" and canDeleteComment below
+  // reads it as false — fails closed, the same choice
+  // getMyPermissions/havePermission already make in main for a permission
+  // key Jira's own answer omitted. There is no error UI for this read: the
+  // one thing a failure changes is that a destructive button stays hidden,
+  // which is the safe direction to fail in and not worth a retry banner of
+  // its own alongside the comment thread's real one.
+  const { data: commentPermissions } = useAsync<JiraCommentPermissions>(
+    () => getJiraCommentPermissions(ticket.key),
+    [ticket.key],
+  );
+
+  /**
+   * The freshness re-check both the Edit-open guard and the Delete guard
+   * below share — see those two call sites for why each needs one, and
+   * renderComment's own comment by the action row below for why neither
+   * trusts `ticket.hasConflict` for it instead (too blunt: that flag trips
+   * on ANY field on the ISSUE drifting, including one with nothing to do
+   * with this comment, and blocking every comment action over an unrelated
+   * priority change would be exactly the false-positive pattern that gets a
+   * safety feature learned-ignored).
+   *
+   * Two reads, for two different jobs, fired together. The verdict on THIS
+   * comment — still there, or Jira won't show it any more — comes from
+   * `getJiraComment`, which names the comment and therefore cannot miss it.
+   * It used to come from searching the array `listJiraComments` returns,
+   * but that read is capped at the newest COMMENT_PAGE_SIZE (100) comments,
+   * so "absent from the page" was produced by two completely different
+   * situations — a real deletion, and a comment that simply scrolled off a
+   * busy thread — and this function told the caller the first no matter
+   * which one had actually happened. `listJiraComments` still runs
+   * alongside it, because it is the only read that keeps the on-screen
+   * thread itself current, and both call sites' "gone" messages want to say
+   * "the thread above now shows the latest version" and have that be true.
+   *
+   * This only ever runs from an explicit user action (an Edit click, a
+   * confirmed Delete), never on render, so paying for both reads at once is
+   * worth it — but they are deliberately `Promise.allSettled`, not a bare
+   * `Promise.all`. A bare `Promise.all` rejects the instant `getJiraComment`
+   * rejects and would lose a `listJiraComments` result that had already come
+   * back fine, silently dropping a real thread refresh for a reason that has
+   * nothing to do with the refresh itself. `allSettled` keeps the two
+   * outcomes independent: the thread refresh below is applied whenever ITS
+   * OWN read succeeded, regardless of what happened to the other one, and
+   * each read's own failure is re-thrown from here so it still reaches the
+   * caller's existing catch/showErrorToast path — including a failed
+   * `listJiraComments`, since a "the thread above now shows the latest
+   * version" message would itself be false if that read never landed.
+   */
+  async function refreshAndFindComment(
+    commentId: string,
+  ): Promise<CommentFreshness> {
+    const [listResult, commentResult] = await Promise.allSettled([
+      listJiraComments(ticket.id),
+      getJiraComment(ticket.id, commentId),
+    ]);
+
+    // Resolved before the refresh below, because it decides what that
+    // refresh is allowed to drop. Only a comment the named read actually
+    // returned counts here — a rejected read is not evidence of anything
+    // (it re-throws a few lines down) and must not be read as "gone".
+    const named =
+      commentResult.status === 'fulfilled' ? commentResult.value : null;
+
+    if (listResult.status === 'fulfilled') {
+      const page = listResult.value.comments;
+      // The page and the named comment can genuinely disagree: the page is
+      // the newest COMMENT_PAGE_SIZE comments, so the very comment being
+      // edited or deleted can be missing from it while unmistakably still
+      // existing — which is the whole reason the named read was added. When
+      // that happens, showing the page verbatim would make the comment
+      // vanish from the thread the instant its Edit button was clicked, and
+      // leave the in-place editor (which renders inside that comment's own
+      // row) with nowhere to appear. Worse, a comment disappearing on click
+      // reads as "it was deleted" just as strongly as the message this
+      // whole change removed — so keeping it is the honest render, not a
+      // convenience: it is there, and this is its current content.
+      //
+      // Prepended rather than inserted at a guessed index: comments are
+      // ordered oldest-first, and a comment absent from the newest page is
+      // necessarily older than every comment on it.
+      const missingFromPage =
+        named !== null && !page.some((c) => c.id === named.id);
+      setComments(missingFromPage && named ? [named, ...page] : page);
+      setCommentTotal(listResult.value.total);
+    }
+
+    // Both failures propagate rather than resolving to 'unavailable' — that
+    // status is reserved for the one specific fact a `null` from
+    // getJiraComment proves (Jira answered 404), never for "the request
+    // failed", which is a completely different situation with its own
+    // error-toast path already in place at both call sites below.
+    if (commentResult.status === 'rejected') {
+      throw commentResult.reason;
+    }
+    if (listResult.status === 'rejected') {
+      throw listResult.reason;
+    }
+
+    const comment = commentResult.value;
+    return comment ? { status: 'found', comment } : { status: 'unavailable' };
+  }
 
   // Both lazy reads follow JiraTicketRow's own shape exactly, including the
   // `.catch()`: without one, a broken connection renders as "no transitions
@@ -293,10 +823,563 @@ export function JiraTicketDetail({
     }
   }
 
+  /**
+   * Copies one comment's real Jira permalink — verified live: this exact URL
+   * shape scrolls Jira's own issue view straight to that comment. Silent on
+   * failure, matching RequestsPage.tsx's own Copy link: clipboard access can
+   * fail (unsupported browser, no permission), and there is nowhere for this
+   * app's error-only toast channel to send a fabricated success in its
+   * place — a mid-air "could not copy" for something this low-stakes is
+   * worse than the button just staying "Copy link".
+   */
+  async function handleCopyCommentLink(commentId: string) {
+    if (!connection?.site) return;
+    const url = buildJiraCommentPermalink(
+      connection.site,
+      ticket.key,
+      commentId,
+    );
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedCommentId(commentId);
+      setTimeout(() => setCopiedCommentId(null), 1500);
+    } catch {
+      // See the function's own comment above: a failed copy has no error
+      // channel to report to and the address is not shown anywhere else in
+      // this row for the user to fall back to reading it, unlike
+      // RequestsPage's own input field — there is simply nothing more to do.
+    }
+  }
+
+  /**
+   * Whether Delete should render for this particular comment — a client-side
+   * decision, since Jira's comment payload carries no per-comment permission
+   * hint (see `commentPermissions`'s own comment above): the project-level
+   * own/all answer, plus whether the signed-in account actually wrote this
+   * one.
+   *
+   * `deleteAll` and `deleteOwn` can both be true on the same account (the
+   * common shape for whoever is testing this against their own Jira, and NOT
+   * the common shape a real non-admin sees) — so the `deleteOwn` branch below
+   * is checked on its own rather than assumed from "deleteAll is false", the
+   * one case this machine's own account cannot exercise by accident.
+   */
+  function canDeleteComment(comment: JiraComment): boolean {
+    if (!commentPermissions) return false;
+    if (commentPermissions.deleteAll) return true;
+    if (!commentPermissions.deleteOwn) return false;
+    return (
+      comment.authorAccountId !== null &&
+      comment.authorAccountId === connection?.accountId
+    );
+  }
+
+  /**
+   * Whether Edit should render for this particular comment at all — the
+   * same shape as `canDeleteComment` just above, and for the same reason:
+   * Jira's comment payload carries no per-comment permission hint, so this
+   * is the project-level own/all answer plus whether the signed-in account
+   * actually wrote this one.
+   *
+   * `editAll` and `editOwn` can both be true on the same account — the
+   * common shape for whoever is testing this against their own Jira,
+   * INCLUDING the account this feature was developed on — so the
+   * `editOwn` branch below is checked on its own rather than assumed from
+   * "editAll is false", the one case this machine's own account cannot
+   * exercise by accident.
+   *
+   * This decides only whether Edit may be OFFERED. Whether it's SAFE to
+   * offer for this comment's own content — whether it can be turned back
+   * into ADF without changing it — is a separate question `canEditComment`
+   * does not answer; see `prepareJiraCommentEdit` in renderComment below.
+   */
+  function canEditComment(comment: JiraComment): boolean {
+    if (!commentPermissions) return false;
+    if (commentPermissions.editAll) return true;
+    if (!commentPermissions.editOwn) return false;
+    return (
+      comment.authorAccountId !== null &&
+      comment.authorAccountId === connection?.accountId
+    );
+  }
+
+  /**
+   * `prepareJiraCommentEdit`'s own answer per comment, computed once per
+   * `comments` array change rather than inline in `renderComment` on every
+   * render — found in review: that ran on every render, for every comment
+   * whose author may edit it, walking and re-serialising that comment's
+   * whole ADF tree even when nothing about the comment or the render had
+   * anything to do with editing (a hover, an unrelated picker opening, a
+   * download finishing, ...). `comments` only gets a new array reference
+   * when its content actually changes (a post, an edit landing, a delete, or
+   * one of the live freshness re-reads below), so this recomputes exactly as
+   * often as there is new data for it to be computed from.
+   *
+   * Gated on `canEditComment`, matching `renderComment`'s own gating below:
+   * a comment nobody may edit is never worth the round trip through this
+   * function, and callers that assert `prepareJiraCommentEdit` is never
+   * invoked for a permission-denied comment depend on that staying true.
+   */
+  const editPreviewsByCommentId = useMemo(() => {
+    const map = new Map<
+      string,
+      { text: string; mentions: JiraMentionSpan[] } | null
+    >();
+    comments
+      .filter((c) => canEditComment(c))
+      .forEach((c) => map.set(c.id, prepareJiraCommentEdit(c)));
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [comments, commentPermissions, connection?.accountId]);
+
+  /**
+   * Deletes one comment outright, after a confirm() naming exactly what that
+   * does (see `deleteJiraCommentConfirmMessage`) — this repo's established
+   * guard on every irreversible action, matching Disconnect's own
+   * `window.confirm` in JiraConnectionPanel.tsx.
+   *
+   * Re-checks the comment is still what's on screen immediately before the
+   * actual delete call, via `refreshAndFindComment` — the same guard, and
+   * the same reasoning, as the Edit save path in JiraCommentComposer.tsx's
+   * handlePost: delete has no undo (see `deleteJiraCommentConfirmMessage`),
+   * so a comment whose content changed in the window between this row
+   * rendering and the confirm dialog closing may no longer be the content
+   * the person confirming actually saw. Checked here rather than before
+   * `window.confirm`, deliberately: the network round trip is only worth
+   * paying once the user has actually said yes, not on every render or on a
+   * confirm they're about to cancel.
+   *
+   * On success the row is dropped from local state directly — `.filter()`
+   * over the just-refreshed array, not a second refetch — because
+   * deleteJiraComment already told Jira to remove it. A failure surfaces
+   * through the same error-only toast channel every other write in this
+   * component uses, naming Jira's own message (a 403 from a permission that
+   * changed since this comment's permissions were fetched, or a 404 — which
+   * says only that Jira will not show this comment, not that someone else
+   * already deleted it; see CommentFreshness's own comment) rather than
+   * pretending nothing happened.
+   */
+  async function handleDeleteComment(comment: JiraComment) {
+    if (!window.confirm(deleteJiraCommentConfirmMessage())) return;
+    setDeletingCommentId(comment.id);
+    try {
+      const freshness = await refreshAndFindComment(comment.id);
+      if (freshness.status === 'unavailable') {
+        // Jira answered 404 for this exact comment — not "absent from a
+        // capped listJiraComments page", which is what this guard used to
+        // infer deletion from and which a busy thread produces just as
+        // easily by scrolling the comment off the newest 100. Even a named
+        // 404 doesn't prove a deletion happened (see CommentFreshness's own
+        // comment: Atlassian answers 404 for a permission change too), so
+        // this can't claim one either way. What it CAN say: nothing was
+        // deleted by this click, and the user who just confirmed a
+        // destructive action deserves to hear that rather than silence —
+        // silently returning here used to leave them with no idea whether
+        // their delete went through.
+        showErrorToast(
+          "Jira won't show this comment any more — it was deleted, or you no longer have permission to see it. Nothing was deleted just now; the thread above shows the latest version.",
+        );
+        return;
+      }
+      const freshComment = freshness.comment;
+      if (
+        comment.updatedAt !== null &&
+        freshComment.updatedAt !== null &&
+        freshComment.updatedAt !== comment.updatedAt
+      ) {
+        // Either side being null means "unknown", which this file's own
+        // hasConflict gating already treats as no evidence of drift rather
+        // than proof of it — the same call made here, for the same reason:
+        // a false refusal on missing data is the false positive that gets a
+        // safety feature learned-ignored.
+        showErrorToast(
+          'This comment changed in Jira since you opened this view, so the delete was stopped rather than remove content you have not seen. The thread above now shows the latest version — delete again if you still want to.',
+        );
+        return;
+      }
+      await deleteJiraComment(ticket.id, comment.id);
+      setComments((cs) => cs.filter((c) => c.id !== comment.id));
+      setCommentTotal((t) => Math.max(0, t - 1));
+    } catch (err) {
+      showErrorToast(
+        err instanceof Error
+          ? err.message
+          : 'Could not delete that comment in Jira.',
+      );
+    } finally {
+      setDeletingCommentId(null);
+    }
+  }
+
   const projectColor = jiraProjectColor(ticket.projectKey);
   const jiraUrl = connection?.site
     ? `https://${connection.site}/browse/${ticket.key}`
     : null;
+
+  /** One comment row — the whole per-comment block `groupCommentsIntoThreads`
+   * below renders twice over (once for a thread's root, once per reply in
+   * it), pulled out so both call sites stay identical rather than drifting
+   * apart the way a root row and a reply row easily could if this were
+   * inlined twice. Not module-scope: it closes over this render's handlers
+   * and state (canDeleteComment, copiedCommentId, ...) the same way
+   * PropertyRow above does NOT need to, because PropertyRow needs none of
+   * them. */
+  function renderComment(c: JiraComment) {
+    // Whether THIS comment's own inline editor is the one pendingEdit
+    // names — pendingEdit is a single value, so at most one comment in the
+    // whole thread ever satisfies this at a time. See pendingEdit's own
+    // comment above for why this stays true for the whole editing session
+    // rather than going null the instant the prefill loads.
+    const isEditing = pendingEdit?.commentId === c.id;
+    return (
+      // `data-comment-id`: the honest hook for a test (or anything else) that
+      // needs to scope to one comment's own row. `.closest('.group')` still
+      // works for that — `group` is load-bearing Tailwind (it's what drives
+      // the hover-reveal action row below), not a test-only class — but it
+      // names a styling detail rather than a comment, and this is the
+      // attribute that actually says which one.
+      <div key={c.id} data-comment-id={c.id} className="group flex gap-2">
+        <Avatar name={c.authorName} size={22} />
+        <div className="min-w-0 flex-1">
+          <div className="mb-0.5 text-xs">
+            <b className="font-semibold text-text">{c.authorName}</b>{' '}
+            <span className="text-text-muted">
+              {formatRelativeTime(c.createdAt)}
+              {c.postedByWaypoint ? ' · via Waypoint' : ''}
+            </span>
+            {/* ROAD-24: Jira's own restriction on who can see this comment,
+                or nothing when `c.visibility` is null (fully public) — see
+                commentVisibilityLabel's own comment for the copy and icon
+                reasoning. Same muted-secondary-text idiom as the timestamp
+                just above, so a restricted comment reads as "one more fact
+                about this comment" rather than a jarring warning color.
+                `aria-label` only overrides the accessible name when
+                commentVisibilityLabel actually returns one (the "couldn't
+                read which role or group" case) — `undefined` otherwise, so
+                every other case keeps its default accessible name (the
+                visible text), same as before this existed. */}
+            {c.visibility &&
+              (() => {
+                const label = commentVisibilityLabel(c.visibility);
+                return (
+                  <span
+                    title={label.title}
+                    aria-label={label.ariaLabel}
+                    className="ml-1 inline-flex items-center gap-0.5 align-middle text-text-muted"
+                  >
+                    <IconLock size={10} />
+                    {label.text}
+                  </span>
+                );
+              })()}
+          </div>
+          {c.disclosureText && (
+            <div className="mb-1 inline-block rounded bg-jira-bg px-1.5 py-0.5 text-[11px] text-jira">
+              {c.disclosureText}
+            </div>
+          )}
+          {isEditing && pendingEdit ? (
+            // Replaces this one comment's own body and action row with a
+            // real composer, right where the comment already sits — matching
+            // Jira's own inline edit (verified live against ENG-84: Edit
+            // swaps the comment's body for an editor in place, not a shared
+            // box elsewhere in the thread). Everything else in the thread,
+            // including every other comment's own position, is untouched.
+            //
+            // A fresh JiraCommentComposer instance, mounted only while
+            // isEditing is true for this one comment: it gets no
+            // onEditConsumed (nothing here needs pendingEdit nulled the
+            // instant the prefill loads — closeInlineEdit, wired to Cancel
+            // and to a successful Save below, is what unmounts this) and no
+            // pendingReply (Reply always targets the composer above the
+            // thread, never this one — see that composer's own JSX below).
+            <JiraCommentComposer
+              ticketId={ticket.id}
+              ticketKey={ticket.key}
+              attachments={ticket.attachments}
+              onTicketUpdated={onTicketUpdated}
+              pendingEdit={pendingEdit}
+              onEdited={(comment) => {
+                // Same "trust the response, not the request" rule the
+                // composer above the thread already follows for onPosted:
+                // replaces the row with whatever Jira's own write response
+                // describes, not the text this instance happened to submit.
+                setComments((cs) =>
+                  cs.map((x) => (x.id === comment.id ? comment : x)),
+                );
+                closeInlineEdit(c.id);
+              }}
+              onEditCancelled={() => closeInlineEdit(c.id)}
+            />
+          ) : (
+            <>
+              {/* ROAD-27 / docs/qa/manual-test-cases.md's JIRA-155: a comment
+                  body is plain text (not routed through JiraRichText, unlike
+                  the description below), so it needs its own `break-words`
+                  — same choice and same reasoning as JiraRichText's root
+                  (prefers a whitespace break, only splits a pasted stack
+                  trace / base64 blob / long URL mid-token when there is
+                  nowhere else to break). It only takes effect because the
+                  comment's own column above is already `min-w-0 flex-1`
+                  (see renderComment's outer div) — without that, this flex
+                  item would refuse to shrink below the unbroken token's
+                  width in the first place, and break-words would have
+                  nothing to work with. */}
+              <div className="text-[12.5px] leading-relaxed whitespace-pre-wrap break-words text-text-secondary">
+                {c.body}
+              </div>
+              {/* Four of Jira's five comment-row actions now: Reply, Edit,
+                  Copy link, and Delete — permission-gated per comment
+                  (see canDeleteComment/canEditComment above) rather than
+                  always shown, since Jira's own comment menu only ever
+                  offers delete/edit on a comment you may actually change.
+                  Reactions have no public API at all and remain the one
+                  honest gap. Opacity-revealed on hover exactly like
+                  ProjectViewsPage.tsx's own row actions, and
+                  group-focus-within (not group-hover alone) is what keeps
+                  a keyboard user from needing a mouse to ever see these —
+                  a Tab landing on any of these buttons already reveals the
+                  row before it needs to be clicked.
+
+                  Edit itself is gated three times, deliberately at three
+                  different layers: `canEditComment` decides whether Edit
+                  may be OFFERED at all (a permissions question);
+                  `editPreviewsByCommentId` (from `prepareJiraCommentEdit`)
+                  decides whether THIS comment's own content can be edited
+                  without changing it (a losslessness question) — a comment
+                  that fails it still gets an honest answer in this row
+                  rather than Edit silently vanishing as though the feature
+                  didn't exist for it; and the Edit button's own onClick
+                  below re-checks, live, whether the comment has actually
+                  changed since `c` (a freshness question) before it will
+                  open an editor over it at all — see that handler's own
+                  comment, and JiraCommentComposer.tsx's handlePost for the
+                  second half of the same guard, immediately before Save.
+                  Delete gets the same freshness re-check, immediately
+                  before its own irreversible call — see
+                  handleDeleteComment's own comment.
+
+                  Reply does not: it posts a brand-new comment rather than
+                  overwriting one, so a stale parent is a stale-looking
+                  thread at worst, never lost content — see handlePost's own
+                  comment in JiraCommentComposer.tsx for the full reasoning.
+
+                  None of the three re-checks reads `ticket.hasConflict`,
+                  and that is deliberate too, not an oversight matching the
+                  pickers/attachment-upload gating elsewhere on this page.
+                  That flag is this ticket's own cached `updated` timestamp
+                  having moved for ANY reason — a priority change, a
+                  relabel, someone else's comment on an entirely different
+                  part of the thread — and the pickers gate on it only
+                  because they have no finer-grained signal available at
+                  all. Comments do: `updatedAt` on the one comment actually
+                  being touched, re-read live at the moment it matters.
+                  Gating comments on `hasConflict` too would only add false
+                  positives on top of that real check — blocking Reply/Edit/
+                  Delete over drift in a field no comment action even
+                  reads — not add any safety a precise, per-comment,
+                  live-verified check doesn't already provide. */}
+              <div className="mt-1 flex items-center gap-2.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                {c.authorAccountId !== null && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // Reply targets the composer above the thread, never
+                      // this comment's own spot — so any inline edit open
+                      // elsewhere in the thread is abandoned rather than
+                      // left open alongside a reply-in-progress.
+                      setPendingEdit(null);
+                      setPendingReply({
+                        commentId: c.id,
+                        accountId: c.authorAccountId as string,
+                        displayName: c.authorName,
+                      });
+                      // ROAD-24: the longer-lived copy the "replying
+                      // publicly" warning reads — see activeReplyTarget's
+                      // own comment for why this can't just read
+                      // pendingReply above.
+                      setActiveReplyTarget(c);
+                    }}
+                    className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
+                  >
+                    Reply
+                  </button>
+                )}
+                {canEditComment(c) &&
+                  (() => {
+                    const editPreview =
+                      editPreviewsByCommentId.get(c.id) ?? null;
+                    if (editPreview) {
+                      const checking = checkingEditId === c.id;
+                      return (
+                        <button
+                          type="button"
+                          disabled={checking}
+                          ref={(el) => {
+                            // Read by closeInlineEdit to return focus here
+                            // once Cancel or a successful Save unmounts this
+                            // comment's own inline editor — see that
+                            // function's own comment.
+                            if (el) editButtonRefs.current.set(c.id, el);
+                            else editButtonRefs.current.delete(c.id);
+                          }}
+                          onClick={async () => {
+                            // Edit targets this comment's own inline spot,
+                            // never the composer above the thread — so any
+                            // reply in progress there is abandoned here
+                            // (editGeneration below remounts that composer
+                            // to actually drop its own draft once the
+                            // editor for THIS comment actually opens).
+                            setPendingReply(null);
+                            setCheckingEditId(c.id);
+                            try {
+                              // Live re-check before opening an editor over
+                              // whatever `c` currently shows — found in
+                              // review: comments load once when the ticket
+                              // opens, and nothing before this re-verified
+                              // them were still current by the time Edit was
+                              // actually clicked, arbitrarily long after
+                              // that load. `refreshAndFindComment` is the
+                              // same freshness guard handleDeleteComment
+                              // uses, for the same reason: `updatedAt` is the
+                              // one signal this app already treats as "did
+                              // this comment change" (see toComment's own
+                              // comment on it), and it costs nothing extra
+                              // to check it here, before committing to an
+                              // editor, rather than only at Save.
+                              const freshness = await refreshAndFindComment(
+                                c.id,
+                              );
+                              if (freshness.status === 'unavailable') {
+                                // A named 404 for this comment, not an
+                                // inference from it being missing off a
+                                // capped listJiraComments page — see
+                                // CommentFreshness's own comment for why
+                                // that used to be unusable evidence. A 404
+                                // still doesn't prove a deletion (could be a
+                                // permission change instead), so this can
+                                // only say Jira won't show it, not that it
+                                // was removed.
+                                showErrorToast(
+                                  "Jira won't show this comment any more — it was deleted, or you no longer have permission to see it. The thread above now shows the latest version.",
+                                );
+                                return;
+                              }
+                              const freshComment = freshness.comment;
+                              if (
+                                c.updatedAt !== null &&
+                                freshComment.updatedAt !== null &&
+                                freshComment.updatedAt !== c.updatedAt
+                              ) {
+                                showErrorToast(
+                                  'This comment changed in Jira since you last saw it. The thread above now shows the latest version — click Edit again to edit it.',
+                                );
+                                return;
+                              }
+                              // Recomputed against the fresh read rather than
+                              // reused from `editPreviewsByCommentId` above:
+                              // that map was built from `c`, the copy on
+                              // screen before this click, and the whole
+                              // point of the re-check just above is that this
+                              // fresh comment is the one actually safe to
+                              // trust now — even though, when `updatedAt`
+                              // matches as it just did, the two are the same
+                              // content by this app's own definition of
+                              // "changed" (see JiraWireComment.updatedAt).
+                              const freshPreview =
+                                prepareJiraCommentEdit(freshComment);
+                              if (!freshPreview) {
+                                showErrorToast(
+                                  "Waypoint can't rebuild this comment's formatting without changing it, so editing it here is refused.",
+                                );
+                                return;
+                              }
+                              setEditGeneration((g) => g + 1);
+                              // ROAD-24: moved here from the top of this
+                              // handler (review finding #2). This composer
+                              // is only actually abandoned — its draft and
+                              // internal replyParentId dropped — by the
+                              // remount `setEditGeneration` just above
+                              // triggers, and every early exit above this
+                              // line (the two `showErrorToast` returns, the
+                              // edit-refused return, or a throw — this `try`
+                              // has no `catch`) skips that remount. Clearing
+                              // `activeReplyTarget` earlier than this cleared
+                              // the warning on every one of those exits while
+                              // the composer stayed genuinely threaded to the
+                              // reply underneath it — the warning disappeared
+                              // while the exact thing it was warning about
+                              // was still true. Kept beside
+                              // `setEditGeneration` so the two can never
+                              // drift apart again: the warning now clears
+                              // exactly when, and only when, the composer
+                              // actually does.
+                              setActiveReplyTarget(null);
+                              setPendingEdit({
+                                commentId: c.id,
+                                updatedAt: freshComment.updatedAt,
+                                ...freshPreview,
+                              });
+                            } finally {
+                              setCheckingEditId(null);
+                            }
+                          }}
+                          className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline disabled:opacity-60"
+                        >
+                          {checking ? 'Checking…' : 'Edit'}
+                        </button>
+                      );
+                    }
+                    // Refused, honestly — see this block's own header comment.
+                    // Jira's `focusedCommentId` permalink is the one real path
+                    // left to change this comment's content at all.
+                    return jiraUrl ? (
+                      <span
+                        className="text-[10.5px] text-text-muted"
+                        title="Waypoint can't rebuild this comment's formatting without changing it, so editing it here is refused rather than risking that."
+                      >
+                        Can&apos;t edit here ·{' '}
+                        <a
+                          href={buildJiraCommentPermalink(
+                            connection?.site ?? '',
+                            ticket.key,
+                            c.id,
+                          )}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-semibold text-text-muted hover:text-text hover:underline"
+                        >
+                          Edit in Jira
+                        </a>
+                      </span>
+                    ) : null;
+                  })()}
+                {jiraUrl && (
+                  <button
+                    type="button"
+                    onClick={() => handleCopyCommentLink(c.id)}
+                    className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
+                  >
+                    {copiedCommentId === c.id ? 'Copied' : 'Copy link'}
+                  </button>
+                )}
+                {canDeleteComment(c) && (
+                  <button
+                    type="button"
+                    disabled={deletingCommentId === c.id}
+                    onClick={() => handleDeleteComment(c)}
+                    className="rounded text-[10.5px] font-semibold text-text-muted hover:text-danger hover:underline disabled:opacity-60"
+                  >
+                    {deletingCommentId === c.id ? 'Deleting…' : 'Delete'}
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -378,14 +1461,16 @@ export function JiraTicketDetail({
             {ticket.title}
           </h3>
 
-          {/* `whitespace-pre-wrap`, matching the comment bodies below.
-              adfToPlainText already emits a \n per ADF block, which is the
-              only structure that survives the flatten — and rendering it in
-              a plain <p> collapsed every one of them. */}
-          {ticket.description ? (
-            <p className="mb-6 text-[13px] leading-relaxed whitespace-pre-wrap text-text-secondary">
-              {ticket.description}
-            </p>
+          {/* `whitespace-pre-wrap`, matching the comment bodies below —
+              JiraRichText's own plain-text fallback is adfToPlainText's
+              output, which emits a \n per ADF block, the only structure that
+              survives the flatten. */}
+          {ticket.description || ticket.descriptionAdf ? (
+            <JiraRichText
+              adf={ticket.descriptionAdf}
+              fallback={ticket.description}
+              className="mb-6 text-[13px] leading-relaxed whitespace-pre-wrap text-text-secondary"
+            />
           ) : (
             <p className="mb-6 text-[13px] text-text-muted">No description.</p>
           )}
@@ -445,6 +1530,90 @@ export function JiraTicketDetail({
             </div>
           ))}
 
+          <div className="mb-2 text-[11px] font-bold tracking-wide text-text-muted uppercase">
+            Subtasks
+          </div>
+          {ticket.subtasks.length === 0 ? (
+            <p className="mb-6 text-[12.5px] text-text-muted">No subtasks.</p>
+          ) : (
+            <div className="mb-6 space-y-2">
+              {ticket.subtasks.map((s) => (
+                <div
+                  key={s.id}
+                  className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-border bg-bg-inset px-2.5 py-2 text-[11.5px] text-text-secondary"
+                >
+                  <span className="shrink-0 font-mono text-[11px] font-semibold text-text-muted">
+                    {s.key}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-text">
+                    {s.title}
+                  </span>
+                  <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                    <span
+                      aria-hidden="true"
+                      className="size-1.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: s.stateColor }}
+                    />
+                    <span className="text-[10.5px] font-semibold text-text-muted">
+                      {s.stateName}
+                    </span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="mb-2 text-[11px] font-bold tracking-wide text-text-muted uppercase">
+            Linked work items
+          </div>
+          {ticket.links.length === 0 ? (
+            <p className="mb-6 text-[12.5px] text-text-muted">
+              No linked work items.
+            </p>
+          ) : (
+            <div className="mb-6 space-y-3">
+              {groupLinksByRelation(ticket.links).map(([relation, group]) => (
+                <div key={relation}>
+                  <div className="mb-1.5 text-[11px] font-semibold text-text-secondary capitalize">
+                    {relation}
+                  </div>
+                  <div className="space-y-2">
+                    {group.map((link) => (
+                      <div
+                        key={link.id}
+                        className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-border bg-bg-inset px-2.5 py-2 text-[11.5px] text-text-secondary"
+                      >
+                        <span
+                          className="shrink-0 font-mono text-[11px] font-semibold"
+                          style={{
+                            color: jiraProjectColor(
+                              link.key.split('-')[0] ?? '',
+                            ),
+                          }}
+                        >
+                          {link.key}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-text">
+                          {link.title}
+                        </span>
+                        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                          <span
+                            aria-hidden="true"
+                            className="size-1.5 shrink-0 rounded-full"
+                            style={{ backgroundColor: link.stateColor }}
+                          />
+                          <span className="text-[10.5px] font-semibold text-text-muted">
+                            {link.stateName}
+                          </span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* No "Pending proposals" section here, unlike TicketDetailContent's
               native-ticket equivalent (MY_JIRA_IMPROVEMENTS.md §5 asked for
               parity if the data supported it — it doesn't, yet). ProposalView
@@ -466,38 +1635,110 @@ export function JiraTicketDetail({
           <div className="mt-6 mb-2 text-[11px] font-bold tracking-wide text-text-muted uppercase">
             Comments
           </div>
+          {/* Above the thread, not below it — matching Jira's own layout
+              (verified live against ENG-84: "Add a comment…" sits directly
+              under the Comments tab, above every existing comment, not
+              after the last one). `key`s this composer to editGeneration so
+              starting an Edit elsewhere (see renderComment's Edit handler)
+              remounts it, abandoning whatever draft — a reply prefill or a
+              plain typed comment — was in progress here; the same "loading
+              an edit replaces the whole draft" behavior this composer had
+              before Edit moved to its own inline spot, just triggered from
+              outside now that the two are separate instances. No
+              pendingEdit/onEditConsumed/onEdited here: this instance never
+              edits anything, only posts new (possibly nested, via
+              pendingReply) comments — see renderComment for the second
+              instance that does edit, mounted per comment rather than once
+              here. */}
+          {/* ROAD-24: this composer has no visibility control and
+              postJiraComment never sends one, so a reply to a restricted or
+              JSM-internal comment posts fully public/customer-visible
+              regardless of what it's replying to — the exact "reply in the
+              open to something meant to stay internal" risk the ticket
+              names. Rather than silently letting that happen, or refusing
+              Reply outright (which would also block a legitimate public
+              follow-up quoting a restricted comment's content), this says
+              so honestly, right where the reply is being typed. See
+              replyVisibilityWarning's own comment for the wording and what
+              could and couldn't be confirmed about the JSM case, and
+              activeReplyTarget's own comment for exactly when this is and
+              isn't shown.
+
+              Two guards, not one: `activeReplyTarget?.visibility` is the
+              existing "is a reply to a restricted/internal comment actually
+              in progress" check; `activeReplyTarget.ticketId === ticket.id`
+              (review finding #7) stops a reply left in progress on a
+              PREVIOUS ticket from rendering this warning against the
+              ticket now on screen. This component isn't remounted between
+              tickets shown in the same drawer, and activeReplyTarget isn't
+              reset on `ticket.id` changing (see its own comment above for
+              why), so without this a warning about a comment on ENG-1 could
+              render while looking at ENG-2. `role="status"` (review finding
+              #3): the warning appears only in reaction to clicking Reply,
+              after which focus moves straight into the composer's textarea
+              — nothing here ever receives focus on its own — so a
+              screen-reader user would otherwise never encounter it.
+              `"status"` (advisory), not `"alert"` (assertive/interrupting):
+              this describes a consequence of an action already taken, not
+              an error blocking one. */}
+          {activeReplyTarget?.visibility &&
+            activeReplyTarget.ticketId === ticket.id && (
+              <div
+                role="status"
+                className="mb-2 rounded-[var(--radius-sm)] border border-warning/30 bg-warning-bg px-3 py-2 text-[11.5px] leading-relaxed text-warning"
+              >
+                {replyVisibilityWarning(activeReplyTarget.visibility)}
+              </div>
+            )}
+          <JiraCommentComposer
+            key={editGeneration}
+            ticketId={ticket.id}
+            ticketKey={ticket.key}
+            attachments={ticket.attachments}
+            onTicketUpdated={onTicketUpdated}
+            pendingReply={pendingReply}
+            onReplyConsumed={() => setPendingReply(null)}
+            onPosted={(comment) => {
+              setComments((cs) => [...cs, comment]);
+              // Otherwise posting into a truncated thread walks the notice's
+              // own numbers together ("101 most recent of 312"), and on a
+              // short thread it would invent a truncation that isn't there.
+              setCommentTotal((t) => t + 1);
+              // ROAD-24: whatever reply was in progress actually went out,
+              // so the warning above (if it was showing) no longer applies
+              // to anything still on screen.
+              setActiveReplyTarget(null);
+            }}
+          />
           {/* Said before the thread, not after it: the whole failure this
               fixes is a reader finishing a partial thread believing it was
               the whole one. `total` comes from Jira rather than being
               inferred, so this can name the real number instead of hedging
               with "there are more". */}
           {commentTotal > comments.length && (
-            <div className="mb-2.5 rounded-[var(--radius-sm)] border border-warning/30 bg-warning-bg px-3 py-2 text-[11.5px] leading-relaxed text-warning">
+            <div className="mt-3 rounded-[var(--radius-sm)] border border-warning/30 bg-warning-bg px-3 py-2 text-[11.5px] leading-relaxed text-warning">
               Showing the {comments.length} most recent of {commentTotal}{' '}
               comments. Open this issue in Jira to read the rest.
             </div>
           )}
-          <div className="mb-4 space-y-3.5">
-            {comments.map((c) => (
-              <div key={c.id} className="flex gap-2">
-                <Avatar name={c.authorName} size={22} />
-                <div className="min-w-0 flex-1">
-                  <div className="mb-0.5 text-xs">
-                    <b className="font-semibold text-text">{c.authorName}</b>{' '}
-                    <span className="text-text-muted">
-                      {formatRelativeTime(c.createdAt)}
-                      {c.postedByWaypoint ? ' · via Waypoint' : ''}
-                    </span>
+          <div className="mt-3 space-y-3.5">
+            {/* Nested, not flat: Jira genuinely threads comments (verified
+                live against ENG-84 — see JiraWireComment.parentId's own
+                comment), so a reply now renders under the comment it
+                answers instead of beside it. `groupCommentsIntoThreads`
+                is what decides the grouping, and it decides it from
+                `parentId` as JIRA REPORTED IT on each comment — never from
+                which button the user clicked — so a reply Jira didn't
+                actually nest (the write endpoint accepting `parentId` is
+                unverified) renders flat here too, honestly. */}
+            {groupCommentsIntoThreads(comments).map(({ root, replies }) => (
+              <div key={root.id}>
+                {renderComment(root)}
+                {replies.length > 0 && (
+                  <div className="mt-2 ml-7 space-y-3 border-l border-border pl-3">
+                    {replies.map((reply) => renderComment(reply))}
                   </div>
-                  {c.disclosureText && (
-                    <div className="mb-1 inline-block rounded bg-jira-bg px-1.5 py-0.5 text-[11px] text-jira">
-                      {c.disclosureText}
-                    </div>
-                  )}
-                  <div className="text-[12.5px] leading-relaxed whitespace-pre-wrap text-text-secondary">
-                    {c.body}
-                  </div>
-                </div>
+                )}
               </div>
             ))}
             {commentsError && (
@@ -515,20 +1756,6 @@ export function JiraTicketDetail({
               <p className="text-[12.5px] text-text-muted">No comments yet.</p>
             )}
           </div>
-
-          <JiraCommentComposer
-            ticketId={ticket.id}
-            ticketKey={ticket.key}
-            attachments={ticket.attachments}
-            onTicketUpdated={onTicketUpdated}
-            onPosted={(comment) => {
-              setComments((cs) => [...cs, comment]);
-              // Otherwise posting into a truncated thread walks the notice's
-              // own numbers together ("101 most recent of 312"), and on a
-              // short thread it would invent a truncation that isn't there.
-              setCommentTotal((t) => t + 1);
-            }}
-          />
         </div>
       </div>
 
@@ -625,6 +1852,25 @@ export function JiraTicketDetail({
           </div>
         </PropertyRow>
 
+        <PropertyRow label="Labels">
+          {ticket.labels.length === 0 ? (
+            <ReadOnlyValue>
+              <span className="text-text-muted">None</span>
+            </ReadOnlyValue>
+          ) : (
+            <div className="flex flex-wrap items-center gap-1 px-2 py-1.5">
+              {ticket.labels.map((label) => (
+                <span
+                  key={label}
+                  className="rounded bg-surface-3 px-1.5 py-0.5 text-[11px] font-medium text-text-secondary"
+                >
+                  {label}
+                </span>
+              ))}
+            </div>
+          )}
+        </PropertyRow>
+
         <PropertyRow label="Reporter">
           <ReadOnlyValue>
             <span className="flex items-center gap-2">
@@ -652,6 +1898,16 @@ export function JiraTicketDetail({
           <ReadOnlyValue>
             {ticket.storyPoints ?? (
               <span className="text-text-muted">No estimate</span>
+            )}
+          </ReadOnlyValue>
+        </PropertyRow>
+
+        <PropertyRow label="Due date">
+          <ReadOnlyValue>
+            {ticket.dueDate ? (
+              formatDueDate(ticket.dueDate)
+            ) : (
+              <span className="text-text-muted">None</span>
             )}
           </ReadOnlyValue>
         </PropertyRow>

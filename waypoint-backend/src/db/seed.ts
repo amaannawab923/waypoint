@@ -17,7 +17,7 @@
 // see the comments at each such spot below.
 import { db } from './client.js';
 import * as schema from './schema/index.js';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 
 const now = new Date();
 function daysAgo(n: number): Date {
@@ -670,6 +670,21 @@ export async function seed() {
     }),
   );
 
+  // ROAD-38: createTicket() now allocates identifiers off projects.nextSequenceId
+  // (an atomic UPDATE ... RETURNING) instead of scanning tickets for MAX(sequenceId)
+  // — a real DB counter, not derived from the rows above. Seeding tickets directly
+  // via tx.insert(), as this function does, bypasses that allocator entirely, so
+  // the counter is left at its schema default (0) unless backfilled here. Without
+  // this, the very first ticket created through the app after a fresh seed collides
+  // with CW-1/PL-1 on the identifier's unique constraint, and every create after
+  // that keeps colliding forever — the counter never self-heals, since a failed
+  // insert rolls the whole transaction back before it could advance.
+  await Promise.all(
+    [...wiByProjectSeq.entries()].map(([projectId, count]) =>
+      tx.update(schema.projects).set({ nextSequenceId: count }).where(eq(schema.projects.id, projectId)),
+    ),
+  );
+
   const labelRows = wiSeeds.flatMap((w) => (w.labelIds ?? []).map((labelId) => ({ ticketId: w.id, labelId })));
   if (labelRows.length) await tx.insert(schema.ticketLabels).values(labelRows);
 
@@ -1166,12 +1181,10 @@ export async function seed() {
   //    kind); the doc itself is seeded directly above.
   //  - "Decline request" (r4) -> not seeded as a proposal; requests.status
   //    already models "declined" directly (see req-cw-spam above).
-  //  - The "Blocked" segment (b1/b2 in the mockup) is not seeded at all:
-  //    proposals.service.ts's computeReviewQueueCounts hardcodes
-  //    blocked: 0 pending agent_runs infrastructure that doesn't exist, so
-  //    a seeded row here could never surface on the real Blocked tab
-  //    regardless of its status — this is a genuine capability gap versus
-  //    the mockup, not a data simplification.
+  //  - The "Blocked" segment (b1/b2 in the mockup) IS seeded, as prop-b1/
+  //    prop-b2 below with status: 'stale' — ROAD-14 made computeReviewQueueCounts
+  //    count real 'stale' rows instead of hardcoding blocked: 0, so a
+  //    seeded stale proposal now genuinely surfaces on the Blocked tab.
   //  - p3's single card (state_change + assignee_change in one) becomes two
   //    real proposal rows (p3 and p3b) — one payload per kind, per the
   //    schema.
@@ -1409,6 +1422,64 @@ export async function seed() {
       expiresAt: hoursFromNow(4),
       createdAt: hoursAgo(19),
       resolvedAt: hoursAgo(18.7),
+    },
+    // b1/b2 — the mockup's Blocked segment. ROAD-14 turned every 'stale'
+    // proposal into a real, present-day member of the Blocked tab (see
+    // computeReviewQueueCounts); these two are seeded stale so a fresh
+    // demo/dev database can actually show it non-empty, matching the two
+    // real staleness causes proposals.service.ts itself documents (a Jira
+    // transition refused mid-approve, and an interrupted approval claim).
+    {
+      id: 'prop-b1',
+      origin: 'copilot',
+      conversationId: 'conv-safari-bug',
+      anchorSeq: seqSafari,
+      agentId: 'agent-triage',
+      projectId: 'proj-cw',
+      kind: 'state_change',
+      ticketId: cw140.id,
+      payload: { stateId: CW_STATE_REVIEW },
+      snapshot: {
+        identifier: 'CW-140',
+        title: cw140.title,
+        fromStateId: CW_STATE_PROGRESS,
+        fromStateName: 'In Progress',
+        fromStateColor: '#c99a2e',
+        toStateName: 'In Review',
+        toStateColor: '#a86fe0',
+        evidence: 'src/jira/transition.ts:1',
+        why: 'The linked Jira issue rejected this transition — its workflow no longer allows moving to that state directly.',
+        agentName: 'Triage Agent',
+      },
+      status: 'stale',
+      statusReason: 'Jira refused this transition — check the ticket’s workflow directly.',
+      decidedBy: 'system',
+      expiresAt: hoursFromNow(4),
+      createdAt: hoursAgo(9),
+      resolvedAt: hoursAgo(9),
+    },
+    {
+      id: 'prop-b2',
+      origin: 'copilot',
+      conversationId: 'conv-webhook-retry',
+      anchorSeq: seqWebhook,
+      agentId: 'agent-code-reviewer',
+      projectId: 'proj-cw',
+      kind: 'comment',
+      ticketId: cw141.id,
+      payload: { body: 'Retry backoff now caps at 3 attempts per the linked PR.' },
+      snapshot: {
+        identifier: 'CW-141',
+        title: cw141.title,
+        why: 'Backoff and the 3-attempt cap are implemented and tested; the Stripe-client touch needs a human.',
+        agentName: 'Code Reviewer',
+      },
+      status: 'stale',
+      statusReason: 'Approval was interrupted — check the ticket before asking Copilot to propose this again.',
+      decidedBy: 'system',
+      expiresAt: hoursFromNow(4),
+      createdAt: hoursAgo(6),
+      resolvedAt: hoursAgo(6),
     },
   ]);
 

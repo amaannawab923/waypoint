@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   disconnectJira,
   getJiraConnectionStatus,
@@ -10,7 +11,30 @@ import { showErrorToast } from '@/lib/toast';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { IconAlert, IconCircleDot } from '@/components/icons';
+import { JiraMark } from '@/components/domain/JiraMark';
+import { AddProjectWizard } from '@/components/domain/AddProjectWizard';
 import type { JiraConnectionStatus } from '@/types/jira';
+
+/**
+ * What a disconnect actually does, in the terms a confirm dialog has to be
+ * honest about: `jira:disconnect` (jiraIpc.ts) deletes the stored API token
+ * outright, immediately, with no undo — unlike archiving a project, there is
+ * no Archive page to restore this from. A standalone function within this
+ * file, the same shape `lib/projectArchiveCopy.ts` gives its own confirm
+ * text (as a dedicated file there, since `archiveConfirmMessage` has a
+ * second call site `ProjectCard` doesn't own), even though this one is so
+ * far a single call site — "what this button actually does" is worth
+ * stating once either way, so a second call site showing up later has it
+ * ready rather than reinventing the wording.
+ */
+export function disconnectJiraConfirmMessage(accountEmail: string): string {
+  return (
+    `Disconnect ${accountEmail || 'this Jira account'}? Waypoint deletes the ` +
+    `stored API token from this device immediately — your issues, comments ` +
+    `and everything else stay exactly as they are in Jira. You can ` +
+    `reconnect any time.`
+  );
+}
 
 /**
  * MyJiraPage's "Connection" tab. Both actions here reach the real site:
@@ -46,8 +70,10 @@ export function JiraConnectionPanel({
    */
   onRefresh?: () => Promise<void>;
 }) {
+  const navigate = useNavigate();
   const [refreshing, setRefreshing] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [showConnectWizard, setShowConnectWizard] = useState(false);
 
   async function handleRefresh() {
     setRefreshing(true);
@@ -71,6 +97,15 @@ export function JiraConnectionPanel({
   }
 
   async function handleDisconnect() {
+    // Deletes the stored token immediately with no undo (see
+    // disconnectJiraConfirmMessage's own comment) — matches this repo's
+    // established confirm() guard on every other irreversible action
+    // (ProjectsList's archiveConfirmMessage).
+    if (
+      !window.confirm(disconnectJiraConfirmMessage(connection.accountEmail))
+    ) {
+      return;
+    }
     setDisconnecting(true);
     try {
       await disconnectJira();
@@ -93,15 +128,43 @@ export function JiraConnectionPanel({
     <div>
       <div className="overflow-hidden rounded-[var(--radius)] border border-border bg-surface shadow-sm">
         <div className="flex items-center gap-3 border-b border-border px-4.5 py-3.5">
-          <Avatar name={connection.accountName} size={34} />
-          <div className="min-w-0">
-            <b className="block text-[13.5px] font-semibold text-text">
-              {connection.accountName}
-            </b>
-            <div className="mt-0.5 truncate text-[12.5px] text-text-muted">
-              {connection.accountEmail} · {connection.site}
-            </div>
-          </div>
+          {connection.connected ? (
+            <>
+              <Avatar name={connection.accountName} size={34} />
+              <div className="min-w-0">
+                <b className="block text-[13.5px] font-semibold text-text">
+                  {connection.accountName}
+                </b>
+                <div className="mt-0.5 truncate text-[12.5px] text-text-muted">
+                  {connection.accountEmail} · {connection.site}
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <span className="flex size-[34px] shrink-0 items-center justify-center rounded-full bg-surface-2 text-jira">
+                <JiraMark size={18} />
+              </span>
+              <div className="min-w-0">
+                <b className="block text-[13.5px] font-semibold text-text">
+                  Not connected
+                </b>
+                {/* Replaces what used to render here with nothing on either
+                    side of it — accountEmail and site both collapse to '' the
+                    moment jira:status stops reporting a connection, so
+                    `{email} · {site}` rendered a bare " · " with no way back
+                    into the app. This is that way back: the same connect flow
+                    JiraConnectionCard already opens from All-Projects. */}
+                <button
+                  type="button"
+                  onClick={() => setShowConnectWizard(true)}
+                  className="mt-0.5 text-[12.5px] font-semibold text-accent hover:underline"
+                >
+                  Connect to Jira
+                </button>
+              </div>
+            </>
+          )}
           {connection.connected ? (
             <span className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-full bg-success-bg py-1 pr-2.5 pl-2 text-[11.5px] font-bold text-success">
               <span className="size-1.5 shrink-0 rounded-full bg-success" />
@@ -131,11 +194,24 @@ export function JiraConnectionPanel({
             </span>
           </div>
           <div>
+            {/* Same honesty as the issue count beside it, and the same flag:
+                countsTruncated marks BOTH numbers, because both come from the
+                one capped ticket read — see JiraConnectionStatus's own
+                comment on projectCount in types/jira.ts ("a project whose
+                only issues fell past the cap is not counted"), and
+                AddProjectWizard.tsx's ConfirmStep, which already applies this
+                same marker to its own copy of these two counts. Rendering
+                this one as a bare exact number while the issue count right
+                next to it carries a "+" and a caveat would say the two are
+                different kinds of fact when they are the same read. */}
             <b className="block font-mono text-lg font-bold tabular-nums text-text">
               {connection.projectCount}
+              {connection.countsTruncated ? '+' : ''}
             </b>
             <span className="text-[11.5px] text-text-muted">
-              Jira projects represented
+              {connection.countsTruncated
+                ? 'Jira projects seen (your queue is larger)'
+                : 'Jira projects represented'}
             </span>
           </div>
         </div>
@@ -148,10 +224,20 @@ export function JiraConnectionPanel({
           >
             {refreshing ? 'Refreshing…' : 'Refresh now'}
           </Button>
+          {/* Not gated on connection.connected, unlike Refresh: once a
+              credential is flagged invalid after a 401 (see jiraAuth.ts's
+              markJiraCredentialInvalid), jira:status reports connected:false
+              even though the dead token is still on disk — and Disconnect is
+              the only control that removes it. Gating this the same way
+              Refresh is gated would make that token permanently
+              undeletable from the UI the moment it goes bad.
+              disconnectJira is already a safe no-op when nothing is
+              stored, so enabling this with no credential present costs
+              nothing. */}
           <Button
             size="xs"
             className="text-danger"
-            disabled={disconnecting || !connection.connected}
+            disabled={disconnecting}
             onClick={handleDisconnect}
           >
             {disconnecting ? 'Disconnecting…' : 'Disconnect'}
@@ -173,17 +259,61 @@ export function JiraConnectionPanel({
               straight through. Attaching joins it now for the same reason:
               uploadJiraAttachment is real, and the drawer's Attachments
               header has a button that opens a native file picker and sends
-              what the user chooses. jiraApi.ts's whole write surface is
-              transitionJiraTicket, postJiraComment, setJiraTicketPriority,
-              setJiraTicketAssignee and uploadJiraAttachment — five, and this
-              sentence names five. (downloadJiraAttachment is not among them:
-              it changes nothing about the issue.) */}
+              what the user chooses. Deleting a comment joins it now for the
+              same reason again: deleteJiraComment is real, gated on the
+              real per-project delete permission Jira reports for the
+              signed-in account (see jiraApi.ts's getJiraCommentPermissions),
+              never shown on a comment the account may not remove.
+              Editing a comment joins it now too, and needs its own sentence
+              rather than the same one Delete gets: the permission check
+              alone is not what decides whether Edit is offered on a given
+              comment. Before Edit ever renders for a comment the account may
+              edit, jiraApi.ts's prepareJiraCommentEdit deserializes that
+              comment's real ADF to the composer's markdown-lite text,
+              re-serializes it through the SAME buildCommentAdf every new
+              comment already goes through, and deep-compares the result
+              against the original. Anything short of an exact match — a
+              table, a panel, an embedded image, or even plain prose that
+              happens to contain a literal *, _ or backtick the round trip
+              would misread as real formatting — refuses Edit for that one
+              comment rather than risk silently rewriting its structure on
+              save, with no undo on either side of that write. The refusal is
+              shown honestly in the comment's own row (JiraTicketDetail.tsx's
+              renderComment), with a link to edit that comment in Jira
+              directly, not hidden as though Edit didn't exist for it.
+              jiraApi.ts's whole write surface is transitionJiraTicket,
+              postJiraComment, updateJiraComment, deleteJiraComment,
+              setJiraTicketPriority, setJiraTicketAssignee and
+              uploadJiraAttachment — seven, and this sentence names seven.
+              (downloadJiraAttachment is not among them: it changes nothing
+              about the issue. Nor is a comment's Reply action a write of its
+              own — it posts through the same postJiraComment as any other
+              comment, now carrying both a prefilled mention AND the
+              replied-to comment's id as the write's parentId. Jira genuinely
+              threads comments — verified live against ENG-84, where Jira's
+              own Reply set a real parentId alongside the mention this app
+              already prefilled — so this is no longer "Jira has no parent
+              field", the belief an earlier version of this comment shipped
+              under. Whether a reply actually nests is decided by Jira's own
+              response, never by what Reply sent (see JiraTicketDetail.tsx's
+              groupCommentsIntoThreads and jiraApi.ts's toComment) — the
+              write endpoint accepting parentId at all is undocumented.
+              Either way it is still postJiraComment, not an eighth
+              capability. Nor is Copy link: it copies an address to the
+              clipboard and sends nothing to Jira.) */}
           <span>
             <b>Your</b> edits — moving a ticket through its workflow, posting a
-            comment, changing its priority, reassigning it, and attaching a file
-            — write straight to Jira the moment you make them, as you. Those
-            five are the whole set; everything else about an issue is read-only
-            here.
+            comment (a reply included), editing one you have permission to
+            change, deleting one you have permission to remove, changing a
+            ticket&apos;s priority, reassigning it, and attaching a file — write
+            straight to Jira the moment you make them, as you. Those seven are
+            the whole set; everything else about an issue, including copying a
+            comment&apos;s link, is read-only here. Editing is refused rather
+            than offered, on a comment-by-comment basis, when Waypoint
+            can&apos;t rebuild that comment&apos;s formatting without changing
+            it — a table, a panel, an embedded image, or prose containing an
+            unintended *, _ or backtick — with a link there to edit it in Jira
+            instead.
           </span>
         </div>
         <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-warning/30 bg-warning-bg px-3 py-2.5 text-[12.5px] leading-relaxed text-warning">
@@ -230,14 +360,32 @@ export function JiraConnectionPanel({
             press Refresh — nothing polls in between.
           </li>
           <li>
-            Copilot proposing a priority change, a reassignment, or a new
-            issue against Jira — only a comment or moving a ticket through its
+            Copilot proposing a priority change, a reassignment, or a new issue
+            against Jira — only a comment or moving a ticket through its
             workflow can be proposed there today. (All three already work
             against your own, non-Jira projects.)
           </li>
           <li>Creating issues, and Linear and Shortcut companions.</li>
         </ul>
       </div>
+
+      {/* The same wizard JiraConnectionCard opens from All-Projects. Mounted
+          only while open, not unconditionally: AddProjectWizard calls
+          useNavigate() on every render regardless of its own `open` prop,
+          so an always-mounted copy would require a Router ancestor for
+          this whole panel even while the wizard is closed and untouched.
+          Step 1 still offers "Independent project" here, same as from
+          All-Projects — a real project can come out of this reconnect
+          entry point, not only a Jira reconnect, so onCreated navigates to
+          it the same way ProjectsList's own "Add project" button does
+          rather than silently doing nothing with it. */}
+      {showConnectWizard && (
+        <AddProjectWizard
+          open={showConnectWizard}
+          onClose={() => setShowConnectWizard(false)}
+          onCreated={(project) => navigate(`/projects/${project.id}/tickets`)}
+        />
+      )}
     </div>
   );
 }

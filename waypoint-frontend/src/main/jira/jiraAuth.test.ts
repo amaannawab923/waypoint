@@ -30,9 +30,12 @@ jest.mock('fs', () => ({
 // above exist.
 // eslint-disable-next-line import/order, import/first
 import {
+  clearJiraCredentialInvalidMarker,
   deleteStoredJiraCredential,
   encodeJiraCredentialHeader,
+  isJiraCredentialMarkedInvalid,
   JIRA_CREDENTIAL_HEADER,
+  markJiraCredentialInvalid,
   readStoredJiraCredential,
   toJiraIdentity,
   writeStoredJiraCredential,
@@ -103,6 +106,16 @@ describe('writeStoredJiraCredential', () => {
         Buffer.from(parsed.encrypted, 'base64').toString().replace(/^enc:/, ''),
       ),
     ).toEqual(CREDENTIAL);
+  });
+
+  // ROAD-16: a token flagged dead by an earlier 401 must not go on looking
+  // dead once the user has pasted in a fresh, working one.
+  it('clears any prior invalid-credential marker on a fresh write', () => {
+    writeStoredJiraCredential(CREDENTIAL);
+
+    expect(unlinkSyncMock).toHaveBeenCalledWith(
+      '/fake/userData/jira-auth-invalid.json',
+    );
   });
 
   // The point of encrypting the whole blob rather than just the token: the
@@ -177,6 +190,78 @@ describe('deleteStoredJiraCredential', () => {
       throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     });
     expect(() => deleteStoredJiraCredential()).not.toThrow();
+  });
+
+  // A flag about a credential that no longer exists is nothing worth
+  // keeping around for whatever gets connected next.
+  it('also clears any invalid-credential marker', () => {
+    deleteStoredJiraCredential();
+
+    expect(unlinkSyncMock).toHaveBeenCalledWith(
+      '/fake/userData/jira-auth-invalid.json',
+    );
+  });
+});
+
+// ROAD-16: the file jiraClient.ts flags the instant a real Jira call comes
+// back 401, and the one jira:status reads to stop claiming a dead connection
+// is still "connected". Deliberately not encrypted — see the module comment
+// beside INVALID_MARKER_FILE_NAME — so these tests exercise it through the
+// same fs mocks as the credential file, on its own path.
+describe('markJiraCredentialInvalid / isJiraCredentialMarkedInvalid / clearJiraCredentialInvalidMarker', () => {
+  it('writes the flag to a sibling, unencrypted file', () => {
+    markJiraCredentialInvalid();
+
+    expect(writeFileSyncMock).toHaveBeenCalledWith(
+      '/fake/userData/jira-auth-invalid.json',
+      JSON.stringify({ invalid: true }),
+    );
+  });
+
+  // Best-effort, per the function's own comment: a failed write here must
+  // not turn a 401 into a crash of the request that surfaced it.
+  it('does not throw when the write fails', () => {
+    writeFileSyncMock.mockImplementation(() => {
+      throw new Error('EROFS: read-only file system');
+    });
+
+    expect(() => markJiraCredentialInvalid()).not.toThrow();
+  });
+
+  it('reports false when nothing has ever been flagged', () => {
+    readFileSyncMock.mockImplementation(() => {
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    });
+
+    expect(isJiraCredentialMarkedInvalid()).toBe(false);
+  });
+
+  it('reports true once the marker file says so', () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({ invalid: true }));
+
+    expect(isJiraCredentialMarkedInvalid()).toBe(true);
+  });
+
+  it('reports false on malformed marker content rather than throwing', () => {
+    readFileSyncMock.mockReturnValue('{not valid json');
+
+    expect(isJiraCredentialMarkedInvalid()).toBe(false);
+  });
+
+  it('removes the marker file', () => {
+    clearJiraCredentialInvalidMarker();
+
+    expect(unlinkSyncMock).toHaveBeenCalledWith(
+      '/fake/userData/jira-auth-invalid.json',
+    );
+  });
+
+  it('is a no-op, not an error, when nothing was ever flagged', () => {
+    unlinkSyncMock.mockImplementation(() => {
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    });
+
+    expect(() => clearJiraCredentialInvalidMarker()).not.toThrow();
   });
 });
 

@@ -195,6 +195,25 @@ export interface JiraConflictInfo {
   changedAt: string; // ISO
 }
 
+/** Renderer mirror of `JiraWireSubtask` (main/jira/jiraTypes.ts). */
+export interface JiraSubtask {
+  id: string;
+  key: string;
+  title: string;
+  stateName: string;
+  stateColor: string;
+}
+
+/** Renderer mirror of `JiraWireIssueLink` (main/jira/jiraTypes.ts). */
+export interface JiraIssueLink {
+  id: string;
+  relation: string;
+  key: string;
+  title: string;
+  stateName: string;
+  stateColor: string;
+}
+
 export interface JiraTicket {
   id: ID;
   key: string; // e.g. "ENG-421"
@@ -227,19 +246,28 @@ export interface JiraTicket {
   storyPoints: number | null;
   sprintName: string | null;
   /**
-   * When Jira last changed this issue (ISO). Carried across the wire since
-   * the first read (see JiraWireTicket) but dropped here until now, which is
-   * why the list could only ever render in whatever order the search
-   * returned. "Recently updated" is the sort a work queue actually wants,
-   * and it needs a timestamp to be one.
+   * When Jira last changed this issue (ISO), or null when Jira's payload
+   * omitted `updated`. Carried across the wire since the first read (see
+   * JiraWireTicket) but dropped here until now, which is why the list could
+   * only ever render in whatever order the search returned. "Recently
+   * updated" is the sort a work queue actually wants, and it needs a
+   * timestamp to be one.
    *
-   * Worth knowing before trusting it too far: main falls back to "now" when
-   * Jira returned no `updated` field at all (jiraMap.ts), so such an issue
-   * sorts to the very top claiming it was just touched. Rare, pre-existing,
-   * and deliberately not papered over here — a second fallback layered on a
-   * first would only make the lie harder to find.
+   * This used to be typed as always-present, because main filled a missing
+   * `updated` in with `new Date().toISOString()` (jiraMap.ts) — so a trimmed
+   * payload sorted to the very top of the queue claiming it was just
+   * touched, which read as "updated just now" for an issue that might be
+   * untouched for months. Main now maps a missing `updated` to null instead
+   * of fabricating one, and useMyJiraQueue.ts's compareTickets treats null as
+   * "unknown", sorting it to the bottom rather than the top.
    */
-  updatedAt: string;
+  updatedAt: string | null;
+  labels: string[];
+  dueDate: string | null;
+  subtasks: JiraSubtask[];
+  links: JiraIssueLink[];
+  /** See `JiraWireTicket.descriptionAdf` - raw ADF beside the plain text. */
+  descriptionAdf: unknown | null;
   attachments: JiraAttachment[];
   isTombstoned: boolean;
   tombstone: JiraTombstoneInfo | null;
@@ -254,17 +282,70 @@ export interface JiraTicket {
 // names — so keeping them would have meant shipping fields permanently filled
 // with empty placeholders.
 
+/** Renderer mirror of `JiraCommentVisibility` (main/jira/jiraTypes.ts), which
+ * has the full story — what each `type` means, why an unrecognized `type`
+ * still resolves to `'restricted'` rather than being dropped, why
+ * `'internal'` is built from JSM's separate `jsdPublic` flag rather than
+ * dropped the way an earlier version of that file did, and the precedence
+ * when a comment carries both a role/group restriction and `jsdPublic:
+ * false`. Carried through jiraApi.ts's `toComment` unchanged; this app has
+ * no UI that writes it. */
+export interface JiraCommentVisibility {
+  type: 'role' | 'group' | 'restricted' | 'internal';
+  value: string;
+}
+
 export interface JiraComment {
   id: ID;
   ticketId: ID;
   authorName: string;
+  /** See `JiraWireComment.authorAccountId` — required to build a Reply's
+   * ADF mention of the author; null when Jira withheld it. */
+  authorAccountId: string | null;
+  /** See `JiraWireComment.updatedAt` — the freshness signal an edit checks
+   * before overwriting someone else's change. */
+  updatedAt: string | null;
+  updateAuthorName: string | null;
   body: string;
-  createdAt: string; // ISO
+  /** When the comment was posted (ISO), or null when Jira's payload omitted
+   * `created` — see JiraTicket's updatedAt for why this is null rather than
+   * a fabricated "now". */
+  createdAt: string | null;
+  /**
+   * The id of the comment this one replies to, or null when it has none —
+   * renderer mirror of `JiraWireComment.parentId` (main/jira/jiraTypes.ts),
+   * which has the full story on why this real, if undocumented, field is
+   * trusted at all.
+   *
+   * Always read off what Jira's own response reported for THIS comment,
+   * never off what a post asked for: JiraTicketDetail.tsx's
+   * groupCommentsIntoThreads nests a comment under its parent using exactly
+   * this value, so a reply Jira silently declined to nest (the public
+   * comment-create endpoint accepting `parentId` is unverified) renders flat
+   * here too, honestly, rather than nested on the strength of a request that
+   * may not have done anything.
+   */
+  parentId: string | null;
+  /** See `JiraCommentVisibility` above — Jira's restriction on who can see
+   * this comment, or null when it is fully public. */
+  visibility: JiraCommentVisibility | null;
   postedByWaypoint: boolean;
   /** Self-disclosure prefix for a Copilot-authored comment (phase 2's
    * approval flow) — null for a plain, user-typed comment like every one
    * this phase's composer posts. */
   disclosureText: string | null;
+  /**
+   * The comment's raw ADF, carried straight off `JiraWireComment.bodyAdf`
+   * (main/jira/jiraTypes.ts) — see that field's own comment for why it
+   * travels alongside the flattened `body` above rather than replacing it.
+   *
+   * This is what `prepareJiraCommentEdit` (data/jiraApi.ts) reads to decide
+   * whether Edit can be offered for this comment at all: null here means
+   * there is no document tree to run the losslessness round-trip against
+   * (a legacy wiki-markup body, or a read that predates this field), and
+   * that comment is never editable in place regardless of permissions.
+   */
+  bodyAdf: unknown | null;
 }
 
 /**

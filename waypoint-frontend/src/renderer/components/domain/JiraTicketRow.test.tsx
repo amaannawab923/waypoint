@@ -37,6 +37,11 @@ function ticket(overrides: Partial<JiraTicket> = {}): JiraTicket {
     storyPoints: null,
     sprintName: null,
     updatedAt: '2026-09-01T10:00:00.000Z',
+    labels: [],
+    dueDate: null,
+    subtasks: [],
+    links: [],
+    descriptionAdf: null,
     attachments: [],
     isTombstoned: false,
     tombstone: null,
@@ -201,5 +206,74 @@ describe('choosing a priority', () => {
       ),
     );
     expect(onTicketUpdated).not.toHaveBeenCalled();
+  });
+});
+
+// ROAD-27 / docs/qa/manual-test-cases.md's JIRA-157: a first attempt at this
+// row-width fix (9481ce4) asserted these same shrink-0/min-w-0 classes and
+// called them "the row survives a narrow width" — but a class existing in
+// jsdom output proves nothing about whether the row actually fits any real
+// viewport, and a review found the ~600px row still overflowed by 80-120px
+// at HEAD despite every one of these classes already being present. jsdom
+// does no layout at all, so none of the tests below — before or after this
+// fix — can prove the row survives a squeeze at any real width. Each one is
+// a class assertion, not a layout measurement, and every name below says so
+// explicitly rather than reading as a layout guarantee. The real ~600px
+// check happens live in the app; see the arithmetic comment on
+// JiraTicketRow.tsx's badge wrapper for what these classes are now meant to
+// add up to. The priority chip's `shrink-0` comes from
+// JiraPriorityPicker.tsx's own JiraPriorityChip root class, and the
+// avatar's from Avatar.tsx's own root class, not from anything this file
+// sets — those two remain regression locks on a guarantee owned elsewhere.
+describe('row-width class assertions (ROAD-27 / JIRA-157)', () => {
+  it('carries shrink-0 on the priority chip (class assertion — jsdom does no layout)', () => {
+    renderRow();
+
+    expect(priorityChip()).toHaveClass('shrink-0');
+  });
+
+  it('carries shrink-0 on the assignee avatar (class assertion — jsdom does no layout)', () => {
+    renderRow();
+
+    expect(screen.getByTitle('Max Chen')).toHaveClass('shrink-0');
+  });
+
+  it('carries min-w-0 flex-1 truncate on the title (class assertion — jsdom does no layout)', () => {
+    renderRow();
+
+    const title = screen.getByRole('button', {
+      name: 'Webhook receiver drops events past 500/min',
+    });
+    expect(title).toHaveClass('min-w-0');
+    expect(title).toHaveClass('flex-1');
+    expect(title).toHaveClass('truncate');
+  });
+
+  // What this fix (not the first attempt) actually adds: the state chip's
+  // label is now bounded rather than unbounded, with the full name preserved
+  // in `title` — see JiraTransitionPopover.tsx's JiraStateChip.
+  it('bounds the state chip label to max-w-[80px] and truncates it, carrying the full name in title (class assertion — jsdom does no layout)', () => {
+    renderRow({ stateName: 'In Progress' });
+
+    const label = screen.getByTitle('In Progress');
+    expect(label).toHaveClass('max-w-[80px]');
+    expect(label).toHaveClass('truncate');
+  });
+
+  // The other half of this fix: the role tag / state chip / priority chip /
+  // avatar are grouped into their own `flex flex-wrap` sub-row so they can
+  // reflow onto more than one line under a real squeeze instead of being
+  // clipped by MyJiraPage.tsx's `overflow-hidden` list wrapper.
+  it('groups the trailing badges into a flex-wrap sub-row so they can reflow instead of overflow (class assertion — jsdom does no layout)', () => {
+    renderRow({ stateName: 'In Progress' });
+
+    const stateChip = screen.getByRole('button', { name: 'In Progress' });
+    expect(stateChip.parentElement).toHaveClass('flex');
+    expect(stateChip.parentElement).toHaveClass('flex-wrap');
+    // Same wrapper for all four trailing badges, not one each.
+    expect(priorityChip().parentElement).toBe(stateChip.parentElement);
+    expect(screen.getByTitle('Max Chen').parentElement).toBe(
+      stateChip.parentElement,
+    );
   });
 });

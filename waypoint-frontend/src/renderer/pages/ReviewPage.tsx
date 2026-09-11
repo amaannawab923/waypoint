@@ -36,7 +36,11 @@ import type { ProposalKind } from '@/types/entities';
 // W4.3 (architecture §4.4) — three segments, tab-style, each a different
 // slice of the same `proposals` table (§4.4's ruling: "Blocked" projects
 // agent_runs into the same card shape rather than becoming a second state
-// machine — see reviewQueue.routes.ts).
+// machine — see reviewQueue.routes.ts). ROAD-14: until agent_runs exists,
+// "Blocked" surfaces every 'stale' proposal instead — a Jira transition
+// refusal, a ticket moved out from under a proposal, a disconnected Jira,
+// an interrupted approve — real blocked-on-a-human work that otherwise had
+// no aggregate home after 24h.
 const SEGMENTS: { key: ReviewQueueSegment; label: string }[] = [
   { key: 'proposed', label: 'Waiting on you' },
   { key: 'blocked', label: 'Blocked' },
@@ -77,7 +81,7 @@ function emptyStateFor(segment: ReviewQueueSegment): {
     return {
       title: 'Nothing blocked',
       description:
-        'When an agent run stops and asks a question, it lands here.',
+        'When a proposal gets stuck — a Jira transition refused, its ticket moved, Jira disconnected, an approval interrupted mid-claim, or a ticket created but a follow-up write like its due date failed — it lands here until you dismiss it.',
     };
   }
   if (segment === 'recent') {

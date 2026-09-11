@@ -22,7 +22,10 @@
 import { JiraApiError } from '@/types/jira';
 import type {
   JiraAttachment,
+  JiraSubtask,
+  JiraIssueLink,
   JiraComment,
+  JiraConflictInfo,
   JiraConnectionStatus,
   JiraPriorityOption,
   JiraTicket,
@@ -42,11 +45,22 @@ import type {
   JiraPriorityOption as JiraWirePriorityOption,
   JiraTruncation,
   JiraWireAttachment,
+  JiraWireSubtask,
+  JiraWireIssueLink,
   JiraWireComment,
   JiraWireTicket,
   JiraWireTransition,
   JiraWireUser,
 } from '../../main/jira/jiraTypes';
+// `JiraCommentPermissions` lives in jiraClient.ts rather than jiraTypes.ts
+// alongside the rest of the wire shapes above (it's the mapped answer from
+// `/rest/api/3/mypermissions`, not a piece of the issue/comment payload) —
+// same file preload.ts's own ElectronHandler type already reaches into for
+// this exact type. Renamed on import for the same reason every other wire
+// import above keeps main's shapes from leaking past this file: `toComment`
+// -> `JiraComment`, and here `JiraWireCommentPermissions` -> the renderer's
+// own `JiraCommentPermissions` below.
+import type { JiraCommentPermissions as JiraWireCommentPermissions } from '../../main/jira/jiraClient';
 
 // -----------------------------------------------------------------------
 // The bridge
@@ -149,6 +163,29 @@ function toPriorityOption(wire: JiraWirePriorityOption): JiraPriorityOption {
  * wire shape ever grows one. A download is addressed by `id` and performed
  * entirely in main.
  */
+/** ROAD-41 contract: wire subtask -> renderer subtask. */
+function toSubtask(wire: JiraWireSubtask): JiraSubtask {
+  return {
+    id: wire.id,
+    key: wire.key,
+    title: wire.title,
+    stateName: wire.stateName,
+    stateColor: stateColor(wire.stateCategory),
+  };
+}
+
+/** ROAD-41 contract: wire issue link -> renderer issue link. */
+function toIssueLink(wire: JiraWireIssueLink): JiraIssueLink {
+  return {
+    id: wire.id,
+    relation: wire.relation,
+    key: wire.key,
+    title: wire.title,
+    stateName: wire.stateName,
+    stateColor: stateColor(wire.stateCategory),
+  };
+}
+
 function toAttachment(wire: JiraWireAttachment): JiraAttachment {
   return {
     id: wire.id,
@@ -170,7 +207,81 @@ function toUserOption(wire: JiraWireUser): JiraUserOption {
   };
 }
 
-function toTicket(wire: JiraWireTicket): JiraTicket {
+/** Same story as toPriorityOption — nothing to translate, but main's shapes
+ * stop at this file. */
+function toCommentPermissions(
+  wire: JiraWireCommentPermissions,
+): JiraCommentPermissions {
+  return {
+    deleteAll: wire.deleteAll,
+    deleteOwn: wire.deleteOwn,
+    editAll: wire.editAll,
+    editOwn: wire.editOwn,
+  };
+}
+
+/**
+ * Whether `wire` looks like it drifted since `previous` — the same ticket,
+ * last mapped from an earlier real read, or `undefined` when this is the
+ * first time this module has ever seen the id (nothing to compare against,
+ * so nothing to flag: a ticket new to the queue is not "changed under you").
+ *
+ * The signal is Jira's own `updated` timestamp, and only that. It is the one
+ * field that moves whenever ANY field on the issue does, so it is the
+ * cheapest true thing to compare — the alternative, diffing every field this
+ * app reads (title, description, priority, assignee, ...), would both cost
+ * more and still miss a field this app doesn't happen to read.
+ *
+ * `updatedAt` is nullable on both sides (Jira can omit `updated`, and a
+ * fabricated stand-in was deliberately removed — see JiraTicket.updatedAt's
+ * own comment). Either side being null means "unknown", and unknown must
+ * resolve to "no conflict" rather than either extreme: it is not proof
+ * nothing changed, but it is even less a case for accusing the ticket of
+ * drift it cannot be shown to have. A conflict strip that fires on missing
+ * data is exactly the kind of false positive that gets a safety feature
+ * turned off — see this file's own note by the isTombstoned/hasConflict
+ * fields below on the same principle applied to tombstoning.
+ */
+function detectConflict(
+  wire: JiraWireTicket,
+  previous: JiraTicket | undefined,
+): JiraConflictInfo | null {
+  if (!previous) return null;
+  if (previous.updatedAt === null || wire.updatedAt === null) return null;
+  if (previous.updatedAt === wire.updatedAt) return null;
+  return {
+    // Jira's issue payload carries no "who last touched this" — that lives
+    // in the changelog, a separate endpoint this client does not read (see
+    // JiraWireTicket.updatedAt: only the timestamp crosses the wire). Naming
+    // a person here would mean guessing, which is exactly what got `updated`
+    // itself de-fabricated elsewhere in this file. "Someone" says plainly
+    // that the identity is unknown rather than inventing one that reads as
+    // authoritative.
+    changedBy: 'Someone',
+    changedAt: wire.updatedAt,
+  };
+}
+
+/**
+ * `previous` is the same ticket as last mapped from a real read, when the
+ * caller has one to offer — see detectConflict just above for what it's
+ * used for and why a missing one is never treated as a conflict.
+ *
+ * Every write in this file below (transitionJiraTicket, setJiraTicketPriority,
+ * setJiraTicketAssignee, uploadJiraAttachment) calls this with ONE argument,
+ * deliberately: the wire ticket a write just got back is this module's own
+ * new "last known truth", not a rival value to compare against the stale
+ * pre-write cache. Passing it through detectConflict there would compare
+ * this module's own action against itself — the ticket's `updated` moved
+ * because Waypoint just moved it — and flag the user's own transition,
+ * priority change, reassignment or attachment upload as someone else's
+ * conflicting edit. That is the false positive that would make the whole
+ * feature intolerable (see the header note above isTombstoned/hasConflict).
+ * Only rememberTickets, which backs a genuine queue re-read and never a
+ * write's own response, passes a `previous` and gets a real comparison.
+ */
+function toTicket(wire: JiraWireTicket, previous?: JiraTicket): JiraTicket {
+  const conflict = detectConflict(wire, previous);
   return {
     id: wire.id,
     key: wire.key,
@@ -190,19 +301,37 @@ function toTicket(wire: JiraWireTicket): JiraTicket {
     storyPoints: wire.storyPoints,
     sprintName: wire.sprintName,
     updatedAt: wire.updatedAt,
+    // ROAD-41 contract - see jiraMap.ts's matching note.
+    labels: wire.labels,
+    dueDate: wire.dueDate,
+    subtasks: wire.subtasks.map(toSubtask),
+    links: wire.links.map(toIssueLink),
+    descriptionAdf: wire.descriptionAdf,
     attachments: wire.attachments.map(toAttachment),
     // Both of these describe drift between what this app last read and what
-    // Jira holds now — a tombstone is "this was reassigned away from you", a
-    // conflict is "someone else moved it while you were looking". Detecting
-    // either needs a persisted previous read to compare against, which this
-    // phase has no store for, so nothing fabricates one: no ticket is ever
-    // marked tombstoned or conflicted, and the strips that render them simply
-    // never appear. The components stay, ready for the phase that adds the
-    // comparison.
+    // Jira holds now. `conflict` is genuinely detected — see detectConflict
+    // above — from `previous`, the same ticket as last mapped from a real
+    // queue read (rememberTickets is the only caller that supplies one).
+    //
+    // `isTombstoned` stays false, unconditionally, and that is a deliberate
+    // decision rather than an unfinished one. A tombstone claims something
+    // specific — "this was reassigned away from you" — and the only signal
+    // available for it is a ticket's id disappearing from one queue read to
+    // the next. That absence is genuinely ambiguous: the "my work" JQL drops
+    // an issue on reassignment, but also on resolution (the query matches
+    // assignee/reporter/watcher AND resolution — see setJiraTicketPriority's
+    // own note), and a page-cap-truncated read (see JiraTruncation) can make
+    // an untouched issue vanish for a reason that has nothing to do with the
+    // issue at all. Nothing this module reads distinguishes those cases, and
+    // guessing "reassigned" for what might be "resolved" or "just fell past
+    // the crawl cap" is worse than the strip never appearing — a false "this
+    // was taken from you" erodes trust the same way a false conflict would.
+    // If a later phase adds a way to tell those apart (an id lookup after a
+    // ticket goes missing, say), this is where it would plug in.
     isTombstoned: false,
     tombstone: null,
-    hasConflict: false,
-    conflict: null,
+    hasConflict: conflict !== null,
+    conflict,
   };
 }
 
@@ -211,14 +340,36 @@ function toComment(wire: JiraWireComment): JiraComment {
     id: wire.id,
     ticketId: wire.ticketId,
     authorName: wire.authorName,
+    authorAccountId: wire.authorAccountId,
+    updatedAt: wire.updatedAt,
+    updateAuthorName: wire.updateAuthorName,
     body: wire.body,
     createdAt: wire.createdAt,
+    // Straight off the wire, deliberately never off what a write asked for —
+    // see JiraComment.parentId's own comment. `postJiraComment` below builds
+    // this from the SAME toComment(unwrap(...)) path every read uses, so a
+    // reply's own return value already tells the truth about whether Jira
+    // actually nested it, with no separate code path that could disagree.
+    // `?? null`, not a bare pass-through: main's own mapComment never sends
+    // `undefined` (it already coerces a missing key to null — see
+    // JiraWireComment.parentId), but this field feeds directly into
+    // groupCommentsIntoThreads' `!current.parentId` check, where `undefined`
+    // and `null` behave identically anyway — this just keeps the type this
+    // module promises (`string | null`) true rather than trusting the wire.
+    parentId: wire.parentId ?? null,
+    // Straight off the wire, unchanged — see JiraCommentVisibility's own
+    // comment (renderer/types/jira.ts) for what null vs. a real value means
+    // and why this app never builds one itself, only ever displays it.
+    visibility: wire.visibility,
     // Jira has no concept of "this comment came from Waypoint" — there's no
     // property on a comment to carry it and this app doesn't keep its own
     // record of what it posted. A comment read back from Jira is therefore
     // just a comment, whoever typed it.
     postedByWaypoint: false,
     disclosureText: null,
+    // Straight off the wire, same as descriptionAdf on toTicket above — see
+    // JiraComment.bodyAdf's own comment for what reads this.
+    bodyAdf: wire.bodyAdf,
   };
 }
 
@@ -266,7 +417,14 @@ function rememberTickets(
   wire: JiraWireTicket[],
   truncated: JiraTruncation,
 ): JiraTicket[] {
-  const tickets = wire.map(toTicket);
+  // The baseline detectConflict compares against: whatever this module had
+  // cached for each id BEFORE this read overwrites it below. Read this off
+  // the OLD `lastTickets`, not the new `wire` array — captured up front,
+  // since `lastTickets` is reassigned at the end of this function and a
+  // lookup built after that point would just compare the new read against
+  // itself.
+  const previousById = new Map(lastTickets.map((t) => [t.id, t]));
+  const tickets = wire.map((item) => toTicket(item, previousById.get(item.id)));
   // Only tickets whose transitions actually came back are remembered. An
   // empty transitions array from the bulk search is ambiguous — it means
   // either "this issue has no legal moves" or "the bulk expand didn't
@@ -502,6 +660,81 @@ export async function listJiraComments(
 ): Promise<JiraCommentRead> {
   const { comments, total } = unwrap(await bridge().listComments(ticketId));
   return { comments: comments.map(toComment), total };
+}
+
+/**
+ * Reads one named comment, fresh — the read the comment freshness guards
+ * have to use, and the reason `not_found` exists as its own failure reason.
+ *
+ * `null` means one specific thing and nothing else: **Jira answered 404 for
+ * this comment.** Every other failure still throws, exactly like every other
+ * function in this module, so a caller cannot mistake "the request failed"
+ * for "the comment is gone" — which is precisely the mistake `null` is here
+ * to make impossible.
+ *
+ * Why this exists at all, when `listJiraComments` already returns comments:
+ * that call is capped at the newest `COMMENT_PAGE_SIZE` (100) comments, so
+ * on a busy thread a comment simply scrolls out of the page it returns.
+ * Searching that page for an id and treating a miss as a deletion — which is
+ * what the guards did before this function — tells someone their comment was
+ * deleted when all that happened is that other people kept commenting. This
+ * read names the comment and cannot miss it.
+ *
+ * What `null` still does NOT prove is that anyone deleted anything.
+ * Atlassian answers 404 rather than 403 for a comment the account may no
+ * longer browse, so a permission change and a real deletion are
+ * indistinguishable here (see `not_found`'s own comment in
+ * main/jira/jiraTypes.ts). Any message a caller builds on `null` has to
+ * allow for both.
+ */
+export async function getJiraComment(
+  ticketId: string,
+  commentId: string,
+): Promise<JiraComment | null> {
+  const result = await bridge().getComment({ ticketId, commentId });
+  if (!result.ok) {
+    if (result.reason === 'not_found') return null;
+    throw new JiraApiError(result.message, result.reason);
+  }
+  return toComment(result.value);
+}
+
+/**
+ * The project-level answer to "may I delete/edit my own comments" and "may I
+ * delete/edit anyone's" on this issue — see jiraClient.ts's own
+ * `getMyPermissions` for why this is project-level rather than a field on
+ * the comment itself: Jira's comment payload carries no per-comment
+ * permission hint, live-confirmed against the real API. Deciding whether one
+ * particular comment's Delete button should render is this app's own job:
+ * this answer, plus whether that comment's `authorAccountId` equals the
+ * connected account's own (`JiraConnectionStatus.accountId`).
+ *
+ * `deleteAll` and `deleteOwn` are not mutually exclusive — the connected
+ * account can hold both at once, which is the common shape for an admin
+ * testing this feature against their own account. It is NOT the common
+ * shape a real non-admin sees, so a caller gating "may I delete my own
+ * comment" must check `deleteOwn` on its own rather than inferring it from
+ * "not deleteAll".
+ */
+export interface JiraCommentPermissions {
+  deleteAll: boolean;
+  deleteOwn: boolean;
+  editAll: boolean;
+  editOwn: boolean;
+}
+
+/**
+ * Uncached, like getJiraPriorityOptions and for the same reason: a
+ * project's comment permission scheme is something an admin can change
+ * underneath a long-lived session, and the honest thing for a destructive
+ * action's own gate is to check what is true right when it might be used,
+ * not what was true when the drawer first opened.
+ */
+export async function getJiraCommentPermissions(
+  issueKey: string,
+): Promise<JiraCommentPermissions> {
+  const wire = unwrap(await bridge().getCommentPermissions(issueKey));
+  return toCommentPermissions(wire);
 }
 
 // -----------------------------------------------------------------------
@@ -858,9 +1091,30 @@ function findInlineRuns(
  * a URL: posted as-is Jira treats it as a relative link that goes nowhere.
  * Assuming https for something that plainly looks like a host is what the
  * user meant. Anything else with a scheme this app does not post (javascript:,
- * data:, file:) loses the mark and keeps its text, which is the honest
- * outcome: the words the user typed still appear, and nothing pretends to be
- * a link that this app would not follow.
+ * data:, file:), OR anything scheme-less that isn't host-shaped — including a
+ * Jira-relative path like `/browse/ENG-1` — loses the mark and keeps its
+ * text, which is the honest outcome: the words the user typed still appear,
+ * and nothing pretends to be a link that this app would not follow.
+ *
+ * This is the one "is this href postable" test in this file, and both
+ * directions use it: `parseInlineRange` below calls it when turning typed
+ * `[text](url)` into a real `link` mark, and `wrapWithMark` further down
+ * calls it when turning an existing comment's `link` mark back into
+ * `[text](url)` text for editing. Giving the read direction its own, looser
+ * idea of "postable" is exactly the bug this function's shared use prevents:
+ * a relative href would deserialize into text that reads fine, then fail
+ * silently when that same text tried to repost, surfacing as an inexplicable
+ * "not editable" days later instead of a comment that plainly can't be
+ * represented today. The real, live boundary this must never be more
+ * permissive than is `isPostableHref` in main/jira/jiraIpc.ts, which is the
+ * last check before a request actually reaches Jira; this function only ever
+ * verifies an https/http/mailto address unchanged or upgrades a bare host to
+ * one, so it can never produce something that check would reject.
+ *
+ * `safeHref` in JiraRichText.tsx is allowed to disagree with this in the
+ * other direction — it renders a comment that already exists, including a
+ * relative `/browse/...` link Jira's own UI can produce, and rendering an
+ * existing link is not the same claim as being able to repost it.
  */
 function postableHref(raw: string | undefined): string | null {
   const href = (raw ?? '').trim();
@@ -1256,6 +1510,466 @@ export function buildCommentAdf(
   return { type: 'doc', version: 1, content };
 }
 
+// -----------------------------------------------------------------------
+// Comment body: ADF -> the lightweight-markdown subset (buildCommentAdf's
+// inverse, for editing an existing comment)
+// -----------------------------------------------------------------------
+//
+// Editing a real comment means: read its ADF, turn it into text a person can
+// edit in the SAME composer that writes comments, then turn that text back
+// into ADF and overwrite the original in Jira. That last step has no
+// approval gate and no undo, so "turn it back into text" cannot be a best-
+// effort flattener the way `main/jira/jiraMap.ts`'s `adfToPlainText` is —
+// that function is allowed to lose formatting on the read-only display path
+// (a bold run renders as plain text; nobody's data changes). Losing
+// formatting HERE means the edit silently rewrites the comment's structure
+// the moment it's saved: a table becomes stray paragraphs, a literal
+// asterisk the author typed becomes real bold. Both are real, irreversible
+// data loss in the founder's own Jira.
+//
+// So this file does not trust a whitelist of "node types the composer can
+// produce" to decide a comment is safe to edit, even though
+// `deserializeJiraCommentAdf` below IS built narrowly around exactly what
+// `blockToAdf`/`groupLinesIntoBlocks` above can produce (paragraphs,
+// headings, bullet/ordered lists, blockquotes, code blocks, mentions, and
+// text carrying at most one of strong/em/strike/code/link). A node-type
+// whitelist alone cannot catch the case that matters most: plain, unmarked
+// prose that happens to contain a literal `*`, `_` or backtick. That text
+// deserializes untouched (there is nothing to reject —
+// every node is a supported type) and then RE-serializes differently, because
+// `buildCommentAdf` has no way to know those characters weren't meant as
+// delimiters. The only way to catch that is to actually do the round trip and
+// compare the result: `prepareJiraCommentEdit` below is the one function
+// anything in this app is allowed to trust for "is this comment safe to edit
+// in place" — never `deserializeJiraCommentAdf`'s success alone.
+
+function isAdfRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** A mention span with no dependency on the source text's own offsets —
+ * `deserializeJiraCommentAdf` builds these directly from the ADF tree it is
+ * walking, then shifts them into whole-document offsets once every block's
+ * text is known (see the caller). */
+interface RelativeMentionSpan {
+  start: number;
+  end: number;
+  accountId: string;
+  displayName: string;
+}
+
+/**
+ * One inline run's markdown-lite spelling, or `null` when `mark` isn't one
+ * `buildCommentAdf`'s own `INLINE_PATTERNS`/`markForRun` can ever produce —
+ * an unsupported mark type, or a `link` mark whose `href` this same file
+ * would never post. `null` here is what makes an unsupported mark surface as
+ * "not editable" rather than as formatting silently dropped: the caller that
+ * receives it bails out of deserializing the whole comment (see
+ * `inlineContentToLineText`) instead of emitting `raw` unmarked, which would
+ * be exactly the kind of guess this feature exists to refuse to make.
+ *
+ * A `link` mark's `href` is judged by `postableHref` — the same test
+ * `parseInlineRange` applies when posting — rather than merely checking it's
+ * a non-empty string. A relative Jira link like `/browse/ENG-1` (real,
+ * Jira's own UI produces these) is non-empty but not postable: accepting it
+ * here would let this function claim a comment can be edited, only for the
+ * repost half of the round trip to silently drop the mark and fail the
+ * proof in `prepareJiraCommentEdit` — "not editable" either way, but for a
+ * reason nothing here states. Rejecting it here instead makes the refusal
+ * immediate and honest: this comment's link can't be represented in the
+ * composer's dialect, full stop, rather than an inequality buried in a deep
+ * ADF comparison two functions away.
+ */
+function wrapWithMark(raw: string, mark: unknown): string | null {
+  if (!isAdfRecord(mark) || typeof mark.type !== 'string') return null;
+  switch (mark.type) {
+    case 'strong':
+      return `**${raw}**`;
+    case 'em':
+      return `_${raw}_`;
+    case 'strike':
+      return `~~${raw}~~`;
+    case 'code':
+      return `\`${raw}\``;
+    case 'link': {
+      const attrs = mark.attrs;
+      const rawHref = isAdfRecord(attrs) ? attrs.href : undefined;
+      const href =
+        typeof rawHref === 'string' ? postableHref(rawHref) : null;
+      return href ? `[${raw}](${href})` : null;
+    }
+    default:
+      return null;
+  }
+}
+
+/** `marks`, read the same lenient way `main/jira/jiraIpc.ts`'s own
+ * `readOptionalMarks` reads it on the write boundary: absent and an explicit
+ * empty array both mean "no marks" (Jira's own read responses use both
+ * shapes for the same plain text node), so treating them differently here
+ * would refuse editing ordinary, unformatted comments — the common case —
+ * over a distinction that carries no real difference in meaning. `null`
+ * means the value present isn't a marks array at all, which IS a real
+ * "cannot represent this" case. */
+function readMarksList(raw: unknown): unknown[] | null {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) return null;
+  return raw;
+}
+
+/**
+ * One line's worth of inline content — a paragraph's, a heading's, one list
+ * item's, one blockquote line's — turned into markdown-lite text plus the
+ * mention spans found in it, relative to this line's own start (`prefix`
+ * included, so a mention after "- " or "## " already accounts for it).
+ *
+ * `null` on anything `blockToAdf`'s own inline pipeline cannot produce: a
+ * mention carrying marks (forbidden on the write side — see
+ * `JiraAdfMentionNode`'s own comment in main/jira/jiraTypes.ts), an inline
+ * node that isn't `text` or `mention` (a real Jira comment can carry an
+ * `emoji`, `hardBreak`, `inlineCard`, `status`, or `date` node the composer's
+ * toolbar has no way to type), a text node whose `marks` carries more than
+ * one entry (the composer never produces compound marks — see
+ * `parseInlineRange`'s own comment on why bold-and-italic-together isn't
+ * detected as one span), or a mark this file doesn't recognize.
+ */
+function inlineContentToLineText(
+  content: unknown,
+  prefix: string,
+): { text: string; mentions: RelativeMentionSpan[] } | null {
+  if (!Array.isArray(content)) return null;
+  let text = prefix;
+  const mentions: RelativeMentionSpan[] = [];
+  for (const node of content) {
+    if (!isAdfRecord(node) || typeof node.type !== 'string') return null;
+    if (node.type === 'mention') {
+      if (node.marks !== undefined) return null;
+      const attrs = node.attrs;
+      if (
+        !isAdfRecord(attrs) ||
+        typeof attrs.id !== 'string' ||
+        typeof attrs.text !== 'string'
+      ) {
+        return null;
+      }
+      const displayName = attrs.text.startsWith('@')
+        ? attrs.text.slice(1)
+        : attrs.text;
+      if (!displayName) return null;
+      const label = `@${displayName}`;
+      mentions.push({
+        start: text.length,
+        end: text.length + label.length,
+        accountId: attrs.id,
+        displayName,
+      });
+      text += label;
+      continue;
+    }
+    if (node.type === 'text' && typeof node.text === 'string') {
+      const marks = readMarksList(node.marks);
+      if (marks === null || marks.length > 1) return null;
+      const wrapped =
+        marks.length === 0 ? node.text : wrapWithMark(node.text, marks[0]);
+      if (wrapped === null) return null;
+      text += wrapped;
+      continue;
+    }
+    return null;
+  }
+  return { text, mentions };
+}
+
+/** One block's worth of output lines — a paragraph or heading is exactly
+ * one, a list or blockquote is one per item, a code block is its fenced
+ * lines — each paired with that same line's own mentions (relative to the
+ * line, same contract as `inlineContentToLineText`'s return). `null` for
+ * anything outside `blockToAdf`'s own range: a `table`, `panel`, `rule`,
+ * `mediaSingle`/`media` (an embedded image or file — the one shape the
+ * founder's own real corpus was refused for), a list item spanning more than
+ * one paragraph, or any block whose inline content itself failed to
+ * deserialize. */
+function blockToLines(
+  raw: unknown,
+): { lines: string[]; lineMentions: RelativeMentionSpan[][] } | null {
+  if (!isAdfRecord(raw) || typeof raw.type !== 'string') return null;
+
+  if (raw.type === 'paragraph') {
+    const inline = inlineContentToLineText(raw.content, '');
+    return inline && { lines: [inline.text], lineMentions: [inline.mentions] };
+  }
+
+  if (raw.type === 'heading') {
+    const attrs = raw.attrs;
+    const level = isAdfRecord(attrs) ? attrs.level : undefined;
+    if (level !== 1 && level !== 2 && level !== 3) return null;
+    const inline = inlineContentToLineText(
+      raw.content,
+      `${'#'.repeat(level)} `,
+    );
+    return inline && { lines: [inline.text], lineMentions: [inline.mentions] };
+  }
+
+  if (raw.type === 'bulletList' || raw.type === 'orderedList') {
+    if (!Array.isArray(raw.content)) return null;
+    const lines: string[] = [];
+    const lineMentions: RelativeMentionSpan[][] = [];
+    for (let i = 0; i < raw.content.length; i += 1) {
+      const item = raw.content[i];
+      if (
+        !isAdfRecord(item) ||
+        item.type !== 'listItem' ||
+        !Array.isArray(item.content) ||
+        item.content.length !== 1
+      ) {
+        return null;
+      }
+      const paragraph = item.content[0];
+      if (!isAdfRecord(paragraph) || paragraph.type !== 'paragraph') {
+        return null;
+      }
+      // ADF's own list-item shape carries no per-item number to preserve
+      // (see JiraAdfOrderedList's own comment: `blockToAdf` never writes
+      // one either), so this synthesizes sequential numbers purely for a
+      // readable draft — `groupLinesIntoBlocks`' ordered-line regex accepts
+      // any digits, and re-encoding discards them the same way regardless
+      // of which ones are here, so the round trip cannot be sensitive to
+      // this choice.
+      const prefix = raw.type === 'bulletList' ? '- ' : `${i + 1}. `;
+      const inline = inlineContentToLineText(paragraph.content, prefix);
+      if (!inline) return null;
+      lines.push(inline.text);
+      lineMentions.push(inline.mentions);
+    }
+    return { lines, lineMentions };
+  }
+
+  if (raw.type === 'blockquote') {
+    if (!Array.isArray(raw.content)) return null;
+    const lines: string[] = [];
+    const lineMentions: RelativeMentionSpan[][] = [];
+    for (const paragraph of raw.content) {
+      if (!isAdfRecord(paragraph) || paragraph.type !== 'paragraph') {
+        return null;
+      }
+      const inline = inlineContentToLineText(paragraph.content, '> ');
+      if (!inline) return null;
+      lines.push(inline.text);
+      lineMentions.push(inline.mentions);
+    }
+    return { lines, lineMentions };
+  }
+
+  if (raw.type === 'codeBlock') {
+    if (!Array.isArray(raw.content)) return null;
+    let combined = '';
+    for (const node of raw.content) {
+      if (!isAdfRecord(node) || node.type !== 'text') return null;
+      if (typeof node.text !== 'string') return null;
+      const marks = readMarksList(node.marks);
+      if (marks === null || marks.length > 0) return null;
+      combined += node.text;
+    }
+    const fenceLines = ['```', ...combined.split('\n'), '```'];
+    return { lines: fenceLines, lineMentions: fenceLines.map(() => []) };
+  }
+
+  // Everything else — table, panel, expand, rule, mediaSingle/media, and
+  // any node this dialect never grew a spelling for — is refused here
+  // rather than approximated. There is no markdown-lite text this file's
+  // dialect can represent it as.
+  return null;
+}
+
+/**
+ * ADF document -> markdown-lite text + mention spans, or `null` for a
+ * document this narrow dialect cannot represent at all.
+ *
+ * This is `buildCommentAdf`'s inverse in the sense that every shape
+ * `groupLinesIntoBlocks`/`blockToAdf` can produce, this can read back — but
+ * it is NOT, on its own, a promise that the result re-serializes to the same
+ * document. A `null` return here is one honest signal ("this comment can't
+ * even be represented"); a non-null return is not yet a second one ("this
+ * comment can be edited without changing it") — only `prepareJiraCommentEdit`
+ * below, which actually performs the round trip, gets to say that. See this
+ * section's own header comment for why the distinction matters: the literal-
+ * delimiter case deserializes here just fine and is caught one step later.
+ */
+function deserializeJiraCommentAdf(
+  raw: unknown,
+): { text: string; mentions: JiraMentionSpan[] } | null {
+  if (!isAdfRecord(raw) || raw.type !== 'doc' || !Array.isArray(raw.content)) {
+    return null;
+  }
+
+  const blockResults = raw.content.map(blockToLines);
+  if (blockResults.some((r) => r === null)) return null;
+
+  const lines: string[] = [];
+  const lineMentions: RelativeMentionSpan[][] = [];
+  for (const result of blockResults as NonNullable<
+    ReturnType<typeof blockToLines>
+  >[]) {
+    lines.push(...result.lines);
+    lineMentions.push(...result.lineMentions);
+  }
+
+  let cursor = 0;
+  const mentions: JiraMentionSpan[] = [];
+  lines.forEach((line, i) => {
+    for (const m of lineMentions[i]) {
+      mentions.push({
+        start: m.start + cursor,
+        end: m.end + cursor,
+        accountId: m.accountId,
+        displayName: m.displayName,
+      });
+    }
+    cursor += line.length + 1; // +1 for the '\n' joining this line to the next
+  });
+
+  return { text: lines.join('\n'), mentions };
+}
+
+/**
+ * A recursive structural equality over two ADF (sub)trees, order-sensitive
+ * on arrays (content order is real document order and must match exactly)
+ * and order-insensitive on object keys.
+ *
+ * One normalization, not a general fuzzy match: `marks: []` and an absent
+ * `marks` key compare equal (see `normalizeAdfForCompare` below), for the
+ * same reason `readMarksList` above treats them alike on the read side —
+ * Jira's own responses use both shapes for the same plain text node, and a
+ * strict raw-JSON comparison would refuse editing on that alone, which would
+ * mean refusing nearly every ordinary, unformatted comment rather than the
+ * rare structurally-different one this proof exists to catch.
+ */
+function deepEqualAdf(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) {
+      return false;
+    }
+    return a.every((v, i) => deepEqualAdf(v, b[i]));
+  }
+  if (a && b && typeof a === 'object' && typeof b === 'object') {
+    const aRec = a as Record<string, unknown>;
+    const bRec = b as Record<string, unknown>;
+    const aKeys = Object.keys(aRec).sort();
+    const bKeys = Object.keys(bRec).sort();
+    if (aKeys.length !== bKeys.length) return false;
+    return aKeys.every(
+      (k, i) => k === bKeys[i] && deepEqualAdf(aRec[k], bRec[k]),
+    );
+  }
+  return false;
+}
+
+/** See `deepEqualAdf`'s own comment — this is the one normalization it
+ * applies before comparing: an empty `marks` array is dropped so it compares
+ * equal to the key being absent entirely, on any object anywhere in the
+ * tree. */
+function normalizeAdfForCompare(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(normalizeAdfForCompare);
+  if (value && typeof value === 'object') {
+    const rec = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(rec)) {
+      if (key === 'marks' && Array.isArray(rec[key]) && rec[key].length === 0) {
+        continue;
+      }
+      // Jira's own editor stamps identity-only attrs onto everything it
+      // creates: a `localId` on each node, and `accessLevel` on a mention.
+      // Neither carries anything the author wrote - they are editor
+      // bookkeeping - but this app's builder never emits them, so comparing
+      // them refused every comment composed in Jira rather than in Waypoint.
+      // Replies always hit it, because Jira's Reply always produces a
+      // mention. Captured from a real one: ENG-84 comment 10192.
+      //
+      // Ignored for the comparison only, and safe to drop from the saved
+      // body for the same reason: they identify nodes to Jira's editor
+      // rather than encoding content, and Jira reissues them. Everything
+      // that does encode content - text, marks, a mention's id, a link's
+      // href - is still compared exactly, so this widens which comments are
+      // editable without weakening what "lossless" means.
+      if (key === 'localId') continue;
+      if (key === 'accessLevel' && rec[key] === '') continue;
+      out[key] = normalizeAdfForCompare(rec[key]);
+    }
+    // A node whose only attrs were identity-only is left with an empty attrs
+    // object, where the builder emits no attrs key at all. Treat those as
+    // the same rather than failing on a difference that is now empty by
+    // definition.
+    const attrs = out.attrs;
+    if (
+      attrs &&
+      typeof attrs === 'object' &&
+      !Array.isArray(attrs) &&
+      Object.keys(attrs as Record<string, unknown>).length === 0
+    ) {
+      delete out.attrs;
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * The one function anything in this app may trust to decide whether a
+ * comment can be edited in place without changing it — see this section's
+ * own header comment for why a node-type whitelist alone (which
+ * `deserializeJiraCommentAdf` above effectively is) cannot make that call by
+ * itself.
+ *
+ * The proof, exactly: deserialize `comment.bodyAdf` to markdown-lite text,
+ * run that text back through `buildCommentAdf` — the SAME function that
+ * posts a real comment, not a copy of its logic — and deep-compare the
+ * result against the original. Anything other than an exact match, including
+ * a `null` from the deserializer itself, means "not editable": there is no
+ * partial-fidelity fallback, because a partial-fidelity editor is worse than
+ * no Edit button at all (see this app's own comment permissions model for
+ * the same shape of decision: `getJiraCommentPermissions`' `editOwn`/
+ * `editAll` decide whether Edit may be OFFERED; this decides whether it can
+ * be SAFELY offered for this particular comment's own content).
+ *
+ * Returns the prefill a caller hands the composer on success — the same
+ * `text`/`mentions` shape `postJiraComment` already takes — so a caller
+ * never has to deserialize a second time to get what it just proved safe.
+ */
+export function prepareJiraCommentEdit(
+  comment: JiraComment,
+): { text: string; mentions: JiraMentionSpan[] } | null {
+  if (comment.bodyAdf == null) return null;
+  const deserialized = deserializeJiraCommentAdf(comment.bodyAdf);
+  if (!deserialized) return null;
+
+  const rebuilt = buildCommentAdf(deserialized.text, deserialized.mentions);
+  const matches = deepEqualAdf(
+    normalizeAdfForCompare(rebuilt),
+    normalizeAdfForCompare(comment.bodyAdf),
+  );
+  return matches ? deserialized : null;
+}
+
+/**
+ * The permalink Jira's own comment menu produces for one comment: the
+ * issue's browse URL with `focusedCommentId` naming a specific comment.
+ *
+ * Verified against live Jira: opening this URL scrolls straight to that
+ * comment and highlights it in the timeline. `site` is the bare host the
+ * connection identity already carries (no scheme), so the `https://` is
+ * added here once rather than re-typed at every call site — the same reason
+ * `jiraUrl` in JiraTicketDetail.tsx builds its own plain browse URL the same
+ * way.
+ */
+export function buildJiraCommentPermalink(
+  site: string,
+  issueKey: string,
+  commentId: string,
+): string {
+  return `https://${site}/browse/${issueKey}?focusedCommentId=${commentId}`;
+}
+
 /**
  * Posts a comment as the connected user.
  *
@@ -1264,25 +1978,180 @@ export function buildCommentAdf(
  * real ADF `mention` nodes. A draft with no mentions goes through the same
  * builder as a single-run paragraph, so there is one write path rather than
  * a plain-text one and a separate mention-aware one.
+ *
+ * `parentId`, when given, is the comment this one is replying to — set by
+ * JiraCommentComposer's Reply flow, and omitted from the IPC call entirely
+ * (rather than sent as an explicit `null`) for anything else, since the
+ * public comment-create endpoint accepting this field at all is undocumented
+ * and unverified; sending nothing is the honest request for "no parent
+ * asked". Whatever Jira actually did with it is read back off the response
+ * through the same `toComment` every other read uses — this function must
+ * never construct the returned comment's own `parentId` from this argument,
+ * because that is exactly the claim this feature cannot make on the
+ * request's word alone. See JiraComment.parentId's own comment.
  */
 export async function postJiraComment(
   ticketId: string,
   text: string,
   mentions: JiraMentionSpan[] = [],
+  parentId: string | null = null,
 ): Promise<JiraComment> {
   const body = buildCommentAdf(text, mentions);
-  return toComment(unwrap(await bridge().postComment({ ticketId, body })));
+  const comment = toComment(
+    unwrap(
+      await bridge().postComment(
+        parentId ? { ticketId, body, parentId } : { ticketId, body },
+      ),
+    ),
+  );
+
+  // Posting a comment moves the ISSUE's `updated` in Jira, not just the
+  // comment's own. Unlike the four writes above this path gets a comment back
+  // rather than a ticket, so there is no fresh ticket to re-baseline from —
+  // and left alone, the next queue read compares a stale cached timestamp
+  // against a value this module's own comment moved, reports "Someone changed
+  // this", and disables the priority/assignee/transition/attachment writes
+  // until the user reloads. A safety banner that fires on the user's own
+  // action is how a safety feature gets learned-ignored.
+  //
+  // Dropping the cached timestamp states the honest position — this module no
+  // longer holds a baseline it can compare — and detectConflict already reads
+  // an unknown timestamp as "no conflict" rather than guessing, so this needs
+  // no new branch there. The next real read re-establishes the baseline.
+  //
+  // It does mean a third party editing in the window between this comment and
+  // the next read is absorbed silently rather than flagged. That is not a
+  // regression against the alternative: re-reading the ticket here would
+  // absorb it identically, because nothing in the payload distinguishes
+  // "updated moved because of me" from "because of me AND someone else". The
+  // trade is a rare missed warning against a constant false one.
+  lastTickets = lastTickets.map((t) =>
+    t.id === ticketId ? { ...t, updatedAt: null } : t,
+  );
+  return comment;
 }
 
-// dismissJiraTombstone / resolveJiraConflict — MyJiraPage still wires both to
-// their rows, but no ticket is ever marked tombstoned or conflicted (see
-// toTicket), so neither strip renders and neither is reachable. Kept as the
-// callbacks those components' props require, doing the only honest thing
-// available: dropping the row locally, and re-reading the issue from Jira.
+/**
+ * Overwrites a real comment's body outright, as the connected user.
+ *
+ * Callers must never reach this function without first proving the edit is
+ * safe with `prepareJiraCommentEdit` — that is what decides whether `text`
+ * and `mentions` came from a comment whose ADF this app can actually
+ * reconstruct losslessly. This function itself does not re-check that; it
+ * trusts its caller the same way `postJiraComment` trusts the composer to
+ * have produced a real draft, not because the stakes are lower (they are
+ * higher — this overwrites something that already exists, with no undo) but
+ * because the proof is expensive to redo per keystroke and belongs at the
+ * one point that decides whether Edit is even offered.
+ *
+ * `text`/`mentions` go through the exact same `buildCommentAdf` every other
+ * write in this file uses — the whole point of round-tripping through it
+ * during the proof is that the write path and the proof path can never
+ * disagree, because they are the same function call.
+ *
+ * That also means a save here is not byte-for-byte the original body, even
+ * when `text`/`mentions` came back from `prepareJiraCommentEdit` unedited:
+ * `buildCommentAdf` never emits `localId` or a mention's `accessLevel`
+ * (see `normalizeAdfForCompare`'s own comment on why the proof ignores
+ * both), so a genuinely no-op save still posts a body missing them.
+ * Deliberately not carried forward from the original ADF: every occurrence
+ * of `accessLevel` seen in the founder's real corpus is `""`, meaning there
+ * is no author-written content in it to lose, and threading the original
+ * per-node value back through here would mean matching rebuilt nodes back
+ * to their source nodes one-for-one — real complexity, for a field this
+ * file has no way to confirm is even still correct at save time (whatever
+ * `accessLevel` reflects, it is not something the user typed, and this app
+ * has no live way to verify a stale copy of it is still accurate). Dropping
+ * it is the same call already made for `localId`, for the same reason: this
+ * file only claims to preserve what the author wrote, and neither attr is
+ * that.
+ *
+ * The returned comment comes straight off Jira's response, through the same
+ * `toComment(unwrap(...))` every read and every other write uses — never
+ * assembled from what was sent. That is what lets `parentId` survive an
+ * edit honestly: this function never asks Jira to change it and never
+ * fabricates it locally (see `JiraComment.parentId`'s own comment), so an
+ * edited reply keeps whatever thread position Jira's response says it still
+ * has, the same guarantee `postJiraComment` makes for a brand-new reply.
+ */
+export async function updateJiraComment(
+  ticketId: string,
+  commentId: string,
+  text: string,
+  mentions: JiraMentionSpan[] = [],
+): Promise<JiraComment> {
+  const body = buildCommentAdf(text, mentions);
+  const comment = toComment(
+    unwrap(await bridge().updateComment({ ticketId, commentId, body })),
+  );
+
+  // Same trap as postJiraComment/deleteJiraComment, solved the same way:
+  // editing a comment moves the ISSUE's `updated` in Jira too, not just the
+  // comment's own. Left alone, the next queue read would compare a stale
+  // cached timestamp against a value this module's own edit just moved,
+  // report "Someone changed this" about the user's own action, and disable
+  // every other write until they reloaded. Dropping the cached timestamp
+  // states the honest position — this module no longer holds a baseline it
+  // can compare — and detectConflict already reads an unknown timestamp as
+  // "no conflict" rather than guessing, so this needs no new branch there.
+  lastTickets = lastTickets.map((t) =>
+    t.id === ticketId ? { ...t, updatedAt: null } : t,
+  );
+  return comment;
+}
+
+/**
+ * Deletes a real comment outright, as the connected user. No undo on either
+ * side of this call: main's `deleteComment` (jiraClient.ts) answers a plain
+ * 204 with no body, so — unlike every write above — there is no fresh
+ * comment or ticket coming back to re-read or re-baseline from.
+ *
+ * Same trap as postJiraComment, solved the same way: deleting a comment
+ * moves the ISSUE's `updated` in Jira too, not just the comment's own. Left
+ * alone, the next queue read would compare a stale cached timestamp against
+ * a value this module's own delete just moved, report "Someone changed
+ * this" about the user's own action, and disable every other write until
+ * they reloaded. Dropping the cached timestamp states the honest position —
+ * this module no longer holds a baseline it can compare — and
+ * detectConflict already reads an unknown timestamp as "no conflict" rather
+ * than guessing, so this needs no new branch there either.
+ *
+ * Removing the row from whatever list a comment thread renders from is the
+ * caller's job, not this module's: unlike `lastTickets` and
+ * `transitionsByTicketId` above, this file keeps no cache of a ticket's
+ * comments — `listJiraComments` is read straight through — so there is no
+ * local state here for a delete to drop the row out of.
+ */
+export async function deleteJiraComment(
+  ticketId: string,
+  commentId: string,
+): Promise<void> {
+  unwrap(await bridge().deleteComment({ ticketId, commentId }));
+  lastTickets = lastTickets.map((t) =>
+    t.id === ticketId ? { ...t, updatedAt: null } : t,
+  );
+}
+
+// dismissJiraTombstone — no ticket is ever marked tombstoned (see toTicket's
+// own note on why that stays false), so this strip never renders and this
+// function is unreachable from the UI today. Kept as the callback
+// JiraTicketRow's props require, doing the only honest thing available if it
+// ever does fire: dropping the row locally rather than pretending to un-do a
+// reassignment this module cannot undo.
 export async function dismissJiraTombstone(ticketId: string): Promise<void> {
   lastTickets = lastTickets.filter((t) => t.id !== ticketId);
 }
 
+// resolveJiraConflict backs the conflict strip's "Reload" button — the one
+// user action a real hasConflict:true is reachable from. A full re-read is
+// the whole fix: rememberTickets recomputes every ticket's conflict against
+// what THIS read returns as the new baseline (see its own comment), so a
+// ticket whose drift is not ongoing — the common case, since the strip's own
+// copy calls it "your first conflict in 3 weeks" — comes back with
+// hasConflict:false and writes unblock. A ticket still actively racing
+// (rare) simply flags again on whatever read notices it next; there is
+// nothing to acknowledge here beyond "look again", which is exactly what a
+// re-read is.
 export async function resolveJiraConflict(
   ticketId: string,
 ): Promise<JiraTicket> {

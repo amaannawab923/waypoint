@@ -1,10 +1,13 @@
 import type {
+  JiraCommentVisibility,
   JiraPriority,
   JiraPriorityOption,
   JiraStateCategory,
   JiraTicketRole,
   JiraWireAttachment,
   JiraWireComment,
+  JiraWireIssueLink,
+  JiraWireSubtask,
   JiraWireTicket,
   JiraWireTransition,
   JiraWireTransitionField,
@@ -919,6 +922,120 @@ export function mapAttachments(value: unknown): JiraWireAttachment[] {
   });
 }
 
+/**
+ * One entry from `fields.labels`, reduced to a plain string array.
+ *
+ * Jira's own shape for this field already IS `string[]` — unlike almost
+ * everything else in this mapper, there is no per-site variance to defend
+ * against here. The filter exists only for a trimmed or proxied payload that
+ * slipped something else into the array; it is not evidence any real site
+ * does that.
+ */
+function mapLabels(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((label): label is string => typeof label === 'string');
+}
+
+/**
+ * One entry from `fields.subtasks`, reduced to exactly what `JiraWireSubtask`
+ * declares.
+ *
+ * Jira returns a subtask as a flat summary object on the PARENT issue's own
+ * payload — `id`, `key`, and a `fields` object carrying only `summary` and
+ * `status` (never the full issue shape `mapIssue` reads), so this reads
+ * nothing beyond what is actually there. A full subtask fetch would need a
+ * request per subtask, which this app does not do.
+ */
+function mapSubtask(raw: unknown): JiraWireSubtask | null {
+  const record = asRecord(raw);
+  const key = typeof record.key === 'string' ? record.key : null;
+  if (!key) return null;
+  const fields = asRecord(record.fields);
+  const status = asRecord(fields.status);
+  return {
+    // Same coercion `mapIssue`'s own `id` uses, for the same reason: an older
+    // or proxied payload can hand this back as a number, and the key is a
+    // worse handle to fall back to only because nothing else here needs to.
+    id: idOf(record.id) ?? key,
+    key,
+    title: typeof fields.summary === 'string' ? fields.summary : key,
+    stateName: typeof status.name === 'string' ? status.name : 'Unknown',
+    stateCategory: mapStateCategory(asRecord(status.statusCategory).key),
+  };
+}
+
+export function mapSubtasks(value: unknown): JiraWireSubtask[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(mapSubtask)
+    .filter((subtask): subtask is JiraWireSubtask => subtask !== null);
+}
+
+/**
+ * One entry from `fields.issuelinks`, flattened to the OTHER issue plus the
+ * phrase describing THIS issue's relationship to it.
+ *
+ * Jira nests a link asymmetrically: `type.inward`/`type.outward` are a site's
+ * own words for the two directions ("blocks" / "is blocked by", and so on for
+ * every link type this site has, including ones this app has never seen), and
+ * exactly one of `inwardIssue`/`outwardIssue` is present per entry — never
+ * both — naming which direction THIS link was found in. Reading the phrase
+ * off Jira's own `type` object rather than hardcoding a table of link names is
+ * what makes this correct for a renamed or custom link type, not just the
+ * default set.
+ *
+ * An entry with neither side present, or whose other issue carries no key, is
+ * dropped rather than shown as a link to nothing.
+ */
+function mapIssueLink(raw: unknown): JiraWireIssueLink | null {
+  const record = asRecord(raw);
+  const type = asRecord(record.type);
+  const isInward = record.inwardIssue != null;
+  const other = asRecord(isInward ? record.inwardIssue : record.outwardIssue);
+  const key = typeof other.key === 'string' ? other.key : null;
+  if (!key) return null;
+
+  const phrase = isInward ? type.inward : type.outward;
+  const otherFields = asRecord(other.fields);
+  const status = asRecord(otherFields.status);
+
+  return {
+    id: idOf(other.id) ?? key,
+    relation: typeof phrase === 'string' && phrase ? phrase : 'relates to',
+    key,
+    title: typeof otherFields.summary === 'string' ? otherFields.summary : key,
+    stateName: typeof status.name === 'string' ? status.name : 'Unknown',
+    stateCategory: mapStateCategory(asRecord(status.statusCategory).key),
+  };
+}
+
+export function mapIssueLinks(value: unknown): JiraWireIssueLink[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(mapIssueLink)
+    .filter((link): link is JiraWireIssueLink => link !== null);
+}
+
+/**
+ * A body field's raw ADF node, carried alongside its flattened plain-text
+ * sibling rather than replacing it — see `JiraWireTicket.descriptionAdf` and
+ * `JiraWireComment.bodyAdf` for why both travel together in each of the two
+ * places this is used (an issue's description, a comment's body).
+ *
+ * Only the object shape counts. A string body is legacy wiki markup (see
+ * `plainTextFromJiraBody`), not ADF, and handing that string back under an
+ * `*Adf` field would mislabel it as a document tree a rich renderer (or the
+ * comment editor's losslessness round-trip) could walk. `null` — Jira's own
+ * shape for "nothing here" — and a missing field both degrade to null here,
+ * same as the string branch: none of the three is an ADF document.
+ */
+function adfBodyOf(value: unknown): unknown | null {
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    return value;
+  }
+  return null;
+}
+
 export function mapIssue(
   raw: unknown,
   myAccountId: string,
@@ -1006,13 +1123,100 @@ export function mapIssue(
         ? storyPointsRaw
         : null,
     sprintName: sprintNameOf(sprintRaw),
+    labels: mapLabels(fields.labels),
+    // Jira's `duedate` is a date-only string ("2026-09-18"), not a timestamp —
+    // carried through exactly as given rather than coerced into an ISO
+    // datetime, which would fabricate a time of day and a timezone Jira never
+    // supplied. Missing or non-string degrades to null, the same "we don't
+    // know" this file uses everywhere else, never today's date or any other
+    // invented value.
+    dueDate:
+      typeof fields.duedate === 'string' && fields.duedate
+        ? fields.duedate
+        : null,
+    subtasks: mapSubtasks(fields.subtasks),
+    links: mapIssueLinks(fields.issuelinks),
+    descriptionAdf: adfBodyOf(fields.description),
     attachments: mapAttachments(fields.attachment),
     transitions: mapTransitions(issue.transitions),
-    updatedAt:
-      typeof fields.updated === 'string'
-        ? fields.updated
-        : new Date().toISOString(),
+    // Fall back to null rather than to "now". `listComments`'s `total`
+    // fallback (jiraClient.ts) states the one thing still known to be true
+    // when Jira omits a field; there is no equivalent honest guess for a
+    // missing `updated` — the issue was not, in fact, just touched, and
+    // stamping it with the current time is a claim this file cannot back up.
+    // The renderer's sort (useMyJiraQueue.ts's compareTickets) treats null as
+    // "unknown", not "most recent", so a trimmed payload no longer pins an
+    // untouched issue to the top of the queue.
+    updatedAt: typeof fields.updated === 'string' ? fields.updated : null,
   };
+}
+
+/**
+ * `record.visibility` and `record.jsdPublic` -> `JiraCommentVisibility |
+ * null`. `null` only when NEITHER says the comment is restricted: no
+ * `visibility` key (or an explicit `null`) AND `jsdPublic` is not `false` —
+ * the one combination Jira's own docs describe as "this comment is public",
+ * and the only case this function treats as "nothing to show".
+ *
+ * `visibility` is checked first and, when present, wins outright — see this
+ * function's own note on precedence below for why a payload carrying both
+ * is even possible and why role/group is the one that gets shown in that
+ * case. Anything present under `visibility` — a well-formed `{ type, value }`
+ * object, an object with a `type` this app has never seen, even a shape too
+ * malformed to read a `type`/`value` out of at all — maps to a real
+ * `JiraCommentVisibility` rather than to `null`. That is a deliberate
+ * asymmetry, not laziness: Jira only ever sends this key at all when a
+ * comment IS restricted, so its presence is itself the fact that matters
+ * most, and it is the one fact this function can always preserve even when
+ * the details underneath cannot be parsed. Getting the label wrong (an
+ * empty `value`, a generic `'restricted'` type) is a cosmetic problem;
+ * getting the lock icon wrong — showing none on a comment Jira told us was
+ * restricted — is the exact defect ROAD-24 was filed for, just moved from
+ * "missing field" to "field we couldn't fully parse". `asRecord` already
+ * degrades a non-object `visibility` to `{}`, so `rawType`/`rawValue` are
+ * simply undefined in that case and fall through to the same 'restricted' /
+ * `''` fallbacks a recognized-but-incomplete object would get.
+ *
+ * `jsdPublic === false` is checked only once `visibility` has ruled itself
+ * out, and maps to `{ type: 'internal', value: '' }` — see
+ * `JiraCommentVisibility`'s own comment (jiraTypes.ts) for the full story on
+ * why this axis was folded in (JSDSERVER-1261: a genuine JSM internal note
+ * carries no `visibility` object at all, so this is not a fallback for a
+ * parsing gap, it is the ONLY signal that case ever sends) and why reading
+ * it can't false-positive off a JSM project (the v3 spec's own documented
+ * `true` default). Any other value — `true`, `undefined`, anything that
+ * isn't the literal `false` — says nothing, the same "absence is not
+ * evidence" rule this file applies to `fields.watches.isWatching` in
+ * `roleOf` above.
+ *
+ * Precedence when a payload somehow carries both a `visibility` restriction
+ * and `jsdPublic: false`: `visibility` wins. Per JSDSERVER-1261 the two are
+ * not supposed to co-occur — real internal notes have no `visibility` at
+ * all — so a payload with both is already an unusual shape this app has not
+ * verified against a real site (a proxy, a scripted write, a future Jira
+ * behavior). Between the two readings available for it, `visibility` is the
+ * more specific, nameable fact ("Restricted to Administrators" against a
+ * generic "Internal note"), and preferring the more specific true statement
+ * this function can make is the same call `mapIssue`'s `isEpicIssueType`
+ * and this very function's own `'restricted'` fallback already make
+ * elsewhere in this file.
+ */
+function mapCommentVisibility(
+  visibility: unknown,
+  jsdPublic: unknown,
+): JiraCommentVisibility | null {
+  if (visibility != null) {
+    const record = asRecord(visibility);
+    const { type: rawType, value: rawValue } = record;
+    return {
+      type: rawType === 'role' || rawType === 'group' ? rawType : 'restricted',
+      value: typeof rawValue === 'string' ? rawValue : '',
+    };
+  }
+  if (jsdPublic === false) {
+    return { type: 'internal', value: '' };
+  }
+  return null;
 }
 
 /** Comments are read AND written through v3 (see jiraClient.ts) — this
@@ -1035,14 +1239,49 @@ export function mapComment(
     id: String(id),
     ticketId,
     authorName: displayNameOf(record.author, 'Unknown'),
+    // Same helper the ticket's assignee id goes through, so the two cannot
+    // disagree about what counts as a usable account id.
+    authorAccountId: accountIdOf(record.author),
+    // Same two-branch guard createdAt uses just below, and for the same
+    // reason: a missing `updated` means Jira did not say, not that the
+    // comment was edited "now". A fabricated value here would tell the edit
+    // path a comment is unchanged when it might not be, or vice versa — the
+    // one failure this field exists to prevent.
+    updatedAt: typeof record.updated === 'string' ? record.updated : null,
+    // Only resolved when Jira actually sent an updateAuthor object; guarding
+    // on that first (rather than handing `record.updateAuthor` straight to
+    // displayNameOf) matters because displayNameOf's own fallback would
+    // otherwise invent an editor's name — "Unknown" — for a comment nobody
+    // has ever edited, which is a worse lie than the null it replaces.
+    updateAuthorName:
+      record.updateAuthor != null
+        ? displayNameOf(record.updateAuthor, 'Unknown')
+        : null,
     // The shared helper, not a reinlined copy of it. `plainTextFromJiraBody`
     // was extracted so a description and a comment "cannot drift apart
     // again", and then this — the one function that comment names — kept its
     // own duplicate of the ternary, leaving the drift the extraction was for.
     body: plainTextFromJiraBody(record.body),
-    createdAt:
-      typeof record.created === 'string'
-        ? record.created
-        : new Date().toISOString(),
+    // The same helper mapIssue's own descriptionAdf goes through, kept in
+    // sync for the same reason plainTextFromJiraBody is shared just above —
+    // see JiraWireComment.bodyAdf's own comment for what this feeds.
+    bodyAdf: adfBodyOf(record.body),
+    // Same reasoning as mapIssue's updatedAt: null, not "now". A comment
+    // whose `created` Jira omitted was not just posted, and a fabricated
+    // timestamp would tell JiraTicketDetail.tsx's formatRelativeTime a lie it
+    // would happily render as "just now".
+    createdAt: typeof record.created === 'string' ? record.created : null,
+    // The same `idOf` every other id on this wire goes through — Jira sends
+    // this one as a JSON number while `id` itself is a string, and `idOf`
+    // already exists to coerce exactly that asymmetry consistently rather
+    // than at each call site. Null both when Jira omitted the key (a
+    // top-level comment) and when it sent something `idOf` can't validate as
+    // an id — see JiraWireComment.parentId's own comment for why the field is
+    // trusted at all despite appearing nowhere in Atlassian's published spec.
+    parentId: idOf(record.parentId),
+    // See mapCommentVisibility's own comment for the null-vs-'restricted'
+    // decision, the `jsdPublic` -> 'internal' mapping, and the precedence
+    // when a payload carries both.
+    visibility: mapCommentVisibility(record.visibility, record.jsdPublic),
   };
 }

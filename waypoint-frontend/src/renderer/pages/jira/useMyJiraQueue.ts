@@ -24,10 +24,16 @@ import type { JiraProjectKey, JiraTicket, JiraTicketRole } from '@/types/jira';
  *  3. The transitions cache would thrash. `rememberTickets` rebuilds
  *     `transitionsByTicketId` from each search, so a search per keystroke
  *     would mean a per-issue transitions round trip per keystroke behind it.
- *  4. The on-screen copy is a contract. "one API call · refresh to re-read"
- *     was written deliberately to replace a false "polls every 15s"; a
- *     toolbar that quietly issued a request per interaction would make it
- *     false again.
+ *  4. The on-screen copy is a contract. "refresh re-runs the search"
+ *     (MyJiraPage.tsx) was written deliberately to replace a false "polls
+ *     every 15s" — and later a false "one API call", since a queue over
+ *     PAGE_SIZE pages the same search across several, and then a false
+ *     "re-reads the whole queue", since it stops at MAX_PAGES (ROAD-22).
+ *     What it promises is that the search runs only when the page opens
+ *     (MyJiraPage and JiraTicketPage both read on mount) or Refresh is
+ *     pressed, and never from this toolbar: a filter, sort or page change
+ *     that quietly issued a request would make it false again. This hook
+ *     imports nothing from data/jiraApi, which is what keeps that true.
  *
  * The cost is real and is stated rather than hidden. listMyTickets caps its
  * crawl at MAX_PAGES × PAGE_SIZE = 500, so these filters and sorts apply to
@@ -72,8 +78,12 @@ export interface JiraQueueQuery {
 }
 
 /** `updated` is the default because it is also the order MY_WORK_JQL already
- * returns (`ORDER BY updated DESC`), so first paint is byte-identical to what
- * this page rendered before any of this existed. */
+ * returns (`ORDER BY updated DESC`) — first paint matches what this page
+ * rendered before any of this existed, for every ticket whose `updated`
+ * Jira actually sent. ROAD-15 made a missing/unparseable `updated` sort to
+ * the bottom client-side rather than masquerading as "just now", so that
+ * one case is no longer byte-identical to the server's own order — the
+ * honest tradeoff for not lying about a timestamp this app doesn't have. */
 export const DEFAULT_QUERY: JiraQueueQuery = {
   projectKey: 'all',
   role: 'all',
@@ -250,11 +260,20 @@ export function compareTickets(
     if (byPriority !== 0) return byPriority;
   }
   if (sort === 'updated') {
-    const byUpdated = Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
-    // An unparseable timestamp yields NaN, and a comparator that returns NaN
-    // produces an order that is not merely wrong but inconsistent between
-    // runs. Falling through to the key tiebreak is the deterministic answer.
-    if (Number.isFinite(byUpdated) && byUpdated !== 0) return byUpdated;
+    // "Unknown" covers two shapes Jira can hand back: a genuinely missing
+    // updatedAt (null), and a present-but-unparseable one (Date.parse
+    // yields NaN, which a malformed or non-ISO string can still produce
+    // even though the field is typed as a string). Both are put after
+    // every known timestamp rather than falling through to the key
+    // tiebreak — scattering NaN among real dates via the tiebreak isn't
+    // just a display quirk, it makes the comparator intransitive
+    // (a<b, b<c, c<a is reachable), which breaks the sort itself.
+    const at = a.updatedAt === null ? NaN : Date.parse(a.updatedAt);
+    const bt = b.updatedAt === null ? NaN : Date.parse(b.updatedAt);
+    const aKnown = Number.isFinite(at);
+    const bKnown = Number.isFinite(bt);
+    if (aKnown !== bKnown) return aKnown ? -1 : 1;
+    if (aKnown && bKnown && bt !== at) return bt - at;
   }
   return compareIssueKeys(a.key, b.key);
 }

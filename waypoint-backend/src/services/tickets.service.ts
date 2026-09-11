@@ -426,20 +426,33 @@ export interface CreateTicketInput {
 
 export async function createTicket(input: CreateTicketInput) {
   return db.transaction(async (tx) => {
-    const [project] = await tx.select().from(projects).where(eq(projects.id, input.projectId));
-    // Lock the project's existing rows to serialize sequenceId allocation
-    // under concurrent requests — the mock's Math.max(...)+1 was only safe
-    // single-threaded; a unique(project_id, sequence_id) constraint backs
-    // this up if two requests still race.
-    const existing = await tx
-      .select({ sequenceId: tickets.sequenceId, sortOrder: tickets.sortOrder })
+    // sequenceId comes from a persistent per-project counter (ROAD-38), not
+    // from scanning existing tickets — the old MAX(sequenceId) approach
+    // read only currently-existing rows, so deleting a ticket silently
+    // freed its number for reuse by a later, unrelated ticket. The counter
+    // only ever increments, so a retired identifier stays retired, the same
+    // guarantee Jira makes for issue keys. The atomic UPDATE...RETURNING
+    // also replaces the old row lock + scan: incrementing this one project
+    // row serializes concurrent allocations without touching the tickets
+    // table at all (unique(project_id, sequence_id) still backs this up).
+    const [project] = await tx
+      .update(projects)
+      .set({ nextSequenceId: sql`${projects.nextSequenceId} + 1` })
+      .where(eq(projects.id, input.projectId))
+      .returning({ identifier: projects.identifier, nextSequenceId: projects.nextSequenceId });
+    const nextSeq = project?.nextSequenceId ?? 1;
+
+    // sortOrder allocation is unrelated to sequenceId and still needs the
+    // most recently created surviving ticket — sequenceId remains monotonic
+    // with insertion order (deletions just leave gaps), so ordering by it
+    // still finds the right row to append after.
+    const [lastTicket] = await tx
+      .select({ sortOrder: tickets.sortOrder })
       .from(tickets)
       .where(eq(tickets.projectId, input.projectId))
       .orderBy(desc(tickets.sequenceId))
-      .limit(1)
-      .for('update');
-    const nextSeq = (existing[0]?.sequenceId ?? 0) + 1;
-    const maxSortOrder = existing[0]?.sortOrder ? Number(existing[0].sortOrder) : 0;
+      .limit(1);
+    const maxSortOrder = lastTicket?.sortOrder ? Number(lastTicket.sortOrder) : 0;
 
     const [row] = await tx
       .insert(tickets)

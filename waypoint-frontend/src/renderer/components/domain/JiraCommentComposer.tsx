@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type ChangeEvent,
@@ -10,8 +11,10 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import {
+  getJiraComment,
   postJiraComment,
   searchJiraAssignableUsers,
+  updateJiraComment,
   uploadJiraAttachment,
 } from '@/data/jiraApi';
 import type { JiraMentionSpan } from '@/data/jiraApi';
@@ -345,12 +348,71 @@ function JiraCommentEmojiPicker({
   );
 }
 
+/**
+ * What a comment row's Reply action hands the composer: which comment is
+ * being answered, and the author to prefill a mention of.
+ *
+ * Verified live against the founder's own Jira (issue ENG-84) that Jira's
+ * own Reply button does both at once — it sets a real `parentId` on the new
+ * comment AND prefills an `@author` mention — so `commentId` travels
+ * alongside `accountId`/`displayName` rather than being left out the way an
+ * earlier version of this interface did, back when this app believed (based
+ * on the same live check, misread) that Jira comments don't thread at all.
+ * `commentId` becomes the write's own `parentId` (see `postJiraComment`);
+ * whether the new comment actually lands nested is decided by what Jira's
+ * response says, never by this value — see JiraTicketDetail.tsx's
+ * groupCommentsIntoThreads and jiraApi.ts's toComment.
+ */
+export interface JiraReplyTarget {
+  commentId: string;
+  accountId: string;
+  displayName: string;
+}
+
+/**
+ * What a comment row's Edit action hands the composer: which comment is
+ * being edited, and the prefill already proven safe to round-trip — see
+ * `prepareJiraCommentEdit` (data/jiraApi.ts), the one function allowed to
+ * decide that, called once by JiraTicketDetail.tsx before this is ever set.
+ *
+ * `text`/`mentions` are handed over already deserialized rather than the
+ * comment's raw ADF, so this composer has exactly one thing to do with
+ * them: load them into the same `draft`/`mentions` state a typed comment
+ * already uses. That keeps this component from ever needing to know ADF is
+ * involved at all — same reason `pendingReply` above carries plain fields
+ * rather than a `JiraComment`.
+ */
+export interface JiraEditTarget {
+  commentId: string;
+  text: string;
+  mentions: JiraMentionSpan[];
+  /**
+   * This comment's own `updatedAt` at the moment Edit was clicked — the
+   * freshness baseline `handlePost` below re-checks against, live,
+   * immediately before Save actually overwrites the comment. Not trusted
+   * from here alone: JiraTicketDetail.tsx's Edit handler already re-reads
+   * the thread and refuses to hand this composer a `pendingEdit` at all if
+   * the comment had already drifted by the time of the click, so by
+   * construction this is the same value a live read reported at that
+   * instant — but the gap this composer's own re-check exists to close is
+   * the one AFTER that: however long the editor then sits open before Save
+   * is actually clicked.
+   */
+  updatedAt: string | null;
+}
+
 export function JiraCommentComposer({
   ticketId,
   ticketKey,
   attachments,
   onPosted,
   onTicketUpdated,
+  pendingReply,
+  onReplyConsumed,
+  pendingEdit,
+  onEditConsumed,
+  onEdited,
+  onEditCancelled,
 }: {
   ticketId: string;
   /** Jira's assignable-user search is specified in terms of the issue KEY,
@@ -361,15 +423,104 @@ export function JiraCommentComposer({
    * can tell which one it just added — see `handleAttach` — without the
    * composer keeping its own second copy of the list. */
   attachments: JiraAttachment[];
-  onPosted: (comment: JiraComment) => void;
+  /** Fired after a genuinely new (non-edit) comment posts. Optional because
+   * an instance mounted only to edit an existing comment in place (see
+   * JiraTicketDetail.tsx's renderComment) never takes this branch of
+   * handlePost — editingCommentId being set returns out of handlePost via
+   * onEdited before this would ever be called. */
+  onPosted?: (comment: JiraComment) => void;
   /** Attaching a file from the composer attaches it to the issue, the same
    * write `JiraTicketDrawer`'s own "Attach a file" button makes — so the
    * re-read ticket goes up through the same callback that keeps the
    * drawer's Attachments section in sync. */
   onTicketUpdated: (updated: JiraTicket) => void;
+  /** Set by JiraTicketDetail when a comment's Reply action is clicked. A new
+   * object every click (even a second Reply on the same author) — see the
+   * prefill effect below, which is keyed on this reference changing rather
+   * than on the accountId/displayName values themselves, so two Replies to
+   * the same person in a row both prefill instead of the second being a
+   * no-op identical-value update React would skip. */
+  pendingReply?: JiraReplyTarget | null;
+  /** Fired the instant `pendingReply` has been prefilled, so the parent can
+   * reset it to null — required for the "new object every click" contract
+   * above to keep working: while `pendingReply` is still the object from
+   * the last click, a second click on that same comment would construct an
+   * identical-looking object, but it is JiraTicketDetail's own state update
+   * (not this effect) that has to see pendingReply go null first, otherwise
+   * the click that sets it back to a same-shaped object still counts as a
+   * real change there. */
+  onReplyConsumed?: () => void;
+  /** Set by JiraTicketDetail when a comment's Edit action is clicked, on a
+   * comment `prepareJiraCommentEdit` has already proven safe to round-trip
+   * — see `JiraEditTarget`'s own comment. New object every click, same
+   * contract as `pendingReply`. */
+  pendingEdit?: JiraEditTarget | null;
+  /** Fired the instant `pendingEdit` has been loaded into the draft, same
+   * contract as `onReplyConsumed`. */
+  onEditConsumed?: () => void;
+  /** Fired when an edit is saved, with the comment Jira's own response
+   * describes — a caller replaces the edited row with this rather than
+   * assuming the request's own text landed verbatim, the same
+   * response-not-request rule `onPosted` already follows for a new
+   * comment. */
+  onEdited?: (comment: JiraComment) => void;
+  /** Fired when Cancel is clicked while editing — after `cancelEdit` has
+   * already cleared this component's own draft/mentions/editingCommentId,
+   * so a caller that unmounts this instance in response (the inline case in
+   * JiraTicketDetail.tsx's renderComment, which exists only while its own
+   * comment is being edited) isn't discarding state this component still
+   * needed. */
+  onEditCancelled?: () => void;
 }) {
   const [draft, setDraft] = useState('');
   const [mentions, setMentions] = useState<JiraMentionSpan[]>([]);
+  // The parentId the next post should carry — set alongside the mention
+  // prefill below, cleared once that post succeeds, the same lifecycle
+  // `draft`/`mentions` already have.
+  //
+  // NOT independent of the mention text: an earlier version of this comment
+  // claimed editing or deleting the prefilled "@Name " left the reply
+  // threaded regardless, on the strength of an unverified claim about how
+  // Jira's own composer behaves — exactly the kind of assertion this repo's
+  // honesty lint exists to catch, and on reflection the behavior itself was
+  // the wrong call besides: a draft that no longer mentions the person being
+  // replied to reads, to whoever wrote it, as its own top-level comment, and
+  // silently nesting it under a parent nobody looking at the draft can still
+  // see referenced would be a surprise, not a feature. See the un-threading
+  // effect below (keyed on `replyTargetAccountId`) that now clears this the
+  // moment no mention of that person remains in `mentions`.
+  const [replyParentId, setReplyParentId] = useState<string | null>(null);
+  // The accountId the reply's prefilled mention names, tracked alongside
+  // `replyParentId` for the un-threading effect below — it needs to ask
+  // "does a mention of THIS SPECIFIC person still exist in the draft",
+  // which `replyParentId` alone (just an id, no identity) can't answer.
+  const [replyTargetAccountId, setReplyTargetAccountId] = useState<
+    string | null
+  >(null);
+  // The comment the next post should overwrite rather than create — same
+  // lifecycle as `replyParentId`, and mutually exclusive with it: loading an
+  // edit clears any pending reply and vice versa (see the two prefill
+  // effects below), since this composer can only be doing one of "reply to"
+  // or "overwrite" at a time.
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  // This edit's own freshness baseline and refusal state — see
+  // JiraEditTarget.updatedAt's own comment and handlePost below, where both
+  // are actually used.
+  const [editingBaselineUpdatedAt, setEditingBaselineUpdatedAt] = useState<
+    string | null
+  >(null);
+  // Set by handlePost's own live re-check when it refuses to Save because
+  // the comment drifted after Edit opened — read by the banner rendered
+  // near the Save button below. Deliberately not just a `showErrorToast`
+  // like every other failure in this component: a transient toast can
+  // vanish before someone still mid-edit reads it, and it says nothing
+  // about whether their unsaved draft is still safe (it is — this state
+  // exists alongside `draft`, never in place of it).
+  const [editStale, setEditStale] = useState<
+    | { kind: 'changed'; updateAuthorName: string | null }
+    | { kind: 'unavailable' }
+    | null
+  >(null);
   const [posting, setPosting] = useState(false);
   const [attaching, setAttaching] = useState(false);
   const [trigger, setTrigger] = useState<{
@@ -400,6 +551,62 @@ export function JiraCommentComposer({
   const formRef = useRef<HTMLDivElement>(null);
 
   const popoverOpen = trigger !== null;
+
+  // The listbox's own id (for the textarea's aria-controls) and a stable id
+  // per option row (for aria-activedescendant and each option's own id).
+  // Scoped by useId(), not ticketId: JiraTicketDetail.tsx now genuinely
+  // mounts two of these on the same ticket at once — the composer above the
+  // thread (new comments and replies) and a second instance inline wherever
+  // a comment is being edited (see its renderComment) — so a ticketId-keyed
+  // id would collide between them and leave one instance's
+  // aria-activedescendant/aria-controls resolving to the other's listbox.
+  // useId() is unique per mounted instance regardless of how many share a
+  // ticket.
+  const instanceId = useId();
+  const mentionListboxId = `jira-comment-mention-listbox-${instanceId}`;
+  function mentionOptionId(accountId: string) {
+    return `jira-comment-mention-option-${instanceId}-${accountId}`;
+  }
+
+  // Whether there are real option rows to show right now — the ONE guard
+  // both the row-rendering block below and highlightedOptionId read, so the
+  // two can never independently drift out of agreement (they used to repeat
+  // this same three-way condition as two separate expressions, which
+  // happened to agree by inspection rather than by construction). False
+  // while loading, erroring, or genuinely empty — those states render no
+  // option rows, so nothing should claim to be the active one.
+  const optionsVisible =
+    popoverOpen &&
+    !loadingSuggestions &&
+    !suggestionsError &&
+    suggestions.length > 0;
+
+  // The one option row a screen reader should be told is current —
+  // deliberately read from the exact same `suggestions`/`highlighted` pair
+  // that decides the row's visual highlight below, so the two can never
+  // drift apart. Unset (rather than pointing at a row that doesn't exist
+  // yet) whenever optionsVisible is false — a dangling aria-activedescendant
+  // would name nothing.
+  const highlightedOptionId =
+    optionsVisible && suggestions[highlighted]
+      ? mentionOptionId(suggestions[highlighted].accountId)
+      : undefined;
+
+  // Keeps the active option in view as arrow keys move `highlighted` past
+  // whatever the popover's fixed height can show at once
+  // (POPOVER_MAX_VISIBLE_ROWS rows, while up to a full page of results can
+  // come back). Without this, aria-activedescendant could correctly name an
+  // option that ArrowDown had scrolled clean out of the popover's clipped
+  // area — matching what the highlight state says is current, but not what
+  // a sighted user (or a screen reader user tracking the highlight visually)
+  // can actually see. 'nearest' rather than 'center': centering on every
+  // keypress would cause visible jumpiness for a short jump of one row.
+  useEffect(() => {
+    if (!highlightedOptionId) return;
+    document
+      .getElementById(highlightedOptionId)
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [highlightedOptionId]);
 
   // The search itself. Debounced, cancellable, and re-run per keystroke of
   // the query — the same shape as JiraAssigneePicker's own search effect,
@@ -645,6 +852,148 @@ export function JiraCommentComposer({
     });
   }
 
+  /**
+   * Reply, prefilled: inserts a real mention of `pendingReply` at the very
+   * start of the draft, the same span shape `selectMention` produces for a
+   * typed "@" pick — one write path, so a prefilled mention is
+   * indistinguishable from a typed one all the way to `buildCommentAdf`.
+   *
+   * Always prepends rather than inserting at the caret. Reply is a fresh
+   * "who is this comment addressed to" action on a composer that is usually
+   * empty, not an edit at wherever the cursor happened to be left from
+   * whatever this composer was doing before — the same reason Jira's own
+   * Reply always lands the mention at the front regardless of caret
+   * position.
+   */
+  useEffect(() => {
+    if (!pendingReply) return;
+    const mentionText = `@${pendingReply.displayName}`;
+    const insertText = `${mentionText} `;
+
+    shiftMentionsForEdit(0, 0, insertText.length);
+    setMentions((spans) => [
+      {
+        start: 0,
+        end: mentionText.length,
+        accountId: pendingReply.accountId,
+        displayName: pendingReply.displayName,
+      },
+      ...spans,
+    ]);
+    setDraft((d) => insertText + d);
+    setReplyParentId(pendingReply.commentId);
+    setReplyTargetAccountId(pendingReply.accountId);
+    // Reply and Edit are mutually exclusive states on this one shared
+    // composer — starting a Reply while an Edit was in progress abandons
+    // the edit rather than leaving `editingCommentId` set on a draft that
+    // is no longer that comment's own text.
+    setEditingCommentId(null);
+    setEditingBaselineUpdatedAt(null);
+    setEditStale(null);
+    onReplyConsumed?.();
+
+    const el = textareaRef.current;
+    const newCaret = insertText.length;
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(newCaret, newCaret);
+    });
+    // Deliberately keyed on `pendingReply` alone. `shiftMentionsForEdit` and
+    // `onReplyConsumed` are recreated every render (the former closes over
+    // `draft`/`mentions` via their setters' functional form, so it does not
+    // actually need to be a dependency to stay correct) and including them
+    // would defeat the "runs once per click" contract this effect exists
+    // for — the same trade the mention-search effect above already makes,
+    // for the same reason.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingReply]);
+
+  /**
+   * Un-threads a Reply whose prefilled mention the user has since removed
+   * entirely from the draft — see `replyParentId`'s own comment above for
+   * why this replaced the earlier "always stays threaded" behavior.
+   *
+   * Reads `mentions`, not the draft text directly, and checks for ANY
+   * mention of `replyTargetAccountId` rather than the one original span:
+   * `shiftMentionsForEdit`/`shiftMentionsForWrap` already drop a span the
+   * moment an edit overlaps it (see their own comments), so by the time this
+   * runs the question is only ever "does a mention of this person exist
+   * anywhere in the draft right now" — true after the mention is merely
+   * moved or retyped, false once every mention of them is gone, which is
+   * the one case this effect exists to catch regardless of which specific
+   * edit caused it (typing over the mention, a toolbar wrap across it,
+   * select-all-and-replace, ...).
+   */
+  useEffect(() => {
+    if (!replyParentId || !replyTargetAccountId) return;
+    const stillMentioned = mentions.some(
+      (m) => m.accountId === replyTargetAccountId,
+    );
+    if (!stillMentioned) {
+      setReplyParentId(null);
+      setReplyTargetAccountId(null);
+    }
+  }, [mentions, replyParentId, replyTargetAccountId]);
+
+  /**
+   * Edit, loaded: replaces the whole draft with `pendingEdit`'s already-
+   * proven-safe prefill, rather than inserting at the caret or prepending
+   * the way Reply's own effect above does — Reply adds to whatever was
+   * already being typed, but Edit's whole point is to load a SPECIFIC
+   * comment's own content in place of it, so anything already in the
+   * composer is replaced, not merged with.
+   *
+   * `pendingEdit.mentions` are used exactly as `prepareJiraCommentEdit`
+   * returned them — no shifting, no re-validation here — because they were
+   * already proven, together with `pendingEdit.text`, to round-trip through
+   * `buildCommentAdf` back to this comment's own original ADF. Editing the
+   * loaded text further (or deleting a mention out of it) is fine: the same
+   * re-validation `buildCommentAdf` already does for a typed reply (a stale
+   * span that no longer reads "@" + displayName is dropped) applies here
+   * too, at `handlePost` time, the same as any other draft.
+   */
+  useEffect(() => {
+    if (!pendingEdit) return;
+    setDraft(pendingEdit.text);
+    setMentions(pendingEdit.mentions);
+    setEditingCommentId(pendingEdit.commentId);
+    setEditingBaselineUpdatedAt(pendingEdit.updatedAt);
+    // A fresh Edit target loading is not a retry of whatever the last one
+    // refused on — it's JiraTicketDetail.tsx's own Edit handler having just
+    // re-read this comment live and proven it current (see that handler's
+    // own comment), so there is nothing stale about it yet.
+    setEditStale(null);
+    // See the reply effect's own note just above: the two are mutually
+    // exclusive on this one composer.
+    setReplyParentId(null);
+    setReplyTargetAccountId(null);
+    onEditConsumed?.();
+
+    const el = textareaRef.current;
+    const newCaret = pendingEdit.text.length;
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(newCaret, newCaret);
+    });
+    // Same "runs once per click" trade as the reply effect above, for the
+    // same reason.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingEdit]);
+
+  /** Discards the loaded edit and clears the composer — the only way out of
+   * edit mode besides saving. Clearing the draft outright, rather than
+   * restoring whatever was being typed before Edit was clicked, matches
+   * this composer's existing "Edit replaces the draft" contract above: there
+   * is no snapshot of the pre-edit draft to restore to. */
+  function cancelEdit() {
+    setEditingCommentId(null);
+    setEditingBaselineUpdatedAt(null);
+    setEditStale(null);
+    setDraft('');
+    setMentions([]);
+    onEditCancelled?.();
+  }
+
   /** Wraps the current selection in a delimiter pair — **bold**, _em_,
    * ~~strike~~, `code` — or, with nothing selected, inserts an empty pair
    * with the caret left between the two delimiters, ready to type into.
@@ -880,15 +1229,105 @@ export function JiraCommentComposer({
     formRef.current?.focus();
     setPosting(true);
     try {
-      const comment = await postJiraComment(ticketId, draft, mentions);
-      onPosted(comment);
+      if (editingCommentId) {
+        // Re-verified here, live, rather than trusted from whatever was
+        // true when Edit opened: the gap between opening the editor and
+        // clicking Save is exactly where someone else's change lands, and
+        // `updateJiraComment` overwrites the comment outright with no undo
+        // (see that function's own comment) — the highest-stakes write this
+        // component makes, and the one JiraTicketDetail.tsx's own pre-open
+        // check (JiraEditTarget.updatedAt's comment) cannot by itself cover,
+        // because it only proves the comment was current at the moment of
+        // the click, not still current now.
+        //
+        // `getJiraComment` (data/jiraApi.ts), not `listJiraComments`: that
+        // list is capped at the newest COMMENT_PAGE_SIZE (100) comments, so
+        // on a busy thread this exact comment can simply scroll off the page
+        // it returns — someone else still commenting, not anyone deleting
+        // anything — and "absent from that page" cannot tell the two apart.
+        // `getJiraComment` names this one comment and reads it directly, so
+        // it cannot miss it the way the page can. A thrown error from it
+        // (anything other than "Jira answered 404 for this comment") is a
+        // genuine request failure, not evidence either way, and is left to
+        // propagate to the catch block below rather than folded into the
+        // not-available branch — that conflation is exactly what this
+        // re-check used to make.
+        //
+        // Refusing on drift here, rather than just letting
+        // `updateJiraComment` proceed, is deliberate: Jira's write would
+        // succeed regardless of what changed underneath, and silently
+        // winning that race is exactly the defect this guard exists to
+        // close.
+        const freshComment = await getJiraComment(ticketId, editingCommentId);
+        if (!freshComment) {
+          // Jira answered 404 for this comment, which is not proof anyone
+          // deleted it: Atlassian answers 404 rather than 403 for a comment
+          // the account may no longer browse, so a permission change and a
+          // real deletion arrive here identically (see `not_found`'s own
+          // comment in main/jira/jiraTypes.ts). Either way there is nothing
+          // left to overwrite, and re-creating it from this draft would be
+          // posting a comment nobody asked for under the pretense of saving
+          // an edit — refused the same as a genuine drift, below.
+          setEditStale({ kind: 'unavailable' });
+          return;
+        }
+        if (
+          editingBaselineUpdatedAt !== null &&
+          freshComment.updatedAt !== null &&
+          freshComment.updatedAt !== editingBaselineUpdatedAt
+        ) {
+          // Either timestamp being null means "unknown", which this file's
+          // own detectConflict (jiraApi.ts) already treats as no evidence
+          // of drift rather than proof of it — the same call made here, for
+          // the same reason: a false refusal on missing data is exactly the
+          // kind of false positive that gets a safety feature learned-
+          // ignored.
+          setEditStale({
+            kind: 'changed',
+            updateAuthorName: freshComment.updateAuthorName,
+          });
+          return;
+        }
+        const comment = await updateJiraComment(
+          ticketId,
+          editingCommentId,
+          draft,
+          mentions,
+        );
+        onEdited?.(comment);
+        setDraft('');
+        setMentions([]);
+        setEditingCommentId(null);
+        setEditingBaselineUpdatedAt(null);
+        setEditStale(null);
+        return;
+      }
+      // A plain 3-arg call when this isn't a reply, rather than always
+      // passing a 4th `null` — the same "presence of the argument, not just
+      // its value" shape jiraClient.ts's own postComment uses for the same
+      // field, kept consistent end to end.
+      //
+      // No freshness re-check here, unlike the edit branch above — Reply
+      // creates a brand-new comment rather than overwriting an existing
+      // one, so a stale parent is not remotely the same risk: the worst
+      // case is a reply nested under a comment whose text has since moved
+      // on, which is a stale-looking thread, not lost content. There is
+      // nothing here for a race to destroy.
+      const comment = replyParentId
+        ? await postJiraComment(ticketId, draft, mentions, replyParentId)
+        : await postJiraComment(ticketId, draft, mentions);
+      onPosted?.(comment);
       setDraft('');
       setMentions([]);
+      setReplyParentId(null);
+      setReplyTargetAccountId(null);
     } catch (err) {
       showErrorToast(
         err instanceof Error
           ? err.message
-          : 'Could not post this comment to Jira.',
+          : editingCommentId
+            ? 'Could not save this edit to Jira.'
+            : 'Could not post this comment to Jira.',
       );
     } finally {
       setPosting(false);
@@ -1024,23 +1463,94 @@ export function JiraCommentComposer({
           }}
           placeholder="Comment… (@ to mention someone)"
           rows={3}
+          // The @-mention popover turns this textarea into an autocomplete
+          // widget: typing "@" opens a list of matches, arrow keys move a
+          // highlight through it, and Enter/Tab picks one. Deliberately NOT
+          // role="combobox" — ARIA in HTML permits no role override on
+          // <textarea> (it's fixed to the implicit "textbox" role, exactly
+          // what a multi-line composer needs screen readers to keep
+          // announcing), and role="combobox" is invalid there regardless of
+          // what it would otherwise buy. aria-expanded, aria-controls,
+          // aria-activedescendant and aria-autocomplete are all valid on
+          // plain textbox and carry the same popup contract without the
+          // invalid role. aria-controls/aria-activedescendant are only set
+          // while the popover is actually open, since neither should point
+          // at an element that isn't in the DOM.
+          aria-expanded={popoverOpen}
+          aria-controls={popoverOpen ? mentionListboxId : undefined}
+          aria-activedescendant={highlightedOptionId}
+          aria-autocomplete="list"
           className="w-full resize-none bg-transparent px-2.5 py-2 text-[12.5px] leading-relaxed text-text outline-none"
         />
+        {/* Save's own refusal banner — rendered only in edit mode, only once
+            handlePost's live re-check has actually refused to overwrite
+            something. Says plainly what happened (this exact comment moved
+            in Jira, or Jira stopped showing it at all — deliberately not
+            phrased as "was deleted", which a 404 does not prove) and, just
+            as important, what did NOT happen: nothing here was cleared,
+            despite Save doing nothing. The draft above still holds
+            every word typed into it — this is a warning shown alongside
+            that text, never a dialog that replaces it. */}
+        {editingCommentId && editStale && (
+          <div
+            role="alert"
+            className="border-t border-warning/30 bg-warning-bg px-2.5 py-2 text-[11px] leading-relaxed text-warning"
+          >
+            {editStale.kind === 'unavailable' ? (
+              <>
+                Jira won&apos;t show this comment any more — it was deleted, or
+                you no longer have permission to see it — so Save was stopped
+                rather than post your text as a new comment. What you wrote is
+                still in the box above; copy it if you want to keep it, then
+                Cancel.
+              </>
+            ) : (
+              <>
+                This comment changed in Jira
+                {editStale.updateAuthorName
+                  ? ` (by ${editStale.updateAuthorName})`
+                  : ''}{' '}
+                after you opened it to edit, so Save was stopped rather than
+                overwrite that change. What you wrote is still in the box above
+                — Cancel and click Edit again to load the latest version, or
+                keep writing and try Save again.
+              </>
+            )}
+          </div>
+        )}
         <div className="flex items-center gap-2 border-t border-border px-2 py-1.5">
           {/* The name is the connected Atlassian account's own display name,
               read from the shared connection store — this comment really is
               posted as that person, and the label has to be able to say who
               that is rather than the fixture name it used to hardcode. */}
           <span className="flex-1 text-[10.5px] text-text-muted">
-            Posts to Jira as {connection?.accountName || 'you'}
+            {editingCommentId
+              ? `Saves the edit to Jira as ${connection?.accountName || 'you'}`
+              : `Posts to Jira as ${connection?.accountName || 'you'}`}
           </span>
+          {editingCommentId && (
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={posting}
+              onClick={cancelEdit}
+            >
+              Cancel
+            </Button>
+          )}
           <Button
             size="xs"
             variant="primary"
             disabled={!draft.trim() || posting}
             onClick={handlePost}
           >
-            {posting ? 'Posting…' : 'Comment'}
+            {editingCommentId
+              ? posting
+                ? 'Saving…'
+                : 'Save'
+              : posting
+                ? 'Posting…'
+                : 'Comment'}
           </Button>
         </div>
       </div>
@@ -1058,14 +1568,26 @@ export function JiraCommentComposer({
         createPortal(
           <div
             ref={popoverRef}
-            role="listbox"
-            aria-label={`Mention someone on ${ticketKey}`}
+            id={mentionListboxId}
+            // role="listbox" only when there are real option children —
+            // the ARIA listbox role requires owned option/group children,
+            // and assistive tech commonly drops non-option content (the
+            // loading/error/empty states below) from a listbox entirely,
+            // leaving a screen reader user with an expanded, empty listbox
+            // and no explanation. aria-live carries those three states
+            // instead, the same way the visible text already does for a
+            // sighted user.
+            role={optionsVisible ? 'listbox' : undefined}
+            aria-label={
+              optionsVisible ? `Mention someone on ${ticketKey}` : undefined
+            }
+            aria-live={optionsVisible ? undefined : 'polite'}
             style={{
               top: placement.top,
               left: placement.left,
               height: popoverHeight,
             }}
-            className="fixed z-[60] w-[240px] overflow-hidden rounded-[var(--radius)] border border-border-strong bg-surface text-left shadow-2xl"
+            className="thin-scroll fixed z-[60] w-[240px] overflow-y-auto rounded-[var(--radius)] border border-border-strong bg-surface text-left shadow-2xl"
           >
             {loadingSuggestions && (
               <div className="px-3 py-2 text-xs text-text-muted">
@@ -1088,12 +1610,22 @@ export function JiraCommentComposer({
                     : 'No teammates found on this issue.'}
                 </div>
               )}
-            {!loadingSuggestions &&
-              !suggestionsError &&
+            {optionsVisible &&
               suggestions.map((user, i) => (
                 <button
                   key={user.accountId}
+                  id={mentionOptionId(user.accountId)}
                   type="button"
+                  role="option"
+                  aria-selected={i === highlighted}
+                  // Not a Tab stop: this popover follows the
+                  // aria-activedescendant combobox pattern, where the
+                  // textarea keeps real focus throughout and arrow keys move
+                  // a *virtual* highlight through the options instead. A row
+                  // that could also take real focus via Tab would give a
+                  // keyboard user two disagreeing ways to move through the
+                  // same list.
+                  tabIndex={-1}
                   // onMouseDown, not onClick: a click fires after the
                   // textarea has already blurred from the mousedown above,
                   // and by then `trigger` and the caret this reads are gone.

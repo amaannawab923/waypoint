@@ -37,6 +37,7 @@ jest.mock('./jiraClient', () => ({
 // eslint-disable-next-line import/order, import/first
 import {
   downloadAttachmentToDisk,
+  inFlightTransferCountForTests,
   mimeTypeForFileName,
   pickAndUploadAttachment,
   safeBaseName,
@@ -69,6 +70,17 @@ beforeEach(() => {
   writeFileMock.mockResolvedValue(undefined);
   statMock.mockResolvedValue({ size: BYTES.byteLength });
   readFileMock.mockResolvedValue(BYTES);
+});
+
+// Every test in this file awaits its transfer to completion, so the
+// `finally` in downloadAttachmentToDisk/pickAndUploadAttachment already
+// empties the module-level guard between tests — but a future test that
+// starts a transfer against a mock that never resolves, without awaiting
+// it, would silently poison every later test claiming the same key. This
+// turns that into a clear assertion failure in the test that caused it,
+// rather than a mysterious transfer_in_progress somewhere else in the file.
+afterEach(() => {
+  expect(inFlightTransferCountForTests()).toBe(0);
 });
 
 /**
@@ -347,6 +359,154 @@ describe('downloadAttachmentToDisk', () => {
       defaultPath: 'replay-log.txt',
     });
   });
+
+  // A rendered `disabled={downloading !== null}` on the renderer's own
+  // Download button is not a guard on the network call and file write this
+  // module actually performs — it does nothing about a click that lands
+  // before that state update commits. These tests exercise the
+  // module-level guard the IPC call now passes through instead, by starting
+  // two calls without awaiting the first: an async function runs
+  // synchronously up to its first `await`, so the guard is claimed (or
+  // found already claimed) before either call has a chance to interleave
+  // with the other.
+  describe('the single-flight guard', () => {
+    it('refuses a second download of the same attachment while the first is in flight', async () => {
+      const first = downloadAttachmentToDisk(WINDOW, '10050', 'replay-log.txt');
+      const second = downloadAttachmentToDisk(WINDOW, '10050', 'replay-log.txt');
+
+      const [firstResult, secondResult] = await Promise.all([first, second]);
+
+      expect(firstResult).toEqual({
+        ok: true,
+        value: {
+          canceled: false,
+          savedPath: '/Users/max/Downloads/replay-log.txt',
+        },
+      });
+      expect(secondResult).toMatchObject({
+        ok: false,
+        reason: 'transfer_in_progress',
+      });
+      // The refused call never touched Jira, the dialog or the filesystem.
+      expect(downloadAttachmentMock).toHaveBeenCalledTimes(1);
+      expect(showSaveDialogMock).toHaveBeenCalledTimes(1);
+    });
+
+    // The test above only proves the guard holds across the initial Jira
+    // fetch — the first `await` a download hits. The save dialog is fully
+    // interactive while it's open (more so with no parent window, where it
+    // isn't even modal), so a duplicate click is at least as likely to land
+    // there as during the fetch. This defers the save dialog's own promise
+    // so the second call is made while the first is genuinely parked on it,
+    // not on the fetch.
+    it('refuses a second download while the first is suspended at the save dialog', async () => {
+      let resolveSaveDialog!: (value: {
+        canceled: boolean;
+        filePath?: string;
+      }) => void;
+      showSaveDialogMock.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveSaveDialog = resolve;
+        }),
+      );
+
+      const first = downloadAttachmentToDisk(WINDOW, '10050', 'replay-log.txt');
+      // Let the first call run up through the Jira fetch and reach the
+      // (still-pending) save dialog before the second call is made.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const second = await downloadAttachmentToDisk(
+        WINDOW,
+        '10050',
+        'replay-log.txt',
+      );
+      expect(second).toMatchObject({ ok: false, reason: 'transfer_in_progress' });
+      expect(downloadAttachmentMock).toHaveBeenCalledTimes(1);
+
+      resolveSaveDialog({
+        canceled: false,
+        filePath: '/Users/max/Downloads/replay-log.txt',
+      });
+      const firstResult = await first;
+      expect(firstResult).toMatchObject({ ok: true, value: { canceled: false } });
+    });
+
+    it('allows a later download of the same attachment once the first has finished', async () => {
+      const first = await downloadAttachmentToDisk(
+        WINDOW,
+        '10050',
+        'replay-log.txt',
+      );
+      expect(first).toMatchObject({ ok: true, value: { canceled: false } });
+
+      const second = await downloadAttachmentToDisk(
+        WINDOW,
+        '10050',
+        'replay-log.txt',
+      );
+      expect(second).toMatchObject({ ok: true, value: { canceled: false } });
+      expect(downloadAttachmentMock).toHaveBeenCalledTimes(2);
+    });
+
+    // The guard has to release on every exit path, not just the happy one —
+    // otherwise a single failed or cancelled download would permanently
+    // block every later download of that same attachment.
+    it('releases the guard after a failed download so a later one is not blocked', async () => {
+      downloadAttachmentMock.mockResolvedValueOnce({
+        ok: false,
+        reason: 'forbidden',
+        message: "Your Jira account isn't allowed to do that.",
+      });
+
+      const failed = await downloadAttachmentToDisk(
+        WINDOW,
+        '10050',
+        'replay-log.txt',
+      );
+      expect(failed).toMatchObject({ ok: false, reason: 'forbidden' });
+
+      const retried = await downloadAttachmentToDisk(
+        WINDOW,
+        '10050',
+        'replay-log.txt',
+      );
+      expect(retried).toMatchObject({ ok: true, value: { canceled: false } });
+    });
+
+    it('releases the guard after a cancelled save dialog so a later download is not blocked', async () => {
+      showSaveDialogMock.mockResolvedValueOnce({ canceled: true, filePath: '' });
+
+      const cancelled = await downloadAttachmentToDisk(
+        WINDOW,
+        '10050',
+        'replay-log.txt',
+      );
+      expect(cancelled).toEqual({ ok: true, value: { canceled: true } });
+
+      const retried = await downloadAttachmentToDisk(
+        WINDOW,
+        '10050',
+        'replay-log.txt',
+      );
+      expect(retried).toMatchObject({ ok: true, value: { canceled: false } });
+    });
+
+    // Keyed on the attachment id, not one shared "any download" lock — two
+    // different attachments must be downloadable at the same time.
+    it('allows concurrent downloads of two different attachments', async () => {
+      const [a, b] = await Promise.all([
+        downloadAttachmentToDisk(WINDOW, '10050', 'replay-log.txt'),
+        downloadAttachmentToDisk(WINDOW, '20099', 'other-file.txt'),
+      ]);
+
+      expect(a).toMatchObject({ ok: true, value: { canceled: false } });
+      expect(b).toMatchObject({ ok: true, value: { canceled: false } });
+      expect(downloadAttachmentMock).toHaveBeenCalledTimes(2);
+      expect(downloadAttachmentMock).toHaveBeenCalledWith('10050');
+      expect(downloadAttachmentMock).toHaveBeenCalledWith('20099');
+    });
+  });
 });
 
 describe('mimeTypeForFileName', () => {
@@ -528,6 +688,94 @@ describe('pickAndUploadAttachment', () => {
     expect(await pickAndUploadAttachment(WINDOW, '10421')).toMatchObject({
       ok: false,
       reason: 'forbidden',
+    });
+  });
+
+  // Same guard as downloadAttachmentToDisk's, keyed on the ticket id this
+  // time rather than the attachment id — see that describe block's own note
+  // on why starting two calls without awaiting the first is enough to force
+  // the interleaving these tests need.
+  describe('the single-flight guard', () => {
+    it('refuses a second upload to the same ticket while the first is in flight', async () => {
+      const first = pickAndUploadAttachment(WINDOW, '10421');
+      const second = pickAndUploadAttachment(WINDOW, '10421');
+
+      const [firstResult, secondResult] = await Promise.all([first, second]);
+
+      expect(firstResult).toEqual({
+        ok: true,
+        value: { canceled: false, ticket: TICKET },
+      });
+      expect(secondResult).toMatchObject({
+        ok: false,
+        reason: 'transfer_in_progress',
+      });
+      // The refused call never opened a picker, read a file or uploaded.
+      expect(showOpenDialogMock).toHaveBeenCalledTimes(1);
+      expect(uploadAttachmentMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('allows a later upload to the same ticket once the first has finished', async () => {
+      const first = await pickAndUploadAttachment(WINDOW, '10421');
+      expect(first).toMatchObject({ ok: true, value: { canceled: false } });
+
+      const second = await pickAndUploadAttachment(WINDOW, '10421');
+      expect(second).toMatchObject({ ok: true, value: { canceled: false } });
+      expect(uploadAttachmentMock).toHaveBeenCalledTimes(2);
+    });
+
+    // The guard has to release on every exit path — a failed or cancelled
+    // upload must not permanently block every later upload to that ticket.
+    it('releases the guard after a failed upload so a later one is not blocked', async () => {
+      uploadAttachmentMock.mockResolvedValueOnce({
+        ok: false,
+        reason: 'forbidden',
+        message: "Your Jira account isn't allowed to do that.",
+      });
+
+      const failed = await pickAndUploadAttachment(WINDOW, '10421');
+      expect(failed).toMatchObject({ ok: false, reason: 'forbidden' });
+
+      const retried = await pickAndUploadAttachment(WINDOW, '10421');
+      expect(retried).toMatchObject({ ok: true, value: { canceled: false } });
+    });
+
+    it('releases the guard after a cancelled picker so a later upload is not blocked', async () => {
+      showOpenDialogMock.mockResolvedValueOnce({
+        canceled: true,
+        filePaths: [],
+      });
+
+      const cancelled = await pickAndUploadAttachment(WINDOW, '10421');
+      expect(cancelled).toEqual({ ok: true, value: { canceled: true } });
+
+      const retried = await pickAndUploadAttachment(WINDOW, '10421');
+      expect(retried).toMatchObject({ ok: true, value: { canceled: false } });
+    });
+
+    // Keyed on the ticket id, not one shared "any upload" lock — two
+    // different tickets must both be attachable to at the same time.
+    it('allows concurrent uploads to two different tickets', async () => {
+      const [a, b] = await Promise.all([
+        pickAndUploadAttachment(WINDOW, '10421'),
+        pickAndUploadAttachment(WINDOW, '99999'),
+      ]);
+
+      expect(a).toMatchObject({ ok: true, value: { canceled: false } });
+      expect(b).toMatchObject({ ok: true, value: { canceled: false } });
+      expect(uploadAttachmentMock).toHaveBeenCalledTimes(2);
+      expect(uploadAttachmentMock).toHaveBeenCalledWith(
+        '10421',
+        'replay-log.txt',
+        BYTES,
+        'text/plain',
+      );
+      expect(uploadAttachmentMock).toHaveBeenCalledWith(
+        '99999',
+        'replay-log.txt',
+        BYTES,
+        'text/plain',
+      );
     });
   });
 });

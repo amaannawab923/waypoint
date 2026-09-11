@@ -41,6 +41,27 @@ export type JiraFailureReason =
   | 'storage_unavailable'
   | 'jira_error'
   /**
+   * Jira answered 404 for the thing this request named.
+   *
+   * Split out of `jira_error` because one caller has to branch on it rather
+   * than just print it: the comment freshness guards (see `getComment`)
+   * decide whether to refuse a Save or a Delete on whether the comment they
+   * are about to overwrite still exists. Before this reason existed those
+   * guards inferred "gone" from the comment being absent from
+   * `listComments`' newest-`COMMENT_PAGE_SIZE` page — which is also exactly
+   * what a comment scrolling off a busy thread looks like, so they could
+   * tell someone their comment had been deleted when nothing of the sort
+   * had happened.
+   *
+   * Read this as "Jira will not show you this", never as "this was
+   * deleted". Atlassian deliberately answers 404 rather than 403 for an
+   * issue or comment the account may not browse, so a permission that
+   * changed under you and a real deletion arrive here identically. Every
+   * message built on this reason has to allow for both — that is the
+   * strongest claim the response actually supports.
+   */
+  | 'not_found'
+  /**
    * The local filesystem said no — the disk is full, the chosen folder is not
    * writable, the picked file vanished between the dialog and the read.
    *
@@ -51,7 +72,26 @@ export type JiraFailureReason =
    * to their own disk, and telling them the first when the second happened
    * wastes their time on someone else's system.
    */
-  | 'file_error';
+  | 'file_error'
+  /**
+   * A transfer of the exact same attachment (download) or to the exact same
+   * ticket (upload) is already running, and this request was refused rather
+   * than allowed to double up.
+   *
+   * The renderer's own per-control `downloading`/`uploading` booleans are
+   * not enough to prevent this on their own: an upload to a ticket can be
+   * started from two separate controls mounted together on the same open
+   * ticket — `JiraTicketDetail.tsx`'s "Attach a file" button and
+   * `JiraCommentComposer.tsx`'s toolbar attach button — each tracking its
+   * own state with no visibility into the other's. Only a guard in main,
+   * which every IPC call for a transfer passes through, can make "one
+   * transfer of this attachment/ticket at a time" actually true. Separate
+   * from `file_error` and `jira_error` for the same reason those are
+   * separate from each other: this is neither the local disk nor Jira
+   * refusing anything, so the sentence has to say what actually happened —
+   * try again once the first transfer finishes.
+   */
+  | 'transfer_in_progress';
 
 export interface JiraFailure {
   ok: false;
@@ -179,6 +219,34 @@ export interface JiraWireAttachment {
   uploaderName: string;
 }
 
+/**
+ * A subtask as Jira reports it on the parent's `fields.subtasks`. Deliberately
+ * a flat summary, not a full JiraWireTicket: Jira returns only these fields
+ * inline, and pretending to more would mean a fetch per subtask.
+ */
+export interface JiraWireSubtask {
+  id: string;
+  key: string;
+  title: string;
+  stateName: string;
+  stateCategory: JiraStateCategory;
+}
+
+/**
+ * One issue link, already flattened to the OTHER issue plus the phrase that
+ * describes this issue's relationship to it ("blocks", "is blocked by", ...).
+ * Jira nests inward/outward differently; that asymmetry is resolved in the
+ * mapper so the renderer never has to know which side it was on.
+ */
+export interface JiraWireIssueLink {
+  id: string;
+  relation: string;
+  key: string;
+  title: string;
+  stateName: string;
+  stateCategory: JiraStateCategory;
+}
+
 export interface JiraWireTicket {
   /** Jira's numeric issue id, not the key. Both work as `issueIdOrKey` in
    * every REST path this uses, but the id survives an issue being moved to
@@ -216,6 +284,17 @@ export interface JiraWireTicket {
   epicName: string | null;
   storyPoints: number | null;
   sprintName: string | null;
+  labels: string[];
+  dueDate: string | null;
+  subtasks: JiraWireSubtask[];
+  links: JiraWireIssueLink[];
+  /**
+   * The description's raw ADF, carried ALONGSIDE the flattened `description`
+   * rather than replacing it. Keeping both is what lets the rich renderer land
+   * without a flag day: surfaces that still read `description` keep working
+   * unchanged, and null here simply means "render the plain text".
+   */
+  descriptionAdf: unknown | null;
   attachments: JiraWireAttachment[];
   /**
    * Whatever the bulk search's `expand=transitions` actually returned for
@@ -225,7 +304,11 @@ export interface JiraWireTicket {
    * comment for why that fallback is not optional.
    */
   transitions: JiraWireTransition[];
-  updatedAt: string;
+  /** When Jira last changed this issue (ISO), or null when Jira's payload
+   * omitted `updated`. Null, not "now" — jiraMap.ts's mapIssue used to
+   * fabricate the current time for a missing field, which pinned an
+   * untouched issue to the top of every "recently updated" sort. */
+  updatedAt: string | null;
 }
 
 /**
@@ -356,12 +439,169 @@ export interface JiraCommentBody {
   content: JiraAdfBlockNode[];
 }
 
+/**
+ * A restriction Jira placed on a comment — present on `JiraWireComment.visibility`
+ * only when the comment is NOT visible to everyone who can otherwise see the
+ * ticket. Read straight off the comment's own `visibility` object (Jira REST
+ * v3's `Comment.visibility`, e.g. `{ type: "role", value: "Administrators" }`);
+ * absent on the raw payload means the comment is fully public, which is why
+ * `JiraWireComment.visibility` is `null` in that case rather than this type
+ * with some "none" variant.
+ *
+ * This app can only ever READ this field. JiraCommentComposer.tsx has no
+ * control for restricting a reply, so every comment this app posts is fully
+ * public no matter what it is replying to. See ROAD-24, which this type
+ * exists to fix: without it, a comment restricted to a project role rendered
+ * indistinguishably from a public one, and a reasonable reply typed in the
+ * open could land on something that was meant to stay internal — worst on
+ * Jira Service Management projects, where "internal" is a real access
+ * boundary, not just a convention.
+ *
+ * `jsdPublic` — JSM's own separate public/internal-note flag for a
+ * customer-facing portal request — now DOES feed this type, as the
+ * `'internal'` variant below. That is a correction, not the original design:
+ * an earlier version of this file skipped `jsdPublic` on the strength of
+ * Atlassian's JSDCLOUD-15406, misread as saying the platform comment-read
+ * endpoints this client calls (`GET /rest/api/3/issue/{id}/comment`, see
+ * jiraClient.ts) don't reliably return it. That ticket is actually about the
+ * Automation web-request Issue Data payload, a different surface entirely,
+ * and its own reporter states plainly that `/rest/api/3/issue/` DOES return
+ * `jsdPublic`. The current v3 OpenAPI spec documents `Comment.jsdPublic` (a
+ * `readOnly` boolean) on the exact `Comment` schema this endpoint returns,
+ * and says it "defaults to true … when the project isn't a Jira Service
+ * Desk project" — so reading it can never false-positive an internal note on
+ * a non-JSM project; an absent or `true` value is simply not this case.
+ *
+ * The reason this couldn't stay a separate, unsurfaced axis: Atlassian's own
+ * JSDSERVER-1261 documents that a genuine JSM internal note — added through
+ * the service desk comment box's own "Add internal note" toggle, the
+ * everyday "meant to stay internal" case on a JSM project, far more common
+ * than a role/group restriction — comes back with NO `visibility` object at
+ * all. It is distinguished only by `jsdPublic: false`. Leaving that out left
+ * exactly the harm ROAD-24 names unaddressed on the project type where it
+ * bites hardest: no lock, no label, on the ordinary case, not just an edge
+ * one.
+ */
+export interface JiraCommentVisibility {
+  /**
+   * Jira's own two `visibility`-based restriction kinds are 'role' and
+   * 'group'. 'restricted' is never sent by Jira — mapComment (jiraMap.ts)
+   * falls back to it for any `visibility.type` this app doesn't recognize,
+   * so a restriction scheme this app has never seen still reads as "hidden
+   * from someone" instead of silently degrading to the unmarked,
+   * fully-public `null` case on `JiraWireComment.visibility`. Treating an
+   * unrecognized restriction as "public" would reproduce the exact bug this
+   * type exists to fix, just triggered by an unfamiliar shape instead of a
+   * missing field — so that direction of failure is the one this app cannot
+   * afford, even though it means occasionally locking a comment whose
+   * restriction we can't fully describe.
+   *
+   * 'internal' is a fourth kind this app adds, never sent by Jira as a
+   * `visibility.type` at all — see this interface's own comment above for
+   * why it exists and JSDSERVER-1261 for why a real `visibility` object is
+   * never present on the payload that produces it. `mapCommentVisibility`
+   * (jiraMap.ts) builds it from `jsdPublic === false` instead, and its own
+   * comment there has the precedence rule for the rare case a payload
+   * carries both.
+   */
+  type: 'role' | 'group' | 'restricted' | 'internal';
+  /**
+   * The role or group name Jira restricted this comment to — "Administrators",
+   * "Service Desk Team". Empty when Jira sent a `visibility` object without a
+   * usable `value`, or when `type` is `'internal'` — a JSM internal note has
+   * no role or group name to carry here; its own fixed label ("Internal
+   * note") is rendered directly, not built from this field. A `'restricted'`
+   * or empty-value comment still renders as restricted, just without a name
+   * to label it with.
+   *
+   * Jira's payload also carries `identifier`, the role/group's own id,
+   * alongside this. Not carried here — but not because it is deprecated: an
+   * earlier version of this comment claimed the v3 spec deprecates
+   * `identifier` in favor of `value`, which is backwards. The spec's actual
+   * wording, on `value` itself, is "the name of a group is mutable, to
+   * reliably identify a group use `identifier`" — `identifier` is the
+   * *stable* handle and `value` is the display name that can drift out from
+   * under it. Still left off this wire type regardless of which one is more
+   * durable: nothing in this app writes visibility, so there is no call an
+   * id would ever feed, and a read-only label needs a name to show, not an
+   * id to write back.
+   */
+  value: string;
+}
+
 export interface JiraWireComment {
   id: string;
   ticketId: string;
   authorName: string;
+  /**
+   * The author's Atlassian account id, or null when Jira withheld it.
+   *
+   * Needed because a "Reply" prefills a real ADF mention of the author, and
+   * an ADF mention node is keyed on accountId — a display name cannot build
+   * one, and guessing an id from a name would be wrong on any site with two
+   * people called Sam. Null is honest here: a mention simply cannot be
+   * offered for an author Jira did not identify.
+   */
+  authorAccountId: string | null;
+  /**
+   * When Jira last changed this comment, and who did. Both are on every
+   * comment in the payload and were being dropped.
+   *
+   * They are the freshness signal an edit needs: the thread is read once on
+   * mount, so without re-checking this before saving, editing a comment
+   * someone else changed in the meantime silently overwrites their words.
+   * Null when Jira omits it - never fabricated, same rule as createdAt.
+   */
+  updatedAt: string | null;
+  updateAuthorName: string | null;
   body: string;
-  createdAt: string;
+  /** When the comment was posted (ISO), or null when Jira's payload omitted
+   * `created` — see JiraWireTicket's updatedAt for why this is null rather
+   * than a fabricated "now". */
+  createdAt: string | null;
+  /**
+   * The id of the comment this one replies to, or null when it has none.
+   *
+   * Real and genuinely undocumented: verified live against the founder's own
+   * Jira (issue ENG-84) that a comment posted through Jira's own Reply button
+   * comes back carrying `parentId`, even though Atlassian's published OpenAPI
+   * spec names no such field on a comment, for reading or for writing. Treat
+   * the spec's silence as exactly that — silence, not proof the field isn't
+   * real.
+   *
+   * `parentId` arrives as a JSON **number** on the wire, unlike `id`, which
+   * Jira sends as a string — the same asymmetry `mapComment`'s `String(id)`
+   * already exists to paper over for `id` itself. Coerced to a string here for
+   * the same reason: two representations of the same kind of value invite a
+   * `===` that silently never matches. Jira also only ever includes this key
+   * on a comment that HAS a parent — it is absent, not present-and-null, on
+   * every top-level comment — so null here means exactly that, "no parent",
+   * not "Jira didn't say".
+   */
+  parentId: string | null;
+  /** Jira's restriction on who can see this comment, or `null` when it is
+   * fully public. See `JiraCommentVisibility` above for what each `type`
+   * means — including `'internal'`, built from this comment's own
+   * `jsdPublic` rather than from a real `visibility` object, which Jira
+   * never sends for that case (JSDSERVER-1261) — and why an unrecognized
+   * `visibility.type` never resolves to `null`. `mapCommentVisibility`
+   * (jiraMap.ts) has the precedence rule for the rare payload carrying both
+   * a `visibility` restriction and `jsdPublic: false` at once. */
+  visibility: JiraCommentVisibility | null;
+  /**
+   * The comment's raw ADF, carried ALONGSIDE the flattened `body` — same
+   * shape and same reason as `JiraWireTicket.descriptionAdf`: `body` stays
+   * the safe, always-rendering plain-text surface, and this is what an
+   * editor needing the real document tree (see jiraApi.ts's ADF <->
+   * markdown-lite pair, `buildCommentAdf`'s inverse) reads instead of trying
+   * to re-derive structure from flattened text. Null whenever Jira sent this
+   * comment as its legacy wiki-markup string rather than v3's real ADF (see
+   * `plainTextFromJiraBody`) — there is no document tree to carry in that
+   * case, only the string `body` already holds. A comment whose `bodyAdf` is
+   * null can never be offered for in-place editing: there is nothing to run
+   * the losslessness round-trip against.
+   */
+  bodyAdf: unknown | null;
 }
 
 /**

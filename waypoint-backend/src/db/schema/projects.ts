@@ -48,6 +48,17 @@ export const projects = pgTable('projects', {
   // real code (Copilot V3). Null means "not linked" — the same
   // absent-is-unset convention leadId/defaultAssigneeId/estimate use.
   repoPath: text('repo_path'),
+  // Persistent per-project counter backing tickets.sequenceId (ROAD-38).
+  // createTicket atomically increments this and uses the result directly —
+  // it never derives the next number from MAX(sequenceId) over existing
+  // tickets, because a delete just removes a row and would silently make
+  // its number available for reuse by an unrelated later ticket. Jira keys
+  // work the same way: an issue key never gets reassigned to a different
+  // issue, so an external reference to it stays valid forever. Existing
+  // projects are backfilled to MAX(sequenceId) over their current tickets
+  // (0 if none) by the migration that adds this column; new projects start
+  // at the default below.
+  nextSequenceId: integer('next_sequence_id').notNull().default(0),
 });
 
 export const projectMembers = pgTable(

@@ -1,13 +1,22 @@
 import type { JiraCredential } from './jiraAuth';
 
 const readStoredJiraCredentialMock = jest.fn<JiraCredential | null, []>();
+const markJiraCredentialInvalidMock = jest.fn();
+const clearJiraCredentialInvalidMarkerMock = jest.fn();
 jest.mock('./jiraAuth', () => ({
   readStoredJiraCredential: () => readStoredJiraCredentialMock(),
+  markJiraCredentialInvalid: () => markJiraCredentialInvalidMock(),
+  clearJiraCredentialInvalidMarker: () =>
+    clearJiraCredentialInvalidMarkerMock(),
 }));
 
 // eslint-disable-next-line import/order, import/first
 import {
+  deleteComment,
   downloadAttachment,
+  getComment,
+  getMyPermissions,
+  getTicket,
   listComments,
   listMyTickets,
   listPriorityOptions,
@@ -17,6 +26,7 @@ import {
   setTicketAssignee,
   setTicketPriority,
   transitionTicket,
+  updateComment,
   uploadAttachment,
   validateCredential,
 } from './jiraClient';
@@ -112,6 +122,33 @@ describe('request building', () => {
     expect(params.get('fields')).toBe('*all');
     expect(params.get('expand')).toContain('names');
   });
+
+  // ROAD-41: settles the dispute over whether labels, duedate, subtasks and
+  // issuelinks are requested. `*all` is Jira's own "every field, standard and
+  // custom" value — not a curated subset — so all four (and `description`,
+  // already read for the plain-text flatten) were already arriving in the
+  // response on both the bulk search above and the single-issue read below.
+  // Nothing about the request changed for ROAD-41; only jiraMap.ts's mapIssue
+  // started reading what was already there.
+  it('requests every field on a single-issue read too, the same way the search does', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        id: '10421',
+        key: 'ENG-421',
+        fields: {
+          summary: 's',
+          project: { key: 'ENG' },
+          status: { name: 'To Do', statusCategory: { key: 'new' } },
+        },
+      }),
+    );
+
+    await getTicket('10421');
+
+    const params = new URL(call()[0]).searchParams;
+    expect(params.get('fields')).toBe('*all');
+    expect(params.get('expand')).toContain('names');
+  });
 });
 
 describe('validateCredential', () => {
@@ -169,6 +206,37 @@ describe('validateCredential', () => {
     });
   });
 
+  // ROAD-16: this probes a CANDIDATE the connect form just typed in, not the
+  // credential jira:status reports on — nothing is stored yet at this point,
+  // and a mistyped token here is not "a previously good connection just
+  // stopped working". Flagging the connection here would either mark an
+  // unrelated credential from an earlier session, or write a marker with no
+  // credential behind it at all.
+  it('does not flag the stored connection over a rejected CANDIDATE credential', async () => {
+    fetchMock.mockResolvedValue(emptyResponse(401));
+
+    await validateCredential(CREDENTIAL);
+
+    expect(markJiraCredentialInvalidMock).not.toHaveBeenCalled();
+  });
+
+  // The same opt-out, the other direction: a candidate probe SUCCEEDING says
+  // nothing about whether the credential actually stored on disk (a
+  // different email/token, from an earlier session) is still good — so it
+  // must not clear that stored credential's marker either.
+  it('does not clear the stored connection marker over a successful CANDIDATE credential', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        accountId: CREDENTIAL.accountId,
+        emailAddress: CREDENTIAL.email,
+      }),
+    );
+
+    await validateCredential(CREDENTIAL);
+
+    expect(clearJiraCredentialInvalidMarkerMock).not.toHaveBeenCalled();
+  });
+
   // The connect form has to say something completely different for "Jira said
   // no" than for "we never reached Jira" — a typo'd token and an offline
   // laptop must not look identical.
@@ -221,6 +289,100 @@ describe('validateCredential', () => {
       reason: 'site_not_found',
     });
   });
+
+  // ROAD-21: a typo'd *.atlassian.net subdomain never reaches a Jira site at
+  // all — Atlassian's own edge answers a real 404 for it, which is the same
+  // underlying fact ENOTFOUND reports for a domain that doesn't resolve.
+  // Before this, `jiraFetch` still classified it `not_found` (correct for
+  // every OTHER caller — see jiraTypes.ts) and the connect form showed
+  // whatever `messageFromErrorBody` fell back to, e.g. "Jira returned 404."
+  it('translates a 404 from a *.atlassian.net host to "site doesn\'t exist"', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ errorMessages: ['Site does not exist.'] }, 404),
+    );
+
+    expect(await validateCredential(CREDENTIAL)).toEqual({
+      ok: false,
+      reason: 'site_not_found',
+      message:
+        "That site doesn't exist — check the address (e.g. yourteam.atlassian.net).",
+    });
+  });
+
+  // A host outside atlassian.net that 404s DID resolve and answered
+  // something — just not a Jira Cloud API — so it gets the other
+  // already-written message rather than "that site doesn't exist".
+  it('translates a 404 from a non-atlassian.net host to "not like a Jira Cloud site"', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ errorMessages: ['Not Found'] }, 404),
+    );
+
+    expect(
+      await validateCredential({ ...CREDENTIAL, site: 'jira.northwind.dev' }),
+    ).toEqual({
+      ok: false,
+      reason: 'site_not_found',
+      message:
+        'That address answered, but not like a Jira Cloud site — check the site address.',
+    });
+  });
+
+  // Atlassian's edge answers an unregistered subdomain with an HTML page,
+  // not JSON — `messageFromErrorBody` never gets a body it can read, and the
+  // classification here doesn't need one: it decides from the candidate
+  // hostname alone, so nothing from that HTML page can leak into the
+  // message shown next to the address field.
+  it('classifies an HTML 404 body the same way, without leaking HTML into the message', async () => {
+    fetchMock.mockResolvedValue({
+      status: 404,
+      ok: false,
+      text: async () =>
+        '<!doctype html><title>Oops, this site doesn’t exist</title>',
+    } as unknown as Response);
+
+    const result = await validateCredential(CREDENTIAL);
+
+    // The exact-string match above is what proves no HTML leaked; this is
+    // just the same fact stated in the terms the test name uses.
+    expect(result).toEqual({
+      ok: false,
+      reason: 'site_not_found',
+      message:
+        "That site doesn't exist — check the address (e.g. yourteam.atlassian.net).",
+    });
+  });
+
+  // Found in review: the two host cases above cannot tell an end-anchored
+  // `/\.atlassian\.net$/` from `.includes('.atlassian.net')` or from a
+  // rule missing the leading dot — every candidate gave the same answer
+  // under all three. These two hosts are the ones that disagree.
+  it.each([
+    // `.atlassian.net` appears in the middle: only an end-anchored rule
+    // says this is NOT Atlassian's own domain.
+    [
+      'foo.atlassian.net.evil.io',
+      'That address answered, but not like a Jira Cloud site — check the site address.',
+    ],
+    // No dot before "atlassian.net": only a rule that requires the dot
+    // says this is NOT an Atlassian subdomain.
+    [
+      'myatlassian.net',
+      'That address answered, but not like a Jira Cloud site — check the site address.',
+    ],
+  ])(
+    'pins the rule to a real *.atlassian.net suffix for %s',
+    async (site, message) => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({ errorMessages: ['Not Found'] }, 404),
+      );
+
+      expect(await validateCredential({ ...CREDENTIAL, site })).toEqual({
+        ok: false,
+        reason: 'site_not_found',
+        message,
+      });
+    },
+  );
 });
 
 describe('listMyTickets', () => {
@@ -1161,14 +1323,14 @@ describe('downloadAttachment', () => {
     expect(await downloadAttachment('10050')).toMatchObject({ ok: true });
   });
 
-  it('reports a deleted attachment as a Jira error, in Jira’s own words', async () => {
+  it('reports a deleted attachment as not_found, in Jira’s own words', async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({ errorMessages: ['Attachment does not exist.'] }, 404),
     );
 
     expect(await downloadAttachment('10050')).toMatchObject({
       ok: false,
-      reason: 'jira_error',
+      reason: 'not_found',
       message: 'Attachment does not exist.',
     });
   });
@@ -1562,5 +1724,472 @@ describe('comments', () => {
       ok: false,
       reason: 'forbidden',
     });
+  });
+
+  // The one thing the founder's live check could NOT confirm: whether this
+  // public write endpoint accepts `parentId` at all. This only pins what
+  // Waypoint sends, never what Jira does with it — see postComment's own
+  // comment and jiraApi.ts's toComment for why the RESPONSE, not this
+  // request, is what ever gets trusted about whether a reply actually nested.
+  it('includes parentId in the request body when replying', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        id: '10510',
+        author: { displayName: 'Max Chen' },
+        body: PLAIN_ADF_BODY,
+        created: '2026-09-01T10:10:00.000+0000',
+      }),
+    );
+
+    await postComment('10421', PLAIN_ADF_BODY, '10158');
+
+    const [, init] = call();
+    expect(JSON.parse(init.body as string)).toEqual({
+      body: PLAIN_ADF_BODY,
+      parentId: '10158',
+    });
+  });
+
+  // Not `parentId: null` or `parentId: undefined` on the wire — the field is
+  // omitted outright for an ordinary comment, the same "say nothing rather
+  // than send an empty claim" choice this codebase makes elsewhere for an
+  // undocumented or partially-known field.
+  it('omits parentId entirely for an ordinary, non-reply comment', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        id: '10511',
+        author: { displayName: 'Max Chen' },
+        body: PLAIN_ADF_BODY,
+        created: '2026-09-01T10:11:00.000+0000',
+      }),
+    );
+
+    await postComment('10421', PLAIN_ADF_BODY, null);
+
+    const [, init] = call();
+    const sent = JSON.parse(init.body as string);
+    expect(sent).toEqual({ body: PLAIN_ADF_BODY });
+    expect(Object.prototype.hasOwnProperty.call(sent, 'parentId')).toBe(false);
+  });
+
+  // The whole safety property this feature is built on: a reply's own
+  // returned comment reflects what JIRA reported, not what was requested. If
+  // Jira silently ignored the field (undocumented, unverified — see
+  // postComment's own comment), the response carries no parentId and the
+  // mapped comment must say so honestly.
+  it("maps the response's own parentId, not the one that was requested", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        id: '10512',
+        author: { displayName: 'Max Chen' },
+        body: PLAIN_ADF_BODY,
+        created: '2026-09-01T10:12:00.000+0000',
+        // No `parentId` here — Jira's honest answer when it declined (or
+        // never recognized) the field this request asked for.
+      }),
+    );
+
+    const result = await postComment('10421', PLAIN_ADF_BODY, '10158');
+
+    expect(result).toMatchObject({ ok: true, value: { parentId: null } });
+  });
+});
+
+describe('deleteComment', () => {
+  it('DELETEs the exact issue/comment path', async () => {
+    fetchMock.mockResolvedValue(emptyResponse(204));
+
+    await deleteComment('10421', '10500');
+
+    const [url, init] = call();
+    expect(init.method).toBe('DELETE');
+    expect(url).toContain('/rest/api/3/issue/10421/comment/10500');
+  });
+
+  // Jira's documented answer on success: 204, no body. `readJsonBody`'s
+  // existing 204 branch resolves this to `undefined` without attempting a
+  // body read, which is what makes `JiraResult<void>` true rather than
+  // something this function had to special-case.
+  it('reports success on a 204 with no body', async () => {
+    fetchMock.mockResolvedValue(emptyResponse(204));
+
+    expect(await deleteComment('10421', '10500')).toEqual({
+      ok: true,
+      value: undefined,
+    });
+  });
+
+  it('reports a permission failure as forbidden, not as bad credentials', async () => {
+    fetchMock.mockResolvedValue(emptyResponse(403));
+
+    expect(await deleteComment('10421', '10500')).toMatchObject({
+      ok: false,
+      reason: 'forbidden',
+    });
+  });
+
+  // Someone else's tab already deleted the same comment, it never existed, or
+  // this account may no longer browse it. Jira reports all three as the same
+  // 404 carrying its own error body, same as every other write here —
+  // surfaced through the shared classification rather than a bespoke branch.
+  it('reports an already-deleted comment as not_found, in Jira’s own words', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ errorMessages: ['The comment could not be found.'] }, 404),
+    );
+
+    expect(await deleteComment('10421', '10500')).toMatchObject({
+      ok: false,
+      reason: 'not_found',
+      message: 'The comment could not be found.',
+    });
+  });
+
+  it('refuses without a stored credential rather than calling out unauthenticated', async () => {
+    readStoredJiraCredentialMock.mockReturnValue(null);
+
+    const result = await deleteComment('10421', '10500');
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: false, reason: 'not_connected' });
+  });
+});
+
+describe('getComment', () => {
+  it('GETs the exact issue/comment path', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        id: '10500',
+        author: { displayName: 'Sam Lee' },
+        body: 'Original text.',
+        created: '2026-09-01T09:00:00.000+0000',
+        updated: '2026-09-03T08:15:00.000+0000',
+        updateAuthor: { displayName: 'Priya Raman' },
+      }),
+    );
+
+    await getComment('10421', '10500');
+
+    const [url, init] = call();
+    expect(init.method).toBe('GET');
+    expect(url).toContain('/rest/api/3/issue/10421/comment/10500');
+  });
+
+  // The whole reason this channel exists: `listComments` is capped and
+  // newest-first, so it cannot reliably answer "what is this ONE comment's
+  // updated/updateAuthor right now" for an old comment on a busy thread. This
+  // pins that the mapped result carries the freshness fields, not just id
+  // and body.
+  it('maps the freshness fields off the single comment Jira returns', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        id: '10500',
+        author: { displayName: 'Sam Lee' },
+        body: 'Original text.',
+        created: '2026-09-01T09:00:00.000+0000',
+        updated: '2026-09-03T08:15:00.000+0000',
+        updateAuthor: { displayName: 'Priya Raman' },
+      }),
+    );
+
+    expect(await getComment('10421', '10500')).toMatchObject({
+      ok: true,
+      value: {
+        id: '10500',
+        updatedAt: '2026-09-03T08:15:00.000+0000',
+        updateAuthorName: 'Priya Raman',
+      },
+    });
+  });
+
+  it('reports a permission failure as forbidden, not as bad credentials', async () => {
+    fetchMock.mockResolvedValue(emptyResponse(403));
+
+    expect(await getComment('10421', '10500')).toMatchObject({
+      ok: false,
+      reason: 'forbidden',
+    });
+  });
+
+  // The comment was deleted (by someone else, or in another tab) between the
+  // thread being read on mount and the freshness check running — or this
+  // account lost permission to browse it, which Jira answers identically.
+  // `not_found` rather than `jira_error` is the whole point of this path:
+  // it is the signal the renderer's freshness guards branch on, and the
+  // only evidence they are allowed to treat as "this is really gone" (see
+  // jiraTypes.ts's own comment on the reason).
+  it('reports a comment Jira will not show as not_found, in Jira’s own words', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ errorMessages: ['The comment could not be found.'] }, 404),
+    );
+
+    expect(await getComment('10421', '10500')).toMatchObject({
+      ok: false,
+      reason: 'not_found',
+      message: 'The comment could not be found.',
+    });
+  });
+
+  it('refuses without a stored credential rather than calling out unauthenticated', async () => {
+    readStoredJiraCredentialMock.mockReturnValue(null);
+
+    const result = await getComment('10421', '10500');
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: false, reason: 'not_connected' });
+  });
+});
+
+describe('updateComment', () => {
+  const EDITED_ADF_BODY = {
+    type: 'doc' as const,
+    version: 1 as const,
+    content: [
+      {
+        type: 'paragraph' as const,
+        content: [{ type: 'text' as const, text: 'Edited text.' }],
+      },
+    ],
+  };
+
+  it('PUTs the exact issue/comment path with the new body', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        id: '10500',
+        author: { displayName: 'Sam Lee' },
+        body: EDITED_ADF_BODY,
+        created: '2026-09-01T09:00:00.000+0000',
+      }),
+    );
+
+    await updateComment('10421', '10500', EDITED_ADF_BODY);
+
+    const [url, init] = call();
+    expect(init.method).toBe('PUT');
+    expect(url).toContain('/rest/api/3/issue/10421/comment/10500');
+    expect(JSON.parse(init.body as string)).toEqual({ body: EDITED_ADF_BODY });
+  });
+
+  // The whole safety property an edit is built on, same as postComment's own
+  // reply-nesting test just above: the returned comment reflects what JIRA
+  // reported for THIS comment, never fields assembled from the request. A
+  // parentId here comes only from the response, so an edited reply keeps
+  // whatever thread position Jira still reports for it.
+  it("maps the response's own comment, not one assembled from the request", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        id: '10500',
+        author: { displayName: 'Sam Lee' },
+        body: EDITED_ADF_BODY,
+        created: '2026-09-01T09:00:00.000+0000',
+        parentId: 10158,
+      }),
+    );
+
+    const result = await updateComment('10421', '10500', EDITED_ADF_BODY);
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: { id: '10500', body: 'Edited text.', parentId: '10158' },
+    });
+  });
+
+  it('reports a permission failure as forbidden, not as bad credentials', async () => {
+    fetchMock.mockResolvedValue(emptyResponse(403));
+
+    expect(
+      await updateComment('10421', '10500', EDITED_ADF_BODY),
+    ).toMatchObject({ ok: false, reason: 'forbidden' });
+  });
+
+  it('reports a not-found comment as not_found, in Jira’s own words', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ errorMessages: ['The comment could not be found.'] }, 404),
+    );
+
+    expect(
+      await updateComment('10421', '10500', EDITED_ADF_BODY),
+    ).toMatchObject({
+      ok: false,
+      reason: 'not_found',
+      message: 'The comment could not be found.',
+    });
+  });
+
+  it('refuses without a stored credential rather than calling out unauthenticated', async () => {
+    readStoredJiraCredentialMock.mockReturnValue(null);
+
+    const result = await updateComment('10421', '10500', EDITED_ADF_BODY);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: false, reason: 'not_connected' });
+  });
+});
+
+describe('getMyPermissions', () => {
+  function permissionsResponse(
+    have: Partial<
+      Record<
+        | 'DELETE_ALL_COMMENTS'
+        | 'DELETE_OWN_COMMENTS'
+        | 'EDIT_ALL_COMMENTS'
+        | 'EDIT_OWN_COMMENTS',
+        boolean
+      >
+    >,
+  ) {
+    const keys = [
+      'DELETE_ALL_COMMENTS',
+      'DELETE_OWN_COMMENTS',
+      'EDIT_ALL_COMMENTS',
+      'EDIT_OWN_COMMENTS',
+    ] as const;
+    return {
+      permissions: Object.fromEntries(
+        keys.map((key) => [key, { havePermission: have[key] === true }]),
+      ),
+    };
+  }
+
+  it('asks mypermissions for exactly the four comment permissions, scoped to the issue', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(permissionsResponse({})));
+
+    await getMyPermissions('ENG-421');
+
+    const params = new URL(call()[0]).searchParams;
+    expect(call()[0]).toContain('/rest/api/3/mypermissions');
+    expect(params.get('issueKey')).toBe('ENG-421');
+    expect(params.get('permissions')).toBe(
+      'DELETE_ALL_COMMENTS,DELETE_OWN_COMMENTS,EDIT_ALL_COMMENTS,EDIT_OWN_COMMENTS',
+    );
+  });
+
+  // The common real-site case: a non-admin may remove their own remarks but
+  // not moderate everyone else's.
+  it('parses a site where the user may delete/edit only their own comments', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        permissionsResponse({
+          DELETE_OWN_COMMENTS: true,
+          EDIT_OWN_COMMENTS: true,
+        }),
+      ),
+    );
+
+    expect(await getMyPermissions('ENG-421')).toEqual({
+      ok: true,
+      value: {
+        deleteAll: false,
+        deleteOwn: true,
+        editAll: false,
+        editOwn: true,
+      },
+    });
+  });
+
+  it('parses a project admin who may delete/edit anyone’s comments', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        permissionsResponse({
+          DELETE_ALL_COMMENTS: true,
+          DELETE_OWN_COMMENTS: true,
+          EDIT_ALL_COMMENTS: true,
+          EDIT_OWN_COMMENTS: true,
+        }),
+      ),
+    );
+
+    expect(await getMyPermissions('ENG-421')).toEqual({
+      ok: true,
+      value: { deleteAll: true, deleteOwn: true, editAll: true, editOwn: true },
+    });
+  });
+
+  // A key Jira's answer omits entirely is not evidence the user holds it —
+  // read closed, not open, the same direction every other unknown in this
+  // client degrades toward.
+  it('reads a permission Jira omitted from its answer as false, not true', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ permissions: {} }));
+
+    expect(await getMyPermissions('ENG-421')).toEqual({
+      ok: true,
+      value: {
+        deleteAll: false,
+        deleteOwn: false,
+        editAll: false,
+        editOwn: false,
+      },
+    });
+  });
+
+  it('refuses without a stored credential rather than calling out unauthenticated', async () => {
+    readStoredJiraCredentialMock.mockReturnValue(null);
+
+    const result = await getMyPermissions('ENG-421');
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: false, reason: 'not_connected' });
+  });
+});
+
+// ROAD-16: `jira:status` used to be a purely local file read that never
+// noticed a token revoked or expired on Atlassian's side, so it reported
+// `connected: true` forever. Every REAL, authenticated call this client
+// makes — the stored credential `requireCredential` reads, not a candidate
+// being probed — must flag that on a 401, so the next `jira:status` read
+// tells the truth. `listMyTickets` stands in for the whole family here
+// rather than repeating this once per exported function: they all funnel
+// through the same `performRequest`, which is what actually decides this,
+// and that single choke point is exactly what `request building` above
+// already leans on for the same reason.
+describe('flagging the connection dead on a real 401 (ROAD-16)', () => {
+  it('flags the stored credential when an authenticated call is rejected', async () => {
+    fetchMock.mockResolvedValue(emptyResponse(401));
+
+    await listMyTickets();
+
+    expect(markJiraCredentialInvalidMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not flag anything on a successful call', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+
+    await listMyTickets();
+
+    expect(markJiraCredentialInvalidMock).not.toHaveBeenCalled();
+  });
+
+  // 403/429 are a real, live credential Jira is choosing not to honor for
+  // this call — a permission or a rate limit, not "this token is dead". Only
+  // 401 is Jira's own word that authentication itself failed.
+  it('does not flag the connection on 403 or 429, only on 401', async () => {
+    fetchMock.mockResolvedValueOnce(emptyResponse(403));
+    await listMyTickets();
+    fetchMock.mockResolvedValueOnce(emptyResponse(429));
+    await listMyTickets();
+
+    expect(markJiraCredentialInvalidMock).not.toHaveBeenCalled();
+  });
+
+  // A single transient or spurious 401 (an Atlassian auth-service blip, a
+  // briefly-locked account) must not pin jira:status to "not connected"
+  // forever once the same credential goes on to work again — the marker has
+  // to be self-healing, not just settable.
+  it('clears a stale marker the moment the same credential succeeds again', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+
+    await listMyTickets();
+
+    expect(clearJiraCredentialInvalidMarkerMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not clear anything on a failed call', async () => {
+    fetchMock.mockResolvedValueOnce(emptyResponse(401));
+    await listMyTickets();
+    fetchMock.mockResolvedValueOnce(emptyResponse(403));
+    await listMyTickets();
+    fetchMock.mockResolvedValueOnce(emptyResponse(429));
+    await listMyTickets();
+
+    expect(clearJiraCredentialInvalidMarkerMock).not.toHaveBeenCalled();
   });
 });

@@ -924,6 +924,23 @@ describe('mapIssue', () => {
     });
   });
 
+  // The queue's default sort keys on this field (useMyJiraQueue.ts's
+  // compareTickets), so a fabricated "now" here used to pin an untouched
+  // issue to the top of every refresh.
+  describe('updatedAt, when Jira omits `updated`', () => {
+    it('maps null rather than the current time', () => {
+      expect(mapIssue(issue({ updated: undefined }), ME)).toMatchObject({
+        updatedAt: null,
+      });
+    });
+
+    it('still carries a real `updated` through untouched', () => {
+      expect(
+        mapIssue(issue({ updated: '2026-09-01T10:00:00.000+0000' }), ME),
+      ).toMatchObject({ updatedAt: '2026-09-01T10:00:00.000+0000' });
+    });
+  });
+
   // The same split priority already has between its display word and its
   // writable id: `assigneeName` is a label (and "Unassigned" is this app's own
   // fallback, not something Jira said), while the account id is the only thing
@@ -1367,6 +1384,223 @@ describe('mapIssue', () => {
   it('returns null for a payload that is not an issue', () => {
     expect(mapIssue({ nope: true }, ME)).toBeNull();
   });
+
+  // ROAD-41 parity fields: labels, dueDate, subtasks, links, descriptionAdf.
+  // `fields: '*all'` (jiraClient.ts) already asks Jira for every one of
+  // these on both the search and the single-issue read, so the shapes below
+  // are exactly what a real response carries — nothing here required a new
+  // request parameter, only a mapping.
+  describe('labels', () => {
+    it('maps a real label list', () => {
+      expect(
+        mapIssue(issue({ labels: ['backend', 'needs-design'] }), ME),
+      ).toMatchObject({ labels: ['backend', 'needs-design'] });
+    });
+
+    it('degrades to an empty array rather than throwing when labels are absent', () => {
+      expect(mapIssue(issue({ labels: undefined }), ME)).toMatchObject({
+        labels: [],
+      });
+    });
+  });
+
+  describe('dueDate', () => {
+    // Jira's own shape for this field: a calendar date, no time, no offset.
+    it('carries the date-only string through exactly as Jira sent it', () => {
+      expect(mapIssue(issue({ duedate: '2026-09-18' }), ME)).toMatchObject({
+        dueDate: '2026-09-18',
+      });
+    });
+
+    // Not "today", not an ISO datetime with a fabricated time-of-day — see
+    // this file's own note on updatedAt for why an invented value is worse
+    // than an honest null.
+    it('maps a missing duedate to null, never a fabricated date', () => {
+      expect(mapIssue(issue({ duedate: undefined }), ME)).toMatchObject({
+        dueDate: null,
+      });
+      expect(mapIssue(issue({ duedate: null }), ME)).toMatchObject({
+        dueDate: null,
+      });
+    });
+  });
+
+  describe('subtasks', () => {
+    it('maps exactly what JiraWireSubtask declares, nothing invented', () => {
+      expect(
+        mapIssue(
+          issue({
+            subtasks: [
+              {
+                id: '10501',
+                key: 'ENG-422',
+                fields: {
+                  summary: 'Add a migration',
+                  status: {
+                    name: 'Done',
+                    statusCategory: { key: 'done' },
+                  },
+                },
+              },
+            ],
+          }),
+          ME,
+        ),
+      ).toMatchObject({
+        subtasks: [
+          {
+            id: '10501',
+            key: 'ENG-422',
+            title: 'Add a migration',
+            stateName: 'Done',
+            stateCategory: 'done',
+          },
+        ],
+      });
+    });
+
+    it('maps an issue with no subtasks to an empty array, not null', () => {
+      expect(mapIssue(issue({ subtasks: undefined }), ME)).toMatchObject({
+        subtasks: [],
+      });
+      expect(mapIssue(issue({ subtasks: [] }), ME)).toMatchObject({
+        subtasks: [],
+      });
+    });
+  });
+
+  describe('links', () => {
+    // Jira nests inward/outward asymmetrically: only one side is present per
+    // entry, and it names the direction THIS link was found in — the phrase
+    // has to come from that side's own word, not the other one.
+    it('reads the outward phrase and issue when found on the outward side', () => {
+      expect(
+        mapIssue(
+          issue({
+            issuelinks: [
+              {
+                id: '10900',
+                type: { name: 'Blocks', inward: 'is blocked by', outward: 'blocks' },
+                outwardIssue: {
+                  id: '10422',
+                  key: 'ENG-423',
+                  fields: {
+                    summary: 'Ship the migration',
+                    status: {
+                      name: 'To Do',
+                      statusCategory: { key: 'new' },
+                    },
+                  },
+                },
+              },
+            ],
+          }),
+          ME,
+        ),
+      ).toMatchObject({
+        links: [
+          {
+            id: '10422',
+            relation: 'blocks',
+            key: 'ENG-423',
+            title: 'Ship the migration',
+            stateName: 'To Do',
+            stateCategory: 'todo',
+          },
+        ],
+      });
+    });
+
+    it('reads the inward phrase and issue when found on the inward side', () => {
+      expect(
+        mapIssue(
+          issue({
+            issuelinks: [
+              {
+                id: '10901',
+                type: { name: 'Blocks', inward: 'is blocked by', outward: 'blocks' },
+                inwardIssue: {
+                  id: '10424',
+                  key: 'ENG-425',
+                  fields: {
+                    summary: 'Cut the release',
+                    status: {
+                      name: 'In Progress',
+                      statusCategory: { key: 'indeterminate' },
+                    },
+                  },
+                },
+              },
+            ],
+          }),
+          ME,
+        ),
+      ).toMatchObject({
+        links: [
+          {
+            id: '10424',
+            relation: 'is blocked by',
+            key: 'ENG-425',
+            title: 'Cut the release',
+            stateName: 'In Progress',
+            stateCategory: 'in-progress',
+          },
+        ],
+      });
+    });
+
+    it('maps an issue with no links to an empty array, not null', () => {
+      expect(mapIssue(issue({ issuelinks: undefined }), ME)).toMatchObject({
+        links: [],
+      });
+      expect(mapIssue(issue({ issuelinks: [] }), ME)).toMatchObject({
+        links: [],
+      });
+    });
+  });
+
+  describe('descriptionAdf', () => {
+    it('carries the raw ADF node alongside the flattened description', () => {
+      const adf = {
+        type: 'doc',
+        content: [
+          { type: 'paragraph', content: [{ type: 'text', text: 'Details.' }] },
+        ],
+      };
+      expect(mapIssue(issue({ description: adf }), ME)).toMatchObject({
+        description: 'Details.',
+        descriptionAdf: adf,
+      });
+    });
+
+    // A description that is absent entirely — not present on the payload at
+    // all, the trimmed-response case, distinct from an explicit null.
+    it('maps null when the description is absent entirely', () => {
+      expect(mapIssue(issue({ description: undefined }), ME)).toMatchObject({
+        description: '',
+        descriptionAdf: null,
+      });
+    });
+
+    it('maps null when Jira explicitly returns no description', () => {
+      expect(mapIssue(issue({ description: null }), ME)).toMatchObject({
+        description: '',
+        descriptionAdf: null,
+      });
+    });
+
+    // Legacy wiki markup is a string, not an ADF document tree — carrying it
+    // under descriptionAdf would mislabel it as something a rich renderer
+    // could walk as a node.
+    it('does not carry legacy wiki-markup text as if it were ADF', () => {
+      expect(
+        mapIssue(issue({ description: 'a *bold* word' }), ME),
+      ).toMatchObject({
+        description: 'a bold word',
+        descriptionAdf: null,
+      });
+    });
+  });
 });
 
 describe('mapTransitions', () => {
@@ -1572,9 +1806,78 @@ describe('mapComment', () => {
       id: '10500',
       ticketId: '10421',
       authorName: 'Sam Lee',
+      authorAccountId: null,
+      updatedAt: null,
+      updateAuthorName: null,
       body: 'Replay log attached.',
+      // A v2-shaped string body is legacy wiki markup, never a document tree
+      // — see `adfBodyOf`'s own comment for why the string branch degrades
+      // to null here exactly like a missing field would.
+      bodyAdf: null,
       createdAt: '2026-09-01T09:00:00.000+0000',
+      parentId: null,
+      // No `visibility` on the raw payload — a fully public comment.
+      visibility: null,
     });
+  });
+
+  // JiraTicketDetail.tsx's formatRelativeTime renders this field, and a
+  // fabricated "now" would have shown a freshly-omitted `created` as
+  // "just now" rather than the honest "Unknown".
+  it('maps null, not the current time, when Jira omits `created`', () => {
+    expect(
+      mapComment(
+        { id: '10502', author: { displayName: 'Sam Lee' }, body: 'No date.' },
+        '10421',
+      ),
+    ).toEqual({
+      id: '10502',
+      ticketId: '10421',
+      authorName: 'Sam Lee',
+      authorAccountId: null,
+      updatedAt: null,
+      updateAuthorName: null,
+      body: 'No date.',
+      bodyAdf: null,
+      createdAt: null,
+      parentId: null,
+      visibility: null,
+    });
+  });
+
+  // Live-confirmed against ENG-84: Jira sends `parentId` as a JSON number on
+  // a comment that has a parent (`id` itself is a string on the very same
+  // payload) — the same asymmetry `idOf` already exists to paper over for
+  // every other id `mapIssue`/`mapComment` coerce.
+  it("coerces a numeric parentId to a string, matching id's own coercion", () => {
+    expect(
+      mapComment(
+        {
+          id: '10192',
+          author: { displayName: 'Sam Lee' },
+          body: 'Reply should be like this.',
+          created: '2026-09-01T09:05:00.000+0000',
+          parentId: 10158,
+        },
+        '10421',
+      ),
+    ).toMatchObject({ id: '10192', parentId: '10158' });
+  });
+
+  // Jira only includes the key at all on a comment that HAS a parent — it is
+  // absent, not present-and-null, on a top-level comment.
+  it('maps a missing parentId to null, not to a fabricated top-level answer', () => {
+    expect(
+      mapComment(
+        {
+          id: '10158',
+          author: { displayName: 'Sam Lee' },
+          body: 'Hello',
+          created: '2026-09-01T09:00:00.000+0000',
+        },
+        '10421',
+      ),
+    ).toMatchObject({ id: '10158', parentId: null });
   });
 
   // Defensive: a v3-shaped body must not render as "[object Object]".
@@ -1598,6 +1901,139 @@ describe('mapComment', () => {
         '10421',
       )?.body,
     ).toBe('Taking it.');
+  });
+
+  // `bodyAdf` is what the comment editor's losslessness round-trip (see
+  // jiraApi.ts) reads instead of trying to re-derive structure from the
+  // flattened `body` string above — carried alongside it, not in place of
+  // it, same as mapIssue's own descriptionAdf.
+  it('carries the raw ADF alongside the flattened body', () => {
+    const adf = {
+      type: 'doc',
+      version: 1,
+      content: [
+        {
+          type: 'paragraph',
+          content: [{ type: 'text', text: 'Taking it.' }],
+        },
+      ],
+    };
+
+    expect(
+      mapComment(
+        {
+          id: '10501',
+          author: { displayName: 'Max Chen' },
+          body: adf,
+          created: '2026-09-01T09:30:00.000+0000',
+        },
+        '10421',
+      )?.bodyAdf,
+    ).toEqual(adf);
+  });
+
+  // Comment freshness: `updated`/`updateAuthor` are the signal an edit needs
+  // to know whether the thread it read on mount is still current. Jira sends
+  // both on every comment, mirroring `created`/`author`, and they must be
+  // mapped for real — see jiraMap.ts's own note on why a fabricated value
+  // here is worse than a missing one.
+  describe('updatedAt / updateAuthorName', () => {
+    it('maps `updated` and `updateAuthor` when Jira sends them', () => {
+      expect(
+        mapComment(
+          {
+            id: '10504',
+            author: { displayName: 'Sam Lee' },
+            body: 'Original text.',
+            created: '2026-09-01T09:00:00.000+0000',
+            updated: '2026-09-02T14:30:00.000+0000',
+            updateAuthor: { displayName: 'Priya Raman' },
+          },
+          '10421',
+        ),
+      ).toMatchObject({
+        updatedAt: '2026-09-02T14:30:00.000+0000',
+        updateAuthorName: 'Priya Raman',
+      });
+    });
+
+    // The common case, live-confirmed: an edited comment's `updated` differs
+    // from its `created`, and the two must not be conflated into one field.
+    it('maps `updated` distinctly from `created` when a comment was edited after posting', () => {
+      const mapped = mapComment(
+        {
+          id: '10505',
+          author: { displayName: 'Sam Lee' },
+          body: 'Edited text.',
+          created: '2026-09-01T09:00:00.000+0000',
+          updated: '2026-09-03T08:15:00.000+0000',
+          updateAuthor: { displayName: 'Sam Lee' },
+        },
+        '10421',
+      );
+      expect(mapped?.createdAt).toBe('2026-09-01T09:00:00.000+0000');
+      expect(mapped?.updatedAt).toBe('2026-09-03T08:15:00.000+0000');
+      expect(mapped?.updatedAt).not.toBe(mapped?.createdAt);
+    });
+
+    it('maps a missing `updated` to null, not to `created` or the current time', () => {
+      expect(
+        mapComment(
+          {
+            id: '10506',
+            author: { displayName: 'Sam Lee' },
+            body: 'No update timestamp.',
+            created: '2026-09-01T09:00:00.000+0000',
+          },
+          '10421',
+        ),
+      ).toMatchObject({ updatedAt: null, updateAuthorName: null });
+    });
+
+    // `updateAuthor` absent must not fall back to "Unknown": that fallback
+    // exists for authorName, where every comment genuinely has an author, but
+    // handing it to a comment with no update author at all would invent an
+    // editor for a comment nobody has edited.
+    it('maps a missing `updateAuthor` to null rather than "Unknown"', () => {
+      expect(
+        mapComment(
+          {
+            id: '10507',
+            author: { displayName: 'Sam Lee' },
+            body: 'Edited, but Jira sent no updateAuthor.',
+            created: '2026-09-01T09:00:00.000+0000',
+            updated: '2026-09-01T09:10:00.000+0000',
+          },
+          '10421',
+        ),
+      ).toMatchObject({
+        updatedAt: '2026-09-01T09:10:00.000+0000',
+        updateAuthorName: null,
+      });
+    });
+
+    // An `updateAuthor` object that is present but carries no displayName
+    // still gets the same "Unknown" fallback authorName uses — the object
+    // itself says someone edited this comment, so null here would misreport
+    // "never edited" rather than "edited by someone this payload didn't name".
+    it('falls back to "Unknown" for an updateAuthor with no displayName', () => {
+      expect(
+        mapComment(
+          {
+            id: '10508',
+            author: { displayName: 'Sam Lee' },
+            body: 'Edited by someone unnamed.',
+            created: '2026-09-01T09:00:00.000+0000',
+            updated: '2026-09-01T09:10:00.000+0000',
+            updateAuthor: {},
+          },
+          '10421',
+        ),
+      ).toMatchObject({
+        updatedAt: '2026-09-01T09:10:00.000+0000',
+        updateAuthorName: 'Unknown',
+      });
+    });
   });
 
   // A string body is legacy wiki markup, not plain text. Before this, the
@@ -1714,5 +2150,229 @@ describe('mapComment', () => {
 
     expect(body).toBe('@a teammate see this patch');
     expect(body).not.toContain('accountid');
+  });
+
+  // ROAD-24: mapComment ignored `visibility` entirely, so a comment
+  // restricted to a project role or group came through indistinguishable
+  // from a fully public one — no lock icon, no label, nothing to stop
+  // someone replying in the open to a comment that was meant to stay
+  // internal. See JiraCommentVisibility's own comment (jiraTypes.ts) for
+  // the full reasoning behind each of these mappings, in particular why an
+  // unrecognized `type` resolves to `'restricted'` rather than to `null`.
+  describe('visibility', () => {
+    it('maps a role restriction', () => {
+      expect(
+        mapComment(
+          {
+            id: '10510',
+            author: { displayName: 'Sam Lee' },
+            body: 'Only admins should see this.',
+            created: '2026-09-01T09:00:00.000+0000',
+            visibility: { type: 'role', value: 'Administrators' },
+          },
+          '10421',
+        )?.visibility,
+      ).toEqual({ type: 'role', value: 'Administrators' });
+    });
+
+    it('maps a group restriction', () => {
+      expect(
+        mapComment(
+          {
+            id: '10511',
+            author: { displayName: 'Sam Lee' },
+            body: 'Only the service desk team should see this.',
+            created: '2026-09-01T09:00:00.000+0000',
+            visibility: { type: 'group', value: 'Service Desk Team' },
+          },
+          '10421',
+        )?.visibility,
+      ).toEqual({ type: 'group', value: 'Service Desk Team' });
+    });
+
+    it('maps a missing visibility to null — a fully public comment', () => {
+      expect(
+        mapComment(
+          {
+            id: '10512',
+            author: { displayName: 'Sam Lee' },
+            body: 'Anyone on the ticket can see this.',
+            created: '2026-09-01T09:00:00.000+0000',
+          },
+          '10421',
+        )?.visibility,
+      ).toBeNull();
+    });
+
+    // Explicit `null` on the raw payload is the same fact as the key being
+    // absent entirely — both mean Jira reported no restriction.
+    it('maps an explicit null visibility to null', () => {
+      expect(
+        mapComment(
+          {
+            id: '10513',
+            author: { displayName: 'Sam Lee' },
+            body: 'Also public.',
+            created: '2026-09-01T09:00:00.000+0000',
+            visibility: null,
+          },
+          '10421',
+        )?.visibility,
+      ).toBeNull();
+    });
+
+    // A restriction scheme this app has never seen must still lock the
+    // comment — falling through to null here would silently reproduce the
+    // exact bug this field exists to fix, just triggered by an unfamiliar
+    // `type` instead of a missing field.
+    it("falls back to 'restricted' for an unrecognized type, rather than dropping it", () => {
+      expect(
+        mapComment(
+          {
+            id: '10514',
+            author: { displayName: 'Sam Lee' },
+            body: 'Some future restriction scheme.',
+            created: '2026-09-01T09:00:00.000+0000',
+            visibility: { type: 'project', value: 'ENG' },
+          },
+          '10421',
+        )?.visibility,
+      ).toEqual({ type: 'restricted', value: 'ENG' });
+    });
+
+    // Jira always sends a `visibility` object as `{ type, value }`, but this
+    // still must not throw or silently drop the restriction when it doesn't
+    // — a comment IS restricted here (the key is present), just in a shape
+    // this function cannot fully read.
+    it('falls back to restricted/empty for a visibility object missing both fields', () => {
+      expect(
+        mapComment(
+          {
+            id: '10515',
+            author: { displayName: 'Sam Lee' },
+            body: 'Malformed visibility.',
+            created: '2026-09-01T09:00:00.000+0000',
+            visibility: {},
+          },
+          '10421',
+        )?.visibility,
+      ).toEqual({ type: 'restricted', value: '' });
+    });
+
+    // A `visibility` that is not even an object at all — defensive against
+    // the general shape of a hand-rolled proxy or an unexpected API version,
+    // same posture the rest of this file takes toward every other field.
+    it('falls back to restricted/empty for a non-object visibility', () => {
+      expect(
+        mapComment(
+          {
+            id: '10516',
+            author: { displayName: 'Sam Lee' },
+            body: 'Visibility sent as a bare string.',
+            created: '2026-09-01T09:00:00.000+0000',
+            visibility: 'role',
+          },
+          '10421',
+        )?.visibility,
+      ).toEqual({ type: 'restricted', value: '' });
+    });
+
+    // A recognized type with a non-string value keeps the type Jira actually
+    // sent, and only the unreadable part (value) degrades.
+    it('keeps a recognized type when only value is unreadable', () => {
+      expect(
+        mapComment(
+          {
+            id: '10517',
+            author: { displayName: 'Sam Lee' },
+            body: 'Value sent as the wrong shape.',
+            created: '2026-09-01T09:00:00.000+0000',
+            visibility: { type: 'role', value: 42 },
+          },
+          '10421',
+        )?.visibility,
+      ).toEqual({ type: 'role', value: '' });
+    });
+
+    // ROAD-24 review finding #1: `jsdPublic` was originally skipped
+    // entirely, on the strength of a misread Atlassian ticket. JSDSERVER-1261
+    // documents that a genuine JSM internal note carries NO `visibility`
+    // object at all — `jsdPublic: false` is the only signal it ever sends —
+    // so this is not an edge case layered on top of `visibility`, it is the
+    // ordinary shape of the everyday "meant to stay internal" comment on a
+    // JSM project.
+    describe('jsdPublic (ROAD-24 review finding #1)', () => {
+      it("maps jsdPublic: false, with no visibility object, to type 'internal'", () => {
+        expect(
+          mapComment(
+            {
+              id: '10520',
+              author: { displayName: 'Sam Lee' },
+              body: 'Only agents should see this.',
+              created: '2026-09-01T09:00:00.000+0000',
+              jsdPublic: false,
+            },
+            '10421',
+          )?.visibility,
+        ).toEqual({ type: 'internal', value: '' });
+      });
+
+      it('maps jsdPublic: true to null — a fully public comment', () => {
+        expect(
+          mapComment(
+            {
+              id: '10521',
+              author: { displayName: 'Sam Lee' },
+              body: 'Visible to the customer.',
+              created: '2026-09-01T09:00:00.000+0000',
+              jsdPublic: true,
+            },
+            '10421',
+          )?.visibility,
+        ).toBeNull();
+      });
+
+      // The v3 spec's own documented default — "defaults to true … when the
+      // project isn't a Jira Service Desk project" — is exactly why an
+      // absent `jsdPublic` must read the same as an explicit `true` rather
+      // than as "unknown, so lock it defensively": the defensive-lock
+      // instinct `mapCommentVisibility` applies to an unrecognized
+      // `visibility.type` would misfire here and mark every ordinary
+      // non-JSM comment "Internal note".
+      it('maps a missing jsdPublic to null, not to internal', () => {
+        expect(
+          mapComment(
+            {
+              id: '10522',
+              author: { displayName: 'Sam Lee' },
+              body: 'An ordinary software-project comment.',
+              created: '2026-09-01T09:00:00.000+0000',
+            },
+            '10421',
+          )?.visibility,
+        ).toBeNull();
+      });
+
+      // Precedence: `visibility` wins over `jsdPublic: false` when a payload
+      // somehow carries both. JSDSERVER-1261 says the two aren't supposed to
+      // co-occur on a real internal note, so this is already an unusual
+      // shape — and between the two readings available for it, the
+      // role/group restriction is the more specific, nameable fact.
+      it('prefers a role/group visibility over jsdPublic: false when a payload carries both', () => {
+        expect(
+          mapComment(
+            {
+              id: '10523',
+              author: { displayName: 'Sam Lee' },
+              body: 'Restricted AND flagged internal.',
+              created: '2026-09-01T09:00:00.000+0000',
+              visibility: { type: 'role', value: 'Administrators' },
+              jsdPublic: false,
+            },
+            '10421',
+          )?.visibility,
+        ).toEqual({ type: 'role', value: 'Administrators' });
+      });
+    });
   });
 });

@@ -141,6 +141,33 @@ describe('useReviewQueue', () => {
     expect(listReviewQueue).toHaveBeenCalledTimes(1);
   });
 
+  // ROAD-14: the Blocked segment now shows real 'stale' proposals, and a
+  // stale card's only affordance is Dismiss (reject) — so it needs the
+  // same live-drop behavior as 'proposed' once that fires, instead of
+  // lingering with a stale `ids` list until the next refetch.
+  it('drops a row from the blocked segment once its store status moves off stale, without a refetch', async () => {
+    jest.mocked(listReviewQueue).mockResolvedValue({
+      proposals: [
+        proposal({ id: 'a', status: 'stale' }),
+        proposal({ id: 'b', status: 'stale' }),
+      ],
+      counts: { proposed: 0, blocked: 2, recent: 0 },
+      nextCursor: null,
+    });
+
+    const { result } = renderHook(() =>
+      useReviewQueue('blocked', undefined, undefined, undefined),
+    );
+    await waitFor(() => expect(result.current.proposals).toHaveLength(2));
+
+    act(() => {
+      upsertProposals([proposal({ id: 'a', status: 'rejected' })]);
+    });
+
+    expect(result.current.proposals.map((p) => p.id)).toEqual(['b']);
+    expect(listReviewQueue).toHaveBeenCalledTimes(1);
+  });
+
   it('does not apply that live-status filter to the recent segment (already-resolved rows stay visible)', async () => {
     jest.mocked(listReviewQueue).mockResolvedValue({
       proposals: [proposal({ id: 'a', status: 'executed' })],
