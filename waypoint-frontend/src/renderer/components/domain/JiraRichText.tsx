@@ -28,6 +28,37 @@ import {
  * never uses `dangerouslySetInnerHTML` — every node becomes real React
  * elements, and every link `href` is scheme-checked before it can become a
  * clickable `<a>` (see `safeHref` below).
+ *
+ * `wrap-anywhere` (`overflow-wrap: anywhere`) is baked into this component's
+ * own root, on both the rendered and fallback paths, rather than left to
+ * each caller's own `className` — so every consumer gets it, including any
+ * future one.
+ *
+ * ROAD-27 correction: an earlier version of this comment claimed
+ * `break-words` (`overflow-wrap: break-word`) was the deliberate,
+ * conservative choice over `anywhere` — that was wrong. Both values behave
+ * identically for actually wrapping text: each prefers an existing
+ * soft-wrap opportunity (a space, a hyphen) and only breaks a token with no
+ * such opportunity — a pasted stack trace frame, a base64 blob, a long URL —
+ * when nothing else fits. Neither one breaks a URL or identifier mid-word
+ * "even where a nearby space could already do the job"; that was never how
+ * either value worked. The *actual* difference is narrower and specific to
+ * sizing: `anywhere` additionally counts an emergency break as a valid break
+ * opportunity when the browser computes this element's *min-content* size
+ * (e.g. what a `width: min-content` or an unconstrained flex/grid track
+ * measures), while `break-word` does not — an element using `break-word`
+ * can still force its ancestor track wider than the viewport when it is
+ * itself inside a flex row that has no other size constraint, exactly the
+ * shape this renderer produces at almost every node (`taskItem`'s `<li
+ * className="flex ...">` below, `renderPanel`'s icon-plus-text row, a
+ * `tableCell`). `anywhere` is the correct choice for a renderer whose own
+ * output is full of nested flex rows, not the conservative one — it is
+ * `break-word`, not `anywhere`, that leaves a wrapping hazard on the table.
+ * `codeBlock` is the one exception: it keeps its own `overflow-x-auto`
+ * scroll instead of wrapping at all (see the `codeBlock` case below),
+ * matching the `table` node's own scroll container — wrapping a stack
+ * trace's indentation-sensitive lines would make them harder to read, not
+ * easier.
  */
 export function JiraRichText({
   adf,
@@ -43,7 +74,7 @@ export function JiraRichText({
     return (
       <div
         className={clsx(
-          'text-[13px] leading-relaxed whitespace-pre-wrap text-text-secondary',
+          'text-[13px] leading-relaxed whitespace-pre-wrap wrap-anywhere text-text-secondary',
           className,
         )}
       >
@@ -51,7 +82,7 @@ export function JiraRichText({
       </div>
     );
   }
-  return <div className={className}>{rendered}</div>;
+  return <div className={clsx('wrap-anywhere', className)}>{rendered}</div>;
 }
 
 // -----------------------------------------------------------------------
@@ -446,7 +477,27 @@ function renderNode(node: unknown, key: string): ReactNode {
               className="mt-1.5 size-3 shrink-0 rounded-sm border border-border-strong"
             />
           )}
-          <span className={done ? 'text-text-muted line-through' : undefined}>
+          {/* ROAD-27: `min-w-0 flex-1`, belt and braces alongside the root's
+              `wrap-anywhere` switch above. The `<li>` this sits in is
+              `flex items-start gap-2` (to lay the checkbox icon and text
+              side by side), and a plain flex item's `min-width` defaults to
+              `auto` — its automatic minimum size is its content's
+              min-content width, i.e. the width of its single longest
+              unbreakable run, same as `renderPanel`'s icon-plus-text row a
+              few cases above (which already carries this pair). Without
+              `min-w-0`, this span refuses to shrink below that width no
+              matter what overflow-wrap value the root sets, so a 300-char
+              unbroken token in a task item would still force the row (and
+              the drawer) wider rather than wrap. `flex-1` matches
+              `renderPanel`'s span too, letting the text claim the row's
+              remaining width once the checkbox icon's own `shrink-0` is
+              subtracted. */}
+          <span
+            className={clsx(
+              'min-w-0 flex-1',
+              done && 'text-text-muted line-through',
+            )}
+          >
             {renderNode(content, key)}
           </span>
         </li>
@@ -460,6 +511,12 @@ function renderNode(node: unknown, key: string): ReactNode {
         </li>
       );
 
+    // A code block scrolls horizontally inside its own <pre>, the same
+    // pattern the `table` node below uses, rather than inheriting the root's
+    // `break-words` behavior in any way that would matter: `<pre>`'s own
+    // `white-space: pre` already keeps a long line intact regardless, and
+    // wrapping a stack trace or a diff mid-line would scramble its
+    // indentation instead of just scrolling to see the rest of it.
     case 'codeBlock': {
       const language = typeof attrs.language === 'string' ? attrs.language : '';
       return (
