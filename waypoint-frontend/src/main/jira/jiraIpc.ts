@@ -8,6 +8,7 @@ import {
   writeStoredJiraCredential,
 } from './jiraAuth';
 import * as client from './jiraClient';
+import type { JiraCommentPermissions } from './jiraClient';
 import * as files from './jiraFiles';
 import { normalizeJiraSite } from './jiraMap';
 import type {
@@ -81,6 +82,42 @@ function readTicketId(value: unknown): string | null {
  * proxy or future API version whose ids are not purely numeric.
  */
 function readAttachmentId(value: unknown): string | null {
+  const id = readString(value);
+  return /^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$/.test(id) ? id : null;
+}
+
+/**
+ * Guards the comment-delete channel's id.
+ *
+ * Its own function rather than a reuse of `readAttachmentId`, for the same
+ * reason `readAttachmentId` isn't a reuse of `readTicketId`: naming which
+ * channel a guard belongs to is what keeps a future change meant for one id
+ * kind from silently loosening another. The character class is identical to
+ * `readAttachmentId`'s because the shape is identical — a Jira Cloud comment
+ * id is a small integer as a string ("10500"), the same as an attachment id —
+ * and, as with that guard, deliberately not pinned to digits only: the
+ * property this actually defends is that nothing caller-supplied reaches a
+ * REST path unchecked, which holds for any value in this character class.
+ */
+function readCommentId(value: unknown): string | null {
+  const id = readString(value);
+  return /^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$/.test(id) ? id : null;
+}
+
+/**
+ * Guards the comment-post channel's optional `parentId` — the comment a
+ * reply is threaded under (see JiraWireComment.parentId's own comment for
+ * why this undocumented field is trusted at all).
+ *
+ * Same character class as `readCommentId`, deliberately: a parent id is a
+ * comment id, and the shape check exists for the same reason it does there
+ * — nothing caller-supplied reaches a real network request unchecked — even
+ * though this one lands in `postComment`'s JSON body rather than a REST path.
+ * `null` for anything absent or malformed, never an empty string: the caller
+ * (jiraClient.ts's postComment) treats `null` as "omit the field entirely",
+ * which is the honest request when nothing usable was sent.
+ */
+function readParentId(value: unknown): string | null {
   const id = readString(value);
   return /^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$/.test(id) ? id : null;
 }
@@ -345,6 +382,40 @@ function commentBodyHasContent(body: JiraCommentBody): boolean {
         return false;
     }
   });
+}
+
+/**
+ * Turns a comment channel's raw `body` into either a validated, non-empty ADF
+ * doc or the one accurate reason to refuse it — shared by `jira:comments:post`
+ * and `jira:comments:update` so the two channels cannot drift onto different
+ * wording for the same two failures.
+ *
+ * The two failures are different facts and need different sentences.
+ * `readCommentBody` returning null means the draft failed structural
+ * validation — an unrecognized node, a mention carrying marks, or (the case a
+ * review actually found) a link whose href isn't `http(s):`/`mailto:`, which
+ * `isPostableHref` above rejects even though `JiraRichText.tsx`'s own
+ * `safeHref` happily renders a relative Jira-internal link like
+ * `/browse/ENG-1` for READING a comment. That policy gap is real but is not
+ * this function's to close — narrowing or widening what this channel accepts
+ * is jiraApi.ts's call. What this function owns is only that the message
+ * matches the failure: "Write something first." is a lie when the draft had
+ * content that simply didn't validate, so that sentence is now reserved for
+ * the one case it is true of — `commentBodyHasContent` finding nothing to
+ * send once the doc *did* parse.
+ */
+function validateCommentBody(raw: unknown): JiraResult<JiraCommentBody> {
+  const body = readCommentBody(raw);
+  if (!body) {
+    return failure(
+      'invalid_input',
+      "That comment includes a link or formatting Jira can't accept here — only full http(s):// or mailto: links are supported. Remove or fix it and try again.",
+    );
+  }
+  if (!commentBodyHasContent(body)) {
+    return failure('invalid_input', 'Write something first.');
+  }
+  return { ok: true, value: body };
 }
 
 /**
@@ -662,17 +733,100 @@ export function registerJiraIpc(getWindow: () => BrowserWindow | null): void {
     },
   );
 
+  /**
+   * Re-reads one comment, fresh — the freshness check an edit needs
+   * immediately before saving (see `client.getComment`'s own comment for why
+   * this is its own channel rather than the renderer re-running
+   * `jira:comments:list` and searching the page for the id it already has).
+   */
+  ipcMain.handle(
+    'jira:comments:get',
+    async (_event, args: unknown): Promise<JiraResult<JiraWireComment>> => {
+      const input = (args ?? {}) as Record<string, unknown>;
+      const ticketId = readTicketId(input.ticketId);
+      const commentId = readCommentId(input.commentId);
+      if (!ticketId) return failure('invalid_input', 'Unknown Jira issue.');
+      if (!commentId) return failure('invalid_input', 'Unknown Jira comment.');
+      return client.getComment(ticketId, commentId);
+    },
+  );
+
   ipcMain.handle(
     'jira:comments:post',
     async (_event, args: unknown): Promise<JiraResult<JiraWireComment>> => {
       const input = (args ?? {}) as Record<string, unknown>;
       const ticketId = readTicketId(input.ticketId);
-      const body = readCommentBody(input.body);
+      const parentId = readParentId(input.parentId);
       if (!ticketId) return failure('invalid_input', 'Unknown Jira issue.');
-      if (!body || !commentBodyHasContent(body)) {
-        return failure('invalid_input', 'Write something first.');
-      }
-      return client.postComment(ticketId, body);
+      const validated = validateCommentBody(input.body);
+      if (!validated.ok) return validated;
+      const body = validated.value;
+      // Two-arg call when there is nothing to thread under, rather than
+      // always passing a third `null` — see jiraClient.ts's own postComment
+      // for why the presence of the argument, not just its value, is what
+      // decides whether the field reaches Jira at all.
+      return parentId
+        ? client.postComment(ticketId, body, parentId)
+        : client.postComment(ticketId, body);
+    },
+  );
+
+  /**
+   * Overwrites one comment's body outright. Same boundary rule as
+   * `jira:comments:post` above — the renderer's own composer builds this
+   * shape (see jiraApi.ts's `buildCommentAdf`, the ADF <-> markdown-lite
+   * pair, and the round-trip proof that decides whether a comment is
+   * offered for editing at all), and `readCommentBody` is reused unchanged
+   * rather than re-validated here, so a body this channel accepts is
+   * provably the same shape `jira:comments:post` already accepts. There is
+   * no confirmation step in this handler either, matching delete — that
+   * belongs in the renderer, before this channel is ever invoked.
+   */
+  ipcMain.handle(
+    'jira:comments:update',
+    async (_event, args: unknown): Promise<JiraResult<JiraWireComment>> => {
+      const input = (args ?? {}) as Record<string, unknown>;
+      const ticketId = readTicketId(input.ticketId);
+      const commentId = readCommentId(input.commentId);
+      if (!ticketId) return failure('invalid_input', 'Unknown Jira issue.');
+      if (!commentId) return failure('invalid_input', 'Unknown Jira comment.');
+      const validated = validateCommentBody(input.body);
+      if (!validated.ok) return validated;
+      return client.updateComment(ticketId, commentId, validated.value);
+    },
+  );
+
+  /**
+   * Deletes one comment outright. There is no confirmation step in this
+   * handler — that belongs in the renderer, before this channel is ever
+   * invoked — but there is also no undo once it is: Jira answers 204 and the
+   * comment is gone.
+   */
+  ipcMain.handle(
+    'jira:comments:delete',
+    async (_event, args: unknown): Promise<JiraResult<void>> => {
+      const input = (args ?? {}) as Record<string, unknown>;
+      const ticketId = readTicketId(input.ticketId);
+      const commentId = readCommentId(input.commentId);
+      if (!ticketId) return failure('invalid_input', 'Unknown Jira issue.');
+      if (!commentId) return failure('invalid_input', 'Unknown Jira comment.');
+      return client.deleteComment(ticketId, commentId);
+    },
+  );
+
+  // The issue KEY, matching `jira:tickets:assignable-users` immediately
+  // above it in spirit: `mypermissions` resolves against a project via
+  // `issueKey`, so `readTicketId` — already shaped for PROJECT-NUMBER — is
+  // the right guard here too.
+  ipcMain.handle(
+    'jira:comments:permissions',
+    async (
+      _event,
+      rawIssueKey: unknown,
+    ): Promise<JiraResult<JiraCommentPermissions>> => {
+      const issueKey = readTicketId(rawIssueKey);
+      if (!issueKey) return failure('invalid_input', 'Unknown Jira issue.');
+      return client.getMyPermissions(issueKey);
     },
   );
 }

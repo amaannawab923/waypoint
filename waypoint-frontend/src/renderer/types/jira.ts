@@ -195,6 +195,25 @@ export interface JiraConflictInfo {
   changedAt: string; // ISO
 }
 
+/** Renderer mirror of `JiraWireSubtask` (main/jira/jiraTypes.ts). */
+export interface JiraSubtask {
+  id: string;
+  key: string;
+  title: string;
+  stateName: string;
+  stateColor: string;
+}
+
+/** Renderer mirror of `JiraWireIssueLink` (main/jira/jiraTypes.ts). */
+export interface JiraIssueLink {
+  id: string;
+  relation: string;
+  key: string;
+  title: string;
+  stateName: string;
+  stateColor: string;
+}
+
 export interface JiraTicket {
   id: ID;
   key: string; // e.g. "ENG-421"
@@ -243,6 +262,12 @@ export interface JiraTicket {
    * "unknown", sorting it to the bottom rather than the top.
    */
   updatedAt: string | null;
+  labels: string[];
+  dueDate: string | null;
+  subtasks: JiraSubtask[];
+  links: JiraIssueLink[];
+  /** See `JiraWireTicket.descriptionAdf` - raw ADF beside the plain text. */
+  descriptionAdf: unknown | null;
   attachments: JiraAttachment[];
   isTombstoned: boolean;
   tombstone: JiraTombstoneInfo | null;
@@ -261,16 +286,50 @@ export interface JiraComment {
   id: ID;
   ticketId: ID;
   authorName: string;
+  /** See `JiraWireComment.authorAccountId` — required to build a Reply's
+   * ADF mention of the author; null when Jira withheld it. */
+  authorAccountId: string | null;
+  /** See `JiraWireComment.updatedAt` — the freshness signal an edit checks
+   * before overwriting someone else's change. */
+  updatedAt: string | null;
+  updateAuthorName: string | null;
   body: string;
   /** When the comment was posted (ISO), or null when Jira's payload omitted
    * `created` — see JiraTicket's updatedAt for why this is null rather than
    * a fabricated "now". */
   createdAt: string | null;
+  /**
+   * The id of the comment this one replies to, or null when it has none —
+   * renderer mirror of `JiraWireComment.parentId` (main/jira/jiraTypes.ts),
+   * which has the full story on why this real, if undocumented, field is
+   * trusted at all.
+   *
+   * Always read off what Jira's own response reported for THIS comment,
+   * never off what a post asked for: JiraTicketDetail.tsx's
+   * groupCommentsIntoThreads nests a comment under its parent using exactly
+   * this value, so a reply Jira silently declined to nest (the public
+   * comment-create endpoint accepting `parentId` is unverified) renders flat
+   * here too, honestly, rather than nested on the strength of a request that
+   * may not have done anything.
+   */
+  parentId: string | null;
   postedByWaypoint: boolean;
   /** Self-disclosure prefix for a Copilot-authored comment (phase 2's
    * approval flow) — null for a plain, user-typed comment like every one
    * this phase's composer posts. */
   disclosureText: string | null;
+  /**
+   * The comment's raw ADF, carried straight off `JiraWireComment.bodyAdf`
+   * (main/jira/jiraTypes.ts) — see that field's own comment for why it
+   * travels alongside the flattened `body` above rather than replacing it.
+   *
+   * This is what `prepareJiraCommentEdit` (data/jiraApi.ts) reads to decide
+   * whether Edit can be offered for this comment at all: null here means
+   * there is no document tree to run the losslessness round-trip against
+   * (a legacy wiki-markup body, or a read that predates this field), and
+   * that comment is never editable in place regardless of permissions.
+   */
+  bodyAdf: unknown | null;
 }
 
 /**

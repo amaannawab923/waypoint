@@ -95,6 +95,18 @@ const MY_WORK_JQL =
 // `transitions` is requested here as an optimization only — see listMyTickets.
 const SEARCH_EXPAND = 'renderedFields,transitions,transitions.fields,names';
 
+// `*all` already requests every field Jira has for an issue — standard AND
+// custom — not a subset. That means labels, duedate, subtasks and issuelinks
+// were already arriving on every search and every getTicket response before
+// ROAD-41's parity fields existed; the gap was entirely on the mapping side
+// (see jiraMap.ts's mapIssue), never the request. Likewise `description`
+// under API v3 is already Atlassian Document Format, so the raw node
+// jiraMap.ts now carries as `descriptionAdf` needs no separate ask either —
+// it's the same `fields.description` `description` has always been read
+// from. Naming this constant is what keeps the two calls in sync rather than
+// each hand-typing '*all' and drifting.
+const ISSUE_FIELDS = '*all';
+
 type Credentialish = Pick<JiraCredential, 'site' | 'email' | 'apiToken'>;
 
 /**
@@ -152,8 +164,10 @@ function classifyNetworkError(err: unknown): JiraFailure {
 interface JiraRequest {
   // PUT is Jira's verb for editing an issue's own fields — the transition
   // endpoint is a POST because a move is an action, but changing a priority
-  // is an edit of the issue itself.
-  method: 'GET' | 'POST' | 'PUT';
+  // is an edit of the issue itself. DELETE is its own verb for the same
+  // reason PUT is: removing a comment is not a POSTed action against the
+  // issue, it is Jira's own documented verb for the comment resource itself.
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   /** Absolute REST path, e.g. "/rest/api/3/myself". */
   path: string;
   query?: Record<string, string>;
@@ -169,7 +183,7 @@ interface JiraRequest {
  * whatever this particular flavour of request adds on top of the two every
  * Jira call carries. */
 interface RawJiraRequest {
-  method: 'GET' | 'POST' | 'PUT';
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   path: string;
   query?: Record<string, string>;
   /** Merged over `Authorization` and `Accept`. Deliberately optional and
@@ -330,7 +344,13 @@ async function performRequest(
       release();
     }
     return failure(
-      'jira_error',
+      // 404 is the one status a caller acts on rather than prints — see
+      // `not_found`'s own comment in jiraTypes.ts. Classified here, at the
+      // single place every response is judged, so it means the same thing on
+      // every path rather than each caller re-deciding what a 404 was. The
+      // message is still Jira's own: this only changes what the failure is
+      // called, never what it says.
+      response.status === 404 ? 'not_found' : 'jira_error',
       messageFromErrorBody(parsed, `Jira returned ${response.status}.`),
     );
   }
@@ -592,7 +612,7 @@ export async function listMyTickets(): Promise<
   for (let page = 0; page < MAX_PAGES && hasNextPage; page += 1) {
     const query: Record<string, string> = {
       jql: MY_WORK_JQL,
-      fields: '*all',
+      fields: ISSUE_FIELDS,
       expand: SEARCH_EXPAND,
       maxResults: String(PAGE_SIZE),
     };
@@ -776,7 +796,7 @@ export async function getTicket(
   const result = await jiraFetch<Record<string, unknown>>(credential, {
     method: 'GET',
     path: `/rest/api/3/issue/${encodeURIComponent(ticketId)}`,
-    query: { fields: '*all', expand: SEARCH_EXPAND },
+    query: { fields: ISSUE_FIELDS, expand: SEARCH_EXPAND },
   });
   if (!result.ok) return result;
 
@@ -1143,9 +1163,70 @@ export async function listComments(
   return { ok: true, value: { comments, total } };
 }
 
+/**
+ * Reads exactly one comment, fresh — not the thread it sits in.
+ *
+ * Added for the freshness check an edit needs immediately before saving:
+ * `updatedAt`/`updateAuthorName` (see `JiraWireComment`'s own comment) exist
+ * so the renderer can tell whether a comment changed since the thread was
+ * read on mount, and re-running `listComments` to answer that one question
+ * is both more than the check needs — mapping up to `COMMENT_PAGE_SIZE`
+ * comments to read one field off one of them — and not reliably enough:
+ * `listComments` is capped at `COMMENT_PAGE_SIZE`, newest-first, so a
+ * comment older than that page is simply absent from it, and a busy thread
+ * can cross that cap while the edit dialog sits open. This endpoint names
+ * the one comment being checked and cannot miss it, and is exactly the read
+ * Jira exposes for that shape of question.
+ */
+export async function getComment(
+  ticketId: string,
+  commentId: string,
+): Promise<JiraResult<JiraWireComment>> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+
+  const result = await jiraFetch<Record<string, unknown>>(
+    credentialResult.value,
+    {
+      method: 'GET',
+      path: `${COMMENT_PATH(ticketId)}/${encodeURIComponent(commentId)}`,
+    },
+  );
+  if (!result.ok) return result;
+
+  const mapped = mapComment(result.value, ticketId);
+  if (!mapped) {
+    return failure(
+      'jira_error',
+      "Jira returned this comment in a shape Waypoint couldn't read.",
+    );
+  }
+  return { ok: true, value: mapped };
+}
+
+/**
+ * `parentId`, when given, asks Jira to thread this comment under the one
+ * named — the same field `mapComment` already reads back off a comment
+ * that has a parent (see JiraWireComment.parentId's own comment on why this
+ * undocumented field is trusted at all). Omitted from the request body
+ * entirely rather than sent as `null` when absent: there is no confirmation
+ * this public endpoint even recognizes the key, so the honest request for
+ * an ordinary comment is one that doesn't mention it.
+ *
+ * Whether Jira actually honoured it is never decided here. The one
+ * documented, verified fact is that `mapComment` maps a comment's own
+ * `parentId` faithfully off whatever Jira's response says — so a caller
+ * that wants to know whether this reply nested must read `mapped.parentId`
+ * on the value this function returns, never assume it from the `parentId`
+ * it passed in. Three real outcomes are possible on an undocumented field
+ * like this — Jira honours it, silently ignores an unknown field (common
+ * for REST APIs), or rejects the request outright — and only the response
+ * can say which one happened.
+ */
 export async function postComment(
   ticketId: string,
   body: JiraCommentBody,
+  parentId?: string | null,
 ): Promise<JiraResult<JiraWireComment>> {
   const credentialResult = requireCredential();
   if (!credentialResult.ok) return credentialResult;
@@ -1155,7 +1236,7 @@ export async function postComment(
     {
       method: 'POST',
       path: COMMENT_PATH(ticketId),
-      body: { body },
+      body: parentId ? { body, parentId } : { body },
     },
   );
   if (!result.ok) return result;
@@ -1168,4 +1249,158 @@ export async function postComment(
     );
   }
   return { ok: true, value: mapped };
+}
+
+/**
+ * Deletes one comment outright. There is no undo on either side of this call:
+ * Jira answers 204 with no body, and there is nothing to re-read afterward —
+ * unlike every write above, a deleted comment has no state to fetch back.
+ *
+ * `readJsonBody`'s existing 204 branch is what makes `JiraResult<void>` the
+ * honest return type here rather than something this function has to
+ * special-case: a 204 already resolves to `{ ok: true, value: undefined }`
+ * with no body read attempted, which is exactly what a delete answers with on
+ * success.
+ */
+export async function deleteComment(
+  ticketId: string,
+  commentId: string,
+): Promise<JiraResult<void>> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+
+  return jiraFetch<void>(credentialResult.value, {
+    method: 'DELETE',
+    path: `${COMMENT_PATH(ticketId)}/${encodeURIComponent(commentId)}`,
+  });
+}
+
+/**
+ * Overwrites one comment's body outright, as the connected user — the one
+ * write in this client with no confirmation of its own and no undo on
+ * Jira's side either. `body` is real ADF built the same way postComment's
+ * is (see jiraApi.ts's `buildCommentAdf` and, for the edit path
+ * specifically, its inverse and the round-trip proof that gates whether
+ * this is ever called at all): this function trusts its caller to have
+ * already decided the edit is safe to send, the same way postComment
+ * trusts the composer to have already produced valid ADF.
+ *
+ * Answers with the updated comment, same shape as postComment — Jira's
+ * PUT on this endpoint returns the full comment, not 204 — so the caller
+ * maps the RESPONSE through the same `mapComment` every read uses rather
+ * than assembling one from what was sent. That is what lets `parentId`
+ * survive an edit honestly: this function never asks Jira to change it and
+ * never fabricates it locally, so an edited reply keeps whatever thread
+ * position the response says it still has.
+ */
+export async function updateComment(
+  ticketId: string,
+  commentId: string,
+  body: JiraCommentBody,
+): Promise<JiraResult<JiraWireComment>> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+
+  const result = await jiraFetch<Record<string, unknown>>(
+    credentialResult.value,
+    {
+      method: 'PUT',
+      path: `${COMMENT_PATH(ticketId)}/${encodeURIComponent(commentId)}`,
+      body: { body },
+    },
+  );
+  if (!result.ok) return result;
+
+  const mapped = mapComment(result.value, ticketId);
+  if (!mapped) {
+    return failure(
+      'jira_error',
+      "The comment was edited, but Jira didn't return it — reopen the ticket to see the change.",
+    );
+  }
+  return { ok: true, value: mapped };
+}
+
+// -----------------------------------------------------------------------
+// 8. Comment permissions
+// -----------------------------------------------------------------------
+
+/**
+ * The four comment permissions the Delete/Edit affordance actually needs,
+ * per Jira's own own/all distinction on comment permissions.
+ *
+ * The comment payload itself carries no per-comment permission hint — live-
+ * confirmed against the real API — so there is nothing to read off a comment
+ * that would say "you may delete this one." What Jira does expose is a
+ * project-level answer to "may this user delete/edit their OWN comments" and
+ * "may this user delete/edit ANYONE's comments," which is exactly what
+ * `/rest/api/3/mypermissions` reports. Deleting/editing a specific comment is
+ * then a client-side decision — this project-level answer, plus whether the
+ * comment's author is the signed-in account (see `JiraIdentity.accountId`
+ * against a comment's own author id) — not a value Jira states per comment.
+ */
+export interface JiraCommentPermissions {
+  deleteAll: boolean;
+  deleteOwn: boolean;
+  editAll: boolean;
+  editOwn: boolean;
+}
+
+const COMMENT_PERMISSION_KEYS =
+  'DELETE_ALL_COMMENTS,DELETE_OWN_COMMENTS,EDIT_ALL_COMMENTS,EDIT_OWN_COMMENTS';
+
+interface MyPermissionsResponse {
+  permissions?: Record<string, { havePermission?: unknown }>;
+}
+
+/** One permission key's boolean, defaulting closed. A permission Jira didn't
+ * mention in its answer is not a permission this app has any evidence the
+ * user holds, so it is read as `false` rather than left `undefined` —
+ * offering a destructive button on the strength of a missing key would be
+ * exactly the silent-403 outcome this whole read exists to prevent. */
+function havePermission(
+  permissions: Record<string, { havePermission?: unknown }>,
+  key: string,
+): boolean {
+  return permissions[key]?.havePermission === true;
+}
+
+/**
+ * Whether the signed-in user may delete or edit their own comments, or
+ * everyone's, on this specific issue — the project-level answer the
+ * Delete/Edit affordance decides its own visibility from, since the comment
+ * payload carries no equivalent hint (see `JiraCommentPermissions`'s own
+ * comment).
+ *
+ * Per-issue, like `listPriorityOptions` and `searchAssignableUsers` before
+ * it: Jira's comment permissions are granted per PROJECT, and an issue key is
+ * what lets `mypermissions` resolve which project's scheme applies, the same
+ * way `issueKey` does on the assignable-users search.
+ */
+export async function getMyPermissions(
+  issueKey: string,
+): Promise<JiraResult<JiraCommentPermissions>> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+
+  const result = await jiraFetch<MyPermissionsResponse>(
+    credentialResult.value,
+    {
+      method: 'GET',
+      path: '/rest/api/3/mypermissions',
+      query: { issueKey, permissions: COMMENT_PERMISSION_KEYS },
+    },
+  );
+  if (!result.ok) return result;
+
+  const permissions = result.value?.permissions ?? {};
+  return {
+    ok: true,
+    value: {
+      deleteAll: havePermission(permissions, 'DELETE_ALL_COMMENTS'),
+      deleteOwn: havePermission(permissions, 'DELETE_OWN_COMMENTS'),
+      editAll: havePermission(permissions, 'EDIT_ALL_COMMENTS'),
+      editOwn: havePermission(permissions, 'EDIT_OWN_COMMENTS'),
+    },
+  };
 }

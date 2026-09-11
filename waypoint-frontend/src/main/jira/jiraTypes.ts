@@ -41,6 +41,27 @@ export type JiraFailureReason =
   | 'storage_unavailable'
   | 'jira_error'
   /**
+   * Jira answered 404 for the thing this request named.
+   *
+   * Split out of `jira_error` because one caller has to branch on it rather
+   * than just print it: the comment freshness guards (see `getComment`)
+   * decide whether to refuse a Save or a Delete on whether the comment they
+   * are about to overwrite still exists. Before this reason existed those
+   * guards inferred "gone" from the comment being absent from
+   * `listComments`' newest-`COMMENT_PAGE_SIZE` page — which is also exactly
+   * what a comment scrolling off a busy thread looks like, so they could
+   * tell someone their comment had been deleted when nothing of the sort
+   * had happened.
+   *
+   * Read this as "Jira will not show you this", never as "this was
+   * deleted". Atlassian deliberately answers 404 rather than 403 for an
+   * issue or comment the account may not browse, so a permission that
+   * changed under you and a real deletion arrive here identically. Every
+   * message built on this reason has to allow for both — that is the
+   * strongest claim the response actually supports.
+   */
+  | 'not_found'
+  /**
    * The local filesystem said no — the disk is full, the chosen folder is not
    * writable, the picked file vanished between the dialog and the read.
    *
@@ -198,6 +219,34 @@ export interface JiraWireAttachment {
   uploaderName: string;
 }
 
+/**
+ * A subtask as Jira reports it on the parent's `fields.subtasks`. Deliberately
+ * a flat summary, not a full JiraWireTicket: Jira returns only these fields
+ * inline, and pretending to more would mean a fetch per subtask.
+ */
+export interface JiraWireSubtask {
+  id: string;
+  key: string;
+  title: string;
+  stateName: string;
+  stateCategory: JiraStateCategory;
+}
+
+/**
+ * One issue link, already flattened to the OTHER issue plus the phrase that
+ * describes this issue's relationship to it ("blocks", "is blocked by", ...).
+ * Jira nests inward/outward differently; that asymmetry is resolved in the
+ * mapper so the renderer never has to know which side it was on.
+ */
+export interface JiraWireIssueLink {
+  id: string;
+  relation: string;
+  key: string;
+  title: string;
+  stateName: string;
+  stateCategory: JiraStateCategory;
+}
+
 export interface JiraWireTicket {
   /** Jira's numeric issue id, not the key. Both work as `issueIdOrKey` in
    * every REST path this uses, but the id survives an issue being moved to
@@ -235,6 +284,17 @@ export interface JiraWireTicket {
   epicName: string | null;
   storyPoints: number | null;
   sprintName: string | null;
+  labels: string[];
+  dueDate: string | null;
+  subtasks: JiraWireSubtask[];
+  links: JiraWireIssueLink[];
+  /**
+   * The description's raw ADF, carried ALONGSIDE the flattened `description`
+   * rather than replacing it. Keeping both is what lets the rich renderer land
+   * without a flag day: surfaces that still read `description` keep working
+   * unchanged, and null here simply means "render the plain text".
+   */
+  descriptionAdf: unknown | null;
   attachments: JiraWireAttachment[];
   /**
    * Whatever the bulk search's `expand=transitions` actually returned for
@@ -383,11 +443,66 @@ export interface JiraWireComment {
   id: string;
   ticketId: string;
   authorName: string;
+  /**
+   * The author's Atlassian account id, or null when Jira withheld it.
+   *
+   * Needed because a "Reply" prefills a real ADF mention of the author, and
+   * an ADF mention node is keyed on accountId — a display name cannot build
+   * one, and guessing an id from a name would be wrong on any site with two
+   * people called Sam. Null is honest here: a mention simply cannot be
+   * offered for an author Jira did not identify.
+   */
+  authorAccountId: string | null;
+  /**
+   * When Jira last changed this comment, and who did. Both are on every
+   * comment in the payload and were being dropped.
+   *
+   * They are the freshness signal an edit needs: the thread is read once on
+   * mount, so without re-checking this before saving, editing a comment
+   * someone else changed in the meantime silently overwrites their words.
+   * Null when Jira omits it - never fabricated, same rule as createdAt.
+   */
+  updatedAt: string | null;
+  updateAuthorName: string | null;
   body: string;
   /** When the comment was posted (ISO), or null when Jira's payload omitted
    * `created` — see JiraWireTicket's updatedAt for why this is null rather
    * than a fabricated "now". */
   createdAt: string | null;
+  /**
+   * The id of the comment this one replies to, or null when it has none.
+   *
+   * Real and genuinely undocumented: verified live against the founder's own
+   * Jira (issue ENG-84) that a comment posted through Jira's own Reply button
+   * comes back carrying `parentId`, even though Atlassian's published OpenAPI
+   * spec names no such field on a comment, for reading or for writing. Treat
+   * the spec's silence as exactly that — silence, not proof the field isn't
+   * real.
+   *
+   * `parentId` arrives as a JSON **number** on the wire, unlike `id`, which
+   * Jira sends as a string — the same asymmetry `mapComment`'s `String(id)`
+   * already exists to paper over for `id` itself. Coerced to a string here for
+   * the same reason: two representations of the same kind of value invite a
+   * `===` that silently never matches. Jira also only ever includes this key
+   * on a comment that HAS a parent — it is absent, not present-and-null, on
+   * every top-level comment — so null here means exactly that, "no parent",
+   * not "Jira didn't say".
+   */
+  parentId: string | null;
+  /**
+   * The comment's raw ADF, carried ALONGSIDE the flattened `body` — same
+   * shape and same reason as `JiraWireTicket.descriptionAdf`: `body` stays
+   * the safe, always-rendering plain-text surface, and this is what an
+   * editor needing the real document tree (see jiraApi.ts's ADF <->
+   * markdown-lite pair, `buildCommentAdf`'s inverse) reads instead of trying
+   * to re-derive structure from flattened text. Null whenever Jira sent this
+   * comment as its legacy wiki-markup string rather than v3's real ADF (see
+   * `plainTextFromJiraBody`) — there is no document tree to carry in that
+   * case, only the string `body` already holds. A comment whose `bodyAdf` is
+   * null can never be offered for in-place editing: there is nothing to run
+   * the losslessness round-trip against.
+   */
+  bodyAdf: unknown | null;
 }
 
 /**

@@ -101,7 +101,9 @@ export function JiraConnectionPanel({
     // disconnectJiraConfirmMessage's own comment) — matches this repo's
     // established confirm() guard on every other irreversible action
     // (ProjectsList's archiveConfirmMessage).
-    if (!window.confirm(disconnectJiraConfirmMessage(connection.accountEmail))) {
+    if (
+      !window.confirm(disconnectJiraConfirmMessage(connection.accountEmail))
+    ) {
       return;
     }
     setDisconnecting(true);
@@ -244,17 +246,61 @@ export function JiraConnectionPanel({
               straight through. Attaching joins it now for the same reason:
               uploadJiraAttachment is real, and the drawer's Attachments
               header has a button that opens a native file picker and sends
-              what the user chooses. jiraApi.ts's whole write surface is
-              transitionJiraTicket, postJiraComment, setJiraTicketPriority,
-              setJiraTicketAssignee and uploadJiraAttachment — five, and this
-              sentence names five. (downloadJiraAttachment is not among them:
-              it changes nothing about the issue.) */}
+              what the user chooses. Deleting a comment joins it now for the
+              same reason again: deleteJiraComment is real, gated on the
+              real per-project delete permission Jira reports for the
+              signed-in account (see jiraApi.ts's getJiraCommentPermissions),
+              never shown on a comment the account may not remove.
+              Editing a comment joins it now too, and needs its own sentence
+              rather than the same one Delete gets: the permission check
+              alone is not what decides whether Edit is offered on a given
+              comment. Before Edit ever renders for a comment the account may
+              edit, jiraApi.ts's prepareJiraCommentEdit deserializes that
+              comment's real ADF to the composer's markdown-lite text,
+              re-serializes it through the SAME buildCommentAdf every new
+              comment already goes through, and deep-compares the result
+              against the original. Anything short of an exact match — a
+              table, a panel, an embedded image, or even plain prose that
+              happens to contain a literal *, _ or backtick the round trip
+              would misread as real formatting — refuses Edit for that one
+              comment rather than risk silently rewriting its structure on
+              save, with no undo on either side of that write. The refusal is
+              shown honestly in the comment's own row (JiraTicketDetail.tsx's
+              renderComment), with a link to edit that comment in Jira
+              directly, not hidden as though Edit didn't exist for it.
+              jiraApi.ts's whole write surface is transitionJiraTicket,
+              postJiraComment, updateJiraComment, deleteJiraComment,
+              setJiraTicketPriority, setJiraTicketAssignee and
+              uploadJiraAttachment — seven, and this sentence names seven.
+              (downloadJiraAttachment is not among them: it changes nothing
+              about the issue. Nor is a comment's Reply action a write of its
+              own — it posts through the same postJiraComment as any other
+              comment, now carrying both a prefilled mention AND the
+              replied-to comment's id as the write's parentId. Jira genuinely
+              threads comments — verified live against ENG-84, where Jira's
+              own Reply set a real parentId alongside the mention this app
+              already prefilled — so this is no longer "Jira has no parent
+              field", the belief an earlier version of this comment shipped
+              under. Whether a reply actually nests is decided by Jira's own
+              response, never by what Reply sent (see JiraTicketDetail.tsx's
+              groupCommentsIntoThreads and jiraApi.ts's toComment) — the
+              write endpoint accepting parentId at all is undocumented.
+              Either way it is still postJiraComment, not an eighth
+              capability. Nor is Copy link: it copies an address to the
+              clipboard and sends nothing to Jira.) */}
           <span>
             <b>Your</b> edits — moving a ticket through its workflow, posting a
-            comment, changing its priority, reassigning it, and attaching a file
-            — write straight to Jira the moment you make them, as you. Those
-            five are the whole set; everything else about an issue is read-only
-            here.
+            comment (a reply included), editing one you have permission to
+            change, deleting one you have permission to remove, changing a
+            ticket&apos;s priority, reassigning it, and attaching a file — write
+            straight to Jira the moment you make them, as you. Those seven are
+            the whole set; everything else about an issue, including copying a
+            comment&apos;s link, is read-only here. Editing is refused rather
+            than offered, on a comment-by-comment basis, when Waypoint
+            can&apos;t rebuild that comment&apos;s formatting without changing
+            it — a table, a panel, an embedded image, or prose containing an
+            unintended *, _ or backtick — with a link there to edit it in Jira
+            instead.
           </span>
         </div>
         <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-warning/30 bg-warning-bg px-3 py-2.5 text-[12.5px] leading-relaxed text-warning">
@@ -301,8 +347,8 @@ export function JiraConnectionPanel({
             press Refresh — nothing polls in between.
           </li>
           <li>
-            Copilot proposing a priority change, a reassignment, or a new
-            issue against Jira — only a comment or moving a ticket through its
+            Copilot proposing a priority change, a reassignment, or a new issue
+            against Jira — only a comment or moving a ticket through its
             workflow can be proposed there today. (All three already work
             against your own, non-Jira projects.)
           </li>

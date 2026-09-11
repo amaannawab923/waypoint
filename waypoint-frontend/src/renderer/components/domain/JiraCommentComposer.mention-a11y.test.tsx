@@ -13,8 +13,15 @@ import { JiraCommentComposer } from './JiraCommentComposer';
 // (posting, formatting, attachments, ...), which is already exercised through
 // JiraTicketDrawer.test.tsx.
 jest.mock('@/data/jiraApi', () => ({
+  // The composer's Save-time freshness read. This suite never enters edit
+  // mode, so it is never called — named here only so the composer's own
+  // import of it is never undefined. Note that null is this function's
+  // "Jira answered 404" answer, so an edit test added here would have to
+  // override this default before Save could get past the guard.
+  getJiraComment: jest.fn(async () => null),
   postJiraComment: jest.fn(),
   searchJiraAssignableUsers: jest.fn(),
+  updateJiraComment: jest.fn(),
   uploadJiraAttachment: jest.fn(),
 }));
 jest.mock('@/lib/jiraStore', () => ({ useJiraConnection: jest.fn() }));
@@ -80,10 +87,15 @@ beforeEach(() => {
     id: 'c1',
     ticketId: '10421',
     authorName: 'Max Chen',
+    authorAccountId: 'acct-max',
+    updatedAt: null,
+    updateAuthorName: null,
     body: 'hi @Sam Lee',
     createdAt: '2026-01-01T00:00:00.000Z',
+    parentId: null,
     postedByWaypoint: false,
     disclosureText: null,
+    bodyAdf: null,
   });
 });
 
@@ -313,5 +325,72 @@ describe('the listbox has an accessible name', () => {
     expect(
       screen.getByRole('listbox', { name: 'Mention someone on ENG-421' }),
     ).toBeInTheDocument();
+  });
+});
+
+// ROAD-41: JiraTicketDetail.tsx now mounts a second JiraCommentComposer on
+// the same ticket at once — one above the comment thread (new comments and
+// replies) and a second inline, in place of whichever comment is being
+// edited (see that component's renderComment). Both used to derive their
+// mention listbox id and each option's id from `ticketId` alone, which two
+// instances on the same ticket share — so two mounted together collided on
+// the same DOM ids, and aria-activedescendant/aria-controls on one could
+// resolve to the OTHER instance's listbox rather than its own, depending on
+// whichever element the browser returned first for that duplicate id. This
+// is the isolated proof that useId() (JiraCommentComposer.tsx) fixes it;
+// JiraTicketDrawer.test.tsx's "two composers open at once" suite covers the
+// same guarantee through the real top-composer + inline-edit integration.
+describe('two composer instances mounted on the same ticket at once', () => {
+  it("keeps each instance's listbox id, and its textarea's aria-controls/aria-activedescendant, distinct from the other's", async () => {
+    render(
+      <>
+        <JiraCommentComposer
+          ticketId="10421"
+          ticketKey="ENG-421"
+          attachments={[]}
+          onPosted={jest.fn()}
+          onTicketUpdated={jest.fn()}
+        />
+        <JiraCommentComposer
+          ticketId="10421"
+          ticketKey="ENG-421"
+          attachments={[]}
+          onPosted={jest.fn()}
+          onTicketUpdated={jest.fn()}
+        />
+      </>,
+    );
+    const [boxA, boxB] = screen.getAllByPlaceholderText(
+      /Comment…/i,
+    ) as HTMLTextAreaElement[];
+    expect(boxA).not.toBe(boxB);
+
+    fireEvent.change(boxA, { target: { value: '@' } });
+    fireEvent.change(boxB, { target: { value: '@' } });
+    await runDebounce();
+
+    const controlsA = boxA.getAttribute('aria-controls');
+    const controlsB = boxB.getAttribute('aria-controls');
+    expect(controlsA).toBeTruthy();
+    expect(controlsB).toBeTruthy();
+    // The actual collision this fixes: a ticketId-only id would make these
+    // equal, since both instances share the same ticketId.
+    expect(controlsA).not.toBe(controlsB);
+
+    const listboxA = document.getElementById(controlsA as string);
+    const listboxB = document.getElementById(controlsB as string);
+    expect(listboxA).not.toBeNull();
+    expect(listboxB).not.toBeNull();
+    expect(listboxA).not.toBe(listboxB);
+
+    // Each textarea's own aria-activedescendant names an option living
+    // inside ITS OWN listbox, never the other instance's.
+    const optionA = listboxA?.querySelector('[role="option"]');
+    const optionB = listboxB?.querySelector('[role="option"]');
+    expect(optionA?.id).toBeTruthy();
+    expect(optionB?.id).toBeTruthy();
+    expect(optionA?.id).not.toBe(optionB?.id);
+    expect(boxA).toHaveAttribute('aria-activedescendant', optionA?.id);
+    expect(boxB).toHaveAttribute('aria-activedescendant', optionB?.id);
   });
 });

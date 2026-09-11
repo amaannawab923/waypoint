@@ -1384,6 +1384,223 @@ describe('mapIssue', () => {
   it('returns null for a payload that is not an issue', () => {
     expect(mapIssue({ nope: true }, ME)).toBeNull();
   });
+
+  // ROAD-41 parity fields: labels, dueDate, subtasks, links, descriptionAdf.
+  // `fields: '*all'` (jiraClient.ts) already asks Jira for every one of
+  // these on both the search and the single-issue read, so the shapes below
+  // are exactly what a real response carries — nothing here required a new
+  // request parameter, only a mapping.
+  describe('labels', () => {
+    it('maps a real label list', () => {
+      expect(
+        mapIssue(issue({ labels: ['backend', 'needs-design'] }), ME),
+      ).toMatchObject({ labels: ['backend', 'needs-design'] });
+    });
+
+    it('degrades to an empty array rather than throwing when labels are absent', () => {
+      expect(mapIssue(issue({ labels: undefined }), ME)).toMatchObject({
+        labels: [],
+      });
+    });
+  });
+
+  describe('dueDate', () => {
+    // Jira's own shape for this field: a calendar date, no time, no offset.
+    it('carries the date-only string through exactly as Jira sent it', () => {
+      expect(mapIssue(issue({ duedate: '2026-09-18' }), ME)).toMatchObject({
+        dueDate: '2026-09-18',
+      });
+    });
+
+    // Not "today", not an ISO datetime with a fabricated time-of-day — see
+    // this file's own note on updatedAt for why an invented value is worse
+    // than an honest null.
+    it('maps a missing duedate to null, never a fabricated date', () => {
+      expect(mapIssue(issue({ duedate: undefined }), ME)).toMatchObject({
+        dueDate: null,
+      });
+      expect(mapIssue(issue({ duedate: null }), ME)).toMatchObject({
+        dueDate: null,
+      });
+    });
+  });
+
+  describe('subtasks', () => {
+    it('maps exactly what JiraWireSubtask declares, nothing invented', () => {
+      expect(
+        mapIssue(
+          issue({
+            subtasks: [
+              {
+                id: '10501',
+                key: 'ENG-422',
+                fields: {
+                  summary: 'Add a migration',
+                  status: {
+                    name: 'Done',
+                    statusCategory: { key: 'done' },
+                  },
+                },
+              },
+            ],
+          }),
+          ME,
+        ),
+      ).toMatchObject({
+        subtasks: [
+          {
+            id: '10501',
+            key: 'ENG-422',
+            title: 'Add a migration',
+            stateName: 'Done',
+            stateCategory: 'done',
+          },
+        ],
+      });
+    });
+
+    it('maps an issue with no subtasks to an empty array, not null', () => {
+      expect(mapIssue(issue({ subtasks: undefined }), ME)).toMatchObject({
+        subtasks: [],
+      });
+      expect(mapIssue(issue({ subtasks: [] }), ME)).toMatchObject({
+        subtasks: [],
+      });
+    });
+  });
+
+  describe('links', () => {
+    // Jira nests inward/outward asymmetrically: only one side is present per
+    // entry, and it names the direction THIS link was found in — the phrase
+    // has to come from that side's own word, not the other one.
+    it('reads the outward phrase and issue when found on the outward side', () => {
+      expect(
+        mapIssue(
+          issue({
+            issuelinks: [
+              {
+                id: '10900',
+                type: { name: 'Blocks', inward: 'is blocked by', outward: 'blocks' },
+                outwardIssue: {
+                  id: '10422',
+                  key: 'ENG-423',
+                  fields: {
+                    summary: 'Ship the migration',
+                    status: {
+                      name: 'To Do',
+                      statusCategory: { key: 'new' },
+                    },
+                  },
+                },
+              },
+            ],
+          }),
+          ME,
+        ),
+      ).toMatchObject({
+        links: [
+          {
+            id: '10422',
+            relation: 'blocks',
+            key: 'ENG-423',
+            title: 'Ship the migration',
+            stateName: 'To Do',
+            stateCategory: 'todo',
+          },
+        ],
+      });
+    });
+
+    it('reads the inward phrase and issue when found on the inward side', () => {
+      expect(
+        mapIssue(
+          issue({
+            issuelinks: [
+              {
+                id: '10901',
+                type: { name: 'Blocks', inward: 'is blocked by', outward: 'blocks' },
+                inwardIssue: {
+                  id: '10424',
+                  key: 'ENG-425',
+                  fields: {
+                    summary: 'Cut the release',
+                    status: {
+                      name: 'In Progress',
+                      statusCategory: { key: 'indeterminate' },
+                    },
+                  },
+                },
+              },
+            ],
+          }),
+          ME,
+        ),
+      ).toMatchObject({
+        links: [
+          {
+            id: '10424',
+            relation: 'is blocked by',
+            key: 'ENG-425',
+            title: 'Cut the release',
+            stateName: 'In Progress',
+            stateCategory: 'in-progress',
+          },
+        ],
+      });
+    });
+
+    it('maps an issue with no links to an empty array, not null', () => {
+      expect(mapIssue(issue({ issuelinks: undefined }), ME)).toMatchObject({
+        links: [],
+      });
+      expect(mapIssue(issue({ issuelinks: [] }), ME)).toMatchObject({
+        links: [],
+      });
+    });
+  });
+
+  describe('descriptionAdf', () => {
+    it('carries the raw ADF node alongside the flattened description', () => {
+      const adf = {
+        type: 'doc',
+        content: [
+          { type: 'paragraph', content: [{ type: 'text', text: 'Details.' }] },
+        ],
+      };
+      expect(mapIssue(issue({ description: adf }), ME)).toMatchObject({
+        description: 'Details.',
+        descriptionAdf: adf,
+      });
+    });
+
+    // A description that is absent entirely — not present on the payload at
+    // all, the trimmed-response case, distinct from an explicit null.
+    it('maps null when the description is absent entirely', () => {
+      expect(mapIssue(issue({ description: undefined }), ME)).toMatchObject({
+        description: '',
+        descriptionAdf: null,
+      });
+    });
+
+    it('maps null when Jira explicitly returns no description', () => {
+      expect(mapIssue(issue({ description: null }), ME)).toMatchObject({
+        description: '',
+        descriptionAdf: null,
+      });
+    });
+
+    // Legacy wiki markup is a string, not an ADF document tree — carrying it
+    // under descriptionAdf would mislabel it as something a rich renderer
+    // could walk as a node.
+    it('does not carry legacy wiki-markup text as if it were ADF', () => {
+      expect(
+        mapIssue(issue({ description: 'a *bold* word' }), ME),
+      ).toMatchObject({
+        description: 'a bold word',
+        descriptionAdf: null,
+      });
+    });
+  });
 });
 
 describe('mapTransitions', () => {
@@ -1589,8 +1806,16 @@ describe('mapComment', () => {
       id: '10500',
       ticketId: '10421',
       authorName: 'Sam Lee',
+      authorAccountId: null,
+      updatedAt: null,
+      updateAuthorName: null,
       body: 'Replay log attached.',
+      // A v2-shaped string body is legacy wiki markup, never a document tree
+      // — see `adfBodyOf`'s own comment for why the string branch degrades
+      // to null here exactly like a missing field would.
+      bodyAdf: null,
       createdAt: '2026-09-01T09:00:00.000+0000',
+      parentId: null,
     });
   });
 
@@ -1607,9 +1832,49 @@ describe('mapComment', () => {
       id: '10502',
       ticketId: '10421',
       authorName: 'Sam Lee',
+      authorAccountId: null,
+      updatedAt: null,
+      updateAuthorName: null,
       body: 'No date.',
+      bodyAdf: null,
       createdAt: null,
+      parentId: null,
     });
+  });
+
+  // Live-confirmed against ENG-84: Jira sends `parentId` as a JSON number on
+  // a comment that has a parent (`id` itself is a string on the very same
+  // payload) — the same asymmetry `idOf` already exists to paper over for
+  // every other id `mapIssue`/`mapComment` coerce.
+  it("coerces a numeric parentId to a string, matching id's own coercion", () => {
+    expect(
+      mapComment(
+        {
+          id: '10192',
+          author: { displayName: 'Sam Lee' },
+          body: 'Reply should be like this.',
+          created: '2026-09-01T09:05:00.000+0000',
+          parentId: 10158,
+        },
+        '10421',
+      ),
+    ).toMatchObject({ id: '10192', parentId: '10158' });
+  });
+
+  // Jira only includes the key at all on a comment that HAS a parent — it is
+  // absent, not present-and-null, on a top-level comment.
+  it('maps a missing parentId to null, not to a fabricated top-level answer', () => {
+    expect(
+      mapComment(
+        {
+          id: '10158',
+          author: { displayName: 'Sam Lee' },
+          body: 'Hello',
+          created: '2026-09-01T09:00:00.000+0000',
+        },
+        '10421',
+      ),
+    ).toMatchObject({ id: '10158', parentId: null });
   });
 
   // Defensive: a v3-shaped body must not render as "[object Object]".
@@ -1633,6 +1898,139 @@ describe('mapComment', () => {
         '10421',
       )?.body,
     ).toBe('Taking it.');
+  });
+
+  // `bodyAdf` is what the comment editor's losslessness round-trip (see
+  // jiraApi.ts) reads instead of trying to re-derive structure from the
+  // flattened `body` string above — carried alongside it, not in place of
+  // it, same as mapIssue's own descriptionAdf.
+  it('carries the raw ADF alongside the flattened body', () => {
+    const adf = {
+      type: 'doc',
+      version: 1,
+      content: [
+        {
+          type: 'paragraph',
+          content: [{ type: 'text', text: 'Taking it.' }],
+        },
+      ],
+    };
+
+    expect(
+      mapComment(
+        {
+          id: '10501',
+          author: { displayName: 'Max Chen' },
+          body: adf,
+          created: '2026-09-01T09:30:00.000+0000',
+        },
+        '10421',
+      )?.bodyAdf,
+    ).toEqual(adf);
+  });
+
+  // Comment freshness: `updated`/`updateAuthor` are the signal an edit needs
+  // to know whether the thread it read on mount is still current. Jira sends
+  // both on every comment, mirroring `created`/`author`, and they must be
+  // mapped for real — see jiraMap.ts's own note on why a fabricated value
+  // here is worse than a missing one.
+  describe('updatedAt / updateAuthorName', () => {
+    it('maps `updated` and `updateAuthor` when Jira sends them', () => {
+      expect(
+        mapComment(
+          {
+            id: '10504',
+            author: { displayName: 'Sam Lee' },
+            body: 'Original text.',
+            created: '2026-09-01T09:00:00.000+0000',
+            updated: '2026-09-02T14:30:00.000+0000',
+            updateAuthor: { displayName: 'Priya Raman' },
+          },
+          '10421',
+        ),
+      ).toMatchObject({
+        updatedAt: '2026-09-02T14:30:00.000+0000',
+        updateAuthorName: 'Priya Raman',
+      });
+    });
+
+    // The common case, live-confirmed: an edited comment's `updated` differs
+    // from its `created`, and the two must not be conflated into one field.
+    it('maps `updated` distinctly from `created` when a comment was edited after posting', () => {
+      const mapped = mapComment(
+        {
+          id: '10505',
+          author: { displayName: 'Sam Lee' },
+          body: 'Edited text.',
+          created: '2026-09-01T09:00:00.000+0000',
+          updated: '2026-09-03T08:15:00.000+0000',
+          updateAuthor: { displayName: 'Sam Lee' },
+        },
+        '10421',
+      );
+      expect(mapped?.createdAt).toBe('2026-09-01T09:00:00.000+0000');
+      expect(mapped?.updatedAt).toBe('2026-09-03T08:15:00.000+0000');
+      expect(mapped?.updatedAt).not.toBe(mapped?.createdAt);
+    });
+
+    it('maps a missing `updated` to null, not to `created` or the current time', () => {
+      expect(
+        mapComment(
+          {
+            id: '10506',
+            author: { displayName: 'Sam Lee' },
+            body: 'No update timestamp.',
+            created: '2026-09-01T09:00:00.000+0000',
+          },
+          '10421',
+        ),
+      ).toMatchObject({ updatedAt: null, updateAuthorName: null });
+    });
+
+    // `updateAuthor` absent must not fall back to "Unknown": that fallback
+    // exists for authorName, where every comment genuinely has an author, but
+    // handing it to a comment with no update author at all would invent an
+    // editor for a comment nobody has edited.
+    it('maps a missing `updateAuthor` to null rather than "Unknown"', () => {
+      expect(
+        mapComment(
+          {
+            id: '10507',
+            author: { displayName: 'Sam Lee' },
+            body: 'Edited, but Jira sent no updateAuthor.',
+            created: '2026-09-01T09:00:00.000+0000',
+            updated: '2026-09-01T09:10:00.000+0000',
+          },
+          '10421',
+        ),
+      ).toMatchObject({
+        updatedAt: '2026-09-01T09:10:00.000+0000',
+        updateAuthorName: null,
+      });
+    });
+
+    // An `updateAuthor` object that is present but carries no displayName
+    // still gets the same "Unknown" fallback authorName uses — the object
+    // itself says someone edited this comment, so null here would misreport
+    // "never edited" rather than "edited by someone this payload didn't name".
+    it('falls back to "Unknown" for an updateAuthor with no displayName', () => {
+      expect(
+        mapComment(
+          {
+            id: '10508',
+            author: { displayName: 'Sam Lee' },
+            body: 'Edited by someone unnamed.',
+            created: '2026-09-01T09:00:00.000+0000',
+            updated: '2026-09-01T09:10:00.000+0000',
+            updateAuthor: {},
+          },
+          '10421',
+        ),
+      ).toMatchObject({
+        updatedAt: '2026-09-01T09:10:00.000+0000',
+        updateAuthorName: 'Unknown',
+      });
+    });
   });
 
   // A string body is legacy wiki markup, not plain text. Before this, the

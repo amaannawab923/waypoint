@@ -2,6 +2,7 @@
 /* eslint no-unused-vars: off */
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import type { CopilotDetectResult } from './copilot/copilotDetect';
+import type { JiraCommentPermissions } from './jira/jiraClient';
 import type {
   JiraCommentBody,
   JiraConnectionSnapshot,
@@ -369,11 +370,62 @@ const electronHandler = {
     listComments(ticketId: string): Promise<JiraResult<JiraCommentPage>> {
       return ipcRenderer.invoke('jira:comments:list', ticketId);
     },
+    // `parentId`, when present, is the comment this one replies to — see
+    // JiraWireComment.parentId's own comment on why this undocumented field
+    // is trusted at all. Optional and omitted (not sent as an explicit
+    // `null`) for an ordinary, non-reply comment: jiraApi.ts's
+    // postJiraComment only puts the key in `args` at all when it has a real
+    // value to put there.
     postComment(args: {
       ticketId: string;
       body: JiraCommentBody;
+      parentId?: string;
     }): Promise<JiraResult<JiraWireComment>> {
       return ipcRenderer.invoke('jira:comments:post', args);
+    },
+    // Overwrites one comment's body outright — the answer carries the
+    // updated comment straight off Jira's own PUT response, like postComment
+    // above and unlike deleteComment below, so a caller reads `parentId` and
+    // every other field off what Jira actually reports rather than
+    // assembling one from what was sent (see jiraClient.ts's own
+    // updateComment for why that matters for an edited reply).
+    updateComment(args: {
+      ticketId: string;
+      commentId: string;
+      body: JiraCommentBody;
+    }): Promise<JiraResult<JiraWireComment>> {
+      return ipcRenderer.invoke('jira:comments:update', args);
+    },
+    // No re-read on success, unlike every write above: a deleted comment has
+    // no state left to fetch back. `void` is the honest payload for that —
+    // the renderer already holds the comment it just asked to delete and can
+    // drop it from its own list on `ok: true`.
+    deleteComment(args: {
+      ticketId: string;
+      commentId: string;
+    }): Promise<JiraResult<void>> {
+      return ipcRenderer.invoke('jira:comments:delete', args);
+    },
+    // One comment, read fresh. Exists for the edit path's freshness check:
+    // the thread is read once when a ticket opens, so without re-reading the
+    // single comment about to be overwritten, an edit can silently replace a
+    // change someone else made in Jira since. listComments cannot answer that
+    // reliably — it is capped at the 100 newest, so an older comment on a
+    // busy thread may not be in it at all.
+    getComment(args: {
+      ticketId: string;
+      commentId: string;
+    }): Promise<JiraResult<JiraWireComment>> {
+      return ipcRenderer.invoke('jira:comments:get', args);
+    },
+    // The project-level own/all answer the Delete/Edit affordance decides its
+    // visibility from, since a comment itself carries no per-comment
+    // permission hint (see jiraClient.ts's `getMyPermissions`). Per issue key,
+    // like `searchAssignableUsers` above.
+    getCommentPermissions(
+      issueKey: string,
+    ): Promise<JiraResult<JiraCommentPermissions>> {
+      return ipcRenderer.invoke('jira:comments:permissions', issueKey);
     },
   },
   // Top-level, not nested under `copilot`: "point me at a local folder" is

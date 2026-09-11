@@ -48,7 +48,11 @@ const setTicketPriorityMock = jest.fn();
 const searchAssignableUsersMock = jest.fn();
 const setTicketAssigneeMock = jest.fn();
 const listCommentsMock = jest.fn();
+const getCommentMock = jest.fn();
 const postCommentMock = jest.fn();
+const updateCommentMock = jest.fn();
+const deleteCommentMock = jest.fn();
+const getMyPermissionsMock = jest.fn();
 const downloadAttachmentMock = jest.fn();
 const uploadAttachmentMock = jest.fn();
 jest.mock('./jiraClient', () => ({
@@ -65,7 +69,11 @@ jest.mock('./jiraClient', () => ({
     searchAssignableUsersMock(...args),
   setTicketAssignee: (...args: unknown[]) => setTicketAssigneeMock(...args),
   listComments: (...args: unknown[]) => listCommentsMock(...args),
+  getComment: (...args: unknown[]) => getCommentMock(...args),
   postComment: (...args: unknown[]) => postCommentMock(...args),
+  updateComment: (...args: unknown[]) => updateCommentMock(...args),
+  deleteComment: (...args: unknown[]) => deleteCommentMock(...args),
+  getMyPermissions: (...args: unknown[]) => getMyPermissionsMock(...args),
 }));
 
 // jiraFiles is deliberately NOT mocked: it is the thing on the other side of
@@ -464,7 +472,7 @@ describe('per-ticket channels', () => {
       expect(postCommentMock).not.toHaveBeenCalled();
     });
 
-    it('refuses a doc made only of empty paragraphs', async () => {
+    it('refuses a doc made only of empty paragraphs, with "Write something first."', async () => {
       expect(
         await getHandler('jira:comments:post')(
           {},
@@ -477,7 +485,48 @@ describe('per-ticket channels', () => {
             },
           },
         ),
-      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      ).toMatchObject({
+        ok: false,
+        reason: 'invalid_input',
+        message: 'Write something first.',
+      });
+      expect(postCommentMock).not.toHaveBeenCalled();
+    });
+
+    // The finding this test pins: a comment body carrying a relative link
+    // (`/browse/ENG-1`, say) fails `isPostableHref`'s scheme check — same as
+    // any other structurally-invalid draft — and used to be refused with
+    // "Write something first.", which is simply false: the user wrote
+    // plenty. The policy itself (only http(s)/mailto links are postable) is
+    // untouched here; only the message must stop lying about why.
+    it('refuses a body with an unpostable link, and does not claim the user wrote nothing', async () => {
+      const result = await getHandler('jira:comments:post')(
+        {},
+        {
+          ticketId: '10421',
+          body: {
+            type: 'doc',
+            version: 1,
+            content: [
+              {
+                type: 'paragraph',
+                content: [
+                  {
+                    type: 'text',
+                    text: 'See ENG-1',
+                    marks: [{ type: 'link', attrs: { href: '/browse/ENG-1' } }],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      );
+
+      expect(result).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect((result as { message: string }).message).not.toBe(
+        'Write something first.',
+      );
       expect(postCommentMock).not.toHaveBeenCalled();
     });
 
@@ -531,6 +580,51 @@ describe('per-ticket channels', () => {
       );
 
       expect(postCommentMock).toHaveBeenCalledWith('10421', ADF_TEXT_ONLY);
+    });
+
+    it('forwards a well-formed parentId as a third argument', async () => {
+      postCommentMock.mockResolvedValue({ ok: true, value: { id: '10509' } });
+
+      await getHandler('jira:comments:post')(
+        {},
+        { ticketId: '10421', body: ADF_TEXT_ONLY, parentId: '10158' },
+      );
+
+      expect(postCommentMock).toHaveBeenCalledWith(
+        '10421',
+        ADF_TEXT_ONLY,
+        '10158',
+      );
+    });
+
+    // The exact two-argument call every other test in this block already
+    // asserts — pinned explicitly here so a future change that starts always
+    // passing a third `null`/`undefined` argument is caught as the
+    // regression it would be for those tests.
+    it('calls postComment with only two arguments when parentId is absent', async () => {
+      postCommentMock.mockResolvedValue({ ok: true, value: { id: '10502' } });
+
+      await getHandler('jira:comments:post')(
+        {},
+        { ticketId: '10421', body: ADF_TEXT_ONLY },
+      );
+
+      expect(postCommentMock.mock.calls[0]).toHaveLength(2);
+    });
+
+    // Guards the same REST-path-injection property `readCommentId` already
+    // guards for the delete channel — nothing caller-supplied reaches
+    // `client.postComment`'s network call unchecked, parentId included.
+    it('drops a malformed parentId rather than forwarding it', async () => {
+      postCommentMock.mockResolvedValue({ ok: true, value: { id: '10502' } });
+
+      await getHandler('jira:comments:post')(
+        {},
+        { ticketId: '10421', body: ADF_TEXT_ONLY, parentId: 'not valid!' },
+      );
+
+      expect(postCommentMock).toHaveBeenCalledWith('10421', ADF_TEXT_ONLY);
+      expect(postCommentMock.mock.calls[0]).toHaveLength(2);
     });
 
     it('passes a body carrying a real mention node straight through', async () => {
@@ -798,6 +892,174 @@ describe('per-ticket channels', () => {
         ),
       ).toMatchObject({ ok: false, reason: 'invalid_input' });
       expect(postCommentMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('jira:comments:update', () => {
+    const ADF_TEXT_ONLY = {
+      type: 'doc',
+      version: 1,
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'Edited.' }] },
+      ],
+    };
+
+    it('refuses a ticket id that is not one, before any client call', async () => {
+      expect(
+        await getHandler('jira:comments:update')(
+          {},
+          { ticketId: '../../etc/passwd', commentId: '10500', body: ADF_TEXT_ONLY },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(updateCommentMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses a comment id that is not one, before any client call', async () => {
+      expect(
+        await getHandler('jira:comments:update')(
+          {},
+          { ticketId: '10421', commentId: '../../etc/passwd', body: ADF_TEXT_ONLY },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(updateCommentMock).not.toHaveBeenCalled();
+    });
+
+    // The same body validator `jira:comments:post` uses, reused rather than
+    // re-implemented — this is the one representative case (a doc of only
+    // empty paragraphs), not the full suite `jira:comments:post` already
+    // covers for the same `readCommentBody`/`commentBodyHasContent` pair.
+    it('refuses a doc made only of empty paragraphs', async () => {
+      expect(
+        await getHandler('jira:comments:update')(
+          {},
+          {
+            ticketId: '10421',
+            commentId: '10500',
+            body: {
+              type: 'doc',
+              version: 1,
+              content: [{ type: 'paragraph', content: [] }],
+            },
+          },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(updateCommentMock).not.toHaveBeenCalled();
+    });
+
+    it('delegates a valid triple to the client', async () => {
+      updateCommentMock.mockResolvedValue({ ok: true, value: { id: '10500' } });
+
+      const result = await getHandler('jira:comments:update')(
+        {},
+        { ticketId: '10421', commentId: '10500', body: ADF_TEXT_ONLY },
+      );
+
+      expect(updateCommentMock).toHaveBeenCalledWith(
+        '10421',
+        '10500',
+        ADF_TEXT_ONLY,
+      );
+      expect(result).toEqual({ ok: true, value: { id: '10500' } });
+    });
+  });
+
+  describe('jira:comments:get', () => {
+    it('refuses a ticket id that is not one, before any client call', async () => {
+      expect(
+        await getHandler('jira:comments:get')(
+          {},
+          { ticketId: '../../etc/passwd', commentId: '10500' },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(getCommentMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses a comment id that is not one, before any client call', async () => {
+      expect(
+        await getHandler('jira:comments:get')(
+          {},
+          { ticketId: '10421', commentId: '../../etc/passwd' },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(getCommentMock).not.toHaveBeenCalled();
+    });
+
+    it('delegates a valid pair to the client', async () => {
+      const comment = {
+        id: '10500',
+        updatedAt: '2026-09-03T08:15:00.000+0000',
+        updateAuthorName: 'Priya Raman',
+      };
+      getCommentMock.mockResolvedValue({ ok: true, value: comment });
+
+      const result = await getHandler('jira:comments:get')(
+        {},
+        { ticketId: '10421', commentId: '10500' },
+      );
+
+      expect(getCommentMock).toHaveBeenCalledWith('10421', '10500');
+      expect(result).toEqual({ ok: true, value: comment });
+    });
+  });
+
+  describe('jira:comments:delete', () => {
+    it('refuses a ticket id that is not one, before any client call', async () => {
+      expect(
+        await getHandler('jira:comments:delete')(
+          {},
+          { ticketId: '../../etc/passwd', commentId: '10500' },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(deleteCommentMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses a comment id that is not one, before any client call', async () => {
+      expect(
+        await getHandler('jira:comments:delete')(
+          {},
+          { ticketId: '10421', commentId: '../../etc/passwd' },
+        ),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(deleteCommentMock).not.toHaveBeenCalled();
+    });
+
+    it('delegates a valid pair to the client', async () => {
+      deleteCommentMock.mockResolvedValue({ ok: true, value: undefined });
+
+      const result = await getHandler('jira:comments:delete')(
+        {},
+        { ticketId: '10421', commentId: '10500' },
+      );
+
+      expect(deleteCommentMock).toHaveBeenCalledWith('10421', '10500');
+      expect(result).toEqual({ ok: true, value: undefined });
+    });
+  });
+
+  describe('jira:comments:permissions', () => {
+    it('refuses an issue key that is not one, before any client call', async () => {
+      expect(
+        await getHandler('jira:comments:permissions')({}, '../../etc/passwd'),
+      ).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(getMyPermissionsMock).not.toHaveBeenCalled();
+    });
+
+    it('delegates a valid issue key to the client', async () => {
+      const permissions = {
+        deleteAll: false,
+        deleteOwn: true,
+        editAll: false,
+        editOwn: true,
+      };
+      getMyPermissionsMock.mockResolvedValue({ ok: true, value: permissions });
+
+      const result = await getHandler('jira:comments:permissions')(
+        {},
+        'ENG-421',
+      );
+
+      expect(getMyPermissionsMock).toHaveBeenCalledWith('ENG-421');
+      expect(result).toEqual({ ok: true, value: permissions });
     });
   });
 

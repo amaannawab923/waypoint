@@ -33,6 +33,30 @@ jest.mock('@/data/jiraApi', () => ({
   setJiraTicketAssignee: jest.fn(),
   listJiraComments: jest.fn(),
   postJiraComment: jest.fn(),
+  // Never actually called: getJiraCommentPermissions below resolves closed,
+  // so canEditComment (JiraTicketDetail.tsx) never reaches this. Present
+  // anyway so JiraCommentComposer's own import of it is never undefined —
+  // same reasoning as every other export named here.
+  prepareJiraCommentEdit: jest.fn(),
+  updateJiraComment: jest.fn(),
+  deleteJiraComment: jest.fn(async () => undefined),
+  // Same reason as prepareJiraCommentEdit above: never reached with
+  // permissions closed, but named here so the freshness guards' import of
+  // it is never undefined. Note for anyone who later writes an Edit or
+  // Delete test in this file: null is this function's "Jira answered 404"
+  // answer, so a guard reaching this default would refuse rather than
+  // proceed — override it with a comment before exercising either path.
+  getJiraComment: jest.fn(async () => null),
+  // Permissions resolve closed here: these suites are not about Delete or
+  // Edit, and a closed default keeps both buttons out of their queries
+  // entirely.
+  getJiraCommentPermissions: jest.fn(async () => ({
+    deleteAll: false,
+    deleteOwn: false,
+    editAll: false,
+    editOwn: false,
+  })),
+  buildJiraCommentPermalink: jest.fn(() => 'https://example.invalid/browse/ENG-1?focusedCommentId=1'),
   getJiraConnectionStatus: jest.fn(),
 }));
 // useJiraConnection is here because the drawer and the comment composer both
@@ -69,6 +93,11 @@ function ticket(overrides: Partial<JiraTicket> = {}): JiraTicket {
     storyPoints: null,
     sprintName: null,
     updatedAt: '2026-09-01T10:00:00.000Z',
+    labels: [],
+    dueDate: null,
+    subtasks: [],
+    links: [],
+    descriptionAdf: null,
     attachments: [],
     isTombstoned: false,
     tombstone: null,
@@ -847,10 +876,15 @@ describe('JiraTicketDrawer — comment timestamps', () => {
       id: 'c-1',
       ticketId: 't-undated-comment',
       authorName: 'Sam Lee',
+      authorAccountId: 'acct-1',
+      updatedAt: null,
+      updateAuthorName: null,
       body: 'Replay log attached.',
       createdAt: null,
+      parentId: null,
       postedByWaypoint: false,
       disclosureText: null,
+      bodyAdf: null,
     };
     jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead([undated]));
     jest
