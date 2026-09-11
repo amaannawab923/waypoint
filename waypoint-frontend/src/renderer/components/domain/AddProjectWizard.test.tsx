@@ -270,6 +270,21 @@ describe('AddProjectWizard — confirm and finish', () => {
     expect(screen.getByText(/waypoint123\.atlassian\.net/)).toBeInTheDocument();
   });
 
+  // ROAD-22: this stat used to claim "1 / API call to load". Connecting
+  // alone is two real requests (validateCredential's GET /myself, then the
+  // JQL search connectJira also runs — see data/jiraApi.ts), and the search
+  // itself can page across more than one request for a large queue
+  // (jiraClient.ts's PAGE_SIZE/MAX_PAGES) — never a stable "1". What that
+  // stat was actually trying to say survives without a false count attached.
+  it('does not claim a fixed API-call count, and says plainly that nothing polls', async () => {
+    renderWizard();
+    await advanceToConfirmStep();
+
+    expect(screen.queryByText(/API call/)).not.toBeInTheDocument();
+    expect(screen.getByText('No polling')).toBeInTheDocument();
+    expect(screen.getByText('after this connects')).toBeInTheDocument();
+  });
+
   it('finishing re-reads the status, closes the wizard and navigates to /my-jira', async () => {
     jest.mocked(getJiraConnectionStatus).mockResolvedValue(status());
     const { onClose } = renderWizard();

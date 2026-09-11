@@ -534,6 +534,68 @@ describe('MyJiraPage — pagination', () => {
   });
 });
 
+// ROAD-22: this app treats an inaccurate capability claim as a defect on par
+// with a broken feature (commit e9e1ec9) — these pin the three fixed claims
+// on this page shut so they cannot silently regress.
+describe('MyJiraPage — honesty fixes (ROAD-22)', () => {
+  function connectionStatus() {
+    return {
+      connected: true,
+      accountName: 'Max Chen',
+      accountEmail: 'max@northwind.dev',
+      accountId: '5f8a',
+      site: 'waypoint123.atlassian.net',
+      lastSyncAt: new Date().toISOString(),
+      issueCount: 4,
+      projectCount: 3,
+      countsTruncated: false,
+    };
+  }
+
+  // "~400ms" was never measured — this app's own measurement of a My Jira
+  // LOAD (a different thing entirely) came back at 1752ms. The two claims
+  // that survive are both checkable: a click writes with no approval step,
+  // and Copilot's own writes never do (see CopilotProposalCard.tsx's
+  // ExternalWriteBanner and main/copilot/proposalApproval.ts, which only
+  // ever executes a Jira-touching proposal from an explicit approve click).
+  it('drops the unmeasured latency claim but keeps the true ones', async () => {
+    jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(TICKETS));
+    jest.mocked(useLoadedJiraConnection).mockReturnValue(connectionStatus());
+    render(
+      <MemoryRouter>
+        <MyJiraPage />
+      </MemoryRouter>,
+    );
+    await screen.findByText('Eng assignee ticket');
+
+    expect(screen.queryByText(/400ms/)).not.toBeInTheDocument();
+    expect(screen.getByText(/no approval step/)).toBeInTheDocument();
+    expect(screen.getByText(/Copilot's never do/)).toBeInTheDocument();
+  });
+
+  // "one API call" is only true when a personal queue fits on the first
+  // page of jiraClient.ts's listMyTickets (PAGE_SIZE 100) — a larger one
+  // pages the same JQL search across up to MAX_PAGES (5) requests, so the
+  // count is not stable enough to print. What the sentence actually meant —
+  // nothing re-reads on its own between one Refresh and the next — survives
+  // without a number attached to it.
+  it('drops the unstable API-call count and says what refresh actually does', async () => {
+    jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(TICKETS));
+    jest.mocked(useLoadedJiraConnection).mockReturnValue(connectionStatus());
+    render(
+      <MemoryRouter>
+        <MyJiraPage />
+      </MemoryRouter>,
+    );
+    await screen.findByText('Eng assignee ticket');
+
+    expect(screen.queryByText(/API call/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText('refresh re-reads the whole queue'),
+    ).toBeInTheDocument();
+  });
+});
+
 // "4 issues · 3 Jira projects" over a page-capped read is a count presented
 // as a total. The strip is what stops the page making that claim silently.
 describe('MyJiraPage — a page-capped read says so', () => {

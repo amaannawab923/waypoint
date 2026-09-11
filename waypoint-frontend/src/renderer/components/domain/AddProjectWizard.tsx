@@ -391,9 +391,22 @@ function ConfirmStep({
           </span>
         </div>
         <div>
-          <b className="block font-mono text-[15px] font-bold text-text">1</b>
+          {/* Used to claim "1 / API call to load". Not true on its own
+              terms: connecting alone is two real requests before this step
+              ever renders — client.validateCredential's GET /myself
+              (jiraClient.ts), then the JQL search this same connect flow
+              runs via listMyJiraTickets (see connectJira in
+              data/jiraApi.ts) — and that search alone can span more than
+              one request when the queue is large (jiraClient.ts's
+              PAGE_SIZE/MAX_PAGES). There is no fixed number honest to print
+              here. What IS stable, and what this stat was actually trying
+              to say (see the comment above this block), is that nothing
+              here polls in the background afterward. */}
+          <b className="block font-mono text-[15px] font-bold text-text">
+            No polling
+          </b>
           <span className="text-[11.5px] text-text-muted">
-            API call to load
+            after this connects
           </span>
         </div>
       </div>

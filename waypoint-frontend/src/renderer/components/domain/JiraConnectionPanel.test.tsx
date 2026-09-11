@@ -134,6 +134,36 @@ describe('JiraConnectionPanel', () => {
     expect(screen.getByText('issues in your queue')).toBeInTheDocument();
   });
 
+  // ROAD-22: both counts come from the same capped read (a project whose
+  // only issues fell past the cap is missing from the project count too —
+  // see JiraConnectionStatus's own comment on projectCount), so rendering
+  // the project count as a bare exact number beside an issue count that
+  // carries a "+" and a caveat said the two were different kinds of fact
+  // when they are not. The project count now gets the same marker.
+  it('renders a capped project count as a floor too, not as a bare exact number', () => {
+    renderPanel(
+      <JiraConnectionPanel
+        connection={status({ projectCount: 12, countsTruncated: true })}
+      />,
+    );
+
+    expect(screen.getByText('12+')).toBeInTheDocument();
+    expect(
+      screen.getByText('Jira projects seen (your queue is larger)'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Jira projects represented')).toBeNull();
+  });
+
+  it('leaves a complete project count unqualified', () => {
+    renderPanel(
+      <JiraConnectionPanel connection={status({ projectCount: 3 })} />,
+    );
+
+    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(screen.queryByText('3+')).toBeNull();
+    expect(screen.getByText('Jira projects represented')).toBeInTheDocument();
+  });
+
   it('renders the connected account row and live stats from the connection prop', () => {
     renderPanel(<JiraConnectionPanel connection={status()} />);
 
