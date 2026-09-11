@@ -108,28 +108,72 @@ describe('registerBootReconcile', () => {
     expect(listAllRuns).toHaveBeenCalledTimes(1);
   });
 
-  it('a backend that is down is a warning and a retry on the next connection, never a supervisor failure', async () => {
+  it('a backend that is down is a warning and a spaced retry, never a supervisor failure', async () => {
     const supervisor = fakeSupervisor(running(1));
     const listAllRuns = jest
       .fn()
       .mockRejectedValueOnce(new Error('fetch failed'))
       .mockResolvedValue([]);
+    const reports: unknown[] = [];
 
     registerBootReconcile({
       supervisor,
       ledger: fakeLedger(listAllRuns),
       logger,
+      retryDelayMs: 5,
+      onReport: (r) => reports.push(r),
     });
     await flush();
     expect(logger.warn).toHaveBeenCalledWith(
-      'engine: boot reconcile did not run',
+      'engine: boot reconcile did not run; retrying',
+      { message: 'fetch failed', inMs: 5, retriesLeft: 2 },
+    );
+    expect(supervisor.stop).not.toHaveBeenCalled();
+
+    await new Promise((r) => setTimeout(r, 15));
+    expect(listAllRuns).toHaveBeenCalledTimes(2);
+    expect(reports).toHaveLength(1);
+  });
+
+  it('gives up after the retry budget and waits for the next connection, which starts with a fresh budget', async () => {
+    const supervisor = fakeSupervisor(running(1));
+    const listAllRuns = jest.fn().mockRejectedValue(new Error('fetch failed'));
+
+    registerBootReconcile({
+      supervisor,
+      ledger: fakeLedger(listAllRuns),
+      logger,
+      retryDelayMs: 2,
+    });
+    await new Promise((r) => setTimeout(r, 40));
+    // 1 + MAX_RETRIES attempts, then silence on this connection.
+    expect(listAllRuns).toHaveBeenCalledTimes(4);
+    expect(logger.warn).toHaveBeenCalledWith(
+      'engine: boot reconcile did not run; will try on the next connection',
       { message: 'fetch failed' },
     );
 
-    // The same connection is not retried on its own …
-    supervisor.emit(running(1));
+    supervisor.emit({ kind: 'stopping', since: 2 });
+    supervisor.emit(running(3));
+    await new Promise((r) => setTimeout(r, 40));
+    expect(listAllRuns).toHaveBeenCalledTimes(8);
+  });
+
+  it('a connection that goes away takes its pending retry with it', async () => {
+    const supervisor = fakeSupervisor(running(1));
+    const listAllRuns = jest.fn().mockRejectedValue(new Error('fetch failed'));
+
+    registerBootReconcile({
+      supervisor,
+      ledger: fakeLedger(listAllRuns),
+      logger,
+      retryDelayMs: 10,
+    });
     await flush();
-    expect(listAllRuns).toHaveBeenCalledTimes(2);
+    supervisor.emit({ kind: 'stopping', since: 2 });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(listAllRuns).toHaveBeenCalledTimes(1);
   });
 
   it('stops listening when unsubscribed', async () => {
