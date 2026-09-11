@@ -132,6 +132,13 @@ export interface EngineSupervisor {
   /** A fresh `health` call on the live connection, or `null` when there is
    *  none to ask — matching `ENGINE_IPC.health`'s own contract. */
   health(): Promise<EngineHealth | null>;
+  /**
+   * The live Wire client while `running`, else `null`. For the run
+   * modules (`runs/`) that speak to the daemon's workspace registry and
+   * ACP runtime on Waypoint's behalf. Never hold it across an await: the
+   * daemon can go away between two calls, so a caller re-asks each time.
+   */
+  client(): WireClient | null;
   /** Fires on every status *change*, in subscriber order — not on
    *  subscribe, so a caller that wants the current value calls getStatus()
    *  first (MachinePage does exactly that on mount). */
@@ -672,5 +679,14 @@ export function createEngineSupervisor(
     listeners.clear();
   }
 
-  return { getStatus, install, start, stop, health, onStatusChange, dispose };
+  return {
+    getStatus,
+    install,
+    start,
+    stop,
+    health,
+    client: () => (status.kind === 'running' ? client : null),
+    onStatusChange,
+    dispose,
+  };
 }

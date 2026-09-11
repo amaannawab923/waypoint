@@ -56,6 +56,7 @@ function fakeSupervisor(
     start: jest.fn(() => Promise.resolve(status)),
     stop: jest.fn(() => Promise.resolve(status)),
     health: jest.fn(() => Promise.resolve(null)),
+    client: jest.fn(() => null),
     onStatusChange: jest.fn((cb: (status: EngineStatus) => void) => {
       listeners.add(cb);
       return () => listeners.delete(cb);

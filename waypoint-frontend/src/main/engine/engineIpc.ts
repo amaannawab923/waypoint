@@ -88,6 +88,7 @@ function unavailableEngineSupervisor(message: string): EngineSupervisor {
     start: same,
     stop: same,
     health: async () => null,
+    client: () => null,
     onStatusChange: () => () => {},
     dispose: () => {},
   };
