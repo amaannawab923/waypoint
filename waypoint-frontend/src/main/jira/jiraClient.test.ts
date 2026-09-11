@@ -6,7 +6,8 @@ const clearJiraCredentialInvalidMarkerMock = jest.fn();
 jest.mock('./jiraAuth', () => ({
   readStoredJiraCredential: () => readStoredJiraCredentialMock(),
   markJiraCredentialInvalid: () => markJiraCredentialInvalidMock(),
-  clearJiraCredentialInvalidMarker: () => clearJiraCredentialInvalidMarkerMock(),
+  clearJiraCredentialInvalidMarker: () =>
+    clearJiraCredentialInvalidMarkerMock(),
 }));
 
 // eslint-disable-next-line import/order, import/first
@@ -225,7 +226,10 @@ describe('validateCredential', () => {
   // must not clear that stored credential's marker either.
   it('does not clear the stored connection marker over a successful CANDIDATE credential', async () => {
     fetchMock.mockResolvedValue(
-      jsonResponse({ accountId: CREDENTIAL.accountId, emailAddress: CREDENTIAL.email }),
+      jsonResponse({
+        accountId: CREDENTIAL.accountId,
+        emailAddress: CREDENTIAL.email,
+      }),
     );
 
     await validateCredential(CREDENTIAL);
@@ -285,6 +289,100 @@ describe('validateCredential', () => {
       reason: 'site_not_found',
     });
   });
+
+  // ROAD-21: a typo'd *.atlassian.net subdomain never reaches a Jira site at
+  // all — Atlassian's own edge answers a real 404 for it, which is the same
+  // underlying fact ENOTFOUND reports for a domain that doesn't resolve.
+  // Before this, `jiraFetch` still classified it `not_found` (correct for
+  // every OTHER caller — see jiraTypes.ts) and the connect form showed
+  // whatever `messageFromErrorBody` fell back to, e.g. "Jira returned 404."
+  it('translates a 404 from a *.atlassian.net host to "site doesn\'t exist"', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ errorMessages: ['Site does not exist.'] }, 404),
+    );
+
+    expect(await validateCredential(CREDENTIAL)).toEqual({
+      ok: false,
+      reason: 'site_not_found',
+      message:
+        "That site doesn't exist — check the address (e.g. yourteam.atlassian.net).",
+    });
+  });
+
+  // A host outside atlassian.net that 404s DID resolve and answered
+  // something — just not a Jira Cloud API — so it gets the other
+  // already-written message rather than "that site doesn't exist".
+  it('translates a 404 from a non-atlassian.net host to "not like a Jira Cloud site"', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ errorMessages: ['Not Found'] }, 404),
+    );
+
+    expect(
+      await validateCredential({ ...CREDENTIAL, site: 'jira.northwind.dev' }),
+    ).toEqual({
+      ok: false,
+      reason: 'site_not_found',
+      message:
+        'That address answered, but not like a Jira Cloud site — check the site address.',
+    });
+  });
+
+  // Atlassian's edge answers an unregistered subdomain with an HTML page,
+  // not JSON — `messageFromErrorBody` never gets a body it can read, and the
+  // classification here doesn't need one: it decides from the candidate
+  // hostname alone, so nothing from that HTML page can leak into the
+  // message shown next to the address field.
+  it('classifies an HTML 404 body the same way, without leaking HTML into the message', async () => {
+    fetchMock.mockResolvedValue({
+      status: 404,
+      ok: false,
+      text: async () =>
+        '<!doctype html><title>Oops, this site doesn’t exist</title>',
+    } as unknown as Response);
+
+    const result = await validateCredential(CREDENTIAL);
+
+    // The exact-string match above is what proves no HTML leaked; this is
+    // just the same fact stated in the terms the test name uses.
+    expect(result).toEqual({
+      ok: false,
+      reason: 'site_not_found',
+      message:
+        "That site doesn't exist — check the address (e.g. yourteam.atlassian.net).",
+    });
+  });
+
+  // Found in review: the two host cases above cannot tell an end-anchored
+  // `/\.atlassian\.net$/` from `.includes('.atlassian.net')` or from a
+  // rule missing the leading dot — every candidate gave the same answer
+  // under all three. These two hosts are the ones that disagree.
+  it.each([
+    // `.atlassian.net` appears in the middle: only an end-anchored rule
+    // says this is NOT Atlassian's own domain.
+    [
+      'foo.atlassian.net.evil.io',
+      'That address answered, but not like a Jira Cloud site — check the site address.',
+    ],
+    // No dot before "atlassian.net": only a rule that requires the dot
+    // says this is NOT an Atlassian subdomain.
+    [
+      'myatlassian.net',
+      'That address answered, but not like a Jira Cloud site — check the site address.',
+    ],
+  ])(
+    'pins the rule to a real *.atlassian.net suffix for %s',
+    async (site, message) => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({ errorMessages: ['Not Found'] }, 404),
+      );
+
+      expect(await validateCredential({ ...CREDENTIAL, site })).toEqual({
+        ok: false,
+        reason: 'site_not_found',
+        message,
+      });
+    },
+  );
 });
 
 describe('listMyTickets', () => {

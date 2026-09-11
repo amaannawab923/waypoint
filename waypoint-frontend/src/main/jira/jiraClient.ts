@@ -540,7 +540,65 @@ export async function validateCredential(
     // attempt.
     invalidateStoredCredentialOn401: false,
   });
-  if (!result.ok) return result;
+  if (!result.ok) {
+    // Every OTHER caller in this file wants `not_found` left exactly as
+    // `jiraFetch` classified it — see `not_found`'s own doc comment in
+    // jiraTypes.ts and the 404 branch in `performRequest`: it is the signal
+    // the renderer's comment-freshness guards branch on, and turning it into
+    // something else anywhere else would break that. This probe is the one
+    // exception, because a 404 here isn't Jira telling us a resource is
+    // gone — it's the ANSWER ITSELF that decides whether a candidate site
+    // exists at all, and "Jira returned 404." — the status fallback; an
+    // HTML body never parses, so nothing from it can reach here — is not a
+    // sentence the connect form should ever show next to an address field.
+    //
+    // Only ONE fact is available to decide which of the two already-written
+    // messages fits: the hostname the user typed, which is all
+    // `validateCredential` ever had going in — the response carries nothing
+    // else to go on; a typo'd `*.atlassian.net` subdomain and a real,
+    // unrelated host both come back as a bare 404, frequently with an HTML
+    // body neither this function nor `messageFromErrorBody` needs to parse,
+    // because the classification never looks at it.
+    //
+    // The rule: if the candidate host itself ends in `.atlassian.net`, the
+    // 404 came from ATLASSIAN'S OWN EDGE (wildcard DNS resolves every
+    // subdomain; the edge answers 404 for one nothing is registered under
+    // — live-verified), so it gets the "doesn't exist" message. Any other
+    // host DID resolve and answered something, just not a Jira Cloud API,
+    // so it gets the second message instead.
+    //
+    // What this gets wrong — on both sides of the rule, and admitted here
+    // so the next reader does not take either sentence as always true:
+    //
+    //  - A REAL `.atlassian.net` tenant with no Jira product on it (a
+    //    Confluence-only site, or Jira deactivated/lapsed). Atlassian's edge
+    //    routes per product, so a Jira REST path on such a site comes back
+    //    as the same edge 404 as an unregistered subdomain, and the user
+    //    reads "That site doesn't exist" about a site that does. Inferred
+    //    from Atlassian's routing, not observed live.
+    //  - A real Jira Cloud site on a custom domain where the REST API is
+    //    not served on that hostname, or a Jira Data Center install whose
+    //    reverse proxy rewrites or blocks `/rest`: both read as "not like a
+    //    Jira Cloud site" about a real Jira.
+    //
+    // Accepted, because a bare 404 carries nothing to tell these apart from
+    // the intended cases, and the actionable half of either sentence —
+    // "check the site address" — is still the right next step for every
+    // one of them; a Data Center admin in particular is outside what this
+    // client speaks at all (see this file's header on why DC/OAuth is a
+    // separate mechanism). What is NOT accepted is pretending the rule is
+    // exact, which is why this list exists.
+    if (result.reason === 'not_found') {
+      const hostIsAtlassianDomain = /\.atlassian\.net$/i.test(candidate.site);
+      return failure(
+        'site_not_found',
+        hostIsAtlassianDomain
+          ? "That site doesn't exist — check the address (e.g. yourteam.atlassian.net)."
+          : 'That address answered, but not like a Jira Cloud site — check the site address.',
+      );
+    }
+    return result;
+  }
 
   const me = result.value ?? {};
   const accountId = typeof me.accountId === 'string' ? me.accountId : '';
