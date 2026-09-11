@@ -29,6 +29,7 @@ import { registerCopilotDetectIpc } from './copilot/copilotDetect';
 import { registerProposalApprovalIpc } from './copilot/proposalApproval';
 import { registerJiraIpc } from './jira/jiraIpc';
 import { registerRepoLinkIpc } from './repoLink';
+import { registerEngineIpc } from './engine/engineIpc';
 
 // Opt-in remote debugging for scripted/agent-driven QA (docs/qa-electron.md)
 // — off unless ELECTRON_QA_DEBUG_PORT is set, so normal dev/prod runs are
@@ -124,6 +125,11 @@ registerProposalApprovalIpc();
 // after a close and reopen.
 registerJiraIpc(() => mainWindow);
 registerRepoLinkIpc(() => mainWindow);
+// ROAD-48/51: same getter-not-window reasoning as every registration above
+// — mainWindow is still null at this point and is a different object after
+// a close/reopen. No explicit supervisor argument: registerEngineIpc's own
+// default builds the real one (engineIpc.ts's createDefaultEngineSupervisor).
+registerEngineIpc(() => mainWindow);
 
 if (process.env.NODE_ENV === 'production') {
   const sourceMapSupport = require('source-map-support');

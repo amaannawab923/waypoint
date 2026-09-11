@@ -16,6 +16,20 @@ import type {
   JiraWireTransition,
   JiraWireUser,
 } from './jira/jiraTypes';
+// A value import, unlike every jira/copilot import above — deliberately.
+// ENGINE_IPC's own channel constants are the whole point of importing it:
+// this bridge and engineIpc.ts (the other side of every one of these calls)
+// share the literal channel names by construction, so the two can never
+// drift the way two independently hand-typed 'engine:...' strings could.
+// Safe to pull in as a value here specifically because engine/types.ts
+// documents itself as importing neither Electron nor Node runtime modules
+// (see that file's own header) — unlike jiraClient.ts or copilotDetect.ts,
+// nothing about it would bloat what ships in the preload bundle.
+import {
+  ENGINE_IPC,
+  type EngineHealth,
+  type EngineStatus,
+} from './engine/types';
 
 // The global Web Crypto API, not Node's `crypto` module: this preload script
 // runs in Electron's sandboxed renderer context by default (Electron 20+),
@@ -436,6 +450,41 @@ const electronHandler = {
       { canceled: true } | { canceled: false; path: string }
     > {
       return ipcRenderer.invoke('repo:choose-folder');
+    },
+  },
+  // ROAD-48/51: the agent-session engine (emdash's `workspace-server`
+  // daemon). Every call is request/response like the Jira bridge above —
+  // ENGINE_IPC's own comment (engine/types.ts) says `status` never throws
+  // ("a broken engine is a status, not an error"), and the same holds for
+  // install/start/stop/health: a failure is an EngineStatus with `kind:
+  // 'failed'`, not a rejected promise, so there is no JiraResult-style
+  // unwrap needed on this side. `onStatusChanged` is the one push channel,
+  // for the same reason copilot.runPrompt's onDone/onChunk are: a status
+  // can change with no renderer call in flight to answer it (the daemon
+  // exiting on its own, say).
+  engine: {
+    status(): Promise<EngineStatus> {
+      return ipcRenderer.invoke(ENGINE_IPC.status);
+    },
+    install(): Promise<EngineStatus> {
+      return ipcRenderer.invoke(ENGINE_IPC.install);
+    },
+    start(): Promise<EngineStatus> {
+      return ipcRenderer.invoke(ENGINE_IPC.start);
+    },
+    stop(): Promise<EngineStatus> {
+      return ipcRenderer.invoke(ENGINE_IPC.stop);
+    },
+    health(): Promise<EngineHealth | null> {
+      return ipcRenderer.invoke(ENGINE_IPC.health);
+    },
+    onStatusChanged(cb: (status: EngineStatus) => void): () => void {
+      const subscription = (_event: IpcRendererEvent, status: EngineStatus) =>
+        cb(status);
+      ipcRenderer.on(ENGINE_IPC.statusChanged, subscription);
+      return () => {
+        ipcRenderer.removeListener(ENGINE_IPC.statusChanged, subscription);
+      };
     },
   },
 };

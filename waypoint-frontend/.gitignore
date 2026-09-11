@@ -31,3 +31,6 @@ npm-debug.log.*
 *.css.d.ts
 *.sass.d.ts
 *.scss.d.ts
+
+# Pinned agent-engine archive, fetched by scripts/fetch-engine.mjs (see engine.lock.json)
+/engine/
