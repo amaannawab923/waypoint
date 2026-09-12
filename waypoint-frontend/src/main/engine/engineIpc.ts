@@ -1,4 +1,11 @@
-import { app, ipcMain, shell, type BrowserWindow } from 'electron';
+import {
+  app,
+  ipcMain,
+  shell,
+  type BrowserWindow,
+  type Event as ElectronEvent,
+  type WebContents,
+} from 'electron';
 import * as path from 'node:path';
 import {
   ENGINE_IPC,
@@ -195,7 +202,29 @@ export function registerEngineIpc(
     ipcMain.handle(channel, (_event, ...args) => handler(...args));
   registerTopicsIpc({
     supervisor,
-    host: { handle, send },
+    host: {
+      handle,
+      send,
+      // A main-frame navigation that is not same-document (a reload, a
+      // full load) or a renderer that crashed: the document holding the
+      // subscriptions is gone. Watched on every webContents the app
+      // creates, since the window does not exist yet at registration.
+      onRendererGone: (callback) => {
+        const watch = (contents: WebContents) => {
+          contents.on('did-start-navigation', (details) => {
+            if (details.isMainFrame && !details.isSameDocument) callback();
+          });
+          contents.on('render-process-gone', () => callback());
+          contents.on('destroyed', () => callback());
+        };
+        const onCreated = (_event: ElectronEvent, contents: WebContents) =>
+          watch(contents);
+        app.on('web-contents-created', onCreated);
+        return () => {
+          app.off('web-contents-created', onCreated);
+        };
+      },
+    },
     logger,
   });
 

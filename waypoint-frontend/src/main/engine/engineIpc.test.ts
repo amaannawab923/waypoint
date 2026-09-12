@@ -8,7 +8,11 @@ const ipcMainHandleMock = jest.fn();
 // which no test here ever calls — see below).
 jest.mock('electron', () => ({
   ipcMain: { handle: ipcMainHandleMock },
-  app: { getPath: jest.fn(() => '/tmp/waypoint-test-userdata') },
+  app: {
+    getPath: jest.fn(() => '/tmp/waypoint-test-userdata'),
+    on: jest.fn(),
+    off: jest.fn(),
+  },
   shell: { showItemInFolder: jest.fn() },
 }));
 

@@ -83,15 +83,22 @@ function fakeSupervisor(client: WireClient | null) {
 function fakeHost() {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
   const sent: Array<{ channel: string; payload: unknown }> = [];
+  const goneCallbacks = new Set<() => void>();
   const host: TopicsIpcHost = {
     handle: (channel, handler) => handlers.set(channel, handler),
     send: (channel, payload) => sent.push({ channel, payload }),
+    onRendererGone: (callback) => {
+      goneCallbacks.add(callback);
+      return () => goneCallbacks.delete(callback);
+    },
   };
   // Like ipcMain.handle: a synchronous throw inside a handler reaches the
   // renderer as a rejected invoke, never as a throw from `invoke` itself.
   const invoke = (channel: string, ...args: unknown[]) =>
     Promise.resolve().then(() => handlers.get(channel)!(...args));
-  return { host, sent, invoke, handlers };
+  /** The renderer document reloaded or died. */
+  const rendererGone = () => goneCallbacks.forEach((cb) => cb());
+  return { host, sent, invoke, handlers, rendererGone, goneCallbacks };
 }
 
 const logger = { warn: jest.fn() };
@@ -327,7 +334,10 @@ describe('registerTopicsIpc', () => {
     });
 
     const failure = await (
-      invoke(ENGINE_IPC.topicSubscribe, 'workspaceRegistry.records.list') as Promise<unknown>
+      invoke(
+        ENGINE_IPC.topicSubscribe,
+        'workspaceRegistry.records.list',
+      ) as Promise<unknown>
     ).catch((e: unknown) => e);
 
     expect(failure).toBeInstanceOf(EngineCallError);
@@ -419,7 +429,10 @@ describe('registerTopicsIpc', () => {
       // Not one of our runs.
       ['acp.sendPrompt', { conversationId: 'conv-1', prompt: { text: 'x' } }],
       // Empty text.
-      ['acp.sendPrompt', { conversationId: 'run-abc1234', prompt: { text: '' } }],
+      [
+        'acp.sendPrompt',
+        { conversationId: 'run-abc1234', prompt: { text: '' } },
+      ],
       // Attachments: the renderer must not name files for the daemon.
       [
         'acp.sendPrompt',
@@ -438,16 +451,28 @@ describe('registerTopicsIpc', () => {
       ['acp.sendPrompt', { conversationId: 'run-abc1234', prompt: 'x' }],
       [
         'acp.sendPrompt',
-        { conversationId: 'run-abc1234', prompt: { text: 'x' }, placement: 'now' },
+        {
+          conversationId: 'run-abc1234',
+          prompt: { text: 'x' },
+          placement: 'now',
+        },
       ],
-      ['acp.resolvePermission', { conversationId: 'run-abc1234', requestId: 'p' }],
+      [
+        'acp.resolvePermission',
+        { conversationId: 'run-abc1234', requestId: 'p' },
+      ],
       [
         'acp.resolvePermission',
         { conversationId: 'run-abc1234', requestId: '', optionId: 'o' },
       ],
       [
         'acp.resolvePermission',
-        { conversationId: 'run-abc1234', requestId: 'p', optionId: 'o', extra: 1 },
+        {
+          conversationId: 'run-abc1234',
+          requestId: 'p',
+          optionId: 'o',
+          extra: 1,
+        },
       ],
       ['acp.cancelTurn', { conversationId: 'run-abc1234', force: true }],
       ['acp.cancelTurn', { conversationId: 'conv-1' }],
@@ -462,6 +487,37 @@ describe('registerTopicsIpc', () => {
       invoke(ENGINE_IPC.call, 'acp.kill', { conversationId: 'run-abc1234' }),
     ).rejects.toThrow('Procedure is not available to the renderer: acp.kill');
     expect(daemon.client.call).toHaveBeenCalledTimes(4);
+  });
+
+  it('releases every attachment, silently, when the renderer document is gone — so the next document can subscribe again', async () => {
+    const daemon = fakeClient();
+    const { host, sent, invoke, rendererGone, goneCallbacks } = fakeHost();
+    const dispose = registerTopicsIpc({
+      supervisor: fakeSupervisor(daemon.client),
+      host,
+      logger,
+    });
+    await invoke(ENGINE_IPC.topicSubscribe, ACTIVE_TURN);
+    await invoke(ENGINE_IPC.topicSubscribe, 'workspaceRegistry.records.list');
+    expect(daemon.detached).toEqual([]);
+
+    rendererGone();
+    expect(daemon.detached.sort()).toEqual(
+      [ACTIVE_TURN, 'workspaceRegistry.records.list'].sort(),
+    );
+    // No push: there is no document to tell.
+    expect(sent.filter((m) => m.channel === ENGINE_IPC.topicClosed)).toEqual(
+      [],
+    );
+    // The new document subscribes to the same topic without complaint.
+    await expect(
+      invoke(ENGINE_IPC.topicSubscribe, ACTIVE_TURN),
+    ).resolves.toMatchObject({
+      subscriptionId: expect.any(String),
+    });
+
+    dispose();
+    expect(goneCallbacks.size).toBe(0);
   });
 
   it('the returned disposer detaches everything without telling the renderer', async () => {

@@ -39,6 +39,16 @@ export interface TopicsIpcHost {
   handle(channel: string, handler: (...args: unknown[]) => unknown): void;
   /** Push to the current window; a no-op when there is none. */
   send(channel: string, payload: unknown): void;
+  /**
+   * Fires when the renderer document that held the subscriptions is gone
+   * — a reload, a full navigation, a crashed renderer. Its followers never
+   * unsubscribed (there was no one left to), and the Wire client holds one
+   * attachment per topic, so the next document's subscribe to the same
+   * topic would be refused with ALREADY_EXISTS (found live: reload the
+   * panel, and every transcript said "not live"). Every attachment is
+   * released, silently — there is no document to tell.
+   */
+  onRendererGone?(callback: () => void): Unsubscribe;
 }
 
 export interface TopicsIpcDeps {
@@ -226,8 +236,15 @@ export function registerTopicsIpc(deps: TopicsIpcDeps): Unsubscribe {
     }
   });
 
+  const unsubscribeGone =
+    deps.host.onRendererGone?.(() => {
+      for (const subscriptionId of [...attachments.keys()])
+        close(subscriptionId, { kind: 'unsubscribed' });
+    }) ?? null;
+
   return () => {
     unsubscribeStatus();
+    unsubscribeGone?.();
     for (const subscriptionId of [...attachments.keys()])
       close(subscriptionId, { kind: 'unsubscribed' });
   };
