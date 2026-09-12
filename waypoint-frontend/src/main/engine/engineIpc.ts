@@ -208,14 +208,36 @@ export function registerEngineIpc(
       // A main-frame navigation that is not same-document (a reload, a
       // full load) or a renderer that crashed: the document holding the
       // subscriptions is gone. Watched on every webContents the app
-      // creates, since the window does not exist yet at registration.
+      // creates, since the window does not exist yet at registration —
+      // but only the app window's own events count: DevTools, a
+      // <webview>, any auxiliary window are webContents too, and their
+      // first navigation must not release the panel's attachments
+      // (found in review, reproduced with ⌘⌥I).
       onRendererGone: (callback) => {
+        const isAppWindow = (contents: WebContents): boolean => {
+          try {
+            const win = getWindow();
+            return !!win && !win.isDestroyed() && win.webContents === contents;
+          } catch {
+            return false;
+          }
+        };
         const watch = (contents: WebContents) => {
+          // Identified on its first navigation (the window exists by
+          // then); remembered for `destroyed`, when the window is gone
+          // and cannot be asked.
+          let appWindow = false;
           contents.on('did-start-navigation', (details) => {
-            if (details.isMainFrame && !details.isSameDocument) callback();
+            appWindow = isAppWindow(contents);
+            if (appWindow && details.isMainFrame && !details.isSameDocument)
+              callback();
           });
-          contents.on('render-process-gone', () => callback());
-          contents.on('destroyed', () => callback());
+          contents.on('render-process-gone', () => {
+            if (appWindow || isAppWindow(contents)) callback();
+          });
+          contents.on('destroyed', () => {
+            if (appWindow) callback();
+          });
         };
         const onCreated = (_event: ElectronEvent, contents: WebContents) =>
           watch(contents);

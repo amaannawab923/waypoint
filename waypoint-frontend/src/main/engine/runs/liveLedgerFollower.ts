@@ -77,6 +77,22 @@ interface PendingPermissionView {
   toolCall?: { title?: string; kind?: string; command?: string };
 }
 
+/**
+ * The reason line is one line, at most MAX_REASON_CHARS — the list row
+ * shows one line, and the ledger refuses a blockedReason over 2000 chars
+ * (agentRuns.schema.ts), which for a heredoc command meant the whole
+ * `blocked` write was dropped and the badge never lit (found in review).
+ */
+export const MAX_REASON_CHARS = 200;
+
+function firstLine(text: string): string {
+  const cut = text.indexOf('\n');
+  const line = (cut === -1 ? text : text.slice(0, cut)).trim();
+  return line.length <= MAX_REASON_CHARS
+    ? line
+    : `${line.slice(0, MAX_REASON_CHARS - 1)}…`;
+}
+
 /** "Wants to run pnpm test" / "Wants to edit src/a.ts" — from the first pending request. */
 export function describePendingPermission(
   request: PendingPermissionView | undefined,
@@ -84,9 +100,11 @@ export function describePendingPermission(
   const title = request?.toolCall?.title?.trim();
   const command = request?.toolCall?.command?.trim();
   if (request?.toolCall?.kind === 'execute-tool-call' && command)
-    return `Wants to run ${command}`;
-  if (title)
-    return `Wants to ${title.charAt(0).toLowerCase()}${title.slice(1)}`;
+    return `Wants to run ${firstLine(command)}`;
+  if (title) {
+    const t = firstLine(title);
+    return `Wants to ${t.charAt(0).toLowerCase()}${t.slice(1)}`;
+  }
   return 'Waiting for your permission';
 }
 

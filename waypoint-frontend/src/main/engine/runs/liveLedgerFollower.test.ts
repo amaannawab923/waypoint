@@ -3,6 +3,7 @@ import type { EngineStatus, WireClient } from '../types';
 import type { AgentRun, LedgerClient } from './ledgerClient';
 import {
   describePendingPermission,
+  MAX_REASON_CHARS,
   registerLiveLedgerFollower,
 } from './liveLedgerFollower';
 
@@ -133,6 +134,20 @@ describe('describePendingPermission', () => {
     expect(describePendingPermission(undefined)).toBe(
       'Waiting for your permission',
     );
+    // A heredoc: one line, cut well under the ledger's 2000-char cap.
+    const long = describePendingPermission({
+      toolCall: {
+        kind: 'execute-tool-call',
+        title: 'Run',
+        command: `bash -c '${'x'.repeat(3000)}'\nsecond line`,
+      },
+    });
+    expect(long.startsWith('Wants to run bash -c')).toBe(true);
+    expect(long.length).toBeLessThanOrEqual(
+      MAX_REASON_CHARS + 'Wants to run '.length,
+    );
+    expect(long).not.toContain('second line');
+    expect(long.endsWith('…')).toBe(true);
   });
 });
 

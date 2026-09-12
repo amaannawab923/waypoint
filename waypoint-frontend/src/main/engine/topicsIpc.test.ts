@@ -378,10 +378,13 @@ describe('registerTopicsIpc', () => {
         limit: 50,
       }),
     ).toEqual({ echoed: 'acp.getHistory' });
-    expect(daemon.client.call).toHaveBeenCalledWith('acp.getHistory', {
-      conversationId: 'run-abc1234',
-      limit: 50,
-    });
+    // With its deadline: a wedged daemon must not hold a history read
+    // forever (review round 3).
+    expect(daemon.client.call).toHaveBeenCalledWith(
+      'acp.getHistory',
+      { conversationId: 'run-abc1234', limit: 50 },
+      { timeoutMs: 30_000 },
+    );
 
     await expect(
       invoke(ENGINE_IPC.call, 'acp.kill', { conversationId: 'run-abc1234' }),
@@ -482,11 +485,123 @@ describe('registerTopicsIpc', () => {
         `Input rejected for ${procedure}.`,
       );
     }
-    // Still nothing the panel is not meant to reach.
+    // Still nothing the panel is not meant to reach — including the
+    // Object.prototype keys an `in` check would have let through.
     await expect(
       invoke(ENGINE_IPC.call, 'acp.kill', { conversationId: 'run-abc1234' }),
     ).rejects.toThrow('Procedure is not available to the renderer: acp.kill');
+    for (const name of [
+      'toString',
+      'valueOf',
+      'constructor',
+      'hasOwnProperty',
+    ]) {
+      await expect(invoke(ENGINE_IPC.call, name, {})).rejects.toThrow(
+        `Procedure is not available to the renderer: ${name}`,
+      );
+    }
     expect(daemon.client.call).toHaveBeenCalledTimes(4);
+    // sendPrompt spans the agent's turn: no deadline; the others have one.
+    const { calls } = (daemon.client.call as jest.Mock).mock;
+    expect(calls[0][2]).toBeUndefined();
+    expect(calls[2][2]).toEqual({ timeoutMs: 30_000 });
+    expect(calls[3][2]).toEqual({ timeoutMs: 30_000 });
+  });
+
+  it('an update the client replays inside the snapshot tick reaches the renderer (the attachment is registered before the attach answers)', async () => {
+    const daemon = fakeClient();
+    const { host, sent, invoke } = fakeHost();
+    registerTopicsIpc({
+      supervisor: fakeSupervisor(daemon.client),
+      host,
+      logger,
+    });
+    // The wire client delivers buffered updates synchronously right after
+    // onSnapshot, before the attach promise's continuation runs.
+    (daemon.client.attach as jest.Mock).mockImplementationOnce(
+      async (_topic: string, handlers: Handlers) => {
+        handlers.onSnapshot({
+          generation: 1,
+          sequence: 0,
+          timestamp: 1,
+          data: {},
+        });
+        handlers.onUpdate({
+          generation: 1,
+          baseSequence: 0,
+          sequence: 1,
+          timestamp: 2,
+          delta: [],
+        });
+        return () => {};
+      },
+    );
+    const { subscriptionId } = (await invoke(
+      ENGINE_IPC.topicSubscribe,
+      ACTIVE_TURN,
+    )) as { subscriptionId: string };
+    expect(
+      sent
+        .filter((m) => m.channel === ENGINE_IPC.topicUpdate)
+        .map((m) => m.payload),
+    ).toEqual([
+      {
+        subscriptionId,
+        update: {
+          generation: 1,
+          baseSequence: 0,
+          sequence: 1,
+          timestamp: 2,
+          delta: [],
+        },
+      },
+    ]);
+  });
+
+  it('a subscribe in flight across a renderer-gone sweep is released, not kept for no one', async () => {
+    const daemon = fakeClient();
+    const { host, invoke, rendererGone } = fakeHost();
+    registerTopicsIpc({
+      supervisor: fakeSupervisor(daemon.client),
+      host,
+      logger,
+    });
+    const detach = jest.fn();
+    let answer: ((v: unknown) => void) | null = null;
+    (daemon.client.attach as jest.Mock).mockImplementationOnce(
+      (_topic: string, handlers: Handlers) =>
+        new Promise((resolve) => {
+          answer = () => {
+            handlers.onSnapshot({
+              generation: 1,
+              sequence: 0,
+              timestamp: 1,
+              data: {},
+            });
+            resolve(detach);
+          };
+        }),
+    );
+    const pending = invoke(ENGINE_IPC.topicSubscribe, ACTIVE_TURN);
+    // The handler runs on a later tick; let the attach start.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    rendererGone();
+    answer!(undefined);
+    await expect(pending).rejects.toThrow();
+    // The unsubscribe arrives a tick after the snapshot; the detach asked
+    // for meanwhile is honoured then.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(detach).toHaveBeenCalledTimes(1);
+    // And the topic is free for the next document.
+    await expect(
+      invoke(ENGINE_IPC.topicSubscribe, ACTIVE_TURN),
+    ).resolves.toMatchObject({
+      subscriptionId: expect.any(String),
+    });
   });
 
   it('releases every attachment, silently, when the renderer document is gone — so the next document can subscribe again', async () => {

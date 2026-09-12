@@ -114,6 +114,11 @@ function attachTopic<T>(
   return new Promise((resolve, reject) => {
     let settled = false;
     let detach: Unsubscribe | null = null;
+    // A detach asked for before the attach promise handed over its
+    // unsubscribe (the snapshot beats it by a tick) is honoured the moment
+    // it arrives — otherwise the attachment would outlive its subscriber
+    // (found in review, round 3).
+    let detachRequested = false;
     client
       .attach(topic, {
         onSnapshot: (value) => {
@@ -123,7 +128,10 @@ function attachTopic<T>(
           // promise); resolve with a thunk that reads it when called.
           resolve({
             snapshot: value as LiveSnapshot<T>,
-            detach: () => detach?.(),
+            detach: () => {
+              detachRequested = true;
+              detach?.();
+            },
           });
         },
         onUpdate: (update) => callbacks.onUpdate(update as LiveUpdate),
@@ -143,6 +151,7 @@ function attachTopic<T>(
       })
       .then((unsubscribe) => {
         detach = unsubscribe;
+        if (detachRequested) unsubscribe();
       })
       .catch((error) => {
         if (settled) return;
@@ -152,10 +161,30 @@ function attachTopic<T>(
   });
 }
 
+/**
+ * A deadline per renderer-callable procedure — a wedged daemon must not
+ * leave a history read or a permission answer pending for the life of the
+ * pane (found in review; daemonApi.ts fixed the same class for main's own
+ * calls in round 2). `acp.sendPrompt` has none on purpose: the daemon
+ * answers it when the agent's turn ends, which can be minutes, and a
+ * timeout here would send a Wire cancel for a prompt that was delivered.
+ */
+export const CALL_DEADLINES_MS: Record<string, number | undefined> = {
+  'acp.getHistory': 30_000,
+  'acp.resolvePermission': 30_000,
+  'acp.cancelTurn': 30_000,
+  'acp.sendPrompt': undefined,
+};
+
 export function registerTopicsIpc(deps: TopicsIpcDeps): Unsubscribe {
   const attachments = new Map<string, Attachment>();
   let counter = 0;
   const mintId = deps.mintId ?? (() => `sub-${(counter += 1)}`);
+  // Bumped by every sweep (engine stopped, renderer gone). A subscribe
+  // that was in flight across a sweep belongs to a document or connection
+  // that is gone: its attachment is released rather than kept for no one
+  // (found in review).
+  let sweep = 0;
 
   const liveClient = (): WireClient => {
     const client = deps.supervisor.client();
@@ -182,15 +211,41 @@ export function registerTopicsIpc(deps: TopicsIpcDeps): Unsubscribe {
       const topic = assertTopic(rawTopic);
       const client = liveClient();
       const subscriptionId = mintId();
-      const { snapshot, detach } = await attachTopic(client, topic, {
-        onUpdate: (update) => {
-          if (attachments.has(subscriptionId))
-            deps.host.send(ENGINE_IPC.topicUpdate, { subscriptionId, update });
-        },
-        onClosed: (reason) => close(subscriptionId, reason),
-      });
-      attachments.set(subscriptionId, { topic, detach, client });
-      return { subscriptionId, snapshot };
+      const sweepAtStart = sweep;
+      // Registered before the attach answers: the Wire client replays the
+      // updates it buffered during the attach synchronously, inside the
+      // snapshot tick, and a registration after the `await` would have
+      // dropped them (found in review). `detach` is filled in below.
+      const attachment: Attachment = { topic, detach: null, client };
+      attachments.set(subscriptionId, attachment);
+      let result;
+      try {
+        result = await attachTopic(client, topic, {
+          onUpdate: (update) => {
+            if (attachments.has(subscriptionId))
+              deps.host.send(ENGINE_IPC.topicUpdate, {
+                subscriptionId,
+                update,
+              });
+          },
+          onClosed: (reason) => close(subscriptionId, reason),
+        });
+      } catch (error) {
+        attachments.delete(subscriptionId);
+        throw error;
+      }
+      attachment.detach = result.detach;
+      if (sweep !== sweepAtStart || !attachments.has(subscriptionId)) {
+        // Swept while attaching: nobody is left to hold this.
+        attachments.delete(subscriptionId);
+        try {
+          result.detach();
+        } catch {
+          // Already gone with the connection.
+        }
+        throw new EngineNotRunningError();
+      }
+      return { subscriptionId, snapshot: result.snapshot };
     },
   );
 
@@ -216,13 +271,23 @@ export function registerTopicsIpc(deps: TopicsIpcDeps): Unsubscribe {
   );
 
   deps.host.handle(ENGINE_IPC.call, (procedure, input): Promise<unknown> => {
-    if (typeof procedure !== 'string' || !(procedure in ALLOWED_PROCEDURES)) {
+    // Own keys only: `in` walks the prototype, so `toString` and friends
+    // would pass the check and reach the daemon (found in review).
+    if (
+      typeof procedure !== 'string' ||
+      !Object.hasOwn(ALLOWED_PROCEDURES, procedure)
+    ) {
       throw new ProcedureNotAllowedError(String(procedure));
     }
     if (!ALLOWED_PROCEDURES[procedure](input)) {
       throw new Error(`Input rejected for ${procedure}.`);
     }
-    return liveClient().call(procedure, input);
+    const timeoutMs = CALL_DEADLINES_MS[procedure];
+    return liveClient().call(
+      procedure,
+      input,
+      timeoutMs === undefined ? undefined : { timeoutMs },
+    );
   });
 
   // The daemon going away closes every subscription — the renderer's
@@ -231,6 +296,7 @@ export function registerTopicsIpc(deps: TopicsIpcDeps): Unsubscribe {
   // its own: a subscription is the renderer's to hold, not main's.
   const unsubscribeStatus = deps.supervisor.onStatusChange((status) => {
     if (status.kind === 'running') return;
+    sweep += 1;
     for (const subscriptionId of [...attachments.keys()]) {
       close(subscriptionId, { kind: 'disconnected' });
     }
@@ -238,6 +304,7 @@ export function registerTopicsIpc(deps: TopicsIpcDeps): Unsubscribe {
 
   const unsubscribeGone =
     deps.host.onRendererGone?.(() => {
+      sweep += 1;
       for (const subscriptionId of [...attachments.keys()])
         close(subscriptionId, { kind: 'unsubscribed' });
     }) ?? null;

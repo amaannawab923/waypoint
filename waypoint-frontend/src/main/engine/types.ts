@@ -531,8 +531,14 @@ export interface RunChanged {
 }
 
 export type StopRunOutcome =
-  /** The daemon session was told to stop and the ledger says cancelled. */
+  /** The ledger says cancelled and the daemon confirmed the session is gone. */
   | 'stopped'
+  /**
+   * The ledger says cancelled but the daemon did not confirm the kill (no
+   * connection, or it refused): the agent may still be running until the
+   * next boot reconcile kills it. The panel says so.
+   */
+  | 'ledger-only'
   /** The run had already ended (done, failed, cancelled): nothing to do. */
   | 'already-ended'
   /** A run waiting on review cannot be cancelled — only its proposals decide it. */
@@ -608,17 +614,18 @@ const RUN_CONVERSATION = /^run-[A-Za-z0-9]{1,64}$/;
  * follower keeps in step, and RUNS_IPC.changed.
  */
 const ALLOWED_KEYLESS_TOPICS = new Set(['workspaceRegistry.records.list']);
-/** Per-session states of `acp.session` the renderer may follow. */
+/**
+ * Per-session states of `acp.session` the renderer may follow — the four
+ * the panel reads (transcript, plan, pending permissions, usage). The
+ * daemon also publishes config/agents/draft/terminals/mcpServers; nothing
+ * in the renderer follows them, so they are not reachable (least
+ * privilege, security round 1). Add here when a panel feature needs one.
+ */
 const ALLOWED_SESSION_STATES = new Set([
   'state',
-  'config',
   'usage',
   'plan',
-  'agents',
   'activeTurn',
-  'draft',
-  'terminals',
-  'mcpServers',
 ]);
 
 /**

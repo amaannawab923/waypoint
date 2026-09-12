@@ -75,17 +75,47 @@ export const GIT_TIMEOUT_MS = 20_000;
 /** The most stdout a single `git` call may return (numstat and patch alike). */
 const GIT_MAX_BUFFER = 8 * 1024 * 1024;
 
-/** The real runner: `git` from PATH, in `cwd`, never through a shell. */
+/**
+ * Config git must not take from the repository — the worktree is a
+ * directory the agent writes to, and repo-local config can turn a plain
+ * `git status` into a code path (found in review, security round 1:
+ * `core.fsmonitor` pointing at a script in the worktree ran it). Every
+ * call carries these `-c` overrides, on top of the per-command flags
+ * below (`--no-ext-diff --no-textconv --ignore-submodules=all`) and the
+ * gitdir provenance check in `assertWorktreeGitDir`.
+ */
+export const GIT_SAFE_CONFIG: readonly string[] = [
+  '-c',
+  'core.fsmonitor=false',
+  '-c',
+  'core.hooksPath=/dev/null',
+  '-c',
+  'diff.external=',
+  '-c',
+  'core.sshCommand=',
+  '-c',
+  'core.pager=cat',
+];
+
+/** The real runner: `git` from PATH, in `cwd`, never through a shell, with a minimal environment. */
 export const execGit: GitRunner = (args, options) =>
   new Promise((resolve, reject) => {
     execFile(
       'git',
-      args,
+      [...GIT_SAFE_CONFIG, ...args],
       {
         cwd: options.cwd,
         timeout: GIT_TIMEOUT_MS,
         maxBuffer: GIT_MAX_BUFFER,
         windowsHide: true,
+        env: {
+          PATH: process.env.PATH ?? '',
+          HOME: process.env.HOME ?? '',
+          LANG: 'C.UTF-8',
+          GIT_CONFIG_NOSYSTEM: '1',
+          GIT_TERMINAL_PROMPT: '0',
+          GIT_OPTIONAL_LOCKS: '0',
+        },
       },
       (error, stdout, stderr) => {
         if (error && !('code' in error && typeof error.code === 'number')) {
@@ -129,21 +159,25 @@ function porcelainStatus(xy: string): RunDiffFileStatus {
   return 'modified';
 }
 
-/** `git diff --numstat` lines → {path: [adds, dels]}; binary files count as 0/0. */
+/** `git diff --numstat -z` records → {path: [adds, dels]}; binary files count as 0/0. */
 function parseNumstat(stdout: string): Map<string, [number, number]> {
   const out = new Map<string, [number, number]>();
-  for (const line of stdout.split('\n')) {
-    if (!line) continue;
-    const [adds, dels, ...rest] = line.split('\t');
-    const file = rest.join('\t');
+  // With -z each record is "adds\tdels\tpath\0"; a rename is
+  // "adds\tdels\0old\0new\0". Walk the NUL-separated fields.
+  const fields = stdout.split('\0');
+  for (let i = 0; i < fields.length; i += 1) {
+    const field = fields[i];
+    if (!field) continue;
+    const [adds, dels, inline] = field.split('\t');
+    if (adds === undefined || dels === undefined) continue;
+    let file = inline;
+    if (!file) {
+      // A rename: the next two fields are old, then new.
+      i += 2;
+      file = fields[i];
+    }
     if (!file) continue;
-    // A rename is "old => new" or "{a => b}/c" in numstat; the status
-    // pass below carries the new name, so key by it.
-    const renamed = / => ([^}]+)}?$/.exec(file);
-    const key = renamed
-      ? file.replace(/\{[^}]* => ([^}]+)\}/, '$1').replace(/^.* => /, '')
-      : file;
-    out.set(key, [
+    out.set(file, [
       adds === '-' ? 0 : Number(adds) || 0,
       dels === '-' ? 0 : Number(dels) || 0,
     ]);
@@ -151,11 +185,58 @@ function parseNumstat(stdout: string): Map<string, [number, number]> {
   return out;
 }
 
+/** `git status --porcelain=v1 -z` → {path: kind}, renames keyed by the new name. */
+function parseStatusZ(stdout: string): Map<string, RunDiffFileStatus> {
+  const out = new Map<string, RunDiffFileStatus>();
+  const fields = stdout.split('\0');
+  for (let i = 0; i < fields.length; i += 1) {
+    const field = fields[i];
+    if (field.length < 4) continue;
+    const xy = field.slice(0, 2);
+    const file = field.slice(3);
+    // A rename/copy record is "XY new\0old\0": skip the old name.
+    if (xy.includes('R') || xy.includes('C')) i += 1;
+    out.set(file, porcelainStatus(xy));
+  }
+  return out;
+}
+
+/** `git diff --name-status -z` → {path: kind}. */
+function parseNameStatusZ(stdout: string): Map<string, RunDiffFileStatus> {
+  const out = new Map<string, RunDiffFileStatus>();
+  const fields = stdout.split('\0');
+  for (let i = 0; i < fields.length; i += 1) {
+    const code = fields[i];
+    if (!code) continue;
+    i += 1;
+    let file = fields[i];
+    if (code.startsWith('R') || code.startsWith('C')) {
+      i += 1;
+      file = fields[i];
+    }
+    if (file) out.set(file, nameStatusKind(code));
+  }
+  return out;
+}
+
+/** An untracked file larger than this is listed but neither counted nor patched. */
+export const MAX_UNTRACKED_FILE_BYTES = 1024 * 1024;
+/** More untracked files than this are listed, but only this many get a patch. */
+export const MAX_UNTRACKED_PATCHED = 200;
+
+const DIFF_FLAGS = ['--no-ext-diff', '--no-textconv', '--find-renames'];
+
 /**
  * The worktree's changes against the run's base: everything committed on
  * the run's branch since it left `baseRef` (via the merge-base, so the base
  * moving on afterwards does not show up as reverse changes) plus whatever
- * is uncommitted, tracked or not. One file list and one patch.
+ * is uncommitted, tracked or not. One file list and one patch. Every git
+ * call is bounded (GIT_TIMEOUT_MS, GIT_MAX_BUFFER); untracked files are
+ * read only when they are regular files under MAX_UNTRACKED_FILE_BYTES,
+ * and the patch stops growing once past MAX_DIFF_PATCH_CHARS, so a
+ * worktree full of build output cannot pin main (security round 1).
+ * Paths travel NUL-separated (-z), so a name with a quote or a non-ASCII
+ * character is the name, not git's C-quoted rendering of it.
  */
 export async function computeRunDiff(
   git: GitRunner,
@@ -176,8 +257,15 @@ export async function computeRunDiff(
   }
 
   const [numstat, status] = await Promise.all([
-    run(['diff', '--numstat', '--find-renames', comparedTo, '--']),
-    run(['status', '--porcelain=v1', '--untracked-files=all', '--']),
+    run(['diff', '--numstat', '-z', ...DIFF_FLAGS, comparedTo, '--']),
+    run([
+      'status',
+      '--porcelain=v1',
+      '-z',
+      '--untracked-files=all',
+      '--ignore-submodules=all',
+      '--',
+    ]),
   ]);
   if (numstat.code !== 0) {
     throw new Error(
@@ -189,36 +277,22 @@ export async function computeRunDiff(
   // Status decides each file's kind: the numstat pass alone cannot tell an
   // untracked file (absent from it) from an unchanged one, and a file
   // deleted on the branch is in numstat but not in status.
-  const statusByPath = new Map<string, RunDiffFileStatus>();
-  const untracked: string[] = [];
-  for (const line of status.stdout.split('\n')) {
-    if (line.length < 4) continue;
-    const xy = line.slice(0, 2);
-    let file = line.slice(3);
-    const arrow = file.indexOf(' -> ');
-    if (arrow !== -1) file = file.slice(arrow + 4);
-    const kind = porcelainStatus(xy);
-    statusByPath.set(file, kind);
-    if (kind === 'untracked') untracked.push(file);
-  }
+  const statusByPath = parseStatusZ(status.stdout);
+  const untracked = [...statusByPath.entries()]
+    .filter(([, kind]) => kind === 'untracked')
+    .map(([file]) => file);
 
   // Committed-only changes are in numstat but not in status: ask git what
   // happened to each of those.
   const nameStatus = await run([
     'diff',
     '--name-status',
-    '--find-renames',
+    '-z',
+    ...DIFF_FLAGS,
     comparedTo,
     '--',
   ]);
-  const committedKind = new Map<string, RunDiffFileStatus>();
-  for (const line of nameStatus.stdout.split('\n')) {
-    if (!line) continue;
-    const [code, ...rest] = line.split('\t');
-    const file = rest[rest.length - 1];
-    if (!file) continue;
-    committedKind.set(file, nameStatusKind(code));
-  }
+  const committedKind = parseNameStatusZ(nameStatus.stdout);
 
   const files: RunDiffFile[] = [];
   const seen = new Set<string>();
@@ -231,41 +305,114 @@ export async function computeRunDiff(
       deletions,
     });
   }
+  // Untracked files worth a patch: regular, under the size cap, and among
+  // the first MAX_UNTRACKED_PATCHED. Anything else is listed and left.
+  const patchable: string[] = [];
   for (const file of untracked) {
     if (seen.has(file)) continue;
     let additions = 0;
     try {
-      const text = await fs.readFile(path.join(worktreePath, file), 'utf8');
-      // Lines, the way git counts them: a trailing newline ends the last
-      // line rather than starting an empty one (found live: "+2" for a
-      // one-line file).
-      additions =
-        text.length === 0 ? 0 : text.replace(/\n$/, '').split('\n').length;
+      const stat = await fs.lstat(path.join(worktreePath, file));
+      if (
+        stat.isFile() &&
+        stat.size <= MAX_UNTRACKED_FILE_BYTES &&
+        patchable.length < MAX_UNTRACKED_PATCHED
+      ) {
+        const text = await fs.readFile(path.join(worktreePath, file), 'utf8');
+        // Lines, the way git counts them: a trailing newline ends the last
+        // line rather than starting an empty one.
+        additions =
+          text.length === 0 ? 0 : text.replace(/\n$/, '').split('\n').length;
+        patchable.push(file);
+      }
     } catch {
-      // Unreadable (a socket, gone already): listed, counted as 0.
+      // Gone already, or not readable: listed, counted as 0.
     }
     files.push({ path: file, status: 'untracked', additions, deletions: 0 });
   }
   files.sort((a, b) => a.path.localeCompare(b.path));
 
-  // One patch: tracked changes against the base, then each untracked file
-  // as a diff against nothing (--no-index exits 1 when there is a diff,
-  // which is the expected answer, not a failure).
+  // One patch: tracked changes against the base, then each patchable
+  // untracked file as a diff against nothing (--no-index exits 1 when
+  // there is a diff, which is the expected answer, not a failure). Assembly
+  // stops once the cap is passed rather than diffing files nobody will see.
   const parts: string[] = [];
-  const tracked = await run(['diff', '--find-renames', comparedTo, '--']);
-  if (tracked.stdout) parts.push(tracked.stdout);
-  for (const file of untracked) {
-    const one = await run(['diff', '--no-index', '--', '/dev/null', file]);
-    if (one.stdout) parts.push(one.stdout);
+  let length = 0;
+  let truncated = false;
+  const tracked = await run(['diff', ...DIFF_FLAGS, comparedTo, '--']);
+  if (tracked.stdout) {
+    parts.push(tracked.stdout);
+    length += tracked.stdout.length;
+  }
+  for (const file of patchable) {
+    if (length > MAX_DIFF_PATCH_CHARS) {
+      truncated = true;
+      break;
+    }
+    const one = await run([
+      'diff',
+      '--no-index',
+      '--no-ext-diff',
+      '--no-textconv',
+      '--',
+      '/dev/null',
+      file,
+    ]);
+    if (one.stdout) {
+      parts.push(one.stdout);
+      length += one.stdout.length;
+    }
   }
   let patch = parts.join('');
-  let truncated = false;
   if (patch.length > MAX_DIFF_PATCH_CHARS) {
     patch = `${patch.slice(0, MAX_DIFF_PATCH_CHARS)}\n… (patch cut here)\n`;
     truncated = true;
   }
 
   return { comparedTo, files, patch, truncated };
+}
+
+/**
+ * The worktree's `.git` must be the plain file `git worktree add` writes,
+ * whose `gitdir:` points OUTSIDE the worktree — the main repository's
+ * `.git/worktrees/<name>`, which the agent's cwd-scoped writes cannot
+ * reach. A `.git` directory, a symlink, or a gitdir inside the worktree
+ * means repo-local config the agent can edit (found in review, security
+ * round 1: `.git` → `gitdir: ./.evil`, `.evil/config` with a fsmonitor
+ * hook, executed by `git status`). Refused, with the sentence the pane
+ * shows.
+ */
+export async function assertWorktreeGitDir(
+  worktreePath: string,
+): Promise<void> {
+  const dotGit = path.join(worktreePath, '.git');
+  let stat;
+  try {
+    stat = await fs.lstat(dotGit);
+  } catch {
+    throw new Error('This worktree has no .git; nothing to diff.');
+  }
+  if (!stat.isFile()) {
+    throw new Error(
+      'This worktree is not a linked worktree (its .git is not the file git worktree add writes). Refusing to run git in it.',
+    );
+  }
+  const content = await fs.readFile(dotGit, 'utf8');
+  const match = /^gitdir:\s*(.+?)\s*$/m.exec(content);
+  if (!match) {
+    throw new Error(
+      "This worktree's .git file names no gitdir. Refusing to run git in it.",
+    );
+  }
+  const gitdir = path.resolve(worktreePath, match[1]);
+  const realWorktree = await fs.realpath(worktreePath);
+  const realGitdir = await fs.realpath(gitdir).catch(() => gitdir);
+  const rel = path.relative(realWorktree, realGitdir);
+  if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) {
+    throw new Error(
+      "This worktree's gitdir is inside the worktree itself, where the agent writes. Refusing to run git in it.",
+    );
+  }
 }
 
 export function registerRunsIpc(deps: RunsIpcDeps): void {
@@ -299,12 +446,20 @@ export function registerRunsIpc(deps: RunsIpcDeps): void {
       return { outcome: 'not-stoppable', status: run.status };
     }
 
-    // Tell the daemon first, then the ledger — the daemon is where the
-    // agent actually is. Either daemon step failing is not a reason to
-    // leave the run live: a session the daemon no longer has is exactly
-    // what the user is asking for, and reconcile (ROAD-57) will not revive
-    // a cancelled run.
+    // The ledger first, then the daemon (found in review: the other way
+    // round, cancelling the turn dropped the pending permission, the live
+    // follower saw a blocked run with nothing pending and wrote
+    // "running / permission answered" before `cancelled` landed). With
+    // `cancelled` written first the follower's fresh read sees a run that
+    // is over and leaves it alone. A daemon step failing is not a reason
+    // to leave the run live — but it is reported: the ledger says
+    // cancelled while the daemon may still hold the session.
+    const updated = await ledger.updateRun(run.id, {
+      status: 'cancelled',
+      reason: 'Stopped from the sessions panel',
+    });
     const daemon = daemonFor(deps.supervisor);
+    let daemonConfirmed = false;
     if (daemon) {
       await daemon.cancelTurn(run.id).catch((error: unknown) =>
         deps.logger.warn('engine: cancelTurn before stop did not apply', {
@@ -312,31 +467,41 @@ export function registerRunsIpc(deps: RunsIpcDeps): void {
           message: error instanceof Error ? error.message : String(error),
         }),
       );
-      await daemon.killSession(run.id).catch((error: unknown) =>
-        deps.logger.warn('engine: kill on stop did not apply', {
-          runId: run.id,
-          message: error instanceof Error ? error.message : String(error),
-        }),
-      );
+      daemonConfirmed = await daemon
+        .killSession(run.id)
+        .then(() => true)
+        .catch((error: unknown) => {
+          deps.logger.warn('engine: kill on stop did not apply', {
+            runId: run.id,
+            message: error instanceof Error ? error.message : String(error),
+          });
+          return false;
+        });
     } else {
       deps.logger.info('engine: stop with no daemon connection; ledger only', {
         runId: run.id,
       });
     }
-    const updated = await ledger.updateRun(run.id, {
-      status: 'cancelled',
-      reason: 'Stopped from the sessions panel',
-    });
     await ledger
-      .appendEvent(run.id, 'session_ended', { reason: 'stopped' })
+      .appendEvent(run.id, 'session_ended', {
+        reason: 'stopped',
+        daemonConfirmed,
+      })
       .catch(() => {});
-    deps.logger.info('engine: run stopped', { runId: run.id });
-    return { outcome: 'stopped', status: updated.status };
+    deps.logger.info('engine: run stopped', {
+      runId: run.id,
+      daemonConfirmed,
+    });
+    return {
+      outcome: daemonConfirmed ? 'stopped' : 'ledger-only',
+      status: updated.status,
+    };
   });
 
   deps.host.handle(RUNS_IPC.diff, async (runId): Promise<RunDiff> => {
     const run = await loadRun(runId);
     const worktree = await worktreeOf(run);
+    await assertWorktreeGitDir(worktree);
     return computeRunDiff(git, worktree, run.baseRef);
   });
 
