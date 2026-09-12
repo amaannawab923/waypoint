@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, gt, inArray, lt, or, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { agentRuns, agentRunEvents, tickets } from '../db/schema/index.js';
+import { agentRuns, agentRunEvents, agentRunTranscripts, tickets } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
 import { ConflictError, NotFoundError, ValidationError } from '../middleware/errors.js';
 import {
@@ -14,6 +14,7 @@ import type {
   CreateAgentRunInput,
   ListAgentRunsQuery,
   UpdateAgentRunInput,
+  SaveAgentRunTranscriptInput,
 } from '../validation/agentRuns.schema.js';
 
 // The agent-runs ledger — ROAD-54 (routes), ROAD-56 (relations). What this
@@ -261,6 +262,40 @@ export async function appendEvent(runId: string, input: AppendAgentRunEventInput
     await lockRun(tx, runId);
     return writeEvent(tx, runId, input.kind, input.payload ?? {});
   });
+}
+
+// W5a follow-up (ROAD-124): the transcript snapshot, replaced whole.
+export interface AgentRunTranscript {
+  runId: string;
+  turns: unknown[];
+  turnCount: number;
+  capturedAt: Date;
+}
+
+export async function saveTranscript(
+  runId: string,
+  input: SaveAgentRunTranscriptInput,
+): Promise<AgentRunTranscript> {
+  const run = await getRun(runId);
+  if (!run) throw new NotFoundError('agent run');
+  const [row] = await db
+    .insert(agentRunTranscripts)
+    .values({ runId, turns: input.turns, turnCount: input.turns.length, capturedAt: new Date() })
+    .onConflictDoUpdate({
+      target: agentRunTranscripts.runId,
+      set: { turns: input.turns, turnCount: input.turns.length, capturedAt: new Date() },
+    })
+    .returning();
+  return { ...row, turns: row.turns as unknown[] };
+}
+
+export async function getTranscript(runId: string): Promise<AgentRunTranscript | null> {
+  const [row] = await db
+    .select()
+    .from(agentRunTranscripts)
+    .where(eq(agentRunTranscripts.runId, runId))
+    .limit(1);
+  return row ? { ...row, turns: row.turns as unknown[] } : null;
 }
 
 function truncateSummary(summary: string | null | undefined): string | null | undefined {

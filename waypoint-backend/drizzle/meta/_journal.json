@@ -127,6 +127,13 @@
       "when": 1789233713154,
       "tag": "0017_w5a_run_mode",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1789237500878,
+      "tag": "0018_agent_run_transcripts",
+      "breakpoints": true
     }
   ]
 }

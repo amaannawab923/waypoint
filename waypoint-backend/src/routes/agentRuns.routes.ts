@@ -9,6 +9,7 @@ import {
   createRunProposalSchema,
   listAgentRunEventsQuerySchema,
   listAgentRunsQuerySchema,
+  saveAgentRunTranscriptSchema,
   updateAgentRunSchema,
 } from '../validation/agentRuns.schema.js';
 
@@ -65,6 +66,25 @@ agentRunsRouter.post(
   asyncHandler(async (req, res) => {
     const input = appendAgentRunEventSchema.parse(req.body);
     res.status(201).json(await agentRunsService.appendEvent(req.params.id, input));
+  }),
+);
+
+// W5a follow-up (ROAD-124): the transcript snapshot main keeps for a run,
+// replaced whole (PUT); the panel reads it when the daemon holds nothing.
+agentRunsRouter.put(
+  '/agent-runs/:id/transcript',
+  asyncHandler(async (req, res) => {
+    const input = saveAgentRunTranscriptSchema.parse(req.body);
+    res.json(await agentRunsService.saveTranscript(req.params.id, input));
+  }),
+);
+
+agentRunsRouter.get(
+  '/agent-runs/:id/transcript',
+  asyncHandler(async (req, res) => {
+    const transcript = await agentRunsService.getTranscript(req.params.id);
+    if (!transcript) throw new NotFoundError('transcript');
+    res.json(transcript);
   }),
 );
 

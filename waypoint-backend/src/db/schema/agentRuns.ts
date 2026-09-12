@@ -203,3 +203,19 @@ export const agentRunEvents = pgTable(
   },
   (t) => [primaryKey({ columns: [t.runId, t.seq] })],
 );
+
+// W5a follow-up (ROAD-124): the transcript, durably. The daemon holds a
+// session's history in memory only — a daemon restart, or the kill that
+// ends a finalized run, loses it — and a run's transcript is the evidence
+// its proposals rest on. Main snapshots the committed turns (acp.getHistory,
+// as the daemon serialises them) after every turn and before every kill;
+// the panel reads this when the daemon has nothing. One row per run,
+// replaced whole: the turns are the daemon's own shape, kept opaque here.
+export const agentRunTranscripts = pgTable('agent_run_transcripts', {
+  runId: text('run_id')
+    .primaryKey()
+    .references(() => agentRuns.id, { onDelete: 'cascade' }),
+  turns: jsonb('turns').notNull().default([]),
+  turnCount: integer('turn_count').notNull().default(0),
+  capturedAt: timestamp('captured_at', { withTimezone: true }).notNull().defaultNow(),
+});
