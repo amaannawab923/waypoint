@@ -351,8 +351,11 @@ export interface EngineInitializeError {
  */
 export class EngineCallError extends Error {
   readonly code: WireErrorCode;
+
   readonly path: string;
+
   readonly cause?: unknown;
+
   constructor(
     path: string,
     code: WireErrorCode,
@@ -499,6 +502,58 @@ export const ENGINE_IPC = {
   /** (procedure, input) → the daemon's answer, for ALLOWED_PROCEDURES only. */
   call: 'engine:call',
 } as const;
+
+// ---------------------------------------------------------------------------
+// Run control for the sessions panel (W3, ROAD-61/64). The renderer names a
+// run; main looks the run up in the ledger and acts on the daemon, the
+// worktree on disk, or the OS shell — the renderer never names a path or a
+// daemon record. Registered by runsIpc.ts.
+// ---------------------------------------------------------------------------
+export const RUNS_IPC = {
+  /** (runId) → StopRunResult. Cancels the turn, kills the session, marks the run cancelled. */
+  stop: 'runs:stop',
+  /** (runId) → RunDiff. The worktree's changes against the run's base ref. */
+  diff: 'runs:diff',
+  /** (runId) → void. Shows the worktree in the OS file manager. */
+  revealWorktree: 'runs:reveal-worktree',
+} as const;
+
+export type StopRunOutcome =
+  /** The daemon session was told to stop and the ledger says cancelled. */
+  | 'stopped'
+  /** The run had already ended (done, failed, cancelled): nothing to do. */
+  | 'already-ended'
+  /** A run waiting on review cannot be cancelled — only its proposals decide it. */
+  | 'not-stoppable';
+
+export interface StopRunResult {
+  outcome: StopRunOutcome;
+  /** The ledger's row after the action. */
+  status: string;
+}
+
+export type RunDiffFileStatus =
+  'added' | 'modified' | 'deleted' | 'renamed' | 'untracked';
+
+export interface RunDiffFile {
+  path: string;
+  status: RunDiffFileStatus;
+  additions: number;
+  deletions: number;
+}
+
+export interface RunDiff {
+  /** What the worktree was compared against: the merge-base with the run's base ref, or HEAD when there is none. */
+  comparedTo: string;
+  files: RunDiffFile[];
+  /** A unified diff of every file above, untracked files included. */
+  patch: string;
+  /** True when `patch` was cut at MAX_DIFF_PATCH_CHARS. */
+  truncated: boolean;
+}
+
+/** A patch longer than this is cut; the file list is always complete. */
+export const MAX_DIFF_PATCH_CHARS = 400_000;
 
 /**
  * A live model's snapshot as the daemon answers it (`@emdash/wire`

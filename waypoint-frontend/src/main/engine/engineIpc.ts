@@ -1,15 +1,16 @@
-import { app, ipcMain, type BrowserWindow } from 'electron';
+import { app, ipcMain, shell, type BrowserWindow } from 'electron';
+import * as path from 'node:path';
 import { ENGINE_IPC, type EngineHealth, type EngineStatus } from './types';
 import { resolveEnginePaths } from './paths';
 import { createEngineSupervisor, type EngineSupervisor } from './supervisor';
 import { connectSocketTransport } from './transport';
 import { createWireClient } from './wire';
-import * as path from 'node:path';
 import { installEngine, verifyInstalledEngine } from './installer';
 import { runDaemonCommand } from './daemonCli';
 import { removeStaleStartLock } from './staleLock';
 import { registerBootReconcile } from './runs/bootReconcile';
 import { registerTopicsIpc } from './topicsIpc';
+import { registerRunsIpc } from './runsIpc';
 
 // ROAD-48: the IPC surface over the engine supervisor.
 //
@@ -96,6 +97,15 @@ function unavailableEngineSupervisor(message: string): EngineSupervisor {
   };
 }
 
+/** EnginePaths.worktreesDir for this install; falls back to `<userData>/worktrees` when the paths cannot be resolved (the supervisor is then unavailable anyway). */
+function defaultWorktreesDir(): string {
+  try {
+    return resolveEnginePaths(app.getPath('userData')).worktreesDir;
+  } catch {
+    return path.join(app.getPath('userData'), 'worktrees');
+  }
+}
+
 export function createDefaultEngineSupervisor(): EngineSupervisor {
   let paths;
   try {
@@ -141,6 +151,13 @@ export function createDefaultEngineSupervisor(): EngineSupervisor {
 export function registerEngineIpc(
   getWindow: () => BrowserWindow | null,
   supervisor: EngineSupervisor = createDefaultEngineSupervisor(),
+  /**
+   * Where run worktrees live (EnginePaths.worktreesDir), for the run
+   * control handlers' containment check. Defaults to this install's; tests
+   * pass a tmp dir or leave the default, which only matters once a
+   * handler is invoked.
+   */
+  worktreesDir: string = defaultWorktreesDir(),
 ): void {
   const send = (channel: string, payload: unknown) => {
     const win = getWindow();
@@ -159,13 +176,21 @@ export function registerEngineIpc(
   // ROAD-60: the renderer's live topics and allowlisted calls, on the
   // same connection. Electron's ipcMain/webContents are handed in as the
   // two functions topicsIpc.ts needs, so it stays unit-testable.
+  const handle = (channel: string, handler: (...args: unknown[]) => unknown) =>
+    ipcMain.handle(channel, (_event, ...args) => handler(...args));
   registerTopicsIpc({
     supervisor,
-    host: {
-      handle: (channel, handler) =>
-        ipcMain.handle(channel, (_event, ...args) => handler(...args)),
-      send,
-    },
+    host: { handle, send },
+    logger,
+  });
+
+  // W3: stop / diff / reveal for a run — the renderer names a run, main
+  // does the rest (runsIpc.ts). Real git from PATH and the OS file manager.
+  registerRunsIpc({
+    supervisor,
+    host: { handle },
+    worktreesDir,
+    reveal: (absolutePath) => shell.showItemInFolder(absolutePath),
     logger,
   });
 

@@ -9,6 +9,7 @@ const ipcMainHandleMock = jest.fn();
 jest.mock('electron', () => ({
   ipcMain: { handle: ipcMainHandleMock },
   app: { getPath: jest.fn(() => '/tmp/waypoint-test-userdata') },
+  shell: { showItemInFolder: jest.fn() },
 }));
 
 // Deliberately NOT hoisted to the top of the file with the type-only
@@ -22,7 +23,7 @@ jest.mock('electron', () => ({
 // eslint-disable-next-line import/order, import/first
 import { registerEngineIpc } from './engineIpc';
 // eslint-disable-next-line import/order, import/first
-import { ENGINE_IPC } from './types';
+import { ENGINE_IPC, RUNS_IPC } from './types';
 
 const NOT_INSTALLED: EngineStatus = {
   kind: 'not-installed',
@@ -101,6 +102,10 @@ describe('registerEngineIpc', () => {
         ENGINE_IPC.start,
         ENGINE_IPC.stop,
         ENGINE_IPC.health,
+        // W3's run control (runsIpc.ts), registered on the same ipcMain.
+        RUNS_IPC.stop,
+        RUNS_IPC.diff,
+        RUNS_IPC.revealWorktree,
       ]),
     );
     // statusChanged is a push channel, not a handle() channel — it must

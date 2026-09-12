@@ -104,6 +104,9 @@ function getElectronHandler() {
       stop: () => Promise<unknown>;
       health: () => Promise<unknown>;
       onStatusChanged: (cb: (status: unknown) => void) => () => void;
+      stopRun: (runId: string) => Promise<unknown>;
+      runDiff: (runId: string) => Promise<unknown>;
+      revealRunWorktree: (runId: string) => Promise<void>;
     };
   };
 }
@@ -446,6 +449,17 @@ describe('electronHandler.engine', () => {
       expect(result).toEqual(STATUS);
     },
   );
+
+  it.each([
+    ['stopRun', 'runs:stop'],
+    ['runDiff', 'runs:diff'],
+    ['revealRunWorktree', 'runs:reveal-worktree'],
+  ] as const)('%s invokes %s with the run id and nothing else', async (method, channel) => {
+    ipcRendererMock.invoke.mockResolvedValueOnce({ echoed: channel });
+    const result = await electronHandler.engine[method]('run-abc1234');
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith(channel, 'run-abc1234');
+    expect(result).toEqual({ echoed: channel });
+  });
 
   it('health invokes engine:health and returns whatever it resolves, including null', async () => {
     ipcRendererMock.invoke.mockResolvedValue(null);

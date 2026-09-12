@@ -100,6 +100,8 @@ export interface DaemonRunsApi {
   /** Every worktree record the daemon holds, by id. */
   listWorkspaceRecords(): Promise<Record<string, DaemonWorkspaceRecord>>;
   listSessions(): Promise<Record<string, DaemonSessionSummary>>;
+  /** Asks the agent to stop its current turn; the session stays alive. */
+  cancelTurn(conversationId: string): Promise<void>;
   killSession(conversationId: string): Promise<void>;
 }
 
@@ -292,6 +294,9 @@ export function createDaemonRunsApi(client: WireClient): DaemonRunsApi {
         client,
         liveTopic('acp.sessions.list'),
       );
+    },
+    async cancelTurn(conversationId) {
+      await fallible<void>('acp.cancelTurn', { conversationId });
     },
     async killSession(conversationId) {
       await fallible<void>('acp.kill', { conversationId });

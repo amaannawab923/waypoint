@@ -27,10 +27,13 @@ import type {
 // nothing about it would bloat what ships in the preload bundle.
 import {
   ENGINE_IPC,
+  RUNS_IPC,
   type EngineHealth,
   type EngineStatus,
   type LiveSnapshot,
   type LiveUpdate,
+  type RunDiff,
+  type StopRunResult,
   type TopicClosedReason,
   type TopicSubscription,
 } from './engine/types';
@@ -548,6 +551,19 @@ const electronHandler = {
     /** One of the allowlisted daemon procedures (engine/types.ts ALLOWED_PROCEDURES). */
     call(procedure: string, input: unknown): Promise<unknown> {
       return ipcRenderer.invoke(ENGINE_IPC.call, procedure, input);
+    },
+    // W3: run control (engine/runsIpc.ts). The renderer names a run and
+    // nothing else; main finds the worktree and the daemon session. A
+    // refusal — unknown run, a worktree outside where runs live — is a
+    // rejected promise carrying main's sentence.
+    stopRun(runId: string): Promise<StopRunResult> {
+      return ipcRenderer.invoke(RUNS_IPC.stop, runId);
+    },
+    runDiff(runId: string): Promise<RunDiff> {
+      return ipcRenderer.invoke(RUNS_IPC.diff, runId);
+    },
+    revealRunWorktree(runId: string): Promise<void> {
+      return ipcRenderer.invoke(RUNS_IPC.revealWorktree, runId);
     },
   },
 };
