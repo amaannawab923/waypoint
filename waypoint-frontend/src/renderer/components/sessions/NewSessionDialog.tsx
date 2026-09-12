@@ -2,12 +2,18 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
+import { getWorkspace } from '@/data/api';
 import { CURRENT_USER_ID } from '@/data/currentUser';
 import { listRunBranches, startRun } from '@/data/engineApi';
 import { useAllProjects } from '@/lib/projectsStore';
+import {
+  resolveProviderSelection,
+  SESSION_PROVIDER_IDS,
+  SESSION_PROVIDERS,
+  workspaceDefaultProvider,
+} from '@/lib/sessionProviders';
 import type { AgentRun, SupportedProviderId } from '@/types/agentRuns';
 import type { EngineStatus } from '@/types/engine';
-import { providerView } from './sessionStatus';
 
 /**
  * The New session dialog — W4, ROAD-67 (docs/design/w4-start-session.md
@@ -16,22 +22,17 @@ import { providerView } from './sessionStatus';
  * (`runs:start`), answering with the run once it is `provisioning`, and
  * the page navigates to it. A refusal from main lands under the field it
  * concerns — the engine being down is the one that replaces the form.
+ *
+ * The provider is emdash's rule (lib/sessionProviders.ts): the
+ * workspace's default preselected, a pick here overrides it for this
+ * session only, and a provider this machine does not have keeps Start
+ * disabled with the sentence that says so.
  */
 
 /** Remembered per device: the project the last session was started on. */
 export const LAST_PROJECT_KEY = 'waypoint:lastSessionProject';
 /** One line, the row's name — main's MAX_RUN_TITLE_CHARS, mirrored. */
 export const TITLE_MAX = 120;
-
-/**
- * What the dialog offers — main's SUPPORTED_PROVIDERS, spelled here as a
- * complete record so adding a provider there fails to compile until it is
- * offered here too (the renderer never imports main at runtime).
- */
-const PROVIDER_CHOICES: Record<SupportedProviderId, { name: string }> = {
-  claude: { name: providerView('claude').name },
-};
-const PROVIDER_IDS = Object.keys(PROVIDER_CHOICES) as SupportedProviderId[];
 
 function readLastProject(): string | null {
   try {
@@ -76,8 +77,15 @@ export function NewSessionDialog({
   );
 
   const [projectId, setProjectId] = useState<string>('');
-  const [providerId, setProviderId] = useState<SupportedProviderId>(
-    PROVIDER_IDS[0],
+  // The workspace's default (read on open) and what this dialog picked.
+  const [defaultProviderId, setDefaultProviderId] =
+    useState<SupportedProviderId | null>(null);
+  const [providerOverride, setProviderOverride] =
+    useState<SupportedProviderId | null>(null);
+  // Which providers this machine has — every probe must answer before
+  // the rule assumes anything about availability.
+  const [installed, setInstalled] = useState<SupportedProviderId[] | null>(
+    null,
   );
   const [baseRef, setBaseRef] = useState<string>('');
   const [title, setTitle] = useState('');
@@ -86,9 +94,11 @@ export function NewSessionDialog({
   const [error, setError] = useState<string | null>(null);
 
   // Opening: the last-used project when it is still linked, else the
-  // first linked one; a fresh title and no error from the last time.
+  // first linked one; a fresh title, no override, no error from the last
+  // time; the workspace default and the availability probes are read
+  // afresh (a provider installed since is seen on the next open).
   useEffect(() => {
-    if (!open) return;
+    if (!open) return undefined;
     const remembered = readLastProject();
     const first =
       linked.find((p) => p.id === remembered)?.id ?? linked[0]?.id ?? '';
@@ -96,10 +106,55 @@ export function NewSessionDialog({
     setTitle('');
     setError(null);
     setStarting(false);
+    setProviderOverride(null);
+    setDefaultProviderId(null);
+    setInstalled(null);
+    let cancelled = false;
+    const readDefault = async () => {
+      let stored: string | null = null;
+      try {
+        stored = (await getWorkspace()).defaultAgentProvider;
+      } catch {
+        // Unreadable: Waypoint's own default stands.
+      }
+      if (!cancelled) setDefaultProviderId(workspaceDefaultProvider(stored));
+    };
+    const probeAll = async () => {
+      let ids: SupportedProviderId[] = [];
+      try {
+        const answers = await Promise.all(
+          SESSION_PROVIDER_IDS.map(async (id) =>
+            (await SESSION_PROVIDERS[id].probe()) ? id : null,
+          ),
+        );
+        ids = answers.filter((id): id is SupportedProviderId => id !== null);
+      } catch {
+        ids = [];
+      }
+      if (!cancelled) setInstalled(ids);
+    };
+    readDefault().catch(() => {});
+    probeAll().catch(() => {});
+    return () => {
+      cancelled = true;
+    };
     // The linked list is read once per open on purpose: a project linked
     // while the dialog is up is picked up on the next open.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  const selection = resolveProviderSelection({
+    orderedProviderIds: SESSION_PROVIDER_IDS,
+    defaultProviderId,
+    providerOverride,
+    installedProviderIds: installed ?? [],
+    availabilityKnown: installed !== null,
+  });
+  const { providerId } = selection;
+  const providerMissing =
+    providerId !== null &&
+    installed !== null &&
+    !installed.includes(providerId);
 
   // The branch list follows the project, through the engine.
   const engineRunning = engine?.kind === 'running';
@@ -140,10 +195,12 @@ export function NewSessionDialog({
     !!projectId &&
     !!baseRef &&
     branches.kind === 'ready' &&
+    !selection.createDisabled &&
+    providerId !== null &&
     !starting;
 
   const start = async () => {
-    if (!canStart) return;
+    if (!canStart || providerId === null) return;
     setStarting(true);
     setError(null);
     try {
@@ -244,19 +301,42 @@ export function NewSessionDialog({
             </label>
             <select
               id="new-session-provider"
-              value={providerId}
+              value={providerId ?? ''}
               onChange={(e) =>
-                setProviderId(e.target.value as SupportedProviderId)
+                setProviderOverride(e.target.value as SupportedProviderId)
               }
-              disabled={starting}
+              disabled={starting || defaultProviderId === null}
               className={fieldClass}
+              aria-describedby={
+                providerMissing ? 'new-session-provider-error' : undefined
+              }
             >
-              {PROVIDER_IDS.map((id) => (
+              {providerId === null && <option value="">—</option>}
+              {SESSION_PROVIDER_IDS.map((id) => (
                 <option key={id} value={id}>
-                  {PROVIDER_CHOICES[id].name}
+                  {SESSION_PROVIDERS[id].name}
+                  {installed !== null && !installed.includes(id)
+                    ? ' (not installed)'
+                    : ''}
+                  {id === defaultProviderId ? ' · workspace default' : ''}
                 </option>
               ))}
             </select>
+            {providerMissing && providerId && (
+              <p
+                id="new-session-provider-error"
+                role="alert"
+                className="text-xs text-danger"
+              >
+                {SESSION_PROVIDERS[providerId].name} is not installed on this
+                machine.
+              </p>
+            )}
+            {providerId === null && installed !== null && (
+              <p role="alert" className="text-xs text-danger">
+                No supported provider is installed on this machine.
+              </p>
+            )}
           </div>
           <div className="flex flex-col gap-1.5">
             <label htmlFor="new-session-branch" className={labelClass}>

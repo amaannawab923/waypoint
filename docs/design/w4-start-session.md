@@ -20,6 +20,16 @@ panel's geometry changes.
    nothing is being typed) all open the **New session** dialog. Codex
    arrives with W7; today the dialog's provider is Claude Code, shown as
    the one choice rather than hidden — the field is where it will be.
+   **Which provider** is emdash's rule, chosen by the founder on
+   2026-09-12 over "per session" and "strictly central": a workspace-wide
+   default (Settings → Agents → *Default provider*,
+   `workspaces.default_agent_provider`) that every way of starting a
+   session preselects; the dialog's field is a per-session override; a
+   session never changes provider once it exists. A default this machine
+   does not have falls back to the first installed provider; none
+   installed keeps Start disabled with the sentence. The rule and its
+   cases are `lib/sessionProviders.ts`, a credited copy of emdash's
+   `provider-selection.ts`.
 2. **The dialog** (`Modal`, 480 px): *Project* (only projects with a linked
    repository; the last used one preselected; none → the dialog says so and
    links to that project's settings), *Provider* (Claude Code), *Base
@@ -90,7 +100,14 @@ panel's geometry changes.
   `Session <id>`. `summary` stays the agent's closing summary.
 - **Only the providers main vouches for.** `SUPPORTED_PROVIDERS =
   ['claude']` in `engine/types.ts`; `runs:start` refuses any other id. The
-  dialog reads the same list. W7 appends `codex`.
+  renderer's catalogue (`SESSION_PROVIDERS`) is a complete record over the
+  same union, so W7 appending `codex` fails to compile until the renderer
+  names and probes it too. The workspace default is stored as a plain
+  string the backend does not interpret; a stored id the renderer does not
+  support reads as Waypoint's built-in default (Claude).
+- **Provider selection is emdash's** (§1.1): default → override →
+  installed-fallback → none. W5's dispatch reads the same workspace
+  default in main (through the ledger client) and never asks.
 - **Cancel during provisioning is honoured.** Stop on a *provisioning* run
   (W3) writes `cancelled` first. The start sequence re-reads the run after
   the worktree and after `acp.start`; a run that is no longer
@@ -168,6 +185,9 @@ resumeRun(deps, runId): Promise<ResumeRunResult>
 
 - Migration `0013_agent_runs_title_provider_session.sql`: `ALTER TABLE
   agent_runs ADD COLUMN title text, ADD COLUMN provider_session_id text`.
+- Migration `0014_workspace_default_agent_provider.sql`: `ALTER TABLE
+  workspaces ADD COLUMN default_agent_provider text` (nullable; null =
+  Waypoint's default); `updateWorkspaceSchema.defaultAgentProvider`.
 - `createAgentRunSchema.title` (optional, ≤ 120, trimmed, empty → null);
   `updateAgentRunSchema.providerSessionId` (≤ 256, nullable) and `title`.
 - The service copies both through; `title` is not part of the status
@@ -181,7 +201,13 @@ resumeRun(deps, runId): Promise<ResumeRunResult>
 - `components/sessions/NewSessionDialog.tsx` (new) — the form of §1.2 on
   `Modal`. Projects from `useAllProjects()` filtered to `repoPath !== null`;
   branches loaded when the project changes (loading / failed states
-  inline); last project id in `localStorage 'waypoint:lastSessionProject'`.
+  inline); last project id in `localStorage 'waypoint:lastSessionProject'`;
+  the provider from `lib/sessionProviders.ts` (workspace default read on
+  open, every provider probed, the rule applied).
+- `lib/sessionProviders.ts` (new) — the catalogue with a per-machine
+  probe each (Claude: the `claude --version` probe MachinePage shows), and
+  `resolveProviderSelection`. `components/sessions/DefaultProviderSetting.tsx`
+  (new) on Settings → Agents, saved on change.
 - `pages/sessions/SessionsPage.tsx` — `NewSessionButton` becomes live and
   opens the dialog; `n` opens it; on success `navigate('/sessions/<id>')`
   and `refreshSessions()`.

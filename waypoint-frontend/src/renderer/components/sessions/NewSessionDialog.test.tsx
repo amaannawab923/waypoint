@@ -7,6 +7,7 @@ import {
   waitFor,
 } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { detectLocalClaudeCode, getWorkspace } from '@/data/api';
 import { listRunBranches, startRun } from '@/data/engineApi';
 import { useAllProjects } from '@/lib/projectsStore';
 import type { Project } from '@/types/entities';
@@ -16,6 +17,10 @@ jest.mock('@/lib/projectsStore', () => ({ useAllProjects: jest.fn() }));
 jest.mock('@/data/engineApi', () => ({
   listRunBranches: jest.fn(),
   startRun: jest.fn(),
+}));
+jest.mock('@/data/api', () => ({
+  getWorkspace: jest.fn(),
+  detectLocalClaudeCode: jest.fn(),
 }));
 
 const project = (id: string, name: string, repoPath: string | null): Project =>
@@ -55,6 +60,10 @@ beforeEach(() => {
     branches: ['feat/x', 'main'],
     suggested: 'main',
   });
+  (getWorkspace as jest.Mock).mockResolvedValue({
+    defaultAgentProvider: 'claude',
+  });
+  (detectLocalClaudeCode as jest.Mock).mockResolvedValue({ state: 'present' });
 });
 
 describe('NewSessionDialog', () => {
@@ -70,8 +79,44 @@ describe('NewSessionDialog', () => {
       'Base branch',
     )) as HTMLSelectElement;
     await waitFor(() => expect(branch.value).toBe('main'));
-    expect(screen.getByLabelText('Provider')).toHaveValue('claude');
-    expect(screen.getByRole('button', { name: 'Start session' })).toBeEnabled();
+    await waitFor(() =>
+      expect(screen.getByLabelText('Provider')).toHaveValue('claude'),
+    );
+    expect(screen.getByLabelText('Provider')).toHaveTextContent(
+      'Claude Code · workspace default',
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Start session' }),
+      ).toBeEnabled(),
+    );
+  });
+
+  it('a provider this machine does not have keeps Start disabled with the sentence (emdash’s rule)', async () => {
+    (detectLocalClaudeCode as jest.Mock).mockResolvedValue({ state: 'absent' });
+    renderDialog();
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'No supported provider is installed on this machine.',
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText('Base branch')).toHaveValue('main'),
+    );
+    expect(
+      screen.getByRole('button', { name: 'Start session' }),
+    ).toBeDisabled();
+    expect(screen.getByLabelText('Provider')).toHaveTextContent(
+      '(not installed)',
+    );
+  });
+
+  it('a workspace that has not chosen a provider gets Waypoint’s default', async () => {
+    (getWorkspace as jest.Mock).mockResolvedValue({
+      defaultAgentProvider: null,
+    });
+    renderDialog();
+    await waitFor(() =>
+      expect(screen.getByLabelText('Provider')).toHaveValue('claude'),
+    );
   });
 
   it('remembers the last project and re-reads branches when the project changes', async () => {
@@ -111,6 +156,11 @@ describe('NewSessionDialog', () => {
     const onClose = renderDialog();
     await waitFor(() =>
       expect(screen.getByLabelText('Base branch')).toHaveValue('main'),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Start session' }),
+      ).toBeEnabled(),
     );
     fireEvent.change(screen.getByLabelText('Base branch'), {
       target: { value: 'feat/x' },
