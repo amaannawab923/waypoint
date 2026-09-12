@@ -2251,6 +2251,69 @@ branches `main` and `feat/road-61-list`). Screenshots in
   `claude` as the default. The not-installed path is unit-tested (the
   probe is `claude --version`, which passes on this machine).
 
+## Sessions anywhere (W4b, ROAD-116) — docs/design/w4b-sessions-anywhere.md
+
+Run live 2026-09-12 against the real daemon and Claude, on the QA scratch
+repository (`/tmp/wp-qa/main-repo`, linked to the Roadmap project) and a
+plain folder (`/tmp/wp-qa/plain-notes`). Screenshots 12–17 in
+`.qa-screenshots/w4-live/`.
+
+- **SESS-26** — A direct session in a plain folder
+  Steps: `n`; pick `plain-notes`; type a first message that needs a
+  write; Start.
+  Expected: the folder lists as *folder*, direct, auto-approve off with
+  "The agent edits this folder directly…", no Advanced fold; the run is
+  named by the message's first line, reads "in /private/tmp/wp-qa/
+  plain-notes", the first message is the first turn, the agent asks
+  before the write; the Changes tab says the folder is not a repository.
+  Result: PASS — 13-w4b-dialog-plain-folder.png, 14-w4b-direct-plain-
+  blocked.png. Provisioning → Running → Blocked in 7 s with "Wants to
+  edit notes.txt"; Allow landed and the line is in the real file; ledger
+  row {projectId: null, isolation: 'directory', cwd, worktreePath: null};
+  events session_started {isolation:'directory'} + prompt_sent
+  {kind:'first-message'} + permission_requested/answered.
+
+- **SESS-27** — A direct session in a repository with auto-approve
+  Steps: pick `main-repo`; Advanced → *This folder directly*; turn
+  auto-approve on (the sentence turns to the warning colour); first
+  message that edits a file and runs `git status`; Start.
+  Expected: no permission is ever asked; the row and header carry
+  "auto"; Changes shows the working tree against HEAD.
+  Result: PASS — 15-w4b-dialog-direct-auto.png, 16-w4b-direct-auto-
+  changes.png. The agent edited README.md and ran git with no
+  permission event in the trail (session_started → prompt_sent, nothing
+  else); "Changes · 1 file · vs HEAD" listed README.md +2; `git status`
+  in the checkout shows ` M README.md`. Flipping to direct re-defaulted
+  auto-approve to off first (the isolation decides), as designed.
+
+- **SESS-28** — A worktree session from a repository
+  Result: PASS by W4's SESS-18 (the same path, `provisionWorktree` with
+  the folder as the repository); a non-linked repository is unit-tested
+  (`startRun.test.ts`, `folders.test.ts`).
+
+- **SESS-29** — Recents and the per-folder auto-approve memory
+  Steps: reopen the dialog after the two starts.
+  Expected: the folders are ordered by last use; each carries its last
+  auto-approve choice.
+  Result: PASS — 17-w4b-dialog-recents.png: `main-repo` first, then
+  `plain-notes`; the recents file holds both with their choices.
+
+- **SESS-30** — A busy folder warns
+  Result: PASS — with the auto-approve run still live in `main-repo`,
+  the dialog said "A session is already running in this folder." and
+  Start stayed enabled.
+
+- **SESS-31** — Browse… (the OS picker)
+  Result: PASS — the picker opened parented to the window and its
+  choice came back as a described handle (it deduplicated into the
+  listed `main-repo`). Driving the panel by script is unreliable, so the
+  plain folder was seeded through the recents file instead; the picker's
+  own return path was exercised once.
+
+Found and fixed during the pass: the auto-approve switch's knob used a
+colour class this theme does not define and had no left anchor
+(invisible, then outside the pill).
+
 ## Summary
 
 **132 test cases executed, personally, live against the running app, across all 27 sections.**

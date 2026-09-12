@@ -123,7 +123,7 @@ function Switch({
     >
       <span
         className={clsx(
-          'absolute top-0.5 size-4 rounded-full bg-white shadow transition-transform',
+          'absolute top-0.5 left-0 size-4 rounded-full bg-bg shadow ring-1 ring-border transition-transform',
           checked ? 'translate-x-4' : 'translate-x-0.5',
         )}
       />
