@@ -11,6 +11,7 @@ import type {
 } from '@/types/entities';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
+import { renderMarkdown } from '@/lib/markdown';
 import { useAgentRunSummary } from '@/lib/useAgentRunSummary';
 import { PriorityIcon, PRIORITY_LABEL } from './PriorityIcon';
 
@@ -363,7 +364,26 @@ function ProposalBody({
           <PriorityChip priority={payload.priority} />
         </div>
       )}
-      {kind === 'comment' && (
+      {kind === 'comment' && proposal.origin === 'agent_run' && (
+        <>
+          {/* A session's closing message is a report — headings, lists,
+              code — and the same escaping renderer Copilot's replies go
+              through (lib/markdown.ts) is what makes it readable; the
+              backend posts it through the same rules (lib/markdownHtml.ts). */}
+          <div className="rounded-[var(--radius-sm)] border border-border bg-bg-inset px-3 py-2.5 text-[13px] leading-relaxed">
+            <em className="text-text-secondary">{disclosureText}</em>
+            <div
+              className="copilot-md mt-1"
+              data-run-comment
+              dangerouslySetInnerHTML={{
+                __html: renderMarkdown(payload.body ?? ''),
+              }}
+            />
+          </div>
+          <ProposerBadge proposal={proposal} agentName={agentName} />
+        </>
+      )}
+      {kind === 'comment' && proposal.origin !== 'agent_run' && (
         <>
           {/* PLAIN REACT TEXT NODES on purpose — the body is model-authored
               text; rendering it through any HTML path (even the markdown

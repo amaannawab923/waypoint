@@ -7,6 +7,8 @@
 // markdown rendering, matching the decision that a Copilot comment is prose,
 // not rich content.
 
+import { renderMarkdownHtml } from './markdownHtml.js';
+
 // Waypoint's existing self-disclosure convention for agent-made changes —
 // same wording the system prompt tells the model Waypoint will add for it.
 export const COPILOT_DISCLOSURE = (displayName: string) =>
@@ -53,6 +55,12 @@ export function buildCopilotCommentHtml(
   origin: ProposalDisclosureOrigin = 'copilot',
 ): string {
   const disclosure = escapeHtml(disclosureFor(origin, displayName));
+  // A session's closing message is a report (headings, lists, code): the
+  // disclosure on its own line, then the markdown rendered through the
+  // same escaping rules the renderer previews it with.
+  if (origin === 'agent_run') {
+    return `<p><em>${disclosure}</em></p>${renderMarkdownHtml(body)}`;
+  }
   const paragraphs = body
     .split(/\n\s*\n/)
     .map((p) => p.trim())

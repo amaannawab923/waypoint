@@ -546,3 +546,27 @@ describe('run-filed proposals (W5a)', () => {
     expect(screen.getAllByText(/from run/)).toHaveLength(2);
   });
 });
+
+describe('a run-filed comment renders as markdown', () => {
+  it('headings and code from the closing message, escaped; a Copilot comment stays plain text', () => {
+    renderCard(
+      proposal({
+        kind: 'comment',
+        origin: 'agent_run',
+        agentId: null,
+        agentRunId: 'run-1',
+        payload: { body: '## Root cause\n\nThe `write` is <unguarded>.' },
+      }),
+    );
+    const body = document.querySelector('[data-run-comment]');
+    expect(body?.querySelector('h3')).toHaveTextContent('Root cause');
+    expect(body?.querySelector('code')).toHaveTextContent('write');
+    expect(body?.innerHTML).toContain('&lt;unguarded&gt;');
+
+    renderCard(
+      proposal({ kind: 'comment', payload: { body: '## not a heading' } }),
+    );
+    expect(document.querySelectorAll('[data-run-comment]')).toHaveLength(1);
+    expect(screen.getByText(/## not a heading/)).toBeInTheDocument();
+  });
+});

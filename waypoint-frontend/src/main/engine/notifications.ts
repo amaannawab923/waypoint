@@ -29,6 +29,7 @@ export interface RunNotificationsDeps {
   /** Bring the app forward and open the run: `win.show()`, `win.focus()`, then `runs:focus`. */
   focusRun: (runId: string) => void;
   logger: {
+    info?: (m: string, meta?: Record<string, unknown>) => void;
     warn: (m: string, meta?: Record<string, unknown>) => void;
   };
 }
@@ -81,6 +82,11 @@ export function createRunNotifications(deps: RunNotificationsDeps): {
       if (!deps.host.isSupported()) return;
       try {
         deps.host.show(notification, () => deps.focusRun(run.id));
+        deps.logger.info?.('engine: notification shown', {
+          runId: run.id,
+          status: run.status,
+          title: notification.title,
+        });
       } catch (error) {
         deps.logger.warn('engine: notification not shown', {
           runId: run.id,
