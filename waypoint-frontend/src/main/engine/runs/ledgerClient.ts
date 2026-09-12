@@ -178,7 +178,7 @@ function defaultBaseUrl(): string {
 // from a caller, even one inside this process.
 const RUN_ID = /^[a-z]+-[A-Za-z0-9]{1,64}$/;
 
-function assertRunId(id: string): void {
+export function assertRunId(id: string): void {
   if (!RUN_ID.test(id)) throw new Error(`Not a run id: ${JSON.stringify(id)}`);
 }
 

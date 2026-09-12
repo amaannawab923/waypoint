@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
+import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import type {
   DaemonApiError,
   DaemonRunsApi,
   DaemonWorkspaceRecord,
 } from './daemonApi';
-import type { AgentRun, LedgerClient } from './ledgerClient';
+import { assertRunId, type AgentRun, type LedgerClient } from './ledgerClient';
 
 /**
  * A worktree per run, through the daemon — ROAD-55.
@@ -81,17 +82,58 @@ export function shortRunId(runId: string): string {
 }
 
 /**
- * The branch a run wants, before checking the repository. Ticket
- * identifiers are `PROJECT-123` (validation/tickets.schema.ts's shape)
- * and short ids are lowercase alphanumerics, so the result is always a
- * valid ref name — no sanitising, and nothing user-typed reaches git.
+ * Whether `component` may be one path component of a branch name, by
+ * git's own check-ref-format rules: no control characters, space, or
+ * `~ ^ : ? * [ \\`; no `..`, `@{`, `//`; no leading `-` or `.`; no
+ * trailing `.` or `.lock`. Found in review, round 2: the first draft
+ * said ticket identifiers were always `PROJECT-123`, but a project's
+ * identifier is any non-empty string, and `agent/<that>` was handed to
+ * git as-is — a permanently unprovisionable project, not an injection
+ * (the daemon passes argv arrays), but a failure a person could not
+ * read.
+ */
+export function isRefSafeComponent(component: string): boolean {
+  if (component.length === 0 || component.length > 200) return false;
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f\x7f ~^:?*[\\]/.test(component)) return false;
+  if (
+    component.includes('..') ||
+    component.includes('@{') ||
+    component.includes('//')
+  )
+    return false;
+  if (
+    component.startsWith('-') ||
+    component.startsWith('.') ||
+    component.startsWith('/')
+  )
+    return false;
+  if (
+    component.endsWith('.') ||
+    component.endsWith('/') ||
+    component.endsWith('.lock')
+  )
+    return false;
+  return true;
+}
+
+/**
+ * The branch a run wants, before checking the repository: `agent/<TICKET>`
+ * for a dispatched run whose ticket identifier is a safe ref component,
+ * else `session/<short id>` — short ids are lowercase alphanumerics, so
+ * that one is always valid.
  */
 export function preferredBranchName(
   run: Pick<AgentRun, 'id' | 'entry'>,
   ticketIdentifier: string | null,
 ): string {
-  if (run.entry === 'dispatched' && ticketIdentifier)
+  if (
+    run.entry === 'dispatched' &&
+    ticketIdentifier &&
+    isRefSafeComponent(ticketIdentifier)
+  ) {
     return `agent/${ticketIdentifier}`;
+  }
   return `session/${shortRunId(run.id)}`;
 }
 
@@ -117,9 +159,27 @@ export function worktreePathFor(worktreesDir: string, runId: string): string {
   return path.join(worktreesDir, runId);
 }
 
-/** Stable per repository path, so two runs on one repo share one record. */
+/**
+ * The id Waypoint asks the daemon to register a repository under: a hash
+ * of its path, so two runs on one repo ask for the same record. This is
+ * what Waypoint *requests*, not something the daemon derives — a
+ * repository the daemon adopted on its own (as the parent of a worktree
+ * it discovered) has a random id, and registerRepository hands back
+ * whatever record exists for the path. Always go through
+ * registerRepository; never look a repo up by this id alone. (Review
+ * round 2 reworded this from a claim about the daemon.)
+ */
 export function repositoryRecordId(repoPath: string): string {
   return `repo-${createHash('sha1').update(path.resolve(repoPath)).digest('hex').slice(0, 16)}`;
+}
+
+// What the ledger accepts (validation/agentRuns.schema.ts); a longer
+// message is cut, never dropped — the ledger hearing "…" beats it hearing
+// nothing because a 400 was swallowed (found in review, round 2).
+const MAX_ERROR_MESSAGE = 4000;
+const MAX_EVENT_MESSAGE = 12_000;
+function clip(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }
 
 function describeDaemonError(error: unknown): string {
@@ -137,7 +197,14 @@ export async function provisionWorktree(
   input: ProvisionWorktreeInput,
 ): Promise<ProvisionedWorktree> {
   const { run } = input;
+  // The run id names a directory under worktreesDir and a daemon record;
+  // it came from an HTTP response, and the ledger client checks ids only
+  // on the way *to* a URL (review round 2).
+  assertRunId(run.id);
   const baseRef = input.baseRef ?? run.baseRef ?? DEFAULT_BASE_REF;
+  if (!baseRef.split('/').every(isRefSafeComponent)) {
+    throw new Error(`Not a usable base ref: ${JSON.stringify(baseRef)}`);
+  }
   const repositoryId = repositoryRecordId(input.repoPath);
   const requestedPath = worktreePathFor(deps.worktreesDir, run.id);
 
@@ -146,6 +213,13 @@ export async function provisionWorktree(
       repositoryId,
       input.repoPath,
     );
+    // Found in review, round 2: the pinned daemon ignores the request's
+    // `preservePatterns` and copies whatever the repository's own
+    // `.emdash.json` names — typically `.env` — into every new worktree,
+    // exactly where the agent will run. The daemon is Waypoint-private,
+    // so its personal config layer (personal > team) is Waypoint's
+    // policy: nothing gitignored is ever copied into an agent worktree.
+    await deps.daemon.disableArtifactCopy(repository.id);
     const branch = chooseBranchName(
       run,
       input.ticketIdentifier,
@@ -169,6 +243,19 @@ export async function provisionWorktree(
       },
       run,
     );
+
+    // The daemon's canonical path must be where we asked, or under it —
+    // a record that says otherwise is not a worktree we will run an agent
+    // in (review round 2).
+    await assertUnder(record.path, deps.worktreesDir);
+    if (record.lifecycle?.steps.some((step) => step.id === 'copy-artifacts')) {
+      await deps.daemon
+        .deleteWorktree(record.id, { deleteBranch: true })
+        .catch(() => {});
+      throw new Error(
+        'The daemon scheduled an artifact copy into the run worktree despite the personal override; refusing to use it.',
+      );
+    }
 
     const provisioned: ProvisionedWorktree = {
       worktreePath: record.path,
@@ -197,10 +284,16 @@ export async function provisionWorktree(
     // the caller owns the run's status and decides between `failed` and
     // leaving an `interrupted` run alone.
     await deps.ledger
-      .updateRun(run.id, { errorKind: 'provision', errorMessage: message })
+      .updateRun(run.id, {
+        errorKind: 'provision',
+        errorMessage: clip(message, MAX_ERROR_MESSAGE),
+      })
       .catch(() => {});
     await deps.ledger
-      .appendEvent(run.id, 'error', { stage: 'worktree', message })
+      .appendEvent(run.id, 'error', {
+        stage: 'worktree',
+        message: clip(message, MAX_EVENT_MESSAGE),
+      })
       .catch(() => {});
     throw error;
   }
@@ -260,8 +353,17 @@ export async function releaseWorktree(
   run: AgentRun,
   reason: ReleaseReason,
 ): Promise<void> {
-  const workspaceId = run.daemonWorkspaceId ?? run.id;
-  await deps.daemon.deleteWorktree(workspaceId, {
+  assertRunId(run.id);
+  // Waypoint always registers the worktree under the run's own id
+  // (provisionWorktree). A ledger row naming another record is a row
+  // someone edited, and `merged` deletes a branch — refuse rather than
+  // remove a worktree that is not this run's (review round 2).
+  if (run.daemonWorkspaceId !== null && run.daemonWorkspaceId !== run.id) {
+    throw new Error(
+      `Run ${run.id} names daemon record ${run.daemonWorkspaceId}; a run's worktree record is always its own id. Refusing to remove it.`,
+    );
+  }
+  await deps.daemon.deleteWorktree(run.id, {
     deleteBranch: reason === 'merged',
   });
   deps.logger.info('engine: run worktree removed', { runId: run.id, reason });
@@ -271,4 +373,18 @@ export async function releaseWorktree(
     reason,
     branchDeleted: reason === 'merged',
   });
+}
+
+/** `candidate` (canonical) must be `root` itself or inside it. */
+async function assertUnder(candidate: string, root: string): Promise<void> {
+  await fs.mkdir(root, { recursive: true });
+  const realRoot = await fs.realpath(root);
+  const realCandidate = await fs
+    .realpath(candidate)
+    .catch(() => path.resolve(candidate));
+  const rel = path.relative(realRoot, realCandidate);
+  if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) return;
+  throw new Error(
+    `The daemon placed the worktree at ${candidate}, outside ${root}. Refusing to use it.`,
+  );
 }

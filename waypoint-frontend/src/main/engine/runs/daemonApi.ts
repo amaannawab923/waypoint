@@ -40,6 +40,8 @@ export interface DaemonWorkspaceRecord {
     baseRef: string | null;
     requestedPath: string;
   } | null;
+  /** Durable lifecycle steps; `copy-artifacts` appears only when patterns were resolved. */
+  lifecycle?: { steps: Array<{ id: string; status: string }> } | null;
   lastCreateOutcome:
     | { status: 'started'; at: number }
     | { status: 'succeeded'; at: number }
@@ -76,6 +78,13 @@ export interface DaemonRunsApi {
     preferredId: string,
     repoPath: string,
   ): Promise<DaemonWorkspaceRecord>;
+  /**
+   * Sets the repository's personal `preservePatterns` to `[]` in this
+   * daemon's config layer, so no gitignored artifact is copied into a
+   * worktree created from it (the request field is ignored by the pinned
+   * daemon; the personal layer beats the repo's `.emdash.json`).
+   */
+  disableArtifactCopy(repositoryId: string): Promise<void>;
   createWorktree(
     request: CreateWorktreeRequest,
   ): Promise<DaemonWorkspaceRecord>;
@@ -251,6 +260,12 @@ export function createDaemonRunsApi(client: WireClient): DaemonRunsApi {
           return detail.record;
         throw error;
       }
+    },
+    async disableArtifactCopy(repositoryId) {
+      await fallible<unknown>('workspaceRegistry.patchPersonalProjectConfig', {
+        workspaceId: repositoryId,
+        patch: { preservePatterns: [] },
+      });
     },
     createWorktree(request) {
       // The daemon inspects, resolves the base, adds the worktree and
