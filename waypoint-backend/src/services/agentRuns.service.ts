@@ -173,6 +173,7 @@ export async function createRun(input: CreateAgentRunInput): Promise<AgentRun> {
         agentId: input.agentId ?? null,
         entry: input.entry,
         providerId: input.providerId,
+        title: input.title ?? null,
         baseRef: input.baseRef ?? null,
         retryOfRunId: input.retryOfRunId ?? null,
       })

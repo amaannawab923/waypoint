@@ -80,6 +80,10 @@ export const agentRuns = pgTable(
     // proposals.agent_id at propose time, same as today.
     agentId: text('agent_id').references(() => agents.id, { onDelete: 'set null' }),
     entry: agentRunEntryEnum('entry').notNull(),
+    // What the user called the session when starting it (W4, ROAD-67),
+    // if anything. The panel names a run by its ticket, else this, else
+    // its branch. Never written by the agent — `summary` is its.
+    title: text('title'),
     // Which engine provider ran it — 'claude', 'codex', … — a plain string
     // because the provider list is the daemon's registry, not this schema's.
     providerId: text('provider_id').notNull(),
@@ -90,6 +94,12 @@ export const agentRuns = pgTable(
     // are what ROAD-57's reconcile matches against after a restart.
     daemonWorkspaceId: text('daemon_workspace_id'),
     daemonSessionId: text('daemon_session_id'),
+    // The provider's own resume handle — Claude's session UUID — exactly
+    // as the daemon's `acp.start` answered it (W4, ROAD-69). Null until a
+    // session has started; rewritten on every resume, because a resume the
+    // provider could not restore is a fresh session with a new id. Resume
+    // hands it back to the daemon; nothing else reads it.
+    providerSessionId: text('provider_session_id'),
     worktreePath: text('worktree_path'),
     branch: text('branch'),
     baseRef: text('base_ref'),
