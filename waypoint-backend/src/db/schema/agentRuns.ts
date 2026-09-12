@@ -14,6 +14,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { members } from './workspace.js';
 import { projects } from './projects.js';
+import { copilotConversations } from './copilot.js';
 import { tickets } from './tickets.js';
 import { agents, agentRunStatusEnum } from './agents.js';
 
@@ -101,6 +102,18 @@ export const agentRuns = pgTable(
     // Started in the provider's bypass-permissions mode: the session asks
     // nothing. Shown on the row so an unattended agent is never invisible.
     autoApprove: boolean('auto_approve').notNull().default(false),
+    // What a dispatched run was asked to do (W5a, ROAD-117): `investigate`
+    // (find the root cause, plan mode, change nothing), `fix` (implement
+    // it), `custom` (the person's own instruction). Null for an
+    // independent run. The intent is what host-side finalize files and
+    // what the metrics split on.
+    intent: text('intent'),
+    // The Copilot conversation a dispatched run's notes go back to: the one
+    // it was dispatched from, when there was one. Null → the member's
+    // latest conversation at note time.
+    copilotConversationId: text('copilot_conversation_id').references(() => copilotConversations.id, {
+      onDelete: 'set null',
+    }),
 
     // --- the daemon's handles, once it has them ---------------------------
     // The daemon's workspace-registry record for the run's worktree, and its

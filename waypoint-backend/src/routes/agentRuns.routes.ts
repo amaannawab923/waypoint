@@ -2,9 +2,11 @@ import { Router } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { NotFoundError } from '../middleware/errors.js';
 import * as agentRunsService from '../services/agentRuns.service.js';
+import * as proposalsService from '../services/proposals.service.js';
 import {
   appendAgentRunEventSchema,
   createAgentRunSchema,
+  createRunProposalSchema,
   listAgentRunEventsQuerySchema,
   listAgentRunsQuerySchema,
   updateAgentRunSchema,
@@ -73,5 +75,19 @@ agentRunsRouter.get(
   '/tickets/:id/agent-runs',
   asyncHandler(async (req, res) => {
     res.json(await agentRunsService.listRunsForTicket(req.params.id));
+  }),
+);
+
+// W5a (ROAD-117): a proposal Waypoint main files on a run's behalf — the
+// agent's closing message as a comment, or the state change Fix asks for.
+// Lands in Review with origin agent_run; the agent itself never calls this.
+agentRunsRouter.post(
+  '/agent-runs/:id/proposals',
+  asyncHandler(async (req, res) => {
+    const input = createRunProposalSchema.parse(req.body);
+    const payload = input.kind === 'comment' ? { body: input.body } : { stateId: input.stateId };
+    res.status(201).json(
+      await proposalsService.createRunProposal({ agentRunId: req.params.id, kind: input.kind, payload }),
+    );
   }),
 );
