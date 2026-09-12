@@ -5,12 +5,15 @@ import { resolveEnginePaths } from './paths';
 const USER_DATA = '/Users/max/Library/Application Support/Waypoint';
 
 describe('resolveEnginePaths', () => {
-  it('nests every path under <userData>/engine/, never ~/.emdash', () => {
+  it('nests every engine path under <userData>/engine/, never ~/.emdash; worktrees beside it', () => {
     const paths = resolveEnginePaths(USER_DATA);
 
-    Object.values(paths).forEach((value) => {
-      expect(value.startsWith(path.join(USER_DATA, 'engine'))).toBe(true);
+    Object.entries(paths).forEach(([key, value]) => {
+      expect(value.startsWith(USER_DATA)).toBe(true);
       expect(value).not.toContain('.emdash');
+      if (key !== 'worktreesDir') {
+        expect(value.startsWith(path.join(USER_DATA, 'engine'))).toBe(true);
+      }
     });
   });
 
@@ -64,13 +67,12 @@ describe('resolveEnginePaths', () => {
   it('puts run worktrees under the engine root, outside every linked checkout (ROAD-55)', () => {
     const paths = resolveEnginePaths(USER_DATA);
 
-    expect(paths.worktreesDir).toBe(
-      path.join(USER_DATA, 'engine', 'worktrees'),
+    expect(paths.worktreesDir).toBe(path.join(USER_DATA, 'worktrees'));
+    // Not inside the engine tree at all: an agent in a worktree must be
+    // nowhere near the launcher main spawns (review round 2).
+    expect(paths.worktreesDir.startsWith(path.join(USER_DATA, 'engine'))).toBe(
+      false,
     );
-    // Not inside the install (an upgrade replaces that directory) and not
-    // inside runDir (the daemon's socket directory).
-    expect(paths.worktreesDir.startsWith(paths.installDir)).toBe(false);
-    expect(paths.worktreesDir.startsWith(paths.runDir)).toBe(false);
   });
 
   it('is pure: the same inputs always produce the same paths', () => {

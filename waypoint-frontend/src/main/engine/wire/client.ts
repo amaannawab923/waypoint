@@ -336,6 +336,38 @@ export function createWireClient(transport: EngineTransport): WireClient {
     input?: unknown,
     options?: { timeoutMs?: number },
   ): Promise<T> {
+    return request<T>(
+      path,
+      (id) => ({ kind: 'call', id, path, input }),
+      options,
+    );
+  }
+
+  /**
+   * One snapshot of a live topic, with no attachment: the daemon answers a
+   * bare `snapshot` request from the topic's source whether or not anyone
+   * is attached (`serve.ts:204-234`). Found in review, round 2: the first
+   * `readSnapshot` attached to read, and this client refuses a second
+   * attach on a topic it already holds — so a one-shot read collided with
+   * a subscriber of the same topic the moment W3 had one.
+   */
+  function snapshot<T = unknown>(
+    topic: string,
+    options?: { timeoutMs?: number },
+  ): Promise<T> {
+    return request<T>(
+      `snapshot:${topic}`,
+      (id) => ({ kind: 'snapshot', id, topic }),
+      options,
+    );
+  }
+
+  /** The request/response half shared by `call` and `snapshot`. */
+  function request<T>(
+    path: string,
+    build: (id: string) => WireMessage,
+    options?: { timeoutMs?: number },
+  ): Promise<T> {
     if (closed) {
       return Promise.reject(
         new EngineCallError(path, 'DISCONNECTED', 'Wire client is closed'),
@@ -399,7 +431,7 @@ export function createWireClient(transport: EngineTransport): WireClient {
         }, options.timeoutMs);
       }
 
-      const sent = trySend({ kind: 'call', id, path, input });
+      const sent = trySend(build(id));
       if (!sent.ok) {
         settle();
         // `EngineTransport.send`'s own contract says this only throws once
@@ -544,7 +576,16 @@ export function createWireClient(transport: EngineTransport): WireClient {
           state.snapshotDelivered = true;
           const buffered = state.bufferedUpdates;
           state.bufferedUpdates = [];
+          // An update the daemon pushed between acknowledging the attach
+          // and answering the snapshot is already inside that snapshot;
+          // replaying it would make every follower resync on this race
+          // (its baseSequence is behind). Dropped by the daemon's own
+          // cursor rule: same generation, sequence at or below the
+          // snapshot's. Anything else is replayed verbatim.
+          const cursor = message.value as
+            { generation?: unknown; sequence?: unknown } | null | undefined;
           for (const update of buffered) {
+            if (isFoldedIntoSnapshot(update, cursor)) continue;
             callHandler(() => state.handlers.onUpdate(update));
           }
           maybeResolve();
@@ -631,5 +672,21 @@ export function createWireClient(transport: EngineTransport): WireClient {
     }
   }
 
-  return { call, attach, onDisconnect, close };
+  return { call, snapshot, attach, onDisconnect, close };
+}
+
+function isFoldedIntoSnapshot(
+  update: unknown,
+  cursor: { generation?: unknown; sequence?: unknown } | null | undefined,
+): boolean {
+  if (
+    !cursor ||
+    typeof cursor.generation !== 'number' ||
+    typeof cursor.sequence !== 'number'
+  )
+    return false;
+  const u = update as { generation?: unknown; sequence?: unknown } | null;
+  if (!u || typeof u.generation !== 'number' || typeof u.sequence !== 'number')
+    return false;
+  return u.generation === cursor.generation && u.sequence <= cursor.sequence;
 }

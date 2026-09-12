@@ -1,6 +1,9 @@
 import type { DaemonRunsApi } from './daemonApi';
 import type { AgentRun, AgentRunStatus, LedgerClient } from './ledgerClient';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
+  LIVE_RUN_STATUSES,
   planReconcile,
   reconcileRunsAtBoot,
   type ReconcileInput,
@@ -18,6 +21,40 @@ function plan(partial: Partial<ReconcileInput>) {
     ...partial,
   });
 }
+
+// The set of statuses reconcile expects a daemon session for is defined
+// twice — here and in waypoint-backend/src/services/runStatusMachine.ts —
+// across a repo boundary with no shared package. A backend that adds a
+// live status the frontend copy lacks would leave runs in it "believed
+// live" forever after a crash (review round 2). This reads the backend's
+// source text and holds the two to each other.
+describe('LIVE_RUN_STATUSES', () => {
+  it('matches the backend’s runStatusMachine.ts exactly', () => {
+    const backend = readFileSync(
+      join(
+        __dirname,
+        '..',
+        '..',
+        '..',
+        '..',
+        '..',
+        'waypoint-backend',
+        'src',
+        'services',
+        'runStatusMachine.ts',
+      ),
+      'utf8',
+    );
+    const match = backend.match(
+      /LIVE_RUN_STATUSES[^=]*=\s*new Set\(\[([^\]]*)\]\)/,
+    );
+    expect(match).not.toBeNull();
+    const backendList = [...match![1].matchAll(/'([a-z-]+)'/g)].map(
+      (m) => m[1],
+    );
+    expect([...LIVE_RUN_STATUSES]).toEqual(backendList);
+  });
+});
 
 describe('planReconcile', () => {
   it('re-attaches a run the daemon and the ledger both have live', () => {
@@ -38,14 +75,8 @@ describe('planReconcile', () => {
     ).toEqual([{ kind: 'adopt', runId: 'run-a' }]);
   });
 
-  it('kills a session for a run the ledger already finished', () => {
-    for (const status of [
-      'done',
-      'failed',
-      'cancelled',
-      'needs-review',
-      'queued',
-    ] as const) {
+  it('kills a session only for a run the ledger has ended for good', () => {
+    for (const status of ['done', 'failed', 'cancelled'] as const) {
       expect(
         plan({
           sessions: { 'run-a': session('run-a') },
@@ -55,7 +86,18 @@ describe('planReconcile', () => {
     }
   });
 
-  it('kills an orphan named like ours with no ledger row, and leaves a conversation that is not ours alone', () => {
+  it('leaves — and only reports — a session for a run that is neither live nor ended (review round 2)', () => {
+    for (const status of ['needs-review', 'queued'] as const) {
+      expect(
+        plan({
+          sessions: { 'run-a': session('run-a') },
+          otherRuns: { 'run-a': run('run-a', status) },
+        }),
+      ).toEqual([{ kind: 'leave-unexpected', runId: 'run-a', status }]);
+    }
+  });
+
+  it('reports an orphan named like ours with no ledger row without killing it, and does not even report a conversation that is not ours', () => {
     expect(
       plan({
         sessions: {
@@ -66,7 +108,7 @@ describe('planReconcile', () => {
       }),
     ).toEqual([
       { kind: 'leave', conversationId: 'conv-emdash1' },
-      { kind: 'kill-orphan', conversationId: 'run-ghost' },
+      { kind: 'orphan', conversationId: 'run-ghost' },
     ]);
   });
 
@@ -126,7 +168,7 @@ describe('planReconcile', () => {
       { kind: 'adopt', runId: 'run-back' },
       { kind: 'reattach', runId: 'run-live' },
       { kind: 'kill-stale', runId: 'run-old', status: 'done' },
-      { kind: 'kill-orphan', conversationId: 'run-x' },
+      { kind: 'orphan', conversationId: 'run-x' },
       {
         kind: 'interrupt',
         runId: 'run-lost',
@@ -223,7 +265,7 @@ describe('reconcileRunsAtBoot', () => {
       'adopt',
       'reattach',
       'kill-stale',
-      'kill-orphan',
+      'orphan',
       'interrupt',
     ]);
 
@@ -245,11 +287,13 @@ describe('reconcileRunsAtBoot', () => {
         daemonSessionId: 'run-back',
       }),
     );
-    // kill-stale and kill-orphan both kill; only the stale one has a row to note it on.
-    expect(daemon.killSession.mock.calls.map((c) => c[0]).sort()).toEqual([
-      'run-old',
-      'run-x',
-    ]);
+    // Only the stale session (a run the ledger ended) is killed; the orphan
+    // is reported and left (review round 2).
+    expect(daemon.killSession.mock.calls.map((c) => c[0])).toEqual(['run-old']);
+    expect(logger.warn).toHaveBeenCalledWith(
+      'engine: daemon session with no ledger row — left running',
+      { conversationId: 'run-x' },
+    );
     expect(ledger.appendEvent).toHaveBeenCalledWith(
       'run-old',
       'session_ended',
@@ -268,19 +312,22 @@ describe('reconcileRunsAtBoot', () => {
   it('isolates a failing action: the rest of the plan still runs and the failure is reported', async () => {
     const daemon = fakeDaemon({
       listSessions: jest.fn(async () => ({
-        'run-x': { conversationId: 'run-x' } as never,
+        'run-old': { conversationId: 'run-old' } as never,
       })),
       killSession: jest.fn(async () => {
         throw new Error('acp.kill: DISCONNECTED');
       }),
     });
-    const ledger = fakeLedger({ 'run-lost': { status: 'running' } });
+    const ledger = fakeLedger({
+      'run-lost': { status: 'running' },
+      'run-old': { status: 'done' },
+    });
 
     const report = await reconcileRunsAtBoot({ daemon, ledger, logger });
 
     expect(report.failures).toEqual([
       {
-        action: { kind: 'kill-orphan', conversationId: 'run-x' },
+        action: { kind: 'kill-stale', runId: 'run-old', status: 'done' },
         message: 'acp.kill: DISCONNECTED',
       },
     ]);

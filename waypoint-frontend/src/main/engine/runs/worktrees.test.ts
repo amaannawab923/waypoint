@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import * as path from 'node:path';
 import {
   DaemonApiError,
   type DaemonRunsApi,
@@ -6,6 +9,7 @@ import {
 import type { AgentRun, LedgerClient } from './ledgerClient';
 import {
   chooseBranchName,
+  isRefSafeComponent,
   preferredBranchName,
   provisionWorktree,
   releaseWorktree,
@@ -79,17 +83,21 @@ function fakeDaemon(
         creation: null,
       }),
     ),
-    createWorktree: jest.fn(async (req) =>
-      record({
+    disableArtifactCopy: jest.fn(async () => {}),
+    // Like the daemon: the directory exists afterwards and the record
+    // carries its canonical path (on macOS, /private/var/… for /var/…).
+    createWorktree: jest.fn(async (req) => {
+      mkdirSync(req.path, { recursive: true });
+      return record({
         id: req.workspaceId,
-        path: `/private${req.path}`,
+        path: realpathSync(req.path),
         creation: {
           branch: req.branch,
           baseRef: req.baseRef,
           requestedPath: req.path,
         },
-      }),
-    ),
+      });
+    }),
     deleteWorktree: jest.fn(async () => {}),
     listLocalBranches: jest.fn(async () => ['main']),
     listWorkspaceRecords: jest.fn(async () => ({})),
@@ -119,8 +127,13 @@ function fakeLedger(): jest.Mocked<LedgerClient> {
 }
 
 const logger = { info: jest.fn(), warn: jest.fn() };
-const WORKTREES = '/userdata/engine/worktrees';
+// A real directory: provisionWorktree checks the daemon's canonical path
+// lands under it, which needs realpath on both sides.
+const TMP = mkdtempSync(path.join(tmpdir(), 'wp-worktrees-'));
+const WORKTREES = path.join(TMP, 'worktrees');
+const canonical = (p: string) => realpathSync(p);
 
+afterAll(() => rmSync(TMP, { recursive: true, force: true }));
 beforeEach(() => jest.clearAllMocks());
 
 describe('naming', () => {
@@ -148,7 +161,7 @@ describe('naming', () => {
 
   it('puts the worktree at <worktreesDir>/<run id> and keys the repository by a hash of its path', () => {
     expect(worktreePathFor(WORKTREES, 'run-abc1234')).toBe(
-      '/userdata/engine/worktrees/run-abc1234',
+      path.join(WORKTREES, 'run-abc1234'),
     );
     expect(repositoryRecordId('/Users/me/proj')).toMatch(/^repo-[0-9a-f]{16}$/);
     expect(repositoryRecordId('/Users/me/proj')).toBe(
@@ -184,21 +197,30 @@ describe('provisionWorktree', () => {
       repositoryId: repositoryRecordId('/Users/me/proj'),
       branch: 'agent/ROAD-55',
       baseRef: 'main',
-      path: '/userdata/engine/worktrees/run-abc1234',
+      path: path.join(WORKTREES, 'run-abc1234'),
     });
+    const expectedPath = canonical(path.join(WORKTREES, 'run-abc1234'));
     expect(result).toEqual({
-      worktreePath: '/private/userdata/engine/worktrees/run-abc1234',
+      worktreePath: expectedPath,
       branch: 'agent/ROAD-55',
       baseRef: 'main',
       daemonWorkspaceId: 'run-abc1234',
       repositoryId: repositoryRecordId('/Users/me/proj'),
     });
     expect(ledger.updateRun).toHaveBeenCalledWith('run-abc1234', {
-      worktreePath: '/private/userdata/engine/worktrees/run-abc1234',
+      worktreePath: expectedPath,
       branch: 'agent/ROAD-55',
       baseRef: 'main',
       daemonWorkspaceId: 'run-abc1234',
     });
+    // The artifact-copy override lands on the repository before the
+    // worktree is cut (review round 2).
+    expect(daemon.disableArtifactCopy).toHaveBeenCalledWith(
+      repositoryRecordId('/Users/me/proj'),
+    );
+    expect(daemon.disableArtifactCopy.mock.invocationCallOrder[0]).toBeLessThan(
+      daemon.createWorktree.mock.invocationCallOrder[0],
+    );
     expect(ledger.appendEvent).toHaveBeenCalledWith(
       'run-abc1234',
       'worktree_created',
@@ -206,7 +228,7 @@ describe('provisionWorktree', () => {
     );
   });
 
-  it('uses the run’s own base_ref when it has one, else the caller’s, else main', async () => {
+  it('base ref: the caller’s wins, else the run’s own base_ref, else main', async () => {
     const daemon = fakeDaemon();
     const deps = {
       daemon,
@@ -227,10 +249,170 @@ describe('provisionWorktree', () => {
       baseRef: 'release/1',
     });
 
+    // Both set: the caller's (a review-2 finding — the old title said the
+    // run's own won, and no case had both set to notice).
+    await provisionWorktree(deps, {
+      run: run({ id: 'run-third01', baseRef: 'develop' }),
+      repoPath: '/r',
+      ticketIdentifier: 'T-1',
+      baseRef: 'hotfix/2',
+    });
+    await provisionWorktree(deps, {
+      run: run({ id: 'run-fourth1' }),
+      repoPath: '/r',
+      ticketIdentifier: 'T-1',
+    });
+
     expect(daemon.createWorktree.mock.calls.map((c) => c[0].baseRef)).toEqual([
       'develop',
       'release/1',
+      'hotfix/2',
+      'main',
     ]);
+  });
+
+  it('refuses a base ref git would read as an option or that is not a ref name, before touching the daemon', async () => {
+    const daemon = fakeDaemon();
+    const deps = {
+      daemon,
+      ledger: fakeLedger(),
+      worktreesDir: WORKTREES,
+      logger,
+    };
+    for (const baseRef of ['--detach', '-f', 'a b', 'a..b', 'x.lock']) {
+      await expect(
+        provisionWorktree(deps, {
+          run: run(),
+          repoPath: '/r',
+          ticketIdentifier: null,
+          baseRef,
+        }),
+      ).rejects.toThrow('Not a usable base ref');
+    }
+    expect(daemon.registerRepository).not.toHaveBeenCalled();
+  });
+
+  it('refuses a run id that could spell a path, before touching the daemon', async () => {
+    const daemon = fakeDaemon();
+    const deps = {
+      daemon,
+      ledger: fakeLedger(),
+      worktreesDir: WORKTREES,
+      logger,
+    };
+    await expect(
+      provisionWorktree(deps, {
+        run: run({ id: 'run-../../x' }),
+        repoPath: '/r',
+        ticketIdentifier: null,
+      }),
+    ).rejects.toThrow('Not a run id');
+    expect(daemon.registerRepository).not.toHaveBeenCalled();
+  });
+
+  it('refuses a worktree the daemon placed outside worktreesDir', async () => {
+    const elsewhere = path.join(TMP, 'elsewhere');
+    mkdirSync(elsewhere, { recursive: true });
+    const daemon = fakeDaemon({
+      createWorktree: jest.fn(async (req) =>
+        record({
+          id: req.workspaceId,
+          path: realpathSync(elsewhere),
+          creation: {
+            branch: req.branch,
+            baseRef: req.baseRef,
+            requestedPath: req.path,
+          },
+        }),
+      ),
+    });
+    const ledger = fakeLedger();
+
+    await expect(
+      provisionWorktree(
+        { daemon, ledger, worktreesDir: WORKTREES, logger },
+        { run: run(), repoPath: '/r', ticketIdentifier: null },
+      ),
+    ).rejects.toThrow('outside');
+    expect(ledger.appendEvent).not.toHaveBeenCalledWith(
+      'run-abc1234',
+      'worktree_created',
+      expect.anything(),
+    );
+  });
+
+  it('refuses a worktree the daemon scheduled an artifact copy into, and removes it', async () => {
+    const daemon = fakeDaemon({
+      createWorktree: jest.fn(async (req) => {
+        mkdirSync(req.path, { recursive: true });
+        return record({
+          id: req.workspaceId,
+          path: realpathSync(req.path),
+          creation: {
+            branch: req.branch,
+            baseRef: req.baseRef,
+            requestedPath: req.path,
+          },
+          lifecycle: {
+            steps: [
+              { id: 'create-worktree', status: 'succeeded' },
+              { id: 'copy-artifacts', status: 'pending' },
+            ],
+          },
+        });
+      }),
+    });
+    const ledger = fakeLedger();
+
+    await expect(
+      provisionWorktree(
+        { daemon, ledger, worktreesDir: WORKTREES, logger },
+        { run: run(), repoPath: '/r', ticketIdentifier: null },
+      ),
+    ).rejects.toThrow('artifact copy');
+    expect(daemon.deleteWorktree).toHaveBeenCalledWith('run-abc1234', {
+      deleteBranch: true,
+    });
+    expect(ledger.updateRun).toHaveBeenCalledWith(
+      'run-abc1234',
+      expect.objectContaining({ errorKind: 'provision' }),
+    );
+  });
+
+  it('a dispatched run whose ticket identifier is not a safe ref component gets a session/ branch instead', () => {
+    expect(preferredBranchName(run(), 'ROAD 55')).toBe('session/abc1234');
+    expect(preferredBranchName(run(), 'a..b')).toBe('session/abc1234');
+    expect(preferredBranchName(run(), '-x')).toBe('session/abc1234');
+    expect(preferredBranchName(run(), 'x.lock')).toBe('session/abc1234');
+    expect(preferredBranchName(run(), 'ROAD-55')).toBe('agent/ROAD-55');
+    expect(isRefSafeComponent('feature_1.2')).toBe(true);
+  });
+
+  it('clips an error message to what the ledger accepts rather than losing it to a 400', async () => {
+    const failure = new DaemonApiError(
+      'workspaceRegistry.createWorktree',
+      {
+        type: 'stage-failed',
+        stage: 'resolve-base',
+        message: 'x'.repeat(10_000),
+      },
+      `stage-failed: resolve-base: ${'x'.repeat(10_000)}`,
+    );
+    const daemon = fakeDaemon({
+      createWorktree: jest.fn().mockRejectedValue(failure),
+    });
+    const ledger = fakeLedger();
+
+    await expect(
+      provisionWorktree(
+        { daemon, ledger, worktreesDir: WORKTREES, logger },
+        { run: run(), repoPath: '/r', ticketIdentifier: null },
+      ),
+    ).rejects.toBe(failure);
+
+    const patch = ledger.updateRun.mock.calls[0][1] as { errorMessage: string };
+    expect(patch.errorMessage.length).toBe(4000);
+    expect(patch.errorMessage.endsWith('…')).toBe(true);
   });
 
   it('adopts the repository record the daemon already has for that path, whatever its id', async () => {
@@ -400,7 +582,7 @@ describe('releaseWorktree', () => {
     );
   });
 
-  it('falls back to the run id as the daemon record id when the ledger never recorded one', async () => {
+  it('uses the run id as the daemon record id when the ledger never recorded one', async () => {
     const daemon = fakeDaemon();
 
     await releaseWorktree(
@@ -412,5 +594,18 @@ describe('releaseWorktree', () => {
     expect(daemon.deleteWorktree).toHaveBeenCalledWith('run-abc1234', {
       deleteBranch: false,
     });
+  });
+
+  it('refuses to remove a worktree the ledger row says belongs to another record (review round 2)', async () => {
+    const daemon = fakeDaemon();
+
+    await expect(
+      releaseWorktree(
+        { daemon, ledger: fakeLedger(), worktreesDir: WORKTREES, logger },
+        run({ daemonWorkspaceId: 'run-someoneelse' }),
+        'merged',
+      ),
+    ).rejects.toThrow('Refusing to remove it');
+    expect(daemon.deleteWorktree).not.toHaveBeenCalled();
   });
 });

@@ -304,24 +304,68 @@ describe('runDaemonCommand', () => {
 });
 
 describe('engineRuntimeEnv', () => {
-  // Review finding H1: under `npm start` Electron main inherits the renderer
+  // Review 1, H1: under `npm start` Electron main inherits the renderer
   // dev server's NODE_OPTIONS="-r ts-node/register"; the launcher's bundled
   // node then fails to resolve that preload from the install dir and dies
-  // before printing anything. Reproduced with the real launcher.
-  it('strips the variables that would reconfigure the daemon’s own node', () => {
+  // before printing anything. Review 2: the fix was a denylist, and the
+  // detached daemon still inherited npm_*, the launching terminal's Claude
+  // Code session variables and ANTHROPIC_BASE_URL — as the base env of
+  // every agent it will spawn. Now an allowlist.
+  it('passes only what a login shell owes a program, and nothing that names Waypoint’s own process', () => {
     const out = engineRuntimeEnv({
       HOME: '/Users/x',
       PATH: '/usr/bin',
+      USER: 'x',
+      SHELL: '/bin/zsh',
+      TMPDIR: '/tmp/x',
+      LANG: 'en_US.UTF-8',
+      LC_ALL: 'C',
+      XDG_CONFIG_HOME: '/Users/x/.config',
+      SSH_AUTH_SOCK: '/tmp/agent.sock',
+      HTTPS_PROXY: 'http://proxy:3128',
       NODE_OPTIONS: '-r ts-node/register --no-warnings',
       NODE_PATH: '/somewhere',
       ELECTRON_RUN_AS_NODE: '1',
       NODE_ENV: 'development',
-      GH_TOKEN: 'keep-me-this-is-ROAD-88-not-here',
+      npm_lifecycle_event: 'start:main',
+      npm_config_user_agent: 'npm/11',
+      CLAUDE_CODE_SESSION_ID: 'sess',
+      ANTHROPIC_BASE_URL: 'https://api.example',
+      ELECTRON_QA_DEBUG_PORT: '19222',
+      GH_TOKEN: 'ghp_x',
+      TS_NODE_TRANSPILE_ONLY: 'true',
     });
     expect(out).toEqual({
       HOME: '/Users/x',
       PATH: '/usr/bin',
-      GH_TOKEN: 'keep-me-this-is-ROAD-88-not-here',
+      USER: 'x',
+      SHELL: '/bin/zsh',
+      TMPDIR: '/tmp/x',
+      LANG: 'en_US.UTF-8',
+      LC_ALL: 'C',
+      XDG_CONFIG_HOME: '/Users/x/.config',
+      SSH_AUTH_SOCK: '/tmp/agent.sock',
+      HTTPS_PROXY: 'http://proxy:3128',
+    });
+  });
+
+  it('lets a developer name extra variables to pass through, and never passes the list variable itself unasked', () => {
+    const out = engineRuntimeEnv({
+      PATH: '/usr/bin',
+      ANTHROPIC_API_KEY: 'sk-x',
+      MY_TOOL_HOME: '/opt/tool',
+      WAYPOINT_ENGINE_ENV_PASSTHROUGH: 'ANTHROPIC_API_KEY, MY_TOOL_HOME',
+    });
+    expect(out).toEqual({
+      PATH: '/usr/bin',
+      ANTHROPIC_API_KEY: 'sk-x',
+      MY_TOOL_HOME: '/opt/tool',
+    });
+  });
+
+  it('drops undefined values rather than passing the name with nothing in it', () => {
+    expect(engineRuntimeEnv({ PATH: '/usr/bin', HOME: undefined })).toEqual({
+      PATH: '/usr/bin',
     });
   });
 });

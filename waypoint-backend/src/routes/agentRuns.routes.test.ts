@@ -89,6 +89,28 @@ describe('POST /agent-runs', () => {
     expect(service.createRun).not.toHaveBeenCalled();
   });
 
+  it('rejects a dispatched run with no ticket, and a baseRef that git would read as an option', async () => {
+    const dispatched = await request(buildTestApp()).post('/agent-runs').send({
+      projectId: 'proj-1',
+      ownerMemberId: 'mem-1',
+      entry: 'dispatched',
+      providerId: 'claude',
+    });
+    expect(dispatched.status).toBe(400);
+
+    for (const baseRef of ['--detach', '-f', 'a b', 'a..b', 'x.lock']) {
+      const res = await request(buildTestApp()).post('/agent-runs').send({
+        projectId: 'proj-1',
+        ownerMemberId: 'mem-1',
+        entry: 'independent',
+        providerId: 'claude',
+        baseRef,
+      });
+      expect(res.status).toBe(400);
+    }
+    expect(service.createRun).not.toHaveBeenCalled();
+  });
+
   it('maps a retry of a live run to 409 with the service sentence', async () => {
     vi.mocked(service.createRun).mockRejectedValue(
       new ConflictError('Run run-old is running; only a finished or interrupted run can be retried.'),
@@ -96,6 +118,7 @@ describe('POST /agent-runs', () => {
 
     const res = await request(buildTestApp()).post('/agent-runs').send({
       projectId: 'proj-1',
+      ticketId: 'wi-1',
       ownerMemberId: 'mem-1',
       entry: 'dispatched',
       providerId: 'claude',

@@ -16,7 +16,7 @@ const EXPECTED: Record<AgentRunStatus, AgentRunStatus[]> = {
   provisioning: ['running', 'interrupted', 'failed', 'cancelled'],
   running: ['blocked', 'finishing', 'interrupted', 'failed', 'cancelled'],
   blocked: ['running', 'interrupted', 'failed', 'cancelled'],
-  finishing: ['needs-review', 'done', 'interrupted', 'failed'],
+  finishing: ['needs-review', 'done', 'interrupted', 'failed', 'cancelled'],
   'needs-review': ['done'],
   done: [],
   interrupted: ['provisioning', 'running', 'failed', 'cancelled'],

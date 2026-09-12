@@ -80,6 +80,9 @@ export function resolveEnginePaths(
     socketPath,
     stateDir: path.join(engineRoot, 'state'),
     logPath: path.join(engineRoot, 'engine.log'),
-    worktreesDir: path.join(engineRoot, 'worktrees'),
+    // Beside the engine, not inside it: an agent runs in a worktree, and a
+    // worktree two directories from the launcher main spawns is two
+    // directories too close (review round 2). userData/worktrees/<run id>.
+    worktreesDir: path.join(userData, 'worktrees'),
   };
 }
