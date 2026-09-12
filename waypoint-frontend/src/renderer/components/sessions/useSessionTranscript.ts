@@ -67,13 +67,25 @@ export function useSessionTranscript(
   const [historyStatus, setHistoryStatus] = useState<HistoryStatus>({
     kind: 'loading',
   });
+  // Committed turns in the loaded history — the transcript's own count.
+  // The ledger's turnCount is the orchestrator's to maintain (W4/W5) and
+  // says 0 until then, so the pane counts what it can see.
+  const [turnCount, setTurnCount] = useState(0);
 
   const loadHistory = useCallback(async (target: TranscriptUnit) => {
     try {
       const page = await target.source.loadHistory({ limit: HISTORY_PAGE });
       if (unitRef.current !== target) return;
+      // `seed` replaces the committed history AND resets the active turn
+      // (chat-ui's ChatHistory contract). Found live: a turn in flight
+      // vanished from the pane the moment history landed after the live
+      // snapshot. So the follower's current turn is put back right after.
       target.state.transcript.history.seed(page.turns);
+      target.state.transcript.activeTurn.set(
+        target.source.activeTurn.getSnapshot() ?? null,
+      );
       target.state.session.setPendingPrompt(null);
+      setTurnCount(page.turns.length);
       setHistoryStatus({ kind: 'ready' });
     } catch (error) {
       if (unitRef.current !== target) return;
@@ -97,17 +109,29 @@ export function useSessionTranscript(
     unitRef.current = created;
     setUnit(created);
     setHistoryStatus({ kind: 'loading' });
+    setTurnCount(0);
 
-    const disconnect = runtime.connectSession(
-      created.state,
-      created.source.connectSource,
-      {
-        onTurnCommitted: () => {
-          loadHistory(created).catch(() => {});
-        },
-      },
-    );
-    loadHistory(created).catch(() => {});
+    // History first, then the live connection — emdash's own order
+    // (acp-chat-store.ts's _runBootstrap): connectSession's first sync
+    // then lays the follower's active turn over a seeded history, rather
+    // than a later seed wiping it. A commit re-seeds through loadHistory,
+    // which restores the active turn itself.
+    let disconnect: (() => void) | null = null;
+    let gone = false;
+    loadHistory(created)
+      .catch(() => {})
+      .then(() => {
+        if (gone) return;
+        disconnect = runtime.connectSession(
+          created.state,
+          created.source.connectSource,
+          {
+            onTurnCommitted: () => {
+              loadHistory(created).catch(() => {});
+            },
+          },
+        );
+      });
     const offEngine = onEngineStatusChanged((status) => {
       if (status.kind === 'running') {
         created.source.reconnect();
@@ -115,9 +139,10 @@ export function useSessionTranscript(
       }
     });
     return () => {
+      gone = true;
       if (unitRef.current === created) unitRef.current = null;
       offEngine();
-      disconnect();
+      disconnect?.();
       created.usage.dispose();
       created.source.dispose();
       created.state.dispose();
@@ -154,6 +179,7 @@ export function useSessionTranscript(
     /** null for the first frame, before the effect created this run's unit. */
     state: unit && unit.runId === runId ? unit.state : null,
     historyStatus,
+    turnCount,
     pendingPermissions,
     usage,
     liveStatus,

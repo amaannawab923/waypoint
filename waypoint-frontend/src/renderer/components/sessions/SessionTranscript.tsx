@@ -25,6 +25,7 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
     context,
     state,
     historyStatus,
+    turnCount,
     pendingPermissions,
     usage,
     liveStatus,
@@ -149,7 +150,7 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
       </div>
       {view?.composerSlot ? createPortal(dock, view.composerSlot) : null}
       <UsageStrip
-        run={run}
+        turnCount={turnCount}
         usage={usage}
         live={liveStatus.kind}
         generating={isGenerating}

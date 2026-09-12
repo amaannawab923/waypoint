@@ -119,7 +119,6 @@ export function SessionDetail({
                 </span>
               )}
               <span>
-                {run.turnCount === 1 ? '1 turn' : `${run.turnCount} turns`} ·{' '}
                 {run.status === 'blocked'
                   ? `waiting ${formatRelativeTime(run.updatedAt)}`
                   : `started ${formatRelativeTime(startedAt)} ago`}

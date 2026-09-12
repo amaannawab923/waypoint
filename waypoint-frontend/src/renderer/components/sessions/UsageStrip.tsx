@@ -2,7 +2,6 @@ import type { SessionUsage } from '@emdash/core/runtimes/acp/api/client' with {
   'resolution-mode': 'import',
 };
 import type { FollowerStatus } from '@/data/live/liveFollower';
-import type { AgentRun } from '@/types/agentRuns';
 
 function compact(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -18,18 +17,19 @@ const LIVE_WORD: Record<FollowerStatus['kind'], string> = {
 };
 
 /**
- * The strip under the composer (W3): turn count from the ledger, context
- * used / size and cost from the daemon's `acp.session.usage` — each only
- * when its source has actually said so. A provider that reports no cost
- * shows no cost; a session with no usage yet shows only the turns.
+ * The strip under the composer (W3): committed turns as the transcript
+ * counts them, context used / size and cost from the daemon's
+ * `acp.session.usage` — each only when its source has actually said so. A
+ * provider that reports no cost shows no cost; a session with no usage
+ * yet shows only the turns.
  */
 export function UsageStrip({
-  run,
+  turnCount,
   usage,
   live,
   generating,
 }: {
-  run: AgentRun;
+  turnCount: number;
   usage: SessionUsage | null;
   live: FollowerStatus['kind'];
   generating: boolean;
@@ -39,7 +39,7 @@ export function UsageStrip({
       data-usage-strip
       className="flex shrink-0 items-center gap-3.5 border-t border-border px-4 py-1 font-mono text-[10px] text-text-muted"
     >
-      <span>{run.turnCount === 1 ? '1 turn' : `${run.turnCount} turns`}</span>
+      <span>{turnCount === 1 ? '1 turn' : `${turnCount} turns`}</span>
       {usage && usage.contextSize > 0 && (
         <span title="Context used of the model's window">
           {compact(usage.contextUsed)} / {compact(usage.contextSize)} ctx
