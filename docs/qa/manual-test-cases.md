@@ -2137,7 +2137,13 @@ branches `main` and `feat/road-61-list`). Screenshots in
   the repo through the engine with the default preselected; Title empty;
   Start session enabled once a branch is chosen. `n` does nothing while
   a text field has focus or the dialog is open.
-  Result:
+  Result: PASS — 01-dialog-via-n.png, 06-dialog-provider-default.png.
+  `n`, the "+" and the empty state all open one dialog; the project list
+  offered Compass Web and Waypoint Roadmap (Product Launch has no repo);
+  Roadmap's branches read through the engine (`main` preselected,
+  `feat/road-61-list` listed); Provider "Claude Code (default)" from the
+  workspace setting; Start enabled once the branches landed. `n` in the
+  title field does nothing.
 
 - **SESS-18** — Start a session: provisioning → running within the list
   Steps: Pick the Roadmap project, `main`, title "W4 live", Start.
@@ -2148,28 +2154,43 @@ branches `main` and `feat/road-61-list`). Screenshots in
   enabled from Running. The ledger has `worktree_created` then
   `session_started {providerSessionId}`, and `providerSessionId` on the
   row.
-  Result:
+  Result: PASS — 04-provisioning.png (taken ~2 s after Start: already
+  Running, branch `session/ymerogo from main`, composer enabled).
+  Ledger: created → provisioning → worktree_created → running →
+  session_started {providerSessionId}; `providerSessionId` on the row;
+  `.git` file → `/private/tmp/wp-qa/main-repo/.git/worktrees/run-ymerogo`.
+  Found and fixed on this case: the transcript's followers subscribed
+  while the run was still provisioning and never reconnected (commit
+  b318b96 — no unit until the run has a session); and the base-branch
+  error for a missing repo showed Electron's IPC wrapper (c7ff7fb).
 
 - **SESS-19** — Prompt, permission, diff on a started session
   Steps: Send "Create hello.txt containing hi" — allow the write when
   asked; open the Diff tab.
   Expected: the W3 loop works unchanged on a run W4 started: the band
   appears, Allow lands, the diff lists `hello.txt` as untracked +1.
-  Result:
+  Result: PASS — 05-blocked-permission.png. Blocked with "Wants to write
+  hello.txt", band docked, rail badge 1; Allow landed; the strip then read
+  "1 turn · 33.1k ctx · $0.25".
 
 - **SESS-20** — Prompt while a turn is running is queued
   Steps: Send a prompt that takes a while; while "working…" shows, send
   a second one.
   Expected: the second prompt shows at once as pending; the usage strip
   says "1 queued" until the first turn ends, then the agent takes it.
-  Result:
+  Result: PASS — 07-queued-prompt.png. During the poem turn the strip
+  read "1 queued · working…"; the second prompt was delivered after it
+  ("queued-ok"). placement `auto` queues as the daemon documents.
 
 - **SESS-21** — Draft per run
   Steps: Type half a message in run A's composer without sending; open
   run B; type something there; go back to A; reload the window (⌘R).
   Expected: A's text is back each time, B's is B's; after sending, the
   box is empty and stays empty on the next visit.
-  Result:
+  Result: PASS. A's text came back after switching to B and back, and
+  after ⌘R; B's was B's (two `waypoint:sessionDraft:` keys); after
+  sending, the box and the key were empty. A draft also outlived an
+  interruption (08-interrupted-resume.png shows "B draft").
 
 - **SESS-22** — Failure copy: a branch that does not exist / a project
   whose repository is gone
@@ -2177,7 +2198,9 @@ branches `main` and `feat/road-61-list`). Screenshots in
   exist on this machine).
   Expected: the base-branch field says why it could not be read, inline,
   and Start stays disabled; no run is created.
-  Result:
+  Result: PASS — 02-dialog-missing-repo.png: "Compass Web's linked
+  repository (~/code/compass-web) is not on this machine. Relink it in
+  the project's settings (Codebase)." inline; Start disabled; no run.
 
 - **SESS-23** — Stop while provisioning
   Steps: Start a session and press Stop in the header while the pill
@@ -2185,7 +2208,10 @@ branches `main` and `feat/road-61-list`). Screenshots in
   Expected: the run is *Cancelled*; no session is started for it (the
   daemon's session list never shows the run id, or shows it and it is
   killed); the worktree stays on disk.
-  Result:
+  Result: PASS (through the bridge, the 189 ms start answer being
+  faster than a click). Cancelled; the daemon never had the session; the
+  worktree is on disk. Found and fixed: the worktree finished after the
+  cancel and the ledger's 409 was recorded as an error event (a9dc1db).
 
 - **SESS-24** — Resume an interrupted run (both outcomes)
   Steps: (a) With a running session, kill the daemon process, restart
@@ -2200,7 +2226,30 @@ branches `main` and `feat/road-61-list`). Screenshots in
   has `session_resumed {outcome:'replaced-by-new'}` and a
   `prompt_sent {by:'waypoint'}`. A run whose worktree is gone: Resume is
   disabled with the reason.
-  Result:
+  Result: PASS. (a) `acp.kill` on "New" → the follower wrote
+  interrupted; Resume → provisioning → running in 4 s, `session_resumed
+  {outcome:'loaded'}`, same providerSessionId, the transcript back with
+  its "hiii" turn — the pinned adapter does loadSession
+  (09-resumed-loaded.png). (b) "W4 live" interrupted, providerSessionId
+  patched to an id Claude does not know; Resume → 14 s, toast, the note
+  as the first message with `?? hello.txt`, Claude answered "Session
+  resumed on branch session/ymerogo … Ready for your next instruction"
+  (10-resumed-replaced-by-new.png); events session_resumed
+  {outcome:'replaced-by-new'} + prompt_sent {by:'waypoint'}; new
+  providerSessionId stored. Worktree gone (dir removed): Resume answered
+  "This run's worktree is no longer on disk; there is nothing to resume
+  on." and the run stayed interrupted.
+
+- **SESS-25** — Provider: workspace default, per-session override
+  Steps: Settings → Agents → Default provider; open the dialog.
+  Expected: the setting shows the workspace's provider and saves on
+  change (`PATCH /workspace {defaultAgentProvider}`); the dialog
+  preselects it, marked "(default)"; a provider this machine lacks is
+  marked "(not installed)" and keeps Start disabled.
+  Result: PASS — 11-settings-default-provider.png; the PATCH round-trip
+  verified over the API (claude → null → claude); the dialog read
+  `claude` as the default. The not-installed path is unit-tested (the
+  probe is `claude --version`, which passes on this machine).
 
 ## Summary
 
