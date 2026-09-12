@@ -8,6 +8,7 @@
 // handler with the same SPA-fallback behavior in the packaged desktop build
 // (src/main/main.ts), and a standard static-host SPA rewrite rule if this
 // ever ships as a website.
+import type { ComponentType } from 'react';
 import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom';
 import { AppShell } from '@/layouts/AppShell';
 import { ProjectLayout } from '@/layouts/ProjectLayout';
@@ -32,7 +33,6 @@ import MachinePage from '@/pages/MachinePage';
 import AllTicketsPage from '@/pages/AllTicketsPage';
 import MyJiraPage from '@/pages/jira/MyJiraPage';
 import JiraTicketPage from '@/pages/jira/JiraTicketPage';
-import SessionsPage from '@/pages/sessions/SessionsPage';
 
 import TicketsLayout from '@/pages/tickets/TicketsLayout';
 import TicketDetailPage from '@/pages/tickets/TicketDetailPage';
@@ -71,6 +71,21 @@ import ProfileSettingsNotifications from '@/pages/profile-settings/Notifications
 import ProfileSettingsSecurity from '@/pages/profile-settings/Security';
 import ProfileSettingsTokens from '@/pages/profile-settings/Tokens';
 import ProfileSettingsCopilot from '@/pages/profile-settings/Copilot';
+
+// Required behind the flag, unlike every page above: SessionsPage pulls
+// the vendored chat-ui build (3.8 MB of Solid plus its stylesheet, whose
+// element-level resets then apply to every document), and a flag-off
+// build must not pay for it (found in review). SESSIONS_ENABLED is a
+// build-time constant, so the production bundler drops the whole branch
+// — and with it chat-ui — when the flag is off. (A dynamic `import()`
+// would be the usual shape, but this package's node16 module resolution
+// treats it as ESM and refuses the alias without an extension webpack
+// cannot resolve.)
+const SessionsPage: ComponentType | null = SESSIONS_ENABLED
+  ? // eslint-disable-next-line global-require, @typescript-eslint/no-var-requires
+    (require('@/pages/sessions/SessionsPage') as { default: ComponentType })
+      .default
+  : null;
 
 /**
  * Guards every route nested under AppShell. There's no real backend/session
@@ -149,7 +164,7 @@ export const router = createBrowserRouter([
               // render the one page; the run id selects the detail.
               {
                 path: '/sessions',
-                element: SESSIONS_ENABLED ? (
+                element: SessionsPage ? (
                   <SessionsPage />
                 ) : (
                   <Navigate to="/" replace />
@@ -157,7 +172,7 @@ export const router = createBrowserRouter([
               },
               {
                 path: '/sessions/:runId',
-                element: SESSIONS_ENABLED ? (
+                element: SessionsPage ? (
                   <SessionsPage />
                 ) : (
                   <Navigate to="/" replace />

@@ -9,7 +9,7 @@ import {
   NEW_SESSION_UNAVAILABLE,
   SessionList,
 } from '@/components/sessions/SessionList';
-import { useMySessions } from '@/lib/sessionsStore';
+import { useMySessions, useSessionRun } from '@/lib/sessionsStore';
 import type { EngineStatus } from '@/types/engine';
 
 /** Below this window width the list and the detail take turns (§1.7). */
@@ -77,9 +77,12 @@ export default function SessionsPage() {
   const { runId } = useParams<{ runId?: string }>();
   const navigate = useNavigate();
   const narrow = useNarrow();
-  const { groups, runs, loaded, error, engine, refresh } = useMySessions();
-
-  const selected = runId ? runs.find((run) => run.id === runId) : undefined;
+  const { groups, runs, loaded, loading, error, engine, refresh } =
+    useMySessions();
+  // Asks the store to re-read when the id is one it has not seen — the
+  // ticket page's "Open session →" can land here inside the poll window
+  // (found in review: "No such session" flashed until the next read).
+  const selected = useSessionRun(runId);
   const open = useCallback(
     (id: string) => navigate(`/sessions/${encodeURIComponent(id)}`),
     [navigate],
@@ -163,8 +166,13 @@ export default function SessionsPage() {
         ))}
       {showDetail &&
         (selected ? (
-          <SessionDetail run={selected} narrow={narrow} onBack={back} />
-        ) : runId && loaded ? (
+          <SessionDetail
+            key={selected.id}
+            run={selected}
+            narrow={narrow}
+            onBack={back}
+          />
+        ) : runId && loaded && !loading ? (
           <div className="flex min-w-0 flex-1 flex-col">
             <EmptyState
               icon={<IconXCircle size={28} />}

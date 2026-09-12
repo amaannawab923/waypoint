@@ -92,7 +92,14 @@ export function createSessionSource(
   );
 
   const connectSource: ConnectSessionSource = {
-    activeTurn,
+    // `null`, never `undefined`, before the first snapshot: connectSession
+    // reads it once to remember whether a turn was active, and `undefined
+    // !== null` counted as one — its first sync then reported a turn
+    // committed and the pane read history twice (found in review).
+    activeTurn: {
+      getSnapshot: () => activeTurn.getSnapshot() ?? null,
+      subscribe: (listener) => activeTurn.subscribe(listener),
+    },
     plan,
     sessionState: {
       // connectSession reads only pendingPermissions; hand it a view that

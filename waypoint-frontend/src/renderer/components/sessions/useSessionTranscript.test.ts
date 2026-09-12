@@ -104,6 +104,15 @@ describe('useSessionTranscript', () => {
     expect(chatState.transcript.history.seed).toHaveBeenCalledWith([
       { id: 't1', seq: 1 },
     ]);
+    // History is seeded BEFORE the live session is connected — chat-ui's
+    // seed resets the active turn, so the other order wiped a turn in
+    // flight (found live; commit 347a192). Connecting second lays the
+    // follower's turn over the seeded history.
+    expect(
+      chatState.transcript.history.seed.mock.invocationCallOrder[0],
+    ).toBeLessThan(runtime.connectSession.mock.invocationCallOrder[0]);
+    // And every later seed puts the follower's turn back.
+    expect(chatState.transcript.activeTurn.set).toHaveBeenCalled();
     expect(result.current.historyStatus).toEqual({ kind: 'ready' });
     expect(result.current.state).toBe(chatState);
     expect(result.current.pendingPermissions).toEqual([{ requestId: 'p1' }]);

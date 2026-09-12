@@ -18,6 +18,7 @@ jest.mock('@/layouts/Sidebar', () => ({
   Sidebar: () => <div data-testid="sidebar" />,
 }));
 jest.mock('@/layouts/SidebarRail', () => ({
+  RAIL_WIDTH_PX: 56,
   SidebarRail: () => <div data-testid="sidebar-rail" />,
 }));
 jest.mock('@/lib/useLocalSummary', () => ({

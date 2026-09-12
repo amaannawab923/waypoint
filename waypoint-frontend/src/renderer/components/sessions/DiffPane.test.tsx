@@ -4,7 +4,10 @@ import { getRunDiff } from '@/data/engineApi';
 import type { AgentRun, RunDiff } from '@/types/agentRuns';
 import { DiffPane, numberLines, splitPatch } from './DiffPane';
 
-jest.mock('@/data/engineApi', () => ({ getRunDiff: jest.fn() }));
+jest.mock('@/data/engineApi', () => ({
+  getRunDiff: jest.fn(),
+  onRunChanged: jest.fn(() => () => {}),
+}));
 
 const PATCH = `diff --git a/src/a.ts b/src/a.ts
 index 111..222 100644

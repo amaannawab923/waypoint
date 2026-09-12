@@ -43,16 +43,24 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
   else if (!status.live)
     disabledReason = `This session has ended (${status.label.toLowerCase()}).`;
 
+  // Fire and forget, the way emdash's own composer does: the daemon
+  // answers acp.sendPrompt when the agent's TURN ends, which can be
+  // minutes (found in review — awaiting it greyed the composer out for
+  // the whole turn). The prompt shows at once as chat-ui's pending
+  // prompt; the live activeTurn replaces it when the daemon starts the
+  // turn, and a refusal takes it back with the daemon's sentence.
   const onSend = async (text: string) => {
-    try {
-      await sendPrompt(run.id, text);
-      await refreshSessions();
-    } catch (error) {
-      showErrorToast(
-        error instanceof Error ? error.message : 'The prompt was not sent.',
-      );
-      throw error;
-    }
+    if (!state) return;
+    const id = `pending-${Date.now()}`;
+    state.session.setPendingPrompt({ id, text });
+    sendPrompt(run.id, text)
+      .then(() => refreshSessions())
+      .catch((error: unknown) => {
+        state.session.setPendingPrompt(null);
+        showErrorToast(
+          error instanceof Error ? error.message : 'The prompt was not sent.',
+        );
+      });
   };
 
   const onAnswer = async (requestId: string, optionId: string) => {

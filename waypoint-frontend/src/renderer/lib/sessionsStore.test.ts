@@ -173,12 +173,21 @@ describe('useMySessions / useWaitingSessionsCount', () => {
     expect(result.current.groups.done.map((r) => r.id)).toEqual(['r1']);
   });
 
-  it('stops polling and listening when the last subscriber leaves', async () => {
+  it('stops polling and listening a tick after the last subscriber leaves — not at once, so the sidebar ⇄ rail swap does not restart everything', async () => {
     const { unmount } = renderHook(() => useMySessions());
     await flush();
     expect(runChangedListeners.size).toBe(1);
     expect(engineListeners.size).toBe(1);
     unmount();
+    // Still up in the same tick: a new subscriber (the rail's badge,
+    // mounted right after the sidebar's unmounted) keeps it running.
+    expect(runChangedListeners.size).toBe(1);
+    const again = renderHook(() => useMySessions());
+    await flush();
+    expect(runChangedListeners.size).toBe(1);
+    expect(listMyAgentRuns).toHaveBeenCalledTimes(1);
+    again.unmount();
+    await flush();
     expect(runChangedListeners.size).toBe(0);
     expect(engineListeners.size).toBe(0);
   });

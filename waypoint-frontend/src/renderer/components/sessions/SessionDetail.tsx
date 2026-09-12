@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { clsx } from 'clsx';
 import { Button, IconButton } from '@/components/ui/Button';
@@ -19,11 +19,13 @@ export type SessionTab = 'transcript' | 'diff';
 
 /**
  * Everything right of the session list (W3, docs/design/w3-sessions-rail.md
- * §1.5): the header — title, status pill, provider, branch ← base, turns
- * and age, Stop, open worktree, ticket link — the Transcript | Diff tabs,
- * and the body each tab owns. The diff is a tab that replaces the
- * transcript in place, never a side inspector (§1.8), so the transcript
- * keeps the whole width while it is the thing being read.
+ * §1.5): the header — title, status pill, provider, branch ← base, age,
+ * Stop, open worktree, ticket link — the Transcript | Diff tabs, and the
+ * body each tab owns. The diff is a tab that replaces the transcript in
+ * place, never a side inspector (§1.8), so the transcript keeps the whole
+ * width while it is the thing being read. Mounted with `key={run.id}` by
+ * the page, so a different run is a fresh pane (tab, counts, in-flight
+ * stop) by construction.
  */
 export function SessionDetail({
   run,
@@ -43,19 +45,17 @@ export function SessionDetail({
   const [stopping, setStopping] = useState(false);
   const [diffCount, setDiffCount] = useState<number | null>(null);
 
-  // A different run is a fresh pane: back on the transcript, no stale count.
-  useEffect(() => {
-    setTab('transcript');
-    setDiffCount(null);
-    setStopping(false);
-  }, [run.id]);
-
   const stop = async () => {
     setStopping(true);
     try {
       const result = await stopRun(run.id);
-      if (result.outcome === 'stopped') {
+      if (result.outcome === 'stopped' || result.outcome === 'ledger-only') {
         patchSessionRun(run.id, { status: 'cancelled' });
+      }
+      if (result.outcome === 'ledger-only') {
+        showErrorToast(
+          'Recorded as cancelled, but the engine did not confirm the session ended — it is killed at the next launch if it is still there.',
+        );
       }
       await refreshSessions();
     } catch (error) {

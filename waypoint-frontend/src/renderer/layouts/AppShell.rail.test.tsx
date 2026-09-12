@@ -24,6 +24,7 @@ jest.mock('@/layouts/Sidebar', () => ({
   ),
 }));
 jest.mock('@/layouts/SidebarRail', () => ({
+  RAIL_WIDTH_PX: 56,
   SidebarRail: ({
     onPeek,
     onPeekEnd,

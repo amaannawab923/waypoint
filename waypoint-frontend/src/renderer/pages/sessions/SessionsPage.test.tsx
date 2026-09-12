@@ -1,13 +1,14 @@
 import '@testing-library/jest-dom';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { groupRuns, useMySessions } from '@/lib/sessionsStore';
+import { groupRuns, useMySessions, useSessionRun } from '@/lib/sessionsStore';
 import type { AgentRun } from '@/types/agentRuns';
 import SessionsPage from './SessionsPage';
 
 jest.mock('@/lib/sessionsStore', () => ({
   ...jest.requireActual('@/lib/sessionsStore'),
   useMySessions: jest.fn(),
+  useSessionRun: jest.fn(),
 }));
 jest.mock('@/components/sessions/SessionDetail', () => ({
   SessionDetail: ({
@@ -58,6 +59,9 @@ function mockSessions(
     refresh: jest.fn(),
     ...over,
   });
+  (useSessionRun as jest.Mock).mockImplementation((id: string | undefined) =>
+    id ? runs.find((r) => r.id === id) : undefined,
+  );
 }
 
 function renderAt(path: string) {

@@ -46,10 +46,13 @@ treatment — is carried over from v1 unchanged. Only the geometry is new.
    rows — a third line with the reason ("Wants to run `pnpm test`",
    "2 proposals need review").
 5. **Detail pane.** Everything right of the list: header (title, status
-   pill, provider, branch ← base, turn count / age, Stop, open worktree,
-   ticket link, ⋯), tabs **Transcript | Diff · N files**, then the
-   `@emdash/chat-ui` transcript, the composer-docked permission band when
-   a permission is pending, the composer, and a usage strip.
+   pill, provider, branch ← base, age, Stop, open worktree, ticket link),
+   tabs **Transcript | Diff · N files**, then the `@emdash/chat-ui`
+   transcript, the composer-docked permission band when a permission is
+   pending, the composer, and a usage strip. The turn count lives in the
+   usage strip and is the transcript's own (the ledger's `turnCount` is
+   the orchestrator's to maintain, W4/W5); the mock's "⋯" overflow menu is
+   not built — nothing needs a second home until W4 adds actions.
 6. **Pixel budget.** Transcript = window − 56 − 300 (− borders):
    **≥ 924 px at 1280**, **≥ 1084 px at 1440**.
 7. **Narrow (< 1100 px).** The rail never disappears. The list becomes
@@ -89,7 +92,7 @@ runs created by the ledger + daemon directly (the W2 QA path).
   ledger already says `running`/`blocked` — and main keeps those two in
   step (see §4.3), so the overlay is a latency hider, not a second truth.
 - **Engine state** — `EngineStatus` from the supervisor. An empty list
-  with the engine stopped says so ("The agent engine isn't running") —
+  with the engine stopped says so ("The agent engine is not running") —
   a different claim from "No sessions yet".
 
 ## 4. Build plan — file by file
@@ -125,7 +128,7 @@ Channels under `RUNS_IPC`, request/response like ENGINE_IPC:
 
 The renderer never names a path; it names a run.
 
-### 4.3 Main — live ledger follower (`engine/runs/liveFollower.ts`, new)
+### 4.3 Main — live ledger follower (`engine/runs/liveLedgerFollower.ts`, new)
 
 Registered beside `registerBootReconcile`: while the engine is running,
 follows `acp.sessions.list` and, for each of our runs in a live status,
@@ -146,11 +149,19 @@ writing duplicate events.
 - `data/engineApi.ts`: `stopRun`, `getRunDiff`, `revealRunWorktree`,
   `sendPrompt`, `resolvePermission`, `cancelTurn` — thin wrappers.
 - `lib/sessionsStore.ts`: one store for the panel and the badge — ledger
-  runs (refetched on mount, on every run-control action, and every 30 s
-  while the panel is open), the `acp.sessions.list` follower (via
-  `createLiveFollower`), engine status. Exposes `useMySessions()` →
+  runs (re-read on the first subscriber, on every run-control action, on
+  every `runs:changed` push from main, and every 30 s as a safety net for
+  writers that do not push) and the engine status (probed once per
+  launch with `install`, so a daemon that outlived the last Waypoint is
+  adopted). The renderer does **not** follow `acp.sessions.list`: the
+  Wire client holds one attachment per topic, and main's live ledger
+  follower (§4.3) owns that one; the ledger, which main keeps in step, is
+  what the renderer reads. Because the badge is in the sidebar, the
+  store is active for the app's lifetime, not only while the panel is
+  open — the poll is against `localhost:14000` today; revisit when the
+  ledger sits behind a network hop. Exposes `useMySessions()` →
   `{ groups, waitingCount, engine, loading, error }` and
-  `useWaitingCount()` for the sidebar badge.
+  `useWaitingSessionsCount()` for the sidebar badge.
 
 ### 4.5 Renderer — shell (ROAD-65)
 

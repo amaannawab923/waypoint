@@ -118,20 +118,21 @@ export function useSessionTranscript(
     // which restores the active turn itself.
     let disconnect: (() => void) | null = null;
     let gone = false;
-    loadHistory(created)
-      .catch(() => {})
-      .then(() => {
-        if (gone) return;
-        disconnect = runtime.connectSession(
-          created.state,
-          created.source.connectSource,
-          {
-            onTurnCommitted: () => {
-              loadHistory(created).catch(() => {});
-            },
+    const connectAfterHistory = async () => {
+      // loadHistory never rejects (a failure becomes historyStatus).
+      await loadHistory(created);
+      if (gone) return;
+      disconnect = runtime.connectSession(
+        created.state,
+        created.source.connectSource,
+        {
+          onTurnCommitted: () => {
+            loadHistory(created).catch(() => {});
           },
-        );
-      });
+        },
+      );
+    };
+    connectAfterHistory().catch(() => {});
     const offEngine = onEngineStatusChanged((status) => {
       if (status.kind === 'running') {
         created.source.reconnect();

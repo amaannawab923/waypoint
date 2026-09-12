@@ -53,10 +53,12 @@ describe('PermissionBand', () => {
 
     fireEvent.click(screen.getByLabelText('More options'));
     const items = screen.getAllByRole('menuitem');
+    // The agent's own names only — no allow_once/allow_always machine
+    // words for a person to decode.
     expect(items.map((i) => i.textContent)).toEqual([
-      'Rejectreject_once',
-      'Allow onceallow_once',
-      'Always allowallow_always',
+      'Reject',
+      'Allow once',
+      'Always allow',
     ]);
     fireEvent.click(items[2]);
     expect(onAnswer).toHaveBeenLastCalledWith('p1', 'always');

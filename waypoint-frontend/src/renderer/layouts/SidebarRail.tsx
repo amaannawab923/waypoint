@@ -188,6 +188,8 @@ export interface SidebarRailProps {
   onPin: () => void;
   /** The Local status strip's facts, rendered as one dot with a title. */
   localSummary: string;
+  /** The peek overlay is open: the affordance's own tooltip would sit on top of it. */
+  peeking?: boolean;
 }
 
 export function SidebarRail({
@@ -195,6 +197,7 @@ export function SidebarRail({
   onPeekEnd,
   onPin,
   localSummary,
+  peeking = false,
 }: SidebarRailProps) {
   const waiting = useWaitingSessionsCount();
   const pendingProposals = usePendingProposalCount();
@@ -231,12 +234,13 @@ export function SidebarRail({
         </svg>
       </div>
 
-      {/* A native title, not the Tooltip: the peek overlay opens right
-          where a floating tooltip would sit, and the two collided. */}
+      {/* A native title, not the Tooltip, and none at all while the peek
+          is open: both floated exactly where the overlay opens (UX
+          review, twice). */}
       <button
         type="button"
         aria-label="Expand sidebar"
-        title="Expand sidebar · ⌘B"
+        title={peeking ? undefined : 'Expand sidebar · ⌘B'}
         onClick={onPin}
         onMouseEnter={() => {
           peekTimer.current = setTimeout(onPeek, PEEK_DELAY_MS);

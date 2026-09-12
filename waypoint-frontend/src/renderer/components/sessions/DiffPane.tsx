@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { clsx } from 'clsx';
-import { getRunDiff } from '@/data/engineApi';
+import { getRunDiff, onRunChanged } from '@/data/engineApi';
 import { IconRefresh } from '@/components/icons';
 import type { AgentRun, RunDiff, RunDiffFile } from '@/types/agentRuns';
 import { statusView } from './sessionStatus';
@@ -161,9 +161,15 @@ export function DiffPane({
     setSelected(null);
     if (!run.worktreePath) {
       onFileCount(null);
-      return;
+      return undefined;
     }
     load().catch(() => {});
+    // Re-read when main reports this run changed (a permission answered,
+    // a turn ended) — what the agent wrote since is what the tab is for.
+    const off = onRunChanged((change) => {
+      if (change.runId === run.id) load().catch(() => {});
+    });
+    return off;
     // Per run; `load` reads the id from `run`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run.id, run.worktreePath]);

@@ -180,16 +180,32 @@ function startActivity(): () => void {
   };
 }
 
+let stopTimer: ReturnType<typeof setTimeout> | null = null;
+
 export function subscribeSessions(listener: Listener): () => void {
   listeners.add(listener);
   activeSubscribers += 1;
-  if (activeSubscribers === 1) stopActivity = startActivity();
+  if (stopTimer) {
+    clearTimeout(stopTimer);
+    stopTimer = null;
+  }
+  if (activeSubscribers === 1 && !stopActivity) stopActivity = startActivity();
   return () => {
     listeners.delete(listener);
     activeSubscribers -= 1;
-    if (activeSubscribers === 0) {
-      stopActivity?.();
-      stopActivity = null;
+    // Stopped a tick later, not at once: the sidebar and the rail swap on
+    // every entry to /sessions, and React unmounts the old badge before it
+    // mounts the new one — an immediate stop restarted the poll, the push
+    // listeners and the engine probe on every navigation (found in
+    // review).
+    if (activeSubscribers === 0 && !stopTimer) {
+      stopTimer = setTimeout(() => {
+        stopTimer = null;
+        if (activeSubscribers === 0) {
+          stopActivity?.();
+          stopActivity = null;
+        }
+      }, 0);
     }
   };
 }
@@ -200,6 +216,11 @@ export function getSessionsSnapshot(): SessionsSnapshot {
 
 /** Test-only: a singleton outlives any one `it()` block. */
 export function resetSessionsStoreForTests(): void {
+  if (stopTimer) clearTimeout(stopTimer);
+  stopTimer = null;
+  stopActivity?.();
+  stopActivity = null;
+  activeSubscribers = 0;
   snapshot = {
     runs: [],
     loaded: false,

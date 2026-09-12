@@ -1114,8 +1114,10 @@ export async function listMyAgentRuns(): Promise<AgentRun[]> {
     });
     if (cursor) search.set('cursor', cursor);
     // eslint-disable-next-line no-await-in-loop -- pages are sequential by cursor
+    // Silent: the sessions store polls this and shows a failure itself.
     const result: RunPage = await http.get<RunPage>(
       `/agent-runs?${search.toString()}`,
+      { silent: true },
     );
     items.push(...result.items);
     cursor = result.nextCursor;

@@ -3,7 +3,11 @@ import type {
   LiveUpdate,
   TopicClosedReason,
 } from '@/types/engine';
-import { createLiveFollower, type TopicBridge } from './liveFollower';
+import {
+  BUSY_RETRY_MS,
+  createLiveFollower,
+  type TopicBridge,
+} from './liveFollower';
 
 type Handlers = {
   onUpdate: (update: LiveUpdate) => void;
@@ -97,7 +101,7 @@ describe('createLiveFollower', () => {
     expect(fb.bridge.snapshotTopic).not.toHaveBeenCalled();
   });
 
-  it('re-reads the snapshot on a sequence gap, and ignores updates while stale', async () => {
+  it('re-reads the snapshot on a sequence gap, holds the updates that arrive meanwhile, and replays the ones the snapshot does not fold in', async () => {
     const fb = fakeBridge();
     const follower = createLiveFollower<{ items: string[] }>(TOPIC, fb.bridge);
     await flush();
@@ -119,19 +123,61 @@ describe('createLiveFollower', () => {
       delta: [],
     });
     expect(follower.getStatus()).toEqual({ kind: 'stale' });
+    // Folded into the snapshot (sequence 5 ≤ 5): skipped on replay.
     fb.push('sub-1', {
       generation: 1,
       baseSequence: 4,
       sequence: 5,
       timestamp: 2,
-      delta: [{ op: 'add', path: ['items', 0], value: 'ignored' }],
+      delta: [{ op: 'add', path: ['items', 0], value: 'folded' }],
+    });
+    // After the snapshot's cursor: replayed onto it.
+    fb.push('sub-1', {
+      generation: 1,
+      baseSequence: 5,
+      sequence: 6,
+      timestamp: 3,
+      delta: [{ op: 'add', path: ['items', 1], value: 'after' }],
     });
     await flush();
 
     expect(fb.bridge.snapshotTopic).toHaveBeenCalledWith('sub-1');
-    expect(follower.getSnapshot()).toEqual({ items: ['fresh'] });
+    expect(fb.bridge.snapshotTopic).toHaveBeenCalledTimes(1);
+    expect(follower.getSnapshot()).toEqual({ items: ['fresh', 'after'] });
     expect(follower.getStatus()).toEqual({ kind: 'live' });
     expect(statuses).toEqual(['stale', 'live']);
+    // And the chain continues from the replayed update.
+    fb.push('sub-1', {
+      generation: 1,
+      baseSequence: 6,
+      sequence: 7,
+      timestamp: 4,
+      delta: [{ op: 'add', path: ['items', 2], value: 'next' }],
+    });
+    expect(follower.getSnapshot()).toEqual({
+      items: ['fresh', 'after', 'next'],
+    });
+    expect(fb.bridge.snapshotTopic).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries once, after a beat, when the topic is still attached from a document that just went away', async () => {
+    jest.useFakeTimers();
+    try {
+      const fb = fakeBridge();
+      (fb.bridge.subscribeTopic as jest.Mock).mockRejectedValueOnce(
+        new Error(
+          'Topic "acp.session.activeTurn|…" is already attached on this Wire client',
+        ),
+      );
+      const follower = createLiveFollower(TOPIC, fb.bridge);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(follower.getStatus()).toEqual({ kind: 'connecting' });
+      await jest.advanceTimersByTimeAsync(BUSY_RETRY_MS + 5);
+      expect(follower.getStatus()).toEqual({ kind: 'live' });
+      expect(fb.bridge.subscribeTopic).toHaveBeenCalledTimes(2);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('re-reads the snapshot on a generation change and on a patch that does not fit', async () => {

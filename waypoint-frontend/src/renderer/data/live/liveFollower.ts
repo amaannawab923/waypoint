@@ -31,6 +31,9 @@ import type {
 
 enablePatches();
 
+/** How long to wait before the one retry on "already attached". */
+export const BUSY_RETRY_MS = 300;
+
 export type LiveReadable<T> = {
   getSnapshot(): T | null | undefined;
   subscribe(listener: () => void): () => void;
@@ -83,9 +86,19 @@ export function createLiveFollower<T>(
   let unsubscribe: (() => void) | null = null;
   let disposed = false;
   let resyncing = false;
+  // Updates that arrive while a snapshot is on its way. Dropping them
+  // meant one gap during a stream turned into a resync loop: the update
+  // after the snapshot did not chain onto it, so another resync (found in
+  // review). Kept in order and replayed onto the snapshot instead — the
+  // rule emdash's own follower applies.
+  let held: LiveUpdate[] = [];
   // Every subscribe/resync is a generation of its own; a late answer from
   // an earlier one (the topic closed and reopened meanwhile) is dropped.
   let attempt = 0;
+  // One retry when the topic is still attached from a document or unit
+  // that just went away — a rapid A → B → A switch, or a reload — before
+  // the old attachment's release has landed in main.
+  let retriedBusy = false;
   const listeners = new Set<() => void>();
 
   const notify = () => {
@@ -95,11 +108,38 @@ export function createLiveFollower<T>(
     status = next;
     notify();
   };
+  const applyInOrder = (update: LiveUpdate): boolean => {
+    if (update.generation !== generation || update.baseSequence !== sequence)
+      return false;
+    try {
+      value = applyPatches(value as object, update.delta as Patch[]) as T;
+    } catch {
+      return false;
+    }
+    sequence = update.sequence;
+    return true;
+  };
+
   const seed = (snapshot: LiveSnapshot) => {
     value = snapshot.data as T;
     generation = snapshot.generation;
     sequence = snapshot.sequence;
     resyncing = false;
+    // Replay what arrived meanwhile: updates the snapshot already folds in
+    // (same generation, sequence ≤ the snapshot's) are skipped; the rest
+    // must chain. One that does not is dropped — the snapshot is the
+    // authority at its cursor, and the next live update either chains or
+    // asks for another snapshot; going again here could loop.
+    const pending = held;
+    held = [];
+    for (const update of pending) {
+      if (
+        update.generation === snapshot.generation &&
+        update.sequence <= snapshot.sequence
+      )
+        continue;
+      if (!applyInOrder(update)) break;
+    }
     setStatus({ kind: 'live' });
   };
 
@@ -108,7 +148,7 @@ export function createLiveFollower<T>(
     resyncing = true;
     const myAttempt = attempt;
     const id = subscriptionId;
-    setStatus({ kind: 'stale' });
+    if (status.kind !== 'stale') setStatus({ kind: 'stale' });
     bridge
       .snapshotTopic(id)
       .then((snapshot) => {
@@ -129,18 +169,16 @@ export function createLiveFollower<T>(
   };
 
   const applyUpdate = (update: LiveUpdate) => {
-    if (disposed || status.kind === 'stale' || status.kind === 'closed') return;
-    if (update.generation !== generation || update.baseSequence !== sequence) {
+    if (disposed || status.kind === 'closed') return;
+    if (status.kind === 'stale') {
+      held.push(update);
+      return;
+    }
+    if (!applyInOrder(update)) {
+      held.push(update);
       resync();
       return;
     }
-    try {
-      value = applyPatches(value as object, update.delta as Patch[]) as T;
-    } catch {
-      resync();
-      return;
-    }
-    sequence = update.sequence;
     notify();
   };
 
@@ -172,13 +210,15 @@ export function createLiveFollower<T>(
       })
       .catch((error: unknown) => {
         if (disposed || myAttempt !== attempt) return;
-        setStatus({
-          kind: 'closed',
-          reason: {
-            kind: 'error',
-            message: error instanceof Error ? error.message : String(error),
-          },
-        });
+        const message = error instanceof Error ? error.message : String(error);
+        if (/already attached/i.test(message) && !retriedBusy) {
+          retriedBusy = true;
+          setTimeout(() => {
+            if (!disposed && myAttempt === attempt) connect();
+          }, BUSY_RETRY_MS);
+          return;
+        }
+        setStatus({ kind: 'closed', reason: { kind: 'error', message } });
       });
   };
 

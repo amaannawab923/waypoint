@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { Sidebar } from '@/layouts/Sidebar';
-import { SidebarRail } from '@/layouts/SidebarRail';
+import { RAIL_WIDTH_PX, SidebarRail } from '@/layouts/SidebarRail';
 import { useLocalSummary } from '@/lib/useLocalSummary';
 import { Topbar } from '@/layouts/Topbar';
 import { CopilotPanel } from '@/components/domain/CopilotPanel';
@@ -43,6 +43,8 @@ function writeSidebarPinned(pinned: boolean): void {
 
 /** The peek overlay lingers this long after the pointer leaves the affordance, so the hand can reach it. */
 const PEEK_LINGER_MS = 300;
+/** Sidebar.tsx's `w-64`. */
+const SIDEBAR_WIDTH_PX = 256;
 
 export function AppShell() {
   // Lifted here, not owned by Topbar (which renders the toggle) or
@@ -139,21 +141,32 @@ export function AppShell() {
 
   return (
     <div className="relative flex h-screen w-screen overflow-hidden bg-bg text-text">
-      {showRail ? (
-        <SidebarRail
-          onPeek={() => {
-            cancelLinger();
-            setPeeking(true);
-          }}
-          onPeekEnd={endPeekSoon}
-          onPin={() => setPin(true)}
-          localSummary={localSummary.sentence}
-        />
-      ) : (
-        <Sidebar
-          onCollapse={focusWorkspace ? () => setPin(false) : undefined}
-        />
-      )}
+      {/* The 150 ms width tween of docs/design/w3-sessions-rail.md §1.10:
+          the column animates between the rail's 56 px and the sidebar's
+          256 px while its content swaps at once; instant under
+          prefers-reduced-motion. */}
+      <div
+        data-sidebar-column
+        className="h-full shrink-0 overflow-hidden transition-[width] duration-150 ease-out motion-reduce:transition-none"
+        style={{ width: showRail ? RAIL_WIDTH_PX : SIDEBAR_WIDTH_PX }}
+      >
+        {showRail ? (
+          <SidebarRail
+            onPeek={() => {
+              cancelLinger();
+              setPeeking(true);
+            }}
+            onPeekEnd={endPeekSoon}
+            onPin={() => setPin(true)}
+            localSummary={localSummary.sentence}
+            peeking={peeking}
+          />
+        ) : (
+          <Sidebar
+            onCollapse={focusWorkspace ? () => setPin(false) : undefined}
+          />
+        )}
+      </div>
       {showRail && peeking && (
         <div
           data-sidebar-peek

@@ -58,7 +58,13 @@ export function PermissionBand({
       className="mx-4 flex shrink-0 items-center gap-2 rounded-t-[var(--radius-sm)] border border-b-0 border-warning bg-warning-bg px-2.5 py-[7px] text-[11px] text-warning"
     >
       <IconShield size={13} className="shrink-0" />
-      <span className="min-w-0 truncate">
+      {/* Up to two lines with the whole text on hover: a long command
+          cut by CSS is a command a person allows without reading
+          (security round 1). */}
+      <span
+        className="line-clamp-2 min-w-0 break-all whitespace-pre-wrap"
+        title={what}
+      >
         <b className="font-bold">Allow</b>{' '}
         <span className="font-mono">{what}</span>
       </span>
@@ -76,7 +82,8 @@ export function PermissionBand({
             onClick={() =>
               primary && onAnswer(request.requestId, primary.optionId)
             }
-            className="flex h-[22px] items-center px-2.5 text-[10.5px] font-semibold text-text hover:bg-surface-2 disabled:opacity-60"
+            title={primary?.name}
+            className="flex h-[22px] max-w-[180px] items-center truncate px-2.5 text-[10.5px] font-semibold text-text hover:bg-surface-2 disabled:opacity-60"
           >
             {busy ? 'Answering…' : (primary?.name ?? 'No options')}
           </button>
@@ -97,23 +104,24 @@ export function PermissionBand({
         {menuOpen && (
           <div
             role="menu"
-            className="absolute right-0 bottom-full z-30 mb-1 min-w-[180px] rounded-[var(--radius-sm)] border border-border bg-surface p-1 shadow-lg"
+            className="absolute right-0 bottom-full z-30 mb-1 w-[240px] rounded-[var(--radius-sm)] border border-border bg-surface p-1 shadow-lg"
           >
+            {/* The agent's own names, one line each — the machine
+                `kind` (allow_once, …) is not something Waypoint says to
+                a person (UX review). */}
             {request.options.map((option) => (
               <button
                 key={option.optionId}
                 type="button"
                 role="menuitem"
+                title={option.name}
                 onClick={() => {
                   setMenuOpen(false);
                   onAnswer(request.requestId, option.optionId);
                 }}
-                className="flex w-full items-center justify-between gap-3 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-xs text-text hover:bg-surface-2"
+                className="flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-xs text-text hover:bg-surface-2"
               >
-                <span>{option.name}</span>
-                <span className="font-mono text-[10px] text-text-muted">
-                  {option.kind}
-                </span>
+                <span className="min-w-0 flex-1 truncate">{option.name}</span>
               </button>
             ))}
           </div>
