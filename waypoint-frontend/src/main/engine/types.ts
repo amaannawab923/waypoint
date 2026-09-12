@@ -366,6 +366,16 @@ export interface WireClient {
     options?: { timeoutMs?: number },
   ): Promise<T>;
   /**
+   * One snapshot of a live topic — `{generation, sequence, timestamp,
+   * data}` — with no attachment made or needed. The read for a caller
+   * that wants the value now and not the updates (reconcile), and the
+   * resync for one that already holds the attachment.
+   */
+  snapshot<T = unknown>(
+    topic: string,
+    options?: { timeoutMs?: number },
+  ): Promise<T>;
+  /**
    * Subscribes to a live topic. Resolves once the initial snapshot arrives,
    * with a detach function. `onUpdate` receives every subsequent `update`
    * verbatim; `onGap`/`onError` are the daemon telling us we missed

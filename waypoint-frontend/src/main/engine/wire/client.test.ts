@@ -331,6 +331,97 @@ describe('call', () => {
   });
 });
 
+describe('snapshot', () => {
+  it('sends a bare snapshot request — no attach — and resolves with the daemon’s value', async () => {
+    const transport = createFakeTransport();
+    const client = createWireClient(transport);
+
+    const promise = client.snapshot('acp.sessions.list');
+    const sent = sentMessages(transport);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toEqual(
+      expect.objectContaining({ kind: 'snapshot', topic: 'acp.sessions.list' }),
+    );
+    const id = findSentId(transport, (m) => m.kind === 'snapshot');
+    respond(transport, {
+      kind: 'result',
+      id,
+      ok: true,
+      value: { generation: 1, sequence: 0, timestamp: 1, data: {} },
+    });
+
+    expect(await promise).toEqual({
+      generation: 1,
+      sequence: 0,
+      timestamp: 1,
+      data: {},
+    });
+  });
+
+  it('rejects with the daemon’s error code, and with TIMEOUT when the deadline passes', async () => {
+    jest.useFakeTimers();
+    try {
+      const transport = createFakeTransport();
+      const client = createWireClient(transport);
+
+      const refused = client.snapshot('nope');
+      respond(transport, {
+        kind: 'result',
+        id: findSentId(transport, (m) => m.kind === 'snapshot'),
+        ok: false,
+        code: 'UNKNOWN_TOPIC',
+        message: 'no such topic',
+      });
+      await expect(refused).rejects.toMatchObject({
+        code: 'UNKNOWN_TOPIC',
+        path: 'snapshot:nope',
+      });
+
+      const slow = client.snapshot('quiet', { timeoutMs: 50 });
+      jest.advanceTimersByTime(60);
+      await expect(slow).rejects.toMatchObject({ code: 'TIMEOUT' });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('does not leave the topic attached: a later attach on the same topic is not refused', async () => {
+    const transport = createFakeTransport();
+    const client = createWireClient(transport);
+    const read = client.snapshot('topic-1');
+    respond(transport, {
+      kind: 'result',
+      id: findSentId(transport, (m) => m.kind === 'snapshot'),
+      ok: true,
+      value: { generation: 1, sequence: 0, timestamp: 1, data: {} },
+    });
+    await read;
+
+    const onSnapshot = jest.fn();
+    const attaching = client.attach('topic-1', {
+      onSnapshot,
+      onUpdate: jest.fn(),
+    });
+    const attachId = findSentId(transport, (m) => m.kind === 'attach');
+    const snapshotIds = sentMessages(transport)
+      .filter((m) => m.kind === 'snapshot')
+      .map((m) => (m as { id: string }).id);
+    respond(transport, {
+      kind: 'result',
+      id: attachId,
+      ok: true,
+      value: undefined,
+    });
+    respond(transport, {
+      kind: 'result',
+      id: snapshotIds[snapshotIds.length - 1],
+      ok: true,
+      value: { generation: 1, sequence: 0, timestamp: 2, data: {} },
+    });
+    await expect(attaching).resolves.toEqual(expect.any(Function));
+  });
+});
+
 describe('binary-frame tolerance', () => {
   it('a stray blob-chunk frame on the wire does not disturb a pending call', async () => {
     const transport = createFakeTransport();
@@ -486,6 +577,52 @@ describe('attach', () => {
 
     expect(deliveryOrder).toEqual(['snapshot', 'update']);
     expect(onUpdate).toHaveBeenCalledWith({ delta: 1 });
+  });
+
+  it('drops a buffered update the snapshot already contains (same generation, sequence at or below the snapshot’s) and keeps the rest', async () => {
+    const { transport, client, onSnapshot, onUpdate } = setup();
+    const promise = client.attach('topic-1', { onSnapshot, onUpdate });
+    const attachId = findSentId(transport, (m) => m.kind === 'attach');
+    const snapshotId = findSentId(transport, (m) => m.kind === 'snapshot');
+
+    respond(transport, {
+      kind: 'result',
+      id: attachId,
+      ok: true,
+      value: undefined,
+    });
+    // Two updates race the snapshot reply: sequence 3 is folded into a
+    // snapshot at sequence 3 (replaying it would make a follower resync on
+    // a baseSequence it has already passed — found in review, round 2);
+    // sequence 4 is genuinely newer and must be delivered.
+    respond(transport, {
+      kind: 'update',
+      topic: 'topic-1',
+      update: { generation: 7, baseSequence: 2, sequence: 3 },
+    });
+    respond(transport, {
+      kind: 'update',
+      topic: 'topic-1',
+      update: { generation: 7, baseSequence: 3, sequence: 4 },
+    });
+    // An update from another generation is not ours to judge: replayed.
+    respond(transport, {
+      kind: 'update',
+      topic: 'topic-1',
+      update: { generation: 8, baseSequence: 0, sequence: 1 },
+    });
+    respond(transport, {
+      kind: 'result',
+      id: snapshotId,
+      ok: true,
+      value: { generation: 7, sequence: 3, timestamp: 1, data: {} },
+    });
+    await promise;
+
+    expect(onUpdate.mock.calls.map((c) => c[0])).toEqual([
+      { generation: 7, baseSequence: 3, sequence: 4 },
+      { generation: 8, baseSequence: 0, sequence: 1 },
+    ]);
   });
 
   it('delivers an update directly once fully established, with no buffering delay', async () => {

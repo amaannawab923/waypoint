@@ -157,93 +157,59 @@ export function liveTopic(stateId: string, key?: unknown): string {
 }
 
 /**
- * One snapshot of a live topic: attach, take the first snapshot, detach.
- * The daemon replies to `snapshot` with `{generation, sequence, timestamp,
- * data}`; callers get `data`.
+ * One snapshot of a live topic, read with a bare `snapshot` request —
+ * no attachment. The daemon answers it from the topic's source whether
+ * or not anyone is attached, and (found in review, round 2) the Wire
+ * client refuses a second attach on a topic it already holds, so the
+ * first draft's attach-to-read collided with any subscriber of the same
+ * topic. The daemon replies `{generation, sequence, timestamp, data}`;
+ * callers get `data`.
  */
 export async function readSnapshot<T>(
   client: WireClient,
   topic: string,
-  timeoutMs = 10_000,
+  timeoutMs = SNAPSHOT_TIMEOUT_MS,
 ): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    let settled = false;
-    let detach: (() => void) | null = null;
-    let released = false;
-    // Detach exactly once, and only once `detach` is known: a snapshot can
-    // arrive before the attach promise resolves (the two race — see
-    // wire/client.ts's header), so whichever of the two happens second is
-    // the one that actually releases the topic.
-    const release = () => {
-      if (released || !detach) return;
-      released = true;
-      detach();
-    };
-    const finish = (fn: () => void) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      fn();
-      queueMicrotask(release);
-    };
-    const timer = setTimeout(
-      () =>
-        finish(() =>
-          reject(
-            new DaemonApiError(
-              topic,
-              null,
-              `No snapshot of ${topic} within ${timeoutMs}ms`,
-            ),
-          ),
-        ),
-      timeoutMs,
-    );
-    client
-      .attach(topic, {
-        onSnapshot: (value) => {
-          const envelope = value as { data?: T } | null;
-          finish(() =>
-            resolve(
-              (envelope && 'data' in envelope ? envelope.data : value) as T,
-            ),
-          );
-        },
-        onUpdate: () => {},
-        onError: (error, retrying) => {
-          if (!retrying)
-            finish(() =>
-              reject(
-                new DaemonApiError(
-                  topic,
-                  error,
-                  `Topic ${topic} failed: ${describe(error)}`,
-                ),
-              ),
-            );
-        },
-      })
-      .then((unsubscribe) => {
-        detach = unsubscribe;
-        if (settled) release();
-      })
-      .catch((error) => finish(() => reject(error)));
-  });
+  let envelope: { data?: T } | null | undefined;
+  try {
+    envelope = await client.snapshot<{ data?: T }>(topic, { timeoutMs });
+  } catch (error) {
+    if (error instanceof EngineCallError) {
+      throw new DaemonApiError(
+        topic,
+        error,
+        `Snapshot of ${topic} failed: ${error.message}`,
+      );
+    }
+    throw error;
+  }
+  return (
+    envelope && typeof envelope === 'object' && 'data' in envelope
+      ? envelope.data
+      : envelope
+  ) as T;
 }
+
+/** A snapshot is answered from memory; ten seconds is a daemon that is wedged. */
+export const SNAPSHOT_TIMEOUT_MS = 10_000;
+/**
+ * Every procedure here gets a deadline (found in review, round 2: the
+ * comment claimed a client default that did not exist, and an `acp.kill`
+ * a wedged daemon never answered pinned boot reconcile for the process
+ * lifetime). Registering a repository and killing a session are quick;
+ * creating a worktree and deleting one are not, and name their own.
+ */
+export const CALL_TIMEOUT_MS = 30_000;
 
 export function createDaemonRunsApi(client: WireClient): DaemonRunsApi {
   async function fallible<T>(
     procedure: string,
     input: unknown,
-    timeoutMs?: number,
+    timeoutMs: number = CALL_TIMEOUT_MS,
   ): Promise<T> {
     let answer: Fallible<T>;
     try {
-      answer = await client.call<Fallible<T>>(
-        procedure,
-        input,
-        timeoutMs ? { timeoutMs } : undefined,
-      );
+      answer = await client.call<Fallible<T>>(procedure, input, { timeoutMs });
     } catch (error) {
       if (error instanceof EngineCallError) {
         throw new DaemonApiError(
@@ -289,8 +255,8 @@ export function createDaemonRunsApi(client: WireClient): DaemonRunsApi {
     createWorktree(request) {
       // The daemon inspects, resolves the base, adds the worktree and
       // verifies before answering — seconds on a large repo, longer if
-      // the base ref needs a fetch. Well past the client's default call
-      // timeout, so name one.
+      // the base ref needs a fetch. Well past CALL_TIMEOUT_MS, so name
+      // its own.
       return fallible<DaemonWorkspaceRecord>(
         'workspaceRegistry.createWorktree',
         { ...request, preservePatterns: [] },
