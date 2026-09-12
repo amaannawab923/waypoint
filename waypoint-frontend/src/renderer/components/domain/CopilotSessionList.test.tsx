@@ -14,6 +14,18 @@ function isoAgo(ms: number): string {
   return new Date(Date.now() - ms).toISOString();
 }
 
+// Local calendar-day offset, not a fixed hour count: bucketFor() groups by
+// *local calendar day* (see copilotSessions.test.ts), so an hour-based
+// fixture like "26 hours ago" lands two days back between 00:00 and 02:00
+// and the Yesterday header disappears (ROAD-103). setDate() keeps the same
+// wall-clock time on an earlier calendar day, which always yields the
+// intended bucket regardless of when the suite runs.
+function isoDaysAgo(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d.toISOString();
+}
+
 function session(overrides: Partial<CopilotSession> = {}): CopilotSession {
   return {
     id: 's1',
@@ -100,21 +112,25 @@ describe('CopilotSessionList', () => {
   it('buckets sessions into Today / Yesterday / Last 7 days / Older by updatedAt', () => {
     renderList({
       sessions: [
-        session({ id: 'today', title: 'Today session', updatedAt: isoAgo(0) }),
+        session({
+          id: 'today',
+          title: 'Today session',
+          updatedAt: isoDaysAgo(0),
+        }),
         session({
           id: 'yesterday',
           title: 'Yesterday session',
-          updatedAt: isoAgo(26 * 3600000),
+          updatedAt: isoDaysAgo(1),
         }),
         session({
           id: 'week',
           title: 'Week session',
-          updatedAt: isoAgo(3 * 86400000),
+          updatedAt: isoDaysAgo(3),
         }),
         session({
           id: 'older',
           title: 'Older session',
-          updatedAt: isoAgo(20 * 86400000),
+          updatedAt: isoDaysAgo(20),
         }),
       ],
     });
