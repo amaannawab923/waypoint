@@ -3,7 +3,7 @@ import { db } from '../db/client.js';
 import { proposals, copilotConversations, copilotMessages, tickets } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
 import { NotFoundError, ValidationError } from '../middleware/errors.js';
-import { buildCopilotCommentHtml, COPILOT_DISCLOSURE } from '../lib/commentHtml.js';
+import { buildCopilotCommentHtml, disclosureFor } from '../lib/commentHtml.js';
 import { buildCopilotJiraCommentAdf } from '../lib/jira/adf.js';
 import type { JiraCredential } from '../lib/jira/client.js';
 import { getJiraProvider, isExternalRef, type JiraProvider } from '../providers/jira.js';
@@ -195,7 +195,7 @@ function toView(row: ProposalRow, displayName: string): ProposalView {
     status: row.status as ProposalStatus,
     statusReason: row.statusReason,
     resultInfo: row.resultInfo,
-    disclosureText: COPILOT_DISCLOSURE(displayName),
+    disclosureText: disclosureFor(row.origin === 'agent_run' ? 'agent_run' : 'copilot', displayName),
     expiresAt: row.expiresAt,
     modelNotifiedAt: row.modelNotifiedAt,
     resolvedAt: row.resolvedAt,
@@ -842,7 +842,11 @@ async function executeProposal(
       const { body } = row.payload as { body: string };
       const comment = await commentsService.addComment(
         row.ticketId as string,
-        buildCopilotCommentHtml(displayName, body),
+        buildCopilotCommentHtml(
+          displayName,
+          body,
+          row.origin === 'agent_run' ? 'agent_run' : 'copilot',
+        ),
       );
       return { commentId: comment.id };
     }
