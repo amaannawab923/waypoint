@@ -17,7 +17,15 @@ import type {
   LiveUpdate,
   TopicClosedReason,
 } from '@/types/engine';
-import type { RunChanged, RunDiff, StopRunResult } from '@/types/agentRuns';
+import type {
+  AgentRun,
+  ResumeRunResult,
+  RunBranches,
+  RunChanged,
+  RunDiff,
+  StartRunInput,
+  StopRunResult,
+} from '@/types/agentRuns';
 
 function bridge() {
   const api = window.electron?.engine;
@@ -164,7 +172,22 @@ export function revealRunWorktree(runId: string): Promise<void> {
   return bridge().revealRunWorktree(runId);
 }
 
-/** Every ledger write main makes from the daemon's report (blocked ⇄ running, interrupted). */
+// W4 (docs/design/w4-start-session.md §5): the renderer names a project,
+// never a path; main answers with the run once it is `provisioning`, and
+// the rest arrives through onRunChanged.
+export function startRun(input: StartRunInput): Promise<AgentRun> {
+  return bridge().startRun(input);
+}
+
+export function resumeRun(runId: string): Promise<ResumeRunResult> {
+  return bridge().resumeRun(runId);
+}
+
+export function listRunBranches(projectId: string): Promise<RunBranches> {
+  return bridge().listRunBranches(projectId);
+}
+
+/** Every ledger write main makes — the follower's, and a start or resume's. */
 export function onRunChanged(cb: (change: RunChanged) => void): () => void {
   return bridge().onRunChanged(cb);
 }

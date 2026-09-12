@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { ChatView } from '@emdash/chat-ui';
 import { ChatTranscript } from '@/components/chat/ChatTranscript';
@@ -7,7 +7,7 @@ import { refreshSessions, useSessionsSnapshot } from '@/lib/sessionsStore';
 import { showErrorToast } from '@/lib/toast';
 import type { AgentRun } from '@/types/agentRuns';
 import { PermissionBand } from './PermissionBand';
-import { SessionComposer } from './SessionComposer';
+import { clearSessionDraft, SessionComposer } from './SessionComposer';
 import { statusView } from './sessionStatus';
 import { UsageStrip } from './UsageStrip';
 import { useSessionTranscript } from './useSessionTranscript';
@@ -30,12 +30,24 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
     usage,
     liveStatus,
     isGenerating,
+    queuedCount,
     reloadHistory,
   } = useSessionTranscript(run.id);
   const { engine } = useSessionsSnapshot();
   const [view, setView] = useState<ChatView | null>(null);
   const [answering, setAnswering] = useState<string | null>(null);
   const status = statusView(run.status);
+
+  // A draft outlives an interruption (the run comes back), not an ending.
+  useEffect(() => {
+    if (
+      run.status === 'done' ||
+      run.status === 'failed' ||
+      run.status === 'cancelled'
+    ) {
+      clearSessionDraft(run.id);
+    }
+  }, [run.id, run.status]);
 
   const engineDown = engine !== undefined && engine.kind !== 'running';
   let disabledReason: string | null = null;
@@ -106,6 +118,7 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
         answering={answering}
       />
       <SessionComposer
+        draftKey={run.id}
         onSend={onSend}
         disabledReason={disabledReason}
         attachedToBand={pendingPermissions.length > 0}
@@ -162,6 +175,7 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
         usage={usage}
         live={liveStatus.kind}
         generating={isGenerating}
+        queued={queuedCount}
       />
     </div>
   );

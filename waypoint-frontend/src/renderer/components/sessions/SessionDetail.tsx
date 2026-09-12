@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { clsx } from 'clsx';
 import { Button, IconButton } from '@/components/ui/Button';
 import { IconChevron, IconGitBranch, IconFolder } from '@/components/icons';
-import { revealRunWorktree, stopRun } from '@/data/engineApi';
+import { resumeRun, revealRunWorktree, stopRun } from '@/data/engineApi';
 import { formatRelativeTime } from '@/lib/copilotSessions';
 import { patchSessionRun, refreshSessions } from '@/lib/sessionsStore';
 import { useTicketSummary } from '@/lib/useTicketLabel';
@@ -16,6 +16,14 @@ import { SessionTranscript } from './SessionTranscript';
 import { DiffPane } from './DiffPane';
 
 export type SessionTab = 'transcript' | 'diff';
+
+/** The ledger's error_kind vocabulary, as a person reads it. */
+const ERROR_KIND_LABEL: Record<string, string> = {
+  provision: 'Worktree',
+  start: 'Session start',
+  resume: 'Resume',
+  session: 'Session',
+};
 
 /**
  * Everything right of the session list (W3, docs/design/w3-sessions-rail.md
@@ -43,6 +51,7 @@ export function SessionDetail({
   const provider = providerView(run.providerId);
   const [tab, setTab] = useState<SessionTab>('transcript');
   const [stopping, setStopping] = useState(false);
+  const [resuming, setResuming] = useState(false);
   const [diffCount, setDiffCount] = useState<number | null>(null);
 
   const stop = async () => {
@@ -64,6 +73,49 @@ export function SessionDetail({
       );
     } finally {
       setStopping(false);
+    }
+  };
+
+  // W4, ROAD-69: the daemon loads the same provider session in the same
+  // worktree; when the provider cannot, main starts a fresh one there and
+  // says so — here as a toast, and in the transcript as its first message.
+  const resume = async () => {
+    setResuming(true);
+    try {
+      const result = await resumeRun(run.id);
+      switch (result.outcome) {
+        case 'loaded':
+          patchSessionRun(run.id, { status: 'running' });
+          break;
+        case 'replaced-by-new':
+          patchSessionRun(run.id, { status: 'running' });
+          // The one toast channel there is; this is a warning in any case.
+          showErrorToast(
+            'The provider could not restore the previous conversation; a fresh session was started in the same worktree with the branch state as its first message.',
+          );
+          break;
+        case 'worktree-gone':
+          showErrorToast(
+            'This run’s worktree is no longer on disk; there is nothing to resume on.',
+          );
+          break;
+        case 'not-resumable':
+          showErrorToast(
+            `This run is ${result.status}; only an interrupted run can be resumed.`,
+          );
+          break;
+        default:
+      }
+      await refreshSessions();
+    } catch (error) {
+      showErrorToast(
+        error instanceof Error
+          ? error.message
+          : 'Could not resume the session.',
+      );
+      await refreshSessions();
+    } finally {
+      setResuming(false);
     }
   };
 
@@ -147,9 +199,36 @@ export function SessionDetail({
                 </a>
               )}
             </div>
+            {run.errorMessage && (
+              <p
+                data-run-error
+                className="mt-1 line-clamp-2 text-[11px] text-danger"
+                title={run.errorMessage}
+              >
+                {run.errorKind
+                  ? `${ERROR_KIND_LABEL[run.errorKind] ?? run.errorKind}: `
+                  : ''}
+                {run.errorMessage}
+              </p>
+            )}
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
+          {run.status === 'interrupted' && (
+            <Button
+              size="xs"
+              variant="primary"
+              onClick={resume}
+              disabled={resuming || !run.worktreePath}
+              title={
+                run.worktreePath
+                  ? undefined
+                  : 'This run has no worktree to resume on.'
+              }
+            >
+              {resuming ? 'Resuming…' : 'Resume'}
+            </Button>
+          )}
           {view.stoppable && (
             <Button
               size="xs"
