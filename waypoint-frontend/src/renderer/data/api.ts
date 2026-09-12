@@ -8,6 +8,7 @@
 import { http } from '@/data/httpClient';
 import { CURRENT_USER_ID } from '@/data/currentUser';
 import type { Probe } from '@/types/probe';
+import type { AgentRun } from '@/types/agentRuns';
 import type {
   Workspace,
   Member,
@@ -116,7 +117,16 @@ export async function inviteMember(input: {
 // looked like a save but silently discarded every edit. This is the real
 // endpoint it's now wired to.
 export async function updateCurrentUser(
-  patch: Partial<Pick<Member, 'fullName' | 'displayName' | 'email' | 'firstDayOfWeek' | 'notificationPrefs'>>,
+  patch: Partial<
+    Pick<
+      Member,
+      | 'fullName'
+      | 'displayName'
+      | 'email'
+      | 'firstDayOfWeek'
+      | 'notificationPrefs'
+    >
+  >,
 ): Promise<Member> {
   return http.patch<Member>('/me', patch);
 }
@@ -953,7 +963,9 @@ export interface ApprovedPerActiveDayStats {
 }
 
 export async function getApprovedPerActiveDayStats(): Promise<ApprovedPerActiveDayStats> {
-  return http.get<ApprovedPerActiveDayStats>('/proposals/stats/approved-per-day');
+  return http.get<ApprovedPerActiveDayStats>(
+    '/proposals/stats/approved-per-day',
+  );
 }
 
 // The workspace-scoped review-queue aggregate (architecture §4.4,
@@ -1076,6 +1088,58 @@ export interface ReviewHealthStats {
 
 export async function getReviewHealthStats(): Promise<ReviewHealthStats> {
   return http.get<ReviewHealthStats>('/proposals/stats/health');
+}
+
+// ---------------------------------------------------------------------------
+// Agent runs — the ledger's rows (ROAD-54), read by the sessions panel (W3)
+// ---------------------------------------------------------------------------
+
+interface RunPage {
+  items: AgentRun[];
+  nextCursor: string | null;
+}
+
+/** The user's own runs, every page folded together, newest first as the
+ *  backend orders them. A person's runs are dozens, not thousands, so the
+ *  panel holds them all and groups client-side. */
+export async function listMyAgentRuns(): Promise<AgentRun[]> {
+  const items: AgentRun[] = [];
+  let cursor: string | null = null;
+  // Bounded: the backend's page cap is 100; a hundred pages is not a
+  // person's session list, it is a runaway cursor (ROAD-108's bug class).
+  for (let page = 0; page < 100; page += 1) {
+    const search = new URLSearchParams({
+      ownerMemberId: CURRENT_USER_ID,
+      limit: '100',
+    });
+    if (cursor) search.set('cursor', cursor);
+    // eslint-disable-next-line no-await-in-loop -- pages are sequential by cursor
+    const result: RunPage = await http.get<RunPage>(
+      `/agent-runs?${search.toString()}`,
+    );
+    items.push(...result.items);
+    cursor = result.nextCursor;
+    if (!cursor) break;
+  }
+  return items;
+}
+
+export async function getAgentRun(id: string): Promise<AgentRun | undefined> {
+  return http.get<AgentRun | undefined>(
+    `/agent-runs/${encodeURIComponent(id)}`,
+    {
+      notFoundAsUndefined: true,
+    },
+  );
+}
+
+/** A ticket's runs (ROAD-56), unpaged — a ticket's runs are a handful. */
+export async function listTicketAgentRuns(
+  ticketId: string,
+): Promise<AgentRun[]> {
+  return http.get<AgentRun[]>(
+    `/tickets/${encodeURIComponent(ticketId)}/agent-runs`,
+  );
 }
 
 // ---------------------------------------------------------------------------
