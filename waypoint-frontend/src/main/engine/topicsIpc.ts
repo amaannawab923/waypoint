@@ -1,9 +1,10 @@
 import type { EngineSupervisor } from './supervisor';
+import { SNAPSHOT_TIMEOUT_MS } from './runs/daemonApi';
 import {
   ALLOWED_PROCEDURES,
-  ALLOWED_TOPIC,
   ENGINE_IPC,
   EngineCallError,
+  isAllowedTopic,
   type LiveSnapshot,
   type LiveUpdate,
   type TopicClosedReason,
@@ -25,7 +26,7 @@ import {
  * `snapshot` re-read on an existing subscription is the resync the
  * follower asks for when an update's `baseSequence` does not match.
  *
- * Narrow on purpose: ALLOWED_TOPIC and ALLOWED_PROCEDURES (types.ts) are
+ * Narrow on purpose: isAllowedTopic and ALLOWED_PROCEDURES (types.ts) are
  * the whole surface. The renderer is this app's own code, but IPC is an
  * input to the privileged process, and a topic name is a string — the
  * same posture jiraIpc.ts and proposalApproval.ts take with their ids.
@@ -75,7 +76,7 @@ export class EngineNotRunningError extends Error {
 }
 
 function assertTopic(topic: unknown): string {
-  if (typeof topic !== 'string' || !ALLOWED_TOPIC.test(topic)) {
+  if (typeof topic !== 'string' || !isAllowedTopic(topic)) {
     throw new TopicNotAllowedError(String(topic));
   }
   return topic;
@@ -187,9 +188,10 @@ export function registerTopicsIpc(deps: TopicsIpcDeps): Unsubscribe {
     close(assertSubscriptionId(rawId), { kind: 'unsubscribed' });
   });
 
-  // Resync: re-attach the same subscription id on the live client and hand
-  // back the fresh snapshot. The old attachment is dropped first so an
-  // update from it cannot interleave with the new snapshot.
+  // Resync: a bare snapshot of the subscription's topic on the attachment
+  // it already holds. The follower ignores updates while stale and seeds
+  // from the snapshot's cursor, so nothing needs re-attaching (review
+  // round 2 — the first draft detached and re-attached).
   deps.host.handle(
     ENGINE_IPC.topicSnapshot,
     async (rawId): Promise<LiveSnapshot> => {
@@ -197,26 +199,9 @@ export function registerTopicsIpc(deps: TopicsIpcDeps): Unsubscribe {
       const attachment = attachments.get(subscriptionId);
       if (!attachment)
         throw new Error(`No such subscription: ${subscriptionId}`);
-      const client = liveClient();
-      attachments.delete(subscriptionId);
-      try {
-        attachment.detach?.();
-      } catch {
-        // see close()
-      }
-      const { snapshot, detach } = await attachTopic(client, attachment.topic, {
-        onUpdate: (update) => {
-          if (attachments.has(subscriptionId))
-            deps.host.send(ENGINE_IPC.topicUpdate, { subscriptionId, update });
-        },
-        onClosed: (reason) => close(subscriptionId, reason),
+      return liveClient().snapshot<LiveSnapshot>(attachment.topic, {
+        timeoutMs: SNAPSHOT_TIMEOUT_MS,
       });
-      attachments.set(subscriptionId, {
-        topic: attachment.topic,
-        detach,
-        client,
-      });
-      return snapshot;
     },
   );
 

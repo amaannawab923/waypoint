@@ -1,3 +1,4 @@
+import { liveTopic, splitTopic } from './wire/topics';
 /**
  * The agent-session engine: emdash's `workspace-server` daemon, run by Waypoint
  * as a pinned, self-built process, spoken to over its Wire protocol.
@@ -531,13 +532,51 @@ export type TopicClosedReason =
   | { kind: 'unsubscribed' };
 
 /** Our runs' conversation ids — the daemon's conversationId IS the run id (ROAD-55). */
-const RUN_CONVERSATION = 'run-[A-Za-z0-9]{1,64}';
-export const ALLOWED_TOPIC = new RegExp(
-  '^(' +
-    ['acp\\.sessions\\.list', 'workspaceRegistry\\.records\\.list'].join('|') +
-    `|acp\\.session\\.(state|config|usage|plan|agents|activeTurn|draft|terminals|mcpServers)\\|\\{"conversationId":"${RUN_CONVERSATION}"\\}` +
-    ')$',
-);
+const RUN_CONVERSATION = /^run-[A-Za-z0-9]{1,64}$/;
+/** Keyless models the renderer may follow. */
+const ALLOWED_KEYLESS_TOPICS = new Set([
+  'acp.sessions.list',
+  'workspaceRegistry.records.list',
+]);
+/** Per-session states of `acp.session` the renderer may follow. */
+const ALLOWED_SESSION_STATES = new Set([
+  'state',
+  'config',
+  'usage',
+  'plan',
+  'agents',
+  'activeTurn',
+  'draft',
+  'terminals',
+  'mcpServers',
+]);
+
+/**
+ * Whether the renderer may subscribe to `topic`. Judged by rebuilding: a
+ * topic is allowed when it is exactly what `liveTopic()` would produce for
+ * an allowed state id and a key of the one shape we hand out
+ * (`{conversationId: <run id>}`) — so this and the facade that builds
+ * topics share one encoding and cannot drift apart (review round 2; the
+ * first draft was a hand-written regex beside `liveTopic`).
+ */
+export function isAllowedTopic(topic: string): boolean {
+  if (ALLOWED_KEYLESS_TOPICS.has(topic)) return true;
+  const parts = splitTopic(topic);
+  if (!parts || parts.key === undefined) return false;
+  const match = /^acp\.session\.([A-Za-z]+)$/.exec(parts.stateId);
+  if (!match || !ALLOWED_SESSION_STATES.has(match[1])) return false;
+  const key = parts.key as { conversationId?: unknown } | null;
+  if (!key || typeof key !== 'object' || Object.keys(key).length !== 1)
+    return false;
+  if (
+    typeof key.conversationId !== 'string' ||
+    !RUN_CONVERSATION.test(key.conversationId)
+  )
+    return false;
+  return (
+    topic === liveTopic(parts.stateId, { conversationId: key.conversationId })
+  );
+}
 /** Procedures the renderer may call, and the check each one's input must pass. */
 export const ALLOWED_PROCEDURES: Record<string, (input: unknown) => boolean> = {
   'acp.getHistory': (input) =>
@@ -545,7 +584,5 @@ export const ALLOWED_PROCEDURES: Record<string, (input: unknown) => boolean> = {
     input !== null &&
     typeof (input as { conversationId?: unknown }).conversationId ===
       'string' &&
-    new RegExp(`^${RUN_CONVERSATION}$`).test(
-      (input as { conversationId: string }).conversationId,
-    ),
+    RUN_CONVERSATION.test((input as { conversationId: string }).conversationId),
 };

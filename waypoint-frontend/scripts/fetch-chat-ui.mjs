@@ -7,9 +7,11 @@
 //
 // Same posture as fetch-engine.mjs, for the same reasons: the build is 5 MB
 // of bundled JS, CSS and fonts that belongs in a release asset pinned by
-// hash, not in git history; `gh` is the auth this private repo's release
-// needs; `WAYPOINT_CHAT_UI_ARCHIVE=/path/to/file.tar.gz` bypasses the
-// download for an archive built locally (still hash-checked).
+// hash, not in git history; `gh` is how the release is reached (the repo
+// is public today, so no auth is strictly needed — `gh` is simply the
+// client that is already here and already knows the release API);
+// `WAYPOINT_CHAT_UI_ARCHIVE=/path/to/file.tar.gz` bypasses the download
+// for an archive built locally (still hash-checked).
 //
 // This script never fails `npm install`. A machine that cannot reach the
 // release (no `gh`, not logged in, offline) is told what is missing and
@@ -25,7 +27,6 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  renameSync,
   rmSync,
   unlinkSync,
   writeFileSync,
@@ -66,6 +67,8 @@ if (local) {
   const tag = lock.release.split('/').pop();
   console.log(`[chat-ui] downloading ${lock.file} from release ${tag} …`);
   try {
+    // Straight into the `.download` name: an interrupted download never
+    // leaves an unverified archive under a name anything else reads.
     execFileSync(
       'gh',
       [
@@ -76,8 +79,8 @@ if (local) {
         'amaannawab923/waypoint',
         '--pattern',
         lock.file,
-        '--dir',
-        vendorDir,
+        '--output',
+        tmp,
         '--clobber',
       ],
       { stdio: ['ignore', 'inherit', 'pipe'] },
@@ -96,7 +99,6 @@ if (local) {
     );
     process.exit(0);
   }
-  renameSync(join(vendorDir, lock.file), tmp);
 }
 
 const actual = sha256(tmp);

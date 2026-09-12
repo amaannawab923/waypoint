@@ -1,5 +1,8 @@
 import * as path from 'node:path';
 import { EngineCallError, type WireClient } from '../types';
+import { liveTopic } from '../wire/topics';
+
+export { liveTopic } from '../wire/topics';
 
 /**
  * The slice of the daemon the run modules need, as one typed facade over
@@ -143,26 +146,6 @@ export function hostAbsolutePath(absolute: string): {
     root: { kind: 'posix' },
     segments: normalized.split('/').filter(Boolean),
   };
-}
-
-/** `@emdash/shared`'s stableStringify: JSON with object keys sorted, recursively. */
-function stableStringify(value: unknown): string {
-  const sort = (v: unknown): unknown => {
-    if (Array.isArray(v)) return v.map(sort);
-    if (v && typeof v === 'object') {
-      return Object.fromEntries(
-        Object.keys(v as Record<string, unknown>)
-          .sort()
-          .map((k) => [k, sort((v as Record<string, unknown>)[k])]),
-      );
-    }
-    return v;
-  };
-  return JSON.stringify(sort(value));
-}
-
-export function liveTopic(stateId: string, key?: unknown): string {
-  return key === undefined ? stateId : `${stateId}|${stableStringify(key)}`;
 }
 
 /**

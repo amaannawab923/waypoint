@@ -3,9 +3,11 @@ import { registerTopicsIpc, type TopicsIpcHost } from './topicsIpc';
 import {
   ENGINE_IPC,
   EngineCallError,
+  isAllowedTopic,
   type EngineStatus,
   type WireClient,
 } from './types';
+import { liveTopic } from './wire/topics';
 
 type Handlers = Parameters<WireClient['attach']>[1];
 
@@ -18,6 +20,12 @@ function fakeClient() {
     call: jest.fn(async (path: string) => ({
       echoed: path,
     })) as WireClient['call'],
+    snapshot: jest.fn(async (topic: string) => ({
+      generation: 1,
+      sequence: 0,
+      timestamp: 9,
+      data: { topic, fresh: true },
+    })) as WireClient['snapshot'],
     attach: jest.fn(async (topic: string, handlers: Handlers) => {
       topics.set(topic, [...(topics.get(topic) ?? []), handlers]);
       queueMicrotask(() =>
@@ -164,6 +172,36 @@ describe('registerTopicsIpc', () => {
     expect(daemon.client.attach).not.toHaveBeenCalled();
   });
 
+  it('judges topics by rebuilding them with liveTopic, so a re-encoded key or an extra key field is refused', () => {
+    expect(isAllowedTopic('acp.sessions.list')).toBe(true);
+    expect(
+      isAllowedTopic(
+        liveTopic('acp.session.activeTurn', { conversationId: 'run-abc1234' }),
+      ),
+    ).toBe(true);
+    // Not exactly what liveTopic produces: spacing, key order, extra keys.
+    expect(
+      isAllowedTopic(
+        'acp.session.activeTurn|{ "conversationId": "run-abc1234" }',
+      ),
+    ).toBe(false);
+    expect(
+      isAllowedTopic(
+        'acp.session.activeTurn|{"conversationId":"run-abc1234","x":1}',
+      ),
+    ).toBe(false);
+    expect(
+      isAllowedTopic('acp.session.activeTurn|{"conversationId":"conv-1"}'),
+    ).toBe(false);
+    expect(
+      isAllowedTopic('acp.session.secrets|{"conversationId":"run-abc1234"}'),
+    ).toBe(false);
+    expect(isAllowedTopic('acp.session.activeTurn|not json')).toBe(false);
+    expect(isAllowedTopic('git.repository.model.refs|{"repository":{}}')).toBe(
+      false,
+    );
+  });
+
   it('refuses to subscribe when the engine is not running', async () => {
     const { host, invoke } = fakeHost();
     registerTopicsIpc({ supervisor: fakeSupervisor(null), host, logger });
@@ -203,7 +241,7 @@ describe('registerTopicsIpc', () => {
     );
   });
 
-  it('snapshot re-attaches the same subscription and answers a fresh snapshot (the resync path)', async () => {
+  it('snapshot answers a fresh bare snapshot of the subscription’s topic without touching the attachment (the resync path)', async () => {
     const daemon = fakeClient();
     const { host, invoke } = fakeHost();
     registerTopicsIpc({
@@ -220,11 +258,14 @@ describe('registerTopicsIpc', () => {
     expect(fresh).toEqual({
       generation: 1,
       sequence: 0,
-      timestamp: 1,
-      data: { topic: ACTIVE_TURN },
+      timestamp: 9,
+      data: { topic: ACTIVE_TURN, fresh: true },
     });
-    expect(daemon.client.attach).toHaveBeenCalledTimes(2);
-    expect(daemon.detached).toEqual([ACTIVE_TURN]);
+    expect(daemon.client.snapshot).toHaveBeenCalledWith(ACTIVE_TURN, {
+      timeoutMs: 10_000,
+    });
+    expect(daemon.client.attach).toHaveBeenCalledTimes(1);
+    expect(daemon.detached).toEqual([]);
     await expect(invoke(ENGINE_IPC.topicSnapshot, 'sub-99')).rejects.toThrow(
       'No such subscription: sub-99',
     );
