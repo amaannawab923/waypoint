@@ -196,7 +196,23 @@ function depsWith(
   };
 }
 
-const flush = () => new Promise((r) => setTimeout(r, 20));
+// continueStart runs detached; wait for the daemon call it ends in rather
+// than a fixed tick (a fixed 20 ms flaked under the full suite's load).
+const flush = async (daemon?: {
+  startSession: { mock: { calls: unknown[] } };
+}) => {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    // eslint-disable-next-line no-await-in-loop -- polling
+    await new Promise((r) => setTimeout(r, 10));
+    if (!daemon || daemon.startSession.mock.calls.length > 0) {
+      // One more tick so the ledger writes after the call have landed.
+      // eslint-disable-next-line no-await-in-loop -- polling
+      await new Promise((r) => setTimeout(r, 30));
+      return;
+    }
+  }
+};
 
 describe('modeFor / sessionModeIdFor', () => {
   it.each([
@@ -440,7 +456,7 @@ describe('dispatchTicketRun', () => {
         copilotConversationId: 'conv-abc',
       }),
     );
-    await flush();
+    await flush(daemon);
     expect(daemon.createWorktree).toHaveBeenCalledWith(
       expect.objectContaining({ branch: 'agent/ROAD-116' }),
     );
@@ -467,7 +483,7 @@ describe('dispatchTicketRun', () => {
       ...dispatchInput,
       intent: 'fix',
     });
-    await flush();
+    await flush(daemon);
     const start = daemon.startSession.mock.calls[0][0];
     expect(start.modeId).toBe(AUTO_APPROVE_MODE_ID);
     expect(start.env).toBeDefined();
@@ -506,7 +522,7 @@ describe('dispatchTicketRun', () => {
       intent: 'fix',
       autoApprove: false,
     });
-    await flush();
+    await flush(daemon);
     const start = daemon.startSession.mock.calls[0][0];
     expect(start.modeId).toBeNull();
     expect(start.env?.GH_TOKEN).toBe('');
