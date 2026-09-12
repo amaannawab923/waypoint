@@ -1,9 +1,15 @@
 import { clsx } from 'clsx';
-import { IconGitBranch, IconSparkles } from '@/components/icons';
+import { IconFolder, IconGitBranch, IconSparkles } from '@/components/icons';
 import { formatRelativeTime } from '@/lib/copilotSessions';
+import { useHomeDir } from '@/lib/useHomeDir';
 import { useTicketLabel } from '@/lib/useTicketLabel';
 import type { AgentRun } from '@/types/agentRuns';
-import { providerView, runTitle, waitingReason } from './sessionStatus';
+import {
+  providerView,
+  runTitle,
+  runWhere,
+  waitingReason,
+} from './sessionStatus';
 import { SessionStatusDot } from './SessionStatusPill';
 
 /** The provider as a 13 px lettered chip, hover for the name. */
@@ -31,6 +37,28 @@ export function ProviderChip({
 }
 
 /**
+ * A session started with auto-approve works without asking (W4b); the
+ * mark is on the row and in the header so an unattended agent in
+ * someone's files is never invisible in the list.
+ */
+export function AutoMark({ size = 'sm' }: { size?: 'sm' | 'md' }) {
+  return (
+    <span
+      data-auto-mark
+      title="Auto-approve: the agent works without asking"
+      className={clsx(
+        'inline-flex shrink-0 items-center rounded-full border border-warning/40 bg-warning-bg px-1.5 font-semibold tracking-wide text-warning uppercase',
+        size === 'sm'
+          ? 'text-[8.5px] leading-[14px]'
+          : 'text-[9.5px] leading-4',
+      )}
+    >
+      auto
+    </span>
+  );
+}
+
+/**
  * One row of the session list (W3, docs/design/w3-sessions-rail.md §1.4):
  * status dot, title, provider chip or age; the branch line; and, for a run
  * waiting on the user, a third line with the reason. Selection and
@@ -50,8 +78,10 @@ export function SessionRow({
   onOpen: (runId: string) => void;
 }) {
   const ticketLabel = useTicketLabel(run.ticketId);
+  const home = useHomeDir();
   const title = runTitle(run, ticketLabel);
   const reason = waitingReason(run);
+  const where = runWhere(run, home);
   const dispatched = run.entry === 'dispatched';
   const age = formatRelativeTime(run.updatedAt);
 
@@ -100,14 +130,22 @@ export function SessionRow({
         ) : (
           <ProviderChip providerId={run.providerId} size={12} />
         )}
-        {run.branch ? (
+        {where?.kind === 'branch' && (
           <>
             <IconGitBranch size={10} className="shrink-0" />
-            <span className="truncate font-mono">{run.branch}</span>
+            <span className="truncate font-mono">{where.branch}</span>
           </>
-        ) : (
+        )}
+        {where?.kind === 'folder' && (
+          <>
+            <IconFolder size={10} className="shrink-0" />
+            <span className="truncate font-mono">{where.path}</span>
+          </>
+        )}
+        {!where && (
           <span className="truncate">{providerView(run.providerId).name}</span>
         )}
+        {run.autoApprove && <AutoMark />}
       </div>
       {reason && (
         <div className="truncate pl-[13px] text-[10.5px] text-warning">

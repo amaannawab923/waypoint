@@ -1,20 +1,26 @@
 import '@testing-library/jest-dom';
-import {
-  act,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { detectLocalClaudeCode, getWorkspace } from '@/data/api';
-import { listRunBranches, startRun } from '@/data/engineApi';
-import { useAllProjects } from '@/lib/projectsStore';
-import type { Project } from '@/types/entities';
-import { LAST_PROJECT_KEY, NewSessionDialog } from './NewSessionDialog';
+import {
+  chooseFolder,
+  listRecentFolders,
+  listRunBranches,
+  startRun,
+} from '@/data/engineApi';
+import { useSessionsSnapshot } from '@/lib/sessionsStore';
+import type { AgentRun, SessionFolder } from '@/types/agentRuns';
+import {
+  autoApproveSentence,
+  defaultAutoApprove,
+  defaultIsolation,
+  LAST_FOLDER_KEY,
+  NewSessionDialog,
+} from './NewSessionDialog';
 
-jest.mock('@/lib/projectsStore', () => ({ useAllProjects: jest.fn() }));
 jest.mock('@/data/engineApi', () => ({
+  chooseFolder: jest.fn(),
+  listRecentFolders: jest.fn(),
   listRunBranches: jest.fn(),
   startRun: jest.fn(),
 }));
@@ -22,9 +28,30 @@ jest.mock('@/data/api', () => ({
   getWorkspace: jest.fn(),
   detectLocalClaudeCode: jest.fn(),
 }));
+jest.mock('@/lib/sessionsStore', () => ({ useSessionsSnapshot: jest.fn() }));
 
-const project = (id: string, name: string, repoPath: string | null): Project =>
-  ({ id, name, repoPath, archivedAt: null }) as Project;
+const folder = (over: Partial<SessionFolder>): SessionFolder => ({
+  handle: 'f-1',
+  path: '/Users/me/code/waypoint',
+  displayPath: '~/code/waypoint',
+  name: 'waypoint',
+  kind: 'repo',
+  projectId: 'proj-wp',
+  projectName: 'Waypoint',
+  lastAutoApprove: null,
+  lastUsedAt: null,
+  ...over,
+});
+const REPO = folder({});
+const PLAIN = folder({
+  handle: 'f-2',
+  path: '/Users/me/notes',
+  displayPath: '~/notes',
+  name: 'notes',
+  kind: 'folder',
+  projectId: null,
+  projectName: null,
+});
 
 const RUNNING = { kind: 'running', since: 1 } as never;
 const STOPPED = { kind: 'stopped', installDir: '/x', version: '1' } as never;
@@ -41,21 +68,19 @@ function renderDialog(engine: unknown = RUNNING, onClose = jest.fn()) {
         />
         <Route path="/sessions/:runId" element={<div>session page</div>} />
         <Route path="/machine" element={<div>machine page</div>} />
-        <Route path="/projects" element={<div>projects page</div>} />
       </Routes>
     </MemoryRouter>,
   );
   return onClose;
 }
 
+const startButton = () => screen.getByRole('button', { name: 'Start session' });
+
 beforeEach(() => {
   jest.clearAllMocks();
   window.localStorage.clear();
-  (useAllProjects as jest.Mock).mockReturnValue([
-    project('proj-docs', 'Docs', null),
-    project('proj-wp', 'Waypoint', '/repos/waypoint'),
-    project('proj-api', 'API', '/repos/api'),
-  ]);
+  (useSessionsSnapshot as jest.Mock).mockReturnValue({ runs: [] });
+  (listRecentFolders as jest.Mock).mockResolvedValue([REPO, PLAIN]);
   (listRunBranches as jest.Mock).mockResolvedValue({
     branches: ['feat/x', 'main'],
     suggested: 'main',
@@ -66,172 +91,229 @@ beforeEach(() => {
   (detectLocalClaudeCode as jest.Mock).mockResolvedValue({ state: 'present' });
 });
 
-describe('NewSessionDialog', () => {
-  it('offers only projects with a linked repository, reads their branches, preselects the suggestion', async () => {
-    renderDialog();
-    const projectField = screen.getByLabelText('Project') as HTMLSelectElement;
-    expect(Array.from(projectField.options).map((o) => o.textContent)).toEqual([
-      'Waypoint',
-      'API',
-    ]);
-    expect(listRunBranches).toHaveBeenCalledWith('proj-wp');
-    const branch = (await screen.findByLabelText(
-      'Base branch',
-    )) as HTMLSelectElement;
-    await waitFor(() => expect(branch.value).toBe('main'));
-    await waitFor(() =>
-      expect(screen.getByLabelText('Provider')).toHaveValue('claude'),
-    );
-    expect(screen.getByLabelText('Provider')).toHaveTextContent(
-      'Claude Code (default)',
-    );
-    await waitFor(() =>
-      expect(
-        screen.getByRole('button', { name: 'Start session' }),
-      ).toBeEnabled(),
+describe('the defaults fall out of the folder', () => {
+  it('a repository → worktree + auto-approve on; a plain folder → direct + off; the last choice wins', () => {
+    expect(defaultIsolation(REPO)).toBe('worktree');
+    expect(defaultIsolation(PLAIN)).toBe('directory');
+    expect(defaultAutoApprove(REPO, 'worktree')).toBe(true);
+    expect(defaultAutoApprove(REPO, 'directory')).toBe(false);
+    expect(defaultAutoApprove(PLAIN, 'directory')).toBe(false);
+    expect(
+      defaultAutoApprove(folder({ lastAutoApprove: true }), 'directory'),
+    ).toBe(true);
+    expect(
+      defaultAutoApprove(folder({ lastAutoApprove: false }), 'worktree'),
+    ).toBe(false);
+    expect(autoApproveSentence('worktree')).toMatch(/own copy/);
+    expect(autoApproveSentence('directory')).toMatch(
+      /edits this folder directly/,
     );
   });
+});
 
-  it('a provider this machine does not have keeps Start disabled with the sentence (emdash’s rule)', async () => {
-    (detectLocalClaudeCode as jest.Mock).mockResolvedValue({ state: 'absent' });
+describe('NewSessionDialog', () => {
+  it('lists the folders main offers, preselects the first, reads its branches, and defaults a repo to worktree + auto-approve', async () => {
     renderDialog();
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'No supported provider is installed on this machine.',
+    const options = await screen.findAllByRole('radio');
+    expect(options[0]).toHaveTextContent('waypoint');
+    expect(options[0]).toHaveTextContent('Waypoint');
+    expect(options[0]).toHaveTextContent('~/code/waypoint');
+    expect(options[0]).toHaveTextContent('git repo');
+    expect(options[1]).toHaveTextContent('notes');
+    expect(options[1]).toHaveTextContent('folder');
+    expect(options[0]).toHaveAttribute('aria-checked', 'true');
+    await waitFor(() => expect(listRunBranches).toHaveBeenCalledWith('f-1'));
+    await waitFor(() =>
+      expect(screen.getByRole('switch')).toHaveAttribute(
+        'aria-checked',
+        'true',
+      ),
     );
+    expect(
+      document.querySelector('[data-auto-approve-sentence]'),
+    ).toHaveTextContent(/own copy/);
+    fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
     await waitFor(() =>
       expect(screen.getByLabelText('Base branch')).toHaveValue('main'),
     );
+    expect(screen.getByLabelText('Work in')).toHaveValue('worktree');
+    await waitFor(() => expect(startButton()).toBeEnabled());
+  });
+
+  it('a plain folder: direct, auto-approve off with the warning sentence, no Advanced fold, no branch read', async () => {
+    (listRecentFolders as jest.Mock).mockResolvedValue([PLAIN, REPO]);
+    renderDialog();
+    await screen.findAllByRole('radio');
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-auto-approve-sentence]'),
+      ).toHaveTextContent(/edits this folder directly/),
+    );
+    expect(listRunBranches).not.toHaveBeenCalled();
+    expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
     expect(
-      screen.getByRole('button', { name: 'Start session' }),
-    ).toBeDisabled();
-    expect(screen.getByLabelText('Provider')).toHaveTextContent(
-      '(not installed)',
-    );
+      screen.queryByRole('button', { name: /Advanced/ }),
+    ).not.toBeInTheDocument();
+    await waitFor(() => expect(startButton()).toBeEnabled());
   });
 
-  it('a workspace that has not chosen a provider gets Waypoint’s default', async () => {
-    (getWorkspace as jest.Mock).mockResolvedValue({
-      defaultAgentProvider: null,
-    });
+  it('remembers the last folder; switching folders re-defaults; a touched auto-approve survives an isolation flip', async () => {
+    window.localStorage.setItem(LAST_FOLDER_KEY, PLAIN.path);
     renderDialog();
+    const options = await screen.findAllByRole('radio');
+    expect(options[1]).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
+
+    fireEvent.click(options[0]);
     await waitFor(() =>
-      expect(screen.getByLabelText('Provider')).toHaveValue('claude'),
+      expect(screen.getByRole('switch')).toHaveAttribute(
+        'aria-checked',
+        'true',
+      ),
     );
-  });
-
-  it('remembers the last project and re-reads branches when the project changes', async () => {
-    window.localStorage.setItem(LAST_PROJECT_KEY, 'proj-api');
-    renderDialog();
-    expect(screen.getByLabelText('Project')).toHaveValue('proj-api');
-    expect(listRunBranches).toHaveBeenLastCalledWith('proj-api');
-    fireEvent.change(screen.getByLabelText('Project'), {
-      target: { value: 'proj-wp' },
+    fireEvent.click(screen.getByRole('switch'));
+    expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
+    fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+    fireEvent.change(screen.getByLabelText('Work in'), {
+      target: { value: 'directory' },
     });
-    await waitFor(() =>
-      expect(listRunBranches).toHaveBeenLastCalledWith('proj-wp'),
-    );
-  });
-
-  it('Start is disabled until the branches are read, and while starting', async () => {
-    let resolveBranches: (v: unknown) => void = () => {};
-    (listRunBranches as jest.Mock).mockReturnValue(
-      new Promise((resolve) => {
-        resolveBranches = resolve;
-      }),
-    );
-    renderDialog();
-    const start = screen.getByRole('button', { name: 'Start session' });
-    expect(start).toBeDisabled();
-    await act(async () => {
-      resolveBranches({ branches: ['main'], suggested: 'main' });
+    expect(
+      document.querySelector('[data-auto-approve-sentence]'),
+    ).toHaveTextContent(/edits this folder directly/);
+    fireEvent.change(screen.getByLabelText('Work in'), {
+      target: { value: 'worktree' },
     });
-    await waitFor(() => expect(start).toBeEnabled());
+    // Set by the person: not re-defaulted to on.
+    expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
   });
 
-  it('starts with the current member, the chosen branch and a trimmed title, remembers the project, navigates', async () => {
+  it('Browse… adds the picked folder at the top and selects it; a cancelled picker changes nothing', async () => {
+    const picked = folder({
+      handle: 'f-9',
+      path: '/Users/me/scratch',
+      displayPath: '~/scratch',
+      name: 'scratch',
+      kind: 'folder',
+      projectId: null,
+      projectName: null,
+    });
+    (chooseFolder as jest.Mock)
+      .mockResolvedValueOnce({ canceled: true })
+      .mockResolvedValueOnce({ canceled: false, folder: picked });
+    renderDialog();
+    await screen.findAllByRole('radio');
+    fireEvent.click(screen.getByRole('button', { name: 'Browse…' }));
+    await waitFor(() => expect(chooseFolder).toHaveBeenCalledTimes(1));
+    expect(screen.getAllByRole('radio')).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Browse…' }));
+    await waitFor(() => expect(screen.getAllByRole('radio')).toHaveLength(3));
+    const options = screen.getAllByRole('radio');
+    expect(options[0]).toHaveTextContent('scratch');
+    expect(options[0]).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('warns about a live session already in the folder', async () => {
+    (useSessionsSnapshot as jest.Mock).mockReturnValue({
+      runs: [
+        { id: 'run-1', status: 'running', cwd: REPO.path } as AgentRun,
+        { id: 'run-2', status: 'cancelled', cwd: REPO.path } as AgentRun,
+      ],
+    });
+    renderDialog();
+    await screen.findAllByRole('radio');
+    expect(
+      screen.getByText('A session is already running in this folder.'),
+    ).toBeInTheDocument();
+  });
+
+  it('starts with the folder handle, the current member, the defaults and the first message; remembers the folder; navigates', async () => {
     (startRun as jest.Mock).mockResolvedValue({
       id: 'run-new1',
       status: 'provisioning',
     });
     const onClose = renderDialog();
-    await waitFor(() =>
-      expect(screen.getByLabelText('Base branch')).toHaveValue('main'),
-    );
-    await waitFor(() =>
-      expect(
-        screen.getByRole('button', { name: 'Start session' }),
-      ).toBeEnabled(),
-    );
-    fireEvent.change(screen.getByLabelText('Base branch'), {
-      target: { value: 'feat/x' },
+    await screen.findAllByRole('radio');
+    await waitFor(() => expect(startButton()).toBeEnabled());
+    fireEvent.change(screen.getByLabelText(/First message/), {
+      target: { value: '  Fix the flaky test\nIt fails on CI.  ' },
     });
-    fireEvent.change(screen.getByLabelText(/Title/), {
-      target: { value: '  Try the flaky test  ' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
+    fireEvent.click(startButton());
 
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(startRun).toHaveBeenCalledWith({
-      projectId: 'proj-wp',
+      folder: 'f-1',
       ownerMemberId: 'mem-1',
       providerId: 'claude',
-      baseRef: 'feat/x',
-      title: 'Try the flaky test',
+      isolation: 'worktree',
+      autoApprove: true,
+      baseRef: 'main',
+      firstMessage: 'Fix the flaky test\nIt fails on CI.',
     });
-    expect(window.localStorage.getItem(LAST_PROJECT_KEY)).toBe('proj-wp');
+    expect(window.localStorage.getItem(LAST_FOLDER_KEY)).toBe(REPO.path);
     expect(screen.getByText('session page')).toBeInTheDocument();
+  });
+
+  it('a direct start sends no base branch and no message when none was typed', async () => {
+    (listRecentFolders as jest.Mock).mockResolvedValue([PLAIN]);
+    (startRun as jest.Mock).mockResolvedValue({
+      id: 'run-d',
+      status: 'provisioning',
+    });
+    renderDialog();
+    await screen.findAllByRole('radio');
+    await waitFor(() => expect(startButton()).toBeEnabled());
+    fireEvent.click(startButton());
+    await waitFor(() => expect(startRun).toHaveBeenCalled());
+    expect(startRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        folder: 'f-2',
+        isolation: 'directory',
+        autoApprove: false,
+        baseRef: null,
+        firstMessage: null,
+      }),
+    );
   });
 
   it("a refused start shows main's sentence inline and keeps the form", async () => {
     (startRun as jest.Mock).mockRejectedValue(
-      new Error('main is not a local branch of the linked repository.'),
+      new Error('main is not a local branch of ~/code/waypoint.'),
     );
     const onClose = renderDialog();
-    await waitFor(() =>
-      expect(
-        screen.getByRole('button', { name: 'Start session' }),
-      ).toBeEnabled(),
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
+    await screen.findAllByRole('radio');
+    await waitFor(() => expect(startButton()).toBeEnabled());
+    fireEvent.click(startButton());
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'main is not a local branch of the linked repository.',
+      'main is not a local branch of ~/code/waypoint.',
     );
     expect(onClose).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'Start session' })).toBeEnabled();
   });
 
-  it('a branch read that fails says so under the field', async () => {
-    (listRunBranches as jest.Mock).mockRejectedValue(
-      new Error('Waypoint has no linked repository.'),
-    );
+  it('a provider this machine does not have keeps Start disabled with the sentence', async () => {
+    (detectLocalClaudeCode as jest.Mock).mockResolvedValue({ state: 'absent' });
     renderDialog();
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Waypoint has no linked repository.',
+      'No supported provider is installed on this machine.',
     );
+    await screen.findAllByRole('radio');
+    expect(startButton()).toBeDisabled();
+  });
+
+  it('with no folders yet it says to Browse', async () => {
+    (listRecentFolders as jest.Mock).mockResolvedValue([]);
+    renderDialog();
     expect(
-      screen.getByRole('button', { name: 'Start session' }),
-    ).toBeDisabled();
+      await screen.findByText(/No folder yet — Browse…/),
+    ).toBeInTheDocument();
+    expect(startButton()).toBeDisabled();
   });
 
   it('with the engine stopped the form is replaced by the way to start it', () => {
     renderDialog(STOPPED);
-    expect(screen.queryByLabelText('Project')).not.toBeInTheDocument();
-    expect(listRunBranches).not.toHaveBeenCalled();
+    expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+    expect(listRecentFolders).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Open This machine' }));
     expect(screen.getByText('machine page')).toBeInTheDocument();
-  });
-
-  it('with no linked project it says where to link one', () => {
-    (useAllProjects as jest.Mock).mockReturnValue([
-      project('proj-docs', 'Docs', null),
-    ]);
-    renderDialog();
-    expect(
-      screen.getByText(/No project has a linked repository yet/),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: 'Start session' }),
-    ).not.toBeInTheDocument();
   });
 
   it('Escape closes it', () => {

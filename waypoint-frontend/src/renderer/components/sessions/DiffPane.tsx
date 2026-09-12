@@ -157,10 +157,13 @@ export function DiffPane({
     }
   };
 
+  // Where the diff is read from: the worktree, or a direct run's folder (W4b).
+  const where = run.isolation === 'directory' ? run.cwd : run.worktreePath;
+
   useEffect(() => {
     setDiff(null);
     setSelected(null);
-    if (!run.worktreePath) {
+    if (!where) {
       onFileCount(null);
       return undefined;
     }
@@ -173,11 +176,11 @@ export function DiffPane({
     return off;
     // Per run; `load` reads the id from `run`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [run.id, run.worktreePath]);
+  }, [run.id, where]);
 
   const byFile = useMemo(() => splitPatch(diff?.patch ?? ''), [diff]);
 
-  if (!run.worktreePath) {
+  if (!where) {
     return (
       <div className="p-6 text-xs text-text-secondary">
         {statusView(run.status).live || run.status === 'queued'
