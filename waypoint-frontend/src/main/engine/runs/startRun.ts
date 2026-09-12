@@ -10,6 +10,7 @@ import {
   type RunIsolation,
   type StartRunInput,
 } from '../types';
+import { agentEnvFor } from './agentEnv';
 import type { DaemonRunsApi } from './daemonApi';
 import { describeFolder, rememberFolder, type FolderDeps } from './folders';
 import { assertRunId, type AgentRun, type LedgerClient } from './ledgerClient';
@@ -281,12 +282,32 @@ async function failStart(
  * The part of a start that takes seconds to minutes. Exported for the
  * tests, which await it; `startRun` does not.
  */
+export interface ContinueStartOptions {
+  /** `ROAD-116` for a dispatched run — names the worktree's branch `agent/ROAD-116` (W2's rule). */
+  ticketIdentifier?: string | null;
+  /** Environment overrides for the agent process (W5a §2.5's scrub); none for an independent run. */
+  env?: Record<string, string>;
+}
+
+/**
+ * The provider mode a run's session starts in: what the row says, else
+ * what its auto-approve flag implies. The row is written by startRun and
+ * dispatch, so resume and start agree.
+ */
+export function sessionModeOf(
+  run: Pick<AgentRun, 'modeId' | 'autoApprove'>,
+): string | null {
+  if (run.modeId) return run.modeId;
+  return run.autoApprove ? AUTO_APPROVE_MODE_ID : null;
+}
+
 export async function continueStart(
   deps: StartRunDeps & { daemonApi: DaemonRunsApi },
   run: AgentRun,
   /** The picked folder: the repository to take a worktree of, or the cwd itself. */
   folderPath: string,
   firstMessage: string | null = null,
+  options: ContinueStartOptions = {},
 ): Promise<void> {
   const { ledger, daemonApi: daemon } = deps;
   let stage: 'worktree' | 'session' = 'worktree';
@@ -307,7 +328,7 @@ export async function continueStart(
         {
           run,
           repoPath: folderPath,
-          ticketIdentifier: null,
+          ticketIdentifier: options.ticketIdentifier ?? null,
           baseRef: run.baseRef ?? undefined,
         },
       );
@@ -325,13 +346,15 @@ export async function continueStart(
     }
 
     stage = 'session';
+    const modeId = sessionModeOf(run);
     const { sessionId } = await daemon.startSession({
       conversationId: run.id,
       providerId: run.providerId,
       cwd,
       sessionId: null,
-      modeId: run.autoApprove ? AUTO_APPROVE_MODE_ID : null,
+      modeId,
       ...(firstMessage ? { initialQueue: [{ text: firstMessage }] } : {}),
+      ...(options.env ? { env: options.env } : {}),
     });
     if (!(await stillProvisioning(ledger, run.id))) {
       deps.logger.info(
@@ -363,12 +386,16 @@ export async function continueStart(
       branch,
       baseRef: run.baseRef,
       autoApprove: run.autoApprove,
+      modeId,
+      ...(run.intent ? { intent: run.intent } : {}),
+      // The keys scrubbed from the agent's env, never their values.
+      ...(options.env ? { envScrubbed: Object.keys(options.env).sort() } : {}),
       firstMessage: firstMessage !== null,
     });
     if (firstMessage) {
       await ledger.appendEvent(run.id, 'prompt_sent', {
-        by: 'user',
-        kind: 'first-message',
+        by: run.entry === 'dispatched' ? 'waypoint' : 'user',
+        kind: run.entry === 'dispatched' ? 'brief' : 'first-message',
       });
     }
     deps.notify({ runId: run.id, status: running.status });
@@ -426,6 +453,7 @@ export async function startRun(
     providerId: input.providerId,
     isolation: input.isolation,
     autoApprove: input.autoApprove,
+    modeId: input.autoApprove ? AUTO_APPROVE_MODE_ID : null,
     ...(input.isolation === 'worktree' && input.baseRef
       ? { baseRef: input.baseRef }
       : {}),
@@ -592,7 +620,10 @@ export async function resumeRun(
       providerId: run.providerId,
       cwd,
       sessionId: run.providerSessionId,
-      modeId: run.autoApprove ? AUTO_APPROVE_MODE_ID : null,
+      modeId: sessionModeOf(run),
+      // A dispatched writing session comes back with the same scrubbed
+      // env it started with (agentEnv.ts); an independent one with none.
+      ...(agentEnvFor(run) ? { env: agentEnvFor(run) } : {}),
     }));
   } catch (error) {
     const message = describe(error);

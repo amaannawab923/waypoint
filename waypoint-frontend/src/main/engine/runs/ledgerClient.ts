@@ -45,6 +45,12 @@ export interface AgentRun {
   cwd: string | null;
   /** Started in the provider's bypass-permissions mode: the session asks nothing. */
   autoApprove: boolean;
+  /** The provider mode the session was started in (`plan`, `bypassPermissions`); null = the provider's default. */
+  modeId: string | null;
+  /** What a dispatched run was asked to do (W5a); null for an independent run. */
+  intent: 'investigate' | 'fix' | 'custom' | null;
+  /** The Copilot conversation the run was dispatched from, when there was one. */
+  copilotConversationId: string | null;
   daemonWorkspaceId: string | null;
   daemonSessionId: string | null;
   /** The provider's own resume handle, as `acp.start` answered it (W4, ROAD-69). */
@@ -88,6 +94,9 @@ export interface CreateAgentRunInput {
   title?: string | null;
   isolation?: 'worktree' | 'directory';
   autoApprove?: boolean;
+  modeId?: string | null;
+  intent?: 'investigate' | 'fix' | 'custom';
+  copilotConversationId?: string | null;
   retryOfRunId?: string;
 }
 
@@ -144,6 +153,57 @@ export interface RunPage {
   nextCursor: string | null;
 }
 
+/** The slice of a ticket a brief is built from (the backend's `/tickets/:id`). */
+export interface LedgerTicket {
+  id: string;
+  /** `ROAD-116`. */
+  identifier: string;
+  title: string;
+  /** Markdown/plain text as the ticket stores it; null when empty. */
+  description: string | null;
+  projectId: string;
+  stateId: string | null;
+  priority: string | null;
+}
+
+export interface LedgerComment {
+  id: string;
+  authorId: string;
+  /** The comment body as stored; HTML for a typed comment. */
+  bodyHtml: string;
+  createdAt: string;
+}
+
+export interface LedgerState {
+  id: string;
+  projectId: string;
+  name: string;
+  group:
+    'backlog' | 'unstarted' | 'started' | 'completed' | 'cancelled' | string;
+  sortOrder: number;
+}
+
+export interface LedgerMember {
+  id: string;
+  fullName: string;
+  displayName: string | null;
+}
+
+/** A proposal as `/tickets/:id/proposals` lists it — the fields Fix seeding reads. */
+export interface LedgerProposal {
+  id: string;
+  kind: string;
+  status: string;
+  origin: 'copilot' | 'agent_run' | string;
+  agentRunId: string | null;
+  payload: Record<string, unknown>;
+  createdAt: string;
+  resolvedAt: string | null;
+}
+
+export type CreateRunProposalInput =
+  { kind: 'comment'; body: string } | { kind: 'state_change'; stateId: string };
+
 /** The slice of a project a run start needs (the backend's `/projects/:id`). */
 export interface LedgerProject {
   id: string;
@@ -171,6 +231,28 @@ export interface LedgerClient {
     kind: ClientEventKind,
     payload?: Record<string, unknown>,
   ): Promise<AgentRunEvent>;
+  // --- W5a: what a dispatched run is built from and files back -----------
+  /** The ticket a session is about to be dispatched on; null when there is none. */
+  getTicket(id: string): Promise<LedgerTicket | null>;
+  /** The ticket's comments, oldest first. */
+  listComments(ticketId: string): Promise<LedgerComment[]>;
+  /** The project's workflow states, for the state change Fix files. */
+  listStates(projectId: string): Promise<LedgerState[]>;
+  /** Every member, for naming comment authors in the brief. */
+  listMembers(): Promise<LedgerMember[]>;
+  /** Every proposal on the ticket, any status — Fix seeds from the approved RCA among them. */
+  listTicketProposals(ticketId: string): Promise<LedgerProposal[]>;
+  /** Files a proposal from a run (origin `agent_run`); lands in Review. Answers the proposal's id. */
+  createRunProposal(
+    runId: string,
+    input: CreateRunProposalInput,
+  ): Promise<{ id: string }>;
+  /**
+   * A Waypoint-authored system note in the Copilot conversation the run
+   * came from, else the member's latest. Answers false when there was no
+   * conversation to post to (the backend's 204) — not an error.
+   */
+  postCopilotNote(runId: string, content: string): Promise<boolean>;
 }
 
 /**
@@ -266,6 +348,10 @@ export function createLedgerClient(deps: LedgerClientDeps = {}): LedgerClient {
       }
       throw new LedgerRequestError(response.status, message);
     }
+    // A 204 (the notes route with nowhere to post) has no body to parse.
+    if (response.status === 204) {
+      return { status: response.status, body: undefined as unknown as T };
+    }
     return { status: response.status, body: (await response.json()) as T };
   }
 
@@ -360,6 +446,85 @@ export function createLedgerClient(deps: LedgerClientDeps = {}): LedgerClient {
           ...(payload ? { payload } : {}),
         })
       ).body;
+    },
+    async getTicket(id) {
+      assertRunId(id);
+      try {
+        const t = (
+          await request<{
+            id: string;
+            identifier: string;
+            title: string;
+            description?: string | null;
+            projectId: string;
+            stateId?: string | null;
+            priority?: string | null;
+          }>('GET', `/tickets/${id}`)
+        ).body;
+        return {
+          id: t.id,
+          identifier: t.identifier,
+          title: t.title,
+          description: t.description ?? null,
+          projectId: t.projectId,
+          stateId: t.stateId ?? null,
+          priority: t.priority ?? null,
+        };
+      } catch (error) {
+        if (error instanceof LedgerRequestError && error.status === 404)
+          return null;
+        throw error;
+      }
+    },
+    async listComments(ticketId) {
+      assertRunId(ticketId);
+      const rows = (
+        await request<LedgerComment[]>('GET', `/tickets/${ticketId}/comments`)
+      ).body;
+      return Array.isArray(rows) ? rows : [];
+    },
+    async listStates(projectId) {
+      assertRunId(projectId);
+      const rows = (
+        await request<LedgerState[]>(
+          'GET',
+          `/states?projectId=${encodeURIComponent(projectId)}`,
+        )
+      ).body;
+      return Array.isArray(rows) ? rows : [];
+    },
+    async listMembers() {
+      const rows = (await request<LedgerMember[]>('GET', '/members')).body;
+      return Array.isArray(rows) ? rows : [];
+    },
+    async listTicketProposals(ticketId) {
+      assertRunId(ticketId);
+      const body = (
+        await request<{ proposals?: LedgerProposal[] }>(
+          'GET',
+          `/tickets/${ticketId}/proposals`,
+        )
+      ).body;
+      return Array.isArray(body?.proposals) ? body.proposals : [];
+    },
+    async createRunProposal(runId, input) {
+      assertRunId(runId);
+      const created = (
+        await request<{ id: string }>(
+          'POST',
+          `/agent-runs/${runId}/proposals`,
+          input,
+        )
+      ).body;
+      return { id: created.id };
+    },
+    async postCopilotNote(runId, content) {
+      assertRunId(runId);
+      const { status } = await request<unknown>('POST', '/copilot/notes', {
+        runId,
+        content,
+      });
+      return status !== 204;
     },
   };
   return client;

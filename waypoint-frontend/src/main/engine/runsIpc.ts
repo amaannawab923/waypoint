@@ -23,6 +23,7 @@ import {
 } from './runs/ledgerClient';
 import { assertUnder } from './runs/worktrees';
 import { listRunBranches, resumeRun, startRun } from './runs/startRun';
+import { buildBriefPreview, dispatchTicketRun } from './runs/dispatch';
 import {
   createFolderRegistry,
   describeFolder,
@@ -479,6 +480,15 @@ export function registerRunsIpc(deps: RunsIpcDeps): void {
   };
   deps.host.handle(RUNS_IPC.start, (input) => startRun(startDeps, input));
   deps.host.handle(RUNS_IPC.resume, (runId) => resumeRun(startDeps, runId));
+  // W5a: a session on a ticket. The renderer names a ticket and a verb;
+  // main builds the brief from the ledger and resolves the project's
+  // repository itself (runs/dispatch.ts).
+  deps.host.handle(RUNS_IPC.briefPreview, (input) =>
+    buildBriefPreview(startDeps, input),
+  );
+  deps.host.handle(RUNS_IPC.dispatch, (input) =>
+    dispatchTicketRun(startDeps, input),
+  );
   deps.host.handle(RUNS_IPC.listBranches, (folder) =>
     listRunBranches(startDeps, folder),
   );

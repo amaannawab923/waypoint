@@ -2,6 +2,7 @@ import {
   app,
   dialog,
   ipcMain,
+  Notification,
   shell,
   type BrowserWindow,
   type Event as ElectronEvent,
@@ -23,8 +24,12 @@ import { runDaemonCommand } from './daemonCli';
 import { removeStaleStartLock } from './staleLock';
 import { registerBootReconcile } from './runs/bootReconcile';
 import { registerLiveLedgerFollower } from './runs/liveLedgerFollower';
+import { createDaemonRunsApi } from './runs/daemonApi';
+import { createRunFinalizer } from './runs/finalize';
+import { createLedgerClient } from './runs/ledgerClient';
+import { createRunNotifications } from './notifications';
 import { registerTopicsIpc } from './topicsIpc';
-import { registerRunsIpc } from './runsIpc';
+import { assertWorktreeGitDir, execGit, registerRunsIpc } from './runsIpc';
 
 // ROAD-48: the IPC surface over the engine supervisor.
 //
@@ -187,12 +192,53 @@ export function registerEngineIpc(
   // makes this a no-op.
   registerBootReconcile({ supervisor, logger });
 
+  // W5a: the two notifications a run sends (blocked, needs review), and
+  // host-side finalize for a dispatched run whose turn ended — both hang
+  // off the follower's facts, neither adds a decision to it.
+  const ledger = createLedgerClient();
+  const daemon = () => {
+    const client = supervisor.client();
+    return client ? createDaemonRunsApi(client) : null;
+  };
+  const notifications = createRunNotifications({
+    host: {
+      isSupported: () => Notification.isSupported(),
+      show: ({ title, body }, onClick) => {
+        const n = new Notification({ title, body });
+        n.on('click', onClick);
+        n.show();
+      },
+    },
+    focusRun: (runId) => {
+      const win = getWindow();
+      if (win && !win.isDestroyed()) {
+        if (win.isMinimized()) win.restore();
+        win.show();
+        win.focus();
+      }
+      send(RUNS_IPC.focus, { runId });
+    },
+    logger,
+  });
+  const finalizer = createRunFinalizer({
+    ledger,
+    daemon,
+    notify: (change) => send(RUNS_IPC.changed, change),
+    git: execGit,
+    assertWorktreeGitDir,
+    onRunStatus: notifications.onRunStatus,
+    logger,
+  });
+
   // W3: between reconciles, the daemon's session list is followed into the
   // ledger (blocked ⇄ running, interrupted), and the renderer is told
   // after every write so the panel re-reads rather than guesses.
   registerLiveLedgerFollower({
     supervisor,
+    ledger,
     notify: (change) => send(RUNS_IPC.changed, change),
+    onSessionIdle: (runId) => void finalizer.onSessionIdle(runId),
+    onRunStatus: notifications.onRunStatus,
     logger,
   });
 
