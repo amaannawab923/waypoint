@@ -2,6 +2,7 @@ import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import { listMyAgentRuns } from '@/data/api';
 import {
   getEngineStatus,
+  installEngine,
   onEngineStatusChanged,
   onRunChanged,
 } from '@/data/engineApi';
@@ -153,9 +154,20 @@ function startActivity(): () => void {
     if (engine.kind === 'running' && !wasRunning)
       refreshSessions().catch(() => {});
   });
-  getEngineStatus()
+  // `install`, not `status`: status answers from the supervisor's last
+  // observation, which at boot is nothing — a daemon that outlived the last
+  // Waypoint stays unknown, and with it the boot reconcile and the live
+  // follower, until someone opens This machine. The same call MachinePage
+  // makes on mount: ensures the archive is extracted and verified, probes
+  // the socket, adopts a running daemon. The store's first subscriber is
+  // the sidebar badge, so this happens once per launch.
+  installEngine()
     .then((engine) => emit({ engine }))
-    .catch(() => {});
+    .catch(() => {
+      getEngineStatus()
+        .then((engine) => emit({ engine }))
+        .catch(() => {});
+    });
   const poll = setInterval(() => {
     refreshSessions().catch(() => {});
   }, REFRESH_MS);

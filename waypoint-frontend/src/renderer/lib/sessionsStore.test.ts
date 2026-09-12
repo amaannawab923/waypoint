@@ -3,6 +3,7 @@ import type { AgentRun } from '@/types/agentRuns';
 import { listMyAgentRuns } from '@/data/api';
 import {
   getEngineStatus,
+  installEngine,
   onEngineStatusChanged,
   onRunChanged,
 } from '@/data/engineApi';
@@ -21,6 +22,7 @@ jest.mock('@/data/api', () => ({
 }));
 jest.mock('@/data/engineApi', () => ({
   getEngineStatus: jest.fn(),
+  installEngine: jest.fn(),
   onEngineStatusChanged: jest.fn(),
   onRunChanged: jest.fn(),
 }));
@@ -40,6 +42,7 @@ beforeEach(() => {
   engineListeners.clear();
   runChangedListeners.clear();
   (listMyAgentRuns as jest.Mock).mockResolvedValue([]);
+  (installEngine as jest.Mock).mockResolvedValue({ kind: 'stopped' });
   (getEngineStatus as jest.Mock).mockResolvedValue({ kind: 'stopped' });
   (onEngineStatusChanged as jest.Mock).mockImplementation((cb) => {
     engineListeners.add(cb);
@@ -84,7 +87,7 @@ describe('groupRuns', () => {
 });
 
 describe('useMySessions / useWaitingSessionsCount', () => {
-  it('reads the ledger on the first subscriber, seeds the engine status, and the badge counts blocked + needs-review', async () => {
+  it('reads the ledger on the first subscriber, probes the engine (install, so a daemon that outlived the last Waypoint is adopted), and the badge counts blocked + needs-review', async () => {
     (listMyAgentRuns as jest.Mock).mockResolvedValue([
       run('r1', 'blocked', '2026-09-01T10:00:00Z'),
       run('r2', 'needs-review', '2026-09-01T10:00:00Z'),
@@ -99,6 +102,7 @@ describe('useMySessions / useWaitingSessionsCount', () => {
     expect(result.current.loaded).toBe(true);
     expect(result.current.groups.waiting).toHaveLength(2);
     expect(result.current.groups.active).toHaveLength(1);
+    expect(installEngine).toHaveBeenCalledTimes(1);
     expect(result.current.engine).toEqual({ kind: 'stopped' });
     expect(badge.result.current).toBe(2);
   });
