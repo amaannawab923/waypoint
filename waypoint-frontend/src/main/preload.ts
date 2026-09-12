@@ -37,6 +37,7 @@ import {
   type LiveSnapshot,
   type LiveUpdate,
   type FolderChoice,
+  type OpenPrResult,
   type ResumeRunResult,
   type RunFocus,
   type RunBranches,
@@ -622,6 +623,10 @@ const electronHandler = {
     },
     dispatchRun(input: DispatchRunInput): Promise<AgentRunRow> {
       return ipcRenderer.invoke(RUNS_IPC.dispatch, input);
+    },
+    /** W6: push the run's branch and open its pull request (the retry). */
+    openRunPr(runId: string): Promise<OpenPrResult> {
+      return ipcRenderer.invoke(RUNS_IPC.openPr, runId);
     },
     /** Push: the person clicked a notification about a run; open it. */
     onRunFocus(cb: (focus: RunFocus) => void): () => void {

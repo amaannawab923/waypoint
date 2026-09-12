@@ -476,3 +476,104 @@ describe('the transcript before the kill (ROAD-124)', () => {
     expect(order).toEqual(['capture:1', 'kill']);
   });
 });
+
+describe('W6: the branch is published before the proposals', () => {
+  it('a Fix leads its comment with the PR, the note names it; Investigate never publishes', async () => {
+    const { ledger } = fakeLedger(
+      run({
+        intent: 'fix',
+        modeId: 'bypassPermissions',
+        title: 'ROAD-116 · Fix',
+      }),
+    );
+    (ledger as unknown as { getTicket: jest.Mock }).getTicket = jest.fn(
+      async () => ({
+        id: 'wi-1',
+        identifier: 'ROAD-116',
+        title: 'Sessions anywhere',
+        description: null,
+        projectId: 'proj-1',
+        stateId: null,
+        priority: null,
+      }),
+    );
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          { kind: 'message', role: 'assistant', text: 'Guarded the write.' },
+        ]),
+      ],
+    });
+    const publish = jest.fn(async () => ({
+      kind: 'opened' as const,
+      url: 'https://github.com/o/r/pull/61',
+      pushed: true as const,
+    }));
+    const { deps } = depsWith(ledger, daemon, { pullRequests: { publish } });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        closingMessage: 'Guarded the write.',
+        title: 'ROAD-116: Sessions anywhere',
+      }),
+    );
+    const [, comment] = ledger.createRunProposal.mock.calls[0];
+    expect(
+      (comment as { body: string }).body.startsWith(
+        'Pull request: https://github.com/o/r/pull/61',
+      ),
+    ).toBe(true);
+    expect(ledger.postCopilotNote).toHaveBeenCalledWith(
+      'run-abc1234',
+      expect.stringContaining('PR opened: https://github.com/o/r/pull/61'),
+    );
+    // Publish comes before the proposals are filed.
+    expect(publish.mock.invocationCallOrder[0]).toBeLessThan(
+      ledger.createRunProposal.mock.invocationCallOrder[0],
+    );
+
+    const investigate = fakeLedger(run());
+    const { deps: planDeps } = depsWith(investigate.ledger, fakeDaemon(), {
+      pullRequests: { publish },
+    });
+    await createRunFinalizer(planDeps).onSessionIdle('run-abc1234');
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failed publish is a sentence on the comment and in the note; the run still reaches needs-review', async () => {
+    const { ledger, rows } = fakeLedger(
+      run({
+        intent: 'fix',
+        modeId: 'bypassPermissions',
+        title: 'ROAD-116 · Fix',
+      }),
+    );
+    (ledger as unknown as { getTicket: jest.Mock }).getTicket = jest.fn(
+      async () => null,
+    );
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          { kind: 'message', role: 'assistant', text: 'Guarded the write.' },
+        ]),
+      ],
+    });
+    const publish = jest.fn(async () => ({
+      kind: 'failed' as const,
+      stage: 'push' as const,
+      message: 'could not read Username',
+    }));
+    const { deps } = depsWith(ledger, daemon, { pullRequests: { publish } });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+    expect(rows.get('run-abc1234')?.status).toBe('needs-review');
+    const [, comment] = ledger.createRunProposal.mock.calls[0];
+    expect((comment as { body: string }).body).toContain(
+      'push failed: could not read Username',
+    );
+    expect(ledger.postCopilotNote).toHaveBeenCalledWith(
+      'run-abc1234',
+      expect.stringContaining('the branch was not published (push failed)'),
+    );
+  });
+});

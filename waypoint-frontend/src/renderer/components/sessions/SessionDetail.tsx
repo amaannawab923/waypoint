@@ -9,7 +9,12 @@ import {
   IconFolder,
 } from '@/components/icons';
 import { renameAgentRun } from '@/data/api';
-import { resumeRun, revealRunWorktree, stopRun } from '@/data/engineApi';
+import {
+  openRunPullRequest,
+  resumeRun,
+  revealRunWorktree,
+  stopRun,
+} from '@/data/engineApi';
 import { formatRelativeTime } from '@/lib/copilotSessions';
 import { patchSessionRun, refreshSessions } from '@/lib/sessionsStore';
 import { useTicketSummary } from '@/lib/useTicketLabel';
@@ -127,6 +132,39 @@ export function SessionDetail({
       await refreshSessions();
     } finally {
       setResuming(false);
+    }
+  };
+
+  // W6: a writing run whose branch was not published (the push or the PR
+  // failed at finalize) can be published from here, as the person.
+  const [publishing, setPublishing] = useState(false);
+  const canOpenPr =
+    run.entry === 'dispatched' &&
+    run.modeId !== 'plan' &&
+    !!run.branch &&
+    !run.prUrl &&
+    (run.status === 'needs-review' || run.status === 'done');
+  const openPr = async () => {
+    setPublishing(true);
+    try {
+      const outcome = await openRunPullRequest(run.id);
+      if (outcome.kind === 'opened') {
+        patchSessionRun(run.id, { prUrl: outcome.url });
+      } else if (outcome.kind === 'failed') {
+        showErrorToast(
+          `${outcome.stage === 'push' ? 'Push' : 'Pull request'} failed: ${outcome.message}`,
+        );
+      } else {
+        showErrorToast(outcome.reason);
+      }
+    } catch (error) {
+      showErrorToast(
+        error instanceof Error
+          ? error.message
+          : 'The branch was not published.',
+      );
+    } finally {
+      setPublishing(false);
     }
   };
 
@@ -321,6 +359,19 @@ export function SessionDetail({
               disabled={stopping}
             >
               {stopping ? 'Stopping…' : 'Stop'}
+            </Button>
+          )}
+          {canOpenPr && (
+            <Button
+              size="xs"
+              variant="secondary"
+              onClick={() => {
+                openPr().catch(() => {});
+              }}
+              disabled={publishing}
+              title="Push the branch and open a pull request, as you"
+            >
+              {publishing ? 'Opening PR…' : 'Open PR'}
             </Button>
           )}
           {(run.cwd ?? run.worktreePath) && (

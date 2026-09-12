@@ -556,6 +556,12 @@ export const RUNS_IPC = {
    */
   focus: 'runs:focus',
   /**
+   * (runId) → OpenPrResult. W6: push the run's branch and open its pull
+   * request as the person — the retry for a publish that failed at
+   * finalize (engine/runs/pullRequests.ts).
+   */
+  openPr: 'runs:open-pr',
+  /**
    * Push: RunChanged — main wrote a run's ledger row from what the daemon
    * reported (runs/liveLedgerFollower.ts) or from a start/resume it is
    * driving (runs/startRun.ts). The renderer re-reads the ledger; the
@@ -678,6 +684,13 @@ export interface DispatchRunInput {
 export interface RunFocus {
   runId: string;
 }
+
+/** What `runs:open-pr` answers. */
+export type OpenPrResult =
+  | { kind: 'opened'; url: string }
+  | { kind: 'pushed-only'; reason: string }
+  | { kind: 'skipped'; reason: string }
+  | { kind: 'failed'; stage: 'push' | 'pr'; message: string };
 
 /**
  * A folder the person may start a session in, as main describes it. The

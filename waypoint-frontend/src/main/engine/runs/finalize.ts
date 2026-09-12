@@ -13,6 +13,12 @@ import type {
 } from './ledgerClient';
 import type { NoteGitRunner } from './startRun';
 import type { TranscriptKeeper } from './transcripts';
+import { isDispatchedWriter } from './agentEnv';
+import {
+  describePublish,
+  type PublishOutcome,
+  type PullRequestPublisher,
+} from './pullRequests';
 
 /**
  * Host-side finalize — W5a, ROAD-120 (docs/design/w5a-investigate-fix.md
@@ -47,6 +53,8 @@ export interface FinalizeDeps {
   onRunStatus?: (run: AgentRun, previous: AgentRunStatus) => void;
   /** The transcript snapshot taken before the session is killed (ROAD-124). */
   transcripts?: TranscriptKeeper;
+  /** W6: pushes a writing run's branch and opens the PR before the proposals are filed. */
+  pullRequests?: PullRequestPublisher;
   logger: {
     info: (m: string, meta?: Record<string, unknown>) => void;
     warn: (m: string, meta?: Record<string, unknown>) => void;
@@ -213,7 +221,9 @@ function label(run: AgentRun): string {
 /** The note Copilot's conversation gets, written by the ledger's facts — never the model. */
 export function finishedNote(
   run: AgentRun,
-  outcome: { turns: number; proposals: number } | { failed: string },
+  outcome:
+    | { turns: number; proposals: number; published?: PublishOutcome | null }
+    | { failed: string },
 ): string {
   if ('failed' in outcome) {
     return `Run ${label(run)} failed: ${outcome.failed}`;
@@ -224,7 +234,13 @@ export function finishedNote(
       : outcome.proposals === 1
         ? '1 proposal filed, waiting for your review'
         : `${outcome.proposals} proposals filed, waiting for your review`;
-  return `Run ${label(run)} finished (${outcome.turns} turn${outcome.turns === 1 ? '' : 's'}) · ${filed}.`;
+  const pr =
+    outcome.published?.kind === 'opened'
+      ? ` · PR opened: ${outcome.published.url}`
+      : outcome.published?.kind === 'failed'
+        ? ` · the branch was not published (${outcome.published.stage} failed)`
+        : '';
+  return `Run ${label(run)} finished (${outcome.turns} turn${outcome.turns === 1 ? '' : 's'}) · ${filed}${pr}.`;
 }
 
 export interface RunFinalizer {
@@ -351,14 +367,37 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
       return;
     }
 
-    // The proposals: the closing message as a comment (a Fix's prefixed
-    // with the branch's work), and for a Fix the state change.
+    // W6: a writing run's branch is pushed and its PR opened first — by
+    // the host, as the person — so the comment can lead with the link.
+    // A failure here is a sentence on the comment and an event, never a
+    // failed run: the session's work is done and on its branch.
+    let published: PublishOutcome | null = null;
+    if (deps.pullRequests && isDispatchedWriter(run) && run.branch) {
+      const ticket = run.ticketId
+        ? await deps.ledger.getTicket(run.ticketId).catch(() => null)
+        : null;
+      published = await deps.pullRequests.publish({
+        run,
+        closingMessage: closing,
+        title: ticket
+          ? `${ticket.identifier}: ${ticket.title}`
+          : (run.title ?? run.branch),
+      });
+      if (published.kind === 'opened') run = { ...run, prUrl: published.url };
+    }
+
+    // The proposals: the closing message as a comment (a writing run's
+    // led by its pull request and the branch's work), and for a Fix the
+    // state change.
     let filed = 0;
     try {
       let body = closing;
-      if (run.intent === 'fix') {
+      if (isDispatchedWriter(run)) {
         const work = await describeBranchWork(deps, run);
-        if (work) body = `${work}\n\n---\n\n${closing}`;
+        const lead = [published ? describePublish(published) : null, work]
+          .filter(Boolean)
+          .join('\n\n');
+        if (lead) body = `${lead}\n\n---\n\n${closing}`;
       }
       const comment = await deps.ledger.createRunProposal(run.id, {
         kind: 'comment',
@@ -437,7 +476,11 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
     await deps.ledger
       .postCopilotNote(
         run.id,
-        finishedNote(reviewed, { turns: turnCount, proposals: filed }),
+        finishedNote(reviewed, {
+          turns: turnCount,
+          proposals: filed,
+          published,
+        }),
       )
       .catch((error: unknown) =>
         warn('engine: Copilot note not posted', error, { runId: run.id }),
