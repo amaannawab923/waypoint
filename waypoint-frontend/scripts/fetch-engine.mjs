@@ -9,9 +9,10 @@
 // Node runtime plus compiled native modules. That belongs in a release
 // asset pinned by hash, not in git history.
 //
-// Why `gh` and not a bare HTTPS download: the waypoint repo is private, so
-// the asset URL needs auth, and `gh` is the auth the founder (and CI) already
-// have. `WAYPOINT_ENGINE_ARCHIVE=/path/to/file.tar.gz` bypasses the download
+// Why `gh` and not a bare HTTPS download: `gh` is the client that is
+// already on every machine this runs on and already speaks the release
+// API; the repo being public today (it was private when this was written)
+// only means no auth is strictly needed — the hash check is what matters. `WAYPOINT_ENGINE_ARCHIVE=/path/to/file.tar.gz` bypasses the download
 // for an archive built locally (the way the pinned one was, from emdash
 // source) — still hash-checked, because a wrong local build is the exact
 // thing the pin exists to catch.

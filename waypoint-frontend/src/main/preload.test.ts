@@ -104,6 +104,10 @@ function getElectronHandler() {
       stop: () => Promise<unknown>;
       health: () => Promise<unknown>;
       onStatusChanged: (cb: (status: unknown) => void) => () => void;
+      stopRun: (runId: string) => Promise<unknown>;
+      runDiff: (runId: string) => Promise<unknown>;
+      revealRunWorktree: (runId: string) => Promise<void>;
+      onRunChanged: (cb: (change: unknown) => void) => () => void;
     };
   };
 }
@@ -444,6 +448,42 @@ describe('electronHandler.engine', () => {
 
       expect(ipcRendererMock.invoke).toHaveBeenCalledWith(channel);
       expect(result).toEqual(STATUS);
+    },
+  );
+
+  it('onRunChanged registers a runs:changed listener and removes exactly it', () => {
+    const cb = jest.fn();
+    const unsubscribe = electronHandler.engine.onRunChanged(cb);
+    const registered = ipcRendererMock.on.mock.calls.find(
+      (c) => c[0] === 'runs:changed',
+    );
+    expect(registered).toBeDefined();
+    registered![1]({}, { runId: 'run-abc1234', status: 'blocked' });
+    expect(cb).toHaveBeenCalledWith({
+      runId: 'run-abc1234',
+      status: 'blocked',
+    });
+    unsubscribe();
+    expect(ipcRendererMock.removeListener).toHaveBeenCalledWith(
+      'runs:changed',
+      registered![1],
+    );
+  });
+
+  it.each([
+    ['stopRun', 'runs:stop'],
+    ['runDiff', 'runs:diff'],
+    ['revealRunWorktree', 'runs:reveal-worktree'],
+  ] as const)(
+    '%s invokes %s with the run id and nothing else',
+    async (method, channel) => {
+      ipcRendererMock.invoke.mockResolvedValueOnce({ echoed: channel });
+      const result = await electronHandler.engine[method]('run-abc1234');
+      expect(ipcRendererMock.invoke).toHaveBeenCalledWith(
+        channel,
+        'run-abc1234',
+      );
+      expect(result).toEqual({ echoed: channel });
     },
   );
 

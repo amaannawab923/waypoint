@@ -1,5 +1,8 @@
 import * as path from 'node:path';
 import { EngineCallError, type WireClient } from '../types';
+import { liveTopic } from '../wire/topics';
+
+export { liveTopic } from '../wire/topics';
 
 /**
  * The slice of the daemon the run modules need, as one typed facade over
@@ -97,6 +100,8 @@ export interface DaemonRunsApi {
   /** Every worktree record the daemon holds, by id. */
   listWorkspaceRecords(): Promise<Record<string, DaemonWorkspaceRecord>>;
   listSessions(): Promise<Record<string, DaemonSessionSummary>>;
+  /** Asks the agent to stop its current turn; the session stays alive. */
+  cancelTurn(conversationId: string): Promise<void>;
   killSession(conversationId: string): Promise<void>;
 }
 
@@ -143,26 +148,6 @@ export function hostAbsolutePath(absolute: string): {
     root: { kind: 'posix' },
     segments: normalized.split('/').filter(Boolean),
   };
-}
-
-/** `@emdash/shared`'s stableStringify: JSON with object keys sorted, recursively. */
-function stableStringify(value: unknown): string {
-  const sort = (v: unknown): unknown => {
-    if (Array.isArray(v)) return v.map(sort);
-    if (v && typeof v === 'object') {
-      return Object.fromEntries(
-        Object.keys(v as Record<string, unknown>)
-          .sort()
-          .map((k) => [k, sort((v as Record<string, unknown>)[k])]),
-      );
-    }
-    return v;
-  };
-  return JSON.stringify(sort(value));
-}
-
-export function liveTopic(stateId: string, key?: unknown): string {
-  return key === undefined ? stateId : `${stateId}|${stableStringify(key)}`;
 }
 
 /**
@@ -309,6 +294,9 @@ export function createDaemonRunsApi(client: WireClient): DaemonRunsApi {
         client,
         liveTopic('acp.sessions.list'),
       );
+    },
+    async cancelTurn(conversationId) {
+      await fallible<void>('acp.cancelTurn', { conversationId });
     },
     async killSession(conversationId) {
       await fallible<void>('acp.kill', { conversationId });

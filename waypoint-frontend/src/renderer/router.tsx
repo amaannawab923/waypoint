@@ -8,11 +8,12 @@
 // handler with the same SPA-fallback behavior in the packaged desktop build
 // (src/main/main.ts), and a standard static-host SPA rewrite rule if this
 // ever ships as a website.
+import type { ComponentType } from 'react';
 import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom';
 import { AppShell } from '@/layouts/AppShell';
 import { ProjectLayout } from '@/layouts/ProjectLayout';
 import { isOnboarded } from '@/lib/onboarding';
-import { MY_JIRA_ENABLED } from '@/lib/featureFlags';
+import { MY_JIRA_ENABLED, SESSIONS_ENABLED } from '@/lib/featureFlags';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 
 import Login from '@/pages/auth/Login';
@@ -70,6 +71,21 @@ import ProfileSettingsNotifications from '@/pages/profile-settings/Notifications
 import ProfileSettingsSecurity from '@/pages/profile-settings/Security';
 import ProfileSettingsTokens from '@/pages/profile-settings/Tokens';
 import ProfileSettingsCopilot from '@/pages/profile-settings/Copilot';
+
+// Required behind the flag, unlike every page above: SessionsPage pulls
+// the vendored chat-ui build (3.8 MB of Solid plus its stylesheet, whose
+// element-level resets then apply to every document), and a flag-off
+// build must not pay for it (found in review). SESSIONS_ENABLED is a
+// build-time constant, so the production bundler drops the whole branch
+// — and with it chat-ui — when the flag is off. (A dynamic `import()`
+// would be the usual shape, but this package's node16 module resolution
+// treats it as ESM and refuses the alias without an extension webpack
+// cannot resolve.)
+const SessionsPage: ComponentType | null = SESSIONS_ENABLED
+  ? // eslint-disable-next-line global-require, @typescript-eslint/no-var-requires
+    (require('@/pages/sessions/SessionsPage') as { default: ComponentType })
+      .default
+  : null;
 
 /**
  * Guards every route nested under AppShell. There's no real backend/session
@@ -139,6 +155,25 @@ export const router = createBrowserRouter([
                 path: '/my-jira/:ticketKey',
                 element: MY_JIRA_ENABLED ? (
                   <JiraTicketPage />
+                ) : (
+                  <Navigate to="/" replace />
+                ),
+              },
+              // W3's My sessions (docs/design/w3-sessions-rail.md §1.1),
+              // gated like /my-jira and for the same reason. Both routes
+              // render the one page; the run id selects the detail.
+              {
+                path: '/sessions',
+                element: SessionsPage ? (
+                  <SessionsPage />
+                ) : (
+                  <Navigate to="/" replace />
+                ),
+              },
+              {
+                path: '/sessions/:runId',
+                element: SessionsPage ? (
+                  <SessionsPage />
                 ) : (
                   <Navigate to="/" replace />
                 ),

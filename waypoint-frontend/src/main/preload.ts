@@ -27,8 +27,16 @@ import type {
 // nothing about it would bloat what ships in the preload bundle.
 import {
   ENGINE_IPC,
+  RUNS_IPC,
   type EngineHealth,
   type EngineStatus,
+  type LiveSnapshot,
+  type LiveUpdate,
+  type RunChanged,
+  type RunDiff,
+  type StopRunResult,
+  type TopicClosedReason,
+  type TopicSubscription,
 } from './engine/types';
 
 // The global Web Crypto API, not Node's `crypto` module: this preload script
@@ -484,6 +492,87 @@ const electronHandler = {
       ipcRenderer.on(ENGINE_IPC.statusChanged, subscription);
       return () => {
         ipcRenderer.removeListener(ENGINE_IPC.statusChanged, subscription);
+      };
+    },
+    // ROAD-60: live topics for the sessions panel. `subscribeTopic` is
+    // request/response for the first snapshot, then push for every update
+    // and for the close — both dispatched here by subscription id, so the
+    // renderer holds one listener per subscription and nothing else sees
+    // its traffic. Main refuses a topic outside its allowlist with a
+    // rejected promise carrying the sentence; that is the whole contract.
+    async subscribeTopic(
+      topic: string,
+      handlers: {
+        onUpdate: (update: LiveUpdate) => void;
+        onClosed: (reason: TopicClosedReason) => void;
+      },
+    ): Promise<{
+      subscriptionId: string;
+      snapshot: LiveSnapshot;
+      unsubscribe: () => void;
+    }> {
+      const { subscriptionId, snapshot } = (await ipcRenderer.invoke(
+        ENGINE_IPC.topicSubscribe,
+        topic,
+      )) as TopicSubscription;
+      const onUpdate = (
+        _event: IpcRendererEvent,
+        payload: { subscriptionId: string; update: LiveUpdate },
+      ) => {
+        if (payload.subscriptionId === subscriptionId)
+          handlers.onUpdate(payload.update);
+      };
+      const onClosed = (
+        _event: IpcRendererEvent,
+        payload: { subscriptionId: string; reason: TopicClosedReason },
+      ) => {
+        if (payload.subscriptionId !== subscriptionId) return;
+        stop();
+        handlers.onClosed(payload.reason);
+      };
+      const stop = () => {
+        ipcRenderer.removeListener(ENGINE_IPC.topicUpdate, onUpdate);
+        ipcRenderer.removeListener(ENGINE_IPC.topicClosed, onClosed);
+      };
+      ipcRenderer.on(ENGINE_IPC.topicUpdate, onUpdate);
+      ipcRenderer.on(ENGINE_IPC.topicClosed, onClosed);
+      return {
+        subscriptionId,
+        snapshot,
+        unsubscribe: () => {
+          stop();
+          void ipcRenderer.invoke(ENGINE_IPC.topicUnsubscribe, subscriptionId);
+        },
+      };
+    },
+    /** A fresh snapshot of an existing subscription's topic — the follower's resync. */
+    snapshotTopic(subscriptionId: string): Promise<LiveSnapshot> {
+      return ipcRenderer.invoke(ENGINE_IPC.topicSnapshot, subscriptionId);
+    },
+    /** One of the allowlisted daemon procedures (engine/types.ts ALLOWED_PROCEDURES). */
+    call(procedure: string, input: unknown): Promise<unknown> {
+      return ipcRenderer.invoke(ENGINE_IPC.call, procedure, input);
+    },
+    // W3: run control (engine/runsIpc.ts). The renderer names a run and
+    // nothing else; main finds the worktree and the daemon session. A
+    // refusal — unknown run, a worktree outside where runs live — is a
+    // rejected promise carrying main's sentence.
+    stopRun(runId: string): Promise<StopRunResult> {
+      return ipcRenderer.invoke(RUNS_IPC.stop, runId);
+    },
+    runDiff(runId: string): Promise<RunDiff> {
+      return ipcRenderer.invoke(RUNS_IPC.diff, runId);
+    },
+    revealRunWorktree(runId: string): Promise<void> {
+      return ipcRenderer.invoke(RUNS_IPC.revealWorktree, runId);
+    },
+    /** Push: main wrote a run's ledger row from the daemon's report. */
+    onRunChanged(cb: (change: RunChanged) => void): () => void {
+      const subscription = (_event: IpcRendererEvent, change: RunChanged) =>
+        cb(change);
+      ipcRenderer.on(RUNS_IPC.changed, subscription);
+      return () => {
+        ipcRenderer.removeListener(RUNS_IPC.changed, subscription);
       };
     },
   },

@@ -6,6 +6,13 @@
     "lib": ["dom", "es2022"],
     "jsx": "react-jsx",
     "strict": true,
+    // Declaration files are not re-checked: the vendored emdash chat-ui
+    // types (vendor/, ROAD-59) are bundler-style .d.ts/.d.mts that node16
+    // resolution reports as CJS/ESM mismatches while still resolving every
+    // type we use — and date-fns's own .d.cts has tripped the same TS1479
+    // in node_modules since before this flag, 246 errors nobody could act
+    // on. Our own sources are checked exactly as before.
+    "skipLibCheck": true,
     "sourceMap": true,
     "moduleResolution": "node16",
     "esModuleInterop": true,
@@ -15,8 +22,13 @@
     "outDir": ".erb/dll",
     "baseUrl": "src",
     "paths": {
-      "@/*": ["renderer/*"]
+      "@/*": ["renderer/*"],
+      "@emdash/chat-ui": ["../vendor/emdash-chat-ui/chat-ui"],
+      "@emdash/chat-ui/style.css": ["../vendor/emdash-chat-ui/chat-ui/dist/style.css"],
+      "@emdash/core/runtimes/acp/api/client": ["../vendor/emdash-chat-ui/core-types/runtimes-acp-api-client.d.mts"],
+      "@emdash/shared": ["../vendor/emdash-chat-ui/shared-types/index.d.mts"],
+      "@emdash/shared/markdown": ["../vendor/emdash-chat-ui/shared-types/markdown.d.mts"]
     }
   },
-  "exclude": ["test", "release/build", "release/app/dist", ".erb/dll"]
+  "exclude": ["test", "release/build", "release/app/dist", ".erb/dll", "vendor"]
 }

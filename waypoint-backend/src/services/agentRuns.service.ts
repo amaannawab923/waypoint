@@ -66,7 +66,7 @@ interface Cursor {
 // middle one never came back). The cursor therefore carries the column's
 // own text rendering, selected alongside the row, and compares it as a
 // timestamptz — exact by construction. (proposals.service.ts's review
-// queue has the same defect; ROAD-104 tracks it.)
+// queue has the same defect; ROAD-108 tracks it.)
 const CURSOR_TEXT = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d{1,6})?[+-]\d{2}(:\d{2})?$/;
 
 function encodeCursor(row: { createdAtText: string; id: string }): string {

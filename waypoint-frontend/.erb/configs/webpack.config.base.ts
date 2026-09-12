@@ -16,7 +16,10 @@ const configuration: webpack.Configuration = {
     rules: [
       {
         test: /\.[jt]sx?$/,
-        exclude: /node_modules/,
+        // vendor/ holds the pinned emdash chat-ui build (ROAD-59): 3.8 MB
+        // of already-compiled ESM that ts-loader would only re-transpile,
+        // slowly, into CommonJS. webpack parses it as-is.
+        exclude: /node_modules|[\\/]vendor[\\/]/,
         use: {
           loader: 'ts-loader',
           options: {

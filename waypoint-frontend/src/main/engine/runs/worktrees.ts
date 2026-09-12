@@ -375,8 +375,13 @@ export async function releaseWorktree(
   });
 }
 
-/** `candidate` (canonical) must be `root` itself or inside it. */
-async function assertUnder(candidate: string, root: string): Promise<void> {
+/**
+ * `candidate` (canonical) must be `root` itself or inside it. Exported for
+ * runsIpc.ts, which applies the same rule before running `git` in, or
+ * revealing, a run's worktree: a ledger row naming a path outside
+ * worktreesDir is a row someone edited, not a place to run commands.
+ */
+export async function assertUnder(candidate: string, root: string): Promise<void> {
   await fs.mkdir(root, { recursive: true });
   const realRoot = await fs.realpath(root);
   const realCandidate = await fs

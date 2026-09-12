@@ -1,3 +1,4 @@
+import { liveTopic, splitTopic } from './wire/topics';
 /**
  * The agent-session engine: emdash's `workspace-server` daemon, run by Waypoint
  * as a pinned, self-built process, spoken to over its Wire protocol.
@@ -350,8 +351,11 @@ export interface EngineInitializeError {
  */
 export class EngineCallError extends Error {
   readonly code: WireErrorCode;
+
   readonly path: string;
+
   readonly cause?: unknown;
+
   constructor(
     path: string,
     code: WireErrorCode,
@@ -474,4 +478,235 @@ export const ENGINE_IPC = {
   health: 'engine:health',
   /** Push channel: every EngineStatus transition, in order. */
   statusChanged: 'engine:status-changed',
+
+  // --- Live topics and calls for the sessions panel (ROAD-60) ------------
+  // The renderer never sees the Wire client. It asks main for a topic by
+  // name; main attaches on the live connection, answers with the first
+  // snapshot, and pushes every update — each renderer subscription is one
+  // daemon attachment, identified by the `subscriptionId` main mints.
+  // Only topics matching ALLOWED_TOPIC (a run's ACP session states, the
+  // session list, the workspace records) and procedures in
+  // ALLOWED_PROCEDURES can cross: the bridge stays as narrow as what the
+  // panel needs, and a conversation that is not one of our runs is not
+  // reachable from the renderer at all.
+  /** (topic) → { subscriptionId, snapshot }. Throws when not running or not allowed. */
+  topicSubscribe: 'engine:topic:subscribe',
+  /** (subscriptionId) → void. Idempotent. */
+  topicUnsubscribe: 'engine:topic:unsubscribe',
+  /** (subscriptionId) → a fresh snapshot of the same topic (resync). */
+  topicSnapshot: 'engine:topic:snapshot',
+  /** Push: { subscriptionId, update: LiveUpdate }. */
+  topicUpdate: 'engine:topic:update',
+  /** Push: { subscriptionId, reason } — the topic is gone (daemon away, topic failed). */
+  topicClosed: 'engine:topic:closed',
+  /** (procedure, input) → the daemon's answer, for ALLOWED_PROCEDURES only. */
+  call: 'engine:call',
 } as const;
+
+// ---------------------------------------------------------------------------
+// Run control for the sessions panel (W3, ROAD-61/64). The renderer names a
+// run; main looks the run up in the ledger and acts on the daemon, the
+// worktree on disk, or the OS shell — the renderer never names a path or a
+// daemon record. Registered by runsIpc.ts.
+// ---------------------------------------------------------------------------
+export const RUNS_IPC = {
+  /** (runId) → StopRunResult. Cancels the turn, kills the session, marks the run cancelled. */
+  stop: 'runs:stop',
+  /** (runId) → RunDiff. The worktree's changes against the run's base ref. */
+  diff: 'runs:diff',
+  /** (runId) → void. Shows the worktree in the OS file manager. */
+  revealWorktree: 'runs:reveal-worktree',
+  /**
+   * Push: RunChanged — main wrote a run's ledger row from what the daemon
+   * reported (runs/liveLedgerFollower.ts). The renderer re-reads the
+   * ledger; the payload is a hint, not the row.
+   */
+  changed: 'runs:changed',
+} as const;
+
+export interface RunChanged {
+  runId: string;
+  /** The ledger's status after the write. */
+  status: string;
+}
+
+export type StopRunOutcome =
+  /** The ledger says cancelled and the daemon confirmed the session is gone. */
+  | 'stopped'
+  /**
+   * The ledger says cancelled but the daemon did not confirm the kill (no
+   * connection, or it refused): the agent may still be running until the
+   * next boot reconcile kills it. The panel says so.
+   */
+  | 'ledger-only'
+  /** The run had already ended (done, failed, cancelled): nothing to do. */
+  | 'already-ended'
+  /** A run waiting on review cannot be cancelled — only its proposals decide it. */
+  | 'not-stoppable';
+
+export interface StopRunResult {
+  outcome: StopRunOutcome;
+  /** The ledger's row after the action. */
+  status: string;
+}
+
+export type RunDiffFileStatus =
+  'added' | 'modified' | 'deleted' | 'renamed' | 'untracked';
+
+export interface RunDiffFile {
+  path: string;
+  status: RunDiffFileStatus;
+  additions: number;
+  deletions: number;
+}
+
+export interface RunDiff {
+  /** What the worktree was compared against: the merge-base with the run's base ref, or HEAD when there is none. */
+  comparedTo: string;
+  files: RunDiffFile[];
+  /** A unified diff of every file above, untracked files included. */
+  patch: string;
+  /** True when `patch` was cut at MAX_DIFF_PATCH_CHARS. */
+  truncated: boolean;
+}
+
+/** A patch longer than this is cut; the file list is always complete. */
+export const MAX_DIFF_PATCH_CHARS = 400_000;
+
+/**
+ * A live model's snapshot as the daemon answers it (`@emdash/wire`
+ * `LiveSnapshot`), and an update (`LiveUpdate`): `delta` is a list of
+ * Immer patches applied to the previous state; `baseSequence` must equal
+ * the sequence the client holds, and `generation` must match the
+ * snapshot's, else the client re-snapshots. Observed live in W2's probes.
+ */
+export interface LiveSnapshot<T = unknown> {
+  generation: number;
+  sequence: number;
+  timestamp: number;
+  data: T;
+}
+export interface LiveUpdate {
+  generation: number;
+  baseSequence: number;
+  sequence: number;
+  timestamp: number;
+  delta: unknown;
+  mutationIds?: string[];
+}
+
+export interface TopicSubscription<T = unknown> {
+  subscriptionId: string;
+  snapshot: LiveSnapshot<T>;
+}
+export type TopicClosedReason =
+  | { kind: 'disconnected' }
+  | { kind: 'topic-error'; code: WireErrorCode; message: string }
+  | { kind: 'unsubscribed' };
+
+/** Our runs' conversation ids — the daemon's conversationId IS the run id (ROAD-55). */
+const RUN_CONVERSATION = /^run-[A-Za-z0-9]{1,64}$/;
+/**
+ * Keyless models the renderer may follow. `acp.sessions.list` is not one:
+ * the Wire client holds one attachment per topic, and main's own live
+ * ledger follower (runs/liveLedgerFollower.ts) owns that one — the
+ * renderer learns about the session list through the ledger, which the
+ * follower keeps in step, and RUNS_IPC.changed.
+ */
+const ALLOWED_KEYLESS_TOPICS = new Set(['workspaceRegistry.records.list']);
+/**
+ * Per-session states of `acp.session` the renderer may follow — the four
+ * the panel reads (transcript, plan, pending permissions, usage). The
+ * daemon also publishes config/agents/draft/terminals/mcpServers; nothing
+ * in the renderer follows them, so they are not reachable (least
+ * privilege, security round 1). Add here when a panel feature needs one.
+ */
+const ALLOWED_SESSION_STATES = new Set([
+  'state',
+  'usage',
+  'plan',
+  'activeTurn',
+]);
+
+/**
+ * Whether the renderer may subscribe to `topic`. Judged by rebuilding: a
+ * topic is allowed when it is exactly what `liveTopic()` would produce for
+ * an allowed state id and a key of the one shape we hand out
+ * (`{conversationId: <run id>}`) — so this and the facade that builds
+ * topics share one encoding and cannot drift apart (review round 2; the
+ * first draft was a hand-written regex beside `liveTopic`).
+ */
+export function isAllowedTopic(topic: string): boolean {
+  if (ALLOWED_KEYLESS_TOPICS.has(topic)) return true;
+  const parts = splitTopic(topic);
+  if (!parts || parts.key === undefined) return false;
+  const match = /^acp\.session\.([A-Za-z]+)$/.exec(parts.stateId);
+  if (!match || !ALLOWED_SESSION_STATES.has(match[1])) return false;
+  const key = parts.key as { conversationId?: unknown } | null;
+  if (!key || typeof key !== 'object' || Object.keys(key).length !== 1)
+    return false;
+  if (
+    typeof key.conversationId !== 'string' ||
+    !RUN_CONVERSATION.test(key.conversationId)
+  )
+    return false;
+  return (
+    topic === liveTopic(parts.stateId, { conversationId: key.conversationId })
+  );
+}
+/** `input` is an object whose `conversationId` is one of our runs. */
+function isRunInput(input: unknown): input is { conversationId: string } {
+  return (
+    typeof input === 'object' &&
+    input !== null &&
+    typeof (input as { conversationId?: unknown }).conversationId ===
+      'string' &&
+    RUN_CONVERSATION.test((input as { conversationId: string }).conversationId)
+  );
+}
+
+const isNonEmptyString = (value: unknown): value is string =>
+  typeof value === 'string' && value.length > 0;
+
+/**
+ * Procedures the renderer may call, and the check each one's input must
+ * pass. Every one is scoped to a run-shaped conversation id, and each
+ * check names exactly the fields the panel sends (W3): a prompt is text
+ * only — attachments would let the renderer name files for the daemon to
+ * read, which W3 has no reason to allow — and a permission answer is one
+ * request id and one option id, the daemon's own decision shape.
+ */
+export const ALLOWED_PROCEDURES: Record<string, (input: unknown) => boolean> = {
+  'acp.getHistory': (input) => isRunInput(input),
+  'acp.sendPrompt': (input) => {
+    if (!isRunInput(input)) return false;
+    const { prompt, placement, ...rest } = input as {
+      conversationId: string;
+      prompt?: unknown;
+      placement?: unknown;
+    };
+    if (Object.keys(rest).length !== 1) return false;
+    if (typeof prompt !== 'object' || prompt === null) return false;
+    const { text, ...promptRest } = prompt as { text?: unknown };
+    if (!isNonEmptyString(text) || Object.keys(promptRest).length !== 0)
+      return false;
+    return (
+      placement === undefined || placement === 'auto' || placement === 'queue'
+    );
+  },
+  'acp.resolvePermission': (input) => {
+    if (!isRunInput(input)) return false;
+    const { requestId, optionId, ...rest } = input as {
+      conversationId: string;
+      requestId?: unknown;
+      optionId?: unknown;
+    };
+    return (
+      Object.keys(rest).length === 1 &&
+      isNonEmptyString(requestId) &&
+      isNonEmptyString(optionId)
+    );
+  },
+  'acp.cancelTurn': (input) =>
+    isRunInput(input) && Object.keys(input).length === 1,
+};

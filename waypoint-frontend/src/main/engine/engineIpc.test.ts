@@ -6,9 +6,15 @@ const ipcMainHandleMock = jest.fn();
 // Mirrors jiraIpc.test.ts's own electron mock: only the surface this file
 // actually touches (ipcMain.handle, plus `app` for createDefaultEngineSupervisor,
 // which no test here ever calls — see below).
+const appOnMock = jest.fn();
 jest.mock('electron', () => ({
   ipcMain: { handle: ipcMainHandleMock },
-  app: { getPath: jest.fn(() => '/tmp/waypoint-test-userdata') },
+  app: {
+    getPath: jest.fn(() => '/tmp/waypoint-test-userdata'),
+    on: appOnMock,
+    off: jest.fn(),
+  },
+  shell: { showItemInFolder: jest.fn() },
 }));
 
 // Deliberately NOT hoisted to the top of the file with the type-only
@@ -22,7 +28,7 @@ jest.mock('electron', () => ({
 // eslint-disable-next-line import/order, import/first
 import { registerEngineIpc } from './engineIpc';
 // eslint-disable-next-line import/order, import/first
-import { ENGINE_IPC } from './types';
+import { ENGINE_IPC, RUNS_IPC } from './types';
 
 const NOT_INSTALLED: EngineStatus = {
   kind: 'not-installed',
@@ -76,10 +82,25 @@ function getHandler(channel: string) {
   return call[1] as (event: unknown, ...args: unknown[]) => unknown;
 }
 
+/** A webContents that records its listeners so a test can fire them. */
+function fakeContents() {
+  const listeners = new Map<string, (...args: unknown[]) => void>();
+  return {
+    send: jest.fn(),
+    on: jest.fn((event: string, listener: (...args: unknown[]) => void) => {
+      listeners.set(event, listener);
+    }),
+    fire: (event: string, ...args: unknown[]) =>
+      listeners.get(event)?.(...args),
+  };
+}
+
 const WINDOW = {
   isDestroyed: jest.fn(() => false),
-  webContents: { send: jest.fn() },
-} as unknown as BrowserWindow;
+  webContents: fakeContents(),
+} as unknown as BrowserWindow & {
+  webContents: ReturnType<typeof fakeContents>;
+};
 const getWindowMock = jest.fn<BrowserWindow | null, []>(() => WINDOW);
 
 beforeEach(() => {
@@ -101,6 +122,10 @@ describe('registerEngineIpc', () => {
         ENGINE_IPC.start,
         ENGINE_IPC.stop,
         ENGINE_IPC.health,
+        // W3's run control (runsIpc.ts), registered on the same ipcMain.
+        RUNS_IPC.stop,
+        RUNS_IPC.diff,
+        RUNS_IPC.revealWorktree,
       ]),
     );
     // statusChanged is a push channel, not a handle() channel — it must
@@ -207,6 +232,67 @@ describe('registerEngineIpc', () => {
       supervisor.emit(STOPPED);
 
       expect(WINDOW.webContents.send).not.toHaveBeenCalled();
+    });
+
+    it('releases the panel’s topic attachments only when the app window’s own document goes away — not DevTools or another webContents', async () => {
+      const supervisor = fakeSupervisor(STOPPED);
+      // A connected client, so a topic can be subscribed.
+      const client = {
+        attach: jest.fn(),
+        call: jest.fn(),
+        snapshot: jest.fn(),
+        onDisconnect: jest.fn(),
+        close: jest.fn(),
+      };
+      (supervisor.client as jest.Mock).mockReturnValue(client);
+      registerEngineIpc(getWindowMock, supervisor);
+      const onCreated = appOnMock.mock.calls.find(
+        (c) => c[0] === 'web-contents-created',
+      )?.[1] as (event: unknown, contents: unknown) => void;
+      expect(onCreated).toBeDefined();
+
+      // The app window's first load identifies it; a same-document
+      // (pushState) navigation is not a new document.
+      onCreated({}, WINDOW.webContents);
+      const devtools = fakeContents();
+      onCreated({}, devtools);
+
+      // A live subscription to release.
+      const detach = jest.fn();
+      client.attach.mockImplementation(
+        async (
+          _topic: string,
+          handlers: { onSnapshot: (value: unknown) => void },
+        ) => {
+          handlers.onSnapshot({
+            generation: 1,
+            sequence: 0,
+            timestamp: 1,
+            data: {},
+          });
+          return detach;
+        },
+      );
+      await getHandler(ENGINE_IPC.topicSubscribe)(
+        {},
+        'workspaceRegistry.records.list',
+      );
+
+      WINDOW.webContents.fire('did-start-navigation', {
+        isMainFrame: true,
+        isSameDocument: true,
+      });
+      devtools.fire('did-start-navigation', {
+        isMainFrame: true,
+        isSameDocument: false,
+      });
+      expect(detach).not.toHaveBeenCalled();
+
+      WINDOW.webContents.fire('did-start-navigation', {
+        isMainFrame: true,
+        isSameDocument: false,
+      });
+      expect(detach).toHaveBeenCalledTimes(1);
     });
 
     it('reads the window fresh on every push, not the one open at registration time', () => {

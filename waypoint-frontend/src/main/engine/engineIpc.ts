@@ -1,14 +1,29 @@
-import { app, ipcMain, type BrowserWindow } from 'electron';
-import { ENGINE_IPC, type EngineHealth, type EngineStatus } from './types';
+import {
+  app,
+  ipcMain,
+  shell,
+  type BrowserWindow,
+  type Event as ElectronEvent,
+  type WebContents,
+} from 'electron';
+import * as path from 'node:path';
+import {
+  ENGINE_IPC,
+  RUNS_IPC,
+  type EngineHealth,
+  type EngineStatus,
+} from './types';
 import { resolveEnginePaths } from './paths';
 import { createEngineSupervisor, type EngineSupervisor } from './supervisor';
 import { connectSocketTransport } from './transport';
 import { createWireClient } from './wire';
-import * as path from 'node:path';
 import { installEngine, verifyInstalledEngine } from './installer';
 import { runDaemonCommand } from './daemonCli';
 import { removeStaleStartLock } from './staleLock';
 import { registerBootReconcile } from './runs/bootReconcile';
+import { registerLiveLedgerFollower } from './runs/liveLedgerFollower';
+import { registerTopicsIpc } from './topicsIpc';
+import { registerRunsIpc } from './runsIpc';
 
 // ROAD-48: the IPC surface over the engine supervisor.
 //
@@ -95,6 +110,15 @@ function unavailableEngineSupervisor(message: string): EngineSupervisor {
   };
 }
 
+/** EnginePaths.worktreesDir for this install; falls back to `<userData>/worktrees` when the paths cannot be resolved (the supervisor is then unavailable anyway). */
+function defaultWorktreesDir(): string {
+  try {
+    return resolveEnginePaths(app.getPath('userData')).worktreesDir;
+  } catch {
+    return path.join(app.getPath('userData'), 'worktrees');
+  }
+}
+
 export function createDefaultEngineSupervisor(): EngineSupervisor {
   let paths;
   try {
@@ -140,6 +164,13 @@ export function createDefaultEngineSupervisor(): EngineSupervisor {
 export function registerEngineIpc(
   getWindow: () => BrowserWindow | null,
   supervisor: EngineSupervisor = createDefaultEngineSupervisor(),
+  /**
+   * Where run worktrees live (EnginePaths.worktreesDir), for the run
+   * control handlers' containment check. Defaults to this install's; tests
+   * pass a tmp dir or leave the default, which only matters once a
+   * handler is invoked.
+   */
+  worktreesDir: string = defaultWorktreesDir(),
 ): void {
   const send = (channel: string, payload: unknown) => {
     const win = getWindow();
@@ -154,6 +185,80 @@ export function registerEngineIpc(
   // connection. A fake supervisor with no client (every engineIpc test)
   // makes this a no-op.
   registerBootReconcile({ supervisor, logger });
+
+  // W3: between reconciles, the daemon's session list is followed into the
+  // ledger (blocked ⇄ running, interrupted), and the renderer is told
+  // after every write so the panel re-reads rather than guesses.
+  registerLiveLedgerFollower({
+    supervisor,
+    notify: (change) => send(RUNS_IPC.changed, change),
+    logger,
+  });
+
+  // ROAD-60: the renderer's live topics and allowlisted calls, on the
+  // same connection. Electron's ipcMain/webContents are handed in as the
+  // two functions topicsIpc.ts needs, so it stays unit-testable.
+  const handle = (channel: string, handler: (...args: unknown[]) => unknown) =>
+    ipcMain.handle(channel, (_event, ...args) => handler(...args));
+  registerTopicsIpc({
+    supervisor,
+    host: {
+      handle,
+      send,
+      // A main-frame navigation that is not same-document (a reload, a
+      // full load) or a renderer that crashed: the document holding the
+      // subscriptions is gone. Watched on every webContents the app
+      // creates, since the window does not exist yet at registration —
+      // but only the app window's own events count: DevTools, a
+      // <webview>, any auxiliary window are webContents too, and their
+      // first navigation must not release the panel's attachments
+      // (found in review, reproduced with ⌘⌥I).
+      onRendererGone: (callback) => {
+        const isAppWindow = (contents: WebContents): boolean => {
+          try {
+            const win = getWindow();
+            return !!win && !win.isDestroyed() && win.webContents === contents;
+          } catch {
+            return false;
+          }
+        };
+        const watch = (contents: WebContents) => {
+          // Identified on its first navigation (the window exists by
+          // then); remembered for `destroyed`, when the window is gone
+          // and cannot be asked.
+          let appWindow = false;
+          contents.on('did-start-navigation', (details) => {
+            appWindow = isAppWindow(contents);
+            if (appWindow && details.isMainFrame && !details.isSameDocument)
+              callback();
+          });
+          contents.on('render-process-gone', () => {
+            if (appWindow || isAppWindow(contents)) callback();
+          });
+          contents.on('destroyed', () => {
+            if (appWindow) callback();
+          });
+        };
+        const onCreated = (_event: ElectronEvent, contents: WebContents) =>
+          watch(contents);
+        app.on('web-contents-created', onCreated);
+        return () => {
+          app.off('web-contents-created', onCreated);
+        };
+      },
+    },
+    logger,
+  });
+
+  // W3: stop / diff / reveal for a run — the renderer names a run, main
+  // does the rest (runsIpc.ts). Real git from PATH and the OS file manager.
+  registerRunsIpc({
+    supervisor,
+    host: { handle },
+    worktreesDir,
+    reveal: (absolutePath) => shell.showItemInFolder(absolutePath),
+    logger,
+  });
 
   // → EngineStatus, never throws — a broken engine is a status, not an IPC
   // error (ENGINE_IPC.status's own comment in types.ts). getStatus() is
