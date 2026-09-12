@@ -26,7 +26,6 @@ export const SCRUBBED_ENV_KEYS: readonly string[] = [
   'GH_ENTERPRISE_TOKEN',
   'GITHUB_ENTERPRISE_TOKEN',
   'SSH_AUTH_SOCK',
-  'GIT_SSH_COMMAND',
   'GIT_ASKPASS',
   'SSH_ASKPASS',
   'AWS_ACCESS_KEY_ID',
@@ -45,12 +44,39 @@ export const SCRUBBED_ENV_KEYS: readonly string[] = [
   'VERCEL_TOKEN',
 ];
 
-/** The overrides for `acp.start`'s `env`: every scrubbed key empty, and git never prompting. */
+/**
+ * What the env alone cannot empty, and the overrides that close it (found
+ * preparing SESS-36 on this machine: `GH_TOKEN` is not even set here, and
+ * an https push would still succeed):
+ *
+ *  - git's credential helper — `osxkeychain` from the system gitconfig,
+ *    or `gh auth git-credential` from a global one — answers an https push
+ *    from the keychain with no env involved. `credential.helper=` (empty)
+ *    injected through `GIT_CONFIG_COUNT` clears every configured helper,
+ *    and it applies last, over system, global and repo config.
+ *  - ssh reads `~/.ssh/id_*` without an agent. The ssh command is pinned
+ *    to batch mode with no agent and no identity file.
+ *  - `gh` keeps its token in the keychain, found through its config dir;
+ *    a config dir that cannot exist leaves it logged out.
+ *
+ * user.name / user.email are untouched, so the agent's commits still
+ * carry the person's identity.
+ */
+export const GIT_OVERRIDES: Readonly<Record<string, string>> = {
+  GIT_TERMINAL_PROMPT: '0',
+  GIT_CONFIG_COUNT: '1',
+  GIT_CONFIG_KEY_0: 'credential.helper',
+  GIT_CONFIG_VALUE_0: '',
+  GIT_SSH_COMMAND:
+    'ssh -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityFile=/dev/null -o IdentityAgent=none',
+  GH_CONFIG_DIR: '/dev/null/gh',
+};
+
+/** The overrides for `acp.start`'s `env`: every scrubbed key empty, and git unable to push. */
 export function scrubbedAgentEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const key of SCRUBBED_ENV_KEYS) env[key] = '';
-  env.GIT_TERMINAL_PROMPT = '0';
-  return env;
+  return { ...env, ...GIT_OVERRIDES };
 }
 
 /** True for a dispatched run whose session may write: a Fix, or *Something else…* with the switch on. */

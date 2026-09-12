@@ -475,7 +475,6 @@ describe('dispatchTicketRun', () => {
       'GH_TOKEN',
       'GITHUB_TOKEN',
       'SSH_AUTH_SOCK',
-      'GIT_SSH_COMMAND',
       'GIT_ASKPASS',
       'AWS_SECRET_ACCESS_KEY',
     ]) {
@@ -483,6 +482,13 @@ describe('dispatchTicketRun', () => {
       expect(start.env?.[key]).toBe('');
     }
     expect(start.env?.GIT_TERMINAL_PROMPT).toBe('0');
+    // The keychain and ssh keys are not env: closed through git's own config
+    // injection, a pinned ssh command, and gh's config dir.
+    expect(start.env?.GIT_CONFIG_COUNT).toBe('1');
+    expect(start.env?.GIT_CONFIG_KEY_0).toBe('credential.helper');
+    expect(start.env?.GIT_CONFIG_VALUE_0).toBe('');
+    expect(start.env?.GIT_SSH_COMMAND).toContain('BatchMode=yes');
+    expect(start.env?.GH_CONFIG_DIR).toBe('/dev/null/gh');
     expect(ledger.appendEvent).toHaveBeenCalledWith(
       'run-new0001',
       'session_started',
