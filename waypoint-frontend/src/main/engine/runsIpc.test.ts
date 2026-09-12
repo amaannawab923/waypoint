@@ -553,7 +553,7 @@ describe('runs:start, runs:resume, runs:list-branches', () => {
       getProject: jest.fn(async () => ({
         id: 'proj-1',
         name: 'P',
-        repoPath: '/r',
+        repoPath: worktreesDir,
       })),
       createRun: jest.fn(async (input: unknown) => ({
         id: 'run-n1',
@@ -634,7 +634,7 @@ describe('runs:start, runs:resume, runs:list-branches', () => {
       getProject: jest.fn(async () => ({
         id: 'proj-1',
         name: 'P',
-        repoPath: '/r',
+        repoPath: worktreesDir,
       })),
     } as unknown as jest.Mocked<LedgerClient>;
     const daemon = {

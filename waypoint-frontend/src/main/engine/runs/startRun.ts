@@ -136,6 +136,20 @@ async function linkedRepoPath(
       `${project.name} has no linked repository. Link one in the project's settings (Codebase) first.`,
     );
   }
+  // The daemon reads the repository, but the sentence for a link that
+  // does not hold on this machine (a path from another machine, a folder
+  // since moved) is Waypoint's to say, before the daemon's structured
+  // path type refuses it (found in W4's live pass: "Not an absolute
+  // path: ~/code/…").
+  const present = await fs
+    .stat(project.repoPath)
+    .then((s) => s.isDirectory())
+    .catch(() => false);
+  if (!present) {
+    throw new Error(
+      `${project.name}'s linked repository (${project.repoPath}) is not on this machine. Relink it in the project's settings (Codebase).`,
+    );
+  }
   return project.repoPath;
 }
 

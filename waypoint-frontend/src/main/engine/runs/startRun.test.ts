@@ -20,14 +20,20 @@ import {
 // between steps, a failure at either stage, and resume's two outcomes.
 
 let worktreesDir: string;
+/** A directory that exists: the linked repository the fake ledger names. */
+let repoDir: string;
 beforeAll(() => {
+  repoDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wp-repo-')));
   // realpath'd: macOS's /var is /private/var, and assertUnder compares
   // canonical paths (a fake record's path must be canonical too).
   worktreesDir = fs.realpathSync(
     fs.mkdtempSync(path.join(os.tmpdir(), 'wp-start-')),
   );
 });
-afterAll(() => fs.rmSync(worktreesDir, { recursive: true, force: true }));
+afterAll(() => {
+  fs.rmSync(worktreesDir, { recursive: true, force: true });
+  fs.rmSync(repoDir, { recursive: true, force: true });
+});
 
 function run(overrides: Partial<AgentRun> = {}): AgentRun {
   return {
@@ -69,9 +75,10 @@ function fakeLedger(seed: AgentRun[] = []) {
   const rows = new Map(seed.map((r) => [r.id, r]));
   const ledger = {
     getProject: jest.fn(async (id: string) => {
-      if (id === 'proj-1')
-        return { id, name: 'Waypoint', repoPath: '/repos/waypoint' };
+      if (id === 'proj-1') return { id, name: 'Waypoint', repoPath: repoDir };
       if (id === 'proj-nolink') return { id, name: 'Docs', repoPath: null };
+      if (id === 'proj-gone')
+        return { id, name: 'Compass', repoPath: '~/code/compass-web' };
       return null;
     }),
     createRun: jest.fn(async (input) => {
@@ -210,6 +217,14 @@ describe('startRun', () => {
       }),
     ).rejects.toThrow(/Docs has no linked repository/);
     await expect(
+      startRun(depsWith(ledger, daemon), {
+        ...goodInput,
+        projectId: 'proj-gone',
+      }),
+    ).rejects.toThrow(
+      /Compass's linked repository \(~\/code\/compass-web\) is not on this machine/,
+    );
+    await expect(
       startRun(depsWith(ledger, daemon), { ...goodInput, baseRef: 'release' }),
     ).rejects.toThrow(
       'release is not a local branch of the linked repository.',
@@ -252,11 +267,7 @@ describe('continueStart', () => {
     const daemon = fakeDaemon();
     const deps = depsWith(ledger, daemon);
 
-    await continueStart(
-      deps,
-      rows.get('run-a1') as AgentRun,
-      '/repos/waypoint',
-    );
+    await continueStart(deps, rows.get('run-a1') as AgentRun, repoDir);
 
     const startOrder = daemon.startSession.mock.invocationCallOrder[0];
     const worktreeOrder = daemon.createWorktree.mock.invocationCallOrder[0];
@@ -321,7 +332,7 @@ describe('continueStart', () => {
     await continueStart(
       depsWith(ledger, daemon),
       rows.get('run-a1') as AgentRun,
-      '/repos/waypoint',
+      repoDir,
     );
 
     expect(daemon.startSession).not.toHaveBeenCalled();
@@ -346,7 +357,7 @@ describe('continueStart', () => {
     await continueStart(
       depsWith(ledger, daemon),
       rows.get('run-a1') as AgentRun,
-      '/repos/waypoint',
+      repoDir,
     );
 
     expect(daemon.killSession).toHaveBeenCalledWith('run-a1');
@@ -367,11 +378,7 @@ describe('continueStart', () => {
     });
     const deps = depsWith(ledger, daemon);
 
-    await continueStart(
-      deps,
-      rows.get('run-a1') as AgentRun,
-      '/repos/waypoint',
-    );
+    await continueStart(deps, rows.get('run-a1') as AgentRun, repoDir);
 
     const row = rows.get('run-a1');
     expect(row?.status).toBe('failed');
@@ -396,7 +403,7 @@ describe('continueStart', () => {
     await continueStart(
       depsWith(ledger, daemon),
       rows.get('run-a1') as AgentRun,
-      '/repos/waypoint',
+      repoDir,
     );
 
     const row = rows.get('run-a1');

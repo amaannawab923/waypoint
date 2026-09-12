@@ -160,31 +160,49 @@ export const engineSessionBridge = {
 // spelled in the renderer.
 // ---------------------------------------------------------------------------
 
+/**
+ * A main-side refusal arrives as Electron's own wrapper — "Error invoking
+ * remote method 'runs:start': Error: <ours>" — and only the last part is
+ * a sentence for a person (found in W4's live pass: the dialog showed the
+ * wrapper). Stripped once here, so every run channel's error is main's
+ * own words.
+ */
+function unwrapIpcError(error: unknown): never {
+  if (error instanceof Error) {
+    const m =
+      /^Error invoking remote method '[^']+': (?:Error: )?([\s\S]*)$/.exec(
+        error.message,
+      );
+    if (m) throw new Error(m[1]);
+  }
+  throw error;
+}
+
 export function stopRun(runId: string): Promise<StopRunResult> {
-  return bridge().stopRun(runId);
+  return bridge().stopRun(runId).catch(unwrapIpcError);
 }
 
 export function getRunDiff(runId: string): Promise<RunDiff> {
-  return bridge().runDiff(runId);
+  return bridge().runDiff(runId).catch(unwrapIpcError);
 }
 
 export function revealRunWorktree(runId: string): Promise<void> {
-  return bridge().revealRunWorktree(runId);
+  return bridge().revealRunWorktree(runId).catch(unwrapIpcError);
 }
 
 // W4 (docs/design/w4-start-session.md §5): the renderer names a project,
 // never a path; main answers with the run once it is `provisioning`, and
 // the rest arrives through onRunChanged.
 export function startRun(input: StartRunInput): Promise<AgentRun> {
-  return bridge().startRun(input);
+  return bridge().startRun(input).catch(unwrapIpcError);
 }
 
 export function resumeRun(runId: string): Promise<ResumeRunResult> {
-  return bridge().resumeRun(runId);
+  return bridge().resumeRun(runId).catch(unwrapIpcError);
 }
 
 export function listRunBranches(projectId: string): Promise<RunBranches> {
-  return bridge().listRunBranches(projectId);
+  return bridge().listRunBranches(projectId).catch(unwrapIpcError);
 }
 
 /** Every ledger write main makes — the follower's, and a start or resume's. */
