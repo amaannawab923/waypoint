@@ -110,9 +110,13 @@ export function findLiveWriter(runs: AgentRun[]): AgentRun | null {
 
 /**
  * The approved root-cause comment from the ticket's latest Investigate:
- * an `agent_run`-origin comment proposal, approved, whose run is an
- * Investigate on this ticket — the newest such by decision time (§1.9).
+ * an `agent_run`-origin comment proposal a person approved — `executed`
+ * in the ledger's vocabulary (proposed → executing → executed; found on
+ * the first live pass, there is no `approved` status) — whose run is an
+ * Investigate on this ticket; the newest such by decision time (§1.9).
  */
+const APPROVED_STATUSES: ReadonlySet<string> = new Set(['executed', 'approved']);
+
 export function findApprovedRca(
   proposals: LedgerProposal[],
   runs: AgentRun[],
@@ -125,7 +129,7 @@ export function findApprovedRca(
       (p) =>
         p.origin === 'agent_run' &&
         p.kind === 'comment' &&
-        p.status === 'approved' &&
+        APPROVED_STATUSES.has(p.status) &&
         p.agentRunId !== null &&
         investigates.has(p.agentRunId) &&
         typeof p.payload?.body === 'string' &&

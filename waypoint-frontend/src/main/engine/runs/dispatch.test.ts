@@ -299,7 +299,7 @@ describe('buildBriefPreview', () => {
       {
         id: 'prop-old',
         kind: 'comment',
-        status: 'approved',
+        status: 'executed',
         origin: 'agent_run',
         agentRunId: 'run-inv00001',
         payload: { body: 'Older root cause.' },
@@ -309,7 +309,7 @@ describe('buildBriefPreview', () => {
       {
         id: 'prop-new',
         kind: 'comment',
-        status: 'approved',
+        status: 'executed',
         origin: 'agent_run',
         agentRunId: 'run-inv00001',
         payload: { body: 'The write is not guarded.' },
@@ -319,7 +319,7 @@ describe('buildBriefPreview', () => {
       {
         id: 'prop-copilot',
         kind: 'comment',
-        status: 'approved',
+        status: 'executed',
         origin: 'copilot',
         agentRunId: null,
         payload: { body: 'Not an RCA.' },
@@ -358,12 +358,12 @@ describe('findLiveWriter / findApprovedRca / findPriorFixBranch', () => {
       findLiveWriter([run({ status: 'running', entry: 'independent' })]),
     ).toBeNull();
   });
-  it('an RCA must be approved, run-filed, and from an Investigate', () => {
+  it('an RCA must be executed (approved), run-filed, and from an Investigate', () => {
     const runs = [run({ id: 'run-inv00001', intent: 'investigate' })];
     const base: LedgerProposal = {
       id: 'p',
       kind: 'comment',
-      status: 'approved',
+      status: 'executed',
       origin: 'agent_run',
       agentRunId: 'run-inv00001',
       payload: { body: 'rca' },
