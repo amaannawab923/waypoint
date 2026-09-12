@@ -62,6 +62,14 @@ const LIVE: ReadonlySet<AgentRun['status']> = new Set(['running', 'blocked']);
 interface SessionFacts {
   pending: number;
   lifecycle: string;
+  /**
+   * The summary's updatedAt, but only while a permission is pending — so a
+   * second request replacing the first (found live: Write answered, rm now
+   * waiting, the list still said "Wants to write") re-judges the reason,
+   * without every streamed token of a running session costing a ledger
+   * read.
+   */
+  stamp: number;
 }
 
 interface PendingPermissionView {
@@ -212,7 +220,12 @@ export function registerLiveLedgerFollower(
       return;
     }
     cancelGone(runId);
-    if (facts.pending > 0 && run.status === 'running') {
+    if (facts.pending > 0 && run.status === 'blocked') {
+      const { reason } = await reasonFor(runId);
+      if (reason !== run.blockedReason) {
+        await write(run, { blockedReason: reason }, null);
+      }
+    } else if (facts.pending > 0 && run.status === 'running') {
       const { reason, requestId } = await reasonFor(runId);
       await write(
         run,
@@ -247,6 +260,7 @@ export function registerLiveLedgerFollower(
       const facts: SessionFacts = {
         pending: summary.pendingPermissionCount,
         lifecycle: String(summary.lifecycle),
+        stamp: summary.pendingPermissionCount > 0 ? summary.updatedAt : 0,
       };
       present.add(summary.conversationId);
       const before = lastSeen.get(summary.conversationId);
@@ -256,7 +270,8 @@ export function registerLiveLedgerFollower(
       if (
         !before ||
         before.pending !== facts.pending ||
-        before.lifecycle !== facts.lifecycle
+        before.lifecycle !== facts.lifecycle ||
+        before.stamp !== facts.stamp
       ) {
         await judge(summary.conversationId, facts);
       }

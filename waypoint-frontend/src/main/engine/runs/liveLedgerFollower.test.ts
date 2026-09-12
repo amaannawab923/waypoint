@@ -239,6 +239,54 @@ describe('registerLiveLedgerFollower', () => {
     });
   });
 
+  it('a second permission replacing the first refreshes the blocked reason without a status change', async () => {
+    const daemon = fakeDaemon();
+    daemon.set(stateTopic('run-a'), {
+      pendingPermissions: [
+        {
+          requestId: 'p2',
+          toolCall: {
+            kind: 'execute-tool-call',
+            title: 'rm',
+            command: 'rm -f x',
+          },
+        },
+      ],
+    });
+    daemon.set(SESSIONS, {
+      'run-a': session('run-a', { pendingPermissionCount: 1, updatedAt: 5 }),
+    });
+    const supervisor = fakeSupervisor(running(1), daemon.client);
+    const { ledger } = fakeLedger({
+      'run-a': { status: 'blocked', blockedReason: 'Wants to write notes.txt' },
+    });
+    const notify = jest.fn();
+    registerLiveLedgerFollower({
+      supervisor,
+      ledger,
+      notify,
+      logger,
+      debounceMs: 0,
+    });
+    await flush();
+    await flush();
+    await flush();
+    expect(ledger.updateRun).toHaveBeenCalledWith('run-a', {
+      blockedReason: 'Wants to run rm -f x',
+    });
+    expect(ledger.appendEvent).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith({ runId: 'run-a', status: 'blocked' });
+
+    // The same pending request again, unchanged: nothing more to write.
+    daemon.sessions({
+      'run-a': session('run-a', { pendingPermissionCount: 1, updatedAt: 6 }),
+    });
+    await flush();
+    await flush();
+    await flush();
+    expect(ledger.updateRun).toHaveBeenCalledTimes(1);
+  });
+
   it('judges only our runs, only when the facts change, and never a run that is not live', async () => {
     const daemon = fakeDaemon();
     daemon.set(SESSIONS, {
@@ -249,7 +297,10 @@ describe('registerLiveLedgerFollower', () => {
     const supervisor = fakeSupervisor(running(1), daemon.client);
     const { ledger } = fakeLedger({
       'run-done': { status: 'done' },
-      'run-b': { status: 'blocked' },
+      'run-b': {
+        status: 'blocked',
+        blockedReason: 'Waiting for your permission',
+      },
     });
     registerLiveLedgerFollower({
       supervisor,
@@ -269,9 +320,10 @@ describe('registerLiveLedgerFollower', () => {
     ]);
     expect(ledger.updateRun).not.toHaveBeenCalled();
 
-    // The same facts pushed again are not re-judged.
+    // The same facts pushed again are not re-judged (a pending request
+    // with a new updatedAt would be — see the reason-refresh test).
     daemon.sessions({
-      'run-b': session('run-b', { pendingPermissionCount: 1, updatedAt: 2 }),
+      'run-b': session('run-b', { pendingPermissionCount: 1, updatedAt: 1 }),
     });
     await flush();
     await flush();
@@ -289,7 +341,10 @@ describe('registerLiveLedgerFollower', () => {
       const supervisor = fakeSupervisor(running(1), daemon.client);
       const { ledger, rows } = fakeLedger({
         'run-a': { status: 'running' },
-        'run-b': { status: 'blocked' },
+        'run-b': {
+          status: 'blocked',
+          blockedReason: 'Waiting for your permission',
+        },
       });
       const notify = jest.fn();
       registerLiveLedgerFollower({
