@@ -160,7 +160,11 @@ export interface LedgerClientDeps {
   /** Defaults to WAYPOINT_API_BASE_URL or the backend's own 14000. */
   baseUrl?: string;
   fetch?: typeof fetch;
+  /** Per-request deadline; defaults to LEDGER_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
+
+export const LEDGER_TIMEOUT_MS = 15_000;
 
 // The same fallback claudeSession.ts and proposalApproval.ts use — 14000,
 // not Express's conventional 4000, matching waypoint-backend's default.
@@ -174,7 +178,7 @@ function defaultBaseUrl(): string {
 // from a caller, even one inside this process.
 const RUN_ID = /^[a-z]+-[A-Za-z0-9]{1,64}$/;
 
-function assertRunId(id: string): void {
+export function assertRunId(id: string): void {
   if (!RUN_ID.test(id)) throw new Error(`Not a run id: ${JSON.stringify(id)}`);
 }
 
@@ -191,11 +195,29 @@ export function createLedgerClient(deps: LedgerClientDeps = {}): LedgerClient {
     path: string,
     body?: unknown,
   ): Promise<{ status: number; body: T }> {
-    const response = await doFetch(`${baseUrl}${path}`, {
-      method,
-      headers: body === undefined ? {} : { 'content-type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    // A backend that accepts and never answers must not pin reconcile
+    // (found in review, round 2); the ledger answers in milliseconds. An
+    // AbortController rather than AbortSignal.timeout: the latter is not
+    // in every runtime this file is loaded in (jsdom), and the effect is
+    // the same.
+    const abort = new AbortController();
+    const timer = setTimeout(
+      () =>
+        abort.abort(new Error(`Ledger request timed out: ${method} ${path}`)),
+      deps.timeoutMs ?? LEDGER_TIMEOUT_MS,
+    );
+    let response: Response;
+    try {
+      response = await doFetch(`${baseUrl}${path}`, {
+        method,
+        headers:
+          body === undefined ? {} : { 'content-type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: abort.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
     if (!response.ok) {
       let message = `Request failed: ${response.status} ${method} ${path}`;
       try {

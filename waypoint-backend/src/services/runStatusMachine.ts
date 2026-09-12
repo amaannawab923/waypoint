@@ -35,7 +35,10 @@ const TRANSITIONS: Record<AgentRunStatus, readonly AgentRunStatus[]> = {
   // shortcut to finishing — a blocked agent has not finished anything.
   blocked: ['running', 'interrupted', 'failed', 'cancelled'],
   // The agent is done; host-side push / PR / proposals in flight (W6).
-  finishing: ['needs-review', 'done', 'interrupted', 'failed'],
+  // `cancelled` is a person giving up on a push that hangs — the finalize
+  // steps are idempotent, so stopping them midway loses nothing that a
+  // retry cannot redo (found in review).
+  finishing: ['needs-review', 'done', 'interrupted', 'failed', 'cancelled'],
   // Left proposals a person has not decided. `done` once the last one is
   // resolved (W6 writes that); nothing else can happen to a run that has
   // already finished.

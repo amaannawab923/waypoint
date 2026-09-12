@@ -11,6 +11,18 @@ const id = z.string().min(1).max(128);
 // Same bound the review queue uses; the panel pages, it never wants 1000.
 const MAX_PAGE = 100;
 
+// A git ref name as this app is willing to pass to `git worktree add`:
+// no leading `-` (git would read it as an option — found in review), and
+// none of the characters check-ref-format refuses. The daemon uses argv
+// arrays, so this is about honest failures, not injection.
+export const gitRefSchema = z
+  .string()
+  .min(1)
+  .max(256)
+  .refine((v) => !v.startsWith('-') && !/[\s~^:?*[\\\x00-\x1f\x7f]|\.\.|@\{|\/\/|\.lock$|^\/|\/$|^\.|\/\./.test(v), {
+    message: 'not a valid git ref name',
+  });
+
 export const createAgentRunSchema = z
   .object({
     projectId: id,
@@ -19,10 +31,16 @@ export const createAgentRunSchema = z
     agentId: id.nullable().optional(),
     entry: z.enum(['independent', 'dispatched']),
     providerId: z.string().min(1).max(64),
-    baseRef: z.string().min(1).max(256).optional(),
+    baseRef: gitRefSchema.optional(),
     retryOfRunId: id.optional(),
   })
-  .strict();
+  .strict()
+  // A dispatched run is one started from a ticket (schema/agentRuns.ts);
+  // a dispatched run with no ticket is a contradiction, not a row.
+  .refine((v) => v.entry !== 'dispatched' || (typeof v.ticketId === 'string' && v.ticketId.length > 0), {
+    message: 'a dispatched run needs a ticketId',
+    path: ['ticketId'],
+  });
 export type CreateAgentRunInput = z.infer<typeof createAgentRunSchema>;
 
 // `status` arrives as `?status=running,blocked` — one query param, split
@@ -108,8 +126,8 @@ export const updateAgentRunSchema = requireAtLeastOneField(
       daemonWorkspaceId: z.string().max(256).nullable().optional(),
       daemonSessionId: z.string().max(256).nullable().optional(),
       worktreePath: z.string().max(4096).nullable().optional(),
-      branch: z.string().max(256).nullable().optional(),
-      baseRef: z.string().max(256).nullable().optional(),
+      branch: gitRefSchema.nullable().optional(),
+      baseRef: gitRefSchema.nullable().optional(),
       prUrl: z.string().url().max(2048).nullable().optional(),
       turnCount: z.number().int().min(0).optional(),
       inputTokens: z.number().int().min(0).optional(),

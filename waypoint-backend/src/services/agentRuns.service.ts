@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, gt, inArray, lt, or, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { agentRuns, agentRunEvents } from '../db/schema/index.js';
+import { agentRuns, agentRunEvents, tickets } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
 import { ConflictError, NotFoundError, ValidationError } from '../middleware/errors.js';
 import {
@@ -36,6 +36,7 @@ export type AgentRunEvent = typeof agentRunEvents.$inferSelect;
 export type AgentRunEventKind =
   | 'created'
   | 'status_changed'
+  | 'blocked_reason_changed'
   | AppendAgentRunEventInput['kind'];
 
 const DEFAULT_PAGE = 50;
@@ -53,24 +54,32 @@ export interface RunPage {
 }
 
 interface Cursor {
-  createdAt: Date;
+  /** `created_at::text` exactly as Postgres renders it — microsecond precision. */
+  createdAt: string;
   id: string;
 }
 
-function encodeCursor(row: { createdAt: Date; id: string }): string {
-  return Buffer.from(JSON.stringify({ c: row.createdAt.toISOString(), i: row.id }), 'utf8').toString(
-    'base64url',
-  );
+// Found in review: a JS Date holds milliseconds, `created_at` holds
+// microseconds, so a cursor built from `toISOString()` sat *below* the
+// boundary row and the next page skipped every row sharing that
+// millisecond (three runs created by concurrent POSTs, page size 1: the
+// middle one never came back). The cursor therefore carries the column's
+// own text rendering, selected alongside the row, and compares it as a
+// timestamptz — exact by construction. (proposals.service.ts's review
+// queue has the same defect; ROAD-104 tracks it.)
+const CURSOR_TEXT = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d{1,6})?[+-]\d{2}(:\d{2})?$/;
+
+function encodeCursor(row: { createdAtText: string; id: string }): string {
+  return Buffer.from(JSON.stringify({ c: row.createdAtText, i: row.id }), 'utf8').toString('base64url');
 }
 
 function decodeCursor(raw: string): Cursor {
   try {
     const parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')) as { c: string; i: string };
-    const createdAt = new Date(parsed.c);
-    if (Number.isNaN(createdAt.getTime()) || typeof parsed.i !== 'string' || !parsed.i) {
+    if (typeof parsed.c !== 'string' || !CURSOR_TEXT.test(parsed.c) || typeof parsed.i !== 'string' || !parsed.i) {
       throw new Error('malformed');
     }
-    return { createdAt, id: parsed.i };
+    return { createdAt: parsed.c, id: parsed.i };
   } catch {
     throw new ValidationError('invalid cursor');
   }
@@ -109,13 +118,49 @@ async function writeEvent(
 
 export async function createRun(input: CreateAgentRunInput): Promise<AgentRun> {
   return db.transaction(async (tx) => {
+    if (input.ticketId) {
+      // A run about a ticket is a run in that ticket's project — the
+      // drawer lists by ticket, the panel by project, and a row that says
+      // otherwise would appear in one and not the other.
+      const [ticket] = await tx
+        .select({ projectId: tickets.projectId })
+        .from(tickets)
+        .where(eq(tickets.id, input.ticketId));
+      if (!ticket) throw new ValidationError('ticketId does not exist');
+      if (ticket.projectId !== input.projectId) {
+        throw new ValidationError('ticketId belongs to a different project than projectId');
+      }
+    }
     if (input.retryOfRunId) {
       // The retried run must exist and be over: retrying a run that is
-      // still going would race it for the same ticket's worktree.
-      const [prior] = await tx.select().from(agentRuns).where(eq(agentRuns.id, input.retryOfRunId));
-      if (!prior) throw new NotFoundError('retried agent run');
+      // still going would race it for the same ticket's worktree. Read
+      // under the row lock (found in review): a plain select could see
+      // `interrupted` while a Resume was mid-commit, and both would land.
+      let prior: AgentRun;
+      try {
+        prior = await lockRun(tx, input.retryOfRunId);
+      } catch (error) {
+        // A body field that names nothing is a bad request, not a missing
+        // resource — the resource this POST addresses is the collection.
+        if (error instanceof NotFoundError) throw new ValidationError('retryOfRunId does not exist');
+        throw error;
+      }
       if (!isTerminal(prior.status) && prior.status !== 'interrupted') {
         throw new ConflictError(`Run ${prior.id} is ${prior.status}; only a finished or interrupted run can be retried.`);
+      }
+      if (prior.status === 'interrupted') {
+        // The retry supersedes it: an interrupted run is resumable, and
+        // two live runs on one ticket is what the lock above exists to
+        // prevent. Cancelled here, under the same lock, with the reason.
+        await tx
+          .update(agentRuns)
+          .set({ status: 'cancelled', endedAt: new Date(), updatedAt: new Date() })
+          .where(eq(agentRuns.id, prior.id));
+        await writeEvent(tx, prior.id, 'status_changed', {
+          from: 'interrupted',
+          to: 'cancelled',
+          reason: 'superseded by a retry',
+        });
       }
     }
     const [run] = await tx
@@ -158,19 +203,26 @@ export async function listRuns(query: ListAgentRunsQuery): Promise<RunPage> {
   if (query.status) conditions.push(inArray(agentRuns.status, query.status));
   if (query.cursor) {
     const c = decodeCursor(query.cursor);
+    // Keyset on (created_at, id) DESC, the cursor's timestamp compared as
+    // the column's own type so no precision is lost on the way round.
+    const at = sql`${c.createdAt}::timestamptz`;
     conditions.push(
-      or(lt(agentRuns.createdAt, c.createdAt), and(eq(agentRuns.createdAt, c.createdAt), lt(agentRuns.id, c.id)))!,
+      or(lt(agentRuns.createdAt, at), and(eq(agentRuns.createdAt, at), lt(agentRuns.id, c.id)))!,
     );
   }
   const rows = await db
-    .select()
+    .select({ run: agentRuns, createdAtText: sql<string>`${agentRuns.createdAt}::text` })
     .from(agentRuns)
     .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(desc(agentRuns.createdAt), desc(agentRuns.id))
     .limit(limit + 1);
   const hasMore = rows.length > limit;
-  const items = hasMore ? rows.slice(0, limit) : rows;
-  return { items, nextCursor: hasMore ? encodeCursor(items[items.length - 1]) : null };
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  const last = page[page.length - 1];
+  return {
+    items: page.map((r) => r.run),
+    nextCursor: hasMore && last ? encodeCursor({ createdAtText: last.createdAtText, id: last.run.id }) : null,
+  };
 }
 
 /** The ticket drawer's list (ROAD-56): every run ever made about this ticket, newest first. */
@@ -219,6 +271,14 @@ export async function updateRun(runId: string, input: UpdateAgentRunInput): Prom
   return db.transaction(async (tx) => {
     const current = await lockRun(tx, runId);
     const { status, reason, ...fields } = input;
+    // A finished run is evidence. Found in review: the header promised
+    // "nothing here updates a finished run's worktree or outcome" while a
+    // field-only patch on a cancelled run went straight through. The one
+    // thing still accepted is a status-only patch to the status it has —
+    // an idempotent retry, handled below.
+    if (isTerminal(current.status) && !(Object.keys(fields).length === 0 && status === current.status)) {
+      throw new ConflictError(`A ${current.status} run is finished; its record is read-only.`);
+    }
     const patch: Partial<typeof agentRuns.$inferInsert> = {
       ...fields,
       summary: truncateSummary(fields.summary),
@@ -251,8 +311,22 @@ export async function updateRun(runId: string, input: UpdateAgentRunInput): Prom
       // and a 409 for it would make every idempotent retry a failure.
       return current;
     }
+    // A blocked run asked a second question: not a transition, but the
+    // trail must show the question changed (found in review).
+    const reasonChanged =
+      !moved &&
+      current.status === 'blocked' &&
+      fields.blockedReason !== undefined &&
+      fields.blockedReason !== current.blockedReason;
 
     const [updated] = await tx.update(agentRuns).set(patch).where(eq(agentRuns.id, runId)).returning();
+    if (reasonChanged) {
+      await writeEvent(tx, runId, 'blocked_reason_changed', {
+        from: current.blockedReason,
+        to: fields.blockedReason,
+        ...(reason !== undefined ? { reason } : {}),
+      });
+    }
     if (moved) {
       await writeEvent(tx, runId, 'status_changed', {
         from: moved.from,

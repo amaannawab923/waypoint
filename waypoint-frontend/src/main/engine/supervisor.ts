@@ -149,6 +149,15 @@ export interface EngineSupervisor {
   dispose(): void;
 }
 
+/**
+ * How long `initialize` and `health` may take once the socket has
+ * accepted us. The daemon answers both from memory in well under a
+ * millisecond; ten seconds is a daemon that is wedged, and without a
+ * deadline the card sat at "starting" until someone clicked Stop (found
+ * in review, round 2).
+ */
+export const HANDSHAKE_TIMEOUT_MS = 10_000;
+
 function errorMessage(error: unknown): string {
   if (error instanceof EngineCallError) return error.message;
   if (error instanceof Error) return error.message;
@@ -232,6 +241,17 @@ export function createEngineSupervisor(
   // real, observed version rather than assuming today's ENGINE_PIN.version
   // is what's on disk.
   let installedVersion: string | null = null;
+  /** The `start` CLI call in flight, if any (settles, never rejects) — see start() and stop(). */
+  let startCli: Promise<void> | null = null;
+  /**
+   * start() is looking (verify + status probe) and has not yet said
+   * `starting`. A stop() that lands in that window has nothing to stop but
+   * must still win: it sets `abandonStart`, and start() steps aside after
+   * its look instead of proceeding to a `start` the user just cancelled.
+   * Found live in review round 2: a Stop 150 ms after Start was a no-op.
+   */
+  let startLooking = false;
+  let abandonStart = false;
   const listeners = new Set<(status: EngineStatus) => void>();
 
   function setStatus(next: EngineStatus): void {
@@ -335,6 +355,7 @@ export function createEngineSupervisor(
       initResult = await newClient.call<EngineInitializeResult>(
         'initialize',
         hello,
+        { timeoutMs: HANDSHAKE_TIMEOUT_MS },
       );
     } catch (error) {
       newClient.close();
@@ -365,7 +386,9 @@ export function createEngineSupervisor(
 
     let startupHealth: EngineHealth;
     try {
-      startupHealth = await newClient.call<EngineHealth>('health');
+      startupHealth = await newClient.call<EngineHealth>('health', undefined, {
+        timeoutMs: HANDSHAKE_TIMEOUT_MS,
+      });
     } catch (error) {
       newClient.close();
       if (stale(gen)) return status;
@@ -510,11 +533,22 @@ export function createEngineSupervisor(
       setStatus(failedStatus('health', probe.value.message));
       return status;
     }
-    setStatus({
+    const stopped: EngineStatus = {
       kind: 'stopped',
       installDir: deps.paths.installDir,
       version: installedVersion,
-    });
+    };
+    // A look that found what we already show is not a change: start()
+    // looks on every call now, and a re-emitted `stopped` would be one
+    // renderer round trip per click for nothing.
+    if (
+      status.kind === 'stopped' &&
+      status.installDir === stopped.installDir &&
+      status.version === stopped.version
+    ) {
+      return status;
+    }
+    setStatus(stopped);
     return status;
   }
 
@@ -524,19 +558,29 @@ export function createEngineSupervisor(
     // with it — a caller that wants to restart waits for stop() to settle.
     if (isLiveOrTransitioning(status)) return status;
 
-    // Never start what has not been looked at. install() verifies the
-    // files and probes the socket; if a daemon is already serving it
-    // attaches and we are done, and if the install is broken we get the
-    // honest failure instead of a `start` CLI error about a missing
-    // launcher. (Found in review, L6: start() from the never-observed
-    // placeholder used to reach the CLI.)
-    if (installedVersion === null || status.kind !== 'stopped') {
-      const looked = await install();
-      if (looked.kind !== 'stopped') return looked;
-      // Two start() calls can share one look (see install()); the first to
-      // resume past it owns the start, the other sees 'starting' here.
-      if (isLiveOrTransitioning(status)) return status;
+    // Never start on an observation older than this call. install()
+    // verifies the files and probes the socket; if a daemon is already
+    // serving it attaches and we are done, and if the install is broken
+    // we get the honest failure instead of a `start` CLI error about a
+    // missing launcher. Always — a `stopped` observed a minute ago by
+    // MachinePage is not evidence about the socket now, and the stale-lock
+    // removal below acts on it (found in review, round 2).
+    startLooking = true;
+    abandonStart = false;
+    let looked: EngineStatus;
+    try {
+      looked = await install();
+    } finally {
+      startLooking = false;
     }
+    if (abandonStart) {
+      abandonStart = false;
+      return status;
+    }
+    if (looked.kind !== 'stopped') return looked;
+    // Two start() calls can share one look (see install()); the first to
+    // resume past it owns the start, the other sees 'starting' here.
+    if (isLiveOrTransitioning(status)) return status;
     const gen = bump();
 
     setStatus({ kind: 'starting', since: deps.clock() });
@@ -547,26 +591,35 @@ export function createEngineSupervisor(
     // the lock has no liveness check, so every later `start` fails with a
     // 5 s `lock` error until someone deletes it. We are that someone —
     // but only now that install() has just observed `not-running` on the
-    // socket: a lock left by a daemon that IS running is not stale, and a
-    // second Waypoint instance's in-flight start (main.ts holds no
-    // single-instance lock — a known gap, see the commit) would be the one
-    // case this still gets wrong.
+    // socket, and only when the pid the lock names is gone (engineIpc.ts's
+    // removeStaleStartLock reads it) — a lock held by a `start` that is
+    // genuinely mid-flight, ours or another Waypoint instance's (main.ts
+    // takes Electron's single-instance lock, so "another" is a packaged
+    // build beside a dev one), is left alone.
     await deps.removeStaleStartLock?.(`${deps.paths.socketPath}.lock`);
     if (stale(gen)) return status;
 
     try {
-      const startResult = await deps.runDaemonCommand(
-        deps.paths.launcherPath,
-        'start',
-        {
-          socketPath: deps.paths.socketPath,
-          // The daemon reads a `.env` in its cwd for `EMDASH_WS_*` overrides
-          // (emdash `config.ts:6`); Electron main's cwd is wherever the app
-          // was launched from. Pin it to the install so nothing outside
-          // Waypoint's own directory can reconfigure the engine.
-          cwd: deps.paths.installDir,
-        },
+      // Remembered so stop() can wait for it: the daemon's `stop` reads
+      // the pid file, which `serve` writes only once it is listening, so
+      // a `stop` that lands during `start`'s health wait answers
+      // "not running" for a daemon that is about to be (found in review,
+      // round 2, reproduced against the pinned binary).
+      const pending = deps.runDaemonCommand(deps.paths.launcherPath, 'start', {
+        socketPath: deps.paths.socketPath,
+        // The daemon reads a `.env` in its cwd for `EMDASH_WS_*` overrides
+        // (emdash `config.ts:6`); Electron main's cwd is wherever the app
+        // was launched from. Pin it to the install so nothing outside
+        // Waypoint's own directory can reconfigure the engine.
+        cwd: deps.paths.installDir,
+      });
+      startCli = pending.then(
+        () => undefined,
+        () => undefined,
       );
+      const startResult = await pending.finally(() => {
+        startCli = null;
+      });
       if (stale(gen)) return status;
       if (!startResult.ok) {
         setStatus(
@@ -592,6 +645,11 @@ export function createEngineSupervisor(
   }
 
   async function stop(): Promise<EngineStatus> {
+    if (startLooking) {
+      // Nothing is running yet, but a start is on its way: cancel it.
+      abandonStart = true;
+      return status;
+    }
     if (
       status.kind === 'stopping' ||
       status.kind === 'stopped' ||
@@ -607,6 +665,13 @@ export function createEngineSupervisor(
     // which would otherwise race this function's own 'stopped' transition
     // below and could overwrite it with a spurious 'failed'.
     teardownClient();
+    // A `start` CLI still in flight is let finish first: its daemon does
+    // not exist for `stop` until `serve` has written the pid file, and a
+    // `stop` that beats it reports "not running" for a daemon that then
+    // comes up anyway. The bump above already made start()'s continuation
+    // stale, so nothing attaches; we only wait for the process to exist
+    // so that the `stop` below actually ends it.
+    if (startCli) await startCli;
 
     try {
       const stopResult = await deps.runDaemonCommand(

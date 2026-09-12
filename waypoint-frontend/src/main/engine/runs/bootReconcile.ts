@@ -42,13 +42,33 @@ export function registerBootReconcile(deps: BootReconcileDeps): Unsubscribe {
   let inFlight: Promise<void> | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let retriesLeft = MAX_RETRIES;
+  // The connection that most recently asked. A reconnect that lands while
+  // a reconcile is still running is not reconciled by that run (it read
+  // the old connection's sessions), so it is remembered and re-run once
+  // the in-flight one settles (review round 2).
+  let latestSince: number | null = null;
 
   const cancelRetry = () => {
     if (retryTimer) clearTimeout(retryTimer);
     retryTimer = null;
   };
 
+  const scheduleRetry = (message: string, retriesLeftNow: number) => {
+    deps.logger.warn('engine: boot reconcile did not run; retrying', {
+      message,
+      inMs: retryDelayMs,
+      retriesLeft: retriesLeftNow,
+    });
+    cancelRetry();
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      const status = deps.supervisor.getStatus();
+      if (status.kind === 'running') reconcile(status.since);
+    }, retryDelayMs);
+  };
+
   const reconcile = (since: number): void => {
+    latestSince = since;
     if (reconciledSince === since || inFlight) return;
     const client = deps.supervisor.client();
     if (!client) return;
@@ -59,25 +79,29 @@ export function registerBootReconcile(deps: BootReconcileDeps): Unsubscribe {
       logger: deps.logger,
     })
       .then((report) => {
-        retriesLeft = MAX_RETRIES;
         deps.onReport?.(report);
+        // A plan that ran but could not apply every action (the backend
+        // restarted between the read and the writes, say) is not done:
+        // the rows it could not fix would sit wrong for the life of a
+        // connection that may never drop. Retried like a failed read
+        // (review round 2).
+        if (report.failures.length > 0 && retriesLeft > 0) {
+          reconciledSince = null;
+          retriesLeft -= 1;
+          scheduleRetry(
+            `${report.failures.length} action(s) failed`,
+            retriesLeft,
+          );
+          return;
+        }
+        retriesLeft = MAX_RETRIES;
       })
       .catch((error) => {
         reconciledSince = null;
         const message = error instanceof Error ? error.message : String(error);
         if (retriesLeft > 0) {
           retriesLeft -= 1;
-          deps.logger.warn('engine: boot reconcile did not run; retrying', {
-            message,
-            inMs: retryDelayMs,
-            retriesLeft,
-          });
-          cancelRetry();
-          retryTimer = setTimeout(() => {
-            retryTimer = null;
-            const status = deps.supervisor.getStatus();
-            if (status.kind === 'running') reconcile(status.since);
-          }, retryDelayMs);
+          scheduleRetry(message, retriesLeft);
         } else {
           deps.logger.warn(
             'engine: boot reconcile did not run; will try on the next connection',
@@ -87,6 +111,15 @@ export function registerBootReconcile(deps: BootReconcileDeps): Unsubscribe {
       })
       .finally(() => {
         inFlight = null;
+        // A newer connection asked while this one ran: its turn. Compared
+        // against the connection THIS run was for, not `reconciledSince`
+        // (a failure resets that to null, which must not re-run the same
+        // connection outside the retry budget).
+        if (latestSince !== null && latestSince !== since) {
+          const status = deps.supervisor.getStatus();
+          if (status.kind === 'running' && status.since === latestSince)
+            reconcile(latestSince);
+        }
       });
   };
 

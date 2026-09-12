@@ -17,6 +17,7 @@ import type {
 } from './daemonCli';
 import {
   createEngineSupervisor,
+  HANDSHAKE_TIMEOUT_MS,
   type ConnectSocketTransport,
   type CreateWireClient,
   type EngineSupervisorDeps,
@@ -31,7 +32,7 @@ const PATHS: EnginePaths = {
   runDir: '/userdata/engine/run',
   socketPath: '/userdata/engine/run/workspace.sock',
   stateDir: '/userdata/engine/state',
-  worktreesDir: '/userdata/engine/worktrees',
+  worktreesDir: '/userdata/worktrees',
   logPath: '/userdata/engine/engine.log',
 };
 
@@ -194,6 +195,9 @@ function fakeClient(
     call: jest.fn((path: string, input?: unknown) =>
       callImpl(path, input),
     ) as WireClient['call'],
+    snapshot: jest.fn(() =>
+      Promise.resolve(undefined),
+    ) as WireClient['snapshot'],
     attach: jest.fn(),
     onDisconnect: jest.fn((cb) => {
       disconnectListeners.add(cb);
@@ -392,7 +396,9 @@ describe('createEngineSupervisor', () => {
       expect(
         (runDaemonCommand as unknown as jest.Mock).mock.calls.map((c) => c[1]),
       ).toEqual(['status']);
-      expect(client.call).toHaveBeenCalledWith('health');
+      expect(client.call).toHaveBeenCalledWith('health', undefined, {
+        timeoutMs: HANDSHAKE_TIMEOUT_MS,
+      });
     });
 
     it('reports failed, stage health, when something answers the socket but not health — never stopped', async () => {
@@ -516,11 +522,20 @@ describe('createEngineSupervisor', () => {
       // The daemon requires the `client` object — observed live: without it,
       // HANDLER_ERROR "client: expected object" — so this pins its presence,
       // not just the protocol version.
-      expect(client.call).toHaveBeenCalledWith('initialize', {
-        protocolVersion: '1.0.0',
-        client: { id: 'waypoint', appVersion: '0.0.0-test' },
+      expect(client.call).toHaveBeenCalledWith(
+        'initialize',
+        {
+          protocolVersion: '1.0.0',
+          client: { id: 'waypoint', appVersion: '0.0.0-test' },
+        },
+        // Bounded (found in review, round 2): a daemon that accepts the
+        // socket but never answers becomes failed/initialize, not a
+        // 'starting' that only Stop can end.
+        { timeoutMs: HANDSHAKE_TIMEOUT_MS },
+      );
+      expect(client.call).toHaveBeenCalledWith('health', undefined, {
+        timeoutMs: HANDSHAKE_TIMEOUT_MS,
       });
-      expect(client.call).toHaveBeenCalledWith('health');
       expect(status).toEqual({
         kind: 'running',
         since: 1_000,
@@ -706,7 +721,11 @@ describe('createEngineSupervisor', () => {
       expect(client.close).toHaveBeenCalledTimes(1);
       // health() was never reached — the mismatch is terminal for this
       // attempt, matching "upgrade, don't retry".
-      expect(client.call).not.toHaveBeenCalledWith('health');
+      expect(client.call).not.toHaveBeenCalledWith(
+        'health',
+        undefined,
+        expect.anything(),
+      );
     });
 
     it('fails at stage initialize when the call itself throws (e.g. disconnected mid-handshake)', async () => {
@@ -755,17 +774,20 @@ describe('createEngineSupervisor', () => {
       runDaemonCommand.mockClear();
 
       const first = supervisor.start();
-      // Called synchronously, before `first` has had a chance to resolve —
-      // status is already 'starting' by this point (set synchronously
-      // before start()'s first await, now that install() has looked), so
-      // this must short-circuit rather than kick off a second
-      // runDaemonCommand/connect/initialize sequence.
+      // Called synchronously, before `first` has had a chance to resolve.
+      // start() always looks first (one `status` call, shared by both
+      // callers), and the first to resume past that look owns the start;
+      // the second sees 'starting' and must not kick off a second
+      // runDaemonCommand('start')/connect/initialize sequence.
       const second = await supervisor.start();
       expect(second.kind).toBe('starting');
 
       const firstResult = await first;
       expect(firstResult.kind).toBe('running');
-      expect(runDaemonCommand).toHaveBeenCalledTimes(1);
+      expect(runDaemonCommand.mock.calls.map((c) => c[1])).toEqual([
+        'status',
+        'start',
+      ]);
     });
 
     it('two cold start() calls share one look and issue one start', async () => {
@@ -807,6 +829,174 @@ describe('createEngineSupervisor', () => {
 
       expect(status.kind).toBe('running');
       expect(runDaemonCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  // Found in review, round 2: the generation counter (M3) had no test of
+  // the overlaps it was added for. Each of these interleaves two
+  // user-initiated transitions and checks that the earlier one's
+  // continuation abandons instead of writing a status the user did not ask
+  // for — and, for stop-during-start, that the daemon `start` forked is
+  // the one `stop` actually ends.
+  describe('overlapping transitions', () => {
+    /** A promise the test resolves by hand. */
+    function deferred<T>() {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((r) => {
+        resolve = r;
+      });
+      return { promise, resolve };
+    }
+
+    it('stop() during an in-flight start CLI waits for it, then stops what it started — never "stopped" for a daemon that is coming up', async () => {
+      const client = fakeClient();
+      successfulInitializeAndHealth(client);
+      const startCli = deferred<DaemonCommandResult<{ status: string }>>();
+      const commands: string[] = [];
+      const { deps } = makeDeps({
+        createWireClient: jest.fn(() => client),
+        runDaemonCommand: mockRunDaemonCommand((_l, command) => {
+          commands.push(command);
+          if (command === 'start') return startCli.promise;
+          if (command === 'stop') return Promise.resolve(stoppedResult());
+          return Promise.resolve(notRunningResult());
+        }),
+      });
+      const supervisor = createEngineSupervisor(deps);
+      await supervisor.install();
+      const seen: string[] = [];
+      supervisor.onStatusChange((s) => seen.push(s.kind));
+
+      const starting = supervisor.start();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(supervisor.getStatus().kind).toBe('starting');
+      const stopping = supervisor.stop();
+      await new Promise((r) => setTimeout(r, 0));
+      // `stop` has NOT been issued yet: the start CLI is still running.
+      expect(commands).toEqual(['status', 'status', 'start']);
+
+      startCli.resolve(startedResult());
+      const [startOutcome, stopOutcome] = await Promise.all([
+        starting,
+        stopping,
+      ]);
+
+      expect(commands).toEqual(['status', 'status', 'start', 'stop']);
+      expect(stopOutcome.kind).toBe('stopped');
+      // The start's continuation was stale by then: no connect, no attach.
+      expect(startOutcome.kind).toBe('stopped');
+      expect(deps.connectSocketTransport).not.toHaveBeenCalled();
+      expect(seen).toEqual(['starting', 'stopping', 'stopped']);
+    });
+
+    it('stop() while start() is still looking cancels the start: nothing is started, status stays stopped', async () => {
+      const client = fakeClient();
+      successfulInitializeAndHealth(client);
+      const probe = deferred<DaemonCommandResult<DaemonStatusOutcome>>();
+      const { deps, runDaemonCommand } = makeDeps({
+        createWireClient: jest.fn(() => client),
+        runDaemonCommand: mockRunDaemonCommand((_l, command) =>
+          command === 'status'
+            ? probe.promise
+            : Promise.resolve(startedResult()),
+        ),
+      });
+      const supervisor = createEngineSupervisor(deps);
+
+      const starting = supervisor.start(); // looking: the status probe is pending
+      await new Promise((r) => setTimeout(r, 0));
+      const stopped = await supervisor.stop();
+      probe.resolve(notRunningResult());
+      const outcome = await starting;
+
+      expect(stopped.kind).toBe('not-installed'); // the placeholder; nothing observed yet
+      expect(outcome.kind).toBe('stopped');
+      expect(runDaemonCommand.mock.calls.map((c) => c[1])).toEqual(['status']);
+      expect(deps.connectSocketTransport).not.toHaveBeenCalled();
+    });
+
+    it('dispose() mid-handshake abandons the attach: no running status, the client is closed', async () => {
+      const initialize = deferred<unknown>();
+      const client = fakeClient((path) =>
+        path === 'initialize' ? initialize.promise : Promise.resolve(HEALTH),
+      );
+      const { deps } = makeDeps({ createWireClient: jest.fn(() => client) });
+      const supervisor = createEngineSupervisor(deps);
+      await supervisor.install();
+      const seen: string[] = [];
+      supervisor.onStatusChange((s) => seen.push(s.kind));
+
+      const starting = supervisor.start();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(client.call).toHaveBeenCalledWith(
+        'initialize',
+        expect.anything(),
+        expect.anything(),
+      );
+      supervisor.dispose();
+      initialize.resolve({ success: true, data: AGREED });
+      const outcome = await starting;
+
+      expect(outcome.kind).not.toBe('running');
+      expect(client.close).toHaveBeenCalled();
+      expect(seen).not.toContain('running');
+      expect(supervisor.client()).toBeNull();
+    });
+
+    it('install() during a start is a no-op that reports the transition, never a re-derived stopped', async () => {
+      const client = fakeClient();
+      successfulInitializeAndHealth(client);
+      const startCli = deferred<DaemonCommandResult<{ status: string }>>();
+      const { deps, verifyInstalledEngine } = makeDeps({
+        createWireClient: jest.fn(() => client),
+        runDaemonCommand: mockRunDaemonCommand((_l, command) =>
+          command === 'start'
+            ? startCli.promise
+            : Promise.resolve(notRunningResult()),
+        ),
+      });
+      const supervisor = createEngineSupervisor(deps);
+      await supervisor.install();
+      verifyInstalledEngine.mockClear();
+
+      const starting = supervisor.start();
+      await new Promise((r) => setTimeout(r, 0));
+      const looked = await supervisor.install();
+
+      expect(looked.kind).toBe('starting');
+      expect(verifyInstalledEngine).toHaveBeenCalledTimes(1); // start()'s own look only
+      startCli.resolve(startedResult());
+      expect((await starting).kind).toBe('running');
+    });
+
+    it('a handshake that never answers becomes failed/initialize, bounded by HANDSHAKE_TIMEOUT_MS', async () => {
+      // The fake honours the timeout the supervisor passes, the way the
+      // real WireClient does.
+      const client = fakeClient((path, _input) => {
+        void path;
+        return new Promise(() => {});
+      });
+      (client.call as jest.Mock).mockImplementation(
+        (_path: string, _input: unknown, options?: { timeoutMs?: number }) =>
+          new Promise((_resolve, reject) => {
+            if (options?.timeoutMs) {
+              setTimeout(
+                () => reject(new Error(`TIMEOUT after ${options.timeoutMs}ms`)),
+                5,
+              );
+            }
+          }),
+      );
+      const { deps } = makeDeps({ createWireClient: jest.fn(() => client) });
+      const supervisor = createEngineSupervisor(deps);
+
+      const status = await supervisor.start();
+
+      expect(status).toMatchObject({ kind: 'failed', stage: 'initialize' });
+      expect(String((status as { message: string }).message)).toContain(
+        'TIMEOUT',
+      );
+      expect(HANDSHAKE_TIMEOUT_MS).toBe(10_000);
     });
   });
 

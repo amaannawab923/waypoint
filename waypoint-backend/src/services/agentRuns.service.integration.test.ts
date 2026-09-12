@@ -29,6 +29,7 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
   let schema: typeof import('../db/schema/index.js');
   let eq: typeof import('drizzle-orm')['eq'];
   let asc: typeof import('drizzle-orm')['asc'];
+  let sql: typeof import('drizzle-orm')['sql'];
 
   const stamp = Date.now();
   const workspaceId = `ws-runs-${stamp}`;
@@ -50,7 +51,7 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
     ({ db } = await import('../db/client.js'));
     service = await import('./agentRuns.service.js');
     schema = await import('../db/schema/index.js');
-    ({ eq, asc } = await import('drizzle-orm'));
+    ({ eq, asc, sql } = await import('drizzle-orm'));
 
     await db.insert(schema.workspaces).values({
       id: workspaceId,
@@ -163,17 +164,18 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
 
   it('refuses an illegal move with a 409 sentence and writes nothing — not even the field patch', async () => {
     const run = await service.createRun(base());
-    await service.updateRun(run.id, { status: 'cancelled' });
+    await service.updateRun(run.id, { status: 'provisioning' });
+    await service.updateRun(run.id, { status: 'running' });
 
-    await expect(service.updateRun(run.id, { status: 'running', summary: 'should not land' })).rejects.toThrow(
-      'A cancelled run is finished; it cannot become running.',
+    await expect(service.updateRun(run.id, { status: 'done', summary: 'should not land' })).rejects.toThrow(
+      'A running run cannot become done; it can become blocked, finishing, interrupted, failed, cancelled.',
     );
 
     const after = await service.getRun(run.id);
-    expect(after?.status).toBe('cancelled');
+    expect(after?.status).toBe('running');
     expect(after?.summary).toBeNull();
     const events = await service.listEvents(run.id);
-    expect(events).toHaveLength(2); // created + the one cancel
+    expect(events).toHaveLength(3); // created + two moves
   });
 
   it('a status-only patch to the current status is an idempotent no-op, not a 409', async () => {
@@ -306,6 +308,141 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
     expect(queuedOnly.items.map((r) => r.id)).not.toContain(made[0]);
     expect(queuedOnly.items).toHaveLength(4);
     await expect(service.listRuns({ ownerMemberId: owner, cursor: 'not-a-cursor' })).rejects.toThrow('invalid cursor');
+  });
+
+  it('a finished run is read-only: a field patch is refused and nothing lands; an idempotent status retry still passes', async () => {
+    const run = await service.createRun(base());
+    await service.updateRun(run.id, { status: 'cancelled' });
+
+    await expect(service.updateRun(run.id, { worktreePath: '/other', summary: 'rewritten' })).rejects.toThrow(
+      'A cancelled run is finished; its record is read-only.',
+    );
+    const again = await service.updateRun(run.id, { status: 'cancelled' });
+
+    expect(again.status).toBe('cancelled');
+    expect(again.summary).toBeNull();
+    expect(again.worktreePath).toBeNull();
+  });
+
+  it('a blocked run asking a second question gets a blocked_reason_changed event without a transition', async () => {
+    const run = await service.createRun(base());
+    await service.updateRun(run.id, { status: 'provisioning' });
+    await service.updateRun(run.id, { status: 'running' });
+    await service.updateRun(run.id, { status: 'blocked', blockedReason: 'first question' });
+
+    await service.updateRun(run.id, { status: 'blocked', blockedReason: 'second question' });
+
+    const events = await service.listEvents(run.id);
+    const last = events[events.length - 1];
+    expect(last.kind).toBe('blocked_reason_changed');
+    expect(last.payload).toEqual({ from: 'first question', to: 'second question' });
+    expect((await service.getRun(run.id))?.status).toBe('blocked');
+  });
+
+  it('retrying an interrupted run cancels it under the lock, so there is never a second live run on the ticket', async () => {
+    const first = await service.createRun(base());
+    await service.updateRun(first.id, { status: 'provisioning' });
+    await service.updateRun(first.id, { status: 'interrupted' });
+
+    const retry = await service.createRun({ ...base(), retryOfRunId: first.id });
+
+    const prior = await service.getRun(first.id);
+    expect(prior?.status).toBe('cancelled');
+    expect(prior?.endedAt).not.toBeNull();
+    const priorEvents = await service.listEvents(first.id);
+    expect(priorEvents[priorEvents.length - 1].payload).toEqual({
+      from: 'interrupted',
+      to: 'cancelled',
+      reason: 'superseded by a retry',
+    });
+    // The resume arrow is now closed for good.
+    await expect(service.updateRun(first.id, { status: 'running' })).rejects.toThrow('is finished');
+    expect(retry.retryOfRunId).toBe(first.id);
+  });
+
+  it('a retry racing a resume waits for the row lock and then sees the truth', async () => {
+    const first = await service.createRun(base());
+    await service.updateRun(first.id, { status: 'provisioning' });
+    await service.updateRun(first.id, { status: 'interrupted' });
+
+    // Resume and retry issued together: whichever wins the lock decides
+    // the other. Either the resume lands and the retry is refused (the
+    // run is running), or the retry lands and the resume is refused (the
+    // run is cancelled). Never both.
+    const [resume, retry] = await Promise.allSettled([
+      service.updateRun(first.id, { status: 'running', reason: 'resume' }),
+      service.createRun({ ...base(), retryOfRunId: first.id }),
+    ]);
+
+    const after = await service.getRun(first.id);
+    if (resume.status === 'fulfilled') {
+      expect(retry.status).toBe('rejected');
+      expect(after?.status).toBe('running');
+    } else {
+      expect(retry.status).toBe('fulfilled');
+      expect(after?.status).toBe('cancelled');
+    }
+  });
+
+  it('refuses a run about a ticket in another project, and a retry of a run that does not exist, as 400s', async () => {
+    const otherProject = `proj-other-${stamp}`;
+    await db.insert(schema.projects).values({
+      id: otherProject,
+      workspaceId,
+      name: 'other',
+      identifier: 'OTH',
+      icon: 'folder',
+      coverGradientStart: '#000000',
+      coverGradientEnd: '#ffffff',
+      timezone: 'UTC',
+      automations: {},
+    });
+    try {
+      await expect(service.createRun({ ...base(), projectId: otherProject })).rejects.toThrow(
+        'ticketId belongs to a different project than projectId',
+      );
+      await expect(service.createRun({ ...base(), retryOfRunId: 'run-nope000' })).rejects.toThrow(
+        'retryOfRunId does not exist',
+      );
+    } finally {
+      await db.delete(schema.projects).where(eq(schema.projects.id, otherProject));
+    }
+  });
+
+  it('pages exactly across rows created in the same millisecond (the cursor keeps microseconds)', async () => {
+    const owner = `mem-ms-${stamp}`;
+    await db.insert(schema.members).values({
+      id: owner,
+      workspaceId,
+      fullName: 'Millis',
+      displayName: 'Millis',
+      email: `${owner}@example.test`,
+      avatarColor: '#000000',
+    });
+    // Three rows whose created_at differ only in microseconds.
+    const at = '2026-01-01 00:00:00.123';
+    const ids = ['run-msa0001', 'run-msb0002', 'run-msc0003'];
+    await db.insert(schema.agentRuns).values(
+      ids.map((id, i) => ({
+        id,
+        projectId,
+        ownerMemberId: owner,
+        entry: 'independent' as const,
+        providerId: 'claude',
+        createdAt: sql`${`${at}${String(i * 200).padStart(3, '0')}+00`}::timestamptz`,
+      })),
+    );
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let i = 0; i < 5; i += 1) {
+      const page = await service.listRuns({ ownerMemberId: owner, limit: 1, cursor });
+      seen.push(...page.items.map((r) => r.id));
+      if (!page.nextCursor) break;
+      cursor = page.nextCursor;
+    }
+
+    expect(seen).toEqual([...ids].reverse());
   });
 
   it('caps a summary at 20,000 characters with a marker rather than refusing it', async () => {

@@ -13,5 +13,7 @@
       "sha256": "1fa9056e65fcc000c9aaec1c397ec85a97d41a9adedbfdd3b18f5af5dc02b9a6",
       "release": "https://github.com/amaannawab923/waypoint/releases/tag/engine-0.1.0-9b102a5f3"
     }
-  }
+  },
+  "launcherRelPath": "emdash-workspace-server/bin/emdash-workspace-server",
+  "launcherSha256": "a6f569e3f1da7287011ae19a65cd811123d539db411342f199181b0dfbf7420d"
 }

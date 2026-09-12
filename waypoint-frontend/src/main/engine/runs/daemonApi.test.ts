@@ -31,22 +31,31 @@ function fakeClient(options: {
         ? (answer as (i: unknown) => unknown)(input)
         : answer;
     }) as WireClient['call'],
-    attach: jest.fn(async (topic: string, handlers: Handlers) => {
+    // A bare snapshot request: answered from the table, or refused the way
+    // the daemon refuses an unknown topic. Never attaches.
+    snapshot: jest.fn(async (topic: string) => {
       const failure = options.topicErrors?.[topic];
       if (failure) {
-        queueMicrotask(() =>
-          handlers.onError?.(failure.error as never, failure.retrying),
-        );
-      } else if (topic in (options.snapshots ?? {})) {
-        queueMicrotask(() =>
-          handlers.onSnapshot({
-            generation: 1,
-            sequence: 0,
-            timestamp: 1,
-            data: options.snapshots![topic],
-          }),
+        throw new EngineCallError(
+          `snapshot:${topic}`,
+          'UNKNOWN_TOPIC',
+          'no such topic',
         );
       }
+      if (!(topic in (options.snapshots ?? {}))) {
+        // A topic nobody answers: hang like a wedged daemon would, so the
+        // deadline is what ends it.
+        return new Promise(() => {});
+      }
+      return {
+        generation: 1,
+        sequence: 0,
+        timestamp: 1,
+        data: options.snapshots![topic],
+      };
+    }) as WireClient['snapshot'],
+    attach: jest.fn(async (topic: string, handlers: Handlers) => {
+      void handlers;
       return () => detached.push(topic);
     }),
     onDisconnect: jest.fn(() => () => {}),
@@ -91,7 +100,7 @@ describe('hostAbsolutePath / liveTopic', () => {
 });
 
 describe('readSnapshot', () => {
-  it('resolves with the envelope’s data and detaches afterwards', async () => {
+  it('reads with a bare snapshot request — no attachment — and unwraps the envelope', async () => {
     const { client, detached } = fakeClient({
       snapshots: {
         'acp.sessions.list': { 'run-1': { conversationId: 'run-1' } },
@@ -101,11 +110,16 @@ describe('readSnapshot', () => {
     const data = await readSnapshot(client, 'acp.sessions.list');
 
     expect(data).toEqual({ 'run-1': { conversationId: 'run-1' } });
-    await new Promise((r) => setTimeout(r, 0));
-    expect(detached).toEqual(['acp.sessions.list']);
+    expect(client.snapshot).toHaveBeenCalledWith('acp.sessions.list', {
+      timeoutMs: 10_000,
+    });
+    // The whole point (found in review, round 2): a reader must not hold
+    // the topic, or a subscriber of the same topic is refused.
+    expect(client.attach).not.toHaveBeenCalled();
+    expect(detached).toEqual([]);
   });
 
-  it('rejects when the topic fails for good, ignores a retrying error, and times out when nothing arrives', async () => {
+  it('rejects with the daemon’s refusal, and with a deadline when nothing answers', async () => {
     const dead = fakeClient({
       topicErrors: { t: { error: { code: 'UNKNOWN_TOPIC' }, retrying: false } },
     });
@@ -114,8 +128,24 @@ describe('readSnapshot', () => {
     );
 
     const silent = fakeClient({});
+    (silent.client.snapshot as jest.Mock).mockImplementation(
+      (_topic: string, options?: { timeoutMs?: number }) =>
+        new Promise((_resolve, reject) => {
+          setTimeout(
+            () =>
+              reject(
+                new EngineCallError(
+                  'snapshot:quiet',
+                  'TIMEOUT',
+                  `timed out after ${options?.timeoutMs}ms`,
+                ),
+              ),
+            5,
+          );
+        }),
+    );
     await expect(readSnapshot(silent.client, 'quiet', 20)).rejects.toThrow(
-      'No snapshot of quiet within 20ms',
+      'Snapshot of quiet failed: timed out after 20ms',
     );
   });
 });

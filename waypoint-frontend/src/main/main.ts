@@ -294,6 +294,24 @@ app.on('before-quit', () => {
   killAllCopilotConnectProcesses();
 });
 
+// One Waypoint per user session. Two instances would each supervise the
+// same engine daemon — two `start`s racing for one socket, each willing
+// to remove what it takes for the other's stale lock (engine/staleLock.ts
+// judges by pid, but a second instance's `start` is a live pid) — and
+// two boot reconciles writing the same ledger. Electron's own lock is the
+// standard answer: the second launch hands its argv to the first and
+// exits, and the first raises its window. (Found in review, round 2.)
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+}
+
 app
   .whenReady()
   .then(() => {
