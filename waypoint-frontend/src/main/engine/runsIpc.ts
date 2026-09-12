@@ -1,3 +1,4 @@
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
@@ -5,10 +6,12 @@ import type { EngineSupervisor } from './supervisor';
 import {
   MAX_DIFF_PATCH_CHARS,
   RUNS_IPC,
+  type FolderChoice,
   type RunChanged,
   type RunDiff,
   type RunDiffFile,
   type RunDiffFileStatus,
+  type SessionFolder,
   type StopRunResult,
 } from './types';
 import { createDaemonRunsApi, type DaemonRunsApi } from './runs/daemonApi';
@@ -20,6 +23,14 @@ import {
 } from './runs/ledgerClient';
 import { assertUnder } from './runs/worktrees';
 import { listRunBranches, resumeRun, startRun } from './runs/startRun';
+import {
+  createFolderRegistry,
+  describeFolder,
+  isGitRepository,
+  listSessionFolders,
+  type FolderDeps,
+  type FolderRegistry,
+} from './runs/folders';
 
 /**
  * The sessions panel's actions on a run — W3, ROAD-61 (stop) and ROAD-64
@@ -67,6 +78,15 @@ export interface RunsIpcDeps {
   reveal: (absolutePath: string) => void;
   /** `runs:changed` to the renderer — start and resume write statuses the panel must hear about. */
   notify: (change: RunChanged) => void;
+  /**
+   * The OS folder picker, parented to the window: the chosen absolute
+   * path, or null when cancelled (W4b). Only main ever sees the path.
+   */
+  chooseDirectory: () => Promise<string | null>;
+  /** Where main keeps the recent folders (`recent-folders.json`). */
+  recentsFile: string;
+  /** Test seam: the handle registry, defaulting to a fresh one per registration. */
+  folderRegistry?: FolderRegistry;
   /** Test seam: the daemon facade, defaulting to the real one over the live client. */
   daemon?: (supervisor: EngineSupervisor) => DaemonRunsApi | null;
   logger: {
@@ -442,6 +462,11 @@ export function registerRunsIpc(deps: RunsIpcDeps): void {
     return run.worktreePath;
   };
 
+  const folders: FolderDeps = {
+    registry: deps.folderRegistry ?? createFolderRegistry(),
+    recentsFile: deps.recentsFile,
+    listProjects: () => ledger.listProjects(),
+  };
   const startDeps = {
     ledger,
     daemon: () => daemonFor(deps.supervisor),
@@ -449,13 +474,27 @@ export function registerRunsIpc(deps: RunsIpcDeps): void {
     notify: deps.notify,
     git,
     assertWorktreeGitDir,
+    folders,
     logger: deps.logger,
   };
   deps.host.handle(RUNS_IPC.start, (input) => startRun(startDeps, input));
   deps.host.handle(RUNS_IPC.resume, (runId) => resumeRun(startDeps, runId));
-  deps.host.handle(RUNS_IPC.listBranches, (projectId) =>
-    listRunBranches(startDeps, projectId),
+  deps.host.handle(RUNS_IPC.listBranches, (folder) =>
+    listRunBranches(startDeps, folder),
   );
+  // W4b: the folders a session may start in. The picker's path never
+  // leaves main; the renderer gets a handle and a description.
+  deps.host.handle(RUNS_IPC.chooseFolder, async (): Promise<FolderChoice> => {
+    const chosen = await deps.chooseDirectory();
+    if (!chosen) return { canceled: true };
+    const folder = await describeFolder(folders, chosen);
+    if (!folder) throw new Error('That is not a folder on this machine.');
+    return { canceled: false, folder };
+  });
+  deps.host.handle(RUNS_IPC.recentFolders, (): Promise<SessionFolder[]> =>
+    listSessionFolders(folders),
+  );
+  deps.host.handle(RUNS_IPC.homeDir, (): string => os.homedir());
 
   deps.host.handle(RUNS_IPC.stop, async (runId): Promise<StopRunResult> => {
     const run = await loadRun(runId);
@@ -518,8 +557,36 @@ export function registerRunsIpc(deps: RunsIpcDeps): void {
     };
   });
 
+  /**
+   * A direct run's cwd is the folder the person picked (W4b): it only has
+   * to still be a directory. It is the person's own repository, where the
+   * agent already runs, so the worktree provenance check does not apply
+   * — the hardened git config and minimal env do.
+   */
+  const directoryOf = async (run: AgentRun): Promise<string> => {
+    if (!run.cwd) throw new Error('This run has no folder.');
+    const present = await fs
+      .stat(run.cwd)
+      .then((s) => s.isDirectory())
+      .catch(() => false);
+    if (!present) {
+      throw new Error(`${run.cwd} is not a folder on this machine any more.`);
+    }
+    return run.cwd;
+  };
+
   deps.host.handle(RUNS_IPC.diff, async (runId): Promise<RunDiff> => {
     const run = await loadRun(runId);
+    if (run.isolation === 'directory') {
+      const dir = await directoryOf(run);
+      if (!(await isGitRepository(dir))) {
+        throw new Error(
+          'This folder is not a git repository, so there are no changes to show.',
+        );
+      }
+      // No base branch: the working tree against HEAD.
+      return computeRunDiff(git, dir, null);
+    }
     const worktree = await worktreeOf(run);
     await assertWorktreeGitDir(worktree);
     return computeRunDiff(git, worktree, run.baseRef);
@@ -527,7 +594,10 @@ export function registerRunsIpc(deps: RunsIpcDeps): void {
 
   deps.host.handle(RUNS_IPC.revealWorktree, async (runId): Promise<void> => {
     const run = await loadRun(runId);
-    const worktree = await worktreeOf(run);
-    deps.reveal(worktree);
+    deps.reveal(
+      run.isolation === 'directory'
+        ? await directoryOf(run)
+        : await worktreeOf(run),
+    );
   });
 }

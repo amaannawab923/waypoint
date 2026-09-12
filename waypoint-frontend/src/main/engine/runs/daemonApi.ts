@@ -86,6 +86,10 @@ export interface StartSessionRequest {
   cwd: string;
   /** The provider's session to load; null starts a new one. */
   sessionId: string | null;
+  /** A session mode the provider offers (`bypassPermissions` for auto-approve, W4b); null = the provider's default. */
+  modeId?: string | null;
+  /** Prompts the daemon delivers once the session is ready — the dialog's first message (W4b). */
+  initialQueue?: Array<{ text: string }>;
 }
 
 /** `git.repository.model.refs` as this module reads it. */
@@ -336,9 +340,15 @@ export function createDaemonRunsApi(client: WireClient): DaemonRunsApi {
     },
     listRefs,
     startSession(request) {
+      const { modeId, initialQueue, ...rest } = request;
       return fallible<{ sessionId: string }>(
         'acp.start',
-        { ...request, model: null },
+        {
+          ...rest,
+          model: null,
+          modeId: modeId ?? null,
+          ...(initialQueue && initialQueue.length ? { initialQueue } : {}),
+        },
         START_SESSION_TIMEOUT_MS,
       );
     },
