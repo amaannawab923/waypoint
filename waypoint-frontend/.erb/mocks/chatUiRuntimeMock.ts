@@ -20,6 +20,12 @@ const runtime = {
       history: { seed: jest.fn(), append: jest.fn(), prepend: jest.fn() },
       activeTurn: { set: jest.fn() },
     },
+    session: {
+      setPermissions: jest.fn(),
+      setPlan: jest.fn(),
+      setPendingPrompt: jest.fn(),
+      setTerminalOutput: jest.fn(),
+    },
     dispose: jest.fn(),
   })),
   createChatView: jest.fn(

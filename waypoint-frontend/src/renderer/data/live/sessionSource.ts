@@ -54,9 +54,19 @@ export interface SessionSource {
 export const SESSION_STATES = ['state', 'plan', 'activeTurn'] as const;
 export type SessionStateName = (typeof SESSION_STATES)[number];
 
+/** Every per-session state the allowlist admits (main/engine/types.ts ALLOWED_SESSION_STATES); the source follows three, the panel's usage strip a fourth. */
+export type SessionTopicState =
+  | SessionStateName
+  | 'config'
+  | 'usage'
+  | 'agents'
+  | 'draft'
+  | 'terminals'
+  | 'mcpServers';
+
 /** `acp.session.<state>|{"conversationId":"…"}` — the daemon's topic key, one field, so no key sorting to get wrong. */
 export function sessionTopic(
-  state: SessionStateName,
+  state: SessionTopicState,
   conversationId: string,
 ): string {
   return `acp.session.${state}|${JSON.stringify({ conversationId })}`;

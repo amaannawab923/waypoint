@@ -83,6 +83,7 @@
     "moduleNameMapper": {
       "\\.(jpg|jpeg|png|gif|eot|otf|webp|svg|ttf|woff|woff2|mp4|webm|wav|mp3|m4a|aac|oga)$": "<rootDir>/.erb/mocks/fileMock.js",
       "\\.(css|less|sass|scss)$": "identity-obj-proxy",
+      "^@/components/chat/chatUiRuntime$": "<rootDir>/.erb/mocks/chatUiRuntimeMock.ts",
       "^@/(.*)$": "<rootDir>/src/renderer/$1",
       "^(\\.{1,2}/)*chatUiRuntime$": "<rootDir>/.erb/mocks/chatUiRuntimeMock.ts",
       "^@emdash/chat-ui$": "<rootDir>/.erb/mocks/chatUiRuntimeMock.ts"

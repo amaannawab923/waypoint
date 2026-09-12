@@ -12,7 +12,7 @@ import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom';
 import { AppShell } from '@/layouts/AppShell';
 import { ProjectLayout } from '@/layouts/ProjectLayout';
 import { isOnboarded } from '@/lib/onboarding';
-import { MY_JIRA_ENABLED } from '@/lib/featureFlags';
+import { MY_JIRA_ENABLED, SESSIONS_ENABLED } from '@/lib/featureFlags';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 
 import Login from '@/pages/auth/Login';
@@ -32,6 +32,7 @@ import MachinePage from '@/pages/MachinePage';
 import AllTicketsPage from '@/pages/AllTicketsPage';
 import MyJiraPage from '@/pages/jira/MyJiraPage';
 import JiraTicketPage from '@/pages/jira/JiraTicketPage';
+import SessionsPage from '@/pages/sessions/SessionsPage';
 
 import TicketsLayout from '@/pages/tickets/TicketsLayout';
 import TicketDetailPage from '@/pages/tickets/TicketDetailPage';
@@ -139,6 +140,25 @@ export const router = createBrowserRouter([
                 path: '/my-jira/:ticketKey',
                 element: MY_JIRA_ENABLED ? (
                   <JiraTicketPage />
+                ) : (
+                  <Navigate to="/" replace />
+                ),
+              },
+              // W3's My sessions (docs/design/w3-sessions-rail.md §1.1),
+              // gated like /my-jira and for the same reason. Both routes
+              // render the one page; the run id selects the detail.
+              {
+                path: '/sessions',
+                element: SESSIONS_ENABLED ? (
+                  <SessionsPage />
+                ) : (
+                  <Navigate to="/" replace />
+                ),
+              },
+              {
+                path: '/sessions/:runId',
+                element: SESSIONS_ENABLED ? (
+                  <SessionsPage />
                 ) : (
                   <Navigate to="/" replace />
                 ),
