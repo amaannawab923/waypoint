@@ -2400,6 +2400,18 @@ its failure window is 00:00–02:00 local and the pass ran inside it.
   base `main`). Found during the pass: the ledger first refused `prUrl`
   on a done run — fixed to take it once. A second Open PR took the PR
   gh said already existed.
+- **SESS-42** — The automatic path (W6, ROAD-125)
+  Steps: *Something else…* on ROAD-125 with the switch on (a real docs
+  task: record SESS-41), base `feat/road-117-w5a-investigate-fix`, Start.
+  Result: PASS — when the turn ended, main pushed `agent/ROAD-125` and
+  opened https://github.com/amaannawab923/waypoint/pull/61 (ready for
+  review, against the base, titled `ROAD-125: …`, body = the closing
+  message + Waypoint's footer) before filing the comment, which led with
+  "Pull request: …"; the Copilot note said "PR opened: …"; the run
+  reached needs-review with `prUrl`. The session's own report said
+  "nothing was pushed" — true of the session; the host did it. The PR
+  was merged into the W5a branch (`ada161c`): the first change a
+  Waypoint session shipped.
 - **Notifications** — logged as shown on `needs-review` (the
   notification centre itself was not observed from the script; the
   click path is unit-tested).

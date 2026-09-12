@@ -322,3 +322,15 @@ where the plan above and the code differ.
 10. **The panel scrolls** to new content (a note, an offer card, a
     streaming reply) when the reader is at the bottom or just opened the
     conversation.
+11. **W6 pulled forward** (ROAD-125, founder's call 2026-09-13:
+    automatic, ready for review). A writing run's branch is pushed and
+    its PR opened by the host, as the person, when its turn ends
+    (`runs/pullRequests.ts`): `git push -u origin <branch>` with their
+    git, `gh pr create` with their `gh`, from the worktree; `prUrl` and
+    the `pushed` / `pr_opened` events on the run; the comment proposal
+    leads with the link; the note names it. A failed push or PR is a
+    sentence on the comment and an error event, and Open PR in the
+    header retries (`runs:open-pr`); a PR gh says already exists is
+    taken as opened; a finished run accepts `prUrl` once. A branch with
+    nothing past its base is not pushed; a non-GitHub remote gets the
+    push only. The session itself still cannot push (§2.5 stands).
