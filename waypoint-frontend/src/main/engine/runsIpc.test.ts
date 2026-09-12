@@ -125,6 +125,7 @@ describe('runs:stop', () => {
       worktreesDir,
       ledger,
       reveal: jest.fn(),
+      notify: jest.fn(),
       daemon: () => daemon,
       logger,
     });
@@ -173,6 +174,7 @@ describe('runs:stop', () => {
       worktreesDir,
       ledger,
       reveal: jest.fn(),
+      notify: jest.fn(),
       daemon: () => daemon,
       logger,
     });
@@ -189,6 +191,7 @@ describe('runs:stop', () => {
       worktreesDir,
       ledger,
       reveal: jest.fn(),
+      notify: jest.fn(),
       daemon: () => null,
       logger,
     });
@@ -214,6 +217,7 @@ describe('runs:stop', () => {
       worktreesDir,
       ledger,
       reveal: jest.fn(),
+      notify: jest.fn(),
       daemon: () => daemon,
       logger,
     });
@@ -242,6 +246,7 @@ describe('runs:stop', () => {
       worktreesDir,
       ledger,
       reveal: jest.fn(),
+      notify: jest.fn(),
       daemon: () => fakeDaemon(),
       logger,
     });
@@ -282,6 +287,7 @@ describe('runs:diff and runs:reveal-worktree', () => {
       ledger,
       git,
       reveal,
+      notify: jest.fn(),
       daemon: () => null,
       logger,
     });
@@ -369,6 +375,7 @@ describe('assertWorktreeGitDir', () => {
       }),
       git,
       reveal: jest.fn(),
+      notify: jest.fn(),
       daemon: () => null,
       logger,
     });
@@ -530,6 +537,143 @@ describe('computeRunDiff', () => {
         : { stdout: '', stderr: 'fatal: not a git repository', code: 128 };
     await expect(computeRunDiff(git, wt, 'main')).rejects.toThrow(
       "git diff failed in the run's worktree: fatal: not a git repository",
+    );
+  });
+});
+
+// W4: the three channels are thin — the sequences themselves are
+// runs/startRun.test.ts's. What is proven here is that each channel is
+// registered, hands its one argument to the module, and answers with its
+// shape; and that `notify` is what a status write reaches the renderer by.
+describe('runs:start, runs:resume, runs:list-branches', () => {
+  it('runs:start refuses a bad request before touching the ledger, and notifies at provisioning', async () => {
+    const { host, invoke } = fakeHost();
+    const ledger = {
+      ...fakeLedger({}),
+      getProject: jest.fn(async () => ({
+        id: 'proj-1',
+        name: 'P',
+        repoPath: '/r',
+      })),
+      createRun: jest.fn(async (input: unknown) => ({
+        id: 'run-n1',
+        status: 'queued',
+        ...(input as object),
+      })),
+    } as unknown as jest.Mocked<LedgerClient>;
+    ledger.updateRun.mockImplementation(
+      async (id, patch) => ({ id, ...patch }) as never,
+    );
+    const daemon = {
+      ...fakeDaemon(),
+      listLocalBranches: jest.fn(async () => ['main']),
+      // Never answers: the channel must not wait for the session.
+      startSession: jest.fn(() => new Promise(() => {})),
+      registerRepository: jest.fn(() => new Promise(() => {})),
+    } as unknown as jest.Mocked<DaemonRunsApi>;
+    const notify = jest.fn();
+    registerRunsIpc({
+      supervisor: supervisorWith(true),
+      host,
+      worktreesDir,
+      ledger,
+      reveal: jest.fn(),
+      notify,
+      daemon: () => daemon,
+      logger,
+    });
+
+    await expect(
+      invoke(RUNS_IPC.start, {
+        projectId: 'proj-1',
+        ownerMemberId: 'mem-1',
+        providerId: 'gpt',
+        baseRef: 'main',
+      }),
+    ).rejects.toThrow(/not one Waypoint can start/);
+    expect(ledger.createRun).not.toHaveBeenCalled();
+
+    const run = (await invoke(RUNS_IPC.start, {
+      projectId: 'proj-1',
+      ownerMemberId: 'mem-1',
+      providerId: 'claude',
+      baseRef: 'main',
+      title: 'Try it',
+    })) as { id: string; status: string };
+    expect(run).toMatchObject({ id: 'run-n1', status: 'provisioning' });
+    expect(notify).toHaveBeenCalledWith({
+      runId: 'run-n1',
+      status: 'provisioning',
+    });
+  });
+
+  it('runs:resume answers not-resumable for a running run without writing', async () => {
+    const { host, invoke } = fakeHost();
+    const ledger = fakeLedger({ 'run-a1': { status: 'running' } });
+    registerRunsIpc({
+      supervisor: supervisorWith(true),
+      host,
+      worktreesDir,
+      ledger,
+      reveal: jest.fn(),
+      notify: jest.fn(),
+      daemon: () => fakeDaemon(),
+      logger,
+    });
+    await expect(invoke(RUNS_IPC.resume, 'run-a1')).resolves.toEqual({
+      outcome: 'not-resumable',
+      status: 'running',
+    });
+    expect(ledger.updateRun).not.toHaveBeenCalled();
+  });
+
+  it('runs:list-branches needs a running engine and answers the sorted list with a suggestion', async () => {
+    const { host, invoke } = fakeHost();
+    const ledger = {
+      ...fakeLedger({}),
+      getProject: jest.fn(async () => ({
+        id: 'proj-1',
+        name: 'P',
+        repoPath: '/r',
+      })),
+    } as unknown as jest.Mocked<LedgerClient>;
+    const daemon = {
+      ...fakeDaemon(),
+      listRefs: jest.fn(async () => ({
+        branches: ['main', 'a'],
+        remoteHeads: [{ remote: 'origin', branch: 'main' }],
+      })),
+    } as unknown as jest.Mocked<DaemonRunsApi>;
+    registerRunsIpc({
+      supervisor: supervisorWith(false),
+      host,
+      worktreesDir,
+      ledger,
+      reveal: jest.fn(),
+      notify: jest.fn(),
+      daemon: () => null,
+      logger,
+    });
+    await expect(invoke(RUNS_IPC.listBranches, 'proj-1')).rejects.toThrow(
+      'The agent engine is not running.',
+    );
+
+    const live = fakeHost();
+    registerRunsIpc({
+      supervisor: supervisorWith(true),
+      host: live.host,
+      worktreesDir,
+      ledger,
+      reveal: jest.fn(),
+      notify: jest.fn(),
+      daemon: () => daemon,
+      logger,
+    });
+    await expect(live.invoke(RUNS_IPC.listBranches, 'proj-1')).resolves.toEqual(
+      {
+        branches: ['a', 'main'],
+        suggested: 'main',
+      },
     );
   });
 });

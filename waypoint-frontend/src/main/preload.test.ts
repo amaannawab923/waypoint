@@ -107,6 +107,9 @@ function getElectronHandler() {
       stopRun: (runId: string) => Promise<unknown>;
       runDiff: (runId: string) => Promise<unknown>;
       revealRunWorktree: (runId: string) => Promise<void>;
+      startRun: (input: unknown) => Promise<unknown>;
+      resumeRun: (runId: string) => Promise<unknown>;
+      listRunBranches: (projectId: string) => Promise<unknown>;
       onRunChanged: (cb: (change: unknown) => void) => () => void;
     };
   };
@@ -474,6 +477,7 @@ describe('electronHandler.engine', () => {
     ['stopRun', 'runs:stop'],
     ['runDiff', 'runs:diff'],
     ['revealRunWorktree', 'runs:reveal-worktree'],
+    ['resumeRun', 'runs:resume'],
   ] as const)(
     '%s invokes %s with the run id and nothing else',
     async (method, channel) => {
@@ -486,6 +490,30 @@ describe('electronHandler.engine', () => {
       expect(result).toEqual({ echoed: channel });
     },
   );
+
+  it('startRun and listRunBranches pass their one argument through unchanged', async () => {
+    ipcRendererMock.invoke.mockResolvedValueOnce({ id: 'run-1' });
+    const input = {
+      projectId: 'proj-1',
+      ownerMemberId: 'mem-1',
+      providerId: 'claude',
+      baseRef: 'main',
+    };
+    await expect(electronHandler.engine.startRun(input)).resolves.toEqual({
+      id: 'run-1',
+    });
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith('runs:start', input);
+
+    ipcRendererMock.invoke.mockResolvedValueOnce({
+      branches: ['main'],
+      suggested: 'main',
+    });
+    await electronHandler.engine.listRunBranches('proj-1');
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith(
+      'runs:list-branches',
+      'proj-1',
+    );
+  });
 
   it('health invokes engine:health and returns whatever it resolves, including null', async () => {
     ipcRendererMock.invoke.mockResolvedValue(null);

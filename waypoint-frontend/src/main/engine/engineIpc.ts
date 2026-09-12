@@ -257,6 +257,7 @@ export function registerEngineIpc(
     host: { handle },
     worktreesDir,
     reveal: (absolutePath) => shell.showItemInFolder(absolutePath),
+    notify: (change) => send(RUNS_IPC.changed, change),
     logger,
   });
 
