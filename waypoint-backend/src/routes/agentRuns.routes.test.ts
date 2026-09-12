@@ -79,6 +79,43 @@ describe('POST /agent-runs', () => {
     expect(service.createRun).toHaveBeenCalledTimes(2);
   });
 
+  it('W4b: an independent run may have no project; isolation and autoApprove pass through; a dispatched run is always a worktree', async () => {
+    vi.mocked(service.createRun).mockResolvedValue(run({ entry: 'independent', ticketId: null, projectId: null }));
+    const app = buildTestApp();
+
+    const direct = await request(app).post('/agent-runs').send({
+      projectId: null,
+      ownerMemberId: 'mem-1',
+      entry: 'independent',
+      providerId: 'claude',
+      isolation: 'directory',
+      autoApprove: true,
+    });
+    expect(direct.status).toBe(201);
+    expect(service.createRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({ projectId: null, isolation: 'directory', autoApprove: true }),
+    );
+
+    const ticketNoProject = await request(app).post('/agent-runs').send({
+      ticketId: 'wi-1',
+      ownerMemberId: 'mem-1',
+      entry: 'independent',
+      providerId: 'claude',
+    });
+    expect(ticketNoProject.status).toBe(400);
+
+    const dispatchedDirect = await request(app).post('/agent-runs').send({
+      projectId: 'proj-1',
+      ticketId: 'wi-1',
+      ownerMemberId: 'mem-1',
+      entry: 'dispatched',
+      providerId: 'claude',
+      isolation: 'directory',
+    });
+    expect(dispatchedDirect.status).toBe(400);
+    expect(service.createRun).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects an unknown entry with 400 before touching the service', async () => {
     const res = await request(buildTestApp()).post('/agent-runs').send({
       projectId: 'proj-1',
@@ -217,13 +254,14 @@ describe('PATCH /agent-runs/:id', () => {
 
     const res = await request(buildTestApp())
       .patch('/agent-runs/run-abc1234')
-      .send({ status: 'running', providerSessionId: 'sess-uuid-1', title: 'Renamed ' });
+      .send({ status: 'running', providerSessionId: 'sess-uuid-1', title: 'Renamed ', cwd: '/w/run-1' });
 
     expect(res.status).toBe(200);
     expect(service.updateRun).toHaveBeenCalledWith('run-abc1234', {
       status: 'running',
       providerSessionId: 'sess-uuid-1',
       title: 'Renamed',
+      cwd: '/w/run-1',
     });
   });
 
