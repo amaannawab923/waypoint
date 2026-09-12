@@ -2120,7 +2120,87 @@ docs/design/w3-sessions-rail.md.
   state.
   Expected: both present and disabled, with "Starting a session from here
   arrives with W4." on hover.
-  Result: PASS — by design until ROAD-66.
+  Result: PASS — by design until ROAD-66. Superseded by SESS-17 (W4).
+
+## Starting and resuming sessions (W4, ROAD-66) — docs/design/w4-start-session.md
+
+Run against the real daemon and a real Claude login, on the Roadmap
+project linked to the QA scratch repository (`/tmp/wp-qa/main-repo`,
+branches `main` and `feat/road-61-list`). Screenshots in
+`.qa-screenshots/w4-live/`.
+
+- **SESS-17** — New session dialog: the three ways in, the fields
+  Steps: On /sessions press `n`; close; click the list header's "+";
+  close; click the empty state's "New session". Read the fields.
+  Expected: the same dialog each time. Project lists only projects with a
+  linked repository; Provider shows Claude Code; Base branch is read from
+  the repo through the engine with the default preselected; Title empty;
+  Start session enabled once a branch is chosen. `n` does nothing while
+  a text field has focus or the dialog is open.
+  Result:
+
+- **SESS-18** — Start a session: provisioning → running within the list
+  Steps: Pick the Roadmap project, `main`, title "W4 live", Start.
+  Expected: the dialog closes and the page navigates to the new run at
+  once; the row is in Active as *Provisioning* within a second; the
+  header shows the branch (`session/<id>` from `main`) once the worktree
+  exists, then *Running* once the daemon has answered; the composer is
+  enabled from Running. The ledger has `worktree_created` then
+  `session_started {providerSessionId}`, and `providerSessionId` on the
+  row.
+  Result:
+
+- **SESS-19** — Prompt, permission, diff on a started session
+  Steps: Send "Create hello.txt containing hi" — allow the write when
+  asked; open the Diff tab.
+  Expected: the W3 loop works unchanged on a run W4 started: the band
+  appears, Allow lands, the diff lists `hello.txt` as untracked +1.
+  Result:
+
+- **SESS-20** — Prompt while a turn is running is queued
+  Steps: Send a prompt that takes a while; while "working…" shows, send
+  a second one.
+  Expected: the second prompt shows at once as pending; the usage strip
+  says "1 queued" until the first turn ends, then the agent takes it.
+  Result:
+
+- **SESS-21** — Draft per run
+  Steps: Type half a message in run A's composer without sending; open
+  run B; type something there; go back to A; reload the window (⌘R).
+  Expected: A's text is back each time, B's is B's; after sending, the
+  box is empty and stays empty on the next visit.
+  Result:
+
+- **SESS-22** — Failure copy: a branch that does not exist / a project
+  whose repository is gone
+  Steps: In the dialog choose "Compass Web" (its linked path does not
+  exist on this machine).
+  Expected: the base-branch field says why it could not be read, inline,
+  and Start stays disabled; no run is created.
+  Result:
+
+- **SESS-23** — Stop while provisioning
+  Steps: Start a session and press Stop in the header while the pill
+  still says Provisioning.
+  Expected: the run is *Cancelled*; no session is started for it (the
+  daemon's session list never shows the run id, or shows it and it is
+  killed); the worktree stays on disk.
+  Result:
+
+- **SESS-24** — Resume an interrupted run (both outcomes)
+  Steps: (a) With a running session, kill the daemon process, restart
+  the engine from This machine; find the run *Interrupted*; press
+  Resume. (b) On a run whose provider session cannot be restored (a run
+  seeded without a provider session id, or after the provider forgot
+  it), press Resume.
+  Expected: (a) the run goes Provisioning → Running and the transcript
+  has its history; the ledger has `session_resumed {outcome:'loaded'}`.
+  (b) Running, a toast says the conversation could not be restored, the
+  transcript's first message is Waypoint's branch-state note, the ledger
+  has `session_resumed {outcome:'replaced-by-new'}` and a
+  `prompt_sent {by:'waypoint'}`. A run whose worktree is gone: Resume is
+  disabled with the reason.
+  Result:
 
 ## Summary
 
