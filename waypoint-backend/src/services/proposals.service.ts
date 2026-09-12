@@ -13,6 +13,7 @@ import * as statesService from './states.service.js';
 import * as membersService from './members.service.js';
 import * as projectsService from './projects.service.js';
 import * as agentRunsService from './agentRuns.service.js';
+import * as copilotService from './copilot.service.js';
 import { agentRuns } from '../db/schema/index.js';
 
 // A proposal the user hasn't acted on within a day is more likely to be
@@ -407,12 +408,34 @@ export async function settleRunIfDecided(runId: string | null): Promise<void> {
       .from(proposals)
       .where(and(eq(proposals.agentRunId, runId), inArray(proposals.status, ['proposed', 'executing'])));
     if (open > 0) return;
-    const [run] = await db.select({ status: agentRuns.status }).from(agentRuns).where(eq(agentRuns.id, runId));
+    const [run] = await db
+      .select({ status: agentRuns.status, title: agentRuns.title, ownerMemberId: agentRuns.ownerMemberId })
+      .from(agentRuns)
+      .where(eq(agentRuns.id, runId));
     if (run?.status !== 'needs-review') return;
     await agentRunsService.updateRun(runId, {
       status: 'done',
       reason: 'Every proposal the run filed has been decided',
     });
+    // W5a §1.8: Copilot hears about the decision too. The note is the
+    // ledger's own sentence — the decided proposals by outcome — and goes
+    // to the conversation the run came from, else the owner's latest.
+    const decided = await db
+      .select({ status: proposals.status, n: count() })
+      .from(proposals)
+      .where(eq(proposals.agentRunId, runId))
+      .groupBy(proposals.status);
+    const tally = decided
+      .filter((d) => d.n > 0)
+      .map((d) => `${d.n} ${d.status}`)
+      .join(', ');
+    const target = await copilotService.resolveNoteConversation(run.ownerMemberId, runId);
+    if (target) {
+      await copilotService.postSystemNote(
+        target,
+        `Run ${run.title ?? runId} is done · its proposals were decided (${tally || 'none'}).`,
+      );
+    }
   } catch (error) {
     // The decision already happened; a settle that fails is logged and
     // retried by the next decision on the run.
