@@ -668,6 +668,22 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     ? offers.filter((o) => o.conversationId === activeSessionId)
     : [];
 
+  // Keep the newest content in view: a reply streaming in, a note, an
+  // offer card. Only when the reader was already at (or near) the bottom
+  // — scrolled up to re-read, they stay where they are.
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  const scrolledSessionRef = useRef<string | null>(null);
+  const transcriptLength = activeSession?.messages.length ?? 0;
+  const streamingLength = streaming?.text.length ?? 0;
+  useEffect(() => {
+    const el = transcriptRef.current;
+    if (!el) return;
+    const opened = scrolledSessionRef.current !== activeSessionId;
+    scrolledSessionRef.current = activeSessionId;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (opened || nearBottom) el.scrollTop = el.scrollHeight;
+  }, [activeSessionId, transcriptLength, streamingLength, offersHere.length]);
+
   function openBrief(conversationId: string, input: BriefPreviewInput) {
     setBriefRequest({ conversationId, input });
   }
@@ -1349,7 +1365,10 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
 
       {activeSession && (
         <>
-          <div className="thin-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4">
+          <div
+            ref={transcriptRef}
+            className="thin-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4"
+          >
             {loadingMessages && (
               <p className="mt-6 text-center text-sm text-text-muted">
                 Loading messages…
