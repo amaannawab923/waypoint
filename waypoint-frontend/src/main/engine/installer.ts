@@ -107,6 +107,18 @@ export async function verifyInstalledEngine(
       message: `No engine launcher at ${paths.launcherPath}.`,
     };
   }
+  // The launcher is what main spawns; it must be the pinned one every
+  // time, not just at extraction (types.ts, ENGINE_PIN.launcherSha256).
+  const launcherHash = createHash('sha256')
+    .update(await fs.readFile(paths.launcherPath))
+    .digest('hex');
+  if (launcherHash !== pin.launcherSha256) {
+    return {
+      ok: false,
+      reason: 'manifest-mismatch',
+      message: `The engine launcher at ${paths.launcherPath} is not the pinned one (sha256 ${launcherHash.slice(0, 12)}…, pinned ${pin.launcherSha256.slice(0, 12)}…). Refusing to run it.`,
+    };
+  }
   const manifestPath = path.join(paths.installDir, pin.name, 'manifest.json');
   let manifest: EngineManifest;
   try {
@@ -196,9 +208,12 @@ export async function installEngine(
     // stdin identically on GNU tar, so this holds for the Linux targets
     // (ROAD-102) when they come. The archive is trusted ONLY because its
     // hash matched the pin a moment ago: bsdtar without `-P` refuses
-    // absolute and `..` entries, and the pinned archive was inspected
-    // (959 entries, none of either), but neither of those is why this is
-    // safe — the hash is.
+    // absolute and `..` entry NAMES, and the pinned archive has none —
+    // it does carry three symlinks under node_modules/.bin whose targets
+    // are absolute paths into the packager's temp dir (dangling here;
+    // bsdtar's default secure-symlinks never writes through them, and
+    // nothing runs .bin/*; review round 2 asks the next pin's packager to
+    // drop them) — but none of that is why this is safe. The hash is.
     await new Promise<void>((resolve, reject) => {
       const child = execFile(
         '/usr/bin/tar',

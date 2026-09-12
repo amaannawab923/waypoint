@@ -48,6 +48,17 @@ export const ENGINE_PIN = {
   /** Inside the extracted archive: the shell launcher that execs the bundled
    *  `node` on `dist/index.mjs`. Takes the CLI commands in `EngineCommand`. */
   launcherRelPath: 'emdash-workspace-server/bin/emdash-workspace-server',
+  /**
+   * sha256 of that launcher — the nine-line `sh` script Waypoint main
+   * spawns on every look and every start. Re-verified before each spawn
+   * (installer.ts, verifyInstalledEngine): the archive is hash-checked
+   * once at extraction, but the extracted tree is user-writable for the
+   * life of the install, and W4's agents will run two directories away
+   * from it. A launcher that is not the pinned one is `failed`/install,
+   * never run. (Review round 2.)
+   */
+  launcherSha256:
+    'a6f569e3f1da7287011ae19a65cd811123d539db411342f199181b0dfbf7420d',
 } as const;
 
 /**
@@ -112,10 +123,12 @@ export interface EnginePaths {
   /** Where Waypoint keeps the engine's stdout/stderr when it spawns it. */
   logPath: string;
   /**
-   * Where a run's worktree goes: `<engine>/worktrees/<run id>` (ROAD-55).
+   * Where a run's worktree goes: `<userData>/worktrees/<run id>` (ROAD-55).
    * Outside every linked checkout — the daemon's own path safety refuses a
-   * worktree inside its repository — and inside Waypoint's data directory,
-   * so what Waypoint created, Waypoint can account for and remove.
+   * worktree inside its repository — outside the engine tree (an agent
+   * must not sit beside the launcher main spawns), and inside Waypoint's
+   * data directory, so what Waypoint created, Waypoint can account for
+   * and remove.
    */
   worktreesDir: string;
 }

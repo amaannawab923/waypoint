@@ -275,26 +275,75 @@ function parseOutcome(
  * parsing is line-first and the code is reported alongside.
  */
 /**
- * The inherited environment minus the variables that would reconfigure the
- * daemon's own Node runtime. Exported for the test and for the stdio
- * transport, which spawns the same launcher.
+ * The environment the daemon runs in — an allowlist, not the inherited
+ * environment minus a few names.
  *
- *  - NODE_OPTIONS / NODE_PATH: preloads and module paths meant for
- *    Waypoint's dev process, not for a bundled node in a bare directory.
- *  - ELECTRON_RUN_AS_NODE: set by Electron for its own forked helpers; the
- *    launcher runs a real node binary and must not be told it is Electron.
- *  - NODE_ENV: Waypoint's build mode ('development') is not the daemon's;
- *    the daemon reads its own config and never keys on this.
+ * Found in review, round 2 (the first draft was a denylist of four): a
+ * `start`ed daemon is detached and outlives Waypoint, and its environment
+ * is the base environment of every agent process it will spawn (emdash
+ * `acp/node/component.ts:56`, `options.env ?? process.env`). Under
+ * `npm start` the inherited set included the whole `npm_*` family, the
+ * Claude Code session variables of the terminal Waypoint was launched
+ * from, `ANTHROPIC_BASE_URL`, `ELECTRON_QA_DEBUG_PORT`… — frozen into a
+ * process that persists across app restarts. "The coding process never
+ * holds a credential" (ROAD-44) starts here.
+ *
+ * What passes: what a login shell gives a program that has to find and
+ * run the user's tools. The daemon then resolves the user's login-shell
+ * environment itself for the agents it hosts (`shell-env/node/manager.ts`),
+ * so nothing functional is lost by starting it clean.
+ *
+ *  - NODE_OPTIONS / NODE_PATH / ELECTRON_RUN_AS_NODE / NODE_ENV are the
+ *    ones the denylist named (review 1, H1: `-r ts-node/register` killed
+ *    the daemon's bundled node before it printed anything) — excluded by
+ *    construction now.
+ *  - `WAYPOINT_ENGINE_ENV_PASSTHROUGH="A,B"` lets a developer name extra
+ *    variables to pass through (an API-key-based provider login, say).
+ *    Never set by Waypoint itself.
+ *
+ * Exported for the test and for the stdio transport, which spawns the
+ * same launcher.
  */
+export const ENGINE_ENV_ALLOWLIST: readonly string[] = [
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'SHELL',
+  'TMPDIR',
+  'LANG',
+  'LANGUAGE',
+  'TERM',
+  'COLORTERM',
+  'TZ',
+  // The agent's git may fetch over ssh; this is a socket path, not a key.
+  'SSH_AUTH_SOCK',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'ALL_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'no_proxy',
+  'all_proxy',
+];
+export const ENGINE_ENV_ALLOWED_PREFIXES: readonly string[] = ['LC_', 'XDG_'];
+export const ENGINE_ENV_PASSTHROUGH_VAR = 'WAYPOINT_ENGINE_ENV_PASSTHROUGH';
+
 export function engineRuntimeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const {
-    NODE_OPTIONS: _nodeOptions,
-    NODE_PATH: _nodePath,
-    ELECTRON_RUN_AS_NODE: _electronRunAsNode,
-    NODE_ENV: _nodeEnv,
-    ...rest
-  } = env;
-  return rest;
+  const extra = (env[ENGINE_ENV_PASSTHROUGH_VAR] ?? '')
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean);
+  const allowed = (name: string): boolean =>
+    ENGINE_ENV_ALLOWLIST.includes(name) ||
+    ENGINE_ENV_ALLOWED_PREFIXES.some((prefix) => name.startsWith(prefix)) ||
+    extra.includes(name);
+  const out: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (value !== undefined && allowed(name)) out[name] = value;
+  }
+  return out;
 }
 
 export function runDaemonCommand<C extends DaemonManagementCommand>(
