@@ -1960,6 +1960,146 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
 
 ---
 
+## My sessions (W3, ROAD-58) — executed live 2026-09-12
+
+Executed against the running app (`npm run start:qa`, which sets
+`WAYPOINT_FEATURE_SESSIONS=true`), this checkout's backend on :14000, and
+the pinned engine daemon, with one real Claude Code ACP session seeded
+through the ledger and the daemon (`scratchpad/w3-qa/wire.mjs`): a run
+dispatched on ROAD-64 with a scratch worktree under
+`<userData>/worktrees/<runId>`. Screenshots in
+`emdash/.qa-screenshots/w3-live/`. Layout rules in
+docs/design/w3-sessions-rail.md.
+
+- **SESS-01** — The sidebar entry and its badge
+  Steps: Launch with the flag on. Look at the sidebar under "My work".
+  Expected: "My sessions" directly under My work; an alert badge with the
+  number of runs waiting on you; none with nothing waiting.
+  Result: PASS — entry present, badge "1" while the run was blocked, gone
+  after the permission was answered.
+
+- **SESS-02** — The rail replaces the sidebar inside /sessions and comes back outside it
+  Steps: Click My sessions. Then navigate to a ticket page.
+  Expected: 56 px icon rail (Home, My work, My sessions + badge, Review,
+  Projects, Settings, Local dot) while on /sessions*; the full sidebar
+  everywhere else.
+  Result: PASS — 01-sessions-overview-1280.png; 08-ticket-runs-section.png
+  shows the full sidebar restored on the ticket page.
+
+- **SESS-03** — Peek and pin
+  Steps: Rest the pointer on the dashed expand affordance under the logo;
+  move away. Click it. Press ⌘B. Leave and re-enter /sessions.
+  Expected: after ~200 ms the full sidebar overlays the workspace without
+  moving it; it retracts when the pointer leaves; click pins it open (the
+  workspace resizes) and the pin survives leaving and returning; ⌘B
+  toggles; the pinned sidebar shows a collapse chevron beside the name.
+  Result: PASS — 05-rail-peek.png. Pin persistence verified by unit test
+  (AppShell.rail.test.tsx) and by reload.
+
+- **SESS-04** — Pixel budget
+  Steps: Window at 1280 wide, then 1440, with a session open.
+  Expected: list 300 px; transcript pane ≥ 924 px at 1280 and ≥ 1084 px at
+  1440.
+  Result: PASS — measured 924 (1280) and 1084 (1440) via
+  getBoundingClientRect; 09-ended-session-1440.png.
+
+- **SESS-05** — The list groups and names runs honestly
+  Steps: With a blocked run, then a running one, then a cancelled one.
+  Expected: groups Waiting on you → Active → Done with counts; a
+  dispatched run named by its ticket ("ROAD-64 · Diff view…") with a
+  Dispatched chip and its branch; a blocked row's third line is the
+  ledger's reason ("Wants to write notes.txt").
+  Result: PASS — the row moved Waiting → Active → Done as the run's
+  status changed, with the reason line following the pending request.
+
+- **SESS-06** — Live transcript of a real session
+  Steps: Open the run. Send "Reply with exactly the word: pong" with ⌘↵.
+  Expected: history renders (user prompt, Execute card with `git status`,
+  the reply); the composer clears; the reply streams in and the turn
+  count in the strip goes up.
+  Result: PASS — 02-blocked-session-1280.png; "pong" arrived, strip went
+  2 → 3 turns, cost $0.29 → $0.31 from the daemon's usage topic.
+
+- **SESS-07** — A permission request, answered from the band
+  Steps: Prompt the agent to create a file and run a shell command. Watch
+  the row, the header and the band. Answer with the main action, then
+  open the menu for the second request.
+  Expected: the ledger goes `blocked` with the tool's reason (written by
+  main's follower); the header pill says Blocked; the band, docked above
+  the composer, names the tool call with the agent's own options — main
+  action = the allow_once option, menu = every option by name; answering
+  releases the agent; the second request replaces the first in the band
+  and in the row's reason line; the run returns to Running.
+  Result: PASS — 02-blocked-session-1280.png, 03-permission-menu.png.
+  Two defects found and fixed during this pass: the turn in flight vanished
+  when history landed after the live snapshot (seed order), and the reason
+  line stayed on the first request after it was answered (follower
+  re-judged only on a count change).
+
+- **SESS-08** — Diff tab
+  Steps: After the agent wrote notes.txt, open Diff.
+  Expected: tab label "Diff · 1 file"; file list with A/M/D glyph and
+  +/−; the selected file as a numbered unified diff; "vs main".
+  Result: PASS — 04-diff-tab-1280.png. Defect found and fixed: an
+  untracked one-line file counted "+2" (trailing newline).
+
+- **SESS-09** — Stop
+  Steps: Click Stop in the header of a running session.
+  Expected: the daemon session is killed (gone from acp.sessions.list),
+  the ledger says cancelled with endedAt, the pill says Cancelled, Stop is
+  gone, the composer is disabled with "This session has ended
+  (cancelled).", the row moves to Done; the transcript stays readable.
+  Result: PASS — 09-ended-session-1440.png; engine log "run stopped".
+
+- **SESS-10** — Narrow window (< 1100 px)
+  Steps: Window at 1000 wide. Open a session; press Esc; click the back
+  chevron.
+  Expected: the rail stays; with a session open the list hides and the
+  detail takes the width with a back chevron; Esc and the chevron return
+  to the list, which then fills the width.
+  Result: PASS — 06-narrow-detail-1000.png, 07-narrow-list-1000.png.
+  Note: after the resize the transcript was not scrolled to its tail
+  (chat-ui keeps its anchor across a reflow); a new message or a scroll
+  brings it back. Not W3's code; noted for the chat-ui pin.
+
+- **SESS-11** — The ticket page's Runs section
+  Steps: Open ROAD-64. Click "Open session →".
+  Expected: a Runs (1) section beside Pending proposals with the status
+  pill, provider, branch, age; the link lands on /sessions/<runId>.
+  Result: PASS — 08-ticket-runs-section.png.
+
+- **SESS-12** — Empty states tell the engine apart from "no sessions"
+  Steps: Stop the engine from This machine with no runs; then start it.
+  Expected: "The agent engine is not running" with a button to This
+  machine; then "No sessions yet" with the (disabled, W4) New session.
+  Result: PASS by unit test (SessionsPage.test.tsx); not re-run live
+  because stopping the daemon would end the seeded session.
+
+- **SESS-13** — Reload the panel
+  Steps: With a session open, reload the renderer (⌘R).
+  Expected: the transcript is live again after the reload.
+  Result: PASS after a fix — the first reload said "not live" on every
+  topic: main kept the old document's attachments and the Wire client
+  holds one per topic. Main now releases them on a main-frame navigation
+  or a crashed renderer.
+
+- **SESS-14** — Launch with a daemon already running
+  Steps: Quit and relaunch Waypoint while the daemon (and a session) keep
+  running. Do not open This machine.
+  Expected: the panel is live and the ledger follows the session without
+  anyone probing the engine by hand.
+  Result: PASS after a fix — nothing asked the supervisor to look at
+  launch, so a pending permission never reached the ledger until This
+  machine was opened; the sessions store now probes (install) once on its
+  first subscriber.
+
+- **SESS-15** — New session
+  Steps: Click "+" in the list header, and "New session" in the empty
+  state.
+  Expected: both present and disabled, with "Starting a session from here
+  arrives with W4." on hover.
+  Result: PASS — by design until ROAD-66.
+
 ## Summary
 
 **132 test cases executed, personally, live against the running app, across all 27 sections.**
