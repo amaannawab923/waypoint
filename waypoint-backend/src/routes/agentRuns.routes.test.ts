@@ -63,6 +63,22 @@ describe('POST /agent-runs', () => {
     });
   });
 
+  it('trims a title on create; a blank one is null, a long one is 400', async () => {
+    vi.mocked(service.createRun).mockResolvedValue(run({ entry: 'independent', ticketId: null }));
+    const app = buildTestApp();
+    const base = { projectId: 'proj-1', ownerMemberId: 'mem-1', entry: 'independent', providerId: 'claude' };
+
+    expect((await request(app).post('/agent-runs').send({ ...base, title: '  Fix the flaky test  ' })).status).toBe(201);
+    expect(service.createRun).toHaveBeenLastCalledWith({ ...base, title: 'Fix the flaky test' });
+
+    expect((await request(app).post('/agent-runs').send({ ...base, title: '   ' })).status).toBe(201);
+    expect(service.createRun).toHaveBeenLastCalledWith({ ...base, title: null });
+
+    const long = await request(app).post('/agent-runs').send({ ...base, title: 'x'.repeat(121) });
+    expect(long.status).toBe(400);
+    expect(service.createRun).toHaveBeenCalledTimes(2);
+  });
+
   it('rejects an unknown entry with 400 before touching the service', async () => {
     const res = await request(buildTestApp()).post('/agent-runs').send({
       projectId: 'proj-1',
@@ -193,6 +209,21 @@ describe('PATCH /agent-runs/:id', () => {
     expect(service.updateRun).toHaveBeenCalledWith('run-abc1234', {
       status: 'cancelled',
       reason: 'user clicked Stop',
+    });
+  });
+
+  it('accepts the provider session id and a title as plain fields', async () => {
+    vi.mocked(service.updateRun).mockResolvedValue(run({ status: 'running' }));
+
+    const res = await request(buildTestApp())
+      .patch('/agent-runs/run-abc1234')
+      .send({ status: 'running', providerSessionId: 'sess-uuid-1', title: 'Renamed ' });
+
+    expect(res.status).toBe(200);
+    expect(service.updateRun).toHaveBeenCalledWith('run-abc1234', {
+      status: 'running',
+      providerSessionId: 'sess-uuid-1',
+      title: 'Renamed',
     });
   });
 

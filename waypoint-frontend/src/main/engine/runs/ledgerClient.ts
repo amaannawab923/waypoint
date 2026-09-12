@@ -36,8 +36,12 @@ export interface AgentRun {
   agentId: string | null;
   entry: AgentRunEntry;
   providerId: string;
+  /** What the user called it in the New session dialog (W4); null when nothing. */
+  title: string | null;
   daemonWorkspaceId: string | null;
   daemonSessionId: string | null;
+  /** The provider's own resume handle, as `acp.start` answered it (W4, ROAD-69). */
+  providerSessionId: string | null;
   worktreePath: string | null;
   branch: string | null;
   baseRef: string | null;
@@ -74,6 +78,7 @@ export interface CreateAgentRunInput {
   entry: AgentRunEntry;
   providerId: string;
   baseRef?: string;
+  title?: string | null;
   retryOfRunId?: string;
 }
 
@@ -87,6 +92,8 @@ export interface UpdateAgentRunInput {
   summary?: string | null;
   daemonWorkspaceId?: string | null;
   daemonSessionId?: string | null;
+  providerSessionId?: string | null;
+  title?: string | null;
   worktreePath?: string | null;
   branch?: string | null;
   baseRef?: string | null;
@@ -127,7 +134,20 @@ export interface RunPage {
   nextCursor: string | null;
 }
 
+/** The slice of a project a run start needs (the backend's `/projects/:id`). */
+export interface LedgerProject {
+  id: string;
+  name: string;
+  /** The linked local git checkout; null when the project has none. */
+  repoPath: string | null;
+}
+
 export interface LedgerClient {
+  /**
+   * The project a run is about to be started in — read by main, so the
+   * renderer never names a path (W4). Null when there is no such project.
+   */
+  getProject(id: string): Promise<LedgerProject | null>;
   createRun(input: CreateAgentRunInput): Promise<AgentRun>;
   getRun(id: string): Promise<AgentRun | null>;
   listRuns(query: ListAgentRunsQuery): Promise<RunPage>;
@@ -178,6 +198,7 @@ function defaultBaseUrl(): string {
 // from a caller, even one inside this process.
 const RUN_ID = /^[a-z]+-[A-Za-z0-9]{1,64}$/;
 
+/** Project ids share the shape (`proj-…`), and reach a URL the same way. */
 export function assertRunId(id: string): void {
   if (!RUN_ID.test(id)) throw new Error(`Not a run id: ${JSON.stringify(id)}`);
 }
@@ -249,6 +270,26 @@ export function createLedgerClient(deps: LedgerClientDeps = {}): LedgerClient {
   }
 
   const client: LedgerClient = {
+    async getProject(id) {
+      assertRunId(id);
+      try {
+        const project = (
+          await request<{ id: string; name: string; repoPath?: string | null }>(
+            'GET',
+            `/projects/${id}`,
+          )
+        ).body;
+        return {
+          id: project.id,
+          name: project.name,
+          repoPath: project.repoPath ?? null,
+        };
+      } catch (error) {
+        if (error instanceof LedgerRequestError && error.status === 404)
+          return null;
+        throw error;
+      }
+    },
     async createRun(input) {
       return (await request<AgentRun>('POST', '/agent-runs', input)).body;
     },

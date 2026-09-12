@@ -36,7 +36,8 @@ npm-debug.log.*
 # archive and the vendored emdash chat-ui build. Both carry minified
 # bundles that `eslint .` would otherwise spend minutes on — CI's lint step
 # hung on them (PR #56).
-engine
-vendor
+# Root-anchored: a bare `engine` would also ignore src/main/engine/.
+/engine
+/vendor
 # Webpack's dev output for the renderer's own workspace.
-release/app/.erb
+/release/app/.erb

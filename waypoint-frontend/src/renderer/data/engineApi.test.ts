@@ -2,10 +2,13 @@ import {
   callEngineFallible,
   cancelTurn,
   getRunDiff,
+  listRunBranches,
   onRunChanged,
   resolvePermission,
+  resumeRun,
   revealRunWorktree,
   sendPrompt,
+  startRun,
   stopRun,
 } from './engineApi';
 
@@ -15,6 +18,9 @@ const engine = {
   runDiff: jest.fn(),
   revealRunWorktree: jest.fn(),
   onRunChanged: jest.fn(),
+  startRun: jest.fn(),
+  resumeRun: jest.fn(),
+  listRunBranches: jest.fn(),
 };
 
 beforeEach(() => {
@@ -72,6 +78,52 @@ describe('the session procedures send exactly the allowlisted shapes', () => {
       ],
       ['acp.cancelTurn', { conversationId: 'run-a1' }],
     ]);
+  });
+});
+
+describe('the W4 run channels', () => {
+  it('pass their one argument through and hand back the answer', async () => {
+    engine.startRun.mockResolvedValueOnce({
+      id: 'run-n1',
+      status: 'provisioning',
+    });
+    engine.resumeRun.mockResolvedValueOnce({
+      outcome: 'loaded',
+      status: 'running',
+    });
+    engine.listRunBranches.mockResolvedValueOnce({
+      branches: ['main'],
+      suggested: 'main',
+    });
+    const input = {
+      projectId: 'proj-1',
+      ownerMemberId: 'mem-1',
+      providerId: 'claude' as const,
+      baseRef: 'main',
+      title: null,
+    };
+    await expect(startRun(input)).resolves.toMatchObject({ id: 'run-n1' });
+    expect(engine.startRun).toHaveBeenCalledWith(input);
+    await expect(resumeRun('run-i1')).resolves.toEqual({
+      outcome: 'loaded',
+      status: 'running',
+    });
+    await expect(listRunBranches('proj-1')).resolves.toMatchObject({
+      suggested: 'main',
+    });
+  });
+
+  it("strip Electron's IPC wrapper so a refusal is main's own sentence", async () => {
+    engine.startRun.mockRejectedValueOnce(
+      new Error(
+        "Error invoking remote method 'runs:start': Error: Compass's linked repository (~/x) is not on this machine.",
+      ),
+    );
+    await expect(startRun({} as never)).rejects.toThrow(
+      "Compass's linked repository (~/x) is not on this machine.",
+    );
+    engine.stopRun.mockRejectedValueOnce(new Error('plain'));
+    await expect(stopRun('run-a1')).rejects.toThrow('plain');
   });
 });
 

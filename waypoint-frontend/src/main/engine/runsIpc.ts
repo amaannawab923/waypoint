@@ -5,6 +5,7 @@ import type { EngineSupervisor } from './supervisor';
 import {
   MAX_DIFF_PATCH_CHARS,
   RUNS_IPC,
+  type RunChanged,
   type RunDiff,
   type RunDiffFile,
   type RunDiffFileStatus,
@@ -18,10 +19,12 @@ import {
   type LedgerClient,
 } from './runs/ledgerClient';
 import { assertUnder } from './runs/worktrees';
+import { listRunBranches, resumeRun, startRun } from './runs/startRun';
 
 /**
- * The sessions panel's three actions on a run — W3, ROAD-61 (stop) and
- * ROAD-64 (diff), plus revealing the worktree.
+ * The sessions panel's actions on a run — W3, ROAD-61 (stop) and ROAD-64
+ * (diff), plus revealing the worktree; W4 adds start, resume and the
+ * branch list the New session dialog needs (runs/startRun.ts).
  *
  * The renderer sends a run id and nothing else. Main reads the run from
  * the ledger, checks the worktree path it finds there is under
@@ -62,6 +65,8 @@ export interface RunsIpcDeps {
   git?: GitRunner;
   /** `shell.showItemInFolder`. */
   reveal: (absolutePath: string) => void;
+  /** `runs:changed` to the renderer — start and resume write statuses the panel must hear about. */
+  notify: (change: RunChanged) => void;
   /** Test seam: the daemon facade, defaulting to the real one over the live client. */
   daemon?: (supervisor: EngineSupervisor) => DaemonRunsApi | null;
   logger: {
@@ -436,6 +441,21 @@ export function registerRunsIpc(deps: RunsIpcDeps): void {
     await assertUnder(run.worktreePath, deps.worktreesDir);
     return run.worktreePath;
   };
+
+  const startDeps = {
+    ledger,
+    daemon: () => daemonFor(deps.supervisor),
+    worktreesDir: deps.worktreesDir,
+    notify: deps.notify,
+    git,
+    assertWorktreeGitDir,
+    logger: deps.logger,
+  };
+  deps.host.handle(RUNS_IPC.start, (input) => startRun(startDeps, input));
+  deps.host.handle(RUNS_IPC.resume, (runId) => resumeRun(startDeps, runId));
+  deps.host.handle(RUNS_IPC.listBranches, (projectId) =>
+    listRunBranches(startDeps, projectId),
+  );
 
   deps.host.handle(RUNS_IPC.stop, async (runId): Promise<StopRunResult> => {
     const run = await loadRun(runId);

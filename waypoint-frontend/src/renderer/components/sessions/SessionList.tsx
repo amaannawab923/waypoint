@@ -11,10 +11,6 @@ import type { SessionGroups } from '@/lib/sessionsStore';
 import type { AgentRun } from '@/types/agentRuns';
 import { SessionRow } from './SessionRow';
 
-/** What the disabled "+" says until W4 (ROAD-66) lands — docs/design/w3-sessions-rail.md §2. */
-export const NEW_SESSION_UNAVAILABLE =
-  'Starting a session from here arrives with W4.';
-
 const GROUP_LABELS: Record<keyof SessionGroups, string> = {
   waiting: 'Waiting on you',
   active: 'Active',
@@ -32,11 +28,14 @@ export function SessionList({
   groups,
   selectedRunId,
   onOpen,
+  onNew,
   width = 300,
 }: {
   groups: SessionGroups;
   selectedRunId: string | null;
   onOpen: (runId: string) => void;
+  /** The header's "+" (W4): opens the New session dialog. */
+  onNew: () => void;
   /** Fixed at 300 beside the rail; the narrow layout hands it the whole width. */
   width?: number | '100%';
 }) {
@@ -114,12 +113,12 @@ export function SessionList({
         <h2 className="font-display text-xs font-semibold text-text">
           My sessions
         </h2>
-        <Tooltip label={NEW_SESSION_UNAVAILABLE}>
+        <Tooltip label="New session · n">
           <button
             type="button"
             aria-label="New session"
-            aria-disabled="true"
-            className="flex size-5 cursor-not-allowed items-center justify-center rounded-[5px] border border-dashed border-border-strong text-text-muted opacity-60"
+            onClick={onNew}
+            className="flex size-5 items-center justify-center rounded-[5px] border border-border-strong text-text-secondary hover:bg-surface-2 hover:text-text"
           >
             <IconPlus size={11} />
           </button>

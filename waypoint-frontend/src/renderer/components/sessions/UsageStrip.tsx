@@ -28,11 +28,14 @@ export function UsageStrip({
   usage,
   live,
   generating,
+  queued = 0,
 }: {
   turnCount: number;
   usage: SessionUsage | null;
   live: FollowerStatus['kind'];
   generating: boolean;
+  /** Prompts the daemon holds for the next turn (W4). */
+  queued?: number;
 }) {
   return (
     <div
@@ -52,6 +55,11 @@ export function UsageStrip({
         </span>
       )}
       <span className="flex-1" />
+      {queued > 0 && (
+        <span title="Sent during a turn; delivered when it ends">
+          {queued} queued
+        </span>
+      )}
       {generating && <span className="text-info">working…</span>}
       <span className={live === 'live' ? 'text-success' : ''}>
         {LIVE_WORD[live]}

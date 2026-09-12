@@ -13,6 +13,13 @@ export const workspaces = pgTable('workspaces', {
   plan: planTierEnum('plan').notNull().default('community'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   restrictWorkspaceCreation: boolean('restrict_workspace_creation').notNull().default(false),
+  // The coding-agent provider every new session runs on unless the person
+  // starting it picks another (W4, emdash's `defaultAgent` rule: a
+  // workspace default, a per-session override, never a change mid-
+  // session). A plain string — the provider list is the engine's — and
+  // null means Waypoint's own default. Availability is per machine and is
+  // the renderer's to check; this is only the workspace's preference.
+  defaultAgentProvider: text('default_agent_provider'),
 });
 
 export const members = pgTable('members', {

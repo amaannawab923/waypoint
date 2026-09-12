@@ -24,6 +24,14 @@ export { liveTopic } from '../wire/topics';
  *     topic 'git.repository.model.refs|{"repository":{"root":{"kind":"posix"},"segments":[…]}}'
  *     snapshot {generation, sequence, timestamp, data:{branches:[{type:'local'|'remote', branch, oid}], …}}
  *   acp.sessions.list                   snapshot data: Record<conversationId, SessionSummary>
+ *   acp.start                           {conversationId, providerId, cwd, sessionId, model}
+ *     → {success:true, data:{sessionId}}   sessionId = the provider's own handle; with
+ *                                          `sessionId` set the daemon loadSessions it and,
+ *                                          if the provider cannot, starts fresh in the same
+ *                                          cwd and answers a NEW sessionId (W4 QA, 2026-09-12)
+ *     → {success:false, error:{type:'auth-required'|'spawn-failed'|'new-session-failed'|…}}
+ *   acp.sendPrompt                      {conversationId, prompt:{text}, placement?}
+ *     → {success:true, data:{queued}}    resolves when the TURN ends, not when it is queued
  *   acp.kill                            {conversationId} → {success:true} | {success:false, error}
  *
  * Nothing in here decides anything: it asks, and hands back what the
@@ -72,6 +80,21 @@ export interface CreateWorktreeRequest {
   path: string;
 }
 
+export interface StartSessionRequest {
+  conversationId: string;
+  providerId: string;
+  cwd: string;
+  /** The provider's session to load; null starts a new one. */
+  sessionId: string | null;
+}
+
+/** `git.repository.model.refs` as this module reads it. */
+export interface RepositoryRefs {
+  branches: string[];
+  /** The branch `origin/HEAD` (or another remote's) points at, when known. */
+  remoteHeads: Array<{ remote: string; branch: string }>;
+}
+
 export interface DaemonRunsApi {
   /**
    * Registers the repository at `repoPath` under `preferredId`, or returns
@@ -97,6 +120,20 @@ export interface DaemonRunsApi {
   ): Promise<void>;
   /** Local branch names of the repository at `repoPath`. */
   listLocalBranches(repoPath: string): Promise<string[]>;
+  /** Local branches plus what the remotes' HEADs point at. */
+  listRefs(repoPath: string): Promise<RepositoryRefs>;
+  /**
+   * Starts (or, with `sessionId`, loads) the ACP session for a run. The
+   * daemon takes minutes on a cold provider start (spawning the agent,
+   * initialising, the first newSession), so this names its own deadline.
+   */
+  startSession(request: StartSessionRequest): Promise<{ sessionId: string }>;
+  /**
+   * A text prompt from Waypoint itself — the resume note (ROAD-69). Answers
+   * when the daemon has taken the prompt, not when the turn ends: the
+   * call's own promise is deliberately not awaited past `queued`.
+   */
+  sendPrompt(conversationId: string, text: string): Promise<void>;
   /** Every worktree record the daemon holds, by id. */
   listWorkspaceRecords(): Promise<Record<string, DaemonWorkspaceRecord>>;
   listSessions(): Promise<Record<string, DaemonSessionSummary>>;
@@ -194,6 +231,12 @@ export const SNAPSHOT_TIMEOUT_MS = 10_000;
  * creating a worktree and deleting one are not, and name their own.
  */
 export const CALL_TIMEOUT_MS = 30_000;
+/** A cold `acp.start` spawns the agent and waits for its first session. */
+export const START_SESSION_TIMEOUT_MS = 3 * 60_000;
+/** The resume note's turn may run long; the call is bounded regardless. */
+export const SEND_PROMPT_TIMEOUT_MS = 10 * 60_000;
+/** After this, the note is taken as accepted even though the turn has not ended. */
+export const PROMPT_ACCEPTED_MS = 2_000;
 
 export function createDaemonRunsApi(client: WireClient): DaemonRunsApi {
   async function fallible<T>(
@@ -221,6 +264,24 @@ export function createDaemonRunsApi(client: WireClient): DaemonRunsApi {
         `${procedure}: ${describe(answer.error)}`,
       );
     return answer.data;
+  }
+
+  async function listRefs(repoPath: string): Promise<RepositoryRefs> {
+    const refs = await readSnapshot<{
+      branches: Array<{ type: string; branch: string }>;
+      remoteHeads?: Array<{ remote: string; branch: string }>;
+    }>(
+      client,
+      liveTopic('git.repository.model.refs', {
+        repository: hostAbsolutePath(repoPath),
+      }),
+    );
+    return {
+      branches: refs.branches
+        .filter((b) => b.type === 'local')
+        .map((b) => b.branch),
+      remoteHeads: refs.remoteHeads ?? [],
+    };
   }
 
   return {
@@ -271,17 +332,34 @@ export function createDaemonRunsApi(client: WireClient): DaemonRunsApi {
       );
     },
     async listLocalBranches(repoPath) {
-      const refs = await readSnapshot<{
-        branches: Array<{ type: string; branch: string }>;
-      }>(
-        client,
-        liveTopic('git.repository.model.refs', {
-          repository: hostAbsolutePath(repoPath),
-        }),
+      return (await listRefs(repoPath)).branches;
+    },
+    listRefs,
+    startSession(request) {
+      return fallible<{ sessionId: string }>(
+        'acp.start',
+        { ...request, model: null },
+        START_SESSION_TIMEOUT_MS,
       );
-      return refs.branches
-        .filter((b) => b.type === 'local')
-        .map((b) => b.branch);
+    },
+    async sendPrompt(conversationId, text) {
+      // The daemon answers `acp.sendPrompt` when the turn ends. Waypoint's
+      // note only needs to be taken, so the first of "the turn ended" and
+      // "PROMPT_ACCEPTED_MS passed with no refusal" wins; a refusal inside
+      // that window is still a rejection. The late outcome is observed
+      // (never an unhandled rejection) and dropped.
+      const turn = fallible<{ queued: boolean }>(
+        'acp.sendPrompt',
+        { conversationId, prompt: { text }, placement: 'auto' },
+        SEND_PROMPT_TIMEOUT_MS,
+      ).then(() => undefined);
+      turn.catch(() => {});
+      await Promise.race([
+        turn,
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, PROMPT_ACCEPTED_MS).unref?.();
+        }),
+      ]);
     },
     listWorkspaceRecords() {
       return readSnapshot<Record<string, DaemonWorkspaceRecord>>(

@@ -58,6 +58,8 @@ export interface Workspace {
   plan: PlanTier;
   createdAt: string;
   restrictWorkspaceCreation: boolean;
+  /** The provider new sessions run on unless overridden (W4); null = Waypoint's default. */
+  defaultAgentProvider: string | null;
 }
 
 export interface NotificationPrefs {

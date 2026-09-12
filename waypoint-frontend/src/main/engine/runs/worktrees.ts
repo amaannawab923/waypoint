@@ -6,7 +6,12 @@ import type {
   DaemonRunsApi,
   DaemonWorkspaceRecord,
 } from './daemonApi';
-import { assertRunId, type AgentRun, type LedgerClient } from './ledgerClient';
+import {
+  assertRunId,
+  LedgerRequestError,
+  type AgentRun,
+  type LedgerClient,
+} from './ledgerClient';
 
 /**
  * A worktree per run, through the daemon — ROAD-55.
@@ -278,6 +283,20 @@ export async function provisionWorktree(
     });
     return provisioned;
   } catch (error) {
+    // The ledger refusing the write (409: the run was stopped while the
+    // worktree was being made, W4) is not a provisioning failure to
+    // record — the record is read-only, and an "error" event about the
+    // ledger's own refusal is noise in the trail. The caller sees the
+    // refusal and decides (found in W4's live pass, SESS-23).
+    if (error instanceof LedgerRequestError && error.status === 409) {
+      deps.logger.info(
+        'engine: run worktree made after the run was stopped; left on disk',
+        {
+          runId: run.id,
+        },
+      );
+      throw error;
+    }
     const message = describeDaemonError(error);
     deps.logger.warn('engine: run worktree failed', { runId: run.id, message });
     // The ledger hears about it before the caller does. Not a status move —
@@ -381,7 +400,10 @@ export async function releaseWorktree(
  * revealing, a run's worktree: a ledger row naming a path outside
  * worktreesDir is a row someone edited, not a place to run commands.
  */
-export async function assertUnder(candidate: string, root: string): Promise<void> {
+export async function assertUnder(
+  candidate: string,
+  root: string,
+): Promise<void> {
   await fs.mkdir(root, { recursive: true });
   const realRoot = await fs.realpath(root);
   const realCandidate = await fs
