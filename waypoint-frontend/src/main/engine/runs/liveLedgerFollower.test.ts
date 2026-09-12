@@ -568,3 +568,36 @@ describe('W5a hooks', () => {
     );
   });
 });
+
+describe('beforeInterrupted (ROAD-124)', () => {
+  it('is awaited before a vanished session marks its run interrupted', async () => {
+    const daemon = fakeDaemon();
+    const supervisor = fakeSupervisor(running(1), daemon.client);
+    const { ledger } = fakeLedger({ 'run-a': { status: 'running' } });
+    const order: string[] = [];
+    const beforeInterrupted = jest.fn(async () => {
+      order.push('capture');
+    });
+    ledger.updateRun.mockImplementation(async (id, patch) => {
+      order.push(`write:${patch.status}`);
+      return { id, ...patch } as never;
+    });
+    daemon.set(SESSIONS, { 'run-a': session('run-a') });
+    registerLiveLedgerFollower({
+      supervisor,
+      ledger,
+      notify: jest.fn(),
+      beforeInterrupted,
+      logger,
+      debounceMs: 0,
+      graceMs: 0,
+    });
+    await flush();
+    await flush();
+    daemon.sessions({});
+    await flush();
+    await flush();
+    await flush();
+    expect(order).toEqual(['capture', 'write:interrupted']);
+  });
+});

@@ -24,6 +24,7 @@ import {
 import { assertUnder } from './runs/worktrees';
 import { listRunBranches, resumeRun, startRun } from './runs/startRun';
 import { buildBriefPreview, dispatchTicketRun } from './runs/dispatch';
+import type { TranscriptKeeper } from './runs/transcripts';
 import {
   createFolderRegistry,
   describeFolder,
@@ -90,6 +91,8 @@ export interface RunsIpcDeps {
   folderRegistry?: FolderRegistry;
   /** Test seam: the daemon facade, defaulting to the real one over the live client. */
   daemon?: (supervisor: EngineSupervisor) => DaemonRunsApi | null;
+  /** The transcript snapshot Stop takes before the kill (ROAD-124). */
+  transcripts?: TranscriptKeeper;
   logger: {
     info: (m: string, meta?: Record<string, unknown>) => void;
     warn: (m: string, meta?: Record<string, unknown>) => void;
@@ -530,6 +533,9 @@ export function registerRunsIpc(deps: RunsIpcDeps): void {
     const daemon = daemonFor(deps.supervisor);
     let daemonConfirmed = false;
     if (daemon) {
+      // The transcript before the kill (ROAD-124): what the agent did up
+      // to the stop stays readable.
+      await deps.transcripts?.capture(run.id);
       await daemon.cancelTurn(run.id).catch((error: unknown) =>
         deps.logger.warn('engine: cancelTurn before stop did not apply', {
           runId: run.id,

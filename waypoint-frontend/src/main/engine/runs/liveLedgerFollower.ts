@@ -51,6 +51,12 @@ export interface LiveLedgerFollowerDeps {
   notify: (change: RunChanged) => void;
   /** A session's turn ended with nothing pending or queued (W5a) — finalize's trigger. */
   onSessionIdle?: (runId: string) => void;
+  /**
+   * A session closed or vanished and its run is about to be marked
+   * interrupted (ROAD-124): the last chance to read its history while the
+   * daemon may still hold it. Awaited; never throws by contract.
+   */
+  beforeInterrupted?: (runId: string) => Promise<void>;
   /** After every status written here, with the status it left (W5a notifications). */
   onRunStatus?: (run: AgentRun, previous: AgentRunStatus) => void;
   logger: {
@@ -218,6 +224,7 @@ export function registerLiveLedgerFollower(
   const markInterrupted = async (runId: string, why: string): Promise<void> => {
     const run = await freshRun(runId);
     if (!run || !LIVE.has(run.status)) return;
+    await deps.beforeInterrupted?.(runId).catch(() => {});
     await write(
       run,
       { status: 'interrupted', reason: why },

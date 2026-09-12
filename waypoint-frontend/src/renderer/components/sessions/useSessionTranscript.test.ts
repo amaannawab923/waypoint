@@ -12,6 +12,9 @@ jest.mock('@/data/engineApi', () => ({
   engineSessionBridge: {},
   onEngineStatusChanged: jest.fn(() => () => {}),
 }));
+jest.mock('@/data/api', () => ({
+  getAgentRunTranscript: jest.fn(async () => undefined),
+}));
 
 type Handlers = {
   onUpdate: (update: LiveUpdate) => void;
@@ -199,5 +202,84 @@ describe('useSessionTranscript', () => {
     await flush();
     expect(runtime.createChatState).toHaveBeenCalledTimes(2);
     expect(fb.bridge.call).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('the kept transcript (ROAD-124)', () => {
+  const { getAgentRunTranscript } = jest.requireMock('@/data/api') as {
+    getAgentRunTranscript: jest.Mock;
+  };
+  const kept = [
+    {
+      id: 't1',
+      seq: 1,
+      initiator: 'user',
+      items: [],
+      outcome: { kind: 'done' },
+    },
+  ];
+
+  it("seeds the ledger's snapshot when the daemon has no history — a killed session, a restarted daemon", async () => {
+    getAgentRunTranscript.mockResolvedValueOnce({
+      turns: kept,
+      turnCount: 1,
+      capturedAt: 'x',
+    });
+    const fb = fakeBridge({}, []);
+    runtime.connectSession.mockImplementation(() => jest.fn());
+    const { result } = renderHook(() =>
+      useSessionTranscript('run-a', { bridge: fb.bridge }),
+    );
+    await flush();
+    const state = runtime.createChatState.mock.results[0].value;
+    expect(state.transcript.history.seed).toHaveBeenLastCalledWith(kept);
+    expect(result.current.turnCount).toBe(1);
+    expect(result.current.historyStatus).toEqual({ kind: 'ready' });
+    expect(getAgentRunTranscript).toHaveBeenCalledWith('run-a');
+  });
+
+  it('also stands in when the daemon errors; without a snapshot the error is reported', async () => {
+    const fb = fakeBridge({}, []);
+    (fb.bridge.call as jest.Mock).mockRejectedValue(
+      new Error('acp.getHistory: conversation-not-found'),
+    );
+    runtime.connectSession.mockImplementation(() => jest.fn());
+    getAgentRunTranscript.mockResolvedValueOnce({
+      turns: kept,
+      turnCount: 1,
+      capturedAt: 'x',
+    });
+    const { result } = renderHook(() =>
+      useSessionTranscript('run-a', { bridge: fb.bridge }),
+    );
+    await flush();
+    expect(result.current.historyStatus).toEqual({ kind: 'ready' });
+    expect(result.current.turnCount).toBe(1);
+
+    getAgentRunTranscript.mockResolvedValueOnce(undefined);
+    await act(() => result.current.reloadHistory());
+    expect(result.current.historyStatus).toEqual({
+      kind: 'failed',
+      message: 'acp.getHistory: conversation-not-found',
+    });
+  });
+
+  it("prefers the daemon's history when it has one", async () => {
+    const live = [
+      {
+        id: 't9',
+        seq: 9,
+        initiator: 'user',
+        items: [],
+        outcome: { kind: 'done' },
+      },
+    ];
+    const fb = fakeBridge({}, live);
+    runtime.connectSession.mockImplementation(() => jest.fn());
+    renderHook(() => useSessionTranscript('run-a', { bridge: fb.bridge }));
+    await flush();
+    const state = runtime.createChatState.mock.results[0].value;
+    expect(state.transcript.history.seed).toHaveBeenLastCalledWith(live);
+    expect(getAgentRunTranscript).not.toHaveBeenCalled();
   });
 });

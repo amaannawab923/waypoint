@@ -10,6 +10,7 @@ import type { SessionUsage } from '@emdash/core/runtimes/acp/api/client' with {
   'resolution-mode': 'import',
 };
 import { getChatUiRuntime } from '@/components/chat/chatUiRuntime';
+import { getAgentRunTranscript } from '@/data/api';
 import { engineSessionBridge, onEngineStatusChanged } from '@/data/engineApi';
 import {
   createLiveFollower,
@@ -85,27 +86,51 @@ export function useSessionTranscript(
   const [turnCount, setTurnCount] = useState(0);
 
   const loadHistory = useCallback(async (target: TranscriptUnit) => {
+    // The daemon's history first; the ledger's snapshot when the daemon
+    // has nothing (ROAD-124: a session killed at finalize or stop, or a
+    // daemon restarted since) — the same turn shape, seeded the same way.
+    let turns:
+      Parameters<typeof target.state.transcript.history.seed>[0] | null = null;
+    let daemonError: unknown = null;
     try {
       const page = await target.source.loadHistory({ limit: HISTORY_PAGE });
-      if (unitRef.current !== target) return;
-      // `seed` replaces the committed history AND resets the active turn
-      // (chat-ui's ChatHistory contract). Found live: a turn in flight
-      // vanished from the pane the moment history landed after the live
-      // snapshot. So the follower's current turn is put back right after.
-      target.state.transcript.history.seed(page.turns);
-      target.state.transcript.activeTurn.set(
-        target.source.activeTurn.getSnapshot() ?? null,
-      );
-      target.state.session.setPendingPrompt(null);
-      setTurnCount(page.turns.length);
-      setHistoryStatus({ kind: 'ready' });
+      if (page.turns.length > 0) turns = page.turns;
     } catch (error) {
-      if (unitRef.current !== target) return;
+      daemonError = error;
+    }
+    if (unitRef.current !== target) return;
+    if (!turns) {
+      try {
+        const kept = await getAgentRunTranscript(target.runId);
+        if (unitRef.current !== target) return;
+        if (kept && kept.turns.length > 0) {
+          turns = kept.turns as NonNullable<typeof turns>;
+        }
+      } catch {
+        // No snapshot either: the daemon's answer (or its error) stands.
+      }
+    }
+    if (!turns && daemonError) {
       setHistoryStatus({
         kind: 'failed',
-        message: error instanceof Error ? error.message : String(error),
+        message:
+          daemonError instanceof Error
+            ? daemonError.message
+            : String(daemonError),
       });
+      return;
     }
+    // `seed` replaces the committed history AND resets the active turn
+    // (chat-ui's ChatHistory contract). Found live: a turn in flight
+    // vanished from the pane the moment history landed after the live
+    // snapshot. So the follower's current turn is put back right after.
+    target.state.transcript.history.seed(turns ?? []);
+    target.state.transcript.activeTurn.set(
+      target.source.activeTurn.getSnapshot() ?? null,
+    );
+    target.state.session.setPendingPrompt(null);
+    setTurnCount(turns?.length ?? 0);
+    setHistoryStatus({ kind: 'ready' });
   }, []);
 
   useEffect(() => {

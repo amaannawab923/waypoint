@@ -12,6 +12,7 @@ import type {
   LedgerState,
 } from './ledgerClient';
 import type { NoteGitRunner } from './startRun';
+import type { TranscriptKeeper } from './transcripts';
 
 /**
  * Host-side finalize — W5a, ROAD-120 (docs/design/w5a-investigate-fix.md
@@ -44,6 +45,8 @@ export interface FinalizeDeps {
   assertWorktreeGitDir?: (worktreePath: string) => Promise<void>;
   /** Told after `needs-review` or `failed` lands: the notification hook (engine/notifications.ts). */
   onRunStatus?: (run: AgentRun, previous: AgentRunStatus) => void;
+  /** The transcript snapshot taken before the session is killed (ROAD-124). */
+  transcripts?: TranscriptKeeper;
   logger: {
     info: (m: string, meta?: Record<string, unknown>) => void;
     warn: (m: string, meta?: Record<string, unknown>) => void;
@@ -276,14 +279,15 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
   const killSession = async (
     daemon: DaemonRunsApi,
     run: AgentRun,
+    turns?: DaemonTranscriptTurn[],
   ): Promise<void> => {
-    await daemon
-      .killSession(run.id)
-      .catch((error: unknown) =>
-        warn('engine: finalize could not kill the session', error, {
-          runId: run.id,
-        }),
-      );
+    // The transcript first: after the kill the daemon has nothing to read.
+    await deps.transcripts?.capture(run.id, turns);
+    await daemon.killSession(run.id).catch((error: unknown) =>
+      warn('engine: finalize could not kill the session', error, {
+        runId: run.id,
+      }),
+    );
     await deps.ledger
       .appendEvent(run.id, 'session_ended', { reason: 'finalized' })
       .catch(() => {});
@@ -343,7 +347,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
       await fail(run, 'The agent ended its turn without a closing message.', {
         stopReason: summary.lastStopReason ?? null,
       });
-      await killSession(daemon, run);
+      await killSession(daemon, run, turns);
       return;
     }
 
@@ -398,7 +402,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
       await fail(run, `The proposal could not be filed: ${describe(error)}`, {
         filed,
       });
-      await killSession(daemon, run);
+      await killSession(daemon, run, turns);
       return;
     }
 
@@ -418,7 +422,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
       warn('engine: finalize could not write needs-review', error, {
         runId: run.id,
       });
-      await killSession(daemon, run);
+      await killSession(daemon, run, turns);
       return;
     }
     deps.notify({ runId: run.id, status: reviewed.status });
@@ -428,7 +432,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
       proposals: filed,
       turns: turnCount,
     });
-    await killSession(daemon, run);
+    await killSession(daemon, run, turns);
     deps.onRunStatus?.(reviewed, 'finishing');
     await deps.ledger
       .postCopilotNote(

@@ -459,3 +459,20 @@ describe('finishedNote', () => {
     ).toBe('Run wi-1 · Fix finished (3 turns) · nothing filed.');
   });
 });
+
+describe('the transcript before the kill (ROAD-124)', () => {
+  it('hands the keeper the turns it read, before killSession', async () => {
+    const { ledger } = fakeLedger(run());
+    const daemon = fakeDaemon();
+    const order: string[] = [];
+    daemon.killSession.mockImplementation(async () => {
+      order.push('kill');
+    });
+    const capture = jest.fn(async (_id: string, turns?: unknown[]) => {
+      order.push(`capture:${turns?.length ?? 'read'}`);
+    });
+    const { deps } = depsWith(ledger, daemon, { transcripts: { capture } });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+    expect(order).toEqual(['capture:1', 'kill']);
+  });
+});

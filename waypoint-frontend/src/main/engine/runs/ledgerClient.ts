@@ -255,6 +255,15 @@ export interface LedgerClient {
    * conversation to post to (the backend's 204) — not an error.
    */
   postCopilotNote(runId: string, content: string): Promise<boolean>;
+  /**
+   * The run's transcript snapshot, replaced whole (ROAD-124): the
+   * daemon's committed turns as `acp.getHistory` serialises them, kept
+   * opaque. The panel reads it when the daemon holds nothing.
+   */
+  saveTranscript(
+    runId: string,
+    turns: unknown[],
+  ): Promise<{ turnCount: number }>;
 }
 
 /**
@@ -311,7 +320,7 @@ export function createLedgerClient(deps: LedgerClientDeps = {}): LedgerClient {
     (deps.fetch ?? fetch)(input, init);
 
   async function request<T>(
-    method: 'GET' | 'POST' | 'PATCH',
+    method: 'GET' | 'POST' | 'PATCH' | 'PUT',
     path: string,
     body?: unknown,
   ): Promise<{ status: number; body: T }> {
@@ -553,6 +562,17 @@ export function createLedgerClient(deps: LedgerClientDeps = {}): LedgerClient {
         )
       ).body;
       return { id: created.id };
+    },
+    async saveTranscript(runId, turns) {
+      assertRunId(runId);
+      const saved = (
+        await request<{ turnCount: number }>(
+          'PUT',
+          `/agent-runs/${runId}/transcript`,
+          { turns },
+        )
+      ).body;
+      return { turnCount: saved.turnCount };
     },
     async postCopilotNote(runId, content) {
       assertRunId(runId);
