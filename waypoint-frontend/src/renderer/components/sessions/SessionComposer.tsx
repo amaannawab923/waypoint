@@ -37,6 +37,8 @@ export function SessionComposer({
     try {
       await onSend(trimmed);
       setText('');
+    } catch {
+      // onSend has already said why (a toast); the text stays for a retry.
     } finally {
       setSending(false);
     }

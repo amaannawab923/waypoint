@@ -2093,6 +2093,28 @@ docs/design/w3-sessions-rail.md.
   machine was opened; the sessions store now probes (install) once on its
   first subscriber.
 
+- **SESS-16** — Review round 3 re-run (2026-09-12, after the four reviews)
+  Steps: On a fresh run seeded on a real `git worktree add` worktree,
+  send a prompt that takes the agent a while (a file write it must ask
+  permission for) and watch the composer during the turn; read the diff
+  before and after allowing; send a second blocking prompt and press Stop
+  while the band is up; read the event trail.
+  Expected: the composer clears and stays usable for the whole turn (it
+  used to grey out until the daemon answered, i.e. the turn's end); the
+  diff reads on the linked worktree (its `.git` file's gitdir is outside
+  the worktree, so the provenance check passes) and counts a three-line
+  untracked file as +3; Stop while blocked writes `cancelled` with no
+  `permission_answered` invented by the follower; `session_ended` records
+  `daemonConfirmed: true`.
+  Result: PASS — 10-round3-blocked-composer-live.png (composer enabled
+  20 s into a blocked turn); diff `[haiku.txt, untracked, 3]`; events
+  … blocked → permission_requested → running → permission_answered →
+  cancelled → session_ended{daemonConfirmed:true}; engine log
+  "run stopped { daemonConfirmed: true }".
+  Also verified: a QA worktree made with `git init` (a `.git` directory)
+  is now refused by the Diff tab with the provenance sentence — only
+  linked worktrees, which is all Waypoint creates, are diffed.
+
 - **SESS-15** — New session
   Steps: Click "+" in the list header, and "New session" in the empty
   state.
