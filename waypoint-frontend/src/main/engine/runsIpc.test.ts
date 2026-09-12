@@ -279,7 +279,7 @@ describe('runs:diff and runs:reveal-worktree', () => {
 describe('computeRunDiff', () => {
   it('compares against the merge-base with the base ref, folds in untracked files, and cuts an oversized patch', async () => {
     const wt = worktreeOf('run-cd1');
-    writeFileSync(path.join(wt, 'new.txt'), 'one\ntwo\nthree');
+    writeFileSync(path.join(wt, 'new.txt'), 'one\ntwo\nthree\n');
     const git = scriptedGit({
       'merge-base': { stdout: 'base999\n' },
       numstat: {

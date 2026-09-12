@@ -236,7 +236,11 @@ export async function computeRunDiff(
     let additions = 0;
     try {
       const text = await fs.readFile(path.join(worktreePath, file), 'utf8');
-      additions = text.length === 0 ? 0 : text.split('\n').length;
+      // Lines, the way git counts them: a trailing newline ends the last
+      // line rather than starting an empty one (found live: "+2" for a
+      // one-line file).
+      additions =
+        text.length === 0 ? 0 : text.replace(/\n$/, '').split('\n').length;
     } catch {
       // Unreadable (a socket, gone already): listed, counted as 0.
     }

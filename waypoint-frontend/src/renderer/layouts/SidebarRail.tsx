@@ -231,23 +231,24 @@ export function SidebarRail({
         </svg>
       </div>
 
-      <Tooltip label="Expand sidebar · ⌘B">
-        <button
-          type="button"
-          aria-label="Expand sidebar"
-          onClick={onPin}
-          onMouseEnter={() => {
-            peekTimer.current = setTimeout(onPeek, PEEK_DELAY_MS);
-          }}
-          onMouseLeave={() => {
-            if (peekTimer.current) clearTimeout(peekTimer.current);
-            onPeekEnd();
-          }}
-          className="flex h-6 w-9 items-center justify-center rounded-lg border border-dashed border-border-strong text-text-muted hover:bg-surface-2 hover:text-text"
-        >
-          <IconChevronRight size={12} />
-        </button>
-      </Tooltip>
+      {/* A native title, not the Tooltip: the peek overlay opens right
+          where a floating tooltip would sit, and the two collided. */}
+      <button
+        type="button"
+        aria-label="Expand sidebar"
+        title="Expand sidebar · ⌘B"
+        onClick={onPin}
+        onMouseEnter={() => {
+          peekTimer.current = setTimeout(onPeek, PEEK_DELAY_MS);
+        }}
+        onMouseLeave={() => {
+          if (peekTimer.current) clearTimeout(peekTimer.current);
+          onPeekEnd();
+        }}
+        className="flex h-6 w-9 items-center justify-center rounded-lg border border-dashed border-border-strong text-text-muted hover:bg-surface-2 hover:text-text"
+      >
+        <IconChevronRight size={12} />
+      </button>
 
       <div className="my-1.5 h-px w-[26px] bg-border" />
 
