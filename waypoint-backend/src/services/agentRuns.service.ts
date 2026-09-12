@@ -317,7 +317,19 @@ export async function updateRun(runId: string, input: UpdateAgentRunInput): Prom
     // field-only patch on a cancelled run went straight through. The one
     // thing still accepted is a status-only patch to the status it has —
     // an idempotent retry, handled below.
-    if (isTerminal(current.status) && !(Object.keys(fields).length === 0 && status === current.status)) {
+    // W6: the one field that is not the run's outcome — its pull request,
+    // which the host may open (or retry) after the run is done (Open PR in
+    // the header) — may be written on a finished run, and only once.
+    const onlyPrUrl =
+      status === undefined &&
+      Object.keys(fields).length === 1 &&
+      typeof fields.prUrl === 'string' &&
+      current.prUrl === null;
+    if (
+      isTerminal(current.status) &&
+      !(Object.keys(fields).length === 0 && status === current.status) &&
+      !onlyPrUrl
+    ) {
       throw new ConflictError(`A ${current.status} run is finished; its record is read-only.`);
     }
     const patch: Partial<typeof agentRuns.$inferInsert> = {

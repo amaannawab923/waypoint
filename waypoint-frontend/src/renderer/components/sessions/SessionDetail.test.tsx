@@ -23,6 +23,7 @@ jest.mock('@/data/engineApi', () => ({
   resumeRun: jest.fn(),
   stopRun: jest.fn(),
   revealRunWorktree: jest.fn(),
+  openRunPullRequest: jest.fn(),
   getHomeDir: jest.fn(async () => '/Users/me'),
 }));
 jest.mock('@/lib/sessionsStore', () => ({
@@ -235,5 +236,91 @@ describe('rename (W5a)', () => {
       screen.queryByRole('textbox', { name: 'Run title' }),
     ).not.toBeInTheDocument();
     expect(renameAgentRun).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Open PR (W6)', () => {
+  it('offers Open PR on a finished writing run without a PR; opening patches the link in; a failure is a toast', async () => {
+    const { openRunPullRequest } = jest.requireMock('@/data/engineApi') as {
+      openRunPullRequest: jest.Mock;
+    };
+    openRunPullRequest.mockResolvedValueOnce({
+      kind: 'opened',
+      url: 'https://github.com/o/r/pull/61',
+    });
+    renderDetail(
+      run({
+        id: 'run-1',
+        entry: 'dispatched',
+        intent: 'fix',
+        modeId: 'bypassPermissions',
+        branch: 'agent/ROAD-1',
+        status: 'needs-review',
+        prUrl: null,
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Open PR' }));
+    await waitFor(() =>
+      expect(openRunPullRequest).toHaveBeenCalledWith('run-1'),
+    );
+    await waitFor(() =>
+      expect(patchSessionRun).toHaveBeenCalledWith('run-1', {
+        prUrl: 'https://github.com/o/r/pull/61',
+      }),
+    );
+
+    openRunPullRequest.mockResolvedValueOnce({
+      kind: 'failed',
+      stage: 'push',
+      message: 'denied',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Open PR' }));
+    await waitFor(() =>
+      expect(showErrorToast).toHaveBeenCalledWith('Push failed: denied'),
+    );
+  });
+
+  it('no Open PR for a plan-mode run, a run with a PR, or a run still running', () => {
+    renderDetail(
+      run({
+        entry: 'dispatched',
+        intent: 'investigate',
+        modeId: 'plan',
+        branch: 'agent/x',
+        status: 'needs-review',
+      }),
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Open PR' }),
+    ).not.toBeInTheDocument();
+    renderDetail(
+      run({
+        entry: 'dispatched',
+        intent: 'fix',
+        modeId: null,
+        branch: 'agent/y',
+        status: 'done',
+        prUrl: 'https://github.com/o/r/pull/1',
+      }),
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Open PR' }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText('Pull request ↗')).toHaveAttribute(
+      'href',
+      'https://github.com/o/r/pull/1',
+    );
+    renderDetail(
+      run({
+        entry: 'dispatched',
+        intent: 'fix',
+        modeId: null,
+        branch: 'agent/z',
+        status: 'running',
+      }),
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Open PR' }),
+    ).not.toBeInTheDocument();
   });
 });

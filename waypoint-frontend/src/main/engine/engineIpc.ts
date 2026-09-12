@@ -29,6 +29,7 @@ import { createRunFinalizer } from './runs/finalize';
 import { createLedgerClient } from './runs/ledgerClient';
 import { createRunNotifications } from './notifications';
 import { createTranscriptKeeper } from './runs/transcripts';
+import { createPullRequestPublisher } from './runs/pullRequests';
 import { registerTopicsIpc } from './topicsIpc';
 import { assertWorktreeGitDir, execGit, registerRunsIpc } from './runsIpc';
 
@@ -224,6 +225,9 @@ export function registerEngineIpc(
   // ROAD-124: the transcript kept in the ledger — after every turn end,
   // before every kill, and when a session goes on its own.
   const transcripts = createTranscriptKeeper({ ledger, daemon, logger });
+  // W6: a writing run's branch is pushed and its PR opened by the host,
+  // as the person, when its turn ends (runs/pullRequests.ts).
+  const pullRequests = createPullRequestPublisher({ ledger, logger });
   const finalizer = createRunFinalizer({
     ledger,
     daemon,
@@ -232,6 +236,7 @@ export function registerEngineIpc(
     assertWorktreeGitDir,
     onRunStatus: notifications.onRunStatus,
     transcripts,
+    pullRequests,
     logger,
   });
 
@@ -329,6 +334,7 @@ export function registerEngineIpc(
     },
     recentsFile: path.join(path.dirname(worktreesDir), 'recent-folders.json'),
     transcripts,
+    pullRequests,
     logger,
   });
 

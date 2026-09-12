@@ -7,6 +7,7 @@ import {
   MAX_DIFF_PATCH_CHARS,
   RUNS_IPC,
   type FolderChoice,
+  type OpenPrResult,
   type RunChanged,
   type RunDiff,
   type RunDiffFile,
@@ -25,6 +26,7 @@ import { assertUnder } from './runs/worktrees';
 import { listRunBranches, resumeRun, startRun } from './runs/startRun';
 import { buildBriefPreview, dispatchTicketRun } from './runs/dispatch';
 import type { TranscriptKeeper } from './runs/transcripts';
+import type { PullRequestPublisher } from './runs/pullRequests';
 import {
   createFolderRegistry,
   describeFolder,
@@ -93,6 +95,8 @@ export interface RunsIpcDeps {
   daemon?: (supervisor: EngineSupervisor) => DaemonRunsApi | null;
   /** The transcript snapshot Stop takes before the kill (ROAD-124). */
   transcripts?: TranscriptKeeper;
+  /** W6: the publisher `runs:open-pr` retries with. */
+  pullRequests?: PullRequestPublisher;
   logger: {
     info: (m: string, meta?: Record<string, unknown>) => void;
     warn: (m: string, meta?: Record<string, unknown>) => void;
@@ -492,6 +496,47 @@ export function registerRunsIpc(deps: RunsIpcDeps): void {
   deps.host.handle(RUNS_IPC.dispatch, (input) =>
     dispatchTicketRun(startDeps, input),
   );
+  // W6: the retry for a branch finalize could not publish. The body is
+  // the run's own comment (its closing message), else its summary.
+  deps.host.handle(RUNS_IPC.openPr, async (runId): Promise<OpenPrResult> => {
+    const run = await loadRun(runId);
+    if (!deps.pullRequests) throw new Error('Publishing is not available.');
+    if (run.entry !== 'dispatched' || !run.branch) {
+      return { kind: 'skipped', reason: 'This run has no branch to publish.' };
+    }
+    let closing = run.summary ?? '';
+    let title = run.title ?? run.branch;
+    if (run.ticketId) {
+      const [proposals, ticket] = await Promise.all([
+        ledger.listTicketProposals(run.ticketId).catch(() => []),
+        ledger.getTicket(run.ticketId).catch(() => null),
+      ]);
+      const comment = proposals.find(
+        (p) => p.agentRunId === run.id && p.kind === 'comment',
+      );
+      if (comment && typeof comment.payload.body === 'string') {
+        closing = comment.payload.body;
+      }
+      if (ticket) title = `${ticket.identifier}: ${ticket.title}`;
+    }
+    const outcome = await deps.pullRequests.publish({
+      run,
+      closingMessage: closing,
+      title,
+    });
+    if (outcome.kind === 'opened') {
+      deps.notify({ runId: run.id, status: run.status });
+      await ledger
+        .postCopilotNote(
+          run.id,
+          `Run ${run.title ?? run.id}: pull request opened · ${outcome.url}`,
+        )
+        .catch(() => {});
+    }
+    return outcome.kind === 'opened'
+      ? { kind: 'opened', url: outcome.url }
+      : outcome;
+  });
   deps.host.handle(RUNS_IPC.listBranches, (folder) =>
     listRunBranches(startDeps, folder),
   );

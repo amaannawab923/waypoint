@@ -16,6 +16,7 @@ export type {
   BriefPreviewInput,
   DispatchRunInput,
   FolderChoice,
+  OpenPrResult,
   ResumeRunOutcome,
   ResumeRunResult,
   RunBranches,

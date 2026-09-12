@@ -2393,6 +2393,13 @@ its failure window is 00:00–02:00 local and the pass ran inside it.
   snapshot, "1 turn", "not live". Found during the pass: before this,
   an app restart emptied a done run's transcript; the first Investigate
   run's transcript is gone for good.
+- **SESS-41** — Open PR (the retry)
+  Result: PASS — on run ROAD-103 · Fix, Open PR in the header pushed
+  `agent/ROAD-103-lkp8qa8` and opened
+  https://github.com/amaannawab923/waypoint/pull/60 (ready for review,
+  base `main`). Found during the pass: the ledger first refused `prUrl`
+  on a done run — fixed to take it once. A second Open PR took the PR
+  gh said already existed.
 - **Notifications** — logged as shown on `needs-review` (the
   notification centre itself was not observed from the script; the
   click path is unit-tested).

@@ -23,6 +23,7 @@ import type {
   BriefPreviewInput,
   DispatchRunInput,
   FolderChoice,
+  OpenPrResult,
   ResumeRunResult,
   RunFocus,
   RunBranches,
@@ -255,6 +256,11 @@ export function getBriefPreview(
 
 export function dispatchRun(input: DispatchRunInput): Promise<AgentRun> {
   return bridge().dispatchRun(input).catch(unwrapIpcError);
+}
+
+/** W6: push the run's branch and open its pull request, as the person — the retry after a failed publish. */
+export function openRunPullRequest(runId: string): Promise<OpenPrResult> {
+  return bridge().openRunPr(runId).catch(unwrapIpcError);
 }
 
 /** The person clicked a notification about a run (main/engine/notifications.ts). */
