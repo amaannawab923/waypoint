@@ -32,7 +32,9 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
     isGenerating,
     queuedCount,
     reloadHistory,
-  } = useSessionTranscript(run.id);
+  } = useSessionTranscript(run.id, {
+    awaitingSession: run.status === 'queued' || run.status === 'provisioning',
+  });
   const { engine } = useSessionsSnapshot();
   const [view, setView] = useState<ChatView | null>(null);
   const [answering, setAnswering] = useState<string | null>(null);
@@ -166,7 +168,11 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
             className="h-full"
           />
         ) : (
-          <div className="p-4 text-xs text-text-muted">Connecting…</div>
+          <div className="p-4 text-xs text-text-muted">
+            {run.status === 'queued' || run.status === 'provisioning'
+              ? 'Starting the session…'
+              : 'Connecting…'}
+          </div>
         )}
       </div>
       {view?.composerSlot ? createPortal(dock, view.composerSlot) : null}

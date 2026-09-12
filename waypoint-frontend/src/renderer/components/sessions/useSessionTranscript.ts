@@ -56,10 +56,22 @@ const noop = () => () => {};
  * (`null` for the first frame, before the effect ran), the pending
  * permissions (the band), the usage (the strip) and the live status.
  */
+export interface SessionTranscriptOptions {
+  /**
+   * The run has no session yet (queued, provisioning — W4): nothing to
+   * follow or read, so no unit is made until this turns false. A resume
+   * passes through provisioning too, and gets fresh followers and a fresh
+   * history read on the far side, which is what a resumed session needs.
+   */
+  awaitingSession?: boolean;
+  bridge?: SessionBridge;
+}
+
 export function useSessionTranscript(
   runId: string,
-  bridge: SessionBridge = engineSessionBridge,
+  options: SessionTranscriptOptions = {},
 ) {
+  const { awaitingSession = false, bridge = engineSessionBridge } = options;
   const runtime = getChatUiRuntime();
   const context = getSharedChatContext();
   const [unit, setUnit] = useState<TranscriptUnit | null>(null);
@@ -97,6 +109,13 @@ export function useSessionTranscript(
   }, []);
 
   useEffect(() => {
+    if (awaitingSession) {
+      unitRef.current = null;
+      setUnit(null);
+      setHistoryStatus({ kind: 'loading' });
+      setTurnCount(0);
+      return undefined;
+    }
     const created: TranscriptUnit = {
       runId,
       state: runtime.createChatState(context, { uri: `run:${runId}` }),
@@ -148,9 +167,10 @@ export function useSessionTranscript(
       created.source.dispose();
       created.state.dispose();
     };
-    // runtime, context and bridge are process-long; the run id is the unit.
+    // runtime, context and bridge are process-long; the run id (and
+    // whether it has a session yet) is the unit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runId]);
+  }, [runId, awaitingSession]);
 
   const pendingPermissions = useSyncExternalStore(
     unit ? (l) => unit.source.sessionState.subscribe(l) : noop,
