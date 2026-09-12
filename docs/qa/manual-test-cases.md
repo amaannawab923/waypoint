@@ -2314,6 +2314,93 @@ Found and fixed during the pass: the auto-approve switch's knob used a
 colour class this theme does not define and had no left anchor
 (invisible, then outside the pill).
 
+## Investigate and Fix (W5a, ROAD-117) — docs/design/w5a-investigate-fix.md
+
+Executed live 2026-09-12/13 with the Roadmap project linked to this
+checkout (`/Users/amaannawab/waypoint-electron`), on ROAD-103 — a real
+flaky test (the `CopilotSessionList` 'Yesterday' fixture), chosen because
+its failure window is 00:00–02:00 local and the pass ran inside it.
+
+- **SESS-32** — Investigate from the ticket
+  Steps: ROAD-103 → Sessions → Investigate; read the preview; Start.
+  Result: PASS — the brief carried the ticket, priority, state and the
+  task in plan mode; the facts row named `~/waypoint-electron · Waypoint
+  Roadmap`, `agent/ROAD-103` from `main`. The row appeared `Running`
+  with the `Investigate PLAN` chip; the brief was the first message; the
+  agent read the code in the worktree (no node_modules, as the brief
+  said) and ended its turn with a root cause with file:line evidence.
+- **SESS-33** — Host-side finalize
+  Result: PASS — on the turn's end main wrote `finishing`, filed one
+  comment proposal (origin `agent_run`, the closing message), wrote
+  `needs-review` (the rail badge lit), killed the session and posted the
+  Copilot note. Event trail: created → provisioning → worktree_created →
+  running → session_started → prompt_sent (brief) → finishing →
+  proposal_created → needs-review → session_ended. The transcript stayed
+  readable after the kill.
+- **SESS-34** — Review and approve
+  Result: PASS — the card said "from run ROAD-103 · Investigate ↗";
+  Approve posted the comment on the ticket and the run went `Done`; a
+  second note ("its proposals were decided (1 executed)") followed.
+  Found and fixed: the card and the posted comment prefixed the RCA with
+  Copilot's disclosure (now "this is a Waypoint session…"); the RCA
+  rendered as raw markdown (now rendered, in the card and the comment).
+- **SESS-35** — Copilot hears and reads
+  Steps: open the conversation; "what was the problem on ROAD-103?"
+  Result: PASS — the four notes showed as Waypoint lines, rode the turn
+  as `[Waypoint note: …]`, and were marked delivered once the reply
+  persisted (not before; not again next turn). Copilot answered from the
+  run's closing message.
+- **SESS-36** — Fix from the RCA, auto-approved, `git push` refused
+  Steps: `/fix ROAD-103 use the calendar-date helper, not fake timers`
+  from the composer; an addendum in the brief asking for one
+  `git push origin HEAD` and one `gh auth status`, outputs verbatim.
+  Result: PASS — the preview was seeded ("Root cause, as approved"),
+  writing mode, auto-approve on, the note in the brief. The session
+  committed `f9679be` on `agent/ROAD-103-lkp8qa8` (one file, a
+  calendar-day helper replacing the 26-hour offset) and reported:
+  `fatal: could not read Username for 'https://github.com': terminal
+  prompts disabled` (exit 128) and `gh … open /dev/null/gh/config.yml:
+  not a directory`. Found preparing this case: the env scrub alone did
+  not neutralise the keychain's credential helper on this machine —
+  fixed with `credential.helper=` injected through `GIT_CONFIG_COUNT`,
+  a pinned ssh command and `GH_CONFIG_DIR`. The fixed test was run
+  beside the original at 00:29 local: the original failed, the fix
+  passed.
+- **SESS-37** — Two proposals, approved, Done
+  Result: PASS — the comment (branch, commit, files, then the report)
+  and the state change Todo → In Progress (the project has no review
+  state; the last `started` state is proposed), both "from run ROAD-103
+  · Fix ↗". Approving both moved the ticket, posted the comment, and the
+  run went `Done` with a note.
+- **SESS-38** — Something else…, both ways of the switch
+  Result: PASS — with the switch off the preview said plan mode and the
+  session (a one-line instruction) ended with exactly that line, filed
+  as a comment (rejected in Review; the run went Done with a "1
+  rejected" note). With the switch on, the preview said writing session
+  with auto-approve; the switch in the preview itself (for a slash
+  command's custom session) rebuilds the brief.
+- **SESS-39** — One writer per ticket; the offer from Copilot
+  Result: PASS — Fix on ROAD-103 while the Fix was live: "A writing
+  session is already live on ROAD-103 … open it, or wait", Start
+  disabled; Investigate on the same ticket was allowed. "Can you get a
+  session to investigate ROAD-43?" in Copilot: the model called
+  `dispatch_session`, the offer card appeared with Investigate
+  highlighted, and the reply said nothing had started.
+- **SESS-40** — Transcript survives a restart (ROAD-124)
+  Steps: after a run finished, `engine.stop()` then `engine.start()`
+  (the daemon answers `acp.getHistory` with no turns); open the run.
+  Result: PASS — the brief and the reply rendered from the ledger's
+  snapshot, "1 turn", "not live". Found during the pass: before this,
+  an app restart emptied a done run's transcript; the first Investigate
+  run's transcript is gone for good.
+- **Notifications** — logged as shown on `needs-review` (the
+  notification centre itself was not observed from the script; the
+  click path is unit-tested).
+- **Not testable here** — a rate-limited turn: the daemon's stop
+  reasons are `end_turn | max_tokens | max_turn_requests | refusal |
+  cancelled`; there is no rate-limit reason to show. The spec's "rate-
+  limit line" is scoped down to a note until the daemon exposes one.
+
 ## Summary
 
 **132 test cases executed, personally, live against the running app, across all 27 sections.**
