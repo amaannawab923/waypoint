@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Outlet, useLocation } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Sidebar } from '@/layouts/Sidebar';
 import { RAIL_WIDTH_PX, SidebarRail } from '@/layouts/SidebarRail';
 import { useLocalSummary } from '@/lib/useLocalSummary';
@@ -8,6 +8,7 @@ import { CopilotPanel } from '@/components/domain/CopilotPanel';
 import { KeyboardShortcutsModal } from '@/components/domain/KeyboardShortcutsModal';
 import { COPILOT_ENABLED, SESSIONS_ENABLED } from '@/lib/featureFlags';
 import { setCopilotOpenState } from '@/lib/copilotOpenStore';
+import { onRunFocus } from '@/data/engineApi';
 import { useGlobalKeyboardShortcuts } from '@/lib/useGlobalKeyboardShortcuts';
 
 /**
@@ -118,6 +119,17 @@ export function AppShell() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [focusWorkspace, setPin]);
+
+  // W5a: a notification about a run was clicked (main/engine/notifications.ts);
+  // main brought the window forward, the shell opens the run.
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (!SESSIONS_ENABLED) return undefined;
+    return onRunFocus(({ runId }) => {
+      if (typeof runId === 'string' && runId)
+        navigate(`/sessions/${encodeURIComponent(runId)}`);
+    });
+  }, [navigate]);
 
   // Leaving the workspace ends any peek; the pin itself is remembered.
   useEffect(() => {

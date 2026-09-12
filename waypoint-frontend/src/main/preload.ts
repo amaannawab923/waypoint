@@ -28,12 +28,16 @@ import type {
 import {
   ENGINE_IPC,
   RUNS_IPC,
+  type BriefPreview,
+  type BriefPreviewInput,
+  type DispatchRunInput,
   type EngineHealth,
   type EngineStatus,
   type LiveSnapshot,
   type LiveUpdate,
   type FolderChoice,
   type ResumeRunResult,
+  type RunFocus,
   type RunBranches,
   type RunChanged,
   type RunDiff,
@@ -594,6 +598,24 @@ const electronHandler = {
     },
     homeDir(): Promise<string> {
       return ipcRenderer.invoke(RUNS_IPC.homeDir);
+    },
+    // W5a: a session on a ticket (engine/runs/dispatch.ts). The renderer
+    // names a ticket and a verb; main builds the brief and finds the
+    // repository. `dispatchRun` sends the brief back as the person left it.
+    briefPreview(input: BriefPreviewInput): Promise<BriefPreview> {
+      return ipcRenderer.invoke(RUNS_IPC.briefPreview, input);
+    },
+    dispatchRun(input: DispatchRunInput): Promise<AgentRunRow> {
+      return ipcRenderer.invoke(RUNS_IPC.dispatch, input);
+    },
+    /** Push: the person clicked a notification about a run; open it. */
+    onRunFocus(cb: (focus: RunFocus) => void): () => void {
+      const subscription = (_event: IpcRendererEvent, focus: RunFocus) =>
+        cb(focus);
+      ipcRenderer.on(RUNS_IPC.focus, subscription);
+      return () => {
+        ipcRenderer.removeListener(RUNS_IPC.focus, subscription);
+      };
     },
     /** Push: main wrote a run's ledger row from the daemon's report. */
     onRunChanged(cb: (change: RunChanged) => void): () => void {

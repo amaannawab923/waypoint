@@ -5,6 +5,7 @@ import { useHomeDir } from '@/lib/useHomeDir';
 import { useTicketLabel } from '@/lib/useTicketLabel';
 import type { AgentRun } from '@/types/agentRuns';
 import {
+  intentView,
   providerView,
   runTitle,
   runWhere,
@@ -41,6 +42,43 @@ export function ProviderChip({
  * mark is on the row and in the header so an unattended agent in
  * someone's files is never invisible in the list.
  */
+/**
+ * A dispatched run's verb and mode (W5a §1.4): `Investigate · plan`,
+ * `Fix · auto`, `Session`. Beside the status, where an independent run
+ * shows nothing; the auto mark alone is the independent run's.
+ */
+export function IntentChip({
+  run,
+  size = 'sm',
+}: {
+  run: Pick<AgentRun, 'intent' | 'modeId' | 'autoApprove' | 'entry'>;
+  size?: 'sm' | 'md';
+}) {
+  const view = intentView(run);
+  if (!view) return null;
+  return (
+    <span
+      data-intent-chip
+      className={clsx(
+        'inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-bg-inset px-1.5 font-medium text-text-secondary',
+        size === 'sm' ? 'text-[9px] leading-[14px]' : 'text-[10px] leading-4',
+      )}
+    >
+      {view.verb}
+      {view.mode && (
+        <span
+          className={clsx(
+            'font-semibold tracking-wide uppercase',
+            view.mode === 'auto' ? 'text-warning' : 'text-text-muted',
+          )}
+        >
+          {view.mode}
+        </span>
+      )}
+    </span>
+  );
+}
+
 export function AutoMark({ size = 'sm' }: { size?: 'sm' | 'md' }) {
   return (
     <span
@@ -145,7 +183,11 @@ export function SessionRow({
         {!where && (
           <span className="truncate">{providerView(run.providerId).name}</span>
         )}
-        {run.autoApprove && <AutoMark />}
+        {run.entry === 'dispatched' ? (
+          <IntentChip run={run} />
+        ) : (
+          run.autoApprove && <AutoMark />
+        )}
       </div>
       {reason && (
         <div className="truncate pl-[13px] text-[10.5px] text-warning">

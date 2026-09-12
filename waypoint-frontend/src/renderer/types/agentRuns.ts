@@ -12,6 +12,9 @@ export type {
 } from '../../main/engine/runs/ledgerClient';
 
 export type {
+  BriefPreview,
+  BriefPreviewInput,
+  DispatchRunInput,
   FolderChoice,
   ResumeRunOutcome,
   ResumeRunResult,
@@ -22,6 +25,8 @@ export type {
   RunDiff,
   RunDiffFile,
   RunDiffFileStatus,
+  RunFocus,
+  RunIntent,
   StartRunInput,
   StopRunOutcome,
   StopRunResult,

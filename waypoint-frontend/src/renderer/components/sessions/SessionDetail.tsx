@@ -10,7 +10,7 @@ import { useTicketSummary } from '@/lib/useTicketLabel';
 import { showErrorToast } from '@/lib/toast';
 import type { AgentRun } from '@/types/agentRuns';
 import { useHomeDir } from '@/lib/useHomeDir';
-import { AutoMark, ProviderChip } from './SessionRow';
+import { AutoMark, IntentChip, ProviderChip } from './SessionRow';
 import { SessionStatusPill } from './SessionStatusPill';
 import { providerView, runTitle, runWhere, statusView } from './sessionStatus';
 import { SessionTranscript } from './SessionTranscript';
@@ -160,7 +160,11 @@ export function SessionDetail({
                 {title}
               </h1>
               <SessionStatusPill status={run.status} />
-              {run.autoApprove && <AutoMark size="md" />}
+              {run.entry === 'dispatched' ? (
+                <IntentChip run={run} size="md" />
+              ) : (
+                run.autoApprove && <AutoMark size="md" />
+              )}
             </div>
             <div className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[10.5px] text-text-muted">
               <span className="inline-flex items-center gap-1">
