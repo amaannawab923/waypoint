@@ -1,6 +1,11 @@
 import { app, ipcMain, shell, type BrowserWindow } from 'electron';
 import * as path from 'node:path';
-import { ENGINE_IPC, type EngineHealth, type EngineStatus } from './types';
+import {
+  ENGINE_IPC,
+  RUNS_IPC,
+  type EngineHealth,
+  type EngineStatus,
+} from './types';
 import { resolveEnginePaths } from './paths';
 import { createEngineSupervisor, type EngineSupervisor } from './supervisor';
 import { connectSocketTransport } from './transport';
@@ -9,6 +14,7 @@ import { installEngine, verifyInstalledEngine } from './installer';
 import { runDaemonCommand } from './daemonCli';
 import { removeStaleStartLock } from './staleLock';
 import { registerBootReconcile } from './runs/bootReconcile';
+import { registerLiveLedgerFollower } from './runs/liveLedgerFollower';
 import { registerTopicsIpc } from './topicsIpc';
 import { registerRunsIpc } from './runsIpc';
 
@@ -172,6 +178,15 @@ export function registerEngineIpc(
   // connection. A fake supervisor with no client (every engineIpc test)
   // makes this a no-op.
   registerBootReconcile({ supervisor, logger });
+
+  // W3: between reconciles, the daemon's session list is followed into the
+  // ledger (blocked ⇄ running, interrupted), and the renderer is told
+  // after every write so the panel re-reads rather than guesses.
+  registerLiveLedgerFollower({
+    supervisor,
+    notify: (change) => send(RUNS_IPC.changed, change),
+    logger,
+  });
 
   // ROAD-60: the renderer's live topics and allowlisted calls, on the
   // same connection. Electron's ipcMain/webContents are handed in as the

@@ -516,7 +516,19 @@ export const RUNS_IPC = {
   diff: 'runs:diff',
   /** (runId) → void. Shows the worktree in the OS file manager. */
   revealWorktree: 'runs:reveal-worktree',
+  /**
+   * Push: RunChanged — main wrote a run's ledger row from what the daemon
+   * reported (runs/liveLedgerFollower.ts). The renderer re-reads the
+   * ledger; the payload is a hint, not the row.
+   */
+  changed: 'runs:changed',
 } as const;
+
+export interface RunChanged {
+  runId: string;
+  /** The ledger's status after the write. */
+  status: string;
+}
 
 export type StopRunOutcome =
   /** The daemon session was told to stop and the ledger says cancelled. */
@@ -588,11 +600,14 @@ export type TopicClosedReason =
 
 /** Our runs' conversation ids — the daemon's conversationId IS the run id (ROAD-55). */
 const RUN_CONVERSATION = /^run-[A-Za-z0-9]{1,64}$/;
-/** Keyless models the renderer may follow. */
-const ALLOWED_KEYLESS_TOPICS = new Set([
-  'acp.sessions.list',
-  'workspaceRegistry.records.list',
-]);
+/**
+ * Keyless models the renderer may follow. `acp.sessions.list` is not one:
+ * the Wire client holds one attachment per topic, and main's own live
+ * ledger follower (runs/liveLedgerFollower.ts) owns that one — the
+ * renderer learns about the session list through the ledger, which the
+ * follower keeps in step, and RUNS_IPC.changed.
+ */
+const ALLOWED_KEYLESS_TOPICS = new Set(['workspaceRegistry.records.list']);
 /** Per-session states of `acp.session` the renderer may follow. */
 const ALLOWED_SESSION_STATES = new Set([
   'state',

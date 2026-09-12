@@ -173,7 +173,10 @@ describe('registerTopicsIpc', () => {
   });
 
   it('judges topics by rebuilding them with liveTopic, so a re-encoded key or an extra key field is refused', () => {
-    expect(isAllowedTopic('acp.sessions.list')).toBe(true);
+    expect(isAllowedTopic('workspaceRegistry.records.list')).toBe(true);
+    // Main's live ledger follower holds the one attachment a Wire client
+    // allows on the session list; the renderer reads the ledger instead.
+    expect(isAllowedTopic('acp.sessions.list')).toBe(false);
     expect(
       isAllowedTopic(
         liveTopic('acp.session.activeTurn', { conversationId: 'run-abc1234' }),
@@ -207,7 +210,7 @@ describe('registerTopicsIpc', () => {
     registerTopicsIpc({ supervisor: fakeSupervisor(null), host, logger });
 
     await expect(
-      invoke(ENGINE_IPC.topicSubscribe, 'acp.sessions.list'),
+      invoke(ENGINE_IPC.topicSubscribe, 'workspaceRegistry.records.list'),
     ).rejects.toThrow('The agent engine is not running.');
   });
 
@@ -221,12 +224,12 @@ describe('registerTopicsIpc', () => {
     });
     const sub = (await invoke(
       ENGINE_IPC.topicSubscribe,
-      'acp.sessions.list',
+      'workspaceRegistry.records.list',
     )) as { subscriptionId: string };
 
     await invoke(ENGINE_IPC.topicUnsubscribe, sub.subscriptionId);
     await invoke(ENGINE_IPC.topicUnsubscribe, sub.subscriptionId);
-    daemon.push('acp.sessions.list', {
+    daemon.push('workspaceRegistry.records.list', {
       generation: 1,
       baseSequence: 0,
       sequence: 1,
@@ -234,7 +237,7 @@ describe('registerTopicsIpc', () => {
       delta: [],
     });
 
-    expect(daemon.detached).toEqual(['acp.sessions.list']);
+    expect(daemon.detached).toEqual(['workspaceRegistry.records.list']);
     expect(sent).toEqual([]);
     await expect(invoke(ENGINE_IPC.topicUnsubscribe, '../x')).rejects.toThrow(
       'Not a subscription id',
@@ -324,7 +327,7 @@ describe('registerTopicsIpc', () => {
     });
 
     const failure = await (
-      invoke(ENGINE_IPC.topicSubscribe, 'acp.sessions.list') as Promise<unknown>
+      invoke(ENGINE_IPC.topicSubscribe, 'workspaceRegistry.records.list') as Promise<unknown>
     ).catch((e: unknown) => e);
 
     expect(failure).toBeInstanceOf(EngineCallError);
@@ -336,7 +339,7 @@ describe('registerTopicsIpc', () => {
     const supervisor = fakeSupervisor(daemon.client);
     const { host, sent, invoke } = fakeHost();
     registerTopicsIpc({ supervisor, host, logger });
-    await invoke(ENGINE_IPC.topicSubscribe, 'acp.sessions.list');
+    await invoke(ENGINE_IPC.topicSubscribe, 'workspaceRegistry.records.list');
     await invoke(ENGINE_IPC.topicSubscribe, ACTIVE_TURN);
 
     supervisor.emit({ kind: 'stopping', since: 2 });
@@ -346,7 +349,7 @@ describe('registerTopicsIpc', () => {
       { subscriptionId: 'sub-2', reason: { kind: 'disconnected' } },
     ]);
     expect(daemon.detached.sort()).toEqual(
-      [ACTIVE_TURN, 'acp.sessions.list'].sort(),
+      [ACTIVE_TURN, 'workspaceRegistry.records.list'].sort(),
     );
   });
 
@@ -469,11 +472,11 @@ describe('registerTopicsIpc', () => {
       host,
       logger,
     });
-    await invoke(ENGINE_IPC.topicSubscribe, 'acp.sessions.list');
+    await invoke(ENGINE_IPC.topicSubscribe, 'workspaceRegistry.records.list');
 
     dispose();
 
-    expect(daemon.detached).toEqual(['acp.sessions.list']);
+    expect(daemon.detached).toEqual(['workspaceRegistry.records.list']);
     expect(sent).toEqual([]);
   });
 });

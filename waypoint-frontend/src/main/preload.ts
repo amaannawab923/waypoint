@@ -32,6 +32,7 @@ import {
   type EngineStatus,
   type LiveSnapshot,
   type LiveUpdate,
+  type RunChanged,
   type RunDiff,
   type StopRunResult,
   type TopicClosedReason,
@@ -564,6 +565,15 @@ const electronHandler = {
     },
     revealRunWorktree(runId: string): Promise<void> {
       return ipcRenderer.invoke(RUNS_IPC.revealWorktree, runId);
+    },
+    /** Push: main wrote a run's ledger row from the daemon's report. */
+    onRunChanged(cb: (change: RunChanged) => void): () => void {
+      const subscription = (_event: IpcRendererEvent, change: RunChanged) =>
+        cb(change);
+      ipcRenderer.on(RUNS_IPC.changed, subscription);
+      return () => {
+        ipcRenderer.removeListener(RUNS_IPC.changed, subscription);
+      };
     },
   },
 };
