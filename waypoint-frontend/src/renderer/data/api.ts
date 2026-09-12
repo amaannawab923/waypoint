@@ -1151,6 +1151,16 @@ export async function getAgentRun(id: string): Promise<AgentRun | undefined> {
   );
 }
 
+/** W5a §1.10: rename a run from its header — the W4 `title` column. */
+export async function renameAgentRun(
+  id: string,
+  title: string,
+): Promise<AgentRun> {
+  return http.patch<AgentRun>(`/agent-runs/${encodeURIComponent(id)}`, {
+    title,
+  });
+}
+
 /** A ticket's runs (ROAD-56), unpaged — a ticket's runs are a handful. */
 export async function listTicketAgentRuns(
   ticketId: string,

@@ -1,8 +1,14 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { clsx } from 'clsx';
 import { Button, IconButton } from '@/components/ui/Button';
-import { IconChevron, IconGitBranch, IconFolder } from '@/components/icons';
+import {
+  IconChevron,
+  IconEdit,
+  IconGitBranch,
+  IconFolder,
+} from '@/components/icons';
+import { renameAgentRun } from '@/data/api';
 import { resumeRun, revealRunWorktree, stopRun } from '@/data/engineApi';
 import { formatRelativeTime } from '@/lib/copilotSessions';
 import { patchSessionRun, refreshSessions } from '@/lib/sessionsStore';
@@ -133,6 +139,33 @@ export function SessionDetail({
 
   const title = runTitle(run, ticket?.label);
   const startedAt = run.startedAt ?? run.createdAt;
+
+  // W5a §1.10: rename from the header. The input holds the run's own
+  // title (or the shown one when it has none); Enter saves through the
+  // ledger, Escape leaves it. An empty title is not a rename.
+  const [renaming, setRenaming] = useState(false);
+  const [draftTitle, setDraftTitle] = useState('');
+  const renameRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (renaming) renameRef.current?.select();
+  }, [renaming]);
+  const startRename = () => {
+    setDraftTitle(run.title ?? title);
+    setRenaming(true);
+  };
+  const commitRename = async () => {
+    const next = draftTitle.trim().slice(0, 120);
+    setRenaming(false);
+    if (!next || next === (run.title ?? title)) return;
+    try {
+      const updated = await renameAgentRun(run.id, next);
+      patchSessionRun(run.id, { title: updated.title });
+    } catch (error) {
+      showErrorToast(
+        error instanceof Error ? error.message : 'The run was not renamed.',
+      );
+    }
+  };
   // A worktree run's diff is against its base; a direct run's is the
   // working tree against HEAD — "Changes", not a branch diff (W4b).
   const changesLabel = run.isolation === 'directory' ? 'Changes' : 'Diff';
@@ -156,9 +189,41 @@ export function SessionDetail({
           )}
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-2">
-              <h1 className="truncate font-display text-[13px] font-semibold text-text">
-                {title}
-              </h1>
+              {renaming ? (
+                <input
+                  ref={renameRef}
+                  aria-label="Run title"
+                  value={draftTitle}
+                  maxLength={120}
+                  onChange={(e) => setDraftTitle(e.target.value)}
+                  onBlur={() => {
+                    commitRename().catch(() => {});
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      commitRename().catch(() => {});
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault();
+                      setRenaming(false);
+                    }
+                  }}
+                  className="h-6 min-w-0 flex-1 rounded-[var(--radius-sm)] border border-border-strong bg-bg px-2 font-display text-[13px] font-semibold text-text outline-none focus:border-accent"
+                />
+              ) : (
+                <>
+                  <h1 className="truncate font-display text-[13px] font-semibold text-text">
+                    {title}
+                  </h1>
+                  <IconButton
+                    label="Rename"
+                    onClick={startRename}
+                    className="-ml-1 size-5 shrink-0 text-text-muted"
+                  >
+                    <IconEdit size={11} />
+                  </IconButton>
+                </>
+              )}
               <SessionStatusPill status={run.status} />
               {run.entry === 'dispatched' ? (
                 <IntentChip run={run} size="md" />
