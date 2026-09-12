@@ -6,6 +6,11 @@ import {
   type SessionHooks,
 } from '../agent/claudeSession';
 import { buildCopilotSessionPolicy } from '../agent/sessionPolicy';
+import {
+  createLedgerClient,
+  type LedgerClient,
+} from '../engine/runs/ledgerClient';
+import { sessionToolsServer, type SessionOffer } from './sessionTools';
 
 // The thin ipcMain.on('copilot:run') adapter (P3c). All SDK-invocation
 // logic — option building, env building, repo-root resolution, the
@@ -68,9 +73,22 @@ export function killAllCopilotProcesses(): void {
   inFlight.clear();
 }
 
+/** Push channel: the model asked to offer a session (copilot/sessionTools.ts). */
+export const SESSION_OFFER_CHANNEL = 'copilot:session-offer';
+
 export function registerCopilotIpc(
   getWindow: () => BrowserWindow | null,
+  /** Test seam: the ledger the session tools read; the real one otherwise. */
+  ledger?: LedgerClient,
 ): void {
+  // Built once, on first use: the ledger client is cheap, but an app that
+  // never opens Copilot should not construct it.
+  let ledgerClient: LedgerClient | null = ledger ?? null;
+  const ledgerFor = () => {
+    if (!ledgerClient) ledgerClient = createLedgerClient();
+    return ledgerClient;
+  };
+
   ipcMain.on(
     'copilot:run',
     (
@@ -128,12 +146,12 @@ export function registerCopilotIpc(
         win.webContents.send('copilot:stream', payload);
       };
 
-      const policy = buildCopilotSessionPolicy({
-        repoPath,
-        resumeSessionId,
-        conversationId,
-        promptPreamble: outcomePreamble,
-      });
+      const offer = (payload: SessionOffer): boolean => {
+        const win = getWindow();
+        if (!win || win.isDestroyed()) return false;
+        win.webContents.send(SESSION_OFFER_CHANNEL, payload);
+        return true;
+      };
 
       const hooks: SessionHooks = {
         onChunk: (text) => send({ requestId, type: 'chunk', text }),
@@ -164,6 +182,26 @@ export function registerCopilotIpc(
           if (inFlight.get(requestId) === query) inFlight.delete(requestId);
         },
       };
+
+      // W5a: the session tools ride along only when the turn belongs to a
+      // conversation (the offer and the run's notes need one to land in).
+      // A spec, built on the SDK inside claudeSdkClient.ts — this handler
+      // stays synchronous up to runSession, as it always was.
+      const policy = buildCopilotSessionPolicy({
+        repoPath,
+        resumeSessionId,
+        conversationId,
+        promptPreamble: outcomePreamble,
+        ...(conversationId
+          ? {
+              sessionTools: sessionToolsServer({
+                conversationId,
+                ledger: ledgerFor(),
+                offer,
+              }),
+            }
+          : {}),
+      });
 
       // Fire-and-forget: every outcome (chunks, the terminal reply, any
       // error) is delivered synchronously through `hooks` above as it

@@ -164,13 +164,16 @@ function taskSection(input: BriefInput): string {
         'End with one message: the root cause, the evidence (files and lines), the fix you would make, and anything you could not settle.',
         CLOSING_RULE,
       ].join('\n');
-    case 'fix':
+    case 'fix': {
+      const note = (input.instructions ?? '').trim();
       return [
         '## Your task — Fix',
+        ...(note ? [`Note from the ticket owner: ${note}`] : []),
         `Implement the fix on this branch. Commit as you go with clear messages. Do not push, open a pull request, or touch anything outside this worktree; the branch is reviewed from Waypoint.${input.approvedRca ? ' Start from the approved root cause above; if the code says otherwise, say so in your closing message.' : ''}`,
         'End with one message: what you changed and why, the files touched, how you verified it, and anything left open. Waypoint files it as a comment and proposes moving the ticket to review.',
         CLOSING_RULE,
       ].join('\n');
+    }
     case 'custom': {
       const instructions = (input.instructions ?? '').trim();
       return [

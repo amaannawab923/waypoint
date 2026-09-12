@@ -40,7 +40,14 @@ export interface TicketFilterQuery {
   // the portable entity shape and useTicketsView.ts is page-local hook
   // state. Optional so a saved view created before this field existed
   // just falls back to the toolbar's own default grouping.
-  groupBy?: 'state' | 'priority' | 'workstream' | 'sprint' | 'assignee' | 'project' | 'none';
+  groupBy?:
+    | 'state'
+    | 'priority'
+    | 'workstream'
+    | 'sprint'
+    | 'assignee'
+    | 'project'
+    | 'none';
 }
 
 export type Visibility = 'public' | 'private';
@@ -431,7 +438,8 @@ export interface AgentAssignment {
   updatedAt: string;
 }
 
-export type CopilotMessageRole = 'user' | 'assistant';
+/** `system` (W5a): a note Waypoint wrote — a run finished, its proposals were decided. */
+export type CopilotMessageRole = 'user' | 'assistant' | 'system';
 
 export interface CopilotMessage {
   id: ID;
@@ -440,6 +448,8 @@ export interface CopilotMessage {
   content: string;
   seq: number;
   createdAt: string;
+  /** System notes only: when the model was told (prepended to a later turn); null until then. */
+  deliveredAt?: string | null;
 }
 
 // The list shape (issue #11) — no messages, since the list endpoint doesn't

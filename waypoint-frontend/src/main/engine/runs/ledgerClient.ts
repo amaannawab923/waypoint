@@ -234,6 +234,8 @@ export interface LedgerClient {
   // --- W5a: what a dispatched run is built from and files back -----------
   /** The ticket a session is about to be dispatched on; null when there is none. */
   getTicket(id: string): Promise<LedgerTicket | null>;
+  /** The same by its `ROAD-116` identifier — what a person types in Copilot. */
+  getTicketByIdentifier(identifier: string): Promise<LedgerTicket | null>;
   /** The ticket's comments, oldest first. */
   listComments(ticketId: string): Promise<LedgerComment[]>;
   /** The project's workflow states, for the state change Fix files. */
@@ -291,6 +293,9 @@ function defaultBaseUrl(): string {
 // own ids and for the same reason: an id is not a value to take on trust
 // from a caller, even one inside this process.
 const RUN_ID = /^[a-z]+-[A-Za-z0-9]{1,64}$/;
+
+/** `ROAD-116`: a project key, a hyphen, a number — the one other thing that reaches a ticket URL. */
+export const TICKET_IDENTIFIER = /^[A-Z][A-Z0-9]{0,9}-\d{1,7}$/;
 
 /** Project ids share the shape (`proj-…`), and reach a URL the same way. */
 export function assertRunId(id: string): void {
@@ -461,6 +466,37 @@ export function createLedgerClient(deps: LedgerClientDeps = {}): LedgerClient {
             priority?: string | null;
           }>('GET', `/tickets/${id}`)
         ).body;
+        return {
+          id: t.id,
+          identifier: t.identifier,
+          title: t.title,
+          description: t.description ?? null,
+          projectId: t.projectId,
+          stateId: t.stateId ?? null,
+          priority: t.priority ?? null,
+        };
+      } catch (error) {
+        if (error instanceof LedgerRequestError && error.status === 404)
+          return null;
+        throw error;
+      }
+    },
+    async getTicketByIdentifier(identifier) {
+      if (!TICKET_IDENTIFIER.test(identifier))
+        throw new Error(`Not a ticket key: ${JSON.stringify(identifier)}`);
+      try {
+        const t = (
+          await request<{
+            id: string;
+            identifier: string;
+            title: string;
+            description?: string | null;
+            projectId: string;
+            stateId?: string | null;
+            priority?: string | null;
+          }>('GET', `/tickets/by-identifier/${encodeURIComponent(identifier)}`)
+        ).body;
+        if (!t || typeof t !== 'object' || !t.id) return null;
         return {
           id: t.id,
           identifier: t.identifier,

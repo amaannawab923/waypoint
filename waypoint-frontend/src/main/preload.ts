@@ -2,6 +2,7 @@
 /* eslint no-unused-vars: off */
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import type { CopilotDetectResult } from './copilot/copilotDetect';
+import type { SessionOffer as CopilotSessionOffer } from './copilot/sessionTools';
 import type { JiraCommentPermissions } from './jira/jiraClient';
 import type {
   JiraCommentBody,
@@ -269,6 +270,20 @@ const electronHandler = {
       openExternal(url: string): Promise<{ ok: boolean }> {
         return ipcRenderer.invoke('copilot:auth:open-external', url);
       },
+    },
+    // W5a: the model asked to offer a session on a ticket
+    // (copilot/sessionTools.ts's dispatch_session). A push, like
+    // engine.onRunChanged — the tool runs mid-turn with no renderer call in
+    // flight to answer.
+    onSessionOffer(cb: (offer: CopilotSessionOffer) => void): () => void {
+      const subscription = (
+        _event: IpcRendererEvent,
+        offer: CopilotSessionOffer,
+      ) => cb(offer);
+      ipcRenderer.on('copilot:session-offer', subscription);
+      return () => {
+        ipcRenderer.removeListener('copilot:session-offer', subscription);
+      };
     },
     // Backs the real Claude Code CLI probe (W1.2) — request/response, like
     // `auth` above, since a single `claude --version` run produces exactly

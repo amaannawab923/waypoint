@@ -260,6 +260,9 @@ const ALL_MCP_TOOLS = [
   'mcp__waypoint__propose_assignee_change',
   'mcp__waypoint__propose_priority_change',
   'mcp__waypoint__propose_create_ticket',
+  // W5a: the session tools, served in-process from main (sessionTools.ts).
+  'mcp__waypoint_sessions__dispatch_session',
+  'mcp__waypoint_sessions__get_run',
 ];
 
 describe('registerCopilotIpc', () => {
@@ -1241,5 +1244,33 @@ describe('killAllCopilotProcesses', () => {
     killAllCopilotProcesses();
 
     expect(queries[0].closeMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('session tools (W5a)', () => {
+  it('rides along as an in-process server spec when the turn has a conversation, and not otherwise', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi', conversationId: 'conv-abcdefg' });
+    const withConversation = runCopilotQueryMock.mock.calls[0][0] as {
+      inProcessServers?: Array<{
+        name: string;
+        tools: Array<{ name: string }>;
+      }>;
+    };
+    expect(withConversation.inProcessServers).toHaveLength(1);
+    expect(withConversation.inProcessServers?.[0].name).toBe(
+      'waypoint_sessions',
+    );
+    expect(
+      withConversation.inProcessServers?.[0].tools.map((t) => t.name),
+    ).toEqual(['dispatch_session', 'get_run']);
+
+    run({ requestId: 'req-2', prompt: 'hi' });
+    const without = runCopilotQueryMock.mock.calls[1][0] as {
+      inProcessServers?: unknown;
+    };
+    expect(without.inProcessServers).toBeUndefined();
   });
 });

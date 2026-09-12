@@ -65,6 +65,9 @@ export function BriefPreviewDialog({
   const [state, setState] = useState<PreviewState>({ kind: 'loading' });
   const [brief, setBrief] = useState('');
   const [baseRef, setBaseRef] = useState<string | null>(null);
+  // *Something else…* only: the switch, when the request came without one
+  // (a slash command); null = as the request said.
+  const [mayChangeFiles, setMayChangeFiles] = useState<boolean | null>(null);
   const [autoApprove, setAutoApprove] = useState(false);
   // Refs, not state: read inside the load effect without re-running it.
   const autoApproveTouched = useRef(false);
@@ -85,8 +88,9 @@ export function BriefPreviewDialog({
     if (lastRequest.current !== request) {
       lastRequest.current = request;
       autoApproveTouched.current = false;
-      if (baseRef !== null) {
+      if (baseRef !== null || mayChangeFiles !== null) {
         setBaseRef(null);
+        setMayChangeFiles(null);
         return undefined;
       }
     }
@@ -99,6 +103,7 @@ export function BriefPreviewDialog({
         const preview = await getBriefPreview({
           ...request,
           ...(baseRef ? { baseRef } : {}),
+          ...(mayChangeFiles !== null ? { mayChangeFiles } : {}),
         });
         if (cancelled) return;
         setState({ kind: 'ready', preview });
@@ -120,7 +125,7 @@ export function BriefPreviewDialog({
     return () => {
       cancelled = true;
     };
-  }, [request, baseRef]);
+  }, [request, baseRef, mayChangeFiles]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -160,7 +165,7 @@ export function BriefPreviewDialog({
         ticketId: preview.ticketId,
         intent: preview.intent,
         brief,
-        mayChangeFiles: request.mayChangeFiles ?? false,
+        mayChangeFiles: mayChangeFiles ?? request.mayChangeFiles ?? false,
         autoApprove: writing ? autoApprove : false,
         baseRef: preview.baseRef ?? '',
         ownerMemberId: CURRENT_USER_ID,
@@ -291,7 +296,19 @@ export function BriefPreviewDialog({
                 </select>
               </dd>
               <dt className="text-text-muted">Mode</dt>
-              <dd className="text-text" data-mode={preview.mode}>
+              <dd
+                className="flex items-center gap-2.5 text-text"
+                data-mode={preview.mode}
+              >
+                {preview.intent === 'custom' && (
+                  <Switch
+                    id="brief-preview-may-change"
+                    label="May change files"
+                    checked={writing}
+                    disabled={starting}
+                    onChange={(next) => setMayChangeFiles(next)}
+                  />
+                )}
                 {writing ? (
                   <span>
                     Writing session — the agent edits files on the branch and

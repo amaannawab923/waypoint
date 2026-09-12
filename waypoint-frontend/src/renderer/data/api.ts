@@ -878,6 +878,22 @@ export async function postCopilotUserMessage(
   );
 }
 
+/**
+ * W5a: the system notes a turn carried to the model are marked delivered
+ * once that turn's reply persisted — the same rule proposal outcomes
+ * follow (markCopilotProposalsNotified), so a failed run re-delivers.
+ */
+export async function markCopilotNotesDelivered(
+  conversationId: string,
+  ids: string[],
+): Promise<void> {
+  if (ids.length === 0) return;
+  await http.post<unknown>(
+    `/copilot/conversations/${conversationId}/notes/delivered`,
+    { ids },
+  );
+}
+
 export async function postCopilotAssistantMessage(
   conversationId: string,
   content: string,

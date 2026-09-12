@@ -7,13 +7,15 @@
 // CopilotSession[] for the list UI — none of it changed by where the data
 // underneath now comes from.
 
-export type CopilotSessionMessageRole = 'user' | 'assistant';
+export type CopilotSessionMessageRole = 'user' | 'assistant' | 'system';
 
 export interface CopilotSessionMessage {
   id: string;
   role: CopilotSessionMessageRole;
   content: string;
   createdAt: string;
+  /** System notes (W5a): when the model heard it; null until a later turn carried it. */
+  deliveredAt?: string | null;
   // Present on backend-fetched messages (the DB's authoritative ordering —
   // see CopilotMessage in types/entities.ts); absent on optimistic local
   // appends until the next fetch. Proposal-card interleaving
