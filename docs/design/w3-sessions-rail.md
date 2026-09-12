@@ -61,7 +61,8 @@ treatment — is carried over from v1 unchanged. Only the geometry is new.
    (status glyph, path, +/−) + unified diff — never a side inspector.
 9. **Keyboard.** `⌘B` toggle rail/pinned sidebar; `↑`/`↓` move the list
    selection, `Enter` opens; `Esc` (narrow, session open) back to list;
-   `⌘Enter` sends; `n` new session; `g s` jumps to `/sessions`.
+   `⌘Enter` sends; `n` new session; `g e` jumps to `/sessions` (`g s` was
+    already Sprints).
 10. **Motion.** The collapse/expand is a 150 ms width tween; instant under
     `prefers-reduced-motion`.
 
@@ -161,7 +162,7 @@ writing duplicate events.
 - `layouts/AppShell.tsx`: derives `focusWorkspace` from the route
   (`/sessions*`), owns `sidebarPinned` (persisted under
   `waypoint:sidebarPinned`), passes `mode` to `Sidebar`, handles ⌘B.
-- `lib/useGlobalKeyboardShortcuts.ts`: `g s` → `/sessions`.
+- `lib/useGlobalKeyboardShortcuts.ts`: `g e` → `/sessions`.
 
 ### 4.6 Renderer — the page (ROAD-61)
 

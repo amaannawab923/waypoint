@@ -162,6 +162,10 @@ const configuration: webpack.Configuration = {
       // lib/featureFlags.ts. Off by default; run with
       // WAYPOINT_FEATURE_MY_JIRA=true to see it.
       WAYPOINT_FEATURE_MY_JIRA: 'false',
+      // Feature flag for the in-progress My sessions panel — see
+      // lib/featureFlags.ts. Off by default; run with
+      // WAYPOINT_FEATURE_SESSIONS=true to see it.
+      WAYPOINT_FEATURE_SESSIONS: 'false',
     }),
 
     new webpack.LoaderOptionsPlugin({

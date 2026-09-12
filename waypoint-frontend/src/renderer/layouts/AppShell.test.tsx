@@ -17,6 +17,16 @@ function StoreProbe() {
 jest.mock('@/layouts/Sidebar', () => ({
   Sidebar: () => <div data-testid="sidebar" />,
 }));
+jest.mock('@/layouts/SidebarRail', () => ({
+  SidebarRail: () => <div data-testid="sidebar-rail" />,
+}));
+jest.mock('@/lib/useLocalSummary', () => ({
+  useLocalSummary: () => ({
+    repoCount: 0,
+    claudeReady: false,
+    sentence: 'Local · 0 repos · Claude not detected',
+  }),
+}));
 
 const onToggleCopilotSpy = jest.fn();
 jest.mock('@/layouts/Topbar', () => ({

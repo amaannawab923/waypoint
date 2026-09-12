@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { Modal } from '@/components/ui/Modal';
+import { SESSIONS_ENABLED } from '@/lib/featureFlags';
 
 /** A single key cap, e.g. <Key>⌘</Key><Key>K</Key> — same visual role as
  * the mockup's `.kbd` span (docs/design/waypoint-revamp-mockup.html), just
@@ -66,6 +67,7 @@ export function KeyboardShortcutsModal({
             <Row label="Docs" keys={['g', 'd']} />
             <Row label="Sprints" keys={['g', 's']} />
             <Row label="This machine" keys={['g', 'l']} />
+            {SESSIONS_ENABLED && <Row label="My sessions" keys={['g', 'e']} />}
           </Section>
           <p className="text-[11px] leading-snug text-text-muted">
             Docs and Sprints only navigate while a project is open.
