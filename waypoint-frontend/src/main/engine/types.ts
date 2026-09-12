@@ -577,12 +577,59 @@ export function isAllowedTopic(topic: string): boolean {
     topic === liveTopic(parts.stateId, { conversationId: key.conversationId })
   );
 }
-/** Procedures the renderer may call, and the check each one's input must pass. */
-export const ALLOWED_PROCEDURES: Record<string, (input: unknown) => boolean> = {
-  'acp.getHistory': (input) =>
+/** `input` is an object whose `conversationId` is one of our runs. */
+function isRunInput(input: unknown): input is { conversationId: string } {
+  return (
     typeof input === 'object' &&
     input !== null &&
     typeof (input as { conversationId?: unknown }).conversationId ===
       'string' &&
-    RUN_CONVERSATION.test((input as { conversationId: string }).conversationId),
+    RUN_CONVERSATION.test((input as { conversationId: string }).conversationId)
+  );
+}
+
+const isNonEmptyString = (value: unknown): value is string =>
+  typeof value === 'string' && value.length > 0;
+
+/**
+ * Procedures the renderer may call, and the check each one's input must
+ * pass. Every one is scoped to a run-shaped conversation id, and each
+ * check names exactly the fields the panel sends (W3): a prompt is text
+ * only — attachments would let the renderer name files for the daemon to
+ * read, which W3 has no reason to allow — and a permission answer is one
+ * request id and one option id, the daemon's own decision shape.
+ */
+export const ALLOWED_PROCEDURES: Record<string, (input: unknown) => boolean> = {
+  'acp.getHistory': (input) => isRunInput(input),
+  'acp.sendPrompt': (input) => {
+    if (!isRunInput(input)) return false;
+    const { prompt, placement, ...rest } = input as {
+      conversationId: string;
+      prompt?: unknown;
+      placement?: unknown;
+    };
+    if (Object.keys(rest).length !== 1) return false;
+    if (typeof prompt !== 'object' || prompt === null) return false;
+    const { text, ...promptRest } = prompt as { text?: unknown };
+    if (!isNonEmptyString(text) || Object.keys(promptRest).length !== 0)
+      return false;
+    return (
+      placement === undefined || placement === 'auto' || placement === 'queue'
+    );
+  },
+  'acp.resolvePermission': (input) => {
+    if (!isRunInput(input)) return false;
+    const { requestId, optionId, ...rest } = input as {
+      conversationId: string;
+      requestId?: unknown;
+      optionId?: unknown;
+    };
+    return (
+      Object.keys(rest).length === 1 &&
+      isNonEmptyString(requestId) &&
+      isNonEmptyString(optionId)
+    );
+  },
+  'acp.cancelTurn': (input) =>
+    isRunInput(input) && Object.keys(input).length === 1,
 };

@@ -384,6 +384,83 @@ describe('registerTopicsIpc', () => {
     expect(daemon.client.call).toHaveBeenCalledTimes(1);
   });
 
+  it('lets the panel prompt, answer a permission and cancel a turn — for our runs, with exactly the fields it sends', async () => {
+    const daemon = fakeClient();
+    const { host, invoke } = fakeHost();
+    registerTopicsIpc({
+      supervisor: fakeSupervisor(daemon.client),
+      host,
+      logger,
+    });
+
+    await invoke(ENGINE_IPC.call, 'acp.sendPrompt', {
+      conversationId: 'run-abc1234',
+      prompt: { text: 'Run the tests' },
+    });
+    await invoke(ENGINE_IPC.call, 'acp.sendPrompt', {
+      conversationId: 'run-abc1234',
+      prompt: { text: 'Then lint' },
+      placement: 'queue',
+    });
+    await invoke(ENGINE_IPC.call, 'acp.resolvePermission', {
+      conversationId: 'run-abc1234',
+      requestId: 'perm-1',
+      optionId: 'allow_once',
+    });
+    await invoke(ENGINE_IPC.call, 'acp.cancelTurn', {
+      conversationId: 'run-abc1234',
+    });
+    expect(daemon.client.call).toHaveBeenCalledTimes(4);
+
+    const refused: Array<[string, unknown]> = [
+      // Not one of our runs.
+      ['acp.sendPrompt', { conversationId: 'conv-1', prompt: { text: 'x' } }],
+      // Empty text.
+      ['acp.sendPrompt', { conversationId: 'run-abc1234', prompt: { text: '' } }],
+      // Attachments: the renderer must not name files for the daemon.
+      [
+        'acp.sendPrompt',
+        {
+          conversationId: 'run-abc1234',
+          prompt: { text: 'x', attachments: [{ id: 'a' }] },
+        },
+      ],
+      [
+        'acp.sendPrompt',
+        {
+          conversationId: 'run-abc1234',
+          prompt: { text: 'x', hiddenContext: 'secret' },
+        },
+      ],
+      ['acp.sendPrompt', { conversationId: 'run-abc1234', prompt: 'x' }],
+      [
+        'acp.sendPrompt',
+        { conversationId: 'run-abc1234', prompt: { text: 'x' }, placement: 'now' },
+      ],
+      ['acp.resolvePermission', { conversationId: 'run-abc1234', requestId: 'p' }],
+      [
+        'acp.resolvePermission',
+        { conversationId: 'run-abc1234', requestId: '', optionId: 'o' },
+      ],
+      [
+        'acp.resolvePermission',
+        { conversationId: 'run-abc1234', requestId: 'p', optionId: 'o', extra: 1 },
+      ],
+      ['acp.cancelTurn', { conversationId: 'run-abc1234', force: true }],
+      ['acp.cancelTurn', { conversationId: 'conv-1' }],
+    ];
+    for (const [procedure, input] of refused) {
+      await expect(invoke(ENGINE_IPC.call, procedure, input)).rejects.toThrow(
+        `Input rejected for ${procedure}.`,
+      );
+    }
+    // Still nothing the panel is not meant to reach.
+    await expect(
+      invoke(ENGINE_IPC.call, 'acp.kill', { conversationId: 'run-abc1234' }),
+    ).rejects.toThrow('Procedure is not available to the renderer: acp.kill');
+    expect(daemon.client.call).toHaveBeenCalledTimes(4);
+  });
+
   it('the returned disposer detaches everything without telling the renderer', async () => {
     const daemon = fakeClient();
     const { host, sent, invoke } = fakeHost();
