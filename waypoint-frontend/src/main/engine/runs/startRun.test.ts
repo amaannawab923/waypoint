@@ -2,7 +2,11 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { DaemonRunsApi, DaemonWorkspaceRecord } from './daemonApi';
-import type { AgentRun, LedgerClient } from './ledgerClient';
+import {
+  LedgerRequestError,
+  type AgentRun,
+  type LedgerClient,
+} from './ledgerClient';
 import {
   buildResumeNote,
   continueStart,
@@ -365,6 +369,63 @@ describe('continueStart', () => {
       ledger.updateRun.mock.calls.some(([, p]) => p.status === 'running'),
     ).toBe(false);
     expect(rows.get('run-a1')?.status).toBe('cancelled');
+  });
+
+  it('a Stop that lands while the worktree is being made: no failure recorded, no session', async () => {
+    const { ledger, rows } = fakeLedger([
+      run({ id: 'run-a1', status: 'provisioning' }),
+    ]);
+    // The worktree finishes after the cancel; the ledger then refuses
+    // the worktree write the way the real one does (409, read-only).
+    ledger.updateRun.mockImplementation(async (id, patch) => {
+      const current = rows.get(id) as AgentRun;
+      if (current.status === 'cancelled') {
+        throw new LedgerRequestError(
+          409,
+          'A cancelled run is finished; its record is read-only.',
+        );
+      }
+      const next = { ...current, ...patch } as AgentRun;
+      rows.set(id, next);
+      return next;
+    });
+    const daemon = fakeDaemon({
+      createWorktree: jest.fn(async (req) => {
+        rows.set('run-a1', {
+          ...(rows.get('run-a1') as AgentRun),
+          status: 'cancelled',
+        });
+        return {
+          id: req.workspaceId,
+          kind: 'worktree',
+          path: path.join(worktreesDir, req.workspaceId),
+          parentId: 'repo-1',
+          observedStatus: 'present',
+          creation: {
+            branch: req.branch,
+            baseRef: req.baseRef,
+            requestedPath: req.path,
+          },
+          lifecycle: null,
+          lastCreateOutcome: { status: 'succeeded', at: 1 },
+        };
+      }),
+    });
+    const deps = depsWith(ledger, daemon);
+
+    await continueStart(deps, rows.get('run-a1') as AgentRun, repoDir);
+
+    expect(daemon.startSession).not.toHaveBeenCalled();
+    expect(ledger.appendEvent).not.toHaveBeenCalledWith(
+      'run-a1',
+      'error',
+      expect.anything(),
+    );
+    expect(rows.get('run-a1')?.status).toBe('cancelled');
+    expect(deps.notify).not.toHaveBeenCalledWith({
+      runId: 'run-a1',
+      status: 'failed',
+    });
   });
 
   it('a worktree failure is failed/provision (worktrees.ts recorded the detail)', async () => {

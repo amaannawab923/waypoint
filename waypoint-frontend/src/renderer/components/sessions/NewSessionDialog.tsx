@@ -318,7 +318,7 @@ export function NewSessionDialog({
                   {installed !== null && !installed.includes(id)
                     ? ' (not installed)'
                     : ''}
-                  {id === defaultProviderId ? ' · workspace default' : ''}
+                  {id === defaultProviderId ? ' (default)' : ''}
                 </option>
               ))}
             </select>

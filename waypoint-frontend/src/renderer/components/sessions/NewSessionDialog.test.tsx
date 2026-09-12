@@ -83,7 +83,7 @@ describe('NewSessionDialog', () => {
       expect(screen.getByLabelText('Provider')).toHaveValue('claude'),
     );
     expect(screen.getByLabelText('Provider')).toHaveTextContent(
-      'Claude Code · workspace default',
+      'Claude Code (default)',
     );
     await waitFor(() =>
       expect(

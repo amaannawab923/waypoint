@@ -302,6 +302,16 @@ export async function continueStart(
       providerSessionId: sessionId,
     });
   } catch (error) {
+    // A Stop that landed while the worktree was being made: the ledger
+    // says cancelled and refused the worktree write (409). The person's
+    // verdict stands; the worktree stays on disk as W2's rule says.
+    if (!(await stillProvisioning(ledger, run.id))) {
+      deps.logger.info(
+        'engine: run left provisioning during its worktree; not recording a failure',
+        { runId: run.id, message: describe(error) },
+      );
+      return;
+    }
     await failStart(deps, run.id, stage, error);
   }
 }
