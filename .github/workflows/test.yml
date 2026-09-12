@@ -21,12 +21,17 @@ jobs:
           cache-dependency-path: waypoint-frontend/package-lock.json
       # No token here: `npm ci` runs every dependency's install script, and a
       # repo-scoped token in that environment is a token every one of them
-      # can read (review round 2). The engine fetch inside postinstall then
-      # prints that it could not download and exits 0 — by design — and the
-      # dedicated step below does the download with the token, alone.
+      # can read (review round 2). The engine and chat-ui fetches inside
+      # postinstall then print that they could not download and exit 0 — by
+      # design (the runner's shared IP is rate-limited unauthenticated) —
+      # and the dedicated step below does both downloads with the token,
+      # alone. Both, not just the engine: the renderer does not build
+      # without the vendored chat-ui (PR #56 hit exactly that).
       - run: npm ci
-      - name: Fetch the pinned agent engine
-        run: node scripts/fetch-engine.mjs
+      - name: Fetch the pinned agent engine and chat-ui build
+        run: |
+          node scripts/fetch-engine.mjs
+          node scripts/fetch-chat-ui.mjs
         env:
           GH_TOKEN: ${{ github.token }}
       - run: npm run typecheck --if-present
@@ -104,9 +109,11 @@ jobs:
           cache-dependency-path: waypoint-frontend/package-lock.json
       - name: Install frontend deps
         run: npm ci
-      # Token only here, for the one download that needs it (see the unit job).
-      - name: Fetch the pinned agent engine
-        run: node scripts/fetch-engine.mjs
+      # Token only here, for the two downloads that need it (see the unit job).
+      - name: Fetch the pinned agent engine and chat-ui build
+        run: |
+          node scripts/fetch-engine.mjs
+          node scripts/fetch-chat-ui.mjs
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Set up Postgres (Homebrew, no Docker on this runner)
