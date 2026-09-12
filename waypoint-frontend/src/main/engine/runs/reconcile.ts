@@ -23,17 +23,29 @@ import type { AgentRun, AgentRunStatus, LedgerClient } from './ledgerClient';
  *                                           daemon was down; the daemon
  *                                           auto-resumed it, so the run is
  *                                           running again.
- *   daemon has it, ledger has it finished   the session is stale — the
- *                                           user's Stop / Done landed in
+ *   daemon has it, ledger has it ended      the session is stale — the
+ *   (done / failed / cancelled)             user's Stop / Done landed in
  *                                           the ledger, Waypoint died
  *                                           before the kill. Kill it.
- *   daemon has it, ledger has no row        orphan. Only sessions named
- *                                           like ours (`run-…`) are ours to
- *                                           judge; with no row there is no
- *                                           owner or project to adopt it
- *                                           into, so it is killed. Any
- *                                           other conversation id is left
- *                                           alone — not ours.
+ *   daemon has it, ledger has it in any     not ours to judge from here:
+ *   other non-live status (queued,          a needs-review session may be
+ *   needs-review)                           kept for a review round (W4/
+ *                                           W6 decide); a queued run with
+ *                                           a session is a sequencing bug
+ *                                           to log, not a thing to kill.
+ *                                           Left alone, warned about.
+ *   daemon has it, ledger has no row        orphan. Reported, never killed
+ *                                           (review round 2): the ledger
+ *                                           answering "no such run" is
+ *                                           one 404 — Waypoint pointed at
+ *                                           an empty or different backend
+ *                                           would otherwise kill every
+ *                                           live session at boot. A
+ *                                           person, or a later workstream
+ *                                           with positive evidence, ends
+ *                                           an orphan. Any conversation
+ *                                           id not shaped like ours is
+ *                                           not even reported.
  *   ledger has it live, daemon does not     `interrupted`, with whether the
  *                                           worktree is still on disk in
  *                                           the reason — Resume (ROAD-69)
@@ -63,7 +75,10 @@ export type ReconcileAction =
   | { kind: 'reattach'; runId: string }
   | { kind: 'adopt'; runId: string }
   | { kind: 'kill-stale'; runId: string; status: AgentRunStatus }
-  | { kind: 'kill-orphan'; conversationId: string }
+  /** A session for a run in a non-live, non-ended status: logged, left. */
+  | { kind: 'leave-unexpected'; runId: string; status: AgentRunStatus }
+  /** A session named like ours with no ledger row: logged, left. */
+  | { kind: 'orphan'; conversationId: string }
   | {
       kind: 'interrupt';
       runId: string;
@@ -71,6 +86,13 @@ export type ReconcileAction =
       worktreePresent: boolean;
     }
   | { kind: 'leave'; conversationId: string };
+
+/** Ended for good — the only statuses whose leftover session is killed. */
+const ENDED_RUN_STATUSES: readonly AgentRunStatus[] = [
+  'done',
+  'failed',
+  'cancelled',
+];
 
 export interface ReconcileInput {
   /** `acp.sessions.list`, by conversation id. */
@@ -104,12 +126,18 @@ export function planReconcile(input: ReconcileInput): ReconcileAction[] {
     }
     const other = input.otherRuns[conversationId];
     if (!other) {
-      actions.push({ kind: 'kill-orphan', conversationId });
+      actions.push({ kind: 'orphan', conversationId });
     } else if (other.status === 'interrupted') {
       actions.push({ kind: 'adopt', runId: other.id });
-    } else {
+    } else if (ENDED_RUN_STATUSES.includes(other.status)) {
       actions.push({
         kind: 'kill-stale',
+        runId: other.id,
+        status: other.status,
+      });
+    } else {
+      actions.push({
+        kind: 'leave-unexpected',
         runId: other.id,
         status: other.status,
       });
@@ -178,8 +206,22 @@ async function applyAction(
         note: `run was already ${action.status}; stale daemon session killed`,
       });
       return;
-    case 'kill-orphan':
-      await deps.daemon.killSession(action.conversationId);
+    case 'orphan':
+      deps.logger.warn(
+        'engine: daemon session with no ledger row — left running',
+        {
+          conversationId: action.conversationId,
+        },
+      );
+      return;
+    case 'leave-unexpected':
+      deps.logger.warn(
+        'engine: daemon session for a run that is neither live nor ended — left running',
+        {
+          runId: action.runId,
+          status: action.status,
+        },
+      );
       return;
     case 'interrupt':
       await deps.ledger.updateRun(action.runId, {

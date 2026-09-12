@@ -176,6 +176,68 @@ describe('registerBootReconcile', () => {
     expect(listAllRuns).toHaveBeenCalledTimes(1);
   });
 
+  it('a plan whose actions failed to apply is retried, like a failed read (review round 2)', async () => {
+    const supervisor = fakeSupervisor(running(1));
+    // One live run the daemon lacks → an `interrupt` action; the first
+    // updateRun fails (backend restarted mid-reconcile), the second lands.
+    const listAllRuns = jest.fn(async () => [
+      { id: 'run-lost', status: 'running' },
+    ]);
+    const ledger = fakeLedger(listAllRuns);
+    (ledger.updateRun as jest.Mock)
+      .mockRejectedValueOnce(new Error('fetch failed'))
+      .mockResolvedValue({});
+    const reports: Array<{ failures: unknown[] }> = [];
+
+    registerBootReconcile({
+      supervisor,
+      ledger,
+      logger,
+      retryDelayMs: 5,
+      onReport: (r) => reports.push(r),
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(reports.map((r) => r.failures.length)).toEqual([1, 0]);
+    expect(listAllRuns).toHaveBeenCalledTimes(2);
+    expect(logger.warn).toHaveBeenCalledWith(
+      'engine: boot reconcile did not run; retrying',
+      expect.objectContaining({ message: '1 action(s) failed' }),
+    );
+  });
+
+  it('a reconnect that lands while a reconcile is in flight gets its own reconcile afterwards', async () => {
+    const supervisor = fakeSupervisor(running(1));
+    let release!: () => void;
+    const listAllRuns = jest
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<unknown[]>((r) => {
+            release = () => r([]);
+          }),
+      )
+      .mockResolvedValue([]);
+
+    registerBootReconcile({
+      supervisor,
+      ledger: fakeLedger(listAllRuns),
+      logger,
+    });
+    await flush();
+    expect(listAllRuns).toHaveBeenCalledTimes(1);
+    // The daemon reconnects under the first reconcile's feet.
+    supervisor.emit({ kind: 'stopping', since: 2 });
+    supervisor.emit(running(3));
+    await flush();
+    expect(listAllRuns).toHaveBeenCalledTimes(1); // still in flight, not doubled
+    release();
+    await flush();
+    await flush();
+
+    expect(listAllRuns).toHaveBeenCalledTimes(2); // the new connection's turn
+  });
+
   it('stops listening when unsubscribed', async () => {
     const supervisor = fakeSupervisor({
       kind: 'stopped',
