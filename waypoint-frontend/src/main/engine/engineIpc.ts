@@ -4,10 +4,10 @@ import { resolveEnginePaths } from './paths';
 import { createEngineSupervisor, type EngineSupervisor } from './supervisor';
 import { connectSocketTransport } from './transport';
 import { createWireClient } from './wire';
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { installEngine, verifyInstalledEngine } from './installer';
 import { runDaemonCommand } from './daemonCli';
+import { removeStaleStartLock } from './staleLock';
 import { registerBootReconcile } from './runs/bootReconcile';
 
 // ROAD-48: the IPC surface over the engine supervisor.
@@ -113,7 +113,9 @@ export function createDefaultEngineSupervisor(): EngineSupervisor {
     verifyInstalledEngine,
     installEngine: () => installEngine(paths, installerDeps),
     removeStaleStartLock: async (lockPath) => {
-      await fs.promises.rm(lockPath, { force: true });
+      const outcome = await removeStaleStartLock(lockPath);
+      if (outcome.kind !== 'absent')
+        logger.info('engine: start lock', { lockPath, ...outcome });
     },
     appVersion: app.getVersion(),
     clock: Date.now,
