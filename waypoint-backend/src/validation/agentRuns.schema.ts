@@ -54,6 +54,7 @@ export const createAgentRunSchema = z
     // W5a: what a dispatched run was asked to do; the Copilot
     // conversation it came from, for the notes going back.
     intent: runIntentSchema.optional(),
+    modeId: z.string().max(64).nullable().optional(),
     copilotConversationId: id.nullable().optional(),
     retryOfRunId: id.optional(),
   })
@@ -173,6 +174,7 @@ export const updateAgentRunSchema = requireAtLeastOneField(
       providerSessionId: z.string().max(256).nullable().optional(),
       title: titleSchema.optional(),
       intent: runIntentSchema.nullable().optional(),
+      modeId: z.string().max(64).nullable().optional(),
       copilotConversationId: id.nullable().optional(),
       worktreePath: z.string().max(4096).nullable().optional(),
       cwd: z.string().max(4096).nullable().optional(),

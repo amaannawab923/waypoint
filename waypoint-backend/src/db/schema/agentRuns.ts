@@ -102,6 +102,11 @@ export const agentRuns = pgTable(
     // Started in the provider's bypass-permissions mode: the session asks
     // nothing. Shown on the row so an unattended agent is never invisible.
     autoApprove: boolean('auto_approve').notNull().default(false),
+    // The provider session mode the run was started in (`plan`,
+    // `bypassPermissions`), exactly as handed to `acp.start` — so a resume
+    // restarts the session the way it was started (W5a: Investigate is
+    // plan mode whatever auto-approve says). Null = the provider's default.
+    modeId: text('mode_id'),
     // What a dispatched run was asked to do (W5a, ROAD-117): `investigate`
     // (find the root cause, plan mode, change nothing), `fix` (implement
     // it), `custom` (the person's own instruction). Null for an

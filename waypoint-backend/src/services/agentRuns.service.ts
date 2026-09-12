@@ -177,6 +177,7 @@ export async function createRun(input: CreateAgentRunInput): Promise<AgentRun> {
         isolation: input.isolation ?? 'worktree',
         autoApprove: input.autoApprove ?? false,
         intent: input.intent ?? null,
+        modeId: input.modeId ?? null,
         copilotConversationId: input.copilotConversationId ?? null,
         baseRef: input.baseRef ?? null,
         retryOfRunId: input.retryOfRunId ?? null,
