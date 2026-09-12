@@ -525,8 +525,18 @@ export const RUNS_IPC = {
   start: 'runs:start',
   /** (runId) → ResumeRunResult. An interrupted run, back on its worktree (ROAD-69). */
   resume: 'runs:resume',
-  /** (projectId) → RunBranches. The linked repository's local branches, through the engine. */
+  /** (folder handle) → RunBranches. The folder's local branches, through the engine. */
   listBranches: 'runs:list-branches',
+  /**
+   * () → FolderChoice. The OS folder picker, parented to the window; the
+   * folder comes back as a handle, never a path (W4b, ROAD-116,
+   * docs/design/w4b-sessions-anywhere.md §2).
+   */
+  chooseFolder: 'runs:choose-folder',
+  /** () → SessionFolder[]. Recent folders and every project's linked repository, as handles. */
+  recentFolders: 'runs:recent-folders',
+  /** () → string. The home directory, so the panel can show a run's folder as `~/…`. */
+  homeDir: 'runs:home-dir',
   /**
    * Push: RunChanged — main wrote a run's ledger row from what the daemon
    * reported (runs/liveLedgerFollower.ts) or from a start/resume it is
@@ -548,16 +558,57 @@ export type SupportedProviderId = (typeof SUPPORTED_PROVIDERS)[number];
 
 /** The most a session title may be — one line, as the row shows it. */
 export const MAX_RUN_TITLE_CHARS = 120;
+/** The most a first message typed in the dialog may be. */
+export const MAX_FIRST_MESSAGE_CHARS = 20_000;
 
-/** What the renderer sends to `runs:start`. It names a project, never a path. */
+/**
+ * Where the agent works (W4b): `worktree` — a fresh worktree Waypoint
+ * provisions and owns; `directory` — the picked folder, edited in place.
+ */
+export type RunIsolation = 'worktree' | 'directory';
+
+/** The provider mode an auto-approved session starts in (verified live on the Claude adapter). */
+export const AUTO_APPROVE_MODE_ID = 'bypassPermissions';
+
+/**
+ * A folder the person may start a session in, as main describes it. The
+ * `handle` is what the renderer hands back; the path is for display only.
+ */
+export interface SessionFolder {
+  handle: string;
+  /** Absolute, canonical. Shown, never sent back. */
+  path: string;
+  /** `path` with the home directory as `~`. */
+  displayPath: string;
+  /** The last path segment. */
+  name: string;
+  /** A git repository (a `.git` directory or file) or a plain folder. */
+  kind: 'repo' | 'folder';
+  /** The project whose linked repository this is, if any. */
+  projectId: string | null;
+  projectName: string | null;
+  /** The auto-approve choice the last session here was started with. */
+  lastAutoApprove: boolean | null;
+  /** When a session was last started here; null for a linked repo never used. */
+  lastUsedAt: string | null;
+}
+
+export type FolderChoice =
+  { canceled: true } | { canceled: false; folder: SessionFolder };
+
+/** What the renderer sends to `runs:start`. It names a folder handle, never a path. */
 export interface StartRunInput {
-  projectId: string;
+  /** A `SessionFolder.handle` from `runs:choose-folder` or `runs:recent-folders`. */
+  folder: string;
   /** The current member (data/currentUser.ts) — ROAD-8 replaces this with the session's. */
   ownerMemberId: string;
   providerId: SupportedProviderId;
-  /** A local branch of the project's linked repository (`runs:list-branches`). */
-  baseRef: string;
-  title?: string | null;
+  isolation: RunIsolation;
+  autoApprove: boolean;
+  /** Worktree runs only: a local branch of the folder's repository (`runs:list-branches`). */
+  baseRef?: string | null;
+  /** Queued as the session's first prompt; its first line names the run. */
+  firstMessage?: string | null;
 }
 
 export type ResumeRunOutcome =

@@ -126,6 +126,8 @@ describe('runs:stop', () => {
       ledger,
       reveal: jest.fn(),
       notify: jest.fn(),
+      chooseDirectory: async () => null,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
       daemon: () => daemon,
       logger,
     });
@@ -175,6 +177,8 @@ describe('runs:stop', () => {
       ledger,
       reveal: jest.fn(),
       notify: jest.fn(),
+      chooseDirectory: async () => null,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
       daemon: () => daemon,
       logger,
     });
@@ -192,6 +196,8 @@ describe('runs:stop', () => {
       ledger,
       reveal: jest.fn(),
       notify: jest.fn(),
+      chooseDirectory: async () => null,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
       daemon: () => null,
       logger,
     });
@@ -218,6 +224,8 @@ describe('runs:stop', () => {
       ledger,
       reveal: jest.fn(),
       notify: jest.fn(),
+      chooseDirectory: async () => null,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
       daemon: () => daemon,
       logger,
     });
@@ -247,6 +255,8 @@ describe('runs:stop', () => {
       ledger,
       reveal: jest.fn(),
       notify: jest.fn(),
+      chooseDirectory: async () => null,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
       daemon: () => fakeDaemon(),
       logger,
     });
@@ -288,6 +298,8 @@ describe('runs:diff and runs:reveal-worktree', () => {
       git,
       reveal,
       notify: jest.fn(),
+      chooseDirectory: async () => null,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
       daemon: () => null,
       logger,
     });
@@ -376,6 +388,8 @@ describe('assertWorktreeGitDir', () => {
       git,
       reveal: jest.fn(),
       notify: jest.fn(),
+      chooseDirectory: async () => null,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
       daemon: () => null,
       logger,
     });
@@ -545,16 +559,72 @@ describe('computeRunDiff', () => {
 // runs/startRun.test.ts's. What is proven here is that each channel is
 // registered, hands its one argument to the module, and answers with its
 // shape; and that `notify` is what a status write reaches the renderer by.
-describe('runs:start, runs:resume, runs:list-branches', () => {
-  it('runs:start refuses a bad request before touching the ledger, and notifies at provisioning', async () => {
+describe('runs:start, runs:resume, runs:list-branches, runs:choose-folder, runs:recent-folders', () => {
+  /** A git repository on disk the picker "chose". */
+  const repoOnDisk = () => {
+    const p = path.join(os.tmpdir(), 'wp-runs-ipc-picked-repo');
+    mkdirSync(path.join(p, '.git'), { recursive: true });
+    return realpathSync(p);
+  };
+
+  it('runs:choose-folder hands back a handle and a description, never the path as the handle; cancel is not an error', async () => {
     const { host, invoke } = fakeHost();
+    const picked = repoOnDisk();
     const ledger = {
       ...fakeLedger({}),
-      getProject: jest.fn(async () => ({
-        id: 'proj-1',
-        name: 'P',
-        repoPath: worktreesDir,
-      })),
+      listProjects: jest.fn(async () => [
+        { id: 'proj-1', name: 'P', repoPath: picked },
+      ]),
+    } as unknown as jest.Mocked<LedgerClient>;
+    let answer: string | null = null;
+    registerRunsIpc({
+      supervisor: supervisorWith(true),
+      host,
+      worktreesDir,
+      ledger,
+      reveal: jest.fn(),
+      notify: jest.fn(),
+      chooseDirectory: async () => answer,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
+      daemon: () => fakeDaemon(),
+      logger,
+    });
+    await expect(invoke(RUNS_IPC.chooseFolder)).resolves.toEqual({
+      canceled: true,
+    });
+    answer = picked;
+    const choice = (await invoke(RUNS_IPC.chooseFolder)) as {
+      canceled: false;
+      folder: {
+        handle: string;
+        path: string;
+        kind: string;
+        projectId: string | null;
+      };
+    };
+    expect(choice.canceled).toBe(false);
+    expect(choice.folder).toMatchObject({
+      path: picked,
+      kind: 'repo',
+      projectId: 'proj-1',
+    });
+    expect(choice.folder.handle).toMatch(/^f-/);
+    expect(choice.folder.handle).not.toBe(picked);
+    // The linked repository is listed among the folders, under the same handle.
+    const listed = (await invoke(RUNS_IPC.recentFolders)) as Array<{
+      handle: string;
+      path: string;
+    }>;
+    expect(listed.map((f) => f.path)).toEqual([picked]);
+    expect(listed[0].handle).toBe(choice.folder.handle);
+  });
+
+  it('runs:start refuses a bad request before touching the ledger, and notifies at provisioning', async () => {
+    const { host, invoke } = fakeHost();
+    const picked = repoOnDisk();
+    const ledger = {
+      ...fakeLedger({}),
+      listProjects: jest.fn(async () => []),
       createRun: jest.fn(async (input: unknown) => ({
         id: 'run-n1',
         status: 'queued',
@@ -579,28 +649,44 @@ describe('runs:start, runs:resume, runs:list-branches', () => {
       ledger,
       reveal: jest.fn(),
       notify,
+      chooseDirectory: async () => picked,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
       daemon: () => daemon,
       logger,
     });
+    const choice = (await invoke(RUNS_IPC.chooseFolder)) as {
+      folder: { handle: string };
+    };
+    const base = {
+      folder: choice.folder.handle,
+      ownerMemberId: 'mem-1',
+      providerId: 'claude',
+      isolation: 'worktree',
+      autoApprove: true,
+      baseRef: 'main',
+    };
 
     await expect(
-      invoke(RUNS_IPC.start, {
-        projectId: 'proj-1',
-        ownerMemberId: 'mem-1',
-        providerId: 'gpt',
-        baseRef: 'main',
-      }),
+      invoke(RUNS_IPC.start, { ...base, providerId: 'gpt' }),
     ).rejects.toThrow(/not one Waypoint can start/);
+    await expect(
+      invoke(RUNS_IPC.start, { ...base, folder: 'f-forged' }),
+    ).rejects.toThrow(/not one this window offered/);
     expect(ledger.createRun).not.toHaveBeenCalled();
 
     const run = (await invoke(RUNS_IPC.start, {
-      projectId: 'proj-1',
-      ownerMemberId: 'mem-1',
-      providerId: 'claude',
-      baseRef: 'main',
-      title: 'Try it',
+      ...base,
+      firstMessage: 'Try it\nplease',
     })) as { id: string; status: string };
     expect(run).toMatchObject({ id: 'run-n1', status: 'provisioning' });
+    expect(ledger.createRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: null,
+        isolation: 'worktree',
+        autoApprove: true,
+        title: 'Try it',
+      }),
+    );
     expect(notify).toHaveBeenCalledWith({
       runId: 'run-n1',
       status: 'provisioning',
@@ -617,6 +703,8 @@ describe('runs:start, runs:resume, runs:list-branches', () => {
       ledger,
       reveal: jest.fn(),
       notify: jest.fn(),
+      chooseDirectory: async () => null,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
       daemon: () => fakeDaemon(),
       logger,
     });
@@ -628,14 +716,10 @@ describe('runs:start, runs:resume, runs:list-branches', () => {
   });
 
   it('runs:list-branches needs a running engine and answers the sorted list with a suggestion', async () => {
-    const { host, invoke } = fakeHost();
+    const picked = repoOnDisk();
     const ledger = {
       ...fakeLedger({}),
-      getProject: jest.fn(async () => ({
-        id: 'proj-1',
-        name: 'P',
-        repoPath: worktreesDir,
-      })),
+      listProjects: jest.fn(async () => []),
     } as unknown as jest.Mocked<LedgerClient>;
     const daemon = {
       ...fakeDaemon(),
@@ -644,19 +728,25 @@ describe('runs:start, runs:resume, runs:list-branches', () => {
         remoteHeads: [{ remote: 'origin', branch: 'main' }],
       })),
     } as unknown as jest.Mocked<DaemonRunsApi>;
+    const down = fakeHost();
     registerRunsIpc({
       supervisor: supervisorWith(false),
-      host,
+      host: down.host,
       worktreesDir,
       ledger,
       reveal: jest.fn(),
       notify: jest.fn(),
+      chooseDirectory: async () => picked,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
       daemon: () => null,
       logger,
     });
-    await expect(invoke(RUNS_IPC.listBranches, 'proj-1')).rejects.toThrow(
-      'The agent engine is not running.',
-    );
+    const choiceDown = (await down.invoke(RUNS_IPC.chooseFolder)) as {
+      folder: { handle: string };
+    };
+    await expect(
+      down.invoke(RUNS_IPC.listBranches, choiceDown.folder.handle),
+    ).rejects.toThrow('The agent engine is not running.');
 
     const live = fakeHost();
     registerRunsIpc({
@@ -666,14 +756,75 @@ describe('runs:start, runs:resume, runs:list-branches', () => {
       ledger,
       reveal: jest.fn(),
       notify: jest.fn(),
+      chooseDirectory: async () => picked,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
       daemon: () => daemon,
       logger,
     });
-    await expect(live.invoke(RUNS_IPC.listBranches, 'proj-1')).resolves.toEqual(
-      {
-        branches: ['a', 'main'],
-        suggested: 'main',
+    const choice = (await live.invoke(RUNS_IPC.chooseFolder)) as {
+      folder: { handle: string };
+    };
+    await expect(
+      live.invoke(RUNS_IPC.listBranches, choice.folder.handle),
+    ).resolves.toEqual({ branches: ['a', 'main'], suggested: 'main' });
+  });
+
+  it('runs:diff on a direct run compares the folder against HEAD without the worktree check; a plain folder is refused; reveal opens the folder', async () => {
+    const { host, invoke } = fakeHost();
+    const picked = repoOnDisk();
+    const plain = path.join(os.tmpdir(), 'wp-runs-ipc-plain');
+    mkdirSync(plain, { recursive: true });
+    const ledger = fakeLedger({
+      'run-dir': {
+        status: 'running',
+        isolation: 'directory',
+        cwd: picked,
+        worktreePath: null,
+        baseRef: null,
       },
+      'run-plain': {
+        status: 'running',
+        isolation: 'directory',
+        cwd: realpathSync(plain),
+        worktreePath: null,
+        baseRef: null,
+      },
+    });
+    const git = scriptedGit({
+      numstat: { stdout: '1\t0\tnotes.md\0' },
+      'name-status': { stdout: 'M\0notes.md\0' },
+      status: { stdout: ' M notes.md\0' },
+      diff: { stdout: 'diff --git a/notes.md b/notes.md\n' },
+    });
+    const reveal = jest.fn();
+    registerRunsIpc({
+      supervisor: supervisorWith(true),
+      host,
+      worktreesDir,
+      ledger,
+      git,
+      reveal,
+      notify: jest.fn(),
+      chooseDirectory: async () => null,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
+      daemon: () => null,
+      logger,
+    });
+    const diff = (await invoke(RUNS_IPC.diff, 'run-dir')) as {
+      comparedTo: string;
+      files: Array<{ path: string }>;
+    };
+    expect(diff.comparedTo).toBe('HEAD');
+    expect(diff.files.map((f) => f.path)).toEqual(['notes.md']);
+    // No merge-base was asked for: there is no base branch.
+    expect(git.mock.calls.some(([args]) => args[0] === 'merge-base')).toBe(
+      false,
     );
+    expect(git.mock.calls.every(([, opts]) => opts.cwd === picked)).toBe(true);
+    await expect(invoke(RUNS_IPC.diff, 'run-plain')).rejects.toThrow(
+      /not a git repository, so there are no changes/,
+    );
+    await invoke(RUNS_IPC.revealWorktree, 'run-dir');
+    expect(reveal).toHaveBeenCalledWith(picked);
   });
 });

@@ -23,6 +23,7 @@ jest.mock('@/data/engineApi', () => ({
   resumeRun: jest.fn(),
   stopRun: jest.fn(),
   revealRunWorktree: jest.fn(),
+  getHomeDir: jest.fn(async () => '/Users/me'),
 }));
 jest.mock('@/lib/sessionsStore', () => ({
   patchSessionRun: jest.fn(),
@@ -39,6 +40,9 @@ const run = (over: Partial<AgentRun>): AgentRun =>
     ticketId: null,
     projectId: 'proj-1',
     title: null,
+    isolation: 'worktree',
+    cwd: '/wt/run-abc1234',
+    autoApprove: false,
     branch: 'session/abc1234',
     baseRef: 'main',
     worktreePath: '/wt/run-abc1234',
@@ -87,14 +91,37 @@ describe('SessionDetail (W4)', () => {
     expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
   });
 
-  it('Resume is disabled, with the reason, when the run has no worktree', () => {
-    renderDetail(run({ status: 'interrupted', worktreePath: null }));
+  it('Resume is disabled, with the reason, when the run has no folder', () => {
+    renderDetail(run({ status: 'interrupted', worktreePath: null, cwd: null }));
     const resume = screen.getByRole('button', { name: 'Resume' });
     expect(resume).toBeDisabled();
     expect(resume).toHaveAttribute(
       'title',
-      'This run has no worktree to resume on.',
+      'This run has no folder to resume in.',
     );
+  });
+
+  it('a direct run reads "in ~/folder", is named by its folder, and carries the auto mark (W4b)', async () => {
+    renderDetail(
+      run({
+        isolation: 'directory',
+        cwd: '/Users/me/code/compass-web',
+        worktreePath: null,
+        branch: null,
+        baseRef: null,
+        autoApprove: true,
+      }),
+    );
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
+      'compass-web',
+    );
+    await waitFor(() =>
+      expect(screen.getByText('~/code/compass-web')).toBeInTheDocument(),
+    );
+    expect(document.querySelector('[data-auto-mark]')).toHaveTextContent('auto');
+    expect(screen.getByRole('tab', { name: /Changes/ })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: /^Diff/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show in Finder' })).toBeInTheDocument();
   });
 
   it('loaded: patches the run to running and re-reads, no toast', async () => {

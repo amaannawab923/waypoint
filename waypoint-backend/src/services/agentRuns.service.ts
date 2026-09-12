@@ -167,13 +167,15 @@ export async function createRun(input: CreateAgentRunInput): Promise<AgentRun> {
       .insert(agentRuns)
       .values({
         id: newId('run'),
-        projectId: input.projectId,
+        projectId: input.projectId ?? null,
         ticketId: input.ticketId ?? null,
         ownerMemberId: input.ownerMemberId,
         agentId: input.agentId ?? null,
         entry: input.entry,
         providerId: input.providerId,
         title: input.title ?? null,
+        isolation: input.isolation ?? 'worktree',
+        autoApprove: input.autoApprove ?? false,
         baseRef: input.baseRef ?? null,
         retryOfRunId: input.retryOfRunId ?? null,
       })

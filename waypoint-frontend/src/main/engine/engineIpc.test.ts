@@ -15,6 +15,7 @@ jest.mock('electron', () => ({
     off: jest.fn(),
   },
   shell: { showItemInFolder: jest.fn() },
+  dialog: { showOpenDialog: jest.fn(async () => ({ canceled: true, filePaths: [] })) },
 }));
 
 // Deliberately NOT hoisted to the top of the file with the type-only

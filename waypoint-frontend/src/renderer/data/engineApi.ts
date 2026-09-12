@@ -19,8 +19,10 @@ import type {
 } from '@/types/engine';
 import type {
   AgentRun,
+  FolderChoice,
   ResumeRunResult,
   RunBranches,
+  SessionFolder,
   RunChanged,
   RunDiff,
   StartRunInput,
@@ -201,8 +203,35 @@ export function resumeRun(runId: string): Promise<ResumeRunResult> {
   return bridge().resumeRun(runId).catch(unwrapIpcError);
 }
 
-export function listRunBranches(projectId: string): Promise<RunBranches> {
-  return bridge().listRunBranches(projectId).catch(unwrapIpcError);
+export function listRunBranches(folderHandle: string): Promise<RunBranches> {
+  return bridge().listRunBranches(folderHandle).catch(unwrapIpcError);
+}
+
+// W4b (docs/design/w4b-sessions-anywhere.md §2): folders are handles main
+// minted — from the OS picker, or from its recents and the projects'
+// linked repositories. The renderer shows the description and hands the
+// handle back; it never names a path.
+export function chooseFolder(): Promise<FolderChoice> {
+  return bridge().chooseFolder().catch(unwrapIpcError);
+}
+
+export function listRecentFolders(): Promise<SessionFolder[]> {
+  return bridge().listRecentFolders().catch(unwrapIpcError);
+}
+
+let homeDirPromise: Promise<string | null> | null = null;
+/** The home directory, read once, so a run's folder can be shown as `~/…`. Null outside Electron. */
+export function getHomeDir(): Promise<string | null> {
+  if (!homeDirPromise) {
+    homeDirPromise = (async () => {
+      try {
+        return await bridge().homeDir();
+      } catch {
+        return null;
+      }
+    })();
+  }
+  return homeDirPromise;
 }
 
 /** Every ledger write main makes — the follower's, and a start or resume's. */

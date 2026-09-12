@@ -12,9 +12,12 @@ export type {
 } from '../../main/engine/runs/ledgerClient';
 
 export type {
+  FolderChoice,
   ResumeRunOutcome,
   ResumeRunResult,
   RunBranches,
+  RunIsolation,
+  SessionFolder,
   RunChanged,
   RunDiff,
   RunDiffFile,
