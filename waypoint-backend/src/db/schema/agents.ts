@@ -20,9 +20,10 @@ export const agentAutonomyEnum = pgEnum('agent_autonomy', [
 // four values migration 0012 added — provisioning, finishing, interrupted,
 // cancelled — are the coding-run lifecycle; what each means, and which
 // moves between them are legal, is documented on agentRuns.ts and enforced
-// by runStatusMachine.ts. Order here is display order, not enum order:
-// Postgres appends ADD VALUE where the migration says, and nothing sorts
-// on this column.
+// by runStatusMachine.ts. Order here is display order; drizzle-kit
+// realises an enum change as a detour through text (cast both columns to
+// text, DROP TYPE, CREATE TYPE in this order, cast back — see 0012), so
+// the enum's order is this list's order and nothing sorts on it anyway.
 export const agentRunStatusEnum = pgEnum('agent_run_status', [
   'queued',
   'provisioning',
