@@ -99,6 +99,13 @@
       "when": 1789213637568,
       "tag": "0013_agent_runs_title_provider_session",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1789217514374,
+      "tag": "0014_workspace_default_agent_provider",
+      "breakpoints": true
     }
   ]
 }

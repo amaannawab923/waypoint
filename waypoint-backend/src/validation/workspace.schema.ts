@@ -9,6 +9,10 @@ export const updateWorkspaceSchema = requireAtLeastOneField(
     timezone: z.string().optional(),
     plan: z.enum(['community', 'pro', 'business', 'enterprise']).optional(),
     restrictWorkspaceCreation: z.boolean().optional(),
+    // A provider id as the engine names them ('claude', 'codex'); which
+    // ids Waypoint can actually start is main's SUPPORTED_PROVIDERS, not
+    // this schema's — the backend stores the preference.
+    defaultAgentProvider: z.string().min(1).max(64).nullable().optional(),
   }),
 );
 
