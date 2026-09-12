@@ -63,6 +63,8 @@ const LINE_CLASS: Record<DiffLineKind, string> = {
 };
 
 interface NumberedLine {
+  /** The line's position in the patch — its identity for rendering. */
+  id: number;
   text: string;
   kind: DiffLineKind;
   /** New-file line number for context and added lines; old-file for deleted. */
@@ -74,27 +76,28 @@ export function numberLines(text: string): NumberedLine[] {
   const out: NumberedLine[] = [];
   let oldNo = 0;
   let newNo = 0;
-  for (const line of text.replace(/\n$/, '').split('\n')) {
+  const lines = text.replace(/\n$/, '').split('\n');
+  lines.forEach((line, id) => {
     const kind = lineKind(line);
     if (kind === 'hunk') {
       const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
       oldNo = m ? Number(m[1]) : 0;
       newNo = m ? Number(m[2]) : 0;
-      out.push({ text: line, kind, no: null });
+      out.push({ id, text: line, kind, no: null });
     } else if (kind === 'add') {
-      out.push({ text: line, kind, no: newNo });
+      out.push({ id, text: line, kind, no: newNo });
       newNo += 1;
     } else if (kind === 'del') {
-      out.push({ text: line, kind, no: oldNo });
+      out.push({ id, text: line, kind, no: oldNo });
       oldNo += 1;
     } else if (kind === 'ctx') {
-      out.push({ text: line, kind, no: newNo });
+      out.push({ id, text: line, kind, no: newNo });
       oldNo += 1;
       newNo += 1;
     } else {
-      out.push({ text: line, kind, no: null });
+      out.push({ id, text: line, kind, no: null });
     }
-  }
+  });
   return out;
 }
 
@@ -102,10 +105,8 @@ function FileDiff({ text }: { text: string }) {
   const lines = useMemo(() => numberLines(text), [text]);
   return (
     <pre className="m-0 font-mono text-[11px] leading-[1.7]">
-      {lines.map((line, i) => (
-        // Lines have no identity of their own; the index is the row.
-        // eslint-disable-next-line react/no-array-index-key
-        <div key={i} className={clsx('flex', LINE_CLASS[line.kind])}>
+      {lines.map((line) => (
+        <div key={line.id} className={clsx('flex', LINE_CLASS[line.kind])}>
           <span className="w-9 shrink-0 pr-2 text-right opacity-70 select-none">
             {line.no ?? ''}
           </span>
