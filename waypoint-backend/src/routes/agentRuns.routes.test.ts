@@ -324,6 +324,21 @@ describe('PATCH /agent-runs/:id', () => {
     expect(service.updateRun).not.toHaveBeenCalled();
   });
 
+  it('rejects a verdict outside the vocabulary; accepts one inside it (W5c)', async () => {
+    const bad = await request(buildTestApp())
+      .patch('/agent-runs/run-abc1234')
+      .send({ verdict: 'shipped' });
+    expect(bad.status).toBe(400);
+    expect(service.updateRun).not.toHaveBeenCalled();
+
+    vi.mocked(service.updateRun).mockResolvedValue({ id: 'run-abc1234', verdict: 'not-a-bug' } as never);
+    const ok = await request(buildTestApp())
+      .patch('/agent-runs/run-abc1234')
+      .send({ verdict: 'not-a-bug' });
+    expect(ok.status).toBe(200);
+    expect(service.updateRun).toHaveBeenCalledWith('run-abc1234', { verdict: 'not-a-bug' });
+  });
+
   it('404s an unknown run', async () => {
     vi.mocked(service.updateRun).mockRejectedValue(new NotFoundError('agent run'));
 

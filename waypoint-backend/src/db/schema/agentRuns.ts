@@ -166,6 +166,14 @@ export const agentRuns = pgTable(
     // The agent's final message, capped by the service — never the whole
     // transcript (that is the daemon's, read live).
     summary: text('summary'),
+    // What the session concluded, in Waypoint's vocabulary (W5c):
+    // `root-cause` | `fixed` | `partial` | `not-a-bug` | `wont-fix` |
+    // `needs-info`. Read by host finalize from the report's `Verdict:` line
+    // (the verb's default when the session named none); it decides which
+    // state change finalize proposes and is what Copilot's offer on the
+    // next dispatch reads back. Null for an independent run or one that
+    // never finished.
+    verdict: text('verdict'),
 
     // --- counters ----------------------------------------------------------
     turnCount: integer('turn_count').notNull().default(0),

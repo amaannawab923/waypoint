@@ -165,6 +165,17 @@ export type CreateRunProposalInput = z.infer<typeof createRunProposalSchema>;
 // decides, not this schema. `reason` rides along into the status_changed
 // event's payload ("user clicked Stop", "daemon session vanished at boot")
 // and is not a column.
+// W5c: the session's conclusion, as finalize read it from the report.
+export const runVerdictSchema = z.enum([
+  'root-cause',
+  'fixed',
+  'partial',
+  'not-a-bug',
+  'wont-fix',
+  'needs-info',
+]);
+export type RunVerdict = z.infer<typeof runVerdictSchema>;
+
 export const updateAgentRunSchema = requireAtLeastOneField(
   z
     .object({
@@ -176,6 +187,7 @@ export const updateAgentRunSchema = requireAtLeastOneField(
       // Bounded for memory only; the service keeps the first 20,000
       // characters with a marker rather than refusing a long final message.
       summary: z.string().max(200_000).nullable().optional(),
+      verdict: runVerdictSchema.nullable().optional(),
       daemonWorkspaceId: z.string().max(256).nullable().optional(),
       daemonSessionId: z.string().max(256).nullable().optional(),
       providerSessionId: z.string().max(256).nullable().optional(),
