@@ -420,6 +420,59 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
     }
   });
 
+  // W5b (ROAD-126): a run on a Jira issue names its ticket_refs handle.
+  // Only the real database can prove the two facts that carry it: the FK
+  // to tickets is gone (a tref id inserts), and the shape check refuses
+  // anything that is neither a native id nor a ref.
+  it('W5b: takes a run on a Jira ref with no project; refuses an unknown ref and a bare key', async () => {
+    const [ref] = await db
+      .insert(schema.ticketRefs)
+      .values({
+        id: `tref-runs${stamp}`,
+        provider: 'jira',
+        externalId: `ENG-${stamp}`,
+        externalSite: 'itest.atlassian.net',
+        cachedIdentifier: `ENG-${stamp}`,
+        cachedTitle: 'A Jira issue with runs',
+        cachedUrl: null,
+        lastSeenAt: new Date(),
+      })
+      .returning();
+    let runId: string | null = null;
+    try {
+      const run = await service.createRun({ ...base(), projectId: null, ticketId: ref.id });
+      runId = run.id;
+      expect(run.ticketId).toBe(ref.id);
+      expect(run.projectId).toBeNull();
+      expect((await service.listRunsForTicket(ref.id)).map((r) => r.id)).toEqual([run.id]);
+
+      await expect(service.createRun({ ...base(), projectId: null, ticketId: 'tref-nope0000' })).rejects.toThrow(
+        'ticketId does not exist',
+      );
+      // The check constraint, below the service: a bare key is not a ticket
+      // id. Drizzle wraps the driver's error; the constraint is on its cause.
+      const shape = await db
+        .insert(schema.agentRuns)
+        .values({
+          id: `run-shape${stamp}`,
+          ticketId: 'ENG-4',
+          ownerMemberId: memberId,
+          entry: 'dispatched',
+          providerId: 'claude',
+        })
+        .then(
+          () => null,
+          (error: unknown) => error as { cause?: { constraint_name?: string; code?: string } },
+        );
+      expect(shape).not.toBeNull();
+      expect(shape?.cause?.code).toBe('23514');
+      expect(shape?.cause?.constraint_name).toBe('agent_runs_ticket_id_shape');
+    } finally {
+      if (runId) await db.delete(schema.agentRuns).where(eq(schema.agentRuns.id, runId));
+      await db.delete(schema.ticketRefs).where(eq(schema.ticketRefs.id, ref.id));
+    }
+  });
+
   it('pages exactly across rows created in the same millisecond (the cursor keeps microseconds)', async () => {
     const owner = `mem-ms-${stamp}`;
     await db.insert(schema.members).values({

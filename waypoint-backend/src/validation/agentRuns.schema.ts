@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isExternalRef } from '../lib/externalRefs.js';
 import { AGENT_RUN_STATUSES } from '../services/runStatusMachine.js';
 import { boundedJson, requireAtLeastOneField } from './shared.js';
 
@@ -65,12 +66,18 @@ export const createAgentRunSchema = z
     message: 'a dispatched run needs a ticketId',
     path: ['ticketId'],
   })
-  // A ticket lives in a project; a run about it does too (W4b: only an
-  // independent run may have none).
-  .refine((v) => !v.ticketId || (typeof v.projectId === 'string' && v.projectId.length > 0), {
-    message: 'a run with a ticketId needs its projectId',
-    path: ['projectId'],
-  })
+  // A native ticket lives in a project; a run about it does too (W4b: only
+  // an independent run may have none). W5b: a Jira issue ("tref-") belongs
+  // to a Jira project, not a Waypoint one — its run has a project only when
+  // the folder it works in is some project's linked repository.
+  .refine(
+    (v) =>
+      !v.ticketId || isExternalRef(v.ticketId) || (typeof v.projectId === 'string' && v.projectId.length > 0),
+    {
+      message: 'a run with a ticketId needs its projectId',
+      path: ['projectId'],
+    },
+  )
   // A dispatched run is always a fresh worktree of the project's repo.
   .refine((v) => v.entry !== 'dispatched' || (v.isolation ?? 'worktree') === 'worktree', {
     message: 'a dispatched run always works in a worktree',

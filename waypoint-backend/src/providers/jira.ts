@@ -1,5 +1,6 @@
 import { jiraGet, jiraPost, type JiraCredential, type JiraResult } from '../lib/jira/client.js';
 import { adfToPlainText, type JiraAdfDoc } from '../lib/jira/adf.js';
+import { JIRA_REF_PREFIX, isExternalRef } from '../lib/externalRefs.js';
 import * as ticketRefs from '../services/ticketRefs.service.js';
 import {
   ProviderUnavailableError,
@@ -26,7 +27,10 @@ import {
  * a site's own schemes, and shipping one badly is worse than not shipping it.
  */
 
-export const JIRA_REF_PREFIX = 'tref-';
+// Defined in lib/externalRefs.ts (no dependencies, so the validation layer
+// can dispatch on the prefix too); re-exported here so every existing caller
+// keeps importing them from the provider.
+export { JIRA_REF_PREFIX, isExternalRef };
 
 /**
  * The fields worth fetching, named explicitly rather than using `*all`.
@@ -576,11 +580,6 @@ export class JiraProvider implements TicketProvider {
   private remember(issue: JiraIssue, key: string) {
     return ticketRefs.remember(this.rememberInput(issue, key));
   }
-}
-
-/** Whether a bare id names a ticket_refs row rather than a native ticket. */
-export function isExternalRef(id: string): boolean {
-  return id.startsWith(JIRA_REF_PREFIX);
 }
 
 /**

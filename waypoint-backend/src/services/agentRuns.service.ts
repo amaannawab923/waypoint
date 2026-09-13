@@ -1,8 +1,9 @@
 import { and, asc, desc, eq, gt, inArray, lt, or, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { agentRuns, agentRunEvents, agentRunTranscripts, tickets } from '../db/schema/index.js';
+import { agentRuns, agentRunEvents, agentRunTranscripts, ticketRefs, tickets } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
 import { ConflictError, NotFoundError, ValidationError } from '../middleware/errors.js';
+import { isExternalRef } from '../lib/externalRefs.js';
 import {
   canTransition,
   describeRefusedTransition,
@@ -119,7 +120,18 @@ async function writeEvent(
 
 export async function createRun(input: CreateAgentRunInput): Promise<AgentRun> {
   return db.transaction(async (tx) => {
-    if (input.ticketId) {
+    if (input.ticketId && isExternalRef(input.ticketId)) {
+      // W5b (ROAD-126): a run on a Jira issue names the issue's ledger
+      // handle. The handle must exist — the FK that used to prove a
+      // ticket id is gone (schema/agentRuns.ts), so the service proves it
+      // — and the project is whatever the folder said, not the issue's:
+      // a Jira issue belongs to no Waypoint project.
+      const [ref] = await tx
+        .select({ id: ticketRefs.id })
+        .from(ticketRefs)
+        .where(eq(ticketRefs.id, input.ticketId));
+      if (!ref) throw new ValidationError('ticketId does not exist');
+    } else if (input.ticketId) {
       // A run about a ticket is a run in that ticket's project — the
       // drawer lists by ticket, the panel by project, and a row that says
       // otherwise would appear in one and not the other.
