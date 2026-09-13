@@ -360,7 +360,21 @@ plan above and the code differ.
 9. **The backend is not prettier-formatted** (no config in
    `waypoint-backend/`, and no existing file passes any obvious one);
    the frontend's touched files are, with the package's config.
-10. **Not verified live.** No Jira write was made by the build or its
-    tests; the two writes (JIRA-SESS-7, JIRA-SESS-10) and the read-only
-    walk-through are the founder's manual round. The engine dev process
-    was paused for the main-process edits and resumed at the end.
+10. **A read-only smoke, and what it found.** After the build, on the
+    running app against the test site (reads only; nothing started, no
+    Jira write): `runs:jira-ticket-ref` minted `tref-…` for ENG-84 once
+    across three calls; `runs:resolve-ticket` answered the same handle
+    for `eng-84`, the native ticket for `ROAD-116`, null for an unknown
+    key; `/investigate ENG-84` from Copilot opened the preview — the
+    Issue link, "Not set yet", the picker with git repositories only,
+    Start disabled, the brief from the live issue and its four comments
+    — and picking the Roadmap repository rebuilt it on `main` with
+    "will be remembered for ENG" and Start enabled; Cancel left no
+    mapping file and no run (`.qa-screenshots/w5b-smoke/`). Found and
+    fixed on the pass: `registerRunsIpc` built its own ledger client
+    without the credential reader, so a Jira key resolved to null until
+    the finalize client was handed in. The two Jira writes (JIRA-SESS-7,
+    JIRA-SESS-10) and the full walk-through are the founder's manual
+    round; the My Jira page itself was not reachable in this dev run
+    (started without `WAYPOINT_FEATURE_MY_JIRA`), so the drawer's
+    Sessions section is covered by its unit test, not the smoke.

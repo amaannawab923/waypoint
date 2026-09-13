@@ -338,6 +338,11 @@ export function registerEngineIpc(
   const runsApi = registerRunsIpc({
     supervisor,
     host: { handle },
+    // The same client finalize uses — the one that borrows the Jira
+    // credential (found on the live pass: a client built inside
+    // registerRunsIpc had no reader, so runs:resolve-ticket answered
+    // null for every Jira key).
+    ledger,
     worktreesDir,
     reveal: (absolutePath) => shell.showItemInFolder(absolutePath),
     notify: (change) => send(RUNS_IPC.changed, change),

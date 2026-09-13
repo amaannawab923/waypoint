@@ -53,6 +53,15 @@ export const INTENT_LABEL: Record<RunIntent, string> = {
   custom: 'Something else…',
 };
 
+/** The Folder row's state, for tests and styling: set, being changed, or still needed (W5b). */
+function folderState(
+  hasRepo: boolean,
+  pickerOpen: boolean,
+): 'set' | 'changing' | 'needed' {
+  if (!hasRepo) return 'needed';
+  return pickerOpen ? 'changing' : 'set';
+}
+
 type PreviewState =
   | { kind: 'loading' }
   | { kind: 'ready'; preview: BriefPreview }
@@ -331,9 +340,10 @@ export function BriefPreviewDialog({
               <dt className="text-text-muted">Folder</dt>
               <dd
                 className="flex min-w-0 items-center gap-1.5 text-text"
-                data-folder-state={
-                  preview.repo ? (pickerOpen ? 'changing' : 'set') : 'needed'
-                }
+                data-folder-state={folderState(
+                  preview.repo !== null,
+                  pickerOpen,
+                )}
               >
                 {preview.repo ? (
                   <>

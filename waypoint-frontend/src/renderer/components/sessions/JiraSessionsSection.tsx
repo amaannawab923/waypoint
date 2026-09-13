@@ -16,18 +16,6 @@ import { TicketRunsSection } from './TicketRunsSection';
  * unavailable in this window, Jira disconnected between the list and the
  * drawer) leaves the section out rather than showing verbs that would fail.
  */
-export function JiraSessionsSection({
-  issueKey,
-  title,
-}: {
-  /** `ENG-4`. */
-  issueKey: string;
-  title: string;
-}) {
-  if (!SESSIONS_ENABLED) return null;
-  return <JiraSessions issueKey={issueKey} title={title} />;
-}
-
 function JiraSessions({
   issueKey,
   title,
@@ -61,4 +49,16 @@ function JiraSessions({
       <TicketRunsSection ticketId={ticketId} />
     </div>
   );
+}
+
+export function JiraSessionsSection({
+  issueKey,
+  title,
+}: {
+  /** `ENG-4`. */
+  issueKey: string;
+  title: string;
+}) {
+  if (!SESSIONS_ENABLED) return null;
+  return <JiraSessions issueKey={issueKey} title={title} />;
 }
