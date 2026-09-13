@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { JIRA_CREDENTIAL_HEADER, parseJiraCredentialHeader } from '../lib/jira/credentialHeader.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { NotFoundError } from '../middleware/errors.js';
 import * as agentRunsService from '../services/agentRuns.service.js';
@@ -101,13 +102,20 @@ agentRunsRouter.get(
 // W5a (ROAD-117): a proposal Waypoint main files on a run's behalf — the
 // agent's closing message as a comment, or the state change Fix asks for.
 // Lands in Review with origin agent_run; the agent itself never calls this.
+// W5b: for a run on a Jira issue main attaches the borrowed credential
+// header — the same seam an approve uses (lib/jira/credentialHeader.ts) —
+// so the service can read the issue live and build the external-write
+// card; absent on a native run, and ignored there when present.
 agentRunsRouter.post(
   '/agent-runs/:id/proposals',
   asyncHandler(async (req, res) => {
     const input = createRunProposalSchema.parse(req.body);
     const payload = input.kind === 'comment' ? { body: input.body } : { stateId: input.stateId };
     res.status(201).json(
-      await proposalsService.createRunProposal({ agentRunId: req.params.id, kind: input.kind, payload }),
+      await proposalsService.createRunProposal(
+        { agentRunId: req.params.id, kind: input.kind, payload },
+        parseJiraCredentialHeader(req.header(JIRA_CREDENTIAL_HEADER)),
+      ),
     );
   }),
 );

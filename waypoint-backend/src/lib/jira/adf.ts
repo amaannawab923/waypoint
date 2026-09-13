@@ -1,4 +1,4 @@
-import { COPILOT_DISCLOSURE } from '../commentHtml.js';
+import { disclosureFor, type ProposalDisclosureOrigin } from '../commentHtml.js';
 
 /**
  * Atlassian Document Format ↔ this process.
@@ -172,16 +172,19 @@ function tidy(text: string): string {
 // -----------------------------------------------------------------------
 
 /**
- * The minimum ADF this file emits. Deliberately not a general ADF type — the
- * only document this process ever builds is a Copilot comment, which is
- * paragraphs of plain text plus one italic disclosure run. Typing exactly
- * that keeps it obvious that nothing here can construct a mention, a link, or
- * anything else that would carry model-authored structure into Jira.
+ * The ADF this file emits. Deliberately not a general ADF type — the only
+ * documents this process ever builds are an agent's comments: paragraphs of
+ * text with one italic disclosure run (Copilot), and, since W5b, a session's
+ * report with the handful of block shapes a markdown report uses (headings,
+ * lists, code, rules). Typing exactly that keeps it obvious that nothing
+ * here can construct a mention, a link, a media node, or anything else that
+ * would carry model-authored structure into Jira: every node type below is
+ * one this file chose, and the text inside is a JSON string, never markup.
  */
 export interface JiraAdfTextNode {
   type: 'text';
   text: string;
-  marks?: { type: 'em' }[];
+  marks?: { type: 'em' | 'strong' | 'code' }[];
 }
 
 export interface JiraAdfParagraph {
@@ -189,14 +192,48 @@ export interface JiraAdfParagraph {
   content: JiraAdfTextNode[];
 }
 
-export interface JiraAdfDoc {
-  type: 'doc';
-  version: 1;
+export interface JiraAdfHeading {
+  type: 'heading';
+  attrs: { level: 1 | 2 | 3 | 4 | 5 | 6 };
+  content: JiraAdfTextNode[];
+}
+
+export interface JiraAdfListItem {
+  type: 'listItem';
   content: JiraAdfParagraph[];
 }
 
+export interface JiraAdfList {
+  type: 'bulletList' | 'orderedList';
+  content: JiraAdfListItem[];
+}
+
+export interface JiraAdfCodeBlock {
+  type: 'codeBlock';
+  attrs?: { language: string };
+  /** One unmarked text node; ADF forbids marks inside a code block. */
+  content: { type: 'text'; text: string }[];
+}
+
+export interface JiraAdfRule {
+  type: 'rule';
+}
+
+export type JiraAdfBlock =
+  | JiraAdfParagraph
+  | JiraAdfHeading
+  | JiraAdfList
+  | JiraAdfCodeBlock
+  | JiraAdfRule;
+
+export interface JiraAdfDoc {
+  type: 'doc';
+  version: 1;
+  content: JiraAdfBlock[];
+}
+
 /**
- * The ADF body for a Copilot-authored Jira comment.
+ * The ADF body for an agent-authored Jira comment.
  *
  * The exact counterpart of lib/commentHtml.ts's buildCopilotCommentHtml, and
  * it borrows that function's whole discipline rather than re-deciding it:
@@ -205,23 +242,46 @@ export interface JiraAdfDoc {
  *    The model's propose_comment schema takes a plain-text `body` only, so
  *    the model can neither omit the self-disclosure nor spoof a different
  *    name into it.
- *  - It shares the SAME exported COPILOT_DISCLOSURE constant. A Jira comment
- *    and a Waypoint comment made by the same agent must say the same thing;
- *    two copies of that sentence is exactly how they would stop.
+ *  - It shares the SAME exported disclosure constants. A Jira comment and a
+ *    Waypoint comment made by the same agent must say the same thing; two
+ *    copies of that sentence is exactly how they would stop. `origin`
+ *    picks the sentence the way disclosureFor does: Copilot's for
+ *    Copilot's own proposal, the session's for a run's (W5b).
  *
  * What differs is escaping, and only because the target does. The HTML
  * builder has to entity-escape both the body and the display name because
  * they end up inside tags. ADF has no such hazard: text lives in a `text`
  * node's JSON string and is never parsed as markup, so escaping here would
  * put literal `&amp;` into a real Jira comment. The safety property is
- * structural instead — this function only ever emits `paragraph` and `text`,
- * so no input can become a node type it did not choose.
+ * structural instead — this function only ever emits the node types typed
+ * above, so no input can become a node type it did not choose.
  *
- * One paragraph per non-empty line, matching what the desktop app's own
- * composer does (waypoint-frontend's buildCommentAdf): ADF has no bare
- * newline, so a `\n` that survives at all has to be a paragraph break.
+ * Copilot's comment is prose: one paragraph per non-empty line, matching
+ * what the desktop app's own composer does (waypoint-frontend's
+ * buildCommentAdf) — ADF has no bare newline, so a `\n` that survives at
+ * all has to be a paragraph break. A session's report is markdown
+ * (headings, lists, code) and is rendered through `markdownToAdf` below,
+ * so it reads on the issue as it reads on the Review card — the disclosure
+ * on its own first line, as the HTML path puts it.
  */
-export function buildCopilotJiraCommentAdf(displayName: string, body: string): JiraAdfDoc {
+export function buildCopilotJiraCommentAdf(
+  displayName: string,
+  body: string,
+  origin: ProposalDisclosureOrigin = 'copilot',
+): JiraAdfDoc {
+  const disclosure: JiraAdfTextNode = {
+    type: 'text',
+    text: disclosureFor(origin, displayName),
+    marks: [{ type: 'em' }],
+  };
+  if (origin === 'agent_run') {
+    return {
+      type: 'doc',
+      version: 1,
+      content: [{ type: 'paragraph', content: [disclosure] }, ...markdownToAdf(body)],
+    };
+  }
+
   const lines = body
     .split('\n')
     .map((line) => line.trim())
@@ -238,10 +298,7 @@ export function buildCopilotJiraCommentAdf(displayName: string, body: string): J
   // text node, and Jira rejects the whole comment with a 400.
   const firstParagraph: JiraAdfParagraph = {
     type: 'paragraph',
-    content: [
-      { type: 'text', text: COPILOT_DISCLOSURE(displayName), marks: [{ type: 'em' }] },
-      ...(first ? [{ type: 'text' as const, text: first }] : []),
-    ],
+    content: [disclosure, ...(first ? [{ type: 'text' as const, text: first }] : [])],
   };
 
   return {
@@ -255,4 +312,197 @@ export function buildCopilotJiraCommentAdf(displayName: string, body: string): J
       })),
     ],
   };
+}
+
+// -----------------------------------------------------------------------
+// markdown-lite → ADF, for a session's report (W5b).
+// -----------------------------------------------------------------------
+
+/** The most blocks one comment carries; a report past this is cut with a marker, never refused. */
+const MAX_ADF_BLOCKS = 400;
+
+/**
+ * Inline text with `code` and **strong** marks — the two a session's report
+ * uses for file names and emphasis. Everything else (links, italics,
+ * stray asterisks) stays literal text: a mark is the only thing this can
+ * add, so no input becomes a link or a mention. Never emits an empty text
+ * node (Jira rejects the document).
+ */
+export function inlineToAdf(text: string): JiraAdfTextNode[] {
+  const out: JiraAdfTextNode[] = [];
+  const push = (chunk: string, mark?: 'code' | 'strong') => {
+    if (!chunk) return;
+    out.push(mark ? { type: 'text', text: chunk, marks: [{ type: mark }] } : { type: 'text', text: chunk });
+  };
+  // Backtick spans first (their content is verbatim), then bold in the rest.
+  const codeSplit = /`([^`\n]+)`/g;
+  let last = 0;
+  let match: RegExpExecArray | null;
+  const plain = (chunk: string) => {
+    const boldSplit = /\*\*([^*\n]+)\*\*/g;
+    let from = 0;
+    let bold: RegExpExecArray | null;
+    while ((bold = boldSplit.exec(chunk)) !== null) {
+      push(chunk.slice(from, bold.index));
+      push(bold[1], 'strong');
+      from = bold.index + bold[0].length;
+    }
+    push(chunk.slice(from));
+  };
+  while ((match = codeSplit.exec(text)) !== null) {
+    plain(text.slice(last, match.index));
+    push(match[1], 'code');
+    last = match.index + match[0].length;
+  }
+  plain(text.slice(last));
+  return out;
+}
+
+function paragraph(text: string): JiraAdfParagraph {
+  return { type: 'paragraph', content: inlineToAdf(text) };
+}
+
+/**
+ * The block shapes the renderer's markdown (lib/markdownHtml.ts) and the
+ * HTML comment path render, said in ADF: `#`…`######` headings, `-`/`*`
+ * bullets and `1.` numbers (one level — a nested item joins its list; ADF
+ * nesting is a structure this deliberately does not build), fenced code
+ * (its content verbatim, unmarked), `---` rules, and paragraphs of the
+ * lines in between joined by spaces the way markdown joins them. A GFM
+ * table becomes its rows as paragraphs — legible, never a table node.
+ * Bounded at MAX_ADF_BLOCKS.
+ */
+export function markdownToAdf(src: string): JiraAdfBlock[] {
+  const blocks: JiraAdfBlock[] = [];
+  const lines = src.replace(/\r\n?/g, '\n').split('\n');
+  let para: string[] = [];
+  // Held in a box rather than a `let`: the closures below assign it, and
+  // TypeScript's narrowing would otherwise read it as `never` after a
+  // `closeList()` call in the loop.
+  const open: { list: JiraAdfList | null } = { list: null };
+  let code: { language: string; lines: string[] } | null = null;
+
+  const flushPara = () => {
+    if (para.length) {
+      const text = para.join(' ').trim();
+      if (text) blocks.push(paragraph(text));
+      para = [];
+    }
+  };
+  const closeList = () => {
+    if (open.list) {
+      if (open.list.content.length) blocks.push(open.list);
+      open.list = null;
+    }
+  };
+  const item = (kind: JiraAdfList['type'], text: string) => {
+    flushPara();
+    if (!open.list || open.list.type !== kind) {
+      closeList();
+      open.list = { type: kind, content: [] };
+    }
+    const content = inlineToAdf(text.trim());
+    open.list.content.push({
+      type: 'listItem',
+      // An empty paragraph is legal ADF; an empty text node is not.
+      content: [{ type: 'paragraph', content }],
+    });
+  };
+
+  for (const raw of lines) {
+    if (blocks.length >= MAX_ADF_BLOCKS) break;
+    const line = raw.replace(/\s+$/, '');
+    if (code) {
+      if (line.trim().startsWith('```')) {
+        const text = code.lines.join('\n');
+        // An empty fence is nothing to show; a node with no content is
+        // not worth asking Jira to accept.
+        if (text) {
+          blocks.push({
+            type: 'codeBlock',
+            ...(code.language ? { attrs: { language: code.language } } : {}),
+            content: [{ type: 'text', text }],
+          });
+        }
+        code = null;
+      } else {
+        code.lines.push(raw);
+      }
+      continue;
+    }
+    const trimmed = line.trim();
+    if (trimmed.startsWith('```')) {
+      flushPara();
+      closeList();
+      code = { language: trimmed.slice(3).trim().split(/\s+/)[0] ?? '', lines: [] };
+      continue;
+    }
+    if (!trimmed) {
+      flushPara();
+      closeList();
+      continue;
+    }
+    const heading = /^(#{1,6})\s+(.*)$/.exec(trimmed);
+    if (heading) {
+      flushPara();
+      closeList();
+      const text = heading[2].trim();
+      if (text) {
+        blocks.push({
+          type: 'heading',
+          attrs: { level: heading[1].length as JiraAdfHeading['attrs']['level'] },
+          content: inlineToAdf(text),
+        });
+      }
+      continue;
+    }
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+      flushPara();
+      closeList();
+      blocks.push({ type: 'rule' });
+      continue;
+    }
+    const bullet = /^[-*+]\s+(.*)$/.exec(trimmed);
+    if (bullet) {
+      item('bulletList', bullet[1]);
+      continue;
+    }
+    const numbered = /^\d+[.)]\s+(.*)$/.exec(trimmed);
+    if (numbered) {
+      item('orderedList', numbered[1]);
+      continue;
+    }
+    // A table row (or its separator) is one paragraph per row, cells
+    // joined — legible on the issue, and never a node this did not choose.
+    if (trimmed.includes('|') && /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?$/.test(trimmed)) continue;
+    const openList = open.list;
+    if (openList && /^\s{2,}/.test(line)) {
+      // A continuation line under a list item joins the item.
+      const lastItem = openList.content[openList.content.length - 1];
+      const lastPara = lastItem?.content[0];
+      if (lastPara) {
+        lastPara.content = inlineToAdf(
+          `${lastPara.content.map((n) => n.text).join('')} ${trimmed}`,
+        );
+        continue;
+      }
+    }
+    closeList();
+    para.push(
+      trimmed.includes('|')
+        ? trimmed.replace(/^\||\|$/g, '').split('|').map((c) => c.trim()).join(' · ')
+        : trimmed,
+    );
+  }
+  if (code) {
+    // An unterminated fence: what was typed is still the report.
+    const text = code.lines.join('\n');
+    if (text) blocks.push({ type: 'codeBlock', content: [{ type: 'text', text }] });
+  }
+  flushPara();
+  closeList();
+  if (lines.length && blocks.length >= MAX_ADF_BLOCKS) {
+    blocks.push(paragraph('… (the report was cut here; the full text is on the run in Waypoint)'));
+  }
+  return blocks;
 }
