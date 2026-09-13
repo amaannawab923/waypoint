@@ -172,6 +172,30 @@ describe('POST /copilot/proposals/:id/reject', () => {
   });
 });
 
+describe('PATCH /copilot/proposals/:id (W5c)', () => {
+  it('edits the body and returns the view', async () => {
+    vi.mocked(proposalsService.editProposalBody).mockResolvedValue(
+      proposalView({ payload: { body: 'edited' } }),
+    );
+
+    const res = await request(buildTestApp())
+      .patch('/copilot/proposals/prop-abc1234')
+      .send({ body: '  edited  ' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.payload.body).toBe('edited');
+    expect(proposalsService.editProposalBody).toHaveBeenCalledWith('prop-abc1234', 'edited');
+  });
+
+  it('rejects an empty body, a stray field, and a body over the cap with 400', async () => {
+    for (const body of [{}, { body: '   ' }, { body: 'x', reason: 'y' }, { body: 'x'.repeat(20_001) }]) {
+      const res = await request(buildTestApp()).patch('/copilot/proposals/prop-abc1234').send(body);
+      expect(res.status).toBe(400);
+    }
+    expect(proposalsService.editProposalBody).not.toHaveBeenCalled();
+  });
+});
+
 describe('POST /copilot/conversations/:id/proposals/reject-all', () => {
   it('rejects all pending and returns the count', async () => {
     vi.mocked(proposalsService.rejectAllPending).mockResolvedValue({ rejected: 3 });

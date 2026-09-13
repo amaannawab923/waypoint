@@ -31,6 +31,7 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     errorKind: null,
     errorMessage: null,
     summary: null,
+    verdict: null,
     turnCount: 0,
     inputTokens: 0,
     outputTokens: 0,

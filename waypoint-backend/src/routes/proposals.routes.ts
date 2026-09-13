@@ -8,6 +8,7 @@ import {
 } from '../lib/jira/credentialHeader.js';
 import {
   approveProposalSchema,
+  editProposalSchema,
   rejectProposalSchema,
   rejectAllProposalsSchema,
   markProposalsNotifiedSchema,
@@ -83,6 +84,14 @@ proposalsRouter.post(
   asyncHandler(async (req, res) => {
     rejectProposalSchema.parse(req.body ?? {});
     res.json(await proposalsService.rejectProposal(req.params.id));
+  }),
+);
+
+proposalsRouter.patch(
+  '/copilot/proposals/:id',
+  asyncHandler(async (req, res) => {
+    const { body } = editProposalSchema.parse(req.body ?? {});
+    res.json(await proposalsService.editProposalBody(req.params.id, body));
   }),
 );
 

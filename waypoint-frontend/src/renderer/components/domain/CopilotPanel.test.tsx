@@ -21,6 +21,7 @@ import {
   rejectCopilotProposal,
   markCopilotProposalsNotified,
   getProject,
+  listTickets,
   updateProject,
 } from '@/data/api';
 import type { ProposalView, Project } from '@/types/entities';
@@ -35,10 +36,12 @@ jest.mock('@/data/engineApi', () => ({
   getBriefPreview: jest.fn(),
   dispatchRun: jest.fn(),
   onRunChanged: jest.fn(() => () => {}),
+  resolveTicket: jest.fn(),
+  listRecentFolders: jest.fn(async () => []),
+  chooseFolder: jest.fn(async () => ({ canceled: true })),
 }));
 jest.mock('@/data/api', () => ({
   markCopilotNotesDelivered: jest.fn(async () => {}),
-  getTicketByIdentifier: jest.fn(),
   listTickets: jest.fn(async () => []),
   getWorkspace: jest.fn(async () => ({ defaultAgentProvider: 'claude' })),
   listCopilotConversations: jest.fn(),
@@ -2062,18 +2065,32 @@ describe('sessions in the conversation (W5a)', () => {
     expect(second.outcomePreamble ?? '').not.toContain('Waypoint note');
   });
 
-  it('/investigate KEY opens the brief preview without a model turn; an unknown key is said', async () => {
-    const { getTicketByIdentifier } = jest.requireMock('@/data/api') as {
-      getTicketByIdentifier: jest.Mock;
-    };
-    const { getBriefPreview } = jest.requireMock('@/data/engineApi') as {
+  it('/investigate KEY opens the brief preview without a model turn; an unknown key is said, an ambiguous one too', async () => {
+    const { getBriefPreview, resolveTicket } = jest.requireMock(
+      '@/data/engineApi',
+    ) as {
       getBriefPreview: jest.Mock;
+      resolveTicket: jest.Mock;
     };
-    getTicketByIdentifier.mockImplementation(async (key: string) =>
-      key === 'ROAD-116'
-        ? { id: 'wi-116', identifier: 'ROAD-116', title: 'Sessions anywhere' }
-        : undefined,
-    );
+    // W5b: the key resolves through main, in both systems.
+    resolveTicket.mockImplementation(async (key: string) => {
+      if (key === 'ROAD-116') {
+        return {
+          provider: 'native',
+          id: 'wi-116',
+          identifier: 'ROAD-116',
+          title: 'Sessions anywhere',
+          projectId: 'proj-1',
+          url: null,
+        };
+      }
+      if (key === 'ENG-9') {
+        throw new Error(
+          '"ENG-9" is ambiguous: it names a Waypoint ticket ("A") and a Jira issue ("B").',
+        );
+      }
+      return null;
+    });
     getBriefPreview.mockResolvedValue({
       ticketId: 'wi-116',
       identifier: 'ROAD-116',
@@ -2092,6 +2109,10 @@ describe('sessions in the conversation (W5a)', () => {
         lastUsedAt: null,
       },
       branches: { branches: ['main'], suggested: 'main' },
+      ticketSystem: 'waypoint',
+      ticketUrl: null,
+      jiraProjectKey: null,
+      repoRemembered: false,
       baseRef: 'main',
       branchHint: 'agent/ROAD-116',
       mode: 'plan',
@@ -2119,6 +2140,12 @@ describe('sessions in the conversation (W5a)', () => {
     );
     expect(copilotIpc.runPrompt).not.toHaveBeenCalled();
 
+    await typeAndSend('/investigate ENG-9');
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      '"ENG-9" is ambiguous',
+    );
+    expect(getBriefPreview).not.toHaveBeenCalled();
+
     await typeAndSend('/investigate road-116');
     await screen.findByDisplayValue('The brief for ROAD-116.');
     expect(getBriefPreview).toHaveBeenCalledWith({
@@ -2128,6 +2155,66 @@ describe('sessions in the conversation (W5a)', () => {
     });
     expect(copilotIpc.runPrompt).not.toHaveBeenCalled();
     expect(getTextarea()).toHaveValue('');
+  });
+
+  // JIRA-SESS-12: with the key menu open (a project with tickets that
+  // start with the typed key), a refusal must still be read — it takes the
+  // menu's place until the next keystroke.
+  it('a refusal shows in place of the key menu, and typing brings the menu back', async () => {
+    const { resolveTicket } = jest.requireMock('@/data/engineApi') as {
+      resolveTicket: jest.Mock;
+    };
+    resolveTicket.mockRejectedValue(
+      new Error(
+        '"ENG-9" is ambiguous: it names a Waypoint ticket and a Jira issue.',
+      ),
+    );
+    jest.mocked(listTickets).mockResolvedValue([
+      { identifier: 'ENG-9', title: 'A' },
+      { identifier: 'ENG-91', title: 'B' },
+    ] as never);
+    jest.mocked(getProject).mockResolvedValue({
+      id: 'proj-1',
+      projectId: 'proj-1',
+      name: 'Roadmap',
+      repoPath: null,
+    } as never);
+    const onClose = jest.fn();
+    render(
+      <MemoryRouter initialEntries={['/projects/proj-1/issues']}>
+        <Routes>
+          <Route
+            path="/projects/:projectId/*"
+            element={<CopilotPanel onClose={onClose} />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await screen.findByText(/No sessions yet/i);
+    await createAndOpenSession();
+    await waitFor(() => expect(listTickets).toHaveBeenCalledWith('proj-1'));
+
+    fireEvent.change(getTextarea(), {
+      target: { value: '/investigate ENG-9' },
+    });
+    expect(screen.getByRole('listbox')).toBeInTheDocument();
+    fireEvent.keyDown(getTextarea(), { key: 'Enter' });
+    const status = await screen.findByRole('status');
+    expect(status).toHaveTextContent('"ENG-9" is ambiguous');
+    expect(status).not.toHaveTextContent('LedgerRequestError');
+    expect(screen.queryByRole('listbox')).toBeNull();
+
+    fireEvent.change(getTextarea(), {
+      target: { value: '/investigate ENG-91' },
+    });
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.getByRole('listbox')).toBeInTheDocument();
+
+    // Escape with the menu open drops the typed key — never the panel.
+    getTextarea().focus();
+    fireEvent.keyDown(getTextarea(), { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(getTextarea()).toHaveValue('/investigate ');
   });
 
   it("a session offer from the model's tool renders the three verbs; picking one opens the preview for that conversation", async () => {
@@ -2165,11 +2252,30 @@ describe('sessions in the conversation (W5a)', () => {
         title: 'Sessions anywhere',
         intent: 'fix',
         note: null,
+        // W5c: the ticket's earlier runs and the latest verdict.
+        history: {
+          runs: 2,
+          latest: {
+            runId: 'run-prior00',
+            title: 'ROAD-116 · Investigate',
+            intent: 'investigate',
+            status: 'done',
+            verdict: 'not-a-bug',
+            prUrl: null,
+          },
+        },
       });
     });
     const card = await screen.findByText('Session on ROAD-116');
     expect(card.closest('[data-session-offer]')).toHaveTextContent(
       'Sessions anywhere',
+    );
+    expect(
+      card
+        .closest('[data-session-offer]')!
+        .querySelector('[data-offer-history]'),
+    ).toHaveTextContent(
+      '2 earlier runs · latest: Investigate, done, verdict: not a bug · open',
     );
     fireEvent.click(screen.getByRole('button', { name: 'Fix' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(

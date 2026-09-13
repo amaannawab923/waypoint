@@ -508,6 +508,10 @@ export type ProposalDecidedBy = 'user' | 'trust_grant' | 'system';
 // present depends on `kind` (see CopilotProposalCard.tsx's per-kind bodies).
 export interface ProposalPayload {
   body?: string; // comment
+  // W5c: a comment edited before posting keeps what the agent wrote and when
+  // the person last changed it (proposals.service.ts editProposalBody).
+  originalBody?: string;
+  editedAt?: string;
   stateId?: string; // state_change, create_ticket
   priority?: Priority; // priority_change, create_ticket
   assigneeId?: string; // assignee_change

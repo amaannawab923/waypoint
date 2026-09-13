@@ -11,12 +11,16 @@ import {
   findApprovedRca,
   findLiveWriter,
   findPriorFixBranch,
+  FOLDER_PLACEHOLDER,
   modeFor,
   sessionModeIdFor,
   validateDispatchInput,
+  type DispatchDeps,
 } from './dispatch';
 import { SCRUBBED_ENV_KEYS } from './agentEnv';
-import type { StartRunDeps } from './startRun';
+import { readJiraRepos, rememberJiraRepo } from './jiraRepos';
+import type { JiraRunDeps } from './jiraRuns';
+import type { JiraWireTicket } from '../../jira/jiraTypes';
 
 // Dispatch against fakes of the ledger and the daemon
 // (docs/design/w5a-investigate-fix.md §6): no linked repo, a second
@@ -64,6 +68,7 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     errorKind: null,
     errorMessage: null,
     summary: null,
+    verdict: null,
     turnCount: 0,
     inputTokens: 0,
     outputTokens: 0,
@@ -92,6 +97,8 @@ function fakeLedger(
     runs?: AgentRun[];
     proposals?: LedgerProposal[];
     repoPath?: string | null;
+    /** W5b: the site the Jira ref was minted against; null for a ref with none. */
+    refSite?: string | null;
   } = {},
 ) {
   const rows = new Map<string, AgentRun>();
@@ -135,8 +142,97 @@ function fakeLedger(
       return next;
     }),
     appendEvent: jest.fn(async () => ({}) as never),
+    // W5b: the Jira issue's handle; only tref-eng4 exists.
+    getTicketRef: jest.fn(async (id: string) =>
+      id === 'tref-eng4'
+        ? {
+            id: 'tref-eng4',
+            provider: 'jira',
+            site: options.refSite === undefined ? JIRA_SITE : options.refSite,
+            key: 'ENG-4',
+            identifier: 'ENG-4',
+            title: 'Checkout 500s (cached)',
+            url: `https://${JIRA_SITE}/browse/ENG-4`,
+          }
+        : null,
+    ),
   } as unknown as jest.Mocked<LedgerClient>;
   return { ledger, rows };
+}
+
+// --- W5b: a Jira issue --------------------------------------------------
+
+const JIRA_SITE = 'yourteam.atlassian.net';
+
+function jiraIssue(overrides: Partial<JiraWireTicket> = {}): JiraWireTicket {
+  return {
+    id: '10042',
+    key: 'ENG-4',
+    projectKey: 'ENG',
+    title: 'Checkout 500s',
+    role: 'assignee',
+    stateName: 'In Progress',
+    stateCategory: 'in-progress',
+    priority: 'high',
+    priorityId: '2',
+    priorityName: 'High',
+    assigneeName: 'Amaan Nawab',
+    assigneeAccountId: '5b10ac8d82e05b22cc7d4ef5',
+    reporterName: 'Priya Raman',
+    description: 'POST /checkout returns 500 after the retry.',
+    epicName: null,
+    storyPoints: null,
+    sprintName: null,
+    labels: ['payments'],
+    dueDate: null,
+    subtasks: [],
+    links: [],
+    descriptionAdf: null,
+    attachments: [],
+    transitions: [],
+    updatedAt: '2026-09-13T10:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function fakeJira(
+  options: { site?: string | null; issue?: JiraWireTicket | null } = {},
+): JiraRunDeps {
+  const issue = options.issue === undefined ? jiraIssue() : options.issue;
+  return {
+    site: () => (options.site === undefined ? JIRA_SITE : options.site),
+    getTicket: jest.fn(async () =>
+      issue
+        ? { ok: true as const, value: issue }
+        : {
+            ok: false as const,
+            reason: 'not_found' as const,
+            message: 'That issue is gone.',
+          },
+    ),
+    listComments: jest.fn(async () => ({
+      ok: true as const,
+      value: {
+        comments: [
+          {
+            id: 'c1',
+            ticketId: 'ENG-4',
+            authorName: 'Priya Raman',
+            authorAccountId: '5b10ac8d82e05b22cc7d4ef5',
+            updatedAt: null,
+            updateAuthorName: null,
+            body: 'Repro on staging only. [~accountid:5b10ac8d82e05b22cc7d4ef5] can you look?',
+            createdAt: '2026-09-12T09:00:00.000Z',
+            parentId: null,
+            visibility: null,
+            bodyAdf: null,
+          },
+        ],
+        total: 1,
+      },
+    })),
+    listTransitions: jest.fn(async () => ({ ok: true as const, value: [] })),
+  };
 }
 
 function fakeDaemon(
@@ -178,7 +274,8 @@ function fakeDaemon(
 function depsWith(
   ledger: LedgerClient,
   daemon: DaemonRunsApi | null,
-): StartRunDeps & { notify: jest.Mock } {
+  extra: { jira?: JiraRunDeps; jiraReposFile?: string } = {},
+): DispatchDeps & { notify: jest.Mock } {
   const notify = jest.fn();
   return {
     ledger,
@@ -193,6 +290,9 @@ function depsWith(
       listProjects: () => ledger.listProjects(),
     } satisfies FolderDeps,
     logger: { info: jest.fn(), warn: jest.fn() },
+    ...(extra.jira ? { jira: extra.jira } : {}),
+    jiraReposFile:
+      extra.jiraReposFile ?? path.join(worktreesDir, 'jira-project-repos.json'),
   };
 }
 
@@ -244,12 +344,16 @@ describe('buildBriefPreview', () => {
     expect(preview.autoApproveDefault).toBe(false);
     expect(preview.baseRef).toBe('main');
     expect(preview.branchHint).toBe('agent/ROAD-116');
-    expect(preview.repo.path).toBe(repoDir);
-    expect(preview.repo.projectName).toBe('Roadmap');
+    expect(preview.repo?.path).toBe(repoDir);
+    expect(preview.repo?.projectName).toBe('Roadmap');
     expect(preview.brief).toContain('## Ticket ROAD-116 — Sessions anywhere');
     expect(preview.brief).toContain('State: In Progress');
     expect(preview.liveWriterRunId).toBeNull();
     expect(preview.seededFromRunId).toBeNull();
+    expect(preview.ticketSystem).toBe('waypoint');
+    expect(preview.ticketUrl).toBeNull();
+    expect(preview.jiraProjectKey).toBeNull();
+    expect(preview.repoRemembered).toBe(false);
     expect(ledger.listTicketProposals).not.toHaveBeenCalled();
   });
 
@@ -356,6 +460,301 @@ describe('buildBriefPreview', () => {
     );
     expect(preview.brief).not.toContain('Older root cause');
     expect(preview.liveWriterRunId).toBe('run-fix00001');
+  });
+});
+
+// W5b (docs/design/w5b-jira-dispatch.md §6): a session on a Jira issue —
+// the brief from main's own client, the folder from the mapping or the
+// request, the ref's site check, the project from the folder.
+describe('buildBriefPreview on a Jira issue', () => {
+  let otherRepo: string;
+  let plainDir: string;
+  beforeAll(() => {
+    otherRepo = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'wp-eng-')),
+    );
+    fs.mkdirSync(path.join(otherRepo, '.git'));
+    plainDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'wp-plain-')),
+    );
+  });
+  afterAll(() => {
+    fs.rmSync(otherRepo, { recursive: true, force: true });
+    fs.rmSync(plainDir, { recursive: true, force: true });
+  });
+
+  it('with no folder remembered: the brief from the issue and its comments, repo null, the placeholder in the brief', async () => {
+    const { ledger } = fakeLedger();
+    const jira = fakeJira();
+    const deps = depsWith(ledger, fakeDaemon(), { jira });
+    const preview = await buildBriefPreview(deps, {
+      ticketId: 'tref-eng4',
+      intent: 'investigate',
+    });
+    expect(preview.ticketSystem).toBe('jira');
+    expect(preview.identifier).toBe('ENG-4');
+    // The live summary, not the ref's cached one.
+    expect(preview.title).toBe('Checkout 500s');
+    expect(preview.ticketUrl).toBe(`https://${JIRA_SITE}/browse/ENG-4`);
+    expect(preview.jiraProjectKey).toBe('ENG');
+    expect(preview.repo).toBeNull();
+    expect(preview.repoRemembered).toBe(false);
+    expect(preview.branches).toEqual({ branches: [], suggested: null });
+    expect(preview.baseRef).toBeNull();
+    expect(preview.branchHint).toBe('agent/ENG-4');
+    expect(jira.getTicket).toHaveBeenCalledWith('ENG-4');
+    expect(jira.listComments).toHaveBeenCalledWith('ENG-4');
+    // Never the ledger's ticket table.
+    expect(ledger.getTicket).not.toHaveBeenCalled();
+    expect(ledger.listComments).not.toHaveBeenCalled();
+    const { brief } = preview;
+    expect(brief).toContain(
+      `You are working on ENG-4, a Jira issue (https://${JIRA_SITE}/browse/ENG-4)`,
+    );
+    expect(brief).toContain('## Issue ENG-4 — Checkout 500s');
+    expect(brief).toContain(
+      'Priority: High · State: In Progress · Labels: payments · Assignee: Amaan Nawab · Reporter: Priya Raman',
+    );
+    expect(brief).toContain('POST /checkout returns 500 after the retry.');
+    expect(brief).toContain(
+      '— Priya Raman, 2026-09-12 09:00:\nRepro on staging only.',
+    );
+    // The scrub: the raw mention the mapper left is not carried.
+    expect(brief).not.toContain('accountid');
+    expect(brief).toContain(`Repository: ${FOLDER_PLACEHOLDER}`);
+    expect(brief).toContain('Waypoint posts this section on the issue');
+  });
+
+  it('with a folder handle: that repository, its branches, the brief rebuilt on it; a plain folder refused', async () => {
+    const { ledger } = fakeLedger();
+    const deps = depsWith(ledger, fakeDaemon(), { jira: fakeJira() });
+    const handle = deps.folders.registry.mint(otherRepo);
+    const preview = await buildBriefPreview(deps, {
+      ticketId: 'tref-eng4',
+      intent: 'fix',
+      folder: handle,
+    });
+    expect(preview.repo?.path).toBe(otherRepo);
+    expect(preview.repo?.projectId).toBeNull();
+    expect(preview.repoRemembered).toBe(false);
+    expect(preview.baseRef).toBe('main');
+    expect(preview.mode).toBe('write');
+    expect(preview.brief).toContain(`Repository: ${preview.repo?.displayPath}`);
+    expect(preview.brief).toContain('Branch: agent/ENG-4, from main');
+
+    await expect(
+      buildBriefPreview(deps, {
+        ticketId: 'tref-eng4',
+        intent: 'fix',
+        folder: deps.folders.registry.mint(plainDir),
+      }),
+    ).rejects.toThrow(/is not a git repository/);
+    // A handle this window never minted is refused before anything is read.
+    await expect(
+      buildBriefPreview(deps, {
+        ticketId: 'tref-eng4',
+        intent: 'fix',
+        folder: 'f-forged',
+      }),
+    ).rejects.toThrow(/not one this window offered/);
+  });
+
+  it('with a folder remembered for the Jira project: that repository, marked remembered; a gone one is forgotten', async () => {
+    const { ledger } = fakeLedger();
+    const file = path.join(worktreesDir, `jira-repos-${Date.now()}.json`);
+    await rememberJiraRepo(file, JIRA_SITE, 'ENG', repoDir);
+    const deps = depsWith(ledger, fakeDaemon(), {
+      jira: fakeJira(),
+      jiraReposFile: file,
+    });
+    const preview = await buildBriefPreview(deps, {
+      ticketId: 'tref-eng4',
+      intent: 'investigate',
+    });
+    expect(preview.repo?.path).toBe(repoDir);
+    // The Roadmap project's linked repository → the run will be that project's.
+    expect(preview.repo?.projectName).toBe('Roadmap');
+    expect(preview.repoRemembered).toBe(true);
+    expect(preview.baseRef).toBe('main');
+
+    const gone = path.join(worktreesDir, `jira-repos-gone-${Date.now()}.json`);
+    await rememberJiraRepo(
+      gone,
+      JIRA_SITE,
+      'ENG',
+      path.join(os.tmpdir(), 'wp-nope-x'),
+    );
+    const again = await buildBriefPreview(
+      depsWith(ledger, fakeDaemon(), { jira: fakeJira(), jiraReposFile: gone }),
+      { ticketId: 'tref-eng4', intent: 'investigate' },
+    );
+    expect(again.repo).toBeNull();
+  });
+
+  it('refuses when Jira is not connected, when the ref is another site’s, and when the issue is gone', async () => {
+    const { ledger } = fakeLedger();
+    await expect(
+      buildBriefPreview(depsWith(ledger, fakeDaemon()), {
+        ticketId: 'tref-eng4',
+        intent: 'investigate',
+      }),
+    ).rejects.toThrow('Jira is not connected');
+    await expect(
+      buildBriefPreview(
+        depsWith(ledger, fakeDaemon(), { jira: fakeJira({ site: null }) }),
+        { ticketId: 'tref-eng4', intent: 'investigate' },
+      ),
+    ).rejects.toThrow('Jira is not connected');
+
+    const other = fakeLedger({ refSite: 'other.atlassian.net' });
+    await expect(
+      buildBriefPreview(
+        depsWith(other.ledger, fakeDaemon(), { jira: fakeJira() }),
+        {
+          ticketId: 'tref-eng4',
+          intent: 'investigate',
+        },
+      ),
+    ).rejects.toThrow(/belongs to another Jira site \(other\.atlassian\.net\)/);
+
+    await expect(
+      buildBriefPreview(
+        depsWith(ledger, fakeDaemon(), { jira: fakeJira({ issue: null }) }),
+        { ticketId: 'tref-eng4', intent: 'investigate' },
+      ),
+    ).rejects.toThrow('That issue is gone.');
+
+    await expect(
+      buildBriefPreview(depsWith(ledger, fakeDaemon(), { jira: fakeJira() }), {
+        ticketId: 'tref-nope',
+        intent: 'investigate',
+      }),
+    ).rejects.toThrow('No ticket tref-nope.');
+  });
+});
+
+describe('dispatchTicketRun on a Jira issue', () => {
+  const base = {
+    ticketId: 'tref-eng4',
+    intent: 'fix',
+    brief: 'The brief as edited.',
+    autoApprove: true,
+    baseRef: 'main',
+    ownerMemberId: 'mem-1',
+    providerId: 'claude',
+  };
+
+  it('refuses without a folder; with one, remembers it for the Jira project and dispatches on the tref with the folder’s project', async () => {
+    const { ledger } = fakeLedger();
+    const daemon = fakeDaemon();
+    const file = path.join(
+      worktreesDir,
+      `jira-repos-dispatch-${Date.now()}.json`,
+    );
+    const deps = depsWith(ledger, daemon, {
+      jira: fakeJira(),
+      jiraReposFile: file,
+    });
+    await expect(dispatchTicketRun(deps, base)).rejects.toThrow(
+      "Choose the folder ENG's code lives in first.",
+    );
+    expect(ledger.createRun).not.toHaveBeenCalled();
+
+    const handle = deps.folders.registry.mint(repoDir);
+    const created = await dispatchTicketRun(deps, { ...base, folder: handle });
+    expect(created.status).toBe('provisioning');
+    expect(ledger.createRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: 'dispatched',
+        ticketId: 'tref-eng4',
+        // repoDir is the Roadmap project's linked repository.
+        projectId: 'proj-1',
+        intent: 'fix',
+        modeId: AUTO_APPROVE_MODE_ID,
+        title: 'ENG-4 · Fix',
+        baseRef: 'main',
+      }),
+    );
+    expect(await readJiraRepos(file)).toEqual([
+      expect.objectContaining({
+        site: JIRA_SITE,
+        projectKey: 'ENG',
+        path: repoDir,
+      }),
+    ]);
+    await flush(daemon);
+    expect(daemon.createWorktree).toHaveBeenCalledWith(
+      expect.objectContaining({ branch: 'agent/ENG-4' }),
+    );
+    expect(daemon.startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modeId: AUTO_APPROVE_MODE_ID,
+        initialQueue: [{ text: 'The brief as edited.' }],
+      }),
+    );
+    // A writing session's env is scrubbed on a Jira issue as on a native ticket.
+    const env = daemon.startSession.mock.calls[0][0].env as Record<
+      string,
+      string
+    >;
+    for (const key of SCRUBBED_ENV_KEYS) expect(env[key]).toBe('');
+
+    // The next dispatch on the project needs no folder: the mapping stands.
+    const next = fakeLedger();
+    const nextDeps = depsWith(next.ledger, fakeDaemon(), {
+      jira: fakeJira(),
+      jiraReposFile: file,
+    });
+    await dispatchTicketRun(nextDeps, { ...base, intent: 'investigate' });
+    expect(next.ledger.createRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ticketId: 'tref-eng4',
+        projectId: 'proj-1',
+        modeId: PLAN_MODE_ID,
+      }),
+    );
+  });
+
+  it('a folder that is no project’s repository dispatches with no project', async () => {
+    const { ledger } = fakeLedger({ repoPath: null });
+    const other = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'wp-eng2-')),
+    );
+    fs.mkdirSync(path.join(other, '.git'));
+    try {
+      const deps = depsWith(ledger, fakeDaemon(), { jira: fakeJira() });
+      await dispatchTicketRun(deps, {
+        ...base,
+        intent: 'investigate',
+        folder: deps.folders.registry.mint(other),
+      });
+      expect(ledger.createRun).toHaveBeenCalledWith(
+        expect.objectContaining({ ticketId: 'tref-eng4', projectId: null }),
+      );
+    } finally {
+      fs.rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  it('one writer per issue holds on a Jira issue too', async () => {
+    const live = run({
+      id: 'run-live0001',
+      ticketId: 'tref-eng4',
+      intent: 'fix',
+      modeId: null,
+      status: 'running',
+      title: 'ENG-4 · Fix',
+    });
+    const { ledger } = fakeLedger({ runs: [live] });
+    const deps = depsWith(ledger, fakeDaemon(), { jira: fakeJira() });
+    await expect(
+      dispatchTicketRun(deps, {
+        ...base,
+        folder: deps.folders.registry.mint(repoDir),
+      }),
+    ).rejects.toThrow(
+      'A writing session is already live on ENG-4 (ENG-4 · Fix)',
+    );
   });
 });
 

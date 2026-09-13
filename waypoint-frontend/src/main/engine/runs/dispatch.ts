@@ -11,13 +11,26 @@ import {
   type RunIntent,
   type SessionFolder,
 } from '../types';
+import type { JiraWireTicket } from '../../jira/jiraTypes';
 import { agentEnvFor } from './agentEnv';
-import { briefTitle, buildBrief } from './briefs';
+import {
+  briefTitle,
+  buildBrief,
+  jiraBriefComments,
+  jiraBriefTicket,
+  jiraIssueUrl,
+  type BriefInput,
+} from './briefs';
 import { describeFolder } from './folders';
+import { lookupJiraRepo, projectKeyOf, rememberJiraRepo } from './jiraRepos';
+import { JIRA_NOT_CONNECTED, type JiraRunDeps } from './jiraRuns';
 import {
   assertRunId,
+  isTicketRef,
   type AgentRun,
   type LedgerProposal,
+  type LedgerTicket,
+  type LedgerTicketRef,
 } from './ledgerClient';
 import {
   continueStart,
@@ -48,7 +61,12 @@ import { isRefSafeComponent, preferredBranchName } from './worktrees';
  * only means anything for a writing session.
  */
 
-export type DispatchDeps = StartRunDeps;
+export type DispatchDeps = StartRunDeps & {
+  /** W5b: main's own Jira reads (runs/jiraRuns.ts); absent when Jira is not connected. */
+  jira?: JiraRunDeps;
+  /** Where main remembers which folder a Jira project's code lives in (runs/jiraRepos.ts). */
+  jiraReposFile: string;
+};
 
 /** A run that still holds (or is about to hold) a session. */
 const LIVE: ReadonlySet<AgentRun['status']> = new Set([
@@ -115,7 +133,10 @@ export function findLiveWriter(runs: AgentRun[]): AgentRun | null {
  * the first live pass, there is no `approved` status) — whose run is an
  * Investigate on this ticket; the newest such by decision time (§1.9).
  */
-const APPROVED_STATUSES: ReadonlySet<string> = new Set(['executed', 'approved']);
+const APPROVED_STATUSES: ReadonlySet<string> = new Set([
+  'executed',
+  'approved',
+]);
 
 export function findApprovedRca(
   proposals: LedgerProposal[],
@@ -155,24 +176,50 @@ export function findPriorFixBranch(runs: AgentRun[]): string | null {
   return prior[0]?.branch ?? null;
 }
 
-interface TicketContext {
-  ticket: NonNullable<Awaited<ReturnType<StartRunDeps['ledger']['getTicket']>>>;
-  repo: SessionFolder;
-  branches: { branches: string[]; suggested: string | null };
-  runs: AgentRun[];
-}
+type Branches = { branches: string[]; suggested: string | null };
+const NO_BRANCHES: Branches = { branches: [], suggested: null };
 
 /**
- * The ticket, its project's linked repository (as a folder the dialog can
- * show), the repository's branches, and the ticket's runs. Every refusal
- * a person can act on is a sentence: no such ticket, no linked
- * repository, the repository gone from this machine.
+ * What a preview and a dispatch resolve from a ticket id — a native
+ * ticket's, or a Jira issue's (W5b): the ticket as its system has it, the
+ * repository the session will take a worktree of (null for a Jira issue
+ * whose project has no remembered folder yet), that repository's
+ * branches, the ticket's runs, and the facts the dialog names.
  */
-async function ticketContext(
+type TicketContext = {
+  identifier: string;
+  title: string;
+  repo: SessionFolder | null;
+  /** The repository came from the Jira project's remembered folder (so the dialog offers *Change*). */
+  repoRemembered: boolean;
+  branches: Branches;
+  runs: AgentRun[];
+} & (
+  | { system: 'waypoint'; ticket: LedgerTicket; jira: null }
+  | {
+      system: 'jira';
+      ticket: null;
+      jira: {
+        ref: LedgerTicketRef;
+        site: string;
+        projectKey: string;
+        issue: JiraWireTicket;
+        url: string;
+        client: JiraRunDeps;
+      };
+    }
+);
+
+/**
+ * A native ticket: its project's linked repository (as a folder the
+ * dialog can show), the repository's branches, and the ticket's runs.
+ * Every refusal a person can act on is a sentence: no such ticket, no
+ * linked repository, the repository gone from this machine.
+ */
+async function nativeTicketContext(
   deps: DispatchDeps,
   ticketId: string,
 ): Promise<TicketContext> {
-  if (!deps.daemon()) throw new Error(ENGINE_NOT_RUNNING);
   const ticket = await deps.ledger.getTicket(ticketId);
   if (!ticket) throw new Error(`No ticket ${ticketId}.`);
   const project = await deps.ledger.getProject(ticket.projectId);
@@ -194,11 +241,148 @@ async function ticketContext(
   }
   const branches = await listRunBranches(deps, repo.handle);
   const runs = await deps.ledger.listAllRuns({ ticketId });
-  return { ticket, repo, branches, runs };
+  return {
+    system: 'waypoint',
+    ticket,
+    jira: null,
+    identifier: ticket.identifier,
+    title: ticket.title,
+    repo,
+    repoRemembered: false,
+    branches,
+    runs,
+  };
+}
+
+/**
+ * A Jira issue (W5b, docs/design/w5b-jira-dispatch.md §2.2, §2.3, §2.9):
+ * its ledger handle must exist and belong to the connected site; the
+ * issue is read live through main's own client; the repository is the
+ * folder the request chose (a handle this window minted, and a git
+ * repository), else the one remembered for the issue's Jira project,
+ * else nothing — the preview then asks. The runs are the handle's.
+ */
+async function jiraTicketContext(
+  deps: DispatchDeps,
+  ticketId: string,
+  folderHandle: string | null,
+): Promise<TicketContext> {
+  const ref = await deps.ledger.getTicketRef(ticketId);
+  if (!ref) throw new Error(`No ticket ${ticketId}.`);
+  const client = deps.jira;
+  const site = client?.site() ?? null;
+  if (!client || !site) throw new Error(JIRA_NOT_CONNECTED);
+  if (ref.site && ref.site !== site) {
+    throw new Error(
+      `${ref.key} belongs to another Jira site (${ref.site}); this Waypoint is connected to ${site}.`,
+    );
+  }
+  const projectKey = projectKeyOf(ref.key);
+  if (!projectKey) throw new Error(`${ref.key} is not a Jira issue key.`);
+
+  const read = await client.getTicket(ref.key);
+  if (!read.ok) throw new Error(read.message);
+  const issue = read.value;
+
+  let repo: SessionFolder | null = null;
+  let repoRemembered = false;
+  if (folderHandle) {
+    const chosen = deps.folders.registry.resolve(folderHandle);
+    repo = await describeFolder(deps.folders, chosen);
+    if (!repo) throw new Error('That folder is not on this machine any more.');
+    if (repo.kind !== 'repo') {
+      throw new Error(
+        `${repo.displayPath} is not a git repository; a session on ${ref.key} needs one to take a worktree of.`,
+      );
+    }
+  } else {
+    const remembered = await lookupJiraRepo(
+      deps.jiraReposFile,
+      site,
+      projectKey,
+    );
+    if (remembered) {
+      const described = await describeFolder(deps.folders, remembered);
+      // A remembered folder that is gone, or no longer a repository, is
+      // simply not remembered: the dialog asks again.
+      if (described?.kind === 'repo') {
+        repo = described;
+        repoRemembered = true;
+      }
+    }
+  }
+  const branches = repo
+    ? await listRunBranches(deps, repo.handle)
+    : NO_BRANCHES;
+  const runs = await deps.ledger.listAllRuns({ ticketId });
+  return {
+    system: 'jira',
+    ticket: null,
+    jira: {
+      ref,
+      site,
+      projectKey,
+      issue,
+      url: jiraIssueUrl(site, ref.key),
+      client,
+    },
+    identifier: ref.key,
+    title: issue.title,
+    repo,
+    repoRemembered,
+    branches,
+    runs,
+  };
+}
+
+async function ticketContext(
+  deps: DispatchDeps,
+  ticketId: string,
+  folderHandle: string | null = null,
+): Promise<TicketContext> {
+  if (!deps.daemon()) throw new Error(ENGINE_NOT_RUNNING);
+  return isTicketRef(ticketId)
+    ? jiraTicketContext(deps, ticketId, folderHandle)
+    : nativeTicketContext(deps, ticketId);
+}
+
+/** The brief's ticket, comments and facts from whichever system the context came from. */
+async function briefSource(
+  deps: DispatchDeps,
+  context: TicketContext,
+): Promise<
+  Pick<BriefInput, 'ticket' | 'comments' | 'members' | 'stateName' | 'jira'>
+> {
+  if (context.system === 'jira') {
+    const { issue, site, ref, client } = context.jira;
+    const comments = await client.listComments(ref.key);
+    if (!comments.ok) throw new Error(comments.message);
+    const facts = jiraBriefTicket(issue, site);
+    return {
+      ticket: facts.ticket,
+      comments: jiraBriefComments(comments.value.comments),
+      members: [],
+      stateName: facts.stateName,
+      jira: facts.jira,
+    };
+  }
+  const { ticket } = context;
+  const [comments, members, states] = await Promise.all([
+    deps.ledger.listComments(ticket.id),
+    deps.ledger.listMembers(),
+    deps.ledger.listStates(ticket.projectId),
+  ]);
+  return {
+    ticket,
+    comments,
+    members,
+    stateName: states.find((st) => st.id === ticket.stateId)?.name ?? null,
+    jira: null,
+  };
 }
 
 function resolveBase(
-  branches: { branches: string[]; suggested: string | null },
+  branches: Branches,
   requested: string | null,
   repo: SessionFolder,
 ): string {
@@ -218,12 +402,20 @@ function resolveBase(
   return branches.suggested;
 }
 
-function validatePreviewInput(
-  input: unknown,
-): Required<Pick<BriefPreviewInput, 'ticketId' | 'intent'>> & {
+/** A folder handle as the renderer sends it (W5b); null when none. Resolved later, against the registry. */
+function cleanFolder(value: unknown): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string') throw new Error('Choose a folder.');
+  return value;
+}
+
+function validatePreviewInput(input: unknown): Required<
+  Pick<BriefPreviewInput, 'ticketId' | 'intent'>
+> & {
   instructions: string | null;
   mayChangeFiles: boolean;
   baseRef: string | null;
+  folder: string | null;
 } {
   if (!input || typeof input !== 'object')
     throw new Error('Not a preview request.');
@@ -253,8 +445,12 @@ function validatePreviewInput(
     instructions,
     mayChangeFiles,
     baseRef: cleanBaseRef(raw.baseRef),
+    folder: cleanFolder(raw.folder),
   };
 }
+
+/** What the brief says about the repository before one is chosen (W5b). */
+export const FOLDER_PLACEHOLDER = '(the folder you choose in the preview)';
 
 /** The brief and the facts the preview dialog shows (§1.3). */
 export async function buildBriefPreview(
@@ -262,34 +458,30 @@ export async function buildBriefPreview(
   rawInput: unknown,
 ): Promise<BriefPreview> {
   const input = validatePreviewInput(rawInput);
-  const { ticket, repo, branches, runs } = await ticketContext(
-    deps,
-    input.ticketId,
-  );
-  const baseRef = resolveBase(branches, input.baseRef, repo);
+  const context = await ticketContext(deps, input.ticketId, input.folder);
+  const { repo, branches, runs } = context;
+  // A Jira issue with no folder yet: the brief is still built — with a
+  // placeholder where the repository goes — so the person reads it while
+  // choosing; it is rebuilt with the real folder the moment one is picked.
+  const baseRef = repo ? resolveBase(branches, input.baseRef, repo) : null;
   const mode = modeFor(input.intent, input.mayChangeFiles);
 
-  const [comments, members, states, proposals] = await Promise.all([
-    deps.ledger.listComments(ticket.id),
-    deps.ledger.listMembers(),
-    deps.ledger.listStates(ticket.projectId),
+  const [source, proposals] = await Promise.all([
+    briefSource(deps, context),
     input.intent === 'fix'
-      ? deps.ledger.listTicketProposals(ticket.id)
+      ? deps.ledger.listTicketProposals(input.ticketId)
       : Promise.resolve([] as LedgerProposal[]),
   ]);
   const rca = input.intent === 'fix' ? findApprovedRca(proposals, runs) : null;
   const liveWriter = mode === 'write' ? findLiveWriter(runs) : null;
   const branchHint = preferredBranchName(
     { id: 'run-preview', entry: 'dispatched' },
-    ticket.identifier,
+    context.identifier,
   );
 
   const brief = buildBrief({
-    ticket,
-    comments,
-    members,
-    stateName: states.find((s) => s.id === ticket.stateId)?.name ?? null,
-    repoDisplayPath: repo.displayPath,
+    ...source,
+    repoDisplayPath: repo?.displayPath ?? FOLDER_PLACEHOLDER,
     branch: branchHint,
     baseRef,
     intent: input.intent,
@@ -300,13 +492,17 @@ export async function buildBriefPreview(
   });
 
   return {
-    ticketId: ticket.id,
-    identifier: ticket.identifier,
-    title: ticket.title,
+    ticketId: input.ticketId,
+    identifier: context.identifier,
+    title: context.title,
     intent: input.intent,
     brief,
     repo,
     branches,
+    ticketSystem: context.system,
+    ticketUrl: context.jira?.url ?? null,
+    jiraProjectKey: context.jira?.projectKey ?? null,
+    repoRemembered: context.repoRemembered,
     baseRef,
     branchHint,
     mode,
@@ -329,6 +525,8 @@ interface ValidatedDispatchInput {
   ownerMemberId: string;
   providerId: DispatchRunInput['providerId'];
   copilotConversationId: string | null;
+  /** W5b: the folder chosen in the preview for a Jira issue; null otherwise. */
+  folder: string | null;
 }
 
 const CONVERSATION_ID = /^[A-Za-z0-9_-]{1,80}$/;
@@ -387,6 +585,7 @@ export function validateDispatchInput(input: unknown): ValidatedDispatchInput {
     ownerMemberId: raw.ownerMemberId,
     providerId: raw.providerId as DispatchRunInput['providerId'],
     copilotConversationId,
+    folder: cleanFolder(raw.folder),
   };
 }
 
@@ -403,26 +602,44 @@ export async function dispatchTicketRun(
   const input = validateDispatchInput(rawInput);
   const daemon = deps.daemon();
   if (!daemon) throw new Error(ENGINE_NOT_RUNNING);
-  const { ticket, repo, branches, runs } = await ticketContext(
-    deps,
-    input.ticketId,
-  );
+  const context = await ticketContext(deps, input.ticketId, input.folder);
+  const { repo, branches, runs, identifier } = context;
+  if (!repo) {
+    throw new Error(
+      `Choose the folder ${context.jira?.projectKey ?? identifier}'s code lives in first.`,
+    );
+  }
   const baseRef = resolveBase(branches, input.baseRef, repo);
   const mode = modeFor(input.intent, input.mayChangeFiles);
   if (mode === 'write') {
     const live = findLiveWriter(runs);
     if (live) {
       throw new Error(
-        `A writing session is already live on ${ticket.identifier} (${live.title ?? live.id}). Open it from the sessions panel, or wait for it to finish.`,
+        `A writing session is already live on ${identifier} (${live.title ?? live.id}). Open it from the sessions panel, or wait for it to finish.`,
       );
     }
   }
   const autoApprove = mode === 'write' && input.autoApprove;
   const modeId = sessionModeIdFor(mode, autoApprove);
 
+  // W5b: the folder chosen for a Jira project is remembered on Start —
+  // the person said where ENG's code lives, once.
+  if (context.system === 'jira' && !context.repoRemembered) {
+    await rememberJiraRepo(
+      deps.jiraReposFile,
+      context.jira.site,
+      context.jira.projectKey,
+      repo.path,
+    );
+  }
+
   const created = await deps.ledger.createRun({
-    projectId: ticket.projectId,
-    ticketId: ticket.id,
+    // A native ticket's project; for a Jira issue the project whose
+    // linked repository the folder is, if any (W4b's rule) — a Jira issue
+    // belongs to no Waypoint project of its own.
+    projectId:
+      context.system === 'jira' ? repo.projectId : context.ticket.projectId,
+    ticketId: input.ticketId,
     ownerMemberId: input.ownerMemberId,
     entry: 'dispatched',
     providerId: input.providerId,
@@ -431,17 +648,18 @@ export async function dispatchTicketRun(
     modeId,
     intent: input.intent,
     baseRef,
-    title: briefTitle(ticket.identifier, input.intent),
+    title: briefTitle(identifier, input.intent),
     copilotConversationId: input.copilotConversationId,
   });
   const run = await deps.ledger.updateRun(created.id, {
     status: 'provisioning',
-    reason: `Dispatched on ${ticket.identifier}`,
+    reason: `Dispatched on ${identifier}`,
   });
   deps.notify({ runId: run.id, status: run.status });
   deps.logger.info('engine: run dispatched', {
     runId: run.id,
-    ticket: ticket.identifier,
+    ticket: identifier,
+    system: context.system,
     intent: input.intent,
     mode,
     autoApprove,
@@ -458,7 +676,7 @@ export async function dispatchTicketRun(
     repo.path,
     input.brief,
     {
-      ticketIdentifier: ticket.identifier,
+      ticketIdentifier: identifier,
       env: agentEnvFor(run),
     },
   );

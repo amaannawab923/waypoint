@@ -1,12 +1,15 @@
 import { z } from 'zod';
 import { RUN_INTENTS, type RunIntent } from '../engine/types';
 import {
-  TICKET_IDENTIFIER,
+  JIRA_ISSUE_KEY,
   assertRunId,
+  isTicketRef,
   type AgentRun,
+  type AgentRunStatus,
   type LedgerClient,
-  type LedgerTicket,
+  type RunVerdict,
 } from '../engine/runs/ledgerClient';
+import { verdictLabel } from '../engine/runs/report';
 import type { InProcessServerSpec, InProcessToolSpec } from './claudeSdkClient';
 
 /**
@@ -42,6 +45,24 @@ export type OpenPullRequestOutcome =
   | { kind: 'skipped'; reason: string }
   | { kind: 'failed'; stage: 'push' | 'pr'; message: string };
 
+/**
+ * What the ticket's earlier runs say (W5c): how many, and the latest one's
+ * verb, status, verdict and PR — so the offer, and the model, know a
+ * second Investigate is a second one, and that a Fix follows a root cause
+ * already found (or a not-a-bug already concluded).
+ */
+export interface SessionOfferHistory {
+  runs: number;
+  latest: {
+    runId: string;
+    title: string | null;
+    intent: RunIntent | null;
+    status: AgentRunStatus;
+    verdict: RunVerdict | null;
+    prUrl: string | null;
+  };
+}
+
 /** What the renderer is handed: the ticket, and the verb the model leaned to, if any. */
 export interface SessionOffer {
   conversationId: string;
@@ -51,6 +72,8 @@ export interface SessionOffer {
   intent: RunIntent | null;
   /** The model's note for the brief (a *Something else…* instruction, or a hint for Fix). */
   note: string | null;
+  /** The ticket's earlier runs, newest first; null when it has none. */
+  history: SessionOfferHistory | null;
 }
 
 export interface SessionToolsDeps {
@@ -58,7 +81,8 @@ export interface SessionToolsDeps {
   ledger: Pick<
     LedgerClient,
     | 'getTicket'
-    | 'getTicketByIdentifier'
+    | 'getTicketRef'
+    | 'resolveTicket'
     | 'getRun'
     | 'listAllRuns'
     | 'listTicketProposals'
@@ -75,27 +99,69 @@ export interface SessionToolsDeps {
 
 const MAX_NOTE_CHARS = 4_000;
 
+/** A ticket as the tools name it: in either system (W5b). */
+interface ToolTicket {
+  /** `wi-…` or `tref-…`. */
+  id: string;
+  identifier: string;
+  title: string;
+  /** A Jira issue's URL; null for a native ticket. */
+  url: string | null;
+}
+
 async function resolveTicket(
   ledger: SessionToolsDeps['ledger'],
   ref: string,
-): Promise<LedgerTicket> {
+): Promise<ToolTicket> {
   const trimmed = ref.trim();
   const key = trimmed.toUpperCase();
-  let ticket: LedgerTicket | null = null;
-  // A key (`ROAD-116`) is taken case-insensitively, since people type it;
-  // an id has a lowercase prefix (`wi-…`, lib/ids.ts). `road-116` is both
-  // shapes, so the key is tried first and the id second — two reads.
-  const looksLikeKey = TICKET_IDENTIFIER.test(key);
+  // A key (`ROAD-116`, `ENG-4`) is taken case-insensitively, since people
+  // type it, and resolved in both systems at once — the backend's dual
+  // lookup, which refuses an ambiguous key rather than guessing (W5b). An
+  // id has a lowercase prefix (`wi-…`, `tref-…`; lib/ids.ts). `road-116`
+  // is both shapes, so the key is tried first and the id second.
+  const looksLikeKey = JIRA_ISSUE_KEY.test(key);
   const looksLikeId = /^[a-z]+-[A-Za-z0-9]{1,64}$/.test(trimmed);
-  if (looksLikeKey) ticket = await ledger.getTicketByIdentifier(key);
-  if (!ticket && looksLikeId) ticket = await ledger.getTicket(trimmed);
   if (!looksLikeKey && !looksLikeId) {
     throw new Error(
-      `"${trimmed}" is not a ticket key (like ROAD-116) or a ticket id.`,
+      `"${trimmed}" is not a ticket key (like ROAD-116 or ENG-4) or a ticket id.`,
     );
   }
-  if (!ticket) throw new Error(`No ticket ${trimmed}.`);
-  return ticket;
+  if (looksLikeKey) {
+    const resolved = await ledger.resolveTicket(key);
+    if (resolved) {
+      return {
+        id: resolved.id,
+        identifier: resolved.identifier,
+        title: resolved.title,
+        url: resolved.url,
+      };
+    }
+  }
+  if (looksLikeId) {
+    if (isTicketRef(trimmed)) {
+      const jiraRef = await ledger.getTicketRef(trimmed);
+      if (jiraRef) {
+        return {
+          id: jiraRef.id,
+          identifier: jiraRef.identifier,
+          title: jiraRef.title,
+          url: jiraRef.url,
+        };
+      }
+    } else {
+      const ticket = await ledger.getTicket(trimmed);
+      if (ticket) {
+        return {
+          id: ticket.id,
+          identifier: ticket.identifier,
+          title: ticket.title,
+          url: null,
+        };
+      }
+    }
+  }
+  throw new Error(`No ticket ${trimmed}.`);
 }
 
 const INTENT_LABEL: Record<RunIntent, string> = {
@@ -104,21 +170,69 @@ const INTENT_LABEL: Record<RunIntent, string> = {
   custom: 'Session',
 };
 
+const STATUS_LABEL: Record<AgentRunStatus, string> = {
+  queued: 'queued',
+  provisioning: 'provisioning',
+  running: 'running',
+  blocked: 'blocked',
+  finishing: 'finishing',
+  'needs-review': 'needs review',
+  done: 'done',
+  interrupted: 'interrupted',
+  failed: 'failed',
+  cancelled: 'cancelled',
+};
+
 function describeRun(run: AgentRun): string {
   const lines = [
     `Run ${run.id} — ${run.title ?? '(untitled)'}`,
     `Status: ${run.status}${run.blockedReason ? ` (${run.blockedReason})` : ''}${run.errorMessage ? ` — ${run.errorMessage}` : ''}`,
     `Intent: ${run.intent ? INTENT_LABEL[run.intent] : 'independent session'}; mode: ${run.modeId ?? 'default'}${run.autoApprove ? ' (auto-approve)' : ''}`,
   ];
+  if (run.verdict) lines.push(`Verdict: ${verdictLabel(run.verdict)}`);
   if (run.branch)
     lines.push(
       `Branch: ${run.branch}${run.baseRef ? ` from ${run.baseRef}` : ''}`,
     );
+  if (run.prUrl) lines.push(`Pull request: ${run.prUrl}`);
   lines.push(
     `Turns: ${run.turnCount}; started ${run.createdAt}; last change ${run.updatedAt}`,
   );
   if (run.summary) lines.push(`Summary: ${run.summary}`);
   return lines.join('\n');
+}
+
+/** The ticket's runs, newest first, as the offer carries them. */
+export function historyOf(runs: AgentRun[]): SessionOfferHistory | null {
+  if (runs.length === 0) return null;
+  const [latest] = [...runs].sort((a, b) =>
+    b.createdAt.localeCompare(a.createdAt),
+  );
+  return {
+    runs: runs.length,
+    latest: {
+      runId: latest.id,
+      title: latest.title,
+      intent: latest.intent,
+      status: latest.status,
+      verdict: latest.verdict,
+      prUrl: latest.prUrl,
+    },
+  };
+}
+
+/** "2 earlier runs · latest: Investigate, needs review, verdict: not a bug" */
+export function describeHistory(history: SessionOfferHistory): string {
+  const { latest } = history;
+  const parts = [
+    latest.intent ? INTENT_LABEL[latest.intent] : 'a session',
+    STATUS_LABEL[latest.status] ?? latest.status,
+  ];
+  if (latest.verdict) parts.push(`verdict: ${verdictLabel(latest.verdict)}`);
+  if (latest.prUrl) parts.push(`PR ${latest.prUrl}`);
+  const count =
+    history.runs === 1 ? '1 earlier run' : `${history.runs} earlier runs`;
+  return `${count} · latest: ${parts.join(', ')}`;
 }
 
 const MAX_CLOSING_CHARS = 8_000;
@@ -134,13 +248,15 @@ export function buildSessionToolSpecs(
     {
       name: 'dispatch_session',
       description:
-        'Offer the person a coding session on a ticket: Investigate (find the root cause, change nothing), Fix (implement it on a branch), or their own instruction. This does NOT start anything — it shows the person the three options in this conversation; they pick one, review the brief, and press Start. Use it when the person wants a session, an RCA, an investigation, or a fix on a ticket. Pass the ticket key (e.g. ROAD-116).',
+        'Offer the person a coding session on a ticket: Investigate (find the root cause, change nothing), Fix (implement it on a branch), or their own instruction. This does NOT start anything — it shows the person the three options in this conversation; they pick one, review the brief, and press Start. Use it when the person wants a session, an RCA, an investigation, or a fix on a ticket. Pass the ticket key — a Waypoint key (ROAD-116) or a Jira issue key (ENG-4).',
       input: {
         ticket: z
           .string()
           .min(1)
           .max(80)
-          .describe('The ticket key (ROAD-116) or id'),
+          .describe(
+            'The ticket key (ROAD-116, or a Jira key like ENG-4) or id',
+          ),
         intent: z
           .enum(RUN_INTENTS as [RunIntent, ...RunIntent[]])
           .optional()
@@ -160,6 +276,7 @@ export function buildSessionToolSpecs(
           deps.ledger,
           String(args.ticket ?? ''),
         );
+        const where = ticket.url ? ` (a Jira issue: ${ticket.url})` : '';
         const intent =
           typeof args.intent === 'string' &&
           (RUN_INTENTS as readonly string[]).includes(args.intent)
@@ -169,6 +286,14 @@ export function buildSessionToolSpecs(
           typeof args.note === 'string' && args.note.trim()
             ? args.note.trim()
             : null;
+        // W5c: what the ticket's earlier runs concluded rides on the
+        // offer and in the reply — read from the ledger, never guessed.
+        // A ledger that will not answer is no reason to withhold the offer.
+        const history = historyOf(
+          await deps.ledger
+            .listAllRuns({ ticketId: ticket.id })
+            .catch(() => []),
+        );
         const shown = deps.offer({
           conversationId: deps.conversationId,
           ticketId: ticket.id,
@@ -176,6 +301,7 @@ export function buildSessionToolSpecs(
           title: ticket.title,
           intent,
           note,
+          history,
         });
         if (!shown) {
           throw new Error(
@@ -183,10 +309,13 @@ export function buildSessionToolSpecs(
           );
         }
         return [
-          `Waypoint is showing the person the session options for ${ticket.identifier} (${ticket.title}) in this conversation: Investigate, Fix, Something else.`,
+          `Waypoint is showing the person the session options for ${ticket.identifier} (${ticket.title})${where} in this conversation: Investigate, Fix, Something else.`,
           intent
             ? `You suggested ${INTENT_LABEL[intent]}; that button is highlighted.`
             : '',
+          history
+            ? `${ticket.identifier} already has ${describeHistory(history)} (run ${history.latest.runId}). A Fix started now is seeded from an approved root cause on the ticket; a closing verdict (not a bug, won't fix) means the ticket was proposed closed — say so before suggesting another session.`
+            : `${ticket.identifier} has no earlier runs.`,
           'Nothing has started. They will review the brief and press Start themselves; when the run finishes, a note arrives in this conversation. Do not say a session is running.',
         ]
           .filter(Boolean)
@@ -202,7 +331,7 @@ export function buildSessionToolSpecs(
         ticket: z
           .string()
           .optional()
-          .describe('A ticket key (ROAD-116) — all of its runs'),
+          .describe('A ticket key (ROAD-116 or ENG-4) — all of its runs'),
       },
       async handler(args) {
         let runs: AgentRun[];
@@ -231,11 +360,27 @@ export function buildSessionToolSpecs(
             ticketIds.map((t) => deps.ledger.listTicketProposals(t)),
           )
         ).flat();
+        // W5b: a run on a Jira issue names the issue and its URL.
+        const jiraRefs = new Map(
+          await Promise.all(
+            ticketIds
+              .filter(isTicketRef)
+              .map(
+                async (t) => [t, await deps.ledger.getTicketRef(t)] as const,
+              ),
+          ),
+        );
         return runs
           .map((run) => {
             const filed = proposals.filter((p) => p.agentRunId === run.id);
             const closing = filed.find((p) => p.kind === 'comment');
             const parts = [describeRun(run)];
+            const jiraRef = run.ticketId ? jiraRefs.get(run.ticketId) : null;
+            if (jiraRef) {
+              parts.push(
+                `Jira issue: ${jiraRef.identifier} — ${jiraRef.title}${jiraRef.url ? ` (${jiraRef.url})` : ''}`,
+              );
+            }
             if (filed.length) {
               parts.push(
                 `Filed: ${filed.map((p) => `${p.kind} (${p.status})`).join(', ')}`,
@@ -260,7 +405,7 @@ export function buildSessionToolSpecs(
         ticket: z
           .string()
           .optional()
-          .describe('A ticket key (ROAD-116): its latest writing run'),
+          .describe('A ticket key (ROAD-116 or ENG-4): its latest writing run'),
       },
       async handler(args) {
         if (!deps.openPullRequest) {

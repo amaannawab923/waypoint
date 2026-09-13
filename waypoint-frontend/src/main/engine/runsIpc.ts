@@ -7,7 +7,9 @@ import {
   MAX_DIFF_PATCH_CHARS,
   RUNS_IPC,
   type FolderChoice,
+  type JiraTicketRef,
   type OpenPrResult,
+  type ResolvedTicket,
   type RunChanged,
   type RunDiff,
   type RunDiffFile,
@@ -19,12 +21,18 @@ import { createDaemonRunsApi, type DaemonRunsApi } from './runs/daemonApi';
 import {
   assertRunId,
   createLedgerClient,
+  JIRA_ISSUE_KEY,
   type AgentRun,
   type LedgerClient,
 } from './runs/ledgerClient';
 import { assertUnder } from './runs/worktrees';
 import { listRunBranches, resumeRun, startRun } from './runs/startRun';
 import { buildBriefPreview, dispatchTicketRun } from './runs/dispatch';
+import {
+  describeRunTicket,
+  JIRA_NOT_CONNECTED,
+  type JiraRunDeps,
+} from './runs/jiraRuns';
 import type { TranscriptKeeper } from './runs/transcripts';
 import type { PullRequestPublisher } from './runs/pullRequests';
 import {
@@ -97,6 +105,10 @@ export interface RunsIpcDeps {
   transcripts?: TranscriptKeeper;
   /** W6: the publisher `runs:open-pr` retries with. */
   pullRequests?: PullRequestPublisher;
+  /** W5b: main's Jira reads and the stored credential's site (runs/jiraRuns.ts); absent = not connected. */
+  jira?: JiraRunDeps;
+  /** W5b: where main remembers which folder a Jira project's code lives in; defaults to beside the recents file. */
+  jiraReposFile?: string;
   logger: {
     info: (m: string, meta?: Record<string, unknown>) => void;
     warn: (m: string, meta?: Record<string, unknown>) => void;
@@ -490,10 +502,12 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
     }
     let closing = run.summary ?? '';
     let title = run.title ?? run.branch;
+    let ticketUrl: string | null = null;
     if (run.ticketId) {
       const [proposals, ticket] = await Promise.all([
         ledger.listTicketProposals(run.ticketId).catch(() => []),
-        ledger.getTicket(run.ticketId).catch(() => null),
+        // A native ticket or a Jira issue's handle (W5b).
+        describeRunTicket(ledger, run.ticketId),
       ]);
       const comment = proposals.find(
         (p) => p.agentRunId === run.id && p.kind === 'comment',
@@ -501,12 +515,16 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
       if (comment && typeof comment.payload.body === 'string') {
         closing = comment.payload.body;
       }
-      if (ticket) title = `${ticket.identifier}: ${ticket.title}`;
+      if (ticket) {
+        title = `${ticket.identifier}: ${ticket.title}`;
+        ticketUrl = ticket.url;
+      }
     }
     const outcome = await deps.pullRequests.publish({
       run,
       closingMessage: closing,
       title,
+      ticketUrl,
     });
     if (outcome.kind === 'opened') {
       deps.notify({ runId: run.id, status: run.status });
@@ -536,6 +554,13 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
     assertWorktreeGitDir,
     folders,
     logger: deps.logger,
+    // W5b: a session on a Jira issue reads the issue through main's own
+    // client and takes its worktree of the folder remembered for the
+    // issue's Jira project.
+    ...(deps.jira ? { jira: deps.jira } : {}),
+    jiraReposFile:
+      deps.jiraReposFile ??
+      path.join(path.dirname(deps.recentsFile), 'jira-project-repos.json'),
   };
   deps.host.handle(RUNS_IPC.start, (input) => startRun(startDeps, input));
   deps.host.handle(RUNS_IPC.resume, (runId) => resumeRun(startDeps, runId));
@@ -551,6 +576,44 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
   // W6: the retry for a branch finalize could not publish — from the
   // header (runs:open-pr) or from Copilot's open_pull_request tool.
   deps.host.handle(RUNS_IPC.openPr, (runId) => openRunPullRequest(runId));
+  // W5b: a typed key to its ticket in either system — the slash commands'
+  // door; the backend's dual lookup, with main's Jira credential.
+  deps.host.handle(
+    RUNS_IPC.resolveTicket,
+    async (identifier): Promise<ResolvedTicket | null> => {
+      if (typeof identifier !== 'string') throw new Error('Type a ticket key.');
+      const key = identifier.trim().toUpperCase();
+      if (!JIRA_ISSUE_KEY.test(key)) {
+        throw new Error(`${identifier} is not a ticket key (like ROAD-116).`);
+      }
+      return ledger.resolveTicket(key);
+    },
+  );
+  // W5b: the ledger handle for a Jira issue the renderer read through
+  // main's Jira client — the My Jira drawer's Sessions section. The site
+  // is the stored credential's; the renderer only names the key.
+  deps.host.handle(
+    RUNS_IPC.jiraTicketRef,
+    async (input): Promise<JiraTicketRef> => {
+      if (!input || typeof input !== 'object')
+        throw new Error('Not a Jira issue.');
+      const raw = input as Record<string, unknown>;
+      const key =
+        typeof raw.key === 'string' ? raw.key.trim().toUpperCase() : '';
+      if (!JIRA_ISSUE_KEY.test(key)) throw new Error('Not a Jira issue key.');
+      const title =
+        typeof raw.title === 'string' ? raw.title.trim().slice(0, 1000) : '';
+      const site = deps.jira?.site() ?? null;
+      if (!site) throw new Error(JIRA_NOT_CONNECTED);
+      const ref = await ledger.rememberTicketRef({ site, key, title });
+      return {
+        ticketId: ref.id,
+        identifier: ref.identifier,
+        title: ref.title,
+        url: ref.url,
+      };
+    },
+  );
   deps.host.handle(RUNS_IPC.listBranches, (folder) =>
     listRunBranches(startDeps, folder),
   );

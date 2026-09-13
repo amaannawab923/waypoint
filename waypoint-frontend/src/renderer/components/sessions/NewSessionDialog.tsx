@@ -4,7 +4,7 @@ import { clsx } from 'clsx';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Switch } from '@/components/ui/Switch';
-import { IconChevron, IconFolder, IconGitBranch } from '@/components/icons';
+import { IconChevron } from '@/components/icons';
 import { getWorkspace } from '@/data/api';
 import { CURRENT_USER_ID } from '@/data/currentUser';
 import {
@@ -27,6 +27,7 @@ import type {
   SupportedProviderId,
 } from '@/types/agentRuns';
 import type { EngineStatus } from '@/types/engine';
+import { FolderPicker } from './FolderPicker';
 import { statusView } from './sessionStatus';
 
 /**
@@ -352,79 +353,17 @@ export function NewSessionDialog({
         }}
       >
         <div className="flex flex-col gap-1.5">
-          <div className="flex items-center justify-between">
-            <span id="new-session-folder-label" className={labelClass}>
-              Folder
-            </span>
-            <button
-              type="button"
-              onClick={() => {
-                browse().catch(() => {});
-              }}
-              disabled={starting || browsing}
-              className="text-xs font-medium text-text-secondary underline-offset-2 hover:text-text hover:underline disabled:opacity-50"
-            >
-              {browsing ? 'Choosing…' : 'Browse…'}
-            </button>
-          </div>
-          <div
-            role="radiogroup"
-            aria-labelledby="new-session-folder-label"
-            className="thin-scroll flex max-h-[176px] flex-col gap-1 overflow-y-auto rounded-[var(--radius-sm)] border border-border-strong bg-bg p-1"
-          >
-            {folders === null && (
-              <div className="px-2 py-3 text-xs text-text-muted">
-                Reading folders…
-              </div>
-            )}
-            {folders !== null && folders.length === 0 && (
-              <div className="px-2 py-3 text-xs text-text-muted">
-                No folder yet — Browse… to pick one. A project&apos;s linked
-                repository shows up here on its own.
-              </div>
-            )}
-            {(folders ?? []).map((folder) => {
-              const isSelected = selected?.path === folder.path;
-              return (
-                <button
-                  key={folder.path}
-                  type="button"
-                  role="radio"
-                  aria-checked={isSelected}
-                  onClick={() => setSelected(folder)}
-                  disabled={starting}
-                  className={clsx(
-                    'flex w-full items-center gap-2.5 rounded-[5px] px-2 py-1.5 text-left',
-                    isSelected
-                      ? 'bg-accent-soft-bg text-accent-soft-text'
-                      : 'text-text hover:bg-surface-2',
-                  )}
-                >
-                  {folder.kind === 'repo' ? (
-                    <IconGitBranch size={13} className="shrink-0 opacity-70" />
-                  ) : (
-                    <IconFolder size={13} className="shrink-0 opacity-70" />
-                  )}
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium">
-                      {folder.name}
-                      {folder.projectName && (
-                        <span className="ml-1.5 text-xs font-normal opacity-70">
-                          · {folder.projectName}
-                        </span>
-                      )}
-                    </span>
-                    <span className="block truncate font-mono text-[11px] opacity-70">
-                      {folder.displayPath}
-                    </span>
-                  </span>
-                  <span className="shrink-0 text-[10px] tracking-wide uppercase opacity-70">
-                    {folder.kind === 'repo' ? 'git repo' : 'folder'}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+          <FolderPicker
+            labelId="new-session-folder-label"
+            folders={folders}
+            selected={selected}
+            onSelect={setSelected}
+            onBrowse={() => {
+              browse().catch(() => {});
+            }}
+            browsing={browsing}
+            disabled={starting}
+          />
           {busy > 0 && (
             <p className="text-xs text-warning">
               {busy === 1

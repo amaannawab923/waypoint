@@ -13,6 +13,7 @@ import {
 import { NotFoundError } from '../middleware/errors.js';
 import { resolveActorNames } from '../lib/actorNames.js';
 import type { JiraCredential } from '../lib/jira/client.js';
+import { baseSnapshot, externalSnapshot, jiraTransitionSnapshot } from '../lib/proposalSnapshot.js';
 import { nativeProvider } from '../providers/native.js';
 import { getJiraProvider, isExternalRef, type JiraProvider } from '../providers/jira.js';
 import type { NormalizedTicket } from '../providers/types.js';
@@ -146,67 +147,10 @@ function refuseExternal(what: string) {
   );
 }
 
-/**
- * The updated-at stamp, from whichever provider's detail record carries it.
- *
- * Native tickets hand back a Date (the column, spread straight through by
- * providers/native.ts's passthrough detail projection); Jira hands back the
- * ISO string its API returned. Normalizing here keeps the snapshot's
- * itemUpdatedAt byte-identical to what the native path has always written.
- */
-function updatedAtIso(ticket: NormalizedTicket): string | undefined {
-  const raw = ticket.detail?.updatedAt;
-  if (raw instanceof Date) return raw.toISOString();
-  return typeof raw === 'string' ? raw : undefined;
-}
-
-/**
- * The three fields every proposal card renders regardless of kind.
- *
- * Takes either a normalized ticket (the provider-dispatched path) or a raw
- * native row (the three native-only kinds, which never reach a provider).
- * One function rather than two, because the card reads this shape uniformly
- * and two producers of it is how the two would drift.
- *
- * `'provider' in item` is a safe discriminant: it is required on
- * NormalizedTicket and does not exist on a native ticket row.
- */
-function baseSnapshot(item: NormalizedTicket | ticketsService.Enriched) {
-  return {
-    identifier: item.identifier,
-    title: item.title,
-    itemUpdatedAt: 'provider' in item ? updatedAtIso(item) : item.updatedAt.toISOString(),
-  };
-}
-
-/**
- * What the approval card has to say before anyone clicks Approve on a write
- * that leaves Waypoint: which system, which site, which issue, as whom, and
- * who finds out.
- *
- * Every field is display-only. `provider` in particular decides nothing —
- * executeProposal re-resolves a ticket's real provider from its own id and
- * refuses to run if the two disagree, precisely so that a snapshot written at
- * propose time can never be what routes a write.
- */
-function externalSnapshot(jira: JiraProvider, ticket: NormalizedTicket) {
-  return {
-    provider: 'jira',
-    externalSite: jira.site,
-    externalUrl: ticket.url,
-    externalActorName: jira.actorName,
-    // Deliberately a description of Jira's behavior rather than a computed
-    // list of people. Jira decides who is notified from the issue's watchers,
-    // its assignee and the site's own notification scheme — resolving that
-    // truthfully would be an extra round trip per proposal (and still only a
-    // snapshot of it), while getting it subtly wrong would be worse than
-    // saying plainly what Jira does. The honest general sentence is the right
-    // trade here; a real recipient list is a later decision, not a cheaper
-    // one.
-    externalNotifiesLabel:
-      "the issue's watchers and assignee will be notified, per your Jira notification scheme",
-  };
-}
+// baseSnapshot / externalSnapshot / jiraTransitionSnapshot live in
+// lib/proposalSnapshot.ts since W5b: a run's host-side finalize files the
+// same card shapes (proposals.service.ts's createRunProposal), and one
+// producer of each keeps a session's card and Copilot's card identical.
 
 export async function proposeCommentHandler(
   jira: Jira,
@@ -327,20 +271,10 @@ async function proposeJiraTransition(
     kind: 'state_change',
     ticketId,
     payload: { stateId: transitionId },
-    snapshot: {
-      ...baseSnapshot(ticket),
-      // The issue's live STATUS id, not the transition's — this is the value
-      // checkStaleness re-reads to tell whether the issue moved underneath
-      // the proposal.
-      fromStateId: ticket.stateId,
-      fromStateName: ticket.stateName,
-      // Jira status colors are per-site theme data this process does not
-      // fetch; null renders as the card's neutral dot rather than a guess.
-      fromStateColor: null,
-      toStateName: target.name,
-      toStateColor: null,
-      ...externalSnapshot(jira, ticket),
-    },
+    // The issue's live STATUS id as fromStateId, not the transition's —
+    // the value checkStaleness re-reads to tell whether the issue moved
+    // underneath the proposal (lib/proposalSnapshot.ts).
+    snapshot: jiraTransitionSnapshot(jira, ticket, target),
     summary: `Proposed: move ${ticket.identifier} from ${ticket.stateName} to ${target.name}`,
   });
 }

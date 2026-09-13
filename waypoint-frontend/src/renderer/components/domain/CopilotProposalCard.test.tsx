@@ -572,6 +572,132 @@ describe('a run-filed comment renders as markdown', () => {
   });
 });
 
+// W5c: edit-before-post. Edit is offered on a pending comment only; the
+// draft is local until Save, which hands the body to onEdit; the saved
+// view comes back through the prop and the card marks it edited.
+describe('edit before posting (W5c)', () => {
+  const runComment = () =>
+    proposal({
+      kind: 'comment',
+      origin: 'agent_run',
+      agentId: null,
+      agentRunId: 'run-1',
+      payload: { body: 'The root cause is X.' },
+    });
+
+  function renderEditable(p: ProposalView) {
+    const onEdit = jest.fn().mockResolvedValue(undefined);
+    const onApprove = jest.fn().mockResolvedValue(undefined);
+    const onReject = jest.fn().mockResolvedValue(undefined);
+    const utils = render(
+      <CopilotProposalCard
+        proposal={p}
+        onApprove={onApprove}
+        onReject={onReject}
+        onEdit={onEdit}
+      />,
+    );
+    return { onEdit, onApprove, onReject, ...utils };
+  }
+
+  it('Edit opens the draft in place of the preview; Save sends the trimmed body; the prop re-render shows the edited mark', () => {
+    const { onEdit, rerender } = renderEditable(runComment());
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const editor = screen.getByRole('textbox', { name: 'Comment' });
+    expect(editor).toHaveValue('The root cause is X.');
+    expect(document.querySelector('[data-run-comment]')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+    expect(
+      screen.getByText(/nothing is posted until you approve/),
+    ).toBeInTheDocument();
+
+    fireEvent.change(editor, { target: { value: '  The root cause is Y.  ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(onEdit).toHaveBeenCalledWith('prop-abc1234', 'The root cause is Y.');
+
+    rerender(
+      <CopilotProposalCard
+        proposal={proposal({
+          kind: 'comment',
+          origin: 'agent_run',
+          agentId: null,
+          agentRunId: 'run-1',
+          payload: {
+            body: 'The root cause is Y.',
+            originalBody: 'The root cause is X.',
+            editedAt: '2026-01-01T00:10:00.000Z',
+          },
+        })}
+        onApprove={jest.fn()}
+        onReject={jest.fn()}
+        onEdit={onEdit}
+      />,
+    );
+    return waitFor(() => {
+      expect(document.querySelector('[data-run-comment]')).toHaveTextContent(
+        'The root cause is Y.',
+      );
+      expect(document.querySelector('[data-edited-mark]')).toHaveTextContent(
+        'edited before posting',
+      );
+      expect(document.querySelector('[data-edited-mark]')).toHaveAttribute(
+        'title',
+        expect.stringContaining('The root cause is X.'),
+      );
+      expect(
+        screen.getByRole('button', { name: 'Approve' }),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it('Cancel drops the draft; an empty draft is refused; a failed save keeps the draft with the reason', async () => {
+    const { onEdit } = renderEditable(runComment());
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Comment' }), {
+      target: { value: 'changed' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onEdit).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-run-comment]')).toHaveTextContent(
+      'The root cause is X.',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Comment' }), {
+      target: { value: '   ' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(onEdit).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'The comment cannot be empty.',
+    );
+
+    onEdit.mockRejectedValueOnce(
+      new Error('A stale proposal can no longer be edited.'),
+    );
+    fireEvent.change(screen.getByRole('textbox', { name: 'Comment' }), {
+      target: { value: 'try again' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'A stale proposal can no longer be edited.',
+    );
+    expect(screen.getByRole('textbox', { name: 'Comment' })).toHaveValue(
+      'try again',
+    );
+  });
+
+  it('no Edit on a state change, a stale comment, or an executed one', () => {
+    renderEditable(proposal());
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    renderEditable(proposal({ ...runComment(), status: 'stale' }));
+    renderEditable(proposal({ ...runComment(), status: 'executed' }));
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    expect(document.querySelector('[data-comment-editor]')).toBeNull();
+  });
+});
+
 describe('expiresIn', () => {
   it('reads hours under two days, days beyond, and says so for a past or missing date', () => {
     const now = Date.parse('2026-09-13T00:00:00.000Z');

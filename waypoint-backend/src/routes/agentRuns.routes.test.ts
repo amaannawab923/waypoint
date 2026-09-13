@@ -166,6 +166,36 @@ describe('POST /agent-runs', () => {
     expect(service.createRun).not.toHaveBeenCalled();
   });
 
+  // W5b: a run on a Jira issue names the issue's `tref-` handle and may
+  // have no project (the folder it works in decides); a native ticket
+  // still needs its project.
+  it('W5b: a dispatched run on a Jira ref needs no project; a native ticket still does', async () => {
+    vi.mocked(service.createRun).mockResolvedValue(run({ ticketId: 'tref-abc1234', projectId: null }));
+    const app = buildTestApp();
+
+    const jira = await request(app).post('/agent-runs').send({
+      projectId: null,
+      ticketId: 'tref-abc1234',
+      ownerMemberId: 'mem-1',
+      entry: 'dispatched',
+      providerId: 'claude',
+    });
+    expect(jira.status).toBe(201);
+    expect(service.createRun).toHaveBeenCalledWith(
+      expect.objectContaining({ ticketId: 'tref-abc1234', projectId: null }),
+    );
+
+    const native = await request(app).post('/agent-runs').send({
+      projectId: null,
+      ticketId: 'wi-1',
+      ownerMemberId: 'mem-1',
+      entry: 'dispatched',
+      providerId: 'claude',
+    });
+    expect(native.status).toBe(400);
+    expect(service.createRun).toHaveBeenCalledTimes(1);
+  });
+
   it('maps a retry of a live run to 409 with the service sentence', async () => {
     vi.mocked(service.createRun).mockRejectedValue(
       new ConflictError('Run run-old is running; only a finished or interrupted run can be retried.'),
@@ -294,6 +324,21 @@ describe('PATCH /agent-runs/:id', () => {
     expect(service.updateRun).not.toHaveBeenCalled();
   });
 
+  it('rejects a verdict outside the vocabulary; accepts one inside it (W5c)', async () => {
+    const bad = await request(buildTestApp())
+      .patch('/agent-runs/run-abc1234')
+      .send({ verdict: 'shipped' });
+    expect(bad.status).toBe(400);
+    expect(service.updateRun).not.toHaveBeenCalled();
+
+    vi.mocked(service.updateRun).mockResolvedValue({ id: 'run-abc1234', verdict: 'not-a-bug' } as never);
+    const ok = await request(buildTestApp())
+      .patch('/agent-runs/run-abc1234')
+      .send({ verdict: 'not-a-bug' });
+    expect(ok.status).toBe(200);
+    expect(service.updateRun).toHaveBeenCalledWith('run-abc1234', { verdict: 'not-a-bug' });
+  });
+
   it('404s an unknown run', async () => {
     vi.mocked(service.updateRun).mockRejectedValue(new NotFoundError('agent run'));
 
@@ -375,27 +420,60 @@ describe('POST /agent-runs/:id/proposals (W5a)', () => {
       .post('/agent-runs/run-abc1234/proposals')
       .send({ kind: 'comment', body: 'Root cause: …' });
     expect(comment.status).toBe(201);
-    expect(proposalsService.createRunProposal).toHaveBeenLastCalledWith({
-      agentRunId: 'run-abc1234',
-      kind: 'comment',
-      payload: { body: 'Root cause: …' },
-    });
+    // No credential header → null: the native path never needs one.
+    expect(proposalsService.createRunProposal).toHaveBeenLastCalledWith(
+      {
+        agentRunId: 'run-abc1234',
+        kind: 'comment',
+        payload: { body: 'Root cause: …' },
+      },
+      null,
+    );
 
     const move = await request(app)
       .post('/agent-runs/run-abc1234/proposals')
       .send({ kind: 'state_change', stateId: 'st-review' });
     expect(move.status).toBe(201);
-    expect(proposalsService.createRunProposal).toHaveBeenLastCalledWith({
-      agentRunId: 'run-abc1234',
-      kind: 'state_change',
-      payload: { stateId: 'st-review' },
-    });
+    expect(proposalsService.createRunProposal).toHaveBeenLastCalledWith(
+      {
+        agentRunId: 'run-abc1234',
+        kind: 'state_change',
+        payload: { stateId: 'st-review' },
+      },
+      null,
+    );
 
     const create = await request(app)
       .post('/agent-runs/run-abc1234/proposals')
       .send({ kind: 'create_ticket', title: 'x' });
     expect(create.status).toBe(400);
     expect(proposalsService.createRunProposal).toHaveBeenCalledTimes(2);
+  });
+
+  // W5b: a run on a Jira issue files through the same borrowed-credential
+  // seam an approve uses — the header main attaches becomes the credential
+  // the service reads the issue with, and lives only for this request.
+  it('hands the service the credential main borrowed on the header (W5b)', async () => {
+    vi.mocked(proposalsService.createRunProposal).mockResolvedValue({ id: 'prop-1' } as never);
+    const header = Buffer.from(
+      JSON.stringify({
+        site: 'yourteam.atlassian.net',
+        email: 'max@example.com',
+        apiToken: 'tok',
+        displayName: 'Max Chen',
+      }),
+    ).toString('base64');
+
+    const res = await request(buildTestApp())
+      .post('/agent-runs/run-abc1234/proposals')
+      .set('x-waypoint-jira-credential', header)
+      .send({ kind: 'state_change', stateId: '31' });
+
+    expect(res.status).toBe(201);
+    expect(proposalsService.createRunProposal).toHaveBeenLastCalledWith(
+      { agentRunId: 'run-abc1234', kind: 'state_change', payload: { stateId: '31' } },
+      { site: 'yourteam.atlassian.net', email: 'max@example.com', apiToken: 'tok', displayName: 'Max Chen' },
+    );
   });
 });
 

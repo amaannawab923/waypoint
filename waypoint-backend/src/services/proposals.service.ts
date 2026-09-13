@@ -2,10 +2,11 @@ import { eq, and, or, lt, gte, desc, count, countDistinct, inArray, asc, isNull,
 import { db } from '../db/client.js';
 import { proposals, copilotConversations, copilotMessages, tickets } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
-import { NotFoundError, ValidationError } from '../middleware/errors.js';
+import { ConflictError, NotFoundError, ValidationError } from '../middleware/errors.js';
 import { buildCopilotCommentHtml, disclosureFor } from '../lib/commentHtml.js';
 import { buildCopilotJiraCommentAdf } from '../lib/jira/adf.js';
 import type { JiraCredential } from '../lib/jira/client.js';
+import { baseSnapshot, externalSnapshot, jiraTransitionSnapshot } from '../lib/proposalSnapshot.js';
 import { getJiraProvider, isExternalRef, type JiraProvider } from '../providers/jira.js';
 import * as ticketsService from './tickets.service.js';
 import * as commentsService from './comments.service.js';
@@ -338,44 +339,38 @@ export async function createProposal(input: CreateProposalInput): Promise<Propos
  * W5a (ROAD-117): a proposal Waypoint main files on a dispatched run's
  * behalf — the agent's closing message as a comment on the run's ticket,
  * or the state change Fix asks for. Origin `agent_run`, no conversation,
- * no anchor: it is a Review-queue card, not a chat card. Native tickets
- * only in W5a (a run is always on a project's linked repository, and the
- * ticket it was dispatched from is that project's); a Jira ticket is
- * refused rather than half-handled. The per-conversation caps do not
- * apply — a run files at most two — and nothing supersedes: a second
- * Investigate on the same ticket is a second RCA, both reviewable.
+ * no anchor: it is a Review-queue card, not a chat card. The
+ * per-conversation caps do not apply — a run files at most two — and
+ * nothing supersedes: a second Investigate on the same ticket is a second
+ * RCA, both reviewable.
+ *
+ * W5b (ROAD-126): a run on a Jira issue ("tref-" ticket) files through
+ * exactly the path Copilot's propose_comment / propose_state_change take
+ * (mcp/proposalTools.ts): the issue is read live through the provider —
+ * with the credential main borrowed to this request, as an approve does —
+ * the card gets the same external-write snapshot (site, actor, who is
+ * notified; for a transition the issue's live status id and the
+ * transition's own name), a transition id is checked against the issue's
+ * live transition list, and `project_id` is null because a Jira issue
+ * belongs to no Waypoint project. From here on approve, staleness and
+ * execution do not know or care who proposed.
  */
-export async function createRunProposal(input: {
-  agentRunId: string;
-  kind: 'comment' | 'state_change';
-  payload: { body: string } | { stateId: string };
-}): Promise<ProposalRow> {
+export async function createRunProposal(
+  input: {
+    agentRunId: string;
+    kind: 'comment' | 'state_change';
+    payload: { body: string } | { stateId: string };
+  },
+  jiraCredential: JiraCredential | null = null,
+): Promise<ProposalRow> {
   const run = await agentRunsService.getRun(input.agentRunId);
   if (!run) throw new NotFoundError('agent run');
   if (!run.ticketId) throw new ValidationError('this run has no ticket to propose on');
-  if (isExternalRef(run.ticketId)) {
-    throw new ValidationError('a run cannot propose on a Jira issue yet (W5a)');
-  }
-  const ticket = await ticketsService.getTicket(run.ticketId);
-  if (!ticket) throw new NotFoundError('ticket');
-  const base = { identifier: ticket.identifier, title: ticket.title, itemUpdatedAt: ticket.updatedAt.toISOString() };
-  let snapshot: ProposalSnapshot = base;
-  if (input.kind === 'state_change') {
-    const { stateId } = input.payload as { stateId: string };
-    const states = await statesService.listStates(ticket.projectId);
-    const toState = states.find((st) => st.id === stateId);
-    if (!toState) throw new ValidationError('stateId is not a state of this project');
-    if (stateId === ticket.stateId) throw new ValidationError('the ticket is already in that state');
-    const fromState = states.find((st) => st.id === ticket.stateId);
-    snapshot = {
-      ...base,
-      fromStateId: ticket.stateId,
-      fromStateName: fromState?.name ?? ticket.stateId,
-      fromStateColor: fromState?.color ?? null,
-      toStateName: toState.name,
-      toStateColor: toState.color,
-    };
-  }
+
+  const target = isExternalRef(run.ticketId)
+    ? await jiraRunTarget(run.ticketId, input, getJiraProvider(jiraCredential))
+    : await nativeRunTarget(run.ticketId, input);
+
   // A run dispatched from a Copilot conversation files its proposals
   // into that conversation too (W5a §1.7): the cards render there, at
   // the tail (no anchor), beside the note that announced them — so
@@ -404,13 +399,75 @@ export async function createRunProposal(input: {
       kind: input.kind,
       ticketId: run.ticketId,
       payload: input.payload,
-      snapshot,
+      snapshot: target.snapshot,
       anchorSeq,
-      projectId: ticket.projectId,
+      projectId: target.projectId,
       expiresAt: new Date(Date.now() + RUN_PROPOSAL_TTL_MS),
     })
     .returning();
   return row;
+}
+
+/** The native half of createRunProposal: the ticket's project's states, as W5a wrote it. */
+async function nativeRunTarget(
+  ticketId: string,
+  input: { kind: 'comment' | 'state_change'; payload: { body: string } | { stateId: string } },
+): Promise<{ snapshot: ProposalSnapshot; projectId: string | null }> {
+  const ticket = await ticketsService.getTicket(ticketId);
+  if (!ticket) throw new NotFoundError('ticket');
+  const base = { identifier: ticket.identifier, title: ticket.title, itemUpdatedAt: ticket.updatedAt.toISOString() };
+  if (input.kind !== 'state_change') return { snapshot: base, projectId: ticket.projectId };
+  const { stateId } = input.payload as { stateId: string };
+  const states = await statesService.listStates(ticket.projectId);
+  const toState = states.find((st) => st.id === stateId);
+  if (!toState) throw new ValidationError('stateId is not a state of this project');
+  if (stateId === ticket.stateId) throw new ValidationError('the ticket is already in that state');
+  const fromState = states.find((st) => st.id === ticket.stateId);
+  return {
+    projectId: ticket.projectId,
+    snapshot: {
+      ...base,
+      fromStateId: ticket.stateId,
+      fromStateName: fromState?.name ?? ticket.stateId,
+      fromStateColor: fromState?.color ?? null,
+      toStateName: toState.name,
+      toStateColor: toState.color,
+    },
+  };
+}
+
+/**
+ * The Jira half: a live read of the issue through the borrowed credential,
+ * the transition (for a state_change) checked against the issue's live
+ * list — a small integer is exactly the shape a caller can get wrong, and
+ * an invented id would sit on a card until Jira answered 400 to the
+ * person who approved it. No credential is a ValidationError, not a
+ * crash: main sends none only when Jira was disconnected between the
+ * run's start and its finish, and the run's owner can reconnect and the
+ * host can retry.
+ */
+async function jiraRunTarget(
+  ticketId: string,
+  input: { kind: 'comment' | 'state_change'; payload: { body: string } | { stateId: string } },
+  jira: JiraProvider | null,
+): Promise<{ snapshot: ProposalSnapshot; projectId: string | null }> {
+  if (!jira) {
+    throw new ValidationError('Jira is not connected, so a run cannot propose on a Jira issue');
+  }
+  const ticket = await jira.getByRef(ticketId);
+  if (!ticket) throw new NotFoundError('ticket');
+  if (input.kind !== 'state_change') {
+    return { snapshot: { ...baseSnapshot(ticket), ...externalSnapshot(jira, ticket) }, projectId: null };
+  }
+  const { stateId: transitionId } = input.payload as { stateId: string };
+  const transitions = await jira.listTransitions(ticketId);
+  const target = transitions?.find((t) => t.id === transitionId);
+  if (!target) {
+    throw new ValidationError(
+      `"${transitionId}" is not a transition this Jira issue can make right now`,
+    );
+  }
+  return { snapshot: jiraTransitionSnapshot(jira, ticket, target), projectId: null };
 }
 
 /**
@@ -987,7 +1044,13 @@ async function executeJiraProposal(
   switch (row.kind as ProposalKind) {
     case 'comment': {
       const { body } = row.payload as { body: string };
-      const posted = await jira.postComment(ticketId, buildCopilotJiraCommentAdf(displayName, body));
+      // W5b: a session's report says a session wrote it (the same rule the
+      // native path applies through buildCopilotCommentHtml's origin), and
+      // is rendered from its markdown rather than posted as `##` lines.
+      const posted = await jira.postComment(
+        ticketId,
+        buildCopilotJiraCommentAdf(displayName, body, row.origin === 'agent_run' ? 'agent_run' : 'copilot'),
+      );
       if (posted === null) {
         throw new TerminalExecutionFailure(
           'stale',
@@ -1191,6 +1254,50 @@ export async function rejectProposal(id: string): Promise<ProposalView> {
   if (!existing) throw new NotFoundError('proposal');
   // Already resolved — idempotent echo, same contract as approve.
   return toView(existing, displayName);
+}
+
+/**
+ * Edit a comment proposal's body before it is posted — W5c, the PM's
+ * third path-to-8 item: a session's report is the agent's draft, and the
+ * person who approves it may fix a sentence without rejecting the whole
+ * card and typing the comment by hand.
+ *
+ * Only a `comment` still `proposed` can be edited — a stale card's only
+ * affordance is Dismiss, and an executed one is on the ticket. The first
+ * edit keeps the original body beside the new one (`originalBody`), and
+ * every edit stamps `editedAt`, so the trail can say what the agent wrote
+ * and what the person changed; a run's trail gets a note. The disclosure
+ * is unchanged: the comment is still the agent's proposal, posted by the
+ * person who edited and approved it.
+ */
+export async function editProposalBody(id: string, body: string): Promise<ProposalView> {
+  const { displayName } = await membersService.getCurrentUser();
+  const updated = await db.transaction(async (tx) => {
+    const [row] = await tx.select().from(proposals).where(eq(proposals.id, id)).for('update').limit(1);
+    if (!row) throw new NotFoundError('proposal');
+    if (row.kind !== 'comment') throw new ConflictError('Only a comment proposal can be edited.');
+    if (row.status !== 'proposed') {
+      throw new ConflictError(`A ${row.status} proposal can no longer be edited.`);
+    }
+    const payload = row.payload as { body: string; originalBody?: string; editedAt?: string };
+    const next = {
+      ...payload,
+      body,
+      originalBody: payload.originalBody ?? payload.body,
+      editedAt: new Date().toISOString(),
+    };
+    const [written] = await tx.update(proposals).set({ payload: next }).where(eq(proposals.id, id)).returning();
+    return written;
+  });
+  if (updated.agentRunId) {
+    await agentRunsService
+      .appendEvent(updated.agentRunId, {
+        kind: 'note',
+        payload: { stage: 'review', message: 'the comment was edited before posting', proposalId: updated.id },
+      })
+      .catch(() => {});
+  }
+  return toView(updated, displayName);
 }
 
 export async function rejectAllPending(conversationId: string): Promise<{ rejected: number }> {

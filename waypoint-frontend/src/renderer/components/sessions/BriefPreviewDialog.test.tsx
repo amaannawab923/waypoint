@@ -1,8 +1,13 @@
 import '@testing-library/jest-dom';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { dispatchRun, getBriefPreview } from '@/data/engineApi';
-import type { BriefPreview } from '@/types/agentRuns';
+import {
+  chooseFolder,
+  dispatchRun,
+  getBriefPreview,
+  listRecentFolders,
+} from '@/data/engineApi';
+import type { BriefPreview, SessionFolder } from '@/types/agentRuns';
 import { BriefPreviewDialog } from './BriefPreviewDialog';
 
 jest.mock('@/data/api', () => ({
@@ -11,6 +16,8 @@ jest.mock('@/data/api', () => ({
 jest.mock('@/data/engineApi', () => ({
   getBriefPreview: jest.fn(),
   dispatchRun: jest.fn(),
+  listRecentFolders: jest.fn(async () => []),
+  chooseFolder: jest.fn(async () => ({ canceled: true })),
 }));
 jest.mock('@/data/currentUser', () => ({ CURRENT_USER_ID: 'mem-1' }));
 
@@ -32,6 +39,10 @@ const preview = (over: Partial<BriefPreview> = {}): BriefPreview => ({
     lastUsedAt: null,
   },
   branches: { branches: ['main', 'release'], suggested: 'main' },
+  ticketSystem: 'waypoint',
+  ticketUrl: null,
+  jiraProjectKey: null,
+  repoRemembered: false,
   baseRef: 'main',
   branchHint: 'agent/ROAD-61',
   mode: 'write',
@@ -40,6 +51,35 @@ const preview = (over: Partial<BriefPreview> = {}): BriefPreview => ({
   liveWriterRunId: null,
   ...over,
 });
+
+// W5b: a Jira issue's preview — the folder remembered for its project, or
+// none yet.
+const engRepo: SessionFolder = {
+  handle: 'h-eng',
+  path: '/Users/me/eng',
+  displayPath: '~/eng',
+  name: 'eng',
+  kind: 'repo',
+  projectId: null,
+  projectName: null,
+  lastAutoApprove: null,
+  lastUsedAt: null,
+};
+const jiraPreview = (over: Partial<BriefPreview> = {}): BriefPreview =>
+  preview({
+    ticketId: 'tref-eng4',
+    identifier: 'ENG-4',
+    title: 'Checkout 500s',
+    intent: 'investigate',
+    mode: 'plan',
+    autoApproveDefault: false,
+    seededFromRunId: null,
+    ticketSystem: 'jira',
+    ticketUrl: 'https://yourteam.atlassian.net/browse/ENG-4',
+    jiraProjectKey: 'ENG',
+    branchHint: 'agent/ENG-4',
+    ...over,
+  });
 
 const flush = () =>
   act(
@@ -188,5 +228,136 @@ describe('BriefPreviewDialog', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(
       'The agent engine is not running.',
     );
+  });
+
+  // W5b (docs/design/w5b-jira-dispatch.md §1.2): a Jira issue with no
+  // folder remembered for its project — the picker instead of a folder,
+  // Start gated; a choice re-fires the preview with the handle, and Start
+  // sends it so main remembers it.
+  it('Jira, no folder yet: the picker, Start disabled; a pick rebuilds the brief and rides along on Start', async () => {
+    (getBriefPreview as jest.Mock)
+      .mockResolvedValueOnce(
+        jiraPreview({
+          repo: null,
+          branches: { branches: [], suggested: null },
+          baseRef: null,
+          brief: 'The brief, no folder.',
+        }),
+      )
+      .mockResolvedValueOnce(
+        jiraPreview({ repo: engRepo, brief: 'The brief, on ~/eng.' }),
+      );
+    (listRecentFolders as jest.Mock).mockResolvedValue([
+      engRepo,
+      {
+        ...engRepo,
+        handle: 'h-plain',
+        path: '/Users/me/notes',
+        name: 'notes',
+        kind: 'folder',
+      },
+    ]);
+    (dispatchRun as jest.Mock).mockResolvedValue({
+      id: 'run-new0001',
+      status: 'provisioning',
+    });
+    renderDialog({ request: { ticketId: 'tref-eng4', intent: 'investigate' } });
+    await flush();
+
+    expect(screen.getByText('Investigate · ENG-4')).toBeInTheDocument();
+    expect(screen.getByText('ENG-4 in Jira ↗')).toHaveAttribute(
+      'href',
+      'https://yourteam.atlassian.net/browse/ENG-4',
+    );
+    expect(
+      screen.getByText(/Not set yet — choose the folder ENG's code lives in/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Start session' }),
+    ).toBeDisabled();
+    await flush();
+    // Only git repositories are offered: a session on a ticket takes a worktree.
+    const options = screen.getAllByRole('radio');
+    expect(options).toHaveLength(1);
+    expect(options[0]).toHaveTextContent('eng');
+
+    fireEvent.click(options[0]);
+    await flush();
+    expect(getBriefPreview).toHaveBeenLastCalledWith({
+      ticketId: 'tref-eng4',
+      intent: 'investigate',
+      folder: 'h-eng',
+    });
+    expect(
+      screen.getByDisplayValue('The brief, on ~/eng.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('~/eng')).toBeInTheDocument();
+    expect(screen.getByText(/will be remembered for ENG/)).toBeInTheDocument();
+    expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start session' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
+    await flush();
+    expect(dispatchRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ticketId: 'tref-eng4',
+        folder: 'h-eng',
+        baseRef: 'main',
+      }),
+    );
+  });
+
+  it('Jira, a remembered folder: shown as remembered with Change; Browse… picks another', async () => {
+    (getBriefPreview as jest.Mock)
+      .mockResolvedValueOnce(
+        jiraPreview({ repo: engRepo, repoRemembered: true }),
+      )
+      .mockResolvedValueOnce(
+        jiraPreview({
+          repo: {
+            ...engRepo,
+            handle: 'h-other',
+            path: '/Users/me/other',
+            displayPath: '~/other',
+          },
+        }),
+      );
+    (chooseFolder as jest.Mock).mockResolvedValue({
+      canceled: false,
+      folder: {
+        ...engRepo,
+        handle: 'h-other',
+        path: '/Users/me/other',
+        displayPath: '~/other',
+      },
+    });
+    renderDialog({ request: { ticketId: 'tref-eng4', intent: 'investigate' } });
+    await flush();
+    expect(screen.getByText(/remembered for ENG/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start session' })).toBeEnabled();
+    expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Change' }));
+    await flush();
+    expect(screen.getByRole('radiogroup')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Browse…' }));
+    await flush();
+    expect(getBriefPreview).toHaveBeenLastCalledWith(
+      expect.objectContaining({ folder: 'h-other' }),
+    );
+    expect(screen.getByText('~/other')).toBeInTheDocument();
+    expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+  });
+
+  it('a native ticket never shows the picker, the Issue row, or Change', async () => {
+    (getBriefPreview as jest.Mock).mockResolvedValue(preview());
+    renderDialog();
+    await flush();
+    expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+    expect(screen.queryByText(/in Jira/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Change' }),
+    ).not.toBeInTheDocument();
+    expect(listRecentFolders).not.toHaveBeenCalled();
   });
 });

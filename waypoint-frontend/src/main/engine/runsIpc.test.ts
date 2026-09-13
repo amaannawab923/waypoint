@@ -853,3 +853,123 @@ describe('runs:start, runs:resume, runs:list-branches, runs:choose-folder, runs:
     expect(reveal).toHaveBeenCalledWith(picked);
   });
 });
+
+// W5b (docs/design/w5b-jira-dispatch.md §2.7, §2.8): the two channels a
+// Jira issue reaches a session through — a typed key resolved in either
+// system, and the ledger handle for an issue the drawer already read,
+// minted with the site from main's stored credential.
+describe('runs:resolve-ticket, runs:jira-ticket-ref', () => {
+  const register = (options: {
+    ledger: jest.Mocked<LedgerClient>;
+    site?: string | null;
+  }) => {
+    const { host, invoke } = fakeHost();
+    registerRunsIpc({
+      supervisor: supervisorWith(true),
+      host,
+      worktreesDir,
+      ledger: options.ledger,
+      reveal: jest.fn(),
+      notify: jest.fn(),
+      chooseDirectory: async () => null,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
+      daemon: () => fakeDaemon(),
+      ...(options.site === undefined
+        ? {}
+        : {
+            jira: {
+              site: () => options.site ?? null,
+              getTicket: jest.fn(),
+              listComments: jest.fn(),
+              listTransitions: jest.fn(),
+            },
+          }),
+      logger,
+    });
+    return invoke;
+  };
+
+  it('runs:resolve-ticket upper-cases the key, refuses a non-key before any request, and passes the ledger’s answer through', async () => {
+    const resolved = {
+      provider: 'jira' as const,
+      id: 'tref-abc1234',
+      identifier: 'ENG-4',
+      title: 'Checkout 500s',
+      projectId: 'ENG',
+      url: 'https://yourteam.atlassian.net/browse/ENG-4',
+    };
+    const ledger = {
+      ...fakeLedger({}),
+      resolveTicket: jest.fn(async (key: string) =>
+        key === 'ENG-4' ? resolved : null,
+      ),
+    } as unknown as jest.Mocked<LedgerClient>;
+    const invoke = register({ ledger });
+
+    await expect(invoke(RUNS_IPC.resolveTicket, ' eng-4 ')).resolves.toEqual(
+      resolved,
+    );
+    expect(ledger.resolveTicket).toHaveBeenCalledWith('ENG-4');
+    await expect(invoke(RUNS_IPC.resolveTicket, 'ENG-9')).resolves.toBeNull();
+    await expect(invoke(RUNS_IPC.resolveTicket, '../x')).rejects.toThrow(
+      /not a ticket key/,
+    );
+    await expect(invoke(RUNS_IPC.resolveTicket, 42)).rejects.toThrow(
+      /Type a ticket key/,
+    );
+    expect(ledger.resolveTicket).toHaveBeenCalledTimes(2);
+  });
+
+  it('runs:jira-ticket-ref mints the handle with main’s site — never the renderer’s — and refuses without Jira or a key', async () => {
+    const ledger = {
+      ...fakeLedger({}),
+      rememberTicketRef: jest.fn(
+        async (input: { site: string; key: string; title: string }) => ({
+          id: 'tref-abc1234',
+          provider: 'jira',
+          site: input.site,
+          key: input.key,
+          identifier: input.key,
+          title: input.title,
+          url: `https://${input.site}/browse/${input.key}`,
+        }),
+      ),
+    } as unknown as jest.Mocked<LedgerClient>;
+    const invoke = register({ ledger, site: 'yourteam.atlassian.net' });
+
+    await expect(
+      invoke(RUNS_IPC.jiraTicketRef, {
+        key: 'eng-4',
+        title: 'Checkout 500s',
+        site: 'evil.example',
+      }),
+    ).resolves.toEqual({
+      ticketId: 'tref-abc1234',
+      identifier: 'ENG-4',
+      title: 'Checkout 500s',
+      url: 'https://yourteam.atlassian.net/browse/ENG-4',
+    });
+    expect(ledger.rememberTicketRef).toHaveBeenCalledWith({
+      site: 'yourteam.atlassian.net',
+      key: 'ENG-4',
+      title: 'Checkout 500s',
+    });
+
+    await expect(
+      invoke(RUNS_IPC.jiraTicketRef, { key: 'nope' }),
+    ).rejects.toThrow('Not a Jira issue key.');
+    await expect(invoke(RUNS_IPC.jiraTicketRef, null)).rejects.toThrow(
+      'Not a Jira issue.',
+    );
+
+    const disconnected = register({ ledger, site: null });
+    await expect(
+      disconnected(RUNS_IPC.jiraTicketRef, { key: 'ENG-4' }),
+    ).rejects.toThrow(/Jira is not connected/);
+    const noJira = register({ ledger });
+    await expect(
+      noJira(RUNS_IPC.jiraTicketRef, { key: 'ENG-4' }),
+    ).rejects.toThrow(/Jira is not connected/);
+    expect(ledger.rememberTicketRef).toHaveBeenCalledTimes(1);
+  });
+});

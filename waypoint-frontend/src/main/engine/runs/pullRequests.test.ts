@@ -41,6 +41,7 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     errorKind: null,
     errorMessage: null,
     summary: null,
+    verdict: null,
     turnCount: 1,
     inputTokens: 0,
     outputTokens: 0,
@@ -293,6 +294,27 @@ describe('buildPrBody / describePublish', () => {
       body.indexOf('### Files'),
     );
     expect(body.trim().endsWith('Guarded the write.')).toBe(true);
+  });
+
+  // W5b: a Jira issue has a URL a reviewer can open; the heading links it.
+  it('a ticket URL turns the heading into a link; none leaves it plain', () => {
+    const facts = { commits: [], files: [] };
+    expect(
+      buildPrBody(
+        {
+          ...input(),
+          ticketUrl: 'https://yourteam.atlassian.net/browse/ENG-4',
+        },
+        facts,
+      ).startsWith(
+        '**[ROAD-103: Flaky test](https://yourteam.atlassian.net/browse/ENG-4)**',
+      ),
+    ).toBe(true);
+    expect(
+      buildPrBody({ ...input(), ticketUrl: null }, facts).startsWith(
+        '**ROAD-103: Flaky test**',
+      ),
+    ).toBe(true);
   });
 
   it('the title is the one commit’s subject, else Fix KEY: title for a Fix', () => {

@@ -8,6 +8,10 @@ export const approveProposalSchema = z.object({}).strict();
 export const rejectProposalSchema = z.object({}).strict();
 export const rejectAllProposalsSchema = z.object({}).strict();
 
+// W5c: the one field a person may change on a proposal before approving
+// it — a comment's body. Same bound as a run's comment proposal.
+export const editProposalSchema = z.object({ body: z.string().trim().min(1).max(20_000) }).strict();
+
 // Bounded ids array: the renderer only ever marks the handful of proposals
 // whose outcomes it just delivered in one preamble, so 100 is generous —
 // an unbounded array here would let one request update arbitrarily many

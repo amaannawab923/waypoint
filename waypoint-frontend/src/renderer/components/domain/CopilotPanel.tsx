@@ -5,13 +5,13 @@ import { clsx } from 'clsx';
 import { ArrowLeft, FolderGit2, Send } from 'lucide-react';
 import { IconPlus, IconSparkles, IconX } from '@/components/icons';
 import {
-  getTicketByIdentifier,
   listTickets,
   markCopilotNotesDelivered,
   postCopilotUserMessage,
   postCopilotAssistantMessage,
   updateProject,
 } from '@/data/api';
+import { resolveTicket } from '@/data/engineApi';
 import {
   matchingCommands,
   matchingKeys,
@@ -21,7 +21,14 @@ import {
 } from '@/lib/copilotSlash';
 import { BriefPreviewDialog } from '@/components/sessions/BriefPreviewDialog';
 import { SESSIONS_ENABLED } from '@/lib/featureFlags';
-import type { BriefPreviewInput, RunIntent } from '@/types/agentRuns';
+import type {
+  BriefPreviewInput,
+  RunIntent,
+  SessionOfferHistory,
+} from '@/types/agentRuns';
+import { INTENT_LABEL } from '@/components/sessions/BriefPreviewDialog';
+import { statusView } from '@/components/sessions/sessionStatus';
+import { verdictLabel } from '@/lib/runVerdict';
 import { useCopilotConversations } from '@/lib/useCopilotConversations';
 import { useCopilotProposals } from '@/lib/useCopilotProposals';
 import { useCurrentRouteProject } from '@/lib/useCurrentRouteProject';
@@ -94,21 +101,40 @@ interface CopilotSessionOffer {
   title: string;
   intent: RunIntent | null;
   note: string | null;
+  /** W5c: the ticket's earlier runs, when it has any. */
+  history?: SessionOfferHistory | null;
+}
+
+/** "2 earlier runs · latest: Fix, needs review, verdict: not a bug" */
+export function describeOfferHistory(history: SessionOfferHistory): string {
+  const { latest } = history;
+  const parts = [
+    latest.intent ? INTENT_LABEL[latest.intent] : 'a session',
+    statusView(latest.status).label.toLowerCase(),
+  ];
+  if (latest.verdict) parts.push(`verdict: ${verdictLabel(latest.verdict)}`);
+  const count =
+    history.runs === 1 ? '1 earlier run' : `${history.runs} earlier runs`;
+  return `${count} · latest: ${parts.join(', ')}`;
 }
 
 /**
  * The three verbs as buttons in the conversation (W5a §1.2, §5): what
  * Copilot's dispatch_session tool renders. Each opens the brief preview;
- * nothing starts until the person presses Start there.
+ * nothing starts until the person presses Start there. W5c: the ticket's
+ * earlier runs, and the latest verdict, above the verbs — a second
+ * Investigate is offered as a second one.
  */
 function SessionOfferCard({
   offer,
   onPick,
   onDismiss,
+  onOpenRun,
 }: {
   offer: CopilotSessionOffer;
   onPick: (intent: RunIntent) => void;
   onDismiss: () => void;
+  onOpenRun: (runId: string) => void;
 }) {
   const verb = (intent: RunIntent, label: string) => (
     <Button
@@ -132,6 +158,21 @@ function SessionOfferCard({
           <div className="truncate text-text">{offer.title}</div>
           {offer.note && (
             <div className="mt-1 text-xs text-text-secondary">{offer.note}</div>
+          )}
+          {offer.history && (
+            <div
+              className="mt-1 text-xs text-text-secondary"
+              data-offer-history
+            >
+              {describeOfferHistory(offer.history)} ·{' '}
+              <button
+                type="button"
+                className="underline decoration-border underline-offset-2 hover:text-text"
+                onClick={() => onOpenRun(offer.history!.latest.runId)}
+              >
+                open
+              </button>
+            </div>
           )}
         </div>
         <IconButton label="Dismiss" onClick={onDismiss} className="-mr-1">
@@ -320,7 +361,10 @@ function Composer({
             hint: t.title,
           }))
         : [];
-  const menuOpen = suggestions.length > 0;
+  // A refusal stands in the menu's place until the next keystroke clears
+  // it (JIRA-SESS-12: an ambiguous key's refusal was hidden behind the key
+  // menu, which the still-typed key kept open).
+  const menuOpen = suggestions.length > 0 && !slashError;
 
   function accept(index: number) {
     const pick = suggestions[index];
@@ -401,7 +445,7 @@ function Composer({
           ))}
         </div>
       )}
-      {slashError && !menuOpen && (
+      {slashError && (
         <div
           className="absolute bottom-full left-4 right-4 mb-1 rounded-[var(--radius-sm)] border border-border bg-surface px-3 py-1.5 text-xs text-warning shadow"
           role="status"
@@ -448,7 +492,10 @@ function Composer({
             return;
           }
           if (menuOpen && e.key === 'Escape') {
+            // The menu takes this Escape; the panel's own document-level
+            // Escape (close) must not see it (found in the W5b QA round).
             e.preventDefault();
+            e.stopPropagation();
             setValue(value.replace(/\S*$/, ''));
             return;
           }
@@ -707,7 +754,10 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
 
   async function handleSlash(parsed: ParsedSlash) {
     if (!activeSessionId) return;
-    const ticket = await getTicketByIdentifier(parsed.key);
+    // W5b: the key resolves in both systems through main — a Jira key opens
+    // the same preview on the issue's handle; an ambiguous key is the
+    // backend's sentence, shown under the composer, never a guess.
+    const ticket = await resolveTicket(parsed.key);
     if (!ticket) throw new Error(`No ticket ${parsed.key}.`);
     const { intent } = parsed.command;
     openBrief(activeSessionId, {
@@ -1447,6 +1497,9 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
                   }
                   onDismiss={() =>
                     setOffers((prev) => prev.filter((o) => o !== offer))
+                  }
+                  onOpenRun={(runId) =>
+                    navigate(`/sessions/${encodeURIComponent(runId)}`)
                   }
                 />
               ))}

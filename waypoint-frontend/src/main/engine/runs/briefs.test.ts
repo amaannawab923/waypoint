@@ -3,6 +3,8 @@ import {
   briefTitle,
   buildBrief,
   htmlToText,
+  jiraBriefComments,
+  jiraBriefTicket,
   MAX_BRIEF_COMMENTS,
   scrubBriefText,
   type BriefInput,
@@ -69,6 +71,11 @@ describe('buildBrief', () => {
     expect(brief).toContain(
       'Waypoint reads only the final message of this turn',
     );
+    expect(brief).toContain(
+      'Verdict: <one of root-cause | not-a-bug | needs-info>',
+    );
+    expect(brief).toContain('## Summary');
+    expect(brief).toContain('## Details');
     expect(brief).not.toContain('## Root cause, as approved');
   });
 
@@ -84,12 +91,21 @@ describe('buildBrief', () => {
       '## Root cause, as approved\nThe write is not guarded.',
     );
     expect(brief).toContain('## Your task — Fix');
-    expect(brief).toContain('Do not push, open a pull request');
+    expect(brief).toContain(
+      'Waypoint pushes this branch and opens the pull request itself',
+    );
+    expect(brief).toContain('must not say the branch was not pushed');
+    expect(brief).not.toContain('Do not push');
+    expect(brief).toContain(
+      'Verdict: <one of fixed | partial | not-a-bug | wont-fix | needs-info>',
+    );
     expect(brief).toContain('Start from the approved root cause above');
     expect(brief).toContain(
       'An earlier Fix on this ticket left the branch agent/ROAD-116-x1',
     );
-    expect(brief).toContain('proposes moving the ticket to review');
+    expect(brief).toContain(
+      'proposes moving the ticket to review for fixed and partial, and closing it for not-a-bug and wont-fix',
+    );
   });
 
   it('Fix without an RCA says nothing about one', () => {
@@ -217,5 +233,107 @@ describe('briefTitle', () => {
     );
     expect(briefTitle('ROAD-116', 'fix')).toBe('ROAD-116 · Fix');
     expect(briefTitle('ROAD-116', 'custom')).toBe('ROAD-116 · Session');
+  });
+});
+
+// W5b: the brief's view of a Jira issue, from main's own client's wire
+// shape (docs/design/w5b-jira-dispatch.md §2.3).
+describe('jiraBriefTicket / jiraBriefComments', () => {
+  const issue = {
+    id: '10042',
+    key: 'ENG-4',
+    projectKey: 'ENG',
+    title: 'Checkout 500s',
+    role: 'assignee' as const,
+    stateName: 'In Progress',
+    stateCategory: 'in-progress' as const,
+    priority: 'none' as const,
+    priorityId: null,
+    priorityName: 'None',
+    assigneeName: 'Unassigned',
+    assigneeAccountId: null,
+    reporterName: '',
+    description: '   ',
+    epicName: null,
+    storyPoints: null,
+    sprintName: null,
+    labels: [],
+    dueDate: null,
+    subtasks: [],
+    links: [],
+    descriptionAdf: null,
+    attachments: [],
+    transitions: [],
+    updatedAt: null,
+  };
+
+  it('names the issue, its URL and status; "None", "Unassigned" and a blank reporter are nothing, not words', () => {
+    const facts = jiraBriefTicket(issue, 'yourteam.atlassian.net');
+    expect(facts.ticket).toEqual({
+      identifier: 'ENG-4',
+      title: 'Checkout 500s',
+      description: null,
+      priority: null,
+    });
+    expect(facts.stateName).toBe('In Progress');
+    expect(facts.jira).toEqual({
+      url: 'https://yourteam.atlassian.net/browse/ENG-4',
+      labels: [],
+      assignee: null,
+      reporter: null,
+    });
+    const brief = buildBrief(
+      input({ ...facts, comments: [], intent: 'investigate' }),
+    );
+    expect(brief).toContain(
+      '## Issue ENG-4 — Checkout 500s\nState: In Progress\n(no description)',
+    );
+    expect(brief).not.toContain('Priority:');
+    expect(brief).not.toContain('Assignee:');
+    expect(brief).toContain(
+      'this session is in plan mode and the issue owner decides',
+    );
+  });
+
+  it('keeps the site’s own priority label, and encodes the key in the URL', () => {
+    const facts = jiraBriefTicket(
+      {
+        ...issue,
+        key: 'ENG_2-7',
+        priorityName: 'Blocker',
+        assigneeName: 'Sam',
+        reporterName: 'Priya',
+      },
+      'yourteam.atlassian.net',
+    );
+    expect(facts.ticket.priority).toBe('Blocker');
+    expect(facts.jira).toMatchObject({
+      url: 'https://yourteam.atlassian.net/browse/ENG_2-7',
+      assignee: 'Sam',
+      reporter: 'Priya',
+    });
+  });
+
+  it('comments become named, flat, undated-tolerant lines', () => {
+    const comments = jiraBriefComments([
+      {
+        id: 'c1',
+        ticketId: 'ENG-4',
+        authorName: 'Priya Raman',
+        authorAccountId: null,
+        updatedAt: null,
+        updateAuthorName: null,
+        body: 'Repro on staging.',
+        createdAt: null,
+        parentId: null,
+        visibility: null,
+        bodyAdf: null,
+      },
+    ]);
+    expect(comments).toEqual([
+      { author: 'Priya Raman', text: 'Repro on staging.', createdAt: null },
+    ]);
+    const brief = buildBrief(input({ comments }));
+    expect(brief).toContain('— Priya Raman, undated:\nRepro on staging.');
   });
 });

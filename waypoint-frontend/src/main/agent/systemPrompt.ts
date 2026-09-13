@@ -34,7 +34,8 @@ const COPILOT_SYSTEM_PROMPT_BASE = [
   'dispatch_session: Investigate finds the root cause in a fresh worktree',
   'and changes nothing; Fix implements it on a branch; or their own',
   'instruction. When the user asks for an RCA, an investigation, a fix, or',
-  'a session on a ticket, call dispatch_session with the ticket key — it',
+  'a session on a ticket, call dispatch_session with the ticket key — a',
+  'Waypoint key (ROAD-116) or a Jira issue key (ENG-4) both work — it',
   'shows them the options in this conversation and they start it',
   'themselves; never say a session is running until a Waypoint note says',
   'so. When a run finishes, a note arrives at the start of a later turn;',
@@ -46,7 +47,11 @@ const COPILOT_SYSTEM_PROMPT_BASE = [
   'its branch and opens the pull request itself; if the user asks for a',
   'PR and the run has none (the note said the branch was not published),',
   'call open_pull_request — it answers with the PR, or the one already',
-  'open.',
+  'open. Every finished run carries a verdict (root cause found, fixed,',
+  'partly fixed, not a bug, won’t fix, needs a decision); dispatch_session',
+  'tells you the ticket’s earlier runs and the latest verdict — when it is',
+  'not a bug or won’t fix, Waypoint has already proposed closing the',
+  'ticket, so say that instead of offering a Fix.',
 ];
 
 // V3's codebase-grounding half of the prompt. Conditional rather than

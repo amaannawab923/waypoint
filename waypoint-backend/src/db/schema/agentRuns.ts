@@ -1,5 +1,7 @@
+import { sql } from 'drizzle-orm';
 import {
   boolean,
+  check,
   pgTable,
   pgEnum,
   text,
@@ -15,7 +17,6 @@ import {
 import { members } from './workspace.js';
 import { projects } from './projects.js';
 import { copilotConversations } from './copilot.js';
-import { tickets } from './tickets.js';
 import { agents, agentRunStatusEnum } from './agents.js';
 
 // The session ledger — ROAD-53, W2 of the agent-sessions epic (ROAD-44).
@@ -63,13 +64,30 @@ export const agentRuns = pgTable(
 
     // --- who, where, about what ------------------------------------------
     // Nullable since W4b (ROAD-116): an independent session on a folder
-    // that is no project's linked repository belongs to no project. A
-    // dispatched run always has one (its ticket's).
+    // that is no project's linked repository belongs to no project. Since
+    // W5b (ROAD-126) a dispatched run may have none too: a run on a Jira
+    // issue works in whatever repository the person mapped that Jira
+    // project to, and only has a project when that folder is some
+    // project's linked repository.
     projectId: text('project_id').references(() => projects.id, { onDelete: 'cascade' }),
     // Null for an independent session that is not about a ticket. A ticket
     // may have many runs over time (retries, follow-ups); a run has at most
-    // one ticket. Never cascaded: a deleted ticket leaves its runs readable.
-    ticketId: text('ticket_id').references(() => tickets.id, { onDelete: 'set null' }),
+    // one ticket.
+    //
+    // W5b (ROAD-126): the id names EITHER a native ticket ("wi-…",
+    // tickets.id) OR a Jira issue's ledger handle ("tref-…",
+    // ticket_refs.id) — exactly the rule proposals.ticket_id follows, and
+    // for its reason (see providerOf in proposals.service.ts): the prefix
+    // alone says which system owns the ticket, with nothing stored beside
+    // it able to disagree. That is why the foreign key to `tickets` is gone
+    // (migration 0019) and a shape check stands in its place: a column
+    // that can name two tables cannot reference one. What the FK gave —
+    // `set null` when a native ticket is deleted — the service keeps at
+    // insert (createRun checks the ticket, or the ref, exists) and the
+    // panel tolerates on read (a label that cannot be resolved falls back
+    // to the run's title and branch). A deleted ticket leaves its runs
+    // readable, as before.
+    ticketId: text('ticket_id'),
     // The account column ahead of ROAD-7's login. Every run has an owner —
     // the panel lists the owner's runs, and only the owner answers an
     // independent run's permission requests. `restrict`: a member with runs
@@ -148,6 +166,14 @@ export const agentRuns = pgTable(
     // The agent's final message, capped by the service — never the whole
     // transcript (that is the daemon's, read live).
     summary: text('summary'),
+    // What the session concluded, in Waypoint's vocabulary (W5c):
+    // `root-cause` | `fixed` | `partial` | `not-a-bug` | `wont-fix` |
+    // `needs-info`. Read by host finalize from the report's `Verdict:` line
+    // (the verb's default when the session named none); it decides which
+    // state change finalize proposes and is what Copilot's offer on the
+    // next dispatch reads back. Null for an independent run or one that
+    // never finished.
+    verdict: text('verdict'),
 
     // --- counters ----------------------------------------------------------
     turnCount: integer('turn_count').notNull().default(0),
@@ -178,6 +204,12 @@ export const agentRuns = pgTable(
     index('agent_runs_ticket_idx').on(t.ticketId),
     // Boot-time reconcile: "every run that thinks it is live".
     index('agent_runs_status_idx').on(t.status),
+    // W5b: a ticket id is a native ticket's or a Jira ref's, never a bare
+    // key or anything else — the shape the service dispatches on.
+    check(
+      'agent_runs_ticket_id_shape',
+      sql`${t.ticketId} IS NULL OR ${t.ticketId} LIKE 'wi-%' OR ${t.ticketId} LIKE 'tref-%'`,
+    ),
   ],
 );
 

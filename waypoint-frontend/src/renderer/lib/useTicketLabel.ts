@@ -1,5 +1,5 @@
 import { useEffect, useSyncExternalStore } from 'react';
-import { getTicket } from '@/data/api';
+import { getTicket, getTicketRef, isTicketRef } from '@/data/api';
 
 /**
  * "ROAD-61 · Session list" for a ticket id — the label a dispatched run is
@@ -8,12 +8,18 @@ import { getTicket } from '@/data/api';
  * re-renders never re-asks; a ticket that could not be read (deleted, the
  * backend down) is remembered as `null` so the row falls back to its
  * branch rather than retrying on every render.
+ *
+ * W5b: a Jira issue's handle (`tref-…`) resolves through the ledger's
+ * ref row — the key, the cached summary, the issue's URL — the same
+ * shape, plus `url` so a Jira run's header can link the issue.
  */
 export interface TicketSummary {
   identifier: string;
   title: string;
   /** "ROAD-61 · Session list" */
   label: string;
+  /** A Jira issue's URL; null for a native ticket. */
+  url: string | null;
 }
 
 type Entry = { summary: TicketSummary | null } | undefined;
@@ -34,7 +40,10 @@ function subscribe(listener: () => void): () => void {
 function load(ticketId: string): Promise<void> {
   const inFlight = pending.get(ticketId);
   if (inFlight) return inFlight;
-  const p = getTicket(ticketId)
+  const read: Promise<
+    { identifier: string; title: string; url?: string | null } | undefined
+  > = isTicketRef(ticketId) ? getTicketRef(ticketId) : getTicket(ticketId);
+  const p = read
     .then((ticket) => {
       labels.set(ticketId, {
         summary: ticket
@@ -42,6 +51,7 @@ function load(ticketId: string): Promise<void> {
               identifier: ticket.identifier,
               title: ticket.title,
               label: `${ticket.identifier} · ${ticket.title}`,
+              url: ticket.url ?? null,
             }
           : null,
       });

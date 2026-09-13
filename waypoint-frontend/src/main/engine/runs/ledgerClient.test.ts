@@ -1,4 +1,9 @@
-import { createLedgerClient, LedgerRequestError } from './ledgerClient';
+import {
+  createLedgerClient,
+  isTicketRef,
+  JIRA_CREDENTIAL_HEADER,
+  LedgerRequestError,
+} from './ledgerClient';
 
 type Call = { url: string; init: RequestInit | undefined };
 
@@ -198,5 +203,179 @@ describe('createLedgerClient', () => {
     } finally {
       if (saved !== undefined) process.env.WAYPOINT_API_BASE_URL = saved;
     }
+  });
+});
+
+// W5b (docs/design/w5b-jira-dispatch.md §2.4, §2.7): the borrowed Jira
+// credential rides only the requests that need it, and a Jira issue's
+// handle and a typed key have their own reads.
+describe('W5b: Jira issues', () => {
+  const header = 'base64-of-the-credential';
+
+  it('isTicketRef: the prefix alone says which system owns the ticket', () => {
+    expect(isTicketRef('tref-abc1234')).toBe(true);
+    expect(isTicketRef('wi-1')).toBe(false);
+    expect(isTicketRef(null)).toBe(false);
+    expect(isTicketRef(undefined)).toBe(false);
+  });
+
+  it('createRunProposal sends the credential header for an external ticket only', async () => {
+    const { fn, calls } = fakeFetch(() => ({
+      status: 201,
+      body: { id: 'prop-1' },
+    }));
+    const jiraCredentialHeader = jest.fn(() => header);
+    const client = createLedgerClient({
+      baseUrl: 'http://api.test',
+      fetch: fn,
+      jiraCredentialHeader,
+    });
+
+    await client.createRunProposal('run-abc1234', {
+      kind: 'comment',
+      body: 'x',
+    });
+    expect(calls[0].init?.headers).toEqual({
+      'content-type': 'application/json',
+    });
+    expect(jiraCredentialHeader).not.toHaveBeenCalled();
+
+    await client.createRunProposal(
+      'run-abc1234',
+      { kind: 'state_change', stateId: '21' },
+      { external: true },
+    );
+    expect(calls[1].init?.headers).toEqual({
+      'content-type': 'application/json',
+      [JIRA_CREDENTIAL_HEADER]: header,
+    });
+    expect(JSON.parse(String(calls[1].init?.body))).toEqual({
+      kind: 'state_change',
+      stateId: '21',
+    });
+  });
+
+  it('with nothing connected the header is simply absent', async () => {
+    const { fn, calls } = fakeFetch(() => ({
+      status: 201,
+      body: { id: 'prop-1' },
+    }));
+    const client = createLedgerClient({
+      baseUrl: 'http://api.test',
+      fetch: fn,
+      jiraCredentialHeader: () => null,
+    });
+    await client.createRunProposal(
+      'run-abc1234',
+      { kind: 'comment', body: 'x' },
+      { external: true },
+    );
+    expect(calls[0].init?.headers).toEqual({
+      'content-type': 'application/json',
+    });
+  });
+
+  it('resolveTicket GETs /tickets/resolve/:key with the credential, null on 404, the backend sentence on 409', async () => {
+    const { fn, calls } = fakeFetch(({ url }) => {
+      if (url.endsWith('/ENG-4')) {
+        return {
+          status: 200,
+          body: {
+            provider: 'jira',
+            id: 'tref-abc1234',
+            identifier: 'ENG-4',
+            title: 'Checkout 500s',
+            projectId: 'ENG',
+            url: 'https://yourteam.atlassian.net/browse/ENG-4',
+          },
+        };
+      }
+      if (url.endsWith('/ENG-9')) {
+        return { status: 409, body: { error: '"ENG-9" is ambiguous: …' } };
+      }
+      return { status: 404, body: { error: 'ticket not found' } };
+    });
+    const client = createLedgerClient({
+      baseUrl: 'http://api.test',
+      fetch: fn,
+      jiraCredentialHeader: () => header,
+    });
+
+    expect(await client.resolveTicket('ENG-4')).toEqual({
+      provider: 'jira',
+      id: 'tref-abc1234',
+      identifier: 'ENG-4',
+      title: 'Checkout 500s',
+      projectId: 'ENG',
+      url: 'https://yourteam.atlassian.net/browse/ENG-4',
+    });
+    expect(calls[0].url).toBe('http://api.test/tickets/resolve/ENG-4');
+    expect(calls[0].init?.method).toBe('GET');
+    expect(calls[0].init?.headers).toEqual({
+      [JIRA_CREDENTIAL_HEADER]: header,
+    });
+
+    expect(await client.resolveTicket('ENG-7')).toBeNull();
+    await expect(client.resolveTicket('ENG-9')).rejects.toThrow(/ambiguous/);
+    await expect(client.resolveTicket('../x')).rejects.toThrow(
+      /Not a ticket key/,
+    );
+    expect(calls).toHaveLength(3);
+  });
+
+  it('getTicketRef reads /ticket-refs/:id (null for a native id without a request, null on 404); rememberTicketRef POSTs the key', async () => {
+    const row = {
+      id: 'tref-abc1234',
+      provider: 'jira',
+      site: 'yourteam.atlassian.net',
+      externalId: 'ENG-4',
+      identifier: 'ENG-4',
+      title: 'Checkout 500s',
+      url: 'https://yourteam.atlassian.net/browse/ENG-4',
+    };
+    const { fn, calls } = fakeFetch(({ url, init }) => {
+      if (init?.method === 'POST') return { status: 201, body: row };
+      return url.endsWith('/tref-abc1234')
+        ? { status: 200, body: row }
+        : { status: 404, body: { error: 'ticket ref not found' } };
+    });
+    const client = createLedgerClient({
+      baseUrl: 'http://api.test',
+      fetch: fn,
+    });
+
+    expect(await client.getTicketRef('wi-1')).toBeNull();
+    expect(calls).toHaveLength(0);
+    expect(await client.getTicketRef('tref-abc1234')).toEqual({
+      id: 'tref-abc1234',
+      provider: 'jira',
+      site: 'yourteam.atlassian.net',
+      key: 'ENG-4',
+      identifier: 'ENG-4',
+      title: 'Checkout 500s',
+      url: 'https://yourteam.atlassian.net/browse/ENG-4',
+    });
+    expect(await client.getTicketRef('tref-nope')).toBeNull();
+
+    const minted = await client.rememberTicketRef({
+      site: 'yourteam.atlassian.net',
+      key: 'ENG-4',
+      title: 'Checkout 500s',
+    });
+    expect(minted.id).toBe('tref-abc1234');
+    expect(calls[2].url).toBe('http://api.test/ticket-refs');
+    expect(JSON.parse(String(calls[2].init?.body))).toEqual({
+      provider: 'jira',
+      site: 'yourteam.atlassian.net',
+      key: 'ENG-4',
+      title: 'Checkout 500s',
+    });
+    // No credential on a ref write: the row holds no secret.
+    expect(calls[2].init?.headers).toEqual({
+      'content-type': 'application/json',
+    });
+    await expect(
+      client.rememberTicketRef({ site: 'x', key: 'not a key', title: '' }),
+    ).rejects.toThrow(/Not a Jira issue key/);
   });
 });

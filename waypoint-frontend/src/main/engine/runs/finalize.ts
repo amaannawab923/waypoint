@@ -15,10 +15,20 @@ import type { NoteGitRunner } from './startRun';
 import type { TranscriptKeeper } from './transcripts';
 import { isDispatchedWriter } from './agentEnv';
 import {
-  describePublish,
-  type PublishOutcome,
-  type PullRequestPublisher,
-} from './pullRequests';
+  describeRunTicket,
+  pickClosingTransition,
+  pickReviewTransition,
+  type JiraRunDeps,
+} from './jiraRuns';
+import type { PublishOutcome, PullRequestPublisher } from './pullRequests';
+import {
+  defaultVerdict,
+  isClosingVerdict,
+  parseReport,
+  verdictLabel,
+  type Verdict,
+} from './report';
+import { buildRunComment, type BranchWork } from './runComment';
 
 /**
  * Host-side finalize — W5a, ROAD-120 (docs/design/w5a-investigate-fix.md
@@ -27,12 +37,16 @@ import {
  * The agent never files anything. When a dispatched run's turn has ended
  * (the follower's idle fact: not generating, nothing pending, nothing
  * queued, a stop reason recorded), main reads the last assistant message
- * of the last committed turn through `acp.getHistory` and files it as a
- * comment proposal on the ticket, origin `agent_run`; for a Fix, also the
- * state change to the project's review state. The run goes `finishing →
- * needs-review`, the session is killed (its transcript stays in the
- * daemon's history), and the person's Copilot conversation gets a note
- * the ledger wrote. A turn that ended with no closing message, or in
+ * of the last committed turn through `acp.getHistory`, reads it as a
+ * report (report.ts: a verdict, a Summary, the Details) and files the
+ * board-shaped part as a comment proposal on the ticket, origin
+ * `agent_run` (runComment.ts). The verdict decides the state change
+ * filed beside it (W5c): a Fix that is fixed or partial proposes the
+ * review state; a closing verdict — not a bug, won't fix — on either
+ * verb proposes the closing state instead, and is not published. The
+ * run goes `finishing → needs-review` with its verdict on the row, the
+ * session is killed (its transcript is kept in the ledger), and the
+ * person's Copilot conversation gets a note the ledger wrote. A turn that ended with no closing message, or in
  * error, makes the run `failed` with the reason on the row.
  *
  * Idempotent by the `finishing` status: the first writer to move the
@@ -55,6 +69,8 @@ export interface FinalizeDeps {
   transcripts?: TranscriptKeeper;
   /** W6: pushes a writing run's branch and opens the PR before the proposals are filed. */
   pullRequests?: PullRequestPublisher;
+  /** W5b: main's Jira reads, for the transition a Fix on a Jira issue proposes (runs/jiraRuns.ts). */
+  jira?: JiraRunDeps;
   logger: {
     info: (m: string, meta?: Record<string, unknown>) => void;
     warn: (m: string, meta?: Record<string, unknown>) => void;
@@ -135,27 +151,59 @@ export function pickReviewState(states: LedgerState[]): LedgerState | null {
   return started[started.length - 1] ?? null;
 }
 
-const MAX_LIST_LINES = 40;
+/** A native state name that closes a ticket without saying it was done. */
+const CLOSING_STATE_NAME =
+  /won'?t\s*(do|fix)|cannot\s*reproduce|can'?t\s*reproduce|not\s*a\s*bug|invalid|declined|rejected|cancel|closed|duplicate/i;
 
-function firstLines(text: string, max: number): string {
-  const lines = text
-    .replace(/\n$/, '')
-    .split('\n')
-    .filter((l) => l.length);
-  if (lines.length <= max) return lines.join('\n');
-  return `${lines.slice(0, max).join('\n')}\n… (${lines.length - max} more)`;
+/**
+ * The state a closing verdict — not a bug, won't fix — proposes moving
+ * the ticket to (W5c): a `cancelled`-group state named for closing when
+ * the project has one, else the first `cancelled`-group state. Never a
+ * `completed` state: Done would say the ticket was fixed. Null when the
+ * project has no cancelled group; the caller files only the comment.
+ */
+export function pickClosingState(states: LedgerState[]): LedgerState | null {
+  const byOrder = [...states]
+    .filter((s) => s.group === 'cancelled')
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+  return (
+    byOrder.find((s) => CLOSING_STATE_NAME.test(s.name)) ?? byOrder[0] ?? null
+  );
 }
 
 /**
- * For a Fix comment: the branch, the commits on it since the base, and
- * the files still uncommitted — through the hardened runner, after the
- * worktree's `.git` has been checked, the way the resume note does.
- * Best-effort: any failure leaves it out.
+ * Which state change a finished run proposes, from its verb and its
+ * verdict: a Fix that is fixed or partial → the review state (as W5a); a
+ * closing verdict on Investigate or Fix → the closing state; anything
+ * else (a root cause found, needs a decision, *Something else…*) → none.
+ */
+export function statePlanFor(
+  run: Pick<AgentRun, 'intent'>,
+  verdict: Verdict | null,
+): 'review' | 'close' | null {
+  if (run.intent !== 'investigate' && run.intent !== 'fix') return null;
+  if (isClosingVerdict(verdict)) return 'close';
+  if (run.intent === 'fix' && (verdict === 'fixed' || verdict === 'partial')) {
+    return 'review';
+  }
+  return null;
+}
+
+function countLines(text: string): number {
+  return text.split('\n').filter((l) => l.trim().length).length;
+}
+
+/**
+ * For a writing run's comment: the branch, and how many commits, files
+ * and uncommitted changes are on it — counted through the hardened
+ * runner, after the worktree's `.git` has been checked, the way the
+ * resume note does. The listing itself is the PR body's (W6); the board
+ * gets the counts. Best-effort: any failure leaves it out.
  */
 async function describeBranchWork(
   deps: FinalizeDeps,
   run: AgentRun,
-): Promise<string | null> {
+): Promise<BranchWork | null> {
   const cwd = run.worktreePath;
   if (!cwd || !deps.git || !deps.assertWorktreeGitDir) return null;
   try {
@@ -165,14 +213,7 @@ async function describeBranchWork(
         ? `${run.baseRef}..HEAD`
         : 'HEAD';
     const log = await deps.git(
-      [
-        'log',
-        '--oneline',
-        '--no-decorate',
-        `-n${MAX_LIST_LINES + 1}`,
-        range,
-        '--',
-      ],
+      ['log', '--oneline', '--no-decorate', range, '--'],
       { cwd },
     );
     const files = await deps.git(
@@ -183,19 +224,13 @@ async function describeBranchWork(
       ['status', '--short', '--untracked-files=all', '--'],
       { cwd },
     );
-    const lines = [
-      `Branch \`${run.branch ?? '(unknown)'}\`${run.baseRef ? ` from \`${run.baseRef}\`` : ''}, in the run's worktree.`,
-    ];
-    const commits =
-      log.code === 0 ? firstLines(log.stdout, MAX_LIST_LINES) : '';
-    lines.push('', 'Commits:', commits || '(none)');
-    const changed =
-      files.code === 0 ? firstLines(files.stdout, MAX_LIST_LINES) : '';
-    if (changed) lines.push('', 'Files changed:', changed);
-    const dirty =
-      status.code === 0 ? firstLines(status.stdout, MAX_LIST_LINES) : '';
-    if (dirty) lines.push('', 'Uncommitted:', dirty);
-    return lines.join('\n');
+    return {
+      branch: run.branch ?? '(unknown)',
+      baseRef: run.baseRef ?? null,
+      commits: log.code === 0 ? countLines(log.stdout) : 0,
+      files: files.code === 0 ? countLines(files.stdout) : 0,
+      uncommitted: status.code === 0 ? countLines(status.stdout) : 0,
+    };
   } catch (error) {
     deps.logger.warn('engine: finalize could not describe the branch', {
       runId: run.id,
@@ -222,12 +257,20 @@ function label(run: AgentRun): string {
 export function finishedNote(
   run: AgentRun,
   outcome:
-    | { turns: number; proposals: number; published?: PublishOutcome | null }
+    | {
+        turns: number;
+        proposals: number;
+        published?: PublishOutcome | null;
+        verdict?: Verdict | null;
+      }
     | { failed: string },
 ): string {
   if ('failed' in outcome) {
     return `Run ${label(run)} failed: ${outcome.failed}`;
   }
+  const verdict = outcome.verdict
+    ? ` · verdict: ${verdictLabel(outcome.verdict)}`
+    : '';
   const filed =
     outcome.proposals === 0
       ? 'nothing filed'
@@ -240,7 +283,77 @@ export function finishedNote(
       : outcome.published?.kind === 'failed'
         ? ` · the branch was not published (${outcome.published.stage} failed)`
         : '';
-  return `Run ${label(run)} finished (${outcome.turns} turn${outcome.turns === 1 ? '' : 's'}) · ${filed}${pr}.`;
+  return `Run ${label(run)} finished (${outcome.turns} turn${outcome.turns === 1 ? '' : 's'})${verdict} · ${filed}${pr}.`;
+}
+
+/**
+ * The state change for a run on a Jira issue: the issue's live transitions
+ * through main's own client, the one the plan's picker names — review
+ * (`pickReviewTransition`) or closing (`pickClosingTransition`) — filed
+ * as the `state_change` shape Copilot's are — `stateId` is the TRANSITION
+ * id, re-checked by the backend at filing and again at approve. Answers
+ * how many proposals it filed (0 or 1); a transition list Jira would not
+ * give, or none that fits, is a `note` event on the run, never a guess.
+ */
+async function proposeJiraTransition(
+  deps: FinalizeDeps,
+  run: AgentRun,
+  key: string,
+  plan: 'review' | 'close',
+): Promise<number> {
+  const note = async (message: string, extra: Record<string, unknown>) => {
+    deps.logger.info(`engine: finalize ${message}`, {
+      runId: run.id,
+      ...extra,
+    });
+    await deps.ledger
+      .appendEvent(run.id, 'note', { stage: 'finalize', message, ...extra })
+      .catch(() => {});
+  };
+  if (!deps.jira || !deps.jira.site()) {
+    await note('filed only the comment: Jira is not connected', { key });
+    return 0;
+  }
+  const listed = await deps.jira.listTransitions(key);
+  if (!listed.ok) {
+    await note('filed only the comment: the transitions could not be read', {
+      key,
+      reason: listed.message,
+    });
+    return 0;
+  }
+  const target =
+    plan === 'close'
+      ? pickClosingTransition(listed.value)
+      : pickReviewTransition(listed.value);
+  if (!target) {
+    await note(
+      plan === 'close'
+        ? 'filed only the comment: no transition that closes the issue'
+        : 'filed only the comment: no transition to review or in progress',
+      {
+        key,
+        plan,
+        offered: listed.value.map((t) => t.targetStateName),
+      },
+    );
+    return 0;
+  }
+  const change = await deps.ledger.createRunProposal(
+    run.id,
+    { kind: 'state_change', stateId: target.id },
+    { external: true },
+  );
+  await deps.ledger
+    .appendEvent(run.id, 'proposal_created', {
+      proposalId: change.id,
+      kind: 'state_change',
+      transitionId: target.id,
+      stateName: target.targetStateName,
+      plan,
+    })
+    .catch(() => {});
+  return 1;
 }
 
 export interface RunFinalizer {
@@ -367,42 +480,73 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
       return;
     }
 
+    // The report (W5c): the verdict the session named, else the verb's
+    // default; the Summary is what the board gets.
+    const report = parseReport(closing);
+    const verdict = report.verdict ?? defaultVerdict(run.intent);
+    const closes = isClosingVerdict(verdict);
+
+    // The run's ticket — a native ticket, or a Jira issue's handle (W5b):
+    // its label for the PR, and which write path its proposals take.
+    const ticket = await describeRunTicket(deps.ledger, run.ticketId);
+    const external = ticket?.external === true;
+
     // W6: a writing run's branch is pushed and its PR opened first — by
     // the host, as the person — so the comment can lead with the link.
     // A failure here is a sentence on the comment and an event, never a
-    // failed run: the session's work is done and on its branch.
+    // failed run: the session's work is done and on its branch. A closing
+    // verdict is not published: a won't-fix pull request is noise for the
+    // team, and the branch stays in the worktree for whoever wants it.
     let published: PublishOutcome | null = null;
-    if (deps.pullRequests && isDispatchedWriter(run) && run.branch) {
-      const ticket = run.ticketId
-        ? await deps.ledger.getTicket(run.ticketId).catch(() => null)
-        : null;
+    let notPublishedBecause: string | null = null;
+    if (closes && deps.pullRequests && isDispatchedWriter(run) && run.branch) {
+      notPublishedBecause = `the session's verdict was ${verdictLabel(verdict!)}`;
+      await deps.ledger
+        .appendEvent(run.id, 'note', {
+          stage: 'finalize',
+          message: `not published: ${notPublishedBecause}`,
+          verdict,
+        })
+        .catch(() => {});
+    } else if (deps.pullRequests && isDispatchedWriter(run) && run.branch) {
       published = await deps.pullRequests.publish({
         run,
         closingMessage: closing,
         title: ticket
           ? `${ticket.identifier}: ${ticket.title}`
           : (run.title ?? run.branch),
+        ticketUrl: ticket?.url ?? null,
       });
       if (published.kind === 'opened') run = { ...run, prUrl: published.url };
     }
 
-    // The proposals: the closing message as a comment (a writing run's
-    // led by its pull request and the branch's work), and for a Fix the
-    // state change.
+    // The proposals: the board-shaped comment (the verdict, the Summary,
+    // and the host's facts about the branch and the PR), and the state
+    // change the verdict calls for.
     let filed = 0;
     try {
-      let body = closing;
-      if (isDispatchedWriter(run)) {
-        const work = await describeBranchWork(deps, run);
-        const lead = [published ? describePublish(published) : null, work]
-          .filter(Boolean)
-          .join('\n\n');
-        if (lead) body = `${lead}\n\n---\n\n${closing}`;
-      }
-      const comment = await deps.ledger.createRunProposal(run.id, {
-        kind: 'comment',
-        body: clip(body, MAX_PROPOSAL_BODY),
+      const work = isDispatchedWriter(run)
+        ? await describeBranchWork(deps, run)
+        : null;
+      const body = buildRunComment({
+        report,
+        verdict,
+        runLabel: label(run),
+        work,
+        published,
+        notPublishedBecause,
       });
+      // A Jira issue's proposals carry the borrowed credential, so the
+      // backend can read the issue live and build the external-write card
+      // — the path Copilot's own Jira proposals take (W5b §2.4).
+      const comment = await deps.ledger.createRunProposal(
+        run.id,
+        {
+          kind: 'comment',
+          body: clip(body, MAX_PROPOSAL_BODY),
+        },
+        { external },
+      );
       filed += 1;
       await deps.ledger
         .appendEvent(run.id, 'proposal_created', {
@@ -410,9 +554,17 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
           kind: 'comment',
         })
         .catch(() => {});
-      if (run.intent === 'fix' && run.projectId) {
+      const plan = statePlanFor(run, verdict);
+      if (plan && external && ticket?.ref) {
+        // W5b §2.6: a transition the issue offers now, picked by name —
+        // review, else in progress; or, for a closing verdict, one that
+        // closes. None → the comment alone, and the trail says which
+        // transitions the issue did offer.
+        filed += await proposeJiraTransition(deps, run, ticket.ref.key, plan);
+      } else if (plan && run.projectId) {
         const states = await deps.ledger.listStates(run.projectId);
-        const target = pickReviewState(states);
+        const target =
+          plan === 'close' ? pickClosingState(states) : pickReviewState(states);
         if (target) {
           const change = await deps.ledger.createRunProposal(run.id, {
             kind: 'state_change',
@@ -425,16 +577,28 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
               kind: 'state_change',
               stateId: target.id,
               stateName: target.name,
+              plan,
             })
             .catch(() => {});
         } else {
           deps.logger.info(
-            'engine: finalize found no review state to propose',
+            `engine: finalize found no ${plan === 'close' ? 'closing' : 'review'} state to propose`,
             {
               runId: run.id,
               projectId: run.projectId,
             },
           );
+          await deps.ledger
+            .appendEvent(run.id, 'note', {
+              stage: 'finalize',
+              message:
+                plan === 'close'
+                  ? 'filed only the comment: the project has no state that closes a ticket without completing it'
+                  : 'filed only the comment: the project has no review or started state',
+              plan,
+              offered: states.map((s) => s.name),
+            })
+            .catch(() => {});
         }
       }
     } catch (error) {
@@ -448,13 +612,15 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
     const turnCount = countTurns(turns);
     let reviewed: AgentRun;
     try {
+      const headline = report.summary || closing;
       reviewed = await deps.ledger.updateRun(run.id, {
         status: 'needs-review',
         reason: `${filed} proposal${filed === 1 ? '' : 's'} filed`,
         summary: clip(
-          closing.split('\n').find((l) => l.trim()) ?? closing,
+          headline.split('\n').find((l) => l.trim()) ?? headline,
           MAX_SUMMARY_CHARS,
         ),
+        verdict,
         turnCount,
       });
     } catch (error) {
@@ -468,6 +634,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
     deps.logger.info('engine: run finalized', {
       runId: run.id,
       intent: run.intent,
+      verdict,
       proposals: filed,
       turns: turnCount,
     });
@@ -480,6 +647,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
           turns: turnCount,
           proposals: filed,
           published,
+          verdict,
         }),
       )
       .catch((error: unknown) =>

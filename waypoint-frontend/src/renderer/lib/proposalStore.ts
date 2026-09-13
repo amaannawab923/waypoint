@@ -1,5 +1,9 @@
 import { useMemo, useSyncExternalStore } from 'react';
-import { approveCopilotProposal, rejectCopilotProposal } from '@/data/api';
+import {
+  approveCopilotProposal,
+  editCopilotProposal,
+  rejectCopilotProposal,
+} from '@/data/api';
 import type { ProposalView } from '@/types/entities';
 
 // A minimal, scoped client cache for proposals (architecture §1.8) — NOT a
@@ -135,6 +139,16 @@ export async function approveProposal(id: string): Promise<ProposalView> {
 
 export async function rejectProposal(id: string): Promise<ProposalView> {
   const updated = await rejectCopilotProposal(id);
+  upsertProposals([updated]);
+  return updated;
+}
+
+/** W5c: the edited body lands in the store the same way, so every card showing the proposal re-renders with it. */
+export async function editProposal(
+  id: string,
+  body: string,
+): Promise<ProposalView> {
+  const updated = await editCopilotProposal(id, body);
   upsertProposals([updated]);
   return updated;
 }

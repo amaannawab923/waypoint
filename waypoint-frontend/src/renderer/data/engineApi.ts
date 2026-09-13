@@ -23,7 +23,9 @@ import type {
   BriefPreviewInput,
   DispatchRunInput,
   FolderChoice,
+  JiraTicketRef,
   OpenPrResult,
+  ResolvedTicket,
   ResumeRunResult,
   RunFocus,
   RunBranches,
@@ -176,8 +178,11 @@ export const engineSessionBridge = {
  */
 function unwrapIpcError(error: unknown): never {
   if (error instanceof Error) {
+    // Electron serialises a thrown error as `${name}: ${message}` — the
+    // name is `Error`, or a subclass's (`LedgerRequestError`); neither is
+    // for the person to read.
     const m =
-      /^Error invoking remote method '[^']+': (?:Error: )?([\s\S]*)$/.exec(
+      /^Error invoking remote method '[^']+': (?:[A-Za-z]*Error: )?([\s\S]*)$/.exec(
         error.message,
       );
     if (m) throw new Error(m[1]);
@@ -261,6 +266,26 @@ export function dispatchRun(input: DispatchRunInput): Promise<AgentRun> {
 /** W6: push the run's branch and open its pull request, as the person — the retry after a failed publish. */
 export function openRunPullRequest(runId: string): Promise<OpenPrResult> {
   return bridge().openRunPr(runId).catch(unwrapIpcError);
+}
+
+// W5b (docs/design/w5b-jira-dispatch.md §2.7, §2.8): a typed key to its
+// ticket in either system — main asks the backend with its own Jira
+// credential, so `/investigate ENG-4` opens a brief on the Jira issue;
+// null when neither system has it, a thrown sentence when the key is
+// ambiguous. And the ledger handle (`tref-…`) for a Jira issue this
+// renderer read through main's Jira client — what the My Jira drawer's
+// Sessions section names; the site is main's, the renderer sends a key.
+export function resolveTicket(
+  identifier: string,
+): Promise<ResolvedTicket | null> {
+  return bridge().resolveTicket(identifier).catch(unwrapIpcError);
+}
+
+export function getJiraTicketRef(input: {
+  key: string;
+  title: string;
+}): Promise<JiraTicketRef> {
+  return bridge().jiraTicketRef(input).catch(unwrapIpcError);
 }
 
 /** The person clicked a notification about a run (main/engine/notifications.ts). */

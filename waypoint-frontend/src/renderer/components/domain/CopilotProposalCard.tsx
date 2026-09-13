@@ -6,12 +6,14 @@ import { IconAlert, IconCheck } from '@/components/icons';
 import type {
   ProposalView,
   ProposalKind,
+  ProposalPayload,
   ProposalSnapshot,
   Priority,
 } from '@/types/entities';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { renderMarkdown } from '@/lib/markdown';
+import { editProposal } from '@/lib/proposalStore';
 import { useAgentRunSummary } from '@/lib/useAgentRunSummary';
 import { PriorityIcon, PRIORITY_LABEL } from './PriorityIcon';
 
@@ -305,14 +307,73 @@ function ExternalWriteBanner({ snapshot }: { snapshot: ProposalSnapshot }) {
   );
 }
 
+/** W5c: the comment as the person is changing it — replaces the preview while an edit is open. */
+function CommentEditor({
+  draft,
+  onChange,
+  disclosureText,
+}: {
+  draft: string;
+  onChange: (next: string) => void;
+  disclosureText: string;
+}) {
+  return (
+    <div className="rounded-[var(--radius-sm)] border border-border-strong bg-bg-inset px-3 py-2.5 text-[13px] leading-relaxed">
+      <em className="text-text-secondary">{disclosureText}</em>
+      <textarea
+        aria-label="Comment"
+        data-comment-editor
+        value={draft}
+        onChange={(e) => onChange(e.target.value)}
+        rows={Math.min(18, Math.max(4, draft.split('\n').length + 1))}
+        className="mt-1 w-full resize-y rounded-[var(--radius-sm)] border border-border bg-surface px-2 py-1.5 font-mono text-[12px] leading-relaxed text-text outline-none focus:border-accent"
+      />
+    </div>
+  );
+}
+
+/** "edited before posting" beside the proposer, once the person has changed the body. */
+function EditedMark({ payload }: { payload: ProposalPayload }) {
+  if (!payload.editedAt) return null;
+  return (
+    <span
+      className="text-[10.5px] text-text-muted"
+      data-edited-mark
+      title={
+        payload.originalBody
+          ? `The agent wrote:\n\n${payload.originalBody}`
+          : undefined
+      }
+    >
+      edited before posting
+    </span>
+  );
+}
+
 function ProposalBody({
   proposal,
   agentName,
+  editing,
 }: {
   proposal: ProposalView;
   agentName?: string;
+  /** W5c: the comment's draft while it is being edited; null when it is not. */
+  editing?: { draft: string; onChange: (next: string) => void } | null;
 }) {
   const { kind, payload, snapshot, disclosureText } = proposal;
+
+  if (kind === 'comment' && editing) {
+    return (
+      <>
+        <CommentEditor
+          draft={editing.draft}
+          onChange={editing.onChange}
+          disclosureText={disclosureText}
+        />
+        <ProposerBadge proposal={proposal} agentName={agentName} />
+      </>
+    );
+  }
 
   if (kind === 'create_ticket') {
     return (
@@ -399,7 +460,10 @@ function ProposalBody({
               }}
             />
           </div>
-          <ProposerBadge proposal={proposal} agentName={agentName} />
+          <span className="inline-flex flex-wrap items-center gap-2">
+            <ProposerBadge proposal={proposal} agentName={agentName} />
+            <EditedMark payload={payload} />
+          </span>
         </>
       )}
       {kind === 'comment' && proposal.origin !== 'agent_run' && (
@@ -411,7 +475,10 @@ function ProposalBody({
             <em className="text-text-secondary">{disclosureText}</em>
             {payload.body}
           </div>
-          <ProposerBadge proposal={proposal} agentName={agentName} />
+          <span className="inline-flex flex-wrap items-center gap-2">
+            <ProposerBadge proposal={proposal} agentName={agentName} />
+            <EditedMark payload={payload} />
+          </span>
         </>
       )}
       {kind === 'add_label' && (
@@ -513,11 +580,18 @@ export function CopilotProposalCard({
   proposal,
   onApprove,
   onReject,
+  onEdit = editProposal,
   agentName,
 }: {
   proposal: ProposalView;
   onApprove: (id: string) => Promise<unknown>;
   onReject: (id: string) => Promise<unknown>;
+  /**
+   * W5c: save an edited comment body before approving. Defaults to the
+   * shared store's editProposal, so every surface gets Edit for free; a
+   * test passes its own.
+   */
+  onEdit?: (id: string, body: string) => Promise<unknown>;
   /**
    * Display name for `proposal.agentId` when `proposal.origin ===
    * 'agent_run'` — optional, caller-supplied (architecture §1.8/W4.2
@@ -561,8 +635,38 @@ export function CopilotProposalCard({
     }
   }
 
+  // W5c: edit-before-post. The draft is local until Save; the saved body
+  // arrives back through the proposal prop (the store upserts the view).
+  // A failed save keeps the draft open with the backend's sentence.
+  const [draft, setDraft] = useState<string | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
+  const editing = draft !== null;
+
+  async function saveEdit() {
+    if (draft === null) return;
+    const body = draft.trim();
+    if (!body) {
+      setEditError('The comment cannot be empty.');
+      return;
+    }
+    cardRef.current?.focus();
+    setActing(true);
+    setEditError(null);
+    try {
+      await onEdit(proposal.id, body);
+      setDraft(null);
+    } catch (error) {
+      setEditError(
+        error instanceof Error ? error.message : 'The edit was not saved.',
+      );
+    } finally {
+      setActing(false);
+    }
+  }
+
   const { status } = proposal;
   const isPending = status === 'proposed';
+  const canEdit = isPending && proposal.kind === 'comment';
   const isStale = status === 'stale';
   const resolved =
     status === 'executed' ||
@@ -599,7 +703,20 @@ export function CopilotProposalCard({
       </div>
 
       <div className="flex flex-col gap-2.5 p-3">
-        <ProposalBody proposal={proposal} agentName={agentName} />
+        <ProposalBody
+          proposal={proposal}
+          agentName={agentName}
+          editing={
+            editing && canEdit
+              ? { draft: draft ?? '', onChange: setDraft }
+              : null
+          }
+        />
+        {editError && (
+          <div className="text-[12px] text-danger" role="alert">
+            {editError}
+          </div>
+        )}
         <ExternalWriteBanner snapshot={proposal.snapshot} />
         {isStale && (
           <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-warning bg-warning-bg px-2.5 py-2 text-[12.5px] leading-snug font-medium text-warning">
@@ -612,12 +729,51 @@ export function CopilotProposalCard({
         )}
       </div>
 
-      {isPending && (
+      {isPending && editing && canEdit && (
+        <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-2.5">
+          <span className="text-[10.5px] leading-tight text-text-muted">
+            Editing — nothing is posted until you approve
+          </span>
+          <div className="flex shrink-0 gap-2">
+            <Button
+              size="xs"
+              variant="secondary"
+              disabled={acting}
+              onClick={() => {
+                setDraft(null);
+                setEditError(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="xs"
+              variant="primary"
+              disabled={acting}
+              onClick={() => void saveEdit()}
+            >
+              Save
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {isPending && !(editing && canEdit) && (
         <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-2.5">
           <span className="text-[10.5px] leading-tight text-text-muted">
             Executes once on approve · {expiresIn(proposal.expiresAt)}
           </span>
           <div className="flex shrink-0 gap-2">
+            {canEdit && (
+              <Button
+                size="xs"
+                variant="ghost"
+                disabled={acting}
+                onClick={() => setDraft(proposal.payload.body ?? '')}
+              >
+                Edit
+              </Button>
+            )}
             <Button
               size="xs"
               variant="secondary"

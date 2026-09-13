@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { adfToPlainText, buildCopilotJiraCommentAdf } from './adf.js';
-import { COPILOT_DISCLOSURE } from '../commentHtml.js';
+import { COPILOT_DISCLOSURE, SESSION_DISCLOSURE } from '../commentHtml.js';
 
 const doc = (...content: unknown[]) => ({ type: 'doc', version: 1, content });
 const para = (...content: unknown[]) => ({ type: 'paragraph', content });
@@ -161,5 +161,118 @@ describe('buildCopilotJiraCommentAdf', () => {
     const built = buildCopilotJiraCommentAdf('Max Chen', 'First.\n\nSecond.');
 
     expect(adfToPlainText(built)).toBe(`${COPILOT_DISCLOSURE('Max Chen')}First.\nSecond.`);
+  });
+});
+
+// W5b (ROAD-126): a run's report on a Jira issue — the session's disclosure
+// and the markdown-lite rendering, so the comment reads on the issue as it
+// reads on the Review card, never as a wall of `##` lines.
+describe('buildCopilotJiraCommentAdf for a session (origin agent_run)', () => {
+  it('opens with the session disclosure on its own line, the same constant the HTML path uses', () => {
+    const built = buildCopilotJiraCommentAdf('Amaan', 'The retry path.', 'agent_run');
+
+    expect(built.content[0]).toEqual({
+      type: 'paragraph',
+      content: [{ type: 'text', text: SESSION_DISCLOSURE('Amaan'), marks: [{ type: 'em' }] }],
+    });
+    expect(built.content[1]).toEqual({
+      type: 'paragraph',
+      content: [{ type: 'text', text: 'The retry path.' }],
+    });
+  });
+
+  it('renders headings, lists, fenced code and rules as their ADF nodes', () => {
+    const body = [
+      '## Root cause',
+      'The retry loop in `api/retry.ts` never resets **attempts**.',
+      '',
+      '- `retry.ts:41` — the counter',
+      '- `retry.ts:58` — the reset that never runs',
+      '  continued on the next line',
+      '',
+      '1. Reproduce with the test',
+      '2. Fix',
+      '',
+      '```ts',
+      'attempts = 0;',
+      '```',
+      '',
+      '---',
+      'Done.',
+    ].join('\n');
+
+    const [, heading, para, bullets, numbers, code, rule, last] = buildCopilotJiraCommentAdf(
+      'Amaan',
+      body,
+      'agent_run',
+    ).content;
+
+    expect(heading).toEqual({
+      type: 'heading',
+      attrs: { level: 2 },
+      content: [{ type: 'text', text: 'Root cause' }],
+    });
+    expect(para).toEqual({
+      type: 'paragraph',
+      content: [
+        { type: 'text', text: 'The retry loop in ' },
+        { type: 'text', text: 'api/retry.ts', marks: [{ type: 'code' }] },
+        { type: 'text', text: ' never resets ' },
+        { type: 'text', text: 'attempts', marks: [{ type: 'strong' }] },
+        { type: 'text', text: '.' },
+      ],
+    });
+    expect(bullets.type).toBe('bulletList');
+    expect((bullets as { content: unknown[] }).content).toHaveLength(2);
+    type Item = { content: { content: { text: string }[] }[] };
+    const second = (bullets as { content: Item[] }).content[1].content[0].content;
+    expect(second.map((n) => n.text).join('')).toBe(
+      'retry.ts:58 — the reset that never runs continued on the next line',
+    );
+    expect(numbers.type).toBe('orderedList');
+    expect(code).toEqual({
+      type: 'codeBlock',
+      attrs: { language: 'ts' },
+      content: [{ type: 'text', text: 'attempts = 0;' }],
+    });
+    expect(rule).toEqual({ type: 'rule' });
+    expect(last).toEqual({ type: 'paragraph', content: [{ type: 'text', text: 'Done.' }] });
+  });
+
+  // Jira rejects a document carrying an empty text node; blank lines,
+  // empty headings and an empty fence must not produce one.
+  it('never emits an empty text node', () => {
+    const built = buildCopilotJiraCommentAdf('Amaan', '\n\n#  \n\n```\n```\n\n- \n', 'agent_run');
+    const texts: string[] = [];
+    const walk = (node: unknown) => {
+      if (Array.isArray(node)) return node.forEach(walk);
+      if (!node || typeof node !== 'object') return;
+      const record = node as Record<string, unknown>;
+      if (record.type === 'text') texts.push(String(record.text));
+      walk(record.content);
+    };
+    walk(built.content);
+    expect(texts.every((t) => t.length > 0)).toBe(true);
+    // A lone `#` or `-` is literal text, not an empty heading or item; the
+    // blank lines and the empty fence produced nothing.
+    expect(texts).toEqual([SESSION_DISCLOSURE('Amaan'), '#', '-']);
+    expect(built.content.some((b) => b.type === 'codeBlock')).toBe(false);
+  });
+
+  it('keeps Copilot’s own comments exactly as before — inline disclosure, a paragraph per line', () => {
+    const built = buildCopilotJiraCommentAdf('Max Chen', '## Not a heading\nSecond.');
+
+    expect(built.content).toHaveLength(2);
+    expect(built.content[0].type).toBe('paragraph');
+    expect((built.content[0] as { content: { text: string }[] }).content.map((n) => n.text)).toEqual([
+      COPILOT_DISCLOSURE('Max Chen'),
+      '## Not a heading',
+    ]);
+  });
+
+  it('round-trips through the reader in this same file', () => {
+    const built = buildCopilotJiraCommentAdf('Amaan', '## Root cause\n- one\n- two', 'agent_run');
+
+    expect(adfToPlainText(built)).toBe(`${SESSION_DISCLOSURE('Amaan')}\nRoot cause\none\ntwo`);
   });
 });

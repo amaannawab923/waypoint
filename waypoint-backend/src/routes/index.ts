@@ -7,6 +7,7 @@ import { labelsRouter } from './labels.routes.js';
 import { workstreamsRouter } from './workstreams.routes.js';
 import { sprintsRouter } from './sprints.routes.js';
 import { ticketsRouter } from './tickets.routes.js';
+import { ticketRefsRouter } from './ticketRefs.routes.js';
 import { docsRouter } from './docs.routes.js';
 import { viewsRouter } from './views.routes.js';
 import { requestsRouter } from './requests.routes.js';
@@ -32,6 +33,9 @@ apiRouter.use(labelsRouter);
 apiRouter.use(workstreamsRouter);
 apiRouter.use(sprintsRouter);
 apiRouter.use(ticketsRouter);
+// W5b: /tickets/resolve/:identifier and /ticket-refs — registered after
+// the tickets router; its /tickets/:id is one segment, these are two.
+apiRouter.use(ticketRefsRouter);
 apiRouter.use(docsRouter);
 apiRouter.use(viewsRouter);
 apiRouter.use(requestsRouter);
