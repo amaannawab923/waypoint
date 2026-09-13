@@ -653,16 +653,33 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     const engine = window.electron?.engine;
     if (!engine || typeof engine.onRunChanged !== 'function') return undefined;
     const id = activeSessionId;
-    return engine.onRunChanged((change) => {
+    // The note lands a moment after the status push (finalize writes the
+    // status, kills the session, then posts the note), so the re-read
+    // waits for it; a conversation reopened while cached is re-read too,
+    // since a note may have arrived while it was closed.
+    sessionStore.refreshMessages(id).catch(() => {});
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const off = engine.onRunChanged((change) => {
       if (
         change.status === 'needs-review' ||
         change.status === 'failed' ||
         change.status === 'done'
       ) {
-        sessionStore.refreshMessages(id).catch(() => {});
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          timer = null;
+          sessionStore.refreshMessages(id).catch(() => {});
+          proposalStore.reload().catch(() => {});
+        }, 2_000);
       }
     });
-  }, [activeSessionId, sessionStore]);
+    return () => {
+      if (timer) clearTimeout(timer);
+      off();
+    };
+    // proposalStore's identity changes with its state; the conversation is the unit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessionId, sessionStore.refreshMessages]);
 
   const offersHere = activeSessionId
     ? offers.filter((o) => o.conversationId === activeSessionId)
