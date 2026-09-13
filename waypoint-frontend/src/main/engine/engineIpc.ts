@@ -1,5 +1,6 @@
 import {
   app,
+  dialog,
   ipcMain,
   shell,
   type BrowserWindow,
@@ -258,6 +259,17 @@ export function registerEngineIpc(
     worktreesDir,
     reveal: (absolutePath) => shell.showItemInFolder(absolutePath),
     notify: (change) => send(RUNS_IPC.changed, change),
+    // W4b: the OS folder picker, parented to the window (the same two
+    // overloads repoLink.ts uses); the path stays in main.
+    chooseDirectory: async () => {
+      const win = getWindow();
+      const result = win
+        ? await dialog.showOpenDialog(win, { properties: ['openDirectory'] })
+        : await dialog.showOpenDialog({ properties: ['openDirectory'] });
+      if (result.canceled || result.filePaths.length === 0) return null;
+      return result.filePaths[0];
+    },
+    recentsFile: path.join(path.dirname(worktreesDir), 'recent-folders.json'),
     logger,
   });
 

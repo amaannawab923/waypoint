@@ -32,9 +32,13 @@ const titleSchema = z
   .transform((v) => (v.length === 0 ? null : v))
   .nullable();
 
+export const runIsolationSchema = z.enum(['worktree', 'directory']);
+
 export const createAgentRunSchema = z
   .object({
-    projectId: id,
+    // Nullable since W4b: an independent run on a folder that is no
+    // project's repository has no project. A dispatched run always has one.
+    projectId: id.nullable().optional(),
     ticketId: id.nullable().optional(),
     ownerMemberId: id,
     agentId: id.nullable().optional(),
@@ -44,6 +48,8 @@ export const createAgentRunSchema = z
     // What the user typed in the New session dialog (W4). Trimmed; an
     // empty title is no title, not a row named "".
     title: titleSchema.optional(),
+    isolation: runIsolationSchema.optional(),
+    autoApprove: z.boolean().optional(),
     retryOfRunId: id.optional(),
   })
   .strict()
@@ -52,6 +58,17 @@ export const createAgentRunSchema = z
   .refine((v) => v.entry !== 'dispatched' || (typeof v.ticketId === 'string' && v.ticketId.length > 0), {
     message: 'a dispatched run needs a ticketId',
     path: ['ticketId'],
+  })
+  // A ticket lives in a project; a run about it does too (W4b: only an
+  // independent run may have none).
+  .refine((v) => !v.ticketId || (typeof v.projectId === 'string' && v.projectId.length > 0), {
+    message: 'a run with a ticketId needs its projectId',
+    path: ['projectId'],
+  })
+  // A dispatched run is always a fresh worktree of the project's repo.
+  .refine((v) => v.entry !== 'dispatched' || (v.isolation ?? 'worktree') === 'worktree', {
+    message: 'a dispatched run always works in a worktree',
+    path: ['isolation'],
   });
 export type CreateAgentRunInput = z.infer<typeof createAgentRunSchema>;
 
@@ -140,6 +157,7 @@ export const updateAgentRunSchema = requireAtLeastOneField(
       providerSessionId: z.string().max(256).nullable().optional(),
       title: titleSchema.optional(),
       worktreePath: z.string().max(4096).nullable().optional(),
+      cwd: z.string().max(4096).nullable().optional(),
       branch: gitRefSchema.nullable().optional(),
       baseRef: gitRefSchema.nullable().optional(),
       prUrl: z.string().url().max(2048).nullable().optional(),

@@ -1,4 +1,5 @@
 import {
+  boolean,
   pgTable,
   pgEnum,
   text,
@@ -60,9 +61,10 @@ export const agentRuns = pgTable(
     id: text('id').primaryKey(), // 'run-…'
 
     // --- who, where, about what ------------------------------------------
-    projectId: text('project_id')
-      .notNull()
-      .references(() => projects.id, { onDelete: 'cascade' }),
+    // Nullable since W4b (ROAD-116): an independent session on a folder
+    // that is no project's linked repository belongs to no project. A
+    // dispatched run always has one (its ticket's).
+    projectId: text('project_id').references(() => projects.id, { onDelete: 'cascade' }),
     // Null for an independent session that is not about a ticket. A ticket
     // may have many runs over time (retries, follow-ups); a run has at most
     // one ticket. Never cascaded: a deleted ticket leaves its runs readable.
@@ -87,6 +89,18 @@ export const agentRuns = pgTable(
     // Which engine provider ran it — 'claude', 'codex', … — a plain string
     // because the provider list is the daemon's registry, not this schema's.
     providerId: text('provider_id').notNull(),
+    // Where the agent works (W4b, ROAD-116): `worktree` — a fresh worktree
+    // Waypoint provisions and owns (every dispatched run; the default for
+    // an independent run on a git repository); `directory` — the folder
+    // the person picked, edited in place, like Claude Code desktop.
+    isolation: text('isolation').notNull().default('worktree'),
+    // The directory the agent runs in, once known: the worktree's
+    // canonical path for a worktree run, the picked folder for a direct
+    // one. The panel names a run by this when it has no branch.
+    cwd: text('cwd'),
+    // Started in the provider's bypass-permissions mode: the session asks
+    // nothing. Shown on the row so an unattended agent is never invisible.
+    autoApprove: boolean('auto_approve').notNull().default(false),
 
     // --- the daemon's handles, once it has them ---------------------------
     // The daemon's workspace-registry record for the run's worktree, and its

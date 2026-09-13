@@ -30,7 +30,8 @@ export type AgentRunEntry = 'independent' | 'dispatched';
 /** The row as the backend serialises it (timestamps as ISO strings). */
 export interface AgentRun {
   id: string;
-  projectId: string;
+  /** Null for an independent run on a folder that is no project's repository (W4b). */
+  projectId: string | null;
   ticketId: string | null;
   ownerMemberId: string;
   agentId: string | null;
@@ -38,6 +39,12 @@ export interface AgentRun {
   providerId: string;
   /** What the user called it in the New session dialog (W4); null when nothing. */
   title: string | null;
+  /** Where the agent works (W4b): a fresh worktree Waypoint owns, or the picked folder itself. */
+  isolation: 'worktree' | 'directory';
+  /** The directory the agent runs in, once known: the worktree's path or the folder. */
+  cwd: string | null;
+  /** Started in the provider's bypass-permissions mode: the session asks nothing. */
+  autoApprove: boolean;
   daemonWorkspaceId: string | null;
   daemonSessionId: string | null;
   /** The provider's own resume handle, as `acp.start` answered it (W4, ROAD-69). */
@@ -71,7 +78,7 @@ export interface AgentRunEvent {
 }
 
 export interface CreateAgentRunInput {
-  projectId: string;
+  projectId: string | null;
   ticketId?: string | null;
   ownerMemberId: string;
   agentId?: string | null;
@@ -79,6 +86,8 @@ export interface CreateAgentRunInput {
   providerId: string;
   baseRef?: string;
   title?: string | null;
+  isolation?: 'worktree' | 'directory';
+  autoApprove?: boolean;
   retryOfRunId?: string;
 }
 
@@ -94,6 +103,7 @@ export interface UpdateAgentRunInput {
   daemonSessionId?: string | null;
   providerSessionId?: string | null;
   title?: string | null;
+  cwd?: string | null;
   worktreePath?: string | null;
   branch?: string | null;
   baseRef?: string | null;
@@ -148,6 +158,8 @@ export interface LedgerClient {
    * renderer never names a path (W4). Null when there is no such project.
    */
   getProject(id: string): Promise<LedgerProject | null>;
+  /** Every project, for matching a picked folder to its linked repository (W4b). */
+  listProjects(): Promise<LedgerProject[]>;
   createRun(input: CreateAgentRunInput): Promise<AgentRun>;
   getRun(id: string): Promise<AgentRun | null>;
   listRuns(query: ListAgentRunsQuery): Promise<RunPage>;
@@ -289,6 +301,18 @@ export function createLedgerClient(deps: LedgerClientDeps = {}): LedgerClient {
           return null;
         throw error;
       }
+    },
+    async listProjects() {
+      const projects = (
+        await request<
+          Array<{ id: string; name: string; repoPath?: string | null }>
+        >('GET', '/projects')
+      ).body;
+      return (Array.isArray(projects) ? projects : []).map((p) => ({
+        id: p.id,
+        name: p.name,
+        repoPath: p.repoPath ?? null,
+      }));
     },
     async createRun(input) {
       return (await request<AgentRun>('POST', '/agent-runs', input)).body;

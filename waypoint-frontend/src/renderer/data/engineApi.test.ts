@@ -96,11 +96,13 @@ describe('the W4 run channels', () => {
       suggested: 'main',
     });
     const input = {
-      projectId: 'proj-1',
+      folder: 'f-abc',
       ownerMemberId: 'mem-1',
       providerId: 'claude' as const,
+      isolation: 'worktree' as const,
+      autoApprove: true,
       baseRef: 'main',
-      title: null,
+      firstMessage: null,
     };
     await expect(startRun(input)).resolves.toMatchObject({ id: 'run-n1' });
     expect(engine.startRun).toHaveBeenCalledWith(input);
@@ -108,7 +110,7 @@ describe('the W4 run channels', () => {
       outcome: 'loaded',
       status: 'running',
     });
-    await expect(listRunBranches('proj-1')).resolves.toMatchObject({
+    await expect(listRunBranches('f-abc')).resolves.toMatchObject({
       suggested: 'main',
     });
   });

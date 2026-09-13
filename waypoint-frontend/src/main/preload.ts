@@ -32,10 +32,12 @@ import {
   type EngineStatus,
   type LiveSnapshot,
   type LiveUpdate,
+  type FolderChoice,
   type ResumeRunResult,
   type RunBranches,
   type RunChanged,
   type RunDiff,
+  type SessionFolder,
   type StartRunInput,
   type StopRunResult,
   type TopicClosedReason,
@@ -579,8 +581,19 @@ const electronHandler = {
     resumeRun(runId: string): Promise<ResumeRunResult> {
       return ipcRenderer.invoke(RUNS_IPC.resume, runId);
     },
-    listRunBranches(projectId: string): Promise<RunBranches> {
-      return ipcRenderer.invoke(RUNS_IPC.listBranches, projectId);
+    listRunBranches(folderHandle: string): Promise<RunBranches> {
+      return ipcRenderer.invoke(RUNS_IPC.listBranches, folderHandle);
+    },
+    // W4b: folders as handles. The OS picker runs in main; the renderer
+    // gets a description and a handle it hands back to startRun.
+    chooseFolder(): Promise<FolderChoice> {
+      return ipcRenderer.invoke(RUNS_IPC.chooseFolder);
+    },
+    listRecentFolders(): Promise<SessionFolder[]> {
+      return ipcRenderer.invoke(RUNS_IPC.recentFolders);
+    },
+    homeDir(): Promise<string> {
+      return ipcRenderer.invoke(RUNS_IPC.homeDir);
     },
     /** Push: main wrote a run's ledger row from the daemon's report. */
     onRunChanged(cb: (change: RunChanged) => void): () => void {

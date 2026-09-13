@@ -9,9 +9,10 @@ import { patchSessionRun, refreshSessions } from '@/lib/sessionsStore';
 import { useTicketSummary } from '@/lib/useTicketLabel';
 import { showErrorToast } from '@/lib/toast';
 import type { AgentRun } from '@/types/agentRuns';
-import { ProviderChip } from './SessionRow';
+import { useHomeDir } from '@/lib/useHomeDir';
+import { AutoMark, ProviderChip } from './SessionRow';
 import { SessionStatusPill } from './SessionStatusPill';
-import { providerView, runTitle, statusView } from './sessionStatus';
+import { providerView, runTitle, runWhere, statusView } from './sessionStatus';
 import { SessionTranscript } from './SessionTranscript';
 import { DiffPane } from './DiffPane';
 
@@ -47,6 +48,8 @@ export function SessionDetail({
 }) {
   const navigate = useNavigate();
   const ticket = useTicketSummary(run.ticketId);
+  const home = useHomeDir();
+  const where = runWhere(run, home);
   const view = statusView(run.status);
   const provider = providerView(run.providerId);
   const [tab, setTab] = useState<SessionTab>('transcript');
@@ -96,7 +99,9 @@ export function SessionDetail({
           break;
         case 'worktree-gone':
           showErrorToast(
-            'This run’s worktree is no longer on disk; there is nothing to resume on.',
+            run.isolation === 'directory'
+              ? 'This run’s folder is no longer on disk; there is nothing to resume in.'
+              : 'This run’s worktree is no longer on disk; there is nothing to resume on.',
           );
           break;
         case 'not-resumable':
@@ -122,12 +127,15 @@ export function SessionDetail({
   const reveal = () =>
     revealRunWorktree(run.id).catch((error: unknown) =>
       showErrorToast(
-        error instanceof Error ? error.message : 'Could not open the worktree.',
+        error instanceof Error ? error.message : 'Could not open the folder.',
       ),
     );
 
   const title = runTitle(run, ticket?.label);
   const startedAt = run.startedAt ?? run.createdAt;
+  // A worktree run's diff is against its base; a direct run's is the
+  // working tree against HEAD — "Changes", not a branch diff (W4b).
+  const changesLabel = run.isolation === 'directory' ? 'Changes' : 'Diff';
 
   return (
     <section
@@ -152,22 +160,29 @@ export function SessionDetail({
                 {title}
               </h1>
               <SessionStatusPill status={run.status} />
+              {run.autoApprove && <AutoMark size="md" />}
             </div>
             <div className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[10.5px] text-text-muted">
               <span className="inline-flex items-center gap-1">
                 <ProviderChip providerId={run.providerId} size={14} />
                 {provider.name}
               </span>
-              {run.branch && (
+              {where?.kind === 'branch' && (
                 <span className="inline-flex items-center gap-1">
                   <IconGitBranch size={10} />
-                  <span className="font-mono">{run.branch}</span>
-                  {run.baseRef && (
+                  <span className="font-mono">{where.branch}</span>
+                  {where.baseRef && (
                     <>
                       {' '}
-                      from <span className="font-mono">{run.baseRef}</span>
+                      from <span className="font-mono">{where.baseRef}</span>
                     </>
                   )}
+                </span>
+              )}
+              {where?.kind === 'folder' && (
+                <span className="inline-flex items-center gap-1">
+                  <IconFolder size={10} />
+                  in <span className="font-mono">{where.path}</span>
                 </span>
               )}
               <span>
@@ -219,11 +234,11 @@ export function SessionDetail({
               size="xs"
               variant="primary"
               onClick={resume}
-              disabled={resuming || !run.worktreePath}
+              disabled={resuming || !(run.cwd ?? run.worktreePath)}
               title={
-                run.worktreePath
+                (run.cwd ?? run.worktreePath)
                   ? undefined
-                  : 'This run has no worktree to resume on.'
+                  : 'This run has no folder to resume in.'
               }
             >
               {resuming ? 'Resuming…' : 'Resume'}
@@ -239,8 +254,8 @@ export function SessionDetail({
               {stopping ? 'Stopping…' : 'Stop'}
             </Button>
           )}
-          {run.worktreePath && (
-            <IconButton label="Show worktree in Finder" onClick={reveal}>
+          {(run.cwd ?? run.worktreePath) && (
+            <IconButton label="Show in Finder" onClick={reveal}>
               <IconFolder size={14} />
             </IconButton>
           )}
@@ -258,8 +273,8 @@ export function SessionDetail({
             [
               'diff',
               diffCount === null
-                ? 'Diff'
-                : `Diff · ${diffCount} file${diffCount === 1 ? '' : 's'}`,
+                ? changesLabel
+                : `${changesLabel} · ${diffCount} file${diffCount === 1 ? '' : 's'}`,
             ],
           ] as const
         ).map(([key, label]) => (

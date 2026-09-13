@@ -7,6 +7,7 @@ import {
   type AgentRun,
   type LedgerClient,
 } from './ledgerClient';
+import { createFolderRegistry, type FolderDeps } from './folders';
 import {
   buildResumeNote,
   continueStart,
@@ -14,6 +15,7 @@ import {
   listRunBranches,
   resumeRun,
   startRun,
+  titleFromMessage,
   validateStartInput,
   type StartRunDeps,
 } from './startRun';
@@ -24,20 +26,33 @@ import {
 // between steps, a failure at either stage, and resume's two outcomes.
 
 let worktreesDir: string;
-/** A directory that exists: the linked repository the fake ledger names. */
+/** A git repository (a `.git` directory) — the linked repository the fake ledger names. */
 let repoDir: string;
+/** A plain folder: no `.git`. */
+let plainDir: string;
+let recentsFile: string;
 beforeAll(() => {
   repoDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wp-repo-')));
+  fs.mkdirSync(path.join(repoDir, '.git'));
+  plainDir = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'wp-plain-')),
+  );
   // realpath'd: macOS's /var is /private/var, and assertUnder compares
   // canonical paths (a fake record's path must be canonical too).
   worktreesDir = fs.realpathSync(
     fs.mkdtempSync(path.join(os.tmpdir(), 'wp-start-')),
   );
+  recentsFile = path.join(worktreesDir, 'recent-folders.json');
 });
 afterAll(() => {
   fs.rmSync(worktreesDir, { recursive: true, force: true });
   fs.rmSync(repoDir, { recursive: true, force: true });
+  fs.rmSync(plainDir, { recursive: true, force: true });
 });
+
+/** The handles a test hands `runs:start`, minted the way main does. */
+const registry = createFolderRegistry();
+const handleOf = (dir: string) => registry.mint(dir);
 
 function run(overrides: Partial<AgentRun> = {}): AgentRun {
   return {
@@ -49,6 +64,9 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     entry: 'independent',
     providerId: 'claude',
     title: null,
+    isolation: 'worktree',
+    cwd: null,
+    autoApprove: false,
     daemonWorkspaceId: null,
     daemonSessionId: null,
     providerSessionId: null,
@@ -78,6 +96,11 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
 function fakeLedger(seed: AgentRun[] = []) {
   const rows = new Map(seed.map((r) => [r.id, r]));
   const ledger = {
+    listProjects: jest.fn(async () => [
+      { id: 'proj-1', name: 'Waypoint', repoPath: repoDir },
+      { id: 'proj-nolink', name: 'Docs', repoPath: null },
+      { id: 'proj-gone', name: 'Compass', repoPath: '~/code/compass-web' },
+    ]),
     getProject: jest.fn(async (id: string) => {
       if (id === 'proj-1') return { id, name: 'Waypoint', repoPath: repoDir };
       if (id === 'proj-nolink') return { id, name: 'Docs', repoPath: null };
@@ -161,6 +184,11 @@ function depsWith(
     worktreesDir,
     git: jest.fn(async () => ({ stdout: '', code: 0 })),
     assertWorktreeGitDir: jest.fn(async () => {}),
+    folders: {
+      registry,
+      recentsFile,
+      listProjects: () => ledger.listProjects(),
+    } satisfies FolderDeps,
     logger: { info: jest.fn(), warn: jest.fn() },
     ...extra,
     notify,
@@ -168,73 +196,99 @@ function depsWith(
 }
 
 const goodInput = {
-  projectId: 'proj-1',
+  get folder() {
+    return handleOf(repoDir);
+  },
   ownerMemberId: 'mem-1',
   providerId: 'claude',
+  isolation: 'worktree',
+  autoApprove: true,
   baseRef: 'main',
-  title: '  Fix flaky test  ',
+  firstMessage: '  Fix the flaky test\nIt fails on CI only.  ',
 };
 
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => {
+  jest.clearAllMocks();
+  fs.rmSync(recentsFile, { force: true });
+});
 
 describe('validateStartInput', () => {
-  it('trims the title and drops a blank one', () => {
-    expect(validateStartInput(goodInput).title).toBe('Fix flaky test');
-    expect(validateStartInput({ ...goodInput, title: '   ' }).title).toBeNull();
+  it('trims the first message and names the run by its first line', () => {
+    const v = validateStartInput(goodInput);
+    expect(v.firstMessage).toBe('Fix the flaky test\nIt fails on CI only.');
+    expect(v.title).toBe('Fix the flaky test');
     expect(
-      validateStartInput({ ...goodInput, title: undefined }).title,
-    ).toBeNull();
+      validateStartInput({ ...goodInput, firstMessage: '   ' }),
+    ).toMatchObject({
+      firstMessage: null,
+      title: null,
+    });
+    expect(titleFromMessage(`${'x'.repeat(200)}\nmore`)).toHaveLength(120);
+    expect(titleFromMessage('\n\n  second line  ')).toBe('second line');
   });
 
-  it('refuses an unsupported provider, a bad ref, a long title and odd ids', () => {
+  it('a direct run needs no base branch; a worktree run does', () => {
+    expect(
+      validateStartInput({
+        ...goodInput,
+        isolation: 'directory',
+        baseRef: null,
+      }).baseRef,
+    ).toBeNull();
+    expect(() =>
+      validateStartInput({ ...goodInput, isolation: 'worktree', baseRef: '' }),
+    ).toThrow(/base branch/);
+  });
+
+  it('refuses an unsupported provider, a bad ref, a long message, a missing isolation or auto-approve, and no folder', () => {
     expect(() =>
       validateStartInput({ ...goodInput, providerId: 'codex' }),
     ).toThrow(/not one Waypoint can start/);
     expect(() => validateStartInput({ ...goodInput, baseRef: '-rf' })).toThrow(
       /base branch/,
     );
-    expect(() => validateStartInput({ ...goodInput, baseRef: '' })).toThrow();
     expect(() =>
-      validateStartInput({ ...goodInput, title: 'x'.repeat(121) }),
-    ).toThrow(/120/);
+      validateStartInput({ ...goodInput, firstMessage: 'x'.repeat(20_001) }),
+    ).toThrow(/20000/);
     expect(() =>
-      validateStartInput({ ...goodInput, projectId: '../x' }),
-    ).toThrow();
+      validateStartInput({ ...goodInput, isolation: 'somewhere' }),
+    ).toThrow(/where the agent should work/);
+    expect(() =>
+      validateStartInput({ ...goodInput, autoApprove: 'yes' }),
+    ).toThrow(/without asking/);
+    expect(() => validateStartInput({ ...goodInput, folder: '' })).toThrow(
+      /Choose a folder/,
+    );
     expect(() => validateStartInput(null)).toThrow();
   });
 });
 
 describe('startRun', () => {
-  it('refuses before any write: engine down, unknown project, no linked repo, unknown branch', async () => {
+  it('refuses before any write: engine down, a handle it never minted, a folder that is gone, a worktree of a plain folder, an unknown branch', async () => {
     const { ledger } = fakeLedger();
     await expect(startRun(depsWith(ledger, null), goodInput)).rejects.toThrow(
       ENGINE_NOT_RUNNING,
     );
     const daemon = fakeDaemon();
     await expect(
-      startRun(depsWith(ledger, daemon), { ...goodInput, projectId: 'proj-9' }),
-    ).rejects.toThrow('No such project.');
+      startRun(depsWith(ledger, daemon), { ...goodInput, folder: 'f-forged' }),
+    ).rejects.toThrow(/not one this window offered/);
+    const gone = handleOf(path.join(plainDir, 'moved-away'));
+    await expect(
+      startRun(depsWith(ledger, daemon), { ...goodInput, folder: gone }),
+    ).rejects.toThrow(/not a folder on this machine any more/);
     await expect(
       startRun(depsWith(ledger, daemon), {
         ...goodInput,
-        projectId: 'proj-nolink',
+        folder: handleOf(plainDir),
       }),
-    ).rejects.toThrow(/Docs has no linked repository/);
-    await expect(
-      startRun(depsWith(ledger, daemon), {
-        ...goodInput,
-        projectId: 'proj-gone',
-      }),
-    ).rejects.toThrow(
-      /Compass's linked repository \(~\/code\/compass-web\) is not on this machine/,
-    );
+    ).rejects.toThrow(/not a git repository, so there is no branch/);
     await expect(
       startRun(depsWith(ledger, daemon), { ...goodInput, baseRef: 'release' }),
-    ).rejects.toThrow(
-      'release is not a local branch of the linked repository.',
-    );
+    ).rejects.toThrow(/release is not a local branch of/);
     expect(ledger.createRun).not.toHaveBeenCalled();
     expect(ledger.updateRun).not.toHaveBeenCalled();
+    expect(fs.existsSync(recentsFile)).toBe(false);
   });
 
   it('creates the row, answers at provisioning, and notifies', async () => {
@@ -248,14 +302,22 @@ describe('startRun', () => {
     const answered = await startRun(deps, goodInput);
 
     expect(answered.status).toBe('provisioning');
+    // The folder is the linked repository of proj-1: the run belongs to it.
     expect(ledger.createRun).toHaveBeenCalledWith({
       projectId: 'proj-1',
       ownerMemberId: 'mem-1',
       entry: 'independent',
       providerId: 'claude',
+      isolation: 'worktree',
+      autoApprove: true,
       baseRef: 'main',
-      title: 'Fix flaky test',
+      title: 'Fix the flaky test',
     });
+    // The folder is remembered with its auto-approve choice.
+    const recents = JSON.parse(fs.readFileSync(recentsFile, 'utf8'));
+    expect(recents).toEqual([
+      expect.objectContaining({ path: repoDir, autoApprove: true }),
+    ]);
     expect(deps.notify).toHaveBeenCalledWith({
       runId: 'run-new0001',
       status: 'provisioning',
@@ -281,6 +343,7 @@ describe('continueStart', () => {
       providerId: 'claude',
       cwd: path.join(worktreesDir, 'run-a1'),
       sessionId: null,
+      modeId: null,
     });
     const runningWrite = ledger.updateRun.mock.calls.find(
       ([, patch]) => patch.status === 'running',
@@ -289,6 +352,7 @@ describe('continueStart', () => {
       status: 'running',
       daemonSessionId: 'run-a1',
       providerSessionId: 'sess-1',
+      cwd: path.join(worktreesDir, 'run-a1'),
     });
     expect(ledger.updateRun.mock.invocationCallOrder.at(-1)).toBeGreaterThan(
       startOrder,
@@ -479,6 +543,97 @@ describe('continueStart', () => {
   });
 });
 
+describe('continueStart (W4b)', () => {
+  it('a direct run skips the worktree, runs in the folder, and writes cwd', async () => {
+    const { ledger, rows } = fakeLedger([
+      run({
+        id: 'run-d1',
+        status: 'provisioning',
+        isolation: 'directory',
+        cwd: plainDir,
+        baseRef: null,
+      }),
+    ]);
+    const daemon = fakeDaemon();
+    const deps = depsWith(ledger, daemon);
+
+    await continueStart(deps, rows.get('run-d1') as AgentRun, plainDir);
+
+    expect(daemon.createWorktree).not.toHaveBeenCalled();
+    expect(daemon.startSession).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: plainDir, modeId: null }),
+    );
+    expect(rows.get('run-d1')).toMatchObject({
+      status: 'running',
+      cwd: plainDir,
+    });
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-d1',
+      'session_started',
+      expect.objectContaining({ isolation: 'directory', branch: null }),
+    );
+  });
+
+  it('auto-approve starts the session in the bypass mode; the first message rides in as the initial queue and is recorded', async () => {
+    const { ledger, rows } = fakeLedger([
+      run({
+        id: 'run-d2',
+        status: 'provisioning',
+        isolation: 'directory',
+        cwd: plainDir,
+        autoApprove: true,
+      }),
+    ]);
+    const daemon = fakeDaemon();
+
+    await continueStart(
+      depsWith(ledger, daemon),
+      rows.get('run-d2') as AgentRun,
+      plainDir,
+      'Say hi',
+    );
+
+    expect(daemon.startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modeId: 'bypassPermissions',
+        initialQueue: [{ text: 'Say hi' }],
+      }),
+    );
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-d2',
+      'prompt_sent',
+      expect.objectContaining({ by: 'user', kind: 'first-message' }),
+    );
+  });
+
+  it('startRun on a plain folder makes a direct run of no project, and the recents remember auto-approve off', async () => {
+    const { ledger } = fakeLedger();
+    const daemon = fakeDaemon({
+      startSession: jest.fn(() => new Promise(() => {})),
+    });
+    const deps = depsWith(ledger, daemon);
+    const answered = await startRun(deps, {
+      ...goodInput,
+      folder: handleOf(plainDir),
+      isolation: 'directory',
+      autoApprove: false,
+      baseRef: null,
+    });
+    expect(answered).toMatchObject({ status: 'provisioning', cwd: plainDir });
+    expect(ledger.createRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: null,
+        isolation: 'directory',
+        autoApprove: false,
+      }),
+    );
+    expect(ledger.createRun.mock.calls[0][0]).not.toHaveProperty('baseRef');
+    expect(JSON.parse(fs.readFileSync(recentsFile, 'utf8'))).toEqual([
+      expect.objectContaining({ path: plainDir, autoApprove: false }),
+    ]);
+  });
+});
+
 describe('resumeRun', () => {
   function interrupted(overrides: Partial<AgentRun> = {}): AgentRun {
     const worktreePath = path.join(worktreesDir, 'run-i1');
@@ -601,6 +756,37 @@ describe('resumeRun', () => {
     );
   });
 
+  it('a direct run resumes in its folder, in the mode it was started with', async () => {
+    const { ledger, rows } = fakeLedger([
+      run({
+        id: 'run-i9',
+        status: 'interrupted',
+        isolation: 'directory',
+        cwd: plainDir,
+        worktreePath: null,
+        autoApprove: true,
+        providerSessionId: 'sess-old',
+      }),
+    ]);
+    const daemon = fakeDaemon({
+      startSession: jest.fn(async () => ({ sessionId: 'sess-old' })),
+    });
+    await expect(
+      resumeRun(depsWith(ledger, daemon), 'run-i9'),
+    ).resolves.toEqual({
+      outcome: 'loaded',
+      status: 'running',
+    });
+    expect(daemon.startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: plainDir,
+        modeId: 'bypassPermissions',
+        sessionId: 'sess-old',
+      }),
+    );
+    expect(rows.get('run-i9')?.status).toBe('running');
+  });
+
   it('a session that never had a provider id is a fresh start (replaced-by-new)', async () => {
     const { ledger } = fakeLedger([interrupted({ providerSessionId: null })]);
     const daemon = fakeDaemon();
@@ -639,7 +825,7 @@ describe('listRunBranches', () => {
   it("sorts the local branches and suggests origin's HEAD when it is local", async () => {
     const { ledger } = fakeLedger();
     await expect(
-      listRunBranches(depsWith(ledger, fakeDaemon()), 'proj-1'),
+      listRunBranches(depsWith(ledger, fakeDaemon()), handleOf(repoDir)),
     ).resolves.toEqual({
       branches: ['feat/x', 'main', 'master'],
       suggested: 'master',
@@ -653,27 +839,39 @@ describe('listRunBranches', () => {
         listRefs: jest.fn(async () => ({ branches, remoteHeads: [] })),
       });
     await expect(
-      listRunBranches(depsWith(ledger, refsOf(['dev', 'main'])), 'proj-1'),
+      listRunBranches(
+        depsWith(ledger, refsOf(['dev', 'main'])),
+        handleOf(repoDir),
+      ),
     ).resolves.toMatchObject({ suggested: 'main' });
     await expect(
-      listRunBranches(depsWith(ledger, refsOf(['dev', 'master'])), 'proj-1'),
+      listRunBranches(
+        depsWith(ledger, refsOf(['dev', 'master'])),
+        handleOf(repoDir),
+      ),
     ).resolves.toMatchObject({ suggested: 'master' });
     await expect(
-      listRunBranches(depsWith(ledger, refsOf(['zeta', 'alpha'])), 'proj-1'),
+      listRunBranches(
+        depsWith(ledger, refsOf(['zeta', 'alpha'])),
+        handleOf(repoDir),
+      ),
     ).resolves.toEqual({ branches: ['alpha', 'zeta'], suggested: 'alpha' });
     await expect(
-      listRunBranches(depsWith(ledger, refsOf([])), 'proj-1'),
+      listRunBranches(depsWith(ledger, refsOf([])), handleOf(repoDir)),
     ).resolves.toEqual({ branches: [], suggested: null });
   });
 
-  it('needs the engine and a linked repository', async () => {
+  it('needs the engine, a minted handle, and a git repository', async () => {
     const { ledger } = fakeLedger();
     await expect(
-      listRunBranches(depsWith(ledger, null), 'proj-1'),
+      listRunBranches(depsWith(ledger, null), handleOf(repoDir)),
     ).rejects.toThrow(ENGINE_NOT_RUNNING);
     await expect(
-      listRunBranches(depsWith(ledger, fakeDaemon()), 'proj-nolink'),
-    ).rejects.toThrow(/no linked repository/);
+      listRunBranches(depsWith(ledger, fakeDaemon()), 'f-forged'),
+    ).rejects.toThrow(/not one this window offered/);
+    await expect(
+      listRunBranches(depsWith(ledger, fakeDaemon()), handleOf(plainDir)),
+    ).rejects.toThrow(/is not a git repository/);
   });
 });
 

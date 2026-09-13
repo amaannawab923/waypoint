@@ -168,10 +168,49 @@ export function waitingReason(run: AgentRun): string | null {
  * ticket (resolved by the caller, `ticketLabel`), an independent one by
  * its branch, and a run that has neither yet by its id.
  */
-/** Ticket label → the title the user gave it (W4) → branch → the id. */
+/** The last segment of a path, for a run named by its folder. */
+export function folderName(cwd: string): string {
+  const trimmed = cwd.replace(/[/\\]+$/, '');
+  const i = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
+  return i === -1 ? trimmed : trimmed.slice(i + 1) || trimmed;
+}
+
+/** `/Users/me/code/x` → `~/code/x` when a home is known; the renderer only shortens what main shows. */
+export function shortenHome(absolute: string, home: string | null): string {
+  if (!home) return absolute;
+  if (absolute === home) return '~';
+  return absolute.startsWith(`${home}/`)
+    ? `~${absolute.slice(home.length)}`
+    : absolute;
+}
+
+/** Ticket label → the title the user gave it (W4) → branch → the folder (W4b) → the id. */
 export function runTitle(run: AgentRun, ticketLabel?: string | null): string {
   if (ticketLabel) return ticketLabel;
   if (run.title) return run.title;
   if (run.branch) return run.branch;
+  if (run.isolation === 'directory' && run.cwd) return folderName(run.cwd);
   return `Session ${shortRunId(run.id)}`;
+}
+
+/**
+ * Where the agent works, as one line (W4b): a worktree run is its branch
+ * (from its base), a direct run is its folder. Null while nothing is
+ * known yet (queued, provisioning without a folder).
+ */
+export function runWhere(
+  run: AgentRun,
+  home: string | null = null,
+):
+  | { kind: 'branch'; branch: string; baseRef: string | null }
+  | { kind: 'folder'; path: string }
+  | null {
+  if (run.isolation === 'directory') {
+    return run.cwd
+      ? { kind: 'folder', path: shortenHome(run.cwd, home) }
+      : null;
+  }
+  if (run.branch)
+    return { kind: 'branch', branch: run.branch, baseRef: run.baseRef };
+  return null;
 }

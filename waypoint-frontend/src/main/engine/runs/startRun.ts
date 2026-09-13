@@ -1,13 +1,17 @@
 import { promises as fs } from 'node:fs';
 import {
+  AUTO_APPROVE_MODE_ID,
+  MAX_FIRST_MESSAGE_CHARS,
   MAX_RUN_TITLE_CHARS,
   SUPPORTED_PROVIDERS,
   type ResumeRunResult,
   type RunBranches,
   type RunChanged,
+  type RunIsolation,
   type StartRunInput,
 } from '../types';
 import type { DaemonRunsApi } from './daemonApi';
+import { describeFolder, rememberFolder, type FolderDeps } from './folders';
 import { assertRunId, type AgentRun, type LedgerClient } from './ledgerClient';
 import {
   assertUnder,
@@ -30,6 +34,13 @@ import {
  * ledger hears about it, so a Stop that landed in between (W3 writes
  * `cancelled` first) is honoured — the session is not started, or is
  * killed, and the worktree stays as evidence (W2's rule for a crash).
+ *
+ * W4b (ROAD-116): the renderer names a folder *handle*, never a path; main
+ * resolves it (folders.ts), decides the run's project from the folder,
+ * and either provisions a worktree of it or runs the agent in it
+ * directly. Auto-approve is the provider's bypass-permissions mode at
+ * start; the dialog's first message rides in as the session's initial
+ * queue and names the run.
  *
  * Resume is `acp.start` with the provider's own session id handed back.
  * The daemon loads the session and, when the provider cannot, starts a
@@ -61,6 +72,8 @@ export interface StartRunDeps {
   git: NoteGitRunner;
   /** runsIpc.ts's check that the worktree's `.git` is a linked-worktree file. */
   assertWorktreeGitDir: (worktreePath: string) => Promise<void>;
+  /** The folder handles this process minted, and the recents file (W4b). */
+  folders: FolderDeps;
   logger: StartRunLogger;
 }
 
@@ -78,16 +91,47 @@ function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** The input as the renderer sent it, checked field by field. Throws with the sentence to show. */
-export function validateStartInput(input: unknown): StartRunInput & {
+/** A validated start request: the folder is still a handle here. */
+export interface ValidatedStartInput {
+  folder: string;
+  ownerMemberId: string;
+  providerId: StartRunInput['providerId'];
+  isolation: RunIsolation;
+  autoApprove: boolean;
+  baseRef: string | null;
+  firstMessage: string | null;
+  /** The first message's first line, clipped — the run's name. */
   title: string | null;
-} {
+}
+
+/** The first non-empty line, clipped to a title. */
+export function titleFromMessage(message: string): string | null {
+  const line = message
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => l.length > 0);
+  if (!line) return null;
+  return line.length <= MAX_RUN_TITLE_CHARS
+    ? line
+    : `${line.slice(0, MAX_RUN_TITLE_CHARS - 1)}…`;
+}
+
+/** The input as the renderer sent it, checked field by field. Throws with the sentence to show. */
+export function validateStartInput(input: unknown): ValidatedStartInput {
   if (!input || typeof input !== 'object')
     throw new Error('Not a start request.');
   const raw = input as Record<string, unknown>;
-  const { projectId, ownerMemberId, providerId, baseRef, title } = raw;
-  if (typeof projectId !== 'string') throw new Error('Choose a project.');
-  assertRunId(projectId);
+  const {
+    folder,
+    ownerMemberId,
+    providerId,
+    isolation,
+    autoApprove,
+    baseRef,
+    firstMessage,
+  } = raw;
+  if (typeof folder !== 'string' || folder.length === 0)
+    throw new Error('Choose a folder.');
   if (typeof ownerMemberId !== 'string') throw new Error('No current member.');
   assertRunId(ownerMemberId);
   if (
@@ -98,76 +142,81 @@ export function validateStartInput(input: unknown): StartRunInput & {
       `Provider ${JSON.stringify(providerId)} is not one Waypoint can start a session on.`,
     );
   }
-  if (
-    typeof baseRef !== 'string' ||
-    baseRef.length === 0 ||
-    !baseRef.split('/').every(isRefSafeComponent)
-  ) {
-    throw new Error('Choose a base branch.');
+  if (isolation !== 'worktree' && isolation !== 'directory') {
+    throw new Error('Choose where the agent should work.');
   }
-  let cleanTitle: string | null = null;
-  if (title !== undefined && title !== null) {
-    if (typeof title !== 'string') throw new Error('The title must be text.');
-    cleanTitle = title.trim();
-    if (cleanTitle.length === 0) cleanTitle = null;
-    else if (cleanTitle.length > MAX_RUN_TITLE_CHARS) {
+  if (typeof autoApprove !== 'boolean') {
+    throw new Error('Say whether the agent may work without asking.');
+  }
+  let cleanBase: string | null = null;
+  if (isolation === 'worktree') {
+    if (
+      typeof baseRef !== 'string' ||
+      baseRef.length === 0 ||
+      !baseRef.split('/').every(isRefSafeComponent)
+    ) {
+      throw new Error('Choose a base branch.');
+    }
+    cleanBase = baseRef;
+  }
+  let cleanMessage: string | null = null;
+  if (firstMessage !== undefined && firstMessage !== null) {
+    if (typeof firstMessage !== 'string')
+      throw new Error('The first message must be text.');
+    cleanMessage = firstMessage.trim();
+    if (cleanMessage.length === 0) cleanMessage = null;
+    else if (cleanMessage.length > MAX_FIRST_MESSAGE_CHARS) {
       throw new Error(
-        `The title can be at most ${MAX_RUN_TITLE_CHARS} characters.`,
+        `The first message can be at most ${MAX_FIRST_MESSAGE_CHARS} characters.`,
       );
     }
   }
   return {
-    projectId,
+    folder,
     ownerMemberId,
     providerId: providerId as StartRunInput['providerId'],
-    baseRef,
-    title: cleanTitle,
+    isolation,
+    autoApprove,
+    baseRef: cleanBase,
+    firstMessage: cleanMessage,
+    title: cleanMessage ? titleFromMessage(cleanMessage) : null,
   };
 }
 
-async function linkedRepoPath(
-  ledger: LedgerClient,
-  projectId: string,
-): Promise<string> {
-  const project = await ledger.getProject(projectId);
-  if (!project) throw new Error('No such project.');
-  if (!project.repoPath) {
+/**
+ * The folder a handle stands for, described — or a refusal: an unknown
+ * handle (not one this window offered), or a folder that is no longer a
+ * directory on this machine.
+ */
+async function folderOf(deps: Pick<StartRunDeps, 'folders'>, handle: unknown) {
+  if (typeof handle !== 'string') throw new Error('Choose a folder.');
+  const resolved = deps.folders.registry.resolve(handle);
+  const described = await describeFolder(deps.folders, resolved);
+  if (!described) {
     throw new Error(
-      `${project.name} has no linked repository. Link one in the project's settings (Codebase) first.`,
+      `${resolved} is not a folder on this machine any more. Pick another.`,
     );
   }
-  // The daemon reads the repository, but the sentence for a link that
-  // does not hold on this machine (a path from another machine, a folder
-  // since moved) is Waypoint's to say, before the daemon's structured
-  // path type refuses it (found in W4's live pass: "Not an absolute
-  // path: ~/code/…").
-  const present = await fs
-    .stat(project.repoPath)
-    .then((s) => s.isDirectory())
-    .catch(() => false);
-  if (!present) {
-    throw new Error(
-      `${project.name}'s linked repository (${project.repoPath}) is not on this machine. Relink it in the project's settings (Codebase).`,
-    );
-  }
-  return project.repoPath;
+  return described;
 }
 
 /**
- * The linked repository's local branches and the one to preselect — what
- * the New session dialog's branch field shows. Through the engine, so the
- * daemon (which will create the worktree) is the one reading the repo.
+ * The folder's local branches and the one to preselect — what the New
+ * session dialog's branch field shows for a worktree run. Through the
+ * engine, so the daemon (which will create the worktree) is the one
+ * reading the repo.
  */
 export async function listRunBranches(
-  deps: Pick<StartRunDeps, 'ledger' | 'daemon'>,
-  projectId: unknown,
+  deps: Pick<StartRunDeps, 'daemon' | 'folders'>,
+  folderHandle: unknown,
 ): Promise<RunBranches> {
-  if (typeof projectId !== 'string') throw new Error('Choose a project.');
-  assertRunId(projectId);
   const daemon = deps.daemon();
   if (!daemon) throw new Error(ENGINE_NOT_RUNNING);
-  const repoPath = await linkedRepoPath(deps.ledger, projectId);
-  const refs = await daemon.listRefs(repoPath);
+  const folder = await folderOf(deps, folderHandle);
+  if (folder.kind !== 'repo') {
+    throw new Error(`${folder.displayPath} is not a git repository.`);
+  }
+  const refs = await daemon.listRefs(folder.path);
   const branches = [...refs.branches].sort((a, b) => a.localeCompare(b));
   const local = new Set(branches);
   const origin =
@@ -235,38 +284,54 @@ async function failStart(
 export async function continueStart(
   deps: StartRunDeps & { daemonApi: DaemonRunsApi },
   run: AgentRun,
-  repoPath: string,
+  /** The picked folder: the repository to take a worktree of, or the cwd itself. */
+  folderPath: string,
+  firstMessage: string | null = null,
 ): Promise<void> {
   const { ledger, daemonApi: daemon } = deps;
   let stage: 'worktree' | 'session' = 'worktree';
   try {
-    // W2: writes worktree_path / branch / base_ref and the worktree_created
-    // event, or errorKind 'provision' + an error event, then throws.
-    const worktree = await provisionWorktree(
-      { daemon, ledger, worktreesDir: deps.worktreesDir, logger: deps.logger },
-      {
-        run,
-        repoPath,
-        ticketIdentifier: null,
-        baseRef: run.baseRef ?? undefined,
-      },
-    );
-    if (!(await stillProvisioning(ledger, run.id))) {
-      deps.logger.info(
-        'engine: run left provisioning before its session started; not starting it',
+    let cwd = folderPath;
+    let branch: string | null = null;
+    if (run.isolation === 'worktree') {
+      // W2: writes worktree_path / branch / base_ref and the
+      // worktree_created event, or errorKind 'provision' + an error
+      // event, then throws.
+      const worktree = await provisionWorktree(
         {
-          runId: run.id,
+          daemon,
+          ledger,
+          worktreesDir: deps.worktreesDir,
+          logger: deps.logger,
+        },
+        {
+          run,
+          repoPath: folderPath,
+          ticketIdentifier: null,
+          baseRef: run.baseRef ?? undefined,
         },
       );
-      return;
+      cwd = worktree.worktreePath;
+      branch = worktree.branch;
+      if (!(await stillProvisioning(ledger, run.id))) {
+        deps.logger.info(
+          'engine: run left provisioning before its session started; not starting it',
+          {
+            runId: run.id,
+          },
+        );
+        return;
+      }
     }
 
     stage = 'session';
     const { sessionId } = await daemon.startSession({
       conversationId: run.id,
       providerId: run.providerId,
-      cwd: worktree.worktreePath,
+      cwd,
       sessionId: null,
+      modeId: run.autoApprove ? AUTO_APPROVE_MODE_ID : null,
+      ...(firstMessage ? { initialQueue: [{ text: firstMessage }] } : {}),
     });
     if (!(await stillProvisioning(ledger, run.id))) {
       deps.logger.info(
@@ -289,13 +354,23 @@ export async function continueStart(
       reason: 'The daemon started the session',
       daemonSessionId: run.id,
       providerSessionId: sessionId,
+      cwd,
     });
     await ledger.appendEvent(run.id, 'session_started', {
       providerSessionId: sessionId,
-      cwd: worktree.worktreePath,
-      branch: worktree.branch,
-      baseRef: worktree.baseRef,
+      cwd,
+      isolation: run.isolation,
+      branch,
+      baseRef: run.baseRef,
+      autoApprove: run.autoApprove,
+      firstMessage: firstMessage !== null,
     });
+    if (firstMessage) {
+      await ledger.appendEvent(run.id, 'prompt_sent', {
+        by: 'user',
+        kind: 'first-message',
+      });
+    }
     deps.notify({ runId: run.id, status: running.status });
     deps.logger.info('engine: run session started', {
       runId: run.id,
@@ -329,37 +404,66 @@ export async function startRun(
   const input = validateStartInput(rawInput);
   const daemon = deps.daemon();
   if (!daemon) throw new Error(ENGINE_NOT_RUNNING);
-  const repoPath = await linkedRepoPath(deps.ledger, input.projectId);
-  const branches = await daemon.listLocalBranches(repoPath);
-  if (!branches.includes(input.baseRef)) {
-    throw new Error(
-      `${input.baseRef} is not a local branch of the linked repository.`,
-    );
+  const folder = await folderOf(deps, input.folder);
+  if (input.isolation === 'worktree') {
+    if (folder.kind !== 'repo') {
+      throw new Error(
+        `${folder.displayPath} is not a git repository, so there is no branch to take a worktree from. Work in the folder directly instead.`,
+      );
+    }
+    const branches = await daemon.listLocalBranches(folder.path);
+    if (!input.baseRef || !branches.includes(input.baseRef)) {
+      throw new Error(
+        `${input.baseRef ?? '(none)'} is not a local branch of ${folder.displayPath}.`,
+      );
+    }
   }
 
   const created = await deps.ledger.createRun({
-    projectId: input.projectId,
+    projectId: folder.projectId,
     ownerMemberId: input.ownerMemberId,
     entry: 'independent',
     providerId: input.providerId,
-    baseRef: input.baseRef,
+    isolation: input.isolation,
+    autoApprove: input.autoApprove,
+    ...(input.isolation === 'worktree' && input.baseRef
+      ? { baseRef: input.baseRef }
+      : {}),
     title: input.title,
   });
   const run = await deps.ledger.updateRun(created.id, {
     status: 'provisioning',
     reason: 'Started from the sessions panel',
+    // A direct run's cwd is known now; a worktree run's once provisioned.
+    ...(input.isolation === 'directory' ? { cwd: folder.path } : {}),
   });
   deps.notify({ runId: run.id, status: run.status });
   deps.logger.info('engine: run starting', {
     runId: run.id,
     providerId: run.providerId,
-    baseRef: run.baseRef,
+    isolation: run.isolation,
+    folder: folder.path,
+    autoApprove: run.autoApprove,
   });
+  await rememberFolder(
+    deps.folders.recentsFile,
+    folder.path,
+    input.autoApprove,
+  ).catch((error: unknown) =>
+    deps.logger.warn('engine: recent folders not written', {
+      message: describe(error),
+    }),
+  );
 
   // Not awaited: the renderer has its row; what follows reports through
   // the ledger and `runs:changed`. Never rejects — every failure is a
   // ledger write inside.
-  void continueStart({ ...deps, daemonApi: daemon }, run, repoPath);
+  void continueStart(
+    { ...deps, daemonApi: daemon },
+    run,
+    folder.path,
+    input.firstMessage,
+  );
   return run;
 }
 
@@ -454,15 +558,19 @@ export async function resumeRun(
   if (run.status !== 'interrupted') {
     return { outcome: 'not-resumable', status: run.status };
   }
-  if (!run.worktreePath) {
+  const cwd = run.cwd ?? run.worktreePath;
+  if (!cwd) {
     return { outcome: 'worktree-gone', status: run.status };
   }
-  // The same containment rule every other main-side use of the path
-  // applies: a row naming a place outside worktreesDir is a row someone
-  // edited, not a cwd to hand an agent.
-  await assertUnder(run.worktreePath, deps.worktreesDir);
+  // A worktree run's cwd must be under worktreesDir — the same rule every
+  // other main-side use of the path applies: a row naming a place outside
+  // it is a row someone edited, not a cwd to hand an agent. A direct
+  // run's cwd is the folder the person picked; it only has to exist.
+  if (run.isolation !== 'directory') {
+    await assertUnder(cwd, deps.worktreesDir);
+  }
   const present = await fs
-    .stat(run.worktreePath)
+    .stat(cwd)
     .then((s) => s.isDirectory())
     .catch(() => false);
   if (!present) {
@@ -482,8 +590,9 @@ export async function resumeRun(
     ({ sessionId } = await daemon.startSession({
       conversationId: run.id,
       providerId: run.providerId,
-      cwd: run.worktreePath,
+      cwd,
       sessionId: run.providerSessionId,
+      modeId: run.autoApprove ? AUTO_APPROVE_MODE_ID : null,
     }));
   } catch (error) {
     const message = describe(error);

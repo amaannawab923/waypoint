@@ -109,7 +109,10 @@ function getElectronHandler() {
       revealRunWorktree: (runId: string) => Promise<void>;
       startRun: (input: unknown) => Promise<unknown>;
       resumeRun: (runId: string) => Promise<unknown>;
-      listRunBranches: (projectId: string) => Promise<unknown>;
+      listRunBranches: (folder: string) => Promise<unknown>;
+      chooseFolder: () => Promise<unknown>;
+      listRecentFolders: () => Promise<unknown>;
+      homeDir: () => Promise<unknown>;
       onRunChanged: (cb: (change: unknown) => void) => () => void;
     };
   };
@@ -508,11 +511,20 @@ describe('electronHandler.engine', () => {
       branches: ['main'],
       suggested: 'main',
     });
-    await electronHandler.engine.listRunBranches('proj-1');
+    await electronHandler.engine.listRunBranches('f-abc');
     expect(ipcRendererMock.invoke).toHaveBeenCalledWith(
       'runs:list-branches',
-      'proj-1',
+      'f-abc',
     );
+
+    ipcRendererMock.invoke.mockResolvedValueOnce({ canceled: true });
+    await expect(electronHandler.engine.chooseFolder()).resolves.toEqual({
+      canceled: true,
+    });
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith('runs:choose-folder');
+    ipcRendererMock.invoke.mockResolvedValueOnce([]);
+    await electronHandler.engine.listRecentFolders();
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith('runs:recent-folders');
   });
 
   it('health invokes engine:health and returns whatever it resolves, including null', async () => {
