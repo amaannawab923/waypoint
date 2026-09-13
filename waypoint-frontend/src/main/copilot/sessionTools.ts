@@ -177,13 +177,15 @@ export function buildSessionToolSpecs(
     {
       name: 'dispatch_session',
       description:
-        'Offer the person a coding session on a ticket: Investigate (find the root cause, change nothing), Fix (implement it on a branch), or their own instruction. This does NOT start anything — it shows the person the three options in this conversation; they pick one, review the brief, and press Start. Use it when the person wants a session, an RCA, an investigation, or a fix on a ticket. Pass the ticket key (e.g. ROAD-116).',
+        'Offer the person a coding session on a ticket: Investigate (find the root cause, change nothing), Fix (implement it on a branch), or their own instruction. This does NOT start anything — it shows the person the three options in this conversation; they pick one, review the brief, and press Start. Use it when the person wants a session, an RCA, an investigation, or a fix on a ticket. Pass the ticket key — a Waypoint key (ROAD-116) or a Jira issue key (ENG-4).',
       input: {
         ticket: z
           .string()
           .min(1)
           .max(80)
-          .describe('The ticket key (ROAD-116) or id'),
+          .describe(
+            'The ticket key (ROAD-116, or a Jira key like ENG-4) or id',
+          ),
         intent: z
           .enum(RUN_INTENTS as [RunIntent, ...RunIntent[]])
           .optional()
@@ -246,7 +248,7 @@ export function buildSessionToolSpecs(
         ticket: z
           .string()
           .optional()
-          .describe('A ticket key (ROAD-116) — all of its runs'),
+          .describe('A ticket key (ROAD-116 or ENG-4) — all of its runs'),
       },
       async handler(args) {
         let runs: AgentRun[];
@@ -320,7 +322,7 @@ export function buildSessionToolSpecs(
         ticket: z
           .string()
           .optional()
-          .describe('A ticket key (ROAD-116): its latest writing run'),
+          .describe('A ticket key (ROAD-116 or ENG-4): its latest writing run'),
       },
       async handler(args) {
         if (!deps.openPullRequest) {
