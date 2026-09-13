@@ -511,6 +511,64 @@ describe('listMyTickets', () => {
     });
   });
 
+  // ENG-77: a two-page crawl cannot tell "the loop appends every page" from
+  // "the loop appends the first page and whichever page it stopped on". A
+  // middle page is the one that is neither, and the last page is the one an
+  // off-by-one in the stop condition (checking for more work BEFORE keeping
+  // the page it just fetched) would drop. Three pages, several issues each,
+  // pinned by exact id in exact order: nothing lost, nothing reordered, and
+  // each request carries the cursor the previous page handed over.
+  it('keeps every issue from every page of a three-page crawl, in order', async () => {
+    const issue = (id: string) => ({ id, key: `ENG-${id}`, fields: {} });
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          issues: [issue('1'), issue('2'), issue('3')],
+          nextPageToken: 'p2',
+          isLast: false,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          issues: [issue('4'), issue('5'), issue('6')],
+          nextPageToken: 'p3',
+          isLast: false,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          issues: [issue('7'), issue('8')],
+          isLast: true,
+        }),
+      );
+
+    const result = await listMyTickets();
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    // First request opens the crawl with no cursor; each later one carries
+    // exactly the token the page before it handed back.
+    expect(new URL(call(0)[0]).searchParams.get('nextPageToken')).toBeNull();
+    expect(new URL(call(1)[0]).searchParams.get('nextPageToken')).toBe('p2');
+    expect(new URL(call(2)[0]).searchParams.get('nextPageToken')).toBe('p3');
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // `toEqual` on the full id list, not `toMatchObject` on a prefix: the
+    // whole point is that the last page's issues are here too, after the
+    // middle page's, and that the count is 8 and not 6.
+    expect(result.value.tickets.map((t) => t.id)).toEqual([
+      '1',
+      '2',
+      '3',
+      '4',
+      '5',
+      '6',
+      '7',
+      '8',
+    ]);
+    expect(result.value.truncated).toBe(false);
+  });
+
   // A pathological account must not turn "load my work" into an unbounded
   // crawl of someone's whole Jira.
   it('stops after the page cap even if Jira keeps offering more', async () => {
