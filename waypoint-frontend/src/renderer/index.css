@@ -25,7 +25,7 @@
 
   --success: #157a3d;
   --success-bg: #eafbf0;
-  --warning: #a4650b;
+  --warning: #96590a; /* 5.1:1 on --warning-bg, 5.6:1 on white — AA for the 11–13 px text that sits on the tint (was #a4650b, 4.3:1) */
   --warning-bg: #fdf3e3;
   --danger: #c8241a;
   --danger-bg: #fdeceb;

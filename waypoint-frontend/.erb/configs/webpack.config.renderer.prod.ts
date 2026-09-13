@@ -120,6 +120,7 @@ const configuration: webpack.Configuration = {
       WAYPOINT_API_BASE_URL: 'http://localhost:14000',
       WAYPOINT_FEATURE_COPILOT: 'false',
       WAYPOINT_FEATURE_MY_JIRA: 'false',
+      WAYPOINT_FEATURE_SESSIONS: 'false',
     }),
 
     new MiniCssExtractPlugin({

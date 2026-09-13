@@ -26,3 +26,14 @@ export const COPILOT_ENABLED = process.env.WAYPOINT_FEATURE_COPILOT === 'true';
  * the data is fake.
  */
 export const MY_JIRA_ENABLED = process.env.WAYPOINT_FEATURE_MY_JIRA === 'true';
+
+/**
+ * "My sessions" — the multi-session agent panel (W3, ROAD-58): the sidebar
+ * entry and rail, the /sessions routes, the live transcript, permission
+ * band and diff. The data underneath is real (the agent-runs ledger and the
+ * pinned emdash engine, W1/W2); the flag stays on because starting a
+ * session from the panel arrives with W4 (ROAD-66) — until then the panel
+ * shows runs the ledger and daemon already have.
+ */
+export const SESSIONS_ENABLED =
+  process.env.WAYPOINT_FEATURE_SESSIONS === 'true';

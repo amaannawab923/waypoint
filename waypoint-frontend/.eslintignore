@@ -31,3 +31,12 @@ npm-debug.log.*
 # eslint ignores hidden directories by default:
 # https://github.com/eslint/eslint/issues/8429
 !.erb
+
+# Fetched by hash, never committed (see .gitignore): the pinned agent-engine
+# archive and the vendored emdash chat-ui build. Both carry minified
+# bundles that `eslint .` would otherwise spend minutes on — CI's lint step
+# hung on them (PR #56).
+engine
+vendor
+# Webpack's dev output for the renderer's own workspace.
+release/app/.erb

@@ -313,3 +313,15 @@ export const IconAlert = makeIcon(
     <path d="M12 10v4M12 16.8h.01" />
   </>,
 );
+
+// W3, the sessions panel: the composer's send, and the diff tab's file glyphs.
+export const IconSend = makeIcon(
+  <path d="M21.5 2.5 11 13M21.5 2.5 15 21.5l-4-8.5-8.5-4z" />,
+);
+
+export const IconDiff = makeIcon(
+  <>
+    <path d="M14 2.5H6a2 2 0 0 0-2 2v15a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8.5z" />
+    <path d="M14 2.5v6h6M9 14h6M12 11v6" />
+  </>,
+);

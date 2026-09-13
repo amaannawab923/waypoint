@@ -8,7 +8,6 @@ import {
   listReviewQueue,
   listNotifications,
   listDraftTickets,
-  detectLocalClaudeCode,
 } from '@/data/api';
 import {
   setProjects,
@@ -17,7 +16,9 @@ import {
 } from '@/lib/projectsStore';
 import { upsertProposals, usePendingProposalCount } from '@/lib/proposalStore';
 import { useLoadedJiraConnection } from '@/lib/jiraStore';
-import { MY_JIRA_ENABLED } from '@/lib/featureFlags';
+import { useWaitingSessionsCount } from '@/lib/sessionsStore';
+import { useLocalSummary } from '@/lib/useLocalSummary';
+import { MY_JIRA_ENABLED, SESSIONS_ENABLED } from '@/lib/featureFlags';
 import type { Project } from '@/types/entities';
 import { CreateProjectModal } from '@/components/domain/CreateProjectModal';
 import { AddProjectWizard } from '@/components/domain/AddProjectWizard';
@@ -43,6 +44,8 @@ import {
   IconChevronRight,
   IconArchive,
   IconChart,
+  IconBot,
+  IconChevron,
 } from '@/components/icons';
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
@@ -263,6 +266,30 @@ function MyJiraNavLink() {
   );
 }
 
+/**
+ * "My sessions" — the user's own agent runs on this machine (W3, ROAD-58),
+ * directly under My work per docs/design/w3-sessions-rail.md §1.1. The
+ * badge is the number of runs waiting on the user (blocked + needs-review),
+ * read live off lib/sessionsStore.ts. Flag-gated at the component boundary
+ * like MyJiraNavItem, and for the same reason: with the flag off the store
+ * hook never runs, so a flag-off build makes no ledger read on launch.
+ */
+function MySessionsNavLink() {
+  const waiting = useWaitingSessionsCount();
+  return (
+    <NavLink to="/sessions" className={navLinkClass}>
+      <IconBot size={15} />
+      My sessions
+      <AlertBadge count={waiting} />
+    </NavLink>
+  );
+}
+
+function MySessionsNavItem() {
+  if (!SESSIONS_ENABLED) return null;
+  return <MySessionsNavLink />;
+}
+
 function MyJiraNavItem() {
   // The flag is checked before the hook, not after it. `useLoadedJiraConnection`
   // fetches on mount, so checking afterwards meant a flag-off build still made
@@ -277,12 +304,8 @@ function MyJiraNavItem() {
 }
 
 function LocalStatusStrip() {
-  const { data: projects } = useAsync(() => listProjects(), []);
-  const { data: claude } = useAsync(() => detectLocalClaudeCode(), []);
+  const { repoCount, claudeReady } = useLocalSummary();
   const navigate = useNavigate();
-
-  const repoCount = (projects ?? []).filter((p) => p.repoPath).length;
-  const claudeReady = claude?.state === 'present';
 
   return (
     <button
@@ -301,7 +324,17 @@ function LocalStatusStrip() {
   );
 }
 
-export function Sidebar() {
+export interface SidebarProps {
+  /**
+   * Inside a focus workspace (W3's My sessions) the full sidebar is the
+   * pinned-open state of the rail; this renders the way back to the rail
+   * beside the workspace name. Absent everywhere else, where there is no
+   * rail to collapse to.
+   */
+  onCollapse?: () => void;
+}
+
+export function Sidebar({ onCollapse }: SidebarProps = {}) {
   // The initial fetch (for loading state) stays a plain useAsync — the
   // result seeds the shared projectsStore, and every render below reads
   // live from that store instead of this hook's own `data`, so a project
@@ -369,6 +402,17 @@ export function Sidebar() {
         ) : (
           <span className="h-3.5 w-20 animate-pulse rounded bg-surface-2" />
         )}
+        {onCollapse && (
+          <button
+            type="button"
+            onClick={onCollapse}
+            aria-label="Collapse sidebar"
+            title="Collapse sidebar · ⌘B"
+            className="ml-auto flex size-6 shrink-0 items-center justify-center rounded text-text-muted hover:bg-surface-2 hover:text-text"
+          >
+            <IconChevron size={14} className="rotate-90" />
+          </button>
+        )}
       </div>
 
       <nav className="flex flex-col gap-0.5 px-2">
@@ -380,6 +424,7 @@ export function Sidebar() {
           <IconUser size={15} />
           My work
         </NavLink>
+        <MySessionsNavItem />
         <NavLink to="/notifications" className={navLinkClass}>
           <IconBell size={15} />
           Notifications

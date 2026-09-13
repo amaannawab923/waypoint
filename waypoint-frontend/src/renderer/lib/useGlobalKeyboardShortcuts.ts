@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { getActiveSelectableView } from '@/lib/useActiveSelectableView';
+import { SESSIONS_ENABLED } from '@/lib/featureFlags';
 
 // The mockup's own key→screen map (docs/design/waypoint-revamp-mockup.html,
 // "/* ---------------- keyboard ---------------- */", around line 2272):
@@ -23,6 +24,10 @@ import { getActiveSelectableView } from '@/lib/useActiveSelectableView';
 //   l -> '/machine' — the sidebar's "Local" status strip now has a real
 //        destination page (MachinePage.tsx), added during the UX-parity
 //        pass; wired here to match.
+//   e -> '/sessions' — W3's My sessions (the agent *e*ngine's sessions);
+//        `s` was already Sprints. Only when the feature is on: with the
+//        flag off the route bounces home, so the key does nothing rather
+//        than navigating somewhere it cannot land.
 const GO_TO: Record<string, (projectId: string | undefined) => string | null> =
   {
     h: () => '/',
@@ -30,6 +35,7 @@ const GO_TO: Record<string, (projectId: string | undefined) => string | null> =
     m: () => '/your-work',
     a: () => '/views',
     l: () => '/machine',
+    e: () => (SESSIONS_ENABLED ? '/sessions' : null),
     t: (projectId) => (projectId ? `/projects/${projectId}/tickets` : '/views'),
     d: (projectId) => (projectId ? `/projects/${projectId}/docs` : null),
     s: (projectId) => (projectId ? `/projects/${projectId}/sprints` : null),

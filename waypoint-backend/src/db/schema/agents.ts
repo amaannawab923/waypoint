@@ -15,13 +15,26 @@ export const agentAutonomyEnum = pgEnum('agent_autonomy', [
   'ask-before-pr',
   'full-auto',
 ]);
+// Shared by agent_assignments.status (a projection of the latest run —
+// architecture §5.4) and agent_runs.status (the run itself, ROAD-53). The
+// four values migration 0012 added — provisioning, finishing, interrupted,
+// cancelled — are the coding-run lifecycle; what each means, and which
+// moves between them are legal, is documented on agentRuns.ts and enforced
+// by runStatusMachine.ts. Order here is display order; drizzle-kit
+// realises an enum change as a detour through text (cast both columns to
+// text, DROP TYPE, CREATE TYPE in this order, cast back — see 0012), so
+// the enum's order is this list's order and nothing sorts on it anyway.
 export const agentRunStatusEnum = pgEnum('agent_run_status', [
   'queued',
+  'provisioning',
   'running',
-  'needs-review',
   'blocked',
+  'finishing',
+  'needs-review',
   'done',
+  'interrupted',
   'failed',
+  'cancelled',
 ]);
 
 export const agents = pgTable('agents', {

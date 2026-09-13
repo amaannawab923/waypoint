@@ -1,0 +1,16 @@
+{
+  "$comment": "The pinned build of emdash's chat transcript UI that Waypoint renders agent sessions with (ROAD-59). An unmodified build of @emdash/chat-ui plus the @emdash/core / @emdash/shared type declarations its public types reference, at the same emdash commit as the engine (engine.lock.json). Fetched by hash into ./vendor/ (gitignored) by scripts/fetch-chat-ui.mjs; the sha256 is what makes it the pinned build and not whatever is at the URL.",
+  "name": "emdash-chat-ui",
+  "version": "1.0.0",
+  "sourceRepo": "https://github.com/generalaction/emdash",
+  "sourceCommit": "9b102a5f3",
+  "license": "Apache-2.0",
+  "builtWith": "pnpm --filter @emdash/chat-ui build (packages/chat-ui, 2026-09-12) + the packages' own dist type declarations",
+  "file": "emdash-chat-ui-1.0.0-9b102a5f3.tar.gz",
+  "sha256": "5b9a5a9751167ca4f3f913827a5bd624a624eb94d59e271b1ae326d0a845bd74",
+  "release": "https://github.com/amaannawab923/waypoint/releases/tag/chat-ui-1.0.0-9b102a5f3",
+  "peers": {
+    "solid-js": "1.9.13 — the one dependency the build externalises; installed by Waypoint",
+    "zod": "4.4.3 — types only; the vendored @emdash/core declarations are written against it"
+  }
+}

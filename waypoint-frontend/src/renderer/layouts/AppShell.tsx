@@ -1,12 +1,50 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Outlet } from 'react-router-dom';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Outlet, useLocation } from 'react-router-dom';
 import { Sidebar } from '@/layouts/Sidebar';
+import { RAIL_WIDTH_PX, SidebarRail } from '@/layouts/SidebarRail';
+import { useLocalSummary } from '@/lib/useLocalSummary';
 import { Topbar } from '@/layouts/Topbar';
 import { CopilotPanel } from '@/components/domain/CopilotPanel';
 import { KeyboardShortcutsModal } from '@/components/domain/KeyboardShortcutsModal';
-import { COPILOT_ENABLED } from '@/lib/featureFlags';
+import { COPILOT_ENABLED, SESSIONS_ENABLED } from '@/lib/featureFlags';
 import { setCopilotOpenState } from '@/lib/copilotOpenStore';
 import { useGlobalKeyboardShortcuts } from '@/lib/useGlobalKeyboardShortcuts';
+
+/**
+ * A focus workspace is a route family where the full sidebar folds to the
+ * icon rail (SidebarRail.tsx) — W3's My sessions today
+ * (docs/design/w3-sessions-rail.md §1.2). Judged from the pathname alone
+ * so this layout needs nothing from the page it hosts.
+ */
+export function isFocusWorkspace(pathname: string): boolean {
+  return SESSIONS_ENABLED && /^\/sessions(\/|$)/.test(pathname);
+}
+
+// The one remembered preference: a sidebar the user pinned open inside a
+// focus workspace stays open on the next visit (per device). The automatic
+// collapse itself is not a preference — it is what "focus workspace" means.
+const PINNED_KEY = 'waypoint:sidebarPinned';
+
+export function readSidebarPinned(): boolean {
+  try {
+    return localStorage.getItem(PINNED_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function writeSidebarPinned(pinned: boolean): void {
+  try {
+    localStorage.setItem(PINNED_KEY, pinned ? 'true' : 'false');
+  } catch {
+    // Best effort — the session still behaves, it just forgets.
+  }
+}
+
+/** The peek overlay lingers this long after the pointer leaves the affordance, so the hand can reach it. */
+const PEEK_LINGER_MS = 300;
+/** Sidebar.tsx's `w-64`. */
+const SIDEBAR_WIDTH_PX = 256;
 
 export function AppShell() {
   // Lifted here, not owned by Topbar (which renders the toggle) or
@@ -46,9 +84,99 @@ export function AppShell() {
       onToggleCopilot: toggleCopilot,
     });
 
+  // W3: the sidebar folds to the rail inside a focus workspace, unless the
+  // user pinned it open. The peek overlay is transient hover state.
+  const { pathname } = useLocation();
+  const focusWorkspace = isFocusWorkspace(pathname);
+  const [pinned, setPinned] = useState(readSidebarPinned);
+  const [peeking, setPeeking] = useState(false);
+  const peekLinger = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  const localSummary = useLocalSummary();
+  const showRail = focusWorkspace && !pinned;
+
+  const setPin = useCallback((next: boolean) => {
+    setPinned(next);
+    writeSidebarPinned(next);
+    setPeeking(false);
+  }, []);
+
+  useEffect(() => {
+    if (!focusWorkspace) return undefined;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        e.key.toLowerCase() === 'b'
+      ) {
+        e.preventDefault();
+        setPin(!readSidebarPinned());
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [focusWorkspace, setPin]);
+
+  // Leaving the workspace ends any peek; the pin itself is remembered.
+  useEffect(() => {
+    if (!showRail) setPeeking(false);
+  }, [showRail]);
+  useEffect(
+    () => () => {
+      if (peekLinger.current) clearTimeout(peekLinger.current);
+    },
+    [],
+  );
+
+  const cancelLinger = () => {
+    if (peekLinger.current) clearTimeout(peekLinger.current);
+    peekLinger.current = undefined;
+  };
+  const endPeekSoon = () => {
+    cancelLinger();
+    peekLinger.current = setTimeout(() => setPeeking(false), PEEK_LINGER_MS);
+  };
+
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-bg text-text">
-      <Sidebar />
+    <div className="relative flex h-screen w-screen overflow-hidden bg-bg text-text">
+      {/* The 150 ms width tween of docs/design/w3-sessions-rail.md §1.10:
+          the column animates between the rail's 56 px and the sidebar's
+          256 px while its content swaps at once; instant under
+          prefers-reduced-motion. */}
+      <div
+        data-sidebar-column
+        className="h-full shrink-0 overflow-hidden transition-[width] duration-150 ease-out motion-reduce:transition-none"
+        style={{ width: showRail ? RAIL_WIDTH_PX : SIDEBAR_WIDTH_PX }}
+      >
+        {showRail ? (
+          <SidebarRail
+            onPeek={() => {
+              cancelLinger();
+              setPeeking(true);
+            }}
+            onPeekEnd={endPeekSoon}
+            onPin={() => setPin(true)}
+            localSummary={localSummary.sentence}
+            peeking={peeking}
+          />
+        ) : (
+          <Sidebar
+            onCollapse={focusWorkspace ? () => setPin(false) : undefined}
+          />
+        )}
+      </div>
+      {showRail && peeking && (
+        <div
+          data-sidebar-peek
+          className="absolute inset-y-0 left-14 z-40 shadow-2xl"
+          onMouseEnter={cancelLinger}
+          onMouseLeave={() => setPeeking(false)}
+        >
+          <Sidebar onCollapse={() => setPeeking(false)} />
+        </div>
+      )}
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar
           copilotEnabled={COPILOT_ENABLED}

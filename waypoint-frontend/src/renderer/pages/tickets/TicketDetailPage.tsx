@@ -1,5 +1,17 @@
-import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import {
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import {
+  Link,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from 'react-router-dom';
 import { clsx } from 'clsx';
 import {
   Copy,
@@ -14,7 +26,14 @@ import {
   Trash2,
   UserPlus,
 } from 'lucide-react';
-import { IconCheck, IconChevron, IconChevronRight, IconLayers, IconPlus, IconX } from '@/components/icons';
+import {
+  IconCheck,
+  IconChevron,
+  IconChevronRight,
+  IconLayers,
+  IconPlus,
+  IconX,
+} from '@/components/icons';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import { useRecordRecent } from '@/lib/recents';
@@ -53,10 +72,18 @@ import { DatePicker } from '@/components/ui/DatePicker';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { CopilotProposalCard } from '@/components/domain/CopilotProposalCard';
+import { TicketRunsSection } from '@/components/sessions/TicketRunsSection';
 import { CreateTicketModal } from '@/components/domain/CreateTicketModal';
 import { agentLabel } from '@/lib/agentLabel';
-import { AGENT_STATUS_CONFIG, AgentStatusBadge } from '@/components/domain/AgentStatusBadge';
-import { PRIORITY_LABEL, PRIORITY_ORDER, PriorityIcon } from '@/components/domain/PriorityIcon';
+import {
+  AGENT_STATUS_CONFIG,
+  AgentStatusBadge,
+} from '@/components/domain/AgentStatusBadge';
+import {
+  PRIORITY_LABEL,
+  PRIORITY_ORDER,
+  PriorityIcon,
+} from '@/components/domain/PriorityIcon';
 import { StateIcon } from '@/components/domain/StateIcon';
 import {
   approveProposal,
@@ -110,7 +137,8 @@ function Dropdown({
   useEffect(() => {
     if (!open) return;
     function onDown(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      if (ref.current && !ref.current.contains(e.target as Node))
+        setOpen(false);
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') setOpen(false);
@@ -127,7 +155,12 @@ function Dropdown({
     <div className="relative" ref={ref}>
       {trigger(() => setOpen((o) => !o), open)}
       {open && (
-        <div className={clsx('absolute z-30 mt-1', align === 'right' ? 'right-0' : 'left-0')}>
+        <div
+          className={clsx(
+            'absolute z-30 mt-1',
+            align === 'right' ? 'right-0' : 'left-0',
+          )}
+        >
           {children(() => setOpen(false))}
         </div>
       )}
@@ -135,10 +168,18 @@ function Dropdown({
   );
 }
 
-function PropertyRow({ label, children }: { label: string; children: ReactNode }) {
+function PropertyRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
   return (
     <div className="flex items-start gap-3 py-2">
-      <span className="mt-1.5 w-[104px] shrink-0 text-xs text-text-muted">{label}</span>
+      <span className="mt-1.5 w-[104px] shrink-0 text-xs text-text-muted">
+        {label}
+      </span>
       <div className="min-w-0 flex-1">{children}</div>
     </div>
   );
@@ -181,7 +222,9 @@ function AddLinkForm({
   function submit() {
     const trimmed = url.trim();
     if (!trimmed) return;
-    const normalized = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    const normalized = /^https?:\/\//i.test(trimmed)
+      ? trimmed
+      : `https://${trimmed}`;
     onAdd(normalized, label.trim() || normalized);
   }
 
@@ -210,7 +253,12 @@ function AddLinkForm({
         <Button variant="ghost" size="sm" onClick={onCancel}>
           Cancel
         </Button>
-        <Button variant="primary" size="sm" disabled={!url.trim()} onClick={submit}>
+        <Button
+          variant="primary"
+          size="sm"
+          disabled={!url.trim()}
+          onClick={submit}
+        >
           Add link
         </Button>
       </div>
@@ -281,7 +329,10 @@ export function TicketDetailContent({
       : undefined;
   const needsProjectFetch = !contextProject && itemProjectId !== '';
   const { data: fetchedProject, loading: projectFetchLoading } = useAsync(
-    () => (needsProjectFetch ? getProject(itemProjectId) : Promise.resolve(undefined)),
+    () =>
+      needsProjectFetch
+        ? getProject(itemProjectId)
+        : Promise.resolve(undefined),
     [needsProjectFetch, itemProjectId],
   );
   const project = contextProject ?? fetchedProject;
@@ -294,7 +345,8 @@ export function TicketDetailContent({
     [itemProjectId],
   );
   const { data: workstreams } = useAsync(
-    () => (itemProjectId ? listWorkstreams(itemProjectId) : Promise.resolve([])),
+    () =>
+      itemProjectId ? listWorkstreams(itemProjectId) : Promise.resolve([]),
     [itemProjectId],
   );
   const { data: sprints } = useAsync(
@@ -304,25 +356,24 @@ export function TicketDetailContent({
   const { data: allMembers } = useAsync(() => listMembers(), []);
   const { data: currentUser } = useAsync(() => getCurrentUser(), []);
   const { data: agents } = useAsync(() => listAgents(), []);
-  const {
-    data: allAgentAssignments,
-    reload: reloadAgentAssignments,
-  } = useAsync(() => listAgentAssignments(), []);
+  const { data: allAgentAssignments, reload: reloadAgentAssignments } =
+    useAsync(() => listAgentAssignments(), []);
 
-  const {
-    data: subItems,
-    reload: reloadSubItems,
-  } = useAsync(() => (item ? listSubItems(item.id) : Promise.resolve([])), [item?.id]);
-  const {
-    data: activity,
-    reload: reloadActivity,
-  } = useAsync(() => (item ? listActivity(item.id) : Promise.resolve([])), [item?.id]);
-  const {
-    data: comments,
-    reload: reloadComments,
-  } = useAsync(() => (item ? listComments(item.id) : Promise.resolve([])), [item?.id]);
+  const { data: subItems, reload: reloadSubItems } = useAsync(
+    () => (item ? listSubItems(item.id) : Promise.resolve([])),
+    [item?.id],
+  );
+  const { data: activity, reload: reloadActivity } = useAsync(
+    () => (item ? listActivity(item.id) : Promise.resolve([])),
+    [item?.id],
+  );
+  const { data: comments, reload: reloadComments } = useAsync(
+    () => (item ? listComments(item.id) : Promise.resolve([])),
+    [item?.id],
+  );
   const { data: parentItem } = useAsync(
-    () => (item?.parentId ? getTicket(item.parentId) : Promise.resolve(undefined)),
+    () =>
+      item?.parentId ? getTicket(item.parentId) : Promise.resolve(undefined),
     [item?.parentId],
   );
 
@@ -334,7 +385,8 @@ export function TicketDetailContent({
   // section) just long enough to show its resolution note, same as the
   // Copilot panel — see lib/useCopilotProposals.ts.
   const { data: fetchedTicketProposals } = useAsync(
-    () => (item ? listTicketProposals(item.id, 'proposed') : Promise.resolve([])),
+    () =>
+      item ? listTicketProposals(item.id, 'proposed') : Promise.resolve([]),
     [item?.id],
   );
   useEffect(() => {
@@ -375,13 +427,17 @@ export function TicketDetailContent({
     if (isFirstProposalCheckRef.current) {
       isFirstProposalCheckRef.current = false;
       for (const p of ticketProposals) {
-        if (p.status === 'executed') seenExecutedProposalIdsRef.current.add(p.id);
+        if (p.status === 'executed')
+          seenExecutedProposalIdsRef.current.add(p.id);
       }
       return;
     }
     let shouldReload = false;
     for (const p of ticketProposals) {
-      if (p.status === 'executed' && !seenExecutedProposalIdsRef.current.has(p.id)) {
+      if (
+        p.status === 'executed' &&
+        !seenExecutedProposalIdsRef.current.has(p.id)
+      ) {
         seenExecutedProposalIdsRef.current.add(p.id);
         shouldReload = true;
       }
@@ -435,7 +491,9 @@ export function TicketDetailContent({
     if (item) {
       setTitleDraft(item.title);
       setDescDraft(item.description);
-      setPointsDraft(item.estimatePoints === null ? '' : String(item.estimatePoints));
+      setPointsDraft(
+        item.estimatePoints === null ? '' : String(item.estimatePoints),
+      );
     }
     // Only reset drafts when a *different* item loads, not on every reload after a save.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -475,16 +533,28 @@ export function TicketDetailContent({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item?.id, autoAssignAgentId]);
 
-  const membersById = useMemo(() => new Map((allMembers ?? []).map((m) => [m.id, m])), [allMembers]);
-  const agentsById = useMemo(() => new Map((agents ?? []).map((a) => [a.id, a])), [agents]);
-  const statesById = useMemo(() => new Map((states ?? []).map((s) => [s.id, s])), [states]);
+  const membersById = useMemo(
+    () => new Map((allMembers ?? []).map((m) => [m.id, m])),
+    [allMembers],
+  );
+  const agentsById = useMemo(
+    () => new Map((agents ?? []).map((a) => [a.id, a])),
+    [agents],
+  );
+  const statesById = useMemo(
+    () => new Map((states ?? []).map((s) => [s.id, s])),
+    [states],
+  );
   // `project` can still be undefined here — these memos run on every render,
   // including the ones before stillLoadingCritical/the `!project` guard
   // below have had a chance to bail out (React hooks must run
   // unconditionally, so nothing above this point can be gated on `project`
   // being resolved yet).
   const projectMembers = useMemo(
-    () => (project ? (allMembers ?? []).filter((m) => project.memberIds.includes(m.id)) : []),
+    () =>
+      project
+        ? (allMembers ?? []).filter((m) => project.memberIds.includes(m.id))
+        : [],
     [allMembers, project],
   );
   // Agents are scoped to a project the same way project membership scopes
@@ -494,7 +564,10 @@ export function TicketDetailContent({
     () =>
       project
         ? (agents ?? []).filter(
-            (a) => a.isActive && (a.scopeProjectIds.length === 0 || a.scopeProjectIds.includes(project.id)),
+            (a) =>
+              a.isActive &&
+              (a.scopeProjectIds.length === 0 ||
+                a.scopeProjectIds.includes(project.id)),
           )
         : [],
     [agents, project],
@@ -505,11 +578,27 @@ export function TicketDetailContent({
   // this here means the Activity feed, Comments feed, and assignee avatar
   // stack all agree on how to render "who did this" without branching logic
   // duplicated three times.
-  function resolveActor(id: string): { name: string; color: string; shape: 'circle' | 'square'; model?: string } {
+  function resolveActor(id: string): {
+    name: string;
+    color: string;
+    shape: 'circle' | 'square';
+    model?: string;
+  } {
     const member = membersById.get(id);
-    if (member) return { name: member.displayName, color: member.avatarColor, shape: 'circle' };
+    if (member)
+      return {
+        name: member.displayName,
+        color: member.avatarColor,
+        shape: 'circle',
+      };
     const agent = agentsById.get(id);
-    if (agent) return { name: agent.name, color: agent.avatarColor, shape: 'square', model: agent.model };
+    if (agent)
+      return {
+        name: agent.name,
+        color: agent.avatarColor,
+        shape: 'square',
+        model: agent.model,
+      };
     return { name: 'Unknown', color: 'var(--accent)', shape: 'circle' };
   }
 
@@ -523,7 +612,12 @@ export function TicketDetailContent({
   // above) — everything below this point assumes `project` is defined.
   const stillLoadingCritical =
     (itemLoading && !item) ||
-    Boolean(item && (states === undefined || activity === undefined || (needsProjectFetch && projectFetchLoading)));
+    Boolean(
+      item &&
+      (states === undefined ||
+        activity === undefined ||
+        (needsProjectFetch && projectFetchLoading)),
+    );
 
   if (stillLoadingCritical) {
     const sidebarLabels = [
@@ -544,10 +638,17 @@ export function TicketDetailContent({
     return (
       <div
         className={
-          isDrawer ? 'flex h-full flex-col overflow-y-auto' : 'mx-auto flex max-w-[1400px] flex-col md:flex-row'
+          isDrawer
+            ? 'flex h-full flex-col overflow-y-auto'
+            : 'mx-auto flex max-w-[1400px] flex-col md:flex-row'
         }
       >
-        <Skeleton className={clsx('min-w-0 flex-1', !isDrawer && 'md:border-r md:border-border')}>
+        <Skeleton
+          className={clsx(
+            'min-w-0 flex-1',
+            !isDrawer && 'md:border-r md:border-border',
+          )}
+        >
           {/* Breadcrumb */}
           <div className="flex items-center justify-between border-b border-border px-6 py-3 md:px-8">
             <Skeleton.Block height="0.8rem" width="12rem" />
@@ -568,9 +669,21 @@ export function TicketDetailContent({
 
           {/* Action row */}
           <div className="mt-5 flex flex-wrap items-center gap-2 px-6 md:px-8">
-            <Skeleton.Block height="2rem" width="9.5rem" rounded="rounded-[var(--radius-sm)]" />
-            <Skeleton.Block height="2rem" width="7rem" rounded="rounded-[var(--radius-sm)]" />
-            <Skeleton.Block height="2rem" width="6rem" rounded="rounded-[var(--radius-sm)]" />
+            <Skeleton.Block
+              height="2rem"
+              width="9.5rem"
+              rounded="rounded-[var(--radius-sm)]"
+            />
+            <Skeleton.Block
+              height="2rem"
+              width="7rem"
+              rounded="rounded-[var(--radius-sm)]"
+            />
+            <Skeleton.Block
+              height="2rem"
+              width="6rem"
+              rounded="rounded-[var(--radius-sm)]"
+            />
           </div>
 
           {/* Activity */}
@@ -591,12 +704,15 @@ export function TicketDetailContent({
         <Skeleton
           className={clsx(
             'w-full shrink-0 border-t border-border px-6 py-5',
-            !isDrawer && 'md:w-[300px] md:self-start md:border-t-0 md:px-5 md:py-6',
+            !isDrawer &&
+              'md:w-[300px] md:self-start md:border-t-0 md:px-5 md:py-6',
           )}
         >
           {sidebarLabels.map((label, index) => (
             <div key={label} className="flex items-center gap-3 py-2">
-              <span className="w-[104px] shrink-0 text-xs text-text-muted">{label}</span>
+              <span className="w-[104px] shrink-0 text-xs text-text-muted">
+                {label}
+              </span>
               <Skeleton.Block
                 height="1.25rem"
                 width={sidebarWidths[index % sidebarWidths.length]}
@@ -644,11 +760,15 @@ export function TicketDetailContent({
   }
 
   const currentState = statesById.get(item.stateId);
-  const currentWorkstream = (workstreams ?? []).find((m) => m.id === item.workstreamId);
+  const currentWorkstream = (workstreams ?? []).find(
+    (m) => m.id === item.workstreamId,
+  );
   const currentSprint = (sprints ?? []).find((c) => c.id === item.sprintId);
   const creator = membersById.get(item.createdById);
   const assignedActors = item.assigneeIds
-    .map((id) => (membersById.has(id) || agentsById.has(id) ? resolveActor(id) : null))
+    .map((id) =>
+      membersById.has(id) || agentsById.has(id) ? resolveActor(id) : null,
+    )
     .filter((x): x is NonNullable<typeof x> => Boolean(x));
   const itemAgentAssignments = (allAgentAssignments ?? []).filter(
     (a) => a.ticketId === item.id && item.assigneeIds.includes(a.agentId),
@@ -657,14 +777,24 @@ export function TicketDetailContent({
   const itemLinks = item.links ?? [];
   const estimateSystem = project.estimate;
   const subItemsList = subItems ?? [];
-  const doneSubItems = subItemsList.filter((c) => statesById.get(c.stateId)?.group === 'completed').length;
-  const subItemsProgress = subItemsList.length > 0 ? Math.round((doneSubItems / subItemsList.length) * 100) : 0;
+  const doneSubItems = subItemsList.filter(
+    (c) => statesById.get(c.stateId)?.group === 'completed',
+  ).length;
+  const subItemsProgress =
+    subItemsList.length > 0
+      ? Math.round((doneSubItems / subItemsList.length) * 100)
+      : 0;
   // Finding 7c: sum of estimatePoints across this ticket's own subItems —
   // already fetched for the list below, no new request. Only shown when at
   // least one subtask actually carries a point value, so a plain checklist
   // of unestimated subtasks doesn't grow a misleading "· 0 pts" suffix.
-  const subItemsWithPoints = subItemsList.filter((c) => c.estimatePoints !== null);
-  const subItemsPointsTotal = subItemsWithPoints.reduce((sum, c) => sum + (c.estimatePoints ?? 0), 0);
+  const subItemsWithPoints = subItemsList.filter(
+    (c) => c.estimatePoints !== null,
+  );
+  const subItemsPointsTotal = subItemsWithPoints.reduce(
+    (sum, c) => sum + (c.estimatePoints ?? 0),
+    0,
+  );
 
   async function patchItem(patch: Partial<Ticket>) {
     if (!item) return;
@@ -751,7 +881,9 @@ export function TicketDetailContent({
     }
     const parsed = Number(trimmed);
     if (!Number.isFinite(parsed) || parsed < 0) {
-      setPointsDraft(item.estimatePoints === null ? '' : String(item.estimatePoints));
+      setPointsDraft(
+        item.estimatePoints === null ? '' : String(item.estimatePoints),
+      );
       return;
     }
     if (parsed === item.estimatePoints) return;
@@ -805,7 +937,8 @@ export function TicketDetailContent({
 
   function handleDelete() {
     if (!item) return;
-    if (!window.confirm(`Delete ${item.identifier}? This can't be undone.`)) return;
+    if (!window.confirm(`Delete ${item.identifier}? This can't be undone.`))
+      return;
     deleteTicket(item.id).then(() => {
       onClose?.();
       navigate(`/projects/${projectId}/tickets`);
@@ -832,27 +965,50 @@ export function TicketDetailContent({
   return (
     <div
       className={
-        isDrawer ? 'flex h-full flex-col overflow-y-auto' : 'mx-auto flex max-w-[1400px] flex-col md:flex-row'
+        isDrawer
+          ? 'flex h-full flex-col overflow-y-auto'
+          : 'mx-auto flex max-w-[1400px] flex-col md:flex-row'
       }
     >
-      <div className={clsx('min-w-0 flex-1', !isDrawer && 'md:border-r md:border-border')}>
+      <div
+        className={clsx(
+          'min-w-0 flex-1',
+          !isDrawer && 'md:border-r md:border-border',
+        )}
+      >
         {/* Breadcrumb */}
         <div className="flex items-center justify-between border-b border-border px-6 py-3 md:px-8">
           {isDrawer ? (
             <div className="flex min-w-0 items-center gap-1.5 text-sm text-text-secondary">
-              <span className="shrink-0 font-mono text-text">{item.identifier}</span>
+              <span className="shrink-0 font-mono text-text">
+                {item.identifier}
+              </span>
             </div>
           ) : (
             <div className="flex min-w-0 items-center gap-1.5 text-sm text-text-secondary">
-              <Link to={`/projects/${projectId}/tickets`} className="truncate hover:text-text">
+              <Link
+                to={`/projects/${projectId}/tickets`}
+                className="truncate hover:text-text"
+              >
                 {project.name}
               </Link>
-              <IconChevronRight size={14} className="shrink-0 text-text-muted" />
-              <Link to={`/projects/${projectId}/tickets`} className="shrink-0 hover:text-text">
+              <IconChevronRight
+                size={14}
+                className="shrink-0 text-text-muted"
+              />
+              <Link
+                to={`/projects/${projectId}/tickets`}
+                className="shrink-0 hover:text-text"
+              >
                 Tickets
               </Link>
-              <IconChevronRight size={14} className="shrink-0 text-text-muted" />
-              <span className="shrink-0 font-mono text-text">{item.identifier}</span>
+              <IconChevronRight
+                size={14}
+                className="shrink-0 text-text-muted"
+              />
+              <span className="shrink-0 font-mono text-text">
+                {item.identifier}
+              </span>
             </div>
           )}
           <div className="flex shrink-0 items-center gap-1">
@@ -929,7 +1085,11 @@ export function TicketDetailContent({
 
         {/* Action row */}
         <div className="mt-4 flex flex-wrap items-center gap-2 px-6 md:px-8">
-          <Button variant="secondary" size="sm" onClick={() => setCreateSubOpen(true)}>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setCreateSubOpen(true)}
+          >
             <IconPlus size={14} /> Add subtask
           </Button>
           <Button variant="secondary" size="sm" disabled title="Coming soon">
@@ -980,7 +1140,10 @@ export function TicketDetailContent({
                 >
                   {link.label}
                 </a>
-                <IconButton label={`Remove link ${link.label}`} onClick={() => handleRemoveLink(link.id)}>
+                <IconButton
+                  label={`Remove link ${link.label}`}
+                  onClick={() => handleRemoveLink(link.id)}
+                >
                   <IconX size={13} />
                 </IconButton>
               </div>
@@ -1016,7 +1179,9 @@ export function TicketDetailContent({
                     className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-surface-2"
                   >
                     {childState && <StateIcon state={childState} />}
-                    <span className="shrink-0 font-mono text-xs text-text-muted">{child.identifier}</span>
+                    <span className="shrink-0 font-mono text-xs text-text-muted">
+                      {child.identifier}
+                    </span>
                     <span className="truncate text-text">{child.title}</span>
                     <PriorityIcon priority={child.priority} />
                   </Link>
@@ -1028,16 +1193,29 @@ export function TicketDetailContent({
 
         {/* Activity */}
         <div className="mt-6 px-6 md:px-8">
-          <h3 className="mb-2 font-display text-sm font-medium text-text">Activity</h3>
+          <h3 className="mb-2 font-display text-sm font-medium text-text">
+            Activity
+          </h3>
           <div className="space-y-3">
-            {(activity ?? []).length === 0 && <p className="text-sm text-text-muted">No activity yet.</p>}
+            {(activity ?? []).length === 0 && (
+              <p className="text-sm text-text-muted">No activity yet.</p>
+            )}
             {(activity ?? []).map((a) => {
               const actor = resolveActor(a.actorId);
               return (
                 <div key={a.id} className="flex items-start gap-2 text-sm">
-                  <Avatar name={actor.name} color={actor.color} shape={actor.shape} size={22} />
+                  <Avatar
+                    name={actor.name}
+                    color={actor.color}
+                    shape={actor.shape}
+                    size={22}
+                  />
                   <div className="min-w-0">
-                    <span className="text-text">{actor.shape === 'square' ? agentLabel(actor.name) : actor.name}</span>{' '}
+                    <span className="text-text">
+                      {actor.shape === 'square'
+                        ? agentLabel(actor.name)
+                        : actor.name}
+                    </span>{' '}
                     <span className="text-text-secondary">{a.detail}</span>
                   </div>
                   <span className="ml-auto shrink-0 text-xs text-text-muted">
@@ -1048,6 +1226,10 @@ export function TicketDetailContent({
             })}
           </div>
         </div>
+
+        {/* W3: this ticket's agent runs, with a way into the sessions panel
+            (ROAD-65). Same no-empty-state rule as Pending proposals below. */}
+        <TicketRunsSection ticketId={item.id} />
 
         {/* Pending proposals — no empty state: a ticket with nothing pending
             shows no section at all (honesty-lint: don't imply agent activity
@@ -1072,13 +1254,20 @@ export function TicketDetailContent({
 
         {/* Comments */}
         <div className="mt-6 mb-8 px-6 md:px-8">
-          <h3 className="mb-2 font-display text-sm font-medium text-text">Comments</h3>
+          <h3 className="mb-2 font-display text-sm font-medium text-text">
+            Comments
+          </h3>
           <div className="space-y-4">
             {(comments ?? []).map((c) => {
               const author = resolveActor(c.authorId);
               return (
                 <div key={c.id} className="flex gap-2.5">
-                  <Avatar name={author.name} color={author.color} shape={author.shape} size={26} />
+                  <Avatar
+                    name={author.name}
+                    color={author.color}
+                    shape={author.shape}
+                    size={26}
+                  />
                   <div
                     className={clsx(
                       'min-w-0 flex-1 rounded-[var(--radius)] border border-border px-3 py-2',
@@ -1087,14 +1276,21 @@ export function TicketDetailContent({
                   >
                     <div className="mb-1 flex items-center gap-2">
                       <span className="text-sm font-medium text-text">
-                        {author.shape === 'square' ? agentLabel(author.name) : author.name}
+                        {author.shape === 'square'
+                          ? agentLabel(author.name)
+                          : author.name}
                       </span>
                       {author.model && (
-                        <Badge tone="info" className="px-1.5 py-0 text-[10px] leading-4">
+                        <Badge
+                          tone="info"
+                          className="px-1.5 py-0 text-[10px] leading-4"
+                        >
                           {author.model}
                         </Badge>
                       )}
-                      <span className="text-xs text-text-muted">{formatRelativeTime(c.createdAt)}</span>
+                      <span className="text-xs text-text-muted">
+                        {formatRelativeTime(c.createdAt)}
+                      </span>
                     </div>
                     {author.model ? (
                       // Agent-authored comments are the one case where bodyHtml
@@ -1125,7 +1321,11 @@ export function TicketDetailContent({
           </div>
 
           <div className="mt-4 flex gap-2.5">
-            <Avatar name={currentUser?.displayName ?? 'Me'} color={currentUser?.avatarColor} size={26} />
+            <Avatar
+              name={currentUser?.displayName ?? 'Me'}
+              color={currentUser?.avatarColor}
+              size={26}
+            />
             <div
               ref={commentFormRef}
               tabIndex={-1}
@@ -1162,7 +1362,8 @@ export function TicketDetailContent({
       <aside
         className={clsx(
           'w-full shrink-0 border-t border-border px-6 py-5',
-          !isDrawer && 'md:w-[300px] md:self-start md:border-t-0 md:px-5 md:py-6',
+          !isDrawer &&
+            'md:w-[300px] md:self-start md:border-t-0 md:px-5 md:py-6',
         )}
       >
         <PropertyRow label="State">
@@ -1170,8 +1371,13 @@ export function TicketDetailContent({
             trigger={(toggle) => (
               <button type="button" onClick={toggle} className={TRIGGER_CLASS}>
                 {currentState && <StateIcon state={currentState} />}
-                <span className="truncate">{currentState?.name ?? 'No state'}</span>
-                <IconChevron size={13} className="ml-auto shrink-0 text-text-muted" />
+                <span className="truncate">
+                  {currentState?.name ?? 'No state'}
+                </span>
+                <IconChevron
+                  size={13}
+                  className="ml-auto shrink-0 text-text-muted"
+                />
               </button>
             )}
           >
@@ -1189,7 +1395,12 @@ export function TicketDetailContent({
                   >
                     <StateIcon state={s} />
                     <span className="truncate">{s.name}</span>
-                    {s.id === item.stateId && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
+                    {s.id === item.stateId && (
+                      <IconCheck
+                        size={14}
+                        className="ml-auto shrink-0 text-accent"
+                      />
+                    )}
                   </button>
                 ))}
               </div>
@@ -1204,10 +1415,23 @@ export function TicketDetailContent({
                 const agent = agentsById.get(assignment.agentId);
                 if (!agent) return null;
                 return (
-                  <div key={assignment.id} className="flex h-8 items-center gap-2 px-2 text-sm">
-                    <Avatar name={agent.name} color={agent.avatarColor} shape="square" size={20} />
-                    <span className="truncate text-text">{agentLabel(agent.name)}</span>
-                    <AgentStatusBadge status={assignment.status} className="ml-auto" />
+                  <div
+                    key={assignment.id}
+                    className="flex h-8 items-center gap-2 px-2 text-sm"
+                  >
+                    <Avatar
+                      name={agent.name}
+                      color={agent.avatarColor}
+                      shape="square"
+                      size={20}
+                    />
+                    <span className="truncate text-text">
+                      {agentLabel(agent.name)}
+                    </span>
+                    <AgentStatusBadge
+                      status={assignment.status}
+                      className="ml-auto"
+                    />
                   </div>
                 );
               })}
@@ -1226,43 +1450,82 @@ export function TicketDetailContent({
                     <UserPlus size={14} /> Add assignees
                   </span>
                 )}
-                <IconChevron size={13} className="ml-auto shrink-0 text-text-muted" />
+                <IconChevron
+                  size={13}
+                  className="ml-auto shrink-0 text-text-muted"
+                />
               </button>
             )}
           >
             {() => (
               <div className={PANEL_CLASS}>
                 {projectMembers.length === 0 && (
-                  <p className="px-2 py-1.5 text-xs text-text-muted">No project members.</p>
+                  <p className="px-2 py-1.5 text-xs text-text-muted">
+                    No project members.
+                  </p>
                 )}
                 {projectMembers.map((m) => {
                   const checked = item.assigneeIds.includes(m.id);
                   return (
-                    <button key={m.id} type="button" onClick={() => toggleAssignee(m.id)} className={OPTION_CLASS}>
-                      <Avatar name={m.displayName} color={m.avatarColor} size={20} />
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => toggleAssignee(m.id)}
+                      className={OPTION_CLASS}
+                    >
+                      <Avatar
+                        name={m.displayName}
+                        color={m.avatarColor}
+                        size={20}
+                      />
                       <span className="truncate">{m.displayName}</span>
-                      {checked && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
+                      {checked && (
+                        <IconCheck
+                          size={14}
+                          className="ml-auto shrink-0 text-accent"
+                        />
+                      )}
                     </button>
                   );
                 })}
                 <div className="my-1 h-px bg-border" />
-                <p className="px-2 py-1 font-mono text-[10px] tracking-wide text-text-muted uppercase">Agents</p>
+                <p className="px-2 py-1 font-mono text-[10px] tracking-wide text-text-muted uppercase">
+                  Agents
+                </p>
                 {projectAgents.map((a) => {
                   const checked = item.assigneeIds.includes(a.id);
-                  const assignment = itemAgentAssignments.find((x) => x.agentId === a.id);
+                  const assignment = itemAgentAssignments.find(
+                    (x) => x.agentId === a.id,
+                  );
                   return (
-                    <button key={a.id} type="button" onClick={() => toggleAgent(a.id)} className={OPTION_CLASS}>
-                      <Avatar name={a.name} color={a.avatarColor} shape="square" size={20} />
+                    <button
+                      key={a.id}
+                      type="button"
+                      onClick={() => toggleAgent(a.id)}
+                      className={OPTION_CLASS}
+                    >
+                      <Avatar
+                        name={a.name}
+                        color={a.avatarColor}
+                        shape="square"
+                        size={20}
+                      />
                       <span className="truncate">
-                        {agentLabel(a.name)} <span className="text-text-muted">— {a.model}</span>
+                        {agentLabel(a.name)}{' '}
+                        <span className="text-text-muted">— {a.model}</span>
                       </span>
                       {assignment && (
                         <Dot
                           color={AGENT_STATUS_CONFIG[assignment.status].dot}
-                          className={clsx('ml-auto', assignment.status === 'running' && 'animate-pulse')}
+                          className={clsx(
+                            'ml-auto',
+                            assignment.status === 'running' && 'animate-pulse',
+                          )}
                         />
                       )}
-                      {checked && <IconCheck size={14} className="shrink-0 text-accent" />}
+                      {checked && (
+                        <IconCheck size={14} className="shrink-0 text-accent" />
+                      )}
                     </button>
                   );
                 })}
@@ -1290,8 +1553,13 @@ export function TicketDetailContent({
             trigger={(toggle) => (
               <button type="button" onClick={toggle} className={TRIGGER_CLASS}>
                 <PriorityIcon priority={item.priority} />
-                <span className="truncate">{PRIORITY_LABEL[item.priority]}</span>
-                <IconChevron size={13} className="ml-auto shrink-0 text-text-muted" />
+                <span className="truncate">
+                  {PRIORITY_LABEL[item.priority]}
+                </span>
+                <IconChevron
+                  size={13}
+                  className="ml-auto shrink-0 text-text-muted"
+                />
               </button>
             )}
           >
@@ -1309,7 +1577,12 @@ export function TicketDetailContent({
                   >
                     <PriorityIcon priority={p} />
                     <span className="truncate">{PRIORITY_LABEL[p]}</span>
-                    {p === item.priority && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
+                    {p === item.priority && (
+                      <IconCheck
+                        size={14}
+                        className="ml-auto shrink-0 text-accent"
+                      />
+                    )}
                   </button>
                 ))}
               </div>
@@ -1343,10 +1616,19 @@ export function TicketDetailContent({
           <PropertyRow label="Estimate">
             <Dropdown
               trigger={(toggle) => (
-                <button type="button" onClick={toggle} className={TRIGGER_CLASS}>
+                <button
+                  type="button"
+                  onClick={toggle}
+                  className={TRIGGER_CLASS}
+                >
                   <Ruler size={14} className="shrink-0 text-text-muted" />
-                  <span className="truncate">{item.estimateValue ?? 'No estimate'}</span>
-                  <IconChevron size={13} className="ml-auto shrink-0 text-text-muted" />
+                  <span className="truncate">
+                    {item.estimateValue ?? 'No estimate'}
+                  </span>
+                  <IconChevron
+                    size={13}
+                    className="ml-auto shrink-0 text-text-muted"
+                  />
                 </button>
               )}
             >
@@ -1360,8 +1642,15 @@ export function TicketDetailContent({
                     }}
                     className={OPTION_CLASS}
                   >
-                    <span className="truncate text-text-secondary">No estimate</span>
-                    {!item.estimateValue && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
+                    <span className="truncate text-text-secondary">
+                      No estimate
+                    </span>
+                    {!item.estimateValue && (
+                      <IconCheck
+                        size={14}
+                        className="ml-auto shrink-0 text-accent"
+                      />
+                    )}
                   </button>
                   {estimateSystem.values.map((v) => (
                     <button
@@ -1374,7 +1663,12 @@ export function TicketDetailContent({
                       className={OPTION_CLASS}
                     >
                       <span className="truncate">{v}</span>
-                      {item.estimateValue === v && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
+                      {item.estimateValue === v && (
+                        <IconCheck
+                          size={14}
+                          className="ml-auto shrink-0 text-accent"
+                        />
+                      )}
                     </button>
                   ))}
                 </div>
@@ -1385,8 +1679,14 @@ export function TicketDetailContent({
 
         <PropertyRow label="Created by">
           <div className="flex h-8 items-center gap-2 px-2 text-sm text-text">
-            <Avatar name={creator?.displayName ?? 'Unknown'} color={creator?.avatarColor} size={20} />
-            <span className="truncate">{creator?.displayName ?? 'Unknown'}</span>
+            <Avatar
+              name={creator?.displayName ?? 'Unknown'}
+              color={creator?.avatarColor}
+              size={20}
+            />
+            <span className="truncate">
+              {creator?.displayName ?? 'Unknown'}
+            </span>
           </div>
         </PropertyRow>
 
@@ -1409,8 +1709,13 @@ export function TicketDetailContent({
             trigger={(toggle) => (
               <button type="button" onClick={toggle} className={TRIGGER_CLASS}>
                 <IconLayers size={14} className="shrink-0 text-text-muted" />
-                <span className="truncate">{currentWorkstream?.name ?? 'No workstream'}</span>
-                <IconChevron size={13} className="ml-auto shrink-0 text-text-muted" />
+                <span className="truncate">
+                  {currentWorkstream?.name ?? 'No workstream'}
+                </span>
+                <IconChevron
+                  size={13}
+                  className="ml-auto shrink-0 text-text-muted"
+                />
               </button>
             )}
           >
@@ -1424,8 +1729,15 @@ export function TicketDetailContent({
                   }}
                   className={OPTION_CLASS}
                 >
-                  <span className="truncate text-text-secondary">No workstream</span>
-                  {!item.workstreamId && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
+                  <span className="truncate text-text-secondary">
+                    No workstream
+                  </span>
+                  {!item.workstreamId && (
+                    <IconCheck
+                      size={14}
+                      className="ml-auto shrink-0 text-accent"
+                    />
+                  )}
                 </button>
                 {(workstreams ?? []).map((m) => (
                   <button
@@ -1438,7 +1750,12 @@ export function TicketDetailContent({
                     className={OPTION_CLASS}
                   >
                     <span className="truncate">{m.name}</span>
-                    {item.workstreamId === m.id && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
+                    {item.workstreamId === m.id && (
+                      <IconCheck
+                        size={14}
+                        className="ml-auto shrink-0 text-accent"
+                      />
+                    )}
                   </button>
                 ))}
               </div>
@@ -1451,8 +1768,13 @@ export function TicketDetailContent({
             trigger={(toggle) => (
               <button type="button" onClick={toggle} className={TRIGGER_CLASS}>
                 <Repeat size={14} className="shrink-0 text-text-muted" />
-                <span className="truncate">{currentSprint?.name ?? 'No sprint'}</span>
-                <IconChevron size={13} className="ml-auto shrink-0 text-text-muted" />
+                <span className="truncate">
+                  {currentSprint?.name ?? 'No sprint'}
+                </span>
+                <IconChevron
+                  size={13}
+                  className="ml-auto shrink-0 text-text-muted"
+                />
               </button>
             )}
           >
@@ -1466,8 +1788,15 @@ export function TicketDetailContent({
                   }}
                   className={OPTION_CLASS}
                 >
-                  <span className="truncate text-text-secondary">No sprint</span>
-                  {!item.sprintId && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
+                  <span className="truncate text-text-secondary">
+                    No sprint
+                  </span>
+                  {!item.sprintId && (
+                    <IconCheck
+                      size={14}
+                      className="ml-auto shrink-0 text-accent"
+                    />
+                  )}
                 </button>
                 {(sprints ?? []).map((c) => (
                   <button
@@ -1480,7 +1809,12 @@ export function TicketDetailContent({
                     className={OPTION_CLASS}
                   >
                     <span className="truncate">{c.name}</span>
-                    {item.sprintId === c.id && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
+                    {item.sprintId === c.id && (
+                      <IconCheck
+                        size={14}
+                        className="ml-auto shrink-0 text-accent"
+                      />
+                    )}
                   </button>
                 ))}
               </div>
@@ -1495,15 +1829,23 @@ export function TicketDetailContent({
                 to={`/projects/${projectId}/tickets/${parentItem.identifier}`}
                 className="flex min-w-0 items-center gap-1.5 truncate text-sm text-text hover:text-accent"
               >
-                <span className="shrink-0 font-mono text-xs text-text-muted">{parentItem.identifier}</span>
+                <span className="shrink-0 font-mono text-xs text-text-muted">
+                  {parentItem.identifier}
+                </span>
                 <span className="truncate">{parentItem.title}</span>
               </Link>
-              <IconButton label="Clear parent" onClick={() => patchItem({ parentId: null })} className="ml-auto">
+              <IconButton
+                label="Clear parent"
+                onClick={() => patchItem({ parentId: null })}
+                className="ml-auto"
+              >
                 <IconX size={13} />
               </IconButton>
             </div>
           ) : (
-            <div className="flex h-8 items-center px-2 text-sm text-text-muted">None</div>
+            <div className="flex h-8 items-center px-2 text-sm text-text-muted">
+              None
+            </div>
           )}
         </PropertyRow>
 
@@ -1531,22 +1873,37 @@ export function TicketDetailContent({
                     <Tag size={14} /> Add labels
                   </span>
                 )}
-                <IconChevron size={13} className="ml-auto shrink-0 text-text-muted" />
+                <IconChevron
+                  size={13}
+                  className="ml-auto shrink-0 text-text-muted"
+                />
               </button>
             )}
           >
             {() => (
               <div className={PANEL_CLASS}>
                 {(labels ?? []).length === 0 && (
-                  <p className="px-2 py-1.5 text-xs text-text-muted">No labels in this project.</p>
+                  <p className="px-2 py-1.5 text-xs text-text-muted">
+                    No labels in this project.
+                  </p>
                 )}
                 {(labels ?? []).map((l) => {
                   const checked = item.labelIds.includes(l.id);
                   return (
-                    <button key={l.id} type="button" onClick={() => toggleLabel(l.id)} className={OPTION_CLASS}>
+                    <button
+                      key={l.id}
+                      type="button"
+                      onClick={() => toggleLabel(l.id)}
+                      className={OPTION_CLASS}
+                    >
                       <Dot color={l.color} />
                       <span className="truncate">{l.name}</span>
-                      {checked && <IconCheck size={14} className="ml-auto shrink-0 text-accent" />}
+                      {checked && (
+                        <IconCheck
+                          size={14}
+                          className="ml-auto shrink-0 text-accent"
+                        />
+                      )}
                     </button>
                   );
                 })}

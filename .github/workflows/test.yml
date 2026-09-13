@@ -19,7 +19,21 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: waypoint-frontend/package-lock.json
+      # No token here: `npm ci` runs every dependency's install script, and a
+      # repo-scoped token in that environment is a token every one of them
+      # can read (review round 2). The engine and chat-ui fetches inside
+      # postinstall then print that they could not download and exit 0 — by
+      # design (the runner's shared IP is rate-limited unauthenticated) —
+      # and the dedicated step below does both downloads with the token,
+      # alone. Both, not just the engine: the renderer does not build
+      # without the vendored chat-ui (PR #56 hit exactly that).
       - run: npm ci
+      - name: Fetch the pinned agent engine and chat-ui build
+        run: |
+          node scripts/fetch-engine.mjs
+          node scripts/fetch-chat-ui.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
       - run: npm run typecheck --if-present
       # continue-on-error, not a hard gate: this is the first time lint has
       # ever run in CI for this repo (no workflow existed before this PR),
@@ -58,6 +72,8 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: waypoint-backend/package-lock.json
+      # No token: the backend has no engine to fetch (its postinstall runs no
+      # release download), and dependency install scripts do not get one.
       - run: npm ci
       # No Postgres setup here, unlike the e2e job below: almost every backend
       # *.test.ts file mocks its DB access rather than hitting a real
@@ -93,6 +109,13 @@ jobs:
           cache-dependency-path: waypoint-frontend/package-lock.json
       - name: Install frontend deps
         run: npm ci
+      # Token only here, for the two downloads that need it (see the unit job).
+      - name: Fetch the pinned agent engine and chat-ui build
+        run: |
+          node scripts/fetch-engine.mjs
+          node scripts/fetch-chat-ui.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
       - name: Set up Postgres (Homebrew, no Docker on this runner)
         run: |
           brew install postgresql@16
