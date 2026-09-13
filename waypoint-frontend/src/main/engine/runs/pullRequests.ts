@@ -32,6 +32,8 @@ export interface PublishInput {
   closingMessage: string;
   /** "ROAD-103: Flaky: …" — the ticket's key and title, when known; the title's fallback. */
   title: string;
+  /** W5b: a Jira issue's URL, linked from the body's first line; null for a native ticket. */
+  ticketUrl?: string | null;
 }
 
 /** What the branch holds, read by the host — the PR's first half, never the agent's guess. */
@@ -203,8 +205,9 @@ export function buildPrBody(
   facts: BranchFacts | null,
 ): string {
   const { run } = input;
+  const heading = firstLine(input.title) || run.title || run.id;
   const lines = [
-    `**${firstLine(input.title) || run.title || run.id}**`,
+    input.ticketUrl ? `**[${heading}](${input.ticketUrl})**` : `**${heading}**`,
     '',
     `Branch \`${run.branch}\`${run.baseRef ? ` from \`${run.baseRef}\`` : ''}, pushed and opened by Waypoint as the run's owner from run \`${run.title ?? run.id}\` (${run.id}). The session worked in a fresh worktree with no credentials.`,
   ];

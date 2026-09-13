@@ -11,6 +11,7 @@ import {
   pickReviewState,
   type FinalizeDeps,
 } from './finalize';
+import { pickReviewTransition, type JiraRunDeps } from './jiraRuns';
 import type { AgentRun, LedgerClient } from './ledgerClient';
 
 // Host-side finalize against fakes (docs/design/w5a-investigate-fix.md
@@ -129,6 +130,8 @@ function fakeLedger(seed: AgentRun) {
       },
     ]),
     postCopilotNote: jest.fn(async () => true),
+    getTicket: jest.fn(async () => null),
+    getTicketRef: jest.fn(async () => null),
   } as unknown as jest.Mocked<LedgerClient>;
   return { ledger, rows };
 }
@@ -267,10 +270,15 @@ describe('createRunFinalizer', () => {
     const statuses = ledger.updateRun.mock.calls.map(([, p]) => p.status);
     expect(statuses).toEqual(['finishing', 'needs-review']);
     expect(ledger.createRunProposal).toHaveBeenCalledTimes(1);
-    expect(ledger.createRunProposal).toHaveBeenCalledWith('run-abc1234', {
-      kind: 'comment',
-      body: 'The root cause is X.',
-    });
+    // A native ticket's proposal carries no Jira credential.
+    expect(ledger.createRunProposal).toHaveBeenCalledWith(
+      'run-abc1234',
+      {
+        kind: 'comment',
+        body: 'The root cause is X.',
+      },
+      { external: false },
+    );
     expect(ledger.appendEvent).toHaveBeenCalledWith(
       'run-abc1234',
       'proposal_created',
@@ -474,6 +482,205 @@ describe('the transcript before the kill (ROAD-124)', () => {
     const { deps } = depsWith(ledger, daemon, { transcripts: { capture } });
     await createRunFinalizer(deps).onSessionIdle('run-abc1234');
     expect(order).toEqual(['capture:1', 'kill']);
+  });
+});
+
+// W5b (docs/design/w5b-jira-dispatch.md §2.4, §2.6): a run on a Jira
+// issue files through the backend's Jira path — its proposals carry the
+// borrowed credential — and a Fix proposes a TRANSITION picked by name.
+describe('W5b: a run on a Jira issue', () => {
+  const JIRA_REF = {
+    id: 'tref-eng4',
+    provider: 'jira',
+    site: 'yourteam.atlassian.net',
+    key: 'ENG-4',
+    identifier: 'ENG-4',
+    title: 'Checkout 500s',
+    url: 'https://yourteam.atlassian.net/browse/ENG-4',
+  };
+  const transition = (
+    id: string,
+    targetStateName: string,
+    targetStateCategory: 'todo' | 'in-progress' | 'done',
+  ) => ({ id, targetStateName, targetStateCategory, requiresFields: [] });
+
+  function jiraWith(
+    transitions: ReturnType<typeof transition>[] | { message: string },
+    site: string | null = 'yourteam.atlassian.net',
+  ): JiraRunDeps {
+    return {
+      site: () => site,
+      getTicket: jest.fn(),
+      listComments: jest.fn(),
+      listTransitions: jest.fn(async () =>
+        Array.isArray(transitions)
+          ? { ok: true as const, value: transitions }
+          : {
+              ok: false as const,
+              reason: 'network' as const,
+              message: transitions.message,
+            },
+      ),
+    };
+  }
+
+  function jiraFixLedger() {
+    const seeded = fakeLedger(
+      run({
+        ticketId: 'tref-eng4',
+        projectId: null,
+        intent: 'fix',
+        modeId: 'bypassPermissions',
+        title: 'ENG-4 · Fix',
+        branch: 'agent/ENG-4',
+      }),
+    );
+    seeded.ledger.getTicketRef.mockImplementation(async (id: string) =>
+      id === 'tref-eng4' ? JIRA_REF : null,
+    );
+    return seeded;
+  }
+
+  it('pickReviewTransition: review by name, else the first in-progress target, else none', () => {
+    const review = transition('21', 'In Review', 'in-progress');
+    const progress = transition('11', 'In Progress', 'in-progress');
+    const done = transition('31', 'Done', 'done');
+    expect(pickReviewTransition([done, progress, review])).toBe(review);
+    expect(pickReviewTransition([done, progress])).toBe(progress);
+    expect(pickReviewTransition([done])).toBeNull();
+    expect(pickReviewTransition([])).toBeNull();
+  });
+
+  it('Investigate on a Jira issue: the comment rides the borrowed credential; no state change', async () => {
+    const { ledger } = fakeLedger(
+      run({
+        ticketId: 'tref-eng4',
+        projectId: null,
+        title: 'ENG-4 · Investigate',
+      }),
+    );
+    ledger.getTicketRef.mockResolvedValue(JIRA_REF);
+    const jira = jiraWith([transition('21', 'In Review', 'in-progress')]);
+    const { deps } = depsWith(ledger, fakeDaemon(), { jira });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+
+    expect(ledger.createRunProposal).toHaveBeenCalledTimes(1);
+    expect(ledger.createRunProposal).toHaveBeenCalledWith(
+      'run-abc1234',
+      { kind: 'comment', body: 'The root cause is X.' },
+      { external: true },
+    );
+    expect(jira.listTransitions).not.toHaveBeenCalled();
+    expect(ledger.listStates).not.toHaveBeenCalled();
+  });
+
+  it('Fix on a Jira issue: the transition named for review, filed as a state_change with the TRANSITION id', async () => {
+    const { ledger } = jiraFixLedger();
+    const daemon = fakeDaemon({
+      turns: [turn([{ kind: 'message', role: 'assistant', text: 'Fixed.' }])],
+    });
+    const jira = jiraWith([
+      transition('31', 'Done', 'done'),
+      transition('11', 'In Progress', 'in-progress'),
+      transition('21', 'Code Review', 'in-progress'),
+    ]);
+    const publish = jest.fn(async () => ({
+      kind: 'opened' as const,
+      url: 'https://github.com/o/r/pull/70',
+      pushed: true as const,
+    }));
+    const { deps } = depsWith(ledger, daemon, {
+      jira,
+      pullRequests: { publish },
+    });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+
+    // The PR is titled and linked from the issue's key, title and URL.
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'ENG-4: Checkout 500s',
+        ticketUrl: 'https://yourteam.atlassian.net/browse/ENG-4',
+      }),
+    );
+    expect(jira.listTransitions).toHaveBeenCalledWith('ENG-4');
+    expect(ledger.createRunProposal).toHaveBeenCalledTimes(2);
+    expect(ledger.createRunProposal).toHaveBeenNthCalledWith(
+      2,
+      'run-abc1234',
+      { kind: 'state_change', stateId: '21' },
+      { external: true },
+    );
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'proposal_created',
+      expect.objectContaining({
+        kind: 'state_change',
+        transitionId: '21',
+        stateName: 'Code Review',
+      }),
+    );
+    // Never the native states.
+    expect(ledger.listStates).not.toHaveBeenCalled();
+    expect(ledger.postCopilotNote).toHaveBeenCalledWith(
+      'run-abc1234',
+      expect.stringContaining('2 proposals filed'),
+    );
+  });
+
+  it('Fix with no fitting transition: the comment alone, and a note event naming what the issue offered', async () => {
+    const { ledger, rows } = jiraFixLedger();
+    const daemon = fakeDaemon({
+      turns: [turn([{ kind: 'message', role: 'assistant', text: 'Fixed.' }])],
+    });
+    const jira = jiraWith([transition('31', 'Done', 'done')]);
+    const { deps } = depsWith(ledger, daemon, { jira });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+
+    expect(ledger.createRunProposal).toHaveBeenCalledTimes(1);
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'note',
+      expect.objectContaining({
+        stage: 'finalize',
+        message: expect.stringContaining(
+          'no transition to review or in progress',
+        ),
+        offered: ['Done'],
+      }),
+    );
+    expect(rows.get('run-abc1234')).toMatchObject({ status: 'needs-review' });
+    expect(ledger.postCopilotNote).toHaveBeenCalledWith(
+      'run-abc1234',
+      expect.stringContaining('1 proposal filed'),
+    );
+  });
+
+  it('Fix when the transitions cannot be read, or Jira is not connected: the comment alone, said in the trail', async () => {
+    const unreadable = jiraFixLedger();
+    const { deps: a } = depsWith(unreadable.ledger, fakeDaemon(), {
+      jira: jiraWith({ message: 'Jira timed out.' }),
+    });
+    await createRunFinalizer(a).onSessionIdle('run-abc1234');
+    expect(unreadable.ledger.createRunProposal).toHaveBeenCalledTimes(1);
+    expect(unreadable.ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'note',
+      expect.objectContaining({ reason: 'Jira timed out.' }),
+    );
+
+    const disconnected = jiraFixLedger();
+    const { deps: b } = depsWith(disconnected.ledger, fakeDaemon(), {
+      jira: jiraWith([], null),
+    });
+    await createRunFinalizer(b).onSessionIdle('run-abc1234');
+    expect(disconnected.ledger.createRunProposal).toHaveBeenCalledTimes(1);
+    expect(disconnected.ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'note',
+      expect.objectContaining({
+        message: expect.stringContaining('Jira is not connected'),
+      }),
+    );
   });
 });
 

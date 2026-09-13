@@ -15,6 +15,11 @@ import type { NoteGitRunner } from './startRun';
 import type { TranscriptKeeper } from './transcripts';
 import { isDispatchedWriter } from './agentEnv';
 import {
+  describeRunTicket,
+  pickReviewTransition,
+  type JiraRunDeps,
+} from './jiraRuns';
+import {
   describePublish,
   type PublishOutcome,
   type PullRequestPublisher,
@@ -55,6 +60,8 @@ export interface FinalizeDeps {
   transcripts?: TranscriptKeeper;
   /** W6: pushes a writing run's branch and opens the PR before the proposals are filed. */
   pullRequests?: PullRequestPublisher;
+  /** W5b: main's Jira reads, for the transition a Fix on a Jira issue proposes (runs/jiraRuns.ts). */
+  jira?: JiraRunDeps;
   logger: {
     info: (m: string, meta?: Record<string, unknown>) => void;
     warn: (m: string, meta?: Record<string, unknown>) => void;
@@ -243,6 +250,67 @@ export function finishedNote(
   return `Run ${label(run)} finished (${outcome.turns} turn${outcome.turns === 1 ? '' : 's'}) · ${filed}${pr}.`;
 }
 
+/**
+ * The state change for a Fix on a Jira issue: the issue's live transitions
+ * through main's own client, the one `pickReviewTransition` names, filed
+ * as the `state_change` shape Copilot's are — `stateId` is the TRANSITION
+ * id, re-checked by the backend at filing and again at approve. Answers
+ * how many proposals it filed (0 or 1); a transition list Jira would not
+ * give, or none that fits, is a `note` event on the run, never a guess.
+ */
+async function proposeJiraTransition(
+  deps: FinalizeDeps,
+  run: AgentRun,
+  key: string,
+): Promise<number> {
+  const note = async (message: string, extra: Record<string, unknown>) => {
+    deps.logger.info(`engine: finalize ${message}`, {
+      runId: run.id,
+      ...extra,
+    });
+    await deps.ledger
+      .appendEvent(run.id, 'note', { stage: 'finalize', message, ...extra })
+      .catch(() => {});
+  };
+  if (!deps.jira || !deps.jira.site()) {
+    await note('filed only the comment: Jira is not connected', { key });
+    return 0;
+  }
+  const listed = await deps.jira.listTransitions(key);
+  if (!listed.ok) {
+    await note('filed only the comment: the transitions could not be read', {
+      key,
+      reason: listed.message,
+    });
+    return 0;
+  }
+  const target = pickReviewTransition(listed.value);
+  if (!target) {
+    await note(
+      'filed only the comment: no transition to review or in progress',
+      {
+        key,
+        offered: listed.value.map((t) => t.targetStateName),
+      },
+    );
+    return 0;
+  }
+  const change = await deps.ledger.createRunProposal(
+    run.id,
+    { kind: 'state_change', stateId: target.id },
+    { external: true },
+  );
+  await deps.ledger
+    .appendEvent(run.id, 'proposal_created', {
+      proposalId: change.id,
+      kind: 'state_change',
+      transitionId: target.id,
+      stateName: target.targetStateName,
+    })
+    .catch(() => {});
+  return 1;
+}
+
 export interface RunFinalizer {
   /** The follower's idle fact for a session. Returns once finalize has run or declined. */
   onSessionIdle(runId: string): Promise<void>;
@@ -367,21 +435,24 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
       return;
     }
 
+    // The run's ticket — a native ticket, or a Jira issue's handle (W5b):
+    // its label for the PR, and which write path its proposals take.
+    const ticket = await describeRunTicket(deps.ledger, run.ticketId);
+    const external = ticket?.external === true;
+
     // W6: a writing run's branch is pushed and its PR opened first — by
     // the host, as the person — so the comment can lead with the link.
     // A failure here is a sentence on the comment and an event, never a
     // failed run: the session's work is done and on its branch.
     let published: PublishOutcome | null = null;
     if (deps.pullRequests && isDispatchedWriter(run) && run.branch) {
-      const ticket = run.ticketId
-        ? await deps.ledger.getTicket(run.ticketId).catch(() => null)
-        : null;
       published = await deps.pullRequests.publish({
         run,
         closingMessage: closing,
         title: ticket
           ? `${ticket.identifier}: ${ticket.title}`
           : (run.title ?? run.branch),
+        ticketUrl: ticket?.url ?? null,
       });
       if (published.kind === 'opened') run = { ...run, prUrl: published.url };
     }
@@ -399,10 +470,17 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
           .join('\n\n');
         if (lead) body = `${lead}\n\n---\n\n${closing}`;
       }
-      const comment = await deps.ledger.createRunProposal(run.id, {
-        kind: 'comment',
-        body: clip(body, MAX_PROPOSAL_BODY),
-      });
+      // A Jira issue's proposals carry the borrowed credential, so the
+      // backend can read the issue live and build the external-write card
+      // — the path Copilot's own Jira proposals take (W5b §2.4).
+      const comment = await deps.ledger.createRunProposal(
+        run.id,
+        {
+          kind: 'comment',
+          body: clip(body, MAX_PROPOSAL_BODY),
+        },
+        { external },
+      );
       filed += 1;
       await deps.ledger
         .appendEvent(run.id, 'proposal_created', {
@@ -410,7 +488,12 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
           kind: 'comment',
         })
         .catch(() => {});
-      if (run.intent === 'fix' && run.projectId) {
+      if (run.intent === 'fix' && external && ticket?.ref) {
+        // W5b §2.6: a transition the issue offers now, picked by name —
+        // review, else in progress. None → the comment alone, and the
+        // trail says which transitions the issue did offer.
+        filed += await proposeJiraTransition(deps, run, ticket.ref.key);
+      } else if (run.intent === 'fix' && run.projectId) {
         const states = await deps.ledger.listStates(run.projectId);
         const target = pickReviewState(states);
         if (target) {
