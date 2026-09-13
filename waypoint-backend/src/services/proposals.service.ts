@@ -2,7 +2,7 @@ import { eq, and, or, lt, gte, desc, count, countDistinct, inArray, asc, isNull,
 import { db } from '../db/client.js';
 import { proposals, copilotConversations, copilotMessages, tickets } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
-import { NotFoundError, ValidationError } from '../middleware/errors.js';
+import { ConflictError, NotFoundError, ValidationError } from '../middleware/errors.js';
 import { buildCopilotCommentHtml, disclosureFor } from '../lib/commentHtml.js';
 import { buildCopilotJiraCommentAdf } from '../lib/jira/adf.js';
 import type { JiraCredential } from '../lib/jira/client.js';
@@ -1254,6 +1254,50 @@ export async function rejectProposal(id: string): Promise<ProposalView> {
   if (!existing) throw new NotFoundError('proposal');
   // Already resolved — idempotent echo, same contract as approve.
   return toView(existing, displayName);
+}
+
+/**
+ * Edit a comment proposal's body before it is posted — W5c, the PM's
+ * third path-to-8 item: a session's report is the agent's draft, and the
+ * person who approves it may fix a sentence without rejecting the whole
+ * card and typing the comment by hand.
+ *
+ * Only a `comment` still `proposed` can be edited — a stale card's only
+ * affordance is Dismiss, and an executed one is on the ticket. The first
+ * edit keeps the original body beside the new one (`originalBody`), and
+ * every edit stamps `editedAt`, so the trail can say what the agent wrote
+ * and what the person changed; a run's trail gets a note. The disclosure
+ * is unchanged: the comment is still the agent's proposal, posted by the
+ * person who edited and approved it.
+ */
+export async function editProposalBody(id: string, body: string): Promise<ProposalView> {
+  const { displayName } = await membersService.getCurrentUser();
+  const updated = await db.transaction(async (tx) => {
+    const [row] = await tx.select().from(proposals).where(eq(proposals.id, id)).for('update').limit(1);
+    if (!row) throw new NotFoundError('proposal');
+    if (row.kind !== 'comment') throw new ConflictError('Only a comment proposal can be edited.');
+    if (row.status !== 'proposed') {
+      throw new ConflictError(`A ${row.status} proposal can no longer be edited.`);
+    }
+    const payload = row.payload as { body: string; originalBody?: string; editedAt?: string };
+    const next = {
+      ...payload,
+      body,
+      originalBody: payload.originalBody ?? payload.body,
+      editedAt: new Date().toISOString(),
+    };
+    const [written] = await tx.update(proposals).set({ payload: next }).where(eq(proposals.id, id)).returning();
+    return written;
+  });
+  if (updated.agentRunId) {
+    await agentRunsService
+      .appendEvent(updated.agentRunId, {
+        kind: 'note',
+        payload: { stage: 'review', message: 'the comment was edited before posting', proposalId: updated.id },
+      })
+      .catch(() => {});
+  }
+  return toView(updated, displayName);
 }
 
 export async function rejectAllPending(conversationId: string): Promise<{ rejected: number }> {
