@@ -8,6 +8,7 @@ import { resolveActorNames } from '../lib/actorNames.js';
 import type { JiraCredential } from '../lib/jira/client.js';
 import { nativeProvider, normalizeNativeTickets } from '../providers/native.js';
 import { getJiraProvider, isExternalRef, type JiraProvider } from '../providers/jira.js';
+import { describeAmbiguity, resolveTicketIdentifier } from '../services/ticketResolution.service.js';
 import {
   ProviderUnavailableError,
   type NormalizedComment,
@@ -136,16 +137,12 @@ type Jira = JiraProvider | null;
 
 type Outcome<T> = { status: 'ok'; value: T } | { status: 'failed'; error: ProviderUnavailableError };
 
-// "We did not ask", shaped as a success carrying nothing — which is what it
-// is: with Jira disconnected there is genuinely no Jira ticket to find, and
-// nothing failed.
-const NOT_ASKED: Outcome<null> = { status: 'ok', value: null };
-
 // Catches ONLY ProviderUnavailableError. Anything else is a bug rather than
 // an integration being unreachable, and is left to withErrorSafetyNet — which
 // logs it server-side and scrubs it out of the model's context. Swallowing
 // everything here would turn a real defect into a plausible-looking
-// "Jira could not be reached".
+// "Jira could not be reached". (Identifier resolution has its own copy in
+// services/ticketResolution.service.ts, for the same reason.)
 async function settled<T>(run: () => Promise<T>): Promise<Outcome<T>> {
   try {
     return { status: 'ok', value: await run() };
@@ -394,37 +391,12 @@ export async function getTicketHandler(jira: Jira, { id }: { id: string }) {
 }
 
 /**
- * Identifier resolution.
- *
- * A human-typed identifier is the ONE place where a ticket's provider is
- * genuinely ambiguous. Native identifiers are minted as
- * `${project.identifier}-${sequence}` (tickets.service.ts) — the same
- * PROJECT-NUMBER shape as a Jira issue key — so "ENG-4" can perfectly well
- * name two different tickets in two different systems. Everywhere else the
- * ambiguity is already gone: once any read tool has returned a ticket, its
- * `id` is a prefixed internal handle ("wi-…" or "tref-…") and every
- * downstream call dispatches on that instead of re-resolving a string.
- *
- * The ordering below is the part that matters, and it is deliberately not the
- * obvious one:
- *
- *   BOTH lookups always run. A native hit does NOT short-circuit the Jira
- *   check. Checking native first and returning early is the natural way to
- *   write this and it is wrong — it resolves an ambiguous identifier to
- *   whichever provider happened to be checked first, and nobody ever finds
- *   out there was another ticket by that name. They are issued concurrently
- *   so the property is structural rather than a fact about statement order
- *   that a later edit could quietly undo.
- *
- * The Jira side is a live point-lookup for that exact key — not a scan, and
- * not a cache read (see JiraProvider.getByIdentifier for why the ref cache
- * cannot answer it). A cache miss therefore never means "must be native",
- * which is the specific gap this shape exists to close.
- *
- * When both match, this refuses to guess. Picking one and hoping is the worst
- * option available: right half the time, silently wrong the rest, and
- * "confidently read the wrong ticket" is a failure nobody can detect from the
- * answer.
+ * Identifier resolution — the dual lookup lives in
+ * services/ticketResolution.service.ts since W5b (ROAD-126), shared with the
+ * desktop app's own resolve route so `/investigate ENG-4` and this tool
+ * agree on what a key names. Read that file for why both systems are
+ * always asked and an ambiguous key is refused rather than guessed. This
+ * handler only shapes the outcomes for the model.
  */
 export async function getTicketByIdentifierHandler(
   jira: Jira,
@@ -436,50 +408,23 @@ export async function getTicketByIdentifierHandler(
     provider?: z.infer<typeof PROVIDER>;
   },
 ) {
-  // An explicit provider is an instruction, not a hint: look only there. It
-  // is also how a caller answers the ambiguity error below.
-  if (provider === 'native') {
-    const item = await nativeProvider.getByIdentifier(identifier);
-    return item ? jsonResult(toDetail(item)) : notFoundResult('ticket');
+  const outcome = await resolveTicketIdentifier(jira, identifier, provider);
+  switch (outcome.kind) {
+    case 'found':
+      return jsonResult(toDetail(outcome.ticket));
+    case 'jira_off':
+      return validationErrorResult(JIRA_NOT_CONNECTED);
+    case 'unavailable':
+      return unavailableResult(outcome.error);
+    case 'ambiguous':
+      return validationErrorResult(
+        `${describeAmbiguity(identifier, outcome.native, outcome.jira)} ` +
+          'Call get_ticket_by_identifier again with provider="native" or provider="jira" to say which you mean, ' +
+          `or use get_ticket with id="${outcome.native.ref}" or id="${outcome.jira.ref}".`,
+      );
+    case 'missing':
+      return notFoundResult('ticket');
   }
-  if (provider === 'jira') {
-    if (!jira) return validationErrorResult(JIRA_NOT_CONNECTED);
-    const item = await jira.getByIdentifier(identifier);
-    return item ? jsonResult(toDetail(item)) : notFoundResult('ticket');
-  }
-
-  // Both, concurrently — see the ordering note above.
-  const [nativeHit, jiraOutcome] = await Promise.all([
-    nativeProvider.getByIdentifier(identifier),
-    jira ? settled(() => jira.getByIdentifier(identifier)) : Promise.resolve(NOT_ASKED),
-  ]);
-
-  if (jiraOutcome.status === 'failed') {
-    // Jira failed to answer, so what it would have said is unknown.
-    //
-    // With a native hit, return it: an optional integration having a bad
-    // minute must not break a path that worked before Jira was ever
-    // connected. The residual risk is real and accepted — if that identifier
-    // also named a Jira issue, this silently resolves to native, which is
-    // exactly what happened before this feature existed.
-    //
-    // Without one, refuse. "Not found" would be a positive claim resting on a
-    // lookup that did not happen, and the model would act on it.
-    if (nativeHit) return jsonResult(toDetail(nativeHit));
-    return unavailableResult(jiraOutcome.error);
-  }
-
-  const jiraHit = jiraOutcome.value;
-  if (nativeHit && jiraHit) {
-    return validationErrorResult(
-      `"${identifier}" is ambiguous: it names a Waypoint ticket ("${nativeHit.title}") and a Jira issue ("${jiraHit.title}"). ` +
-        'Call get_ticket_by_identifier again with provider="native" or provider="jira" to say which you mean, ' +
-        `or use get_ticket with id="${nativeHit.ref}" or id="${jiraHit.ref}".`,
-    );
-  }
-  if (nativeHit) return jsonResult(toDetail(nativeHit));
-  if (jiraHit) return jsonResult(toDetail(jiraHit));
-  return notFoundResult('ticket');
 }
 
 export async function searchTicketsHandler(
