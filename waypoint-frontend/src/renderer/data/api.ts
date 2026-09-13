@@ -948,6 +948,21 @@ export async function rejectCopilotProposal(id: string): Promise<ProposalView> {
   return window.electron.copilot.proposals.reject<ProposalView>(id);
 }
 
+/**
+ * W5c: edit a comment proposal's body before approving it. A plain backend
+ * write — no borrowed credential, nothing reaches a tracker — so it goes
+ * over HTTP like the other reads and writes here.
+ */
+export async function editCopilotProposal(
+  id: string,
+  body: string,
+): Promise<ProposalView> {
+  return http.patch<ProposalView>(
+    `/copilot/proposals/${encodeURIComponent(id)}`,
+    { body },
+  );
+}
+
 export async function rejectAllCopilotProposals(
   conversationId: string,
 ): Promise<{ rejected: number }> {
