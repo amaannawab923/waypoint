@@ -2585,11 +2585,19 @@ not make, are recorded as not run. Screenshots:
   in code marks — not as literal `##` and `-` lines. The card goes
   Applied; the run goes `Done`; the note says "its proposals were decided
   (1 executed)". The issue's status is unchanged.
-  Result: READY FOR FOUNDER — not approved. The card from JIRA-SESS-5 is
-  pending in Review with the banner and Approve (screenshot
-  `12-review-card-banner-pending.png`); ENG-77 is still To Do with no
-  comments. The founder approves; the rendering of the posted comment
-  (ADF headings, lists, code) is then theirs to check.
+  Result: PASS — approved by the founder 2026-09-13 13:23 IST (with the
+  Fix's two cards, JIRA-SESS-10). The Investigate's comment landed on
+  ENG-77 as Jira comment 10325 by Amaan Nawab, opening "This is a
+  Waypoint session — Amaan's agent — reporting on their behalf:" then the
+  report ("Investigation of ENG-77 … Bottom line: this repository has no
+  search indexer; the ticket is seeded fixture data"); the Fix's as
+  10324, leading with the PR link, branch and commit. Read back through
+  the app's own Jira read path (screenshot
+  `31-eng77-on-jira-after-approve.png`, the issue page with both
+  comments). Both cards went Applied; `run-h2hqak7` went Done; the note
+  "its proposals were decided (1 executed)" posted. Headings in the
+  posted ADF read as plain lines in the app's comment view; the Jira web
+  rendering was not inspected.
 - **JIRA-SESS-8** — Fix, seeded from the approved RCA, on the issue
   Steps: Fix on ENG-4 (the section, or `/fix ENG-4 <note>` from Copilot).
   Expected: The preview is a writing session, auto-approve on, "Root
@@ -2655,12 +2663,13 @@ not make, are recorded as not run. Screenshots:
   state-change card with the issue untouched: the transition is applied
   in Jira, the card goes Applied, the run goes `Done` once both cards
   are decided.
-  Result: READY FOR FOUNDER — not approved. The state-change card from
-  JIRA-SESS-9 is pending in Review (screenshot
-  `27-review-state-change-card-pending.png`), ENG-77 untouched in Jira.
-  The staleness half (move ENG-77 by hand first, expect "This issue
-  changed since Copilot proposed this — ask again") and the clean approve
-  are the founder's.
+  Result: PASS (clean approve) — approved by the founder 2026-09-13
+  13:22 IST: transition 21 applied, ENG-77 reads In Progress
+  (`stateCategory: in-progress`) through the app's Jira read path;
+  the card went Applied, `run-bgvpwai` went Done, the note "its
+  proposals were decided (2 executed)" posted. The staleness half (move
+  the issue by hand first, expect "This issue changed since Copilot
+  proposed this — ask again") was not exercised in this round.
 - **JIRA-SESS-11** — Copilot: `/investigate ENG-4`, "look at ENG-4", get_run
   Steps: In Copilot, `/investigate ENG-4`; then in plain language "can a
   session look at ENG-4?"; after a run finished, "what did the session
