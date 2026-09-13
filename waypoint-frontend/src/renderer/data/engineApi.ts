@@ -178,8 +178,11 @@ export const engineSessionBridge = {
  */
 function unwrapIpcError(error: unknown): never {
   if (error instanceof Error) {
+    // Electron serialises a thrown error as `${name}: ${message}` — the
+    // name is `Error`, or a subclass's (`LedgerRequestError`); neither is
+    // for the person to read.
     const m =
-      /^Error invoking remote method '[^']+': (?:Error: )?([\s\S]*)$/.exec(
+      /^Error invoking remote method '[^']+': (?:[A-Za-z]*Error: )?([\s\S]*)$/.exec(
         error.message,
       );
     if (m) throw new Error(m[1]);

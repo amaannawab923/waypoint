@@ -361,7 +361,10 @@ function Composer({
             hint: t.title,
           }))
         : [];
-  const menuOpen = suggestions.length > 0;
+  // A refusal stands in the menu's place until the next keystroke clears
+  // it (JIRA-SESS-12: an ambiguous key's refusal was hidden behind the key
+  // menu, which the still-typed key kept open).
+  const menuOpen = suggestions.length > 0 && !slashError;
 
   function accept(index: number) {
     const pick = suggestions[index];
@@ -442,7 +445,7 @@ function Composer({
           ))}
         </div>
       )}
-      {slashError && !menuOpen && (
+      {slashError && (
         <div
           className="absolute bottom-full left-4 right-4 mb-1 rounded-[var(--radius-sm)] border border-border bg-surface px-3 py-1.5 text-xs text-warning shadow"
           role="status"
@@ -489,7 +492,10 @@ function Composer({
             return;
           }
           if (menuOpen && e.key === 'Escape') {
+            // The menu takes this Escape; the panel's own document-level
+            // Escape (close) must not see it (found in the W5b QA round).
             e.preventDefault();
+            e.stopPropagation();
             setValue(value.replace(/\S*$/, ''));
             return;
           }

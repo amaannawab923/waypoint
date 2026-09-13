@@ -21,6 +21,7 @@ import {
   rejectCopilotProposal,
   markCopilotProposalsNotified,
   getProject,
+  listTickets,
   updateProject,
 } from '@/data/api';
 import type { ProposalView, Project } from '@/types/entities';
@@ -2154,6 +2155,66 @@ describe('sessions in the conversation (W5a)', () => {
     });
     expect(copilotIpc.runPrompt).not.toHaveBeenCalled();
     expect(getTextarea()).toHaveValue('');
+  });
+
+  // JIRA-SESS-12: with the key menu open (a project with tickets that
+  // start with the typed key), a refusal must still be read — it takes the
+  // menu's place until the next keystroke.
+  it('a refusal shows in place of the key menu, and typing brings the menu back', async () => {
+    const { resolveTicket } = jest.requireMock('@/data/engineApi') as {
+      resolveTicket: jest.Mock;
+    };
+    resolveTicket.mockRejectedValue(
+      new Error(
+        '"ENG-9" is ambiguous: it names a Waypoint ticket and a Jira issue.',
+      ),
+    );
+    jest.mocked(listTickets).mockResolvedValue([
+      { identifier: 'ENG-9', title: 'A' },
+      { identifier: 'ENG-91', title: 'B' },
+    ] as never);
+    jest.mocked(getProject).mockResolvedValue({
+      id: 'proj-1',
+      projectId: 'proj-1',
+      name: 'Roadmap',
+      repoPath: null,
+    } as never);
+    const onClose = jest.fn();
+    render(
+      <MemoryRouter initialEntries={['/projects/proj-1/issues']}>
+        <Routes>
+          <Route
+            path="/projects/:projectId/*"
+            element={<CopilotPanel onClose={onClose} />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await screen.findByText(/No sessions yet/i);
+    await createAndOpenSession();
+    await waitFor(() => expect(listTickets).toHaveBeenCalledWith('proj-1'));
+
+    fireEvent.change(getTextarea(), {
+      target: { value: '/investigate ENG-9' },
+    });
+    expect(screen.getByRole('listbox')).toBeInTheDocument();
+    fireEvent.keyDown(getTextarea(), { key: 'Enter' });
+    const status = await screen.findByRole('status');
+    expect(status).toHaveTextContent('"ENG-9" is ambiguous');
+    expect(status).not.toHaveTextContent('LedgerRequestError');
+    expect(screen.queryByRole('listbox')).toBeNull();
+
+    fireEvent.change(getTextarea(), {
+      target: { value: '/investigate ENG-91' },
+    });
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.getByRole('listbox')).toBeInTheDocument();
+
+    // Escape with the menu open drops the typed key — never the panel.
+    getTextarea().focus();
+    fireEvent.keyDown(getTextarea(), { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(getTextarea()).toHaveValue('/investigate ');
   });
 
   it("a session offer from the model's tool renders the three verbs; picking one opens the preview for that conversation", async () => {

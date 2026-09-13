@@ -5,6 +5,7 @@ import {
   listRunBranches,
   onRunChanged,
   resolvePermission,
+  resolveTicket,
   resumeRun,
   revealRunWorktree,
   sendPrompt,
@@ -20,6 +21,7 @@ const engine = {
   onRunChanged: jest.fn(),
   startRun: jest.fn(),
   resumeRun: jest.fn(),
+  resolveTicket: jest.fn(),
   listRunBranches: jest.fn(),
 };
 
@@ -126,6 +128,15 @@ describe('the W4 run channels', () => {
     );
     engine.stopRun.mockRejectedValueOnce(new Error('plain'));
     await expect(stopRun('run-a1')).rejects.toThrow('plain');
+    // JIRA-SESS-12: a subclass's name is not the person's sentence either.
+    engine.resolveTicket.mockRejectedValueOnce(
+      new Error(
+        `Error invoking remote method 'runs:resolve-ticket': LedgerRequestError: "ENG-9" is ambiguous: it names a Waypoint ticket and a Jira issue.`,
+      ),
+    );
+    await expect(resolveTicket('ENG-9')).rejects.toThrow(
+      /^"ENG-9" is ambiguous/,
+    );
   });
 });
 
