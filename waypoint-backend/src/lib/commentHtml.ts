@@ -17,7 +17,7 @@ export const COPILOT_DISCLOSURE = (displayName: string) =>
 // W5a: a comment a coding session filed (origin agent_run) says so — it was
 // written by a session Waypoint ran on the ticket, not by Copilot.
 export const SESSION_DISCLOSURE = (displayName: string) =>
-  `Hi, this is a Waypoint session — ${displayName}’s agent — reporting on their behalf: `;
+  `This is a Waypoint session — ${displayName}’s agent — reporting on their behalf: `;
 
 export type ProposalDisclosureOrigin = 'copilot' | 'agent_run';
 

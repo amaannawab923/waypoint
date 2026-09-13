@@ -21,6 +21,10 @@ import { agentRuns } from '../db/schema/index.js';
 // listProposals lazily finalizes it) rather than executing against a
 // day-old snapshot of reality.
 export const PROPOSAL_TTL_MS = 24 * 60 * 60 * 1000;
+// A run's proposals are its outcome, waiting for a person who may be away
+// for the weekend (PM review of the W5a walkthrough): they keep for a month,
+// not a day, and when they do expire the run is settled with them.
+export const RUN_PROPOSAL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 // Per-turn cap: anchorSeq identifies a turn (every proposal in one model
 // turn shares the max message seq at propose time), so counting rows with
 // the same (conversationId, anchorSeq) counts this turn's proposals.
@@ -376,6 +380,19 @@ export async function createRunProposal(input: {
   // into that conversation too (W5a §1.7): the cards render there, at
   // the tail (no anchor), beside the note that announced them — so
   // "post the RCA" is the card's Approve, in the same panel.
+  // Anchored like a Copilot proposal — to the conversation's current last
+  // message — so the card sits where the run finished and later replies
+  // push it up, rather than trailing the conversation forever (PM review).
+  let anchorSeq: number | null = null;
+  if (run.copilotConversationId) {
+    const [last] = await db
+      .select({ seq: copilotMessages.seq })
+      .from(copilotMessages)
+      .where(eq(copilotMessages.conversationId, run.copilotConversationId))
+      .orderBy(desc(copilotMessages.seq))
+      .limit(1);
+    anchorSeq = last ? Number(last.seq) : 0;
+  }
   const [row] = await db
     .insert(proposals)
     .values({
@@ -388,9 +405,9 @@ export async function createRunProposal(input: {
       ticketId: run.ticketId,
       payload: input.payload,
       snapshot,
-      anchorSeq: null,
+      anchorSeq,
       projectId: ticket.projectId,
-      expiresAt: new Date(Date.now() + PROPOSAL_TTL_MS),
+      expiresAt: new Date(Date.now() + RUN_PROPOSAL_TTL_MS),
     })
     .returning();
   return row;
@@ -472,7 +489,7 @@ export async function repairProposals(): Promise<void> {
   // Both resolutions here are system-driven — no person acted — so
   // decidedBy='system' (never 'user'), and decisionLatencyMs is left unset
   // (NULL), per the column's own "NULL for system resolutions" comment.
-  await db
+  const expired = await db
     .update(proposals)
     .set({
       status: 'expired',
@@ -480,7 +497,14 @@ export async function repairProposals(): Promise<void> {
       resolvedAt: now,
       decidedBy: 'system',
     })
-    .where(and(eq(proposals.status, 'proposed'), lt(proposals.expiresAt, now)));
+    .where(and(eq(proposals.status, 'proposed'), lt(proposals.expiresAt, now)))
+    .returning({ agentRunId: proposals.agentRunId });
+  // A run whose last open proposal just expired is decided too — else it
+  // sits at needs-review with nothing approvable (PM review of W5a).
+  const expiredRuns = new Set(
+    (Array.isArray(expired) ? expired : []).map((r) => r.agentRunId).filter((id): id is string => !!id),
+  );
+  for (const runId of expiredRuns) await settleRunIfDecided(runId);
   await db
     .update(proposals)
     .set({
@@ -844,19 +868,21 @@ async function executeProposal(
   switch (kind) {
     case 'comment': {
       const { body } = row.payload as { body: string };
+      const fromRun = row.origin === 'agent_run';
       const comment = await commentsService.addComment(
         row.ticketId as string,
-        buildCopilotCommentHtml(
-          displayName,
-          body,
-          row.origin === 'agent_run' ? 'agent_run' : 'copilot',
-        ),
+        buildCopilotCommentHtml(displayName, body, fromRun ? 'agent_run' : 'copilot'),
+        // The audit trail says an agent wrote it (PM review of W5a).
+        fromRun ? "posted a session's report as a comment" : "posted Copilot's comment",
       );
       return { commentId: comment.id };
     }
     case 'state_change': {
       const { stateId } = row.payload as { stateId: string };
-      await ticketsService.updateTicket(row.ticketId as string, { stateId });
+      await ticketsService.updateTicket(row.ticketId as string, { stateId }, {
+        activityDetail:
+          row.origin === 'agent_run' ? 'changed state, as a session proposed' : 'changed state, as Copilot proposed',
+      });
       return null;
     }
     case 'priority_change': {

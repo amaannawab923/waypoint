@@ -19,7 +19,12 @@ export async function listComments(ticketId: string, limit?: number) {
   return limit ? query.limit(limit) : query;
 }
 
-export async function addComment(ticketId: string, bodyHtml: string) {
+export async function addComment(
+  ticketId: string,
+  bodyHtml: string,
+  /** The activity line; the default is a person's own comment. */
+  activityDetail = 'left a comment',
+) {
   return db.transaction(async (tx) => {
     const [comment] = await tx
       .insert(comments)
@@ -29,7 +34,7 @@ export async function addComment(ticketId: string, bodyHtml: string) {
       ticketId,
       actorId: CURRENT_USER_ID,
       verb: 'commented',
-      detail: 'left a comment',
+      detail: activityDetail,
       createdAt: comment.createdAt,
     });
     return comment;

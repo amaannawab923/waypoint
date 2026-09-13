@@ -624,7 +624,7 @@ describe('approveProposal', () => {
     await approveProposal('prop-abc1234');
 
     expect(ticketsService.updateTicket).toHaveBeenCalledTimes(1);
-    expect(ticketsService.updateTicket).toHaveBeenCalledWith('wi-1', { stateId: 'st-done' });
+    expect(ticketsService.updateTicket).toHaveBeenCalledWith('wi-1', { stateId: 'st-done' }, { activityDetail: 'changed state, as Copilot proposed' });
   });
 
   it('executes a priority change with EXACTLY one patch key — priority', async () => {

@@ -69,11 +69,11 @@ describe('COPILOT_DISCLOSURE', () => {
 describe('SESSION_DISCLOSURE (W5a)', () => {
   it('a run-filed comment says a session wrote it, not Copilot', () => {
     expect(disclosureFor('agent_run', 'Priya')).toBe(
-      'Hi, this is a Waypoint session — Priya’s agent — reporting on their behalf: ',
+      'This is a Waypoint session — Priya’s agent — reporting on their behalf: ',
     );
     expect(disclosureFor('copilot', 'Priya')).toBe(COPILOT_DISCLOSURE('Priya'));
     expect(buildCopilotCommentHtml('Priya', '## Root cause\n\nThe `write` is <unguarded>.', 'agent_run')).toBe(
-      '<p><em>Hi, this is a Waypoint session — Priya’s agent — reporting on their behalf: </em></p><h3>Root cause</h3>\n<p>The <code>write</code> is &lt;unguarded&gt;.</p>',
+      '<p><em>This is a Waypoint session — Priya’s agent — reporting on their behalf: </em></p><h3>Root cause</h3>\n<p>The <code>write</code> is &lt;unguarded&gt;.</p>',
     );
   });
 });
