@@ -10,7 +10,9 @@ import { ConflictError, NotFoundError } from '../middleware/errors.js';
 // real database is agentRuns.service.integration.test.ts's job.
 vi.mock('../db/client.js', () => ({ db: {} }));
 vi.mock('../services/agentRuns.service.js');
+vi.mock('../services/proposals.service.js');
 const service = await import('../services/agentRuns.service.js');
+const proposalsService = await import('../services/proposals.service.js');
 const { agentRunsRouter } = await import('./agentRuns.routes.js');
 
 function buildTestApp() {
@@ -361,5 +363,67 @@ describe('GET /tickets/:id/agent-runs', () => {
     expect(res.status).toBe(200);
     expect(res.body.map((r: { id: string }) => r.id)).toEqual(['run-abc1234', 'run-older']);
     expect(service.listRunsForTicket).toHaveBeenCalledWith('wi-1');
+  });
+});
+
+describe('POST /agent-runs/:id/proposals (W5a)', () => {
+  it('files a comment or a state change on the run’s behalf and refuses any other kind', async () => {
+    vi.mocked(proposalsService.createRunProposal).mockResolvedValue({ id: 'prop-1' } as never);
+    const app = buildTestApp();
+
+    const comment = await request(app)
+      .post('/agent-runs/run-abc1234/proposals')
+      .send({ kind: 'comment', body: 'Root cause: …' });
+    expect(comment.status).toBe(201);
+    expect(proposalsService.createRunProposal).toHaveBeenLastCalledWith({
+      agentRunId: 'run-abc1234',
+      kind: 'comment',
+      payload: { body: 'Root cause: …' },
+    });
+
+    const move = await request(app)
+      .post('/agent-runs/run-abc1234/proposals')
+      .send({ kind: 'state_change', stateId: 'st-review' });
+    expect(move.status).toBe(201);
+    expect(proposalsService.createRunProposal).toHaveBeenLastCalledWith({
+      agentRunId: 'run-abc1234',
+      kind: 'state_change',
+      payload: { stateId: 'st-review' },
+    });
+
+    const create = await request(app)
+      .post('/agent-runs/run-abc1234/proposals')
+      .send({ kind: 'create_ticket', title: 'x' });
+    expect(create.status).toBe(400);
+    expect(proposalsService.createRunProposal).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('the transcript snapshot (ROAD-124)', () => {
+  it('PUT replaces it whole and answers the row; GET reads it, 404 when none', async () => {
+    const turns = [{ id: 't1', seq: 1, items: [{ kind: 'message', role: 'assistant', text: 'hi' }] }];
+    vi.mocked(service.saveTranscript).mockResolvedValue({
+      runId: 'run-abc1234',
+      turns,
+      turnCount: 1,
+      capturedAt: new Date(),
+    } as never);
+    const put = await request(buildTestApp()).put('/agent-runs/run-abc1234/transcript').send({ turns });
+    expect(put.status).toBe(200);
+    expect(put.body.turnCount).toBe(1);
+    expect(service.saveTranscript).toHaveBeenCalledWith('run-abc1234', { turns });
+
+    vi.mocked(service.getTranscript).mockResolvedValueOnce(null);
+    expect((await request(buildTestApp()).get('/agent-runs/run-abc1234/transcript')).status).toBe(404);
+    vi.mocked(service.getTranscript).mockResolvedValueOnce({ runId: 'run-abc1234', turns, turnCount: 1, capturedAt: new Date() } as never);
+    const got = await request(buildTestApp()).get('/agent-runs/run-abc1234/transcript');
+    expect(got.status).toBe(200);
+    expect(got.body.turns).toEqual(turns);
+  });
+
+  it('refuses a body that is not turns, or a stray field', async () => {
+    expect((await request(buildTestApp()).put('/agent-runs/run-abc1234/transcript').send({ turns: 'x' })).status).toBe(400);
+    expect((await request(buildTestApp()).put('/agent-runs/run-abc1234/transcript').send({ turns: [], extra: 1 })).status).toBe(400);
+    expect(service.saveTranscript).not.toHaveBeenCalled();
   });
 });

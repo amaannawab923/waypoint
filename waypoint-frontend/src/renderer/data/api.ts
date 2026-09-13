@@ -878,6 +878,22 @@ export async function postCopilotUserMessage(
   );
 }
 
+/**
+ * W5a: the system notes a turn carried to the model are marked delivered
+ * once that turn's reply persisted — the same rule proposal outcomes
+ * follow (markCopilotProposalsNotified), so a failed run re-delivers.
+ */
+export async function markCopilotNotesDelivered(
+  conversationId: string,
+  ids: string[],
+): Promise<void> {
+  if (ids.length === 0) return;
+  await http.post<unknown>(
+    `/copilot/conversations/${conversationId}/notes/delivered`,
+    { ids },
+  );
+}
+
 export async function postCopilotAssistantMessage(
   conversationId: string,
   content: string,
@@ -1133,6 +1149,33 @@ export async function getAgentRun(id: string): Promise<AgentRun | undefined> {
       notFoundAsUndefined: true,
     },
   );
+}
+
+/**
+ * ROAD-124: the transcript snapshot main keeps for a run — the daemon's
+ * committed turns as `acp.getHistory` shaped them. Undefined when none
+ * was ever taken (a run that never reached a turn end).
+ */
+export async function getAgentRunTranscript(
+  runId: string,
+): Promise<
+  { turns: unknown[]; turnCount: number; capturedAt: string } | undefined
+> {
+  return http.get<
+    { turns: unknown[]; turnCount: number; capturedAt: string } | undefined
+  >(`/agent-runs/${encodeURIComponent(runId)}/transcript`, {
+    notFoundAsUndefined: true,
+  });
+}
+
+/** W5a §1.10: rename a run from its header — the W4 `title` column. */
+export async function renameAgentRun(
+  id: string,
+  title: string,
+): Promise<AgentRun> {
+  return http.patch<AgentRun>(`/agent-runs/${encodeURIComponent(id)}`, {
+    title,
+  });
 }
 
 /** A ticket's runs (ROAD-56), unpaged — a ticket's runs are a handful. */

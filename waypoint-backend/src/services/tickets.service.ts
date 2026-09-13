@@ -570,7 +570,12 @@ export interface UpdateTicketPatch {
   isDraft?: boolean;
 }
 
-export async function updateTicket(id: string, patch: UpdateTicketPatch) {
+export async function updateTicket(
+  id: string,
+  patch: UpdateTicketPatch,
+  /** W5a: the activity line for a state change an agent proposed; the default is a person's own. */
+  options: { activityDetail?: string } = {},
+) {
   return db.transaction(async (tx) => {
     const [current] = await tx.select().from(tickets).where(eq(tickets.id, id));
     if (!current) throw new NotFoundError('ticket');
@@ -578,7 +583,12 @@ export async function updateTicket(id: string, patch: UpdateTicketPatch) {
 
     const stateChanged = Boolean(patch.stateId && patch.stateId !== current.stateId);
     if (stateChanged) {
-      await logActivity(tx, { ticketId: id, actorId: CURRENT_USER_ID, verb: 'state_changed', detail: 'changed state' });
+      await logActivity(tx, {
+        ticketId: id,
+        actorId: CURRENT_USER_ID,
+        verb: 'state_changed',
+        detail: options.activityDetail ?? 'changed state',
+      });
     }
     if (patch.priority && patch.priority !== current.priority) {
       await logActivity(tx, {

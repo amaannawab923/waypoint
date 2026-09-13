@@ -67,6 +67,9 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     isolation: 'worktree',
     cwd: null,
     autoApprove: false,
+    modeId: null,
+    intent: null,
+    copilotConversationId: null,
     daemonWorkspaceId: null,
     daemonSessionId: null,
     providerSessionId: null,
@@ -310,6 +313,7 @@ describe('startRun', () => {
       providerId: 'claude',
       isolation: 'worktree',
       autoApprove: true,
+      modeId: 'bypassPermissions',
       baseRef: 'main',
       title: 'Fix the flaky test',
     });

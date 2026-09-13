@@ -184,10 +184,13 @@ export function shortenHome(absolute: string, home: string | null): string {
     : absolute;
 }
 
-/** Ticket label → the title the user gave it (W4) → branch → the folder (W4b) → the id. */
+/**
+ * The title the run carries (W4's own, or W5a's "ROAD-116 · Investigate")
+ * → the ticket label → branch → the folder (W4b) → the id.
+ */
 export function runTitle(run: AgentRun, ticketLabel?: string | null): string {
-  if (ticketLabel) return ticketLabel;
   if (run.title) return run.title;
+  if (ticketLabel) return ticketLabel;
   if (run.branch) return run.branch;
   if (run.isolation === 'directory' && run.cwd) return folderName(run.cwd);
   return `Session ${shortRunId(run.id)}`;
@@ -213,4 +216,23 @@ export function runWhere(
   if (run.branch)
     return { kind: 'branch', branch: run.branch, baseRef: run.baseRef };
   return null;
+}
+
+/** What a dispatched run was asked to do, as the chip says it (W5a). */
+export function intentView(
+  run: Pick<AgentRun, 'intent' | 'modeId' | 'autoApprove' | 'entry'>,
+): {
+  verb: string;
+  /** `plan` for a reading session; `auto` for an unattended writing one; null for a writing one that asks. */
+  mode: 'plan' | 'auto' | null;
+} | null {
+  if (run.entry !== 'dispatched') return null;
+  const verb =
+    run.intent === 'investigate'
+      ? 'Investigate'
+      : run.intent === 'fix'
+        ? 'Fix'
+        : 'Session';
+  const mode = run.modeId === 'plan' ? 'plan' : run.autoApprove ? 'auto' : null;
+  return { verb, mode };
 }

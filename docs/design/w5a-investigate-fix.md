@@ -271,3 +271,66 @@ whose branch became a merged PR within 7 days (once W6 exists).
 - ROAD-122 · Fix seeded from the approved RCA; one writer per ticket; the
   rate-limit line; group-by and rename.
 - ROAD-123 · Later: a second Fix continuing on the prior branch.
+- ROAD-124 · Transcripts kept in the ledger (found on the live pass —
+  see §9).
+
+## 9. What the build changed — 2026-09-12/13
+
+Recorded after the live pass (docs/qa/manual-test-cases.md SESS-32…40),
+where the plan above and the code differ.
+
+1. **`agent_runs.mode_id`** (migration 0017). Investigate is plan mode
+   whatever auto-approve says, and *Something else…* is plan mode with
+   the switch off, so `auto_approve` alone could not say how to restart
+   a session on resume. The mode id goes on the row exactly as handed to
+   `acp.start`; start and resume read it (`sessionModeOf`).
+2. **The env scrub is more than env** (§2.5). On this machine `GH_TOKEN`
+   is not even set, and an https push would still have succeeded: the
+   system gitconfig's `osxkeychain` helper answers from the keychain,
+   ssh reads `~/.ssh/id_*` without an agent, and `gh` keeps its token
+   behind its config dir. `runs/agentEnv.ts` also injects
+   `credential.helper=` through `GIT_CONFIG_COUNT`, pins the ssh command
+   to batch mode with no identity, and points `GH_CONFIG_DIR` at a path
+   that cannot exist. Applied to every dispatched writing session,
+   auto-approved or not; reapplied on resume. Proved inside a session
+   (SESS-36). `user.name`/`user.email` are untouched.
+3. **No rate-limit line** (§1.9, §2.7). The daemon's stop reasons are
+   `end_turn | max_tokens | max_turn_requests | refusal | cancelled`; a
+   429/overloaded turn is not distinguishable on the wire. Scoped down
+   until the daemon exposes one.
+4. **A cancelled turn is not a finished one.** Finalize's idle fact
+   requires a stop reason other than `cancelled`, so a turn the person
+   stopped from the transcript leaves the run running to be steered.
+5. **"Approved" is `executed`.** A proposal a person approves goes
+   `proposed → executing → executed`; Fix seeds from an executed
+   `agent_run` comment of an Investigate on the ticket.
+6. **The review state** (§1.6): a state named for review when the project
+   has one, else the last `started` state (In Progress on the default
+   workflow), else no state change.
+7. **The disclosure** on a run-filed comment says a Waypoint session
+   wrote it, not Copilot; the comment renders as markdown in the card
+   and is posted as rendered HTML (`lib/markdownHtml.ts`, a verbatim
+   port of the renderer's).
+8. **Transcripts are kept in the ledger** (ROAD-124). The daemon holds
+   history in memory only; `agent_run_transcripts` (migration 0018) is
+   written after every turn end, before every kill, and when a session
+   goes on its own; the pane reads it when the daemon has nothing.
+9. **Copilot's tools are specs, built on the SDK inside the client.**
+   `sessionToolsServer()` returns a spec; `claudeSdkClient.runCopilotQuery`
+   builds the in-process server after its own lazy import, so the IPC
+   handler stays synchronous up to `runSession`.
+10. **The panel scrolls** to new content (a note, an offer card, a
+    streaming reply) when the reader is at the bottom or just opened the
+    conversation.
+11. **W6 pulled forward** (ROAD-125, founder's call 2026-09-13:
+    automatic, ready for review). A writing run's branch is pushed and
+    its PR opened by the host, as the person, when its turn ends
+    (`runs/pullRequests.ts`): `git push -u origin <branch>` with their
+    git, `gh pr create` with their `gh`, from the worktree; `prUrl` and
+    the `pushed` / `pr_opened` events on the run; the comment proposal
+    leads with the link; the note names it. A failed push or PR is a
+    sentence on the comment and an error event, and Open PR in the
+    header retries (`runs:open-pr`); a PR gh says already exists is
+    taken as opened; a finished run accepts `prUrl` once. A branch with
+    nothing past its base is not pushed; a non-GitHub remote gets the
+    push only. The session itself still cannot push (§2.5 stands).

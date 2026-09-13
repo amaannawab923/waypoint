@@ -107,7 +107,17 @@ ipcMain.on('ipc-example', async (event, arg) => {
 // load (mainWindow is still null then), but a Copilot run started later —
 // after a close/reopen, `mainWindow` is reassigned — needs the *current*
 // window at send time, not whichever one existed at registration time.
-registerCopilotIpc(() => mainWindow);
+// W6: Copilot's open_pull_request tool is the engine's own verb, handed
+// over after the engine registers below (a function reference, so the
+// order of the two registrations does not matter at call time).
+let engineHost: ReturnType<typeof registerEngineIpc> | null = null;
+registerCopilotIpc(() => mainWindow, {
+  openPullRequest: (runId) => {
+    if (!engineHost)
+      return Promise.reject(new Error('The engine is not registered.'));
+    return engineHost.openRunPullRequest(runId);
+  },
+});
 registerCopilotAuthIpc();
 registerCopilotConnectIpc(() => mainWindow);
 registerCopilotDetectIpc();
@@ -129,7 +139,7 @@ registerRepoLinkIpc(() => mainWindow);
 // — mainWindow is still null at this point and is a different object after
 // a close/reopen. No explicit supervisor argument: registerEngineIpc's own
 // default builds the real one (engineIpc.ts's createDefaultEngineSupervisor).
-registerEngineIpc(() => mainWindow);
+engineHost = registerEngineIpc(() => mainWindow);
 
 if (process.env.NODE_ENV === 'production') {
   const sourceMapSupport = require('source-map-support');

@@ -1,3 +1,5 @@
+import type { InProcessServerSpec } from '../copilot/claudeSdkClient';
+import { SESSION_TOOL_NAMES } from '../copilot/sessionTools';
 import {
   encodeJiraCredentialHeader,
   readStoredJiraCredential,
@@ -38,6 +40,12 @@ export interface SessionPolicy {
    * — never a tool input, so the model can never choose or spoof where its
    * proposals land or whose Jira it reads. */
   mcpHeaders: Record<string, string>;
+  /** In-process MCP servers beside the backend's — W5a's session tools
+   * (copilot/sessionTools.ts), specified per turn with the conversation
+   * and a push to the renderer captured, built by claudeSdkClient.ts on
+   * the loaded SDK. Their tool names must be in `mcpTools` to be callable
+   * without a prompt. */
+  inProcessServers?: InProcessServerSpec[];
   /** Builds the system prompt for a given repoLinked value. A function,
    * not a precomputed string, for the same reason repoPath above is raw:
    * repoLinked is re-derived fresh per attempt, and the prompt variant must
@@ -92,6 +100,8 @@ const MCP_TOOLS = [
   'mcp__waypoint__propose_assignee_change',
   'mcp__waypoint__propose_priority_change',
   'mcp__waypoint__propose_create_ticket',
+  // W5a (ROAD-121): the session tools, served in-process from main.
+  ...SESSION_TOOL_NAMES,
 ];
 
 // Matches waypoint-backend's newId('conv') shape (and is re-validated
@@ -156,6 +166,8 @@ export interface CopilotSessionPolicyInput {
    * this is called — that validation is about the outcome-preamble IPC
    * field specifically, not a general policy concern. */
   promptPreamble?: string;
+  /** The session tools server for this turn (copilot/sessionTools.ts); absent in probes. */
+  sessionTools?: InProcessServerSpec;
 }
 
 // The one constructor this unit builds — for the Copilot panel's IPC
@@ -170,6 +182,7 @@ export function buildCopilotSessionPolicy(
     builtinTools: REPO_READ_TOOLS,
     mcpTools: MCP_TOOLS,
     mcpHeaders: buildMcpHeaders(input.conversationId),
+    ...(input.sessionTools ? { inProcessServers: [input.sessionTools] } : {}),
     buildSystemPrompt,
     promptPreamble: input.promptPreamble,
     resumeSessionId: input.resumeSessionId,

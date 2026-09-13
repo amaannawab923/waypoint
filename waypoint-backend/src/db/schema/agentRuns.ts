@@ -14,6 +14,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { members } from './workspace.js';
 import { projects } from './projects.js';
+import { copilotConversations } from './copilot.js';
 import { tickets } from './tickets.js';
 import { agents, agentRunStatusEnum } from './agents.js';
 
@@ -101,6 +102,23 @@ export const agentRuns = pgTable(
     // Started in the provider's bypass-permissions mode: the session asks
     // nothing. Shown on the row so an unattended agent is never invisible.
     autoApprove: boolean('auto_approve').notNull().default(false),
+    // The provider session mode the run was started in (`plan`,
+    // `bypassPermissions`), exactly as handed to `acp.start` — so a resume
+    // restarts the session the way it was started (W5a: Investigate is
+    // plan mode whatever auto-approve says). Null = the provider's default.
+    modeId: text('mode_id'),
+    // What a dispatched run was asked to do (W5a, ROAD-117): `investigate`
+    // (find the root cause, plan mode, change nothing), `fix` (implement
+    // it), `custom` (the person's own instruction). Null for an
+    // independent run. The intent is what host-side finalize files and
+    // what the metrics split on.
+    intent: text('intent'),
+    // The Copilot conversation a dispatched run's notes go back to: the one
+    // it was dispatched from, when there was one. Null → the member's
+    // latest conversation at note time.
+    copilotConversationId: text('copilot_conversation_id').references(() => copilotConversations.id, {
+      onDelete: 'set null',
+    }),
 
     // --- the daemon's handles, once it has them ---------------------------
     // The daemon's workspace-registry record for the run's worktree, and its
@@ -185,3 +203,19 @@ export const agentRunEvents = pgTable(
   },
   (t) => [primaryKey({ columns: [t.runId, t.seq] })],
 );
+
+// W5a follow-up (ROAD-124): the transcript, durably. The daemon holds a
+// session's history in memory only — a daemon restart, or the kill that
+// ends a finalized run, loses it — and a run's transcript is the evidence
+// its proposals rest on. Main snapshots the committed turns (acp.getHistory,
+// as the daemon serialises them) after every turn and before every kill;
+// the panel reads this when the daemon has nothing. One row per run,
+// replaced whole: the turns are the daemon's own shape, kept opaque here.
+export const agentRunTranscripts = pgTable('agent_run_transcripts', {
+  runId: text('run_id')
+    .primaryKey()
+    .references(() => agentRuns.id, { onDelete: 'cascade' }),
+  turns: jsonb('turns').notNull().default([]),
+  turnCount: integer('turn_count').notNull().default(0),
+  capturedAt: timestamp('captured_at', { withTimezone: true }).notNull().defaultNow(),
+});

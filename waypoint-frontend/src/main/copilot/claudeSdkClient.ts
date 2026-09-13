@@ -118,6 +118,13 @@ function unpackAsarPath(commandPath: string): string {
 export interface RunCopilotQueryArgs {
   prompt: string;
   options: Options;
+  /**
+   * In-process MCP servers to build on the loaded SDK and merge into
+   * `options.mcpServers` (W5a's session tools). Specs, not instances: the
+   * caller stays synchronous and SDK-free; the build happens here, after
+   * the same lazy import query() needs anyway.
+   */
+  inProcessServers?: InProcessServerSpec[];
 }
 
 // The one exported entry point copilotRunner.ts (and copilotAuth.ts's
@@ -129,12 +136,20 @@ export interface RunCopilotQueryArgs {
 export async function runCopilotQuery({
   prompt,
   options,
+  inProcessServers = [],
 }: RunCopilotQueryArgs): Promise<Query> {
   const sdk = await loadSdk();
+  const built: Record<string, McpServerConfig> = {};
+  for (const spec of inProcessServers) {
+    built[spec.name] = createInProcessMcpServer(sdk, spec);
+  }
   return sdk.query({
     prompt,
     options: {
       ...options,
+      ...(inProcessServers.length
+        ? { mcpServers: { ...(options.mcpServers ?? {}), ...built } }
+        : {}),
       spawnClaudeCodeProcess: (spawnOptions) => {
         const child = spawn(
           unpackAsarPath(spawnOptions.command),
@@ -170,6 +185,65 @@ export async function runCopilotQuery({
         return toSpawnedProcess(child);
       },
     },
+  });
+}
+
+// W5a (docs/design/w5a-investigate-fix.md §2.6): Copilot's session tools
+// are an in-process MCP server on the SDK's own transport — `dispatch_session`
+// and `get_run` run in main, where the ledger and the engine are. The
+// SDK's `tool()` and `createSdkMcpServer()` are reached through the same
+// lazy import as query(), so this stays the only file naming the package;
+// copilot/sessionTools.ts supplies the specs and never sees the SDK.
+export interface InProcessToolSpec {
+  name: string;
+  description: string;
+  /** A zod raw shape (`{ key: z.string() }`) — the SDK builds the JSON schema. */
+  input: Record<string, unknown>;
+  /** Answers the model's text; a thrown Error becomes an error result. */
+  handler: (args: Record<string, unknown>) => Promise<string>;
+}
+
+export interface InProcessServerSpec {
+  name: string;
+  instructions: string;
+  tools: InProcessToolSpec[];
+}
+
+function createInProcessMcpServer(
+  sdk: ClaudeAgentSdk,
+  { name, instructions, tools }: InProcessServerSpec,
+): McpServerConfig {
+  return sdk.createSdkMcpServer({
+    name,
+    instructions,
+    alwaysLoad: true,
+    tools: tools.map((spec) =>
+      // The shape is a zod raw shape at runtime; the SDK's generic wants the
+      // zod type, which this module deliberately does not import.
+      sdk.tool(
+        spec.name,
+        spec.description,
+        spec.input as Record<string, never>,
+        async (args: unknown) => {
+          try {
+            const text = await spec.handler(
+              (args ?? {}) as Record<string, unknown>,
+            );
+            return { content: [{ type: 'text', text }] };
+          } catch (error) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: error instanceof Error ? error.message : String(error),
+                },
+              ],
+              isError: true,
+            };
+          }
+        },
+      ),
+    ),
   });
 }
 

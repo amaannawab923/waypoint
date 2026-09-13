@@ -322,6 +322,17 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
     expect(again.status).toBe('cancelled');
     expect(again.summary).toBeNull();
     expect(again.worktreePath).toBeNull();
+
+    // W6: the pull request the host opens after the run is done is the one
+    // field a finished run takes — alone, and once.
+    const withPr = await service.updateRun(run.id, { prUrl: 'https://github.com/o/r/pull/60' });
+    expect(withPr.prUrl).toBe('https://github.com/o/r/pull/60');
+    await expect(service.updateRun(run.id, { prUrl: 'https://github.com/o/r/pull/61' })).rejects.toThrow(
+      'read-only',
+    );
+    await expect(service.updateRun(run.id, { prUrl: 'https://x/pull/1', summary: 's' })).rejects.toThrow(
+      'read-only',
+    );
   });
 
   it('a blocked run asking a second question gets a blocked_reason_changed event without a transition', async () => {

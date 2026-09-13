@@ -6,7 +6,7 @@ import type { ProposalView } from '@/types/entities';
 // message, which is exactly where a just-typed message belongs anyway.
 export interface TranscriptMessage {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: string;
   createdAt: string;
   seq?: number;

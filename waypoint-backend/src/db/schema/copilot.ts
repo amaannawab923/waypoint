@@ -1,7 +1,12 @@
 import { pgTable, text, timestamp, pgEnum, bigserial, index } from 'drizzle-orm/pg-core';
 import { members } from './workspace.js';
 
-export const copilotMessageRoleEnum = pgEnum('copilot_message_role', ['user', 'assistant']);
+// `system` (W5a): a note Waypoint itself wrote into the conversation — a
+// run finished, its proposals were decided — built from the ledger, never
+// by a model. Rendered as a note in the panel and read to the model on its
+// next turn (then `deliveredAt` is stamped), the same rail the proposal
+// outcome preamble rides (architecture §5.6).
+export const copilotMessageRoleEnum = pgEnum('copilot_message_role', ['user', 'assistant', 'system']);
 
 // Multiple conversations per member (issue #11) — memberId is deliberately
 // NOT unique. Listing (copilot.service.ts's listConversations) queries
@@ -47,6 +52,9 @@ export const copilotMessages = pgTable(
     // this actually flips in practice, not just in theory. A monotonic
     // bigserial sorts correctly regardless of same-transaction timestamps.
     seq: bigserial('seq', { mode: 'number' }).notNull(),
+    // System notes only: when the note was read to the model. Null until
+    // then; a user/assistant message never sets it.
+    deliveredAt: timestamp('delivered_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   // Composite, not conversationId alone: the only query this feature runs

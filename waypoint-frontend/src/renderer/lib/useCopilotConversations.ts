@@ -46,6 +46,14 @@ export interface UseCopilotConversationsResult {
   ) => void;
   /** Rolls back an optimistic appendMessageLocal — used when its backing POST fails. */
   removeMessageLocal: (sessionId: string, messageId: string) => void;
+  /** W5a: a system note's deliveredAt after a turn carried it. */
+  patchMessageLocal: (
+    sessionId: string,
+    messageId: string,
+    patch: Partial<Pick<CopilotSessionMessage, 'deliveredAt'>>,
+  ) => void;
+  /** W5a: re-read an open conversation's messages (a note main appended). */
+  refreshMessages: (sessionId: string) => Promise<void>;
   /** Merges a patch (e.g. a fresh updatedAt, a newly-learned claudeSessionId) into the cached conversation summary, without a refetch. */
   patchConversationLocal: (
     sessionId: string,
@@ -191,6 +199,33 @@ export function useCopilotConversations(): UseCopilotConversationsResult {
     [],
   );
 
+  // W5a: a system note's deliveredAt, once a turn carried it to the model.
+  const patchMessageLocal = useCallback(
+    (
+      sessionId: string,
+      messageId: string,
+      patch: Partial<Pick<CopilotSessionMessage, 'deliveredAt'>>,
+    ) => {
+      setMessagesById((prev) => {
+        if (!prev[sessionId]) return prev;
+        return {
+          ...prev,
+          [sessionId]: prev[sessionId].map((m) =>
+            m.id === messageId ? { ...m, ...patch } : m,
+          ),
+        };
+      });
+    },
+    [],
+  );
+
+  // W5a: a note main appended while the conversation is open — the panel
+  // re-reads the conversation so the note shows without a reopen.
+  const refreshMessages = useCallback(async (id: string) => {
+    const full = await getCopilotConversation(id);
+    setMessagesById((prev) => ({ ...prev, [id]: full.messages }));
+  }, []);
+
   const patchConversationLocal = useCallback(
     (
       sessionId: string,
@@ -218,6 +253,8 @@ export function useCopilotConversations(): UseCopilotConversationsResult {
     reorderSessionsWithinGroup: reorderAction,
     appendMessageLocal,
     removeMessageLocal,
+    patchMessageLocal,
+    refreshMessages,
     patchConversationLocal,
   };
 }

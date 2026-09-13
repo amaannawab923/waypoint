@@ -423,6 +423,10 @@ export function runSession(
         try {
           query = await runCopilotQuery({
             prompt: fullPrompt,
+            // W5a: the session tools, built on the SDK inside the client.
+            ...(policy.inProcessServers?.length
+              ? { inProcessServers: policy.inProcessServers }
+              : {}),
             options: {
               ...buildSdkOptions(
                 policy,

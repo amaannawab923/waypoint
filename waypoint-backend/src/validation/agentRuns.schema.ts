@@ -33,6 +33,7 @@ const titleSchema = z
   .nullable();
 
 export const runIsolationSchema = z.enum(['worktree', 'directory']);
+export const runIntentSchema = z.enum(['investigate', 'fix', 'custom']);
 
 export const createAgentRunSchema = z
   .object({
@@ -50,6 +51,11 @@ export const createAgentRunSchema = z
     title: titleSchema.optional(),
     isolation: runIsolationSchema.optional(),
     autoApprove: z.boolean().optional(),
+    // W5a: what a dispatched run was asked to do; the Copilot
+    // conversation it came from, for the notes going back.
+    intent: runIntentSchema.optional(),
+    modeId: z.string().max(64).nullable().optional(),
+    copilotConversationId: id.nullable().optional(),
     retryOfRunId: id.optional(),
   })
   .strict()
@@ -135,6 +141,17 @@ export const appendAgentRunEventSchema = z
   .strict();
 export type AppendAgentRunEventInput = z.infer<typeof appendAgentRunEventSchema>;
 
+// W5a: a proposal filed by Waypoint main on a dispatched run's behalf —
+// the agent's closing message as a comment, or the state change Fix
+// asks for. Only these two kinds; a run never creates tickets or
+// reassigns people.
+export const createRunProposalSchema = z
+  .discriminatedUnion('kind', [
+    z.object({ kind: z.literal('comment'), body: z.string().min(1).max(20_000) }).strict(),
+    z.object({ kind: z.literal('state_change'), stateId: id }).strict(),
+  ]);
+export type CreateRunProposalInput = z.infer<typeof createRunProposalSchema>;
+
 // Everything a run's owner-side process may write back as it learns things:
 // the daemon's handles once provisioning has them, the branch and PR, the
 // outcome, the counters — and `status`, whose legality runStatusMachine.ts
@@ -156,6 +173,9 @@ export const updateAgentRunSchema = requireAtLeastOneField(
       daemonSessionId: z.string().max(256).nullable().optional(),
       providerSessionId: z.string().max(256).nullable().optional(),
       title: titleSchema.optional(),
+      intent: runIntentSchema.nullable().optional(),
+      modeId: z.string().max(64).nullable().optional(),
+      copilotConversationId: id.nullable().optional(),
       worktreePath: z.string().max(4096).nullable().optional(),
       cwd: z.string().max(4096).nullable().optional(),
       branch: gitRefSchema.nullable().optional(),
@@ -169,3 +189,20 @@ export const updateAgentRunSchema = requireAtLeastOneField(
     .strict(),
 );
 export type UpdateAgentRunInput = z.infer<typeof updateAgentRunSchema>;
+
+// W5a follow-up (ROAD-124): a transcript snapshot. The turns are the
+// daemon's own shape (acp.getHistory's transcriptTurnSchema), kept opaque
+// past a depth check and a byte cap: a transcript is the one ledger write
+// that is legitimately large, so the cap is generous but real — and under
+// app.ts's 5 MB body limit, so a refusal is this schema's 400, not the
+// parser's. Main drops the oldest turns to fit (engine/runs/transcripts.ts).
+export const MAX_TRANSCRIPT_BYTES = 4 * 1024 * 1024;
+export const saveAgentRunTranscriptSchema = z
+  .object({
+    turns: boundedJson(z.array(z.record(z.string(), z.unknown())).max(2000)).refine(
+      (v) => JSON.stringify(v).length <= MAX_TRANSCRIPT_BYTES,
+      { message: 'transcript exceeds 4 MiB' },
+    ),
+  })
+  .strict();
+export type SaveAgentRunTranscriptInput = z.infer<typeof saveAgentRunTranscriptSchema>;

@@ -3,7 +3,7 @@ import { db } from '../db/client.js';
 import { proposals, copilotConversations, copilotMessages, tickets } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
 import { NotFoundError, ValidationError } from '../middleware/errors.js';
-import { buildCopilotCommentHtml, COPILOT_DISCLOSURE } from '../lib/commentHtml.js';
+import { buildCopilotCommentHtml, disclosureFor } from '../lib/commentHtml.js';
 import { buildCopilotJiraCommentAdf } from '../lib/jira/adf.js';
 import type { JiraCredential } from '../lib/jira/client.js';
 import { getJiraProvider, isExternalRef, type JiraProvider } from '../providers/jira.js';
@@ -12,12 +12,19 @@ import * as commentsService from './comments.service.js';
 import * as statesService from './states.service.js';
 import * as membersService from './members.service.js';
 import * as projectsService from './projects.service.js';
+import * as agentRunsService from './agentRuns.service.js';
+import * as copilotService from './copilot.service.js';
+import { agentRuns } from '../db/schema/index.js';
 
 // A proposal the user hasn't acted on within a day is more likely to be
 // forgotten context than a still-wanted change — approve refuses it (and
 // listProposals lazily finalizes it) rather than executing against a
 // day-old snapshot of reality.
 export const PROPOSAL_TTL_MS = 24 * 60 * 60 * 1000;
+// A run's proposals are its outcome, waiting for a person who may be away
+// for the weekend (PM review of the W5a walkthrough): they keep for a month,
+// not a day, and when they do expire the run is settled with them.
+export const RUN_PROPOSAL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 // Per-turn cap: anchorSeq identifies a turn (every proposal in one model
 // turn shares the max message seq at propose time), so counting rows with
 // the same (conversationId, anchorSeq) counts this turn's proposals.
@@ -192,7 +199,7 @@ function toView(row: ProposalRow, displayName: string): ProposalView {
     status: row.status as ProposalStatus,
     statusReason: row.statusReason,
     resultInfo: row.resultInfo,
-    disclosureText: COPILOT_DISCLOSURE(displayName),
+    disclosureText: disclosureFor(row.origin === 'agent_run' ? 'agent_run' : 'copilot', displayName),
     expiresAt: row.expiresAt,
     modelNotifiedAt: row.modelNotifiedAt,
     resolvedAt: row.resolvedAt,
@@ -327,6 +334,136 @@ export async function createProposal(input: CreateProposalInput): Promise<Propos
   });
 }
 
+/**
+ * W5a (ROAD-117): a proposal Waypoint main files on a dispatched run's
+ * behalf — the agent's closing message as a comment on the run's ticket,
+ * or the state change Fix asks for. Origin `agent_run`, no conversation,
+ * no anchor: it is a Review-queue card, not a chat card. Native tickets
+ * only in W5a (a run is always on a project's linked repository, and the
+ * ticket it was dispatched from is that project's); a Jira ticket is
+ * refused rather than half-handled. The per-conversation caps do not
+ * apply — a run files at most two — and nothing supersedes: a second
+ * Investigate on the same ticket is a second RCA, both reviewable.
+ */
+export async function createRunProposal(input: {
+  agentRunId: string;
+  kind: 'comment' | 'state_change';
+  payload: { body: string } | { stateId: string };
+}): Promise<ProposalRow> {
+  const run = await agentRunsService.getRun(input.agentRunId);
+  if (!run) throw new NotFoundError('agent run');
+  if (!run.ticketId) throw new ValidationError('this run has no ticket to propose on');
+  if (isExternalRef(run.ticketId)) {
+    throw new ValidationError('a run cannot propose on a Jira issue yet (W5a)');
+  }
+  const ticket = await ticketsService.getTicket(run.ticketId);
+  if (!ticket) throw new NotFoundError('ticket');
+  const base = { identifier: ticket.identifier, title: ticket.title, itemUpdatedAt: ticket.updatedAt.toISOString() };
+  let snapshot: ProposalSnapshot = base;
+  if (input.kind === 'state_change') {
+    const { stateId } = input.payload as { stateId: string };
+    const states = await statesService.listStates(ticket.projectId);
+    const toState = states.find((st) => st.id === stateId);
+    if (!toState) throw new ValidationError('stateId is not a state of this project');
+    if (stateId === ticket.stateId) throw new ValidationError('the ticket is already in that state');
+    const fromState = states.find((st) => st.id === ticket.stateId);
+    snapshot = {
+      ...base,
+      fromStateId: ticket.stateId,
+      fromStateName: fromState?.name ?? ticket.stateId,
+      fromStateColor: fromState?.color ?? null,
+      toStateName: toState.name,
+      toStateColor: toState.color,
+    };
+  }
+  // A run dispatched from a Copilot conversation files its proposals
+  // into that conversation too (W5a §1.7): the cards render there, at
+  // the tail (no anchor), beside the note that announced them — so
+  // "post the RCA" is the card's Approve, in the same panel.
+  // Anchored like a Copilot proposal — to the conversation's current last
+  // message — so the card sits where the run finished and later replies
+  // push it up, rather than trailing the conversation forever (PM review).
+  let anchorSeq: number | null = null;
+  if (run.copilotConversationId) {
+    const [last] = await db
+      .select({ seq: copilotMessages.seq })
+      .from(copilotMessages)
+      .where(eq(copilotMessages.conversationId, run.copilotConversationId))
+      .orderBy(desc(copilotMessages.seq))
+      .limit(1);
+    anchorSeq = last ? Number(last.seq) : 0;
+  }
+  const [row] = await db
+    .insert(proposals)
+    .values({
+      id: newId('prop'),
+      origin: 'agent_run',
+      conversationId: run.copilotConversationId ?? null,
+      agentRunId: run.id,
+      agentId: run.agentId,
+      kind: input.kind,
+      ticketId: run.ticketId,
+      payload: input.payload,
+      snapshot,
+      anchorSeq,
+      projectId: ticket.projectId,
+      expiresAt: new Date(Date.now() + RUN_PROPOSAL_TTL_MS),
+    })
+    .returning();
+  return row;
+}
+
+/**
+ * W5a: once every proposal a run filed has been decided, the run is done —
+ * the W6 rule pulled forward. Called after any decision; a proposal with
+ * no run, a run not in needs-review, or one with a proposal still open
+ * changes nothing. Never throws into the decision that triggered it.
+ */
+export async function settleRunIfDecided(runId: string | null): Promise<void> {
+  // A Copilot proposal has no run: nothing to settle, and — deliberately —
+  // no extra query on the decision path the existing flows script.
+  if (!runId) return;
+  try {
+    const [{ n: open }] = await db
+      .select({ n: count() })
+      .from(proposals)
+      .where(and(eq(proposals.agentRunId, runId), inArray(proposals.status, ['proposed', 'executing'])));
+    if (open > 0) return;
+    const [run] = await db
+      .select({ status: agentRuns.status, title: agentRuns.title, ownerMemberId: agentRuns.ownerMemberId })
+      .from(agentRuns)
+      .where(eq(agentRuns.id, runId));
+    if (run?.status !== 'needs-review') return;
+    await agentRunsService.updateRun(runId, {
+      status: 'done',
+      reason: 'Every proposal the run filed has been decided',
+    });
+    // W5a §1.8: Copilot hears about the decision too. The note is the
+    // ledger's own sentence — the decided proposals by outcome — and goes
+    // to the conversation the run came from, else the owner's latest.
+    const decided = await db
+      .select({ status: proposals.status, n: count() })
+      .from(proposals)
+      .where(eq(proposals.agentRunId, runId))
+      .groupBy(proposals.status);
+    const tally = decided
+      .filter((d) => d.n > 0)
+      .map((d) => `${d.n} ${d.status}`)
+      .join(', ');
+    const target = await copilotService.resolveNoteConversation(run.ownerMemberId, runId);
+    if (target) {
+      await copilotService.postSystemNote(
+        target,
+        `Run ${run.title ?? runId} is done · its proposals were decided (${tally || 'none'}).`,
+      );
+    }
+  } catch (error) {
+    // The decision already happened; a settle that fails is logged and
+    // retried by the next decision on the run.
+    console.warn('[proposals] settleRunIfDecided failed', { runId, error });
+  }
+}
+
 // W3.3 (architecture §4.2, "the repair pass has to change shape"): this
 // used to run inline inside listProposals, scoped by conversation_id. The
 // aggregate review queue has no conversation id to scope a repair scan by,
@@ -352,7 +489,7 @@ export async function repairProposals(): Promise<void> {
   // Both resolutions here are system-driven — no person acted — so
   // decidedBy='system' (never 'user'), and decisionLatencyMs is left unset
   // (NULL), per the column's own "NULL for system resolutions" comment.
-  await db
+  const expired = await db
     .update(proposals)
     .set({
       status: 'expired',
@@ -360,7 +497,14 @@ export async function repairProposals(): Promise<void> {
       resolvedAt: now,
       decidedBy: 'system',
     })
-    .where(and(eq(proposals.status, 'proposed'), lt(proposals.expiresAt, now)));
+    .where(and(eq(proposals.status, 'proposed'), lt(proposals.expiresAt, now)))
+    .returning({ agentRunId: proposals.agentRunId });
+  // A run whose last open proposal just expired is decided too — else it
+  // sits at needs-review with nothing approvable (PM review of W5a).
+  const expiredRuns = new Set(
+    (Array.isArray(expired) ? expired : []).map((r) => r.agentRunId).filter((id): id is string => !!id),
+  );
+  for (const runId of expiredRuns) await settleRunIfDecided(runId);
   await db
     .update(proposals)
     .set({
@@ -645,7 +789,10 @@ async function finalize(
     .set({ ...patch, statusReason: boundStatusReason(patch.statusReason), resolvedAt: new Date() })
     .where(and(eq(proposals.id, id), eq(proposals.status, 'executing')))
     .returning();
-  if (row) return row;
+  if (row) {
+    await settleRunIfDecided(row.agentRunId);
+    return row;
+  }
   const [current] = await db
     .select()
     .from(proposals)
@@ -721,15 +868,21 @@ async function executeProposal(
   switch (kind) {
     case 'comment': {
       const { body } = row.payload as { body: string };
+      const fromRun = row.origin === 'agent_run';
       const comment = await commentsService.addComment(
         row.ticketId as string,
-        buildCopilotCommentHtml(displayName, body),
+        buildCopilotCommentHtml(displayName, body, fromRun ? 'agent_run' : 'copilot'),
+        // The audit trail says an agent wrote it (PM review of W5a).
+        fromRun ? "posted a session's report as a comment" : "posted Copilot's comment",
       );
       return { commentId: comment.id };
     }
     case 'state_change': {
       const { stateId } = row.payload as { stateId: string };
-      await ticketsService.updateTicket(row.ticketId as string, { stateId });
+      await ticketsService.updateTicket(row.ticketId as string, { stateId }, {
+        activityDetail:
+          row.origin === 'agent_run' ? 'changed state, as a session proposed' : 'changed state, as Copilot proposed',
+      });
       return null;
     }
     case 'priority_change': {
@@ -1030,7 +1183,10 @@ export async function rejectProposal(id: string): Promise<ProposalView> {
     })
     .where(and(eq(proposals.id, id), inArray(proposals.status, ['proposed', 'stale'])))
     .returning();
-  if (updated) return toView(updated, displayName);
+  if (updated) {
+    await settleRunIfDecided(updated.agentRunId);
+    return toView(updated, displayName);
+  }
   const [existing] = await db.select().from(proposals).where(eq(proposals.id, id)).limit(1);
   if (!existing) throw new NotFoundError('proposal');
   // Already resolved — idempotent echo, same contract as approve.

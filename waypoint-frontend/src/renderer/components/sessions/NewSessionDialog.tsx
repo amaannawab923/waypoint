@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { clsx } from 'clsx';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
+import { Switch } from '@/components/ui/Switch';
 import { IconChevron, IconFolder, IconGitBranch } from '@/components/icons';
 import { getWorkspace } from '@/data/api';
 import { CURRENT_USER_ID } from '@/data/currentUser';
@@ -95,41 +96,6 @@ type BranchState =
   | { kind: 'loading' }
   | { kind: 'ready'; branches: string[]; suggested: string | null }
   | { kind: 'failed'; message: string };
-
-function Switch({
-  id,
-  checked,
-  disabled,
-  onChange,
-}: {
-  id: string;
-  checked: boolean;
-  disabled?: boolean;
-  onChange: (next: boolean) => void;
-}) {
-  return (
-    <button
-      id={id}
-      type="button"
-      role="switch"
-      aria-label="Auto-approve"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={clsx(
-        'relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-50',
-        checked ? 'bg-accent' : 'bg-border-strong',
-      )}
-    >
-      <span
-        className={clsx(
-          'absolute top-0.5 left-0 size-4 rounded-full bg-bg shadow ring-1 ring-border transition-transform',
-          checked ? 'translate-x-4' : 'translate-x-0.5',
-        )}
-      />
-    </button>
-  );
-}
 
 export function NewSessionDialog({
   open,
@@ -532,6 +498,7 @@ export function NewSessionDialog({
         <div className="flex items-start gap-3">
           <Switch
             id="new-session-auto-approve"
+            label="Auto-approve"
             checked={autoApprove}
             disabled={starting || !selected}
             onChange={(next) => {

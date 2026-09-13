@@ -70,6 +70,37 @@ export function groupOf(status: AgentRunStatus): SessionGroup {
 const byRecentActivity = (a: AgentRun, b: AgentRun) =>
   (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '');
 
+/**
+ * The list's other grouping (W5a §1.10): by ticket, most recently active
+ * ticket first, the ticket's runs newest first; runs on no ticket last,
+ * under one "Independent" group (`ticketId: null`).
+ */
+export interface TicketGroup {
+  ticketId: string | null;
+  runs: AgentRun[];
+}
+
+export function groupRunsByTicket(runs: readonly AgentRun[]): TicketGroup[] {
+  const byTicket = new Map<string | null, AgentRun[]>();
+  for (const run of runs) {
+    const key = run.ticketId ?? null;
+    const bucket = byTicket.get(key);
+    if (bucket) bucket.push(run);
+    else byTicket.set(key, [run]);
+  }
+  const groups: TicketGroup[] = [];
+  for (const [ticketId, bucket] of byTicket) {
+    bucket.sort(byRecentActivity);
+    groups.push({ ticketId, runs: bucket });
+  }
+  groups.sort((a, b) => {
+    if (a.ticketId === null) return 1;
+    if (b.ticketId === null) return -1;
+    return byRecentActivity(a.runs[0], b.runs[0]);
+  });
+  return groups;
+}
+
 /** Waiting → active → done; within a group, most recent activity first. */
 export function groupRuns(runs: readonly AgentRun[]): SessionGroups {
   const groups: SessionGroups = { waiting: [], active: [], done: [] };

@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, gt, inArray, lt, or, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { agentRuns, agentRunEvents, tickets } from '../db/schema/index.js';
+import { agentRuns, agentRunEvents, agentRunTranscripts, tickets } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
 import { ConflictError, NotFoundError, ValidationError } from '../middleware/errors.js';
 import {
@@ -14,6 +14,7 @@ import type {
   CreateAgentRunInput,
   ListAgentRunsQuery,
   UpdateAgentRunInput,
+  SaveAgentRunTranscriptInput,
 } from '../validation/agentRuns.schema.js';
 
 // The agent-runs ledger — ROAD-54 (routes), ROAD-56 (relations). What this
@@ -176,6 +177,9 @@ export async function createRun(input: CreateAgentRunInput): Promise<AgentRun> {
         title: input.title ?? null,
         isolation: input.isolation ?? 'worktree',
         autoApprove: input.autoApprove ?? false,
+        intent: input.intent ?? null,
+        modeId: input.modeId ?? null,
+        copilotConversationId: input.copilotConversationId ?? null,
         baseRef: input.baseRef ?? null,
         retryOfRunId: input.retryOfRunId ?? null,
       })
@@ -260,6 +264,40 @@ export async function appendEvent(runId: string, input: AppendAgentRunEventInput
   });
 }
 
+// W5a follow-up (ROAD-124): the transcript snapshot, replaced whole.
+export interface AgentRunTranscript {
+  runId: string;
+  turns: unknown[];
+  turnCount: number;
+  capturedAt: Date;
+}
+
+export async function saveTranscript(
+  runId: string,
+  input: SaveAgentRunTranscriptInput,
+): Promise<AgentRunTranscript> {
+  const run = await getRun(runId);
+  if (!run) throw new NotFoundError('agent run');
+  const [row] = await db
+    .insert(agentRunTranscripts)
+    .values({ runId, turns: input.turns, turnCount: input.turns.length, capturedAt: new Date() })
+    .onConflictDoUpdate({
+      target: agentRunTranscripts.runId,
+      set: { turns: input.turns, turnCount: input.turns.length, capturedAt: new Date() },
+    })
+    .returning();
+  return { ...row, turns: row.turns as unknown[] };
+}
+
+export async function getTranscript(runId: string): Promise<AgentRunTranscript | null> {
+  const [row] = await db
+    .select()
+    .from(agentRunTranscripts)
+    .where(eq(agentRunTranscripts.runId, runId))
+    .limit(1);
+  return row ? { ...row, turns: row.turns as unknown[] } : null;
+}
+
 function truncateSummary(summary: string | null | undefined): string | null | undefined {
   if (typeof summary !== 'string' || summary.length <= MAX_SUMMARY_CHARS) return summary;
   return `${summary.slice(0, MAX_SUMMARY_CHARS - 1)}…`;
@@ -279,7 +317,19 @@ export async function updateRun(runId: string, input: UpdateAgentRunInput): Prom
     // field-only patch on a cancelled run went straight through. The one
     // thing still accepted is a status-only patch to the status it has —
     // an idempotent retry, handled below.
-    if (isTerminal(current.status) && !(Object.keys(fields).length === 0 && status === current.status)) {
+    // W6: the one field that is not the run's outcome — its pull request,
+    // which the host may open (or retry) after the run is done (Open PR in
+    // the header) — may be written on a finished run, and only once.
+    const onlyPrUrl =
+      status === undefined &&
+      Object.keys(fields).length === 1 &&
+      typeof fields.prUrl === 'string' &&
+      current.prUrl === null;
+    if (
+      isTerminal(current.status) &&
+      !(Object.keys(fields).length === 0 && status === current.status) &&
+      !onlyPrUrl
+    ) {
       throw new ConflictError(`A ${current.status} run is finished; its record is read-only.`);
     }
     const patch: Partial<typeof agentRuns.$inferInsert> = {

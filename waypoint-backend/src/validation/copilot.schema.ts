@@ -39,3 +39,17 @@ export const createCopilotConversationSchema = z.object({}).strict();
 export const renameCopilotConversationSchema = z.object({
   title: z.string().trim().min(1).max(60),
 });
+
+// W5a: a note Waypoint main writes into a conversation about a run, and the
+// stamp for the notes a turn read to the model.
+export const postCopilotNoteSchema = z
+  .object({
+    runId: z.string().min(1).max(128).nullable().optional(),
+    conversationId: z.string().min(1).max(128).nullable().optional(),
+    content: z.string().trim().min(1).max(2000),
+  })
+  .strict();
+
+export const markCopilotNotesDeliveredSchema = z
+  .object({ ids: z.array(z.string().min(1).max(128)).min(1).max(100) })
+  .strict();

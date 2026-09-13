@@ -7,7 +7,14 @@ import {
   type ReactNode,
 } from 'react';
 import { clsx } from 'clsx';
-import { IconBot, IconFolder, IconFilter, IconChevron, IconCheck, IconReview } from '@/components/icons';
+import {
+  IconBot,
+  IconFolder,
+  IconFilter,
+  IconChevron,
+  IconCheck,
+  IconReview,
+} from '@/components/icons';
 import { useAsync } from '@/lib/useAsync';
 import { useReviewQueue } from '@/lib/useReviewQueue';
 import {
@@ -441,7 +448,9 @@ export default function ReviewPage() {
         <p className="text-sm text-text-secondary">
           Every pending proposal from every agent, across every project — what
           would change, and Approve or Reject. Agents never write directly;
-          approving is the only thing that mutates anything.
+          nothing reaches your tracker without your approval. A finished writing
+          session's branch is pushed and its pull request opened by Waypoint, as
+          you — the ticket hears about it here.
         </p>
       </div>
 

@@ -140,8 +140,10 @@ export function renderMarkdown(src: string): string {
       continue;
     }
 
-    const bulletItem = /^[-*]\s+(.*)$/.exec(raw);
-    const orderedItem = /^(\d+)[.)]\s+(.*)$/.exec(raw);
+    // A leading indent is allowed: a model's nested "  - item" is a list
+    // item to the reader, not a literal dash (PM review of W5a).
+    const bulletItem = /^\s{0,6}[-*]\s+(.*)$/.exec(raw);
+    const orderedItem = /^\s{0,6}(\d+)[.)]\s+(.*)$/.exec(raw);
     if (bulletItem || orderedItem) {
       const tag = bulletItem ? 'ul' : 'ol';
       if (listTag !== tag) {

@@ -2,6 +2,7 @@ import {
   app,
   dialog,
   ipcMain,
+  Notification,
   shell,
   type BrowserWindow,
   type Event as ElectronEvent,
@@ -23,8 +24,19 @@ import { runDaemonCommand } from './daemonCli';
 import { removeStaleStartLock } from './staleLock';
 import { registerBootReconcile } from './runs/bootReconcile';
 import { registerLiveLedgerFollower } from './runs/liveLedgerFollower';
+import { createDaemonRunsApi } from './runs/daemonApi';
+import { createRunFinalizer } from './runs/finalize';
+import { createLedgerClient } from './runs/ledgerClient';
+import { createRunNotifications } from './notifications';
+import { createTranscriptKeeper } from './runs/transcripts';
+import { createPullRequestPublisher } from './runs/pullRequests';
 import { registerTopicsIpc } from './topicsIpc';
-import { registerRunsIpc } from './runsIpc';
+import {
+  assertWorktreeGitDir,
+  execGit,
+  registerRunsIpc,
+  type RunsHostApi,
+} from './runsIpc';
 
 // ROAD-48: the IPC surface over the engine supervisor.
 //
@@ -172,7 +184,7 @@ export function registerEngineIpc(
    * handler is invoked.
    */
   worktreesDir: string = defaultWorktreesDir(),
-): void {
+): RunsHostApi {
   const send = (channel: string, payload: unknown) => {
     const win = getWindow();
     if (!win || win.isDestroyed()) return;
@@ -187,12 +199,68 @@ export function registerEngineIpc(
   // makes this a no-op.
   registerBootReconcile({ supervisor, logger });
 
+  // W5a: the two notifications a run sends (blocked, needs review), and
+  // host-side finalize for a dispatched run whose turn ended — both hang
+  // off the follower's facts, neither adds a decision to it.
+  const ledger = createLedgerClient();
+  const daemon = () => {
+    const client = supervisor.client();
+    return client ? createDaemonRunsApi(client) : null;
+  };
+  const notifications = createRunNotifications({
+    host: {
+      isSupported: () => Notification.isSupported(),
+      show: ({ title, body }, onClick) => {
+        const n = new Notification({ title, body });
+        n.on('click', onClick);
+        n.show();
+      },
+    },
+    focusRun: (runId) => {
+      const win = getWindow();
+      if (win && !win.isDestroyed()) {
+        if (win.isMinimized()) win.restore();
+        win.show();
+        win.focus();
+      }
+      send(RUNS_IPC.focus, { runId });
+    },
+    logger,
+  });
+  // ROAD-124: the transcript kept in the ledger — after every turn end,
+  // before every kill, and when a session goes on its own.
+  const transcripts = createTranscriptKeeper({ ledger, daemon, logger });
+  // W6: a writing run's branch is pushed and its PR opened by the host,
+  // as the person, when its turn ends (runs/pullRequests.ts).
+  const pullRequests = createPullRequestPublisher({ ledger, logger });
+  const finalizer = createRunFinalizer({
+    ledger,
+    daemon,
+    notify: (change) => send(RUNS_IPC.changed, change),
+    git: execGit,
+    assertWorktreeGitDir,
+    onRunStatus: notifications.onRunStatus,
+    transcripts,
+    pullRequests,
+    logger,
+  });
+
   // W3: between reconciles, the daemon's session list is followed into the
   // ledger (blocked ⇄ running, interrupted), and the renderer is told
   // after every write so the panel re-reads rather than guesses.
   registerLiveLedgerFollower({
     supervisor,
+    ledger,
     notify: (change) => send(RUNS_IPC.changed, change),
+    onSessionIdle: (runId) => {
+      // The snapshot first, then finalize (which snapshots again, with
+      // the turns it read, before its kill).
+      void transcripts
+        .capture(runId)
+        .then(() => finalizer.onSessionIdle(runId));
+    },
+    beforeInterrupted: (runId) => transcripts.capture(runId),
+    onRunStatus: notifications.onRunStatus,
     logger,
   });
 
@@ -253,7 +321,7 @@ export function registerEngineIpc(
 
   // W3: stop / diff / reveal for a run — the renderer names a run, main
   // does the rest (runsIpc.ts). Real git from PATH and the OS file manager.
-  registerRunsIpc({
+  const runsApi = registerRunsIpc({
     supervisor,
     host: { handle },
     worktreesDir,
@@ -270,6 +338,8 @@ export function registerEngineIpc(
       return result.filePaths[0];
     },
     recentsFile: path.join(path.dirname(worktreesDir), 'recent-folders.json'),
+    transcripts,
+    pullRequests,
     logger,
   });
 
@@ -291,4 +361,6 @@ export function registerEngineIpc(
   ipcMain.handle(ENGINE_IPC.health, (): Promise<EngineHealth | null> =>
     supervisor.health(),
   );
+
+  return runsApi;
 }

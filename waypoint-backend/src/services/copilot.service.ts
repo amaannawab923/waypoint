@@ -1,6 +1,6 @@
-import { eq, asc, desc, count } from 'drizzle-orm';
+import { eq, asc, desc, count, and, inArray, isNull } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { copilotConversations, copilotMessages } from '../db/schema/index.js';
+import { agentRuns, copilotConversations, copilotMessages } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
 import { truncateTitle } from '../lib/text.js';
 import { NotFoundError } from '../middleware/errors.js';
@@ -140,4 +140,89 @@ export async function postAssistantMessage(
       .where(eq(copilotConversations.id, conversationId));
     return message;
   });
+}
+
+// ---------------------------------------------------------------------------
+// W5a (ROAD-117): system notes — what Waypoint itself tells a conversation.
+// ---------------------------------------------------------------------------
+
+/**
+ * The conversation a run's notes go to: the one it was dispatched from
+ * when there was one, else the member's most recent. Null when the member
+ * has no conversation at all — then there is nowhere to say it, and the
+ * panel's badge and Review carry the news instead.
+ */
+export async function resolveNoteConversation(
+  memberId: string,
+  runId: string | null,
+): Promise<string | null> {
+  if (runId) {
+    const [run] = await db
+      .select({ conversationId: agentRuns.copilotConversationId })
+      .from(agentRuns)
+      .where(eq(agentRuns.id, runId))
+      .limit(1);
+    if (run?.conversationId) return run.conversationId;
+  }
+  const [latest] = await db
+    .select({ id: copilotConversations.id })
+    .from(copilotConversations)
+    .where(eq(copilotConversations.memberId, memberId))
+    .orderBy(desc(copilotConversations.updatedAt))
+    .limit(1);
+  return latest?.id ?? null;
+}
+
+/** A note Waypoint wrote — built from the ledger, never by a model. Bumps the conversation so it surfaces. */
+export async function postSystemNote(conversationId: string, content: string) {
+  return db.transaction(async (tx) => {
+    const [conversation] = await tx
+      .select({ id: copilotConversations.id })
+      .from(copilotConversations)
+      .where(eq(copilotConversations.id, conversationId))
+      .limit(1);
+    if (!conversation) throw new NotFoundError('conversation');
+    const [message] = await tx
+      .insert(copilotMessages)
+      .values({ id: newId('msg'), conversationId, role: 'system', content })
+      .returning();
+    await tx
+      .update(copilotConversations)
+      .set({ updatedAt: new Date() })
+      .where(eq(copilotConversations.id, conversationId));
+    return message;
+  });
+}
+
+/** The notes the model has not been read yet, oldest first. */
+export async function listUndeliveredNotes(conversationId: string) {
+  return db
+    .select()
+    .from(copilotMessages)
+    .where(
+      and(
+        eq(copilotMessages.conversationId, conversationId),
+        eq(copilotMessages.role, 'system'),
+        isNull(copilotMessages.deliveredAt),
+      ),
+    )
+    .orderBy(asc(copilotMessages.seq));
+}
+
+/** Stamps the notes the model was read on a successful turn. Only system notes of this conversation. */
+export async function markNotesDelivered(conversationId: string, ids: string[]): Promise<{ delivered: number }> {
+  if (ids.length === 0) return { delivered: 0 };
+  const rows = await db
+    .update(copilotMessages)
+    .set({ deliveredAt: new Date() })
+    .where(
+      and(
+        eq(copilotMessages.conversationId, conversationId),
+        eq(copilotMessages.role, 'system'),
+        isNull(copilotMessages.deliveredAt),
+        inArray(copilotMessages.id, ids),
+      ),
+    )
+    .returning({ id: copilotMessages.id });
+  return { delivered: rows.length };
 }

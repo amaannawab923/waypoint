@@ -2,9 +2,11 @@ import type { EngineSupervisor } from '../supervisor';
 import type { RunChanged, Unsubscribe, WireClient } from '../types';
 import { liveTopic } from '../wire/topics';
 import { readSnapshot, type DaemonSessionSummary } from './daemonApi';
+import { isTurnEnded } from './finalize';
 import {
   createLedgerClient,
   type AgentRun,
+  type AgentRunStatus,
   type LedgerClient,
 } from './ledgerClient';
 import { RUN_ID_PREFIX } from './reconcile';
@@ -35,12 +37,28 @@ import { RUN_ID_PREFIX } from './reconcile';
  * follower's: those are the orchestrator's (W4/W5). After every write the
  * renderer is told through `notify` (RUNS_IPC.changed) so the panel
  * re-reads the ledger instead of guessing.
+ *
+ * W5a adds one fact and two hooks, and no new decision: a session whose
+ * turn has ended (finalize.ts's `isTurnEnded`) is reported through
+ * `onSessionIdle`, and host-side finalize decides what that means for a
+ * dispatched run; every status this follower writes is also reported
+ * through `onRunStatus`, which is where notifications hang.
  */
 export interface LiveLedgerFollowerDeps {
   supervisor: EngineSupervisor;
   ledger?: LedgerClient;
   /** RUNS_IPC.changed to the renderer. */
   notify: (change: RunChanged) => void;
+  /** A session's turn ended with nothing pending or queued (W5a) — finalize's trigger. */
+  onSessionIdle?: (runId: string) => void;
+  /**
+   * A session closed or vanished and its run is about to be marked
+   * interrupted (ROAD-124): the last chance to read its history while the
+   * daemon may still hold it. Awaited; never throws by contract.
+   */
+  beforeInterrupted?: (runId: string) => Promise<void>;
+  /** After every status written here, with the status it left (W5a notifications). */
+  onRunStatus?: (run: AgentRun, previous: AgentRunStatus) => void;
   logger: {
     info: (m: string, meta?: Record<string, unknown>) => void;
     warn: (m: string, meta?: Record<string, unknown>) => void;
@@ -62,6 +80,8 @@ const LIVE: ReadonlySet<AgentRun['status']> = new Set(['running', 'blocked']);
 interface SessionFacts {
   pending: number;
   lifecycle: string;
+  /** finalize.ts's idle fact: the turn ended, nothing pending, nothing queued. */
+  idle: boolean;
   /**
    * The summary's updatedAt, but only while a permission is pending — so a
    * second request replacing the first (found live: Write answered, rm now
@@ -169,6 +189,7 @@ export function registerLiveLedgerFollower(
       to: updated.status,
     });
     deps.notify({ runId: run.id, status: updated.status });
+    if (updated.status !== run.status) deps.onRunStatus?.(updated, run.status);
   };
 
   const freshRun = async (runId: string): Promise<AgentRun | null> => {
@@ -203,6 +224,7 @@ export function registerLiveLedgerFollower(
   const markInterrupted = async (runId: string, why: string): Promise<void> => {
     const run = await freshRun(runId);
     if (!run || !LIVE.has(run.status)) return;
+    await deps.beforeInterrupted?.(runId).catch(() => {});
     await write(
       run,
       { status: 'interrupted', reason: why },
@@ -278,6 +300,7 @@ export function registerLiveLedgerFollower(
       const facts: SessionFacts = {
         pending: summary.pendingPermissionCount,
         lifecycle: String(summary.lifecycle),
+        idle: isTurnEnded(summary),
         stamp: summary.pendingPermissionCount > 0 ? summary.updatedAt : 0,
       };
       present.add(summary.conversationId);
@@ -292,6 +315,12 @@ export function registerLiveLedgerFollower(
         before.stamp !== facts.stamp
       ) {
         await judge(summary.conversationId, facts);
+      }
+      // The idle fact is reported on its rising edge and on first sight
+      // (a run whose turn ended while nobody was following); finalize
+      // re-reads everything before it acts, so a repeat costs nothing.
+      if (facts.idle && (!before || !before.idle)) {
+        deps.onSessionIdle?.(summary.conversationId);
       }
     }
     for (const runId of [...lastSeen.keys()]) {

@@ -8,9 +8,48 @@ import { showErrorToast } from '@/lib/toast';
 import type { AgentRun } from '@/types/agentRuns';
 import { PermissionBand } from './PermissionBand';
 import { clearSessionDraft, SessionComposer } from './SessionComposer';
-import { statusView } from './sessionStatus';
+import { intentView, runTitle, statusView } from './sessionStatus';
 import { UsageStrip } from './UsageStrip';
 import { useSessionTranscript } from './useSessionTranscript';
+
+/**
+ * The Brief bar (W5a): a dispatched run's first prompt, folded out of
+ * the transcript and kept here behind "View brief" — one line by
+ * default, the full text (read-only, as the session was given it) on
+ * demand. Nothing to edit after Start; the preview is where it was
+ * edited.
+ */
+function BriefBar({ brief, label }: { brief: string; label: string }) {
+  const [open, setOpen] = useState(false);
+  const lines = brief.split('\n').length;
+  return (
+    <div
+      className="mx-4 mt-3 rounded-[var(--radius-sm)] border border-border bg-bg-inset text-xs"
+      data-brief-bar
+      data-open={open ? 'true' : 'false'}
+    >
+      <div className="flex items-center gap-2 px-3 py-2">
+        <span className="font-medium text-text">Brief</span>
+        <span className="min-w-0 flex-1 truncate text-text-muted">
+          {label} · what the session was told first · {lines} lines
+        </span>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="shrink-0 font-medium text-text-secondary underline-offset-2 hover:text-text hover:underline"
+        >
+          {open ? 'Hide brief' : 'View brief'}
+        </button>
+      </div>
+      {open && (
+        <pre className="thin-scroll max-h-[40vh] overflow-auto border-t border-border px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-text-secondary">
+          {brief}
+        </pre>
+      )}
+    </div>
+  );
+}
 
 /**
  * The Transcript tab (W3, ROAD-62/63): the vendored chat-ui view for the
@@ -32,9 +71,16 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
     isGenerating,
     queuedCount,
     reloadHistory,
+    brief,
   } = useSessionTranscript(run.id, {
     awaitingSession: run.status === 'queued' || run.status === 'provisioning',
+    // A dispatched run's first prompt is its brief: folded (W5a).
+    foldBrief: run.entry === 'dispatched' ? { label: runTitle(run) } : null,
   });
+  const briefLabel =
+    run.entry === 'dispatched'
+      ? `${runTitle(run)}${intentView(run)?.mode ? ` · ${intentView(run)?.mode}` : ''}`
+      : null;
   const { engine } = useSessionsSnapshot();
   const [view, setView] = useState<ChatView | null>(null);
   const [answering, setAnswering] = useState<string | null>(null);
@@ -145,6 +191,7 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
           </button>
         </div>
       )}
+      {brief && briefLabel && <BriefBar brief={brief} label={briefLabel} />}
       {liveStatus.kind === 'closed' && !engineDown && status.live && (
         <div className="mx-4 mt-3 rounded-[var(--radius-sm)] border border-border bg-bg-inset px-3 py-2 text-xs text-text-secondary">
           Live updates stopped
