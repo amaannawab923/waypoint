@@ -10,7 +10,11 @@ import {
   createLedgerClient,
   type LedgerClient,
 } from '../engine/runs/ledgerClient';
-import { sessionToolsServer, type SessionOffer } from './sessionTools';
+import {
+  sessionToolsServer,
+  type OpenPullRequestOutcome,
+  type SessionOffer,
+} from './sessionTools';
 
 // The thin ipcMain.on('copilot:run') adapter (P3c). All SDK-invocation
 // logic — option building, env building, repo-root resolution, the
@@ -76,11 +80,18 @@ export function killAllCopilotProcesses(): void {
 /** Push channel: the model asked to offer a session (copilot/sessionTools.ts). */
 export const SESSION_OFFER_CHANNEL = 'copilot:session-offer';
 
+export interface CopilotHostDeps {
+  /** Test seam: the ledger the session tools read; the real one otherwise. */
+  ledger?: LedgerClient;
+  /** W6: the engine's publish verb (registerEngineIpc's return), for open_pull_request. */
+  openPullRequest?: (runId: string) => Promise<OpenPullRequestOutcome>;
+}
+
 export function registerCopilotIpc(
   getWindow: () => BrowserWindow | null,
-  /** Test seam: the ledger the session tools read; the real one otherwise. */
-  ledger?: LedgerClient,
+  hostDeps: CopilotHostDeps = {},
 ): void {
+  const { ledger } = hostDeps;
   // Built once, on first use: the ledger client is cheap, but an app that
   // never opens Copilot should not construct it.
   let ledgerClient: LedgerClient | null = ledger ?? null;
@@ -198,6 +209,9 @@ export function registerCopilotIpc(
                 conversationId,
                 ledger: ledgerFor(),
                 offer,
+                ...(hostDeps.openPullRequest
+                  ? { openPullRequest: hostDeps.openPullRequest }
+                  : {}),
               }),
             }
           : {}),

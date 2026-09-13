@@ -67,10 +67,14 @@ function harness(
     runs?: AgentRun[];
     proposals?: LedgerProposal[];
     windowGone?: boolean;
+    openPullRequest?: SessionToolsDeps['openPullRequest'];
   } = {},
 ) {
   const offers: SessionOffer[] = [];
   const deps: SessionToolsDeps = {
+    ...(options.openPullRequest
+      ? { openPullRequest: options.openPullRequest }
+      : {}),
     conversationId: 'conv-1',
     ledger: {
       getTicket: jest.fn(async (id: string) => (id === 'wi-1' ? ticket : null)),
@@ -238,5 +242,85 @@ describe('get_run', () => {
     await expect(tool('get_run').handler({ run_id: '../etc' })).rejects.toThrow(
       /Not a run id/,
     );
+  });
+});
+
+describe('open_pull_request', () => {
+  it("publishes the ticket's latest writing run, or says the PR is already open", async () => {
+    const openPullRequest = jest.fn(async () => ({
+      kind: 'opened' as const,
+      url: 'https://github.com/o/r/pull/61',
+    }));
+    const fix = run({
+      id: 'run-fix00001',
+      intent: 'fix',
+      modeId: 'bypassPermissions',
+      title: 'ROAD-116 · Fix',
+      status: 'done',
+      branch: 'agent/ROAD-116',
+    });
+    const { tool } = harness({ runs: [run(), fix], openPullRequest });
+    const answer = await tool('open_pull_request').handler({
+      ticket: 'ROAD-116',
+    });
+    expect(openPullRequest).toHaveBeenCalledWith('run-fix00001');
+    expect(answer).toContain('https://github.com/o/r/pull/61');
+
+    const already = harness({
+      runs: [{ ...fix, prUrl: 'https://github.com/o/r/pull/7' }],
+      openPullRequest,
+    });
+    expect(
+      await already
+        .tool('open_pull_request')
+        .handler({ run_id: 'run-fix00001' }),
+    ).toContain('already open');
+    expect(openPullRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a plan-mode-only ticket, a run still running, a failed publish, and no engine', async () => {
+    const openPullRequest = jest.fn(async () => ({
+      kind: 'failed' as const,
+      stage: 'push' as const,
+      message: 'denied',
+    }));
+    const { tool } = harness({ runs: [run()], openPullRequest });
+    await expect(
+      tool('open_pull_request').handler({ ticket: 'ROAD-116' }),
+    ).rejects.toThrow(/no writing session/);
+    const running = harness({
+      runs: [
+        run({
+          id: 'run-fix00001',
+          intent: 'fix',
+          modeId: null,
+          status: 'running',
+          branch: 'agent/x',
+        }),
+      ],
+      openPullRequest,
+    });
+    await expect(
+      running.tool('open_pull_request').handler({ run_id: 'run-fix00001' }),
+    ).rejects.toThrow(/is running/);
+    const failing = harness({
+      runs: [
+        run({
+          id: 'run-fix00001',
+          intent: 'fix',
+          modeId: null,
+          status: 'done',
+          branch: 'agent/x',
+        }),
+      ],
+      openPullRequest,
+    });
+    await expect(
+      failing.tool('open_pull_request').handler({ run_id: 'run-fix00001' }),
+    ).rejects.toThrow(/push failed: denied/);
+    const noEngine = harness({ runs: [run()] });
+    await expect(
+      noEngine.tool('open_pull_request').handler({ ticket: 'ROAD-116' }),
+    ).rejects.toThrow(/not available/);
   });
 });

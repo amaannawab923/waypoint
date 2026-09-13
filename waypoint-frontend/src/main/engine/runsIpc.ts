@@ -448,7 +448,13 @@ export async function assertWorktreeGitDir(
   }
 }
 
-export function registerRunsIpc(deps: RunsIpcDeps): void {
+/** What registration hands back to main: the verbs other modules (Copilot's tools) may call. */
+export interface RunsHostApi {
+  /** W6: push a run's branch and open its pull request, as the person. */
+  openRunPullRequest(runId: string): Promise<OpenPrResult>;
+}
+
+export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
   const ledger = deps.ledger ?? createLedgerClient();
   const git = deps.git ?? execGit;
   const daemonFor = deps.daemon ?? defaultDaemon;
@@ -470,35 +476,13 @@ export function registerRunsIpc(deps: RunsIpcDeps): void {
     return run.worktreePath;
   };
 
-  const folders: FolderDeps = {
-    registry: deps.folderRegistry ?? createFolderRegistry(),
-    recentsFile: deps.recentsFile,
-    listProjects: () => ledger.listProjects(),
-  };
-  const startDeps = {
-    ledger,
-    daemon: () => daemonFor(deps.supervisor),
-    worktreesDir: deps.worktreesDir,
-    notify: deps.notify,
-    git,
-    assertWorktreeGitDir,
-    folders,
-    logger: deps.logger,
-  };
-  deps.host.handle(RUNS_IPC.start, (input) => startRun(startDeps, input));
-  deps.host.handle(RUNS_IPC.resume, (runId) => resumeRun(startDeps, runId));
-  // W5a: a session on a ticket. The renderer names a ticket and a verb;
-  // main builds the brief from the ledger and resolves the project's
-  // repository itself (runs/dispatch.ts).
-  deps.host.handle(RUNS_IPC.briefPreview, (input) =>
-    buildBriefPreview(startDeps, input),
-  );
-  deps.host.handle(RUNS_IPC.dispatch, (input) =>
-    dispatchTicketRun(startDeps, input),
-  );
-  // W6: the retry for a branch finalize could not publish. The body is
-  // the run's own comment (its closing message), else its summary.
-  deps.host.handle(RUNS_IPC.openPr, async (runId): Promise<OpenPrResult> => {
+  /**
+   * W6: push the run's branch and open its pull request, as the person.
+   * The body is the run's own comment (its closing message), else its
+   * summary. Idempotent through the publisher (a PR gh says exists is
+   * taken as opened).
+   */
+  const openRunPullRequest = async (runId: unknown): Promise<OpenPrResult> => {
     const run = await loadRun(runId);
     if (!deps.pullRequests) throw new Error('Publishing is not available.');
     if (run.entry !== 'dispatched' || !run.branch) {
@@ -536,7 +520,37 @@ export function registerRunsIpc(deps: RunsIpcDeps): void {
     return outcome.kind === 'opened'
       ? { kind: 'opened', url: outcome.url }
       : outcome;
-  });
+  };
+
+  const folders: FolderDeps = {
+    registry: deps.folderRegistry ?? createFolderRegistry(),
+    recentsFile: deps.recentsFile,
+    listProjects: () => ledger.listProjects(),
+  };
+  const startDeps = {
+    ledger,
+    daemon: () => daemonFor(deps.supervisor),
+    worktreesDir: deps.worktreesDir,
+    notify: deps.notify,
+    git,
+    assertWorktreeGitDir,
+    folders,
+    logger: deps.logger,
+  };
+  deps.host.handle(RUNS_IPC.start, (input) => startRun(startDeps, input));
+  deps.host.handle(RUNS_IPC.resume, (runId) => resumeRun(startDeps, runId));
+  // W5a: a session on a ticket. The renderer names a ticket and a verb;
+  // main builds the brief from the ledger and resolves the project's
+  // repository itself (runs/dispatch.ts).
+  deps.host.handle(RUNS_IPC.briefPreview, (input) =>
+    buildBriefPreview(startDeps, input),
+  );
+  deps.host.handle(RUNS_IPC.dispatch, (input) =>
+    dispatchTicketRun(startDeps, input),
+  );
+  // W6: the retry for a branch finalize could not publish — from the
+  // header (runs:open-pr) or from Copilot's open_pull_request tool.
+  deps.host.handle(RUNS_IPC.openPr, (runId) => openRunPullRequest(runId));
   deps.host.handle(RUNS_IPC.listBranches, (folder) =>
     listRunBranches(startDeps, folder),
   );
@@ -661,4 +675,6 @@ export function registerRunsIpc(deps: RunsIpcDeps): void {
         : await worktreeOf(run),
     );
   });
+
+  return { openRunPullRequest };
 }

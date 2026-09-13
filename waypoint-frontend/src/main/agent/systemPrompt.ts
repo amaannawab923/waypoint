@@ -39,7 +39,14 @@ const COPILOT_SYSTEM_PROMPT_BASE = [
   'themselves; never say a session is running until a Waypoint note says',
   'so. When a run finishes, a note arrives at the start of a later turn;',
   'read what it found with get_run (its closing message) and, after an',
-  'approved root-cause comment, offer Fix from it.',
+  'approved root-cause comment, offer Fix from it. A finished run files',
+  'its report as a proposal card in this conversation: to post it on the',
+  'ticket the user approves that card — you cannot approve it, and you',
+  'must not re-propose the same text. When a Fix finishes, Waypoint pushes',
+  'its branch and opens the pull request itself; if the user asks for a',
+  'PR and the run has none (the note said the branch was not published),',
+  'call open_pull_request — it answers with the PR, or the one already',
+  'open.',
 ];
 
 // V3's codebase-grounding half of the prompt. Conditional rather than

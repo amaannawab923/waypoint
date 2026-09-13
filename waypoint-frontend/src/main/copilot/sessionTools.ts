@@ -32,7 +32,15 @@ export const SESSION_TOOLS_SERVER = 'waypoint_sessions';
 export const SESSION_TOOL_NAMES = [
   `mcp__${SESSION_TOOLS_SERVER}__dispatch_session`,
   `mcp__${SESSION_TOOLS_SERVER}__get_run`,
+  `mcp__${SESSION_TOOLS_SERVER}__open_pull_request`,
 ] as const;
+
+/** What `open_pull_request` gets back from main (engine/runsIpc.ts's verb). */
+export type OpenPullRequestOutcome =
+  | { kind: 'opened'; url: string }
+  | { kind: 'pushed-only'; reason: string }
+  | { kind: 'skipped'; reason: string }
+  | { kind: 'failed'; stage: 'push' | 'pr'; message: string };
 
 /** What the renderer is handed: the ticket, and the verb the model leaned to, if any. */
 export interface SessionOffer {
@@ -57,6 +65,12 @@ export interface SessionToolsDeps {
   >;
   /** Push the offer to the renderer; false when no window is there to take it. */
   offer: (offer: SessionOffer) => boolean;
+  /**
+   * W6: push a run's branch and open its pull request, as the person —
+   * the engine's own verb (runs:open-pr). Absent when the engine is not
+   * registered; the tool then says so.
+   */
+  openPullRequest?: (runId: string) => Promise<OpenPullRequestOutcome>;
 }
 
 const MAX_NOTE_CHARS = 4_000;
@@ -237,6 +251,66 @@ export function buildSessionToolSpecs(
           .join('\n\n---\n\n');
       },
     },
+    {
+      name: 'open_pull_request',
+      description:
+        "Push a finished writing session's branch and open its pull request on GitHub, as the person. Waypoint does this on its own when a Fix finishes; call it when the person asks for a PR and the run has none, or after a failed publish. Pass the run id, or the ticket key to take its latest writing run. Answers with the PR URL — or the one already open.",
+      input: {
+        run_id: z.string().optional().describe('A run id (run-…)'),
+        ticket: z
+          .string()
+          .optional()
+          .describe('A ticket key (ROAD-116): its latest writing run'),
+      },
+      async handler(args) {
+        if (!deps.openPullRequest) {
+          throw new Error('Publishing is not available in this window.');
+        }
+        let run: AgentRun | null = null;
+        if (typeof args.run_id === 'string' && args.run_id.trim()) {
+          const id = args.run_id.trim();
+          assertRunId(id);
+          run = await deps.ledger.getRun(id);
+          if (!run) throw new Error(`No run ${id}.`);
+        } else if (typeof args.ticket === 'string' && args.ticket.trim()) {
+          const ticket = await resolveTicket(deps.ledger, args.ticket);
+          const runs = (await deps.ledger.listAllRuns({ ticketId: ticket.id }))
+            .filter(
+              (r) =>
+                r.entry === 'dispatched' && r.modeId !== 'plan' && r.branch,
+            )
+            .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+          run = runs[0] ?? null;
+          if (!run) {
+            throw new Error(
+              `${ticket.identifier} has no writing session with a branch to publish. Fix it first (dispatch_session with intent fix).`,
+            );
+          }
+        } else {
+          throw new Error('Pass run_id or ticket.');
+        }
+        if (run.prUrl) {
+          return `A pull request is already open for run ${run.id} (${run.title ?? run.branch}): ${run.prUrl}. Nothing to do.`;
+        }
+        if (!['needs-review', 'done', 'finishing'].includes(run.status)) {
+          throw new Error(
+            `Run ${run.id} is ${run.status}; its branch can be published once the session has finished.`,
+          );
+        }
+        const outcome = await deps.openPullRequest(run.id);
+        switch (outcome.kind) {
+          case 'opened':
+            return `Pull request opened for run ${run.id} (${run.title ?? run.branch}): ${outcome.url}. Ready for review. The person can merge it from GitHub.`;
+          case 'pushed-only':
+          case 'skipped':
+            return outcome.reason;
+          case 'failed':
+            throw new Error(
+              `The ${outcome.stage === 'push' ? 'push' : 'pull request'} failed: ${outcome.message}. Tell the person; Open PR in the run's header retries.`,
+            );
+        }
+      },
+    },
   ];
 }
 
@@ -247,7 +321,7 @@ export function sessionToolsServer(
   return {
     name: SESSION_TOOLS_SERVER,
     instructions:
-      'Waypoint coding sessions: offer one on a ticket (dispatch_session — the person starts it), and read what a session did (get_run).',
+      'Waypoint coding sessions: offer one on a ticket (dispatch_session — the person starts it), read what a session did (get_run), and publish a finished writing session (open_pull_request).',
     tools: buildSessionToolSpecs(deps),
   };
 }

@@ -263,6 +263,7 @@ const ALL_MCP_TOOLS = [
   // W5a: the session tools, served in-process from main (sessionTools.ts).
   'mcp__waypoint_sessions__dispatch_session',
   'mcp__waypoint_sessions__get_run',
+  'mcp__waypoint_sessions__open_pull_request',
 ];
 
 describe('registerCopilotIpc', () => {
@@ -1265,7 +1266,7 @@ describe('session tools (W5a)', () => {
     );
     expect(
       withConversation.inProcessServers?.[0].tools.map((t) => t.name),
-    ).toEqual(['dispatch_session', 'get_run']);
+    ).toEqual(['dispatch_session', 'get_run', 'open_pull_request']);
 
     run({ requestId: 'req-2', prompt: 'hi' });
     const without = runCopilotQueryMock.mock.calls[1][0] as {

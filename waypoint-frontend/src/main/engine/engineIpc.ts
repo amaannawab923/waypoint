@@ -31,7 +31,12 @@ import { createRunNotifications } from './notifications';
 import { createTranscriptKeeper } from './runs/transcripts';
 import { createPullRequestPublisher } from './runs/pullRequests';
 import { registerTopicsIpc } from './topicsIpc';
-import { assertWorktreeGitDir, execGit, registerRunsIpc } from './runsIpc';
+import {
+  assertWorktreeGitDir,
+  execGit,
+  registerRunsIpc,
+  type RunsHostApi,
+} from './runsIpc';
 
 // ROAD-48: the IPC surface over the engine supervisor.
 //
@@ -179,7 +184,7 @@ export function registerEngineIpc(
    * handler is invoked.
    */
   worktreesDir: string = defaultWorktreesDir(),
-): void {
+): RunsHostApi {
   const send = (channel: string, payload: unknown) => {
     const win = getWindow();
     if (!win || win.isDestroyed()) return;
@@ -316,7 +321,7 @@ export function registerEngineIpc(
 
   // W3: stop / diff / reveal for a run — the renderer names a run, main
   // does the rest (runsIpc.ts). Real git from PATH and the OS file manager.
-  registerRunsIpc({
+  const runsApi = registerRunsIpc({
     supervisor,
     host: { handle },
     worktreesDir,
@@ -356,4 +361,6 @@ export function registerEngineIpc(
   ipcMain.handle(ENGINE_IPC.health, (): Promise<EngineHealth | null> =>
     supervisor.health(),
   );
+
+  return runsApi;
 }
