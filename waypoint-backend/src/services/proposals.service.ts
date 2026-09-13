@@ -372,12 +372,16 @@ export async function createRunProposal(input: {
       toStateColor: toState.color,
     };
   }
+  // A run dispatched from a Copilot conversation files its proposals
+  // into that conversation too (W5a §1.7): the cards render there, at
+  // the tail (no anchor), beside the note that announced them — so
+  // "post the RCA" is the card's Approve, in the same panel.
   const [row] = await db
     .insert(proposals)
     .values({
       id: newId('prop'),
       origin: 'agent_run',
-      conversationId: null,
+      conversationId: run.copilotConversationId ?? null,
       agentRunId: run.id,
       agentId: run.agentId,
       kind: input.kind,
