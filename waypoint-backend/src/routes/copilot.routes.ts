@@ -1,12 +1,15 @@
 import { Router } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { CURRENT_USER_ID } from '../lib/currentUser.js';
+import { NotFoundError } from '../middleware/errors.js';
 import * as copilotService from '../services/copilot.service.js';
 import {
   postCopilotMessageSchema,
   postCopilotAssistantMessageSchema,
   createCopilotConversationSchema,
   renameCopilotConversationSchema,
+  postCopilotNoteSchema,
+  markCopilotNotesDeliveredSchema,
 } from '../validation/copilot.schema.js';
 
 export const copilotRouter = Router();
@@ -71,5 +74,39 @@ copilotRouter.post(
     const { content, claudeSessionId } = postCopilotAssistantMessageSchema.parse(req.body);
     const message = await copilotService.postAssistantMessage(req.params.id, content, claudeSessionId);
     res.status(201).json(message);
+  }),
+);
+
+// W5a (ROAD-117): system notes. `POST /copilot/notes` is main's — a run
+// finished, its proposals were decided — and picks the conversation the
+// run came from, else the member's latest; no conversation at all is a
+// 204, not an error (the panel badge and Review still carry the news).
+copilotRouter.post(
+  '/copilot/notes',
+  asyncHandler(async (req, res) => {
+    const { runId, conversationId, content } = postCopilotNoteSchema.parse(req.body);
+    const target =
+      conversationId ?? (await copilotService.resolveNoteConversation(CURRENT_USER_ID, runId ?? null));
+    if (!target) {
+      res.status(204).end();
+      return;
+    }
+    try {
+      res.status(201).json(await copilotService.postSystemNote(target, content));
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        res.status(204).end();
+        return;
+      }
+      throw error;
+    }
+  }),
+);
+
+copilotRouter.post(
+  '/copilot/conversations/:id/notes/delivered',
+  asyncHandler(async (req, res) => {
+    const { ids } = markCopilotNotesDeliveredSchema.parse(req.body);
+    res.json(await copilotService.markNotesDelivered(req.params.id, ids));
   }),
 );

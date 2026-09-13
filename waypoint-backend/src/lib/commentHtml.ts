@@ -7,10 +7,23 @@
 // markdown rendering, matching the decision that a Copilot comment is prose,
 // not rich content.
 
+import { renderMarkdownHtml } from './markdownHtml.js';
+
 // Waypoint's existing self-disclosure convention for agent-made changes —
 // same wording the system prompt tells the model Waypoint will add for it.
 export const COPILOT_DISCLOSURE = (displayName: string) =>
   `Hi, this is Copilot — ${displayName}’s agent — commenting on their behalf: `;
+
+// W5a: a comment a coding session filed (origin agent_run) says so — it was
+// written by a session Waypoint ran on the ticket, not by Copilot.
+export const SESSION_DISCLOSURE = (displayName: string) =>
+  `Hi, this is a Waypoint session — ${displayName}’s agent — reporting on their behalf: `;
+
+export type ProposalDisclosureOrigin = 'copilot' | 'agent_run';
+
+export function disclosureFor(origin: ProposalDisclosureOrigin, displayName: string): string {
+  return origin === 'agent_run' ? SESSION_DISCLOSURE(displayName) : COPILOT_DISCLOSURE(displayName);
+}
 
 // Mirrors waypoint-frontend/src/renderer/lib/markdown.ts's escapeHtml (same
 // five characters, same order) — comment bodies render as stored HTML in the
@@ -36,8 +49,18 @@ export function escapeHtml(s: string): string {
 // bodyHtml values): the disclosure runs inline (italic) into the body's
 // first paragraph; each blank-line-separated chunk after that becomes its
 // own <p>.
-export function buildCopilotCommentHtml(displayName: string, body: string): string {
-  const disclosure = escapeHtml(COPILOT_DISCLOSURE(displayName));
+export function buildCopilotCommentHtml(
+  displayName: string,
+  body: string,
+  origin: ProposalDisclosureOrigin = 'copilot',
+): string {
+  const disclosure = escapeHtml(disclosureFor(origin, displayName));
+  // A session's closing message is a report (headings, lists, code): the
+  // disclosure on its own line, then the markdown rendered through the
+  // same escaping rules the renderer previews it with.
+  if (origin === 'agent_run') {
+    return `<p><em>${disclosure}</em></p>${renderMarkdownHtml(body)}`;
+  }
   const paragraphs = body
     .split(/\n\s*\n/)
     .map((p) => p.trim())

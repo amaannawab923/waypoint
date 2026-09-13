@@ -8,7 +8,14 @@ import { SessionList } from './SessionList';
 jest.mock('@/lib/useTicketLabel', () => ({
   useTicketLabel: (ticketId: string | null) =>
     ticketId === 'wi-61' ? 'ROAD-61 · Session list' : null,
-  useTicketSummary: () => null,
+  useTicketSummary: (ticketId: string | null) =>
+    ticketId === 'wi-61'
+      ? {
+          identifier: 'ROAD-61',
+          title: 'Session list',
+          label: 'ROAD-61 · Session list',
+        }
+      : null,
 }));
 
 const run = (
@@ -113,5 +120,39 @@ describe('SessionList', () => {
     expect(plus).not.toHaveAttribute('aria-disabled');
     fireEvent.click(plus);
     expect(onNew).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('group by (W5a)', () => {
+  afterEach(() => localStorage.clear());
+
+  it('switches to ticket groups — most recent ticket first, independent runs last — and remembers it', () => {
+    renderList();
+    fireEvent.click(screen.getByRole('radio', { name: 'Ticket' }));
+    expect(screen.getByRole('radio', { name: 'Ticket' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    const groups = screen.getAllByRole('group');
+    expect(groups.map((g) => g.getAttribute('aria-label'))).toEqual([
+      'wi-61',
+      'Independent',
+    ]);
+    expect(within(groups[0]).getByText('ROAD-61')).toBeInTheDocument();
+    expect(within(groups[0]).getByText('Session list')).toBeInTheDocument();
+    expect(within(groups[1]).getAllByRole('option')).toHaveLength(2);
+    expect(localStorage.getItem('waypoint:sessions:groupBy')).toBe('ticket');
+    expect(
+      screen.queryByRole('group', { name: 'Waiting on you' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('keyboard order follows the ticket groups', () => {
+    localStorage.setItem('waypoint:sessions:groupBy', 'ticket');
+    const onOpen = renderList();
+    const box = screen.getByRole('listbox');
+    fireEvent.keyDown(box, { key: 'ArrowDown' });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(onOpen).toHaveBeenCalledWith('run-blocked');
   });
 });

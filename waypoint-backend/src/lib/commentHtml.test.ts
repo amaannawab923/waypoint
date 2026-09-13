@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildCopilotCommentHtml, COPILOT_DISCLOSURE, escapeHtml } from './commentHtml.js';
+import { buildCopilotCommentHtml, COPILOT_DISCLOSURE, disclosureFor, escapeHtml } from './commentHtml.js';
 
 describe('escapeHtml', () => {
   it('escapes all five characters the frontend renderer escapes, ampersand first', () => {
@@ -62,6 +62,18 @@ describe('COPILOT_DISCLOSURE', () => {
   it("interpolates the display name into Waypoint's standard disclosure line", () => {
     expect(COPILOT_DISCLOSURE('Priya')).toBe(
       'Hi, this is Copilot — Priya’s agent — commenting on their behalf: ',
+    );
+  });
+});
+
+describe('SESSION_DISCLOSURE (W5a)', () => {
+  it('a run-filed comment says a session wrote it, not Copilot', () => {
+    expect(disclosureFor('agent_run', 'Priya')).toBe(
+      'Hi, this is a Waypoint session — Priya’s agent — reporting on their behalf: ',
+    );
+    expect(disclosureFor('copilot', 'Priya')).toBe(COPILOT_DISCLOSURE('Priya'));
+    expect(buildCopilotCommentHtml('Priya', '## Root cause\n\nThe `write` is <unguarded>.', 'agent_run')).toBe(
+      '<p><em>Hi, this is a Waypoint session — Priya’s agent — reporting on their behalf: </em></p><h3>Root cause</h3>\n<p>The <code>write</code> is &lt;unguarded&gt;.</p>',
     );
   });
 });

@@ -538,6 +538,30 @@ export const RUNS_IPC = {
   /** () → string. The home directory, so the panel can show a run's folder as `~/…`. */
   homeDir: 'runs:home-dir',
   /**
+   * (BriefPreviewInput) → BriefPreview. The brief a dispatched session
+   * would be given, built in main from the ledger's view of the ticket,
+   * plus the facts the preview dialog shows (W5a, ROAD-119,
+   * docs/design/w5a-investigate-fix.md §1.3).
+   */
+  briefPreview: 'runs:brief-preview',
+  /**
+   * (DispatchRunInput) → AgentRun, answered once the row is
+   * `provisioning`; a fresh worktree of the ticket's project repository
+   * and the session follow in main, the brief as the first prompt.
+   */
+  dispatch: 'runs:dispatch',
+  /**
+   * Push: RunFocus — the person clicked a notification about a run
+   * (engine/notifications.ts); the renderer opens the sessions panel on it.
+   */
+  focus: 'runs:focus',
+  /**
+   * (runId) → OpenPrResult. W6: push the run's branch and open its pull
+   * request as the person — the retry for a publish that failed at
+   * finalize (engine/runs/pullRequests.ts).
+   */
+  openPr: 'runs:open-pr',
+  /**
    * Push: RunChanged — main wrote a run's ledger row from what the daemon
    * reported (runs/liveLedgerFollower.ts) or from a start/resume it is
    * driving (runs/startRun.ts). The renderer re-reads the ledger; the
@@ -569,6 +593,104 @@ export type RunIsolation = 'worktree' | 'directory';
 
 /** The provider mode an auto-approved session starts in (verified live on the Claude adapter). */
 export const AUTO_APPROVE_MODE_ID = 'bypassPermissions';
+/**
+ * The provider mode a reading session starts in — the Claude adapter's
+ * "planning mode, no actual tool execution": reads, no edits, no
+ * commands. Investigate, and *Something else…* with "may change files"
+ * off (W5a §2.1).
+ */
+export const PLAN_MODE_ID = 'plan';
+
+/**
+ * What a dispatched run was asked to do (W5a): find the root cause and
+ * change nothing; implement the fix; or the person's own instruction.
+ */
+export type RunIntent = 'investigate' | 'fix' | 'custom';
+export const RUN_INTENTS: readonly RunIntent[] = [
+  'investigate',
+  'fix',
+  'custom',
+];
+
+/** The most a brief may be once the person has edited it — the same bound as a first message. */
+export const MAX_BRIEF_CHARS = MAX_FIRST_MESSAGE_CHARS;
+/** The most a *Something else…* instruction may be. */
+export const MAX_INSTRUCTIONS_CHARS = 4_000;
+
+/** What the renderer sends to `runs:brief-preview`: a ticket and a verb. */
+export interface BriefPreviewInput {
+  ticketId: string;
+  intent: RunIntent;
+  /** *Something else…*: the person's instruction. Ignored for the other verbs. */
+  instructions?: string | null;
+  /** *Something else…*: whether the session may edit files (else plan mode). */
+  mayChangeFiles?: boolean;
+  /** The base branch for the worktree; null = the repository's suggested one. */
+  baseRef?: string | null;
+}
+
+/** The brief and the facts the preview dialog shows before Start. */
+export interface BriefPreview {
+  ticketId: string;
+  /** `ROAD-116`. */
+  identifier: string;
+  title: string;
+  intent: RunIntent;
+  /** The text the session will be given as its first prompt; editable in the dialog. */
+  brief: string;
+  /** The project's linked repository, as a folder the person may recognise. */
+  repo: SessionFolder;
+  branches: RunBranches;
+  /** The base branch the brief was built for. */
+  baseRef: string | null;
+  /** The branch the worktree will be on (`agent/ROAD-116`, deduplicated by W2's rule at provisioning). */
+  branchHint: string;
+  /** Plan mode (reads only) or a writing session. */
+  mode: 'plan' | 'write';
+  /** A writing session's default for the auto-approve switch (§2.5). */
+  autoApproveDefault: boolean;
+  /**
+   * Fix only: the approved root-cause comment the brief was seeded from,
+   * when the ticket's latest Investigate produced one (§1.9).
+   */
+  seededFromRunId: string | null;
+  /**
+   * A writing run already live on this ticket (§2.2: one writer per
+   * ticket at a time). The dialog says so and offers to open it; Start
+   * is refused for a writing session while this is set.
+   */
+  liveWriterRunId: string | null;
+}
+
+/** What the renderer sends to `runs:dispatch`: the previewed brief, possibly edited. */
+export interface DispatchRunInput {
+  ticketId: string;
+  intent: RunIntent;
+  /** The brief as the person left it — stored on the run as its first message. */
+  brief: string;
+  /** *Something else…*: whether the session may edit files. Investigate is always plan; Fix always writes. */
+  mayChangeFiles?: boolean;
+  /** Writing sessions only; ignored (false) for plan mode. */
+  autoApprove: boolean;
+  /** A local branch of the repository, from the preview's `branches`. */
+  baseRef: string;
+  ownerMemberId: string;
+  providerId: SupportedProviderId;
+  /** The Copilot conversation the verb was used from, when it was; notes go back there. */
+  copilotConversationId?: string | null;
+}
+
+/** Push payload of `runs:focus`. */
+export interface RunFocus {
+  runId: string;
+}
+
+/** What `runs:open-pr` answers. */
+export type OpenPrResult =
+  | { kind: 'opened'; url: string }
+  | { kind: 'pushed-only'; reason: string }
+  | { kind: 'skipped'; reason: string }
+  | { kind: 'failed'; stage: 'push' | 'pr'; message: string };
 
 /**
  * A folder the person may start a session in, as main describes it. The

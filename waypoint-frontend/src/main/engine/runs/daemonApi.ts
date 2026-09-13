@@ -32,7 +32,17 @@ export { liveTopic } from '../wire/topics';
  *     → {success:false, error:{type:'auth-required'|'spawn-failed'|'new-session-failed'|…}}
  *   acp.sendPrompt                      {conversationId, prompt:{text}, placement?}
  *     → {success:true, data:{queued}}    resolves when the TURN ends, not when it is queued
+ *   acp.getHistory                      {conversationId, limit, before?}
+ *     → {success:true, data:{turns, nextCursor}}   the latest `limit` COMMITTED turns, oldest
+ *                                          first; an item is {kind:'message', role, text} |
+ *                                          thinking | tool…; a turn's `outcome` is
+ *                                          {kind:'done'|'error'|'cancelled'|'interrupted'}
  *   acp.kill                            {conversationId} → {success:true} | {success:false, error}
+ *
+ * `acp.start` also takes `env` (W5a): merged LAST over the daemon's
+ * allowlisted agent env (plugin-host.ts `buildAcpSpawn`), so a key set to
+ * '' here reaches the agent process empty even when the allowlist would
+ * have passed the shell's value through.
  *
  * Nothing in here decides anything: it asks, and hands back what the
  * daemon said, as typed data or a thrown DaemonApiError.
@@ -69,6 +79,36 @@ export interface DaemonSessionSummary {
   isGenerating: boolean;
   pendingPermissionCount: number;
   updatedAt: number;
+  /** Prompts waiting for the current turn to end (W5a: a turn has ended only when this is 0 too). */
+  queuedPromptCount?: number;
+  /** The provider's reason for the last turn's end; `end_turn` is the ordinary one. */
+  lastStopReason?:
+    | 'end_turn'
+    | 'max_tokens'
+    | 'max_turn_requests'
+    | 'refusal'
+    | 'cancelled'
+    | null;
+  /** The last turn settled as an error (prompt failed, process closed…). */
+  lastTurnErrored?: boolean;
+  /** When the agent last produced output; absent before its first. */
+  lastOutputAt?: number;
+  lastInputAt?: number;
+}
+
+/** One committed turn of a session's history, the parts finalize reads. */
+export interface DaemonTranscriptTurn {
+  id: string;
+  seq: number;
+  initiator: unknown;
+  items: Array<
+    | { kind: 'message'; role: 'user' | 'assistant'; text: string }
+    | { kind: string; [key: string]: unknown }
+  >;
+  outcome?: {
+    kind: 'done' | 'cancelled' | 'error' | 'interrupted';
+    reason?: string;
+  };
 }
 
 export interface CreateWorktreeRequest {
@@ -90,6 +130,12 @@ export interface StartSessionRequest {
   modeId?: string | null;
   /** Prompts the daemon delivers once the session is ready — the dialog's first message (W4b). */
   initialQueue?: Array<{ text: string }>;
+  /**
+   * Environment overrides for the agent process, applied over the daemon's
+   * own allowlisted env (W5a §2.5: credentials set to '' for an
+   * auto-approved writing session).
+   */
+  env?: Record<string, string>;
 }
 
 /** `git.repository.model.refs` as this module reads it. */
@@ -138,6 +184,14 @@ export interface DaemonRunsApi {
    * call's own promise is deliberately not awaited past `queued`.
    */
   sendPrompt(conversationId: string, text: string): Promise<void>;
+  /**
+   * The latest `limit` committed turns of a session, oldest first — what
+   * host-side finalize reads the closing message from (W5a §2.4).
+   */
+  getHistory(
+    conversationId: string,
+    limit: number,
+  ): Promise<DaemonTranscriptTurn[]>;
   /** Every worktree record the daemon holds, by id. */
   listWorkspaceRecords(): Promise<Record<string, DaemonWorkspaceRecord>>;
   listSessions(): Promise<Record<string, DaemonSessionSummary>>;
@@ -340,7 +394,7 @@ export function createDaemonRunsApi(client: WireClient): DaemonRunsApi {
     },
     listRefs,
     startSession(request) {
-      const { modeId, initialQueue, ...rest } = request;
+      const { modeId, initialQueue, env, ...rest } = request;
       return fallible<{ sessionId: string }>(
         'acp.start',
         {
@@ -348,9 +402,17 @@ export function createDaemonRunsApi(client: WireClient): DaemonRunsApi {
           model: null,
           modeId: modeId ?? null,
           ...(initialQueue && initialQueue.length ? { initialQueue } : {}),
+          ...(env && Object.keys(env).length ? { env } : {}),
         },
         START_SESSION_TIMEOUT_MS,
       );
+    },
+    async getHistory(conversationId, limit) {
+      const page = await fallible<{ turns: DaemonTranscriptTurn[] }>(
+        'acp.getHistory',
+        { conversationId, limit },
+      );
+      return page.turns ?? [];
     },
     async sendPrompt(conversationId, text) {
       // The daemon answers `acp.sendPrompt` when the turn ends. Waypoint's

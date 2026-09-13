@@ -23,6 +23,7 @@ jest.mock('@/data/engineApi', () => ({
   resumeRun: jest.fn(),
   stopRun: jest.fn(),
   revealRunWorktree: jest.fn(),
+  openRunPullRequest: jest.fn(),
   getHomeDir: jest.fn(async () => '/Users/me'),
 }));
 jest.mock('@/lib/sessionsStore', () => ({
@@ -30,6 +31,7 @@ jest.mock('@/lib/sessionsStore', () => ({
   refreshSessions: jest.fn(async () => {}),
 }));
 jest.mock('@/lib/toast', () => ({ showErrorToast: jest.fn() }));
+jest.mock('@/data/api', () => ({ renameAgentRun: jest.fn() }));
 
 const run = (over: Partial<AgentRun>): AgentRun =>
   ({
@@ -118,10 +120,16 @@ describe('SessionDetail (W4)', () => {
     await waitFor(() =>
       expect(screen.getByText('~/code/compass-web')).toBeInTheDocument(),
     );
-    expect(document.querySelector('[data-auto-mark]')).toHaveTextContent('auto');
+    expect(document.querySelector('[data-auto-mark]')).toHaveTextContent(
+      'auto',
+    );
     expect(screen.getByRole('tab', { name: /Changes/ })).toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: /^Diff/ })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Show in Finder' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('tab', { name: /^Diff/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Show in Finder' }),
+    ).toBeInTheDocument();
   });
 
   it('loaded: patches the run to running and re-reads, no toast', async () => {
@@ -196,5 +204,123 @@ describe('SessionDetail (W4)', () => {
         status: 'cancelled',
       }),
     );
+  });
+});
+
+describe('rename (W5a)', () => {
+  it('renames from the header on Enter, through the ledger, and patches the store; Escape leaves it', async () => {
+    const { renameAgentRun } = jest.requireMock('@/data/api') as {
+      renameAgentRun: jest.Mock;
+    };
+    renameAgentRun.mockResolvedValue({ id: 'run-1', title: 'Guard the write' });
+    renderDetail(run({ id: 'run-1', title: 'ROAD-116 · Fix' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+    const input = screen.getByRole('textbox', { name: 'Run title' });
+    expect(input).toHaveValue('ROAD-116 · Fix');
+    fireEvent.change(input, { target: { value: '  Guard the write  ' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() =>
+      expect(renameAgentRun).toHaveBeenCalledWith('run-1', 'Guard the write'),
+    );
+    await waitFor(() =>
+      expect(patchSessionRun).toHaveBeenCalledWith('run-1', {
+        title: 'Guard the write',
+      }),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+    const again = screen.getByRole('textbox', { name: 'Run title' });
+    fireEvent.change(again, { target: { value: 'nope' } });
+    fireEvent.keyDown(again, { key: 'Escape' });
+    expect(
+      screen.queryByRole('textbox', { name: 'Run title' }),
+    ).not.toBeInTheDocument();
+    expect(renameAgentRun).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Open PR (W6)', () => {
+  it('offers Open PR on a finished writing run without a PR; opening patches the link in; a failure is a toast', async () => {
+    const { openRunPullRequest } = jest.requireMock('@/data/engineApi') as {
+      openRunPullRequest: jest.Mock;
+    };
+    openRunPullRequest.mockResolvedValueOnce({
+      kind: 'opened',
+      url: 'https://github.com/o/r/pull/61',
+    });
+    renderDetail(
+      run({
+        id: 'run-1',
+        entry: 'dispatched',
+        intent: 'fix',
+        modeId: 'bypassPermissions',
+        branch: 'agent/ROAD-1',
+        status: 'needs-review',
+        prUrl: null,
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Open PR' }));
+    await waitFor(() =>
+      expect(openRunPullRequest).toHaveBeenCalledWith('run-1'),
+    );
+    await waitFor(() =>
+      expect(patchSessionRun).toHaveBeenCalledWith('run-1', {
+        prUrl: 'https://github.com/o/r/pull/61',
+      }),
+    );
+
+    openRunPullRequest.mockResolvedValueOnce({
+      kind: 'failed',
+      stage: 'push',
+      message: 'denied',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Open PR' }));
+    await waitFor(() =>
+      expect(showErrorToast).toHaveBeenCalledWith('Push failed: denied'),
+    );
+  });
+
+  it('no Open PR for a plan-mode run, a run with a PR, or a run still running', () => {
+    renderDetail(
+      run({
+        entry: 'dispatched',
+        intent: 'investigate',
+        modeId: 'plan',
+        branch: 'agent/x',
+        status: 'needs-review',
+      }),
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Open PR' }),
+    ).not.toBeInTheDocument();
+    renderDetail(
+      run({
+        entry: 'dispatched',
+        intent: 'fix',
+        modeId: null,
+        branch: 'agent/y',
+        status: 'done',
+        prUrl: 'https://github.com/o/r/pull/1',
+      }),
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Open PR' }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText('Pull request ↗')).toHaveAttribute(
+      'href',
+      'https://github.com/o/r/pull/1',
+    );
+    renderDetail(
+      run({
+        entry: 'dispatched',
+        intent: 'fix',
+        modeId: null,
+        branch: 'agent/z',
+        status: 'running',
+      }),
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Open PR' }),
+    ).not.toBeInTheDocument();
   });
 });

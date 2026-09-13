@@ -443,3 +443,161 @@ describe('registerLiveLedgerFollower', () => {
     }
   });
 });
+
+describe('W5a hooks', () => {
+  it('reports the idle fact on its rising edge and on first sight, never while generating or with something queued', async () => {
+    const daemon = fakeDaemon();
+    const supervisor = fakeSupervisor(running(1), daemon.client);
+    const { ledger } = fakeLedger({ 'run-a': { status: 'running' } });
+    const onSessionIdle = jest.fn();
+    // First sight: a session whose turn already ended.
+    daemon.set(SESSIONS, {
+      'run-a': session('run-a', {
+        lastStopReason: 'end_turn',
+        queuedPromptCount: 0,
+      }),
+    });
+    registerLiveLedgerFollower({
+      supervisor,
+      ledger,
+      notify: jest.fn(),
+      onSessionIdle,
+      logger,
+      debounceMs: 0,
+    });
+    await flush();
+    await flush();
+    expect(onSessionIdle).toHaveBeenCalledTimes(1);
+    expect(onSessionIdle).toHaveBeenCalledWith('run-a');
+
+    // Still idle on the next update: not reported again.
+    daemon.sessions({
+      'run-a': session('run-a', {
+        lastStopReason: 'end_turn',
+        queuedPromptCount: 0,
+        updatedAt: 2,
+      }),
+    });
+    await flush();
+    await flush();
+    expect(onSessionIdle).toHaveBeenCalledTimes(1);
+
+    // A new turn: generating, then a prompt queued — neither is idle.
+    daemon.sessions({
+      'run-a': session('run-a', {
+        isGenerating: true,
+        lastStopReason: 'end_turn',
+      }),
+    });
+    await flush();
+    await flush();
+    daemon.sessions({
+      'run-a': session('run-a', {
+        lastStopReason: 'end_turn',
+        queuedPromptCount: 1,
+      }),
+    });
+    await flush();
+    await flush();
+    expect(onSessionIdle).toHaveBeenCalledTimes(1);
+
+    // The turn ends with nothing queued: the rising edge.
+    daemon.sessions({
+      'run-a': session('run-a', {
+        lastStopReason: 'end_turn',
+        queuedPromptCount: 0,
+      }),
+    });
+    await flush();
+    await flush();
+    expect(onSessionIdle).toHaveBeenCalledTimes(2);
+
+    // A cancelled turn is not a finished one.
+    daemon.sessions({ 'run-a': session('run-a', { isGenerating: true }) });
+    await flush();
+    await flush();
+    daemon.sessions({
+      'run-a': session('run-a', { lastStopReason: 'cancelled' }),
+    });
+    await flush();
+    await flush();
+    expect(onSessionIdle).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports every status it writes through onRunStatus, with the status it left', async () => {
+    const daemon = fakeDaemon();
+    const supervisor = fakeSupervisor(running(1), daemon.client);
+    const { ledger } = fakeLedger({ 'run-a': { status: 'running' } });
+    const onRunStatus = jest.fn();
+    registerLiveLedgerFollower({
+      supervisor,
+      ledger,
+      notify: jest.fn(),
+      onRunStatus,
+      logger,
+      debounceMs: 0,
+    });
+    await flush();
+    await flush();
+    daemon.set(stateTopic('run-a'), {
+      pendingPermissions: [
+        { requestId: 'p1', toolCall: { title: 'Edit a.ts' } },
+      ],
+    });
+    daemon.sessions({
+      'run-a': session('run-a', { pendingPermissionCount: 1 }),
+    });
+    await flush();
+    await flush();
+    expect(onRunStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'run-a',
+        status: 'blocked',
+        blockedReason: 'Wants to edit a.ts',
+      }),
+      'running',
+    );
+    daemon.sessions({
+      'run-a': session('run-a', { pendingPermissionCount: 0 }),
+    });
+    await flush();
+    await flush();
+    expect(onRunStatus).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: 'running' }),
+      'blocked',
+    );
+  });
+});
+
+describe('beforeInterrupted (ROAD-124)', () => {
+  it('is awaited before a vanished session marks its run interrupted', async () => {
+    const daemon = fakeDaemon();
+    const supervisor = fakeSupervisor(running(1), daemon.client);
+    const { ledger } = fakeLedger({ 'run-a': { status: 'running' } });
+    const order: string[] = [];
+    const beforeInterrupted = jest.fn(async () => {
+      order.push('capture');
+    });
+    ledger.updateRun.mockImplementation(async (id, patch) => {
+      order.push(`write:${patch.status}`);
+      return { id, ...patch } as never;
+    });
+    daemon.set(SESSIONS, { 'run-a': session('run-a') });
+    registerLiveLedgerFollower({
+      supervisor,
+      ledger,
+      notify: jest.fn(),
+      beforeInterrupted,
+      logger,
+      debounceMs: 0,
+      graceMs: 0,
+    });
+    await flush();
+    await flush();
+    daemon.sessions({});
+    await flush();
+    await flush();
+    await flush();
+    expect(order).toEqual(['capture', 'write:interrupted']);
+  });
+});

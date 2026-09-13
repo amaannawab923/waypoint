@@ -7,6 +7,7 @@ import {
   MAX_DIFF_PATCH_CHARS,
   RUNS_IPC,
   type FolderChoice,
+  type OpenPrResult,
   type RunChanged,
   type RunDiff,
   type RunDiffFile,
@@ -23,6 +24,9 @@ import {
 } from './runs/ledgerClient';
 import { assertUnder } from './runs/worktrees';
 import { listRunBranches, resumeRun, startRun } from './runs/startRun';
+import { buildBriefPreview, dispatchTicketRun } from './runs/dispatch';
+import type { TranscriptKeeper } from './runs/transcripts';
+import type { PullRequestPublisher } from './runs/pullRequests';
 import {
   createFolderRegistry,
   describeFolder,
@@ -89,6 +93,10 @@ export interface RunsIpcDeps {
   folderRegistry?: FolderRegistry;
   /** Test seam: the daemon facade, defaulting to the real one over the live client. */
   daemon?: (supervisor: EngineSupervisor) => DaemonRunsApi | null;
+  /** The transcript snapshot Stop takes before the kill (ROAD-124). */
+  transcripts?: TranscriptKeeper;
+  /** W6: the publisher `runs:open-pr` retries with. */
+  pullRequests?: PullRequestPublisher;
   logger: {
     info: (m: string, meta?: Record<string, unknown>) => void;
     warn: (m: string, meta?: Record<string, unknown>) => void;
@@ -440,7 +448,13 @@ export async function assertWorktreeGitDir(
   }
 }
 
-export function registerRunsIpc(deps: RunsIpcDeps): void {
+/** What registration hands back to main: the verbs other modules (Copilot's tools) may call. */
+export interface RunsHostApi {
+  /** W6: push a run's branch and open its pull request, as the person. */
+  openRunPullRequest(runId: string): Promise<OpenPrResult>;
+}
+
+export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
   const ledger = deps.ledger ?? createLedgerClient();
   const git = deps.git ?? execGit;
   const daemonFor = deps.daemon ?? defaultDaemon;
@@ -462,6 +476,52 @@ export function registerRunsIpc(deps: RunsIpcDeps): void {
     return run.worktreePath;
   };
 
+  /**
+   * W6: push the run's branch and open its pull request, as the person.
+   * The body is the run's own comment (its closing message), else its
+   * summary. Idempotent through the publisher (a PR gh says exists is
+   * taken as opened).
+   */
+  const openRunPullRequest = async (runId: unknown): Promise<OpenPrResult> => {
+    const run = await loadRun(runId);
+    if (!deps.pullRequests) throw new Error('Publishing is not available.');
+    if (run.entry !== 'dispatched' || !run.branch) {
+      return { kind: 'skipped', reason: 'This run has no branch to publish.' };
+    }
+    let closing = run.summary ?? '';
+    let title = run.title ?? run.branch;
+    if (run.ticketId) {
+      const [proposals, ticket] = await Promise.all([
+        ledger.listTicketProposals(run.ticketId).catch(() => []),
+        ledger.getTicket(run.ticketId).catch(() => null),
+      ]);
+      const comment = proposals.find(
+        (p) => p.agentRunId === run.id && p.kind === 'comment',
+      );
+      if (comment && typeof comment.payload.body === 'string') {
+        closing = comment.payload.body;
+      }
+      if (ticket) title = `${ticket.identifier}: ${ticket.title}`;
+    }
+    const outcome = await deps.pullRequests.publish({
+      run,
+      closingMessage: closing,
+      title,
+    });
+    if (outcome.kind === 'opened') {
+      deps.notify({ runId: run.id, status: run.status });
+      await ledger
+        .postCopilotNote(
+          run.id,
+          `Run ${run.title ?? run.id}: pull request opened · ${outcome.url}`,
+        )
+        .catch(() => {});
+    }
+    return outcome.kind === 'opened'
+      ? { kind: 'opened', url: outcome.url }
+      : outcome;
+  };
+
   const folders: FolderDeps = {
     registry: deps.folderRegistry ?? createFolderRegistry(),
     recentsFile: deps.recentsFile,
@@ -479,6 +539,18 @@ export function registerRunsIpc(deps: RunsIpcDeps): void {
   };
   deps.host.handle(RUNS_IPC.start, (input) => startRun(startDeps, input));
   deps.host.handle(RUNS_IPC.resume, (runId) => resumeRun(startDeps, runId));
+  // W5a: a session on a ticket. The renderer names a ticket and a verb;
+  // main builds the brief from the ledger and resolves the project's
+  // repository itself (runs/dispatch.ts).
+  deps.host.handle(RUNS_IPC.briefPreview, (input) =>
+    buildBriefPreview(startDeps, input),
+  );
+  deps.host.handle(RUNS_IPC.dispatch, (input) =>
+    dispatchTicketRun(startDeps, input),
+  );
+  // W6: the retry for a branch finalize could not publish — from the
+  // header (runs:open-pr) or from Copilot's open_pull_request tool.
+  deps.host.handle(RUNS_IPC.openPr, (runId) => openRunPullRequest(runId));
   deps.host.handle(RUNS_IPC.listBranches, (folder) =>
     listRunBranches(startDeps, folder),
   );
@@ -520,6 +592,9 @@ export function registerRunsIpc(deps: RunsIpcDeps): void {
     const daemon = daemonFor(deps.supervisor);
     let daemonConfirmed = false;
     if (daemon) {
+      // The transcript before the kill (ROAD-124): what the agent did up
+      // to the stop stays readable.
+      await deps.transcripts?.capture(run.id);
       await daemon.cancelTurn(run.id).catch((error: unknown) =>
         deps.logger.warn('engine: cancelTurn before stop did not apply', {
           runId: run.id,
@@ -600,4 +675,6 @@ export function registerRunsIpc(deps: RunsIpcDeps): void {
         : await worktreeOf(run),
     );
   });
+
+  return { openRunPullRequest };
 }

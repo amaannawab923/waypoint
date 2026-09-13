@@ -1292,17 +1292,21 @@ export function TicketDetailContent({
                         {formatRelativeTime(c.createdAt)}
                       </span>
                     </div>
-                    {author.model ? (
+                    {author.model || isDisclosedAgentHtml(c.bodyHtml) ? (
                       // Agent-authored comments are the one case where bodyHtml
                       // genuinely is HTML: proposals.service.ts builds it with
                       // buildCopilotCommentHtml, which escapes the display name
                       // and the model's body first and only ever wraps them in a
                       // fixed <p>/<em> template (waypoint-backend/src/lib/commentHtml.ts)
-                      // — no path from model output to an unescaped tag. Human
+                      // — no path from model output to an unescaped tag. Those
+                      // comments are posted as the person who approved them
+                      // (a member, not an agent — "Posted as you"), so the
+                      // author alone does not say so: the builder's own
+                      // disclosure opening does (isDisclosedAgentHtml). Human
                       // comments below never go through that builder, which is
                       // why they render as plain text instead of trusting this.
                       <div
-                        className="prose-comment text-sm text-text-secondary [&_p]:m-0"
+                        className="copilot-md text-sm text-text-secondary"
                         dangerouslySetInnerHTML={{ __html: c.bodyHtml }}
                       />
                     ) : (
@@ -1925,6 +1929,18 @@ export function TicketDetailContent({
 }
 
 /** Route entry: resolves `:projectId`/`:identifier` from the URL and renders the full page. */
+/**
+ * A comment the backend built for an approved Copilot or session
+ * proposal (waypoint-backend/src/lib/commentHtml.ts): posted as the
+ * person, so its author is a member, but its body is the builder's
+ * escaped HTML behind a fixed disclosure opening. A typed comment cannot
+ * match — the REST path entity-escapes what a person types, so a literal
+ * `<p>` arrives as `&lt;p&gt;`.
+ */
+export function isDisclosedAgentHtml(bodyHtml: string): boolean {
+  return /^<p><em>Hi, this is (Copilot|a Waypoint session) — /.test(bodyHtml);
+}
+
 export default function TicketDetailPage() {
   const { projectId = '', identifier = '' } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();

@@ -1,13 +1,27 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
 import { clsx } from 'clsx';
 import { ArrowLeft, FolderGit2, Send } from 'lucide-react';
 import { IconPlus, IconSparkles, IconX } from '@/components/icons';
 import {
+  getTicketByIdentifier,
+  listTickets,
+  markCopilotNotesDelivered,
   postCopilotUserMessage,
   postCopilotAssistantMessage,
   updateProject,
 } from '@/data/api';
+import {
+  matchingCommands,
+  matchingKeys,
+  parseSlash,
+  slashCompletionStage,
+  type ParsedSlash,
+} from '@/lib/copilotSlash';
+import { BriefPreviewDialog } from '@/components/sessions/BriefPreviewDialog';
+import { SESSIONS_ENABLED } from '@/lib/featureFlags';
+import type { BriefPreviewInput, RunIntent } from '@/types/agentRuns';
 import { useCopilotConversations } from '@/lib/useCopilotConversations';
 import { useCopilotProposals } from '@/lib/useCopilotProposals';
 import { useCurrentRouteProject } from '@/lib/useCurrentRouteProject';
@@ -48,11 +62,101 @@ function generateLocalId(prefix: string): string {
 // and `- ` markers, no distinction between prose and code). inline() there
 // escapes HTML before adding any tags, so this is safe against a reply (or
 // a pasted user message) containing raw HTML/script content.
+/**
+ * A note Waypoint wrote into the conversation (W5a §2.8): a run finished,
+ * its proposals were decided. Not a bubble — a centred line the model
+ * hears at the start of the next turn (handleSend's notes preamble).
+ */
+function NoteLine({
+  message,
+}: {
+  message: { content: string; deliveredAt?: string | null };
+}) {
+  return (
+    <div
+      className="flex justify-center px-6 text-center text-[11px] leading-relaxed text-text-muted"
+      data-copilot-note
+      data-delivered={message.deliveredAt ? 'true' : 'false'}
+    >
+      <span>
+        <span className="font-medium text-text-secondary">Waypoint</span> ·{' '}
+        {message.content}
+      </span>
+    </div>
+  );
+}
+
+// W5a: what dispatch_session hands the renderer (main/copilot/sessionTools.ts).
+interface CopilotSessionOffer {
+  conversationId: string;
+  ticketId: string;
+  identifier: string;
+  title: string;
+  intent: RunIntent | null;
+  note: string | null;
+}
+
+/**
+ * The three verbs as buttons in the conversation (W5a §1.2, §5): what
+ * Copilot's dispatch_session tool renders. Each opens the brief preview;
+ * nothing starts until the person presses Start there.
+ */
+function SessionOfferCard({
+  offer,
+  onPick,
+  onDismiss,
+}: {
+  offer: CopilotSessionOffer;
+  onPick: (intent: RunIntent) => void;
+  onDismiss: () => void;
+}) {
+  const verb = (intent: RunIntent, label: string) => (
+    <Button
+      size="sm"
+      variant={offer.intent === intent ? 'primary' : 'secondary'}
+      onClick={() => onPick(intent)}
+    >
+      {label}
+    </Button>
+  );
+  return (
+    <div
+      className="flex flex-col gap-2 rounded-[var(--radius)] border border-border bg-surface-2 px-3.5 py-3 text-sm"
+      data-session-offer
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-xs font-medium text-text-muted">
+            Session on {offer.identifier}
+          </div>
+          <div className="truncate text-text">{offer.title}</div>
+          {offer.note && (
+            <div className="mt-1 text-xs text-text-secondary">{offer.note}</div>
+          )}
+        </div>
+        <IconButton label="Dismiss" onClick={onDismiss} className="-mr-1">
+          <IconX size={13} />
+        </IconButton>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {verb('investigate', 'Investigate')}
+        {verb('fix', 'Fix')}
+        {verb('custom', 'Something else…')}
+      </div>
+    </div>
+  );
+}
+
 function MessageBubble({
   message,
 }: {
-  message: { role: CopilotSessionMessageRole; content: string };
+  message: {
+    role: CopilotSessionMessageRole;
+    content: string;
+    deliveredAt?: string | null;
+  };
 }) {
+  if (message.role === 'system') return <NoteLine message={message} />;
   return (
     <div
       className={clsx(
@@ -183,16 +287,71 @@ function CopilotRepoLinkCard({
 function Composer({
   disabled,
   onSend,
+  onSlash,
+  tickets,
 }: {
   disabled: boolean;
   onSend: (content: string) => Promise<void>;
+  /** W5a: a complete slash command — opens the brief preview, sends nothing. */
+  onSlash?: (parsed: ParsedSlash) => Promise<void>;
+  /** The open project's tickets, for `/fix RO…` key completion. */
+  tickets?: ReadonlyArray<{ identifier: string; title: string }>;
 }) {
   const [value, setValue] = useState('');
   const [sending, setSending] = useState(false);
+  const [slashError, setSlashError] = useState<string | null>(null);
+  const [highlight, setHighlight] = useState(0);
+
+  // W5a: the `/` menu. Shown while the caret is on the command word or
+  // the key; a complete command is submitted on Enter, an incomplete one
+  // says what is missing rather than being sent to the model.
+  const stage = onSlash ? slashCompletionStage(value) : null;
+  const suggestions: Array<{ insert: string; label: string; hint: string }> =
+    stage?.stage === 'command'
+      ? matchingCommands(stage.typed).map((c) => ({
+          insert: `/${c.name} `,
+          label: c.usage,
+          hint: c.hint,
+        }))
+      : stage?.stage === 'key'
+        ? matchingKeys(stage.typed, tickets ?? []).map((t) => ({
+            insert: `${value.replace(/\S*$/, '')}${t.identifier} `,
+            label: t.identifier,
+            hint: t.title,
+          }))
+        : [];
+  const menuOpen = suggestions.length > 0;
+
+  function accept(index: number) {
+    const pick = suggestions[index];
+    if (!pick) return;
+    setValue(pick.insert);
+    setHighlight(0);
+  }
 
   async function submit() {
     const content = value.trim();
     if (!content || disabled || sending) return;
+    if (onSlash) {
+      const slash = parseSlash(content);
+      if (slash.kind === 'incomplete') {
+        setSlashError(slash.reason);
+        return;
+      }
+      if (slash.kind === 'command') {
+        setSending(true);
+        try {
+          await onSlash(slash.parsed);
+          setValue('');
+          setSlashError(null);
+        } catch (err) {
+          setSlashError(err instanceof Error ? err.message : String(err));
+        } finally {
+          setSending(false);
+        }
+        return;
+      }
+    }
     setSending(true);
     try {
       await onSend(content);
@@ -211,7 +370,45 @@ function Composer({
   const composerDisabled = disabled || sending;
 
   return (
-    <div className="flex items-end gap-2 border-t border-border px-4 py-3">
+    <div className="relative flex items-end gap-2 border-t border-border px-4 py-3">
+      {menuOpen && (
+        <div
+          role="listbox"
+          aria-label="Slash commands"
+          className="absolute bottom-full left-4 right-4 mb-1 flex flex-col overflow-hidden rounded-[var(--radius-sm)] border border-border bg-surface shadow-lg"
+          data-slash-menu
+        >
+          {suggestions.map((sug, i) => (
+            <button
+              key={sug.insert}
+              type="button"
+              role="option"
+              aria-selected={i === highlight}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                accept(i);
+              }}
+              className={clsx(
+                'flex items-baseline gap-2 px-3 py-1.5 text-left text-xs',
+                i === highlight
+                  ? 'bg-surface-2 text-text'
+                  : 'text-text-secondary',
+              )}
+            >
+              <span className="shrink-0 font-mono text-text">{sug.label}</span>
+              <span className="truncate text-text-muted">{sug.hint}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {slashError && !menuOpen && (
+        <div
+          className="absolute bottom-full left-4 right-4 mb-1 rounded-[var(--radius-sm)] border border-border bg-surface px-3 py-1.5 text-xs text-warning shadow"
+          role="status"
+        >
+          {slashError}
+        </div>
+      )}
       <textarea
         value={value}
         // readOnly, NOT disabled: a *disabled* form control is forced out of
@@ -230,10 +427,37 @@ function Composer({
         // no onChange fires) without ever moving focus, so the field stays
         // a real typing target for as long as it visually looks "disabled".
         readOnly={composerDisabled}
-        onChange={(e) => setValue(e.target.value)}
+        onChange={(e) => {
+          setValue(e.target.value);
+          setSlashError(null);
+          setHighlight(0);
+        }}
         onKeyDown={(e) => {
+          if (menuOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+            e.preventDefault();
+            setHighlight((h) =>
+              e.key === 'ArrowDown'
+                ? (h + 1) % suggestions.length
+                : (h - 1 + suggestions.length) % suggestions.length,
+            );
+            return;
+          }
+          if (menuOpen && e.key === 'Tab') {
+            e.preventDefault();
+            accept(highlight);
+            return;
+          }
+          if (menuOpen && e.key === 'Escape') {
+            e.preventDefault();
+            setValue(value.replace(/\S*$/, ''));
+            return;
+          }
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
+            if (menuOpen && stage?.stage === 'command') {
+              accept(highlight);
+              return;
+            }
             submit();
           }
         }}
@@ -289,6 +513,7 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
   // open route, not from the conversation, which has no project at all. See
   // useCurrentRouteProject.ts for why.
   const routeProject = useCurrentRouteProject();
+  const navigate = useNavigate();
 
   // null = session-list view. Always starts on the list on open — this
   // panel is conditionally (un)mounted by AppShell, so "closing and
@@ -364,6 +589,166 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
   } | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
   const unsubscribeStreamRef = useRef<(() => void) | null>(null);
+
+  // W5a: session offers the model made (dispatch_session), per
+  // conversation; the brief preview a verb or a slash command opened; the
+  // open project's tickets for `/fix RO…` completion.
+  const [offers, setOffers] = useState<CopilotSessionOffer[]>([]);
+  const [briefRequest, setBriefRequest] = useState<{
+    conversationId: string;
+    input: BriefPreviewInput;
+  } | null>(null);
+  const [keyTickets, setKeyTickets] = useState<
+    Array<{ identifier: string; title: string }>
+  >([]);
+
+  useEffect(() => {
+    if (!SESSIONS_ENABLED) return undefined;
+    const bridge = window.electron?.copilot;
+    if (!bridge || typeof bridge.onSessionOffer !== 'function')
+      return undefined;
+    return bridge.onSessionOffer((offer) => {
+      setOffers((prev) => [
+        ...prev.filter(
+          (o) =>
+            !(
+              o.conversationId === offer.conversationId &&
+              o.ticketId === offer.ticketId
+            ),
+        ),
+        offer,
+      ]);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!SESSIONS_ENABLED) return undefined;
+    const projectId = routeProject.project?.projectId;
+    if (!projectId) {
+      setKeyTickets([]);
+      return undefined;
+    }
+    let cancelled = false;
+    listTickets(projectId)
+      .then((rows) => {
+        if (!cancelled)
+          setKeyTickets(
+            rows.map((t) => ({ identifier: t.identifier, title: t.title })),
+          );
+        return undefined;
+      })
+      .catch(() => {
+        // Completion is a convenience; the key can still be typed.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [routeProject.project?.projectId]);
+
+  // W5a: a run's note lands in the conversation while it is open — main
+  // tells the renderer through runs:changed for the run itself; the note
+  // is re-read with the conversation on the next status push.
+  useEffect(() => {
+    if (!SESSIONS_ENABLED || !activeSessionId) return undefined;
+    const engine = window.electron?.engine;
+    if (!engine || typeof engine.onRunChanged !== 'function') return undefined;
+    const id = activeSessionId;
+    // The note lands a moment after the status push (finalize writes the
+    // status, kills the session, then posts the note), so the re-read
+    // waits for it; a conversation reopened while cached is re-read too,
+    // since a note may have arrived while it was closed.
+    sessionStore.refreshMessages(id).catch(() => {});
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const off = engine.onRunChanged((change) => {
+      if (
+        change.status === 'needs-review' ||
+        change.status === 'failed' ||
+        change.status === 'done'
+      ) {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          timer = null;
+          sessionStore.refreshMessages(id).catch(() => {});
+          proposalStore.reload().catch(() => {});
+        }, 2_000);
+      }
+    });
+    return () => {
+      if (timer) clearTimeout(timer);
+      off();
+    };
+    // proposalStore's identity changes with its state; the conversation is the unit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessionId, sessionStore.refreshMessages]);
+
+  const offersHere = activeSessionId
+    ? offers.filter((o) => o.conversationId === activeSessionId)
+    : [];
+
+  // Keep the newest content in view: a reply streaming in, a note, an
+  // offer card. Only when the reader was already at (or near) the bottom
+  // — scrolled up to re-read, they stay where they are.
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  const scrolledSessionRef = useRef<string | null>(null);
+  const transcriptLength = activeSession?.messages.length ?? 0;
+  const streamingLength = streaming?.text.length ?? 0;
+  useEffect(() => {
+    const el = transcriptRef.current;
+    if (!el) return;
+    const opened = scrolledSessionRef.current !== activeSessionId;
+    scrolledSessionRef.current = activeSessionId;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (opened || nearBottom) el.scrollTop = el.scrollHeight;
+  }, [activeSessionId, transcriptLength, streamingLength, offersHere.length]);
+
+  function openBrief(conversationId: string, input: BriefPreviewInput) {
+    setBriefRequest({ conversationId, input });
+  }
+
+  async function handleSlash(parsed: ParsedSlash) {
+    if (!activeSessionId) return;
+    const ticket = await getTicketByIdentifier(parsed.key);
+    if (!ticket) throw new Error(`No ticket ${parsed.key}.`);
+    const { intent } = parsed.command;
+    openBrief(activeSessionId, {
+      ticketId: ticket.id,
+      intent,
+      ...(parsed.text ? { instructions: parsed.text } : {}),
+      mayChangeFiles: intent === 'fix',
+    });
+  }
+
+  /**
+   * W5a §2.8: the system notes the model has not heard yet, as bracketed
+   * lines ahead of the prompt — the same rail the proposal outcomes ride.
+   */
+  function buildNotesPreamble(): { text: string; noteIds: string[] } | null {
+    const notes = (activeSession?.messages ?? []).filter(
+      (m) => m.role === 'system' && !m.deliveredAt,
+    );
+    if (notes.length === 0) return null;
+    const MAX_NOTES_PER_TURN = 10;
+    const batch = notes.slice(0, MAX_NOTES_PER_TURN);
+    return {
+      text: batch.map((n) => `[Waypoint note: ${n.content}]`).join('\n'),
+      noteIds: batch.map((n) => n.id),
+    };
+  }
+
+  function buildPreamble(): {
+    text: string;
+    ids: string[];
+    noteIds: string[];
+  } | null {
+    const outcome = proposalStore.buildOutcomePreamble();
+    const notes = buildNotesPreamble();
+    if (!outcome && !notes) return null;
+    return {
+      text: [notes?.text, outcome?.text].filter(Boolean).join('\n\n'),
+      ids: outcome?.ids ?? [],
+      noteIds: notes?.noteIds ?? [],
+    };
+  }
   // Bumped, per session, at the start of every runAndPersist call for that
   // session; each call's onChunk/onDone/onError closures capture the value
   // current at their own start and compare against the ref before touching
@@ -464,7 +849,7 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     // ids are marked notified ONLY once the run's reply persists, so a
     // failed run re-delivers the same outcomes next turn (harmless
     // duplication beats a lost outcome).
-    outcome: { text: string; ids: string[] } | null = null,
+    outcome: { text: string; ids: string[]; noteIds?: string[] } | null = null,
   ) {
     const generation = (runGenerationRef.current.get(sessionId) ?? 0) + 1;
     runGenerationRef.current.set(sessionId, generation);
@@ -597,6 +982,22 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
                     // Failing to mark is safe: worst case the model hears
                     // the same outcome twice next turn.
                   });
+                  // W5a: the notes the same way — delivered only once the
+                  // reply that heard them persisted.
+                  const noteIds = outcome.noteIds ?? [];
+                  if (noteIds.length) {
+                    await markCopilotNotesDelivered(sessionId, noteIds)
+                      .then(() => {
+                        const at = new Date().toISOString();
+                        noteIds.forEach((id) =>
+                          sessionStore.patchMessageLocal(sessionId, id, {
+                            deliveredAt: at,
+                          }),
+                        );
+                        return undefined;
+                      })
+                      .catch(() => {});
+                  }
                 }
               } catch (err) {
                 if (isStale()) {
@@ -664,11 +1065,11 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     // the title alone server-side too.
     const isFirstMessage = (activeSession?.messages.length ?? 0) === 0;
 
-    // Built BEFORE the user message posts, from the current proposal list:
-    // the outcome note goes to the model on stdin only, while the POST
-    // below persists nothing but the user's own words — the
-    // transcript-pollution split this whole flow exists to preserve.
-    const outcome = proposalStore.buildOutcomePreamble();
+    // Built BEFORE the user message posts, from the current proposal list
+    // and the undelivered notes: the preamble goes to the model on stdin
+    // only, while the POST below persists nothing but the user's own words
+    // — the transcript-pollution split this whole flow exists to preserve.
+    const outcome = buildPreamble();
 
     // Optimistic — instant, same feel as the old local-only version — but
     // now backed by a real POST, so a failure needs a real rollback: unlike
@@ -811,7 +1212,7 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
         sessionId,
         lastFailedPrompt,
         resumeSessionId,
-        proposalStore.buildOutcomePreamble(),
+        buildPreamble(),
       );
       return;
     }
@@ -829,7 +1230,7 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
           sessionId,
           lastFailedPrompt,
           resumeSessionId,
-          proposalStore.buildOutcomePreamble(),
+          buildPreamble(),
         ),
       );
   }
@@ -981,7 +1382,10 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
 
       {activeSession && (
         <>
-          <div className="thin-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4">
+          <div
+            ref={transcriptRef}
+            className="thin-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4"
+          >
             {loadingMessages && (
               <p className="mt-6 text-center text-sm text-text-muted">
                 Loading messages…
@@ -1029,6 +1433,23 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
                   />
                 ),
               )}
+              {offersHere.map((offer) => (
+                <SessionOfferCard
+                  key={`${offer.conversationId}:${offer.ticketId}`}
+                  offer={offer}
+                  onPick={(intent) =>
+                    openBrief(offer.conversationId, {
+                      ticketId: offer.ticketId,
+                      intent,
+                      ...(offer.note ? { instructions: offer.note } : {}),
+                      mayChangeFiles: intent === 'fix',
+                    })
+                  }
+                  onDismiss={() =>
+                    setOffers((prev) => prev.filter((o) => o !== offer))
+                  }
+                />
+              ))}
               {isStreamingHere &&
                 (streaming?.text ? (
                   <MessageBubble
@@ -1076,8 +1497,30 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
             )}
           </div>
 
-          <Composer disabled={isStreamingHere} onSend={handleSend} />
+          <Composer
+            disabled={isStreamingHere}
+            onSend={handleSend}
+            {...(SESSIONS_ENABLED
+              ? { onSlash: handleSlash, tickets: keyTickets }
+              : {})}
+          />
         </>
+      )}
+
+      {SESSIONS_ENABLED && (
+        <BriefPreviewDialog
+          request={briefRequest?.input ?? null}
+          copilotConversationId={briefRequest?.conversationId ?? null}
+          onClose={() => setBriefRequest(null)}
+          onStarted={(run) => {
+            // The offer is answered; the run's notes come back here. The
+            // run itself opens in the sessions panel, as from the ticket.
+            setOffers((prev) =>
+              prev.filter((o) => o.ticketId !== run.ticketId),
+            );
+            navigate(`/sessions/${encodeURIComponent(run.id)}`);
+          }}
+        />
       )}
 
       <CopilotConnectModal
@@ -1108,23 +1551,6 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
           left as an inherited side effect that a future ancestor style
           change could quietly break. */}
       <style>{`
-        .copilot-md { user-select: text; -webkit-user-select: text; cursor: text; }
-        .copilot-md > *:first-child { margin-top: 0; }
-        .copilot-md > *:last-child { margin-bottom: 0; }
-        .copilot-md h2 { margin: 0.6em 0 0.3em; font-family: var(--font-display); font-size: 1.05em; font-weight: 600; }
-        .copilot-md h3 { margin: 0.5em 0 0.25em; font-family: var(--font-display); font-size: 1em; font-weight: 600; }
-        .copilot-md p { margin: 0.5em 0; }
-        .copilot-md ul, .copilot-md ol { margin: 0.5em 0; padding-left: 1.3em; }
-        .copilot-md ul { list-style: disc; }
-        .copilot-md ol { list-style: decimal; }
-        .copilot-md li { margin: 0.2em 0; }
-        .copilot-md code { padding: 0.1em 0.35em; border-radius: 4px; background: color-mix(in srgb, currentColor 12%, transparent); font-family: var(--font-mono); font-size: 0.85em; overflow-wrap: anywhere; }
-        .copilot-md pre { margin: 0.6em 0; padding: 0.6em 0.75em; border-radius: var(--radius-sm); background: color-mix(in srgb, currentColor 10%, transparent); font-family: var(--font-mono); font-size: 0.85em; white-space: pre-wrap; overflow-wrap: anywhere; }
-        .copilot-md pre code { padding: 0; background: none; overflow-wrap: anywhere; }
-        .copilot-md a { text-decoration: underline; }
-        .copilot-md table { margin: 0.6em 0; border-collapse: collapse; width: 100%; font-size: 0.9em; display: block; overflow-x: auto; }
-        .copilot-md th, .copilot-md td { padding: 0.35em 0.6em; border: 1px solid color-mix(in srgb, currentColor 15%, transparent); text-align: left; }
-        .copilot-md th { background: color-mix(in srgb, currentColor 8%, transparent); font-weight: 600; }
 
         .copilot-typing { display: flex; align-items: center; gap: 4px; }
         .copilot-typing-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 0.35; animation: copilot-typing-bounce 1.1s infinite ease-in-out; }

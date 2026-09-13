@@ -113,6 +113,27 @@
       "when": 1789223155528,
       "tag": "0015_agent_runs_isolation_cwd_auto_approve",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1789232997111,
+      "tag": "0016_w5a_intent_notes",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1789233713154,
+      "tag": "0017_w5a_run_mode",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1789237500878,
+      "tag": "0018_agent_run_transcripts",
+      "breakpoints": true
     }
   ]
 }

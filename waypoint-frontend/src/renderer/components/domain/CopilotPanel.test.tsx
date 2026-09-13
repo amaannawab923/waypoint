@@ -27,7 +27,20 @@ import type { ProposalView, Project } from '@/types/entities';
 import { resetProposalStoreForTests } from '@/lib/proposalStore';
 import { CopilotPanel } from './CopilotPanel';
 
+jest.mock('@/lib/featureFlags', () => ({
+  COPILOT_ENABLED: true,
+  SESSIONS_ENABLED: true,
+}));
+jest.mock('@/data/engineApi', () => ({
+  getBriefPreview: jest.fn(),
+  dispatchRun: jest.fn(),
+  onRunChanged: jest.fn(() => () => {}),
+}));
 jest.mock('@/data/api', () => ({
+  markCopilotNotesDelivered: jest.fn(async () => {}),
+  getTicketByIdentifier: jest.fn(),
+  listTickets: jest.fn(async () => []),
+  getWorkspace: jest.fn(async () => ({ defaultAgentProvider: 'claude' })),
   listCopilotConversations: jest.fn(),
   createCopilotConversation: jest.fn(),
   getCopilotConversation: jest.fn(),
@@ -101,9 +114,10 @@ function mockCopilotIpc() {
 // backend would produce, without a real HTTP round trip.
 interface FakeMessage {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: string;
   createdAt: string;
+  deliveredAt?: string | null;
 }
 interface FakeConversation {
   id: string;
@@ -435,13 +449,21 @@ afterEach(() => {
 
 describe('CopilotPanel', () => {
   it('opens to the session list, showing the empty state when no sessions exist yet', async () => {
-    render(<CopilotPanel onClose={jest.fn()} />);
+    render(
+      <MemoryRouter>
+        <CopilotPanel onClose={jest.fn()} />
+      </MemoryRouter>,
+    );
     expect(await screen.findByText(/No sessions yet/i)).toBeInTheDocument();
     expect(screen.getByText('Copilot')).toBeInTheDocument();
   });
 
   it('creates a session from the header "+" button and switches straight to its (empty) chat', async () => {
-    render(<CopilotPanel onClose={jest.fn()} />);
+    render(
+      <MemoryRouter>
+        <CopilotPanel onClose={jest.fn()} />
+      </MemoryRouter>,
+    );
     await screen.findByText(/No sessions yet/i);
 
     fireEvent.click(getHeaderNewSessionButton());
@@ -458,7 +480,11 @@ describe('CopilotPanel', () => {
   });
 
   it('creates a session from the list\'s dashed "New session" row and switches to its chat too', async () => {
-    render(<CopilotPanel onClose={jest.fn()} />);
+    render(
+      <MemoryRouter>
+        <CopilotPanel onClose={jest.fn()} />
+      </MemoryRouter>,
+    );
     await screen.findByText(/No sessions yet/i);
 
     // The dashed CTA row, not the header's "+" — disambiguated by matching
@@ -472,7 +498,11 @@ describe('CopilotPanel', () => {
   });
 
   it('goes back to the session list via the back arrow, and the created session is now listed', async () => {
-    render(<CopilotPanel onClose={jest.fn()} />);
+    render(
+      <MemoryRouter>
+        <CopilotPanel onClose={jest.fn()} />
+      </MemoryRouter>,
+    );
     await screen.findByText(/No sessions yet/i);
     await createAndOpenSession();
 
@@ -498,7 +528,11 @@ describe('CopilotPanel', () => {
       jest
         .mocked(listCopilotConversations)
         .mockRejectedValueOnce(new Error('network down'));
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
 
       expect(
         await screen.findByText(/Failed to load your Copilot sessions/i),
@@ -527,7 +561,11 @@ describe('CopilotPanel', () => {
       // its own "no-op if already cached" comment). Unmount and remount, the
       // same way the "Loading messages…" coverage above does, to get a fresh
       // hook instance whose cache is genuinely cold for this session.
-      const { unmount } = render(<CopilotPanel onClose={jest.fn()} />);
+      const { unmount } = render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
       await typeAndSend('has real history');
@@ -540,7 +578,11 @@ describe('CopilotPanel', () => {
         await handlers.onDone({ fullText: 'a reply', sessionId: 'sess-1' });
       });
       unmount();
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       const row = await screen.findByText('has real history');
 
       jest
@@ -586,7 +628,11 @@ describe('CopilotPanel', () => {
 
   describe('sending a message', () => {
     it('appends the user message immediately, then streams and persists the reply', async () => {
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
 
@@ -638,7 +684,11 @@ describe('CopilotPanel', () => {
     });
 
     it('auto-titles the session from the first message sent (server-derived, refetched after send)', async () => {
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
 
@@ -652,7 +702,11 @@ describe('CopilotPanel', () => {
     });
 
     it('resumes the same Claude Code session on a second message', async () => {
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
 
@@ -679,7 +733,11 @@ describe('CopilotPanel', () => {
     });
 
     it('persists sent and received messages across a full panel remount (backend-persisted)', async () => {
-      const { unmount } = render(<CopilotPanel onClose={jest.fn()} />);
+      const { unmount } = render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
 
@@ -704,7 +762,11 @@ describe('CopilotPanel', () => {
       // opens back on the session list — reads from the same fake backend
       // store, not component state, proving persistence survived the
       // remount.
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       expect(await screen.findByText('remember this')).toBeInTheDocument();
 
       fireEvent.click(screen.getByText('remember this'));
@@ -720,7 +782,11 @@ describe('CopilotPanel', () => {
     });
 
     it('shows a "Loading messages…" placeholder while a session\'s history is being fetched', async () => {
-      const { unmount } = render(<CopilotPanel onClose={jest.fn()} />);
+      const { unmount } = render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
       await typeAndSend('will be fetched later');
@@ -734,7 +800,11 @@ describe('CopilotPanel', () => {
       // short-circuiting on the cache the live session above already
       // populated (see useCopilotConversations.ts's openSession).
       unmount();
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
 
       // Never resolves during this test — long enough to observe the
       // in-between loading state deterministically instead of racing it.
@@ -748,7 +818,11 @@ describe('CopilotPanel', () => {
     });
 
     it('rolls back the optimistic user bubble when persisting the user message fails', async () => {
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
 
@@ -777,7 +851,11 @@ describe('CopilotPanel', () => {
     });
 
     it('offers a save-only retry (not a re-run) when persisting a successful reply fails', async () => {
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
 
@@ -819,7 +897,11 @@ describe('CopilotPanel', () => {
     });
 
     it('shows a clear inline error when the Claude Code run itself fails, and keeps the sent message visible', async () => {
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
 
@@ -857,7 +939,11 @@ describe('CopilotPanel', () => {
     // no visible path from "not logged in" to actually fixing it short of
     // already knowing to dig through Settings.
     it('shows a "Connect your Claude subscription" action for an auth_failed error, distinct from other error kinds', async () => {
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
 
@@ -891,7 +977,11 @@ describe('CopilotPanel', () => {
     });
 
     it('shows a retry instead of persisting an empty reply when the run finishes with no real text', async () => {
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
 
@@ -915,7 +1005,11 @@ describe('CopilotPanel', () => {
     });
 
     it('ignores late chunk events from a superseded run after "Try again" starts a new one', async () => {
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
 
@@ -963,7 +1057,11 @@ describe('CopilotPanel', () => {
     // discarding its real reply (and the subscription usage spent
     // generating it) the moment it finished, with no error shown anywhere.
     it('completes a run in one session even after a second run starts in a different session', async () => {
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
 
       await createAndOpenSession();
@@ -1016,7 +1114,11 @@ describe('CopilotPanel', () => {
     });
 
     it('shows a clear error instead of hanging forever when runPrompt itself throws synchronously', async () => {
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
 
@@ -1044,7 +1146,11 @@ describe('CopilotPanel', () => {
     });
 
     it('makes the composer read-only (never natively disabled) for the duration of an in-flight streaming run, and reverts it once done', async () => {
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
 
@@ -1071,7 +1177,11 @@ describe('CopilotPanel', () => {
     });
 
     it('shows a typing indicator before the first token arrives, replaced by the real text once streaming starts', async () => {
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
 
@@ -1091,7 +1201,11 @@ describe('CopilotPanel', () => {
     });
 
     it('unsubscribes from the IPC stream on unmount without cancelling the run', async () => {
-      const { unmount } = render(<CopilotPanel onClose={jest.fn()} />);
+      const { unmount } = render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
 
@@ -1104,7 +1218,11 @@ describe('CopilotPanel', () => {
     });
 
     it('does not submit on Shift+Enter, and does not send an empty/whitespace draft', async () => {
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
 
@@ -1118,7 +1236,11 @@ describe('CopilotPanel', () => {
     });
 
     it('submits on Enter without Shift', async () => {
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
 
@@ -1165,7 +1287,11 @@ describe('CopilotPanel', () => {
     }
 
     it('refetches proposals after a completed run and renders the card after the assistant bubble', async () => {
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
 
@@ -1205,7 +1331,11 @@ describe('CopilotPanel', () => {
     });
 
     it('also refetches proposals when the run FAILS — a partial turn may still have proposed', async () => {
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
 
@@ -1230,7 +1360,11 @@ describe('CopilotPanel', () => {
     // them notified WITHOUT putting them in the preamble (they're system
     // cleanup, not the user saying no).
     it('rejects the failed turn\'s pending proposals before "Try again" re-runs, without telling the model the user rejected them', async () => {
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
       await createAndOpenSession();
 
@@ -1278,7 +1412,11 @@ describe('CopilotPanel', () => {
         addFakeProposal(conv.id, { status: 'executed', anchorSeq: 1 }),
       );
 
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       fireEvent.click(await screen.findByText('seeded session'));
       await act(async () => {});
       expect((await screen.findAllByText('Applied ✓')).length).toBe(25);
@@ -1316,7 +1454,11 @@ describe('CopilotPanel', () => {
         anchorSeq: 1,
       });
 
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       fireEvent.click(await screen.findByText('seeded session'));
       await act(async () => {});
 
@@ -1330,7 +1472,11 @@ describe('CopilotPanel', () => {
         anchorSeq: 1,
       });
 
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       const row = await screen.findByText('seeded session');
       fireEvent.click(row);
       await act(async () => {});
@@ -1378,7 +1524,11 @@ describe('CopilotPanel', () => {
         anchorSeq: 1,
       });
 
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       fireEvent.click(await screen.findByText('seeded session'));
       await act(async () => {});
       await screen.findByText('Applied ✓');
@@ -1410,7 +1560,11 @@ describe('CopilotPanel', () => {
       const conv = seedConversation('conv-seeded');
       addFakeProposal(conv.id, { status: 'executed', anchorSeq: 1 });
 
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       fireEvent.click(await screen.findByText('seeded session'));
       await act(async () => {});
       await screen.findByText('Applied ✓');
@@ -1437,7 +1591,11 @@ describe('CopilotPanel', () => {
         },
       });
 
-      render(<CopilotPanel onClose={jest.fn()} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       fireEvent.click(await screen.findByText('seeded session'));
       await act(async () => {});
       await waitFor(() =>
@@ -1465,7 +1623,11 @@ describe('CopilotPanel', () => {
   describe('Escape key handling', () => {
     it('closes the panel when Escape is pressed with focus inside it', async () => {
       const onClose = jest.fn();
-      render(<CopilotPanel onClose={onClose} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={onClose} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
 
       getHeaderNewSessionButton().focus();
@@ -1479,7 +1641,11 @@ describe('CopilotPanel', () => {
       const outsideInput = document.createElement('input');
       document.body.appendChild(outsideInput);
 
-      render(<CopilotPanel onClose={onClose} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={onClose} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
 
       outsideInput.focus();
@@ -1491,7 +1657,11 @@ describe('CopilotPanel', () => {
 
     it('ignores non-Escape keys', async () => {
       const onClose = jest.fn();
-      render(<CopilotPanel onClose={onClose} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={onClose} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
 
       getHeaderNewSessionButton().focus();
@@ -1504,7 +1674,11 @@ describe('CopilotPanel', () => {
   describe('close button and focus restoration', () => {
     it('calls onClose when the close button is clicked', async () => {
       const onClose = jest.fn();
-      render(<CopilotPanel onClose={onClose} />);
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={onClose} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
 
       fireEvent.click(screen.getByRole('button', { name: 'Close panel' }));
@@ -1518,7 +1692,11 @@ describe('CopilotPanel', () => {
       toggleButton.focus();
       expect(document.activeElement).toBe(toggleButton);
 
-      const { unmount } = render(<CopilotPanel onClose={jest.fn()} />);
+      const { unmount } = render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
       await screen.findByText(/No sessions yet/i);
 
       unmount();
@@ -1797,6 +1975,210 @@ describe('CopilotPanel codebase grounding (Copilot V3)', () => {
           screen.queryByText(/Codebase not linked/i),
         ).not.toBeInTheDocument(),
       );
+    });
+  });
+});
+
+describe('sessions in the conversation (W5a)', () => {
+  const now = new Date().toISOString();
+  function seedWithNote() {
+    const conv: FakeConversation = {
+      id: 'conv-w5a',
+      memberId: 'mem-1',
+      title: 'seeded session',
+      claudeSessionId: null,
+      createdAt: now,
+      updatedAt: now,
+      messages: [
+        { id: 'msg-1', role: 'user', content: 'earlier ask', createdAt: now },
+        {
+          id: 'msg-note',
+          role: 'system',
+          content:
+            'Run ROAD-116 · Investigate finished (3 turns) · 1 proposal filed, waiting for your review.',
+          createdAt: now,
+          deliveredAt: null,
+        },
+      ],
+    };
+    store.push(conv);
+    return conv;
+  }
+
+  it('renders a Waypoint note as a line, carries it to the model once, and marks it delivered after the reply persists', async () => {
+    seedWithNote();
+    const { markCopilotNotesDelivered } = jest.requireMock('@/data/api') as {
+      markCopilotNotesDelivered: jest.Mock;
+    };
+    render(
+      <MemoryRouter>
+        <CopilotPanel onClose={jest.fn()} />
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByText('seeded session'));
+    const note = await screen.findByText(/Investigate finished \(3 turns\)/);
+    expect(note.closest('[data-copilot-note]')).toHaveAttribute(
+      'data-delivered',
+      'false',
+    );
+
+    await typeAndSend('what was the problem?');
+    await act(async () => {});
+    const handlers = await waitForRun('what was the problem?');
+    const args = copilotIpc.runPrompt.mock.calls[0][0] as {
+      outcomePreamble?: string;
+      prompt: string;
+    };
+    expect(args.outcomePreamble).toContain(
+      '[Waypoint note: Run ROAD-116 · Investigate finished',
+    );
+    expect(args.prompt).toBe('what was the problem?');
+    expect(markCopilotNotesDelivered).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await handlers.onDone({
+        fullText: 'The write was unguarded.',
+        sessionId: 'sess-1',
+      });
+    });
+    await waitFor(() =>
+      expect(markCopilotNotesDelivered).toHaveBeenCalledWith('conv-w5a', [
+        'msg-note',
+      ]),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Investigate finished/).closest('[data-copilot-note]'),
+      ).toHaveAttribute('data-delivered', 'true'),
+    );
+
+    // The next turn does not carry it again.
+    await typeAndSend('thanks');
+    await act(async () => {});
+    await waitForRun('thanks');
+    const second = copilotIpc.runPrompt.mock.calls[1][0] as {
+      outcomePreamble?: string;
+    };
+    expect(second.outcomePreamble ?? '').not.toContain('Waypoint note');
+  });
+
+  it('/investigate KEY opens the brief preview without a model turn; an unknown key is said', async () => {
+    const { getTicketByIdentifier } = jest.requireMock('@/data/api') as {
+      getTicketByIdentifier: jest.Mock;
+    };
+    const { getBriefPreview } = jest.requireMock('@/data/engineApi') as {
+      getBriefPreview: jest.Mock;
+    };
+    getTicketByIdentifier.mockImplementation(async (key: string) =>
+      key === 'ROAD-116'
+        ? { id: 'wi-116', identifier: 'ROAD-116', title: 'Sessions anywhere' }
+        : undefined,
+    );
+    getBriefPreview.mockResolvedValue({
+      ticketId: 'wi-116',
+      identifier: 'ROAD-116',
+      title: 'Sessions anywhere',
+      intent: 'investigate',
+      brief: 'The brief for ROAD-116.',
+      repo: {
+        handle: 'h',
+        path: '/r',
+        displayPath: '~/r',
+        name: 'r',
+        kind: 'repo',
+        projectId: 'proj-1',
+        projectName: 'Roadmap',
+        lastAutoApprove: null,
+        lastUsedAt: null,
+      },
+      branches: { branches: ['main'], suggested: 'main' },
+      baseRef: 'main',
+      branchHint: 'agent/ROAD-116',
+      mode: 'plan',
+      autoApproveDefault: false,
+      seededFromRunId: null,
+      liveWriterRunId: null,
+    });
+    render(
+      <MemoryRouter>
+        <CopilotPanel onClose={jest.fn()} />
+      </MemoryRouter>,
+    );
+    await screen.findByText(/No sessions yet/i);
+    await createAndOpenSession();
+
+    // The menu, while typing the command word.
+    fireEvent.change(getTextarea(), { target: { value: '/inv' } });
+    expect(
+      screen.getByRole('option', { name: /\/investigate KEY/ }),
+    ).toBeInTheDocument();
+
+    await typeAndSend('/investigate ROAD-999');
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'No ticket ROAD-999.',
+    );
+    expect(copilotIpc.runPrompt).not.toHaveBeenCalled();
+
+    await typeAndSend('/investigate road-116');
+    await screen.findByDisplayValue('The brief for ROAD-116.');
+    expect(getBriefPreview).toHaveBeenCalledWith({
+      ticketId: 'wi-116',
+      intent: 'investigate',
+      mayChangeFiles: false,
+    });
+    expect(copilotIpc.runPrompt).not.toHaveBeenCalled();
+    expect(getTextarea()).toHaveValue('');
+  });
+
+  it("a session offer from the model's tool renders the three verbs; picking one opens the preview for that conversation", async () => {
+    let pushOffer: ((offer: unknown) => void) | null = null;
+    (window as unknown as { electron: typeof window.electron }).electron = {
+      copilot: {
+        runPrompt: copilotIpc.runPrompt,
+        onSessionOffer: (cb: (offer: unknown) => void) => {
+          pushOffer = cb;
+          return () => {};
+        },
+      },
+      repo: { chooseFolder: chooseFolderMock },
+    } as unknown as typeof window.electron;
+    const { getBriefPreview } = jest.requireMock('@/data/engineApi') as {
+      getBriefPreview: jest.Mock;
+    };
+    getBriefPreview.mockRejectedValue(
+      new Error('Roadmap has no linked repository.'),
+    );
+    render(
+      <MemoryRouter>
+        <CopilotPanel onClose={jest.fn()} />
+      </MemoryRouter>,
+    );
+    await screen.findByText(/No sessions yet/i);
+    await createAndOpenSession();
+    const conversationId = store[0].id;
+
+    act(() => {
+      pushOffer?.({
+        conversationId,
+        ticketId: 'wi-116',
+        identifier: 'ROAD-116',
+        title: 'Sessions anywhere',
+        intent: 'fix',
+        note: null,
+      });
+    });
+    const card = await screen.findByText('Session on ROAD-116');
+    expect(card.closest('[data-session-offer]')).toHaveTextContent(
+      'Sessions anywhere',
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Fix' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Roadmap has no linked repository.',
+    );
+    expect(getBriefPreview).toHaveBeenCalledWith({
+      ticketId: 'wi-116',
+      intent: 'fix',
+      mayChangeFiles: true,
     });
   });
 });

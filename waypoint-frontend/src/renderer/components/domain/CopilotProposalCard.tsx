@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { Link, useInRouterContext } from 'react-router-dom';
 import { clsx } from 'clsx';
 import { ArrowRight } from 'lucide-react';
 import { IconAlert, IconCheck } from '@/components/icons';
@@ -10,6 +11,8 @@ import type {
 } from '@/types/entities';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
+import { renderMarkdown } from '@/lib/markdown';
+import { useAgentRunSummary } from '@/lib/useAgentRunSummary';
 import { PriorityIcon, PRIORITY_LABEL } from './PriorityIcon';
 
 // Ported 1:1 from the approved mockup (docs/qa/copilot-write-approval-mockup.html)
@@ -155,6 +158,36 @@ function displayNameFromDisclosure(disclosureText: string): string {
 // the caller has (or can look up) for `proposal.agentId` instead. Kept as a
 // prop rather than a backend join (architecture §1.8/W4.2 decision — see
 // the unit's report) so this component's own data needs don't grow.
+/**
+ * W5a §1.7: a proposal a session filed says which run, and links to its
+ * transcript — "from run ROAD-116 · Investigate ↗". Outside a router (a
+ * bare test render) the name shows without the link.
+ */
+function RunOriginLine({ runId }: { runId: string }) {
+  const summary = useAgentRunSummary(runId);
+  const inRouter = useInRouterContext();
+  const label =
+    summary === undefined ? '…' : summary === null ? runId : summary.title;
+  return (
+    <span
+      className="inline-flex items-center gap-1 text-[10.5px] text-text-muted"
+      data-run-origin={runId}
+    >
+      from run{' '}
+      {inRouter ? (
+        <Link
+          to={`/sessions/${encodeURIComponent(runId)}`}
+          className="font-medium text-text-secondary underline-offset-2 hover:underline"
+        >
+          {label} ↗
+        </Link>
+      ) : (
+        <span className="font-medium text-text-secondary">{label}</span>
+      )}
+    </span>
+  );
+}
+
 function ProposerBadge({
   proposal,
   agentName,
@@ -165,9 +198,12 @@ function ProposerBadge({
   if (proposal.origin === 'agent_run') {
     const name = agentName ?? proposal.agentId ?? 'Agent';
     return (
-      <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-[10.5px] font-semibold text-text-secondary">
-        <Avatar name={name} size={16} />
-        Proposed by {name}
+      <span className="inline-flex w-fit flex-wrap items-center gap-2">
+        <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-[10.5px] font-semibold text-text-secondary">
+          <Avatar name={name} size={16} />
+          Proposed by {name}
+        </span>
+        {proposal.agentRunId && <RunOriginLine runId={proposal.agentRunId} />}
       </span>
     );
   }
@@ -303,18 +339,23 @@ function ProposalBody({
     <>
       <TicketLine identifier={snapshot.identifier} title={snapshot.title} />
       {kind === 'state_change' && (
-        <div className="flex flex-wrap items-center gap-2">
-          <StateChip
-            name={snapshot.fromStateName}
-            color={snapshot.fromStateColor}
-          />
-          <ArrowRight size={14} className="text-text-muted" />
-          <StateChip
-            name={snapshot.toStateName}
-            color={snapshot.toStateColor}
-            highlight
-          />
-        </div>
+        <>
+          <div className="flex flex-wrap items-center gap-2">
+            <StateChip
+              name={snapshot.fromStateName}
+              color={snapshot.fromStateColor}
+            />
+            <ArrowRight size={14} className="text-text-muted" />
+            <StateChip
+              name={snapshot.toStateName}
+              color={snapshot.toStateColor}
+              highlight
+            />
+          </div>
+          {proposal.origin === 'agent_run' && (
+            <ProposerBadge proposal={proposal} agentName={agentName} />
+          )}
+        </>
       )}
       {kind === 'priority_change' && (
         <div className="flex flex-wrap items-center gap-2">
@@ -323,7 +364,26 @@ function ProposalBody({
           <PriorityChip priority={payload.priority} />
         </div>
       )}
-      {kind === 'comment' && (
+      {kind === 'comment' && proposal.origin === 'agent_run' && (
+        <>
+          {/* A session's closing message is a report — headings, lists,
+              code — and the same escaping renderer Copilot's replies go
+              through (lib/markdown.ts) is what makes it readable; the
+              backend posts it through the same rules (lib/markdownHtml.ts). */}
+          <div className="rounded-[var(--radius-sm)] border border-border bg-bg-inset px-3 py-2.5 text-[13px] leading-relaxed">
+            <em className="text-text-secondary">{disclosureText}</em>
+            <div
+              className="copilot-md mt-1"
+              data-run-comment
+              dangerouslySetInnerHTML={{
+                __html: renderMarkdown(payload.body ?? ''),
+              }}
+            />
+          </div>
+          <ProposerBadge proposal={proposal} agentName={agentName} />
+        </>
+      )}
+      {kind === 'comment' && proposal.origin !== 'agent_run' && (
         <>
           {/* PLAIN REACT TEXT NODES on purpose — the body is model-authored
               text; rendering it through any HTML path (even the markdown

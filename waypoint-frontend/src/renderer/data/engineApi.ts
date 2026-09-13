@@ -19,8 +19,13 @@ import type {
 } from '@/types/engine';
 import type {
   AgentRun,
+  BriefPreview,
+  BriefPreviewInput,
+  DispatchRunInput,
   FolderChoice,
+  OpenPrResult,
   ResumeRunResult,
+  RunFocus,
   RunBranches,
   SessionFolder,
   RunChanged,
@@ -237,6 +242,34 @@ export function getHomeDir(): Promise<string | null> {
 /** Every ledger write main makes — the follower's, and a start or resume's. */
 export function onRunChanged(cb: (change: RunChanged) => void): () => void {
   return bridge().onRunChanged(cb);
+}
+
+// W5a (docs/design/w5a-investigate-fix.md §1.3): a session on a ticket.
+// The preview is built in main from the ledger's view of the ticket; the
+// dispatch sends the brief back as the person left it, and the run
+// arrives `provisioning` like a started one.
+export function getBriefPreview(
+  input: BriefPreviewInput,
+): Promise<BriefPreview> {
+  return bridge().briefPreview(input).catch(unwrapIpcError);
+}
+
+export function dispatchRun(input: DispatchRunInput): Promise<AgentRun> {
+  return bridge().dispatchRun(input).catch(unwrapIpcError);
+}
+
+/** W6: push the run's branch and open its pull request, as the person — the retry after a failed publish. */
+export function openRunPullRequest(runId: string): Promise<OpenPrResult> {
+  return bridge().openRunPr(runId).catch(unwrapIpcError);
+}
+
+/** The person clicked a notification about a run (main/engine/notifications.ts). */
+export function onRunFocus(cb: (focus: RunFocus) => void): () => void {
+  try {
+    return bridge().onRunFocus(cb);
+  } catch {
+    return () => {};
+  }
 }
 
 /** Text only: the panel's composer has no attachments in W3. */

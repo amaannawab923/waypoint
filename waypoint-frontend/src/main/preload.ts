@@ -2,6 +2,7 @@
 /* eslint no-unused-vars: off */
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import type { CopilotDetectResult } from './copilot/copilotDetect';
+import type { SessionOffer as CopilotSessionOffer } from './copilot/sessionTools';
 import type { JiraCommentPermissions } from './jira/jiraClient';
 import type {
   JiraCommentBody,
@@ -28,12 +29,17 @@ import type {
 import {
   ENGINE_IPC,
   RUNS_IPC,
+  type BriefPreview,
+  type BriefPreviewInput,
+  type DispatchRunInput,
   type EngineHealth,
   type EngineStatus,
   type LiveSnapshot,
   type LiveUpdate,
   type FolderChoice,
+  type OpenPrResult,
   type ResumeRunResult,
+  type RunFocus,
   type RunBranches,
   type RunChanged,
   type RunDiff,
@@ -265,6 +271,20 @@ const electronHandler = {
       openExternal(url: string): Promise<{ ok: boolean }> {
         return ipcRenderer.invoke('copilot:auth:open-external', url);
       },
+    },
+    // W5a: the model asked to offer a session on a ticket
+    // (copilot/sessionTools.ts's dispatch_session). A push, like
+    // engine.onRunChanged — the tool runs mid-turn with no renderer call in
+    // flight to answer.
+    onSessionOffer(cb: (offer: CopilotSessionOffer) => void): () => void {
+      const subscription = (
+        _event: IpcRendererEvent,
+        offer: CopilotSessionOffer,
+      ) => cb(offer);
+      ipcRenderer.on('copilot:session-offer', subscription);
+      return () => {
+        ipcRenderer.removeListener('copilot:session-offer', subscription);
+      };
     },
     // Backs the real Claude Code CLI probe (W1.2) — request/response, like
     // `auth` above, since a single `claude --version` run produces exactly
@@ -594,6 +614,28 @@ const electronHandler = {
     },
     homeDir(): Promise<string> {
       return ipcRenderer.invoke(RUNS_IPC.homeDir);
+    },
+    // W5a: a session on a ticket (engine/runs/dispatch.ts). The renderer
+    // names a ticket and a verb; main builds the brief and finds the
+    // repository. `dispatchRun` sends the brief back as the person left it.
+    briefPreview(input: BriefPreviewInput): Promise<BriefPreview> {
+      return ipcRenderer.invoke(RUNS_IPC.briefPreview, input);
+    },
+    dispatchRun(input: DispatchRunInput): Promise<AgentRunRow> {
+      return ipcRenderer.invoke(RUNS_IPC.dispatch, input);
+    },
+    /** W6: push the run's branch and open its pull request (the retry). */
+    openRunPr(runId: string): Promise<OpenPrResult> {
+      return ipcRenderer.invoke(RUNS_IPC.openPr, runId);
+    },
+    /** Push: the person clicked a notification about a run; open it. */
+    onRunFocus(cb: (focus: RunFocus) => void): () => void {
+      const subscription = (_event: IpcRendererEvent, focus: RunFocus) =>
+        cb(focus);
+      ipcRenderer.on(RUNS_IPC.focus, subscription);
+      return () => {
+        ipcRenderer.removeListener(RUNS_IPC.focus, subscription);
+      };
     },
     /** Push: main wrote a run's ledger row from the daemon's report. */
     onRunChanged(cb: (change: RunChanged) => void): () => void {

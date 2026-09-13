@@ -1,7 +1,17 @@
 import '@testing-library/jest-dom';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ProposalView } from '@/types/entities';
+import { resetAgentRunSummariesForTests } from '@/lib/useAgentRunSummary';
 import { CopilotProposalCard } from './CopilotProposalCard';
+
+jest.mock('@/data/api', () => ({ getAgentRun: jest.fn() }));
+
+beforeEach(() => {
+  resetAgentRunSummariesForTests();
+  (
+    jest.requireMock('@/data/api') as { getAgentRun: jest.Mock }
+  ).getAgentRun.mockResolvedValue(undefined);
+});
 
 const DISCLOSURE =
   'Hi, this is Copilot — Amaan’s agent — commenting on their behalf: ';
@@ -490,5 +500,73 @@ describe('CopilotProposalCard', () => {
         screen.getByText(/Approving writes to the real Linear issue/),
       ).toBeInTheDocument();
     });
+  });
+});
+
+describe('run-filed proposals (W5a)', () => {
+  it('says which run filed it, on a comment and on a state change', async () => {
+    const { getAgentRun } = jest.requireMock('@/data/api') as {
+      getAgentRun?: jest.Mock;
+    };
+    getAgentRun?.mockResolvedValue({
+      id: 'run-1',
+      title: 'ROAD-116 · Investigate',
+      intent: 'investigate',
+      status: 'needs-review',
+      branch: null,
+    });
+    renderCard(
+      proposal({
+        origin: 'agent_run',
+        agentId: null,
+        agentRunId: 'run-1',
+      }),
+    );
+    const line = await screen.findByText(/from run/);
+    expect(line).toHaveAttribute('data-run-origin', 'run-1');
+    await waitFor(() =>
+      expect(line).toHaveTextContent('ROAD-116 · Investigate'),
+    );
+
+    renderCard(
+      proposal({
+        kind: 'state_change',
+        origin: 'agent_run',
+        agentId: null,
+        agentRunId: 'run-1',
+        payload: { stateId: 'st-2' },
+        snapshot: {
+          fromStateName: 'In Progress',
+          fromStateColor: '#c99a2e',
+          toStateName: 'Done',
+          toStateColor: '#2f7a4f',
+        } as never,
+      }),
+    );
+    expect(screen.getAllByText(/from run/)).toHaveLength(2);
+  });
+});
+
+describe('a run-filed comment renders as markdown', () => {
+  it('headings and code from the closing message, escaped; a Copilot comment stays plain text', () => {
+    renderCard(
+      proposal({
+        kind: 'comment',
+        origin: 'agent_run',
+        agentId: null,
+        agentRunId: 'run-1',
+        payload: { body: '## Root cause\n\nThe `write` is <unguarded>.' },
+      }),
+    );
+    const body = document.querySelector('[data-run-comment]');
+    expect(body?.querySelector('h3')).toHaveTextContent('Root cause');
+    expect(body?.querySelector('code')).toHaveTextContent('write');
+    expect(body?.innerHTML).toContain('&lt;unguarded&gt;');
+
+    renderCard(
+      proposal({ kind: 'comment', payload: { body: '## not a heading' } }),
+    );
+    expect(document.querySelectorAll('[data-run-comment]')).toHaveLength(1);
+    expect(screen.getByText(/## not a heading/)).toBeInTheDocument();
   });
 });

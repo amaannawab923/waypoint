@@ -157,6 +157,31 @@ describe('runs:stop', () => {
     expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 
+  it('snapshots the transcript before the kill (ROAD-124)', async () => {
+    const { host, invoke } = fakeHost();
+    const ledger = fakeLedger({ 'run-a1': { status: 'running' } });
+    const daemon = fakeDaemon();
+    const capture = jest.fn(async () => {});
+    registerRunsIpc({
+      supervisor: supervisorWith(true),
+      host,
+      worktreesDir,
+      ledger,
+      reveal: jest.fn(),
+      notify: jest.fn(),
+      chooseDirectory: async () => null,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
+      daemon: () => daemon,
+      transcripts: { capture },
+      logger,
+    });
+    await invoke(RUNS_IPC.stop, 'run-a1');
+    expect(capture).toHaveBeenCalledWith('run-a1');
+    expect(capture.mock.invocationCallOrder[0]).toBeLessThan(
+      daemon.killSession.mock.invocationCallOrder[0],
+    );
+  });
+
   it('a daemon that no longer has the session, or no daemon at all, still ends the run in the ledger — and says the daemon did not confirm', async () => {
     const { host, invoke } = fakeHost();
     const ledger = fakeLedger({

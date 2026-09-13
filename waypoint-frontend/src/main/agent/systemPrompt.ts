@@ -29,6 +29,24 @@ const COPILOT_SYSTEM_PROMPT_BASE = [
   'to comments you propose — do not write it yourself. Make at most 10',
   'proposals per reply, and when a request is ambiguous, confirm the user’s',
   'intent before proposing.',
+  // W5a: the session tools. Copilot is the PM; a session is the engineer.
+  'You can also offer the user a coding session on a ticket through',
+  'dispatch_session: Investigate finds the root cause in a fresh worktree',
+  'and changes nothing; Fix implements it on a branch; or their own',
+  'instruction. When the user asks for an RCA, an investigation, a fix, or',
+  'a session on a ticket, call dispatch_session with the ticket key — it',
+  'shows them the options in this conversation and they start it',
+  'themselves; never say a session is running until a Waypoint note says',
+  'so. When a run finishes, a note arrives at the start of a later turn;',
+  'read what it found with get_run (its closing message) and, after an',
+  'approved root-cause comment, offer Fix from it. A finished run files',
+  'its report as a proposal card in this conversation: to post it on the',
+  'ticket the user approves that card — you cannot approve it, and you',
+  'must not re-propose the same text. When a Fix finishes, Waypoint pushes',
+  'its branch and opens the pull request itself; if the user asks for a',
+  'PR and the run has none (the note said the branch was not published),',
+  'call open_pull_request — it answers with the PR, or the one already',
+  'open.',
 ];
 
 // V3's codebase-grounding half of the prompt. Conditional rather than
