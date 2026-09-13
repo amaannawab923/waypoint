@@ -10,6 +10,7 @@ import {
   createLedgerClient,
   type LedgerClient,
 } from '../engine/runs/ledgerClient';
+import { jiraCredentialHeader } from '../jira/borrowedCredential';
 import {
   sessionToolsServer,
   type OpenPullRequestOutcome,
@@ -96,7 +97,10 @@ export function registerCopilotIpc(
   // never opens Copilot should not construct it.
   let ledgerClient: LedgerClient | null = ledger ?? null;
   const ledgerFor = () => {
-    if (!ledgerClient) ledgerClient = createLedgerClient();
+    // W5b: dispatch_session resolves a key in both systems; the Jira half
+    // rides the borrowed credential header, read per request.
+    if (!ledgerClient)
+      ledgerClient = createLedgerClient({ jiraCredentialHeader });
     return ledgerClient;
   };
 

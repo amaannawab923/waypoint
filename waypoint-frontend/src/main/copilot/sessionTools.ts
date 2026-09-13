@@ -1,11 +1,11 @@
 import { z } from 'zod';
 import { RUN_INTENTS, type RunIntent } from '../engine/types';
 import {
-  TICKET_IDENTIFIER,
+  JIRA_ISSUE_KEY,
   assertRunId,
+  isTicketRef,
   type AgentRun,
   type LedgerClient,
-  type LedgerTicket,
 } from '../engine/runs/ledgerClient';
 import type { InProcessServerSpec, InProcessToolSpec } from './claudeSdkClient';
 
@@ -58,7 +58,8 @@ export interface SessionToolsDeps {
   ledger: Pick<
     LedgerClient,
     | 'getTicket'
-    | 'getTicketByIdentifier'
+    | 'getTicketRef'
+    | 'resolveTicket'
     | 'getRun'
     | 'listAllRuns'
     | 'listTicketProposals'
@@ -75,27 +76,69 @@ export interface SessionToolsDeps {
 
 const MAX_NOTE_CHARS = 4_000;
 
+/** A ticket as the tools name it: in either system (W5b). */
+interface ToolTicket {
+  /** `wi-…` or `tref-…`. */
+  id: string;
+  identifier: string;
+  title: string;
+  /** A Jira issue's URL; null for a native ticket. */
+  url: string | null;
+}
+
 async function resolveTicket(
   ledger: SessionToolsDeps['ledger'],
   ref: string,
-): Promise<LedgerTicket> {
+): Promise<ToolTicket> {
   const trimmed = ref.trim();
   const key = trimmed.toUpperCase();
-  let ticket: LedgerTicket | null = null;
-  // A key (`ROAD-116`) is taken case-insensitively, since people type it;
-  // an id has a lowercase prefix (`wi-…`, lib/ids.ts). `road-116` is both
-  // shapes, so the key is tried first and the id second — two reads.
-  const looksLikeKey = TICKET_IDENTIFIER.test(key);
+  // A key (`ROAD-116`, `ENG-4`) is taken case-insensitively, since people
+  // type it, and resolved in both systems at once — the backend's dual
+  // lookup, which refuses an ambiguous key rather than guessing (W5b). An
+  // id has a lowercase prefix (`wi-…`, `tref-…`; lib/ids.ts). `road-116`
+  // is both shapes, so the key is tried first and the id second.
+  const looksLikeKey = JIRA_ISSUE_KEY.test(key);
   const looksLikeId = /^[a-z]+-[A-Za-z0-9]{1,64}$/.test(trimmed);
-  if (looksLikeKey) ticket = await ledger.getTicketByIdentifier(key);
-  if (!ticket && looksLikeId) ticket = await ledger.getTicket(trimmed);
   if (!looksLikeKey && !looksLikeId) {
     throw new Error(
-      `"${trimmed}" is not a ticket key (like ROAD-116) or a ticket id.`,
+      `"${trimmed}" is not a ticket key (like ROAD-116 or ENG-4) or a ticket id.`,
     );
   }
-  if (!ticket) throw new Error(`No ticket ${trimmed}.`);
-  return ticket;
+  if (looksLikeKey) {
+    const resolved = await ledger.resolveTicket(key);
+    if (resolved) {
+      return {
+        id: resolved.id,
+        identifier: resolved.identifier,
+        title: resolved.title,
+        url: resolved.url,
+      };
+    }
+  }
+  if (looksLikeId) {
+    if (isTicketRef(trimmed)) {
+      const jiraRef = await ledger.getTicketRef(trimmed);
+      if (jiraRef) {
+        return {
+          id: jiraRef.id,
+          identifier: jiraRef.identifier,
+          title: jiraRef.title,
+          url: jiraRef.url,
+        };
+      }
+    } else {
+      const ticket = await ledger.getTicket(trimmed);
+      if (ticket) {
+        return {
+          id: ticket.id,
+          identifier: ticket.identifier,
+          title: ticket.title,
+          url: null,
+        };
+      }
+    }
+  }
+  throw new Error(`No ticket ${trimmed}.`);
 }
 
 const INTENT_LABEL: Record<RunIntent, string> = {
@@ -160,6 +203,7 @@ export function buildSessionToolSpecs(
           deps.ledger,
           String(args.ticket ?? ''),
         );
+        const where = ticket.url ? ` (a Jira issue: ${ticket.url})` : '';
         const intent =
           typeof args.intent === 'string' &&
           (RUN_INTENTS as readonly string[]).includes(args.intent)
@@ -183,7 +227,7 @@ export function buildSessionToolSpecs(
           );
         }
         return [
-          `Waypoint is showing the person the session options for ${ticket.identifier} (${ticket.title}) in this conversation: Investigate, Fix, Something else.`,
+          `Waypoint is showing the person the session options for ${ticket.identifier} (${ticket.title})${where} in this conversation: Investigate, Fix, Something else.`,
           intent
             ? `You suggested ${INTENT_LABEL[intent]}; that button is highlighted.`
             : '',
@@ -231,11 +275,27 @@ export function buildSessionToolSpecs(
             ticketIds.map((t) => deps.ledger.listTicketProposals(t)),
           )
         ).flat();
+        // W5b: a run on a Jira issue names the issue and its URL.
+        const jiraRefs = new Map(
+          await Promise.all(
+            ticketIds
+              .filter(isTicketRef)
+              .map(
+                async (t) => [t, await deps.ledger.getTicketRef(t)] as const,
+              ),
+          ),
+        );
         return runs
           .map((run) => {
             const filed = proposals.filter((p) => p.agentRunId === run.id);
             const closing = filed.find((p) => p.kind === 'comment');
             const parts = [describeRun(run)];
+            const jiraRef = run.ticketId ? jiraRefs.get(run.ticketId) : null;
+            if (jiraRef) {
+              parts.push(
+                `Jira issue: ${jiraRef.identifier} — ${jiraRef.title}${jiraRef.url ? ` (${jiraRef.url})` : ''}`,
+              );
+            }
             if (filed.length) {
               parts.push(
                 `Filed: ${filed.map((p) => `${p.kind} (${p.status})`).join(', ')}`,

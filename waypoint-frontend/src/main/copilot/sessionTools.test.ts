@@ -78,8 +78,48 @@ function harness(
     conversationId: 'conv-1',
     ledger: {
       getTicket: jest.fn(async (id: string) => (id === 'wi-1' ? ticket : null)),
-      getTicketByIdentifier: jest.fn(async (key: string) =>
-        key === 'ROAD-116' ? ticket : null,
+      // W5b: a key resolves in either system; ROAD-116 is native, ENG-4 a
+      // Jira issue whose handle is tref-eng4, ENG-9 is in both.
+      resolveTicket: jest.fn(async (key: string) => {
+        if (key === 'ROAD-116') {
+          return {
+            provider: 'native' as const,
+            id: 'wi-1',
+            identifier: 'ROAD-116',
+            title: 'Sessions anywhere',
+            projectId: 'proj-1',
+            url: null,
+          };
+        }
+        if (key === 'ENG-4') {
+          return {
+            provider: 'jira' as const,
+            id: 'tref-eng4',
+            identifier: 'ENG-4',
+            title: 'Checkout 500s',
+            projectId: 'ENG',
+            url: 'https://yourteam.atlassian.net/browse/ENG-4',
+          };
+        }
+        if (key === 'ENG-9') {
+          throw new Error(
+            '"ENG-9" is ambiguous: it names a Waypoint ticket ("A") and a Jira issue ("B").',
+          );
+        }
+        return null;
+      }),
+      getTicketRef: jest.fn(async (id: string) =>
+        id === 'tref-eng4'
+          ? {
+              id: 'tref-eng4',
+              provider: 'jira',
+              site: 'yourteam.atlassian.net',
+              key: 'ENG-4',
+              identifier: 'ENG-4',
+              title: 'Checkout 500s',
+              url: 'https://yourteam.atlassian.net/browse/ENG-4',
+            }
+          : null,
       ),
       getRun: jest.fn(
         async (id: string) => options.runs?.find((r) => r.id === id) ?? null,
@@ -172,6 +212,40 @@ describe('dispatch_session', () => {
     await expect(
       tool('dispatch_session').handler({ ticket: 'ROAD-116' }),
     ).rejects.toThrow(/no window/);
+  });
+
+  // W5b: a Jira key resolves to the issue's ledger handle — the offer the
+  // renderer opens names `tref-…` and the preview reads the issue live.
+  it('resolves a Jira key (or its tref id) to the issue’s handle and names the issue', async () => {
+    const { tool, offers, deps } = harness();
+    const answer = await tool('dispatch_session').handler({
+      ticket: 'eng-4',
+      intent: 'fix',
+    });
+    expect(deps.ledger.resolveTicket).toHaveBeenCalledWith('ENG-4');
+    expect(offers[0]).toMatchObject({
+      ticketId: 'tref-eng4',
+      identifier: 'ENG-4',
+      title: 'Checkout 500s',
+      intent: 'fix',
+    });
+    expect(answer).toContain(
+      'a Jira issue: https://yourteam.atlassian.net/browse/ENG-4',
+    );
+
+    await tool('dispatch_session').handler({ ticket: 'tref-eng4' });
+    expect(offers[1]).toMatchObject({
+      ticketId: 'tref-eng4',
+      identifier: 'ENG-4',
+    });
+  });
+
+  it('surfaces an ambiguous key as the backend’s sentence, never a guess', async () => {
+    const { tool, offers } = harness();
+    await expect(
+      tool('dispatch_session').handler({ ticket: 'ENG-9' }),
+    ).rejects.toThrow(/ambiguous/);
+    expect(offers).toEqual([]);
   });
 });
 
