@@ -212,6 +212,41 @@ export interface LedgerProject {
   repoPath: string | null;
 }
 
+// --- W5b: Jira issues in the ledger ----------------------------------------
+
+/**
+ * The prefix of a Jira issue's ledger handle — a `ticket_refs` row
+ * (waypoint-backend/src/db/schema/integrations.ts). A run on a Jira issue
+ * stores this id where a native run stores its `wi-…` ticket id; the
+ * prefix alone says which system owns the ticket, the rule the backend's
+ * `providerOf` applies to a proposal's ticket id.
+ */
+export const TICKET_REF_PREFIX = 'tref-';
+
+/** Whether a run's `ticketId` names a Jira issue rather than a native ticket. */
+export function isTicketRef(ticketId: string | null | undefined): boolean {
+  return typeof ticketId === 'string' && ticketId.startsWith(TICKET_REF_PREFIX);
+}
+
+/** What a `tref-` handle stands for (the backend's `/ticket-refs/:id`): display data, never content. */
+export interface LedgerTicketRef {
+  id: string;
+  provider: string;
+  /** The Jira site's hostname the handle was minted against. */
+  site: string | null;
+  /** The issue key — `ENG-4`. */
+  key: string;
+  identifier: string;
+  /** The summary as last seen; the brief reads the issue live. */
+  title: string;
+  url: string | null;
+}
+
+/** A typed key resolved in either system (the backend's `/tickets/resolve/:identifier`). */
+export type { ResolvedTicket } from '../types';
+
+import type { ResolvedTicket } from '../types';
+
 export interface LedgerClient {
   /**
    * The project a run is about to be started in — read by main, so the
@@ -244,11 +279,38 @@ export interface LedgerClient {
   listMembers(): Promise<LedgerMember[]>;
   /** Every proposal on the ticket, any status — Fix seeds from the approved RCA among them. */
   listTicketProposals(ticketId: string): Promise<LedgerProposal[]>;
-  /** Files a proposal from a run (origin `agent_run`); lands in Review. Answers the proposal's id. */
+  /**
+   * Files a proposal from a run (origin `agent_run`); lands in Review.
+   * Answers the proposal's id. For a run on a Jira issue (`external`) the
+   * request carries the borrowed Jira credential header — the seam an
+   * approve uses — so the backend can read the issue live and build the
+   * external-write card; a native run's request carries nothing.
+   */
   createRunProposal(
     runId: string,
     input: CreateRunProposalInput,
+    options?: { external?: boolean },
   ): Promise<{ id: string }>;
+  // --- W5b: Jira issues ---------------------------------------------------
+  /** What a `tref-` handle stands for; null when there is no such ref. */
+  getTicketRef(id: string): Promise<LedgerTicketRef | null>;
+  /**
+   * Mints (or refreshes) the handle for a Jira issue main has read itself
+   * — the My Jira drawer's issue. The site is main's stored credential's,
+   * never the renderer's.
+   */
+  rememberTicketRef(input: {
+    site: string;
+    key: string;
+    title: string;
+  }): Promise<LedgerTicketRef>;
+  /**
+   * A typed key (`ROAD-116`, `ENG-4`) to the ticket it names, in either
+   * system — the MCP tool's dual lookup, with the borrowed credential so
+   * the Jira half can answer. Null when neither has it; throws with the
+   * backend's sentence when the key is ambiguous or Jira could not answer.
+   */
+  resolveTicket(identifier: string): Promise<ResolvedTicket | null>;
   /**
    * A Waypoint-authored system note in the Copilot conversation the run
    * came from, else the member's latest. Answers false when there was no
@@ -287,7 +349,19 @@ export interface LedgerClientDeps {
   fetch?: typeof fetch;
   /** Per-request deadline; defaults to LEDGER_TIMEOUT_MS. */
   timeoutMs?: number;
+  /**
+   * W5b: the Jira credential, encoded for the backend's borrowed-credential
+   * header (jira/jiraAuth.ts's encodeJiraCredentialHeader), or null when
+   * nothing is connected. Read per request, never held: the wiring hands
+   * in the reader so this module stays free of Electron. Sent only on the
+   * requests that need it — a run's proposal on a Jira issue, a key
+   * resolution — the way proposalApproval.ts sends it only on an approve.
+   */
+  jiraCredentialHeader?: () => string | null;
 }
+
+/** The header name the backend parses (waypoint-backend/src/lib/jira/credentialHeader.ts). */
+export const JIRA_CREDENTIAL_HEADER = 'x-waypoint-jira-credential';
 
 export const LEDGER_TIMEOUT_MS = 15_000;
 
@@ -305,6 +379,12 @@ const RUN_ID = /^[a-z]+-[A-Za-z0-9]{1,64}$/;
 
 /** `ROAD-116`: a project key, a hyphen, a number — the one other thing that reaches a ticket URL. */
 export const TICKET_IDENTIFIER = /^[A-Z][A-Z0-9]{0,9}-\d{1,7}$/;
+/**
+ * A Jira issue key as the backend's provider accepts it — a project key
+ * may carry an underscore, and is matched case-insensitively (people type
+ * `eng-4`). Every key that reaches a resolve or ref URL passes this.
+ */
+export const JIRA_ISSUE_KEY = /^[A-Za-z][A-Za-z0-9_]{0,63}-\d{1,9}$/;
 
 /** Project ids share the shape (`proj-…`), and reach a URL the same way. */
 export function assertRunId(id: string): void {
@@ -323,7 +403,16 @@ export function createLedgerClient(deps: LedgerClientDeps = {}): LedgerClient {
     method: 'GET' | 'POST' | 'PATCH' | 'PUT',
     path: string,
     body?: unknown,
+    options: { withJiraCredential?: boolean } = {},
   ): Promise<{ status: number; body: T }> {
+    const headers: Record<string, string> = {};
+    if (body !== undefined) headers['content-type'] = 'application/json';
+    if (options.withJiraCredential) {
+      // No connected account simply omits the header; the backend treats
+      // absent and malformed alike as "Jira is not connected".
+      const credential = deps.jiraCredentialHeader?.() ?? null;
+      if (credential) headers[JIRA_CREDENTIAL_HEADER] = credential;
+    }
     // A backend that accepts and never answers must not pin reconcile
     // (found in review, round 2); the ledger answers in milliseconds. An
     // AbortController rather than AbortSignal.timeout: the latter is not
@@ -339,8 +428,7 @@ export function createLedgerClient(deps: LedgerClientDeps = {}): LedgerClient {
     try {
       response = await doFetch(`${baseUrl}${path}`, {
         method,
-        headers:
-          body === undefined ? {} : { 'content-type': 'application/json' },
+        headers,
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: abort.signal,
       });
@@ -552,16 +640,103 @@ export function createLedgerClient(deps: LedgerClientDeps = {}): LedgerClient {
       ).body;
       return Array.isArray(body?.proposals) ? body.proposals : [];
     },
-    async createRunProposal(runId, input) {
+    async createRunProposal(runId, input, options = {}) {
       assertRunId(runId);
       const created = (
         await request<{ id: string }>(
           'POST',
           `/agent-runs/${runId}/proposals`,
           input,
+          { withJiraCredential: options.external === true },
         )
       ).body;
       return { id: created.id };
+    },
+    async getTicketRef(id) {
+      assertRunId(id);
+      if (!isTicketRef(id)) return null;
+      try {
+        const row = (
+          await request<{
+            id: string;
+            provider: string;
+            site?: string | null;
+            externalId: string;
+            identifier: string;
+            title: string;
+            url?: string | null;
+          }>('GET', `/ticket-refs/${id}`)
+        ).body;
+        return {
+          id: row.id,
+          provider: row.provider,
+          site: row.site ?? null,
+          key: row.externalId,
+          identifier: row.identifier,
+          title: row.title,
+          url: row.url ?? null,
+        };
+      } catch (error) {
+        if (error instanceof LedgerRequestError && error.status === 404)
+          return null;
+        throw error;
+      }
+    },
+    async rememberTicketRef(input) {
+      if (!JIRA_ISSUE_KEY.test(input.key))
+        throw new Error(`Not a Jira issue key: ${JSON.stringify(input.key)}`);
+      const row = (
+        await request<{
+          id: string;
+          provider: string;
+          site?: string | null;
+          externalId: string;
+          identifier: string;
+          title: string;
+          url?: string | null;
+        }>('POST', '/ticket-refs', {
+          provider: 'jira',
+          site: input.site,
+          key: input.key,
+          title: input.title,
+        })
+      ).body;
+      return {
+        id: row.id,
+        provider: row.provider,
+        site: row.site ?? null,
+        key: row.externalId,
+        identifier: row.identifier,
+        title: row.title,
+        url: row.url ?? null,
+      };
+    },
+    async resolveTicket(identifier) {
+      if (!JIRA_ISSUE_KEY.test(identifier))
+        throw new Error(`Not a ticket key: ${JSON.stringify(identifier)}`);
+      try {
+        const t = (
+          await request<ResolvedTicket>(
+            'GET',
+            `/tickets/resolve/${encodeURIComponent(identifier)}`,
+            undefined,
+            { withJiraCredential: true },
+          )
+        ).body;
+        if (!t || typeof t !== 'object' || !t.id) return null;
+        return {
+          provider: t.provider === 'jira' ? 'jira' : 'native',
+          id: t.id,
+          identifier: t.identifier,
+          title: t.title,
+          projectId: t.projectId,
+          url: t.url ?? null,
+        };
+      } catch (error) {
+        if (error instanceof LedgerRequestError && error.status === 404)
+          return null;
+        throw error;
+      }
     },
     async saveTranscript(runId, turns) {
       assertRunId(runId);

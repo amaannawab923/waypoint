@@ -27,6 +27,9 @@ import { registerLiveLedgerFollower } from './runs/liveLedgerFollower';
 import { createDaemonRunsApi } from './runs/daemonApi';
 import { createRunFinalizer } from './runs/finalize';
 import { createLedgerClient } from './runs/ledgerClient';
+import type { JiraRunDeps } from './runs/jiraRuns';
+import * as jiraClient from '../jira/jiraClient';
+import { jiraCredentialHeader, jiraSite } from '../jira/borrowedCredential';
 import { createRunNotifications } from './notifications';
 import { createTranscriptKeeper } from './runs/transcripts';
 import { createPullRequestPublisher } from './runs/pullRequests';
@@ -202,7 +205,17 @@ export function registerEngineIpc(
   // W5a: the two notifications a run sends (blocked, needs review), and
   // host-side finalize for a dispatched run whose turn ended — both hang
   // off the follower's facts, neither adds a decision to it.
-  const ledger = createLedgerClient();
+  // W5b: the ledger client borrows the Jira credential per request for a
+  // run's proposal on a Jira issue and a key resolution; the run modules
+  // read the issue through main's own Jira client (reads only) and the
+  // stored credential's site. Both readers, never the credential itself.
+  const ledger = createLedgerClient({ jiraCredentialHeader });
+  const jira: JiraRunDeps = {
+    site: jiraSite,
+    getTicket: (key) => jiraClient.getTicket(key),
+    listComments: (key) => jiraClient.listComments(key),
+    listTransitions: (key) => jiraClient.listTransitions(key),
+  };
   const daemon = () => {
     const client = supervisor.client();
     return client ? createDaemonRunsApi(client) : null;
@@ -242,6 +255,7 @@ export function registerEngineIpc(
     onRunStatus: notifications.onRunStatus,
     transcripts,
     pullRequests,
+    jira,
     logger,
   });
 
@@ -340,6 +354,11 @@ export function registerEngineIpc(
     recentsFile: path.join(path.dirname(worktreesDir), 'recent-folders.json'),
     transcripts,
     pullRequests,
+    jira,
+    jiraReposFile: path.join(
+      path.dirname(worktreesDir),
+      'jira-project-repos.json',
+    ),
     logger,
   });
 

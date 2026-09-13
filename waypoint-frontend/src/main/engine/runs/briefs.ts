@@ -1,4 +1,5 @@
 import type { RunIntent } from '../types';
+import type { JiraWireComment, JiraWireTicket } from '../../jira/jiraTypes';
 import type { LedgerComment, LedgerMember, LedgerTicket } from './ledgerClient';
 
 /**
@@ -22,14 +23,45 @@ import type { LedgerComment, LedgerMember, LedgerTicket } from './ledgerClient';
  *    agent what to put in it.
  */
 
+/**
+ * The ticket as the brief needs it — the slice a native ticket
+ * (`LedgerTicket`) and a Jira issue (jiraBriefTicket, below) both fill.
+ * `priority` is whatever the system calls it: the ledger's word, or the
+ * Jira site's own label.
+ */
+export type BriefTicket =
+  | LedgerTicket
+  | Pick<LedgerTicket, 'identifier' | 'title' | 'description' | 'priority'>;
+
+/**
+ * A comment as the brief reads it: the ledger's row (an author id the
+ * members list names, an HTML body), or an already-named, already-flat one
+ * — a Jira comment as main's mapper hands it over (the mapper strips
+ * account ids; the name is the display name Jira showed).
+ */
+export type BriefComment =
+  LedgerComment | { author: string; text: string; createdAt: string | null };
+
+/** W5b: what the brief says about a Jira issue that a native ticket has no equivalent of. */
+export interface JiraBriefFacts {
+  /** `https://site/browse/ENG-4` — named so the agent can cite it. */
+  url: string;
+  issueType?: string | null;
+  labels?: string[];
+  assignee?: string | null;
+  reporter?: string | null;
+}
+
 export interface BriefInput {
-  ticket: LedgerTicket;
+  ticket: BriefTicket;
   /** Oldest first, as the ledger lists them; the brief keeps the newest MAX_BRIEF_COMMENTS. */
-  comments: LedgerComment[];
+  comments: BriefComment[];
   /** For naming authors; an unknown author is "a teammate". */
   members: LedgerMember[];
   /** The state's name, when known. */
   stateName: string | null;
+  /** W5b: set when the ticket is a Jira issue; the brief says so and names the URL. */
+  jira?: JiraBriefFacts | null;
   /** The repository as the person sees it (`~/waypoint-electron`), never a path with a secret in it. */
   repoDisplayPath: string;
   /** The branch the worktree will be on. */
@@ -145,6 +177,15 @@ function authorName(members: LedgerMember[], authorId: string): string {
   return m ? m.displayName || m.fullName : 'a teammate';
 }
 
+/** One comment's author, time and flat text, whichever shape it came in. */
+function commentLine(members: LedgerMember[], c: BriefComment): string {
+  if ('bodyHtml' in c) {
+    return `— ${authorName(members, c.authorId)}, ${when(c.createdAt)}:\n${clip(htmlToText(c.bodyHtml), MAX_COMMENT_CHARS)}`;
+  }
+  const at = c.createdAt ? when(c.createdAt) : 'undated';
+  return `— ${c.author || 'a teammate'}, ${at}:\n${clip(c.text.trim(), MAX_COMMENT_CHARS)}`;
+}
+
 function when(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
@@ -152,15 +193,17 @@ function when(iso: string): string {
 }
 
 // The closing-message contract, common to every verb.
-const CLOSING_RULE =
-  "Waypoint reads only the final message of this turn — it files that message as a comment proposal on the ticket for a person to review — so put everything the ticket's readers need in it, written for them, not for Waypoint. Do not ask questions at the end; state what you found and what you would do next.";
+const closingRule = (noun: 'ticket' | 'issue') =>
+  `Waypoint reads only the final message of this turn — it files that message as a comment proposal on the ${noun} for a person to review — so put everything the ${noun}'s readers need in it, written for them, not for Waypoint. Do not ask questions at the end; state what you found and what you would do next.`;
 
 function taskSection(input: BriefInput): string {
+  const noun = input.jira ? 'issue' : 'ticket';
+  const CLOSING_RULE = closingRule(noun);
   switch (input.intent) {
     case 'investigate':
       return [
         '## Your task — Investigate',
-        'Find the root cause. Read the code and its history, run read-only commands as you need. Do not change any file: this session is in plan mode and the ticket owner decides what happens next.',
+        `Find the root cause. Read the code and its history, run read-only commands as you need. Do not change any file: this session is in plan mode and the ${noun} owner decides what happens next.`,
         'End with one message: the root cause, the evidence (files and lines), the fix you would make, and anything you could not settle.',
         CLOSING_RULE,
       ].join('\n');
@@ -168,9 +211,9 @@ function taskSection(input: BriefInput): string {
       const note = (input.instructions ?? '').trim();
       return [
         '## Your task — Fix',
-        ...(note ? [`Note from the ticket owner: ${note}`] : []),
+        ...(note ? [`Note from the ${noun} owner: ${note}`] : []),
         `Implement the fix on this branch. Commit as you go with clear messages. Do not push, open a pull request, or touch anything outside this worktree; the branch is reviewed from Waypoint.${input.approvedRca ? ' Start from the approved root cause above; if the code says otherwise, say so in your closing message.' : ''}`,
-        'End with one message: what you changed and why, the files touched, how you verified it, and anything left open. Waypoint files it as a comment and proposes moving the ticket to review.',
+        `End with one message: what you changed and why, the files touched, how you verified it, and anything left open. Waypoint files it as a comment and proposes moving the ${noun} to review.`,
         CLOSING_RULE,
       ].join('\n');
     }
@@ -194,18 +237,24 @@ function taskSection(input: BriefInput): string {
  * and for the scrub.
  */
 export function buildBrief(input: BriefInput): string {
-  const { ticket } = input;
+  const { ticket, jira } = input;
   const parts: string[] = [];
   parts.push(
-    `You are working on ${ticket.identifier} for the Waypoint team, in a fresh git worktree of the project's repository. The ticket and its discussion follow; your task is at the end.`,
+    jira
+      ? `You are working on ${ticket.identifier}, a Jira issue (${jira.url}), in a fresh git worktree of the repository its code lives in. The issue and its discussion follow, as Jira has them now; your task is at the end.`
+      : `You are working on ${ticket.identifier} for the Waypoint team, in a fresh git worktree of the project's repository. The ticket and its discussion follow; your task is at the end.`,
   );
 
   const facts: string[] = [];
+  if (jira?.issueType) facts.push(`Type: ${jira.issueType}`);
   if (ticket.priority) facts.push(`Priority: ${ticket.priority}`);
   if (input.stateName) facts.push(`State: ${input.stateName}`);
+  if (jira?.labels?.length) facts.push(`Labels: ${jira.labels.join(', ')}`);
+  if (jira?.assignee) facts.push(`Assignee: ${jira.assignee}`);
+  if (jira?.reporter) facts.push(`Reporter: ${jira.reporter}`);
   parts.push(
     [
-      `## Ticket ${ticket.identifier} — ${ticket.title}`,
+      `## ${jira ? 'Issue' : 'Ticket'} ${ticket.identifier} — ${ticket.title}`,
       ...(facts.length ? [facts.join(' · ')] : []),
       clip(
         ticket.description?.trim() || '(no description)',
@@ -218,7 +267,12 @@ export function buildBrief(input: BriefInput): string {
     ? acceptanceSection(ticket.description)
     : null;
   if (acceptance) {
-    parts.push(['## Acceptance (from the ticket)', acceptance].join('\n'));
+    parts.push(
+      [
+        `## Acceptance (from the ${jira ? 'issue' : 'ticket'})`,
+        acceptance,
+      ].join('\n'),
+    );
   }
 
   const newest = input.comments.slice(-MAX_BRIEF_COMMENTS);
@@ -227,10 +281,7 @@ export function buildBrief(input: BriefInput): string {
     parts.push(
       [
         `## Comments (${omitted > 0 ? `newest ${newest.length} of ${input.comments.length}, ` : ''}oldest first)`,
-        ...newest.map(
-          (c) =>
-            `— ${authorName(input.members, c.authorId)}, ${when(c.createdAt)}:\n${clip(htmlToText(c.bodyHtml), MAX_COMMENT_CHARS)}`,
-        ),
+        ...newest.map((c) => commentLine(input.members, c)),
       ].join('\n'),
     );
   }
@@ -257,4 +308,54 @@ export function buildBrief(input: BriefInput): string {
 
   parts.push(taskSection(input));
   return scrubBriefText(parts.join('\n\n'));
+}
+
+// --- W5b: a Jira issue, as main's own client reads it ----------------------
+
+/**
+ * The brief's view of a Jira issue, from the wire shape main's Jira client
+ * hands the renderer (jira/jiraMap.ts's mapIssue: the description already
+ * flattened from ADF, mentions rendered as names, account ids kept off).
+ * The priority is the site's own label, the state Jira's status name.
+ */
+export function jiraBriefTicket(
+  issue: JiraWireTicket,
+  site: string,
+): {
+  ticket: BriefTicket;
+  stateName: string;
+  jira: JiraBriefFacts;
+} {
+  return {
+    ticket: {
+      identifier: issue.key,
+      title: issue.title,
+      description: issue.description?.trim() ? issue.description : null,
+      priority: issue.priorityName === 'None' ? null : issue.priorityName,
+    },
+    stateName: issue.stateName,
+    jira: {
+      url: jiraIssueUrl(site, issue.key),
+      labels: issue.labels,
+      assignee:
+        issue.assigneeName && issue.assigneeName !== 'Unassigned'
+          ? issue.assigneeName
+          : null,
+      reporter: issue.reporterName || null,
+    },
+  };
+}
+
+/** The issue's comments as the brief reads them: named, flat, oldest first as the client lists them. */
+export function jiraBriefComments(comments: JiraWireComment[]): BriefComment[] {
+  return comments.map((c) => ({
+    author: c.authorName,
+    text: c.body,
+    createdAt: c.createdAt,
+  }));
+}
+
+/** `https://site/browse/ENG-4` — the same shape the backend's provider records on the ref. */
+export function jiraIssueUrl(site: string, key: string): string {
+  return `https://${site}/browse/${encodeURIComponent(key)}`;
 }

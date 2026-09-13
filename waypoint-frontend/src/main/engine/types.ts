@@ -562,6 +562,22 @@ export const RUNS_IPC = {
    */
   openPr: 'runs:open-pr',
   /**
+   * (identifier) → ResolvedTicket | null. W5b: a typed key (`ROAD-116`,
+   * `ENG-4`) to the ticket it names in either system, through the
+   * backend's dual lookup with main's Jira credential — so a slash
+   * command on a Jira key opens the same preview a native key does.
+   * Throws with the backend's sentence when the key is ambiguous.
+   */
+  resolveTicket: 'runs:resolve-ticket',
+  /**
+   * ({ key, title }) → JiraTicketRef. W5b: the ledger handle (`tref-…`)
+   * for a Jira issue the renderer has read through main's Jira client —
+   * minted through the backend with the site from main's stored
+   * credential, never the renderer's. What the My Jira drawer's Sessions
+   * section names.
+   */
+  jiraTicketRef: 'runs:jira-ticket-ref',
+  /**
    * Push: RunChanged — main wrote a run's ledger row from what the daemon
    * reported (runs/liveLedgerFollower.ts) or from a start/resume it is
    * driving (runs/startRun.ts). The renderer re-reads the ledger; the
@@ -619,6 +635,7 @@ export const MAX_INSTRUCTIONS_CHARS = 4_000;
 
 /** What the renderer sends to `runs:brief-preview`: a ticket and a verb. */
 export interface BriefPreviewInput {
+  /** A native ticket's id (`wi-…`) or a Jira issue's ledger handle (`tref-…`, W5b). */
   ticketId: string;
   intent: RunIntent;
   /** *Something else…*: the person's instruction. Ignored for the other verbs. */
@@ -627,7 +644,17 @@ export interface BriefPreviewInput {
   mayChangeFiles?: boolean;
   /** The base branch for the worktree; null = the repository's suggested one. */
   baseRef?: string | null;
+  /**
+   * W5b, Jira issues only: the folder the person chose in the preview (a
+   * `SessionFolder.handle`), when the Jira project has no remembered
+   * folder yet or they picked *Change*. Ignored for a native ticket, whose
+   * project's linked repository decides.
+   */
+  folder?: string | null;
 }
+
+/** Which system a ticket lives in (W5b). */
+export type TicketSystem = 'waypoint' | 'jira';
 
 /** The brief and the facts the preview dialog shows before Start. */
 export interface BriefPreview {
@@ -638,9 +665,23 @@ export interface BriefPreview {
   intent: RunIntent;
   /** The text the session will be given as its first prompt; editable in the dialog. */
   brief: string;
-  /** The project's linked repository, as a folder the person may recognise. */
-  repo: SessionFolder;
+  /**
+   * The repository the session will take a worktree of: the project's
+   * linked repository for a native ticket; for a Jira issue the folder
+   * remembered for its project, or the one the request chose — null when
+   * neither exists yet, and the dialog asks (W5b §1.2).
+   */
+  repo: SessionFolder | null;
+  /** Empty when `repo` is null. */
   branches: RunBranches;
+  /** W5b: where the ticket lives. */
+  ticketSystem: TicketSystem;
+  /** W5b: a Jira issue's URL; null for a native ticket. */
+  ticketUrl: string | null;
+  /** W5b: the Jira project the folder is (or will be) remembered for; null for a native ticket. */
+  jiraProjectKey: string | null;
+  /** W5b: true when `repo` came from the remembered mapping, so the dialog offers *Change*. */
+  repoRemembered: boolean;
   /** The base branch the brief was built for. */
   baseRef: string | null;
   /** The branch the worktree will be on (`agent/ROAD-116`, deduplicated by W2's rule at provisioning). */
@@ -678,6 +719,30 @@ export interface DispatchRunInput {
   providerId: SupportedProviderId;
   /** The Copilot conversation the verb was used from, when it was; notes go back there. */
   copilotConversationId?: string | null;
+  /** W5b, Jira issues only: the folder chosen in the preview, remembered for the Jira project on Start. */
+  folder?: string | null;
+}
+
+/** What `runs:resolve-ticket` answers: a typed key's ticket, in either system (W5b). */
+export interface ResolvedTicket {
+  provider: 'native' | 'jira';
+  /** `wi-…` or `tref-…` — what a brief preview names. */
+  id: string;
+  identifier: string;
+  title: string;
+  /** Native: the project id. Jira: the project key. */
+  projectId: string;
+  url: string | null;
+}
+
+/** What `runs:jira-ticket-ref` answers: a Jira issue's ledger handle (W5b). */
+export interface JiraTicketRef {
+  /** `tref-…`. */
+  ticketId: string;
+  /** `ENG-4`. */
+  identifier: string;
+  title: string;
+  url: string | null;
 }
 
 /** Push payload of `runs:focus`. */
