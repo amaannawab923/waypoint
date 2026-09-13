@@ -283,3 +283,83 @@ describe('the kept transcript (ROAD-124)', () => {
     expect(getAgentRunTranscript).not.toHaveBeenCalled();
   });
 });
+
+describe('the folded brief (W5a)', () => {
+  const long = `You are working on ROAD-43…\n${'x'.repeat(400)}`;
+  const briefTurn = {
+    id: 't1',
+    seq: 1,
+    initiator: 'user',
+    items: [
+      { kind: 'message', id: 'm1', seq: 1, role: 'user', text: long },
+      {
+        kind: 'message',
+        id: 'm2',
+        seq: 2,
+        role: 'assistant',
+        text: 'reading…',
+      },
+    ],
+  };
+
+  it('seeds the placeholder, hands the brief back, and folds the live first turn the same way', async () => {
+    const fb = fakeBridge({}, [briefTurn]);
+    runtime.connectSession.mockImplementation(() => jest.fn());
+    const { result } = renderHook(() =>
+      useSessionTranscript('run-a', {
+        bridge: fb.bridge,
+        foldBrief: { label: 'ROAD-43 · Investigate' },
+      }),
+    );
+    await flush();
+    const state = runtime.createChatState.mock.results[0].value;
+    const seeded = state.transcript.history.seed.mock.calls.at(-1)[0];
+    expect(seeded[0].items[0].text).toMatch(
+      /^Brief for ROAD-43 · Investigate — \d+ lines/,
+    );
+    expect(seeded[0].items[1].text).toBe('reading…');
+    expect(result.current.brief).toBe(long);
+
+    expect(
+      typeof runtime.connectSession.mock.calls[0][1].activeTurn.subscribe,
+    ).toBe('function');
+  });
+
+  it('folds the live first turn while the agent is still on it (no history yet)', async () => {
+    const fb = fakeBridge(
+      {
+        [`acp.session.activeTurn|${JSON.stringify({ conversationId: 'run-a' })}`]:
+          briefTurn,
+      },
+      [],
+    );
+    runtime.connectSession.mockImplementation(() => jest.fn());
+    renderHook(() =>
+      useSessionTranscript('run-a', {
+        bridge: fb.bridge,
+        foldBrief: { label: 'ROAD-43 · Investigate' },
+      }),
+    );
+    await flush();
+    const state = runtime.createChatState.mock.results[0].value;
+    const placed = state.transcript.activeTurn.set.mock.calls.at(-1)[0];
+    expect(placed.items[0].text).toMatch(/^Brief for ROAD-43 · Investigate/);
+    const source = runtime.connectSession.mock.calls[0][1];
+    expect(source.activeTurn.getSnapshot().items[0].text).toMatch(
+      /^Brief for ROAD-43/,
+    );
+  });
+
+  it('without the option, the first message is left as it is', async () => {
+    const fb = fakeBridge({}, [briefTurn]);
+    runtime.connectSession.mockImplementation(() => jest.fn());
+    const { result } = renderHook(() =>
+      useSessionTranscript('run-a', { bridge: fb.bridge }),
+    );
+    await flush();
+    const state = runtime.createChatState.mock.results[0].value;
+    const seeded = state.transcript.history.seed.mock.calls.at(-1)[0];
+    expect(seeded[0].items[0].text).toBe(long);
+    expect(result.current.brief).toBeNull();
+  });
+});

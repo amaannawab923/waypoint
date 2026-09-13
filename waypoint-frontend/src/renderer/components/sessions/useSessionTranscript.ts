@@ -24,6 +24,7 @@ import {
   type SessionSource,
 } from '@/data/live/sessionSource';
 import { getSharedChatContext } from '@/lib/chatContext';
+import { briefTurnSeq, foldBrief, foldTurn } from './briefFold';
 
 /** How the transcript's history read stands. */
 export type HistoryStatus =
@@ -66,13 +67,24 @@ export interface SessionTranscriptOptions {
    */
   awaitingSession?: boolean;
   bridge?: SessionBridge;
+  /**
+   * W5a: fold the first prompt (a dispatched run's brief) to one line in
+   * the transcript and hand it back as `brief` for the bar above
+   * (briefFold.ts). The label names the run in the placeholder.
+   */
+  foldBrief?: { label: string } | null;
 }
 
 export function useSessionTranscript(
   runId: string,
   options: SessionTranscriptOptions = {},
 ) {
-  const { awaitingSession = false, bridge = engineSessionBridge } = options;
+  const {
+    awaitingSession = false,
+    bridge = engineSessionBridge,
+    foldBrief: fold = null,
+  } = options;
+  const foldLabel = fold?.label ?? null;
   const runtime = getChatUiRuntime();
   const context = getSharedChatContext();
   const [unit, setUnit] = useState<TranscriptUnit | null>(null);
@@ -84,6 +96,11 @@ export function useSessionTranscript(
   // The ledger's turnCount is the orchestrator's to maintain (W4/W5) and
   // says 0 until then, so the pane counts what it can see.
   const [turnCount, setTurnCount] = useState(0);
+  // The folded first prompt, for the Brief bar; null until history says.
+  const [brief, setBrief] = useState<string | null>(null);
+  const briefSeqRef = useRef<number | null>(null);
+  const foldLabelRef = useRef<string | null>(foldLabel);
+  foldLabelRef.current = foldLabel;
 
   const loadHistory = useCallback(async (target: TranscriptUnit) => {
     // The daemon's history first; the ledger's snapshot when the daemon
@@ -120,18 +137,40 @@ export function useSessionTranscript(
       });
       return;
     }
+    // The brief folded (W5a), when asked: the earliest turn's opening
+    // message becomes one line; its text goes to the bar.
+    let seeded = turns ?? [];
+    if (foldLabelRef.current) {
+      const folded = foldBrief(seeded, foldLabelRef.current);
+      seeded = folded.turns;
+      briefSeqRef.current = folded.seq;
+      setBrief(folded.brief);
+    }
     // `seed` replaces the committed history AND resets the active turn
     // (chat-ui's ChatHistory contract). Found live: a turn in flight
     // vanished from the pane the moment history landed after the live
     // snapshot. So the follower's current turn is put back right after.
-    target.state.transcript.history.seed(turns ?? []);
+    target.state.transcript.history.seed(seeded);
     target.state.transcript.activeTurn.set(
-      target.source.activeTurn.getSnapshot() ?? null,
+      foldActive(target.source.activeTurn.getSnapshot() ?? null),
     );
     target.state.session.setPendingPrompt(null);
     setTurnCount(turns?.length ?? 0);
     setHistoryStatus({ kind: 'ready' });
   }, []);
+
+  // The live active turn folded the same way: the brief is the first turn
+  // while the agent works on it, before history has it committed.
+  const foldActive = useCallback(
+    (turn: ReturnType<SessionSource['activeTurn']['getSnapshot']> | null) => {
+      const label = foldLabelRef.current;
+      if (!turn || !label) return turn ?? null;
+      const seq = briefSeqRef.current;
+      if (seq !== null ? turn.seq !== seq : turn.seq !== 1) return turn;
+      return foldTurn(turn, label);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (awaitingSession) {
@@ -139,6 +178,8 @@ export function useSessionTranscript(
       setUnit(null);
       setHistoryStatus({ kind: 'loading' });
       setTurnCount(0);
+      setBrief(null);
+      briefSeqRef.current = null;
       return undefined;
     }
     const created: TranscriptUnit = {
@@ -154,6 +195,8 @@ export function useSessionTranscript(
     setUnit(created);
     setHistoryStatus({ kind: 'loading' });
     setTurnCount(0);
+    setBrief(null);
+    briefSeqRef.current = null;
 
     // History first, then the live connection — emdash's own order
     // (acp-chat-store.ts's _runBootstrap): connectSession's first sync
@@ -168,7 +211,14 @@ export function useSessionTranscript(
       if (gone) return;
       disconnect = runtime.connectSession(
         created.state,
-        created.source.connectSource,
+        {
+          ...created.source.connectSource,
+          activeTurn: {
+            getSnapshot: () =>
+              foldActive(created.source.connectSource.activeTurn.getSnapshot()),
+            subscribe: created.source.connectSource.activeTurn.subscribe,
+          },
+        },
         {
           onTurnCommitted: () => {
             loadHistory(created).catch(() => {});
@@ -234,6 +284,8 @@ export function useSessionTranscript(
     state: unit && unit.runId === runId ? unit.state : null,
     historyStatus,
     turnCount,
+    /** The folded first prompt (W5a), when `foldBrief` was asked and history had one. */
+    brief,
     pendingPermissions,
     usage,
     liveStatus,
