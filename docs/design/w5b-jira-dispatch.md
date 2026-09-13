@@ -307,3 +307,60 @@ active day on Jira issues vs native tickets; the approval rate of
 run-filed Jira comments and how often the transition card is rejected
 (the name rule picked wrong); how many Jira projects reach a remembered
 folder on the first dispatch (the mapping is set once and stays).
+
+## 9. What the build changed — 2026-09-13
+
+Recorded after the build, before the founder's manual round
+(docs/qa/manual-test-cases.md JIRA-SESS-1…14, not yet run), where the
+plan above and the code differ.
+
+1. **The brief's input widened rather than replaced** (§3.1).
+   `BriefInput.ticket` is a union of the ledger's ticket and the four
+   fields the brief reads; `comments` a union of the ledger's row and an
+   already-named flat comment; `jira?: JiraBriefFacts` carries the URL,
+   labels, assignee and reporter. `jiraBriefTicket` / `jiraBriefComments`
+   adapt the wire types. Every W5a brief test runs unchanged.
+2. **A preview with no folder still has a brief.** For a Jira issue whose
+   project has no remembered folder the brief is built with
+   `(the folder you choose in the preview)` where the repository goes,
+   so the person reads it while choosing; a pick re-fires the preview
+   and the brief is rebuilt on the real folder. The dialog's picker
+   offers git repositories only — a session on a ticket always takes a
+   worktree — and Start stays disabled until one is chosen.
+3. **`runs/jiraRuns.ts`** holds what the plan put in dispatch: the
+   injected `JiraRunDeps` (main's reads and the stored site),
+   `describeRunTicket` (a native ticket or a ref, as a label and a link)
+   and `pickReviewTransition`. finalize, runsIpc and dispatch import it;
+   engineIpc wires `jira/jiraClient.ts` and `jira/borrowedCredential.ts`
+   (the two readers — the encoded header and the site — so no run module
+   imports Electron).
+4. **The transition's event names the transition.** `proposal_created`
+   for a Jira state change carries `transitionId` and `stateName`; the
+   no-transition case is a `note` event with `offered: [...]`, and so are
+   an unreadable list and a disconnected Jira — three sentences, one
+   shape.
+5. **`GET /tickets/resolve/:identifier` answers 409** for an ambiguous
+   key and for Jira unreachable with no native hit, 404 for missing, 400
+   for an explicit `provider=jira` with no credential. Main's ledger
+   client turns 404 into null and lets the 409 sentence through; the
+   renderer shows it under the composer.
+6. **The drawer mints on open.** `JiraSessionsSection` asks main for the
+   handle when the drawer (or page) mounts — an upsert, one row however
+   many opens — and renders the W5a section only once it has it; a
+   handle that cannot be minted leaves the section out, with no verbs
+   that would fail.
+7. **The mapping file's default location** is beside the recents file
+   (`<userData>/engine/jira-project-repos.json`); tests hand in their
+   own.
+8. **`agent_runs.project_id` for a Jira run** is the folder's project
+   through `describeFolder` — the Roadmap project when its linked
+   repository is chosen, null for any other repository — exactly W4b's
+   rule for an independent run, so a Jira run lists under the project
+   whose code it touched.
+9. **The backend is not prettier-formatted** (no config in
+   `waypoint-backend/`, and no existing file passes any obvious one);
+   the frontend's touched files are, with the package's config.
+10. **Not verified live.** No Jira write was made by the build or its
+    tests; the two writes (JIRA-SESS-7, JIRA-SESS-10) and the read-only
+    walk-through are the founder's manual round. The engine dev process
+    was paused for the main-process edits and resumed at the end.

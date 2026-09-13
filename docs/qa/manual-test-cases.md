@@ -2420,6 +2420,158 @@ its failure window is 00:00–02:00 local and the pass ran inside it.
   cancelled`; there is no rate-limit reason to show. The spec's "rate-
   limit line" is scoped down to a note until the daemon exposes one.
 
+## Jira sessions (W5b, ROAD-126) — docs/design/w5b-jira-dispatch.md
+
+**Not yet run — Jira writes are the founder's.** Written 2026-09-13 for the
+manual round, to be executed in manual mode against the seeded test site
+(`waypoint123.atlassian.net`) with the Roadmap project linked to this
+checkout and the engine running. Every case up to the approve is a read;
+JIRA-SESS-7 and JIRA-SESS-10 are the two that write to Jira, and they
+are the only two. Nothing in the slice's build or tests wrote to any
+Jira site. Pick an issue in "my work" that a session can sensibly act on
+(a small bug in this repository, or a doc task) — `ENG-4` below stands
+for it.
+
+- **JIRA-SESS-1** — The Sessions section on a Jira issue
+  Steps: My Jira → open ENG-4 in the drawer; then expand to `/my-jira/ENG-4`.
+  Expected: Under the description and links, above Comments, a *Sessions*
+  section with **Investigate**, **Fix**, **Something else…** — the same
+  three verbs a native ticket has. No runs listed yet. The section is
+  absent (not empty) with Jira disconnected or the engine unavailable.
+  Check: `psql -At waypoint -c "select id, external_id, external_site from
+  ticket_refs where external_id='ENG-4'"` shows one `tref-…` row for the
+  connected site, and a second drawer open does not add a second row.
+- **JIRA-SESS-2** — The brief preview asks for the folder, once
+  Steps: Investigate on ENG-4 (the first time for an `ENG-…` issue).
+  Expected: The dialog's Issue row links "ENG-4 in Jira ↗"; the Folder row
+  says "Not set yet — choose the folder ENG's code lives in below"; the
+  folder picker lists recent folders and linked repositories (git
+  repositories only) with Browse…; the Worktree row says `agent/ENG-4`
+  from "(the folder's default branch)"; **Start session is disabled**. The
+  brief is already built from the issue — "You are working on ENG-4, a
+  Jira issue (https://…/browse/ENG-4)", "## Issue ENG-4 — <summary>",
+  Type/Priority/State/Labels/Assignee/Reporter, the description, the
+  newest comments with their authors and times, the task in plan mode,
+  "Repository: (the folder you choose in the preview)". No account id,
+  no token, no URL with a secret anywhere in it.
+  Pick the Roadmap repository. Expected: the preview rebuilds — Folder
+  shows `~/waypoint-electron · Waypoint Roadmap · will be remembered for
+  ENG`, the base-branch select appears with `main`, the brief's
+  Repository line names the folder, Start enables.
+- **JIRA-SESS-3** — Investigate runs, on the issue's handle
+  Steps: Start.
+  Expected: Within a second a row `ENG-4 · Investigate` with the
+  `Investigate PLAN` chip, branch `agent/ENG-4`; the list's *Group by
+  ticket* header reads `ENG-4 · <summary>`; the header's ticket link
+  opens the issue in Jira (external), not a Waypoint ticket page. The
+  brief is the first message; the agent works in the fresh worktree.
+  Check: `select ticket_id, project_id, title from agent_runs order by
+  created_at desc limit 1` → `tref-…`, `proj-…` (the Roadmap project,
+  because its linked repository was chosen), `ENG-4 · Investigate`.
+- **JIRA-SESS-4** — The folder is remembered
+  Steps: After JIRA-SESS-3, Investigate (or Fix) on any other `ENG-…`
+  issue, or ENG-4 again.
+  Expected: No picker. The Folder row shows the repository with
+  `remembered for ENG` and a **Change** link; Start is enabled at once.
+  Change opens the picker over it with *Keep this one*; picking another
+  repository rebuilds the brief on it and, on Start, replaces the memory.
+  Check: `~/Library/Application Support/waypoint-frontend/engine/
+  jira-project-repos.json` holds one entry for `waypoint123.atlassian.net`
+  / `ENG` with the absolute path.
+- **JIRA-SESS-5** — Finalize files the comment proposal on the Jira issue
+  Steps: Let the Investigate turn end (or steer it to).
+  Expected: `finishing → needs-review`; one comment proposal in Review
+  with the **external-write banner** Copilot's Jira proposals carry — the
+  site, "posts as <Atlassian account>", the watchers/assignee sentence —
+  and "from run ENG-4 · Investigate ↗"; the card's disclosure reads "This
+  is a Waypoint session — <name>'s agent — reporting on their behalf:"
+  (not Copilot's). The Copilot note says "1 proposal filed". The event
+  trail has `proposal_created` with `kind: comment`; no state change for
+  an Investigate. **Do not approve yet.**
+  Check: `select ticket_id, project_id, origin, snapshot->>'provider',
+  snapshot->>'externalSite' from proposals order by created_at desc limit
+  1` → `tref-…`, NULL, `agent_run`, `jira`, the site.
+- **JIRA-SESS-6** — Jira disconnected between start and finish
+  Steps: Start an Investigate on a Jira issue; while it runs, disconnect
+  Jira in My Jira; let the turn end.
+  Expected: The run goes `failed` with "The proposal could not be filed:
+  Jira is not connected, so a run cannot propose on a Jira issue" (the
+  backend's sentence) — never a needs-review with nothing to review; the
+  note says the run failed. Reconnect Jira afterwards.
+- **JIRA-SESS-7 (WRITE)** — Approve the comment
+  Steps: In Review, Approve the comment proposal from JIRA-SESS-5.
+  Expected: The comment appears on ENG-4 in Jira, posted by the connected
+  Atlassian account, opening with the session disclosure in italics on
+  its own line, then the report rendered — `## Root cause` as a heading,
+  `- ` lines as a bullet list, fenced code as a code block, `file.ts:41`
+  in code marks — not as literal `##` and `-` lines. The card goes
+  Applied; the run goes `Done`; the note says "its proposals were decided
+  (1 executed)". The issue's status is unchanged.
+- **JIRA-SESS-8** — Fix, seeded from the approved RCA, on the issue
+  Steps: Fix on ENG-4 (the section, or `/fix ENG-4 <note>` from Copilot).
+  Expected: The preview is a writing session, auto-approve on, "Root
+  cause, as approved" seeded from the comment approved in JIRA-SESS-7,
+  the remembered folder, the note in the brief. Start: the row carries
+  `Fix AUTO`, branch `agent/ENG-4-<suffix>` (the first branch exists).
+  A second Fix while this is live is refused with "A writing session is
+  already live on ENG-4"; Investigate is still allowed. The env scrub
+  holds (SESS-36's `git push` refusal is unchanged — optional to repeat).
+- **JIRA-SESS-9** — Finalize files the transition, or says why not
+  Steps: Let the Fix turn end.
+  Expected: The host pushes the branch and opens the PR titled from the
+  one commit (else `Fix ENG-4: <summary>`), its body's first line a link
+  to the issue in Jira. Two proposals: the comment (PR link, branch
+  work, then the report) and a **state change** whose card says "from
+  <current status> to <transition name>" — the transition named for
+  review when ENG-4's workflow offers one (e.g. *In Review* / *Code
+  Review*), else the one that moves it to *In Progress*. When the issue
+  offers neither (already In Progress with only *Done* available): one
+  proposal, and the run's events carry a `note` — "filed only the
+  comment: no transition to review or in progress", `offered: [...]`.
+  Check: `select kind, payload, snapshot->>'fromStateId',
+  snapshot->>'toStateName' from proposals where agent_run_id='<run>'` —
+  the state change's `payload.stateId` is a small integer (the TRANSITION
+  id), `fromStateId` the issue's live status id.
+- **JIRA-SESS-10 (WRITE)** — Approve the transition, and its staleness
+  Steps: First, in Jira, move ENG-4 to some other status by hand. Then
+  Approve the state-change card.
+  Expected: Stale — "This issue changed since Copilot proposed this — ask
+  again" (the shared check); nothing applied. Move it back in Jira, Fix
+  again (or use a fresh Fix on another issue), and Approve the new
+  state-change card with the issue untouched: the transition is applied
+  in Jira, the card goes Applied, the run goes `Done` once both cards
+  are decided.
+- **JIRA-SESS-11** — Copilot: `/investigate ENG-4`, "look at ENG-4", get_run
+  Steps: In Copilot, `/investigate ENG-4`; then in plain language "can a
+  session look at ENG-4?"; after a run finished, "what did the session
+  find on ENG-4?".
+  Expected: The slash command opens the same preview (no model turn); the
+  offer card names ENG-4 and Investigate is highlighted; `get_run`
+  answers from the ledger with "Jira issue: ENG-4 — <summary> (url)" and
+  the closing message. `/investigate eng-4` (lower case) works.
+- **JIRA-SESS-12** — An ambiguous key is refused, never guessed
+  Steps: Create a native ticket whose identifier collides with a Jira key
+  (a project with identifier `ENG` and a ticket that becomes `ENG-<n>`
+  matching an existing Jira issue), then `/investigate ENG-<n>`.
+  Expected: Under the composer: `"ENG-<n>" is ambiguous: it names a
+  Waypoint ticket ("…") and a Jira issue ("…"). Open the one you mean and
+  use its Sessions section.` No preview. The same from
+  `dispatch_session`. The Sessions section on either ticket still works.
+- **JIRA-SESS-13** — A ref from another site
+  Steps: With a `tref-…` row minted against the test site, disconnect and
+  connect a different Atlassian site (or edit `external_site` on a row in
+  the dev database), then Investigate from a run's history or a stale
+  drawer.
+  Expected: "ENG-4 belongs to another Jira site (<site>); this Waypoint is
+  connected to <site>." — no run, no read.
+- **JIRA-SESS-14** — Labels survive a deleted ref; nothing leaks
+  Steps: Open the sessions list with Jira runs present; open one; check
+  the brief text and the run's events.
+  Expected: Rows and group headers name `ENG-4 · <summary>` from the ref
+  (cached summary); the header links the issue. The brief and events
+  carry no account id, token, or credential-bearing URL (grep the
+  transcript for `accountid`, `Bearer`, `api_token`).
+
 ## Summary
 
 **132 test cases executed, personally, live against the running app, across all 27 sections.**
