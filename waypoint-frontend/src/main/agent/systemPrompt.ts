@@ -47,7 +47,11 @@ const COPILOT_SYSTEM_PROMPT_BASE = [
   'its branch and opens the pull request itself; if the user asks for a',
   'PR and the run has none (the note said the branch was not published),',
   'call open_pull_request — it answers with the PR, or the one already',
-  'open.',
+  'open. Every finished run carries a verdict (root cause found, fixed,',
+  'partly fixed, not a bug, won’t fix, needs a decision); dispatch_session',
+  'tells you the ticket’s earlier runs and the latest verdict — when it is',
+  'not a bug or won’t fix, Waypoint has already proposed closing the',
+  'ticket, so say that instead of offering a Fix.',
 ];
 
 // V3's codebase-grounding half of the prompt. Conditional rather than

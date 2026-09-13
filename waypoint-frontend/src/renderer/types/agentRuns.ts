@@ -9,7 +9,11 @@ export type {
   AgentRunEntry,
   AgentRunEvent,
   AgentRunStatus,
+  RunVerdict,
 } from '../../main/engine/runs/ledgerClient';
+
+// W5c: what dispatch_session hands the renderer with the offer.
+export type { SessionOfferHistory } from '../../main/copilot/sessionTools';
 
 export type {
   BriefPreview,

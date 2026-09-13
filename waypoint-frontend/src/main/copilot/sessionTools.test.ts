@@ -169,13 +169,68 @@ describe('dispatch_session', () => {
         title: 'Sessions anywhere',
         intent: 'investigate',
         note: null,
+        history: null,
       },
     ]);
     expect(answer).toContain(
       'showing the person the session options for ROAD-116',
     );
     expect(answer).toContain('You suggested Investigate');
+    expect(answer).toContain('ROAD-116 has no earlier runs.');
     expect(answer).toContain('Nothing has started');
+  });
+
+  // W5c: the ticket's earlier runs ride on the offer and in the reply —
+  // the latest one's verb, status, verdict and PR, from the ledger.
+  it("carries the ticket's run history and the latest verdict; a ledger that will not answer still offers", async () => {
+    const { tool, offers, deps } = harness({
+      runs: [
+        run({
+          id: 'run-old0000',
+          createdAt: '2026-09-10T00:00:00.000Z',
+          status: 'done',
+          verdict: 'root-cause',
+        }),
+        run({
+          id: 'run-new0000',
+          createdAt: '2026-09-12T00:00:00.000Z',
+          intent: 'fix',
+          title: 'ROAD-116 · Fix',
+          status: 'needs-review',
+          verdict: 'not-a-bug',
+          prUrl: null,
+        }),
+      ],
+    });
+    const answer = await tool('dispatch_session').handler({
+      ticket: 'ROAD-116',
+    });
+    expect(deps.ledger.listAllRuns).toHaveBeenCalledWith({ ticketId: 'wi-1' });
+    expect(offers[0].history).toEqual({
+      runs: 2,
+      latest: {
+        runId: 'run-new0000',
+        title: 'ROAD-116 · Fix',
+        intent: 'fix',
+        status: 'needs-review',
+        verdict: 'not-a-bug',
+        prUrl: null,
+      },
+    });
+    expect(answer).toContain(
+      'ROAD-116 already has 2 earlier runs · latest: Fix, needs review, verdict: not a bug (run run-new0000).',
+    );
+    expect(answer).toContain('say so before suggesting another session');
+
+    const failing = harness();
+    (failing.deps.ledger.listAllRuns as jest.Mock).mockRejectedValue(
+      new Error('ledger down'),
+    );
+    const answer2 = await failing
+      .tool('dispatch_session')
+      .handler({ ticket: 'ROAD-116' });
+    expect(failing.offers[0].history).toBeNull();
+    expect(answer2).toContain('has no earlier runs');
   });
 
   it('takes a ticket id too, and a note for the brief', async () => {
@@ -275,11 +330,19 @@ describe('get_run', () => {
   ];
 
   it('by run id: the facts, what it filed, and its closing message', async () => {
-    const { tool } = harness({ runs: [run()], proposals });
+    const { tool } = harness({
+      runs: [
+        run({ verdict: 'root-cause', prUrl: 'https://github.com/o/r/pull/3' }),
+      ],
+      proposals,
+    });
     const answer = await tool('get_run').handler({ run_id: 'run-abc1234' });
     expect(answer).toContain('Run run-abc1234 — ROAD-116 · Investigate');
     expect(answer).toContain('Status: needs-review');
     expect(answer).toContain('Intent: Investigate; mode: plan');
+    // W5c: the verdict and the PR, when the run has them.
+    expect(answer).toContain('Verdict: root cause found');
+    expect(answer).toContain('Pull request: https://github.com/o/r/pull/3');
     expect(answer).toContain('Branch: agent/ROAD-116 from main');
     expect(answer).toContain('Filed: comment (proposed)');
     expect(answer).toContain(

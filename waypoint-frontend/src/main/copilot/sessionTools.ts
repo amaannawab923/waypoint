@@ -5,8 +5,11 @@ import {
   assertRunId,
   isTicketRef,
   type AgentRun,
+  type AgentRunStatus,
   type LedgerClient,
+  type RunVerdict,
 } from '../engine/runs/ledgerClient';
+import { verdictLabel } from '../engine/runs/report';
 import type { InProcessServerSpec, InProcessToolSpec } from './claudeSdkClient';
 
 /**
@@ -42,6 +45,24 @@ export type OpenPullRequestOutcome =
   | { kind: 'skipped'; reason: string }
   | { kind: 'failed'; stage: 'push' | 'pr'; message: string };
 
+/**
+ * What the ticket's earlier runs say (W5c): how many, and the latest one's
+ * verb, status, verdict and PR — so the offer, and the model, know a
+ * second Investigate is a second one, and that a Fix follows a root cause
+ * already found (or a not-a-bug already concluded).
+ */
+export interface SessionOfferHistory {
+  runs: number;
+  latest: {
+    runId: string;
+    title: string | null;
+    intent: RunIntent | null;
+    status: AgentRunStatus;
+    verdict: RunVerdict | null;
+    prUrl: string | null;
+  };
+}
+
 /** What the renderer is handed: the ticket, and the verb the model leaned to, if any. */
 export interface SessionOffer {
   conversationId: string;
@@ -51,6 +72,8 @@ export interface SessionOffer {
   intent: RunIntent | null;
   /** The model's note for the brief (a *Something else…* instruction, or a hint for Fix). */
   note: string | null;
+  /** The ticket's earlier runs, newest first; null when it has none. */
+  history: SessionOfferHistory | null;
 }
 
 export interface SessionToolsDeps {
@@ -147,21 +170,69 @@ const INTENT_LABEL: Record<RunIntent, string> = {
   custom: 'Session',
 };
 
+const STATUS_LABEL: Record<AgentRunStatus, string> = {
+  queued: 'queued',
+  provisioning: 'provisioning',
+  running: 'running',
+  blocked: 'blocked',
+  finishing: 'finishing',
+  'needs-review': 'needs review',
+  done: 'done',
+  interrupted: 'interrupted',
+  failed: 'failed',
+  cancelled: 'cancelled',
+};
+
 function describeRun(run: AgentRun): string {
   const lines = [
     `Run ${run.id} — ${run.title ?? '(untitled)'}`,
     `Status: ${run.status}${run.blockedReason ? ` (${run.blockedReason})` : ''}${run.errorMessage ? ` — ${run.errorMessage}` : ''}`,
     `Intent: ${run.intent ? INTENT_LABEL[run.intent] : 'independent session'}; mode: ${run.modeId ?? 'default'}${run.autoApprove ? ' (auto-approve)' : ''}`,
   ];
+  if (run.verdict) lines.push(`Verdict: ${verdictLabel(run.verdict)}`);
   if (run.branch)
     lines.push(
       `Branch: ${run.branch}${run.baseRef ? ` from ${run.baseRef}` : ''}`,
     );
+  if (run.prUrl) lines.push(`Pull request: ${run.prUrl}`);
   lines.push(
     `Turns: ${run.turnCount}; started ${run.createdAt}; last change ${run.updatedAt}`,
   );
   if (run.summary) lines.push(`Summary: ${run.summary}`);
   return lines.join('\n');
+}
+
+/** The ticket's runs, newest first, as the offer carries them. */
+export function historyOf(runs: AgentRun[]): SessionOfferHistory | null {
+  if (runs.length === 0) return null;
+  const [latest] = [...runs].sort((a, b) =>
+    b.createdAt.localeCompare(a.createdAt),
+  );
+  return {
+    runs: runs.length,
+    latest: {
+      runId: latest.id,
+      title: latest.title,
+      intent: latest.intent,
+      status: latest.status,
+      verdict: latest.verdict,
+      prUrl: latest.prUrl,
+    },
+  };
+}
+
+/** "2 earlier runs · latest: Investigate, needs review, verdict: not a bug" */
+export function describeHistory(history: SessionOfferHistory): string {
+  const { latest } = history;
+  const parts = [
+    latest.intent ? INTENT_LABEL[latest.intent] : 'a session',
+    STATUS_LABEL[latest.status] ?? latest.status,
+  ];
+  if (latest.verdict) parts.push(`verdict: ${verdictLabel(latest.verdict)}`);
+  if (latest.prUrl) parts.push(`PR ${latest.prUrl}`);
+  const count =
+    history.runs === 1 ? '1 earlier run' : `${history.runs} earlier runs`;
+  return `${count} · latest: ${parts.join(', ')}`;
 }
 
 const MAX_CLOSING_CHARS = 8_000;
@@ -215,6 +286,14 @@ export function buildSessionToolSpecs(
           typeof args.note === 'string' && args.note.trim()
             ? args.note.trim()
             : null;
+        // W5c: what the ticket's earlier runs concluded rides on the
+        // offer and in the reply — read from the ledger, never guessed.
+        // A ledger that will not answer is no reason to withhold the offer.
+        const history = historyOf(
+          await deps.ledger
+            .listAllRuns({ ticketId: ticket.id })
+            .catch(() => []),
+        );
         const shown = deps.offer({
           conversationId: deps.conversationId,
           ticketId: ticket.id,
@@ -222,6 +301,7 @@ export function buildSessionToolSpecs(
           title: ticket.title,
           intent,
           note,
+          history,
         });
         if (!shown) {
           throw new Error(
@@ -233,6 +313,9 @@ export function buildSessionToolSpecs(
           intent
             ? `You suggested ${INTENT_LABEL[intent]}; that button is highlighted.`
             : '',
+          history
+            ? `${ticket.identifier} already has ${describeHistory(history)} (run ${history.latest.runId}). A Fix started now is seeded from an approved root cause on the ticket; a closing verdict (not a bug, won't fix) means the ticket was proposed closed — say so before suggesting another session.`
+            : `${ticket.identifier} has no earlier runs.`,
           'Nothing has started. They will review the brief and press Start themselves; when the run finishes, a note arrives in this conversation. Do not say a session is running.',
         ]
           .filter(Boolean)

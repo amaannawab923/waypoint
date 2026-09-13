@@ -4,6 +4,8 @@ import { formatRelativeTime } from '@/lib/copilotSessions';
 import { useHomeDir } from '@/lib/useHomeDir';
 import { useTicketLabel } from '@/lib/useTicketLabel';
 import type { AgentRun } from '@/types/agentRuns';
+import { Badge } from '@/components/ui/Badge';
+import { verdictLabel, verdictTone } from '@/lib/runVerdict';
 import {
   intentView,
   providerView,
@@ -42,6 +44,34 @@ export function ProviderChip({
  * mark is on the row and in the header so an unattended agent in
  * someone's files is never invisible in the list.
  */
+/**
+ * What a finished run concluded (W5c): `not a bug`, `fixed`… — beside the
+ * status once finalize has read the report; nothing before.
+ */
+export function VerdictChip({
+  run,
+  size = 'sm',
+}: {
+  run: Pick<AgentRun, 'verdict'>;
+  size?: 'sm' | 'md';
+}) {
+  if (!run.verdict) return null;
+  return (
+    <span data-verdict-chip className="inline-flex shrink-0">
+      <Badge
+        tone={verdictTone(run.verdict)}
+        className={clsx(
+          size === 'sm'
+            ? 'px-1.5 py-0 text-[9px] leading-[14px]'
+            : 'py-0 text-[10px] leading-4',
+        )}
+      >
+        {verdictLabel(run.verdict)}
+      </Badge>
+    </span>
+  );
+}
+
 /**
  * A dispatched run's verb and mode (W5a §1.4): `Investigate · plan`,
  * `Fix · auto`, `Session`. Beside the status, where an independent run
@@ -188,6 +218,7 @@ export function SessionRow({
         ) : (
           run.autoApprove && <AutoMark />
         )}
+        <VerdictChip run={run} />
       </div>
       {reason && (
         <div className="truncate pl-[13px] text-[10.5px] text-warning">

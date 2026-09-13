@@ -2191,11 +2191,30 @@ describe('sessions in the conversation (W5a)', () => {
         title: 'Sessions anywhere',
         intent: 'fix',
         note: null,
+        // W5c: the ticket's earlier runs and the latest verdict.
+        history: {
+          runs: 2,
+          latest: {
+            runId: 'run-prior00',
+            title: 'ROAD-116 · Investigate',
+            intent: 'investigate',
+            status: 'done',
+            verdict: 'not-a-bug',
+            prUrl: null,
+          },
+        },
       });
     });
     const card = await screen.findByText('Session on ROAD-116');
     expect(card.closest('[data-session-offer]')).toHaveTextContent(
       'Sessions anywhere',
+    );
+    expect(
+      card
+        .closest('[data-session-offer]')!
+        .querySelector('[data-offer-history]'),
+    ).toHaveTextContent(
+      '2 earlier runs · latest: Investigate, done, verdict: not a bug · open',
     );
     fireEvent.click(screen.getByRole('button', { name: 'Fix' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(

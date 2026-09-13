@@ -21,7 +21,14 @@ import {
 } from '@/lib/copilotSlash';
 import { BriefPreviewDialog } from '@/components/sessions/BriefPreviewDialog';
 import { SESSIONS_ENABLED } from '@/lib/featureFlags';
-import type { BriefPreviewInput, RunIntent } from '@/types/agentRuns';
+import type {
+  BriefPreviewInput,
+  RunIntent,
+  SessionOfferHistory,
+} from '@/types/agentRuns';
+import { INTENT_LABEL } from '@/components/sessions/BriefPreviewDialog';
+import { statusView } from '@/components/sessions/sessionStatus';
+import { verdictLabel } from '@/lib/runVerdict';
 import { useCopilotConversations } from '@/lib/useCopilotConversations';
 import { useCopilotProposals } from '@/lib/useCopilotProposals';
 import { useCurrentRouteProject } from '@/lib/useCurrentRouteProject';
@@ -94,21 +101,40 @@ interface CopilotSessionOffer {
   title: string;
   intent: RunIntent | null;
   note: string | null;
+  /** W5c: the ticket's earlier runs, when it has any. */
+  history?: SessionOfferHistory | null;
+}
+
+/** "2 earlier runs · latest: Fix, needs review, verdict: not a bug" */
+export function describeOfferHistory(history: SessionOfferHistory): string {
+  const { latest } = history;
+  const parts = [
+    latest.intent ? INTENT_LABEL[latest.intent] : 'a session',
+    statusView(latest.status).label.toLowerCase(),
+  ];
+  if (latest.verdict) parts.push(`verdict: ${verdictLabel(latest.verdict)}`);
+  const count =
+    history.runs === 1 ? '1 earlier run' : `${history.runs} earlier runs`;
+  return `${count} · latest: ${parts.join(', ')}`;
 }
 
 /**
  * The three verbs as buttons in the conversation (W5a §1.2, §5): what
  * Copilot's dispatch_session tool renders. Each opens the brief preview;
- * nothing starts until the person presses Start there.
+ * nothing starts until the person presses Start there. W5c: the ticket's
+ * earlier runs, and the latest verdict, above the verbs — a second
+ * Investigate is offered as a second one.
  */
 function SessionOfferCard({
   offer,
   onPick,
   onDismiss,
+  onOpenRun,
 }: {
   offer: CopilotSessionOffer;
   onPick: (intent: RunIntent) => void;
   onDismiss: () => void;
+  onOpenRun: (runId: string) => void;
 }) {
   const verb = (intent: RunIntent, label: string) => (
     <Button
@@ -132,6 +158,21 @@ function SessionOfferCard({
           <div className="truncate text-text">{offer.title}</div>
           {offer.note && (
             <div className="mt-1 text-xs text-text-secondary">{offer.note}</div>
+          )}
+          {offer.history && (
+            <div
+              className="mt-1 text-xs text-text-secondary"
+              data-offer-history
+            >
+              {describeOfferHistory(offer.history)} ·{' '}
+              <button
+                type="button"
+                className="underline decoration-border underline-offset-2 hover:text-text"
+                onClick={() => onOpenRun(offer.history!.latest.runId)}
+              >
+                open
+              </button>
+            </div>
           )}
         </div>
         <IconButton label="Dismiss" onClick={onDismiss} className="-mr-1">
@@ -1450,6 +1491,9 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
                   }
                   onDismiss={() =>
                     setOffers((prev) => prev.filter((o) => o !== offer))
+                  }
+                  onOpenRun={(runId) =>
+                    navigate(`/sessions/${encodeURIComponent(runId)}`)
                   }
                 />
               ))}

@@ -75,6 +75,31 @@ describe('SessionDetail (W4)', () => {
     );
   });
 
+  // W5c: the verdict finalize read from the report, beside the status.
+  it('shows the verdict chip once the run has one, and nothing before', () => {
+    const { rerender, container } = renderDetail(
+      run({ status: 'running', entry: 'dispatched', intent: 'investigate' }),
+    );
+    expect(container.querySelector('[data-verdict-chip]')).toBeNull();
+    rerender(
+      <MemoryRouter>
+        <SessionDetail
+          run={run({
+            status: 'needs-review',
+            entry: 'dispatched',
+            intent: 'investigate',
+            verdict: 'not-a-bug',
+          })}
+          narrow={false}
+          onBack={jest.fn()}
+        />
+      </MemoryRouter>,
+    );
+    expect(container.querySelector('[data-verdict-chip]')).toHaveTextContent(
+      'not a bug',
+    );
+  });
+
   it('shows Resume only for an interrupted run, beside Stop', () => {
     const { rerender } = renderDetail(run({ status: 'running' }));
     expect(
