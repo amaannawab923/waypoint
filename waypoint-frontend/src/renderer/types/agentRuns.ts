@@ -12,10 +12,15 @@ export type {
 } from '../../main/engine/runs/ledgerClient';
 
 export type {
+  ResumeRunOutcome,
+  ResumeRunResult,
+  RunBranches,
   RunChanged,
   RunDiff,
   RunDiffFile,
   RunDiffFileStatus,
+  StartRunInput,
   StopRunOutcome,
   StopRunResult,
+  SupportedProviderId,
 } from '../../main/engine/types';

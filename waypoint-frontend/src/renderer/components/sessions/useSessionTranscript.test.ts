@@ -76,7 +76,7 @@ describe('useSessionTranscript', () => {
       [{ id: 't1', seq: 1 }],
     );
     const { result } = renderHook(() =>
-      useSessionTranscript('run-a', fb.bridge),
+      useSessionTranscript('run-a', { bridge: fb.bridge }),
     );
     await flush();
 
@@ -130,7 +130,7 @@ describe('useSessionTranscript', () => {
     const disconnect = jest.fn();
     runtime.connectSession.mockImplementation(() => disconnect);
     const { result, rerender } = renderHook(
-      ({ id }) => useSessionTranscript(id, fb.bridge),
+      ({ id }) => useSessionTranscript(id, { bridge: fb.bridge }),
       { initialProps: { id: 'run-a' } },
     );
     await flush();
@@ -159,5 +159,45 @@ describe('useSessionTranscript', () => {
     expect(fb.unsubscribed).toHaveLength(4);
     expect(runtime.createChatState).toHaveBeenCalledTimes(2);
     expect(result.current.historyStatus).toEqual({ kind: 'ready' });
+  });
+
+  it('makes no unit while the run awaits its session, and a fresh one once it has it (W4)', async () => {
+    const fb = fakeBridge({}, []);
+    const disconnect = jest.fn();
+    runtime.connectSession.mockImplementation(() => disconnect);
+    const { result, rerender } = renderHook(
+      ({ awaiting }) =>
+        useSessionTranscript('run-a', {
+          awaitingSession: awaiting,
+          bridge: fb.bridge,
+        }),
+      { initialProps: { awaiting: true } },
+    );
+    await flush();
+    // Provisioning: nothing subscribed, nothing read, no state to render.
+    expect(result.current.state).toBeNull();
+    expect(fb.bridge.subscribeTopic).not.toHaveBeenCalled();
+    expect(fb.bridge.call).not.toHaveBeenCalled();
+    expect(result.current.historyStatus).toEqual({ kind: 'loading' });
+
+    // Running: the unit is made, history read, session connected.
+    rerender({ awaiting: false });
+    await flush();
+    expect(runtime.createChatState).toHaveBeenCalledTimes(1);
+    expect(fb.bridge.subscribeTopic).toHaveBeenCalledTimes(4);
+    expect(fb.bridge.call).toHaveBeenCalledTimes(1);
+    expect(result.current.state).not.toBeNull();
+
+    // A resume passes through provisioning again: the old unit goes, and
+    // the far side gets fresh followers and a fresh history read.
+    rerender({ awaiting: true });
+    await flush();
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(fb.unsubscribed).toHaveLength(4);
+    expect(result.current.state).toBeNull();
+    rerender({ awaiting: false });
+    await flush();
+    expect(runtime.createChatState).toHaveBeenCalledTimes(2);
+    expect(fb.bridge.call).toHaveBeenCalledTimes(2);
   });
 });

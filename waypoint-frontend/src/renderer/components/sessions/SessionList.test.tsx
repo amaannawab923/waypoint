@@ -3,7 +3,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import type { AgentRun } from '@/types/agentRuns';
 import { groupRuns } from '@/lib/sessionsStore';
-import { NEW_SESSION_UNAVAILABLE, SessionList } from './SessionList';
+import { SessionList } from './SessionList';
 
 jest.mock('@/lib/useTicketLabel', () => ({
   useTicketLabel: (ticketId: string | null) =>
@@ -40,16 +40,18 @@ const RUNS = [
 
 function renderList(selected: string | null = null) {
   const onOpen = jest.fn();
+  const onNew = jest.fn();
   render(
     <MemoryRouter>
       <SessionList
         groups={groupRuns(RUNS)}
         selectedRunId={selected}
         onOpen={onOpen}
+        onNew={onNew}
       />
     </MemoryRouter>,
   );
-  return onOpen;
+  return Object.assign(onOpen, { onNew });
 }
 
 describe('SessionList', () => {
@@ -105,10 +107,11 @@ describe('SessionList', () => {
     expect(onOpen).toHaveBeenCalledWith('run-run');
   });
 
-  it('shows New session, disabled, with the sentence that says why', () => {
-    renderList();
+  it('the header "+" opens the New session dialog (W4)', () => {
+    const { onNew } = renderList();
     const plus = screen.getByLabelText('New session');
-    expect(plus).toHaveAttribute('aria-disabled', 'true');
-    expect(NEW_SESSION_UNAVAILABLE).toMatch(/W4/);
+    expect(plus).not.toHaveAttribute('aria-disabled');
+    fireEvent.click(plus);
+    expect(onNew).toHaveBeenCalledTimes(1);
   });
 });

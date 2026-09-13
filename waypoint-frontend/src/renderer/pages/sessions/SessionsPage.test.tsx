@@ -32,6 +32,25 @@ jest.mock('@/lib/useTicketLabel', () => ({
   useTicketLabel: () => null,
   useTicketSummary: () => null,
 }));
+// The dialog has its own test; here it is a marker that says whether it
+// is open, so the page's three ways of opening it can be proven.
+jest.mock('@/components/sessions/NewSessionDialog', () => ({
+  NewSessionDialog: ({
+    open,
+    onClose,
+  }: {
+    open: boolean;
+    onClose: () => void;
+  }) =>
+    open ? (
+      <div role="dialog" aria-label="New session">
+        dialog open
+        <button type="button" onClick={onClose}>
+          close dialog
+        </button>
+      </div>
+    ) : null,
+}));
 
 const run = (id: string, status: AgentRun['status']): AgentRun =>
   ({
@@ -91,7 +110,7 @@ beforeEach(() => {
 });
 
 describe('SessionsPage', () => {
-  it('with nothing selected: the list beside the "select a session" state, New session disabled with the W4 sentence', () => {
+  it('with nothing selected: the list beside the "select a session" state; either New session opens the dialog', () => {
     mockSessions([run('run-a', 'running')]);
     renderAt('/sessions');
     expect(
@@ -100,14 +119,39 @@ describe('SessionsPage', () => {
     expect(
       screen.getByText('Select a session, or start one'),
     ).toBeInTheDocument();
-    // Two of them — the list header's "+" and the empty state's button —
-    // both disabled until W4.
+    // Two of them — the list header's "+" and the empty state's button.
     const buttons = screen.getAllByRole('button', { name: /New session/ });
     expect(buttons).toHaveLength(2);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    fireEvent.click(buttons[1]);
     expect(
-      buttons.every((b) => b.getAttribute('aria-disabled') === 'true'),
-    ).toBe(true);
+      screen.getByRole('dialog', { name: 'New session' }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByText('close dialog'));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    fireEvent.click(buttons[0]);
+    expect(
+      screen.getByRole('dialog', { name: 'New session' }),
+    ).toBeInTheDocument();
     expect(screen.queryByTestId('detail')).not.toBeInTheDocument();
+  });
+
+  it('`n` opens the dialog — not while typing, not with a modifier, not twice', () => {
+    mockSessions([run('run-a', 'running')]);
+    renderAt('/sessions');
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    fireEvent.keyDown(input, { key: 'n' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'n', metaKey: true });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'n' });
+    expect(
+      screen.getByRole('dialog', { name: 'New session' }),
+    ).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'n' });
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    input.remove();
   });
 
   it('with a run selected: list and detail side by side; an unknown id says so', () => {

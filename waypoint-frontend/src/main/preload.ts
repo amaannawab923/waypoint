@@ -32,12 +32,16 @@ import {
   type EngineStatus,
   type LiveSnapshot,
   type LiveUpdate,
+  type ResumeRunResult,
+  type RunBranches,
   type RunChanged,
   type RunDiff,
+  type StartRunInput,
   type StopRunResult,
   type TopicClosedReason,
   type TopicSubscription,
 } from './engine/types';
+import type { AgentRun as AgentRunRow } from './engine/runs/ledgerClient';
 
 // The global Web Crypto API, not Node's `crypto` module: this preload script
 // runs in Electron's sandboxed renderer context by default (Electron 20+),
@@ -565,6 +569,18 @@ const electronHandler = {
     },
     revealRunWorktree(runId: string): Promise<void> {
       return ipcRenderer.invoke(RUNS_IPC.revealWorktree, runId);
+    },
+    // W4: starting and resuming (engine/runs/startRun.ts). The renderer
+    // names a project, a provider and a branch; main resolves the
+    // repository, writes the ledger and drives the daemon.
+    startRun(input: StartRunInput): Promise<AgentRunRow> {
+      return ipcRenderer.invoke(RUNS_IPC.start, input);
+    },
+    resumeRun(runId: string): Promise<ResumeRunResult> {
+      return ipcRenderer.invoke(RUNS_IPC.resume, runId);
+    },
+    listRunBranches(projectId: string): Promise<RunBranches> {
+      return ipcRenderer.invoke(RUNS_IPC.listBranches, projectId);
     },
     /** Push: main wrote a run's ledger row from the daemon's report. */
     onRunChanged(cb: (change: RunChanged) => void): () => void {

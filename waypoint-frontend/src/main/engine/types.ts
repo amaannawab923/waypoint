@@ -517,12 +517,79 @@ export const RUNS_IPC = {
   /** (runId) → void. Shows the worktree in the OS file manager. */
   revealWorktree: 'runs:reveal-worktree',
   /**
+   * (StartRunInput) → AgentRun, answered once the row is `provisioning`;
+   * the worktree and the session follow in main (W4, ROAD-67,
+   * docs/design/w4-start-session.md §3). Every later status arrives as
+   * `changed`.
+   */
+  start: 'runs:start',
+  /** (runId) → ResumeRunResult. An interrupted run, back on its worktree (ROAD-69). */
+  resume: 'runs:resume',
+  /** (projectId) → RunBranches. The linked repository's local branches, through the engine. */
+  listBranches: 'runs:list-branches',
+  /**
    * Push: RunChanged — main wrote a run's ledger row from what the daemon
-   * reported (runs/liveLedgerFollower.ts). The renderer re-reads the
-   * ledger; the payload is a hint, not the row.
+   * reported (runs/liveLedgerFollower.ts) or from a start/resume it is
+   * driving (runs/startRun.ts). The renderer re-reads the ledger; the
+   * payload is a hint, not the row.
    */
   changed: 'runs:changed',
 } as const;
+
+/**
+ * The providers `runs:start` will hand to the daemon — a subset of the
+ * daemon's own registry, listed here because a session on a provider
+ * nobody has verified against this pin is not a session Waypoint should
+ * start. Claude now; Codex arrives with W7 (ROAD-66's note). The New
+ * session dialog offers exactly this list.
+ */
+export const SUPPORTED_PROVIDERS = ['claude'] as const;
+export type SupportedProviderId = (typeof SUPPORTED_PROVIDERS)[number];
+
+/** The most a session title may be — one line, as the row shows it. */
+export const MAX_RUN_TITLE_CHARS = 120;
+
+/** What the renderer sends to `runs:start`. It names a project, never a path. */
+export interface StartRunInput {
+  projectId: string;
+  /** The current member (data/currentUser.ts) — ROAD-8 replaces this with the session's. */
+  ownerMemberId: string;
+  providerId: SupportedProviderId;
+  /** A local branch of the project's linked repository (`runs:list-branches`). */
+  baseRef: string;
+  title?: string | null;
+}
+
+export type ResumeRunOutcome =
+  /** The provider restored the previous conversation. */
+  | 'loaded'
+  /**
+   * The provider could not restore it: the daemon started a fresh session
+   * in the same worktree and Waypoint sent it the branch state as its
+   * first message.
+   */
+  | 'replaced-by-new'
+  /** Only an `interrupted` run can be resumed; this one is `status`. */
+  | 'not-resumable'
+  /** The run's worktree is no longer on disk; there is nothing to resume on. */
+  | 'worktree-gone';
+
+export interface ResumeRunResult {
+  outcome: ResumeRunOutcome;
+  /** The ledger's status after the action. */
+  status: string;
+}
+
+export interface RunBranches {
+  /** Local branch names, sorted. */
+  branches: string[];
+  /**
+   * The branch to preselect: what `origin/HEAD` points at when that is a
+   * local branch, else `main`, else `master`, else the first — null when
+   * the repository has no local branch at all.
+   */
+  suggested: string | null;
+}
 
 export interface RunChanged {
   runId: string;

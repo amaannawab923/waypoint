@@ -10,6 +10,8 @@ import { SkeletonListRows } from '@/components/ui/Skeleton';
 import { Avatar } from '@/components/ui/Avatar';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { NotWired } from '@/components/ui/NotWired';
+import { DefaultProviderSetting } from '@/components/sessions/DefaultProviderSetting';
+import { SESSIONS_ENABLED } from '@/lib/featureFlags';
 
 export default function Agents() {
   const { data: agents, loading, reload } = useAsync(() => listAgents(), []);
@@ -42,6 +44,14 @@ export default function Agents() {
           Create agent
         </Button>
       </div>
+
+      {/* W4: the provider every new session runs on (flag-gated with the
+          sessions panel it belongs to). */}
+      {SESSIONS_ENABLED && (
+        <div className="mb-6">
+          <DefaultProviderSetting />
+        </div>
+      )}
 
       <div className="mb-6">
         <NotWired capability="agents.runtime" />

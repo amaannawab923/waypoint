@@ -168,8 +168,10 @@ export function waitingReason(run: AgentRun): string | null {
  * ticket (resolved by the caller, `ticketLabel`), an independent one by
  * its branch, and a run that has neither yet by its id.
  */
+/** Ticket label → the title the user gave it (W4) → branch → the id. */
 export function runTitle(run: AgentRun, ticketLabel?: string | null): string {
   if (ticketLabel) return ticketLabel;
+  if (run.title) return run.title;
   if (run.branch) return run.branch;
   return `Session ${shortRunId(run.id)}`;
 }

@@ -1,0 +1,1 @@
+ALTER TABLE "workspaces" ADD COLUMN "default_agent_provider" text;

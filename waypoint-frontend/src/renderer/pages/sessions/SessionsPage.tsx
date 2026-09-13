@@ -2,13 +2,10 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Button } from '@/components/ui/Button';
-import { Tooltip } from '@/components/ui/Tooltip';
 import { IconBot, IconPlus, IconXCircle } from '@/components/icons';
+import { NewSessionDialog } from '@/components/sessions/NewSessionDialog';
 import { SessionDetail } from '@/components/sessions/SessionDetail';
-import {
-  NEW_SESSION_UNAVAILABLE,
-  SessionList,
-} from '@/components/sessions/SessionList';
+import { SessionList } from '@/components/sessions/SessionList';
 import { useMySessions, useSessionRun } from '@/lib/sessionsStore';
 import type { EngineStatus } from '@/types/engine';
 
@@ -51,17 +48,25 @@ function engineSentence(engine: EngineStatus | undefined): string | null {
   }
 }
 
-/** Present, disabled, and honest about why — docs/design/w3-sessions-rail.md §2. */
-function NewSessionButton() {
+/** Opens the New session dialog (W4, docs/design/w4-start-session.md §1.1). */
+function NewSessionButton({ onClick }: { onClick: () => void }) {
   return (
-    <Tooltip label={NEW_SESSION_UNAVAILABLE}>
-      <span className="inline-flex">
-        <Button size="xs" variant="primary" disabled aria-disabled="true">
-          <IconPlus size={12} />
-          New session
-        </Button>
-      </span>
-    </Tooltip>
+    <Button size="xs" variant="primary" onClick={onClick}>
+      <IconPlus size={12} />
+      New session
+    </Button>
+  );
+}
+
+/** The `n` key means New session only here, and never while typing. */
+function isTypingTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  return (
+    el?.tagName === 'INPUT' ||
+    el?.tagName === 'TEXTAREA' ||
+    el?.tagName === 'SELECT' ||
+    !!el?.isContentEditable ||
+    !!el?.closest?.('[data-shortcut-guard]')
   );
 }
 
@@ -88,6 +93,24 @@ export default function SessionsPage() {
     [navigate],
   );
   const back = useCallback(() => navigate('/sessions'), [navigate]);
+  const [newOpen, setNewOpen] = useState(false);
+  const openNew = useCallback(() => setNewOpen(true), []);
+  const closeNew = useCallback(() => setNewOpen(false), []);
+
+  // `n` opens the dialog — page-local, with the same typing guard the
+  // global shortcuts use (ROAD-111's first half); modifiers excluded so
+  // ⌘N stays whatever the OS makes of it.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'n' || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (newOpen || isTypingTarget(e.target)) return;
+      if (document.querySelector('[role="dialog"]')) return;
+      e.preventDefault();
+      setNewOpen(true);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [newOpen]);
 
   // Narrow, with a session open: Esc goes back to the list (§1.7). Left to
   // the list/detail otherwise — Esc has other owners (drawers, the composer).
@@ -139,7 +162,7 @@ export default function SessionsPage() {
               Open This machine
             </Button>
           ) : (
-            <NewSessionButton />
+            <NewSessionButton onClick={openNew} />
           )
         }
       />
@@ -161,6 +184,7 @@ export default function SessionsPage() {
             groups={groups}
             selectedRunId={runId ?? null}
             onOpen={open}
+            onNew={openNew}
             width={narrow ? '100%' : 300}
           />
         ))}
@@ -195,10 +219,11 @@ export default function SessionsPage() {
               icon={<IconBot size={28} />}
               title="Select a session, or start one"
               description="Pick anything on the left, or start a new run on a linked repo — you'll watch it live from right here."
-              action={<NewSessionButton />}
+              action={<NewSessionButton onClick={openNew} />}
             />
           </div>
         ))}
+      <NewSessionDialog open={newOpen} onClose={closeNew} engine={engine} />
     </div>
   );
 }

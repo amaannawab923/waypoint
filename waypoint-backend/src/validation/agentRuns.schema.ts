@@ -23,6 +23,15 @@ export const gitRefSchema = z
     message: 'not a valid git ref name',
   });
 
+// One line, as the panel's row shows it. Nullable on update so a title can
+// be removed; on create, absent and null mean the same thing.
+const titleSchema = z
+  .string()
+  .max(120)
+  .transform((v) => v.trim())
+  .transform((v) => (v.length === 0 ? null : v))
+  .nullable();
+
 export const createAgentRunSchema = z
   .object({
     projectId: id,
@@ -32,6 +41,9 @@ export const createAgentRunSchema = z
     entry: z.enum(['independent', 'dispatched']),
     providerId: z.string().min(1).max(64),
     baseRef: gitRefSchema.optional(),
+    // What the user typed in the New session dialog (W4). Trimmed; an
+    // empty title is no title, not a row named "".
+    title: titleSchema.optional(),
     retryOfRunId: id.optional(),
   })
   .strict()
@@ -125,6 +137,8 @@ export const updateAgentRunSchema = requireAtLeastOneField(
       summary: z.string().max(200_000).nullable().optional(),
       daemonWorkspaceId: z.string().max(256).nullable().optional(),
       daemonSessionId: z.string().max(256).nullable().optional(),
+      providerSessionId: z.string().max(256).nullable().optional(),
+      title: titleSchema.optional(),
       worktreePath: z.string().max(4096).nullable().optional(),
       branch: gitRefSchema.nullable().optional(),
       baseRef: gitRefSchema.nullable().optional(),
