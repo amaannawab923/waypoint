@@ -58,7 +58,7 @@ this order, and never the Details:
 Branch `agent/ENG-77` from `main` · 2 commits · 3 files changed
 Pull request: https://github.com/o/r/pull/64
 
-_Full report — the evidence, files and how it was verified — is on the run in Waypoint (ENG-77 · Fix)._
+*Full report — the evidence, files and how it was verified — is on the run in Waypoint (ENG-77 · Fix).*
 ```
 
 The branch line is git's count through the hardened runner (commits,

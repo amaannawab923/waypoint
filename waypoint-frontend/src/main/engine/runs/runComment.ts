@@ -88,8 +88,10 @@ export function buildRunComment(input: RunCommentInput): string {
   ].filter((l): l is string => !!l);
   if (facts.length) blocks.push(facts.join('\n'));
 
+  // `*…*`, not `_…_`: the one emphasis both markdown renderers (renderer
+  // lib/markdown.ts, backend lib/markdownHtml.ts) read.
   blocks.push(
-    `_Full report — the evidence, files and how it was verified — is on the run in Waypoint (${input.runLabel})._`,
+    `*Full report — the evidence, files and how it was verified — is on the run in Waypoint (${input.runLabel}).*`,
   );
   return blocks.join('\n\n');
 }

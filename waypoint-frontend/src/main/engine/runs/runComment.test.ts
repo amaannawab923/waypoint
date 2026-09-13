@@ -33,7 +33,7 @@ describe('buildRunComment', () => {
         '**Verdict:** fixed',
         'The retry re-sent the charge because the idempotency key was minted per attempt.\nKeyed it on the order id; the second attempt now returns the first result.',
         'Branch `agent/ENG-77` from `main` · 2 commits · 3 files changed\nPull request: https://github.com/o/r/pull/9',
-        '_Full report — the evidence, files and how it was verified — is on the run in Waypoint (ENG-77 · Fix)._',
+        '*Full report — the evidence, files and how it was verified — is on the run in Waypoint (ENG-77 · Fix).*',
       ].join('\n\n'),
     );
     expect(body).not.toContain('retry.ts:41');
@@ -54,7 +54,7 @@ describe('buildRunComment', () => {
       [
         '**Verdict:** not a bug',
         'The 500 is the upstream timeout, by design.',
-        '_Full report — the evidence, files and how it was verified — is on the run in Waypoint (ENG-77 · Investigate)._',
+        '*Full report — the evidence, files and how it was verified — is on the run in Waypoint (ENG-77 · Investigate).*',
       ].join('\n\n'),
     );
   });
@@ -117,7 +117,7 @@ describe('buildRunComment', () => {
       published: null,
     });
     expect(body).toBe(
-      '_Full report — the evidence, files and how it was verified — is on the run in Waypoint (r)._',
+      '*Full report — the evidence, files and how it was verified — is on the run in Waypoint (r).*',
     );
   });
 });

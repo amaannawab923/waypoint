@@ -2753,6 +2753,80 @@ styled and indented unlike the uppercase section headers around it;
 Copilot's "above" for a card that renders below; Escape meant for the
 slash menu closes the whole Copilot panel and drops the draft.
 
+W5c (2026-09-13) fixed the first and the last of those: the refusal now
+takes the menu's place (JIRA-SESS-12 re-run pending in the next manual
+round; pinned by a CopilotPanel test) and Escape on the menu no longer
+reaches the panel.
+
+## Board-shaped outcomes (W5c) — docs/design/w5c-board-shaped-outcomes.md
+
+Live pass 2026-09-13 on ROAD-127 (a native ticket written so that the
+honest answer is *by design*: "Escape while typing in the Copilot panel
+closes the whole panel"), Waypoint Roadmap → this checkout, Claude Code.
+Screenshots: `.qa-screenshots/w5c-verdict/01–08`.
+
+- **W5C-1** — The brief asks for the report shape
+  Steps: Investigate from the ticket page; read the brief preview.
+  Expected: The task section ends with `Verdict: <one of root-cause |
+  not-a-bug | needs-info>`, `## Summary`, `## Details`, and says the
+  Summary is what Waypoint posts.
+  Result: PASS — `02-brief-preview.png`; the session followed it (the
+  transcript's closing message carries all three parts).
+- **W5C-2** — A not-a-bug verdict proposes the closing state, not In Progress
+  Steps: Let the run finish; open Review.
+  Expected: Two cards: a state change Todo → **Cancelled** (the
+  project's `cancelled`-group state) and the comment; the run's trail
+  says `proposal_created … plan: close … Cancelled`; the run row reads
+  `verdict: not-a-bug`.
+  Result: PASS — `03-review-cancelled-proposed.png`; events read back
+  from `/agent-runs/run-hw6lj1s/events`.
+- **W5C-3** — The comment is board-shaped
+  Steps: Read the comment card.
+  Expected: `**Verdict:** not a bug`, the Summary (two paragraphs, no
+  file paths), the footer *Full report … is on the run in Waypoint
+  (ROAD-127 · Investigate)*; no `## Details`, no `CopilotPanel.tsx:…`
+  lines — those are on the run's transcript.
+  Result: PASS — `04-board-shaped-comment.png` (the footer's `_…_`
+  rendered literally on this first pass; switched to `*…*`, which both
+  markdown renderers read, before the commit).
+- **W5C-4** — Edit before posting
+  Steps: Edit on the comment card; change a sentence; Save.
+  Expected: The draft replaces the preview with "Editing — nothing is
+  posted until you approve"; after Save the card shows the new body,
+  "edited before posting" beside the proposer (the original on hover),
+  Approve is back; the backend row carries `originalBody` and
+  `editedAt`; the run's trail has a `note` "the comment was edited
+  before posting".
+  Result: PASS — `05-edit-mode.png`, `06-edited-before-posting.png`;
+  the note read back from the events.
+- **W5C-5** — The verdict on the run
+  Steps: Open the run from the card's "from run" link.
+  Expected: The header reads `Needs review · Investigate PLAN · not a
+  bug`; the session list row carries the same chip.
+  Result: PASS — `07-run-header-verdict-chip.png`.
+- **W5C-6** — Copilot's offer knows the history
+  Steps: New Copilot conversation: "Can you spin up a session to fix
+  ROAD-127?".
+  Expected: The offer card carries `1 earlier run · latest:
+  Investigate, needs review, verdict: not a bug · open`; Copilot's reply
+  says the ticket was already proposed closed and suggests reading the
+  investigation before a Fix, rather than cheering the Fix on.
+  Result: PASS — `08-copilot-offer-history.png`. Copilot said the
+  report "is waiting for your review as a card" — it is on Review, not
+  in this conversation (the run was dispatched from the ticket page, so
+  its cards anchor to no conversation); wording only.
+- **W5C-7** — A Fix with a closing verdict is not published (not run live)
+  Expected: No push, no PR; the comment says *Not published: the
+  session's verdict was won't fix*; a `note` event says the same.
+  Result: NOT RUN live (needs a Fix that concludes won't-fix on a real
+  branch); pinned by `finalize.test.ts` "Fix that concludes won't fix".
+- **W5C-8** — Jira: a closing verdict proposes Won't Do / Cannot Reproduce / Done (not run live)
+  Expected: On an issue whose workflow offers a closing-named status,
+  that transition; else the first *done* transition; never In Progress.
+  Result: NOT RUN live (the founder's manual round; the transition is a
+  real write on approve); pinned by `finalize.test.ts` "Investigate on
+  a Jira issue that concludes not-a-bug".
+
 ## Summary
 
 **132 test cases executed, personally, live against the running app, across all 27 sections.**

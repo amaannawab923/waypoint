@@ -338,7 +338,7 @@ describe('createRunFinalizer', () => {
         body: [
           '**Verdict:** root cause found',
           'The root cause is X.',
-          '_Full report — the evidence, files and how it was verified — is on the run in Waypoint (ROAD-116 · Investigate)._',
+          '*Full report — the evidence, files and how it was verified — is on the run in Waypoint (ROAD-116 · Investigate).*',
         ].join('\n\n'),
       },
       { external: false },
