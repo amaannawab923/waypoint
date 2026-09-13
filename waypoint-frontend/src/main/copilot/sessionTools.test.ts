@@ -49,6 +49,7 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     errorKind: null,
     errorMessage: null,
     summary: 'The root cause is X.',
+    verdict: null,
     turnCount: 3,
     inputTokens: 0,
     outputTokens: 0,

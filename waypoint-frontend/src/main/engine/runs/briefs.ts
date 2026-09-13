@@ -192,29 +192,50 @@ function when(iso: string): string {
   return d.toISOString().slice(0, 16).replace('T', ' ');
 }
 
-// The closing-message contract, common to every verb.
-const closingRule = (noun: 'ticket' | 'issue') =>
-  `Waypoint reads only the final message of this turn — it files that message as a comment proposal on the ${noun} for a person to review — so put everything the ${noun}'s readers need in it, written for them, not for Waypoint. Do not ask questions at the end; state what you found and what you would do next.`;
+// The closing-message contract, common to every verb — W5c: the report
+// shape (report.ts reads it back). The Summary goes on the ticket, so it
+// is written for the ticket's readers; the Details stay with the run.
+function closingRule(noun: 'ticket' | 'issue', verdicts: string[]): string {
+  return [
+    `Waypoint reads only the final message of this turn, so end the turn with one message in exactly this shape, and nothing after it:`,
+    `Verdict: <one of ${verdicts.join(' | ')}>`,
+    `## Summary`,
+    `Three to eight lines for the ${noun}'s readers — a product manager and a reviewer who has not seen the code: what you concluded, the one or two facts that support it, and what happens next. No file paths or commands here. Waypoint posts this section on the ${noun}, as a comment a person approves first.`,
+    `## Details`,
+    `Everything else — evidence with files and lines, what you tried, how you verified it, what you could not settle. This stays with the run in Waypoint and is not posted on the ${noun}.`,
+    `Do not ask questions at the end; state what you found and what you would do next.`,
+  ].join('\n');
+}
+
+const INVESTIGATE_VERDICTS = ['root-cause', 'not-a-bug', 'needs-info'];
+const FIX_VERDICTS = [
+  'fixed',
+  'partial',
+  'not-a-bug',
+  'wont-fix',
+  'needs-info',
+];
+const CUSTOM_VERDICTS = ['done', 'partial', 'needs-info'];
 
 function taskSection(input: BriefInput): string {
   const noun = input.jira ? 'issue' : 'ticket';
-  const CLOSING_RULE = closingRule(noun);
   switch (input.intent) {
     case 'investigate':
       return [
         '## Your task — Investigate',
         `Find the root cause. Read the code and its history, run read-only commands as you need. Do not change any file: this session is in plan mode and the ${noun} owner decides what happens next.`,
-        'End with one message: the root cause, the evidence (files and lines), the fix you would make, and anything you could not settle.',
-        CLOSING_RULE,
+        `Your verdict: root-cause when you found it (say what the fix would be); not-a-bug when the ${noun} describes intended behaviour or something already the case — Waypoint then proposes closing it; needs-info when you cannot settle it without a person.`,
+        closingRule(noun, INVESTIGATE_VERDICTS),
       ].join('\n');
     case 'fix': {
       const note = (input.instructions ?? '').trim();
       return [
         '## Your task — Fix',
         ...(note ? [`Note from the ${noun} owner: ${note}`] : []),
-        `Implement the fix on this branch. Commit as you go with clear messages. Do not push, open a pull request, or touch anything outside this worktree; the branch is reviewed from Waypoint.${input.approvedRca ? ' Start from the approved root cause above; if the code says otherwise, say so in your closing message.' : ''}`,
-        `End with one message: what you changed and why, the files touched, how you verified it, and anything left open. Waypoint files it as a comment and proposes moving the ${noun} to review.`,
-        CLOSING_RULE,
+        `Implement the fix on this branch. Commit as you go with clear messages. Do not touch anything outside this worktree.${input.approvedRca ? ' Start from the approved root cause above; if the code says otherwise, say so in your closing message.' : ''}`,
+        `Waypoint pushes this branch and opens the pull request itself once you finish — you cannot push from this session and must not try, and your report must not say the branch was not pushed or that a PR is still to be opened; Waypoint adds those facts to the comment.`,
+        `Your verdict: fixed when the change is on the branch and verified; partial when it is on the branch but does not close the ${noun} (say what is left); not-a-bug or wont-fix when the ${noun} should be closed instead of fixed — then change nothing and say why; needs-info when a person must decide first. Waypoint proposes moving the ${noun} to review for fixed and partial, and closing it for not-a-bug and wont-fix.`,
+        closingRule(noun, FIX_VERDICTS),
       ].join('\n');
     }
     case 'custom': {
@@ -223,10 +244,9 @@ function taskSection(input: BriefInput): string {
         '## Your task',
         instructions || '(no instruction was given)',
         input.mayChangeFiles
-          ? 'You may edit files on this branch; commit as you go. Do not push, open a pull request, or touch anything outside this worktree.'
+          ? 'You may edit files on this branch; commit as you go. Do not touch anything outside this worktree. Waypoint pushes the branch and opens the pull request itself once you finish; you cannot push from this session.'
           : 'Do not change any file: this session is in plan mode. Read, run read-only commands, and report.',
-        'End with one message summarising the outcome.',
-        CLOSING_RULE,
+        closingRule(noun, CUSTOM_VERDICTS),
       ].join('\n');
     }
   }

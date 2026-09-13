@@ -27,6 +27,10 @@ export type AgentRunStatus =
 
 export type AgentRunEntry = 'independent' | 'dispatched';
 
+/** Mirrors the backend's runVerdictSchema; report.ts's Verdict is the same set. */
+export type RunVerdict =
+  'root-cause' | 'fixed' | 'partial' | 'not-a-bug' | 'wont-fix' | 'needs-info';
+
 /** The row as the backend serialises it (timestamps as ISO strings). */
 export interface AgentRun {
   id: string;
@@ -64,6 +68,8 @@ export interface AgentRun {
   errorKind: string | null;
   errorMessage: string | null;
   summary: string | null;
+  /** What the session concluded, as finalize read it from its report (W5c); null until then. */
+  verdict: RunVerdict | null;
   turnCount: number;
   inputTokens: number;
   outputTokens: number;
@@ -108,6 +114,7 @@ export interface UpdateAgentRunInput {
   errorKind?: string | null;
   errorMessage?: string | null;
   summary?: string | null;
+  verdict?: RunVerdict | null;
   daemonWorkspaceId?: string | null;
   daemonSessionId?: string | null;
   providerSessionId?: string | null;

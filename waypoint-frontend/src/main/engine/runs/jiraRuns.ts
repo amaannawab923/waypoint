@@ -102,3 +102,25 @@ export function pickReviewTransition(
     transitions.find((t) => t.targetStateCategory === 'in-progress') ?? null
   );
 }
+
+/** A status name that closes an issue without saying it was done. */
+export const CLOSING_STATE_NAME =
+  /won'?t\s*(do|fix)|cannot\s*reproduce|can'?t\s*reproduce|not\s*a\s*bug|invalid|declined|rejected|cancel|closed|duplicate/i;
+
+/**
+ * The transition a session's closing verdict — not a bug, won't fix —
+ * proposes (W5c): the first whose target status is named for closing
+ * (Won't Do, Cannot Reproduce, Closed…), else the first whose target
+ * category is *done* — on a team-managed project that is the only way
+ * an issue closes, and the comment beside it carries the verdict. Null
+ * when the issue offers neither; the caller files only the comment.
+ */
+export function pickClosingTransition(
+  transitions: JiraWireTransition[],
+): JiraWireTransition | null {
+  const named = transitions.find((t) =>
+    CLOSING_STATE_NAME.test(t.targetStateName),
+  );
+  if (named) return named;
+  return transitions.find((t) => t.targetStateCategory === 'done') ?? null;
+}

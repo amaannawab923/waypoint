@@ -71,6 +71,11 @@ describe('buildBrief', () => {
     expect(brief).toContain(
       'Waypoint reads only the final message of this turn',
     );
+    expect(brief).toContain(
+      'Verdict: <one of root-cause | not-a-bug | needs-info>',
+    );
+    expect(brief).toContain('## Summary');
+    expect(brief).toContain('## Details');
     expect(brief).not.toContain('## Root cause, as approved');
   });
 
@@ -86,12 +91,21 @@ describe('buildBrief', () => {
       '## Root cause, as approved\nThe write is not guarded.',
     );
     expect(brief).toContain('## Your task — Fix');
-    expect(brief).toContain('Do not push, open a pull request');
+    expect(brief).toContain(
+      'Waypoint pushes this branch and opens the pull request itself',
+    );
+    expect(brief).toContain('must not say the branch was not pushed');
+    expect(brief).not.toContain('Do not push');
+    expect(brief).toContain(
+      'Verdict: <one of fixed | partial | not-a-bug | wont-fix | needs-info>',
+    );
     expect(brief).toContain('Start from the approved root cause above');
     expect(brief).toContain(
       'An earlier Fix on this ticket left the branch agent/ROAD-116-x1',
     );
-    expect(brief).toContain('proposes moving the ticket to review');
+    expect(brief).toContain(
+      'proposes moving the ticket to review for fixed and partial, and closing it for not-a-bug and wont-fix',
+    );
   });
 
   it('Fix without an RCA says nothing about one', () => {

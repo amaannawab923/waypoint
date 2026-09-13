@@ -68,6 +68,7 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     errorKind: null,
     errorMessage: null,
     summary: null,
+    verdict: null,
     turnCount: 0,
     inputTokens: 0,
     outputTokens: 0,
@@ -521,7 +522,7 @@ describe('buildBriefPreview on a Jira issue', () => {
     // The scrub: the raw mention the mapper left is not carried.
     expect(brief).not.toContain('accountid');
     expect(brief).toContain(`Repository: ${FOLDER_PLACEHOLDER}`);
-    expect(brief).toContain('comment proposal on the issue');
+    expect(brief).toContain('Waypoint posts this section on the issue');
   });
 
   it('with a folder handle: that repository, its branches, the brief rebuilt on it; a plain folder refused', async () => {
