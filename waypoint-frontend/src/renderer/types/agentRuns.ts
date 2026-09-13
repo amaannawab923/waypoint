@@ -16,7 +16,9 @@ export type {
   BriefPreviewInput,
   DispatchRunInput,
   FolderChoice,
+  JiraTicketRef,
   OpenPrResult,
+  ResolvedTicket,
   ResumeRunOutcome,
   ResumeRunResult,
   RunBranches,
@@ -32,4 +34,5 @@ export type {
   StopRunOutcome,
   StopRunResult,
   SupportedProviderId,
+  TicketSystem,
 } from '../../main/engine/types';

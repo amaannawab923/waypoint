@@ -42,6 +42,7 @@ import {
 } from '@/components/domain/JiraCommentComposer';
 import { JiraLoadError } from '@/components/domain/JiraLoadError';
 import { JiraRichText } from '@/components/domain/JiraRichText';
+import { JiraSessionsSection } from '@/components/sessions/JiraSessionsSection';
 import { jiraProjectColor } from '@/types/jira';
 import type {
   JiraAttachment,
@@ -1614,24 +1615,19 @@ export function JiraTicketDetail({
             </div>
           )}
 
-          {/* No "Pending proposals" section here, unlike TicketDetailContent's
-              native-ticket equivalent (MY_JIRA_IMPROVEMENTS.md §5 asked for
-              parity if the data supported it — it doesn't, yet). ProposalView
-              is origin-agnostic in shape, but every propose_* MCP tool
-              (waypoint-backend/src/mcp/proposalTools.ts) resolves its
-              `ticketId` through ticketsService.getTicket against this app's
-              own Postgres `tickets` table — and Jira issues are never rows
-              there (fetched live from Jira Cloud, no sync into that table,
-              no `source` value for it either — see db/schema/tickets.ts).
-              So a proposal's `ticketId` can equal a native Ticket.id but
-              never a JiraTicket.id: Copilot cannot propose against a Jira
-              issue today, at any layer, not just in this UI. Rendering an
-              always-empty section here would be UI asserting a capability
-              this app doesn't have — the honesty-lint rule the native
-              section's own "no empty state" comment already follows in the
-              other direction. Revisit once Copilot can actually target Jira
-              issues (a real MCP tool + a ticketId scheme that reaches them),
-              not before. */}
+          {/* W5b (docs/design/w5b-jira-dispatch.md §1.1): the same
+              Sessions section a native ticket has — Investigate, Fix,
+              Something else…, and the issue's runs — on the issue's ledger
+              handle (a `tref-…` id the backend keeps for Jira issues, the
+              same one Copilot's proposals on a Jira issue name). The
+              section resolves the handle through main and renders nothing
+              until it has it, and nothing at all with the sessions flag
+              off. Still no "Pending proposals" section here: Copilot's and
+              a session's proposals on a Jira issue land in the Review queue
+              (and the dispatching conversation), and the drawer does not
+              yet read them — the native section's "no empty state" rule
+              applies until it does. */}
+          <JiraSessionsSection issueKey={ticket.key} title={ticket.title} />
           <div className="mt-6 mb-2 text-[11px] font-bold tracking-wide text-text-muted uppercase">
             Comments
           </div>

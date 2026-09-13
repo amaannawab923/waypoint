@@ -297,7 +297,19 @@ export function SessionDetail({
                   ? `waiting ${formatRelativeTime(run.updatedAt)}`
                   : `started ${formatRelativeTime(startedAt)} ago`}
               </span>
-              {ticket && run.projectId && (
+              {ticket && ticket.url && (
+                // W5b: a run on a Jira issue links the issue in Jira.
+                <a
+                  href={ticket.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-mono text-text-secondary underline-offset-2 hover:underline"
+                  data-jira-issue-link
+                >
+                  {ticket.identifier} ↗
+                </a>
+              )}
+              {ticket && !ticket.url && run.projectId && (
                 <button
                   type="button"
                   onClick={() =>

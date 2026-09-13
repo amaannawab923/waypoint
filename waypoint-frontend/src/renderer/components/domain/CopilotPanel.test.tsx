@@ -35,10 +35,12 @@ jest.mock('@/data/engineApi', () => ({
   getBriefPreview: jest.fn(),
   dispatchRun: jest.fn(),
   onRunChanged: jest.fn(() => () => {}),
+  resolveTicket: jest.fn(),
+  listRecentFolders: jest.fn(async () => []),
+  chooseFolder: jest.fn(async () => ({ canceled: true })),
 }));
 jest.mock('@/data/api', () => ({
   markCopilotNotesDelivered: jest.fn(async () => {}),
-  getTicketByIdentifier: jest.fn(),
   listTickets: jest.fn(async () => []),
   getWorkspace: jest.fn(async () => ({ defaultAgentProvider: 'claude' })),
   listCopilotConversations: jest.fn(),
@@ -2062,18 +2064,32 @@ describe('sessions in the conversation (W5a)', () => {
     expect(second.outcomePreamble ?? '').not.toContain('Waypoint note');
   });
 
-  it('/investigate KEY opens the brief preview without a model turn; an unknown key is said', async () => {
-    const { getTicketByIdentifier } = jest.requireMock('@/data/api') as {
-      getTicketByIdentifier: jest.Mock;
-    };
-    const { getBriefPreview } = jest.requireMock('@/data/engineApi') as {
+  it('/investigate KEY opens the brief preview without a model turn; an unknown key is said, an ambiguous one too', async () => {
+    const { getBriefPreview, resolveTicket } = jest.requireMock(
+      '@/data/engineApi',
+    ) as {
       getBriefPreview: jest.Mock;
+      resolveTicket: jest.Mock;
     };
-    getTicketByIdentifier.mockImplementation(async (key: string) =>
-      key === 'ROAD-116'
-        ? { id: 'wi-116', identifier: 'ROAD-116', title: 'Sessions anywhere' }
-        : undefined,
-    );
+    // W5b: the key resolves through main, in both systems.
+    resolveTicket.mockImplementation(async (key: string) => {
+      if (key === 'ROAD-116') {
+        return {
+          provider: 'native',
+          id: 'wi-116',
+          identifier: 'ROAD-116',
+          title: 'Sessions anywhere',
+          projectId: 'proj-1',
+          url: null,
+        };
+      }
+      if (key === 'ENG-9') {
+        throw new Error(
+          '"ENG-9" is ambiguous: it names a Waypoint ticket ("A") and a Jira issue ("B").',
+        );
+      }
+      return null;
+    });
     getBriefPreview.mockResolvedValue({
       ticketId: 'wi-116',
       identifier: 'ROAD-116',
@@ -2092,6 +2108,10 @@ describe('sessions in the conversation (W5a)', () => {
         lastUsedAt: null,
       },
       branches: { branches: ['main'], suggested: 'main' },
+      ticketSystem: 'waypoint',
+      ticketUrl: null,
+      jiraProjectKey: null,
+      repoRemembered: false,
       baseRef: 'main',
       branchHint: 'agent/ROAD-116',
       mode: 'plan',
@@ -2118,6 +2138,12 @@ describe('sessions in the conversation (W5a)', () => {
       'No ticket ROAD-999.',
     );
     expect(copilotIpc.runPrompt).not.toHaveBeenCalled();
+
+    await typeAndSend('/investigate ENG-9');
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      '"ENG-9" is ambiguous',
+    );
+    expect(getBriefPreview).not.toHaveBeenCalled();
 
     await typeAndSend('/investigate road-116');
     await screen.findByDisplayValue('The brief for ROAD-116.');

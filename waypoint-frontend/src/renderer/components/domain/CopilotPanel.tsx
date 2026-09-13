@@ -5,13 +5,13 @@ import { clsx } from 'clsx';
 import { ArrowLeft, FolderGit2, Send } from 'lucide-react';
 import { IconPlus, IconSparkles, IconX } from '@/components/icons';
 import {
-  getTicketByIdentifier,
   listTickets,
   markCopilotNotesDelivered,
   postCopilotUserMessage,
   postCopilotAssistantMessage,
   updateProject,
 } from '@/data/api';
+import { resolveTicket } from '@/data/engineApi';
 import {
   matchingCommands,
   matchingKeys,
@@ -707,7 +707,10 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
 
   async function handleSlash(parsed: ParsedSlash) {
     if (!activeSessionId) return;
-    const ticket = await getTicketByIdentifier(parsed.key);
+    // W5b: the key resolves in both systems through main — a Jira key opens
+    // the same preview on the issue's handle; an ambiguous key is the
+    // backend's sentence, shown under the composer, never a guess.
+    const ticket = await resolveTicket(parsed.key);
     if (!ticket) throw new Error(`No ticket ${parsed.key}.`);
     const { intent } = parsed.command;
     openBrief(activeSessionId, {

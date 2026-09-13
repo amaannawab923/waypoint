@@ -1187,6 +1187,35 @@ export async function listTicketAgentRuns(
   );
 }
 
+/**
+ * W5b: what a Jira issue's ledger handle (`tref-…`) stands for — the key,
+ * the summary as last seen, the issue's URL. Display data for a run's
+ * label; the issue itself is read live through main's Jira client.
+ */
+export interface TicketRef {
+  id: string;
+  provider: string;
+  site: string | null;
+  /** `ENG-4`. */
+  identifier: string;
+  title: string;
+  url: string | null;
+}
+
+/** The prefix of a Jira issue's ledger handle (main/engine/runs/ledgerClient.ts's TICKET_REF_PREFIX). */
+export const TICKET_REF_PREFIX = 'tref-';
+
+export function isTicketRef(ticketId: string | null | undefined): boolean {
+  return typeof ticketId === 'string' && ticketId.startsWith(TICKET_REF_PREFIX);
+}
+
+export async function getTicketRef(id: string): Promise<TicketRef | undefined> {
+  return http.get<TicketRef | undefined>(
+    `/ticket-refs/${encodeURIComponent(id)}`,
+    { notFoundAsUndefined: true },
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Dev/demo utility
 // ---------------------------------------------------------------------------

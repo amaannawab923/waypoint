@@ -7,15 +7,22 @@ import { Switch } from '@/components/ui/Switch';
 import { IconFolder, IconGitBranch } from '@/components/icons';
 import { getWorkspace } from '@/data/api';
 import { CURRENT_USER_ID } from '@/data/currentUser';
-import { dispatchRun, getBriefPreview } from '@/data/engineApi';
+import {
+  chooseFolder,
+  dispatchRun,
+  getBriefPreview,
+  listRecentFolders,
+} from '@/data/engineApi';
 import { workspaceDefaultProvider } from '@/lib/sessionProviders';
 import type {
   AgentRun,
   BriefPreview,
   BriefPreviewInput,
   RunIntent,
+  SessionFolder,
   SupportedProviderId,
 } from '@/types/agentRuns';
+import { FolderPicker } from './FolderPicker';
 
 /**
  * The brief preview — W5a, ROAD-119 (docs/design/w5a-investigate-fix.md
@@ -30,6 +37,14 @@ import type {
  * `BriefPreviewInput` and, from Copilot, the conversation the run's
  * notes go back to. Nothing here names a path: the repository arrives
  * described, as a folder handle main minted.
+ *
+ * W5b (docs/design/w5b-jira-dispatch.md §1.2): for a Jira issue the
+ * repository is the folder remembered for the issue's Jira project. When
+ * none is remembered yet the preview answers `repo: null` and the Folder
+ * row becomes the picker the New session dialog has (recent folders,
+ * linked repositories, Browse…); a choice re-fires the preview with the
+ * handle, and Start remembers it for the project. A remembered folder
+ * shows with *Change*.
  */
 
 export const INTENT_LABEL: Record<RunIntent, string> = {
@@ -68,6 +83,12 @@ export function BriefPreviewDialog({
   // *Something else…* only: the switch, when the request came without one
   // (a slash command); null = as the request said.
   const [mayChangeFiles, setMayChangeFiles] = useState<boolean | null>(null);
+  // W5b, Jira issues: the folder chosen in this dialog (a handle), the
+  // picker's list, and whether the picker is open over a remembered folder.
+  const [folder, setFolder] = useState<SessionFolder | null>(null);
+  const [folders, setFolders] = useState<SessionFolder[] | null>(null);
+  const [choosing, setChoosing] = useState(false);
+  const [browsing, setBrowsing] = useState(false);
   const [autoApprove, setAutoApprove] = useState(false);
   // Refs, not state: read inside the load effect without re-running it.
   const autoApproveTouched = useRef(false);
@@ -88,9 +109,11 @@ export function BriefPreviewDialog({
     if (lastRequest.current !== request) {
       lastRequest.current = request;
       autoApproveTouched.current = false;
-      if (baseRef !== null || mayChangeFiles !== null) {
+      setChoosing(false);
+      if (baseRef !== null || mayChangeFiles !== null || folder !== null) {
         setBaseRef(null);
         setMayChangeFiles(null);
+        setFolder(null);
         return undefined;
       }
     }
@@ -104,6 +127,7 @@ export function BriefPreviewDialog({
           ...request,
           ...(baseRef ? { baseRef } : {}),
           ...(mayChangeFiles !== null ? { mayChangeFiles } : {}),
+          ...(folder ? { folder: folder.handle } : {}),
         });
         if (cancelled) return;
         setState({ kind: 'ready', preview });
@@ -125,7 +149,59 @@ export function BriefPreviewDialog({
     return () => {
       cancelled = true;
     };
-  }, [request, baseRef, mayChangeFiles]);
+  }, [request, baseRef, mayChangeFiles, folder]);
+
+  // W5b: the picker's list, read when the picker is shown — a Jira issue
+  // with no folder yet, or *Change* on a remembered one. Git repositories
+  // only: a session on a ticket always takes a worktree.
+  const preview = state.kind === 'ready' ? state.preview : null;
+  const pickerOpen =
+    !!preview &&
+    preview.ticketSystem === 'jira' &&
+    (preview.repo === null || choosing);
+  useEffect(() => {
+    if (!pickerOpen) return undefined;
+    let cancelled = false;
+    setFolders(null);
+    listRecentFolders()
+      .then((listed) => {
+        if (!cancelled) setFolders(listed.filter((f) => f.kind === 'repo'));
+        return undefined;
+      })
+      .catch(() => {
+        if (!cancelled) setFolders([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pickerOpen]);
+
+  const pick = (chosen: SessionFolder) => {
+    setChoosing(false);
+    setBaseRef(null);
+    setFolder(chosen);
+  };
+
+  const browse = async () => {
+    setBrowsing(true);
+    try {
+      const choice = await chooseFolder();
+      if (choice.canceled) return;
+      setFolders((current) => {
+        const rest = (current ?? []).filter(
+          (f) => f.path !== choice.folder.path,
+        );
+        return [choice.folder, ...rest];
+      });
+      pick(choice.folder);
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : 'The folder was not picked.',
+      );
+    } finally {
+      setBrowsing(false);
+    }
+  };
 
   useEffect(() => {
     if (!open) return undefined;
@@ -144,7 +220,6 @@ export function BriefPreviewDialog({
     };
   }, [open]);
 
-  const preview = state.kind === 'ready' ? state.preview : null;
   const writing = preview?.mode === 'write';
   const blockedByWriter = !!preview && writing && !!preview.liveWriterRunId;
   const canStart =
@@ -152,6 +227,7 @@ export function BriefPreviewDialog({
     !!request &&
     providerId !== null &&
     brief.trim().length > 0 &&
+    !!preview.repo &&
     !!preview.baseRef &&
     !blockedByWriter &&
     !starting;
@@ -171,6 +247,7 @@ export function BriefPreviewDialog({
         ownerMemberId: CURRENT_USER_ID,
         providerId,
         copilotConversationId,
+        ...(folder ? { folder: folder.handle } : {}),
       });
       onClose();
       if (onStarted) onStarted(run);
@@ -231,15 +308,73 @@ export function BriefPreviewDialog({
         {preview && (
           <>
             <dl className="grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-2 rounded-[var(--radius-sm)] border border-border bg-bg-inset p-3 text-xs">
+              {preview.ticketSystem === 'jira' && (
+                <>
+                  <dt className="text-text-muted">Issue</dt>
+                  <dd className="inline-flex min-w-0 items-center gap-1.5 text-text">
+                    {preview.ticketUrl ? (
+                      <a
+                        href={preview.ticketUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="truncate font-mono underline-offset-2 hover:underline"
+                        data-jira-issue-link
+                      >
+                        {preview.identifier} in Jira ↗
+                      </a>
+                    ) : (
+                      <span className="font-mono">{preview.identifier}</span>
+                    )}
+                  </dd>
+                </>
+              )}
               <dt className="text-text-muted">Folder</dt>
-              <dd className="inline-flex min-w-0 items-center gap-1.5 text-text">
-                <IconFolder size={11} className="shrink-0 text-text-muted" />
-                <span className="truncate font-mono">
-                  {preview.repo.displayPath}
-                </span>
-                {preview.repo.projectName && (
-                  <span className="shrink-0 text-text-muted">
-                    · {preview.repo.projectName}
+              <dd
+                className="flex min-w-0 items-center gap-1.5 text-text"
+                data-folder-state={
+                  preview.repo ? (pickerOpen ? 'changing' : 'set') : 'needed'
+                }
+              >
+                {preview.repo ? (
+                  <>
+                    <IconFolder
+                      size={11}
+                      className="shrink-0 text-text-muted"
+                    />
+                    <span className="truncate font-mono">
+                      {preview.repo.displayPath}
+                    </span>
+                    {preview.repo.projectName && (
+                      <span className="shrink-0 text-text-muted">
+                        · {preview.repo.projectName}
+                      </span>
+                    )}
+                    {preview.jiraProjectKey && (
+                      <span className="shrink-0 text-text-muted">
+                        ·{' '}
+                        {preview.repoRemembered
+                          ? 'remembered'
+                          : 'will be remembered'}{' '}
+                        for {preview.jiraProjectKey}
+                      </span>
+                    )}
+                    {preview.ticketSystem === 'jira' && (
+                      <button
+                        type="button"
+                        onClick={() => setChoosing(!pickerOpen)}
+                        disabled={starting}
+                        className="ml-auto shrink-0 font-medium text-text-secondary underline-offset-2 hover:text-text hover:underline disabled:opacity-50"
+                      >
+                        {pickerOpen ? 'Keep this one' : 'Change'}
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <span className="text-text-secondary">
+                    Not set yet — choose the folder{' '}
+                    {preview.jiraProjectKey ?? preview.identifier}&apos;s code
+                    lives in below. It is remembered for the next{' '}
+                    {preview.jiraProjectKey ?? 'issue'} session.
                   </span>
                 )}
               </dd>
@@ -248,19 +383,25 @@ export function BriefPreviewDialog({
                 <IconGitBranch size={11} className="shrink-0 text-text-muted" />
                 <span className="font-mono">{preview.branchHint}</span>
                 <span className="text-text-muted">from</span>
-                <select
-                  aria-label="Base branch"
-                  value={preview.baseRef ?? ''}
-                  onChange={(e) => setBaseRef(e.target.value)}
-                  disabled={starting}
-                  className={fieldClass}
-                >
-                  {preview.branches.branches.map((b) => (
-                    <option key={b} value={b}>
-                      {b}
-                    </option>
-                  ))}
-                </select>
+                {preview.repo ? (
+                  <select
+                    aria-label="Base branch"
+                    value={preview.baseRef ?? ''}
+                    onChange={(e) => setBaseRef(e.target.value)}
+                    disabled={starting}
+                    className={fieldClass}
+                  >
+                    {preview.branches.branches.map((b) => (
+                      <option key={b} value={b}>
+                        {b}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="text-text-muted">
+                    (the folder&apos;s default branch)
+                  </span>
+                )}
               </dd>
               <dt className="text-text-muted">Mode</dt>
               <dd
@@ -313,6 +454,24 @@ export function BriefPreviewDialog({
                 </>
               )}
             </dl>
+
+            {pickerOpen && (
+              <div data-brief-folder-picker>
+                <FolderPicker
+                  labelId="brief-preview-folder-label"
+                  label={`Folder for ${preview.jiraProjectKey ?? preview.identifier}`}
+                  folders={folders}
+                  selected={folder}
+                  onSelect={pick}
+                  onBrowse={() => {
+                    browse().catch(() => {});
+                  }}
+                  browsing={browsing}
+                  disabled={starting}
+                  emptyHint="No git repository yet — Browse… to pick the folder this Jira project's code lives in. A project's linked repository shows up here on its own."
+                />
+              </div>
+            )}
 
             <div className="flex flex-col gap-1.5">
               <label
