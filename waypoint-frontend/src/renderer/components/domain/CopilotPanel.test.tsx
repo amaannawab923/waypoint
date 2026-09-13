@@ -1499,6 +1499,44 @@ describe('CopilotPanel', () => {
 
       expect(onClose).not.toHaveBeenCalled();
     });
+
+    // ROAD-127: the panel's document-level listener closes it whenever
+    // focus is anywhere inside, which used to include the composer
+    // mid-draft — one reflexive Escape closed the panel with the user's
+    // text still in it. The textarea now stops the keystroke at itself
+    // while there's a draft; the draft and focus stay exactly where they
+    // were.
+    it('does not close the panel on Escape while the composer has a draft', async () => {
+      const onClose = jest.fn();
+      render(<CopilotPanel onClose={onClose} />);
+      await screen.findByText(/No sessions yet/i);
+      await createAndOpenSession();
+
+      const textarea = getTextarea();
+      textarea.focus();
+      fireEvent.change(textarea, { target: { value: 'half a thought' } });
+      fireEvent.keyDown(textarea, { key: 'Escape' });
+
+      expect(onClose).not.toHaveBeenCalled();
+      expect(textarea.value).toBe('half a thought');
+      expect(document.activeElement).toBe(textarea);
+    });
+
+    // Deliberately still closes: with nothing typed there's nothing to
+    // protect, and the ⌘J-open / Escape-close keyboard round-trip must keep
+    // working from the composer, not just from the panel's buttons.
+    it('still closes the panel on Escape from an empty composer', async () => {
+      const onClose = jest.fn();
+      render(<CopilotPanel onClose={onClose} />);
+      await screen.findByText(/No sessions yet/i);
+      await createAndOpenSession();
+
+      const textarea = getTextarea();
+      textarea.focus();
+      fireEvent.keyDown(textarea, { key: 'Escape' });
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('close button and focus restoration', () => {

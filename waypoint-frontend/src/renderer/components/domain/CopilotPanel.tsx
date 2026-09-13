@@ -235,6 +235,21 @@ function Composer({
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             submit();
+            return;
+          }
+          if (e.key === 'Escape' && value) {
+            // Stops here, at the textarea — the earliest point in the
+            // bubble chain — so the keystroke never reaches CopilotPanel's
+            // own document-level Escape listener below (which closes the
+            // whole panel whenever focus is anywhere inside it) or the
+            // global cascade's blur fallback. Without this, Escape mid-draft
+            // closed the panel out from under the user with their text
+            // still in it (ROAD-127). Same pattern as JiraCommentComposer's
+            // mention popover. Gated on a non-empty draft on purpose: with
+            // nothing typed there's nothing to protect, and Escape keeps
+            // closing the panel so the ⌘J-open / Escape-close keyboard
+            // round-trip still works.
+            e.stopPropagation();
           }
         }}
         rows={1}
