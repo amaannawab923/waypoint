@@ -44,7 +44,9 @@ describe('foldBrief', () => {
     expect((folded.items[0] as { text: string }).text).toBe(
       foldPlaceholder(long, 'ROAD-43 · Investigate'),
     );
-    expect((folded.items[0] as { text: string }).text).toContain('View brief');
+    expect((folded.items[0] as { text: string }).text).toContain(
+      'Brief bar above',
+    );
     expect((folded.items[1] as { text: string }).text).toBe('reply');
     // The other turn is untouched, and the input is not mutated.
     expect(

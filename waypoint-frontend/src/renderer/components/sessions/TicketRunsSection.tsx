@@ -199,6 +199,16 @@ function TicketRuns({ ticketId }: { ticketId: string }) {
                     <span className="ml-2 text-text-muted">{run.summary}</span>
                   )}
                 </span>
+                {run.prUrl && (
+                  <a
+                    href={run.prUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="shrink-0 font-medium text-text-secondary underline-offset-2 hover:underline"
+                  >
+                    PR ↗
+                  </a>
+                )}
                 <span className="shrink-0 text-text-muted">
                   {formatRelativeTime(run.updatedAt)}
                 </span>

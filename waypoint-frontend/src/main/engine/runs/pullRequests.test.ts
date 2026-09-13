@@ -1,6 +1,7 @@
 import type { AgentRun } from './ledgerClient';
 import {
   buildPrBody,
+  buildPrTitle,
   createPullRequestPublisher,
   describePublish,
   githubRepoOf,
@@ -60,20 +61,18 @@ const bad = (stderr: string, code = 1): CommandResult => ({
   code,
 });
 
-/** A runner scripted by the command's verb: rev-list, remote, push, gh. */
-function scripted(
-  answers: Partial<
-    Record<'rev-list' | 'remote' | 'push' | 'gh', CommandResult | Error>
-  >,
-) {
+/** A runner scripted by the command's verb: log, diff, remote, push, gh. */
+type Verb = 'log' | 'diff' | 'remote' | 'push' | 'gh';
+function scripted(answers: Partial<Record<Verb, CommandResult | Error>>) {
   const calls: Array<{ file: string; args: string[]; cwd: string }> = [];
   const runner: HostCommandRunner = async (file, args, options) => {
     calls.push({ file, args, cwd: options.cwd });
-    const verb =
+    const verb: Verb =
       file === 'gh'
         ? 'gh'
-        : (args.find((a) => ['rev-list', 'remote', 'push'].includes(a)) as
-            'rev-list' | 'remote' | 'push');
+        : (args.find((a) =>
+            ['log', 'diff', 'remote', 'push'].includes(a),
+          ) as Verb);
     const answer = answers[verb];
     if (answer instanceof Error) throw answer;
     return answer ?? ok();
@@ -127,7 +126,7 @@ describe('githubRepoOf / prUrlOf', () => {
 describe('createPullRequestPublisher', () => {
   it('pushes with the safety overrides, opens the PR as the person, records prUrl and the events', async () => {
     const { publisher, calls, ledger } = harness({
-      'rev-list': ok('1\n'),
+      log: ok('abc1234 test: guard the write\n'),
       remote: ok('https://github.com/amaannawab923/waypoint.git\n'),
       push: ok(),
       gh: ok('https://github.com/amaannawab923/waypoint/pull/61\n'),
@@ -161,7 +160,7 @@ describe('createPullRequestPublisher', () => {
         '--base',
         'main',
         '--title',
-        'ROAD-103: Flaky test',
+        'test: guard the write',
       ]),
     );
     expect(gh?.args).toContain('--body-file');
@@ -184,7 +183,7 @@ describe('createPullRequestPublisher', () => {
 
   it('a push that fails is a failed outcome with git’s sentence, an error event, and no gh call', async () => {
     const { publisher, calls, ledger } = harness({
-      'rev-list': ok('2\n'),
+      log: ok('abc1234 one\nabc1235 two\n'),
       remote: ok('https://github.com/o/r.git'),
       push: bad(
         "fatal: could not read Username for 'https://github.com': terminal prompts disabled\n",
@@ -209,7 +208,7 @@ describe('createPullRequestPublisher', () => {
 
   it('a remote that is not GitHub gets the push and no PR; gh missing is a PR failure after the push', async () => {
     const other = harness({
-      'rev-list': ok('1'),
+      log: ok('abc1234 test: guard the write'),
       remote: ok('/tmp/wp-qa/origin.git'),
       push: ok(),
     });
@@ -219,7 +218,7 @@ describe('createPullRequestPublisher', () => {
     expect(other.calls.some((c) => c.file === 'gh')).toBe(false);
 
     const noGh = harness({
-      'rev-list': ok('1'),
+      log: ok('abc1234 test: guard the write'),
       remote: ok('git@github.com:o/r.git'),
       push: ok(),
       gh: new Error('gh: not installed'),
@@ -238,7 +237,7 @@ describe('createPullRequestPublisher', () => {
 
   it('a PR gh says already exists is taken as opened', async () => {
     const { publisher } = harness({
-      'rev-list': ok('1'),
+      log: ok('abc1234 test: guard the write'),
       remote: ok('https://github.com/o/r'),
       push: ok(),
       gh: bad(
@@ -252,7 +251,7 @@ describe('createPullRequestPublisher', () => {
   });
 
   it('skips a run with a PR, a run with no branch, and a branch with nothing past its base', async () => {
-    const { publisher, calls } = harness({ 'rev-list': ok('0\n') });
+    const { publisher, calls } = harness({ log: ok('') });
     expect(
       await publisher.publish(
         input(run({ prUrl: 'https://github.com/o/r/pull/1' })),
@@ -278,11 +277,36 @@ describe('createPullRequestPublisher', () => {
 });
 
 describe('buildPrBody / describePublish', () => {
-  it('the body is the closing message then Waypoint’s footer', () => {
-    const body = buildPrBody(input());
-    expect(body.startsWith('Guarded the write.')).toBe(true);
+  it('the body leads with what the host read off the branch, then the session’s report', () => {
+    const facts = {
+      commits: ['abc1234 test: guard the write'],
+      files: ['M\tsrc/a.ts'],
+    };
+    const body = buildPrBody(input(), facts);
+    expect(body.startsWith('**ROAD-103: Flaky test**')).toBe(true);
     expect(body).toContain(
-      'Opened by Waypoint from run `ROAD-103 · Fix` (run-abc1234) on branch `agent/ROAD-103` from `main`',
+      'Branch `agent/ROAD-103` from `main`, pushed and opened by Waypoint',
+    );
+    expect(body).toContain('### Commits\n- abc1234 test: guard the write');
+    expect(body).toContain('### Files\n- `M src/a.ts`');
+    expect(body.indexOf("### The session's report")).toBeGreaterThan(
+      body.indexOf('### Files'),
+    );
+    expect(body.trim().endsWith('Guarded the write.')).toBe(true);
+  });
+
+  it('the title is the one commit’s subject, else Fix KEY: title for a Fix', () => {
+    expect(
+      buildPrTitle(input(), {
+        commits: ['abc1234 test: guard the write'],
+        files: [],
+      }),
+    ).toBe('test: guard the write');
+    expect(
+      buildPrTitle(input(), { commits: ['a one', 'b two'], files: [] }),
+    ).toBe('Fix ROAD-103: Flaky test');
+    expect(buildPrTitle(input(run({ intent: 'custom' })), null)).toBe(
+      'ROAD-103: Flaky test',
     );
   });
   it('the comment’s lead line per outcome', () => {

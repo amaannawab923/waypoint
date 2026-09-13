@@ -9,7 +9,7 @@ describe('isDisclosedAgentHtml', () => {
     ).toBe(true);
     expect(
       isDisclosedAgentHtml(
-        '<p><em>Hi, this is a Waypoint session — Amaan’s agent — reporting on their behalf: </em></p><h3>x</h3>',
+        '<p><em>This is a Waypoint session — Amaan’s agent — reporting on their behalf: </em></p><h3>x</h3>',
       ),
     ).toBe(true);
     // A typed comment arrives entity-escaped from the REST path.

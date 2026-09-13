@@ -28,10 +28,18 @@ import { isRefSafeComponent } from './worktrees';
 
 export interface PublishInput {
   run: AgentRun;
-  /** The PR's body: the closing message, then Waypoint's footer. */
+  /** The session's report — the PR body's second half. */
   closingMessage: string;
-  /** "ROAD-103: Flaky: …" — the ticket's key and title, when known. */
+  /** "ROAD-103: Flaky: …" — the ticket's key and title, when known; the title's fallback. */
   title: string;
+}
+
+/** What the branch holds, read by the host — the PR's first half, never the agent's guess. */
+export interface BranchFacts {
+  /** `git log --oneline base..HEAD`, oldest first. */
+  commits: string[];
+  /** `git diff --name-status base..HEAD` lines. */
+  files: string[];
 }
 
 export type PublishOutcome =
@@ -163,15 +171,60 @@ function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** The body `gh` posts: the closing message, then where it came from. */
-export function buildPrBody(input: PublishInput): string {
+/**
+ * The PR's title: the change, not the bug (PM review of W5a). One commit
+ * on the branch → its subject, which is the agent's own name for what it
+ * did; more than one → "Fix KEY: title" for a Fix, "KEY: title" otherwise.
+ */
+export function buildPrTitle(
+  input: PublishInput,
+  facts: BranchFacts | null,
+): string {
   const { run } = input;
-  return [
-    clip(input.closingMessage.trim(), MAX_PR_BODY_CHARS),
+  if (facts && facts.commits.length === 1) {
+    const subject = facts.commits[0].replace(/^[0-9a-f]{7,40}\s+/, '').trim();
+    if (subject) return clip(subject, MAX_PR_TITLE_CHARS);
+  }
+  const ticket = firstLine(input.title) || run.title || run.branch || run.id;
+  return clip(
+    run.intent === 'fix' ? `Fix ${ticket}` : ticket,
+    MAX_PR_TITLE_CHARS,
+  );
+}
+
+/**
+ * The body `gh` posts: what the branch holds, as the host read it (never
+ * the agent's guess at its own branch name — found in PR #62: "Branch:
+ * agent/ROAD-43 … Not pushed", on a branch named `-0uftaro` that Waypoint
+ * had just pushed), then the session's report.
+ */
+export function buildPrBody(
+  input: PublishInput,
+  facts: BranchFacts | null,
+): string {
+  const { run } = input;
+  const lines = [
+    `**${firstLine(input.title) || run.title || run.id}**`,
     '',
-    '---',
-    `Opened by Waypoint from run \`${run.title ?? run.id}\` (${run.id}) on branch \`${run.branch}\`${run.baseRef ? ` from \`${run.baseRef}\`` : ''}. The session ran in a fresh worktree with no credentials; the branch was pushed and this pull request opened by the run's owner from Waypoint.`,
-  ].join('\n');
+    `Branch \`${run.branch}\`${run.baseRef ? ` from \`${run.baseRef}\`` : ''}, pushed and opened by Waypoint as the run's owner from run \`${run.title ?? run.id}\` (${run.id}). The session worked in a fresh worktree with no credentials.`,
+  ];
+  if (facts && facts.commits.length) {
+    lines.push('', '### Commits', ...facts.commits.map((c) => `- ${c}`));
+  }
+  if (facts && facts.files.length) {
+    lines.push(
+      '',
+      '### Files',
+      ...facts.files.map((f) => `- \`${f.replace(/\t/g, ' ')}\``),
+    );
+  }
+  lines.push(
+    '',
+    "### The session's report",
+    '',
+    clip(input.closingMessage.trim(), MAX_PR_BODY_CHARS),
+  );
+  return lines.join('\n');
 }
 
 export interface PullRequestPublisher {
@@ -236,22 +289,58 @@ export function createPullRequestPublisher(
             ? run.baseRef
             : null;
 
-        // Anything to publish? A Fix that changed nothing has no branch worth a PR.
+        // What the branch holds, read by the host: the PR's facts, and the
+        // check that there is anything to publish at all.
+        let facts: BranchFacts | null = null;
         if (base) {
-          const ahead = await runCommand(
-            'git',
-            [...PUSH_SAFE_CONFIG, 'rev-list', '--count', `${base}..HEAD`, '--'],
-            { cwd, timeoutMs: 20_000 },
-          ).catch(() => null);
-          if (
-            ahead &&
-            ahead.code === 0 &&
-            Number.parseInt(ahead.stdout.trim(), 10) === 0
-          ) {
-            return {
-              kind: 'skipped',
-              reason: `No commits on ${run.branch} past ${base}; nothing to push.`,
+          const [log, diff] = await Promise.all([
+            runCommand(
+              'git',
+              [
+                ...PUSH_SAFE_CONFIG,
+                'log',
+                '--oneline',
+                '--no-decorate',
+                '--reverse',
+                `${base}..HEAD`,
+                '--',
+              ],
+              { cwd, timeoutMs: 20_000 },
+            ).catch(() => null),
+            runCommand(
+              'git',
+              [
+                ...PUSH_SAFE_CONFIG,
+                'diff',
+                '--name-status',
+                `${base}..HEAD`,
+                '--',
+              ],
+              { cwd, timeoutMs: 20_000 },
+            ).catch(() => null),
+          ]);
+          if (log && log.code === 0) {
+            facts = {
+              commits: log.stdout
+                .split('\n')
+                .map((l) => l.trim())
+                .filter(Boolean)
+                .slice(0, 50),
+              files:
+                diff && diff.code === 0
+                  ? diff.stdout
+                      .split('\n')
+                      .map((l) => l.trim())
+                      .filter(Boolean)
+                      .slice(0, 100)
+                  : [],
             };
+            if (facts.commits.length === 0) {
+              return {
+                kind: 'skipped',
+                reason: `No commits on ${run.branch} past ${base}; nothing to push.`,
+              };
+            }
           }
         }
 
@@ -308,7 +397,7 @@ export function createPullRequestPublisher(
             await fs.mkdtemp(path.join(os.tmpdir(), 'wp-pr-')),
             'body.md',
           );
-          await fs.writeFile(bodyFile, buildPrBody(input), 'utf8');
+          await fs.writeFile(bodyFile, buildPrBody(input, facts), 'utf8');
           const pr = await runCommand(
             'gh',
             [
@@ -320,10 +409,7 @@ export function createPullRequestPublisher(
               run.branch,
               ...(base ? ['--base', base] : []),
               '--title',
-              clip(
-                firstLine(input.title) || run.title || run.branch,
-                MAX_PR_TITLE_CHARS,
-              ),
+              buildPrTitle(input, facts),
               '--body-file',
               bodyFile,
             ],

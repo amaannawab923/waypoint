@@ -188,6 +188,20 @@ function RunOriginLine({ runId }: { runId: string }) {
   );
 }
 
+/** "expires in 24h" / "expires in 29 days" — read off the row, since a run's proposals keep a month. */
+export function expiresIn(
+  expiresAt: string | null | undefined,
+  now = Date.now(),
+): string {
+  if (!expiresAt) return 'does not expire';
+  const ms = new Date(expiresAt).getTime() - now;
+  if (Number.isNaN(ms)) return 'does not expire';
+  if (ms <= 0) return 'expired';
+  const hours = Math.ceil(ms / 3_600_000);
+  if (hours <= 48) return `expires in ${hours}h`;
+  return `expires in ${Math.ceil(hours / 24)} days`;
+}
+
 function ProposerBadge({
   proposal,
   agentName,
@@ -196,7 +210,12 @@ function ProposerBadge({
   agentName?: string;
 }) {
   if (proposal.origin === 'agent_run') {
-    const name = agentName ?? proposal.agentId ?? 'Agent';
+    // A run-filed proposal without a named agent is a Waypoint session's
+    // (the "from run … ↗" line beside it names which).
+    const name =
+      agentName ??
+      proposal.agentId ??
+      (proposal.agentRunId ? 'a Waypoint session' : 'Agent');
     return (
       <span className="inline-flex w-fit flex-wrap items-center gap-2">
         <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-[10.5px] font-semibold text-text-secondary">
@@ -596,7 +615,7 @@ export function CopilotProposalCard({
       {isPending && (
         <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-2.5">
           <span className="text-[10.5px] leading-tight text-text-muted">
-            Executes once on approve · expires in 24h
+            Executes once on approve · {expiresIn(proposal.expiresAt)}
           </span>
           <div className="flex shrink-0 gap-2">
             <Button

@@ -230,39 +230,6 @@ export function BriefPreviewDialog({
         )}
         {preview && (
           <>
-            <div className="flex flex-col gap-1.5">
-              <label
-                htmlFor="brief-preview-text"
-                className="flex items-baseline justify-between text-xs font-medium text-text-secondary"
-              >
-                <span>The brief — what the session is told first</span>
-                <span className="font-normal text-text-muted">
-                  {preview.title}
-                </span>
-              </label>
-              <textarea
-                id="brief-preview-text"
-                value={brief}
-                onChange={(e) => setBrief(e.target.value)}
-                onKeyDown={(e) => {
-                  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-                    e.preventDefault();
-                    start().catch(() => {});
-                  }
-                }}
-                disabled={starting}
-                rows={14}
-                spellCheck={false}
-                className="thin-scroll resize-y rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 py-2 font-mono text-[11.5px] leading-relaxed text-text outline-none focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
-              />
-              {preview.seededFromRunId && (
-                <p className="text-xs text-text-muted" data-seeded>
-                  Seeded with the approved root cause from the latest
-                  Investigate.
-                </p>
-              )}
-            </div>
-
             <dl className="grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-2 rounded-[var(--radius-sm)] border border-border bg-bg-inset p-3 text-xs">
               <dt className="text-text-muted">Folder</dt>
               <dd className="inline-flex min-w-0 items-center gap-1.5 text-text">
@@ -346,6 +313,39 @@ export function BriefPreviewDialog({
                 </>
               )}
             </dl>
+
+            <div className="flex flex-col gap-1.5">
+              <label
+                htmlFor="brief-preview-text"
+                className="flex items-baseline justify-between text-xs font-medium text-text-secondary"
+              >
+                <span>The brief — what the session is told first</span>
+                <span className="font-normal text-text-muted">
+                  {preview.title}
+                </span>
+              </label>
+              <textarea
+                id="brief-preview-text"
+                value={brief}
+                onChange={(e) => setBrief(e.target.value)}
+                onKeyDown={(e) => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                    e.preventDefault();
+                    start().catch(() => {});
+                  }
+                }}
+                disabled={starting}
+                rows={11}
+                spellCheck={false}
+                className="thin-scroll resize-y rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 py-2 font-mono text-[11.5px] leading-relaxed text-text outline-none focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
+              />
+              {preview.seededFromRunId && (
+                <p className="text-xs text-text-muted" data-seeded>
+                  Seeded with the approved root cause from the latest
+                  Investigate.
+                </p>
+              )}
+            </div>
 
             {blockedByWriter && (
               <p

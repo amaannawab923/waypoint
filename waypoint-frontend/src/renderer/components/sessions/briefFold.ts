@@ -38,7 +38,7 @@ export const FOLD_MIN_CHARS = 240;
 
 export function foldPlaceholder(text: string, label: string): string {
   const lines = text.split('\n').length;
-  return `Brief for ${label} — ${lines} lines. Open “View brief” above the transcript to read it.`;
+  return `Brief for ${label} — ${lines} lines (in the Brief bar above the transcript).`;
 }
 
 /** The turn with its brief folded to the placeholder; the same turn when there is nothing to fold. */

@@ -1938,7 +1938,9 @@ export function TicketDetailContent({
  * `<p>` arrives as `&lt;p&gt;`.
  */
 export function isDisclosedAgentHtml(bodyHtml: string): boolean {
-  return /^<p><em>Hi, this is (Copilot|a Waypoint session) — /.test(bodyHtml);
+  return /^<p><em>(Hi, this is Copilot|This is a Waypoint session) — /.test(
+    bodyHtml,
+  );
 }
 
 export default function TicketDetailPage() {

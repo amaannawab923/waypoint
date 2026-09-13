@@ -2,7 +2,7 @@ import '@testing-library/jest-dom';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ProposalView } from '@/types/entities';
 import { resetAgentRunSummariesForTests } from '@/lib/useAgentRunSummary';
-import { CopilotProposalCard } from './CopilotProposalCard';
+import { CopilotProposalCard, expiresIn } from './CopilotProposalCard';
 
 jest.mock('@/data/api', () => ({ getAgentRun: jest.fn() }));
 
@@ -85,7 +85,8 @@ describe('CopilotProposalCard', () => {
     renderCard(proposal());
 
     expect(
-      screen.getByText(/Executes once on approve · expires in 24h/),
+      // The fixture's expiresAt is in the past relative to the real clock.
+      screen.getByText(/Executes once on approve · expired/),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Reject' })).toBeEnabled();
@@ -568,5 +569,17 @@ describe('a run-filed comment renders as markdown', () => {
     );
     expect(document.querySelectorAll('[data-run-comment]')).toHaveLength(1);
     expect(screen.getByText(/## not a heading/)).toBeInTheDocument();
+  });
+});
+
+describe('expiresIn', () => {
+  it('reads hours under two days, days beyond, and says so for a past or missing date', () => {
+    const now = Date.parse('2026-09-13T00:00:00.000Z');
+    expect(expiresIn('2026-09-14T00:00:00.000Z', now)).toBe('expires in 24h');
+    expect(expiresIn('2026-10-13T00:00:00.000Z', now)).toBe(
+      'expires in 30 days',
+    );
+    expect(expiresIn('2026-09-12T00:00:00.000Z', now)).toBe('expired');
+    expect(expiresIn(null, now)).toBe('does not expire');
   });
 });

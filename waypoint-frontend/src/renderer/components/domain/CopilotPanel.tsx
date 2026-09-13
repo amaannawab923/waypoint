@@ -74,7 +74,7 @@ function NoteLine({
 }) {
   return (
     <div
-      className="flex justify-center px-6 text-center text-[11px] leading-relaxed text-text-muted"
+      className="flex justify-center px-6 text-center text-[11px] leading-relaxed break-all text-text-muted"
       data-copilot-note
       data-delivered={message.deliveredAt ? 'true' : 'false'}
     >
