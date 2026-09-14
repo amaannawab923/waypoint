@@ -4,11 +4,12 @@
 (move it to the relevant numbered file). Everything not listed here is
 either decided or explicitly a post-launch tuning item.
 
-## Decide before building AT2
+## Decided 2026-09-14
 
-1. **Does first launch require sign-in?** (001 §3)
-   Default: **No** — bundled local database, sign-in only at invite.
-   This is the one that changes what gets built.
+1. ~~**Does first launch require sign-in?**~~ **Called:** yes, but it is a
+   *local profile* (name + email, no password, local DB only) whose job is
+   to map everything to a user id from day one; the browser sign-in at
+   the invite click links it rather than replacing it. See 001 §3.
 
 ## Decide before AT6 (billing) — but not before
 

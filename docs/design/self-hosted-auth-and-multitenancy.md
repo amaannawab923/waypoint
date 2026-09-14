@@ -120,10 +120,13 @@ bolted onto the current table.
   `createdAt`. This is the row a session token points at.
 - **`members` becomes the workspace-membership row it already
   conceptually is** — add `members.userId text references users(id),
-  nullable`. Null is Personal's unauthenticated seeded `mem-1` row
-  (`db/seed.ts` is unchanged, per the prior doc's §1 — Personal never
-  gains a `users` row because it never signs in). Set once a person joins
-  a Team workspace or turns on Sync.
+  nullable`. **Revised 2026-09-14 (decision 001 §3):** Personal's member
+  row points at a *local, unverified* `users` row created by the
+  first-launch profile screen — `users.emailVerifiedAt` is null until the
+  browser sign-in links it. `userId` stays nullable only for membership
+  rows that exist before a person has joined (an issued-but-unaccepted
+  invite, AT12). Set to a verified user once a person joins a Team
+  workspace or turns on Sync.
 - **`members.email unique` relaxes to `unique(workspaceId, email)`** — the
   concrete fix for the gap above. Display fields (`fullName`,
   `displayName`, `avatarColor`) stay on `members`, per-membership, exactly

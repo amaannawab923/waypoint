@@ -1,7 +1,6 @@
 # 001 — Product shape and distribution
 
-**Status:** decided except §3, which is the one fork the founder still has
-to call. Everything else here is settled.
+**Status:** decided. §3's fork was called by the founder on 2026-09-14.
 
 ## 1. The picture, in plain words
 
@@ -66,12 +65,34 @@ lives on our servers. Self-hosting means running that backend yourself.
   cost per free solo user. The privacy pitch changes from "on your
   machine" to "in our cloud."
 
-**Recommendation:** Version A. It is the version every piece of research
-this month was built on, and its only extra cost is one packaging task.
+**CALLED 2026-09-14 (founder): Version A's packaging, plus a local
+identity at first launch.**
 
-**Not yet decided by the founder.** Do not build AT1–AT6 against either
-assumption without this being called — it changes AT2's first screen and
-whether Personal ever touches the backend at all.
+- The app carries its own local database and opens with no server.
+- First launch shows **one local profile screen** — a name and an email,
+  **no password**, stored only in the local database. Its job is mapping:
+  every ticket, session, and comment is attributed to a user id from day
+  one. Nothing is sent anywhere; there is no account.
+- At the invite click (or Sync), the one-time browser sign-in **links**
+  that local profile to a verified identity rather than creating a second
+  one. Existing local data already carries the user id, so nothing is
+  re-attributed later.
+- Cost accepted knowingly: this is Option B's soft-start screen, which the
+  research rated as small-but-real friction. It stays one screen, no
+  account, no password, so the "no sign-up wall" finding holds in
+  substance. "Login" must never grow into credentials — a password on a
+  local-only app protects nothing and creates a reset problem with no
+  server to solve it.
+
+**Schema consequence (AT7, ROAD-142):** Personal's member row *does* point
+at a `users` row — a local, unverified one. `users.emailVerifiedAt` is
+null until the browser sign-in links it. The earlier "Personal never gets
+a users row" rule in the self-hosted auth doc §3 is superseded by this.
+
+**Ticket consequence:** the bundled-local-database work (§4 item 1) and
+this first-launch profile screen are one ticket — ROAD-149. AT10's
+desktop sign-in client gains "link the local profile" as part of its
+scope.
 
 ## 4. Build order
 
