@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { Request, Response, NextFunction } from 'express';
 import type { users } from '../db/schema/index.js';
+import { ServiceUnavailableError } from './errors.js';
 
 // AT8 (ROAD-143). The two guards this ticket introduces. Neither resolves
 // a session — that is AT11's middleware, which will attach `req.user`
@@ -38,17 +39,12 @@ function withStatus(message: string, status: number): Error & { status: number }
 // guessed a byte at a time; 503 when the operator hasn't set one, because
 // "setup is impossible" is a configuration state, not a client error.
 //
-// The env is read per request, not captured when the router is built —
-// errorHandler only trusts 4xx statuses on thrown errors, so the 503 is
-// sent directly rather than routed through it.
+// The env is read per request, not captured when the router is built.
 export function requireSetupToken(getEnv: () => NodeJS.ProcessEnv = () => process.env) {
-  return (req: Request, res: Response, next: NextFunction) => {
+  return (req: Request, _res: Response, next: NextFunction) => {
     const expected = getEnv().INSTANCE_SETUP_TOKEN?.trim();
     if (!expected) {
-      res.status(503).json({
-        error: 'setup_token_not_configured',
-        message: 'INSTANCE_SETUP_TOKEN is not configured on this instance',
-      });
+      next(new ServiceUnavailableError('INSTANCE_SETUP_TOKEN is not configured on this instance'));
       return;
     }
     const given = bearer(req);

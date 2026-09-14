@@ -10,7 +10,9 @@ import postgres from 'postgres';
 //
 // The shared dev database may or may not already hold the 'instance'
 // row (the seed doesn't create one; a self-hosted run would). The suite
-// saves whatever is there, runs against a clean slate, and restores it.
+// saves whatever is there, runs against a clean slate, and restores it in
+// afterAll — which runs after an assertion failure but not after a hard
+// kill mid-suite; on a dev DB that's an accepted gap, not a silent one.
 async function databaseReachable(): Promise<boolean> {
   const url = process.env.DATABASE_URL;
   if (!url) return false;
@@ -72,7 +74,9 @@ describe.skipIf(!REAL_DB)('instance setup against real Postgres (AT8)', () => {
     const { instance, admin } = await service.completeSetup(INPUT, ENV_ALL);
     expect(instance).toMatchObject({ id: 'instance', instanceName: INPUT.instanceName, signupMode: 'invite_only' });
     expect(instance.setupCompletedAt).toBeInstanceOf(Date);
-    expect(admin).toMatchObject({ email: INPUT.admin.email, isInstanceAdmin: true, emailVerifiedAt: null });
+    // ENV_ALL configures GitHub only — the placeholder must say so, not
+    // claim an email sign-in the instance can't perform.
+    expect(admin).toMatchObject({ email: INPUT.admin.email, isInstanceAdmin: true, emailVerifiedAt: null, authMethod: 'github' });
   });
 
   it('refuses a second setup with a conflict and leaves the first admin alone', async () => {

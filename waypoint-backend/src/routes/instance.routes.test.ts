@@ -11,7 +11,8 @@ vi.mock('../db/client.js', () => ({ db: {} }));
 vi.mock('../services/instance.service.js');
 
 const service = await import('../services/instance.service.js');
-const { instanceRouter, adminRouter } = await import('./instance.routes.js');
+const { instanceRouter } = await import('./instance.routes.js');
+const { adminRouter } = await import('./admin.routes.js');
 const { requireInstanceAdmin } = await import('../middleware/auth.js');
 
 const ADMIN = {
@@ -75,6 +76,7 @@ describe('POST /instance/setup', () => {
     delete process.env.INSTANCE_SETUP_TOKEN;
     const res = await request(app()).post('/instance/setup').send(SETUP_BODY);
     expect(res.status).toBe(503);
+    expect(res.body.error).toMatch(/INSTANCE_SETUP_TOKEN/);
     expect(service.completeSetup).not.toHaveBeenCalled();
   });
 

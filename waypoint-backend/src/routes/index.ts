@@ -22,7 +22,8 @@ import { proposalsRouter } from './proposals.routes.js';
 import { reviewQueueRouter } from './reviewQueue.routes.js';
 import { mcpRouter } from './mcp.routes.js';
 import { devRouter } from './dev.routes.js';
-import { instanceRouter, adminRouter } from './instance.routes.js';
+import { instanceRouter } from './instance.routes.js';
+import { adminRouter } from './admin.routes.js';
 
 export const apiRouter = Router();
 

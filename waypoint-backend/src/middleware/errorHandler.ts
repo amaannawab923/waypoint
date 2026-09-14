@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
-import { NotFoundError, ConflictError, ValidationError } from './errors.js';
+import { NotFoundError, ConflictError, ValidationError, ServiceUnavailableError } from './errors.js';
 
 // The postgres-js driver throws a DrizzleQueryError wrapping the real
 // PostgresError in `.cause`; the Postgres error code lives on whichever of
@@ -72,6 +72,10 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
   }
   if (err instanceof ValidationError) {
     res.status(400).json({ error: err.message });
+    return;
+  }
+  if (err instanceof ServiceUnavailableError) {
+    res.status(503).json({ error: err.message });
     return;
   }
   const trustedStatus = trustedHttpStatus(err);

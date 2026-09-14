@@ -1,7 +1,7 @@
 import { eq, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { instanceSettings, users, workspaces } from '../db/schema/index.js';
-import { ConflictError, ValidationError } from '../middleware/errors.js';
+import { ConflictError, NotFoundError, ValidationError } from '../middleware/errors.js';
 import { newId } from '../lib/ids.js';
 import { configuredAuthMethods, type AuthMethod } from '../lib/authMethods.js';
 
@@ -47,7 +47,8 @@ export type CompleteSetupInput = {
 export async function completeSetup(input: CompleteSetupInput, env: NodeJS.ProcessEnv = process.env) {
   // Refuse to produce an instance nobody can sign into. Checked here, not
   // only in the wizard's UI, because the wizard is one client of this.
-  if (configuredAuthMethods(env).length === 0) {
+  const methods = configuredAuthMethods(env);
+  if (methods.length === 0) {
     throw new ValidationError(
       'No sign-in method is configured. Set GITHUB_OAUTH_CLIENT_ID/SECRET, GOOGLE_OAUTH_CLIENT_ID/SECRET, or SMTP_HOST/SMTP_FROM before completing setup.',
     );
@@ -68,7 +69,10 @@ export async function completeSetup(input: CompleteSetupInput, env: NodeJS.Proce
         id: newId('user'),
         email: input.admin.email,
         fullName: input.admin.fullName,
-        authMethod: 'email',
+        // A placeholder until AT9's sign-in records how they actually
+        // signed in — but an honest one: the first method this instance
+        // offers, never 'email' on an instance with no SMTP.
+        authMethod: methods[0],
         emailVerifiedAt: null,
         isInstanceAdmin: true,
       })
@@ -93,7 +97,7 @@ export async function completeSetup(input: CompleteSetupInput, env: NodeJS.Proce
 
 export async function getInstance() {
   const [row] = await db.select().from(instanceSettings).where(eq(instanceSettings.id, INSTANCE_ROW_ID));
-  if (!row) throw new ConflictError('This instance has not completed setup');
+  if (!row) throw new NotFoundError('instance settings (setup not completed)');
   const [[w], [u]] = await Promise.all([
     db.select({ n: sql<number>`count(*)::int` }).from(workspaces),
     db.select({ n: sql<number>`count(*)::int` }).from(users),
@@ -109,6 +113,6 @@ export async function updateInstance(patch: UpdateInstanceInput) {
     .set({ ...patch, updatedAt: new Date() })
     .where(eq(instanceSettings.id, INSTANCE_ROW_ID))
     .returning();
-  if (!row) throw new ConflictError('This instance has not completed setup');
+  if (!row) throw new NotFoundError('instance settings (setup not completed)');
   return row;
 }
