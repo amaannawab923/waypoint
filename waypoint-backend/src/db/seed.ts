@@ -195,6 +195,8 @@ export async function seed() {
     plan: 'community',
     createdAt: daysAgo(200),
     restrictWorkspaceCreation: false,
+    // The one Personal workspace a fresh install runs against (AT7).
+    isPersonal: true,
   });
 
   // Members — same five people (initials, names, colors) as the mockup's
