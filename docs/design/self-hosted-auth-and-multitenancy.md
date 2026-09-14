@@ -187,9 +187,22 @@ because cloud's one instance is ours to operate, not theirs.
   and signup mode (`open` — anyone who can reach this instance and
   authenticate can create a workspace — or `invite_only` — only an
   existing member can invite). Submitting it writes the one
-  `instance_settings` row and creates the **first** `users` row from
-  whichever auth method the operator just completed, with
+  `instance_settings` row and creates the **first** `users` row with
   `isInstanceAdmin = true`.
+
+  **Amended for AT8 (2026-09-14):** sign-in doesn't exist until AT9, so
+  the wizard cannot be gated on "the auth method the operator just
+  completed." It is gated on **`INSTANCE_SETUP_TOKEN`** instead — an
+  operator-supplied secret in the compose env, sent as a bearer token to
+  `POST /instance/setup` (compared in constant time; 503 if unset, 401 if
+  wrong, 409 once setup is done). The admin's `users` row is created
+  *unverified* (`emailVerifiedAt = null`, the same shape as the desktop's
+  local profile); the first AT9 sign-in with that email links and
+  verifies it. Net effect: whoever holds the compose file owns the
+  instance — the same trust boundary as the database password — and no
+  one who merely reaches the URL first can claim it. The wizard also
+  refuses to complete with zero configured auth methods, so an
+  unsignable instance can't be produced.
 - **Ongoing admin surface:** `GET/PATCH /admin/instance`, guarded by
   `req.user.isInstanceAdmin` (§5) — change signup mode, see the instance's
   workspace/user counts. New files: `waypoint-backend/src/routes/
