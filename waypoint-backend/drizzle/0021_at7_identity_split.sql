@@ -21,6 +21,7 @@ CREATE TABLE "users" (
 	"id" text PRIMARY KEY NOT NULL,
 	"email" text NOT NULL,
 	"auth_method" "auth_method" DEFAULT 'email' NOT NULL,
+	"email_verified_at" timestamp with time zone,
 	"auth_provider_id" text,
 	"full_name" text NOT NULL,
 	"avatar_url" text,

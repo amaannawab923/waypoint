@@ -35,8 +35,9 @@ describe.skipIf(!REAL_DB)('identity split against real Postgres (AT7)', () => {
   let inArray: typeof import('drizzle-orm')['inArray'];
 
   const WS = ['at7-ws-a', 'at7-ws-b'];
-  const MEMBERS = ['at7-mem-a', 'at7-mem-b'];
+  const MEMBERS = ['at7-mem-a', 'at7-mem-b', 'at7-mem-c'];
   const USER = 'at7-user-1';
+  const LOCAL_USER = 'at7-user-local';
   const EMAIL = 'jordan.at7@example.test';
 
   beforeAll(async () => {
@@ -49,7 +50,7 @@ describe.skipIf(!REAL_DB)('identity split against real Postgres (AT7)', () => {
     // Order matters: members → workspaces (FK), sessions → users (FK).
     await db.delete(schema.members).where(inArray(schema.members.id, MEMBERS));
     await db.delete(schema.workspaces).where(inArray(schema.workspaces.id, WS));
-    await db.delete(schema.users).where(eq(schema.users.id, USER));
+    await db.delete(schema.users).where(inArray(schema.users.id, [USER, LOCAL_USER]));
   });
 
   async function twoWorkspaces() {
@@ -99,9 +100,14 @@ describe.skipIf(!REAL_DB)('identity split against real Postgres (AT7)', () => {
     });
   });
 
-  it('a member may point at a users row, and Personal members may point at none', async () => {
+  it('a member points at a users row — verified for a joined teammate, unverified for a local profile — and an issued invite may point at none', async () => {
     await twoWorkspaces();
-    await db.insert(schema.users).values({ id: USER, email: EMAIL, fullName: 'Jordan Reyes' });
+    await db.insert(schema.users).values([
+      { id: USER, email: EMAIL, fullName: 'Jordan Reyes', emailVerifiedAt: new Date() },
+      // The first-launch local profile (decision 001 §3): a real users
+      // row, nothing verified yet.
+      { id: LOCAL_USER, email: 'you@local.test', fullName: 'You', emailVerifiedAt: null },
+    ]);
     await db.insert(schema.members).values([
       {
         id: MEMBERS[0],
@@ -119,20 +125,34 @@ describe.skipIf(!REAL_DB)('identity split against real Postgres (AT7)', () => {
         displayName: 'You',
         email: 'you@local.test',
         avatarColor: '#000000',
-        // Personal's seeded row shape: never signed in, no users row.
+        // Personal's shape: mapped to a local profile, not verified.
+        userId: LOCAL_USER,
+      },
+      {
+        id: MEMBERS[2],
+        workspaceId: WS[1],
+        fullName: 'Invited',
+        displayName: 'Invited',
+        email: 'invited@example.test',
+        avatarColor: '#000000',
+        // An issued-but-unaccepted invite (AT12): nobody behind it yet.
         userId: null,
       },
     ]);
     const rows = await db
-      .select({ id: schema.members.id, userId: schema.members.userId })
+      .select({
+        id: schema.members.id,
+        userId: schema.members.userId,
+        verified: schema.users.emailVerifiedAt,
+      })
       .from(schema.members)
+      .leftJoin(schema.users, eq(schema.users.id, schema.members.userId))
       .where(inArray(schema.members.id, MEMBERS));
-    expect(new Map(rows.map((r) => [r.id, r.userId]))).toEqual(
-      new Map([
-        [MEMBERS[0], USER],
-        [MEMBERS[1], null],
-      ]),
-    );
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    expect(byId.get(MEMBERS[0])).toMatchObject({ userId: USER });
+    expect(byId.get(MEMBERS[0])?.verified).toBeInstanceOf(Date);
+    expect(byId.get(MEMBERS[1])).toMatchObject({ userId: LOCAL_USER, verified: null });
+    expect(byId.get(MEMBERS[2])).toMatchObject({ userId: null, verified: null });
   });
 
   it('the seeded workspace is flagged Personal with the free 30-day history window', async () => {

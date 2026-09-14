@@ -81,6 +81,11 @@ async function truncateAll(tx: Tx) {
     'projects',
     'members',
     'workspaces',
+    // AT7: identity tables. users last — members.user_id points at it
+    // (CASCADE handles order anyway, but keep the list honest).
+    'sessions',
+    'users',
+    'instance_settings',
   ];
   await tx.execute(sql.raw(`TRUNCATE TABLE ${tables.map((t) => `"${t}"`).join(', ')} RESTART IDENTITY CASCADE`));
 }
@@ -203,10 +208,24 @@ export async function seed() {
   // PEOPLE array. Emails follow amaan@waypointlabs.dev (the one the mockup
   // states, on the Profile settings screen) for the rest, since none of the
   // other four are given explicit emails anywhere in the mockup.
+  // The local profile behind mem-1 (AT7, decision 001 §3): a users row
+  // that exists so everything maps to a user id from day one, unverified
+  // until a browser sign-in links it. The other four seeded members are
+  // teammates in the mockup's Team story and have no local profile here.
+  await tx.insert(schema.users).values({
+    id: 'user-1',
+    email: 'amaan@waypointlabs.dev',
+    authMethod: 'email',
+    emailVerifiedAt: null,
+    fullName: 'Amaan Nawab',
+    createdAt: daysAgo(200),
+  });
+
   await tx.insert(schema.members).values([
     {
       id: 'mem-1',
       workspaceId: 'ws-1',
+      userId: 'user-1',
       fullName: 'Amaan Nawab',
       displayName: 'Amaan',
       email: 'amaan@waypointlabs.dev',

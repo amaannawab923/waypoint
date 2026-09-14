@@ -1,5 +1,5 @@
 {
-  "id": "819fc56b-87d7-4f99-9d98-1ffd798cc2d6",
+  "id": "6f92dd19-f065-46ea-a711-e02d7b71bfc9",
   "prevId": "bf51a95b-2f03-4825-a5a2-22fbf45111f2",
   "version": "7",
   "dialect": "postgresql",
@@ -278,6 +278,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'email'"
+        },
+        "email_verified_at": {
+          "name": "email_verified_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         },
         "auth_provider_id": {
           "name": "auth_provider_id",

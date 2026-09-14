@@ -35,14 +35,20 @@ export const workspaces = pgTable('workspaces', {
 });
 
 // AT7 (ROAD-142). One row per real person on this instance, independent
-// of any workspace — this is what a session token points at. Personal's
-// seeded mem-1 never gets one: it never signs in. A row appears the first
-// time someone signs in through the browser (AT9), whether to create a
-// Team, accept an invite, or turn on Sync.
+// of any workspace — this is what a session token points at. Personal
+// gets one too: the first-launch profile screen (decision 001 §3) creates
+// a local, unverified row so everything is attributed to a user id from
+// day one. The browser sign-in (AT9/AT10) later *links* that row —
+// setting emailVerifiedAt and authProviderId — rather than creating a
+// second identity.
 export const users = pgTable('users', {
   id: text('id').primaryKey(),
   email: text('email').notNull().unique(),
   authMethod: authMethodEnum('auth_method').notNull().default('email'),
+  // Null until a browser sign-in has proven this email (or the provider
+  // vouched for it). A local profile is a real users row with this null —
+  // that is the whole difference between "mapped" and "verified".
+  emailVerifiedAt: timestamp('email_verified_at', { withTimezone: true }),
   // The GitHub / Google subject id. Null for someone who only ever used
   // the email link — email is their identity then.
   authProviderId: text('auth_provider_id'),
@@ -102,10 +108,11 @@ export const members = pgTable('members', {
   avatarColor: text('avatar_color').notNull(),
   role: memberRoleEnum('role').notNull().default('member'),
   authMethod: authMethodEnum('auth_method').notNull().default('email'),
-  // AT7 (ROAD-142). The person behind this membership. Null is Personal's
-  // seeded mem-1 — never signed in, no users row. Set when someone joins a
-  // Team workspace or turns on Sync (AT12 / AT6). Display fields stay on
-  // this row, per membership, so nothing that reads them changes.
+  // AT7 (ROAD-142). The person behind this membership. Personal's seeded
+  // mem-1 points at a local, unverified users row (decision 001 §3);
+  // null only for a membership that exists before anyone has joined it
+  // (an issued invite, AT12). Display fields stay on this row, per
+  // membership, so nothing that reads them changes.
   userId: text('user_id').references(() => users.id, { onDelete: 'set null' }),
   joinedAt: timestamp('joined_at', { withTimezone: true }).notNull().defaultNow(),
   // Preferences settings' "First day of the week" select — see
