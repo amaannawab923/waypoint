@@ -79,6 +79,36 @@ export const sessions = pgTable('sessions', {
   deviceLabel: text('device_label'),
 });
 
+// AT9 (ROAD-144). A sign-in in flight: from "the desktop opened the
+// sign-in page" to "the browser came back with a token." One row per
+// attempt, for every method — the OAuth `state` we hand GitHub/Google and
+// the magic-link token we email are both random secrets we later have to
+// recognise, so both are stored the same way sessions are: hashed, never
+// raw. Rows are single-use (consumedAt) and short-lived (expiresAt); a
+// row in the database rather than memory so a cloud deployment with more
+// than one API process still completes a flow whichever process the
+// callback lands on. The redirect the browser is sent back to is the one
+// recorded at the start, never a parameter on the callback.
+export const authFlows = pgTable('auth_flows', {
+  id: text('id').primaryKey(),
+  provider: authMethodEnum('provider').notNull(),
+  secretHash: text('secret_hash').notNull().unique(),
+  // Magic link only: the address the link was sent to, which is the
+  // identity the click proves.
+  email: text('email'),
+  // Where the desktop asked to be sent back — validated as a loopback
+  // callback when the flow starts (AT10 owns that server).
+  redirectUri: text('redirect_uri').notNull(),
+  // The desktop's own CSRF value, echoed back to it untouched.
+  clientState: text('client_state').notNull(),
+  // What the sign-in is for: a workspace slug or 'sync' — display only in
+  // this ticket; AT12 reads it to land an invitee on the right board.
+  purpose: text('purpose'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  consumedAt: timestamp('consumed_at', { withTimezone: true }),
+});
+
 // AT7 (ROAD-142). Singleton — id is always the literal 'instance'. Holds
 // what a self-hosted operator decides at first run (AT8): the instance's
 // name and whether anyone may sign up or only invitees. Created here,

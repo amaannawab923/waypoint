@@ -77,10 +77,11 @@ jobs:
       - run: npm ci
       # No Postgres setup here, unlike the e2e job below: almost every backend
       # *.test.ts file mocks its DB access rather than hitting a real
-      # database. The one exception (proposals.service.integration.test.ts)
-      # skips itself when DATABASE_URL doesn't resolve — see databaseReachable
-      # in that file — so it is silently absent from this job's coverage; it
-      # runs for real in the e2e job below, which already stands up Postgres
+      # database. The exceptions (*.integration.test.ts files — proposals,
+      # AT7's identity split, AT8's instance setup, AT9's sign-in flow) skip
+      # themselves when DATABASE_URL doesn't resolve — see databaseReachable
+      # in each — so they are silently absent from this job's coverage; they
+      # run for real in the e2e job below, which already stands up Postgres
       # for a different reason. This job still needs the package installed
       # and built.
       - run: npm run build
