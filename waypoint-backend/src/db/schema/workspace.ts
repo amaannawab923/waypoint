@@ -87,8 +87,10 @@ export const instanceSettings = pgTable('instance_settings', {
   id: text('id').primaryKey(),
   instanceName: text('instance_name').notNull().default('Waypoint'),
   // 'open' — anyone who can reach the instance may sign in and create a
-  // workspace; 'invite-only' — only people holding an invite link.
-  signupMode: text('signup_mode').notNull().default('invite-only'),
+  // workspace; 'invite_only' — only people holding an invite link. The
+  // literal matches the spec (§4) and the INSTANCE_SIGNUP_MODE env var
+  // AT8/AT13 read, so the same string appears everywhere.
+  signupMode: text('signup_mode').notNull().default('invite_only'),
   setupCompletedAt: timestamp('setup_completed_at', { withTimezone: true }),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

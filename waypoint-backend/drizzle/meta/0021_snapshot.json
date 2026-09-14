@@ -1,5 +1,5 @@
 {
-  "id": "6f92dd19-f065-46ea-a711-e02d7b71bfc9",
+  "id": "d202e143-81d1-4070-a7c6-a9c80de537a0",
   "prevId": "bf51a95b-2f03-4825-a5a2-22fbf45111f2",
   "version": "7",
   "dialect": "postgresql",
@@ -26,7 +26,7 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'invite-only'"
+          "default": "'invite_only'"
         },
         "setup_completed_at": {
           "name": "setup_completed_at",

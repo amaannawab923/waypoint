@@ -1,7 +1,7 @@
 CREATE TABLE "instance_settings" (
 	"id" text PRIMARY KEY NOT NULL,
 	"instance_name" text DEFAULT 'Waypoint' NOT NULL,
-	"signup_mode" text DEFAULT 'invite-only' NOT NULL,
+	"signup_mode" text DEFAULT 'invite_only' NOT NULL,
 	"setup_completed_at" timestamp with time zone,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );

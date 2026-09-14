@@ -81,8 +81,8 @@ async function truncateAll(tx: Tx) {
     'projects',
     'members',
     'workspaces',
-    // AT7: identity tables. users last — members.user_id points at it
-    // (CASCADE handles order anyway, but keep the list honest).
+    // AT7: identity tables. One TRUNCATE ... CASCADE takes the whole set
+    // at once, so order here is only for reading.
     'sessions',
     'users',
     'instance_settings',

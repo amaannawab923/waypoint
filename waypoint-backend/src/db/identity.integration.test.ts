@@ -155,11 +155,24 @@ describe.skipIf(!REAL_DB)('identity split against real Postgres (AT7)', () => {
     expect(byId.get(MEMBERS[2])).toMatchObject({ userId: null, verified: null });
   });
 
-  it('the seeded workspace is flagged Personal with the free 30-day history window', async () => {
-    const [ws] = await db
-      .select({ isPersonal: schema.workspaces.isPersonal, days: schema.workspaces.reviewHistoryDays })
+  it('a workspace defaults to not-Personal with the free 30-day history window, and Personal is an explicit flag', async () => {
+    await db.insert(schema.workspaces).values([
+      { id: WS[0], name: WS[0], slug: WS[0], companySize: '2-10', timezone: 'UTC' },
+      { id: WS[1], name: WS[1], slug: WS[1], companySize: '2-10', timezone: 'UTC', isPersonal: true },
+    ]);
+    const rows = await db
+      .select({
+        id: schema.workspaces.id,
+        isPersonal: schema.workspaces.isPersonal,
+        days: schema.workspaces.reviewHistoryDays,
+      })
       .from(schema.workspaces)
-      .where(eq(schema.workspaces.id, 'ws-1'));
-    expect(ws).toEqual({ isPersonal: true, days: 30 });
+      .where(inArray(schema.workspaces.id, WS));
+    expect(new Map(rows.map((r) => [r.id, { isPersonal: r.isPersonal, days: r.days }]))).toEqual(
+      new Map([
+        [WS[0], { isPersonal: false, days: 30 }],
+        [WS[1], { isPersonal: true, days: 30 }],
+      ]),
+    );
   });
 });
