@@ -1,0 +1,591 @@
+<title>Onboarding B · Soft Start</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --font-display: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+    --font-body: 'Public Sans', ui-sans-serif, system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+
+    --bg: #ffffff;
+    --bg-inset: #f9f9fb;
+    --surface: #ffffff;
+    --surface-2: #f4f4f6;
+    --border: #e4e4e8;
+    --border-strong: #d3d3d9;
+    --text: #0a0a0c;
+    --text-secondary: #53535c;
+    --text-muted: #9a9aa3;
+
+    --accent: #18181b;
+    --accent-hover: #000000;
+    --accent-soft-bg: #f1f1f3;
+    --accent-soft-text: #0a0a0c;
+    --on-accent: #ffffff;
+
+    --success: #157a3d;
+    --success-bg: #eafbf0;
+    --warning: #96590a;
+    --warning-bg: #fdf3e3;
+    --danger: #c8241a;
+    --danger-bg: #fdeceb;
+    --info: #1c5fc4;
+    --info-bg: #eaf1fd;
+    --jira: #0052cc;
+    --jira-bg: #eaf1fd;
+
+    --shadow-color: 240 8% 8%;
+    --radius-sm: 6px;
+    --radius: 10px;
+    --radius-lg: 16px;
+    color-scheme: light;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0a0a0c;
+      --bg-inset: #131316;
+      --surface: #131316;
+      --surface-2: #1c1c20;
+      --border: #29292f;
+      --border-strong: #3a3a42;
+      --text: #f2f2f4;
+      --text-secondary: #a8a8b3;
+      --text-muted: #6b6b76;
+      --accent: #f2f2f4;
+      --accent-hover: #ffffff;
+      --accent-soft-bg: #232328;
+      --accent-soft-text: #f2f2f4;
+      --on-accent: #0a0a0c;
+      --success: #3ecf7e;
+      --success-bg: #0d2418;
+      --warning: #e2a13d;
+      --warning-bg: #2a1e08;
+      --danger: #f0655f;
+      --danger-bg: #2c1210;
+      --info: #5b93e6;
+      --info-bg: #101f33;
+      --jira: #6e9bf4;
+      --jira-bg: #1c2740;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0a0a0c;
+    --bg-inset: #131316;
+    --surface: #131316;
+    --surface-2: #1c1c20;
+    --border: #29292f;
+    --border-strong: #3a3a42;
+    --text: #f2f2f4;
+    --text-secondary: #a8a8b3;
+    --text-muted: #6b6b76;
+    --accent: #f2f2f4;
+    --accent-hover: #ffffff;
+    --accent-soft-bg: #232328;
+    --accent-soft-text: #f2f2f4;
+    --on-accent: #0a0a0c;
+    --success: #3ecf7e;
+    --success-bg: #0d2418;
+    --warning: #e2a13d;
+    --warning-bg: #2a1e08;
+    --danger: #f0655f;
+    --danger-bg: #2c1210;
+    --info: #5b93e6;
+    --info-bg: #101f33;
+    --jira: #6e9bf4;
+    --jira-bg: #1c2740;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3 { font-family: var(--font-display); letter-spacing: -0.01em; margin: 0; }
+  svg.icon { width: 15px; height: 15px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+  .page { max-width: 1240px; margin: 0 auto; padding: 28px 24px 72px; display: flex; flex-direction: column; gap: 20px; }
+  .eyebrow { font: 600 11px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--text-muted); }
+  .hero h1 { font-size: 26px; margin: 6px 0 8px; }
+  .hero .dek { color: var(--text-secondary); max-width: 700px; font-size: 13.5px; }
+
+  .stepper-bar {
+    position: sticky; top: 0; z-index: 5; background: var(--bg);
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 12px 0; border-bottom: 1px solid var(--border);
+  }
+  .step-dots { display: flex; gap: 6px; flex-wrap: wrap; }
+  .step-dot {
+    padding: 6px 11px; border-radius: 999px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text-secondary);
+    font: 600 11.5px var(--font-body); cursor: pointer; white-space: nowrap;
+  }
+  .step-dot:hover { border-color: var(--border-strong); }
+  .step-dot[aria-current="step"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+  .nav-btns { display: flex; gap: 8px; margin-left: auto; }
+  .nav-btn {
+    border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
+    border-radius: var(--radius-sm); padding: 7px 14px; font: 600 12.5px var(--font-body); cursor: pointer;
+  }
+  .nav-btn:hover { border-color: var(--text-muted); }
+  .nav-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .kbd-hint { color: var(--text-muted); font: 500 11px var(--font-mono); }
+
+  button:focus-visible, .step-dot:focus-visible, a:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid var(--info); outline-offset: 2px; border-radius: 4px;
+  }
+
+  .stage { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(280px, 1fr); gap: 22px; align-items: start; }
+  @media (max-width: 880px) { .stage { grid-template-columns: 1fr; } }
+
+  .window-wrap { overflow-x: auto; border-radius: var(--radius-lg); }
+  .env-tag-row { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+  .env-tag { font: 600 11px var(--font-mono); padding: 4px 10px; border-radius: 999px; display: inline-flex; align-items: center; gap: 6px; }
+  .env-tag.local { background: var(--success-bg); color: var(--success); }
+  .env-tag.hosted { background: var(--info-bg); color: var(--info); }
+  .env-tag .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+  .mock-window {
+    width: 940px; max-width: 100%; height: 600px;
+    border-radius: var(--radius-lg); border: 1px solid var(--border);
+    background: var(--surface); box-shadow: 0 30px 60px -30px hsl(var(--shadow-color) / 0.35);
+    display: grid; grid-template-columns: 210px 1fr; grid-template-rows: 52px 1fr;
+    overflow: hidden; position: relative;
+  }
+  .m-topbar { grid-column: 1 / 3; display: flex; align-items: center; gap: 12px; padding: 0 16px; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .m-search { flex: 1; max-width: 320px; display: flex; align-items: center; gap: 8px; background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 7px 10px; color: var(--text-muted); font-size: 12.5px; }
+  .m-newticket { background: var(--accent); color: var(--on-accent); border: none; border-radius: var(--radius-sm); padding: 7px 13px; font: 600 12.5px var(--font-body); display: flex; gap: 6px; align-items: center; white-space:nowrap; }
+  .m-topbar-icons { display: flex; align-items: center; gap: 12px; margin-left: auto; color: var(--text-secondary); }
+  .m-avatar { width: 25px; height: 25px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font: 700 11px var(--font-body); background: var(--accent-soft-bg); color: var(--accent-soft-text); flex: none; }
+  .m-avatar.placeholder { background: var(--surface-2); color: var(--text-muted); border: 1px dashed var(--border-strong); }
+
+  .m-sidebar { border-right: 1px solid var(--border); background: var(--bg-inset); padding: 12px 9px; display: flex; flex-direction: column; gap: 1px; overflow-y: auto; }
+  .m-brand { display: flex; align-items: center; gap: 8px; padding: 3px 6px 13px; font: 700 13.5px var(--font-display); }
+  .m-brand .mark { width: 20px; height: 20px; border-radius: 6px; background: var(--accent); color: var(--on-accent); display: flex; align-items: center; justify-content: center; font-size: 11px; }
+  .m-navitem { display: flex; align-items: center; gap: 9px; padding: 6px 8px; border-radius: var(--radius-sm); color: var(--text-secondary); font: 500 12.5px var(--font-body); }
+  .m-navitem.active { background: var(--surface-2); color: var(--text); font-weight: 600; }
+  .m-navitem .spacer { flex: 1; }
+  .m-navitem .badge { background: var(--danger); color: #fff; font: 700 9.5px var(--font-mono); border-radius: 999px; padding: 1px 6px; }
+  .m-section-label { font: 700 9.5px var(--font-mono); letter-spacing: .07em; text-transform: uppercase; color: var(--text-muted); padding: 12px 8px 3px; }
+  .m-sidebar-footer { margin-top: auto; padding-top: 9px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 7px; }
+  .m-machine { display: flex; align-items: center; gap: 6px; font: 600 10.5px var(--font-mono); color: var(--text-muted); padding: 2px 6px; }
+  .m-machine .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+  .m-invite-link { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: var(--radius-sm); color: var(--text-secondary); font: 700 11.5px var(--font-body); border: 1px dashed var(--border-strong); background: transparent; }
+  .m-invite-link.highlight { color: var(--text); border-color: var(--text); border-style: solid; background: var(--surface-2); box-shadow: 0 0 0 3px var(--accent-soft-bg); }
+  .m-wsswitch { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: var(--radius-sm); background: var(--surface); border: 1px solid var(--border); font: 700 12px var(--font-body); }
+  .m-wsswitch small { display: block; font: 600 9.5px var(--font-mono); color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
+
+  .m-content { overflow-y: auto; padding: 22px 26px; background: var(--bg); }
+  .crumbs { display:flex; align-items:center; gap:8px; font: 600 12px var(--font-body); color: var(--text-secondary); margin-bottom: 16px; }
+  .crumbs b { color: var(--text); }
+
+  .greeting { font-family: var(--font-display); font-size: 20px; margin: 0 0 3px; }
+  .subgreeting { color: var(--text-secondary); font-size: 12.5px; margin: 0 0 18px; }
+  .quick-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 22px; }
+  .qa-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 13px; background: var(--surface); display: flex; flex-direction: column; gap: 5px; }
+  .qa-card strong { font: 700 12.5px var(--font-body); }
+  .qa-card span { font-size: 11.5px; color: var(--text-secondary); }
+
+  .section-title { font: 700 11px var(--font-mono); text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); margin: 20px 0 8px; }
+  .ticket-row { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 6px; background: var(--surface); font-size: 12.5px; }
+  .ticket-key { font: 700 11.5px var(--font-mono); color: var(--text-muted); min-width: 58px; }
+  .ticket-key.jira { color: var(--jira); }
+  .ticket-title { flex: 1; color: var(--text); }
+  .pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font: 700 10.5px var(--font-body); border: 1px solid var(--border-strong); color: var(--text-secondary); }
+  .pill.warn { background: var(--warning-bg); color: var(--warning); border-color: transparent; }
+  .pill.review { background: var(--info-bg); color: var(--info); border-color: transparent; }
+  .pill.done { background: var(--success-bg); color: var(--success); border-color: transparent; }
+
+  .ticket-detail { display: grid; grid-template-columns: 1fr 240px; gap: 22px; }
+  .ticket-body h2 { font-size: 18px; margin-bottom: 10px; }
+  .ticket-body p.desc { color: var(--text-secondary); font-size: 12.5px; margin: 0 0 16px; }
+  .side-field { margin-bottom: 14px; }
+  .side-field label { display: block; font: 700 10.5px var(--font-mono); text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); margin-bottom: 5px; }
+  .side-field .val { font: 600 12.5px var(--font-body); }
+
+  .sessions-row { display: flex; gap: 8px; margin: 4px 0 18px; }
+  .sess-chip { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 7px 12px; font: 600 12px var(--font-body); background: var(--surface); }
+
+  .banner { display: flex; align-items: center; gap: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 12px 14px; margin-bottom: 18px; }
+  .banner strong { display:block; font-size: 12.5px; }
+  .banner span { font-size: 11.5px; color: var(--text-secondary); }
+  .banner .actions { margin-left: auto; display: flex; gap: 8px; flex: none; }
+  .banner .actions button { font: 700 11.5px var(--font-body); border-radius: var(--radius-sm); padding: 6px 11px; }
+  .banner .actions .yes { background: var(--accent); color: var(--on-accent); border: none; }
+  .banner .actions .no { background: transparent; border: 1px solid var(--border-strong); color: var(--text-secondary); }
+  .milestone-icon { width: 30px; height: 30px; border-radius: 8px; background: var(--accent-soft-bg); color: var(--accent-soft-text); display: flex; align-items: center; justify-content: center; flex: none; }
+
+  .m-modal-backdrop { position: absolute; inset: 0; background: color-mix(in srgb, var(--text) 40%, transparent); display: flex; align-items: center; justify-content: center; }
+  .m-modal { width: 380px; max-width: 88%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; box-shadow: 0 24px 48px -12px hsl(var(--shadow-color)/.45); }
+  .m-modal h3 { font-size: 15.5px; margin-bottom: 4px; }
+  .m-modal p.hint { color: var(--text-secondary); font-size: 11.5px; margin: 0 0 16px; line-height:1.5; }
+  .field { margin-bottom: 12px; }
+  .field label { font: 700 11px var(--font-body); display: block; margin-bottom: 5px; }
+  .field input { width: 100%; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; background: var(--bg-inset); color: var(--text); font: 500 12.5px var(--font-body); }
+  .field input::placeholder { color: var(--text-muted); }
+  .field input:disabled { color: var(--text-secondary); }
+  .field .subnote { font-size: 10.5px; color: var(--text-muted); margin-top: 4px; }
+  .note-box { background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 9px 10px; font-size: 11.5px; color: var(--text-secondary); margin-bottom: 14px; line-height:1.5; }
+  .note-box b { color: var(--text); }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+  .modal-actions.split { justify-content: space-between; }
+  .btn-primary { background: var(--accent); color: var(--on-accent); border: none; border-radius: var(--radius-sm); padding: 8px 15px; font: 700 12.5px var(--font-body); }
+  .btn-ghost { background: transparent; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 8px 15px; font: 700 12.5px var(--font-body); color: var(--text); }
+  .btn-skip { background: transparent; border: none; color: var(--text-secondary); font: 700 12.5px var(--font-body); text-decoration: underline; text-underline-offset: 3px; padding: 8px 4px; }
+  .link-box { display: flex; gap: 8px; align-items: center; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-inset); padding: 8px 10px; font: 500 11.5px var(--font-mono); color: var(--text-secondary); margin-bottom: 12px; }
+  .link-box span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .welcome-card { width: 400px; max-width: 90%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 28px; box-shadow: 0 24px 48px -12px hsl(var(--shadow-color)/.4); text-align:left; }
+  .welcome-card .brandmark { width:34px; height:34px; border-radius:9px; background:var(--accent); color:var(--on-accent); display:flex; align-items:center; justify-content:center; font:700 15px var(--font-display); margin-bottom:16px; }
+  .welcome-card h3 { font-size:18px; margin-bottom:6px; }
+  .welcome-card p.hint { color: var(--text-secondary); font-size:12.5px; margin: 0 0 18px; line-height:1.5;}
+  .avatar-preview { display:flex; align-items:center; gap:10px; margin-bottom: 16px; }
+  .avatar-preview .m-avatar { width: 38px; height: 38px; font-size: 14px; }
+
+  .join-card { width: 400px; max-width: 90%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 26px; box-shadow: 0 24px 48px -12px hsl(var(--shadow-color)/.4); text-align:left; }
+  .join-card .brandmark { width:34px; height:34px; border-radius:9px; background:var(--accent); color:var(--on-accent); display:flex; align-items:center; justify-content:center; font:700 15px var(--font-display); margin-bottom:14px; }
+  .join-card h3 { font-size:17px; margin-bottom:6px; }
+  .join-card p.hint { color: var(--text-secondary); font-size:12.5px; margin: 0 0 18px; }
+
+  .caption {
+    border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface);
+    padding: 18px; display: flex; flex-direction: column; gap: 13px; position: sticky; top: 66px;
+  }
+  .caption .stepno { font: 700 10.5px var(--font-mono); color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; }
+  .caption h2 { font-size: 16px; margin-top: 4px; }
+  .risk-block { border-radius: var(--radius); padding: 10px 12px; font-size: 12px; line-height: 1.55; }
+  .risk-block b { display: block; font: 700 10px var(--font-mono); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; }
+  .risk-block.dropoff { background: var(--danger-bg); color: var(--danger); }
+  .risk-block.mitigation { background: var(--success-bg); color: var(--success); }
+
+  .legend { display:flex; flex-wrap:wrap; gap: 14px; padding-top: 6px; border-top:1px solid var(--border); }
+  .legend span { font-size: 11px; color: var(--text-muted); display:flex; align-items:center; gap:6px; }
+  .legend .sw { width:8px; height:8px; border-radius:50%; }
+  .legend .sw.local { background: var(--success); }
+  .legend .sw.hosted { background: var(--info); }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+  }
+</style>
+
+<svg style="display:none" aria-hidden="true">
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 11.5 12 4l8 7.5"/><path d="M6 10v9h12v-9"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.4"/><path d="M5 20c1.2-4 4-6 7-6s5.8 2 7 6"/></symbol>
+  <symbol id="i-bot" viewBox="0 0 24 24"><rect x="5" y="9" width="14" height="10" rx="2.5"/><path d="M12 5v4M9 14h.01M15 14h.01"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 10a6 6 0 0 1 12 0c0 4 1.5 5.5 1.5 5.5h-15S6 14 6 10Z"/><path d="M10 19a2 2 0 0 0 4 0"/></symbol>
+  <symbol id="i-pencil" viewBox="0 0 24 24"><path d="m5 19 1-4L16.5 4.5a1.6 1.6 0 0 1 2.3 2.3L8.3 17.3 5 19Z"/></symbol>
+  <symbol id="i-note" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2.5"/><path d="M8 9h8M8 13h5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M4 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-3.8-3.8"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M18 6l-2.5 2.5M8.5 15.5 6 18"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+  <symbol id="i-flag" viewBox="0 0 24 24"><path d="M6 3v18"/><path d="M6 4h11l-2.5 4L17 12H6"/></symbol>
+</svg>
+
+<div class="page">
+  <div class="hero">
+    <div class="eyebrow">Onboarding Option B</div>
+    <h1>Soft Start</h1>
+    <p class="dek">One optional, equal-weight identity screen at first launch — skippable in under three seconds — so inviting later is a single field. A second difference from Option A: the invite prompt isn't only passive. Once real usage happens, a one-time milestone nudge offers it directly.</p>
+  </div>
+
+  <div class="stepper-bar">
+    <div class="step-dots" id="dots" role="tablist" aria-label="Walkthrough steps"></div>
+    <div class="nav-btns">
+      <span class="kbd-hint">&larr; / &rarr; to navigate</span>
+      <button class="nav-btn" id="prevBtn" type="button">Prev</button>
+      <button class="nav-btn" id="nextBtn" type="button">Next</button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div>
+      <div class="env-tag-row"><span class="env-tag" id="envTag"></span></div>
+      <div class="window-wrap"><div class="mock-window" id="windowFrame"></div></div>
+      <div class="legend">
+        <span><i class="sw local"></i>Local — this machine only, no Waypoint server</span>
+        <span><i class="sw hosted"></i>Hosted — Fairweather Labs' shared workspace</span>
+      </div>
+    </div>
+    <div class="caption" id="captionPanel" tabindex="-1" aria-live="polite"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var sidebarBase = function (activeKey, footer, notifBadge) {
+    var items = [
+      ['home', 'i-home', 'Home'],
+      ['mywork', 'i-user', 'My work'],
+      ['sessions', 'i-bot', 'My sessions'],
+      ['notif', 'i-bell', 'Notifications'],
+      ['drafts', 'i-pencil', 'Drafts'],
+      ['scratch', 'i-note', 'Scratchpad'],
+    ];
+    var nav = items.map(function (it) {
+      var badge = (it[0] === 'notif' && notifBadge) ? '<span class="badge">' + notifBadge + '</span>' : '';
+      return '<div class="m-navitem' + (it[0] === activeKey ? ' active' : '') + '"><svg class="icon"><use href="#' + it[1] + '"/></svg>' + it[2] + '<span class="spacer"></span>' + badge + '</div>';
+    }).join('');
+    return '' +
+      '<div class="m-sidebar">' +
+        '<div class="m-brand"><span class="mark">W</span>Fairweather</div>' +
+        nav +
+        '<div class="m-navitem' + (activeKey === 'review' ? ' active' : '') + '"><svg class="icon"><use href="#i-check"/></svg>Review<span class="spacer"></span></div>' +
+        '<div class="m-section-label">Projects</div>' +
+        '<div class="m-navitem"><svg class="icon"><use href="#i-folder"/></svg>All projects</div>' +
+        '<div class="m-navitem' + (activeKey === 'ticket' ? ' active' : '') + '"><svg class="icon"><use href="#i-folder"/></svg>Waypoint Roadmap</div>' +
+        '<div class="m-sidebar-footer">' + footer + '</div>' +
+      '</div>';
+  };
+
+  var topbar = function (avatarHtml) {
+    return '' +
+      '<div class="m-topbar">' +
+        '<div class="m-search"><svg class="icon"><use href="#i-search"/></svg>Search&hellip; <span style="margin-left:auto;opacity:.6">&#8984;K</span></div>' +
+        '<button class="m-newticket"><svg class="icon"><use href="#i-plus"/></svg>New ticket</button>' +
+        '<div class="m-topbar-icons">' +
+          '<svg class="icon"><use href="#i-sun"/></svg>' +
+          '<svg class="icon"><use href="#i-bell"/></svg>' +
+          '<svg class="icon"><use href="#i-spark"/></svg>' +
+          avatarHtml +
+        '</div>' +
+      '</div>';
+  };
+
+  var footerDefault = '' +
+    '<div class="m-machine"><span class="dot"></span>Local &middot; on this machine</div>' +
+    '<a class="m-invite-link" href="javascript:void(0)"><svg class="icon"><use href="#i-user"/></svg>Invite your team</a>';
+
+  var footerSwitcher = '' +
+    '<div class="m-wsswitch"><svg class="icon"><use href="#i-folder"/></svg><div><div>Personal<small>local</small></div></div><svg class="icon" style="margin-left:auto"><use href="#i-arrow"/></svg></div>' +
+    '<div class="m-wsswitch" style="opacity:.7"><svg class="icon"><use href="#i-user"/></svg><div><div>Fairweather Labs<small>hosted</small></div></div></div>';
+
+  var avatarPlaceholder = '<div class="m-avatar placeholder">Y</div>';
+  var avatarAmaan = '<div class="m-avatar">AM</div>';
+
+  var steps = [
+    {
+      title: 'First launch — one optional field, equal-weight skip',
+      env: 'local',
+      dropoff: 'Any screen before Home — even one field — is friction a zero-account competitor doesn\'t have. Some solo users will bounce purely on principle if the "real" path looks even slightly bigger than the skip path.',
+      mitigation: '"Skip — just me" is a full button, not a small grey afterthought, and pressing Enter with the field empty does exactly the same thing. Takes under three seconds either way, and nothing here is required to proceed.',
+      window: function () {
+        return topbar(avatarPlaceholder) + sidebarBase('home', footerDefault) +
+          '<div class="m-content" style="filter:blur(1.5px);opacity:.4"><div class="greeting">Good afternoon</div></div>' +
+          '<div class="m-modal-backdrop">' +
+            '<div class="welcome-card">' +
+              '<div class="brandmark">W</div>' +
+              '<h3>What should we call you?</h3>' +
+              '<p class="hint">Only used to label your own comments if you ever invite someone. No email, no password &mdash; ever, for this.</p>' +
+              '<div class="avatar-preview"><div class="m-avatar">AM</div><input style="flex:1;border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px;background:var(--bg-inset);color:var(--text);font:500 13px var(--font-body)" placeholder="e.g. Amaan Nawab" value="Amaan Nawab"></div>' +
+              '<div class="modal-actions split">' +
+                '<button class="btn-skip">Skip &mdash; just me</button>' +
+                '<button class="btn-primary">Continue</button>' +
+              '</div>' +
+            '</div>' +
+          '</div>';
+      }
+    },
+    {
+      title: 'Home reflects whichever path was taken',
+      env: 'local',
+      dropoff: 'If skipping produces a worse Home than naming yourself, "skip" stops being a real option and becomes a trap.',
+      mitigation: 'The two paths converge on the same Home. Named: "Good afternoon, Amaan." Skipped: "Good afternoon" with a "You" placeholder, identical layout, no missing features, renameable later from Settings.',
+      window: function () {
+        return topbar(avatarAmaan) + sidebarBase('home', footerDefault) +
+          '<div class="m-content">' +
+            '<div class="greeting">Good afternoon, Amaan</div>' +
+            '<div class="subgreeting">Here\'s what\'s worth looking at.</div>' +
+            '<div class="quick-actions">' +
+              '<div class="qa-card"><strong>Connect Jira</strong><span>Sync an existing project in one click.</span></div>' +
+              '<div class="qa-card"><strong>New ticket</strong><span>Start tracking work right here, no setup.</span></div>' +
+              '<div class="qa-card"><strong>Start a session</strong><span>Point an agent at a repo on this machine.</span></div>' +
+            '</div>' +
+            '<div class="section-title">My work</div>' +
+            '<div style="color:var(--text-muted);font-size:12.5px;padding:10px 0;">Nothing yet — create a ticket or connect Jira to see it here.</div>' +
+          '</div>';
+      }
+    },
+    {
+      title: 'First value — a real ticket, in seconds',
+      env: 'local',
+      dropoff: 'No clear next step after Home could make a new visitor bounce before seeing anything the product actually does.',
+      mitigation: 'One obvious primary action on Home. Opening the first ticket takes seconds — no project template, no team field.',
+      window: function () {
+        return topbar(avatarAmaan) + sidebarBase('ticket', footerDefault) +
+          '<div class="m-content">' +
+            '<div class="crumbs">Waypoint Roadmap &rsaquo; Tickets &rsaquo; <b>ROAD-127</b></div>' +
+            '<div class="ticket-detail">' +
+              '<div class="ticket-body">' +
+                '<h2>Bug: pressing Escape while typing in the Copilot panel loses the draft</h2>' +
+                '<p class="desc">Repro: open the Copilot panel, click into the composer, type a few words, press Escape.</p>' +
+                '<div class="section-title" style="margin-top:0">Sessions</div>' +
+                '<div class="sessions-row"><span class="sess-chip">Investigate</span><span class="sess-chip">Fix</span></div>' +
+              '</div>' +
+              '<div>' +
+                '<div class="side-field"><label>State</label><div class="val">Todo</div></div>' +
+                '<div class="side-field"><label>Assignee</label><div class="val">Amaan</div></div>' +
+                '<div class="side-field"><label>Priority</label><div class="val">Medium</div></div>' +
+              '</div>' +
+            '</div>' +
+          '</div>';
+      }
+    },
+    {
+      title: 'A milestone nudge, shown once',
+      env: 'local',
+      dropoff: 'A banner that\'s easy to ignore or feels pushy on day one gets dismissed on reflex and forgotten forever.',
+      mitigation: 'The nudge ties to real usage (five tickets closed solo) instead of appearing on day one, appears exactly once, and dismissing it never removes the permanent sidebar link below it.',
+      window: function () {
+        return topbar(avatarAmaan) + sidebarBase('home', footerDefault) +
+          '<div class="m-content">' +
+            '<div class="greeting">Good afternoon, Amaan</div>' +
+            '<div class="subgreeting">Here\'s what\'s worth looking at.</div>' +
+            '<div class="banner">' +
+              '<div class="milestone-icon"><svg class="icon"><use href="#i-flag"/></svg></div>' +
+              '<div><strong>You\'ve closed 5 tickets solo this week</strong><span>Split the next sprint with Priya Shah? Takes one field to set up.</span></div>' +
+              '<div class="actions"><button class="no">Not now</button><button class="yes">Invite Priya</button></div>' +
+            '</div>' +
+            '<div class="section-title" style="margin-top:0">Recently closed</div>' +
+            '<div class="ticket-row"><span class="ticket-key">ROAD-118</span><span class="ticket-title">Fix stale cache on project switch</span><span class="pill done">Done</span></div>' +
+            '<div class="ticket-row"><span class="ticket-key">ROAD-121</span><span class="ticket-title">Board drag disabled for grouped view</span><span class="pill done">Done</span></div>' +
+            '<div class="ticket-row"><span class="ticket-key jira">ENG-77</span><span class="ticket-title">Comment: root cause found</span><span class="pill done">Done</span></div>' +
+          '</div>';
+      }
+    },
+    {
+      title: 'Invite clicked — identity already known, one field left',
+      env: 'local',
+      dropoff: 'Asking the same question twice (a name, then a name again) reads as sloppy and re-introduces the friction the soft-ask screen was meant to remove. Monetization risk, added after the Vibe Kanban shutdown: if a price or card showed up at this click, it would repeat VK\'s exact mistake of charging right when conversion should be easiest.',
+      mitigation: 'Because Amaan already gave a name at launch, this modal only asks for the team name. Someone who skipped launch gets exactly one name field here instead — never both. Monetization bet, matching Option A: this creates a free team workspace — unlimited members, shared board and Review queue, Jira sync for the team — with no card anywhere near this click; self-hosting is stated as available today for compliance/data-residency needs rather than "on the roadmap," which research read as "a free alternative is coming, defer paying."',
+      window: function () {
+        return topbar(avatarAmaan) + sidebarBase('home', footerDefault) +
+          '<div class="m-content" style="filter:blur(1.5px);opacity:.5"><div class="greeting">Good afternoon, Amaan</div></div>' +
+          '<div class="m-modal-backdrop">' +
+            '<div class="m-modal">' +
+              '<h3>Invite Priya Shah</h3>' +
+              '<p class="hint">Creates a shared, hosted workspace. Everything already on this machine stays local.</p>' +
+              '<div class="field"><label>Your name</label><input value="Amaan Nawab" disabled><div class="subnote">Already set — from your first launch.</div></div>' +
+              '<div class="field"><label>Team workspace name</label><input placeholder="e.g. Fairweather Labs" value="Fairweather Labs"></div>' +
+              '<div class="note-box"><b>Free to create:</b> unlimited members, shared Review queue, Jira sync for the team — no card. <b>Stays local:</b> ROAD-127 and everything else on this machine. <b>Goes hosted:</b> only this new team workspace. Self-hosting is available today for compliance/data-residency needs, same Docker Compose.</div>' +
+              '<div class="modal-actions"><button class="btn-ghost">Cancel</button><button class="btn-primary">Create free workspace</button></div>' +
+            '</div>' +
+          '</div>';
+      }
+    },
+    {
+      title: 'Invite link ready',
+      env: 'hosted',
+      dropoff: 'Ambiguity about whether private tickets just became visible to a stranger would break trust right when it\'s most fragile.',
+      mitigation: 'An explicit line states what\'s shared and what isn\'t, plus a copyable link and an optional emailed invite.',
+      window: function () {
+        return topbar(avatarAmaan) + sidebarBase('home', footerDefault) +
+          '<div class="m-content" style="filter:blur(1.5px);opacity:.5"><div class="greeting">Good afternoon, Amaan</div></div>' +
+          '<div class="m-modal-backdrop">' +
+            '<div class="m-modal">' +
+              '<h3>Fairweather Labs is ready <span class="pill" style="background:var(--success-bg);color:var(--success);border-color:transparent">Free</span></h3>' +
+              '<p class="hint">Share this link with Priya. It works whether or not Waypoint is already installed.</p>' +
+              '<div class="link-box"><span>app.waypoint.sh/join/fwl-8k2n</span><svg class="icon"><use href="#i-search"/></svg></div>' +
+              '<div class="note-box"><b>Stays local:</b> ROAD-127 and your other personal tickets. <b>Shared:</b> only Fairweather Labs, once Priya joins it — still free, unlimited members.</div>' +
+              '<div class="modal-actions"><button class="btn-ghost">Email invite instead</button><button class="btn-primary">Copy link</button></div>' +
+            '</div>' +
+          '</div>';
+      }
+    },
+    {
+      title: "Priya's join path",
+      env: 'hosted',
+      dropoff: 'A clunky accept flow — a forced download, a password to invent — loses the invitee before they see the board.',
+      mitigation: 'One link, one field. Opens in-browser immediately and deep-links into the desktop app if it\'s installed.',
+      window: function () {
+        return '<div class="m-topbar"><div class="m-search"><svg class="icon"><use href="#i-search"/></svg>app.waypoint.sh/join/fwl-8k2n</div></div>' +
+          '<div style="grid-column:1/3;display:flex;align-items:center;justify-content:center;background:var(--bg-inset)">' +
+            '<div class="join-card">' +
+              '<div class="brandmark">W</div>' +
+              '<h3>Join Fairweather Labs on Waypoint</h3>' +
+              '<p class="hint">Amaan invited you to their team workspace. You\'ll see the shared board — nothing from their personal Waypoint.</p>' +
+              '<div class="field"><label>Your name</label><input placeholder="e.g. Priya Shah"></div>' +
+              '<div class="modal-actions" style="justify-content:flex-start;margin-top:6px">' +
+                '<button class="btn-primary">Join &amp; open in Waypoint</button>' +
+                '<button class="btn-ghost">Continue in browser</button>' +
+              '</div>' +
+            '</div>' +
+          '</div>';
+      }
+    },
+    {
+      title: 'Afterward — the nudge doesn\'t come back',
+      env: 'local',
+      dropoff: 'A milestone nudge that keeps reappearing after being acted on (or dismissed) trains the user to ignore every banner in the product. Same monetization note as Option A: whatever later triggers an upgrade for Fairweather Labs has to be a limit hit through real use (history depth, in Option A\'s design), not a cap on members or a repeat of the invite-click ask.',
+      mitigation: 'Once acted on, the milestone banner is gone for good — replaced by the same permanent, low-key workspace switcher Option A settles into. Personal stays local and untouched, and Fairweather Labs stays on the free plan shown at creation until it hits that later limit — see onboarding-option-a.html and monetization-design.md for the shape of that screen; not redrawn here since the mechanism is identical.',
+      window: function () {
+        return topbar(avatarAmaan) + sidebarBase('home', footerSwitcher) +
+          '<div class="m-content">' +
+            '<div class="greeting">Good afternoon, Amaan</div>' +
+            '<div class="subgreeting">Personal workspace &middot; local to this machine</div>' +
+            '<div class="banner"><svg class="icon" style="color:var(--success)"><use href="#i-check"/></svg><div><strong>Priya joined Fairweather Labs</strong><span>Free plan &middot; unlimited members. Switch workspaces from the sidebar to see the shared board.</span></div></div>' +
+            '<div class="section-title" style="margin-top:0">My work</div>' +
+            '<div class="ticket-row"><span class="ticket-key">ROAD-127</span><span class="ticket-title">Fix draft-loss on Escape</span><span class="pill warn">Todo</span></div>' +
+          '</div>';
+      }
+    }
+  ];
+
+  var dotsEl = document.getElementById('dots');
+  var frameEl = document.getElementById('windowFrame');
+  var captionEl = document.getElementById('captionPanel');
+  var envTagEl = document.getElementById('envTag');
+  var prevBtn = document.getElementById('prevBtn');
+  var nextBtn = document.getElementById('nextBtn');
+  var current = 0;
+
+  steps.forEach(function (s, i) {
+    var b = document.createElement('button');
+    b.className = 'step-dot';
+    b.type = 'button';
+    b.setAttribute('role', 'tab');
+    b.textContent = (i + 1) + '. ' + s.title.split(' — ')[0];
+    b.addEventListener('click', function () { render(i); });
+    dotsEl.appendChild(b);
+  });
+
+  function render(i) {
+    current = Math.max(0, Math.min(steps.length - 1, i));
+    var s = steps[current];
+    frameEl.innerHTML = s.window();
+    envTagEl.className = 'env-tag ' + s.env;
+    envTagEl.innerHTML = '<span class="dot"></span>' + (s.env === 'local' ? 'Local — no Waypoint server' : "Hosted — Fairweather Labs' workspace");
+    captionEl.innerHTML =
+      '<div class="stepno">Step ' + (current + 1) + ' of ' + steps.length + '</div>' +
+      '<h2>' + s.title + '</h2>' +
+      '<div class="risk-block dropoff"><b>Drop-off risk</b>' + s.dropoff + '</div>' +
+      '<div class="risk-block mitigation"><b>Mitigation</b>' + s.mitigation + '</div>';
+    Array.prototype.forEach.call(dotsEl.children, function (el, idx) {
+      if (idx === current) { el.setAttribute('aria-current', 'step'); } else { el.removeAttribute('aria-current'); }
+    });
+    prevBtn.disabled = current === 0;
+    nextBtn.disabled = current === steps.length - 1;
+  }
+
+  prevBtn.addEventListener('click', function () { render(current - 1); });
+  nextBtn.addEventListener('click', function () { render(current + 1); });
+  document.addEventListener('keydown', function (e) {
+    var tag = (document.activeElement && document.activeElement.tagName) || '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    if (e.key === 'ArrowRight') { render(current + 1); }
+    if (e.key === 'ArrowLeft') { render(current - 1); }
+  });
+
+  render(0);
+})();
+</script>
