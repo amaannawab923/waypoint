@@ -243,7 +243,21 @@
   .banner .actions .no { background: transparent; border: 1px solid var(--border-strong); color: var(--text-secondary); }
   .milestone-icon { width: 30px; height: 30px; border-radius: 8px; background: var(--accent-soft-bg); color: var(--accent-soft-text); display: flex; align-items: center; justify-content: center; flex: none; }
   .pill.done { background: var(--success-bg); color: var(--success); border-color: transparent; }
+  .pill.free { background: var(--success-bg); color: var(--success); border-color: transparent; }
   .fastfollow { display: inline-block; font: 700 9.5px var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--warning); background: var(--warning-bg); border-radius: 999px; padding: 3px 8px; margin-left: 8px; vertical-align: middle; }
+  .pricebet-tag { display: inline-flex; align-items: center; gap: 5px; font: 700 9.5px var(--font-mono); text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); border: 1px dashed var(--border-strong); border-radius: 999px; padding: 3px 9px; margin-bottom: 12px; }
+  .price-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px; }
+  .price-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; background: var(--surface); }
+  .price-card.primary { border-color: var(--text); box-shadow: 0 0 0 3px var(--accent-soft-bg); }
+  .price-card h4 { font: 700 12.5px var(--font-display); margin-bottom: 2px; }
+  .price-card .price { font: 700 16px var(--font-display); margin-bottom: 7px; }
+  .price-card .price small { font: 600 10px var(--font-mono); color: var(--text-muted); }
+  .price-card ul { margin: 0 0 10px; padding-left: 15px; font-size: 11px; color: var(--text-secondary); line-height: 1.5; }
+  .price-card li { margin-bottom: 2px; }
+  .price-card button { width: 100%; }
+  .locked-row { opacity: .5; }
+  .locked-row .ticket-key { color: var(--text-muted); }
+  .addon-card { border: 1px dashed var(--border-strong); border-radius: var(--radius); background: var(--surface); padding: 12px 14px; margin-bottom: 14px; }
   .note-box { background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 9px 10px; font-size: 11.5px; color: var(--text-secondary); margin-bottom: 14px; line-height:1.5; }
   .note-box b { color: var(--text); }
   .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
@@ -289,6 +303,7 @@
   .caption h2 { font-size: 16px; margin-top: 4px; }
   .caption .desc { font-size: 12.5px; color: var(--text-secondary); line-height: 1.55; }
   .risk-block { border-radius: var(--radius); padding: 10px 12px; font-size: 12px; line-height: 1.55; }
+  .risk-block strong { font-weight: 700; }
   .risk-block b { display: block; font: 700 10px var(--font-mono); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; }
   .risk-block.dropoff { background: var(--danger-bg); color: var(--danger); }
   .risk-block.mitigation { background: var(--success-bg); color: var(--success); }
@@ -323,13 +338,15 @@
   <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
   <symbol id="i-flag" viewBox="0 0 24 24"><path d="M6 3v18"/><path d="M6 4h11l-2.5 4L17 12H6"/></symbol>
   <symbol id="i-git" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="6" r="2.4"/><path d="M6 8.4V15.6M8.4 6H14a4 4 0 0 1 4 4v.5"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+  <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M6 18a4 4 0 1 1 .7-7.94 5 5 0 0 1 9.6-.86A4.5 4.5 0 0 1 18 18H6Z"/></symbol>
 </svg>
 
 <div class="page">
   <div class="hero">
-    <div class="eyebrow">Onboarding Option A · revised on the research</div>
+    <div class="eyebrow">Onboarding Option A · revised on the research · now with monetization designed in</div>
     <h1>Quiet Invite</h1>
-    <p class="dek">Zero-account solo start — the app never asks for identity to open. "Invite your team" is a primary sidebar item on every screen (moved out of the footer: footer placements get 0.05–0.46% CTR), with a second contextual entry in the Assignee field. Identity is asked only at the click, and the modal says where agent sessions live and that self-hosting is on the roadmap. A milestone nudge is shown as a labelled post-launch fast-follow. The login is where it belongs: nowhere for a solo user; a one-time system-browser sign-in (GitHub, Google, or an email link — never a password) at the invite click, because a hosted workspace needs a real owner. Invitees sign in the same way from the join link.</p>
+    <p class="dek">Zero-account solo start — the app never asks for identity to open. "Invite your team" is a primary sidebar item on every screen (moved out of the footer: footer placements get 0.05–0.46% CTR), with a second contextual entry in the Assignee field. Identity is asked only at the click, and the modal says where agent sessions live. A milestone nudge is shown as a labelled post-launch fast-follow. The login is where it belongs: nowhere for a solo user; a one-time system-browser sign-in (GitHub, Google, or an email link — never a password) at the invite click, because a hosted workspace needs a real owner. Invitees sign in the same way from the join link. New in this revision, after the Vibe Kanban precedent: the invite click creates a <b>free</b> team workspace — no price anywhere near it — and the paywall instead surfaces later, at a usage limit hit through real work; solo gets one optional paid add-on that requires real hosting, never a cap on anything local. Prices and limits shown are explicit placeholders — see <code>monetization-design.md</code>.</p>
   </div>
 
   <div class="stepper-bar">
@@ -359,7 +376,7 @@
   var inviteNav = function (highlight) {
     return '<div class="m-invite-nav' + (highlight ? ' highlight' : '') + '">' +
       '<div class="row"><svg class="icon"><use href="#i-user"/></svg>Invite your team</div>' +
-      '<small>Shared workspace &middot; hosted, self-hosting on the roadmap</small>' +
+      '<small>Shared workspace &middot; free &middot; hosted or self-hosted</small>' +
     '</div>';
   };
 
@@ -409,6 +426,11 @@
     '<div class="m-machine"><span class="dot"></span>Local &middot; on this machine</div>' +
     '<div class="m-wsswitch"><svg class="icon"><use href="#i-folder"/></svg><div><div>Personal<small>local</small></div></div><svg class="icon" style="margin-left:auto"><use href="#i-arrow"/></svg></div>' +
     '<div class="m-wsswitch" style="opacity:.7"><svg class="icon"><use href="#i-user"/></svg><div><div>Fairweather Labs<small>hosted</small></div></div></div>';
+
+  var footerHostedActive = '' +
+    '<div class="m-machine"><span class="dot" style="background:var(--info)"></span>Fairweather Labs &middot; hosted, free plan</div>' +
+    '<div class="m-wsswitch"><svg class="icon"><use href="#i-user"/></svg><div><div>Fairweather Labs<small>hosted &middot; free</small></div></div><svg class="icon" style="margin-left:auto"><use href="#i-arrow"/></svg></div>' +
+    '<div class="m-wsswitch" style="opacity:.7"><svg class="icon"><use href="#i-folder"/></svg><div><div>Personal<small>local</small></div></div></div>';
 
   var avatarPlaceholder = '<div class="m-avatar placeholder">Y</div>';
   var avatarAmaan = '<div class="m-avatar">AM</div>';
@@ -463,7 +485,7 @@
       title: 'Habit forms — the invite item lives in the primary nav',
       env: 'local',
       dropoff: 'The first draft put "Invite your team" in the sidebar footer. Footer and sidebar-edge placements get 0.05–0.46% click-through and eye-tracking shows near-total avoidance of those regions during goal-directed use — a habitual solo user could go months without seeing it.',
-      mitigation: 'Moved out of the footer into the primary sidebar, directly under Review, with a one-line explainer of what it does and where it goes ("hosted, self-hosting on the roadmap" — the trust research asked for exactly that sentence). The footer keeps only the "Local · on this machine" badge, on every Personal screen.',
+      mitigation: 'Moved out of the footer into the primary sidebar, directly under Review, with a one-line explainer of what it does and where it goes ("free · hosted or self-hosted" — the trust research asked for exactly that sentence; the monetization round changed "on the roadmap" to "self-hosted", since the compose path already exists and "roadmap" tested as "defer paying"). The footer keeps only the "Local · on this machine" badge, on every Personal screen.',
       window: function () {
         return topbar(avatarPlaceholder) + sidebarBase('review', footerDefault, '3') +
           '<div class="m-content">' +
@@ -530,8 +552,8 @@
     {
       title: 'Invite clicked — name the workspace, then sign in',
       env: 'local',
-      dropoff: 'Two things the research flagged here, plus the one the first revision glossed over: a name the person never set reads unfinished on the invite; silence about where agent sessions and the hosted workspace live reads as lock-in; and a typed name (even with a typed email) cannot own a hosted workspace — anyone with the link could claim to be "Amaan", nothing verifies the audit identity, and the owner couldn\'t get back in from another machine.',
-      mitigation: 'One field before the auth detour — the workspace name — so the person commits to the intent first and the sign-in has a reason. The button says exactly what happens next: a one-time sign-in in the browser, no password ever. The note still states where agent sessions live, that self-hosting is on the roadmap, and links to how "stays local" works. The typed-email field is gone: the verified account is the audit identity, and the name pre-fills from it on the next screen.',
+      dropoff: 'Two things the research flagged here, plus the one the first revision glossed over: a name the person never set reads unfinished on the invite; silence about where agent sessions and the hosted workspace live reads as lock-in; and a typed name (even with a typed email) cannot own a hosted workspace — anyone with the link could claim to be "Amaan", nothing verifies the audit identity, and the owner couldn\'t get back in from another machine. New risk, from the Vibe Kanban precedent: if this screen named a price or asked for a card, it would repeat VK\'s exact mistake — charging at the one click that should convert most easily.',
+      mitigation: 'One field before the auth detour — the workspace name — so the person commits to the intent first and the sign-in has a reason. The button says exactly what happens next: a one-time sign-in in the browser, no password ever. <strong>Monetization bet:</strong> this creates a free team workspace — unlimited members, shared board, shared Review queue, and Jira sync for the team, no card anywhere in this path. Self-hosting is now stated as available today, not roadmapped — "on the roadmap" tested as "a free alternative is coming, defer paying" in the research; the compose file already exists, so this is a positioning change, not a promise about unbuilt work. The typed-email field is gone: the verified account is the audit identity, and the name pre-fills from it on the next screen.',
       window: function () {
         return topbar(avatarPlaceholder) + sidebarBase('ticket', footerDefault, null, true) +
           '<div class="m-content" style="filter:blur(1.5px);opacity:.5">' +
@@ -543,12 +565,13 @@
               '<p class="hint">Creates a shared, hosted workspace so teammates see the same board. Everything already on this machine stays local.</p>' +
               '<div class="field"><label>Team workspace name</label><input placeholder="e.g. Fairweather Labs" value="Fairweather Labs"></div>' +
               '<div class="note-box">' +
+                '<p><b>Free to create:</b> unlimited members, shared board, shared Review queue, Jira sync for the team &mdash; no card, ever, to reach this.</p>' +
                 '<p><b>Stays local:</b> ROAD-127, every other ticket here, and every agent session on them.</p>' +
                 '<p><b>Goes hosted:</b> only this new workspace and what you put in it; its agent sessions live with it.</p>' +
-                '<p>Hosted on waypoint.sh today &middot; self-hosting via the same Docker Compose is on the roadmap &middot; <a href="javascript:void(0)">How &ldquo;stays local&rdquo; works</a></p>' +
+                '<p>Self-hosting is available today for compliance and data-residency needs, same Docker Compose &middot; <a href="javascript:void(0)">How &ldquo;stays local&rdquo; works</a></p>' +
               '</div>' +
               '<p class="signin-fine" style="margin:0 0 12px">Next: sign in once in your browser &mdash; Google, GitHub, or an email link. No password. That account owns Fairweather Labs; your personal Waypoint stays local and never needs one.</p>' +
-              '<div class="modal-actions"><button class="btn-ghost">Cancel</button><button class="btn-primary">Continue &mdash; sign in to create it</button></div>' +
+              '<div class="modal-actions"><button class="btn-ghost">Cancel</button><button class="btn-primary">Continue &mdash; sign in to create it free</button></div>' +
             '</div>' +
           '</div>';
       }
@@ -585,8 +608,8 @@
     {
       title: 'Back in the app — signed in, one click to create',
       env: 'local',
-      dropoff: 'A second confirmation after the browser detour can feel like being asked twice; a name pulled from an account the person didn\'t pick as their "work" name would look wrong on every comment.',
-      mitigation: 'Nothing to type. The account is shown (and swappable), the name pre-fills from it and stays editable — this is the one place "what teammates will see" is set. The workspace name carries over from before the detour. One click creates it. This verified account is also the audit identity the trust research asked for, without a typed email pretending to be one.',
+      dropoff: 'A second confirmation after the browser detour can feel like being asked twice; a name pulled from an account the person didn\'t pick as their "work" name would look wrong on every comment. Someone who just sat through a sign-in flow is primed to expect a card field next — this is exactly the moment the Vibe Kanban precedent says kills solo-to-team conversion if a price shows up.',
+      mitigation: 'Nothing to type. The account is shown (and swappable), the name pre-fills from it and stays editable — this is the one place "what teammates will see" is set. The workspace name carries over from before the detour. One click creates it, and the button says "free" outright rather than leaving it implied. This verified account is also the audit identity the trust research asked for, without a typed email pretending to be one.',
       window: function () {
         return topbar(avatarAmaan) + sidebarBase('ticket', footerDefault, null, true) +
           '<div class="m-content" style="filter:blur(1.5px);opacity:.5">' +
@@ -599,8 +622,8 @@
               '<div class="signed-chip"><div class="m-avatar" style="width:30px;height:30px;font-size:12px">AM</div><div><b>Amaan Nawab</b><span>via GitHub</span></div><a class="swap" href="javascript:void(0)">Use a different account</a></div>' +
               '<div class="field"><label>Your name on the team</label><input value="Amaan Nawab"><div class="subnote">From your account &mdash; this is what teammates see.</div></div>' +
               '<div class="field"><label>Team workspace name</label><input value="Fairweather Labs"></div>' +
-              '<div class="note-box"><p><b>Stays local:</b> ROAD-127, every other ticket here, and their agent sessions.</p><p><b>Goes hosted:</b> only Fairweather Labs and what you put in it.</p></div>' +
-              '<div class="modal-actions"><button class="btn-ghost">Cancel</button><button class="btn-primary">Create &amp; get invite link</button></div>' +
+              '<div class="note-box"><p><b>Fairweather Labs (free):</b> unlimited members, shared board, shared Review queue, Jira sync for the team.</p><p><b>Stays local:</b> ROAD-127, every other ticket here, and their agent sessions.</p></div>' +
+              '<div class="modal-actions"><button class="btn-ghost">Cancel</button><button class="btn-primary">Create free workspace</button></div>' +
             '</div>' +
           '</div>';
       }
@@ -609,7 +632,7 @@
       title: 'Invite link ready',
       env: 'hosted',
       dropoff: 'Two trust breaks the research named here: ambiguity about whether private tickets just became visible to a stranger, and a browser URL that reads as "my data passed through the web" to a local-first audience.',
-      mitigation: 'The scoped note is repeated verbatim from the previous screen — consistency, not a new claim. And the link says what it does: it opens in the browser, deep-links into Waypoint if Jordan has it installed, and nothing gets re-entered.',
+      mitigation: 'The scoped note is repeated verbatim from the previous screen — consistency, not a new claim, now carrying the same "(free)" label instead of a fresh one. And the link says what it does: it opens in the browser, deep-links into Waypoint if Jordan has it installed, and nothing gets re-entered.',
       window: function () {
         return topbar(avatarAmaan) + sidebarBase('ticket', footerDefault, null, true) +
           '<div class="m-content" style="filter:blur(1.5px);opacity:.5">' +
@@ -617,10 +640,10 @@
           '</div>' +
           '<div class="m-modal-backdrop">' +
             '<div class="m-modal">' +
-              '<h3>Fairweather Labs is ready</h3>' +
+              '<h3>Fairweather Labs is ready <span class="pill free">Free</span></h3>' +
               '<p class="hint">Share this link with Jordan. It opens in the browser, and if Waypoint is installed it hands straight off to the app — nothing is re-entered.</p>' +
               '<div class="link-box"><span>app.waypoint.sh/join/fwl-8k2n</span><svg class="icon"><use href="#i-search"/></svg></div>' +
-              '<div class="note-box"><p><b>Stays local:</b> ROAD-127, your other personal tickets, and their agent sessions.</p><p><b>Shared:</b> only Fairweather Labs, once Jordan joins it.</p></div>' +
+              '<div class="note-box"><p><b>Stays local:</b> ROAD-127, your other personal tickets, and their agent sessions.</p><p><b>Shared:</b> only Fairweather Labs, once Jordan joins it &mdash; still free, unlimited members.</p></div>' +
               '<div class="modal-actions"><button class="btn-ghost">Email invite instead</button><button class="btn-primary">Copy link</button></div>' +
             '</div>' +
           '</div>';
@@ -655,14 +678,65 @@
       title: 'Afterward — two workspaces, clearly separated',
       env: 'local',
       dropoff: 'If Personal and Team data blend together even slightly, the "my data stays mine" guarantee that got this user here quietly breaks.',
-      mitigation: 'A workspace switcher makes the split explicit: Personal keeps its "Local · on this machine" badge and everything it had before; Fairweather Labs is a distinct hosted workspace. Nothing merges silently — the trust research called silent blending the core violation for this audience.',
+      mitigation: 'A workspace switcher makes the split explicit: Personal keeps its "Local · on this machine" badge and everything it had before; Fairweather Labs is a distinct hosted workspace, labelled free. Nothing merges silently — the trust research called silent blending the core violation for this audience. What "free" stops covering, and when, is the next step.',
       window: function () {
         return topbar(avatarAmaan) + sidebarBase('home', footerSwitcher, null, false, true) +
           '<div class="m-content">' +
             '<div class="greeting">Good afternoon, Amaan</div>' +
             '<div class="subgreeting">Personal workspace &middot; local to this machine</div>' +
-            '<div class="banner"><svg class="icon" style="color:var(--success)"><use href="#i-check"/></svg><div><strong>Jordan joined Fairweather Labs</strong><span>Switch workspaces from the sidebar to see the shared board.</span></div></div>' +
+            '<div class="banner"><svg class="icon" style="color:var(--success)"><use href="#i-check"/></svg><div><strong>Jordan joined Fairweather Labs</strong><span>Free plan &middot; unlimited members. Switch workspaces from the sidebar to see the shared board.</span></div></div>' +
             '<div class="section-title" style="margin-top:0">My work</div>' +
+            '<div class="ticket-row"><span class="ticket-key">ROAD-127</span><span class="ticket-title">Fix draft-loss on Escape</span><span class="pill warn">Todo</span></div>' +
+          '</div>';
+      }
+    },
+    {
+      title: 'Weeks later — the team hits a limit, and sees the upgrade',
+      env: 'hosted',
+      badge: 'Monetization bet',
+      dropoff: 'This is the flow\'s one real monetization risk, and it\'s the shape Vibe Kanban got wrong: charging at the wrong moment, for the wrong thing. If "the limit" turned out to be a seat cap right after people just finished inviting each other, it would repeat VK\'s mistake in a new costume — asking to pay the moment the invite starts paying off. A history window that is too short also risks feeling like a bait-and-switch on data the team already produced.',
+      mitigation: 'The limit is depth of history, not who can join or whether shared Review/Jira sync exist at all — the whole reason to invite people stays free and unlimited in members, unlike Vibe Kanban\'s "solo, but visible to others" tier. Runs still happened; older ones just aren\'t searchable without upgrading, the same shape as Slack\'s 90-day history and Linear\'s 250-issue cap, both of which convert 30–40% of active teams per the vendor data. <strong>Both the 30-day number and both prices below are placeholders for the founder to react to</strong> — see monetization-design.md for what would replace them with real launch data.',
+      window: function () {
+        return topbar(avatarAmaan) + sidebarBase('review', footerHostedActive, '1') +
+          '<div class="m-content">' +
+            '<div class="crumbs">Fairweather Labs &rsaquo; <b>Review</b></div>' +
+            '<div class="banner" style="align-items:flex-start">' +
+              '<svg class="icon" style="color:var(--warning);margin-top:2px"><use href="#i-lock"/></svg>' +
+              '<div><strong>Free plan keeps 30 days of Review history</strong><span>42 runs from before Aug 15 still happened &mdash; they\'re just not searchable here without upgrading.</span></div>' +
+              '<div class="actions"><button class="yes">See Team Pro</button></div>' +
+            '</div>' +
+            '<div class="section-title" style="margin-top:0">Last 30 days</div>' +
+            '<div class="ticket-row"><span class="ticket-key">ROAD-131</span><span class="ticket-title">Priya &middot; Claude Code &middot; Add relation field to tickets</span><span class="pill review">Needs review</span></div>' +
+                        '<div class="section-title">Locked &middot; before Aug 15</div>' +
+            '<div class="ticket-row locked-row"><svg class="icon"><use href="#i-lock"/></svg><span class="ticket-key">ROAD-108</span><span class="ticket-title">Amaan &middot; Claude Code &middot; Initial roadmap import</span></div>' +
+            '<div class="pricebet-tag"><svg class="icon" style="width:11px;height:11px"><use href="#i-flag"/></svg>Placeholder pricing &mdash; react &amp; adjust</div>' +
+            '<div class="price-grid">' +
+              '<div class="price-card primary"><h4>Team Pro</h4><div class="price">$8<small>/seat/mo</small></div><ul><li>Unlimited Review &amp; run history</li><li>Audit-trail export</li><li>Roles beyond admin/member</li></ul><button class="btn-primary">Upgrade Fairweather Labs</button></div>' +
+              '<div class="price-card"><h4>Team Commercial</h4><div class="price">$24<small>/seat/mo</small></div><ul><li>SSO &amp; SCIM</li><li>Compliance certs (SOC2)</li><li>Self-hosted deployment support</li></ul><button class="btn-ghost">Talk to us</button></div>' +
+            '</div>' +
+          '</div>';
+      }
+    },
+    {
+      title: 'The solo paid add-on — one hook, surfaced post-value',
+      env: 'local',
+      badge: 'Proposal',
+      dropoff: 'If this reads as removing something solo could already do, it recreates the exact mistake that cost Warp and Insomnia real backlash — gating what used to be free is the fastest way to alienate the persona the founder said must stay frictionless. Placed inside onboarding instead of after real usage, it would also just be Option B\'s milestone nudge wearing a price tag.',
+      mitigation: 'Sync is new capacity — cross-device backup — never a cap on local usage; the copy says outright that nothing local changes if it\'s skipped. Shown on Home, once, only after real usage (not in the onboarding path the research asked to keep clean), dismissible, and it never returns uninvited. Flagged here as a proposal, not committed launch scope: it needs its own design pass — a session-detail prompt instead of a Home banner is the other candidate the research raised. The $5/mo price is a placeholder modeled on Obsidian Sync\'s, not a number researched for Waypoint.',
+      window: function () {
+        return topbar(avatarAmaan) + sidebarBase('home', footerSwitcher, null, false, true) +
+          '<div class="m-content">' +
+            '<div class="greeting">Good afternoon, Amaan</div>' +
+            '<div class="subgreeting">Personal workspace &middot; local to this machine</div>' +
+            '<div class="addon-card">' +
+              '<div class="pricebet-tag" style="margin-bottom:10px"><svg class="icon" style="width:11px;height:11px"><use href="#i-flag"/></svg>Proposal &mdash; not onboarding, not necessarily launch scope</div>' +
+              '<div class="banner" style="border:none;padding:0;margin-bottom:0">' +
+                '<div class="milestone-icon"><svg class="icon"><use href="#i-cloud"/></svg></div>' +
+                '<div><strong>Working from another machine too?</strong><span>Waypoint Sync backs up and syncs your local tickets &amp; agent sessions, end-to-end encrypted. $5/mo (placeholder). Nothing local changes if you skip this.</span></div>' +
+                '<div class="actions"><button class="no">Not now</button><button class="yes">Learn about Sync</button></div>' +
+              '</div>' +
+            '</div>' +
+            '<div class="section-title" style="margin-top:14px">My work</div>' +
             '<div class="ticket-row"><span class="ticket-key">ROAD-127</span><span class="ticket-title">Fix draft-loss on Escape</span><span class="pill warn">Todo</span></div>' +
           '</div>';
       }
@@ -682,8 +756,9 @@
     b.className = 'step-dot';
     b.type = 'button';
     b.setAttribute('role', 'tab');
-    b.textContent = (i + 1) + '. ' + s.title.split(' — ')[0] + (s.fastfollow ? ' ·' : '');
-    if (s.fastfollow) b.title = 'Post-launch fast-follow';
+    var tagLabel = s.badge || (s.fastfollow ? 'Fast-follow' : null);
+    b.textContent = (i + 1) + '. ' + s.title.split(' — ')[0] + (tagLabel ? ' ·' : '');
+    if (tagLabel) b.title = tagLabel;
     b.addEventListener('click', function () { render(i); });
     dotsEl.appendChild(b);
   });
@@ -694,9 +769,10 @@
     frameEl.innerHTML = s.window();
     envTagEl.className = 'env-tag ' + s.env;
     envTagEl.innerHTML = '<span class="dot"></span>' + (s.env === 'local' ? 'Local — no Waypoint server' : "Hosted — Fairweather Labs' workspace");
+    var capTag = s.badge || (s.fastfollow ? 'Fast-follow' : null);
     captionEl.innerHTML =
       '<div class="stepno">Step ' + (current + 1) + ' of ' + steps.length + '</div>' +
-      '<h2>' + s.title + (s.fastfollow ? '<span class="fastfollow">Fast-follow</span>' : '') + '</h2>' +
+      '<h2>' + s.title + (capTag ? '<span class="fastfollow">' + capTag + '</span>' : '') + '</h2>' +
       '<div class="risk-block dropoff"><b>Drop-off risk</b>' + s.dropoff + '</div>' +
       '<div class="risk-block mitigation"><b>Mitigation</b>' + s.mitigation + '</div>';
     Array.prototype.forEach.call(dotsEl.children, function (el, idx) {

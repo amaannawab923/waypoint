@@ -466,8 +466,8 @@
     {
       title: 'Invite clicked — identity already known, one field left',
       env: 'local',
-      dropoff: 'Asking the same question twice (a name, then a name again) reads as sloppy and re-introduces the friction the soft-ask screen was meant to remove.',
-      mitigation: 'Because Amaan already gave a name at launch, this modal only asks for the team name. Someone who skipped launch gets exactly one name field here instead — never both.',
+      dropoff: 'Asking the same question twice (a name, then a name again) reads as sloppy and re-introduces the friction the soft-ask screen was meant to remove. Monetization risk, added after the Vibe Kanban shutdown: if a price or card showed up at this click, it would repeat VK\'s exact mistake of charging right when conversion should be easiest.',
+      mitigation: 'Because Amaan already gave a name at launch, this modal only asks for the team name. Someone who skipped launch gets exactly one name field here instead — never both. Monetization bet, matching Option A: this creates a free team workspace — unlimited members, shared board and Review queue, Jira sync for the team — with no card anywhere near this click; self-hosting is stated as available today for compliance/data-residency needs rather than "on the roadmap," which research read as "a free alternative is coming, defer paying."',
       window: function () {
         return topbar(avatarAmaan) + sidebarBase('home', footerDefault) +
           '<div class="m-content" style="filter:blur(1.5px);opacity:.5"><div class="greeting">Good afternoon, Amaan</div></div>' +
@@ -477,8 +477,8 @@
               '<p class="hint">Creates a shared, hosted workspace. Everything already on this machine stays local.</p>' +
               '<div class="field"><label>Your name</label><input value="Amaan Nawab" disabled><div class="subnote">Already set — from your first launch.</div></div>' +
               '<div class="field"><label>Team workspace name</label><input placeholder="e.g. Fairweather Labs" value="Fairweather Labs"></div>' +
-              '<div class="note-box"><b>Stays local:</b> ROAD-127 and everything else on this machine. <b>Goes hosted:</b> only this new team workspace.</div>' +
-              '<div class="modal-actions"><button class="btn-ghost">Cancel</button><button class="btn-primary">Create &amp; get invite link</button></div>' +
+              '<div class="note-box"><b>Free to create:</b> unlimited members, shared Review queue, Jira sync for the team — no card. <b>Stays local:</b> ROAD-127 and everything else on this machine. <b>Goes hosted:</b> only this new team workspace. Self-hosting is available today for compliance/data-residency needs, same Docker Compose.</div>' +
+              '<div class="modal-actions"><button class="btn-ghost">Cancel</button><button class="btn-primary">Create free workspace</button></div>' +
             '</div>' +
           '</div>';
       }
@@ -493,10 +493,10 @@
           '<div class="m-content" style="filter:blur(1.5px);opacity:.5"><div class="greeting">Good afternoon, Amaan</div></div>' +
           '<div class="m-modal-backdrop">' +
             '<div class="m-modal">' +
-              '<h3>Fairweather Labs is ready</h3>' +
+              '<h3>Fairweather Labs is ready <span class="pill" style="background:var(--success-bg);color:var(--success);border-color:transparent">Free</span></h3>' +
               '<p class="hint">Share this link with Priya. It works whether or not Waypoint is already installed.</p>' +
               '<div class="link-box"><span>app.waypoint.sh/join/fwl-8k2n</span><svg class="icon"><use href="#i-search"/></svg></div>' +
-              '<div class="note-box"><b>Stays local:</b> ROAD-127 and your other personal tickets. <b>Shared:</b> only Fairweather Labs, once Priya joins it.</div>' +
+              '<div class="note-box"><b>Stays local:</b> ROAD-127 and your other personal tickets. <b>Shared:</b> only Fairweather Labs, once Priya joins it — still free, unlimited members.</div>' +
               '<div class="modal-actions"><button class="btn-ghost">Email invite instead</button><button class="btn-primary">Copy link</button></div>' +
             '</div>' +
           '</div>';
@@ -526,14 +526,14 @@
     {
       title: 'Afterward — the nudge doesn\'t come back',
       env: 'local',
-      dropoff: 'A milestone nudge that keeps reappearing after being acted on (or dismissed) trains the user to ignore every banner in the product.',
-      mitigation: 'Once acted on, the milestone banner is gone for good — replaced by the same permanent, low-key workspace switcher Option A settles into. Personal stays local and untouched.',
+      dropoff: 'A milestone nudge that keeps reappearing after being acted on (or dismissed) trains the user to ignore every banner in the product. Same monetization note as Option A: whatever later triggers an upgrade for Fairweather Labs has to be a limit hit through real use (history depth, in Option A\'s design), not a cap on members or a repeat of the invite-click ask.',
+      mitigation: 'Once acted on, the milestone banner is gone for good — replaced by the same permanent, low-key workspace switcher Option A settles into. Personal stays local and untouched, and Fairweather Labs stays on the free plan shown at creation until it hits that later limit — see onboarding-option-a.html and monetization-design.md for the shape of that screen; not redrawn here since the mechanism is identical.',
       window: function () {
         return topbar(avatarAmaan) + sidebarBase('home', footerSwitcher) +
           '<div class="m-content">' +
             '<div class="greeting">Good afternoon, Amaan</div>' +
             '<div class="subgreeting">Personal workspace &middot; local to this machine</div>' +
-            '<div class="banner"><svg class="icon" style="color:var(--success)"><use href="#i-check"/></svg><div><strong>Priya joined Fairweather Labs</strong><span>Switch workspaces from the sidebar to see the shared board.</span></div></div>' +
+            '<div class="banner"><svg class="icon" style="color:var(--success)"><use href="#i-check"/></svg><div><strong>Priya joined Fairweather Labs</strong><span>Free plan &middot; unlimited members. Switch workspaces from the sidebar to see the shared board.</span></div></div>' +
             '<div class="section-title" style="margin-top:0">My work</div>' +
             '<div class="ticket-row"><span class="ticket-key">ROAD-127</span><span class="ticket-title">Fix draft-loss on Escape</span><span class="pill warn">Todo</span></div>' +
           '</div>';

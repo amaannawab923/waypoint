@@ -333,3 +333,48 @@ the revised 11-step flow, and this precedent. Addenda in
 - Is governance (audit, roles, SSO) the paid line, with self-hosting
   free for compliance — Plane's model — or is hosting itself the
   product?
+
+## 7. Monetization designed into the mockups — proposed defaults
+
+The PM/UX pass that followed §6 took the three sharpened decisions and
+proposed a default for each, then drew the money line into the mockups
+so the founder reacts to screens rather than prose. Full reasoning and
+the launch instrumentation plan are in
+[`onboarding/monetization-design.md`](onboarding/monetization-design.md);
+the comparison table in
+[`onboarding/options-comparison.md`](onboarding/options-comparison.md)
+gained two monetization rows.
+
+**Proposed defaults (placeholders marked as such inside the mockups):**
+
+1. **Solo: free forever, plus one paid add-on that needs real hosting** —
+   cross-device sync of local tickets and agent sessions, end-to-end
+   encrypted, ~$5/mo placeholder (Obsidian Sync's shape). Never a cap on
+   anything local; the runtime-hours cap stays rejected.
+2. **Free team workspace: unlimited members, shared board, shared Review
+   queue, Jira sync for the team.** The paid trigger is depth of
+   Review/run history — 30 days free (placeholder) — not headcount. A
+   member cap was considered and rejected as gate-at-invite in a new
+   shape. Team Pro $8/seat (unlimited history, audit export, roles) and
+   Team Commercial $24/seat (SSO, SCIM, compliance, self-host support)
+   are placeholders sized from Plane's bands.
+3. **Governance is the paid line; self-hosting is free and stated as
+   available today** (Plane's split). This is a positioning change the
+   compose file already supports — but it commits the product to the
+   compose path being genuinely usable by a Product Hunt visitor.
+
+**Where it landed in Option A (now 13 steps):** steps 6 and 8 say "free"
+and list what's included, with no price anywhere near the invite click;
+the sidebar explainer reads "free · hosted or self-hosted"; step 9 and
+11 carry a Free pill; **step 12** (new, labelled *Monetization bet*) is
+the Review queue weeks into real use with a locked-history banner and
+the two-tier pricing card inline; **step 13** (new, labelled *Proposal*)
+is the dismissible Sync card on Home, explicitly outside onboarding and
+not necessarily launch scope. B and C got the same free/self-hosting
+copy in their invite modals and reference A for the limit-hit screen.
+
+**What the founder still decides** — the same three questions, now with
+a concrete default to accept or change: the solo add-on (and whether
+Home or a post-session prompt carries it), the free-tier limit type and
+the two seat prices, and whether "self-hosting available today" is a
+claim the compose path can honour at launch.

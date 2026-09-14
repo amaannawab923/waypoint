@@ -4,6 +4,17 @@ Companion to `onboarding-option-a.html`, `onboarding-option-b.html`, `onboarding
 (clickable walkthroughs, one screen per moment in the journey). This is the side-by-side read:
 where each option is strongest, where it's weakest, and what it costs to build.
 
+**Update, after this comparison was first written:** Option A was subsequently chosen as
+least-risk for launch and taken through two further rounds of independent research —
+`docs/product/research-approach-a-quiet-invite.md` in the waypoint-electron repo has the full
+record, including the invite item moving into primary nav, the milestone nudge becoming a
+labelled fast-follow, and where the sign-in actually sits. A third round, prompted by Vibe
+Kanban's April 2026 shutdown, re-rated all three options against a hard monetization
+constraint — that round is folded into the table and recommendation below, and is the subject
+of the new `monetization-design.md` in this same folder. The original recommendation section
+(B, then) is left below for the record; the monetization round doesn't overturn the pick of A,
+it adds a requirement A had to be checked against and revised for.
+
 All three share the same underlying commitment from the research
 (`docs/product/pm-research-accounts-onboarding.md`, Approach C) and design doc
 (`docs/design/waypoint-accounts-and-teams.md`): Personal is fully local with no sign-in gate,
@@ -43,6 +54,9 @@ that isn't you; @-mention and session-share are the same pattern, not shown as s
 | **Engineering scope to launch** | Smallest of the three. One persistent sidebar affordance + one Assignee-field hook + the invite modal + hosted workspace provisioning (shared across all three options). | A plus one optional first-launch screen (name capture, skip state, local persistence) and one milestone-detection rule (e.g. "5 tickets closed") to trigger the nudge once. | A's invite-modal/provisioning work, plus per-surface trigger logic in every place a "name that isn't you" can appear (Assignee, @-mention, session-share) — more surfaces to instrument than A or B, even though the entry UI itself is simpler. |
 | **Favors** | The purest solo persona — anyone who would bounce at *any* pre-Home friction, and power users who already know where to look for things in a sidebar. | The average solo user who's fine giving a name if asked nicely, and who benefits from being proactively reminded once they've built a habit — likely the best-converting option for solo→team specifically. | Teams that form around a specific piece of work rather than a general "let's use this together" decision — e.g., assigning a bug to a teammate. Best fit if the founder wants the tool to feel like solitaire until it isn't. |
 | **Honest weakness** | The sidebar link is easy to overlook if the user never scrolls to the footer or never assigns a ticket to someone else — habit alone doesn't guarantee the loop fires, only makes it possible. | The extra first-launch screen is real, measurable friction versus A for the "I will not click through anything" segment, even though it's small and skippable. | Discovery is the weakest of the three by a real margin — it depends on specific solo behaviors happening at all. A user who works entirely alone, never assigns tickets to anyone, never @-mentions, never shares a session, has *no* path to discovering Team mode. This is a genuine, not theoretical, dead-end risk for part of the target audience. |
+| **Monetization — where the money line sits** | Invite click creates a **free** team workspace (no price named); the paid upgrade surfaces later, at a Review-history-depth limit hit through real team use (step 12 of the revised mockup). Solo gets one optional paid add-on (cross-device sync), surfaced post-value on Home, never in onboarding. | Same structure as A, applied to B's mechanism: the invite-click modal (B's step 5) is now explicitly free with the same self-hosting-available line; the milestone nudge stays a pure discovery mechanism, not a pricing one — B doesn't redraw the limit-hit or solo-add-on screens, since the mechanism is identical to A's. | Same structure again, applied to C's trigger: the "workspace" modal (C's step 5) is free with the same self-hosting line; C likewise doesn't redraw the limit-hit or solo-add-on screens. |
+| **Monetization — what's free vs. paid** | Free: unlimited members, shared board, shared Review queue, Jira sync for the team, 30 days of Review/run history (placeholder). Paid (Team Pro, placeholder $8/seat/mo): unlimited history, audit-trail export, roles beyond admin/member. Paid (Team Commercial, placeholder $24/seat/mo): SSO, SCIM, compliance certs. Solo paid add-on (placeholder $5/mo): cross-device sync — never a cap on local usage. | Identical free/paid structure to A (inherited, not redesigned) — B changes *when* identity is asked, not what the team tier contains. | Identical free/paid structure to A — C changes *what triggers discovery*, not what the team tier contains. |
+| **Monetization — Vibe-Kanban-trap risk** | Lowest of the three by construction: the flow was the one directly re-rated against VK's failure mode and revised until the researchers' composite score recovered from 6/7.5/5 to 8/8.5/8. The residual risk is the placeholder numbers themselves turning out wrong once real usage data exists — a tuning risk, not a structural one. | Same structural risk as A (inherited fixes), plus B's own open question: whether a milestone nudge that *also* becomes the moment pricing is mentioned would recreate the gate-at-invite mistake in a new spot — mitigated by keeping the nudge purely about discovery, never pricing, in this revision. | Same structural risk as A, plus C's discovery weakness compounds it: if a team is invited in through a rare trigger and then hits a paywall soon after, the combination reads as "hard to find, then charges you" — a worse first impression than A's more visible path. |
 
 ---
 
@@ -86,3 +100,40 @@ own name a second time at the exact moment he's least likely to want to.
    @-mention, session share) worth doing, or does the founder accept C only with a single trigger
    and the discovery risk that comes with it?** This decides whether C is a real contender or a
    reference point for "what not to under-scope."
+
+---
+
+## Proposed monetization defaults
+
+Added after the Vibe Kanban precedent made "no flow may fail the app's monetization future" a
+hard constraint. Three decisions were explicitly unmade by the founder; these are proposed
+defaults, not conclusions — full reasoning and instrumentation plan in `monetization-design.md`.
+
+1. **Solo is free forever, plus one optional paid add-on that requires real hosting or
+   compute — never free-forever full stop.** The three researchers converged on this after
+   re-rating: a solo product with zero revenue lever ever, at any usage level, is Vibe Kanban's
+   ARPU-zero core persona restated. The proposed add-on is cross-device session/ticket sync
+   (Obsidian Sync's shape and price point, $5/mo placeholder) — new capacity, never a cap on
+   anything that works locally today. A local-runtime-hours cap was explicitly considered and
+   rejected: it's the same mistake Warp and Insomnia walked back after backlash.
+2. **The free team workspace includes everything that makes Team mode worth choosing —
+   unlimited members, shared board, shared Review queue, Jira sync for the whole team — and the
+   limit that triggers payment is depth of Review/run history (30 days free, placeholder),
+   not headcount.** A member-count cap was considered (a simple, common freemium pattern) and
+   rejected as a default: it would re-create gate-at-invite in a new shape, charging exactly
+   when a team's invite loop starts paying off, which is the specific mechanism that killed VK.
+   A history-depth limit instead mirrors Slack (90-day history) and Linear (250 free issues),
+   both of which convert 30–40% of active teams in the vendor data cited in the research.
+3. **Governance is the paid line; self-hosting is free and stated as available today, not
+   roadmapped — Plane's model, not "hosting itself is the product."** All three researchers
+   named this as the highest-leverage single change for trust with the regulated/self-hosting
+   segment (a 1.5-point swing in the standalone trust-lens rating). "On the roadmap" tested as
+   "a free alternative is coming, defer paying"; "available for compliance and data-residency
+   needs" tested as credible and non-threatening to the hosted business, because the buyers of
+   governance features (audit trail, roles, SSO) are teams with compliance requirements, who
+   pay for that regardless of where the data physically sits.
+
+These three defaults are what the revised `onboarding-option-a.html` (steps 6, 8, 9, 11–13)
+and the lighter touch-ups in B and C are built to. All prices and the 30-day number are
+explicitly labelled as placeholders inside the mockups themselves — they are starting points
+for the founder to react to, not researched conclusions.
