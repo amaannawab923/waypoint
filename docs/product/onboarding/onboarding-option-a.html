@@ -225,7 +225,7 @@
   .banner span { font-size: 11.5px; color: var(--text-secondary); }
 
   .m-modal-backdrop { position: absolute; inset: 0; background: color-mix(in srgb, var(--text) 40%, transparent); display: flex; align-items: center; justify-content: center; }
-  .m-modal { width: 380px; max-width: 88%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; box-shadow: 0 24px 48px -12px hsl(var(--shadow-color)/.45); }
+  .m-modal { width: 380px; max-width: 88%; max-height: 92%; overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; box-shadow: 0 24px 48px -12px hsl(var(--shadow-color)/.45); }
   .m-modal h3 { font-size: 15.5px; margin-bottom: 4px; }
   .m-modal p.hint { color: var(--text-secondary); font-size: 11.5px; margin: 0 0 16px; line-height:1.5; }
   .field { margin-bottom: 12px; }
@@ -252,6 +252,30 @@
   .link-box { display: flex; gap: 8px; align-items: center; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-inset); padding: 8px 10px; font: 500 11.5px var(--font-mono); color: var(--text-secondary); margin-bottom: 12px; }
   .link-box span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+  .browser-card { width: 440px; max-width: 92%; background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); box-shadow: 0 28px 56px -16px hsl(var(--shadow-color)/.5); overflow: hidden; }
+  .browser-bar { display: flex; align-items: center; gap: 8px; padding: 9px 12px; background: var(--bg-inset); border-bottom: 1px solid var(--border); }
+  .browser-bar .dots { display: flex; gap: 5px; }
+  .browser-bar .dots i { width: 9px; height: 9px; border-radius: 50%; background: var(--border-strong); display: block; }
+  .browser-bar .url { flex: 1; font: 500 11px var(--font-mono); color: var(--text-secondary); background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; display: flex; align-items: center; gap: 6px; }
+  .browser-bar .url .lock { width: 10px; height: 10px; border: 1.5px solid currentColor; border-radius: 3px; display: inline-block; }
+  .browser-body { padding: 22px 24px 24px; }
+  .browser-body .brandmark { width: 34px; height: 34px; border-radius: 9px; background: var(--accent); color: var(--on-accent); display: flex; align-items: center; justify-content: center; font: 700 15px var(--font-display); margin-bottom: 12px; }
+  .browser-body h3 { font-size: 17px; margin-bottom: 5px; }
+  .browser-body p.hint { color: var(--text-secondary); font-size: 12px; margin: 0 0 14px; line-height: 1.5; }
+  .signin-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+  .signin-btn { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font: 700 12.5px var(--font-body); text-align: left; }
+  .signin-btn .glyph { width: 18px; height: 18px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; font: 800 10px var(--font-mono); background: var(--accent-soft-bg); color: var(--accent-soft-text); flex: none; }
+  .signin-btn.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+  .signin-btn.primary .glyph { background: color-mix(in srgb, var(--on-accent) 18%, transparent); color: var(--on-accent); }
+  .signin-fine { font-size: 10.5px; color: var(--text-muted); line-height: 1.5; }
+  .waiting-card { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 16px 32px -12px hsl(var(--shadow-color)/.4); padding: 10px 14px; display: flex; align-items: center; gap: 10px; font: 600 12px var(--font-body); color: var(--text-secondary); white-space: nowrap; }
+  .waiting-card .spin { width: 12px; height: 12px; border: 2px solid var(--border-strong); border-top-color: var(--text); border-radius: 50%; }
+  .waiting-card button { border: none; background: transparent; color: var(--text-muted); font: 700 11.5px var(--font-body); text-decoration: underline; text-underline-offset: 2px; }
+  @media (prefers-reduced-motion: no-preference) { .waiting-card .spin { animation: spin 900ms linear infinite; } @keyframes spin { to { transform: rotate(360deg); } } }
+  .signed-chip { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--bg-inset); border: 1px solid var(--border); margin-bottom: 12px; font-size: 12px; }
+  .signed-chip b { display: block; font-size: 12.5px; }
+  .signed-chip span { color: var(--text-muted); font-size: 11px; }
+  .signed-chip .swap { margin-left: auto; font: 700 11px var(--font-body); color: var(--text-secondary); text-decoration: underline; text-underline-offset: 2px; }
   .join-card { width: 400px; max-width: 90%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 26px; box-shadow: 0 24px 48px -12px hsl(var(--shadow-color)/.4); text-align:left; }
   .join-card .brandmark { width:34px; height:34px; border-radius:9px; background:var(--accent); color:var(--on-accent); display:flex; align-items:center; justify-content:center; font:700 15px var(--font-display); margin-bottom:14px; }
   .join-card h3 { font-size:17px; margin-bottom:6px; }
@@ -305,7 +329,7 @@
   <div class="hero">
     <div class="eyebrow">Onboarding Option A · revised on the research</div>
     <h1>Quiet Invite</h1>
-    <p class="dek">Zero-account solo start — the app never asks for identity to open. "Invite your team" is a primary sidebar item on every screen (moved out of the footer: footer placements get 0.05–0.46% CTR), with a second contextual entry in the Assignee field. Identity is asked only at the click, and the modal now says where agent sessions live, that self-hosting is on the roadmap, and takes an optional email for the team's audit trail. A milestone nudge is shown as a labelled post-launch fast-follow.</p>
+    <p class="dek">Zero-account solo start — the app never asks for identity to open. "Invite your team" is a primary sidebar item on every screen (moved out of the footer: footer placements get 0.05–0.46% CTR), with a second contextual entry in the Assignee field. Identity is asked only at the click, and the modal says where agent sessions live and that self-hosting is on the roadmap. A milestone nudge is shown as a labelled post-launch fast-follow. The login is where it belongs: nowhere for a solo user; a one-time system-browser sign-in (GitHub, Google, or an email link — never a password) at the invite click, because a hosted workspace needs a real owner. Invitees sign in the same way from the join link.</p>
   </div>
 
   <div class="stepper-bar">
@@ -504,10 +528,10 @@
       }
     },
     {
-      title: 'Invite clicked — identity asked for the first time',
+      title: 'Invite clicked — name the workspace, then sign in',
       env: 'local',
-      dropoff: 'Three things the research flagged on this exact screen: a name the person never set reads unfinished on the invite ("You invited Jordan"); an audit trail can\'t tell two members who both typed "Amaan" apart; and silence about where agent sessions and the hosted workspace live reads as lock-in to a local-first audience.',
-      mitigation: 'Still two required fields, no password. The name field says plainly the person has been "You" until now. A third field, email, is optional and labelled for what it is — the team\'s audit trail, never shown publicly — so it costs a privacy-first solo user nothing. The note now states where agent sessions live, that self-hosting is on the roadmap, and links to how "stays local" actually works, because this audience trusts what it can verify, not copy.',
+      dropoff: 'Two things the research flagged here, plus the one the first revision glossed over: a name the person never set reads unfinished on the invite; silence about where agent sessions and the hosted workspace live reads as lock-in; and a typed name (even with a typed email) cannot own a hosted workspace — anyone with the link could claim to be "Amaan", nothing verifies the audit identity, and the owner couldn\'t get back in from another machine.',
+      mitigation: 'One field before the auth detour — the workspace name — so the person commits to the intent first and the sign-in has a reason. The button says exactly what happens next: a one-time sign-in in the browser, no password ever. The note still states where agent sessions live, that self-hosting is on the roadmap, and links to how "stays local" works. The typed-email field is gone: the verified account is the audit identity, and the name pre-fills from it on the next screen.',
       window: function () {
         return topbar(avatarPlaceholder) + sidebarBase('ticket', footerDefault, null, true) +
           '<div class="m-content" style="filter:blur(1.5px);opacity:.5">' +
@@ -517,14 +541,65 @@
             '<div class="m-modal">' +
               '<h3>Invite your team</h3>' +
               '<p class="hint">Creates a shared, hosted workspace so teammates see the same board. Everything already on this machine stays local.</p>' +
-              '<div class="field"><label>Your name</label><input placeholder="e.g. Amaan Nawab" value="Amaan Nawab"><div class="subnote">You\'ve been "You" until now — this is the name teammates will see.</div></div>' +
               '<div class="field"><label>Team workspace name</label><input placeholder="e.g. Fairweather Labs" value="Fairweather Labs"></div>' +
-              '<div class="field"><label>Email <span class="opt">&middot; optional</span></label><input placeholder="you@example.com"><div class="subnote">For the team\'s audit trail only. Never shown publicly, never required.</div></div>' +
               '<div class="note-box">' +
                 '<p><b>Stays local:</b> ROAD-127, every other ticket here, and every agent session on them.</p>' +
                 '<p><b>Goes hosted:</b> only this new workspace and what you put in it; its agent sessions live with it.</p>' +
                 '<p>Hosted on waypoint.sh today &middot; self-hosting via the same Docker Compose is on the roadmap &middot; <a href="javascript:void(0)">How &ldquo;stays local&rdquo; works</a></p>' +
               '</div>' +
+              '<p class="signin-fine" style="margin:0 0 12px">Next: sign in once in your browser &mdash; Google, GitHub, or an email link. No password. That account owns Fairweather Labs; your personal Waypoint stays local and never needs one.</p>' +
+              '<div class="modal-actions"><button class="btn-ghost">Cancel</button><button class="btn-primary">Continue &mdash; sign in to create it</button></div>' +
+            '</div>' +
+          '</div>';
+      }
+    },
+    {
+      title: 'Sign in — once, in the browser',
+      env: 'local',
+      dropoff: 'A window switch at peak intent, a method to choose, and (for the email option) a hop to the inbox — each is a place to lose someone. And a sign-in that looked like it applied to the whole app would undo the "no account" promise this persona came for.',
+      mitigation: 'Three methods, no password, one click for the OAuth ones; the browser page says in its first line that this is only for the team workspace. The app doesn\'t block — it shows one quiet waiting card and picks the session up automatically through its own protocol handler, the way emdash and Zed do it. Cancel returns to the modal with nothing changed and nothing created.',
+      window: function () {
+        return topbar(avatarPlaceholder) + sidebarBase('ticket', footerDefault, null, true) +
+          '<div class="m-content" style="filter:blur(1.5px);opacity:.5">' +
+            '<div class="crumbs">Waypoint Roadmap &rsaquo; Tickets &rsaquo; <b>ROAD-127</b></div>' +
+          '</div>' +
+          '<div class="m-modal-backdrop" style="align-items:flex-start;padding-top:22px">' +
+            '<div class="browser-card">' +
+              '<div class="browser-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url"><span class="lock"></span>accounts.waypoint.sh/sign-in?for=fairweather-labs</div></div>' +
+              '<div class="browser-body">' +
+                '<div class="brandmark">W</div>' +
+                '<h3>Sign in to create Fairweather Labs</h3>' +
+                '<p class="hint">Only for the team workspace. Your personal Waypoint stays on your machine and never needs an account.</p>' +
+                '<div class="signin-list">' +
+                  '<button class="signin-btn primary"><span class="glyph">GH</span>Continue with GitHub</button>' +
+                  '<button class="signin-btn"><span class="glyph">G</span>Continue with Google</button>' +
+                  '<button class="signin-btn"><span class="glyph">@</span>Email me a sign-in link</button>' +
+                '</div>' +
+                '<div class="signin-fine">No password, ever. You\'ll be sent straight back to Waypoint.</div>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+          '<div class="waiting-card"><span class="spin"></span>Finish signing in in your browser&hellip;<button>Cancel</button></div>';
+      }
+    },
+    {
+      title: 'Back in the app — signed in, one click to create',
+      env: 'local',
+      dropoff: 'A second confirmation after the browser detour can feel like being asked twice; a name pulled from an account the person didn\'t pick as their "work" name would look wrong on every comment.',
+      mitigation: 'Nothing to type. The account is shown (and swappable), the name pre-fills from it and stays editable — this is the one place "what teammates will see" is set. The workspace name carries over from before the detour. One click creates it. This verified account is also the audit identity the trust research asked for, without a typed email pretending to be one.',
+      window: function () {
+        return topbar(avatarAmaan) + sidebarBase('ticket', footerDefault, null, true) +
+          '<div class="m-content" style="filter:blur(1.5px);opacity:.5">' +
+            '<div class="crumbs">Waypoint Roadmap &rsaquo; Tickets &rsaquo; <b>ROAD-127</b></div>' +
+          '</div>' +
+          '<div class="m-modal-backdrop">' +
+            '<div class="m-modal">' +
+              '<h3>Almost there</h3>' +
+              '<p class="hint">Signed in. This account owns Fairweather Labs and is what the team\'s history is attributed to.</p>' +
+              '<div class="signed-chip"><div class="m-avatar" style="width:30px;height:30px;font-size:12px">AM</div><div><b>Amaan Nawab</b><span>via GitHub</span></div><a class="swap" href="javascript:void(0)">Use a different account</a></div>' +
+              '<div class="field"><label>Your name on the team</label><input value="Amaan Nawab"><div class="subnote">From your account &mdash; this is what teammates see.</div></div>' +
+              '<div class="field"><label>Team workspace name</label><input value="Fairweather Labs"></div>' +
+              '<div class="note-box"><p><b>Stays local:</b> ROAD-127, every other ticket here, and their agent sessions.</p><p><b>Goes hosted:</b> only Fairweather Labs and what you put in it.</p></div>' +
               '<div class="modal-actions"><button class="btn-ghost">Cancel</button><button class="btn-primary">Create &amp; get invite link</button></div>' +
             '</div>' +
           '</div>';
@@ -552,21 +627,25 @@
       }
     },
     {
-      title: "Jordan's join path",
+      title: "Jordan's join path — the same sign-in, from the link",
       env: 'hosted',
-      dropoff: 'A clunky accept flow — a forced app download, a separate password to invent — loses the invitee before they ever see the board.',
-      mitigation: 'One link, one field. It opens a lightweight join screen in-browser and deep-links into the desktop app if it\'s already installed — no password to invent, nothing re-entered. The inviter\'s real name is on it because the modal asked for it, not "You".',
+      dropoff: 'A clunky accept flow — a forced app download, a password to invent — loses the invitee before they see the board. A join that asked only for a typed name (the first revision) would let anyone holding the link walk in as anyone.',
+      mitigation: 'One link, one sign-in, no password: the same three methods the inviter used, so Jordan is a real, distinguishable member the moment they land. The page opens in the browser, and if Waypoint is installed it hands off to the app after sign-in — nothing re-entered. It says up front what Jordan will and won\'t see, and lands them on the board that brought them here, not an empty one.',
       window: function () {
         return '<div class="m-topbar"><div class="m-search"><svg class="icon"><use href="#i-search"/></svg>app.waypoint.sh/join/fwl-8k2n</div></div>' +
           '<div style="grid-column:1/3;display:flex;align-items:center;justify-content:center;background:var(--bg-inset)">' +
-            '<div class="join-card">' +
-              '<div class="brandmark">W</div>' +
-              '<h3>Join Fairweather Labs on Waypoint</h3>' +
-              '<p class="hint">Amaan Nawab invited you to their team workspace. You\'ll see the shared board — nothing from their personal Waypoint. Your name is used only on this workspace.</p>' +
-              '<div class="field"><label>Your name</label><input placeholder="e.g. Jordan Reyes"></div>' +
-              '<div class="modal-actions" style="justify-content:flex-start;margin-top:6px">' +
-                '<button class="btn-primary">Join &amp; open in Waypoint</button>' +
-                '<button class="btn-ghost">Continue in browser</button>' +
+            '<div class="browser-card" style="width:420px">' +
+              '<div class="browser-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url"><span class="lock"></span>app.waypoint.sh/join/fwl-8k2n</div></div>' +
+              '<div class="browser-body">' +
+                '<div class="brandmark">W</div>' +
+                '<h3>Join Fairweather Labs on Waypoint</h3>' +
+                '<p class="hint"><b>Amaan Nawab</b> invited you. You\'ll see the shared board &mdash; nothing from their personal Waypoint. Sign in once; if Waypoint is installed it opens there.</p>' +
+                '<div class="signin-list">' +
+                  '<button class="signin-btn primary"><span class="glyph">GH</span>Continue with GitHub</button>' +
+                  '<button class="signin-btn"><span class="glyph">G</span>Continue with Google</button>' +
+                  '<button class="signin-btn"><span class="glyph">@</span>Email me a sign-in link</button>' +
+                '</div>' +
+                '<div class="signin-fine">No password. Don\'t have Waypoint? You can use the board here in the browser and install later.</div>' +
               '</div>' +
             '</div>' +
           '</div>';

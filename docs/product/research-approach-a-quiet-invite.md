@@ -214,12 +214,31 @@ point of choosing A.
    installed app and that nothing is re-entered (lens 3).
 5. **Captions** now cite the evidence in the mitigation text where it
    changed the design, so the mockup explains itself.
+6. **The login, added after the first revision** (the founder's
+   question: "where's the login?"). The first revision captured identity
+   at the invite click with typed fields — a name and an optional email
+   — which cannot own a hosted workspace: anyone holding the join link
+   could claim to be the inviter, nothing verified the audit identity,
+   and the owner couldn't get back in from another machine. The flow now
+   has the sign-in where the design doc always put it and where the
+   research says people tolerate it — once, at the invite click, after
+   value: the modal asks only for the workspace name, then a
+   system-browser sign-in (GitHub / Google / email link, never a
+   password) whose first line says it is only for the team workspace;
+   the app shows one waiting card and picks the session up through its
+   protocol handler; back in the app, the account is shown, the name
+   pre-fills from it and stays editable, one click creates the
+   workspace. The typed-email field is gone — the verified account is
+   the audit identity. Invitees sign in the same way from the join link
+   instead of typing a name. The solo path still has no login anywhere.
 
-Not changed, deliberately: the number of fields is still two required
-(name, team) — lens 2's suggestion to capture the name at launch is B,
-not A, and was rejected for launch-day risk; the milestone trigger is
-not chosen; hosting stays "waypoint.sh today, self-hosting roadmapped"
-rather than committing to either, because that is the founder's call.
+Not changed, deliberately: the milestone trigger is not chosen; hosting
+stays "waypoint.sh today, self-hosting roadmapped" rather than
+committing to either, because that is the founder's call; the sign-in
+provider is drawn generically (the design doc recommends Clerk; the
+research rated Clerk and WorkOS AuthKit as both workable, with WorkOS
+documenting the Electron path more directly — a secondary choice, not a
+blocker).
 
 ## 5. The decisions this leaves open
 
