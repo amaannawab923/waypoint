@@ -24,6 +24,7 @@ import { mcpRouter } from './mcp.routes.js';
 import { devRouter } from './dev.routes.js';
 import { instanceRouter } from './instance.routes.js';
 import { adminRouter } from './admin.routes.js';
+import { authRouter } from './auth.routes.js';
 
 export const apiRouter = Router();
 
@@ -55,6 +56,8 @@ apiRouter.use(mcpRouter);
 // 401 until AT11 attaches req.user.
 apiRouter.use(instanceRouter);
 apiRouter.use(adminRouter);
+// AT9: the browser-facing sign-in page and provider callbacks.
+apiRouter.use(authRouter);
 if (process.env.NODE_ENV !== 'production') {
   apiRouter.use(devRouter);
 }
