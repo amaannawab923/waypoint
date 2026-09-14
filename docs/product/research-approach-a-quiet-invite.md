@@ -254,3 +254,82 @@ blocker).
 4. **Where agent transcripts go for a hosted team workspace, exactly.**
    The mockup now makes a claim ("live with the workspace"); the
    architecture has to be decided so the claim is true.
+
+## 6. The Vibe Kanban constraint — re-rated with monetization as a hard requirement
+
+Added 2026-09-14 after the founder's constraint: *no flow we pick may
+fail the app's monetization future.* The precedent, verified: Vibe
+Kanban (BloopAI) ran essentially this exact flow — `npx vibe-kanban`
+fully local with no account, GitHub/Google sign-in only for "Remote
+Projects" (cloud-synced organisations, shared issues, comments),
+self-hosting available — **and had a paid tier: $30 per user per month
+for teams.** On 10 April 2026 bloop shut down: "the vast majority are
+free users and we couldn't find a business model that we could get
+excited about." Remote services were switched off after 30 days; local
+still works; the project is community-maintained under Apache-2.0.
+(Sources: the shutdown post, the founder's announcement, the pricing
+and Remote Projects pages — in the lens addenda.)
+
+The same three researchers were resumed with their original context,
+the revised 11-step flow, and this precedent. Addenda in
+`research/approach-a/*-monetization.md`.
+
+| Lens | Under the constraint | With their fixes |
+|---|---|---|
+| 1 · Solo first launch | **6 / 10** — a complete, zero-friction solo product is exactly what gave VK's core persona an ARPU of zero forever | **8 / 10** with one solo paid add-on that genuinely needs hosting or compute (cloud agent runs, cross-device session sync) — never a gate on what is local today |
+| 2 · Solo → team growth | **7.5 / 10** — the revised discovery and auth fix the loop; the money line is the open risk | **8.5 / 10** if the team tier contains what solo structurally cannot do, and the paywall sits behind a limit discovered through work, not at the invite click |
+| 3 · Local-first trust | **5 / 10** hosted-only middleware — "solo, but visible to others" is VK's category; would need a pivot | **8 / 10** on Plane's model: self-hosting free for the compliance niche, governance (audit, roles, SSO) is what teams pay for |
+
+**What all three converged on:**
+
+1. **The flow survives.** None of the three blamed the onboarding
+   shape — Zed, VS Code, Raycast, Warp and Obsidian run it and are
+   alive. VK died on what its paid layer *contained*, not on where its
+   sign-in sat.
+2. **VK's paid tier was "solo, but visible to others."** Shared kanban
+   visibility, no workflow a team needed, no limit that forced the
+   upgrade — at $30 a seat. The successful ones charge for required team
+   infrastructure (Warp Drive's shared context, Raycast's admin
+   controls, Excalidraw+ access management) or for a limit hit through
+   work (Linear's 250 free issues, Slack's 90-day history — the
+   free-team-then-limit model converts at 30–40 % in the vendor data;
+   gate-at-invite converted poorly for VK).
+3. **Waypoint's team workspace has to contain something solo cannot
+   do** — a shared Review queue of agent proposals, runs attributable
+   across people, a PM view over everyone's sessions, Jira for the whole
+   team — or it is VK's shared kanban with a different logo. This is the
+   product argument for Team mode, not a hosting story.
+4. **The paywall should not be the invite click.** Create a *free* team
+   workspace at the click (the sign-in stays there — a hosted workspace
+   still needs an owner); surface the upgrade when a natural limit is
+   hit in normal team work (agent runs, members, integrations). The
+   revised mockup's "Create & get invite link" already names no price,
+   so this is a positioning decision, not a redraw.
+5. **Solo needs one paid hook that requires hosting or compute** —
+   Obsidian Sync ($4–10/mo), Raycast Pro, Zed's hosted models, Warp's
+   AI credits are the precedents: add-ons, never clawbacks. Struck from
+   lens 1's own list: a cap on *local* runtime hours — that is the
+   Warp/Insomnia mistake restated, and it contradicts the rule the same
+   report opens with.
+6. **Reframe self-hosting.** "On the roadmap" reads as "a free
+   alternative is coming, defer paying." Plane's split — Community
+   self-hosted free, Pro/Commercial for SSO, audit, compliance — is the
+   precedent that works: say "self-hosting available for compliance and
+   data-residency needs," and make governance the paid line rather than
+   an afterthought.
+7. **The uncomfortable structural point** (lens 3): Waypoint is a layer
+   on top of agents people already pay for — VK's category exactly.
+   The defensible lines in that category are governance (Plane),
+   compute (Zed), and convenience/sync (Obsidian, Raycast). Freemium
+   solo→team conversion runs 1–5 % in the vendor data; a business that
+   is only Team seats needs the loop *and* a solo line.
+
+**Decisions this puts on the founder's desk, sharpened:**
+
+- Is solo free forever with one hosted add-on, or free forever full
+  stop? (The three say "full stop" is the VK trap.)
+- What does the free team workspace include, and which limit triggers
+  the paid tier?
+- Is governance (audit, roles, SSO) the paid line, with self-hosting
+  free for compliance — Plane's model — or is hosting itself the
+  product?
