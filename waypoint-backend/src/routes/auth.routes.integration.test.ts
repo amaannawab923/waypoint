@@ -49,7 +49,11 @@ function fakeGithub(user: { id: number; login: string; name: string | null; emai
     if (input.startsWith('https://api.github.com/user/emails')) {
       return new Response(JSON.stringify([{ email: user.email, primary: true, verified: user.verified ?? true }]), { status: 200 });
     }
-    return new Response(JSON.stringify({ id: user.id, login: user.login, name: user.name, email: null, avatar_url: 'https://a/x.png' }), { status: 200 });
+    // GitHub leaves the profile email null for most developers; when the
+    // fake is asked to report "unverified", surface it there instead so
+    // the exchange still finds an address.
+    const profileEmail = user.verified === false ? user.email : null;
+    return new Response(JSON.stringify({ id: user.id, login: user.login, name: user.name, email: profileEmail, avatar_url: 'https://a/x.png' }), { status: 200 });
   };
 }
 
@@ -178,6 +182,53 @@ describe.skipIf(!REAL_DB)('sign-in flows against real Postgres (AT9)', () => {
     expect(resolved?.user.emailVerifiedAt).toBeInstanceOf(Date);
     const rows = await db.select().from(schema.users).where(ilike(schema.users.email, 'at9-amaan%'));
     expect(rows).toHaveLength(1);
+  });
+
+  it('SECURITY: an unverified provider email can neither claim an existing row nor create one — the review-1 takeover path', async () => {
+    // AT8's setup admin: an unverified row, isInstanceAdmin. The attack:
+    // a GitHub account whose *profile* email is the admin's address but
+    // which GitHub has not verified.
+    await db.insert(schema.users).values({ id: 'at9-user-admin', email: 'at9-admin@example.test', fullName: 'Op', authMethod: 'github', isInstanceAdmin: true });
+    const attacker: FetchLike = async (input: string) => {
+      if (input.startsWith('https://github.com/login/oauth/access_token')) return new Response(JSON.stringify({ access_token: 'tok' }), { status: 200 });
+      if (input.startsWith('https://api.github.com/user/emails')) return new Response(JSON.stringify([]), { status: 200 });
+      return new Response(JSON.stringify({ id: 666, login: 'mallory', name: 'Mallory', email: 'at9-admin@example.test', avatar_url: null }), { status: 200 });
+    };
+    const { cb } = await githubRoundTrip(request(app(attacker)));
+    expect(cb.status).toBe(403);
+    expect(cb.headers.location).toBeUndefined();
+    expect(cb.text).toMatch(/isn(&#39;|')t verified/);
+    const [admin] = await db.select().from(schema.users).where(eq(schema.users.id, 'at9-user-admin'));
+    expect(admin).toMatchObject({ authProviderId: null, emailVerifiedAt: null, isInstanceAdmin: true });
+    expect(await db.select().from(schema.sessions).where(eq(schema.sessions.userId, 'at9-user-admin'))).toHaveLength(0);
+
+    // Same identity against an address nobody holds: still refused —
+    // an unverified email may not create a row either, or a later
+    // verified owner would inherit the attacker's provider binding.
+    const stranger: FetchLike = async (input: string) => {
+      if (input.startsWith('https://github.com/login/oauth/access_token')) return new Response(JSON.stringify({ access_token: 'tok' }), { status: 200 });
+      if (input.startsWith('https://api.github.com/user/emails')) return new Response(JSON.stringify([]), { status: 200 });
+      return new Response(JSON.stringify({ id: 667, login: 'm2', name: null, email: 'at9-nobody@example.test', avatar_url: null }), { status: 200 });
+    };
+    expect((await githubRoundTrip(request(app(stranger)))).cb.status).toBe(403);
+    expect(await db.select().from(schema.users).where(eq(schema.users.email, 'at9-nobody@example.test'))).toHaveLength(0);
+  });
+
+  it('a returning provider subject signs in even if the provider now reports the email unverified', async () => {
+    const first = await githubRoundTrip(request(app(fakeGithub({ id: 4242, login: 'amaan', name: 'Amaan N', email: 'at9-amaan@example.test' }))));
+    expect(first.cb.status).toBe(302);
+    const again = await githubRoundTrip(request(app(fakeGithub({ id: 4242, login: 'amaan', name: 'Amaan N', email: 'at9-amaan@example.test', verified: false }))));
+    expect(again.cb.status).toBe(302);
+    expect(await db.select().from(schema.users).where(ilike(schema.users.email, 'at9-amaan%'))).toHaveLength(1);
+  });
+
+  it('a second provider with the same verified email signs in but does not overwrite the first binding', async () => {
+    await db.insert(schema.users).values({ id: 'at9-user-g', email: 'at9-amaan@example.test', fullName: 'Amaan', authMethod: 'google', authProviderId: 'g-110', emailVerifiedAt: new Date() });
+    const { cb } = await githubRoundTrip(request(app()));
+    expect(cb.status).toBe(302);
+    const token = new URL(cb.headers.location).searchParams.get('token')!;
+    const resolved = await sessions.resolveSession(token);
+    expect(resolved?.user).toMatchObject({ id: 'at9-user-g', authMethod: 'google', authProviderId: 'g-110' });
   });
 
   it('invite-only: refuses a stranger with a page and creates nothing; lets a pre-created person in', async () => {

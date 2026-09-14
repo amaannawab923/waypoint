@@ -96,62 +96,102 @@ export type ResolvedIdentity = {
 };
 
 // Decision 001 §3, "link, don't replace": a person is one users row for
-// life. Match by provider subject first, then by email — which is how the
-// desktop's local profile and AT8's setup admin (both unverified rows
-// created before any sign-in) get claimed by the first real sign-in
-// rather than duplicated. Signup mode is enforced only when a brand-new
-// row would be needed: an existing row is by definition someone already
-// let in (an invitee's row is pre-created by AT12).
+// life. Match by provider subject first — that is proof of the same
+// account regardless of what the provider says about the email today.
+// Otherwise match by email, which is how the desktop's local profile and
+// AT8's setup admin (both unverified rows created before any sign-in) get
+// claimed by the first real sign-in rather than duplicated — but ONLY by
+// an identity whose email the provider has verified. An unverified
+// address is a claim, not a proof, and letting it match by email would
+// let anyone who can set a profile email on a GitHub account take over
+// the row behind it (including isInstanceAdmin). Such an identity is
+// refused outright and pointed at the email link, which verifies.
+//
+// A row that already carries a provider subject keeps it: a verified
+// sign-in through a second provider for the same email still succeeds,
+// but doesn't overwrite the first binding (and can't flip-flop it).
+// Signup mode is enforced only when a brand-new row would be needed: an
+// existing row is by definition someone already let in (an invitee's row
+// is pre-created by AT12).
 export async function resolveOrCreateUser(identity: ResolvedIdentity, deps: FlowDeps) {
   const email = identity.email.trim().toLowerCase();
   const now = deps.now();
 
-  const byProvider =
-    identity.providerId &&
-    (await db
-      .select()
-      .from(users)
-      .where(and(eq(users.authMethod, identity.provider), eq(users.authProviderId, identity.providerId))))[0];
-  const [byEmail] = byProvider ? [] : await db.select().from(users).where(sql`lower(${users.email}) = ${email}`);
-  const existing = byProvider || byEmail;
-
-  if (existing) {
+  const [byProvider] = identity.providerId
+    ? await db
+        .select()
+        .from(users)
+        .where(and(eq(users.authMethod, identity.provider), eq(users.authProviderId, identity.providerId)))
+    : [];
+  if (byProvider) {
     const patch: Partial<typeof users.$inferInsert> = {};
-    if (identity.providerId && existing.authProviderId !== identity.providerId) {
+    if (identity.emailVerified && !byProvider.emailVerifiedAt) patch.emailVerifiedAt = now;
+    if (!byProvider.avatarUrl && identity.avatarUrl) patch.avatarUrl = identity.avatarUrl;
+    return { user: await applyPatch(byProvider, patch), created: false };
+  }
+
+  if (!identity.emailVerified) {
+    throw new ConflictError(
+      `Your ${identity.provider} account's email address isn't verified, so it can't be used to sign in here. Verify it with ${identity.provider}, or use "Email me a link" instead.`,
+    );
+  }
+
+  const [byEmail] = await db.select().from(users).where(sql`lower(${users.email}) = ${email}`);
+  if (byEmail) {
+    const patch: Partial<typeof users.$inferInsert> = {};
+    if (identity.providerId && !byEmail.authProviderId) {
       patch.authProviderId = identity.providerId;
       patch.authMethod = identity.provider;
-    } else if (!identity.providerId && existing.authMethod !== identity.provider && !existing.authProviderId) {
-      patch.authMethod = identity.provider;
+    } else if (!identity.providerId && !byEmail.authProviderId && byEmail.authMethod !== 'email') {
+      // AT8's setup admin carries a placeholder method; the email link is
+      // what actually signed them in.
+      patch.authMethod = 'email';
     }
-    if (identity.emailVerified && !existing.emailVerifiedAt) patch.emailVerifiedAt = now;
+    if (!byEmail.emailVerifiedAt) patch.emailVerifiedAt = now;
     // Stored lowercase always — users.email's unique index is case-
-    // sensitive, so "Me@x" and "me@x" would otherwise be two people. A
-    // verified sign-in may also correct the address outright.
-    if (existing.email !== email && (identity.emailVerified || existing.email.toLowerCase() === email)) patch.email = email;
-    if (!existing.avatarUrl && identity.avatarUrl) patch.avatarUrl = identity.avatarUrl;
-    if (Object.keys(patch).length === 0) return { user: existing, created: false };
-    const [updated] = await db.update(users).set(patch).where(eq(users.id, existing.id)).returning();
-    return { user: updated, created: false };
+    // sensitive, so "Me@x" and "me@x" would otherwise be two people.
+    if (byEmail.email !== email) patch.email = email;
+    if (!byEmail.avatarUrl && identity.avatarUrl) patch.avatarUrl = identity.avatarUrl;
+    return { user: await applyPatch(byEmail, patch), created: false };
   }
 
   const status = await getSetupStatus(deps.env);
   if (status.signupMode === 'invite_only') {
     throw new ConflictError('This instance is invite-only. Ask a workspace member for an invite link.');
   }
-  const [created] = await db
-    .insert(users)
-    .values({
-      id: newId('user'),
-      email,
-      authMethod: identity.provider,
-      authProviderId: identity.providerId,
-      emailVerifiedAt: identity.emailVerified ? now : null,
-      fullName: identity.fullName,
-      avatarUrl: identity.avatarUrl,
-      createdAt: now,
-    })
-    .returning();
-  return { user: created, created: true };
+  try {
+    const [created] = await db
+      .insert(users)
+      .values({
+        id: newId('user'),
+        email,
+        authMethod: identity.provider,
+        authProviderId: identity.providerId,
+        emailVerifiedAt: now,
+        fullName: identity.fullName,
+        avatarUrl: identity.avatarUrl,
+        createdAt: now,
+      })
+      .returning();
+    return { user: created, created: true };
+  } catch (err) {
+    // Two first sign-ins for the same new address racing: the loser's
+    // insert hits users_email_unique. Say so instead of leaking a driver
+    // error into the browser page.
+    if (isUniqueViolation(err)) throw new ConflictError('That account was just created — try signing in again.');
+    throw err;
+  }
+}
+
+async function applyPatch(existing: typeof users.$inferSelect, patch: Partial<typeof users.$inferInsert>) {
+  if (Object.keys(patch).length === 0) return existing;
+  const [updated] = await db.update(users).set(patch).where(eq(users.id, existing.id)).returning();
+  return updated;
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  const code = (err as { code?: unknown })?.code ?? (err as { cause?: { code?: unknown } })?.cause?.code;
+  return code === '23505';
 }
 
 function finishRedirect(flow: typeof authFlows.$inferSelect, token: string): string {

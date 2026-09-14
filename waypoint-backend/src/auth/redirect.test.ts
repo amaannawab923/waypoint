@@ -6,11 +6,13 @@ import { validateRedirectUri, validateClientState, publicBaseUrl } from './redir
 describe('validateRedirectUri', () => {
   it('accepts a loopback callback on any port', () => {
     expect(validateRedirectUri('http://127.0.0.1:53127/callback')).toBe('http://127.0.0.1:53127/callback');
-    expect(validateRedirectUri('http://localhost:1/callback')).toBe('http://localhost:1/callback');
+    expect(validateRedirectUri('http://127.0.0.1:1/callback')).toBe('http://127.0.0.1:1/callback');
   });
 
   it.each([
     ['https://127.0.0.1:1/callback', 'https loopback is not what the desktop serves'],
+    ['http://localhost:1/callback', 'a name, not the loopback literal (RFC 8252 §8.3)'],
+    ['http://[::1]:1/callback', 'IPv6 loopback — the desktop binds v4'],
     ['http://evil.example/callback', 'a real host'],
     ['http://127.0.0.1.evil.example/callback', 'a lookalike host'],
     ['http://127.0.0.1:1/other', 'wrong path'],

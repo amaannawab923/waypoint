@@ -67,7 +67,9 @@ export async function completeSetup(input: CompleteSetupInput, env: NodeJS.Proce
       .insert(users)
       .values({
         id: newId('user'),
-        email: input.admin.email,
+        // Lowercased like every other write to users.email (AT9 links by
+        // lower(email); the unique index is case-sensitive).
+        email: input.admin.email.trim().toLowerCase(),
         fullName: input.admin.fullName,
         // A placeholder until AT9's sign-in records how they actually
         // signed in — but an honest one: the first method this instance

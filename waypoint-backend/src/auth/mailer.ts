@@ -2,8 +2,9 @@ import nodemailer from 'nodemailer';
 
 // AT9 (ROAD-144). The magic-link sender, built from the operator's own
 // SMTP env (spec §8). Injected into the flow service so tests use a fake
-// and never send; the real transport is created lazily on first use so
-// an instance with no SMTP configured never touches nodemailer at all.
+// and never send; the real transport is created lazily on first use, so
+// an instance with no SMTP configured never opens a connection (the
+// module itself is imported either way — it's inert until createTransport).
 
 export type Mailer = {
   send(msg: { to: string; subject: string; text: string; html: string }): Promise<void>;

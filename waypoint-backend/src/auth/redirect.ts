@@ -23,7 +23,10 @@ export function validateRedirectUri(raw: string | undefined): string {
   } catch {
     throw new ValidationError('redirect_uri must be an absolute URL');
   }
-  const loopback = u.protocol === 'http:' && (u.hostname === '127.0.0.1' || u.hostname === 'localhost');
+  // The IP literal only, per RFC 8252 §8.3: `localhost` is a name, and a
+  // name is whatever the resolver (or a hosts file) says it is. The
+  // desktop (AT10) binds 127.0.0.1 and asks for exactly this.
+  const loopback = u.protocol === 'http:' && u.hostname === '127.0.0.1';
   if (!loopback || u.pathname !== '/callback' || u.search || u.hash || u.username || u.password) {
     throw new ValidationError('redirect_uri must be http://127.0.0.1:<port>/callback');
   }
