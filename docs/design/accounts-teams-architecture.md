@@ -128,6 +128,23 @@ Postgres bill, not settled by this doc.
 
 ## 3. Auth
 
+**Superseded 2026-09-14 by
+[`docs/design/self-hosted-auth-and-multitenancy.md`](self-hosted-auth-and-multitenancy.md):**
+the Clerk recommendation below is reversed. Building and running the
+self-hosted team backend on docker-compose *before* any cloud deployment
+exists (`docs/decisions/001-product-shape-and-distribution.md` §4) means
+sign-in itself can't depend on a third-party SaaS account — this section's
+own §8 flags that exact problem ("Clerk itself is still a hosted
+dependency even in a self-hosted deployment") without resolving it. The
+new doc replaces Clerk with built-in auth (operator-supplied GitHub/Google
+OAuth client IDs, operator-supplied SMTP for email magic links, sessions
+in our own Postgres) and a `users`/`members` schema split the section
+below doesn't have. The `req.member` middleware shape and the
+workspace-scoping audit findings below (§4) are correct and carried
+forward unchanged — only what resolves `req.member` changes. Kept below
+for the historical record of the Clerk evaluation; do not build against
+this section.
+
 ### Provider: keep Clerk, re-affirmed against the actual requirement
 
 The requirement changed from "solo vs. team fork at every sign-up" to
