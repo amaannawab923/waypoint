@@ -21,3 +21,13 @@ export class ValidationError extends Error {
     this.name = 'ValidationError';
   }
 }
+
+// For "this instance isn't configured to do that" — an operator state, not
+// a client mistake (AT8: INSTANCE_SETUP_TOKEN unset). 503, so a client can
+// tell "try again once the operator fixes it" from a 4xx it caused.
+export class ServiceUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ServiceUnavailableError';
+  }
+}

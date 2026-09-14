@@ -22,6 +22,8 @@ import { proposalsRouter } from './proposals.routes.js';
 import { reviewQueueRouter } from './reviewQueue.routes.js';
 import { mcpRouter } from './mcp.routes.js';
 import { devRouter } from './dev.routes.js';
+import { instanceRouter } from './instance.routes.js';
+import { adminRouter } from './admin.routes.js';
 
 export const apiRouter = Router();
 
@@ -49,6 +51,10 @@ apiRouter.use(copilotRouter);
 apiRouter.use(proposalsRouter);
 apiRouter.use(reviewQueueRouter);
 apiRouter.use(mcpRouter);
+// AT8: first-run setup status + token-gated setup; admin routes answer
+// 401 until AT11 attaches req.user.
+apiRouter.use(instanceRouter);
+apiRouter.use(adminRouter);
 if (process.env.NODE_ENV !== 'production') {
   apiRouter.use(devRouter);
 }
