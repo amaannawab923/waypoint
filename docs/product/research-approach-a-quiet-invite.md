@@ -378,3 +378,46 @@ a concrete default to accept or change: the solo add-on (and whether
 Home or a post-session prompt carries it), the free-tier limit type and
 the two seat prices, and whether "self-hosting available today" is a
 claim the compose path can honour at launch.
+
+## 8. Final synthesis — the founder's call, plus a senior-PM correction
+
+The founder liked Option B ("looks pretty nice as well... Cross-device syncing is pretty nice")
+and confirmed two numbers that were placeholders through §6–7: **$5/mo** for the solo Sync
+add-on and **30 days** for the free team Review-history window. Asked for one final mockup
+combining the best of A/B/C around those two confirmed numbers, built by a senior-PM review
+rather than an averaging exercise.
+
+**The call: Option A is the foundation outright, not "the best of A and B."** The standing
+recommendation in `onboarding/options-comparison.md` (B, with A's link as fallback) didn't
+survive scrutiny — both of its stated reasons for B turn out to be things A already has for
+free. A's invite-click flow ends in a system-browser OAuth sign-in, which returns the inviter's
+real name and avatar automatically — the "personalized invite" argument for B's identity screen
+assumed A couldn't do this. And B's milestone nudge was never actually dependent on B's
+first-launch screen; it fires off usage data regardless of when identity was captured, so it can
+ride directly on top of A's permanent sidebar link. Once both are subtracted, B's identity screen
+is pure friction with no offsetting benefit — exactly the trade this persona (zero pre-value
+friction) shouldn't make. The comparison doc's recommendation section has been corrected in
+place rather than left to stand alongside a contradicting final answer.
+
+**What actually changed, concretely, in
+[`onboarding-final.html`](onboarding/onboarding-final.html):**
+1. The milestone nudge (A's step 4) is promoted from "post-launch fast-follow" to committed v1
+   scope — same screen, same copy discipline (once, dismissible, usage-triggered), different
+   commitment level.
+2. A new ambient step: a single quiet line on the Review page ("N days left in your free 30-day
+   history"), no icon banner, no CTA button, visible only where history depth is relevant —
+   so the hard paywall is never the team's first signal that a limit exists.
+3. The paywall screen states 30 days as confirmed (no longer hedged as a placeholder); the two
+   seat prices ($8 / $24) stay explicit placeholders, since only the two numbers above were
+   actually confirmed.
+4. The Sync add-on moves out of Home and out of onboarding entirely, into a new Settings →
+   Devices & Sync screen, reusing the same one-time OAuth pattern as the team invite rather than
+   inventing a second identity mechanism. This is a monetization-safety move as much as a UX
+   one: keeping "invite" and "pay" off the same screen, even a step apart, was the one discipline
+   every researcher agreed Vibe Kanban broke.
+
+**One risk flagged, not fully resolved:** running the sidebar link (passive) and the milestone
+nudge (active) at once was rated as two competing mechanisms across two different mockups, never
+designed as a pair. The spec constraint carried into the mockup — the nudge must never fire
+mid-session or mid-edit — is stated in the step's own mitigation copy but not yet validated
+against a real trigger-detection implementation.

@@ -60,24 +60,48 @@ that isn't you; @-mention and session-share are the same pattern, not shown as s
 
 ---
 
-## Recommendation
+## Recommendation — superseded, see below
 
-**Option B, with A's sidebar link kept as the permanent fallback.**
+~~**Option B, with A's sidebar link kept as the permanent fallback.**~~
 
-Reasoning: B and A have essentially identical first-launch and first-value drop-off (the skip
+~~Reasoning: B and A have essentially identical first-launch and first-value drop-off (the skip
 button makes B's extra screen close to free), but B adds a second, *active* discovery
-mechanism — the milestone nudge — without removing A's *passive* one. C's mechanism is the most
-elegant in isolation (nothing to notice, nothing to ignore, shows up exactly when relevant) but
-its discovery risk is structural, not just a tuning problem: some real fraction of the target
-solo audience will never trigger it, and for those users the growth loop the founder identified
-as the whole point ("habit → invite the team") simply doesn't exist. That's a risk worth taking
-for a product that has to convert habitual users into team accounts to grow, only if C's trigger
-surface is deliberately widened well beyond one field — which is itself more engineering, not
-less, undercutting the "invisible = simple" intuition.
+mechanism — the milestone nudge — without removing A's *passive* one.~~ ~~B's one soft field also
+pays for itself downstream: it's the only option where the *invitee* sees a fully personalized
+invite ("Amaan invited you...") without Amaan having had to type his own name a second time at
+the exact moment he's least likely to want to.~~
 
-B's one soft field also pays for itself downstream: it's the only option where the *invitee*
-sees a fully personalized invite ("Amaan invited you...") without Amaan having had to type his
-own name a second time at the exact moment he's least likely to want to.
+**This reasoning didn't survive a senior-PM review and is superseded by the final recommendation
+below.** Both claims for B turn out to be paid for by A already: A's invite-click flow ends in
+OAuth (GitHub/Google), which returns the inviter's real name and avatar for free, at the moment
+of actual intent — B's personalized-invite argument assumed A couldn't do this. And the milestone
+nudge was never actually B-specific; nothing about a usage-triggered banner depends on capturing
+identity at launch, it was just bundled into B's mockup rather than A's. Once both are subtracted,
+B's only remaining distinctive move — the first-launch identity screen — is pure cost (one extra
+decision point before any value is shown, paid by every install) with no offsetting benefit, for
+a persona whose entire value proposition is zero pre-value friction. C's discovery weakness
+(above) stands unchanged and still rules it out as primary.
+
+## Final recommendation — Option A, unmodified in spirit, plus one promotion
+
+**Option A is the foundation, not a compromise between A and B.** Take B's milestone nudge
+(it was never B-specific) and promote it from "post-launch fast-follow" to committed v1 scope,
+riding on top of A's permanent sidebar link — passive and active discovery together, with no
+identity-capture screen at all. Drop everything else B offered. C is folded in only as the
+justification already built into A's Assignee-field trigger (invite the moment a solo action
+names a second person), which the original A mockup already implemented.
+
+A fourth, single synthesized mockup —
+[`onboarding-final.html`](onboarding-final.html) — implements this with the two monetization
+numbers the founder has since confirmed: **$5/mo** for the cross-device Sync add-on (moved out
+of Home and onboarding entirely, into Settings → Devices & Sync, so "invite" and "pay" never
+share a screen) and a **30-day** free Review-history window, now shown as decided rather than a
+placeholder in the paywall screen. It also adds one screen neither A nor B had: an ambient,
+button-free "N days left" indicator on the Review page, so the hard paywall at 30 days is never
+the first time a team hears about the limit. Team seat prices ($8 Team Pro / $24 Team
+Commercial) remain explicit placeholders. See `onboarding-final.html`'s own dek for the full
+reasoning, and `monetization-design.md` for the launch-instrumentation plan behind both confirmed
+numbers.
 
 ## Product decisions the founder still has to make
 
