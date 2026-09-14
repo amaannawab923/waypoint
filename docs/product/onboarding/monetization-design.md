@@ -58,6 +58,13 @@ banner — untested for this product).
 
 ## Decision 2 — What's in the free team workspace, and which limit triggers paid?
 
+> **Superseded 2026-09-14 by [`docs/decisions/002-pricing-and-free-tier.md`](../../decisions/002-pricing-and-free-tier.md).**
+> The cloud free tier is now *bounded* — free up to 10 people **and** 30 days
+> of history, whichever first — not unlimited in members. Free-forever
+> teams live in self-hosting, which already provides that at zero cost to
+> us. The rule that survives unchanged: never charge at the first invite.
+> The reasoning below is kept for the record.
+
 **Proposed default: everything that makes Team mode worth choosing is free and unlimited in
 members; the paid trigger is depth of Review/run history, not headcount.**
 
