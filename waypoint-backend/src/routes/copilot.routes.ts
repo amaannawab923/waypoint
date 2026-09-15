@@ -92,6 +92,16 @@ copilotRouter.post(
       return;
     }
     try {
+      // AT11 (ROAD-146) review fix: resolveNoteConversation only ever
+      // returns a conversation belonging to currentMemberId(), but an
+      // explicit conversationId here comes straight from the request
+      // body — verify it before it ever reaches postSystemNote, which no
+      // longer checks this itself (see its own comment for why). Folded
+      // into this try so a mismatch reads the same as "no conversation,"
+      // matching this route's own non-distinguishing 204 convention.
+      if (conversationId) {
+        await copilotService.assertConversationOwnedByMember(conversationId, currentMemberId());
+      }
       res.status(201).json(await copilotService.postSystemNote(target, content));
     } catch (error) {
       if (error instanceof NotFoundError) {

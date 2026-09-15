@@ -4,6 +4,7 @@ import { agentRuns, copilotConversations, copilotMessages } from '../db/schema/i
 import { newId } from '../lib/ids.js';
 import { truncateTitle } from '../lib/text.js';
 import { NotFoundError } from '../middleware/errors.js';
+import { currentMemberId } from '../lib/requestContext.js';
 
 export async function createConversation(memberId: string) {
   // A plain insert, no conflict handling — memberId isn't unique (issue
@@ -25,11 +26,18 @@ export async function listConversations(memberId: string) {
     .orderBy(desc(copilotConversations.updatedAt));
 }
 
+// AT11 (ROAD-146) review fix: copilotConversations has no workspaceId of
+// its own, but every row has exactly one owning member — and a
+// conversation is that person's own Copilot chat, not a team-shared one
+// (the mockup's own framing), so the real check here is ownership by
+// the signed-in member, not just "same workspace." A cross-member id —
+// someone else's on the same team, or another workspace's entirely —
+// now resolves identically to a missing one.
 export async function getConversation(id: string) {
   const [conversation] = await db
     .select()
     .from(copilotConversations)
-    .where(eq(copilotConversations.id, id))
+    .where(and(eq(copilotConversations.id, id), eq(copilotConversations.memberId, currentMemberId())))
     .limit(1);
   if (!conversation) throw new NotFoundError('conversation');
   return conversation;
@@ -40,24 +48,35 @@ export async function getConversation(id: string) {
 // scratchNotes.service.ts's deleteScratchNote). Messages cascade via the
 // existing FK.
 export async function deleteConversation(id: string) {
-  await db.delete(copilotConversations).where(eq(copilotConversations.id, id));
+  await db
+    .delete(copilotConversations)
+    .where(and(eq(copilotConversations.id, id), eq(copilotConversations.memberId, currentMemberId())));
 }
 
 export async function renameConversation(id: string, title: string) {
   const [conversation] = await db
     .update(copilotConversations)
     .set({ title, updatedAt: new Date() })
-    .where(eq(copilotConversations.id, id))
+    .where(and(eq(copilotConversations.id, id), eq(copilotConversations.memberId, currentMemberId())))
     .returning();
   if (!conversation) throw new NotFoundError('conversation');
   return conversation;
+}
+
+// AT11 (ROAD-146) review fix: every function below this point takes a
+// conversationId directly (not the conversation's own id via
+// getConversation's now-ownership-scoped lookup), so each needs its own
+// check — a subquery of the current member's own conversation ids,
+// reused everywhere a conversationId is the only thing to scope by.
+function ownConversationIds() {
+  return db.select({ id: copilotConversations.id }).from(copilotConversations).where(eq(copilotConversations.memberId, currentMemberId()));
 }
 
 export async function listMessages(conversationId: string) {
   return db
     .select()
     .from(copilotMessages)
-    .where(eq(copilotMessages.conversationId, conversationId))
+    .where(and(eq(copilotMessages.conversationId, conversationId), inArray(copilotMessages.conversationId, ownConversationIds())))
     .orderBy(asc(copilotMessages.seq));
 }
 
@@ -70,6 +89,11 @@ export async function listMessages(conversationId: string) {
 // completes, which the caller invokes as a separate follow-up call.
 export async function postUserMessage(conversationId: string, content: string) {
   return db.transaction(async (tx) => {
+    const [owned] = await tx
+      .select({ id: copilotConversations.id })
+      .from(copilotConversations)
+      .where(and(eq(copilotConversations.id, conversationId), eq(copilotConversations.memberId, currentMemberId())));
+    if (!owned) throw new NotFoundError('conversation');
     const [message] = await tx
       .insert(copilotMessages)
       .values({
@@ -122,6 +146,11 @@ export async function postAssistantMessage(
   claudeSessionId: string | null,
 ) {
   return db.transaction(async (tx) => {
+    const [owned] = await tx
+      .select({ id: copilotConversations.id })
+      .from(copilotConversations)
+      .where(and(eq(copilotConversations.id, conversationId), eq(copilotConversations.memberId, currentMemberId())));
+    if (!owned) throw new NotFoundError('conversation');
     const [message] = await tx
       .insert(copilotMessages)
       .values({
@@ -173,6 +202,33 @@ export async function resolveNoteConversation(
   return latest?.id ?? null;
 }
 
+// AT11 (ROAD-146) review fix: deliberately NOT scoped against
+// currentMemberId() here, unlike every sibling function above — this is
+// called from proposals.service.ts's settleRunIfDecided, including its
+// expired-runs sweep (proposals.service.ts:564), which runs with no
+// request/caller identity at all (not just a different member's). Both
+// of postSystemNote's callers already resolve conversationId through a
+// path that's ownership-safe by construction: proposals.service.ts via
+// resolveNoteConversation(run.ownerMemberId, ...), which only ever
+// returns a conversation matching that memberId; and the
+// POST /copilot/notes route below, which verifies a caller-supplied
+// conversationId against currentMemberId() itself before calling this.
+/**
+ * For the one caller that takes a conversationId straight from a request
+ * body rather than deriving it itself (POST /copilot/notes below): throws
+ * NotFoundError unless it belongs to the given member. Call this before
+ * postSystemNote whenever the conversationId came from outside the
+ * service layer — postSystemNote itself trusts its caller on this.
+ */
+export async function assertConversationOwnedByMember(conversationId: string, memberId: string): Promise<void> {
+  const [conversation] = await db
+    .select({ id: copilotConversations.id })
+    .from(copilotConversations)
+    .where(and(eq(copilotConversations.id, conversationId), eq(copilotConversations.memberId, memberId)))
+    .limit(1);
+  if (!conversation) throw new NotFoundError('conversation');
+}
+
 /** A note Waypoint wrote — built from the ledger, never by a model. Bumps the conversation so it surfaces. */
 export async function postSystemNote(conversationId: string, content: string) {
   return db.transaction(async (tx) => {
@@ -204,6 +260,7 @@ export async function listUndeliveredNotes(conversationId: string) {
         eq(copilotMessages.conversationId, conversationId),
         eq(copilotMessages.role, 'system'),
         isNull(copilotMessages.deliveredAt),
+        inArray(copilotMessages.conversationId, ownConversationIds()),
       ),
     )
     .orderBy(asc(copilotMessages.seq));
@@ -221,6 +278,7 @@ export async function markNotesDelivered(conversationId: string, ids: string[]):
         eq(copilotMessages.role, 'system'),
         isNull(copilotMessages.deliveredAt),
         inArray(copilotMessages.id, ids),
+        inArray(copilotMessages.conversationId, ownConversationIds()),
       ),
     )
     .returning({ id: copilotMessages.id });

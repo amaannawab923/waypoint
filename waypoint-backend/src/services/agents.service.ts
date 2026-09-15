@@ -1,4 +1,4 @@
-import { eq, inArray, desc } from 'drizzle-orm';
+import { eq, and, inArray, desc } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { agents, agentProjectScopes } from '../db/schema/index.js';
 import { NotFoundError } from '../middleware/errors.js';
@@ -27,13 +27,23 @@ async function attachScopes(rows: AgentRow[]) {
   return rows.map((r) => toEntity(r, byAgent.get(r.id) ?? []));
 }
 
+// AT11 (ROAD-146) review fix: agents has a direct workspaceId column
+// (set in createAgent below already) — every read/write here previously
+// ignored it.
 export async function listAgents() {
-  const rows = await db.select().from(agents).orderBy(desc(agents.updatedAt));
+  const rows = await db
+    .select()
+    .from(agents)
+    .where(eq(agents.workspaceId, currentWorkspaceId()))
+    .orderBy(desc(agents.updatedAt));
   return attachScopes(rows);
 }
 
 export async function getAgent(id: string) {
-  const [row] = await db.select().from(agents).where(eq(agents.id, id));
+  const [row] = await db
+    .select()
+    .from(agents)
+    .where(and(eq(agents.id, id), eq(agents.workspaceId, currentWorkspaceId())));
   if (!row) return undefined;
   const [entity] = await attachScopes([row]);
   return entity;
@@ -105,7 +115,7 @@ export async function updateAgent(id: string, patch: UpdateAgentPatch) {
     const [row] = await tx
       .update(agents)
       .set({ ...columnPatch, updatedAt: new Date() })
-      .where(eq(agents.id, id))
+      .where(and(eq(agents.id, id), eq(agents.workspaceId, currentWorkspaceId())))
       .returning();
     if (!row) throw new NotFoundError('agent');
     if (scopeProjectIds) {
@@ -121,5 +131,5 @@ export async function updateAgent(id: string, patch: UpdateAgentPatch) {
 }
 
 export async function deleteAgent(id: string) {
-  await db.delete(agents).where(eq(agents.id, id));
+  await db.delete(agents).where(and(eq(agents.id, id), eq(agents.workspaceId, currentWorkspaceId())));
 }

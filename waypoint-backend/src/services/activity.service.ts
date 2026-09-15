@@ -1,4 +1,5 @@
 import { eq, asc } from 'drizzle-orm';
+import { assertTicketInWorkspace } from '../lib/workspaceGuard.js';
 import { db } from '../db/client.js';
 import { activityEntries } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
@@ -25,7 +26,10 @@ export async function logActivity(
 // limit caps how many rows the query itself fetches (undefined means
 // unlimited, preserving prior behavior for callers that don't pass one —
 // see the REST route in tickets.routes.ts).
+// AT11 (ROAD-146) review fix: called directly from routes/tickets.routes.ts
+// with a bare req.params.id.
 export async function listActivity(ticketId: string, limit?: number) {
+  await assertTicketInWorkspace(ticketId);
   const query = db
     .select()
     .from(activityEntries)

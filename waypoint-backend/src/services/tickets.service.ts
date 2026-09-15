@@ -634,7 +634,16 @@ export async function updateTicket(
   options: { activityDetail?: string } = {},
 ) {
   return db.transaction(async (tx) => {
-    const [current] = await tx.select().from(tickets).where(eq(tickets.id, id));
+    // AT11 (ROAD-146) review fix: this whole function, and every other
+    // mutating one below it in this file, previously read/wrote by a
+    // bare tickets.id with no workspace check at all — a real
+    // cross-tenant IDOR gap the reads/create-path guards above this
+    // point didn't close. A cross-tenant id now resolves `current` to
+    // undefined here, same as a genuinely missing one.
+    const [current] = await tx
+      .select()
+      .from(tickets)
+      .where(and(eq(tickets.id, id), inArray(tickets.projectId, workspaceProjectIdsSubquery())));
     if (!current) throw new NotFoundError('ticket');
     const [currentEnriched] = await attachRelations([current], tx);
 
@@ -719,7 +728,11 @@ export async function updateTicket(
 
 export async function toggleTicketAssignee(id: string, memberId: string) {
   return db.transaction(async (tx) => {
-    const [current] = await tx.select().from(tickets).where(eq(tickets.id, id));
+    // AT11 (ROAD-146) review fix.
+    const [current] = await tx
+      .select()
+      .from(tickets)
+      .where(and(eq(tickets.id, id), inArray(tickets.projectId, workspaceProjectIdsSubquery())));
     if (!current) throw new NotFoundError('ticket');
     const [{ assigneeIds: before }] = await attachRelations([current], tx);
     const adding = !before.includes(memberId);
@@ -745,7 +758,11 @@ export async function toggleTicketAssignee(id: string, memberId: string) {
 
 export async function toggleTicketLabel(id: string, labelId: string) {
   return db.transaction(async (tx) => {
-    const [current] = await tx.select().from(tickets).where(eq(tickets.id, id));
+    // AT11 (ROAD-146) review fix.
+    const [current] = await tx
+      .select()
+      .from(tickets)
+      .where(and(eq(tickets.id, id), inArray(tickets.projectId, workspaceProjectIdsSubquery())));
     if (!current) throw new NotFoundError('ticket');
     const [{ labelIds: before }] = await attachRelations([current], tx);
     const after = before.includes(labelId) ? before.filter((l) => l !== labelId) : [...before, labelId];
@@ -767,8 +784,13 @@ export async function toggleTicketLabel(id: string, labelId: string) {
 // the drop position without touching every other row.
 export async function reorderTicket(id: string, targetId: string, position: 'before' | 'after') {
   return db.transaction(async (tx) => {
-    const [item] = await tx.select().from(tickets).where(eq(tickets.id, id));
-    const [target] = await tx.select().from(tickets).where(eq(tickets.id, targetId));
+    // AT11 (ROAD-146) review fix: both ends scoped, not just `item` —
+    // `target`'s stateId gets read onto `item` below (a cross-workspace
+    // stateId is a real, separate leak/corruption vector, not only a
+    // "which ticket" one).
+    const inWorkspace = inArray(tickets.projectId, workspaceProjectIdsSubquery());
+    const [item] = await tx.select().from(tickets).where(and(eq(tickets.id, id), inWorkspace));
+    const [target] = await tx.select().from(tickets).where(and(eq(tickets.id, targetId), inWorkspace));
     if (!item || !target) throw new NotFoundError('ticket');
     if (item.id === target.id) {
       const [enriched] = await attachRelations([item], tx);
@@ -811,12 +833,17 @@ export async function reorderTicket(id: string, targetId: string, position: 'bef
 }
 
 export async function deleteTicket(id: string) {
-  await db.delete(tickets).where(eq(tickets.id, id));
+  // AT11 (ROAD-146) review fix.
+  await db.delete(tickets).where(and(eq(tickets.id, id), inArray(tickets.projectId, workspaceProjectIdsSubquery())));
 }
 
 export async function addTicketLink(ticketId: string, input: { url: string; label: string }) {
   return db.transaction(async (tx) => {
-    const [item] = await tx.select().from(tickets).where(eq(tickets.id, ticketId));
+    // AT11 (ROAD-146) review fix.
+    const [item] = await tx
+      .select()
+      .from(tickets)
+      .where(and(eq(tickets.id, ticketId), inArray(tickets.projectId, workspaceProjectIdsSubquery())));
     if (!item) throw new NotFoundError('ticket');
     await tx.insert(ticketLinks).values({ id: newId('link'), ticketId, url: input.url, label: input.label });
     const [{ n }] = await tx.select({ n: sql<number>`count(*)::int` }).from(ticketLinks).where(eq(ticketLinks.ticketId, ticketId));
@@ -835,6 +862,16 @@ export async function addTicketLink(ticketId: string, input: { url: string; labe
 
 export async function removeTicketLink(ticketId: string, linkId: string) {
   return db.transaction(async (tx) => {
+    // AT11 (ROAD-146) review fix: checked before the delete below, not
+    // after — the delete previously ran unconditionally, so a
+    // cross-tenant ticketId/linkId pair could delete a real link row
+    // belonging to another workspace's ticket even though the function
+    // went on to throw NotFoundError once it reached the ticket update.
+    const [ticket] = await tx
+      .select({ id: tickets.id })
+      .from(tickets)
+      .where(and(eq(tickets.id, ticketId), inArray(tickets.projectId, workspaceProjectIdsSubquery())));
+    if (!ticket) throw new NotFoundError('ticket');
     const [link] = await tx.select().from(ticketLinks).where(eq(ticketLinks.id, linkId));
     await tx.delete(ticketLinks).where(eq(ticketLinks.id, linkId));
     const [{ n }] = await tx.select({ n: sql<number>`count(*)::int` }).from(ticketLinks).where(eq(ticketLinks.ticketId, ticketId));

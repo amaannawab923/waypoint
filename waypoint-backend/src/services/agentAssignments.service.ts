@@ -1,13 +1,34 @@
-import { eq, and } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { agentAssignments, agents, members } from '../db/schema/index.js';
+import { agentAssignments, agents, members, tickets } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
 import { currentMemberId } from '../lib/requestContext.js';
+import { assertTicketInWorkspace, workspaceProjectIdsSubquery } from '../lib/workspaceGuard.js';
 import { toggleTicketAssignee } from './tickets.service.js';
 import { addComment } from './comments.service.js';
 
+// AT11 (ROAD-146) review fix: no scoping at all previously — agent
+// assignments have no direct workspaceId, so this scopes through the
+// ticket's own project, the same subquery pattern used throughout this
+// epic. toggleTicketAgent and takeBackOverFromAgent reach the database
+// only after toggleTicketAssignee's own now-guarded ticketId check has
+// already run first (see tickets.service.ts), so they don't need a
+// second guard of their own. ensureAgentAssignments does NOT go through
+// toggleTicketAssignee — a second look while writing this round's test
+// coverage found it was still a real, unguarded cross-tenant write (any
+// workspace's ticketId could have an agent assignment inserted against
+// it, via POST /tickets/:id/agent-assignments) even after the first
+// review-fix pass; it gets its own explicit guard below.
 export async function listAgentAssignments() {
-  return db.select().from(agentAssignments);
+  return db
+    .select()
+    .from(agentAssignments)
+    .where(
+      inArray(
+        agentAssignments.ticketId,
+        db.select({ id: tickets.id }).from(tickets).where(inArray(tickets.projectId, workspaceProjectIdsSubquery())),
+      ),
+    );
 }
 
 async function ensureAgentAssignment(ticketId: string, agentId: string) {
@@ -18,6 +39,7 @@ async function ensureAgentAssignment(ticketId: string, agentId: string) {
 }
 
 export async function ensureAgentAssignments(ticketId: string, agentIds: string[]) {
+  await assertTicketInWorkspace(ticketId);
   for (const agentId of agentIds) await ensureAgentAssignment(ticketId, agentId);
 }
 

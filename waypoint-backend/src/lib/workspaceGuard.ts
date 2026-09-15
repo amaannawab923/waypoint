@@ -1,6 +1,6 @@
-import { eq } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { projects } from '../db/schema/index.js';
+import { projects, tickets } from '../db/schema/index.js';
 import { NotFoundError } from '../middleware/errors.js';
 import { currentWorkspaceId } from './requestContext.js';
 
@@ -30,14 +30,18 @@ export async function assertProjectInWorkspace(projectId: string): Promise<void>
   }
 }
 
-/** For an already-fetched row's own `projectId` (nullable) — a doc, view,
- * ticket, etc. read by bare id with no projectId argument from the
- * caller. Null projectId (a workspace-wide saved view) falls through to
- * the caller's own explicit ownerId/workspaceId check instead — this
- * helper only covers the project-scoped case. */
-export async function assertRowProjectInWorkspace(projectId: string | null): Promise<void> {
-  if (projectId === null) return;
-  await assertProjectInWorkspace(projectId);
+/** Throws NotFoundError('ticket') unless `ticketId` belongs to the
+ * current request's workspace, via its project. AT11 review fix: for
+ * comments.service.ts and activity.service.ts, called directly from
+ * routes with a bare req.params.id — they don't inherit scoping from an
+ * already-guarded caller the way tickets.service.ts's own logActivity
+ * callers (already inside a workspace-checked transaction) do. */
+export async function assertTicketInWorkspace(ticketId: string): Promise<void> {
+  const [row] = await db
+    .select({ id: tickets.id })
+    .from(tickets)
+    .where(and(eq(tickets.id, ticketId), inArray(tickets.projectId, workspaceProjectIdsSubquery())));
+  if (!row) throw new NotFoundError('ticket');
 }
 
 /** A Drizzle subquery of every project id in the caller's current

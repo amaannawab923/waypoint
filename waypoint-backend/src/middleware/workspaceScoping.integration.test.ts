@@ -56,6 +56,10 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
     docId: `pg-at11-a-${stamp}`,
     workstreamId: `mod-at11-a-${stamp}`,
     sprintId: `cyc-at11-a-${stamp}`,
+    agentId: `agent-at11-a-${stamp}`,
+    agentAssignmentId: `aa-at11-a-${stamp}`,
+    linkId: `link-at11-a-${stamp}`,
+    conversationId: `conv-at11-a-${stamp}`,
     token: '',
   };
   const B = {
@@ -69,6 +73,10 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
     docId: `pg-at11-b-${stamp}`,
     workstreamId: `mod-at11-b-${stamp}`,
     sprintId: `cyc-at11-b-${stamp}`,
+    agentId: `agent-at11-b-${stamp}`,
+    agentAssignmentId: `aa-at11-b-${stamp}`,
+    linkId: `link-at11-b-${stamp}`,
+    conversationId: `conv-at11-b-${stamp}`,
   };
 
   function asA() {
@@ -154,6 +162,37 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
       startDate: '2026-01-01',
       endDate: '2026-01-14',
     });
+    await db.insert(schema.agents).values({
+      id: t.agentId,
+      workspaceId: t.workspaceId,
+      name: `AT11 agent ${t.workspaceId}`,
+      avatarColor: '#000000',
+      instructionsFilename: 'AGENTS.md',
+      instructionsContentMarkdown: '',
+      scopeAllProjects: true,
+      executionMethod: 'local-claude-subscription',
+      model: 'claude',
+      autonomy: 'plan-only',
+      triggers: ['manual'],
+      createdById: t.memberId,
+    });
+    await db.insert(schema.agentAssignments).values({
+      id: t.agentAssignmentId,
+      ticketId: t.ticketId,
+      agentId: t.agentId,
+      status: 'queued',
+    });
+    await db.insert(schema.ticketLinks).values({
+      id: t.linkId,
+      ticketId: t.ticketId,
+      url: 'https://example.test/at11',
+      label: 'AT11 link',
+    });
+    await db.insert(schema.copilotConversations).values({
+      id: t.conversationId,
+      memberId: t.memberId,
+      title: `AT11 conversation ${t.workspaceId}`,
+    });
   }
 
   beforeAll(async () => {
@@ -173,13 +212,18 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
   afterAll(async () => {
     if (!db) return;
     // Explicit order, not just "delete the workspace and let FK cascade
-    // sort it out": tickets/docs' created_by_id/owner_id reference
-    // members with ON DELETE RESTRICT (not cascade), so a workspace
-    // delete that reaches "cascade-delete this member" before it has
-    // already cascade-deleted every ticket/doc that member created is
-    // rejected outright — deleting the project first (cascading
-    // tickets/docs/views/workstreams/sprints via their own projectId FK)
-    // removes that referencing row before members are ever touched.
+    // sort it out": tickets/docs' created_by_id/owner_id, and now also
+    // agents' created_by_id, reference members with ON DELETE RESTRICT
+    // (not cascade), so a workspace delete that reaches "cascade-delete
+    // this member" before it has already cascade-deleted every ticket/
+    // doc/agent that member created is rejected outright — deleting
+    // agents (cascading agent_assignments via their own agentId FK) and
+    // the project (cascading tickets/ticket_links/docs/views/
+    // workstreams/sprints/agent_assignments via their own projectId/
+    // ticketId FKs) first removes every such referencing row before
+    // members are ever touched.
+    await db.delete(schema.agents).where(eq(schema.agents.workspaceId, A.workspaceId));
+    await db.delete(schema.agents).where(eq(schema.agents.workspaceId, B.workspaceId));
     await db.delete(schema.projects).where(eq(schema.projects.id, A.projectId));
     await db.delete(schema.projects).where(eq(schema.projects.id, B.projectId));
     // sessions/users don't hang off either workspace's FK chain at all —
@@ -264,6 +308,84 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
     expect(res.status).toBe(404);
     const rows = await db.select().from(schema.tickets).where(eq(schema.tickets.title, 'pwned'));
     expect(rows).toHaveLength(0);
+  });
+
+  // AT11 (ROAD-146) review-fix round: the security review found the first
+  // pass of this audit had checked reads and creation but left every
+  // ticket mutation, comments, activity, agents, and agent-assignments
+  // unaudited — real, exploitable cross-tenant IDOR gaps. These cases are
+  // what closes that gap for tickets specifically.
+  it('PATCH /tickets/:id refuses to update B\'s ticket as 404, and does not touch it', async () => {
+    const res = await request(app).patch(`/tickets/${B.ticketId}`).set(asA()).send({ title: 'pwned' });
+    expect(res.status).toBe(404);
+    const [row] = await db.select().from(schema.tickets).where(eq(schema.tickets.id, B.ticketId));
+    expect(row?.title).not.toBe('pwned');
+  });
+
+  it('POST /tickets/:id/assignees/:memberId/toggle refuses B\'s ticket as 404', async () => {
+    const res = await request(app)
+      .post(`/tickets/${B.ticketId}/assignees/${A.memberId}/toggle`)
+      .set(asA());
+    expect(res.status).toBe(404);
+  });
+
+  it('POST /tickets/:id/labels/:labelId/toggle refuses B\'s ticket as 404', async () => {
+    const res = await request(app).post(`/tickets/${B.ticketId}/labels/label-fake/toggle`).set(asA());
+    expect(res.status).toBe(404);
+  });
+
+  it('POST /tickets/:id/reorder refuses when either end is B\'s ticket, and never copies B\'s stateId onto A\'s', async () => {
+    // A's own ticket as the item, B's as the target — the more dangerous
+    // direction, since a naive fix might only guard `id` and let a
+    // cross-tenant `targetId` slip its stateId onto A's ticket.
+    const res = await request(app)
+      .post(`/tickets/${A.ticketId}/reorder`)
+      .set(asA())
+      .send({ targetId: B.ticketId, position: 'after' });
+    expect(res.status).toBe(404);
+    const [row] = await db.select().from(schema.tickets).where(eq(schema.tickets.id, A.ticketId));
+    expect(row?.stateId).toBe(A.stateId);
+  });
+
+  it('POST /tickets/:id/links refuses to add a link to B\'s ticket as 404, and writes nothing', async () => {
+    const res = await request(app)
+      .post(`/tickets/${B.ticketId}/links`)
+      .set(asA())
+      .send({ url: 'https://example.test/pwned', label: 'pwned' });
+    expect(res.status).toBe(404);
+    const rows = await db.select().from(schema.ticketLinks).where(eq(schema.ticketLinks.label, 'pwned'));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('DELETE /tickets/:id/links/:linkId refuses B\'s link via B\'s ticket as 404, checked before the delete runs — B\'s link survives', async () => {
+    const res = await request(app).delete(`/tickets/${B.ticketId}/links/${B.linkId}`).set(asA());
+    expect(res.status).toBe(404);
+    const [row] = await db.select().from(schema.ticketLinks).where(eq(schema.ticketLinks.id, B.linkId));
+    expect(row).toBeDefined();
+  });
+
+  it('DELETE /tickets/:id against B\'s ticket is a silent no-op (204), and B\'s row survives', async () => {
+    const res = await request(app).delete(`/tickets/${B.ticketId}`).set(asA());
+    expect(res.status).toBe(204);
+    const [row] = await db.select().from(schema.tickets).where(eq(schema.tickets.id, B.ticketId));
+    expect(row).toBeDefined();
+  });
+
+  it('GET /tickets/:id/comments refuses B\'s ticket as 404', async () => {
+    const res = await request(app).get(`/tickets/${B.ticketId}/comments`).set(asA());
+    expect(res.status).toBe(404);
+  });
+
+  it('POST /tickets/:id/comments refuses to comment on B\'s ticket as 404, and writes nothing', async () => {
+    const res = await request(app).post(`/tickets/${B.ticketId}/comments`).set(asA()).send({ bodyHtml: 'pwned' });
+    expect(res.status).toBe(404);
+    const rows = await db.select().from(schema.comments).where(eq(schema.comments.ticketId, B.ticketId));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('GET /tickets/:id/activity refuses B\'s ticket as 404', async () => {
+    const res = await request(app).get(`/tickets/${B.ticketId}/activity`).set(asA());
+    expect(res.status).toBe(404);
   });
 
   it('GET /projects/:projectId/views against B refuses as 404', async () => {
@@ -356,6 +478,113 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
     expect(res.status).toBe(204);
     const [row] = await db.select().from(schema.sprints).where(eq(schema.sprints.id, B.sprintId));
     expect(row).toBeDefined();
+  });
+
+  it('GET /agents (list) never includes B\'s agent', async () => {
+    const res = await request(app).get('/agents').set(asA());
+    expect(res.status).toBe(200);
+    expect((res.body as Array<{ id: string }>).map((a) => a.id)).not.toContain(B.agentId);
+  });
+
+  it('GET /agents/:id refuses B\'s agent as 404', async () => {
+    const res = await request(app).get(`/agents/${B.agentId}`).set(asA());
+    expect(res.status).toBe(404);
+  });
+
+  it('PATCH /agents/:id refuses B\'s agent as 404, and does not touch it', async () => {
+    const res = await request(app).patch(`/agents/${B.agentId}`).set(asA()).send({ name: 'pwned' });
+    expect(res.status).toBe(404);
+    const [row] = await db.select().from(schema.agents).where(eq(schema.agents.id, B.agentId));
+    expect(row?.name).not.toBe('pwned');
+  });
+
+  it('DELETE /agents/:id against B\'s agent is a silent no-op (204), and B\'s row survives', async () => {
+    const res = await request(app).delete(`/agents/${B.agentId}`).set(asA());
+    expect(res.status).toBe(204);
+    const [row] = await db.select().from(schema.agents).where(eq(schema.agents.id, B.agentId));
+    expect(row).toBeDefined();
+  });
+
+  // The review's own headline finding for this file: listAgentAssignments
+  // had no scoping at all before this fix — every workspace's agent
+  // assignments were visible to every other one.
+  it('GET /agent-assignments never includes B\'s assignment', async () => {
+    const res = await request(app).get('/agent-assignments').set(asA());
+    expect(res.status).toBe(200);
+    expect((res.body as Array<{ id: string }>).map((a) => a.id)).not.toContain(B.agentAssignmentId);
+    expect((res.body as Array<{ id: string }>).map((a) => a.id)).toContain(A.agentAssignmentId);
+  });
+
+  it('POST /tickets/:id/agent-assignments refuses to assign an agent onto B\'s ticket as 404', async () => {
+    const res = await request(app)
+      .post(`/tickets/${B.ticketId}/agent-assignments`)
+      .set(asA())
+      .send({ agentIds: [A.agentId] });
+    expect(res.status).toBe(404);
+  });
+
+  it('POST /tickets/:id/agents/:agentId/toggle refuses B\'s ticket as 404', async () => {
+    const res = await request(app).post(`/tickets/${B.ticketId}/agents/${A.agentId}/toggle`).set(asA());
+    expect(res.status).toBe(404);
+  });
+
+  // AT11 (ROAD-146) review-fix round: copilot conversations scope by
+  // member ownership, not by workspace directly (a conversation is one
+  // person's own Copilot chat) — the review flagged this file as never
+  // audited at all in the first pass, despite being named in the
+  // ticket's own file list.
+  it('GET /copilot/conversations/:id refuses B\'s conversation as 404', async () => {
+    const res = await request(app).get(`/copilot/conversations/${B.conversationId}`).set(asA());
+    expect(res.status).toBe(404);
+  });
+
+  it('PATCH /copilot/conversations/:id refuses to rename B\'s conversation as 404, and does not touch it', async () => {
+    const res = await request(app)
+      .patch(`/copilot/conversations/${B.conversationId}`)
+      .set(asA())
+      .send({ title: 'pwned' });
+    expect(res.status).toBe(404);
+    const [row] = await db
+      .select()
+      .from(schema.copilotConversations)
+      .where(eq(schema.copilotConversations.id, B.conversationId));
+    expect(row?.title).not.toBe('pwned');
+  });
+
+  it('DELETE /copilot/conversations/:id against B\'s conversation is a silent no-op (204), and B\'s row survives', async () => {
+    const res = await request(app).delete(`/copilot/conversations/${B.conversationId}`).set(asA());
+    expect(res.status).toBe(204);
+    const [row] = await db
+      .select()
+      .from(schema.copilotConversations)
+      .where(eq(schema.copilotConversations.id, B.conversationId));
+    expect(row).toBeDefined();
+  });
+
+  it('POST /copilot/conversations/:id/messages refuses to post into B\'s conversation as 404, and writes nothing', async () => {
+    const res = await request(app)
+      .post(`/copilot/conversations/${B.conversationId}/messages`)
+      .set(asA())
+      .send({ content: 'pwned' });
+    expect(res.status).toBe(404);
+    const rows = await db
+      .select()
+      .from(schema.copilotMessages)
+      .where(eq(schema.copilotMessages.conversationId, B.conversationId));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('POST /copilot/notes with an explicit conversationId of B\'s reads as no-conversation (204), and writes nothing', async () => {
+    const res = await request(app)
+      .post('/copilot/notes')
+      .set(asA())
+      .send({ conversationId: B.conversationId, content: 'pwned' });
+    expect(res.status).toBe(204);
+    const rows = await db
+      .select()
+      .from(schema.copilotMessages)
+      .where(eq(schema.copilotMessages.conversationId, B.conversationId));
+    expect(rows).toHaveLength(0);
   });
 
   it('a scratch note authored while signed in as A is invisible to B, with an explicit workspace column (not just authorId)', async () => {
