@@ -285,6 +285,14 @@ no Clerk to delegate the actual provider exchange to.
    behavior — that is AT12 and AT6, both calling this same primitive
    with whatever `purpose` string means to them.
 
+   **Amended in AT10 review:** sign-out also revokes the session
+   server-side — `POST /auth/signout` (bearer token, no `req.user`
+   needed; the token itself is the authority to revoke), added to
+   `auth.routes.ts` and calling `sessions.ts`'s `revokeSession`, which
+   AT9 had already built but never exposed. Without it, "Sign out"
+   only forgot the token locally while it stayed valid on the backend
+   for up to its full 90-day TTL.
+
 ## 6. `req.member` middleware and the workspace-scoping audit
 
 ### The middleware
