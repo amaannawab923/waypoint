@@ -2,6 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import { apiRouter } from './routes/index.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { asyncHandler } from './middleware/asyncHandler.js';
+import { resolveMember } from './middleware/resolveMember.js';
 
 export function createApp() {
   const app = express();
@@ -72,6 +74,19 @@ export function createApp() {
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok' });
   });
+
+  // AT11 (ROAD-146): resolves a Bearer session to req.user/req.member and
+  // an AsyncLocalStorage identity every service reads via
+  // lib/requestContext.ts's currentMemberId()/currentWorkspaceId(). A
+  // request with no Authorization header passes straight through — this
+  // is additive to the existing Personal (unauthenticated) path, not a
+  // gate in front of it. Mounted after /health (which needs no identity)
+  // and before every other route. Wrapped in asyncHandler for the same
+  // reason every route in this project is: Express 4 doesn't catch a
+  // rejected promise from an async middleware on its own, and this one
+  // does real async work (resolveSession, a members lookup) before ever
+  // calling next().
+  app.use(asyncHandler(resolveMember));
 
   app.use(apiRouter);
 

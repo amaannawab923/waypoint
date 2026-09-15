@@ -2,7 +2,7 @@ import { eq, and } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { agentAssignments, agents, members } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
-import { CURRENT_USER_ID } from '../lib/currentUser.js';
+import { currentMemberId } from '../lib/requestContext.js';
 import { toggleTicketAssignee } from './tickets.service.js';
 import { addComment } from './comments.service.js';
 
@@ -36,7 +36,7 @@ export async function toggleTicketAgent(ticketId: string, agentId: string) {
 // duplicating it, same as the mock's call into addComment.
 export async function takeBackOverFromAgent(ticketId: string, agentId: string) {
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId));
-  const [me] = await db.select().from(members).where(eq(members.id, CURRENT_USER_ID));
+  const [me] = await db.select().from(members).where(eq(members.id, currentMemberId()));
   const item = await toggleTicketAssignee(ticketId, agentId);
   await db
     .update(agentAssignments)

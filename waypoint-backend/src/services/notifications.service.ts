@@ -1,13 +1,13 @@
 import { eq, desc } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { notifications } from '../db/schema/index.js';
-import { CURRENT_USER_ID } from '../lib/currentUser.js';
+import { currentMemberId } from '../lib/requestContext.js';
 
 export async function listNotifications() {
   return db
     .select()
     .from(notifications)
-    .where(eq(notifications.recipientId, CURRENT_USER_ID))
+    .where(eq(notifications.recipientId, currentMemberId()))
     .orderBy(desc(notifications.createdAt));
 }
 

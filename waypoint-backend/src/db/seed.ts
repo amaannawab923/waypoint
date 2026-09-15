@@ -1053,6 +1053,8 @@ export async function seed() {
     {
       id: 'sk-1',
       authorId: CURRENT_USER_ID,
+      // AT11 (ROAD-146).
+      workspaceId: 'ws-1',
       title: 'Ask Maya about the Q4 roadmap review date',
       body: '',
       color: '#a4650b',
@@ -1061,6 +1063,7 @@ export async function seed() {
     {
       id: 'sk-2',
       authorId: CURRENT_USER_ID,
+      workspaceId: 'ws-1',
       title: 'Demo script for Friday — cover Requests triage first',
       body: '',
       color: '#1c5fc4',

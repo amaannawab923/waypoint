@@ -65,7 +65,13 @@ const PROJECT_ROW = {
 beforeEach(() => {
   vi.clearAllMocks();
   db.update.mockReturnValue(chainable([PROJECT_ROW]));
-  db.select.mockReturnValue(chainable([]));
+  // AT11 (ROAD-146): updateProject now calls assertProjectInWorkspace(id)
+  // first, itself a db.select(...).from(projects).where(...) — stubbed to
+  // resolve as "this project is in the current (Personal fallback)
+  // workspace," matching PROJECT_ROW.workspaceId, so every case below
+  // reaches the code this file actually means to test instead of
+  // failing at the new guard.
+  db.select.mockReturnValue(chainable([{ workspaceId: PROJECT_ROW.workspaceId }]));
 });
 
 describe('validateRepoPath', () => {
