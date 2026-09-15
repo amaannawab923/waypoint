@@ -28,6 +28,7 @@ import {
 import { registerCopilotDetectIpc } from './copilot/copilotDetect';
 import { registerProposalApprovalIpc } from './copilot/proposalApproval';
 import { registerJiraIpc } from './jira/jiraIpc';
+import { registerAccountIpc } from './account/accountIpc';
 import { registerRepoLinkIpc } from './repoLink';
 import { registerEngineIpc } from './engine/engineIpc';
 
@@ -134,6 +135,9 @@ registerProposalApprovalIpc();
 // two above, that `mainWindow` is null at this point and is a different object
 // after a close and reopen.
 registerJiraIpc(() => mainWindow);
+// AT10 (ROAD-145): takes no window getter — it only ever opens the system
+// browser via shell.openExternal, never anything modal against mainWindow.
+registerAccountIpc();
 registerRepoLinkIpc(() => mainWindow);
 // ROAD-48/51: same getter-not-window reasoning as every registration above
 // — mainWindow is still null at this point and is a different object after

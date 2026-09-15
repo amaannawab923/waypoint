@@ -156,6 +156,11 @@ describe.skipIf(!REAL_DB)('sign-in flows against real Postgres (AT9)', () => {
     expect(back.searchParams.get('for')).toBe('fairweather-labs');
     const token = back.searchParams.get('token')!;
     expect(token.length).toBeGreaterThan(30);
+    // Profile fields ride the same redirect (AT10 reads them directly —
+    // no separate "who am I" round trip needed).
+    expect(back.searchParams.get('email')).toBe('at9-amaan@example.test');
+    expect(back.searchParams.get('name')).toBe('Amaan N');
+    expect(back.searchParams.get('avatar')).toBe('https://a/x.png');
 
     const resolved = await sessions.resolveSession(token);
     expect(resolved?.user).toMatchObject({ email: 'at9-amaan@example.test', authMethod: 'github', authProviderId: '4242', fullName: 'Amaan N' });

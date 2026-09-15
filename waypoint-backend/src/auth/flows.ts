@@ -194,10 +194,19 @@ function isUniqueViolation(err: unknown): boolean {
   return code === '23505';
 }
 
-function finishRedirect(flow: typeof authFlows.$inferSelect, token: string): string {
+// email/name ride the same redirect the token does — no new backend
+// endpoint for the desktop (AT10) to ask "who am I" separately. Not new
+// exposure: the token this same query string already carries is the
+// actual bearer secret; an email and a display name are what the
+// sign-in page itself showed moments earlier, on the very account this
+// browser just proved control of.
+function finishRedirect(flow: typeof authFlows.$inferSelect, token: string, user: typeof users.$inferSelect): string {
   const u = new URL(flow.redirectUri);
   u.searchParams.set('token', token);
   u.searchParams.set('state', flow.clientState);
+  u.searchParams.set('email', user.email);
+  u.searchParams.set('name', user.fullName);
+  if (user.avatarUrl) u.searchParams.set('avatar', user.avatarUrl);
   if (flow.purpose) u.searchParams.set('for', flow.purpose);
   return u.toString();
 }
@@ -242,7 +251,7 @@ export async function completeOAuth(
   );
   const { user } = await resolveOrCreateUser(identity, deps);
   const { token } = await issueSession(user.id, { now: deps.now() });
-  return finishRedirect(flow, token);
+  return finishRedirect(flow, token, user);
 }
 
 // ---- Email magic link ------------------------------------------------------
@@ -288,5 +297,5 @@ export async function completeEmailLink(args: { token?: string }, deps: FlowDeps
     deps,
   );
   const { token } = await issueSession(user.id, { now: deps.now() });
-  return finishRedirect(flow, token);
+  return finishRedirect(flow, token, user);
 }

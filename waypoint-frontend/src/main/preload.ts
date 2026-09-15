@@ -5,6 +5,12 @@ import type { CopilotDetectResult } from './copilot/copilotDetect';
 import type { SessionOffer as CopilotSessionOffer } from './copilot/sessionTools';
 import type { JiraCommentPermissions } from './jira/jiraClient';
 import type {
+  AccountConnectionSnapshot,
+  AccountIdentity,
+  AccountResult,
+  InstanceSetupStatus,
+} from './account/accountTypes';
+import type {
   JiraCommentBody,
   JiraConnectionSnapshot,
   JiraIdentity,
@@ -660,6 +666,31 @@ const electronHandler = {
       return () => {
         ipcRenderer.removeListener(RUNS_IPC.changed, subscription);
       };
+    },
+  },
+
+  // AT10 (ROAD-145). The reusable Team/Sync sign-in primitive — request/
+  // response like `jira`, for the same reason: no channel here ever
+  // pushes, and nothing that crosses back contains the session token
+  // (see main/account/accountAuth.ts's AccountIdentity boundary). `signIn`
+  // is the one call that can run for minutes (it opens the system browser
+  // and waits for the person to finish there); `signIn.cancel` is what a
+  // waiting-card Cancel button calls while it's in flight.
+  account: {
+    status(): Promise<AccountConnectionSnapshot> {
+      return ipcRenderer.invoke('account:status');
+    },
+    setupStatus(): Promise<AccountResult<InstanceSetupStatus>> {
+      return ipcRenderer.invoke('account:setupStatus');
+    },
+    signIn(args: { purpose?: string }): Promise<AccountResult<AccountIdentity>> {
+      return ipcRenderer.invoke('account:signIn', args);
+    },
+    cancelSignIn(): Promise<{ ok: true }> {
+      return ipcRenderer.invoke('account:signIn:cancel');
+    },
+    signOut(): Promise<{ ok: true }> {
+      return ipcRenderer.invoke('account:signOut');
     },
   },
 };
