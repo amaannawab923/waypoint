@@ -255,15 +255,35 @@ no Clerk to delegate the actual provider exchange to.
    `sessions`, and redirects the browser to the original
    `redirect_uri=http://127.0.0.1:<port>/callback?token=...&state=...`
    (`state` checked against step 1's value before anything else happens).
-5. Main receives the raw token over loopback, `safeStorage`-encrypts and
-   persists it (mirroring `jiraAuth.ts`'s `writeStoredJiraCredential`
-   shape exactly — dedicated file, 0600, hard refusal when
-   `safeStorage.isEncryptionAvailable()` is false, no plaintext fallback),
-   closes the loopback server, and exposes a renderer-safe "signed in as
-   `<name>`" / "signed out" projection over IPC — the same boundary
-   `toJiraIdentity()` already draws in that file: **the renderer never
-   sees the raw session token**, main attaches it as a Bearer header on
-   every request scoped to a Team workspace or Sync.
+
+   **Amended for AT10 (2026-09-15):** the redirect also carries `email`,
+   `name`, and (when present) `avatar` — the resolved `users` row's own
+   fields, added so the desktop never needs a separate "who am I" round
+   trip against a backend a token has only just proven live. Not new
+   exposure: the token this same query string already carries is the
+   actual bearer secret; an email and a display name are what the
+   sign-in page itself just showed, on the very account the browser
+   proved control of moments earlier.
+5. Main receives the raw token (and the profile fields) over loopback,
+   `safeStorage`-encrypts and persists them (mirroring `jiraAuth.ts`'s
+   `writeStoredJiraCredential` shape exactly — dedicated file, 0600, hard
+   refusal when `safeStorage.isEncryptionAvailable()` is false, no
+   plaintext fallback), closes the loopback server, and exposes a
+   renderer-safe "signed in as `<name>`" / "signed out" projection over
+   IPC — the same boundary `toJiraIdentity()` already draws in that
+   file: **the renderer never sees the raw session token**, main
+   attaches it as a Bearer header on every request scoped to a Team
+   workspace or Sync.
+
+   **Built in AT10 (ROAD-145):** `waypoint-frontend/src/main/account/`
+   — `accountAuth.ts` (the credential store, `account-auth.json`,
+   distinct from `jira-auth.json`), `accountSignIn.ts` (the loopback
+   server + `shell.openExternal`, one flow in flight at a time,
+   cancellable), `accountIpc.ts` (`account:status` /
+   `account:setupStatus` / `account:signIn` / `account:signIn:cancel` /
+   `account:signOut`). No workspace creation and no purpose-specific
+   behavior — that is AT12 and AT6, both calling this same primitive
+   with whatever `purpose` string means to them.
 
 ## 6. `req.member` middleware and the workspace-scoping audit
 
