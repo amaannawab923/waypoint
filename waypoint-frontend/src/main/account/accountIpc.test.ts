@@ -21,10 +21,12 @@ jest.mock('./accountAuth', () => ({
 const checkInstanceSetupStatusMock = jest.fn();
 const startSignInMock = jest.fn();
 const cancelSignInMock = jest.fn();
+const revokeAccountSessionMock = jest.fn().mockResolvedValue(undefined);
 jest.mock('./accountSignIn', () => ({
   checkInstanceSetupStatus: () => checkInstanceSetupStatusMock(),
   startSignIn: (purpose: unknown) => startSignInMock(purpose),
   cancelSignIn: () => cancelSignInMock(),
+  revokeAccountSession: (backendUrl: unknown, token: unknown) => revokeAccountSessionMock(backendUrl, token),
 }));
 
 // eslint-disable-next-line import/order, import/first
@@ -140,8 +142,22 @@ describe('account:signIn:cancel', () => {
 });
 
 describe('account:signOut', () => {
-  it('deletes the stored credential and answers ok', () => {
-    expect(getHandler('account:signOut')({})).toEqual({ ok: true });
+  it('revokes the session on the backend, then deletes the stored credential, then answers ok', async () => {
+    readStoredAccountCredentialMock.mockReturnValue(CREDENTIAL);
+    await expect(getHandler('account:signOut')({})).resolves.toEqual({ ok: true });
+    expect(revokeAccountSessionMock).toHaveBeenCalledWith(CREDENTIAL.backendUrl, CREDENTIAL.token);
+    expect(deleteStoredAccountCredentialMock).toHaveBeenCalledTimes(1);
+    // Revoke (which needs the token) happens before delete (which would
+    // lose it) — order matters, not just that both were called.
+    const revokeOrder = revokeAccountSessionMock.mock.invocationCallOrder[0];
+    const deleteOrder = deleteStoredAccountCredentialMock.mock.invocationCallOrder[0];
+    expect(revokeOrder).toBeLessThan(deleteOrder);
+  });
+
+  it('still deletes the local credential and answers ok when nothing was stored — no revoke call with no token', async () => {
+    readStoredAccountCredentialMock.mockReturnValue(null);
+    await expect(getHandler('account:signOut')({})).resolves.toEqual({ ok: true });
+    expect(revokeAccountSessionMock).not.toHaveBeenCalled();
     expect(deleteStoredAccountCredentialMock).toHaveBeenCalledTimes(1);
   });
 });

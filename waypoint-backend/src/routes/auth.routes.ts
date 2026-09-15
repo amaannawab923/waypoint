@@ -1,8 +1,10 @@
 import { Router, urlencoded } from 'express';
+import { bearer } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { configuredAuthMethods } from '../lib/authMethods.js';
 import { getSetupStatus } from '../services/instance.service.js';
 import * as flows from '../auth/flows.js';
+import { revokeSession } from '../auth/sessions.js';
 import { createSmtpMailer, smtpConfigured, type Mailer } from '../auth/mailer.js';
 import { renderErrorPage, renderSentPage, renderSignInPage } from '../auth/signInPage.js';
 import { ProviderExchangeError } from '../auth/providers/types.js';
@@ -121,6 +123,24 @@ export function createAuthRouter(overrides: AuthRouterDeps = {}) {
     page(async (req, res) => {
       const to = await flows.completeEmailLink({ token: str(req.query.token) }, deps());
       res.redirect(302, to);
+    }),
+  );
+
+  // AT10 (ROAD-145): a JSON route, not a `page()` one — the caller here is
+  // the desktop's own main process (accountIpc.ts's account:signOut),
+  // never a browser tab. Idempotent and never leaks whether a token was
+  // real: an unknown, already-revoked, or missing token all answer 200,
+  // the same "already gone is a no-op, not an error" rule
+  // deleteStoredJiraCredential applies to the local half of sign-out.
+  // revokeSession does the real work; nothing here needs req.user
+  // (AT11) — the token IS the authority to revoke itself, same as a
+  // password-reset link authorizes exactly the one thing it names.
+  router.post(
+    '/auth/signout',
+    asyncHandler(async (req, res) => {
+      const token = bearer(req);
+      if (token) await revokeSession(token);
+      res.status(200).json({ ok: true });
     }),
   );
 

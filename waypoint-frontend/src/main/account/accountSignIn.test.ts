@@ -6,7 +6,7 @@ jest.mock('electron', () => ({
 // eslint-disable-next-line import/order, import/first
 import * as http from 'http';
 // eslint-disable-next-line import/order, import/first
-import { cancelSignIn, checkInstanceSetupStatus, startSignIn } from './accountSignIn';
+import { cancelSignIn, checkInstanceSetupStatus, revokeAccountSession, startSignIn } from './accountSignIn';
 
 // No mock of Node's `http`: a real one-shot loopback server is cheap, local,
 // and gives this file its actual coverage — that the server rejects a wrong
@@ -41,6 +41,20 @@ afterEach(() => {
   if (ORIGINAL_ENV === undefined) delete process.env.WAYPOINT_API_BASE_URL;
   else process.env.WAYPOINT_API_BASE_URL = ORIGINAL_ENV;
 });
+
+// Waits for the flow's async server.listen() callback to have actually
+// called shell.openExternal, by polling rather than a fixed sleep — a
+// fixed setTimeout(20) would be exactly the kind of environment-speed-
+// dependent flake this file otherwise avoids (see the close-spy test's
+// own comment on that). Loopback bind is normally sub-millisecond; 500ms
+// is a generous ceiling, not an expected wait.
+async function waitForOpenExternal(): Promise<void> {
+  const deadline = Date.now() + 500;
+  while (openExternalMock.mock.calls.length === 0) {
+    if (Date.now() > deadline) break;
+    await new Promise((r) => setTimeout(r, 1));
+  }
+}
 
 // Extracts the redirect_uri and state the flow put in the URL it asked the
 // browser to open, so a test can act as that browser against the real
@@ -81,7 +95,7 @@ describe('startSignIn', () => {
   it('opens the configured backend\'s /sign-in with a loopback redirect_uri, state, and purpose', async () => {
     process.env.WAYPOINT_API_BASE_URL = 'https://backend.example.test';
     const pending = startSignIn('fairweather-labs');
-    await new Promise((r) => setTimeout(r, 20)); // let listen() + openExternal land
+    await waitForOpenExternal();
     const url = openedUrl();
     expect(url.origin + url.pathname).toBe('https://backend.example.test/sign-in');
     expect(url.searchParams.get('for')).toBe('fairweather-labs');
@@ -118,7 +132,7 @@ describe('startSignIn', () => {
 
   it('rejects a wrong or missing state as state_mismatch, and the server refuses a second callback', async () => {
     const pending = startSignIn('sync');
-    await new Promise((r) => setTimeout(r, 20));
+    await waitForOpenExternal();
     const redirectUri = openedUrl().searchParams.get('redirect_uri')!;
 
     const bad = new URL(redirectUri);
@@ -137,7 +151,7 @@ describe('startSignIn', () => {
 
     async function oneFlow(complete: (redirectUri: string, state: string) => Promise<void>) {
       const pending = startSignIn('x');
-      await new Promise((r) => setTimeout(r, 20));
+      await waitForOpenExternal();
       const url = openedUrl();
       await complete(url.searchParams.get('redirect_uri')!, url.searchParams.get('state')!);
       await pending;
@@ -171,7 +185,7 @@ describe('startSignIn', () => {
 
   it('refuses a second sign-in while one is already open, without touching the first', async () => {
     const first = startSignIn('a');
-    await new Promise((r) => setTimeout(r, 20));
+    await waitForOpenExternal();
     const second = await startSignIn('b');
     expect(second).toEqual({ ok: false, reason: 'already_in_progress', message: expect.any(String) });
     expect(openExternalMock).toHaveBeenCalledTimes(1); // only the first ever opened a browser
@@ -183,19 +197,59 @@ describe('startSignIn', () => {
   it('cancelSignIn resolves the pending flow with cancelled, and is a harmless no-op when nothing is in flight', async () => {
     expect(() => cancelSignIn()).not.toThrow();
     const pending = startSignIn('sync');
-    await new Promise((r) => setTimeout(r, 20));
+    await waitForOpenExternal();
     cancelSignIn();
     await expect(pending).resolves.toEqual({ ok: false, reason: 'cancelled', message: expect.any(String) });
   });
 
   it('a 404 for any path other than /callback', async () => {
     const pending = startSignIn('sync');
-    await new Promise((r) => setTimeout(r, 20));
+    await waitForOpenExternal();
     const redirectUri = openedUrl().searchParams.get('redirect_uri')!;
     const other = new URL(redirectUri);
     other.pathname = '/whatever';
     expect((await requestGet(other.toString())).status).toBe(404);
     cancelSignIn();
     await pending;
+  });
+
+  it('resolves with network when shell.openExternal rejects, and clears the in-flight guard', async () => {
+    openExternalMock.mockRejectedValueOnce(new Error('no default browser'));
+    const result = await startSignIn('sync');
+    expect(result).toEqual({ ok: false, reason: 'network', message: expect.stringContaining('no default browser') });
+
+    // The guard was cleared — a second sign-in can start right away
+    // rather than being wedged behind the failed one.
+    const next = startSignIn('sync');
+    await waitForOpenExternal();
+    cancelSignIn();
+    await expect(next).resolves.toMatchObject({ ok: false, reason: 'cancelled' });
+  });
+});
+
+describe('revokeAccountSession', () => {
+  const REAL_FETCH = global.fetch;
+  afterEach(() => {
+    global.fetch = REAL_FETCH;
+  });
+
+  it('POSTs a Bearer header to <backendUrl>/auth/signout', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({ ok: true });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    await revokeAccountSession('https://backend.example.test', 'tok-123');
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://backend.example.test/auth/signout',
+      expect.objectContaining({ method: 'POST', headers: { Authorization: 'Bearer tok-123' } }),
+    );
+  });
+
+  it('never throws — a network failure is swallowed, since local sign-out must still succeed', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new Error('ECONNREFUSED')) as unknown as typeof fetch;
+    await expect(revokeAccountSession('https://backend.example.test', 'tok')).resolves.toBeUndefined();
+  });
+
+  it('never throws on a non-ok response either — it does not inspect the response at all', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 500 }) as unknown as typeof fetch;
+    await expect(revokeAccountSession('https://backend.example.test', 'tok')).resolves.toBeUndefined();
   });
 });

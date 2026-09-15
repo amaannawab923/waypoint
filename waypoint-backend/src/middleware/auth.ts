@@ -19,7 +19,11 @@ declare global {
   }
 }
 
-function bearer(req: Request): string | null {
+// Exported for the one JSON API route (auth.routes.ts's POST /auth/signout,
+// AT10) that has to read a session bearer token before AT11's middleware
+// exists to attach req.user from it — everything else here stays a plain
+// guard, not a resolver.
+export function bearer(req: Request): string | null {
   const header = req.header('authorization');
   if (!header) return null;
   const [scheme, token] = header.split(' ', 2);

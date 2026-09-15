@@ -6,7 +6,7 @@ import {
   toAccountIdentity,
   writeStoredAccountCredential,
 } from './accountAuth';
-import { cancelSignIn, checkInstanceSetupStatus, startSignIn } from './accountSignIn';
+import { cancelSignIn, checkInstanceSetupStatus, revokeAccountSession, startSignIn } from './accountSignIn';
 import type { AccountConnectionSnapshot, AccountIdentity, AccountResult, InstanceSetupStatus } from './accountTypes';
 
 // AT10 (ROAD-145). Every `account:*` channel, in one place — mirrors
@@ -55,7 +55,7 @@ export function registerAccountIpc(): void {
         };
       }
 
-      const result = await startSignIn(purpose || undefined as unknown as string);
+      const result = await startSignIn(purpose || undefined);
       if (!result.ok) return result;
 
       // AT9's redirect (waypoint-backend/src/auth/flows.ts's
@@ -88,7 +88,14 @@ export function registerAccountIpc(): void {
     return { ok: true };
   });
 
-  ipcMain.handle('account:signOut', (): { ok: true } => {
+  ipcMain.handle('account:signOut', async (): Promise<{ ok: true }> => {
+    // Best-effort server-side revoke before forgetting the credential
+    // locally — read it first, since deleting it first would lose the
+    // token this needs. Review fix: signing out previously only deleted
+    // the local file, leaving the session valid on the backend for up to
+    // its full 90-day TTL.
+    const credential = readStoredAccountCredential();
+    if (credential) await revokeAccountSession(credential.backendUrl, credential.token);
     deleteStoredAccountCredential();
     return { ok: true };
   });

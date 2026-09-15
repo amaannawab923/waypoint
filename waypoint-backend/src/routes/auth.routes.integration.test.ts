@@ -305,4 +305,39 @@ describe.skipIf(!REAL_DB)('sign-in flows against real Postgres (AT9)', () => {
     expect(await sessions.resolveSession(token)).toBeNull();
     expect(await sessions.revokeSession(token)).toBe(false);
   });
+
+  describe('POST /auth/signout (AT10 review fix)', () => {
+    it('revokes the session — the token is dead against real Postgres afterward', async () => {
+      const { cb } = await githubRoundTrip(request(app()));
+      const token = new URL(cb.headers.location).searchParams.get('token')!;
+      expect(await sessions.resolveSession(token)).not.toBeNull();
+
+      const res = await request(app()).post('/auth/signout').set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ ok: true });
+      expect(await sessions.resolveSession(token)).toBeNull();
+    });
+
+    it('is idempotent and never leaks whether a token was real — unknown, missing, and malformed headers all answer 200', async () => {
+      const a = request(app());
+      expect((await a.post('/auth/signout')).status).toBe(200);
+      expect((await a.post('/auth/signout').set('Authorization', 'Bearer not-a-real-token')).status).toBe(200);
+      expect((await a.post('/auth/signout').set('Authorization', 'Basic dXNlcjpwYXNz')).status).toBe(200);
+
+      // Signing out twice is a no-op the second time too.
+      const { cb } = await githubRoundTrip(request(app()));
+      const token = new URL(cb.headers.location).searchParams.get('token')!;
+      expect((await a.post('/auth/signout').set('Authorization', `Bearer ${token}`)).status).toBe(200);
+      expect((await a.post('/auth/signout').set('Authorization', `Bearer ${token}`)).status).toBe(200);
+    });
+
+    it('does not require req.user — works before AT11 exists', async () => {
+      // No session-resolving middleware is mounted on `app()` at all; the
+      // route reads the bearer token itself. Asserted by the two tests
+      // above already passing without any such middleware — this test
+      // documents the property explicitly rather than leaving it implicit.
+      const res = await request(app()).post('/auth/signout');
+      expect(res.status).toBe(200);
+    });
+  });
 });

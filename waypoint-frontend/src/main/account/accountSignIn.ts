@@ -89,7 +89,7 @@ let current: { server: http.Server; cancel: (result: AccountFailure) => void } |
  * writeStoredJiraCredential comment documents for its own failure modes.
  * accountIpc.ts's handler is the only caller; it decides what to persist.
  */
-export function startSignIn(purpose: SignInPurpose): Promise<AccountResult<SignInSuccess>> {
+export function startSignIn(purpose?: SignInPurpose): Promise<AccountResult<SignInSuccess>> {
   if (current) {
     return Promise.resolve(failure('already_in_progress', 'A sign-in is already open in your browser.'));
   }
@@ -160,19 +160,31 @@ export function startSignIn(purpose: SignInPurpose): Promise<AccountResult<SignI
 
     current = { server, cancel: finish };
 
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address();
-      if (!address || typeof address === 'string') {
-        finish(failure('network', "Couldn't determine the local sign-in port."));
-        return;
-      }
-      const redirectUri = `http://127.0.0.1:${address.port}/callback`;
-      const params = new URLSearchParams({ redirect_uri: redirectUri, state });
-      if (purpose) params.set('for', purpose);
-      shell.openExternal(`${backendUrl}/sign-in?${params.toString()}`).catch((err: Error) => {
-        finish(failure('network', `Couldn't open the browser: ${err.message}`));
+    // Node reports a real bind failure asynchronously via the 'error'
+    // listener above, never a synchronous throw here — but that's a
+    // guarantee about Node's own implementation, not this function's
+    // contract to its caller. Defense in depth, from review: an
+    // unguarded throw here would reject this Promise, breaking the
+    // documented "resolves, never rejects" contract, and leave `current`
+    // set forever with nothing left to clear it — every later sign-in
+    // wedged behind already_in_progress until the app restarts.
+    try {
+      server.listen(0, '127.0.0.1', () => {
+        const address = server.address();
+        if (!address || typeof address === 'string') {
+          finish(failure('network', "Couldn't determine the local sign-in port."));
+          return;
+        }
+        const redirectUri = `http://127.0.0.1:${address.port}/callback`;
+        const params = new URLSearchParams({ redirect_uri: redirectUri, state });
+        if (purpose) params.set('for', purpose);
+        shell.openExternal(`${backendUrl}/sign-in?${params.toString()}`).catch((err: Error) => {
+          finish(failure('network', `Couldn't open the browser: ${err.message}`));
+        });
       });
-    });
+    } catch (err) {
+      finish(failure('network', `Couldn't start the local sign-in listener: ${(err as Error).message}`));
+    }
   });
 }
 
@@ -182,6 +194,32 @@ export function startSignIn(purpose: SignInPurpose): Promise<AccountResult<SignI
  * finished on its own is not an error. */
 export function cancelSignIn(): void {
   current?.cancel(failure('cancelled', 'Cancelled.'));
+}
+
+/**
+ * Tells the backend this session token is dead — AT9's `POST
+ * /auth/signout` (`revokeSession`), added in review. Without this, "Sign
+ * out" only forgot the token locally while it stayed live on the backend
+ * for up to its full 90-day TTL. Best-effort and silent about failure:
+ * the caller (accountIpc.ts's `account:signOut`) deletes the local
+ * credential regardless — a person clicking Sign Out with no network
+ * must not be told it didn't work, because the one thing that has to be
+ * true locally, is.
+ */
+export async function revokeAccountSession(backendUrl: string, token: string): Promise<void> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  try {
+    await fetch(`${backendUrl}/auth/signout`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    });
+  } catch {
+    // Nothing to do — see the doc comment above.
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function escapeHtml(s: string): string {
