@@ -378,6 +378,49 @@ a sentence in this doc into something CI enforces; it must fail against
 today's `listMembers()` before the fix and pass after, which is the
 concrete acceptance bar for closing this gap.
 
+### Built in AT11 (ROAD-146) — decisions made at implementation
+
+- **The `workspaceId` request shape, decided:** an `X-Waypoint-Workspace-Id`
+  header, not a route param. Almost nothing in this API is already
+  workspace-scoped in its URL (`/tickets`, `/projects`, `/members` — no
+  `/workspaces/:id/...` prefix anywhere), and adding one to every existing
+  route would have been a far larger, riskier change than this ticket's
+  actual job.
+- **How `CURRENT_USER_ID`/`WORKSPACE_ID` became request-scoped without
+  threading a parameter through every one of the ~15 functions across the
+  12 listed files (and every route that calls them): `AsyncLocalStorage`**
+  (`waypoint-backend/src/lib/requestContext.ts`), not a changed function
+  signature. The middleware sets the current identity once per request;
+  `currentMemberId()`/`currentWorkspaceId()` read it from anywhere in the
+  call stack, falling back to the literal constants exactly as before
+  when no request context exists (a unit test calling a service function
+  directly, a script, the dev seed) — `currentUser.ts` itself stays
+  genuinely unmodified, and no existing test needed a functional change,
+  only new mock plumbing for the added `db.select()` calls.
+- **The workspace-scoping audit went beyond the table above** in two
+  ways the table's own phrasing ("listing/lookup," "listing") undersold:
+  every id-keyed **write** (update/delete/create-inside-a-project) got
+  the same scoping as every read — `addProjectMember`, `updateProject`,
+  `createTicket`, `updateView`/`deleteView`, `updateDoc`/`deleteDoc`,
+  `updateWorkstream`, `updateSprint`/`deleteSprint` — since a workspace
+  A member mutating workspace B's real row is at least as serious as
+  reading it. `scratchNotes` gained a real `workspaceId` column
+  (migration `0023`) rather than only tightening its query, matching
+  every other project-adjacent table's own explicit-column pattern.
+  `lib/workspaceGuard.ts` holds the shared pieces:
+  `assertProjectInWorkspace` (throws `NotFoundError`, never `403` — a
+  cross-tenant id and a genuinely missing one must look identical) and
+  `workspaceProjectIdsSubquery` (a Drizzle subquery embedded into a
+  list/lookup query's own `WHERE`, for the functions with no single
+  `projectId` argument to guard).
+- **Renderer-side deferred to AT12** (§7 below), not built here: nothing
+  in the renderer can reach a "signed in to a Team workspace" state
+  until AT12's invite/join flow exists to produce one — there is no
+  session token in the renderer's hands yet for `currentUser.ts`,
+  `data/api.ts`, or the two dialog components to read. Wiring them to
+  the real identity is properly AT12's own job, done at the moment the
+  flow that creates that identity is also being built.
+
 ## 7. Invite / join flow
 
 Unchanged in product shape from the prior doc — mockup steps 6–11 — built
