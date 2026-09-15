@@ -2,7 +2,7 @@ import { eq, asc } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { comments } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
-import { CURRENT_USER_ID } from '../lib/currentUser.js';
+import { currentMemberId } from '../lib/requestContext.js';
 import { logActivity } from './activity.service.js';
 
 // limit caps how many rows the query itself fetches (undefined means
@@ -28,11 +28,11 @@ export async function addComment(
   return db.transaction(async (tx) => {
     const [comment] = await tx
       .insert(comments)
-      .values({ id: newId('cm'), ticketId, authorId: CURRENT_USER_ID, bodyHtml })
+      .values({ id: newId('cm'), ticketId, authorId: currentMemberId(), bodyHtml })
       .returning();
     await logActivity(tx, {
       ticketId,
-      actorId: CURRENT_USER_ID,
+      actorId: currentMemberId(),
       verb: 'commented',
       detail: activityDetail,
       createdAt: comment.createdAt,

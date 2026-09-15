@@ -33,6 +33,23 @@ describe.skipIf(!REAL_DB)('createTicket sequenceId allocation against real Postg
   let db: typeof import('../db/client.js')['db'];
   let schema: typeof import('../db/schema/index.js');
   let eq: typeof import('drizzle-orm')['eq'];
+  let runWithIdentity: typeof import('../lib/requestContext.js')['runWithIdentity'];
+
+  // AT11 (ROAD-146): createTicket now calls assertProjectInWorkspace,
+  // which reads currentWorkspaceId() — with no request/ALS context (a
+  // plain function call, not an HTTP request), that falls back to
+  // Personal's WORKSPACE_ID ('ws-1'), not this file's own isolated
+  // workspace, and every createTicket call below would be refused as
+  // cross-tenant. Wrapped in the real identity this file's project
+  // actually belongs to. memberId is the real seeded 'mem-1' (not a
+  // fake id) so createdById's FK to members is satisfied; which
+  // workspace mem-1 itself belongs to doesn't matter for that FK, only
+  // that the row exists.
+  function createTicket(input: Parameters<typeof service.createTicket>[0]) {
+    return runWithIdentity({ userId: 'user-itest', memberId: 'mem-1', workspaceId, role: 'admin' }, () =>
+      service.createTicket(input),
+    );
+  }
 
   // Everything this file writes hangs off one workspace id, so afterAll's
   // single delete reclaims it all through the FK cascade (workspace ->
@@ -49,6 +66,7 @@ describe.skipIf(!REAL_DB)('createTicket sequenceId allocation against real Postg
     service = await import('./tickets.service.js');
     schema = await import('../db/schema/index.js');
     ({ eq } = await import('drizzle-orm'));
+    ({ runWithIdentity } = await import('../lib/requestContext.js'));
 
     await db.insert(schema.workspaces).values({
       id: workspaceId,
@@ -84,8 +102,8 @@ describe.skipIf(!REAL_DB)('createTicket sequenceId allocation against real Postg
   });
 
   it('never reuses a deleted ticket\'s sequenceId/identifier for a later, unrelated ticket', async () => {
-    const first = await service.createTicket({ projectId, title: 'First ticket', stateId });
-    const second = await service.createTicket({ projectId, title: 'Second ticket', stateId });
+    const first = await createTicket({ projectId, title: 'First ticket', stateId });
+    const second = await createTicket({ projectId, title: 'Second ticket', stateId });
 
     expect(first!.sequenceId).toBe(1);
     expect(first!.identifier).toBe('RIT-1');
@@ -96,7 +114,7 @@ describe.skipIf(!REAL_DB)('createTicket sequenceId allocation against real Postg
     // is now 1 again, which is exactly the trap the old derivation fell into.
     await service.deleteTicket(second!.id);
 
-    const third = await service.createTicket({ projectId, title: 'Third ticket', stateId });
+    const third = await createTicket({ projectId, title: 'Third ticket', stateId });
 
     // The third ticket must continue from the persistent counter (3), never
     // reuse RIT-2 — the identifier a git commit, Slack link, or bookmark
@@ -112,9 +130,9 @@ describe.skipIf(!REAL_DB)('createTicket sequenceId allocation against real Postg
   });
 
   it('keeps allocating past a whole run of deletions, never dropping back to a lower, previously-used number', async () => {
-    const a = await service.createTicket({ projectId, title: 'A', stateId });
-    const b = await service.createTicket({ projectId, title: 'B', stateId });
-    const c = await service.createTicket({ projectId, title: 'C', stateId });
+    const a = await createTicket({ projectId, title: 'A', stateId });
+    const b = await createTicket({ projectId, title: 'B', stateId });
+    const c = await createTicket({ projectId, title: 'C', stateId });
 
     await service.deleteTicket(a!.id);
     await service.deleteTicket(b!.id);
@@ -123,7 +141,7 @@ describe.skipIf(!REAL_DB)('createTicket sequenceId allocation against real Postg
     // Every prior ticket in this project is now gone — MAX(sequenceId) over
     // existing rows would be undefined/0, which is exactly what would let
     // the old derivation restart numbering from 1.
-    const d = await service.createTicket({ projectId, title: 'D', stateId });
+    const d = await createTicket({ projectId, title: 'D', stateId });
 
     expect(d!.sequenceId).toBeGreaterThan(c!.sequenceId);
     expect([a!.identifier, b!.identifier, c!.identifier]).not.toContain(d!.identifier);
@@ -192,7 +210,7 @@ describe.skipIf(!REAL_DB)('createTicket sequenceId allocation against real Postg
     // verbatim rather than invoked, since the real seed() is destructive.
     await db.update(schema.projects).set({ nextSequenceId: 1 }).where(eq(schema.projects.id, seedProjectId));
 
-    const afterSeed = await service.createTicket({
+    const afterSeed = await createTicket({
       projectId: seedProjectId,
       title: 'Created after a seed-style bulk insert',
       stateId: seedStateId,

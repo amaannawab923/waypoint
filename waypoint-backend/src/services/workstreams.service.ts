@@ -1,8 +1,9 @@
-import { eq, inArray } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { workstreams, workstreamMembers } from '../db/schema/index.js';
 import { NotFoundError } from '../middleware/errors.js';
 import { newId } from '../lib/ids.js';
+import { assertProjectInWorkspace, workspaceProjectIdsSubquery } from '../lib/workspaceGuard.js';
 
 async function attachMemberIds<T extends { id: string }>(rows: T[]): Promise<(T & { memberIds: string[] })[]> {
   if (rows.length === 0) return [];
@@ -16,12 +17,15 @@ async function attachMemberIds<T extends { id: string }>(rows: T[]): Promise<(T 
 }
 
 export async function listWorkstreams(projectId: string) {
+  await assertProjectInWorkspace(projectId);
   const rows = await db.select().from(workstreams).where(eq(workstreams.projectId, projectId));
   return attachMemberIds(rows);
 }
 
+// AT11 (ROAD-146): scoped via its projects — workstreams has no
+// workspaceId column of its own.
 export async function listAllWorkstreams() {
-  const rows = await db.select().from(workstreams);
+  const rows = await db.select().from(workstreams).where(inArray(workstreams.projectId, workspaceProjectIdsSubquery()));
   return attachMemberIds(rows);
 }
 
@@ -36,6 +40,7 @@ export interface CreateWorkstreamInput {
 }
 
 export async function createWorkstream(projectId: string, input: CreateWorkstreamInput) {
+  await assertProjectInWorkspace(projectId);
   return db.transaction(async (tx) => {
     const [row] = await tx
       .insert(workstreams)
@@ -69,9 +74,13 @@ export async function updateWorkstream(id: string, patch: Partial<CreateWorkstre
     // `UPDATE ... SET WHERE id = ...`, invalid SQL that Postgres rejects
     // with a syntax error. Skip the scalar update entirely when there's
     // nothing scalar to change.
+    // AT11 (ROAD-146): both branches scoped identically — a cross-tenant
+    // id matches zero rows either way, and the existing NotFoundError
+    // below already covers "no row" regardless of which branch ran.
+    const scope = and(eq(workstreams.id, id), inArray(workstreams.projectId, workspaceProjectIdsSubquery()));
     const row = Object.keys(rest).length
-      ? (await tx.update(workstreams).set(rest).where(eq(workstreams.id, id)).returning())[0]
-      : (await tx.select().from(workstreams).where(eq(workstreams.id, id)))[0];
+      ? (await tx.update(workstreams).set(rest).where(scope).returning())[0]
+      : (await tx.select().from(workstreams).where(scope))[0];
     if (!row) throw new NotFoundError('workstream');
     if (memberIds) {
       await tx.delete(workstreamMembers).where(eq(workstreamMembers.workstreamId, id));

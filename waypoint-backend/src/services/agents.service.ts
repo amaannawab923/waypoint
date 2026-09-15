@@ -3,7 +3,7 @@ import { db } from '../db/client.js';
 import { agents, agentProjectScopes } from '../db/schema/index.js';
 import { NotFoundError } from '../middleware/errors.js';
 import { newId } from '../lib/ids.js';
-import { CURRENT_USER_ID, WORKSPACE_ID } from '../lib/currentUser.js';
+import { currentMemberId, currentWorkspaceId } from '../lib/requestContext.js';
 
 type AgentRow = typeof agents.$inferSelect;
 
@@ -58,7 +58,7 @@ export async function createAgent(input: CreateAgentInput) {
       .insert(agents)
       .values({
         id: newId('agent'),
-        workspaceId: WORKSPACE_ID,
+        workspaceId: currentWorkspaceId(),
         name: input.name,
         avatarColor: input.avatarColor,
         instructionsFilename: input.instructionsFile.filename,
@@ -70,7 +70,7 @@ export async function createAgent(input: CreateAgentInput) {
         triggers: input.triggers ?? ['on-assign'],
         templateId: input.templateId,
         isActive: true,
-        createdById: CURRENT_USER_ID,
+        createdById: currentMemberId(),
       })
       .returning();
     const scopeProjectIds = input.scopeProjectIds ?? [];

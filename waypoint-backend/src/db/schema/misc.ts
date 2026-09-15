@@ -17,6 +17,15 @@ export const scratchNotes = pgTable('scratch_notes', {
   authorId: text('author_id')
     .notNull()
     .references(() => members.id, { onDelete: 'cascade' }),
+  // AT11 (ROAD-146). Explicit, not just relied on implicitly via
+  // authorId — a member id is already unique to one (person, workspace)
+  // pairing, so authorId alone happens to already scope correctly, but
+  // an explicit column matches the same defense-in-depth every other
+  // project-adjacent table in this file already carries, and is what
+  // the workspace-scoping audit specifically asked for here.
+  workspaceId: text('workspace_id')
+    .notNull()
+    .references(() => workspaces.id, { onDelete: 'cascade' }),
   title: text('title').notNull(),
   body: text('body').notNull(),
   color: text('color').notNull(),

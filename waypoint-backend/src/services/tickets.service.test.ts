@@ -56,7 +56,8 @@ beforeEach(() => {
 describe('searchTickets', () => {
   it('matches on title (case-insensitively) and excludes drafts, with no project filter by default', async () => {
     const rows = [{ id: 'wi-1', title: 'Fix login bug', isDraft: false }];
-    db.select.mockReturnValueOnce(chainable(rows));
+    // AT11 (ROAD-146): the leading workspace-scoping subquery call.
+    db.select.mockReturnValueOnce(chainable([])).mockReturnValueOnce(chainable(rows));
 
     const result = await searchTickets('login');
 
@@ -66,7 +67,13 @@ describe('searchTickets', () => {
   });
 
   it('filters to one project when projectId is given', async () => {
-    db.select.mockReturnValueOnce(chainable([]));
+    // AT11 (ROAD-146): two extra db.select() calls ahead of the real
+    // query now — assertProjectInWorkspace(projectId)'s own check, then
+    // the workspace-scoping subquery every searchTickets call builds.
+    db.select
+      .mockReturnValueOnce(chainable([{ workspaceId: 'ws-1' }]))
+      .mockReturnValueOnce(chainable([]))
+      .mockReturnValueOnce(chainable([]));
 
     await searchTickets('login', 'proj-1');
 
@@ -102,7 +109,10 @@ describe('searchTickets', () => {
 
   it('applies a limit at the query layer when given, not as a post-fetch slice', async () => {
     const searchChain = chainable([]);
-    db.select.mockReturnValueOnce(searchChain);
+    // AT11 (ROAD-146): the workspace-scoping subquery this function now
+    // always builds is one leading db.select() call, even with no
+    // projectId (no assertProjectInWorkspace call in that case).
+    db.select.mockReturnValueOnce(chainable([])).mockReturnValueOnce(searchChain);
 
     await searchTickets('login', undefined, 51);
 
@@ -160,15 +170,19 @@ describe('listAllTickets filters', () => {
   // from ticketAssignees, not a plain resolved array of ids.
   it('folds assigneeId into the SAME single query as every other filter, via a subquery passed to inArray — not a separate pre-query', async () => {
     const mainChain = chainable([]);
+    // AT11 (ROAD-146): a third leading call — listAllTickets now always
+    // folds a workspace-scoping subquery into baseConditions too, ahead
+    // of both the assignee subquery and the main query below.
+    db.select.mockReturnValueOnce(mainChain); // the workspace-scoping subquery
     db.select.mockReturnValueOnce(mainChain); // the ticketAssignees subquery builder itself
     db.select.mockReturnValueOnce(mainChain); // the main tickets query
 
     await listAllTickets({ assigneeId: 'mem-4', stateId: 'st-1', dueBefore: '2026-09-01', limit: 50 });
 
-    // Exactly two db.select() calls total: one to build the subquery
-    // expression, one for the main tickets query — never a third,
+    // Three db.select() calls total now: the workspace subquery, the
+    // assignee subquery, and the main tickets query — never a fourth,
     // independently-awaited pre-query round-trip.
-    expect(db.select).toHaveBeenCalledTimes(2);
+    expect(db.select).toHaveBeenCalledTimes(3);
 
     // The assignee subquery itself is built from ticketAssignees, scoped
     // by assigneeId, and critically has NO .limit() of its own — it must
@@ -215,17 +229,18 @@ describe('listAllTickets filters', () => {
   // description.)
   it('still runs exactly one main query (no special-cased short-circuit) even for an assignee with no items', async () => {
     const mainChain = chainable([]);
-    db.select.mockReturnValueOnce(mainChain).mockReturnValueOnce(mainChain);
+    db.select.mockReturnValueOnce(mainChain).mockReturnValueOnce(mainChain).mockReturnValueOnce(mainChain);
 
     const result = await listAllTickets({ assigneeId: 'mem-nobody' });
 
     expect(result).toEqual([]);
-    expect(db.select).toHaveBeenCalledTimes(2);
+    expect(db.select).toHaveBeenCalledTimes(3);
   });
 
   it('applies a limit at the query layer when given', async () => {
     const mainChain = chainable([]);
-    db.select.mockReturnValueOnce(mainChain);
+    // AT11 (ROAD-146): the leading workspace-scoping subquery call.
+    db.select.mockReturnValueOnce(chainable([])).mockReturnValueOnce(mainChain);
 
     await listAllTickets({ limit: 51 });
 
@@ -234,8 +249,16 @@ describe('listAllTickets filters', () => {
 });
 
 describe('listTickets filters', () => {
+  // AT11 (ROAD-146): listTickets now calls assertProjectInWorkspace(id)
+  // first — its own db.select(...).where(...) round trip, consuming the
+  // first slot in the mockReturnValueOnce queue below. Stubbed here to
+  // resolve as "this project is in the caller's (Personal-fallback)
+  // workspace," matching WORKSPACE_ID ('ws-1'), so the guard passes and
+  // each test reaches the query construction it actually means to test.
+  const guardPass = () => chainable([{ workspaceId: 'ws-1' }]);
+
   it('combines the project scope with the given filters', async () => {
-    db.select.mockReturnValueOnce(chainable([]));
+    db.select.mockReturnValueOnce(guardPass()).mockReturnValueOnce(chainable([]));
 
     await listTickets('proj-1', { priority: 'high' });
 
@@ -251,19 +274,19 @@ describe('listTickets filters', () => {
   // without a join inside the subquery itself.
   it('does not join tickets into the assignee subquery — the outer query already scopes by project', async () => {
     const mainChain = chainable([]);
-    db.select.mockReturnValueOnce(mainChain).mockReturnValueOnce(mainChain);
+    db.select.mockReturnValueOnce(guardPass()).mockReturnValueOnce(mainChain).mockReturnValueOnce(mainChain);
 
     await listTickets('proj-1', { assigneeId: 'mem-4' });
 
     expect(mainChain.innerJoin).not.toHaveBeenCalled();
     expect(eq).toHaveBeenCalledWith(ticketAssignees.assigneeId, 'mem-4');
     expect(eq).toHaveBeenCalledWith(tickets.projectId, 'proj-1');
-    expect(db.select).toHaveBeenCalledTimes(2);
+    expect(db.select).toHaveBeenCalledTimes(3);
   });
 
   it('applies a limit at the query layer when given', async () => {
     const mainChain = chainable([]);
-    db.select.mockReturnValueOnce(mainChain);
+    db.select.mockReturnValueOnce(guardPass()).mockReturnValueOnce(mainChain);
 
     await listTickets('proj-1', { limit: 51 });
 
@@ -404,7 +427,12 @@ describe('buildTypedFilterConditions', () => {
 describe('listTicketsByFilter', () => {
   it('runs a single query combining every condition with AND and orders by sortOrder', async () => {
     const mainChain = chainable([{ id: 'wi-1' }]);
-    db.select.mockReturnValueOnce(mainChain);
+    // AT11 (ROAD-146): the workspace-scoping subquery this function now
+    // ANDs in is itself built with one db.select(...).from(projects)...
+    // call, synchronously, before the real query below runs — a slot in
+    // the mock queue, even though the subquery is never awaited on its
+    // own (it's embedded into the outer query's SQL via inArray).
+    db.select.mockReturnValueOnce(chainable([])).mockReturnValueOnce(mainChain);
 
     const result = await listTicketsByFilter({ priorities: ['urgent'], stateIds: ['st-1'] });
 

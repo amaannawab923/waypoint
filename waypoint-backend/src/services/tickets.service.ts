@@ -13,7 +13,8 @@ import {
 } from '../db/schema/index.js';
 import { NotFoundError, ConflictError } from '../middleware/errors.js';
 import { newId } from '../lib/ids.js';
-import { CURRENT_USER_ID } from '../lib/currentUser.js';
+import { currentMemberId } from '../lib/requestContext.js';
+import { assertProjectInWorkspace, workspaceProjectIdsSubquery } from '../lib/workspaceGuard.js';
 import { logActivity } from './activity.service.js';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -138,6 +139,7 @@ function withFilters(baseConditions: SQL[], filters: TicketFilters): SQL[] {
 }
 
 export async function listTickets(projectId: string, filters: TicketFilters = {}) {
+  await assertProjectInWorkspace(projectId);
   const conditions = withFilters([eq(tickets.projectId, projectId), eq(tickets.isDraft, false)], filters);
   const query = db
     .select()
@@ -148,8 +150,15 @@ export async function listTickets(projectId: string, filters: TicketFilters = {}
   return attachRelations(rows);
 }
 
+// AT11 (ROAD-146): workspace-scoping audit — no projectId argument means
+// this has no natural single guard, so the scope is folded directly into
+// the query's own conditions instead: only tickets whose project belongs
+// to the caller's current workspace.
 export async function listAllTickets(filters: TicketFilters = {}) {
-  const conditions = withFilters([eq(tickets.isDraft, false)], filters);
+  const conditions = withFilters(
+    [eq(tickets.isDraft, false), inArray(tickets.projectId, workspaceProjectIdsSubquery())],
+    filters,
+  );
   const query = db
     .select()
     .from(tickets)
@@ -198,7 +207,7 @@ export interface TicketFilterQuery {
   createdAfter?: string;
   text?: string;
   // Drafts are excluded by default, matching listDraftTickets'
-  // CURRENT_USER_ID-scoped listing and the MCP list tools' own
+  // currentMemberId()-scoped listing and the MCP list tools' own
   // exclude-drafts-by-default convention. Set true to include them.
   includeDrafts?: boolean;
 }
@@ -222,7 +231,7 @@ function resolveFilterDate(token: string): Date | undefined {
 function buildAssigneeCondition(rawIds: string[]): SQL | undefined {
   const ids = new Set(rawIds);
   const wantsUnassigned = ids.delete('@unassigned');
-  if (ids.delete('@me')) ids.add(CURRENT_USER_ID);
+  if (ids.delete('@me')) ids.add(currentMemberId());
   const specificIds = [...ids];
 
   const specificCondition = specificIds.length
@@ -244,7 +253,7 @@ function buildAssigneeCondition(rawIds: string[]): SQL | undefined {
 // just an inArray() after resolving '@me' — no unassigned branch needed.
 function buildCreatorCondition(rawIds: string[]): SQL | undefined {
   const ids = new Set(rawIds);
-  if (ids.delete('@me')) ids.add(CURRENT_USER_ID);
+  if (ids.delete('@me')) ids.add(currentMemberId());
   const specificIds = [...ids];
   return specificIds.length ? inArray(tickets.createdById, specificIds) : undefined;
 }
@@ -308,7 +317,13 @@ export function buildTypedFilterConditions(query: TicketFilterQuery): SQL[] {
 // hook instance as List/Board, so there is exactly one place filtering can
 // (or can fail to) happen.
 export async function listTicketsByFilter(query: TicketFilterQuery) {
-  const conditions = buildTypedFilterConditions(query);
+  // AT11 (ROAD-146): added here, not inside buildTypedFilterConditions
+  // itself — that function is exported and unit-tested on its own terms
+  // (tickets.service.test.ts), independent of any request/workspace
+  // context; folding a currentWorkspaceId() read into it would make
+  // those pure condition-building tests request-context-dependent for
+  // no benefit, since this is the only real caller.
+  const conditions = [...buildTypedFilterConditions(query), inArray(tickets.projectId, workspaceProjectIdsSubquery())];
   const rows = await db
     .select()
     .from(tickets)
@@ -320,7 +335,12 @@ export async function listTicketsByFilter(query: TicketFilterQuery) {
 // Title-only match for now — description/identifier matching is a
 // reasonable fast-follow, not silently promised here.
 export async function searchTickets(query: string, projectId?: string, limit?: number) {
-  const conditions = [eq(tickets.isDraft, false), ilike(tickets.title, `%${escapeLikePattern(query)}%`)];
+  if (projectId) await assertProjectInWorkspace(projectId);
+  const conditions = [
+    eq(tickets.isDraft, false),
+    ilike(tickets.title, `%${escapeLikePattern(query)}%`),
+    inArray(tickets.projectId, workspaceProjectIdsSubquery()),
+  ];
   if (projectId) conditions.push(eq(tickets.projectId, projectId));
   const dbQuery = db
     .select()
@@ -359,7 +379,15 @@ export async function countTicketsBySprintIds(sprintIds: string[]): Promise<Map<
     })
     .from(tickets)
     .innerJoin(ticketStates, eq(ticketStates.id, tickets.stateId))
-    .where(and(inArray(tickets.sprintId, sprintIds), eq(tickets.isDraft, false)))
+    .where(
+      and(
+        inArray(tickets.sprintId, sprintIds),
+        eq(tickets.isDraft, false),
+        // AT11 (ROAD-146): a cross-tenant sprintId now counts zero
+        // tickets instead of a real workspace's real counts.
+        inArray(tickets.projectId, workspaceProjectIdsSubquery()),
+      ),
+    )
     .groupBy(tickets.sprintId);
   return new Map(
     rows.filter((row): row is typeof row & { sprintId: string } => row.sprintId !== null).map((row) => [row.sprintId, { total: row.total, done: row.done }]),
@@ -370,12 +398,27 @@ export async function listDraftTickets() {
   const rows = await db
     .select()
     .from(tickets)
-    .where(and(eq(tickets.isDraft, true), eq(tickets.createdById, CURRENT_USER_ID)));
+    .where(
+      and(
+        eq(tickets.isDraft, true),
+        eq(tickets.createdById, currentMemberId()),
+        // AT11 (ROAD-146): explicit, not just relied on implicitly via
+        // createdById — the same defense-in-depth the spec calls for on
+        // scratchNotes' identical authorId-only pattern.
+        inArray(tickets.projectId, workspaceProjectIdsSubquery()),
+      ),
+    );
   return attachRelations(rows);
 }
 
 export async function getTicket(id: string) {
-  const [row] = await db.select().from(tickets).where(eq(tickets.id, id));
+  const [row] = await db
+    .select()
+    .from(tickets)
+    // AT11 (ROAD-146): a cross-tenant id now reads as "not found," same
+    // as a genuinely missing one — this function's own existing contract
+    // (undefined, never a thrown error) for both.
+    .where(and(eq(tickets.id, id), inArray(tickets.projectId, workspaceProjectIdsSubquery())));
   if (!row) return undefined;
   const [enriched] = await attachRelations([row]);
   return enriched;
@@ -391,19 +434,28 @@ export async function getTicket(id: string) {
 // "hidden because it's a draft" cases, matching how those callers already
 // treat both as the same not-found result.
 export async function isTicketDraftOrMissing(id: string): Promise<boolean> {
-  const [row] = await db.select({ isDraft: tickets.isDraft }).from(tickets).where(eq(tickets.id, id));
+  const [row] = await db
+    .select({ isDraft: tickets.isDraft })
+    .from(tickets)
+    .where(and(eq(tickets.id, id), inArray(tickets.projectId, workspaceProjectIdsSubquery())));
   return !row || row.isDraft;
 }
 
 export async function getTicketByIdentifier(identifier: string) {
-  const [row] = await db.select().from(tickets).where(eq(tickets.identifier, identifier));
+  const [row] = await db
+    .select()
+    .from(tickets)
+    .where(and(eq(tickets.identifier, identifier), inArray(tickets.projectId, workspaceProjectIdsSubquery())));
   if (!row) return undefined;
   const [enriched] = await attachRelations([row]);
   return enriched;
 }
 
 export async function listSubItems(parentId: string) {
-  const rows = await db.select().from(tickets).where(eq(tickets.parentId, parentId));
+  const rows = await db
+    .select()
+    .from(tickets)
+    .where(and(eq(tickets.parentId, parentId), inArray(tickets.projectId, workspaceProjectIdsSubquery())));
   return attachRelations(rows);
 }
 
@@ -425,6 +477,11 @@ export interface CreateTicketInput {
 }
 
 export async function createTicket(input: CreateTicketInput) {
+  // AT11 (ROAD-146): write-side of the same audit — without this, the
+  // transaction below would happily increment and consume another
+  // workspace's real project's sequence counter and insert a ticket
+  // into it.
+  await assertProjectInWorkspace(input.projectId);
   return db.transaction(async (tx) => {
     // sequenceId comes from a persistent per-project counter (ROAD-38), not
     // from scanning existing tickets — the old MAX(sequenceId) approach
@@ -469,7 +526,7 @@ export async function createTicket(input: CreateTicketInput) {
         workstreamId: input.workstreamId ?? null,
         sprintId: input.sprintId ?? null,
         parentId: input.parentId ?? null,
-        createdById: CURRENT_USER_ID,
+        createdById: currentMemberId(),
         isDraft: input.isDraft ?? false,
         sortOrder: String(maxSortOrder + 1000),
       })
@@ -491,7 +548,7 @@ export async function createTicket(input: CreateTicketInput) {
 
     await logActivity(tx, {
       ticketId: row.id,
-      actorId: CURRENT_USER_ID,
+      actorId: currentMemberId(),
       verb: 'created',
       detail: 'created the ticket',
       createdAt: row.createdAt,
@@ -515,7 +572,7 @@ async function logAssigneeChanges(tx: Tx, ticketId: string, beforeIds: string[],
   for (const id of afterIds.filter((a) => !before.has(a))) {
     await logActivity(tx, {
       ticketId,
-      actorId: CURRENT_USER_ID,
+      actorId: currentMemberId(),
       verb: 'assignee_added',
       detail: `added ${(await nameForActor(tx, id)) ?? 'an assignee'} as assignee`,
     });
@@ -523,7 +580,7 @@ async function logAssigneeChanges(tx: Tx, ticketId: string, beforeIds: string[],
   for (const id of beforeIds.filter((b) => !after.has(b))) {
     await logActivity(tx, {
       ticketId,
-      actorId: CURRENT_USER_ID,
+      actorId: currentMemberId(),
       verb: 'assignee_removed',
       detail: `removed ${(await nameForActor(tx, id)) ?? 'an assignee'} as assignee`,
     });
@@ -537,7 +594,7 @@ async function logLabelChanges(tx: Tx, ticketId: string, beforeIds: string[], af
     const [label] = await tx.select().from(labels).where(eq(labels.id, id));
     await logActivity(tx, {
       ticketId,
-      actorId: CURRENT_USER_ID,
+      actorId: currentMemberId(),
       verb: 'label_added',
       detail: `added ${label?.name ?? 'a label'} as a label`,
     });
@@ -546,7 +603,7 @@ async function logLabelChanges(tx: Tx, ticketId: string, beforeIds: string[], af
     const [label] = await tx.select().from(labels).where(eq(labels.id, id));
     await logActivity(tx, {
       ticketId,
-      actorId: CURRENT_USER_ID,
+      actorId: currentMemberId(),
       verb: 'label_removed',
       detail: `removed ${label?.name ?? 'a label'} as a label`,
     });
@@ -585,7 +642,7 @@ export async function updateTicket(
     if (stateChanged) {
       await logActivity(tx, {
         ticketId: id,
-        actorId: CURRENT_USER_ID,
+        actorId: currentMemberId(),
         verb: 'state_changed',
         detail: options.activityDetail ?? 'changed state',
       });
@@ -593,7 +650,7 @@ export async function updateTicket(
     if (patch.priority && patch.priority !== current.priority) {
       await logActivity(tx, {
         ticketId: id,
-        actorId: CURRENT_USER_ID,
+        actorId: currentMemberId(),
         verb: 'priority_changed',
         detail: `set priority to ${patch.priority}`,
       });
@@ -622,7 +679,7 @@ export async function updateTicket(
     if (patch.startDate !== undefined && patch.startDate && patch.startDate !== current.startDate) {
       await logActivity(tx, {
         ticketId: id,
-        actorId: CURRENT_USER_ID,
+        actorId: currentMemberId(),
         verb: 'start_date_set',
         detail: `set start date to ${patch.startDate}`,
       });
@@ -630,7 +687,7 @@ export async function updateTicket(
     if (patch.dueDate !== undefined && patch.dueDate && patch.dueDate !== current.dueDate) {
       await logActivity(tx, {
         ticketId: id,
-        actorId: CURRENT_USER_ID,
+        actorId: currentMemberId(),
         verb: 'due_date_set',
         detail: `set due date to ${patch.dueDate}`,
       });
@@ -638,7 +695,7 @@ export async function updateTicket(
     if (patch.parentId && patch.parentId !== current.parentId) {
       await logActivity(tx, {
         ticketId: patch.parentId,
-        actorId: CURRENT_USER_ID,
+        actorId: currentMemberId(),
         verb: 'sub_item_added',
         detail: `added ${current.identifier} as a sub-item`,
       });
@@ -719,7 +776,7 @@ export async function reorderTicket(id: string, targetId: string, position: 'bef
     }
 
     if (item.stateId !== target.stateId) {
-      await logActivity(tx, { ticketId: id, actorId: CURRENT_USER_ID, verb: 'state_changed', detail: 'changed state' });
+      await logActivity(tx, { ticketId: id, actorId: currentMemberId(), verb: 'state_changed', detail: 'changed state' });
       await tx.update(tickets).set({ stateId: target.stateId, updatedAt: new Date() }).where(eq(tickets.id, id));
     }
 
@@ -766,7 +823,7 @@ export async function addTicketLink(ticketId: string, input: { url: string; labe
     await tx.update(tickets).set({ linkCount: n, updatedAt: new Date() }).where(eq(tickets.id, ticketId));
     await logActivity(tx, {
       ticketId,
-      actorId: CURRENT_USER_ID,
+      actorId: currentMemberId(),
       verb: 'link_added',
       detail: `added ${input.label || input.url} as a link`,
     });
@@ -790,7 +847,7 @@ export async function removeTicketLink(ticketId: string, linkId: string) {
     if (link) {
       await logActivity(tx, {
         ticketId,
-        actorId: CURRENT_USER_ID,
+        actorId: currentMemberId(),
         verb: 'link_removed',
         detail: `removed ${link.label || link.url} as a link`,
       });

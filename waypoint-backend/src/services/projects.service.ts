@@ -19,7 +19,8 @@ import {
 } from '../db/schema/index.js';
 import { NotFoundError, ValidationError } from '../middleware/errors.js';
 import { newId } from '../lib/ids.js';
-import { WORKSPACE_ID, CURRENT_USER_ID } from '../lib/currentUser.js';
+import { currentMemberId, currentWorkspaceId } from '../lib/requestContext.js';
+import { assertProjectInWorkspace } from '../lib/workspaceGuard.js';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type ProjectRow = typeof projects.$inferSelect;
@@ -187,7 +188,11 @@ async function selectProjectsWithCounts(where: SQL | undefined, limit?: number):
     .leftJoin(docsSub, eq(docsSub.projectId, projects.id))
     .leftJoin(requestsSub, eq(requestsSub.projectId, projects.id))
     .leftJoin(requestsPendingSub, eq(requestsPendingSub.projectId, projects.id))
-    .where(where)
+    // AT11 (ROAD-146): every caller of this shared query goes through
+    // here, so the workspace filter lives once, baked in, rather than
+    // repeated (and forgettable) at each of listProjects/
+    // listArchivedProjects/getProject's own call sites.
+    .where(and(eq(projects.workspaceId, currentWorkspaceId()), where))
     // Deterministic order matters once `limit` is in play below — with none,
     // which rows survive a LIMIT is whatever order Postgres happens to
     // return, which can shift between two otherwise-identical calls.
@@ -261,7 +266,7 @@ export async function createProject(input: CreateProjectInput): Promise<ProjectW
       .insert(projects)
       .values({
         id: newId('proj'),
-        workspaceId: WORKSPACE_ID,
+        workspaceId: currentWorkspaceId(),
         name: input.name,
         identifier,
         description: input.description ?? '',
@@ -297,13 +302,13 @@ export async function createProject(input: CreateProjectInput): Promise<ProjectW
 
     // The creator is a member from the start — same as the original mock's
     // `memberIds: [d.currentUserId]` on creation.
-    await tx.insert(projectMembers).values({ projectId: project.id, memberId: CURRENT_USER_ID });
+    await tx.insert(projectMembers).values({ projectId: project.id, memberId: currentMemberId() });
 
     // A brand new project has no sprints/workstreams/views/docs/requests yet
     // (docs/design/waypoint-revamp-architecture.md §3.4) — no need to query
     // for what is necessarily all zero.
     return {
-      ...toProjectEntity(project, [CURRENT_USER_ID]),
+      ...toProjectEntity(project, [currentMemberId()]),
       primitiveCounts: { sprints: 0, workstreams: 0, views: 0, docs: 0, requests: 0, requestsPending: 0 },
     };
   });
@@ -336,6 +341,7 @@ export async function updateProject(
   id: string,
   patch: Partial<typeof projects.$inferInsert>,
 ): Promise<ProjectWithCounts> {
+  await assertProjectInWorkspace(id);
   // An explicit `null` (unlink) skips validation entirely — clearing is
   // always safe, and a checkout that has since been deleted must still be
   // unlinkable.
@@ -349,6 +355,11 @@ export async function updateProject(
 // GLOBAL role, not a project-scoped one — project_members has no role
 // column. Worth confirming intent on separately; not "fixed" during the port.
 export async function addProjectMember(projectId: string, memberId: string, role?: 'admin' | 'member' | 'guest') {
+  // AT11 (ROAD-146): checked before the insert below, not after — the
+  // prior code called getProject(projectId) only at the very end, which
+  // meant a cross-tenant projectId still wrote a real row to
+  // project_members before the function ever noticed and threw.
+  await assertProjectInWorkspace(projectId);
   await db
     .insert(projectMembers)
     .values({ projectId, memberId })
@@ -362,6 +373,7 @@ export async function addProjectMember(projectId: string, memberId: string, role
 }
 
 export async function removeProjectMember(projectId: string, memberId: string) {
+  await assertProjectInWorkspace(projectId);
   return db.transaction(async (tx) => {
     await tx
       .delete(projectMembers)
@@ -426,6 +438,7 @@ export async function removeProjectMember(projectId: string, memberId: string) {
 }
 
 export async function updateProjectEstimate(id: string, estimate: { type: string; values: string[] } | null) {
+  await assertProjectInWorkspace(id);
   const [row] = await db.update(projects).set({ estimate }).where(eq(projects.id, id)).returning();
   if (!row) throw new NotFoundError('project');
   return withPrimitiveCounts(await attachMemberIdsOne(row));
@@ -446,11 +459,13 @@ export async function updateProjectAutomations(id: string, patch: Record<string,
 }
 
 export async function archiveProject(id: string) {
+  await assertProjectInWorkspace(id);
   const [row] = await db.update(projects).set({ archivedAt: new Date() }).where(eq(projects.id, id)).returning();
   if (!row) throw new NotFoundError('project');
 }
 
 export async function deleteProject(id: string) {
+  await assertProjectInWorkspace(id);
   const [row] = await db.delete(projects).where(eq(projects.id, id)).returning();
   if (!row) throw new NotFoundError('project');
 }

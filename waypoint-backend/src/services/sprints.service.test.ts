@@ -48,6 +48,12 @@ function makeTx({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // AT11 (ROAD-146): updateSprint now builds a workspace-scoping subquery
+  // via the module-level db (not tx) even from inside the transaction —
+  // it's never independently executed, only embedded as SQL into the
+  // tx-built query around it, but the mock still needs a return value
+  // for the call itself not to throw.
+  db.select.mockReturnValue(chainable([]));
 });
 
 // Regression coverage for the sprint "clear lead" fix: `Object.keys(rest).length` (the
