@@ -5,6 +5,8 @@ import { newId } from '../lib/ids.js';
 import { ConflictError, NotFoundError, ValidationError } from '../middleware/errors.js';
 import { configuredAuthMethods, type AuthMethod } from '../lib/authMethods.js';
 import { getSetupStatus } from '../services/instance.service.js';
+import { getInvitePreview, acceptInvite } from '../services/workspaces.service.js';
+import { renderJoinCompletePage } from './joinPage.js';
 import { oauthCredentials, oauthProviders } from './providers/index.js';
 import type { FetchLike, ProviderIdentity } from './providers/types.js';
 import type { Mailer } from './mailer.js';
@@ -45,7 +47,16 @@ function purposeOf(raw: string | undefined): string | null {
 
 async function createFlow(
   provider: AuthMethod,
-  args: { redirectUri: string; clientState: string; purpose: string | null; email?: string },
+  args: {
+    redirectUri: string | null;
+    clientState: string;
+    purpose: string | null;
+    email?: string;
+    // AT12 (ROAD-147): set only for a join-flow row — see
+    // resolveFlowTarget below for why redirectUri is null exactly when
+    // this is set.
+    inviteToken?: string | null;
+  },
   deps: FlowDeps,
 ): Promise<{ secret: string; id: string }> {
   const secret = newSecret();
@@ -59,10 +70,32 @@ async function createFlow(
     redirectUri: args.redirectUri,
     clientState: args.clientState,
     purpose: args.purpose,
+    inviteToken: args.inviteToken ?? null,
     createdAt: now,
     expiresAt: new Date(now.getTime() + FLOW_TTL_MS),
   });
   return { secret, id };
+}
+
+// AT12 (ROAD-147). The one place that decides whether a flow is the
+// desktop-loopback shape (redirectUri validated as a real loopback
+// callback) or the join shape (no redirect target at all — the join page
+// itself is the destination, completion renders a page directly). An
+// inviteToken re-validated here (existence/expiry/not-yet-accepted, via
+// getInvitePreview) so a dead link never even reaches the OAuth
+// provider — the definitive, atomic check still happens again at
+// acceptance time in workspaces.service.ts's acceptInvite, since a link
+// can expire or be consumed by someone else during the OAuth round trip.
+async function resolveFlowTarget(args: {
+  redirectUri?: string;
+  clientState?: string;
+  inviteToken?: string;
+}): Promise<{ redirectUri: string | null; clientState: string }> {
+  if (args.inviteToken) {
+    await getInvitePreview(args.inviteToken);
+    return { redirectUri: null, clientState: newSecret() };
+  }
+  return { redirectUri: validateRedirectUri(args.redirectUri), clientState: validateClientState(args.clientState) };
 }
 
 // Consumes the flow atomically: the UPDATE ... WHERE consumed_at IS NULL
@@ -113,7 +146,16 @@ export type ResolvedIdentity = {
 // Signup mode is enforced only when a brand-new row would be needed: an
 // existing row is by definition someone already let in (an invitee's row
 // is pre-created by AT12).
-export async function resolveOrCreateUser(identity: ResolvedIdentity, deps: FlowDeps) {
+export async function resolveOrCreateUser(
+  identity: ResolvedIdentity,
+  deps: FlowDeps,
+  // AT12 (ROAD-147): set only by finishFlow when completing a join-flow
+  // row — accepting a valid, already-server-verified workspace invite is
+  // itself the authorization an invite-only instance is checking for.
+  // Never derived from anything client-supplied; resolveFlowTarget/
+  // acceptInvite own the real invite validation, not this flag.
+  opts: { skipSignupModeCheck?: boolean } = {},
+) {
   const email = identity.email.trim().toLowerCase();
   const now = deps.now();
 
@@ -156,7 +198,7 @@ export async function resolveOrCreateUser(identity: ResolvedIdentity, deps: Flow
   }
 
   const status = await getSetupStatus(deps.env);
-  if (status.signupMode === 'invite_only') {
+  if (status.signupMode === 'invite_only' && !opts.skipSignupModeCheck) {
     throw new ConflictError('This instance is invite-only. Ask a workspace member for an invite link.');
   }
   try {
@@ -201,6 +243,11 @@ function isUniqueViolation(err: unknown): boolean {
 // sign-in page itself showed moments earlier, on the very account this
 // browser just proved control of.
 function finishRedirect(flow: typeof authFlows.$inferSelect, token: string, user: typeof users.$inferSelect): string {
+  // Only ever called from finishFlow's non-join branch, where
+  // resolveFlowTarget guarantees this was validated as a real loopback
+  // callback at flow-start time — never null there. A join-flow row
+  // (redirectUri null) takes the other branch entirely.
+  if (!flow.redirectUri) throw new ValidationError('this sign-in has no redirect target');
   const u = new URL(flow.redirectUri);
   u.searchParams.set('token', token);
   u.searchParams.set('state', flow.clientState);
@@ -211,20 +258,48 @@ function finishRedirect(flow: typeof authFlows.$inferSelect, token: string, user
   return u.toString();
 }
 
+// AT12 (ROAD-147). What completing a flow yields: the ordinary
+// desktop-loopback shape sends the browser back to the app via a
+// redirect; a join-flow row (inviteToken set) has nowhere to redirect
+// to, so completion renders a confirmation page directly instead. Both
+// route handlers in auth.routes.ts branch on `.kind`.
+export type FlowCompletion = { kind: 'redirect'; to: string } | { kind: 'html'; body: string };
+
+async function finishFlow(
+  flow: typeof authFlows.$inferSelect,
+  identity: ResolvedIdentity,
+  deps: FlowDeps,
+): Promise<FlowCompletion> {
+  const { user } = await resolveOrCreateUser(identity, deps, { skipSignupModeCheck: !!flow.inviteToken });
+  const { token } = await issueSession(user.id, { now: deps.now() });
+  if (flow.inviteToken) {
+    // acceptInvite re-validates the invite from scratch (expiry, not
+    // already accepted) rather than trusting resolveFlowTarget's earlier
+    // check — a link can expire or get consumed by someone else during
+    // the OAuth round trip in between.
+    const { workspace } = await acceptInvite(flow.inviteToken, user);
+    return { kind: 'html', body: renderJoinCompletePage(workspace.name) };
+  }
+  return { kind: 'redirect', to: finishRedirect(flow, token, user) };
+}
+
 // ---- OAuth -----------------------------------------------------------------
 
 export async function startOAuth(
   provider: 'github' | 'google',
-  args: { redirectUri?: string; clientState?: string; purpose?: string },
+  args: { redirectUri?: string; clientState?: string; purpose?: string; inviteToken?: string },
   deps: FlowDeps,
 ): Promise<string> {
   if (!configuredAuthMethods(deps.env).includes(provider)) {
     throw new ValidationError(`${provider} sign-in is not configured on this instance`);
   }
   const creds = oauthCredentials(provider, deps.env)!;
-  const redirectUri = validateRedirectUri(args.redirectUri);
-  const clientState = validateClientState(args.clientState);
-  const { secret } = await createFlow(provider, { redirectUri, clientState, purpose: purposeOf(args.purpose) }, deps);
+  const { redirectUri, clientState } = await resolveFlowTarget(args);
+  const { secret } = await createFlow(
+    provider,
+    { redirectUri, clientState, purpose: purposeOf(args.purpose), inviteToken: args.inviteToken },
+    deps,
+  );
   return oauthProviders[provider].authorizeUrl({
     clientId: creds.clientId,
     redirectUri: `${deps.publicBaseUrl}/auth/${provider}/callback`,
@@ -232,14 +307,16 @@ export async function startOAuth(
   });
 }
 
-// Returns the desktop redirect to send the browser to. Throws on a bad or
-// reused state, a failed exchange, or an invite-only refusal — the route
-// renders those as a page, since a browser is what's on the other end.
+// Returns the desktop redirect to send the browser to, or (a join flow) a
+// page to render directly. Throws on a bad or reused state, a failed
+// exchange, an invite-only refusal, or an invite that died mid-flow — the
+// route renders those as a page, since a browser is what's on the other
+// end either way.
 export async function completeOAuth(
   provider: 'github' | 'google',
   args: { code?: string; state?: string; error?: string },
   deps: FlowDeps,
-): Promise<string> {
+): Promise<FlowCompletion> {
   if (args.error) throw new ValidationError(`${provider} refused the sign-in: ${args.error}`);
   if (!args.state || !args.code) throw new ValidationError('missing code or state');
   const flow = await consumeFlow(provider, args.state, deps);
@@ -249,15 +326,13 @@ export async function completeOAuth(
     { ...creds, redirectUri: `${deps.publicBaseUrl}/auth/${provider}/callback`, code: args.code },
     deps.fetch,
   );
-  const { user } = await resolveOrCreateUser(identity, deps);
-  const { token } = await issueSession(user.id, { now: deps.now() });
-  return finishRedirect(flow, token, user);
+  return finishFlow(flow, identity, deps);
 }
 
 // ---- Email magic link ------------------------------------------------------
 
 export async function startEmailLink(
-  args: { email?: string; redirectUri?: string; clientState?: string; purpose?: string },
+  args: { email?: string; redirectUri?: string; clientState?: string; purpose?: string; inviteToken?: string },
   deps: FlowDeps,
 ): Promise<{ sentTo: string }> {
   if (!configuredAuthMethods(deps.env).includes('email') || !deps.mailer) {
@@ -265,9 +340,12 @@ export async function startEmailLink(
   }
   const email = args.email?.trim().toLowerCase();
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new ValidationError('a valid email is required');
-  const redirectUri = validateRedirectUri(args.redirectUri);
-  const clientState = validateClientState(args.clientState);
-  const { secret } = await createFlow('email', { redirectUri, clientState, purpose: purposeOf(args.purpose), email }, deps);
+  const { redirectUri, clientState } = await resolveFlowTarget(args);
+  const { secret } = await createFlow(
+    'email',
+    { redirectUri, clientState, purpose: purposeOf(args.purpose), email, inviteToken: args.inviteToken },
+    deps,
+  );
   const link = `${deps.publicBaseUrl}/auth/email/verify?token=${encodeURIComponent(secret)}`;
   const status = await getSetupStatus(deps.env);
   const name = status.instanceName ?? 'Waypoint';
@@ -280,11 +358,12 @@ export async function startEmailLink(
   return { sentTo: email };
 }
 
-export async function completeEmailLink(args: { token?: string }, deps: FlowDeps): Promise<string> {
+export async function completeEmailLink(args: { token?: string }, deps: FlowDeps): Promise<FlowCompletion> {
   if (!args.token) throw new ValidationError('missing token');
   const flow = await consumeFlow('email', args.token, deps);
   if (!flow.email) throw new ValidationError('malformed sign-in link');
-  const { user } = await resolveOrCreateUser(
+  return finishFlow(
+    flow,
     {
       provider: 'email',
       providerId: null,
@@ -296,6 +375,4 @@ export async function completeEmailLink(args: { token?: string }, deps: FlowDeps
     },
     deps,
   );
-  const { token } = await issueSession(user.id, { now: deps.now() });
-  return finishRedirect(flow, token, user);
 }

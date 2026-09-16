@@ -21,6 +21,17 @@ export const inviteMemberSchema = z.object({
   role: z.enum(['admin', 'member', 'guest']),
 });
 
+// AT12 (ROAD-147).
+export const createWorkspaceSchema = z.object({
+  name: z.string().min(1).max(120),
+});
+
+export const createInviteSchema = z.object({
+  // Only "Email invite instead" (mockup step 9) collects one; plain "Copy
+  // link" creates an invite with no address attached at all.
+  email: z.string().email().optional(),
+});
+
 export const notificationPrefsSchema = z.object({
   email: z.boolean().optional(),
   push: z.boolean().optional(),

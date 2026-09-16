@@ -83,9 +83,22 @@ describe.skipIf(!REAL_DB)('sign-in flows against real Postgres (AT9)', () => {
     return a;
   }
 
+  // AT12 (ROAD-147): upsert, not delete-then-insert. instance_settings is
+  // a real singleton row shared with every other *.integration.test.ts
+  // file's own real Postgres connection (this project doesn't isolate
+  // test files onto separate databases) — a delete-then-insert here can
+  // duplicate-key against another file's concurrent write to the same
+  // row (workspaces.routes.integration.test.ts's own setInstance hit
+  // exactly this once both files existed). An upsert has no such race
+  // window.
   async function setInstance(signupMode: 'open' | 'invite_only') {
-    await db.delete(schema.instanceSettings).where(eq(schema.instanceSettings.id, instance.INSTANCE_ROW_ID));
-    await db.insert(schema.instanceSettings).values({ id: instance.INSTANCE_ROW_ID, instanceName: 'AT9 Test', signupMode, setupCompletedAt: new Date() });
+    await db
+      .insert(schema.instanceSettings)
+      .values({ id: instance.INSTANCE_ROW_ID, instanceName: 'AT9 Test', signupMode, setupCompletedAt: new Date() })
+      .onConflictDoUpdate({
+        target: schema.instanceSettings.id,
+        set: { instanceName: 'AT9 Test', signupMode, setupCompletedAt: new Date() },
+      });
   }
 
   async function clean() {
@@ -123,8 +136,14 @@ describe.skipIf(!REAL_DB)('sign-in flows against real Postgres (AT9)', () => {
 
   afterAll(async () => {
     await clean();
-    await db.delete(schema.instanceSettings).where(eq(schema.instanceSettings.id, instance.INSTANCE_ROW_ID));
-    if (savedInstance) await db.insert(schema.instanceSettings).values(savedInstance);
+    if (savedInstance) {
+      await db
+        .insert(schema.instanceSettings)
+        .values(savedInstance)
+        .onConflictDoUpdate({ target: schema.instanceSettings.id, set: savedInstance });
+    } else {
+      await db.delete(schema.instanceSettings).where(eq(schema.instanceSettings.id, instance.INSTANCE_ROW_ID));
+    }
   });
 
   it('renders the sign-in page with only the configured methods, and refuses before setup', async () => {

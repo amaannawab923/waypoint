@@ -1,6 +1,6 @@
 import express from 'express';
 import cors from 'cors';
-import { apiRouter } from './routes/index.js';
+import { apiRouter, identityOnlyRouter } from './routes/index.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { asyncHandler } from './middleware/asyncHandler.js';
 import { resolveMember } from './middleware/resolveMember.js';
@@ -74,6 +74,15 @@ export function createApp() {
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok' });
   });
+
+  // AT12 (ROAD-147): instance setup, sign-in/join pages, and workspace
+  // creation/listing all need at most req.user (or no identity at all) —
+  // never req.member. Mounted before resolveMember for the same reason
+  // /health is: resolveMember hard-refuses any request carrying a bearer
+  // token but no X-Waypoint-Workspace-Id header, which would otherwise
+  // block every one of these before their own, more permissive guard
+  // (requireUser, or none) ever ran. See routes/index.ts's own comment.
+  app.use(identityOnlyRouter);
 
   // AT11 (ROAD-146): resolves a Bearer session to req.user/req.member and
   // an AsyncLocalStorage identity every service reads via

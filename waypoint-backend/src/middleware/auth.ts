@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import type { Request, Response, NextFunction } from 'express';
 import type { users } from '../db/schema/index.js';
 import { ServiceUnavailableError } from './errors.js';
+import { resolveSession, touchSession } from '../auth/sessions.js';
 
 // AT8 (ROAD-143). The two guards this ticket introduces. Neither resolves
 // a session — that is AT11's middleware, which will attach `req.user`
@@ -71,5 +72,31 @@ export function requireInstanceAdmin(req: Request, _res: Response, next: NextFun
     next(withStatus('Instance admin required', 403));
     return;
   }
+  next();
+}
+
+// AT12 (ROAD-147). Found while wiring workspace creation: middleware/
+// resolveMember.ts only ever sets req.user AFTER also resolving a
+// workspace + membership (400/403 otherwise) — so a route that needs
+// nothing more than "who is this real, signed-in person" (creating their
+// first workspace, listing every workspace they belong to, or — this same
+// gap — requireInstanceAdmin above, whose own AT8-era comment assumed
+// req.user would already be set by any valid bearer token) can't sit
+// behind resolveMember at all. This resolves a bearer token to req.user
+// on its own, with no workspace involvement — a strict subset of what
+// resolveMember does, not a competing identity path.
+export async function requireUser(req: Request, _res: Response, next: NextFunction): Promise<void> {
+  const token = bearer(req);
+  if (!token) {
+    next(withStatus('Sign in required', 401));
+    return;
+  }
+  const resolved = await resolveSession(token);
+  if (!resolved) {
+    next(withStatus('This session is invalid or has expired. Sign in again.', 401));
+    return;
+  }
+  req.user = resolved.user;
+  touchSession(resolved.session.id, resolved.session.lastSeenAt).catch(() => {});
   next();
 }

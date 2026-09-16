@@ -78,13 +78,26 @@ export function createAuthRouter(overrides: AuthRouterDeps = {}) {
     }),
   );
 
+  // AT12 (ROAD-147): a FlowCompletion is either a redirect (the ordinary
+  // desktop-loopback shape) or a page to render directly (a join-flow
+  // row, which has no redirect target at all).
+  const sendCompletion = (res: import('express').Response, result: flows.FlowCompletion) => {
+    if (result.kind === 'redirect') res.redirect(302, result.to);
+    else html(res, 200, result.body);
+  };
+
   for (const provider of ['github', 'google'] as const) {
     router.get(
       `/auth/${provider}/start`,
       page(async (req, res) => {
         const url = await flows.startOAuth(
           provider,
-          { redirectUri: str(req.query.redirect_uri), clientState: str(req.query.state), purpose: str(req.query.for) },
+          {
+            redirectUri: str(req.query.redirect_uri),
+            clientState: str(req.query.state),
+            purpose: str(req.query.for),
+            inviteToken: str(req.query.invite_token),
+          },
           deps(),
         );
         res.redirect(302, url);
@@ -93,12 +106,12 @@ export function createAuthRouter(overrides: AuthRouterDeps = {}) {
     router.get(
       `/auth/${provider}/callback`,
       page(async (req, res) => {
-        const to = await flows.completeOAuth(
+        const result = await flows.completeOAuth(
           provider,
           { code: str(req.query.code), state: str(req.query.state), error: str(req.query.error) },
           deps(),
         );
-        res.redirect(302, to);
+        sendCompletion(res, result);
       }),
     );
   }
@@ -110,7 +123,13 @@ export function createAuthRouter(overrides: AuthRouterDeps = {}) {
       const d = deps();
       const body = (req.body ?? {}) as Record<string, unknown>;
       const { sentTo } = await flows.startEmailLink(
-        { email: str(body.email), redirectUri: str(body.redirect_uri), clientState: str(body.state), purpose: str(body.for) },
+        {
+          email: str(body.email),
+          redirectUri: str(body.redirect_uri),
+          clientState: str(body.state),
+          purpose: str(body.for),
+          inviteToken: str(body.invite_token),
+        },
         d,
       );
       const status = await getSetupStatus(d.env);
@@ -121,8 +140,8 @@ export function createAuthRouter(overrides: AuthRouterDeps = {}) {
   router.get(
     '/auth/email/verify',
     page(async (req, res) => {
-      const to = await flows.completeEmailLink({ token: str(req.query.token) }, deps());
-      res.redirect(302, to);
+      const result = await flows.completeEmailLink({ token: str(req.query.token) }, deps());
+      sendCompletion(res, result);
     }),
   );
 

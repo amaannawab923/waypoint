@@ -169,6 +169,13 @@
       "when": 1789499968054,
       "tag": "0023_at11_scratch_notes_workspace_id",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1789544226076,
+      "tag": "0024_at12_workspace_invites_jira_credential",
+      "breakpoints": true
     }
   ]
 }
