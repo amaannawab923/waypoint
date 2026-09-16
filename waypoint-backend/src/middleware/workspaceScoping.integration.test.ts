@@ -891,6 +891,108 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
     }
   });
 
+  // Fifth review round's proven live exploit: the check above only
+  // covered A repointing A's OWN run. Nothing stopped A from PATCHing
+  // B's run instead, at A's own conversation this time — the direction
+  // that actually mattered, since createRunProposal then copies that
+  // conversationId onto the run's next proposal, and
+  // proposalWorkspaceCondition's conversation branch renders it in A's
+  // queue with B's ticket/report content, even though the run (and its
+  // ownerMemberId) still belongs to B.
+  it('PATCH /agent-runs/:id refuses to touch B\'s own run at all — even just repointing it at A\'s conversation — as 404', async () => {
+    const runId = `run-at11-b-repoint-${stamp}`;
+    await db.insert(schema.agentRuns).values({
+      id: runId,
+      ownerMemberId: B.memberId,
+      entry: 'independent',
+      providerId: 'claude',
+    });
+    try {
+      const res = await request(app)
+        .patch(`/agent-runs/${runId}`)
+        .set(asA())
+        .send({ copilotConversationId: A.conversationId });
+      expect(res.status).toBe(404);
+      const [row] = await db.select().from(schema.agentRuns).where(eq(schema.agentRuns.id, runId));
+      expect(row?.copilotConversationId).toBeNull();
+      expect(row?.ownerMemberId).toBe(B.memberId);
+    } finally {
+      await db.delete(schema.agentRuns).where(eq(schema.agentRuns.id, runId));
+    }
+  });
+
+  it('PATCH /agent-runs/:id refuses ANY field patch to B\'s run as 404, not only the conversation field', async () => {
+    const runId = `run-at11-b-patch-${stamp}`;
+    await db.insert(schema.agentRuns).values({
+      id: runId,
+      ownerMemberId: B.memberId,
+      entry: 'independent',
+      providerId: 'claude',
+    });
+    try {
+      const res = await request(app).patch(`/agent-runs/${runId}`).set(asA()).send({ title: 'pwned' });
+      expect(res.status).toBe(404);
+      const [row] = await db.select().from(schema.agentRuns).where(eq(schema.agentRuns.id, runId));
+      expect(row?.title).not.toBe('pwned');
+    } finally {
+      await db.delete(schema.agentRuns).where(eq(schema.agentRuns.id, runId));
+    }
+  });
+
+  it('GET /agent-runs/:id refuses B\'s run as 404', async () => {
+    const runId = `run-at11-b-get-${stamp}`;
+    await db.insert(schema.agentRuns).values({
+      id: runId,
+      ownerMemberId: B.memberId,
+      entry: 'independent',
+      providerId: 'claude',
+    });
+    try {
+      const res = await request(app).get(`/agent-runs/${runId}`).set(asA());
+      expect(res.status).toBe(404);
+    } finally {
+      await db.delete(schema.agentRuns).where(eq(schema.agentRuns.id, runId));
+    }
+  });
+
+  it('GET /agent-runs (list) never includes B\'s run', async () => {
+    const res = await request(app).get('/agent-runs').set(asA());
+    expect(res.status).toBe(200);
+    const ids = (res.body.items as Array<{ id: string }>).map((r) => r.id);
+    expect(ids).not.toContain(B.agentRunId);
+  });
+
+  // Second half of the proven exploit: retryOfRunId let A cancel B's
+  // real, live run outright, and leaked its status via the 409 message
+  // for a still-running one.
+  it('POST /agent-runs with retryOfRunId naming B\'s interrupted run refuses it (not cancelled), as if it did not exist', async () => {
+    const runId = `run-at11-b-retry-${stamp}`;
+    await db.insert(schema.agentRuns).values({
+      id: runId,
+      ownerMemberId: B.memberId,
+      entry: 'independent',
+      providerId: 'claude',
+      status: 'interrupted',
+    });
+    let createdId: string | undefined;
+    try {
+      const res = await request(app)
+        .post('/agent-runs')
+        .set(asA())
+        .send({ ownerMemberId: A.memberId, entry: 'independent', providerId: 'claude', retryOfRunId: runId });
+      createdId = res.body?.id;
+      expect(res.status).toBe(400);
+      const [row] = await db.select().from(schema.agentRuns).where(eq(schema.agentRuns.id, runId));
+      expect(row?.status).toBe('interrupted');
+    } finally {
+      // Cleanup runs even when an assertion above throws — a real
+      // retry-created row (createdId) can exist either way, and it
+      // names runId as its own retryOfRunId, so runId must go second.
+      if (createdId) await db.delete(schema.agentRuns).where(eq(schema.agentRuns.id, createdId));
+      await db.delete(schema.agentRuns).where(eq(schema.agentRuns.id, runId));
+    }
+  });
+
   it('a scratch note authored while signed in as A is invisible to B, with an explicit workspace column (not just authorId)', async () => {
     const noteId = `sk-at11-${stamp}`;
     await db.insert(schema.scratchNotes).values({

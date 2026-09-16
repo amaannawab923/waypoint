@@ -71,6 +71,42 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
     );
   }
 
+  // Fifth review round: getRun/listRuns/listRunsForTicket/listEvents/
+  // appendEvent are now ALSO workspace-scoped (previously only create/
+  // update were, from the fourth round) — same reasoning, wrapped the
+  // same way, so every existing call in this file keeps reaching the
+  // real seeded workspace/member it always meant to instead of falling
+  // back to Personal's WORKSPACE_ID outside any request context.
+  function getRun(id: string, asMemberId = memberId) {
+    return runWithIdentity({ userId: `user-${asMemberId}`, memberId: asMemberId, workspaceId, role: 'admin' }, () =>
+      service.getRun(id),
+    );
+  }
+  function listRuns(query: Parameters<typeof service.listRuns>[0], asMemberId = memberId) {
+    return runWithIdentity({ userId: `user-${asMemberId}`, memberId: asMemberId, workspaceId, role: 'admin' }, () =>
+      service.listRuns(query),
+    );
+  }
+  function listRunsForTicket(ticketId: string, asMemberId = memberId) {
+    return runWithIdentity({ userId: `user-${asMemberId}`, memberId: asMemberId, workspaceId, role: 'admin' }, () =>
+      service.listRunsForTicket(ticketId),
+    );
+  }
+  function listEvents(
+    runId: string,
+    options?: Parameters<typeof service.listEvents>[1],
+    asMemberId = memberId,
+  ) {
+    return runWithIdentity({ userId: `user-${asMemberId}`, memberId: asMemberId, workspaceId, role: 'admin' }, () =>
+      service.listEvents(runId, options),
+    );
+  }
+  function appendEvent(runId: string, input: Parameters<typeof service.appendEvent>[1], asMemberId = memberId) {
+    return runWithIdentity({ userId: `user-${asMemberId}`, memberId: asMemberId, workspaceId, role: 'admin' }, () =>
+      service.appendEvent(runId, input),
+    );
+  }
+
   beforeAll(async () => {
     ({ db } = await import('../db/client.js'));
     service = await import('./agentRuns.service.js');
@@ -141,7 +177,7 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
     expect(run.id).toMatch(/^run-/);
     expect(run.status).toBe('queued');
     expect(run.startedAt).toBeNull();
-    const events = await service.listEvents(run.id);
+    const events = await listEvents(run.id);
     expect(events.map((e) => [e.seq, e.kind])).toEqual([[1, 'created']]);
     expect(events[0].payload).toMatchObject({ entry: 'dispatched', providerId: 'claude', ticketId });
   });
@@ -173,7 +209,7 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
     expect(done.endedAt).not.toBeNull();
     expect(done.summary).toBe('Opened a PR.');
 
-    const events = await service.listEvents(run.id);
+    const events = await listEvents(run.id);
     expect(events.map((e) => [e.seq, e.kind])).toEqual([
       [1, 'created'],
       [2, 'status_changed'],
@@ -196,10 +232,10 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
       'A running run cannot become done; it can become blocked, finishing, interrupted, failed, cancelled.',
     );
 
-    const after = await service.getRun(run.id);
+    const after = await getRun(run.id);
     expect(after?.status).toBe('running');
     expect(after?.summary).toBeNull();
-    const events = await service.listEvents(run.id);
+    const events = await listEvents(run.id);
     expect(events).toHaveLength(3); // created + two moves
   });
 
@@ -207,7 +243,7 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
     const run = await createRun(base());
     const again = await updateRun(run.id, { status: 'queued' });
     expect(again.status).toBe('queued');
-    expect(await service.listEvents(run.id)).toHaveLength(1);
+    expect(await listEvents(run.id)).toHaveLength(1);
   });
 
   it('mints consecutive, unique seqs under concurrent appends', async () => {
@@ -215,7 +251,7 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
 
     const appended = await Promise.all(
       Array.from({ length: 12 }, (_, i) =>
-        service.appendEvent(run.id, { kind: 'note', payload: { i } }),
+        appendEvent(run.id, { kind: 'note', payload: { i } }),
       ),
     );
 
@@ -230,7 +266,7 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
   });
 
   it('appendEvent on an unknown run is a 404, not an FK error', async () => {
-    await expect(service.appendEvent('run-nope', { kind: 'note' })).rejects.toThrow('agent run not found');
+    await expect(appendEvent('run-nope', { kind: 'note' })).rejects.toThrow('agent run not found');
   });
 
   it('a retry is a new row naming the first, and only a finished or interrupted run can be retried', async () => {
@@ -249,11 +285,11 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
     expect(retry.retryOfRunId).toBe(first.id);
     expect(retry.worktreePath).toBeNull();
     // The first run's evidence is untouched (ROAD-56: rows, not upserts).
-    const firstAfter = await service.getRun(first.id);
+    const firstAfter = await getRun(first.id);
     expect(firstAfter?.worktreePath).toBe('/tmp/first');
     expect(firstAfter?.status).toBe('failed');
     // And the ticket lists both, newest first.
-    const forTicket = await service.listRunsForTicket(ticketId);
+    const forTicket = await listRunsForTicket(ticketId);
     const ids = forTicket.map((r) => r.id);
     expect(ids.indexOf(retry.id)).toBeLessThan(ids.indexOf(first.id));
   });
@@ -318,21 +354,21 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
     }
     await updateRun(made[0], { status: 'cancelled' }, owner);
 
-    const page1 = await service.listRuns({ ownerMemberId: owner, limit: 2 });
+    const page1 = await listRuns({ ownerMemberId: owner, limit: 2 });
     expect(page1.items).toHaveLength(2);
     expect(page1.nextCursor).not.toBeNull();
-    const page2 = await service.listRuns({ ownerMemberId: owner, limit: 2, cursor: page1.nextCursor! });
-    const page3 = await service.listRuns({ ownerMemberId: owner, limit: 2, cursor: page2.nextCursor! });
+    const page2 = await listRuns({ ownerMemberId: owner, limit: 2, cursor: page1.nextCursor! });
+    const page3 = await listRuns({ ownerMemberId: owner, limit: 2, cursor: page2.nextCursor! });
     const all = [...page1.items, ...page2.items, ...page3.items].map((r) => r.id);
     expect(all).toHaveLength(5);
     expect(new Set(all).size).toBe(5);
     expect(all).toEqual([...made].reverse());
     expect(page3.nextCursor).toBeNull();
 
-    const queuedOnly = await service.listRuns({ ownerMemberId: owner, status: ['queued'] });
+    const queuedOnly = await listRuns({ ownerMemberId: owner, status: ['queued'] });
     expect(queuedOnly.items.map((r) => r.id)).not.toContain(made[0]);
     expect(queuedOnly.items).toHaveLength(4);
-    await expect(service.listRuns({ ownerMemberId: owner, cursor: 'not-a-cursor' })).rejects.toThrow('invalid cursor');
+    await expect(listRuns({ ownerMemberId: owner, cursor: 'not-a-cursor' })).rejects.toThrow('invalid cursor');
   });
 
   it('a finished run is read-only: a field patch is refused and nothing lands; an idempotent status retry still passes', async () => {
@@ -368,11 +404,11 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
 
     await updateRun(run.id, { status: 'blocked', blockedReason: 'second question' });
 
-    const events = await service.listEvents(run.id);
+    const events = await listEvents(run.id);
     const last = events[events.length - 1];
     expect(last.kind).toBe('blocked_reason_changed');
     expect(last.payload).toEqual({ from: 'first question', to: 'second question' });
-    expect((await service.getRun(run.id))?.status).toBe('blocked');
+    expect((await getRun(run.id))?.status).toBe('blocked');
   });
 
   it('retrying an interrupted run cancels it under the lock, so there is never a second live run on the ticket', async () => {
@@ -382,10 +418,10 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
 
     const retry = await createRun({ ...base(), retryOfRunId: first.id });
 
-    const prior = await service.getRun(first.id);
+    const prior = await getRun(first.id);
     expect(prior?.status).toBe('cancelled');
     expect(prior?.endedAt).not.toBeNull();
-    const priorEvents = await service.listEvents(first.id);
+    const priorEvents = await listEvents(first.id);
     expect(priorEvents[priorEvents.length - 1].payload).toEqual({
       from: 'interrupted',
       to: 'cancelled',
@@ -410,7 +446,7 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
       createRun({ ...base(), retryOfRunId: first.id }),
     ]);
 
-    const after = await service.getRun(first.id);
+    const after = await getRun(first.id);
     if (resume.status === 'fulfilled') {
       expect(retry.status).toBe('rejected');
       expect(after?.status).toBe('running');
@@ -469,7 +505,7 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
       runId = run.id;
       expect(run.ticketId).toBe(ref.id);
       expect(run.projectId).toBeNull();
-      expect((await service.listRunsForTicket(ref.id)).map((r) => r.id)).toEqual([run.id]);
+      expect((await listRunsForTicket(ref.id)).map((r) => r.id)).toEqual([run.id]);
 
       await expect(createRun({ ...base(), projectId: null, ticketId: 'tref-nope0000' })).rejects.toThrow(
         'ticketId does not exist',
@@ -525,7 +561,7 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
     const seen: string[] = [];
     let cursor: string | undefined;
     for (let i = 0; i < 5; i += 1) {
-      const page = await service.listRuns({ ownerMemberId: owner, limit: 1, cursor });
+      const page = await listRuns({ ownerMemberId: owner, limit: 1, cursor });
       seen.push(...page.items.map((r) => r.id));
       if (!page.nextCursor) break;
       cursor = page.nextCursor;

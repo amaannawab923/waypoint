@@ -411,6 +411,12 @@ export async function createRunProposal(
   },
   jiraCredential: JiraCredential | null = null,
 ): Promise<ProposalRow> {
+  // Fifth review round: agentRunsService.getRun is itself workspace-scoped
+  // now, so a cross-tenant agentRunId already resolves to null here —
+  // closing this for both the native path (previously also caught by
+  // ticketsService.getTicket's own guard below) and the Jira path, which
+  // had no such backstop at all (ticket_refs carries no workspace
+  // concept of its own).
   const run = await agentRunsService.getRun(input.agentRunId);
   if (!run) throw new NotFoundError('agent run');
   if (!run.ticketId) throw new ValidationError('this run has no ticket to propose on');

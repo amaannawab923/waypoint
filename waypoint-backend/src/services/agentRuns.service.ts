@@ -1,10 +1,10 @@
-import { and, asc, desc, eq, gt, inArray, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gt, inArray, lt, or, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { agentRuns, agentRunEvents, agentRunTranscripts, ticketRefs, tickets } from '../db/schema/index.js';
+import { agentRuns, agentRunEvents, agentRunTranscripts, members, ticketRefs, tickets } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
 import { ConflictError, NotFoundError, ValidationError } from '../middleware/errors.js';
 import { isExternalRef } from '../lib/externalRefs.js';
-import { currentMemberId } from '../lib/requestContext.js';
+import { currentMemberId, currentWorkspaceId } from '../lib/requestContext.js';
 import { assertConversationOwnedByMember } from './copilot.service.js';
 import {
   canTransition,
@@ -101,6 +101,49 @@ async function lockRun(tx: Tx, runId: string): Promise<AgentRun> {
   return row;
 }
 
+// AT11 (ROAD-146) fifth review round: this whole file had no workspace
+// scoping anywhere — deferred through three review rounds as lower
+// severity than the rest of the audit, until round 4 found two of its
+// fields (ownerMemberId, copilotConversationId) were actually load-bearing
+// for proposals.service.ts's own workspace check, and round 5 proved a
+// live cross-tenant read+destructive-write through the one path that
+// fix didn't cover (updateRun comparing a conversation's ownership
+// against the CALLER instead of the RUN's real owner). That pattern —
+// three rounds, three different load-bearing fields in the same
+// "deferred" file — is what settled it: this file needed the guard the
+// rest of the audit already gives everything else, not another
+// one-field patch.
+//
+// ownerMemberId is not a workspaceId column, but every run's owner is a
+// real member (forced to currentMemberId() at creation since round 4),
+// and every member belongs to exactly one workspace — so joining through
+// ownerMemberId is exactly workspaceProjectIdsSubquery()'s own pattern,
+// one join away instead of a subquery.
+async function ownerWorkspaceId(executor: Tx | typeof db, ownerMemberId: string): Promise<string | null> {
+  const [row] = await executor.select({ workspaceId: members.workspaceId }).from(members).where(eq(members.id, ownerMemberId));
+  return row?.workspaceId ?? null;
+}
+
+/**
+ * Throws NotFoundError('agent run') unless `runId` belongs to a member of
+ * the current request's workspace. For the ROUTE layer only — every
+ * bare-id route in agentRuns.routes.ts calls this before touching the
+ * run. Deliberately NOT called from inside updateRun/appendEvent
+ * themselves: updateRun is also reached from proposals.service.ts's
+ * settleRunIfDecided, including a request-less expiry sweep that
+ * legitimately settles runs across every workspace, where
+ * currentWorkspaceId() would just be Personal's fallback and would
+ * wrongly refuse a real cross-tenant sweep. Functions with no such
+ * request-less caller (getRun, listRuns, listRunsForTicket, createRun's
+ * own retryOfRunId check, appendEvent) scope themselves directly instead.
+ */
+export async function assertRunInWorkspace(runId: string): Promise<void> {
+  const [run] = await db.select({ ownerMemberId: agentRuns.ownerMemberId }).from(agentRuns).where(eq(agentRuns.id, runId));
+  if (!run || (await ownerWorkspaceId(db, run.ownerMemberId)) !== currentWorkspaceId()) {
+    throw new NotFoundError('agent run');
+  }
+}
+
 async function nextSeq(tx: Tx, runId: string): Promise<number> {
   const [{ max }] = await tx
     .select({ max: sql<number>`coalesce(max(${agentRunEvents.seq}), 0)` })
@@ -169,6 +212,16 @@ export async function createRun(input: CreateAgentRunInput): Promise<AgentRun> {
       let prior: AgentRun;
       try {
         prior = await lockRun(tx, input.retryOfRunId);
+        // Fifth review round, proven live: without this, naming another
+        // workspace's real run here cancelled it outright (a forged
+        // 'superseded by a retry' event in a stranger's ledger) — and,
+        // against a still-running one, the ConflictError below leaked
+        // its existence and status to an unrelated tenant. Folded into
+        // this same try so a cross-tenant match reads exactly like a
+        // missing id, not a distinguishable refusal.
+        if ((await ownerWorkspaceId(tx, prior.ownerMemberId)) !== currentWorkspaceId()) {
+          throw new NotFoundError('agent run');
+        }
       } catch (error) {
         // A body field that names nothing is a bad request, not a missing
         // resource — the resource this POST addresses is the collection.
@@ -224,8 +277,15 @@ export async function createRun(input: CreateAgentRunInput): Promise<AgentRun> {
   });
 }
 
+// Fifth review round: scoped directly, safe unconditionally — unlike
+// updateRun, neither of getRun's two callers (the GET /agent-runs/:id
+// route, proposals.service.ts's createRunProposal) is ever request-less.
 export async function getRun(id: string): Promise<AgentRun | null> {
-  const [row] = await db.select().from(agentRuns).where(eq(agentRuns.id, id));
+  const [row] = await db
+    .select(getTableColumns(agentRuns))
+    .from(agentRuns)
+    .innerJoin(members, eq(members.id, agentRuns.ownerMemberId))
+    .where(and(eq(agentRuns.id, id), eq(members.workspaceId, currentWorkspaceId())));
   return row ?? null;
 }
 
@@ -246,10 +306,14 @@ export async function listRuns(query: ListAgentRunsQuery): Promise<RunPage> {
       or(lt(agentRuns.createdAt, at), and(eq(agentRuns.createdAt, at), lt(agentRuns.id, c.id)))!,
     );
   }
+  // Fifth review round: this had no workspace filter at all — every
+  // tenant's whole run list, unpaged past the cursor, to any caller.
+  conditions.push(eq(members.workspaceId, currentWorkspaceId()));
   const rows = await db
     .select({ run: agentRuns, createdAtText: sql<string>`${agentRuns.createdAt}::text` })
     .from(agentRuns)
-    .where(conditions.length ? and(...conditions) : undefined)
+    .innerJoin(members, eq(members.id, agentRuns.ownerMemberId))
+    .where(and(...conditions))
     .orderBy(desc(agentRuns.createdAt), desc(agentRuns.id))
     .limit(limit + 1);
   const hasMore = rows.length > limit;
@@ -263,10 +327,15 @@ export async function listRuns(query: ListAgentRunsQuery): Promise<RunPage> {
 
 /** The ticket drawer's list (ROAD-56): every run ever made about this ticket, newest first. */
 export async function listRunsForTicket(ticketId: string): Promise<AgentRun[]> {
+  // Fifth review round: unscoped — ticketId names a native ticket in any
+  // workspace, or a Jira ledger handle with no workspace concept of its
+  // own (ticket_refs, same gap noted elsewhere in this epic), so filtering
+  // by the run's real owner is the one basis available either way.
   return db
-    .select()
+    .select(getTableColumns(agentRuns))
     .from(agentRuns)
-    .where(eq(agentRuns.ticketId, ticketId))
+    .innerJoin(members, eq(members.id, agentRuns.ownerMemberId))
+    .where(and(eq(agentRuns.ticketId, ticketId), eq(members.workspaceId, currentWorkspaceId())))
     .orderBy(desc(agentRuns.createdAt), desc(agentRuns.id));
 }
 
@@ -288,7 +357,13 @@ export async function listEvents(
 
 export async function appendEvent(runId: string, input: AppendAgentRunEventInput): Promise<AgentRunEvent> {
   return db.transaction(async (tx) => {
-    await lockRun(tx, runId);
+    const run = await lockRun(tx, runId);
+    // Fifth review round: safe to scope directly here (unlike updateRun,
+    // this function's only caller is its own route — never
+    // settleRunIfDecided's request-less sweep).
+    if ((await ownerWorkspaceId(tx, run.ownerMemberId)) !== currentWorkspaceId()) {
+      throw new NotFoundError('agent run');
+    }
     return writeEvent(tx, runId, input.kind, input.payload ?? {});
   });
 }
@@ -319,10 +394,16 @@ export async function saveTranscript(
 }
 
 export async function getTranscript(runId: string): Promise<AgentRunTranscript | null> {
+  // Fifth review round: previously had no ownership check on the run at
+  // all — a full session transcript of another tenant's agent run, by
+  // id, to anyone. Safe to scope directly: this function's only caller
+  // is its own route.
   const [row] = await db
-    .select()
+    .select(getTableColumns(agentRunTranscripts))
     .from(agentRunTranscripts)
-    .where(eq(agentRunTranscripts.runId, runId))
+    .innerJoin(agentRuns, eq(agentRuns.id, agentRunTranscripts.runId))
+    .innerJoin(members, eq(members.id, agentRuns.ownerMemberId))
+    .where(and(eq(agentRunTranscripts.runId, runId), eq(members.workspaceId, currentWorkspaceId())))
     .limit(1);
   return row ? { ...row, turns: row.turns as unknown[] } : null;
 }
@@ -344,10 +425,25 @@ export async function updateRun(runId: string, input: UpdateAgentRunInput): Prom
     // AT11 (ROAD-146) third review round: same reasoning as createRun's
     // own copilotConversationId check above — this field is load-bearing
     // for proposals.service.ts's workspace check, so a PATCH cannot be
-    // allowed to repoint an existing run at a conversation the caller
-    // doesn't own either.
+    // allowed to repoint an existing run at a conversation its own owner
+    // doesn't hold.
+    //
+    // Fifth review round, proven live: this compared the conversation
+    // against currentMemberId() — the CALLER — not current.ownerMemberId
+    // — the RUN's real owner. Those are only the same person when you're
+    // patching your own run, which nothing here checks; PATCHing a
+    // stranger's run to point at your OWN conversation passed this
+    // check every time. createRunProposal then copies that conversation
+    // id onto the run's next proposal, and proposalWorkspaceCondition's
+    // conversation branch renders it in YOUR queue — with the victim's
+    // ticket title/identifier and report body — even though the run,
+    // and its ownerMemberId, both still belong to them. Comparing
+    // against the run's own owner instead closes this regardless of who
+    // is doing the patching, request-context or not — this is a data-
+    // to-data check, not a caller-to-data one, so it stays correct for
+    // settleRunIfDecided's request-less callers below too.
     if (fields.copilotConversationId) {
-      await assertConversationOwnedByMember(fields.copilotConversationId, currentMemberId());
+      await assertConversationOwnedByMember(fields.copilotConversationId, current.ownerMemberId);
     }
     // A finished run is evidence. Found in review: the header promised
     // "nothing here updates a finished run's worktree or outcome" while a

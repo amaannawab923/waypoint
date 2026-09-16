@@ -50,6 +50,12 @@ agentRunsRouter.patch(
   '/agent-runs/:id',
   asyncHandler(async (req, res) => {
     const patch = updateAgentRunSchema.parse(req.body);
+    // AT11 (ROAD-146) fifth review round: updateRun itself can't carry
+    // this check — it's also reached from proposals.service.ts's
+    // settleRunIfDecided, including a request-less expiry sweep that
+    // legitimately settles runs across every workspace — so the guard
+    // lives here, at the one call site that's always a real request.
+    await agentRunsService.assertRunInWorkspace(req.params.id);
     res.json(await agentRunsService.updateRun(req.params.id, patch));
   }),
 );
