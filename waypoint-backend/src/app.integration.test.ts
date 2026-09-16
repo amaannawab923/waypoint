@@ -4,14 +4,18 @@ import express from 'express';
 import request from 'supertest';
 import postgres from 'postgres';
 
-// AT13 (ROAD-148) QA pass. A real browser reaching the sign-in/join pages
-// directly — not the desktop app's own fetch — sends an Origin header on
-// its form POST, same as any other cross-origin-looking request. app.ts's
-// cors() allowlist only ever contemplated the desktop app's own origins
-// (the webpack dev server, app://waypoint), so every real self-hosted
-// sign-in was silently 403ing before this fix — caught live, not by
-// reading the code, since every curl-based check this epic ran until now
-// never sent an Origin header at all and so never hit this path.
+// AT13 (ROAD-148) QA pass. A real browser reaching /sign-in or
+// /join/:token directly (not through the desktop app's own fetch)
+// submits a same-origin form POST back to this same backend — and a
+// same-origin POST still carries a real Origin header, unlike the GET
+// navigation that got it there in the first place (real browsers send no
+// Origin on a plain top-level GET, so that half of the flow was never
+// actually broken). That origin is this backend's own
+// (auth/redirect.ts's publicBaseUrl), never going to be in an allowlist
+// built for the desktop app's origins — so POST /auth/email/start
+// 403'd for every real browser before this fix, caught live rather than
+// by reading the code: every curl-based check this epic ran until now
+// never sent an Origin header at all, masking it entirely.
 //
 // Skipped, not failed, without a reachable database — same convention as
 // every other *.integration.test.ts file in this project.
@@ -31,28 +35,44 @@ async function databaseReachable(): Promise<boolean> {
 
 const REAL_DB = await databaseReachable();
 
-describe.skipIf(!REAL_DB)('publicPageRouter is reachable from a real browser origin (AT13)', () => {
+describe.skipIf(!REAL_DB)("this backend's own origin is allowed through CORS (AT13)", () => {
   let app: express.Express;
+  let publicBaseUrl: typeof import('./auth/redirect.js')['publicBaseUrl'];
 
   const A_FOREIGN_ORIGIN = 'http://a-real-browser-tab.example';
 
-  it('serves /sign-in even with an Origin header no allowlist could ever contain', async () => {
+  it("accepts POST /auth/email/start from this backend's own origin — the exact request shape that 403'd before this fix", async () => {
+    ({ publicBaseUrl } = await import('./auth/redirect.js'));
     const { createApp } = await import('./app.js');
     app = createApp();
 
     const res = await request(app)
-      .get('/sign-in')
-      .query({ redirect_uri: 'http://127.0.0.1:45999/callback', state: 'a-real-32-char-or-longer-state-value' })
-      .set('Origin', A_FOREIGN_ORIGIN);
+      .post('/auth/email/start')
+      .type('form')
+      .set('Origin', publicBaseUrl(process.env))
+      .send({ email: `qa-${Date.now()}@example.test`, redirect_uri: 'http://127.0.0.1:45999/callback', state: 'a-real-32-char-or-longer-state-value' });
 
-    // 503 (setup not completed on whatever instance this runs against) is
-    // an acceptable outcome here — the point is it's not the 403 a CORS
-    // rejection would have produced; either status means the request
-    // reached the route handler at all.
-    expect([200, 503]).toContain(res.status);
+    // Not 403: the request reached the route handler. A real outcome
+    // (200 "check your email", or a 400/503 from setup/config state on
+    // whatever instance this runs against) both prove the same thing —
+    // CORS didn't block it.
+    expect(res.status).not.toBe(403);
   });
 
-  it('still blocks that same foreign Origin from the JSON API this CORS policy actually protects', async () => {
+  it('still rejects that same route for an origin with no legitimate reason to call it', async () => {
+    const { createApp } = await import('./app.js');
+    app = createApp();
+
+    const res = await request(app)
+      .post('/auth/email/start')
+      .type('form')
+      .set('Origin', A_FOREIGN_ORIGIN)
+      .send({ email: 'someone@example.test', redirect_uri: 'http://127.0.0.1:45999/callback', state: 'a-real-32-char-or-longer-state-value' });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('still blocks that same foreign origin from the JSON API this CORS policy actually protects', async () => {
     const { createApp } = await import('./app.js');
     app = createApp();
 
@@ -61,7 +81,7 @@ describe.skipIf(!REAL_DB)('publicPageRouter is reachable from a real browser ori
     expect(res.status).toBe(403);
   });
 
-  it('still serves the same JSON API route for the desktop app\'s own origin', async () => {
+  it("still serves the same JSON API route for the desktop app's own origin", async () => {
     const { createApp } = await import('./app.js');
     app = createApp();
 

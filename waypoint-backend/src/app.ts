@@ -1,23 +1,13 @@
 import express from 'express';
 import cors from 'cors';
-import { apiRouter, identityOnlyRouter, publicPageRouter } from './routes/index.js';
+import { apiRouter, identityOnlyRouter } from './routes/index.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { asyncHandler } from './middleware/asyncHandler.js';
 import { resolveMember } from './middleware/resolveMember.js';
+import { publicBaseUrl } from './auth/redirect.js';
 
 export function createApp() {
   const app = express();
-
-  // Mounted before the CORS origin check below, not just before
-  // resolveMember the way the rest of identityOnlyRouter is — see
-  // routes/index.ts's own comment on publicPageRouter for why: these are
-  // the sign-in/join pages a real browser loads and form-submits to
-  // directly, and that check exists to protect the JSON API from a
-  // malicious background fetch(), a threat these public, no-ambient-
-  // credential pages were never exposed to in the first place — only
-  // broken by.
-  app.use(publicPageRouter);
-
   // Origin is restricted (not auth — there's still none in this phase) so
   // an arbitrary webpage a developer has open can't call this API from a
   // background fetch() while the stack is running; a wildcard origin
@@ -50,7 +40,27 @@ export function createApp() {
   // survive as a truthy empty string, split into [''], and reject every
   // origin including the packaged app's, failing the whole API closed with
   // no indication why.
-  const allowedOrigins = (process.env.CORS_ORIGIN || defaultAllowedOrigins).split(',').map((o) => o.trim());
+  const configuredOrigins = (process.env.CORS_ORIGIN || defaultAllowedOrigins).split(',').map((o) => o.trim());
+  // Always allowed, and deliberately not foldable into CORS_ORIGIN's own
+  // override above: a real browser reaching /sign-in or /join/:token
+  // directly (not through the desktop app's own fetch) submits a
+  // same-origin form POST back to this same backend — and a same-origin
+  // POST still carries a real Origin header, unlike the GET navigation
+  // that got it there. That origin is this backend's own
+  // (auth/redirect.ts's publicBaseUrl, the same value already used to
+  // build every OAuth callback URL), never going to be in an allowlist
+  // built for the desktop app's origins. Missing this exact case 403'd
+  // every real self-hosted sign-in attempt — found live, since every
+  // curl-based check this epic ran until now never sent an Origin header
+  // at all. Kept as a real origin check rather than exempting these
+  // routes from it entirely (an earlier version of this fix tried that,
+  // routing them before this middleware — round 2 review found it also
+  // exempted POST /auth/email/start, side-effectful and previously
+  // curl-only-reachable, from CORS with no rate limiting anywhere in this
+  // backend to fall back on): this way every route these pages expose
+  // stays behind the same check, just with the one legitimate additional
+  // origin these pages themselves run on.
+  const allowedOrigins = [...configuredOrigins, publicBaseUrl(process.env)];
   app.use(
     cors({
       origin(origin, callback) {
