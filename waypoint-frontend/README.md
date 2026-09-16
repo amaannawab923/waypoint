@@ -26,6 +26,24 @@ npm start
 shell together, with hot reload on both sides. Make sure `waypoint-backend` is
 running first (see its own README) — this app has no built-in mock/offline mode.
 
+### Behind a corporate proxy (Jira, GitHub, or Waypoint's own backend won't connect)
+
+A TLS-inspecting proxy (Netskope, Zscaler, and similar VPN/security clients)
+re-signs outbound HTTPS with its own certificate. The app already trusts
+whatever your OS's own certificate store trusts (`main/net/systemCaTrust.ts`)
+— on a company-managed Mac or Windows machine this is usually enough on its
+own, since that's the same store Chrome and Safari already trust the proxy's
+certificate through.
+
+If a connection still fails with a certificate-trust error after that, set
+`NODE_EXTRA_CA_CERTS` to a PEM file containing your proxy's full certificate
+chain (both the intermediate and the root — the intermediate alone produces
+a different error) before starting the app:
+
+```bash
+NODE_EXTRA_CA_CERTS="/path/to/proxy-ca-chain.pem" npm start
+```
+
 ## Building a packaged app
 
 ```bash

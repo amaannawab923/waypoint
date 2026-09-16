@@ -1,6 +1,6 @@
 {
   "name": "waypoint-frontend",
-  "description": "Waypoint's native Electron desktop app \u2014 the client for a project management tool that ships as a real desktop application instead of a browser tab.",
+  "description": "Waypoint's native Electron desktop app — the client for a project management tool that ships as a real desktop application instead of a browser tab.",
   "engines": {
     "node": ">=22"
   },
@@ -130,6 +130,7 @@
     "react-router-dom": "^7.18.2",
     "recharts": "^3.10.1",
     "solid-js": "1.9.13",
+    "undici": "^7.29.1",
     "uuid": "^14.0.1",
     "zustand": "^5.0.15"
   },

@@ -266,6 +266,26 @@ describe('validateCredential', () => {
     });
   });
 
+  // A corporate TLS-inspecting proxy (Netskope, Zscaler, ...) whose root
+  // isn't in this machine's OS trust store — installSystemCaTrust()
+  // (main/net/systemCaTrust.ts) already resolves the common case of this
+  // before a request gets here; this is the actionable message for
+  // whatever's left, rather than the same generic "check your connection"
+  // text a typo'd URL or a dead wifi connection would also produce.
+  it('gives actionable, proxy-specific guidance for a certificate trust failure', async () => {
+    fetchMock.mockRejectedValue(
+      Object.assign(new TypeError('fetch failed'), {
+        cause: { code: 'SELF_SIGNED_CERT_IN_CHAIN' },
+      }),
+    );
+
+    const result = await validateCredential(CREDENTIAL);
+    expect(result).toMatchObject({ ok: false, reason: 'network' });
+    expect((result as { message: string }).message).toMatch(
+      /certificate.*corporate network/i,
+    );
+  });
+
   // A hostname that answers on https with a login page is not a Jira site;
   // saying so beats a downstream "cannot read property of undefined".
   it('rejects a 200 that is not a Jira API response', async () => {

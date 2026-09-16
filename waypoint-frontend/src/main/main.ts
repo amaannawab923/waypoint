@@ -31,6 +31,14 @@ import { registerJiraIpc } from './jira/jiraIpc';
 import { registerAccountIpc } from './account/accountIpc';
 import { registerRepoLinkIpc } from './repoLink';
 import { registerEngineIpc } from './engine/engineIpc';
+import { installSystemCaTrust } from './net/systemCaTrust';
+
+// Runs before anything else touches the network: every main-process fetch
+// below (Jira, the hosted-workspace backend, sign-in, GitHub proposal
+// approval) shares this one ambient `fetch`, so configuring its trust store
+// once, here, covers all of them — no Electron `app` dependency, so no
+// reason to wait for app.whenReady().
+installSystemCaTrust();
 
 // Opt-in remote debugging for scripted/agent-driven QA (docs/qa-electron.md)
 // — off unless ELECTRON_QA_DEBUG_PORT is set, so normal dev/prod runs are
