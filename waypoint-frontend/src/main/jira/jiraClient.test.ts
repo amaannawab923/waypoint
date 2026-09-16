@@ -286,6 +286,30 @@ describe('validateCredential', () => {
     );
   });
 
+  // Deliberately excluded from the proxy-specific guidance above: these
+  // point at a real problem with Jira's own certificate (expired, wrong
+  // hostname) rather than this computer's trust store, so telling someone
+  // to "check with IT" would be actively wrong — an expired cert or a
+  // hostname mismatch can also be a genuine MITM, and the proxy-specific
+  // message would steer them toward trusting it anyway. Locked in here so
+  // a future "let's also cover this code" edit can't silently fold them
+  // into CERT_TRUST_ERROR_CODES without a test noticing.
+  it.each(['CERT_HAS_EXPIRED', 'ERR_TLS_CERT_ALTNAME_INVALID'])(
+    'gives the generic message, not proxy-specific guidance, for %s',
+    async (code) => {
+      fetchMock.mockRejectedValue(
+        Object.assign(new TypeError('fetch failed'), { cause: { code } }),
+      );
+
+      const result = await validateCredential(CREDENTIAL);
+      expect(result).toMatchObject({
+        ok: false,
+        reason: 'network',
+        message: "Couldn't reach Jira. Check your connection and try again.",
+      });
+    },
+  );
+
   // A hostname that answers on https with a login page is not a Jira site;
   // saying so beats a downstream "cannot read property of undefined".
   it('rejects a 200 that is not a Jira API response', async () => {
