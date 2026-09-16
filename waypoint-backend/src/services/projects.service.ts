@@ -259,8 +259,26 @@ export interface CreateProjectInput {
   leadId?: string | null;
 }
 
+// Ninth review round, proven live: leadId/defaultAssigneeId are real FKs to
+// members.id (see db/schema/projects.ts) written with no check at all —
+// the same round-8 class already closed for these exact columns on sprints
+// and workstreams (assertMembersInWorkspace) and for project MEMBERSHIP
+// itself (addProjectMember's memberId), just never reached on the project
+// row's own two member columns.
+async function assertMembersInWorkspace(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const rows = await db
+    .select({ id: members.id })
+    .from(members)
+    .where(and(inArray(members.id, ids), eq(members.workspaceId, currentWorkspaceId())));
+  const known = new Set(rows.map((r) => r.id));
+  const unknown = ids.filter((id) => !known.has(id));
+  if (unknown.length) throw new ValidationError(`unknown member id(s): ${unknown.join(', ')}`);
+}
+
 export async function createProject(input: CreateProjectInput): Promise<ProjectWithCounts> {
   const identifier = input.identifier.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) || 'PROJ';
+  await assertMembersInWorkspace(input.leadId ? [input.leadId] : []);
   return db.transaction(async (tx) => {
     const [project] = await tx
       .insert(projects)
@@ -342,6 +360,10 @@ export async function updateProject(
   patch: Partial<typeof projects.$inferInsert>,
 ): Promise<ProjectWithCounts> {
   await assertProjectInWorkspace(id);
+  await assertMembersInWorkspace([
+    ...(patch.leadId ? [patch.leadId] : []),
+    ...(patch.defaultAssigneeId ? [patch.defaultAssigneeId] : []),
+  ]);
   // An explicit `null` (unlink) skips validation entirely — clearing is
   // always safe, and a checkout that has since been deleted must still be
   // unlinkable.

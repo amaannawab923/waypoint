@@ -13,12 +13,13 @@ vi.mock('../db/client.js', () => ({ db }));
 
 vi.mock('drizzle-orm', async (importOriginal) => {
   const actual = await importOriginal<typeof import('drizzle-orm')>();
-  return { ...actual, inArray: vi.fn(actual.inArray) };
+  return { ...actual, inArray: vi.fn(actual.inArray), eq: vi.fn(actual.eq) };
 });
 
 const { members, agents } = await import('../db/schema/index.js');
 const { resolveActorNames } = await import('./actorNames.js');
-const { inArray } = await import('drizzle-orm');
+const { inArray, eq } = await import('drizzle-orm');
+const { runWithIdentity } = await import('./requestContext.js');
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -62,5 +63,31 @@ describe('resolveActorNames', () => {
     const result = await resolveActorNames(['mem-ghost']);
 
     expect(result.has('mem-ghost')).toBe(false);
+  });
+
+  // Ninth review round, proven live: every prior caller only ever handed
+  // this ids read back off an already-scoped row, so an unscoped lookup
+  // survived eight rounds — but mcp/proposalTools.ts hands it a
+  // caller-supplied assigneeId directly, turning a cross-tenant id into a
+  // real display-name read plus an existence oracle. Both lookups must be
+  // filtered to the caller's own workspace, not just deduplicated ids.
+  it('scopes both the member and the agent lookup to the current request workspace', async () => {
+    db.select.mockReturnValueOnce(chainable([])).mockReturnValueOnce(chainable([]));
+
+    await runWithIdentity({ userId: 'u-1', memberId: 'mem-1', workspaceId: 'ws-at11', role: 'member' }, () =>
+      resolveActorNames(['mem-4']),
+    );
+
+    expect(eq).toHaveBeenCalledWith(members.workspaceId, 'ws-at11');
+    expect(eq).toHaveBeenCalledWith(agents.workspaceId, 'ws-at11');
+  });
+
+  it('falls back to the Personal workspace constant outside any request context', async () => {
+    db.select.mockReturnValueOnce(chainable([])).mockReturnValueOnce(chainable([]));
+
+    await resolveActorNames(['mem-4']);
+
+    expect(eq).toHaveBeenCalledWith(members.workspaceId, 'ws-1');
+    expect(eq).toHaveBeenCalledWith(agents.workspaceId, 'ws-1');
   });
 });

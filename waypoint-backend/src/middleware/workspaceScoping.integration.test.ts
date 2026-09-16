@@ -377,6 +377,34 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
     expect(rows.map((r) => r.memberId)).not.toContain(A.memberId);
   });
 
+  // Ninth review round: the round-8 class ("foreign id written into an
+  // already-guarded row") missed projects' own leadId/defaultAssigneeId —
+  // the exact same FK-to-members shape already closed for sprints and
+  // workstreams (and for project membership itself), one function over.
+  it('PATCH /projects/:id on A\'s own project with B\'s memberId as leadId refuses as 400, and leaves it unset', async () => {
+    const res = await request(app).patch(`/projects/${A.projectId}`).set(asA()).send({ leadId: B.memberId });
+    expect(res.status).toBe(400);
+    const [row] = await db.select().from(schema.projects).where(eq(schema.projects.id, A.projectId));
+    expect(row?.leadId).not.toBe(B.memberId);
+  });
+
+  it('PATCH /projects/:id on A\'s own project with B\'s memberId as defaultAssigneeId refuses as 400, and leaves it unset', async () => {
+    const res = await request(app).patch(`/projects/${A.projectId}`).set(asA()).send({ defaultAssigneeId: B.memberId });
+    expect(res.status).toBe(400);
+    const [row] = await db.select().from(schema.projects).where(eq(schema.projects.id, A.projectId));
+    expect(row?.defaultAssigneeId).not.toBe(B.memberId);
+  });
+
+  it('POST /projects with B\'s memberId as leadId refuses as 400, and creates no project', async () => {
+    const res = await request(app)
+      .post('/projects')
+      .set(asA())
+      .send({ name: 'pwned via leadId', identifier: 'PWND', leadId: B.memberId });
+    expect(res.status).toBe(400);
+    const rows = await db.select().from(schema.projects).where(eq(schema.projects.name, 'pwned via leadId'));
+    expect(rows).toHaveLength(0);
+  });
+
   it('GET /tickets/:id refuses B\'s ticket as 404', async () => {
     const res = await request(app).get(`/tickets/${B.ticketId}`).set(asA());
     expect(res.status).toBe(404);
