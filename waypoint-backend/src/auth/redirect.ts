@@ -35,11 +35,20 @@ export function publicBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
 // three are trusted here specifically for loopback, since nothing about
 // the actual security boundary (a real sign-in through this same
 // backend) depends on which spelling reached it.
-const LOOPBACK_HOSTNAME_SIBLINGS: Record<string, string[]> = {
-  localhost: ['127.0.0.1', '[::1]'],
-  '127.0.0.1': ['localhost', '[::1]'],
-  '[::1]': ['localhost', '127.0.0.1'],
-};
+// Map, not a plain object literal (round 7 review): a plain-object lookup
+// keyed on an arbitrary hostname string can hit Object.prototype instead
+// of missing cleanly — PUBLIC_BASE_URL=http://constructor or
+// http://__proto__ both parse and lowercase into a real property lookup
+// that would otherwise return Object/Object.prototype, a truthy
+// non-array value the loop below can't iterate. Neither is a hostname
+// any operator would plausibly write and this is operator config, not
+// attacker-reachable input, but a Map sidesteps the whole prototype
+// chain for the cost of three .set() calls.
+const LOOPBACK_HOSTNAME_SIBLINGS = new Map<string, string[]>([
+  ['localhost', ['127.0.0.1', '[::1]']],
+  ['127.0.0.1', ['localhost', '[::1]']],
+  ['[::1]', ['localhost', '127.0.0.1']],
+]);
 
 export function corsOriginsForBackend(publicBaseUrlValue: string): string[] {
   // Empty, not [publicBaseUrlValue], on both rejection paths below.
@@ -69,7 +78,7 @@ export function corsOriginsForBackend(publicBaseUrlValue: string): string[] {
   // becomes the scheme — and produces exactly this).
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return [];
   const origins = [u.origin];
-  const siblings = LOOPBACK_HOSTNAME_SIBLINGS[u.hostname];
+  const siblings = LOOPBACK_HOSTNAME_SIBLINGS.get(u.hostname);
   if (siblings) {
     for (const sibling of siblings) origins.push(`${u.protocol}//${sibling}${u.port ? `:${u.port}` : ''}`);
   }

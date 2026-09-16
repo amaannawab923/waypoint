@@ -75,6 +75,14 @@ describe('corsOriginsForBackend', () => {
     expect(corsOriginsForBackend('https://waypoint.example.com')).toEqual(['https://waypoint.example.com']);
   });
 
+  // Round-7 review: a plain-object sibling lookup keyed on an arbitrary
+  // hostname could hit Object.prototype instead of missing cleanly for
+  // these two (not realistic operator config, but a real object-literal
+  // footgun) — must still return just the bare origin, not throw.
+  it.each(['constructor', '__proto__'])('treats %s as an ordinary non-loopback hostname, not a prototype lookup', (hostname) => {
+    expect(corsOriginsForBackend(`http://${hostname}`)).toEqual([`http://${hostname}`]);
+  });
+
   it('returns nothing — not the raw string — for an unparseable value', () => {
     // Round-5 review: an earlier version returned [rawString] here,
     // reasoning no raw string could ever match a real Origin header.
