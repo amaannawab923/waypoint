@@ -17,7 +17,13 @@ export function smtpConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
 export function createSmtpMailer(env: NodeJS.ProcessEnv = process.env): Mailer {
   const host = env.SMTP_HOST!.trim();
   const from = env.SMTP_FROM!.trim();
-  const port = Number(env.SMTP_PORT ?? 587);
+  // `?.trim() || 587`, not `?? 587`: the Dockerized api service (AT13,
+  // ROAD-148) sets SMTP_PORT via Compose's ${SMTP_PORT:-} when it's left
+  // unset, which resolves to an empty string, not undefined — `??` would
+  // have let that through as `Number('')` (0), landing on `secure: false`
+  // by an accident of nodemailer's own fallback rather than this line's
+  // own logic. Matches smtpConfigured's own trim-then-check above.
+  const port = Number(env.SMTP_PORT?.trim() || 587);
   const user = env.SMTP_USER?.trim();
   const pass = env.SMTP_PASS;
   const transport = nodemailer.createTransport({

@@ -1,12 +1,23 @@
 import express from 'express';
 import cors from 'cors';
-import { apiRouter, identityOnlyRouter } from './routes/index.js';
+import { apiRouter, identityOnlyRouter, publicPageRouter } from './routes/index.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { asyncHandler } from './middleware/asyncHandler.js';
 import { resolveMember } from './middleware/resolveMember.js';
 
 export function createApp() {
   const app = express();
+
+  // Mounted before the CORS origin check below, not just before
+  // resolveMember the way the rest of identityOnlyRouter is — see
+  // routes/index.ts's own comment on publicPageRouter for why: these are
+  // the sign-in/join pages a real browser loads and form-submits to
+  // directly, and that check exists to protect the JSON API from a
+  // malicious background fetch(), a threat these public, no-ambient-
+  // credential pages were never exposed to in the first place — only
+  // broken by.
+  app.use(publicPageRouter);
+
   // Origin is restricted (not auth — there's still none in this phase) so
   // an arbitrary webpage a developer has open can't call this API from a
   // background fetch() while the stack is running; a wildcard origin

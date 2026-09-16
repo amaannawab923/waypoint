@@ -43,7 +43,17 @@ RUN chmod +x docker-entrypoint.sh && chown -R node:node /app
 # this directory needs to exist, with the right owner, before that
 # happens: without it, the `node` user this container actually runs as
 # (below) gets EACCES the first time it tries to write the key.
-RUN mkdir -p /data/secrets && chown node:node /data/secrets
+#
+# chmod 700, not just chown: secretBox.ts's own keyFilePath() asks
+# mkdirSync for mode 0700 on this directory, but mkdirSync doesn't chmod a
+# directory that already exists — and on this path it always already
+# does, since creating it is the point of the line above. Without this,
+# umask leaves it at the shell's default 0755: the key file itself still
+# enforces its own 0600 regardless (secretBox.ts writes it with that
+# mode), so this isn't a read exposure, but it's real metadata exposure —
+# anything else that can see this volume could confirm a key exists here
+# — and it's the mode this directory was always supposed to have.
+RUN mkdir -p /data/secrets && chown node:node /data/secrets && chmod 700 /data/secrets
 
 USER node
 EXPOSE 4000
