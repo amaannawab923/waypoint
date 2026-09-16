@@ -1,10 +1,16 @@
-import { eq, asc, count, inArray } from 'drizzle-orm';
+import { and, eq, asc, count, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { ticketStates, tickets } from '../db/schema/index.js';
 import { NotFoundError } from '../middleware/errors.js';
 import { newId } from '../lib/ids.js';
+import { assertProjectInWorkspace, workspaceProjectIdsSubquery } from '../lib/workspaceGuard.js';
 
+// AT11 (ROAD-146) seventh review round: entirely unaudited — same gap
+// shape as labels.service.ts, plus a populated state (tickets.stateId is
+// ON DELETE RESTRICT) turned a cross-tenant deleteState into a 500 on
+// someone else's project rather than a clean refusal.
 export async function listStates(projectId: string) {
+  await assertProjectInWorkspace(projectId);
   return db
     .select()
     .from(ticketStates)
@@ -23,7 +29,7 @@ export async function resolveStateNames(ids: string[]): Promise<Map<string, { na
   const rows = await db
     .select({ id: ticketStates.id, name: ticketStates.name, group: ticketStates.group })
     .from(ticketStates)
-    .where(inArray(ticketStates.id, uniqueIds));
+    .where(and(inArray(ticketStates.id, uniqueIds), inArray(ticketStates.projectId, workspaceProjectIdsSubquery())));
   return new Map(rows.map((row) => [row.id, { name: row.name, group: row.group }]));
 }
 
@@ -31,6 +37,7 @@ export async function createState(
   projectId: string,
   input: { name: string; group: (typeof ticketStates.$inferInsert)['group']; color: string },
 ) {
+  // listStates already asserts the project is in-workspace.
   const existing = await listStates(projectId);
   const [row] = await db
     .insert(ticketStates)
@@ -48,16 +55,26 @@ export async function createState(
 }
 
 export async function updateState(id: string, patch: Partial<typeof ticketStates.$inferInsert>) {
-  const [row] = await db.update(ticketStates).set(patch).where(eq(ticketStates.id, id)).returning();
+  const [row] = await db
+    .update(ticketStates)
+    .set(patch)
+    .where(and(eq(ticketStates.id, id), inArray(ticketStates.projectId, workspaceProjectIdsSubquery())))
+    .returning();
   if (!row) throw new NotFoundError('state');
   return row;
 }
 
 export async function countTicketsInState(stateId: string) {
-  const [row] = await db.select({ n: count() }).from(tickets).where(eq(tickets.stateId, stateId));
+  const [row] = await db
+    .select({ n: count() })
+    .from(tickets)
+    .innerJoin(ticketStates, eq(ticketStates.id, tickets.stateId))
+    .where(and(eq(tickets.stateId, stateId), inArray(ticketStates.projectId, workspaceProjectIdsSubquery())));
   return row?.n ?? 0;
 }
 
 export async function deleteState(id: string) {
-  await db.delete(ticketStates).where(eq(ticketStates.id, id));
+  await db
+    .delete(ticketStates)
+    .where(and(eq(ticketStates.id, id), inArray(ticketStates.projectId, workspaceProjectIdsSubquery())));
 }

@@ -1,11 +1,18 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { requests } from '../db/schema/index.js';
 import { NotFoundError, ConflictError } from '../middleware/errors.js';
 import { newId } from '../lib/ids.js';
+import { assertProjectInWorkspace, workspaceProjectIdsSubquery } from '../lib/workspaceGuard.js';
 import { createTicket } from './tickets.service.js';
 
+// AT11 (ROAD-146) seventh review round: entirely unaudited — listRequests
+// leaked another workspace's whole intake inbox, INCLUDING sourceEmail
+// (third-party customer PII, not even the caller's own teammate's), and
+// updateRequestStatus/convertRequestToTicket took a bare id with no
+// scoping at all.
 export async function listRequests(projectId: string) {
+  await assertProjectInWorkspace(projectId);
   return db.select().from(requests).where(eq(requests.projectId, projectId));
 }
 
@@ -19,6 +26,7 @@ export interface CreateRequestInput {
 }
 
 export async function createRequest(input: CreateRequestInput) {
+  await assertProjectInWorkspace(input.projectId);
   const [row] = await db
     .insert(requests)
     .values({
@@ -38,7 +46,11 @@ export async function createRequest(input: CreateRequestInput) {
 }
 
 export async function updateRequestStatus(id: string, status: (typeof requests.$inferInsert)['status']) {
-  const [row] = await db.update(requests).set({ status }).where(eq(requests.id, id)).returning();
+  const [row] = await db
+    .update(requests)
+    .set({ status })
+    .where(and(eq(requests.id, id), inArray(requests.projectId, workspaceProjectIdsSubquery())))
+    .returning();
   if (!row) throw new NotFoundError('request');
   return row;
 }
@@ -48,7 +60,10 @@ export async function convertRequestToTicket(
   stateId: string,
   overrides?: { title?: string; description?: string; priority?: (typeof requests.$inferInsert)['priority'] },
 ) {
-  const [request] = await db.select().from(requests).where(eq(requests.id, id));
+  const [request] = await db
+    .select()
+    .from(requests)
+    .where(and(eq(requests.id, id), inArray(requests.projectId, workspaceProjectIdsSubquery())));
   if (!request) throw new NotFoundError('request');
   if (request.linkedTicketId) {
     throw new ConflictError(`request already converted to ${request.linkedTicketId}`);

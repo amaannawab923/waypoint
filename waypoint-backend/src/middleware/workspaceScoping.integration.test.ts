@@ -68,6 +68,8 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
     webhookId: `wh-at11-a-${stamp}`,
     exportId: `exp-at11-a-${stamp}`,
     notificationId: `notif-at11-a-${stamp}`,
+    labelId: `lbl-at11-a-${stamp}`,
+    requestId: `in-at11-a-${stamp}`,
     token: '',
   };
   const B = {
@@ -91,6 +93,8 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
     webhookId: `wh-at11-b-${stamp}`,
     exportId: `exp-at11-b-${stamp}`,
     notificationId: `notif-at11-b-${stamp}`,
+    labelId: `lbl-at11-b-${stamp}`,
+    requestId: `in-at11-b-${stamp}`,
   };
 
   function asA() {
@@ -264,6 +268,21 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
       actorId: t.memberId,
       message: `AT11 notification ${t.workspaceId}`,
       kind: 'mention',
+    });
+    // Seventh review round: labels/states/requests/workspace were all
+    // entirely unaudited before this round.
+    await db.insert(schema.labels).values({
+      id: t.labelId,
+      projectId: t.projectId,
+      name: `AT11 label ${t.workspaceId}`,
+      color: '#000000',
+    });
+    await db.insert(schema.requests).values({
+      id: t.requestId,
+      projectId: t.projectId,
+      title: `AT11 request ${t.workspaceId}`,
+      sourceName: 'AT11 Customer',
+      sourceEmail: `customer-${t.workspaceId}@example.test`,
     });
   }
 
@@ -1084,6 +1103,118 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
     expect(res.status).toBe(204);
     const [row] = await db.select().from(schema.notifications).where(eq(schema.notifications.id, B.notificationId));
     expect(row?.read).toBe(false);
+  });
+
+  // Seventh review round: workspace.service.ts was never touched by the
+  // audit at all — GET/PATCH /workspace read and wrote the pre-AT11
+  // WORKSPACE_ID constant directly, so any hosted tenant's own workspace
+  // page would have shown, and let them destructively rewrite, Personal's
+  // real ws-1 row instead of their own.
+  it('GET /workspace returns A\'s own workspace, never ws-1/B\'s', async () => {
+    const res = await request(app).get('/workspace').set(asA());
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe(A.workspaceId);
+    expect(res.body.id).not.toBe(B.workspaceId);
+  });
+
+  it('PATCH /workspace only ever touches A\'s own row, never B\'s', async () => {
+    const res = await request(app).patch('/workspace').set(asA()).send({ name: 'AT11 renamed' });
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe(A.workspaceId);
+    const [bRow] = await db.select().from(schema.workspaces).where(eq(schema.workspaces.id, B.workspaceId));
+    expect(bRow?.name).not.toBe('AT11 renamed');
+  });
+
+  it('GET /labels never includes B\'s label, and refuses to list B\'s project at all', async () => {
+    const res = await request(app).get('/labels').set(asA()).query({ projectId: B.projectId });
+    expect(res.status).toBe(404);
+  });
+
+  it('POST /projects/:id/labels refuses to write into B\'s project as 404, and creates nothing', async () => {
+    const res = await request(app).post(`/projects/${B.projectId}/labels`).set(asA()).send({ name: 'pwned', color: '#000000' });
+    expect(res.status).toBe(404);
+    const rows = await db.select().from(schema.labels).where(eq(schema.labels.name, 'pwned'));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('PATCH /labels/:id refuses to rename B\'s label as 404, and does not touch it', async () => {
+    const res = await request(app).patch(`/labels/${B.labelId}`).set(asA()).send({ name: 'pwned' });
+    expect(res.status).toBe(404);
+    const [row] = await db.select().from(schema.labels).where(eq(schema.labels.id, B.labelId));
+    expect(row?.name).not.toBe('pwned');
+  });
+
+  it('DELETE /labels/:id against B\'s label is a silent no-op (204), and B\'s row survives', async () => {
+    const res = await request(app).delete(`/labels/${B.labelId}`).set(asA());
+    expect(res.status).toBe(204);
+    const [row] = await db.select().from(schema.labels).where(eq(schema.labels.id, B.labelId));
+    expect(row).toBeDefined();
+  });
+
+  it('GET /states refuses to list B\'s project as 404', async () => {
+    const res = await request(app).get('/states').set(asA()).query({ projectId: B.projectId });
+    expect(res.status).toBe(404);
+  });
+
+  it('POST /projects/:id/states refuses to write into B\'s project as 404, and creates nothing', async () => {
+    const res = await request(app)
+      .post(`/projects/${B.projectId}/states`)
+      .set(asA())
+      .send({ name: 'pwned', group: 'unstarted', color: '#000000' });
+    expect(res.status).toBe(404);
+    const rows = await db.select().from(schema.ticketStates).where(eq(schema.ticketStates.name, 'pwned'));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('PATCH /states/:id refuses to rename B\'s state as 404, and does not touch it', async () => {
+    const res = await request(app).patch(`/states/${B.stateId}`).set(asA()).send({ name: 'pwned' });
+    expect(res.status).toBe(404);
+    const [row] = await db.select().from(schema.ticketStates).where(eq(schema.ticketStates.id, B.stateId));
+    expect(row?.name).not.toBe('pwned');
+  });
+
+  it('GET /states/:id/ticket-count against B\'s state reads as 0, not B\'s real count', async () => {
+    const res = await request(app).get(`/states/${B.stateId}/ticket-count`).set(asA());
+    expect(res.status).toBe(200);
+    expect(res.body.count).toBe(0);
+  });
+
+  it('DELETE /states/:id against B\'s state is a silent no-op (204), and B\'s row survives', async () => {
+    const res = await request(app).delete(`/states/${B.stateId}`).set(asA());
+    expect(res.status).toBe(204);
+    const [row] = await db.select().from(schema.ticketStates).where(eq(schema.ticketStates.id, B.stateId));
+    expect(row).toBeDefined();
+  });
+
+  // The review's headline finding for this file: sourceEmail is
+  // third-party customer PII, not even the caller's own teammate's.
+  it('GET /projects/:id/requests refuses to list B\'s project (and its customers\' emails) as 404', async () => {
+    const res = await request(app).get(`/projects/${B.projectId}/requests`).set(asA());
+    expect(res.status).toBe(404);
+  });
+
+  it('POST /requests refuses to write into B\'s project as 404, and creates nothing', async () => {
+    const res = await request(app)
+      .post('/requests')
+      .set(asA())
+      .send({ projectId: B.projectId, title: 'pwned', sourceName: 'x', sourceEmail: 'x@example.test' });
+    expect(res.status).toBe(404);
+    const rows = await db.select().from(schema.requests).where(eq(schema.requests.title, 'pwned'));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('PATCH /requests/:id/status refuses to touch B\'s request as 404, and leaves it pending', async () => {
+    const res = await request(app).patch(`/requests/${B.requestId}/status`).set(asA()).send({ status: 'declined' });
+    expect(res.status).toBe(404);
+    const [row] = await db.select().from(schema.requests).where(eq(schema.requests.id, B.requestId));
+    expect(row?.status).toBe('pending');
+  });
+
+  it('POST /requests/:id/convert refuses to convert B\'s request as 404, and creates no ticket', async () => {
+    const res = await request(app).post(`/requests/${B.requestId}/convert`).set(asA()).send({ stateId: B.stateId });
+    expect(res.status).toBe(404);
+    const [row] = await db.select().from(schema.requests).where(eq(schema.requests.id, B.requestId));
+    expect(row?.linkedTicketId).toBeNull();
   });
 
   it('a scratch note authored while signed in as A is invisible to B, with an explicit workspace column (not just authorId)', async () => {
