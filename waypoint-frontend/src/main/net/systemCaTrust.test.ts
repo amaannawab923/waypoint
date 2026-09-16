@@ -4,9 +4,9 @@ jest.mock('node:tls', () => ({
 }));
 
 const logWarnMock = jest.fn();
-jest.mock('electron-log', () => ({ warn: (...args: unknown[]) => logWarnMock(...args) }));
-
-const GLOBAL_DISPATCHER_KEY = Symbol.for('undici.globalDispatcher.1');
+jest.mock('electron-log', () => ({
+  warn: (...args: unknown[]) => logWarnMock(...args),
+}));
 
 const setGlobalDispatcherMock = jest.fn();
 class FakeAgent {
@@ -16,20 +16,9 @@ class FakeAgent {
     this.options = options;
   }
 }
-// Toggled per-test to simulate the two real behaviors this module has to
-// tell apart: a normal undici copy shares its dispatcher via the
-// well-known globalThis symbol (default here); a hypothetical future
-// Electron/undici build whose bundled fetch reads a different symbol
-// would not (see the "warns" test below).
-let writeGlobalDispatcherSymbol = true;
 jest.mock('undici', () => ({
   Agent: FakeAgent,
-  setGlobalDispatcher: (agent: unknown) => {
-    setGlobalDispatcherMock(agent);
-    if (writeGlobalDispatcherSymbol) {
-      (globalThis as Record<symbol, unknown>)[GLOBAL_DISPATCHER_KEY] = agent;
-    }
-  },
+  setGlobalDispatcher: (...args: unknown[]) => setGlobalDispatcherMock(...args),
 }));
 
 // eslint-disable-next-line import/order, import/first
@@ -37,8 +26,6 @@ import { installSystemCaTrust } from './systemCaTrust';
 
 beforeEach(() => {
   jest.resetAllMocks();
-  writeGlobalDispatcherSymbol = true;
-  delete (globalThis as Record<symbol, unknown>)[GLOBAL_DISPATCHER_KEY];
 });
 
 describe('installSystemCaTrust', () => {
@@ -58,26 +45,7 @@ describe('installSystemCaTrust', () => {
     expect(dispatcher.options).toEqual({
       connect: { ca: ['bundled-1', 'bundled-2', 'system-1', 'extra-1'] },
     });
-  });
-
-  it('does not warn when the dispatcher write reaches the shared global symbol', () => {
-    getCACertificatesMock.mockReturnValue([]);
-
-    installSystemCaTrust();
-
     expect(logWarnMock).not.toHaveBeenCalled();
-  });
-
-  it('warns, without throwing, when the dispatcher write does not reach the shared global symbol', () => {
-    getCACertificatesMock.mockReturnValue([]);
-    // Simulate a future Electron/undici build whose bundled `fetch` reads a
-    // different globalThis symbol than the one this module writes to.
-    writeGlobalDispatcherSymbol = false;
-
-    expect(() => installSystemCaTrust()).not.toThrow();
-
-    expect(logWarnMock).toHaveBeenCalledTimes(1);
-    expect(logWarnMock.mock.calls[0][0]).toMatch(/certificate store/i);
   });
 
   it('does nothing when tls.getCACertificates is not exposed by this Node build', () => {
@@ -93,17 +61,23 @@ describe('installSystemCaTrust', () => {
     try {
       installSystemCaTrust();
       expect(setGlobalDispatcherMock).not.toHaveBeenCalled();
+      expect(logWarnMock).not.toHaveBeenCalled();
     } finally {
       tls.getCACertificates = original;
     }
   });
 
-  it('does nothing, and does not throw, when reading the OS trust store fails', () => {
+  it('warns, without throwing, and skips installing a dispatcher, when reading the OS trust store fails', () => {
+    const readError = new Error('keychain access denied');
     getCACertificatesMock.mockImplementation(() => {
-      throw new Error('keychain access denied');
+      throw readError;
     });
 
     expect(() => installSystemCaTrust()).not.toThrow();
+
     expect(setGlobalDispatcherMock).not.toHaveBeenCalled();
+    expect(logWarnMock).toHaveBeenCalledTimes(1);
+    expect(logWarnMock.mock.calls[0][0]).toMatch(/certificate store/i);
+    expect(logWarnMock.mock.calls[0][1]).toBe(readError);
   });
 });

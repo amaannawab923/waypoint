@@ -2,23 +2,9 @@ import tls from 'node:tls';
 import log from 'electron-log';
 import { Agent, setGlobalDispatcher } from 'undici';
 
-// Electron bundles its own, separate copy of undici for the built-in
-// `fetch` every main-process file calls — a different module instance
-// than the one this file imports from node_modules. The two only end up
-// sharing one dispatcher because `setGlobalDispatcher` writes it onto
-// `globalThis` under this well-known `Symbol.for` key (undici's own
-// mechanism for exactly this cross-copy scenario), which any undici copy
-// reads regardless of which node_modules install it came from — verified
-// live (round 1 review) that Electron 35.7.5's bundled undici 6.21.2 and
-// this file's own undici 7.29.1 both resolve to it. Read directly here,
-// not through this module's own setGlobalDispatcher/getGlobalDispatcher
-// pair, since asking the same copy that just wrote it would only confirm
-// it's consistent with itself — not that the OTHER copy sees it too.
-const GLOBAL_DISPATCHER_KEY = Symbol.for('undici.globalDispatcher.1');
-
-/** `tls.getCACertificates` (Node 22.16+) isn't in this project's pinned
+/** `tls.getCACertificates` (Node 22.15+) isn't in this project's pinned
  * `@types/node` yet — declared locally rather than bumping that dependency
- * project-wide for one function. Node 22.16 is why `package.json` pins
+ * project-wide for one function. Node 22.15 is why `package.json` pins
  * `electron` to `^35.4.0`, not just `^35.0.2` — Electron 35.0.x–35.3.x
  * bundle Node 22.14, where this function doesn't exist yet; the `typeof`
  * guard below makes that a silent no-op rather than a crash, but the
@@ -43,15 +29,37 @@ interface TlsWithCaCertificates {
  * request failed with an opaque "self signed certificate in certificate
  * chain" wrapped in a generic "couldn't reach Jira" message.
  *
- * `tls.getCACertificates('system')` (Node 22.16+) reads exactly the store
- * macOS/Windows/Linux already trust — this does not weaken verification in
- * any way: a certificate chain that isn't rooted in Node's bundled list OR
- * the OS's own trusted roots still fails, same as today.
+ * `tls.getCACertificates('system')` reads exactly the store macOS/Windows/
+ * Linux already trust — this does not weaken verification in any way: a
+ * certificate chain that isn't rooted in Node's bundled list OR the OS's
+ * own trusted roots still fails, same as today (round 2 review re-verified
+ * this live, including that a malformed/garbage entry in the OS store is
+ * silently skipped by `tls.createSecureContext` rather than breaking every
+ * other request).
+ *
+ * `setGlobalDispatcher` (from `undici`, imported explicitly rather than
+ * relying on Node's own bundled copy — see package.json's own comment on
+ * that dependency) reconfigures the *ambient* global `fetch` itself, not a
+ * separate export: Electron bundles its own, separately-loaded copy of
+ * undici for that built-in `fetch`, and the two only end up sharing one
+ * dispatcher because `setGlobalDispatcher` writes it onto a well-known
+ * `Symbol.for` key that any undici copy reads regardless of which
+ * node_modules install it came from. Confirmed live, round 1 and 2, that
+ * this repo's pinned Electron version actually reads it. There is no
+ * cheap, non-tautological way to verify that from inside this function
+ * itself at every startup (round 2 review: an earlier version of this
+ * function tried, and the check could never actually fail given how
+ * `setGlobalDispatcher` is implemented — a passing check that can't fail
+ * is worse than no check, so it was removed rather than kept for
+ * appearances) — if a future Electron/undici version ever stops sharing
+ * that symbol, the failure mode is silent: main-process HTTPS quietly
+ * goes back to Node's bundled trust only. `electron-log`'s warning below
+ * is reserved for the one failure this function genuinely can detect —
+ * reading the OS trust store itself failing — not for that one.
  *
  * A no-op on a Node/Electron build old enough not to expose
- * `tls.getCACertificates` at all, or if reading the OS store throws for any
- * reason — those installs just keep today's (unchanged) behavior rather
- * than crashing main-process startup over it.
+ * `tls.getCACertificates` at all — that install just keeps today's
+ * (unchanged) behavior rather than crashing main-process startup over it.
  */
 export function installSystemCaTrust(): void {
   const tlsModule = tls as unknown as TlsWithCaCertificates;
@@ -66,17 +74,12 @@ export function installSystemCaTrust(): void {
       // for a store this OS-store read doesn't happen to pick up.
       ...getCACertificates('extra'),
     ];
-  } catch {
+  } catch (err) {
+    log.warn(
+      "installSystemCaTrust: couldn't read this OS's certificate store — main-process HTTPS calls will use Node's default trust only.",
+      err,
+    );
     return;
   }
-  const agent = new Agent({ connect: { ca } });
-  setGlobalDispatcher(agent);
-  // If a future Electron/undici version stops sharing this symbol, the
-  // ambient `fetch` silently keeps Node's default trust — safe, but
-  // invisible. This makes that regression observable instead.
-  if ((globalThis as Record<symbol, unknown>)[GLOBAL_DISPATCHER_KEY] !== agent) {
-    log.warn(
-      "installSystemCaTrust: the OS certificate store wasn't picked up by the main process's fetch — main-process HTTPS calls will use Node's default trust only.",
-    );
-  }
+  setGlobalDispatcher(new Agent({ connect: { ca } }));
 }
