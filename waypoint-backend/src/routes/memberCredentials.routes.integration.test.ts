@@ -185,4 +185,14 @@ describe.skipIf(!REAL_DB)('per-member Jira credential storage against real Postg
     expect(asBStatus.connected).toBe(false);
     expect(asBStatus.needsReconnect).toBe(true);
   });
+
+  // Round 2 review finding (M-1).
+  it('SECURITY (M-1): every operation refuses an unauthenticated caller — no Personal-fallback access to a real member\'s Jira credential', async () => {
+    const noAuth = request(app);
+    expect((await noAuth.get('/me/jira-credential')).status).toBe(404);
+    expect(
+      (await noAuth.put('/me/jira-credential').send({ site: 'evil.atlassian.net', email: 'x@evil.test', apiToken: 'planted' })).status,
+    ).toBe(404);
+    expect((await noAuth.delete('/me/jira-credential')).status).toBe(404);
+  });
 });

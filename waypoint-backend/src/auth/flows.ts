@@ -205,9 +205,23 @@ export async function resolveOrCreateUser(
     return { user: await applyPatch(byEmail, patch, executor), created: false };
   }
 
-  const status = await getSetupStatus(deps.env);
-  if (status.signupMode === 'invite_only' && !opts.skipSignupModeCheck) {
-    throw new ConflictError('This instance is invite-only. Ask a workspace member for an invite link.');
+  // Round 2 review finding (L-3): getSetupStatus's result is provably
+  // unused whenever skipSignupModeCheck is true (the condition below is
+  // false regardless of what it returns), so skip the call entirely in
+  // that case rather than making it and discarding the answer. Not just
+  // an efficiency nit: getSetupStatus queries via the plain db client,
+  // never the join-flow transaction's own executor — called unconditionally
+  // from inside finishFlow's transaction (see below), it used to reserve
+  // a second pool connection per in-flight join completion. A batch of
+  // concurrent new-invitee joins (the ordinary case: a brand-new person,
+  // neither by-provider nor by-email match, is exactly when this line
+  // used to run) could exhaust postgres.js's default 10-connection pool
+  // and hang the eleventh request rather than erroring.
+  if (!opts.skipSignupModeCheck) {
+    const status = await getSetupStatus(deps.env);
+    if (status.signupMode === 'invite_only') {
+      throw new ConflictError('This instance is invite-only. Ask a workspace member for an invite link.');
+    }
   }
   try {
     const [created] = await executor

@@ -325,22 +325,53 @@ async function claimOrCreateMember(
     const [claimed] = await tx.update(members).set({ userId: user.id }).where(eq(members.id, existing.id)).returning();
     return claimed;
   }
-  if (existing) return existing;
+  if (existing) {
+    // Round 2 review finding (L-1): existing.userId is set here (the
+    // branch above already handled the null case) — but whose? members.
+    // service.ts's updateCurrentUser lets any existing member repoint
+    // their OWN members.email at an address they don't own — no
+    // verification step, updateCurrentUserSchema just accepts a string.
+    // A row squatted that way used to be handed back here silently, as
+    // if it belonged to whoever is completing THIS join: the invite
+    // still gets consumed and a real user + session still gets created
+    // (H1's transaction has nothing to roll back, since nothing here
+    // throws), but no real membership results for the actual invitee —
+    // their single-use link is burned and they're locked out. Same harm
+    // class H1 closed, reachable deterministically instead of only by
+    // losing a race.
+    if (existing.userId !== user.id) {
+      throw new ConflictError('This email is already associated with a different account in this workspace.');
+    }
+    return existing;
+  }
+  // Round 2 review finding (L-4): recursing on the SAME tx after a caught
+  // unique-violation used to be broken inside a transaction — Postgres
+  // aborts the WHOLE transaction server-side on any statement error, so
+  // the recursive call's own SELECT would itself fail with "current
+  // transaction is aborted," not the graceful re-read this comment used
+  // to claim. A SAVEPOINT (tx.transaction(...), Drizzle's nested-
+  // transaction shape — a real savepoint when tx is already inside one,
+  // an ordinary transaction when it's the plain db client) scopes the
+  // failure to just this insert attempt, so a losing race leaves the
+  // outer transaction (and everything already accepted in it, e.g. the
+  // invite consumption above) live to retry against.
   try {
-    const [created] = await tx
-      .insert(members)
-      .values({
-        id: newId('mem'),
-        workspaceId,
-        fullName: user.fullName,
-        displayName: user.fullName,
-        email,
-        avatarColor: FOUNDING_MEMBER_COLOR,
-        role: 'member',
-        authMethod: user.authMethod,
-        userId: user.id,
-      })
-      .returning();
+    const [created] = await tx.transaction((savepoint) =>
+      savepoint
+        .insert(members)
+        .values({
+          id: newId('mem'),
+          workspaceId,
+          fullName: user.fullName,
+          displayName: user.fullName,
+          email,
+          avatarColor: FOUNDING_MEMBER_COLOR,
+          role: 'member',
+          authMethod: user.authMethod,
+          userId: user.id,
+        })
+        .returning(),
+    );
     return created;
   } catch (err) {
     if (isUniqueViolation(err)) return claimOrCreateMember(workspaceId, email, user, tx);

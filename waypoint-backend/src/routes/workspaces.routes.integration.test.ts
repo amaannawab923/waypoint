@@ -506,5 +506,53 @@ describe.skipIf(!REAL_DB)('team workspace creation + invite + join against real 
       const [row] = await db.select().from(schema.workspaceInvites).where(eq(schema.workspaceInvites.id, invite.body.id));
       expect(row).toBeTruthy();
     });
+
+    // Round 2 review finding (L-1).
+    it("SECURITY (L-1): a member who repoints their own email onto someone else's target address cannot silently absorb that person's targeted invite", async () => {
+      const { token: inviterToken } = await issueSession(U.userId);
+      const ws = await request(app()).post('/workspaces').set('Authorization', `Bearer ${inviterToken}`).send({ name: `AT12WS-${stamp} Squat` });
+      const asInviter = { Authorization: `Bearer ${inviterToken}`, 'X-Waypoint-Workspace-Id': ws.body.id };
+
+      // A real, ordinary member joins this workspace first (the squatter).
+      const squatterInvite = await request(app()).post(`/workspaces/${ws.body.id}/invites`).set(asInviter).send({});
+      const squatterToken = new URL(squatterInvite.body.joinUrl).pathname.split('/join/')[1];
+      const a = request(app());
+      const squatterEmail = `at12-squatter-${stamp}@example.test`;
+      await a.post('/auth/email/start').type('form').send({ email: squatterEmail, invite_token: squatterToken });
+      const squatterLink = sent[sent.length - 1].text.match(/token=(\S+)/)![1];
+      await a.get('/auth/email/verify').query({ token: squatterLink });
+      const [squatterUser] = await db.select().from(schema.users).where(eq(schema.users.email, squatterEmail));
+      const { token: squatterSessionToken } = await issueSession(squatterUser.id);
+
+      // The squatter repoints their OWN members.email onto the address a
+      // real invite is about to target — updateCurrentUser has no
+      // verification step for this.
+      const targetEmail = `at12-victim-${stamp}@example.test`;
+      const squat = await request(app())
+        .patch('/me')
+        .set('Authorization', `Bearer ${squatterSessionToken}`)
+        .set('X-Waypoint-Workspace-Id', ws.body.id)
+        .send({ email: targetEmail });
+      expect(squat.status).toBe(200);
+
+      // A targeted invite is created for that same address, and the
+      // REAL, intended invitee (a distinct authenticated identity — the
+      // whole point of "Email invite instead" being targeted at all)
+      // tries to complete it.
+      const targetedInvite = await request(app())
+        .post(`/workspaces/${ws.body.id}/invites`)
+        .set(asInviter)
+        .send({ email: targetEmail });
+      const targetedToken = new URL(targetedInvite.body.joinUrl).pathname.split('/join/')[1];
+      await a.post('/auth/email/start').type('form').send({ email: targetEmail, invite_token: targetedToken });
+      const victimLink = sent[sent.length - 1].text.match(/token=(\S+)/)![1];
+      const complete = await a.get('/auth/email/verify').query({ token: victimLink });
+
+      // Refused, not silently absorbed into the squatter's row.
+      expect(complete.status).not.toBe(200);
+      const rows = await db.select().from(schema.members).where(eq(schema.members.workspaceId, ws.body.id));
+      const squatterRow = rows.find((m) => m.email === targetEmail);
+      expect(squatterRow?.userId).toBe(squatterUser.id);
+    });
   });
 });

@@ -4,7 +4,7 @@ import { members } from '../db/schema/index.js';
 import { seal, open } from '../lib/secretBox.js';
 import { normalizeSite } from '../lib/jira/credentialHeader.js';
 import type { JiraCredential } from '../lib/jira/client.js';
-import { currentMemberId } from '../lib/requestContext.js';
+import { currentIdentity, currentMemberId } from '../lib/requestContext.js';
 import { NotFoundError, ValidationError } from '../middleware/errors.js';
 
 // AT12 (ROAD-147). Spec §7: "per-member Jira credential storage on the
@@ -43,6 +43,23 @@ export interface MyJiraCredentialStatus {
   needsReconnect?: boolean;
 }
 
+// Round 2 review finding (M-1): every function here is currentMemberId()-
+// scoped, never an id-in-URL — correct against a cross-tenant caller, but
+// resolveMember's "no Authorization header → Personal" fallback means an
+// UNAUTHENTICATED caller on a hosted instance still resolves to the
+// seeded Personal identity (mem-1), with no header check catching it the
+// way workspaces.service.ts's createInvite/revokeInvite already do (the
+// H3 fix). Unlike those two id-taking routes, this file has no id
+// parameter to guard — the guard has to be "is this a real, resolved
+// identity at all," the same currentIdentity() check, applied here
+// directly. Read-only elsewhere on the Personal fallback is accepted
+// (AT11's own stance); this is the first SECRET STORE on that surface —
+// an anonymous PUT would otherwise plant an attacker-chosen credential in
+// mem-1's own row, sealed correctly under mem-1's real AAD.
+function requireRealIdentity(): void {
+  if (!currentIdentity()) throw new NotFoundError('current member');
+}
+
 async function readRow(memberId: string) {
   const [row] = await db
     .select({ sealed: members.jiraCredentialEncrypted, updatedAt: members.jiraCredentialUpdatedAt })
@@ -67,6 +84,7 @@ function openCredential(sealed: string, memberId: string): JiraCredential | null
 }
 
 export async function getMyJiraCredentialStatus(): Promise<MyJiraCredentialStatus> {
+  requireRealIdentity();
   const memberId = currentMemberId();
   const row = await readRow(memberId);
   if (!row.sealed) return { connected: false };
@@ -85,6 +103,7 @@ export async function getMyJiraCredentialStatus(): Promise<MyJiraCredentialStatu
 // call to this function, not a second seal/open call site to keep in sync
 // with this one's AAD context and JSON shape.
 export async function getMyJiraCredential(): Promise<JiraCredential | null> {
+  requireRealIdentity();
   const memberId = currentMemberId();
   const row = await readRow(memberId);
   if (!row.sealed) return null;
@@ -108,6 +127,7 @@ export interface SetJiraCredentialInput {
 // borrowed-header path already does, so a malformed or hostile site value
 // can't reach storage in the first place.
 export async function setMyJiraCredential(input: SetJiraCredentialInput): Promise<MyJiraCredentialStatus> {
+  requireRealIdentity();
   const memberId = currentMemberId();
   const site = normalizeSite(input.site);
   if (!site) throw new ValidationError('site must be a Jira Cloud hostname, e.g. yourteam.atlassian.net');
@@ -128,6 +148,7 @@ export async function setMyJiraCredential(input: SetJiraCredentialInput): Promis
 }
 
 export async function clearMyJiraCredential(): Promise<void> {
+  requireRealIdentity();
   const memberId = currentMemberId();
   await db
     .update(members)
