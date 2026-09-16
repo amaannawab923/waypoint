@@ -34,8 +34,18 @@ export async function createScratchNote(title: string, body: string) {
   return row;
 }
 
+// Tenth review round: scoped by authorId too, matching listScratchNotes —
+// previously any teammate in the same workspace could delete another
+// member's own scratch note by id. Intra-workspace, not cross-tenant, but
+// there's no reason the read and the delete should disagree.
 export async function deleteScratchNote(id: string) {
   await db
     .delete(scratchNotes)
-    .where(and(eq(scratchNotes.id, id), eq(scratchNotes.workspaceId, currentWorkspaceId())));
+    .where(
+      and(
+        eq(scratchNotes.id, id),
+        eq(scratchNotes.authorId, currentMemberId()),
+        eq(scratchNotes.workspaceId, currentWorkspaceId()),
+      ),
+    );
 }

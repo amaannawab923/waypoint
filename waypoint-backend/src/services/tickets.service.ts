@@ -625,10 +625,16 @@ export async function createTicket(input: CreateTicketInput) {
   });
 }
 
+// Tenth review round: scoped directly, the same "helper trusts its
+// caller's own guard" shape resolveActorNames was exploitable through in
+// round 9 — this one is only safe today because validateAssigneeIds
+// already refuses a foreign id on the add path, and removal can only
+// name an id already legitimately on the ticket. Scoping the read itself
+// means that invariant no longer has to hold for this to stay correct.
 async function nameForActor(tx: Tx, id: string): Promise<string | undefined> {
-  const [member] = await tx.select().from(members).where(eq(members.id, id));
+  const [member] = await tx.select().from(members).where(and(eq(members.id, id), eq(members.workspaceId, currentWorkspaceId())));
   if (member) return member.displayName;
-  const [agent] = await tx.select().from(agents).where(eq(agents.id, id));
+  const [agent] = await tx.select().from(agents).where(and(eq(agents.id, id), eq(agents.workspaceId, currentWorkspaceId())));
   return agent ? `${agent.name} (agent)` : undefined;
 }
 
@@ -653,11 +659,18 @@ async function logAssigneeChanges(tx: Tx, ticketId: string, beforeIds: string[],
   }
 }
 
+// Tenth review round: scoped directly, same reasoning as nameForActor
+// above — safe today only because assertTicketRefsInProject already
+// refuses a foreign labelId on the add path, and removal can only name a
+// label already legitimately attached.
 async function logLabelChanges(tx: Tx, ticketId: string, beforeIds: string[], afterIds: string[]) {
   const before = new Set(beforeIds);
   const after = new Set(afterIds);
   for (const id of afterIds.filter((l) => !before.has(l))) {
-    const [label] = await tx.select().from(labels).where(eq(labels.id, id));
+    const [label] = await tx
+      .select()
+      .from(labels)
+      .where(and(eq(labels.id, id), inArray(labels.projectId, workspaceProjectIdsSubquery())));
     await logActivity(tx, {
       ticketId,
       actorId: currentMemberId(),
@@ -666,7 +679,10 @@ async function logLabelChanges(tx: Tx, ticketId: string, beforeIds: string[], af
     });
   }
   for (const id of beforeIds.filter((b) => !after.has(b))) {
-    const [label] = await tx.select().from(labels).where(eq(labels.id, id));
+    const [label] = await tx
+      .select()
+      .from(labels)
+      .where(and(eq(labels.id, id), inArray(labels.projectId, workspaceProjectIdsSubquery())));
     await logActivity(tx, {
       ticketId,
       actorId: currentMemberId(),

@@ -78,7 +78,16 @@ export async function toggleTicketAgent(ticketId: string, agentId: string) {
 // doomed cross-tenant call doesn't run two queries it'll never use.
 export async function takeBackOverFromAgent(ticketId: string, agentId: string) {
   const item = await toggleTicketAssignee(ticketId, agentId);
-  const [agent] = await db.select().from(agents).where(eq(agents.id, agentId));
+  // Tenth review round: this read is only safe today because no
+  // ticket_assignees insert path lets a foreign agentId reach an
+  // in-workspace ticket (the invariant toggleTicketAssignee/
+  // ensureAgentAssignments both enforce) — the same "helper trusts its
+  // caller's own guard" shape that made resolveActorNames exploitable in
+  // round 9. Scoped directly so this read never depends on that holding.
+  const [agent] = await db
+    .select()
+    .from(agents)
+    .where(and(eq(agents.id, agentId), eq(agents.workspaceId, currentWorkspaceId())));
   const [me] = await db.select().from(members).where(eq(members.id, currentMemberId()));
   await db
     .update(agentAssignments)
