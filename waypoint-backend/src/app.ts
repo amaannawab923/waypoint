@@ -4,7 +4,7 @@ import { apiRouter, identityOnlyRouter } from './routes/index.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { asyncHandler } from './middleware/asyncHandler.js';
 import { resolveMember } from './middleware/resolveMember.js';
-import { publicBaseUrl } from './auth/redirect.js';
+import { publicBaseUrl, corsOriginsForBackend } from './auth/redirect.js';
 
 export function createApp() {
   const app = express();
@@ -60,7 +60,18 @@ export function createApp() {
   // backend to fall back on): this way every route these pages expose
   // stays behind the same check, just with the one legitimate additional
   // origin these pages themselves run on.
-  const allowedOrigins = [...configuredOrigins, publicBaseUrl(process.env)];
+  //
+  // corsOriginsForBackend, not the raw publicBaseUrl() string: an Origin
+  // header is scheme+host+port only (no path, default ports omitted),
+  // which publicBaseUrl() itself doesn't return (by design — it's a base
+  // URL other call sites path-join OAuth callbacks onto) — and round-3
+  // review found the raw-string version 403'd for a second real
+  // deployment shape: an operator whose desktop points at this backend
+  // via 127.0.0.1 while this backend's own PUBLIC_BASE_URL defaults to
+  // localhost (or vice versa) — same backend, different Origin spelling
+  // to a browser. See that function's own comment for why both loopback
+  // spellings are trusted here.
+  const allowedOrigins = [...configuredOrigins, ...corsOriginsForBackend(publicBaseUrl(process.env))];
   app.use(
     cors({
       origin(origin, callback) {

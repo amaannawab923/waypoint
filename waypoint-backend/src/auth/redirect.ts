@@ -11,6 +11,46 @@ export function publicBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   return `http://localhost:${env.PORT ?? 14000}`;
 }
 
+// AT13 (ROAD-148) round-3 review. What app.ts's CORS allowlist actually
+// needs from publicBaseUrl() — an Origin, not a base URL — and both
+// loopback spellings of it, not just the one this env happens to be
+// configured with.
+//
+// An Origin header carries scheme+host+port only: no path, and the
+// browser omits the port when it's the scheme's default (80/443).
+// publicBaseUrl() itself has to keep returning a full base URL (a real
+// deployment behind a path-routed reverse proxy legitimately sets
+// PUBLIC_BASE_URL with a path prefix, and every OAuth callback URL is
+// built by joining a path onto it) — so this derives the Origin
+// separately via URL's own `.origin`, rather than changing what
+// publicBaseUrl() itself returns.
+//
+// The loopback-spelling half: this backend's own default is
+// `http://localhost:<PORT>`, but the desktop's WAYPOINT_API_BASE_URL
+// default (main/account/accountSignIn.ts) and the compose file's own
+// published address (docker-compose.yml, docs/operations/
+// self-hosted-setup.md) both use the 127.0.0.1 literal — an operator
+// pointing their desktop at "the loopback backend" via either spelling
+// is describing the same backend, but a browser treats
+// http://localhost:X and http://127.0.0.1:X as different Origins. Both
+// are trusted here specifically for loopback, since nothing about the
+// actual security boundary (a real sign-in through this same backend)
+// depends on which spelling reached it.
+export function corsOriginsForBackend(publicBaseUrlValue: string): string[] {
+  let u: URL;
+  try {
+    u = new URL(publicBaseUrlValue);
+  } catch {
+    return [publicBaseUrlValue];
+  }
+  const origins = [u.origin];
+  if (u.hostname === 'localhost' || u.hostname === '127.0.0.1') {
+    const sibling = u.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
+    origins.push(`${u.protocol}//${sibling}${u.port ? `:${u.port}` : ''}`);
+  }
+  return origins;
+}
+
 // The desktop's callback must be a loopback URL: that is the whole reason
 // the raw token can travel on a redirect — it never leaves the machine
 // the person is sitting at. Anything else is an open redirect that would

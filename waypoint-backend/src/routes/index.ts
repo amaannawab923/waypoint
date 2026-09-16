@@ -77,16 +77,19 @@ if (process.env.NODE_ENV !== 'production') {
 // same gate. app.ts mounts this router before resolveMember instead.
 //
 // Every route here still sits behind app.ts's CORS origin check, same as
-// before — a real self-hosted sign-in via GET /sign-in or GET
-// /join/:token 403ing for every real browser (found live, QA E2E pass,
-// ROAD-141 epic closeout) was fixed by adding this backend's own origin
-// to that check's allowlist, in app.ts, not by exempting any of these
-// routes from it. An earlier version of this fix tried exempting
-// authRouter/joinRouter wholesale instead (mounted before the CORS
-// middleware): round 2 of that fix's own review found it also exempted
-// POST /auth/email/start — side-effectful, and until this fix only ever
-// reachable via curl (which never sends an Origin header at all) — from
-// CORS, with no rate limiting anywhere in this backend to fall back on.
+// before — a real self-hosted sign-in's POST /auth/email/start 403ing
+// for every real browser (found live, QA E2E pass, ROAD-141 epic
+// closeout — a plain GET to /sign-in or /join/:token was never actually
+// broken: a top-level GET navigation carries no Origin header at all,
+// only the same-origin form POST that follows it does) was fixed by
+// adding this backend's own origin to that check's allowlist, in
+// app.ts, not by exempting any of these routes from it. An earlier
+// version of this fix tried exempting authRouter/joinRouter wholesale
+// instead (mounted before the CORS middleware): round 2 of that fix's
+// own review found it also exempted POST /auth/email/start —
+// side-effectful, and until this fix only ever reachable via curl
+// (which never sends an Origin header at all) — from CORS, with no rate
+// limiting anywhere in this backend to fall back on.
 export const identityOnlyRouter = Router();
 identityOnlyRouter.use(instanceRouter);
 identityOnlyRouter.use(adminRouter);

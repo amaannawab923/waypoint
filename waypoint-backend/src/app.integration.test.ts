@@ -38,6 +38,7 @@ const REAL_DB = await databaseReachable();
 describe.skipIf(!REAL_DB)("this backend's own origin is allowed through CORS (AT13)", () => {
   let app: express.Express;
   let publicBaseUrl: typeof import('./auth/redirect.js')['publicBaseUrl'];
+  let corsOriginsForBackend: typeof import('./auth/redirect.js')['corsOriginsForBackend'];
 
   const A_FOREIGN_ORIGIN = 'http://a-real-browser-tab.example';
 
@@ -56,6 +57,28 @@ describe.skipIf(!REAL_DB)("this backend's own origin is allowed through CORS (AT
     // (200 "check your email", or a 400/503 from setup/config state on
     // whatever instance this runs against) both prove the same thing —
     // CORS didn't block it.
+    expect(res.status).not.toBe(403);
+  });
+
+  // Round-3 review: the previous version of this fix only trusted
+  // publicBaseUrl()'s own exact spelling, not the sibling loopback
+  // hostname — reproducing the original bug for an operator whose
+  // desktop points at 127.0.0.1 while this backend's PUBLIC_BASE_URL
+  // defaults to localhost (or the reverse).
+  it('accepts that same request from this backend\'s sibling loopback spelling too', async () => {
+    ({ publicBaseUrl, corsOriginsForBackend } = await import('./auth/redirect.js'));
+    const { createApp } = await import('./app.js');
+    app = createApp();
+
+    const [, sibling] = corsOriginsForBackend(publicBaseUrl(process.env));
+    expect(sibling).toBeDefined(); // this env's own base URL must be loopback for this case to mean anything
+
+    const res = await request(app)
+      .post('/auth/email/start')
+      .type('form')
+      .set('Origin', sibling!)
+      .send({ email: `qa-${Date.now()}@example.test`, redirect_uri: 'http://127.0.0.1:45999/callback', state: 'a-real-32-char-or-longer-state-value' });
+
     expect(res.status).not.toBe(403);
   });
 

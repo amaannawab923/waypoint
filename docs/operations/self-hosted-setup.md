@@ -94,6 +94,14 @@ registered as the callback host above. For local-only use, leave it unset
 your own machine, set it to the real, public URL — see "Reaching this
 instance beyond localhost," below, before you do.
 
+This is also whatever address you point the desktop app's own
+`WAYPOINT_API_BASE_URL` at (Settings → General on the desktop, or that
+env var directly) — both need to name the *same* backend for sign-in to
+complete. For plain loopback use, `localhost` and `127.0.0.1` are
+interchangeable here (this backend trusts both spellings for its own
+origin); once you set a real `PUBLIC_BASE_URL`, use that exact value on
+the desktop side too.
+
 ## Step 4 — bring the stack up
 
 ```bash
