@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, getTableColumns, gt, inArray, lt, or, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { agentRuns, agentRunEvents, agentRunTranscripts, members, projects, ticketRefs, tickets } from '../db/schema/index.js';
+import { agentRuns, agentRunEvents, agentRunTranscripts, agents, members, projects, ticketRefs, tickets } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
 import { ConflictError, NotFoundError, ValidationError } from '../middleware/errors.js';
 import { isExternalRef } from '../lib/externalRefs.js';
@@ -221,6 +221,14 @@ export async function createRun(input: CreateAgentRunInput): Promise<AgentRun> {
     } else if (input.projectId) {
       const [project] = await tx.select({ workspaceId: projects.workspaceId }).from(projects).where(eq(projects.id, input.projectId));
       if (!project || project.workspaceId !== currentWorkspaceId()) throw new ValidationError('projectId does not exist');
+    }
+    // Eighth review round, proven live: the one id field in this
+    // function's own insert this round's earlier passes never reached —
+    // an existence + workspace oracle, real 201 vs fake 400, identical
+    // to the projectId/ticketId gap the sixth round already fixed here.
+    if (input.agentId) {
+      const [agent] = await tx.select({ workspaceId: agents.workspaceId }).from(agents).where(eq(agents.id, input.agentId));
+      if (!agent || agent.workspaceId !== currentWorkspaceId()) throw new ValidationError('agentId does not exist');
     }
     if (input.retryOfRunId) {
       // The retried run must exist and be over: retrying a run that is

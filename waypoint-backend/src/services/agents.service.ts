@@ -1,11 +1,26 @@
 import { eq, and, inArray, desc } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { agents, agentProjectScopes } from '../db/schema/index.js';
-import { NotFoundError } from '../middleware/errors.js';
+import { agents, agentProjectScopes, projects } from '../db/schema/index.js';
+import { NotFoundError, ValidationError } from '../middleware/errors.js';
 import { newId } from '../lib/ids.js';
 import { currentMemberId, currentWorkspaceId } from '../lib/requestContext.js';
 
 type AgentRow = typeof agents.$inferSelect;
+
+// Eighth review round, proven live: scopeProjectIds was written into
+// agent_project_scopes with no check at all — a real row binding a
+// foreign workspace's project into your agent's scope.
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+async function assertProjectsInWorkspace(tx: Tx, projectIds: string[]): Promise<void> {
+  if (projectIds.length === 0) return;
+  const rows = await tx
+    .select({ id: projects.id })
+    .from(projects)
+    .where(and(inArray(projects.id, projectIds), eq(projects.workspaceId, currentWorkspaceId())));
+  const known = new Set(rows.map((r) => r.id));
+  const unknown = projectIds.filter((id) => !known.has(id));
+  if (unknown.length) throw new ValidationError(`unknown projectId(s): ${unknown.join(', ')}`);
+}
 
 function toEntity(row: AgentRow, scopeProjectIds: string[]) {
   const { instructionsFilename, instructionsContentMarkdown, ...rest } = row;
@@ -85,6 +100,7 @@ export async function createAgent(input: CreateAgentInput) {
       .returning();
     const scopeProjectIds = input.scopeProjectIds ?? [];
     if (scopeProjectIds.length) {
+      await assertProjectsInWorkspace(tx, scopeProjectIds);
       await tx.insert(agentProjectScopes).values(scopeProjectIds.map((projectId) => ({ agentId: row.id, projectId })));
     }
     return toEntity(row, scopeProjectIds);
@@ -119,6 +135,7 @@ export async function updateAgent(id: string, patch: UpdateAgentPatch) {
       .returning();
     if (!row) throw new NotFoundError('agent');
     if (scopeProjectIds) {
+      await assertProjectsInWorkspace(tx, scopeProjectIds);
       await tx.delete(agentProjectScopes).where(eq(agentProjectScopes.agentId, id));
       if (scopeProjectIds.length) {
         await tx.insert(agentProjectScopes).values(scopeProjectIds.map((projectId) => ({ agentId: id, projectId })));

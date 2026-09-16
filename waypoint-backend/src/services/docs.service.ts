@@ -26,8 +26,19 @@ export async function getDoc(id: string) {
   return row;
 }
 
+// Eighth review round, proven live: parentDocId was written unchecked —
+// a real row parented under another workspace's real doc.
+async function assertDocInWorkspace(id: string): Promise<void> {
+  const [row] = await db
+    .select({ id: docs.id })
+    .from(docs)
+    .where(and(eq(docs.id, id), inArray(docs.projectId, workspaceProjectIdsSubquery())));
+  if (!row) throw new NotFoundError('doc');
+}
+
 export async function createDoc(projectId: string, title = 'Untitled', parentDocId: string | null = null) {
   await assertProjectInWorkspace(projectId);
+  if (parentDocId) await assertDocInWorkspace(parentDocId);
   const [row] = await db
     .insert(docs)
     .values({
@@ -49,6 +60,7 @@ export async function createDoc(projectId: string, title = 'Untitled', parentDoc
 }
 
 export async function updateDoc(id: string, patch: Partial<typeof docs.$inferInsert>) {
+  if (patch.parentDocId) await assertDocInWorkspace(patch.parentDocId);
   const [row] = await db
     .update(docs)
     .set({ ...patch, updatedAt: new Date() })

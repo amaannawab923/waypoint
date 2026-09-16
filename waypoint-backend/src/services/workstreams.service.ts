@@ -1,9 +1,22 @@
 import { eq, and, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { workstreams, workstreamMembers } from '../db/schema/index.js';
-import { NotFoundError } from '../middleware/errors.js';
+import { workstreams, workstreamMembers, members } from '../db/schema/index.js';
+import { NotFoundError, ValidationError } from '../middleware/errors.js';
 import { newId } from '../lib/ids.js';
+import { currentWorkspaceId } from '../lib/requestContext.js';
 import { assertProjectInWorkspace, workspaceProjectIdsSubquery } from '../lib/workspaceGuard.js';
+
+// Eighth review round, proven live: leadId/memberIds were written with no
+// check at all — a real cross-tenant workstreamMembers row, or a lead
+// pointed at a stranger's memberId. Same helper as sprints.service.ts's
+// own copy of this fix.
+async function assertMembersInWorkspace(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const rows = await db.select({ id: members.id }).from(members).where(and(inArray(members.id, ids), eq(members.workspaceId, currentWorkspaceId())));
+  const known = new Set(rows.map((r) => r.id));
+  const unknown = ids.filter((id) => !known.has(id));
+  if (unknown.length) throw new ValidationError(`unknown member id(s): ${unknown.join(', ')}`);
+}
 
 async function attachMemberIds<T extends { id: string }>(rows: T[]): Promise<(T & { memberIds: string[] })[]> {
   if (rows.length === 0) return [];
@@ -41,6 +54,7 @@ export interface CreateWorkstreamInput {
 
 export async function createWorkstream(projectId: string, input: CreateWorkstreamInput) {
   await assertProjectInWorkspace(projectId);
+  await assertMembersInWorkspace([...(input.leadId ? [input.leadId] : []), ...(input.memberIds ?? [])]);
   return db.transaction(async (tx) => {
     const [row] = await tx
       .insert(workstreams)
@@ -67,6 +81,7 @@ export async function createWorkstream(projectId: string, input: CreateWorkstrea
 }
 
 export async function updateWorkstream(id: string, patch: Partial<CreateWorkstreamInput>) {
+  await assertMembersInWorkspace([...(patch.leadId ? [patch.leadId] : []), ...(patch.memberIds ?? [])]);
   return db.transaction(async (tx) => {
     const { memberIds, ...rest } = patch;
     // A memberIds-only patch (exactly what the Members multi-select sends

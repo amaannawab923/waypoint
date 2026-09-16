@@ -360,6 +360,15 @@ export async function addProjectMember(projectId: string, memberId: string, role
   // meant a cross-tenant projectId still wrote a real row to
   // project_members before the function ever noticed and threw.
   await assertProjectInWorkspace(projectId);
+  // Eighth review round, proven live: memberId itself was never checked
+  // against the caller's workspace — pointing this at your OWN project
+  // (passes the guard above) and a foreign memberId wrote a real
+  // project_members row binding a stranger into your project, and — far
+  // worse — the role branch rewrote that stranger's GLOBAL role with no
+  // scoping at all, letting any signed-in member demote or promote any
+  // other tenant's member, admins included.
+  const [member] = await db.select({ workspaceId: members.workspaceId }).from(members).where(eq(members.id, memberId));
+  if (!member || member.workspaceId !== currentWorkspaceId()) throw new NotFoundError('member');
   await db
     .insert(projectMembers)
     .values({ projectId, memberId })

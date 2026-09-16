@@ -9,7 +9,7 @@ import { buildCopilotJiraCommentAdf } from '../lib/jira/adf.js';
 import type { JiraCredential } from '../lib/jira/client.js';
 import { baseSnapshot, externalSnapshot, jiraTransitionSnapshot } from '../lib/proposalSnapshot.js';
 import { getJiraProvider, isExternalRef, type JiraProvider } from '../providers/jira.js';
-import { currentWorkspaceId } from '../lib/requestContext.js';
+import { currentMemberId, currentWorkspaceId } from '../lib/requestContext.js';
 import * as ticketsService from './tickets.service.js';
 import * as commentsService from './comments.service.js';
 import * as statesService from './states.service.js';
@@ -270,10 +270,18 @@ export async function createProposal(input: CreateProposalInput): Promise<Propos
     // Existence check inside the same transaction — a bogus conversationId
     // (the header is attacker-influencable in principle) must 404-shape
     // fail, not surface as a raw FK violation.
+    //
+    // Eighth review round: this checked existence only, never ownership
+    // — the x-waypoint-conversation-id header the comment above already
+    // flags as attacker-influenceable could name ANY real conversation,
+    // filing a model-authored proposal into a stranger's Copilot panel.
+    // mcpRouter sits behind the same global resolveMember middleware
+    // every other route does, so currentMemberId() here is the real,
+    // authenticated caller regardless of what that header claims.
     const [conversation] = await tx
       .select({ id: copilotConversations.id })
       .from(copilotConversations)
-      .where(eq(copilotConversations.id, conversationId))
+      .where(and(eq(copilotConversations.id, conversationId), eq(copilotConversations.memberId, currentMemberId())))
       .limit(1);
     if (!conversation) throw new NotFoundError('conversation');
 

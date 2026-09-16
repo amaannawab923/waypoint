@@ -1217,6 +1217,134 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
     expect(row?.linkedTicketId).toBeNull();
   });
 
+  // ---------------------------------------------------------------------
+  // Eighth review round: a whole class of bug none of the prior seven
+  // rounds covered — every case above guards the ROW an id in the URL
+  // addresses, but nothing checked the OTHER ids a request body writes
+  // INTO an already-guarded row. Every case below pairs the caller's OWN
+  // project/ticket/row (so the existing guard passes) with a SECOND,
+  // foreign id in the body — the one shape none of the existing 94 cases
+  // exercised.
+  // ---------------------------------------------------------------------
+
+  // The single worst finding of the whole audit: unscoped, this let any
+  // signed-in member demote or promote any OTHER tenant's member —
+  // including their only admin — by pointing addProjectMember at their
+  // own project and a foreign memberId.
+  it('POST /projects/:id/members refuses a real memberId from B as 404, and rewrites nothing', async () => {
+    const res = await request(app)
+      .post(`/projects/${A.projectId}/members`)
+      .set(asA())
+      .send({ memberId: B.memberId, role: 'admin' });
+    expect(res.status).toBe(404);
+    const [bMember] = await db.select().from(schema.members).where(eq(schema.members.id, B.memberId));
+    expect(bMember?.role).toBe('admin'); // seeded role, unchanged — see seedTenant
+    const links = await db
+      .select()
+      .from(schema.projectMembers)
+      .where(and(eq(schema.projectMembers.projectId, A.projectId), eq(schema.projectMembers.memberId, B.memberId)));
+    expect(links).toHaveLength(0);
+  });
+
+  it('POST /tickets with A\'s own project but B\'s stateId refuses as 400, and creates no ticket', async () => {
+    const res = await request(app)
+      .post('/tickets')
+      .set(asA())
+      .send({ projectId: A.projectId, title: 'pwned via stateId', stateId: B.stateId });
+    expect(res.status).toBe(400);
+    const rows = await db.select().from(schema.tickets).where(eq(schema.tickets.title, 'pwned via stateId'));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('PATCH /tickets/:id on A\'s own ticket with B\'s stateId refuses as 400, and leaves it unchanged', async () => {
+    const res = await request(app).patch(`/tickets/${A.ticketId}`).set(asA()).send({ stateId: B.stateId });
+    expect(res.status).toBe(400);
+    const [row] = await db.select().from(schema.tickets).where(eq(schema.tickets.id, A.ticketId));
+    expect(row?.stateId).toBe(A.stateId);
+  });
+
+  it('PATCH /tickets/:id on A\'s own ticket with B\'s labelIds refuses as 400, writes nothing, and leaks nothing into activity', async () => {
+    const res = await request(app).patch(`/tickets/${A.ticketId}`).set(asA()).send({ labelIds: [B.labelId] });
+    expect(res.status).toBe(400);
+    const links = await db.select().from(schema.ticketLabels).where(eq(schema.ticketLabels.ticketId, A.ticketId));
+    expect(links.map((l) => l.labelId)).not.toContain(B.labelId);
+    const activity = await db.select().from(schema.activityEntries).where(eq(schema.activityEntries.ticketId, A.ticketId));
+    expect(activity.some((a) => a.verb === 'label_added')).toBe(false);
+  });
+
+  it('POST /tickets/:id/labels/:labelId/toggle on A\'s own ticket with B\'s labelId refuses as 400, and adds nothing', async () => {
+    const res = await request(app).post(`/tickets/${A.ticketId}/labels/${B.labelId}/toggle`).set(asA());
+    expect(res.status).toBe(400);
+    const links = await db.select().from(schema.ticketLabels).where(eq(schema.ticketLabels.ticketId, A.ticketId));
+    expect(links.map((l) => l.labelId)).not.toContain(B.labelId);
+  });
+
+  it('POST /agents with A\'s own scope but B\'s project in scopeProjectIds refuses as 400, and creates no scope row', async () => {
+    const res = await request(app)
+      .post('/agents')
+      .set(asA())
+      .send({
+        name: 'AT11 agent',
+        avatarColor: '#000000',
+        instructionsFile: { filename: 'AGENTS.md', contentMarkdown: '' },
+        scopeAllProjects: false,
+        scopeProjectIds: [A.projectId, B.projectId],
+        executionMethod: 'local-claude-subscription',
+        model: 'claude',
+        autonomy: 'plan-only',
+      });
+    expect(res.status).toBe(400);
+    const rows = await db.select().from(schema.agentProjectScopes).where(eq(schema.agentProjectScopes.projectId, B.projectId));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('POST /agent-runs with a real agentId from B refuses as 400, the same as a fake one', async () => {
+    const withReal = await request(app)
+      .post('/agent-runs')
+      .set(asA())
+      .send({ ownerMemberId: A.memberId, entry: 'independent', providerId: 'claude', agentId: B.agentId });
+    expect(withReal.status).toBe(400);
+    const rows = await db.select().from(schema.agentRuns).where(eq(schema.agentRuns.agentId, B.agentId));
+    expect(rows.map((r) => r.ownerMemberId)).not.toContain(A.memberId);
+  });
+
+  it('POST /projects/:id/docs with B\'s docId as parentDocId refuses as 404, and creates no doc', async () => {
+    const res = await request(app)
+      .post(`/projects/${A.projectId}/docs`)
+      .set(asA())
+      .send({ title: 'pwned via parentDocId', parentDocId: B.docId });
+    expect(res.status).toBe(404);
+    const rows = await db.select().from(schema.docs).where(eq(schema.docs.title, 'pwned via parentDocId'));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('PATCH /docs/:id on A\'s own doc with B\'s docId as parentDocId refuses as 404, and leaves it unparented', async () => {
+    const res = await request(app).patch(`/docs/${A.docId}`).set(asA()).send({ parentDocId: B.docId });
+    expect(res.status).toBe(404);
+    const [row] = await db.select().from(schema.docs).where(eq(schema.docs.id, A.docId));
+    expect(row?.parentDocId).toBeNull();
+  });
+
+  it('POST /projects/:id/sprints with B\'s memberId as leadId refuses as 400, and creates no sprint', async () => {
+    const res = await request(app)
+      .post(`/projects/${A.projectId}/sprints`)
+      .set(asA())
+      .send({ name: 'pwned sprint', startDate: '2026-01-01', endDate: '2026-01-14', leadId: B.memberId });
+    expect(res.status).toBe(400);
+    const rows = await db.select().from(schema.sprints).where(eq(schema.sprints.name, 'pwned sprint'));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('POST /projects/:id/workstreams with B\'s memberId in memberIds refuses as 400, and creates no workstream', async () => {
+    const res = await request(app)
+      .post(`/projects/${A.projectId}/workstreams`)
+      .set(asA())
+      .send({ name: 'pwned workstream', memberIds: [B.memberId] });
+    expect(res.status).toBe(400);
+    const rows = await db.select().from(schema.workstreams).where(eq(schema.workstreams.name, 'pwned workstream'));
+    expect(rows).toHaveLength(0);
+  });
+
   it('a scratch note authored while signed in as A is invisible to B, with an explicit workspace column (not just authorId)', async () => {
     const noteId = `sk-at11-${stamp}`;
     await db.insert(schema.scratchNotes).values({

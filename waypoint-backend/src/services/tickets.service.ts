@@ -10,8 +10,10 @@ import {
   projects,
   members,
   agents,
+  workstreams,
+  sprints,
 } from '../db/schema/index.js';
-import { NotFoundError, ConflictError } from '../middleware/errors.js';
+import { NotFoundError, ConflictError, ValidationError } from '../middleware/errors.js';
 import { newId } from '../lib/ids.js';
 import { currentMemberId, currentWorkspaceId } from '../lib/requestContext.js';
 import { assertProjectInWorkspace, assertTicketInWorkspace, workspaceProjectIdsSubquery } from '../lib/workspaceGuard.js';
@@ -37,6 +39,58 @@ async function validateAssigneeIds(tx: Tx, ids: string[]): Promise<void> {
   const unknown = ids.filter((id) => !known.has(id));
   if (unknown.length) {
     throw new ConflictError(`unknown assignee id(s): ${unknown.join(', ')}`);
+  }
+}
+
+// Eighth review round, proven live: stateId/workstreamId/sprintId/
+// labelIds were the one class of id this whole audit's guards never
+// covered — the TICKET's own id was checked, and (since round 2)
+// parentId and assigneeIds were, but not the other project-scoped
+// references a create/update also writes. A cross-tenant stateId
+// pinned a ticket to another workspace's real (and now
+// undeletable-by-them, via ON DELETE RESTRICT) state; a cross-tenant
+// labelId both attached a real foreign row AND, via logLabelChanges'
+// unscoped read below, leaked that label's name into your own
+// activity feed — the exact "guard the row, not what's read back
+// from a foreign id it points at" bug removeTicketLink was fixed for
+// in round 2 and this was not. Scoped to the ticket's own project —
+// not just the caller's workspace — since a state/workstream/sprint/
+// label from a DIFFERENT project in the SAME workspace is equally
+// wrong for a ticket's board grouping, just not a security bug.
+async function assertTicketRefsInProject(
+  tx: Tx,
+  projectId: string,
+  refs: { stateId?: string; workstreamId?: string | null; sprintId?: string | null; labelIds?: string[] },
+): Promise<void> {
+  if (refs.stateId) {
+    const [row] = await tx
+      .select({ id: ticketStates.id })
+      .from(ticketStates)
+      .where(and(eq(ticketStates.id, refs.stateId), eq(ticketStates.projectId, projectId)));
+    if (!row) throw new ValidationError('stateId does not exist in this project');
+  }
+  if (refs.workstreamId) {
+    const [row] = await tx
+      .select({ id: workstreams.id })
+      .from(workstreams)
+      .where(and(eq(workstreams.id, refs.workstreamId), eq(workstreams.projectId, projectId)));
+    if (!row) throw new ValidationError('workstreamId does not exist in this project');
+  }
+  if (refs.sprintId) {
+    const [row] = await tx
+      .select({ id: sprints.id })
+      .from(sprints)
+      .where(and(eq(sprints.id, refs.sprintId), eq(sprints.projectId, projectId)));
+    if (!row) throw new ValidationError('sprintId does not exist in this project');
+  }
+  if (refs.labelIds?.length) {
+    const rows = await tx
+      .select({ id: labels.id })
+      .from(labels)
+      .where(and(inArray(labels.id, refs.labelIds), eq(labels.projectId, projectId)));
+    const known = new Set(rows.map((r) => r.id));
+    const unknown = refs.labelIds.filter((id) => !known.has(id));
+    if (unknown.length) throw new ValidationError(`unknown labelId(s): ${unknown.join(', ')}`);
   }
 }
 type TicketRow = typeof tickets.$inferSelect;
@@ -492,6 +546,9 @@ export async function createTicket(input: CreateTicketInput) {
   // any other workspace's real ticket.
   if (input.parentId) await assertTicketInWorkspace(input.parentId);
   return db.transaction(async (tx) => {
+    // Eighth review round: checked before the sequence counter below is
+    // even touched, so a doomed create never consumes a real identifier.
+    await assertTicketRefsInProject(tx, input.projectId, input);
     // sequenceId comes from a persistent per-project counter (ROAD-38), not
     // from scanning existing tickets — the old MAX(sequenceId) approach
     // read only currently-existing rows, so deleting a ticket silently
@@ -660,6 +717,13 @@ export async function updateTicket(
     // write this ticket's own identifier into that foreign ticket's
     // activity feed, a cross-tenant write with attacker-chosen content.
     if (patch.parentId) await assertTicketInWorkspace(patch.parentId);
+    // Eighth review round: same reasoning as createTicket — checked
+    // before any of the state/label logic below runs, both so a doomed
+    // patch writes nothing and so logLabelChanges' own read of a
+    // foreign label's name (into THIS ticket's activity feed) can never
+    // be reached with an id that isn't already confirmed to be this
+    // ticket's own project's.
+    await assertTicketRefsInProject(tx, current.projectId, patch);
     const [currentEnriched] = await attachRelations([current], tx);
 
     const stateChanged = Boolean(patch.stateId && patch.stateId !== current.stateId);
@@ -780,7 +844,14 @@ export async function toggleTicketLabel(id: string, labelId: string) {
       .where(and(eq(tickets.id, id), inArray(tickets.projectId, workspaceProjectIdsSubquery())));
     if (!current) throw new NotFoundError('ticket');
     const [{ labelIds: before }] = await attachRelations([current], tx);
-    const after = before.includes(labelId) ? before.filter((l) => l !== labelId) : [...before, labelId];
+    const adding = !before.includes(labelId);
+    // Eighth review round: only the adding direction needs this — a
+    // remove only ever names a label already legitimately on the
+    // ticket. Without it, a foreign labelId attached a real row AND
+    // leaked its name into this ticket's activity feed via
+    // logLabelChanges just below.
+    if (adding) await assertTicketRefsInProject(tx, current.projectId, { labelIds: [labelId] });
+    const after = adding ? [...before, labelId] : before.filter((l) => l !== labelId);
     await logLabelChanges(tx, id, before, after);
     await tx.delete(ticketLabels).where(eq(ticketLabels.ticketId, id));
     if (after.length) {
