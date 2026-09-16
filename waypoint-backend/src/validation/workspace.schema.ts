@@ -32,6 +32,15 @@ export const createInviteSchema = z.object({
   email: z.string().email().optional(),
 });
 
+// AT12 (ROAD-147). site's real shape check is normalizeSite() in
+// memberCredentials.service.ts (a bare hostname check needs URL parsing,
+// not a regex); this only rejects the empty/missing case up front.
+export const setJiraCredentialSchema = z.object({
+  site: z.string().min(1),
+  email: z.string().email(),
+  apiToken: z.string().min(1),
+});
+
 export const notificationPrefsSchema = z.object({
   email: z.boolean().optional(),
   push: z.boolean().optional(),
