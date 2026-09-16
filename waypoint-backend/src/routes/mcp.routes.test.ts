@@ -329,7 +329,7 @@ function visibleTicket() {
 // Minimal fluent-chain fake, same shape as the service tests'.
 function chainable(resolvedValue: unknown) {
   const chain: Record<string, unknown> = {};
-  for (const method of ['from', 'where', 'limit', 'orderBy', 'values', 'set']) {
+  for (const method of ['from', 'where', 'limit', 'orderBy', 'values', 'set', 'leftJoin']) {
     chain[method] = vi.fn(() => chain);
   }
   chain.returning = vi.fn(() => Promise.resolve(resolvedValue));

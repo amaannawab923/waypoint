@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import { CURRENT_USER_ID } from '../lib/currentUser.js';
+import { currentMemberId } from '../lib/requestContext.js';
 import { NotFoundError } from '../middleware/errors.js';
 import * as copilotService from '../services/copilot.service.js';
 import {
@@ -17,7 +17,7 @@ export const copilotRouter = Router();
 copilotRouter.get(
   '/copilot/conversations',
   asyncHandler(async (_req, res) => {
-    res.json(await copilotService.listConversations(CURRENT_USER_ID));
+    res.json(await copilotService.listConversations(currentMemberId()));
   }),
 );
 
@@ -25,7 +25,7 @@ copilotRouter.post(
   '/copilot/conversations',
   asyncHandler(async (req, res) => {
     createCopilotConversationSchema.parse(req.body ?? {});
-    const conversation = await copilotService.createConversation(CURRENT_USER_ID);
+    const conversation = await copilotService.createConversation(currentMemberId());
     res.status(201).json(conversation);
   }),
 );
@@ -86,12 +86,22 @@ copilotRouter.post(
   asyncHandler(async (req, res) => {
     const { runId, conversationId, content } = postCopilotNoteSchema.parse(req.body);
     const target =
-      conversationId ?? (await copilotService.resolveNoteConversation(CURRENT_USER_ID, runId ?? null));
+      conversationId ?? (await copilotService.resolveNoteConversation(currentMemberId(), runId ?? null));
     if (!target) {
       res.status(204).end();
       return;
     }
     try {
+      // AT11 (ROAD-146) review fix: resolveNoteConversation only ever
+      // returns a conversation belonging to currentMemberId(), but an
+      // explicit conversationId here comes straight from the request
+      // body — verify it before it ever reaches postSystemNote, which no
+      // longer checks this itself (see its own comment for why). Folded
+      // into this try so a mismatch reads the same as "no conversation,"
+      // matching this route's own non-distinguishing 204 convention.
+      if (conversationId) {
+        await copilotService.assertConversationOwnedByMember(conversationId, currentMemberId());
+      }
       res.status(201).json(await copilotService.postSystemNote(target, content));
     } catch (error) {
       if (error instanceof NotFoundError) {

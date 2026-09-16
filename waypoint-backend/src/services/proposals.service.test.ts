@@ -25,7 +25,7 @@ function sqlFragmentText(fragment: unknown): string {
 
 function chainable(resolvedValue: unknown) {
   const chain: Record<string, unknown> = {};
-  const methods = ['from', 'where', 'limit', 'orderBy', 'values', 'set'];
+  const methods = ['from', 'where', 'limit', 'orderBy', 'values', 'set', 'innerJoin', 'leftJoin'];
   for (const method of methods) {
     chain[method] = vi.fn(() => chain);
   }
@@ -96,10 +96,33 @@ type Vfn = ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Second review round: vi.clearAllMocks() resets call history but does
+  // NOT drain an already-queued mockReturnValueOnce(...) — an earlier
+  // test that queued more than it consumed left db.select returning ITS
+  // leftover value to the very first db.select() call in the NEXT test,
+  // which is now always assertProposalInWorkspace's own guard (added
+  // this round). db/insert/update/delete have no real implementation to
+  // lose (unlike eq/and/inArray below, which wrap the REAL drizzle-orm
+  // functions and must not be reset), so resetting just these four is
+  // safe and drains that leftover queue before every test starts.
+  db.select.mockReset();
+  db.update.mockReset();
+  db.insert.mockReset();
+  db.delete.mockReset();
   vi.mocked(membersService.getCurrentUser).mockResolvedValue({ displayName: 'Amaan' } as never);
   // Jira disconnected unless a test connects it — the state almost every
   // approve is in.
   vi.mocked(getJiraProvider).mockReturnValue(null);
+  // approveProposal/rejectProposal now open with assertProposalInWorkspace
+  // — one extra db.select() call (a truthy row = "yes, it's mine") ahead
+  // of whatever a test's own mocks are there to exercise. None of these
+  // tests are ABOUT workspace scoping — that's proven separately, live,
+  // in workspaceScoping.integration.test.ts — so this default just keeps
+  // every one of them passing through it, the same way they already
+  // passed through db.select before this round for every OTHER purpose a
+  // test doesn't care about. A test that DOES want the guard to refuse
+  // overrides this with its own mockReturnValueOnce(chainable([])).
+  db.select.mockReturnValue(chainable([{ id: 'ws-guard-ok' }]));
 });
 
 // ---------------------------------------------------------------------------
@@ -343,9 +366,11 @@ describe('approveProposal', () => {
 
   it('is idempotent: an already-executed row (claim matches nothing) is echoed with the service NOT called again', async () => {
     db.update.mockReturnValueOnce(chainable([]));
-    db.select.mockReturnValueOnce(
-      chainable([proposalRow({ status: 'executed', resultInfo: { commentId: 'cm-1' } })]),
-    );
+    // assertProposalInWorkspace's own guard select, ahead of the echo
+    // read below — this test isn't about workspace scoping.
+    db.select
+      .mockReturnValueOnce(chainable([{ id: 'ws-guard-ok' }]))
+      .mockReturnValueOnce(chainable([proposalRow({ status: 'executed', resultInfo: { commentId: 'cm-1' } })]));
 
     const view = await approveProposal('prop-abc1234');
 
@@ -791,9 +816,11 @@ describe('approveProposal', () => {
     // finalize's fallback fetch returns the row as the repair parked it.
     vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket({ priority: 'medium' }) as never);
     vi.mocked(ticketsService.updateTicket).mockResolvedValue({} as never);
-    db.select.mockReturnValueOnce(
-      chainable([proposalRow({ status: 'stale', statusReason: 'Approval was interrupted' })]),
-    );
+    // assertProposalInWorkspace's own guard select, ahead of finalize's
+    // fallback fetch below — this test isn't about workspace scoping.
+    db.select
+      .mockReturnValueOnce(chainable([{ id: 'ws-guard-ok' }]))
+      .mockReturnValueOnce(chainable([proposalRow({ status: 'stale', statusReason: 'Approval was interrupted' })]));
 
     const view = await approveProposal('prop-abc1234');
 
@@ -899,11 +926,17 @@ describe('rejectProposal', () => {
 
   it('echoes an already-resolved row idempotently and 404s a missing one', async () => {
     db.update.mockReturnValueOnce(chainable([]));
-    db.select.mockReturnValueOnce(chainable([proposalRow({ status: 'executed' })]));
+    // assertProposalInWorkspace's own guard select, ahead of the echo
+    // read below — this test isn't about workspace scoping.
+    db.select
+      .mockReturnValueOnce(chainable([{ id: 'ws-guard-ok' }]))
+      .mockReturnValueOnce(chainable([proposalRow({ status: 'executed' })]));
     const view = await rejectProposal('prop-abc1234');
     expect(view.status).toBe('executed');
 
     db.update.mockReturnValueOnce(chainable([]));
+    // Empty here reads as "not mine" at the guard itself, before the
+    // echo path below is ever reached — same observable 404 either way.
     db.select.mockReturnValueOnce(chainable([]));
     await expect(rejectProposal('prop-missing')).rejects.toThrow(NotFoundError);
   });

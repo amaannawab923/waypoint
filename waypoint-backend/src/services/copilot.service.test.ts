@@ -33,7 +33,14 @@ vi.mock('../db/client.js', () => ({ db }));
 // assertable.
 vi.mock('drizzle-orm', async (importOriginal) => {
   const actual = await importOriginal<typeof import('drizzle-orm')>();
-  return { ...actual, asc: vi.fn(actual.asc), eq: vi.fn(actual.eq), desc: vi.fn(actual.desc), count: vi.fn(actual.count) };
+  return {
+    ...actual,
+    asc: vi.fn(actual.asc),
+    eq: vi.fn(actual.eq),
+    desc: vi.fn(actual.desc),
+    count: vi.fn(actual.count),
+    inArray: vi.fn(actual.inArray),
+  };
 });
 
 const { copilotConversations, copilotMessages } = await import('../db/schema/index.js');
@@ -46,8 +53,27 @@ const {
   listMessages,
   postUserMessage,
   postAssistantMessage,
+  listUndeliveredNotes,
+  markNotesDelivered,
+  assertConversationOwnedByMember,
 } = await import('./copilot.service.js');
-const { asc, eq, desc } = await import('drizzle-orm');
+const { asc, eq, desc, inArray } = await import('drizzle-orm');
+const { runWithIdentity } = await import('../lib/requestContext.js');
+
+// AT11 (ROAD-146) review fix: the id-keyed functions below this point
+// (getConversation, deleteConversation, renameConversation, listMessages,
+// postUserMessage/postAssistantMessage's initial ownership check,
+// listUndeliveredNotes, markNotesDelivered) previously took a bare id with
+// no check that it belonged to the caller — any signed-in member could
+// read, rename, delete, or post into any other member's conversation
+// (cross-tenant, or cross-member on the same team). Each is now scoped
+// against currentMemberId(); these tests run inside runWithIdentity so
+// there's a real, non-Personal-fallback member id to assert the query was
+// actually scoped by.
+const OTHER_MEMBER = { userId: 'user-other', memberId: 'mem-other', workspaceId: 'ws-1', role: 'member' as const };
+function asOtherMember<T>(fn: () => T): T {
+  return runWithIdentity(OTHER_MEMBER, fn);
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -114,6 +140,15 @@ describe('getConversation', () => {
 
     await expect(getConversation('conv-missing')).rejects.toThrow(NotFoundError);
   });
+
+  // AT11 (ROAD-146) review fix.
+  it('scopes the lookup to the current member, so another member\'s conversation reads as missing', async () => {
+    db.select.mockReturnValue(chainable([]));
+
+    await expect(asOtherMember(() => getConversation('conv-not-mine'))).rejects.toThrow(NotFoundError);
+
+    expect(eq).toHaveBeenCalledWith(copilotConversations.memberId, 'mem-other');
+  });
 });
 
 describe('deleteConversation', () => {
@@ -125,6 +160,17 @@ describe('deleteConversation', () => {
 
     expect(db.delete).toHaveBeenCalledWith(copilotConversations);
     expect(eq).toHaveBeenCalledWith(copilotConversations.id, 'conv-abc1234');
+  });
+
+  // AT11 (ROAD-146) review fix: previously ran unconditionally against any
+  // id — deleting a conversation that belongs to another member entirely
+  // would have succeeded silently.
+  it('also scopes the delete to the current member', async () => {
+    db.delete.mockReturnValue(chainable(undefined));
+
+    await asOtherMember(() => deleteConversation('conv-not-mine'));
+
+    expect(eq).toHaveBeenCalledWith(copilotConversations.memberId, 'mem-other');
   });
 });
 
@@ -148,6 +194,17 @@ describe('renameConversation', () => {
 
     await expect(renameConversation('conv-missing', 'New title')).rejects.toThrow(NotFoundError);
   });
+
+  // AT11 (ROAD-146) review fix.
+  it('scopes the update to the current member, so a cross-member id matches nothing and is left untouched', async () => {
+    db.update.mockReturnValue(chainable([]));
+
+    await expect(asOtherMember(() => renameConversation('conv-not-mine', 'Hijacked'))).rejects.toThrow(
+      NotFoundError,
+    );
+
+    expect(eq).toHaveBeenCalledWith(copilotConversations.memberId, 'mem-other');
+  });
 });
 
 describe('listMessages', () => {
@@ -168,6 +225,18 @@ describe('listMessages', () => {
     expect(selectChain.orderBy).toHaveBeenCalled();
     expect(asc).toHaveBeenCalledWith(copilotMessages.seq);
     expect(result).toEqual(rows);
+  });
+
+  // AT11 (ROAD-146) review fix: previously had no ownership check at all —
+  // any member could read any conversation's messages by id. Now folds a
+  // subquery of the current member's own conversation ids into the WHERE.
+  it("only matches the conversation if it's among the current member's own", async () => {
+    db.select.mockReturnValue(chainable([]));
+
+    await asOtherMember(() => listMessages('conv-not-mine'));
+
+    expect(inArray).toHaveBeenCalledWith(copilotMessages.conversationId, expect.anything());
+    expect(eq).toHaveBeenCalledWith(copilotConversations.memberId, 'mem-other');
   });
 });
 
@@ -240,11 +309,29 @@ describe('postUserMessage', () => {
     const setArgs = (tx.update.mock.results[0].value.set as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(setArgs).not.toHaveProperty('title');
   });
+
+  // AT11 (ROAD-146) review fix: previously wrote a message into a
+  // conversation of any id, without first checking it belonged to the
+  // current member. Now the transaction's first query is an ownership
+  // check that throws NotFoundError before any insert runs.
+  it('refuses to post into a conversation that is not the current member\'s, before inserting anything', async () => {
+    const tx = {
+      select: vi.fn(() => chainable([])),
+      insert: vi.fn(() => chainable([{ id: 'msg-should-not-exist' }])),
+      update: vi.fn(() => chainable(undefined)),
+    };
+    db.transaction.mockImplementation(async (callback: (tx: unknown) => unknown) => callback(tx));
+
+    await expect(asOtherMember(() => postUserMessage('conv-not-mine', 'hijack'))).rejects.toThrow(NotFoundError);
+
+    expect(tx.insert).not.toHaveBeenCalled();
+  });
 });
 
 describe('postAssistantMessage', () => {
   it('inserts the assistant message and sets claudeSessionId in the same transaction', async () => {
     const tx = {
+      select: vi.fn(() => chainable([{ id: 'conv-abc1234' }])),
       insert: vi.fn(() =>
         chainable([{ id: 'msg-reply1', conversationId: 'conv-abc1234', role: 'assistant' }]),
       ),
@@ -277,6 +364,7 @@ describe('postAssistantMessage', () => {
     // message to start a brand-new Claude Code session for no visible
     // reason. The conversation's updatedAt timestamp should still bump.
     const tx = {
+      select: vi.fn(() => chainable([{ id: 'conv-abc1234' }])),
       insert: vi.fn(() => chainable([{ id: 'msg-reply1' }])),
       update: vi.fn(() => chainable(undefined)),
     };
@@ -287,5 +375,76 @@ describe('postAssistantMessage', () => {
     const setArgs = (tx.update.mock.results[0].value.set as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(setArgs).not.toHaveProperty('claudeSessionId');
     expect(setArgs).toHaveProperty('updatedAt');
+  });
+
+  // AT11 (ROAD-146) review fix: same ownership check as postUserMessage —
+  // an assistant reply must not be attachable to another member's
+  // conversation either.
+  it('refuses to post into a conversation that is not the current member\'s, before inserting anything', async () => {
+    const tx = {
+      select: vi.fn(() => chainable([])),
+      insert: vi.fn(() => chainable([{ id: 'msg-should-not-exist' }])),
+      update: vi.fn(() => chainable(undefined)),
+    };
+    db.transaction.mockImplementation(async (callback: (tx: unknown) => unknown) => callback(tx));
+
+    await expect(
+      asOtherMember(() => postAssistantMessage('conv-not-mine', 'hijack', null)),
+    ).rejects.toThrow(NotFoundError);
+
+    expect(tx.insert).not.toHaveBeenCalled();
+  });
+});
+
+describe('listUndeliveredNotes', () => {
+  // AT11 (ROAD-146) review fix: previously had no ownership check — any
+  // member could read another member's undelivered system notes by
+  // conversationId. Now folds the same ownConversationIds() subquery
+  // listMessages uses into its WHERE.
+  it("only matches the conversation if it's among the current member's own", async () => {
+    db.select.mockReturnValue(chainable([]));
+
+    await asOtherMember(() => listUndeliveredNotes('conv-not-mine'));
+
+    expect(inArray).toHaveBeenCalledWith(copilotMessages.conversationId, expect.anything());
+    expect(eq).toHaveBeenCalledWith(copilotConversations.memberId, 'mem-other');
+  });
+});
+
+describe('markNotesDelivered', () => {
+  it('returns delivered: 0 without querying when given no ids', async () => {
+    const result = await markNotesDelivered('conv-abc1234', []);
+
+    expect(result).toEqual({ delivered: 0 });
+    expect(db.update).not.toHaveBeenCalled();
+  });
+
+  // AT11 (ROAD-146) review fix: previously any member could mark another
+  // member's notes delivered by conversationId. Scoped the same way as
+  // listUndeliveredNotes.
+  it("only matches the conversation if it's among the current member's own", async () => {
+    db.update.mockReturnValue(chainable([]));
+
+    await asOtherMember(() => markNotesDelivered('conv-not-mine', ['msg-1']));
+
+    expect(inArray).toHaveBeenCalledWith(copilotMessages.conversationId, expect.anything());
+    expect(eq).toHaveBeenCalledWith(copilotConversations.memberId, 'mem-other');
+  });
+});
+
+describe('assertConversationOwnedByMember', () => {
+  it('resolves when the conversation belongs to the given member', async () => {
+    db.select.mockReturnValue(chainable([{ id: 'conv-abc1234' }]));
+
+    await expect(assertConversationOwnedByMember('conv-abc1234', 'mem-1')).resolves.toBeUndefined();
+
+    expect(eq).toHaveBeenCalledWith(copilotConversations.id, 'conv-abc1234');
+    expect(eq).toHaveBeenCalledWith(copilotConversations.memberId, 'mem-1');
+  });
+
+  it('throws NotFoundError when the conversation belongs to someone else, or does not exist', async () => {
+    db.select.mockReturnValue(chainable([]));
+
+    await expect(assertConversationOwnedByMember('conv-not-mine', 'mem-other')).rejects.toThrow(NotFoundError);
   });
 });

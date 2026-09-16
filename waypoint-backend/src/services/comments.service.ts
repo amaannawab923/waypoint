@@ -1,8 +1,9 @@
-import { eq, asc } from 'drizzle-orm';
+import { eq, and, asc, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { comments } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
-import { CURRENT_USER_ID } from '../lib/currentUser.js';
+import { currentMemberId } from '../lib/requestContext.js';
+import { assertTicketInWorkspace } from '../lib/workspaceGuard.js';
 import { logActivity } from './activity.service.js';
 
 // limit caps how many rows the query itself fetches (undefined means
@@ -10,7 +11,12 @@ import { logActivity } from './activity.service.js';
 // see the REST route in tickets.routes.ts). Ordered by createdAt so a
 // limited call has a deterministic, meaningful "first N" rather than
 // whatever order the table scan happens to return.
+// AT11 (ROAD-146) review fix: called directly from routes/tickets.routes.ts
+// with a bare req.params.id — this file's own boundary, not one that
+// inherits scoping from an already-guarded caller the way logActivity's
+// tx-scoped callers do.
 export async function listComments(ticketId: string, limit?: number) {
+  await assertTicketInWorkspace(ticketId);
   const query = db
     .select()
     .from(comments)
@@ -25,14 +31,15 @@ export async function addComment(
   /** The activity line; the default is a person's own comment. */
   activityDetail = 'left a comment',
 ) {
+  await assertTicketInWorkspace(ticketId);
   return db.transaction(async (tx) => {
     const [comment] = await tx
       .insert(comments)
-      .values({ id: newId('cm'), ticketId, authorId: CURRENT_USER_ID, bodyHtml })
+      .values({ id: newId('cm'), ticketId, authorId: currentMemberId(), bodyHtml })
       .returning();
     await logActivity(tx, {
       ticketId,
-      actorId: CURRENT_USER_ID,
+      actorId: currentMemberId(),
       verb: 'commented',
       detail: activityDetail,
       createdAt: comment.createdAt,

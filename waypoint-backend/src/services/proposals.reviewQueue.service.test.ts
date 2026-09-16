@@ -10,7 +10,7 @@ import { NotFoundError, ConflictError } from '../middleware/errors.js';
 // not real Postgres behavior.
 function chainable(resolvedValue: unknown) {
   const chain: Record<string, unknown> = {};
-  const methods = ['from', 'where', 'limit', 'orderBy', 'values', 'set'];
+  const methods = ['from', 'where', 'limit', 'orderBy', 'values', 'set', 'leftJoin'];
   for (const method of methods) {
     chain[method] = vi.fn(() => chain);
   }
@@ -67,9 +67,60 @@ const { eq, and, inArray } = await import('drizzle-orm');
 
 type Vfn = ReturnType<typeof vi.fn>;
 
+// Cycle-safe walk of a real drizzle SQL fragment (from a spied eq/and/or
+// call, not a mock) looking for any string-keyed field matching a
+// predicate anywhere in the tree — used to check a captured where()
+// condition actually references a given column, or embeds a given literal
+// value, without a fragile full deep-equal against a freshly reconstructed
+// condition (see the listReviewQueue tests below for why: the aliased
+// members tables involved trip a stack overflow in the equality matcher's
+// own cycle handling).
+function findInFragment(node: unknown, predicate: (value: unknown) => boolean, seen = new Set<unknown>()): boolean {
+  if (predicate(node)) return true;
+  if (!node || typeof node !== 'object') return false;
+  if (seen.has(node)) return false;
+  seen.add(node);
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    // A column's own `.table` back-reference (an aliased table is a
+    // drizzle-orm Proxy — TableAliasProxyHandler — whose `get` trap
+    // synthesizes a NEW column wrapper object on every access, so the
+    // exact same logical column never repeats as the exact same object
+    // reference the `seen` Set above could catch; walking into it
+    // recurses without ever terminating). This predicate only ever needs
+    // a column's own name/value, never the table it belongs to, so this
+    // one key is skipped rather than walked.
+    if (key === 'table') continue;
+    if (Array.isArray(value)) {
+      if (value.some((v) => findInFragment(v, predicate, seen))) return true;
+    } else if (findInFragment(value, predicate, seen)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function findColumnName(node: unknown, name: string): boolean {
+  return findInFragment(node, (v) => (v as { name?: unknown } | null)?.name === name);
+}
+
+function findParamValue(node: unknown, value: string): boolean {
+  return findInFragment(node, (v) => (v as { value?: unknown } | null)?.value === value);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  // Second review round: clearAllMocks() resets call history but does NOT
+  // drain an already-queued mockReturnValueOnce(...) — see the identical
+  // comment in proposals.service.test.ts's own beforeEach. db.select
+  // additionally now needs a passing default: approveProposal/
+  // rejectProposal (looped by bulkApproveProposals/bulkRejectProposals
+  // below) open with assertProposalInWorkspace's own guard select.
+  db.select.mockReset();
+  db.update.mockReset();
+  db.insert.mockReset();
+  db.delete.mockReset();
   vi.mocked(membersService.getCurrentUser).mockResolvedValue({ displayName: 'Amaan' } as never);
+  db.select.mockReturnValue(chainable([{ id: 'ws-guard-ok' }]));
 });
 
 function proposalRow(overrides: Record<string, unknown> = {}) {
@@ -334,7 +385,17 @@ describe('listReviewQueue', () => {
     // always wraps conditions in and()), so the expected value has to match
     // that — a bare eq(...) here would compare and()'s SQL wrapper against
     // eq()'s own unwrapped result and never match.
-    expect(pageChain.where).toHaveBeenCalledWith(and(eq(proposals.status, 'stale')));
+    // Second review round: the page query is now also scoped by workspace.
+    // Not a full deep-equal against a freshly reconstructed condition —
+    // the aliased members tables involved trip a stack overflow in the
+    // matcher's cycle handling — so this walks the captured where() arg's
+    // own SQL fragment tree (findColumnName below, cycle-safe) checking
+    // for both the status filter and a workspace_id column reference,
+    // which only the new workspace condition could put there.
+    expect(pageChain.where).toHaveBeenCalledTimes(1);
+    const pageCondition = (pageChain.where as Vfn).mock.calls[0][0];
+    expect(findColumnName(pageCondition, 'status')).toBe(true);
+    expect(findColumnName(pageCondition, 'workspace_id')).toBe(true);
     expect(db.select).toHaveBeenCalledTimes(4);
   });
 
@@ -369,11 +430,15 @@ describe('listReviewQueue', () => {
 
     expect(result.proposals).toEqual([]);
     expect(result.counts.blocked).toBe(1);
-    // toHaveBeenCalledWith requires an exact structural match on SOME call —
-    // if a regression ever widened this to inArray(status, ['proposed',
-    // 'stale']) or similar, the actual where() argument would no longer
-    // deep-equal this and the assertion would fail.
-    expect(pageChain.where).toHaveBeenCalledWith(and(eq(proposals.status, 'proposed')));
+    // Guards the original regression this test is named for (widened to
+    // also include 'stale') plus, second review round, that the workspace
+    // condition is present too — see findInFragment's own comment for why
+    // this isn't a full deep-equal against a reconstructed condition.
+    expect(pageChain.where).toHaveBeenCalledTimes(1);
+    const pageCondition = (pageChain.where as Vfn).mock.calls[0][0];
+    expect(findParamValue(pageCondition, 'proposed')).toBe(true);
+    expect(findParamValue(pageCondition, 'stale')).toBe(false);
+    expect(findColumnName(pageCondition, 'workspace_id')).toBe(true);
   });
 
   it('paginates with a keyset cursor and reports nextCursor only when a further page exists', async () => {
@@ -422,7 +487,14 @@ describe('bulkApproveProposals', () => {
       .mockReturnValueOnce(claimChain)
       .mockReturnValueOnce(finalizeChain)
       .mockReturnValueOnce(failedClaimChain);
-    db.select.mockReturnValueOnce(staleEcho);
+    // Each id's own approveProposal call opens with assertProposalInWorkspace's
+    // own guard select (a passing stub) ahead of that id's real db.select
+    // work — 2 ids in this batch means 2 leading guard passes before the
+    // one real echo read this test is actually about.
+    db.select
+      .mockReturnValueOnce(chainable([{ id: 'ws-guard-ok' }]))
+      .mockReturnValueOnce(chainable([{ id: 'ws-guard-ok' }]))
+      .mockReturnValueOnce(staleEcho);
     vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
     vi.mocked(commentsService.addComment).mockResolvedValue({ id: 'cm-1' } as never);
 
@@ -437,11 +509,19 @@ describe('bulkApproveProposals', () => {
   });
 
   it('a nonexistent id resolves as not_found and the rest of the batch still runs', async () => {
-    db.update.mockReturnValueOnce(chainable([])); // claim fails
-    db.select.mockReturnValueOnce(chainable([])); // and there's no row at all
+    // Second review round: assertProposalInWorkspace's own guard select is
+    // now the very first thing approveProposal does — an empty result
+    // there throws NotFoundError before any claim UPDATE is even
+    // attempted, so there's no "claim fails" db.update call to mock for
+    // prop-missing at all anymore (the old mockReturnValueOnce for it is
+    // gone; leaving it in place left an unconsumed queue entry that
+    // corrupted prop-live's own claim below).
+    db.select.mockReturnValueOnce(chainable([])); // prop-missing: guard finds nothing at all
 
     const claimChain = chainable([proposalRow({ id: 'prop-live', status: 'executing' })]);
     const finalizeChain = chainable([proposalRow({ id: 'prop-live', status: 'executed' })]);
+    // prop-live's own guard pass, ahead of its claim/finalize below.
+    db.select.mockReturnValueOnce(chainable([{ id: 'ws-guard-ok' }]));
     db.update.mockReturnValueOnce(claimChain).mockReturnValueOnce(finalizeChain);
     vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
     vi.mocked(commentsService.addComment).mockResolvedValue({ id: 'cm-1' } as never);
@@ -479,7 +559,13 @@ describe('bulkApproveProposals', () => {
       .mockReturnValueOnce(earlierFinalize)
       .mockReturnValueOnce(conflictClaim)
       .mockReturnValueOnce(conflictRevert);
-    db.select.mockReturnValueOnce(conflictStatusRead);
+    // Two leading guard passes (one per id's own approveProposal call)
+    // ahead of the one real select this test is about: bulkApproveProposals's
+    // own fallback re-read of prop-conflict's actual status after the revert.
+    db.select
+      .mockReturnValueOnce(chainable([{ id: 'ws-guard-ok' }]))
+      .mockReturnValueOnce(chainable([{ id: 'ws-guard-ok' }]))
+      .mockReturnValueOnce(conflictStatusRead);
     vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
     vi.mocked(commentsService.addComment)
       .mockResolvedValueOnce({ id: 'cm-1' } as never)

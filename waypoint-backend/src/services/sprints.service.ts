@@ -1,8 +1,21 @@
-import { asc, eq, inArray } from 'drizzle-orm';
+import { asc, eq, and, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { sprints, sprintMembers } from '../db/schema/index.js';
-import { NotFoundError, ConflictError } from '../middleware/errors.js';
+import { sprints, sprintMembers, members } from '../db/schema/index.js';
+import { NotFoundError, ConflictError, ValidationError } from '../middleware/errors.js';
 import { newId } from '../lib/ids.js';
+import { currentWorkspaceId } from '../lib/requestContext.js';
+import { assertProjectInWorkspace, workspaceProjectIdsSubquery } from '../lib/workspaceGuard.js';
+
+// Eighth review round, proven live: leadId/memberIds were written with no
+// check at all — a real cross-tenant sprintMembers row, or a lead pointed
+// at a stranger's memberId.
+async function assertMembersInWorkspace(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const rows = await db.select({ id: members.id }).from(members).where(and(inArray(members.id, ids), eq(members.workspaceId, currentWorkspaceId())));
+  const known = new Set(rows.map((r) => r.id));
+  const unknown = ids.filter((id) => !known.has(id));
+  if (unknown.length) throw new ValidationError(`unknown member id(s): ${unknown.join(', ')}`);
+}
 
 async function attachMemberIds<T extends { id: string }>(rows: T[]): Promise<(T & { memberIds: string[] })[]> {
   if (rows.length === 0) return [];
@@ -26,6 +39,7 @@ async function attachMemberIds<T extends { id: string }>(rows: T[]): Promise<(T 
 // exact nondeterminism ticketTools.ts's own capped queries already order
 // around.
 export async function listSprints(projectId: string, limit?: number) {
+  await assertProjectInWorkspace(projectId);
   const query = db
     .select()
     .from(sprints)
@@ -35,8 +49,14 @@ export async function listSprints(projectId: string, limit?: number) {
   return attachMemberIds(rows);
 }
 
+// AT11 (ROAD-146): scoped via its projects — sprints has no workspaceId
+// column of its own.
 export async function listAllSprints(limit?: number) {
-  const query = db.select().from(sprints).orderBy(asc(sprints.startDate), asc(sprints.id));
+  const query = db
+    .select()
+    .from(sprints)
+    .where(inArray(sprints.projectId, workspaceProjectIdsSubquery()))
+    .orderBy(asc(sprints.startDate), asc(sprints.id));
   const rows = limit ? await query.limit(limit) : await query;
   return attachMemberIds(rows);
 }
@@ -45,7 +65,10 @@ export async function listAllSprints(limit?: number) {
 // get_sprint MCP tool (src/mcp/sprintTools.ts), which needs an id ->
 // full-record lookup the same way ticketTools.ts's get_ticket does.
 export async function getSprint(id: string) {
-  const [row] = await db.select().from(sprints).where(eq(sprints.id, id));
+  const [row] = await db
+    .select()
+    .from(sprints)
+    .where(and(eq(sprints.id, id), inArray(sprints.projectId, workspaceProjectIdsSubquery())));
   if (!row) return undefined;
   const [withMembers] = await attachMemberIds([row]);
   return withMembers;
@@ -64,6 +87,8 @@ export interface CreateSprintInput {
 }
 
 export async function createSprint(projectId: string, input: CreateSprintInput) {
+  await assertProjectInWorkspace(projectId);
+  await assertMembersInWorkspace([...(input.leadId ? [input.leadId] : []), ...(input.memberIds ?? [])]);
   return db.transaction(async (tx) => {
     const [row] = await tx
       .insert(sprints)
@@ -87,6 +112,7 @@ export async function createSprint(projectId: string, input: CreateSprintInput) 
 }
 
 export async function updateSprint(id: string, patch: Partial<CreateSprintInput>) {
+  await assertMembersInWorkspace([...(patch.leadId ? [patch.leadId] : []), ...(patch.memberIds ?? [])]);
   return db.transaction(async (tx) => {
     const { memberIds, ...rest } = patch;
 
@@ -96,8 +122,10 @@ export async function updateSprint(id: string, patch: Partial<CreateSprintInput>
     // NOT in this patch. Check that case here, where the stored row is
     // actually available, so a single-field date PATCH can't produce an
     // inverted range that a two-field PATCH would have rejected.
+    // AT11 (ROAD-146): scoped — see the main row fetch below for why.
+    const sprintInWorkspace = and(eq(sprints.id, id), inArray(sprints.projectId, workspaceProjectIdsSubquery()));
     if (rest.startDate !== undefined || rest.endDate !== undefined) {
-      const [current] = await tx.select().from(sprints).where(eq(sprints.id, id));
+      const [current] = await tx.select().from(sprints).where(sprintInWorkspace);
       if (!current) throw new NotFoundError('sprint');
       const nextStart = rest.startDate ?? current.startDate;
       const nextEnd = rest.endDate ?? current.endDate;
@@ -108,9 +136,11 @@ export async function updateSprint(id: string, patch: Partial<CreateSprintInput>
 
     // See workstreams.service.ts's updateWorkstream — a memberIds-only patch
     // leaves `rest` empty, and `.set({})` is invalid SQL.
+    // AT11 (ROAD-146): both branches scoped identically — a cross-tenant
+    // id matches zero rows either way.
     const row = Object.keys(rest).length
-      ? (await tx.update(sprints).set(rest).where(eq(sprints.id, id)).returning())[0]
-      : (await tx.select().from(sprints).where(eq(sprints.id, id)))[0];
+      ? (await tx.update(sprints).set(rest).where(sprintInWorkspace).returning())[0]
+      : (await tx.select().from(sprints).where(sprintInWorkspace))[0];
     if (!row) throw new NotFoundError('sprint');
     if (memberIds) {
       await tx.delete(sprintMembers).where(eq(sprintMembers.sprintId, id));
@@ -124,5 +154,5 @@ export async function updateSprint(id: string, patch: Partial<CreateSprintInput>
 }
 
 export async function deleteSprint(id: string) {
-  await db.delete(sprints).where(eq(sprints.id, id));
+  await db.delete(sprints).where(and(eq(sprints.id, id), inArray(sprints.projectId, workspaceProjectIdsSubquery())));
 }

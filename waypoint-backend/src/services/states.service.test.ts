@@ -22,6 +22,13 @@ const { inArray } = await import('drizzle-orm');
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // AT11 (ROAD-146) seventh review round: resolveStateNames now folds
+  // workspaceProjectIdsSubquery() into its WHERE, which is a SECOND,
+  // nested db.select() call (built while evaluating the outer where()'s
+  // own argument) — this default stands in for it so tests that only
+  // care about the outer query's own result don't need to queue a
+  // second value they aren't testing.
+  db.select.mockReturnValue(chainable([]));
 });
 
 describe('resolveStateNames', () => {

@@ -30,6 +30,7 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
   let eq: typeof import('drizzle-orm')['eq'];
   let asc: typeof import('drizzle-orm')['asc'];
   let sql: typeof import('drizzle-orm')['sql'];
+  let runWithIdentity: typeof import('../lib/requestContext.js')['runWithIdentity'];
 
   const stamp = Date.now();
   const workspaceId = `ws-runs-${stamp}`;
@@ -47,11 +48,71 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
     providerId: 'claude',
   });
 
+  // AT11 (ROAD-146) third review round: createRun/updateRun now force
+  // ownerMemberId to the real caller's identity (currentMemberId()) and
+  // validate copilotConversationId ownership the same way, rather than
+  // trusting whatever the request body claims — see agentRuns.service.ts's
+  // own comment on createRun for why. This file's calls previously relied
+  // on a bare service.createRun/updateRun writing the input's own
+  // ownerMemberId straight through with no request context at all, which
+  // outside any request falls back to Personal's CURRENT_USER_ID — not
+  // this file's own real seeded `memberId` (or, for the paging test
+  // below, its own second member `owner`). Wrapped in the real identity
+  // each call is really acting as, so ownerMemberId keeps landing where
+  // every existing assertion in this file already expects it to.
+  function createRun(input: Parameters<typeof service.createRun>[0], asMemberId = memberId) {
+    return runWithIdentity({ userId: `user-${asMemberId}`, memberId: asMemberId, workspaceId, role: 'admin' }, () =>
+      service.createRun(input),
+    );
+  }
+  function updateRun(id: string, input: Parameters<typeof service.updateRun>[0], asMemberId = memberId) {
+    return runWithIdentity({ userId: `user-${asMemberId}`, memberId: asMemberId, workspaceId, role: 'admin' }, () =>
+      service.updateRun(id, input),
+    );
+  }
+
+  // Fifth review round: getRun/listRuns/listRunsForTicket/listEvents/
+  // appendEvent are now ALSO workspace-scoped (previously only create/
+  // update were, from the fourth round) — same reasoning, wrapped the
+  // same way, so every existing call in this file keeps reaching the
+  // real seeded workspace/member it always meant to instead of falling
+  // back to Personal's WORKSPACE_ID outside any request context.
+  function getRun(id: string, asMemberId = memberId) {
+    return runWithIdentity({ userId: `user-${asMemberId}`, memberId: asMemberId, workspaceId, role: 'admin' }, () =>
+      service.getRun(id),
+    );
+  }
+  function listRuns(query: Parameters<typeof service.listRuns>[0], asMemberId = memberId) {
+    return runWithIdentity({ userId: `user-${asMemberId}`, memberId: asMemberId, workspaceId, role: 'admin' }, () =>
+      service.listRuns(query),
+    );
+  }
+  function listRunsForTicket(ticketId: string, asMemberId = memberId) {
+    return runWithIdentity({ userId: `user-${asMemberId}`, memberId: asMemberId, workspaceId, role: 'admin' }, () =>
+      service.listRunsForTicket(ticketId),
+    );
+  }
+  function listEvents(
+    runId: string,
+    options?: Parameters<typeof service.listEvents>[1],
+    asMemberId = memberId,
+  ) {
+    return runWithIdentity({ userId: `user-${asMemberId}`, memberId: asMemberId, workspaceId, role: 'admin' }, () =>
+      service.listEvents(runId, options),
+    );
+  }
+  function appendEvent(runId: string, input: Parameters<typeof service.appendEvent>[1], asMemberId = memberId) {
+    return runWithIdentity({ userId: `user-${asMemberId}`, memberId: asMemberId, workspaceId, role: 'admin' }, () =>
+      service.appendEvent(runId, input),
+    );
+  }
+
   beforeAll(async () => {
     ({ db } = await import('../db/client.js'));
     service = await import('./agentRuns.service.js');
     schema = await import('../db/schema/index.js');
     ({ eq, asc, sql } = await import('drizzle-orm'));
+    ({ runWithIdentity } = await import('../lib/requestContext.js'));
 
     await db.insert(schema.workspaces).values({
       id: workspaceId,
@@ -111,22 +172,22 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
   });
 
   it('createRun writes the row queued with a `created` event at seq 1', async () => {
-    const run = await service.createRun(base());
+    const run = await createRun(base());
 
     expect(run.id).toMatch(/^run-/);
     expect(run.status).toBe('queued');
     expect(run.startedAt).toBeNull();
-    const events = await service.listEvents(run.id);
+    const events = await listEvents(run.id);
     expect(events.map((e) => [e.seq, e.kind])).toEqual([[1, 'created']]);
     expect(events[0].payload).toMatchObject({ entry: 'dispatched', providerId: 'claude', ticketId });
   });
 
   it('walks the machine, stamping startedAt on first running and endedAt on terminal, one event per move', async () => {
-    const run = await service.createRun(base());
+    const run = await createRun(base());
 
-    const provisioning = await service.updateRun(run.id, { status: 'provisioning' });
+    const provisioning = await updateRun(run.id, { status: 'provisioning' });
     expect(provisioning.startedAt).toBeNull();
-    const running = await service.updateRun(run.id, {
+    const running = await updateRun(run.id, {
       status: 'running',
       daemonSessionId: 'sess-1',
       worktreePath: '/tmp/wt',
@@ -134,21 +195,21 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
     });
     expect(running.startedAt).not.toBeNull();
     expect(running.daemonSessionId).toBe('sess-1');
-    const blocked = await service.updateRun(run.id, {
+    const blocked = await updateRun(run.id, {
       status: 'blocked',
       blockedReason: 'Wants to run `npm test`',
     });
     expect(blocked.blockedReason).toBe('Wants to run `npm test`');
-    const back = await service.updateRun(run.id, { status: 'running', reason: 'user allowed' });
+    const back = await updateRun(run.id, { status: 'running', reason: 'user allowed' });
     // Leaving blocked clears the reason; startedAt is first-entry only.
     expect(back.blockedReason).toBeNull();
     expect(back.startedAt?.getTime()).toBe(running.startedAt?.getTime());
-    await service.updateRun(run.id, { status: 'finishing' });
-    const done = await service.updateRun(run.id, { status: 'done', summary: 'Opened a PR.' });
+    await updateRun(run.id, { status: 'finishing' });
+    const done = await updateRun(run.id, { status: 'done', summary: 'Opened a PR.' });
     expect(done.endedAt).not.toBeNull();
     expect(done.summary).toBe('Opened a PR.');
 
-    const events = await service.listEvents(run.id);
+    const events = await listEvents(run.id);
     expect(events.map((e) => [e.seq, e.kind])).toEqual([
       [1, 'created'],
       [2, 'status_changed'],
@@ -163,34 +224,34 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
   });
 
   it('refuses an illegal move with a 409 sentence and writes nothing — not even the field patch', async () => {
-    const run = await service.createRun(base());
-    await service.updateRun(run.id, { status: 'provisioning' });
-    await service.updateRun(run.id, { status: 'running' });
+    const run = await createRun(base());
+    await updateRun(run.id, { status: 'provisioning' });
+    await updateRun(run.id, { status: 'running' });
 
-    await expect(service.updateRun(run.id, { status: 'done', summary: 'should not land' })).rejects.toThrow(
+    await expect(updateRun(run.id, { status: 'done', summary: 'should not land' })).rejects.toThrow(
       'A running run cannot become done; it can become blocked, finishing, interrupted, failed, cancelled.',
     );
 
-    const after = await service.getRun(run.id);
+    const after = await getRun(run.id);
     expect(after?.status).toBe('running');
     expect(after?.summary).toBeNull();
-    const events = await service.listEvents(run.id);
+    const events = await listEvents(run.id);
     expect(events).toHaveLength(3); // created + two moves
   });
 
   it('a status-only patch to the current status is an idempotent no-op, not a 409', async () => {
-    const run = await service.createRun(base());
-    const again = await service.updateRun(run.id, { status: 'queued' });
+    const run = await createRun(base());
+    const again = await updateRun(run.id, { status: 'queued' });
     expect(again.status).toBe('queued');
-    expect(await service.listEvents(run.id)).toHaveLength(1);
+    expect(await listEvents(run.id)).toHaveLength(1);
   });
 
   it('mints consecutive, unique seqs under concurrent appends', async () => {
-    const run = await service.createRun(base());
+    const run = await createRun(base());
 
     const appended = await Promise.all(
       Array.from({ length: 12 }, (_, i) =>
-        service.appendEvent(run.id, { kind: 'note', payload: { i } }),
+        appendEvent(run.id, { kind: 'note', payload: { i } }),
       ),
     );
 
@@ -205,36 +266,36 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
   });
 
   it('appendEvent on an unknown run is a 404, not an FK error', async () => {
-    await expect(service.appendEvent('run-nope', { kind: 'note' })).rejects.toThrow('agent run not found');
+    await expect(appendEvent('run-nope', { kind: 'note' })).rejects.toThrow('agent run not found');
   });
 
   it('a retry is a new row naming the first, and only a finished or interrupted run can be retried', async () => {
-    const first = await service.createRun(base());
-    await service.updateRun(first.id, { status: 'provisioning' });
-    await service.updateRun(first.id, { status: 'running', worktreePath: '/tmp/first' });
+    const first = await createRun(base());
+    await updateRun(first.id, { status: 'provisioning' });
+    await updateRun(first.id, { status: 'running', worktreePath: '/tmp/first' });
 
-    await expect(service.createRun({ ...base(), retryOfRunId: first.id })).rejects.toThrow(
+    await expect(createRun({ ...base(), retryOfRunId: first.id })).rejects.toThrow(
       `Run ${first.id} is running; only a finished or interrupted run can be retried.`,
     );
 
-    await service.updateRun(first.id, { status: 'failed', errorKind: 'generic', errorMessage: 'boom' });
-    const retry = await service.createRun({ ...base(), retryOfRunId: first.id });
+    await updateRun(first.id, { status: 'failed', errorKind: 'generic', errorMessage: 'boom' });
+    const retry = await createRun({ ...base(), retryOfRunId: first.id });
 
     expect(retry.id).not.toBe(first.id);
     expect(retry.retryOfRunId).toBe(first.id);
     expect(retry.worktreePath).toBeNull();
     // The first run's evidence is untouched (ROAD-56: rows, not upserts).
-    const firstAfter = await service.getRun(first.id);
+    const firstAfter = await getRun(first.id);
     expect(firstAfter?.worktreePath).toBe('/tmp/first');
     expect(firstAfter?.status).toBe('failed');
     // And the ticket lists both, newest first.
-    const forTicket = await service.listRunsForTicket(ticketId);
+    const forTicket = await listRunsForTicket(ticketId);
     const ids = forTicket.map((r) => r.id);
     expect(ids.indexOf(retry.id)).toBeLessThan(ids.indexOf(first.id));
   });
 
   it('a proposal can point at a run, and deleting the run leaves the proposal with a null run id', async () => {
-    const run = await service.createRun(base());
+    const run = await createRun(base());
     await db.insert(schema.copilotConversations).values({ id: conversationId, memberId, title: 'runs itest' });
     const proposalId = `prop-runs-${stamp}`;
     await db.insert(schema.proposals).values({
@@ -288,36 +349,36 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
     });
     const made: string[] = [];
     for (let i = 0; i < 5; i += 1) {
-      const r = await service.createRun({ ...base(), ownerMemberId: owner, entry: 'independent', ticketId: null });
+      const r = await createRun({ ...base(), ownerMemberId: owner, entry: 'independent', ticketId: null }, owner);
       made.push(r.id);
     }
-    await service.updateRun(made[0], { status: 'cancelled' });
+    await updateRun(made[0], { status: 'cancelled' }, owner);
 
-    const page1 = await service.listRuns({ ownerMemberId: owner, limit: 2 });
+    const page1 = await listRuns({ ownerMemberId: owner, limit: 2 });
     expect(page1.items).toHaveLength(2);
     expect(page1.nextCursor).not.toBeNull();
-    const page2 = await service.listRuns({ ownerMemberId: owner, limit: 2, cursor: page1.nextCursor! });
-    const page3 = await service.listRuns({ ownerMemberId: owner, limit: 2, cursor: page2.nextCursor! });
+    const page2 = await listRuns({ ownerMemberId: owner, limit: 2, cursor: page1.nextCursor! });
+    const page3 = await listRuns({ ownerMemberId: owner, limit: 2, cursor: page2.nextCursor! });
     const all = [...page1.items, ...page2.items, ...page3.items].map((r) => r.id);
     expect(all).toHaveLength(5);
     expect(new Set(all).size).toBe(5);
     expect(all).toEqual([...made].reverse());
     expect(page3.nextCursor).toBeNull();
 
-    const queuedOnly = await service.listRuns({ ownerMemberId: owner, status: ['queued'] });
+    const queuedOnly = await listRuns({ ownerMemberId: owner, status: ['queued'] });
     expect(queuedOnly.items.map((r) => r.id)).not.toContain(made[0]);
     expect(queuedOnly.items).toHaveLength(4);
-    await expect(service.listRuns({ ownerMemberId: owner, cursor: 'not-a-cursor' })).rejects.toThrow('invalid cursor');
+    await expect(listRuns({ ownerMemberId: owner, cursor: 'not-a-cursor' })).rejects.toThrow('invalid cursor');
   });
 
   it('a finished run is read-only: a field patch is refused and nothing lands; an idempotent status retry still passes', async () => {
-    const run = await service.createRun(base());
-    await service.updateRun(run.id, { status: 'cancelled' });
+    const run = await createRun(base());
+    await updateRun(run.id, { status: 'cancelled' });
 
-    await expect(service.updateRun(run.id, { worktreePath: '/other', summary: 'rewritten' })).rejects.toThrow(
+    await expect(updateRun(run.id, { worktreePath: '/other', summary: 'rewritten' })).rejects.toThrow(
       'A cancelled run is finished; its record is read-only.',
     );
-    const again = await service.updateRun(run.id, { status: 'cancelled' });
+    const again = await updateRun(run.id, { status: 'cancelled' });
 
     expect(again.status).toBe('cancelled');
     expect(again.summary).toBeNull();
@@ -325,67 +386,67 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
 
     // W6: the pull request the host opens after the run is done is the one
     // field a finished run takes — alone, and once.
-    const withPr = await service.updateRun(run.id, { prUrl: 'https://github.com/o/r/pull/60' });
+    const withPr = await updateRun(run.id, { prUrl: 'https://github.com/o/r/pull/60' });
     expect(withPr.prUrl).toBe('https://github.com/o/r/pull/60');
-    await expect(service.updateRun(run.id, { prUrl: 'https://github.com/o/r/pull/61' })).rejects.toThrow(
+    await expect(updateRun(run.id, { prUrl: 'https://github.com/o/r/pull/61' })).rejects.toThrow(
       'read-only',
     );
-    await expect(service.updateRun(run.id, { prUrl: 'https://x/pull/1', summary: 's' })).rejects.toThrow(
+    await expect(updateRun(run.id, { prUrl: 'https://x/pull/1', summary: 's' })).rejects.toThrow(
       'read-only',
     );
   });
 
   it('a blocked run asking a second question gets a blocked_reason_changed event without a transition', async () => {
-    const run = await service.createRun(base());
-    await service.updateRun(run.id, { status: 'provisioning' });
-    await service.updateRun(run.id, { status: 'running' });
-    await service.updateRun(run.id, { status: 'blocked', blockedReason: 'first question' });
+    const run = await createRun(base());
+    await updateRun(run.id, { status: 'provisioning' });
+    await updateRun(run.id, { status: 'running' });
+    await updateRun(run.id, { status: 'blocked', blockedReason: 'first question' });
 
-    await service.updateRun(run.id, { status: 'blocked', blockedReason: 'second question' });
+    await updateRun(run.id, { status: 'blocked', blockedReason: 'second question' });
 
-    const events = await service.listEvents(run.id);
+    const events = await listEvents(run.id);
     const last = events[events.length - 1];
     expect(last.kind).toBe('blocked_reason_changed');
     expect(last.payload).toEqual({ from: 'first question', to: 'second question' });
-    expect((await service.getRun(run.id))?.status).toBe('blocked');
+    expect((await getRun(run.id))?.status).toBe('blocked');
   });
 
   it('retrying an interrupted run cancels it under the lock, so there is never a second live run on the ticket', async () => {
-    const first = await service.createRun(base());
-    await service.updateRun(first.id, { status: 'provisioning' });
-    await service.updateRun(first.id, { status: 'interrupted' });
+    const first = await createRun(base());
+    await updateRun(first.id, { status: 'provisioning' });
+    await updateRun(first.id, { status: 'interrupted' });
 
-    const retry = await service.createRun({ ...base(), retryOfRunId: first.id });
+    const retry = await createRun({ ...base(), retryOfRunId: first.id });
 
-    const prior = await service.getRun(first.id);
+    const prior = await getRun(first.id);
     expect(prior?.status).toBe('cancelled');
     expect(prior?.endedAt).not.toBeNull();
-    const priorEvents = await service.listEvents(first.id);
+    const priorEvents = await listEvents(first.id);
     expect(priorEvents[priorEvents.length - 1].payload).toEqual({
       from: 'interrupted',
       to: 'cancelled',
       reason: 'superseded by a retry',
     });
     // The resume arrow is now closed for good.
-    await expect(service.updateRun(first.id, { status: 'running' })).rejects.toThrow('is finished');
+    await expect(updateRun(first.id, { status: 'running' })).rejects.toThrow('is finished');
     expect(retry.retryOfRunId).toBe(first.id);
   });
 
   it('a retry racing a resume waits for the row lock and then sees the truth', async () => {
-    const first = await service.createRun(base());
-    await service.updateRun(first.id, { status: 'provisioning' });
-    await service.updateRun(first.id, { status: 'interrupted' });
+    const first = await createRun(base());
+    await updateRun(first.id, { status: 'provisioning' });
+    await updateRun(first.id, { status: 'interrupted' });
 
     // Resume and retry issued together: whichever wins the lock decides
     // the other. Either the resume lands and the retry is refused (the
     // run is running), or the retry lands and the resume is refused (the
     // run is cancelled). Never both.
     const [resume, retry] = await Promise.allSettled([
-      service.updateRun(first.id, { status: 'running', reason: 'resume' }),
-      service.createRun({ ...base(), retryOfRunId: first.id }),
+      updateRun(first.id, { status: 'running', reason: 'resume' }),
+      createRun({ ...base(), retryOfRunId: first.id }),
     ]);
 
-    const after = await service.getRun(first.id);
+    const after = await getRun(first.id);
     if (resume.status === 'fulfilled') {
       expect(retry.status).toBe('rejected');
       expect(after?.status).toBe('running');
@@ -409,10 +470,10 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
       automations: {},
     });
     try {
-      await expect(service.createRun({ ...base(), projectId: otherProject })).rejects.toThrow(
+      await expect(createRun({ ...base(), projectId: otherProject })).rejects.toThrow(
         'ticketId belongs to a different project than projectId',
       );
-      await expect(service.createRun({ ...base(), retryOfRunId: 'run-nope000' })).rejects.toThrow(
+      await expect(createRun({ ...base(), retryOfRunId: 'run-nope000' })).rejects.toThrow(
         'retryOfRunId does not exist',
       );
     } finally {
@@ -440,13 +501,13 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
       .returning();
     let runId: string | null = null;
     try {
-      const run = await service.createRun({ ...base(), projectId: null, ticketId: ref.id });
+      const run = await createRun({ ...base(), projectId: null, ticketId: ref.id });
       runId = run.id;
       expect(run.ticketId).toBe(ref.id);
       expect(run.projectId).toBeNull();
-      expect((await service.listRunsForTicket(ref.id)).map((r) => r.id)).toEqual([run.id]);
+      expect((await listRunsForTicket(ref.id)).map((r) => r.id)).toEqual([run.id]);
 
-      await expect(service.createRun({ ...base(), projectId: null, ticketId: 'tref-nope0000' })).rejects.toThrow(
+      await expect(createRun({ ...base(), projectId: null, ticketId: 'tref-nope0000' })).rejects.toThrow(
         'ticketId does not exist',
       );
       // The check constraint, below the service: a bare key is not a ticket
@@ -500,7 +561,7 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
     const seen: string[] = [];
     let cursor: string | undefined;
     for (let i = 0; i < 5; i += 1) {
-      const page = await service.listRuns({ ownerMemberId: owner, limit: 1, cursor });
+      const page = await listRuns({ ownerMemberId: owner, limit: 1, cursor });
       seen.push(...page.items.map((r) => r.id));
       if (!page.nextCursor) break;
       cursor = page.nextCursor;
@@ -510,8 +571,8 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
   });
 
   it('caps a summary at 20,000 characters with a marker rather than refusing it', async () => {
-    const run = await service.createRun(base());
-    const updated = await service.updateRun(run.id, { summary: 'y'.repeat(25_000) });
+    const run = await createRun(base());
+    const updated = await updateRun(run.id, { summary: 'y'.repeat(25_000) });
     expect(updated.summary).toHaveLength(20_000);
     expect(updated.summary?.endsWith('…')).toBe(true);
   });

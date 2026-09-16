@@ -7,7 +7,7 @@ import { ConflictError, NotFoundError } from '../middleware/errors.js';
 // proves what is read under lock, what is written, and what is refused.
 function chainable(resolvedValue: unknown) {
   const chain: Record<string, unknown> = {};
-  const methods = ['from', 'where', 'limit', 'orderBy', 'values', 'set', 'for'];
+  const methods = ['from', 'where', 'limit', 'orderBy', 'values', 'set', 'for', 'leftJoin'];
   for (const method of methods) {
     chain[method] = vi.fn(() => chain);
   }
@@ -71,6 +71,15 @@ function txWith(row: unknown, written?: unknown) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Second review round: editProposalBody now opens with
+  // assertProposalInWorkspace's own db.select(...) guard, run before the
+  // db.transaction() these tests already mock via txWith() — a separate
+  // mock target, so it needs its own default here. None of these tests
+  // are about workspace scoping (that's proven live, separately, in
+  // workspaceScoping.integration.test.ts); this just lets every one of
+  // them pass through the guard the way they already passed db.select for
+  // every other purpose before this round.
+  db.select.mockReturnValue(chainable([{ id: 'ws-guard-ok' }]));
   vi.mocked(membersService.getCurrentUser).mockResolvedValue({ displayName: 'Amaan' } as never);
   vi.mocked(agentRunsService.appendEvent).mockResolvedValue({} as never);
 });
