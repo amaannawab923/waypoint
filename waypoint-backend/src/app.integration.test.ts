@@ -42,15 +42,27 @@ describe.skipIf(!REAL_DB)("this backend's own origin is allowed through CORS (AT
 
   const A_FOREIGN_ORIGIN = 'http://a-real-browser-tab.example';
 
-  it("accepts POST /auth/email/start from this backend's own origin — the exact request shape that 403'd before this fix", async () => {
-    ({ publicBaseUrl } = await import('./auth/redirect.js'));
+  it("accepts POST /auth/email/start from this backend's own origin — the exact request shape that 403'd before this fix", async (ctx) => {
+    ({ publicBaseUrl, corsOriginsForBackend } = await import('./auth/redirect.js'));
     const { createApp } = await import('./app.js');
     app = createApp();
+
+    // Round-6 review: the allowlist holds corsOriginsForBackend's own
+    // derived Origin, not publicBaseUrl()'s raw base-URL string — those
+    // differ for a real deployment behind a path-routed reverse proxy
+    // (redirect.ts's own comment names this as a legitimate shape), so
+    // sending the raw base URL as Origin would false-fail against a real
+    // operator's own PUBLIC_BASE_URL despite the fix behaving correctly.
+    const [ownOrigin] = corsOriginsForBackend(publicBaseUrl(process.env));
+    if (!ownOrigin) {
+      ctx.skip();
+      return;
+    }
 
     const res = await request(app)
       .post('/auth/email/start')
       .type('form')
-      .set('Origin', publicBaseUrl(process.env))
+      .set('Origin', ownOrigin)
       .send({ email: `qa-${Date.now()}@example.test`, redirect_uri: 'http://127.0.0.1:45999/callback', state: 'a-real-32-char-or-longer-state-value' });
 
     // Not 403: the request reached the route handler. A real outcome

@@ -464,7 +464,12 @@ individually, at least one auth method required):**
 - `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` —
   their own relay (any provider), for email-link sign-in.
 - `INSTANCE_SIGNUP_MODE` default (`open`/`invite_only`) — settable at
-  first-run instead if left unset.
+  first-run instead if left unset. **Never implemented as an env var**
+  (AT13, ROAD-148, §"Built in AT13" below) — set via `POST
+  /instance/setup`'s own request body at first-run, changed afterward
+  via `PATCH /admin/instance`. Kept in this list because "settable at
+  first-run instead" already anticipated the env-var half might not
+  ship; only that half didn't.
 - Nothing else. No account with us, no API key from us, no license
   check to defeat (003 §5) — a self-hoster who configures none of the
   above simply can't complete first-run setup, which is an honest failure
