@@ -1,9 +1,28 @@
 import tls from 'node:tls';
+import log from 'electron-log';
 import { Agent, setGlobalDispatcher } from 'undici';
+
+// Electron bundles its own, separate copy of undici for the built-in
+// `fetch` every main-process file calls — a different module instance
+// than the one this file imports from node_modules. The two only end up
+// sharing one dispatcher because `setGlobalDispatcher` writes it onto
+// `globalThis` under this well-known `Symbol.for` key (undici's own
+// mechanism for exactly this cross-copy scenario), which any undici copy
+// reads regardless of which node_modules install it came from — verified
+// live (round 1 review) that Electron 35.7.5's bundled undici 6.21.2 and
+// this file's own undici 7.29.1 both resolve to it. Read directly here,
+// not through this module's own setGlobalDispatcher/getGlobalDispatcher
+// pair, since asking the same copy that just wrote it would only confirm
+// it's consistent with itself — not that the OTHER copy sees it too.
+const GLOBAL_DISPATCHER_KEY = Symbol.for('undici.globalDispatcher.1');
 
 /** `tls.getCACertificates` (Node 22.16+) isn't in this project's pinned
  * `@types/node` yet — declared locally rather than bumping that dependency
- * project-wide for one function. */
+ * project-wide for one function. Node 22.16 is why `package.json` pins
+ * `electron` to `^35.4.0`, not just `^35.0.2` — Electron 35.0.x–35.3.x
+ * bundle Node 22.14, where this function doesn't exist yet; the `typeof`
+ * guard below makes that a silent no-op rather than a crash, but the
+ * floor exists so a routine `npm install` can't quietly regress into it. */
 type CaCertificateStore = 'bundled' | 'system' | 'extra' | 'default';
 interface TlsWithCaCertificates {
   getCACertificates?: (type: CaCertificateStore) => Array<string | Buffer>;
@@ -50,5 +69,14 @@ export function installSystemCaTrust(): void {
   } catch {
     return;
   }
-  setGlobalDispatcher(new Agent({ connect: { ca } }));
+  const agent = new Agent({ connect: { ca } });
+  setGlobalDispatcher(agent);
+  // If a future Electron/undici version stops sharing this symbol, the
+  // ambient `fetch` silently keeps Node's default trust — safe, but
+  // invisible. This makes that regression observable instead.
+  if ((globalThis as Record<symbol, unknown>)[GLOBAL_DISPATCHER_KEY] !== agent) {
+    log.warn(
+      "installSystemCaTrust: the OS certificate store wasn't picked up by the main process's fetch — main-process HTTPS calls will use Node's default trust only.",
+    );
+  }
 }

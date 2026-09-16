@@ -174,9 +174,15 @@ function classifyNetworkError(err: unknown): JiraFailure {
     );
   }
   if (CERT_TRUST_ERROR_CODES.has(code)) {
+    // Not "set NODE_EXTRA_CA_CERTS": that's a real fallback (see this
+    // repo's README), but it's an env var a packaged app launched from
+    // Finder/the Dock has no supported way to set — telling someone who
+    // will only ever see this dialog to do that would just send them to a
+    // second, unresolved ticket. Point them at the one thing that is
+    // actionable for them.
     return failure(
       'network',
-      "Couldn't verify Jira's certificate. If you're on a corporate network that inspects HTTPS traffic, its certificate may need to be in this computer's trust store — check with IT, or set NODE_EXTRA_CA_CERTS to point at it.",
+      "Couldn't verify Jira's certificate. If you're on a corporate network that inspects HTTPS traffic, check with IT — this computer's trust settings may need updating.",
     );
   }
   return failure(
