@@ -5,17 +5,24 @@ const readStoredAccountCredentialMock = jest.fn();
 const writeStoredAccountCredentialMock = jest.fn();
 const deleteStoredAccountCredentialMock = jest.fn();
 const isAccountSecureStorageAvailableMock = jest.fn(() => true);
+const setStoredActiveWorkspaceIdMock = jest.fn();
 jest.mock('./accountAuth', () => ({
   readStoredAccountCredential: () => readStoredAccountCredentialMock(),
   writeStoredAccountCredential: (c: unknown) => writeStoredAccountCredentialMock(c),
   deleteStoredAccountCredential: () => deleteStoredAccountCredentialMock(),
   isAccountSecureStorageAvailable: () => isAccountSecureStorageAvailableMock(),
+  setStoredActiveWorkspaceId: (id: string | null) => setStoredActiveWorkspaceIdMock(id),
   toAccountIdentity: (c: { backendUrl: string; email: string; fullName: string; avatarUrl: string | null }) => ({
     backendUrl: c.backendUrl,
     email: c.email,
     fullName: c.fullName,
     avatarUrl: c.avatarUrl,
   }),
+}));
+
+const hostedFetchMock = jest.fn();
+jest.mock('./hostedApi', () => ({
+  hostedFetch: (req: unknown) => hostedFetchMock(req),
 }));
 
 const checkInstanceSetupStatusMock = jest.fn();
@@ -159,5 +166,41 @@ describe('account:signOut', () => {
     await expect(getHandler('account:signOut')({})).resolves.toEqual({ ok: true });
     expect(revokeAccountSessionMock).not.toHaveBeenCalled();
     expect(deleteStoredAccountCredentialMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// AT12 (ROAD-147).
+describe('account:activeWorkspace:set', () => {
+  it('passes the workspace id straight through and reports the result', () => {
+    setStoredActiveWorkspaceIdMock.mockReturnValue(true);
+    const res = getHandler('account:activeWorkspace:set')({}, { workspaceId: 'ws-fairweather' });
+    expect(setStoredActiveWorkspaceIdMock).toHaveBeenCalledWith('ws-fairweather');
+    expect(res).toEqual({ ok: true });
+  });
+
+  it('treats a missing/empty workspaceId as null (clearing it), not the empty string', () => {
+    setStoredActiveWorkspaceIdMock.mockReturnValue(true);
+    getHandler('account:activeWorkspace:set')({}, {});
+    expect(setStoredActiveWorkspaceIdMock).toHaveBeenCalledWith(null);
+    setStoredActiveWorkspaceIdMock.mockClear();
+    getHandler('account:activeWorkspace:set')({}, { workspaceId: '' });
+    expect(setStoredActiveWorkspaceIdMock).toHaveBeenCalledWith(null);
+  });
+
+  it('resolves { ok: false }, not a throw, when the underlying write fails', () => {
+    setStoredActiveWorkspaceIdMock.mockImplementation(() => {
+      throw new Error('keychain locked');
+    });
+    expect(getHandler('account:activeWorkspace:set')({}, { workspaceId: 'ws-x' })).toEqual({ ok: false });
+  });
+});
+
+describe('account:hostedFetch', () => {
+  it('passes the request straight through to hostedFetch and returns its result', async () => {
+    hostedFetchMock.mockResolvedValue({ ok: true, status: 201, body: { id: 'ws-1' } });
+    const req = { path: '/workspaces', method: 'POST', body: { name: 'Fairweather Labs' } };
+    const res = await getHandler('account:hostedFetch')({}, req);
+    expect(hostedFetchMock).toHaveBeenCalledWith(req);
+    expect(res).toEqual({ ok: true, status: 201, body: { id: 'ws-1' } });
   });
 });

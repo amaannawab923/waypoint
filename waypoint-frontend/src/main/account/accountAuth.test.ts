@@ -32,6 +32,7 @@ import {
   deleteStoredAccountCredential,
   isAccountSecureStorageAvailable,
   readStoredAccountCredential,
+  setStoredActiveWorkspaceId,
   toAccountIdentity,
   writeStoredAccountCredential,
 } from './accountAuth';
@@ -43,6 +44,7 @@ const CREDENTIAL: AccountCredential = {
   email: 'jordan@example.test',
   fullName: 'Jordan Reyes',
   avatarUrl: 'https://avatar.example/48',
+  activeWorkspaceId: null,
 };
 
 function storedFile(credential: Partial<AccountCredential>): string {
@@ -79,6 +81,7 @@ describe('readStoredAccountCredential', () => {
       email: CREDENTIAL.email,
       fullName: CREDENTIAL.email,
       avatarUrl: null,
+      activeWorkspaceId: null,
     });
   });
 
@@ -128,6 +131,32 @@ describe('writeStoredAccountCredential', () => {
   });
 });
 
+describe('setStoredActiveWorkspaceId', () => {
+  it('returns false and writes nothing when not signed in', () => {
+    readFileSyncMock.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    expect(setStoredActiveWorkspaceId('ws-abc')).toBe(false);
+    expect(writeFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('re-encrypts the whole credential with the new workspace id, keeping every other field', () => {
+    readFileSyncMock.mockReturnValue(storedFile(CREDENTIAL));
+    expect(setStoredActiveWorkspaceId('ws-new')).toBe(true);
+    const written = JSON.parse(writeFileSyncMock.mock.calls[0][1] as string);
+    const decrypted = JSON.parse(decryptStringMock(Buffer.from(written.encrypted, 'base64') as unknown as Buffer));
+    expect(decrypted).toEqual({ ...CREDENTIAL, activeWorkspaceId: 'ws-new' });
+  });
+
+  it('clears it back to null', () => {
+    readFileSyncMock.mockReturnValue(storedFile({ ...CREDENTIAL, activeWorkspaceId: 'ws-old' }));
+    setStoredActiveWorkspaceId(null);
+    const written = JSON.parse(writeFileSyncMock.mock.calls[0][1] as string);
+    const decrypted = JSON.parse(decryptStringMock(Buffer.from(written.encrypted, 'base64') as unknown as Buffer));
+    expect(decrypted.activeWorkspaceId).toBeNull();
+  });
+});
+
 describe('deleteStoredAccountCredential', () => {
   it('unlinks the file', () => {
     deleteStoredAccountCredential();
@@ -149,6 +178,7 @@ describe('toAccountIdentity', () => {
       email: CREDENTIAL.email,
       fullName: CREDENTIAL.fullName,
       avatarUrl: CREDENTIAL.avatarUrl,
+      activeWorkspaceId: CREDENTIAL.activeWorkspaceId,
     });
     expect(toAccountIdentity(CREDENTIAL)).not.toHaveProperty('token');
   });
