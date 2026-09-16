@@ -26,16 +26,21 @@ export function publicBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
 // publicBaseUrl() itself returns.
 //
 // The loopback-spelling half: this backend's own default is
-// `http://localhost:<PORT>`, but the desktop's WAYPOINT_API_BASE_URL
-// default (main/account/accountSignIn.ts) and the compose file's own
-// published address (docker-compose.yml, docs/operations/
-// self-hosted-setup.md) both use the 127.0.0.1 literal — an operator
-// pointing their desktop at "the loopback backend" via either spelling
-// is describing the same backend, but a browser treats
-// http://localhost:X and http://127.0.0.1:X as different Origins. Both
-// are trusted here specifically for loopback, since nothing about the
-// actual security boundary (a real sign-in through this same backend)
-// depends on which spelling reached it.
+// `http://localhost:<PORT>`, but docker-compose.yml's own published
+// address and docs/operations/self-hosted-setup.md's own walkthrough
+// both use the 127.0.0.1 literal — an operator pointing their desktop's
+// WAYPOINT_API_BASE_URL at "the loopback backend" via either spelling is
+// describing the same backend, but a browser treats http://localhost:X
+// and http://127.0.0.1:X (and http://[::1]:X) as different Origins. All
+// three are trusted here specifically for loopback, since nothing about
+// the actual security boundary (a real sign-in through this same
+// backend) depends on which spelling reached it.
+const LOOPBACK_HOSTNAME_SIBLINGS: Record<string, string[]> = {
+  localhost: ['127.0.0.1', '[::1]'],
+  '127.0.0.1': ['localhost', '[::1]'],
+  '[::1]': ['localhost', '127.0.0.1'],
+};
+
 export function corsOriginsForBackend(publicBaseUrlValue: string): string[] {
   let u: URL;
   try {
@@ -43,10 +48,21 @@ export function corsOriginsForBackend(publicBaseUrlValue: string): string[] {
   } catch {
     return [publicBaseUrlValue];
   }
+  // WHATWG URL gives a "null" string for `.origin` on any non-special
+  // scheme (round-4 review, live-verified: a schemeless value like
+  // "localhost:14000" parses fine — the part before the first colon just
+  // becomes the scheme — and produces exactly this). "null" is also the
+  // literal Origin header value a real browser sends for an opaque
+  // origin (a sandboxed iframe, a data: document, some cross-origin
+  // redirects) — allowlisting the string "null" would let exactly the
+  // request class this whole check exists to stop through. Refuse to
+  // return anything for a value that isn't a real http(s) origin, rather
+  // than trusting `.origin` blindly.
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return [publicBaseUrlValue];
   const origins = [u.origin];
-  if (u.hostname === 'localhost' || u.hostname === '127.0.0.1') {
-    const sibling = u.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
-    origins.push(`${u.protocol}//${sibling}${u.port ? `:${u.port}` : ''}`);
+  const siblings = LOOPBACK_HOSTNAME_SIBLINGS[u.hostname];
+  if (siblings) {
+    for (const sibling of siblings) origins.push(`${u.protocol}//${sibling}${u.port ? `:${u.port}` : ''}`);
   }
   return origins;
 }

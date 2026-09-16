@@ -23,7 +23,13 @@ export function createSmtpMailer(env: NodeJS.ProcessEnv = process.env): Mailer {
   // have let that through as `Number('')` (0), landing on `secure: false`
   // by an accident of nodemailer's own fallback rather than this line's
   // own logic. Matches smtpConfigured's own trim-then-check above.
-  const port = Number(env.SMTP_PORT?.trim() || 587);
+  //
+  // Number.isInteger guard: a garbage value (SMTP_PORT=smtp, a typo'd
+  // port) would otherwise silently become NaN here — still falsy against
+  // `=== 465` for `secure`, but nodemailer would then fail with an
+  // opaque connection error instead of this naming the actual bad input.
+  const rawPort = Number(env.SMTP_PORT?.trim() || 587);
+  const port = Number.isInteger(rawPort) ? rawPort : 587;
   const user = env.SMTP_USER?.trim();
   const pass = env.SMTP_PASS;
   const transport = nodemailer.createTransport({

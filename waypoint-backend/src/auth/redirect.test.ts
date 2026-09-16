@@ -43,22 +43,32 @@ describe('publicBaseUrl', () => {
   });
 });
 
-// AT13 (ROAD-148) round-3 review: what app.ts's CORS allowlist actually
-// needs from publicBaseUrl() is an Origin (scheme+host+port, no path, no
-// default port) plus, for loopback specifically, the sibling spelling —
-// a desktop pointed at this backend via 127.0.0.1 and one pointed via
-// localhost are the same backend to an operator, but different Origins
-// to a browser.
+// AT13 (ROAD-148) rounds 3–4 review: what app.ts's CORS allowlist
+// actually needs from publicBaseUrl() is an Origin (scheme+host+port, no
+// path, no default port) plus, for loopback specifically, every sibling
+// spelling — a desktop pointed at this backend via 127.0.0.1 and one
+// pointed via localhost are the same backend to an operator, but
+// different Origins to a browser.
 describe('corsOriginsForBackend', () => {
-  it('returns both loopback spellings, same port, for either loopback hostname', () => {
-    expect(corsOriginsForBackend('http://localhost:14000')).toEqual(['http://localhost:14000', 'http://127.0.0.1:14000']);
-    expect(corsOriginsForBackend('http://127.0.0.1:14000')).toEqual(['http://127.0.0.1:14000', 'http://localhost:14000']);
+  it('returns all three loopback spellings, same port, for any one of them', () => {
+    expect(corsOriginsForBackend('http://localhost:14000')).toEqual(['http://localhost:14000', 'http://127.0.0.1:14000', 'http://[::1]:14000']);
+    expect(corsOriginsForBackend('http://127.0.0.1:14000')).toEqual(['http://127.0.0.1:14000', 'http://localhost:14000', 'http://[::1]:14000']);
+    expect(corsOriginsForBackend('http://[::1]:14000')).toEqual(['http://[::1]:14000', 'http://localhost:14000', 'http://127.0.0.1:14000']);
+  });
+
+  it('handles a bare loopback address with no port — the shape the compose docs actually use', () => {
+    expect(corsOriginsForBackend('http://127.0.0.1')).toEqual(['http://127.0.0.1', 'http://localhost', 'http://[::1]']);
   });
 
   it('reduces a base URL to a bare Origin — no path, no default port, lowercased host', () => {
     expect(corsOriginsForBackend('https://Waypoint.example.com/some/path/prefix')).toEqual(['https://waypoint.example.com']);
     expect(corsOriginsForBackend('https://waypoint.example.com:443')).toEqual(['https://waypoint.example.com']);
     expect(corsOriginsForBackend('http://waypoint.example.com:80')).toEqual(['http://waypoint.example.com']);
+    // A trailing slash combined with a non-default port — publicBaseUrl()
+    // itself always strips a trailing slash before this function ever
+    // sees it, but this function is independently exported and tested,
+    // so its own "no path" contract gets its own direct case.
+    expect(corsOriginsForBackend('http://localhost:14000/')).toEqual(['http://localhost:14000', 'http://127.0.0.1:14000', 'http://[::1]:14000']);
   });
 
   it('does not add a loopback sibling for a real, non-loopback host', () => {
@@ -67,5 +77,25 @@ describe('corsOriginsForBackend', () => {
 
   it('falls back to the raw string, rather than throwing, for an unparseable value', () => {
     expect(corsOriginsForBackend('not a url')).toEqual(['not a url']);
+  });
+
+  // Round-4 review, the real finding: a schemeless value like
+  // "localhost:14000" is NOT unparseable — the part before the first
+  // colon becomes the URL's scheme, and WHATWG's `.origin` for any
+  // non-http(s) scheme is the literal string "null". That string is
+  // also the real Origin header value a browser sends for an opaque
+  // origin (a sandboxed iframe, a data: document) — trusting it blindly
+  // would allowlist exactly the request class this check exists to
+  // block. Every one of these must fall back to the inert raw-string
+  // form, the same as a genuinely unparseable value, not to "null".
+  it.each([
+    ['localhost:14000', 'missing scheme — "localhost:" becomes the protocol, not the host'],
+    ['waypoint.example.com:8443', 'same shape with a real-looking hostname'],
+    ['app://waypoint', 'a real, non-http(s) scheme'],
+    ['file:///srv/waypoint', 'a file: URL'],
+  ])('never allowlists the opaque-origin string "null" for %s (%s)', (value) => {
+    const result = corsOriginsForBackend(value);
+    expect(result).not.toContain('null');
+    expect(result).toEqual([value]);
   });
 });

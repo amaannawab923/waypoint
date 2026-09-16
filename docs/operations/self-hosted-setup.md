@@ -95,10 +95,12 @@ your own machine, set it to the real, public URL — see "Reaching this
 instance beyond localhost," below, before you do.
 
 This is also whatever address you point the desktop app's own
-`WAYPOINT_API_BASE_URL` at (Settings → General on the desktop, or that
-env var directly) — both need to name the *same* backend for sign-in to
-complete. For plain loopback use, `localhost` and `127.0.0.1` are
-interchangeable here (this backend trusts both spellings for its own
+`WAYPOINT_API_BASE_URL` at — an environment variable set before
+launching the app, not a setting in the app itself; there is no
+in-app field for it yet. Both need to name the *same* backend for
+sign-in to complete. For plain loopback use, `localhost` and `127.0.0.1`
+(and `[::1]`, if you've bound this backend to it) are all
+interchangeable here (this backend trusts all of them for its own
 origin); once you set a real `PUBLIC_BASE_URL`, use that exact value on
 the desktop side too.
 
