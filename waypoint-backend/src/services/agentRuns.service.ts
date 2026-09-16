@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, getTableColumns, gt, inArray, lt, or, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { agentRuns, agentRunEvents, agentRunTranscripts, members, ticketRefs, tickets } from '../db/schema/index.js';
+import { agentRuns, agentRunEvents, agentRunTranscripts, members, projects, ticketRefs, tickets } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
 import { ConflictError, NotFoundError, ValidationError } from '../middleware/errors.js';
 import { isExternalRef } from '../lib/externalRefs.js';
@@ -180,29 +180,47 @@ export async function createRun(input: CreateAgentRunInput): Promise<AgentRun> {
     await assertConversationOwnedByMember(input.copilotConversationId, ownerMemberId);
   }
   return db.transaction(async (tx) => {
+    // Sixth review round: projectId/ticketId were the last unscoped id
+    // fields left in this function — a real cross-tenant existence +
+    // relationship oracle (four distinguishable responses told a caller
+    // whether a given id existed in ANOTHER workspace, and whether a
+    // ticket belonged to a given project there), proven live. Folded into
+    // this same ValidationError('...does not exist') wherever the field
+    // was already validated for plain existence, so a cross-tenant match
+    // reads identically to a genuinely missing one.
     if (input.ticketId && isExternalRef(input.ticketId)) {
       // W5b (ROAD-126): a run on a Jira issue names the issue's ledger
       // handle. The handle must exist — the FK that used to prove a
       // ticket id is gone (schema/agentRuns.ts), so the service proves it
       // — and the project is whatever the folder said, not the issue's:
-      // a Jira issue belongs to no Waypoint project.
+      // a Jira issue belongs to no Waypoint project. ticket_refs itself
+      // carries no workspace concept (noted elsewhere in this epic), so
+      // projectId — if also given — is the one thing left to check here.
       const [ref] = await tx
         .select({ id: ticketRefs.id })
         .from(ticketRefs)
         .where(eq(ticketRefs.id, input.ticketId));
       if (!ref) throw new ValidationError('ticketId does not exist');
+      if (input.projectId) {
+        const [project] = await tx.select({ workspaceId: projects.workspaceId }).from(projects).where(eq(projects.id, input.projectId));
+        if (!project || project.workspaceId !== currentWorkspaceId()) throw new ValidationError('projectId does not exist');
+      }
     } else if (input.ticketId) {
       // A run about a ticket is a run in that ticket's project — the
       // drawer lists by ticket, the panel by project, and a row that says
       // otherwise would appear in one and not the other.
       const [ticket] = await tx
-        .select({ projectId: tickets.projectId })
+        .select({ projectId: tickets.projectId, workspaceId: projects.workspaceId })
         .from(tickets)
+        .innerJoin(projects, eq(projects.id, tickets.projectId))
         .where(eq(tickets.id, input.ticketId));
-      if (!ticket) throw new ValidationError('ticketId does not exist');
+      if (!ticket || ticket.workspaceId !== currentWorkspaceId()) throw new ValidationError('ticketId does not exist');
       if (ticket.projectId !== input.projectId) {
         throw new ValidationError('ticketId belongs to a different project than projectId');
       }
+    } else if (input.projectId) {
+      const [project] = await tx.select({ workspaceId: projects.workspaceId }).from(projects).where(eq(projects.id, input.projectId));
+      if (!project || project.workspaceId !== currentWorkspaceId()) throw new ValidationError('projectId does not exist');
     }
     if (input.retryOfRunId) {
       // The retried run must exist and be over: retrying a run that is

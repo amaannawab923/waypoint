@@ -65,6 +65,9 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
     proposalId: `prop-at11-a-${stamp}`,
     agentRunId: `run-at11-a-${stamp}`,
     runProposalId: `prop-at11-run-a-${stamp}`,
+    webhookId: `wh-at11-a-${stamp}`,
+    exportId: `exp-at11-a-${stamp}`,
+    notificationId: `notif-at11-a-${stamp}`,
     token: '',
   };
   const B = {
@@ -85,6 +88,9 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
     proposalId: `prop-at11-b-${stamp}`,
     agentRunId: `run-at11-b-${stamp}`,
     runProposalId: `prop-at11-run-b-${stamp}`,
+    webhookId: `wh-at11-b-${stamp}`,
+    exportId: `exp-at11-b-${stamp}`,
+    notificationId: `notif-at11-b-${stamp}`,
   };
 
   function asA() {
@@ -234,6 +240,30 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
       snapshot: { identifier: `AT11 run ${t.workspaceId}`, title: 'AT11 run proposal snapshot' },
       status: 'proposed',
       expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    });
+    // Sixth review round: labels/states/requests remain deliberately
+    // deferred, but webhooks/exports/notifications turned out to fail
+    // the deferral's own severity bar (a proven destructive cross-tenant
+    // delete and a secret-bearing leak) and were fixed alongside the
+    // rest of this round.
+    await db.insert(schema.webhooks).values({
+      id: t.webhookId,
+      workspaceId: t.workspaceId,
+      url: `https://example.test/webhook/${t.workspaceId}?secret=sh`,
+      eventTypes: ['ticket.created'],
+    });
+    await db.insert(schema.workspaceExports).values({
+      id: t.exportId,
+      workspaceId: t.workspaceId,
+      scopeLabel: `AT11 export ${t.workspaceId}`,
+      format: 'json',
+    });
+    await db.insert(schema.notifications).values({
+      id: t.notificationId,
+      recipientId: t.memberId,
+      actorId: t.memberId,
+      message: `AT11 notification ${t.workspaceId}`,
+      kind: 'mention',
     });
   }
 
@@ -991,6 +1021,69 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
       if (createdId) await db.delete(schema.agentRuns).where(eq(schema.agentRuns.id, createdId));
       await db.delete(schema.agentRuns).where(eq(schema.agentRuns.id, runId));
     }
+  });
+
+  // Sixth review round: the last unscoped id fields in createRun (a
+  // cross-tenant existence + relationship oracle, proven live) —
+  // projectId alone, and ticketId/projectId together.
+  it('POST /agent-runs with B\'s own projectId+ticketId refuses as "does not exist", the same message a genuinely missing id gets', async () => {
+    const withFake = await request(app)
+      .post('/agent-runs')
+      .set(asA())
+      .send({ ownerMemberId: A.memberId, entry: 'independent', providerId: 'claude', projectId: A.projectId, ticketId: 'wi-not-real-at-all' });
+    const withReal = await request(app)
+      .post('/agent-runs')
+      .set(asA())
+      .send({
+        ownerMemberId: A.memberId,
+        entry: 'independent',
+        providerId: 'claude',
+        projectId: B.projectId,
+        ticketId: B.ticketId,
+      });
+    expect(withFake.status).toBe(400);
+    expect(withReal.status).toBe(400);
+    expect(withReal.body.error).toBe(withFake.body.error);
+  });
+
+  it('POST /agent-runs with only B\'s projectId (no ticketId) refuses as "does not exist", and creates nothing', async () => {
+    const res = await request(app)
+      .post('/agent-runs')
+      .set(asA())
+      .send({ ownerMemberId: A.memberId, entry: 'independent', providerId: 'claude', projectId: B.projectId });
+    expect(res.status).toBe(400);
+    const rows = await db.select().from(schema.agentRuns).where(eq(schema.agentRuns.projectId, B.projectId));
+    expect(rows.map((r) => r.ownerMemberId)).not.toContain(A.memberId);
+  });
+
+  it('GET /webhooks never includes B\'s webhook (its URL, secret and all)', async () => {
+    const res = await request(app).get('/webhooks').set(asA());
+    expect(res.status).toBe(200);
+    const ids = (res.body as Array<{ id: string }>).map((w) => w.id);
+    expect(ids).toContain(A.webhookId);
+    expect(ids).not.toContain(B.webhookId);
+  });
+
+  it('DELETE /webhooks/:id refuses to delete B\'s webhook — it survives', async () => {
+    const res = await request(app).delete(`/webhooks/${B.webhookId}`).set(asA());
+    expect(res.status).toBe(204);
+    const [row] = await db.select().from(schema.webhooks).where(eq(schema.webhooks.id, B.webhookId));
+    expect(row).toBeDefined();
+  });
+
+  it('GET /exports never includes B\'s export', async () => {
+    const res = await request(app).get('/exports').set(asA());
+    expect(res.status).toBe(200);
+    const ids = (res.body as Array<{ id: string }>).map((e) => e.id);
+    expect(ids).toContain(A.exportId);
+    expect(ids).not.toContain(B.exportId);
+  });
+
+  it('POST /notifications/:id/read refuses to mark B\'s notification read — it stays unread', async () => {
+    const res = await request(app).post(`/notifications/${B.notificationId}/read`).set(asA());
+    expect(res.status).toBe(204);
+    const [row] = await db.select().from(schema.notifications).where(eq(schema.notifications.id, B.notificationId));
+    expect(row?.read).toBe(false);
   });
 
   it('a scratch note authored while signed in as A is invisible to B, with an explicit workspace column (not just authorId)', async () => {
