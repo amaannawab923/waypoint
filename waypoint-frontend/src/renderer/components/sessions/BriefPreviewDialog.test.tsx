@@ -19,7 +19,13 @@ jest.mock('@/data/engineApi', () => ({
   listRecentFolders: jest.fn(async () => []),
   chooseFolder: jest.fn(async () => ({ canceled: true })),
 }));
-jest.mock('@/data/currentUser', () => ({ CURRENT_USER_ID: 'mem-1' }));
+// AT12 (ROAD-147): the dialog resolves its dispatch identity through
+// activeIdentity.ts now, not the bare CURRENT_USER_ID constant — mocked
+// the same way dispatchRun/getBriefPreview above are, matching what the
+// dialog actually calls.
+jest.mock('@/data/activeIdentity', () => ({
+  getActiveMemberId: jest.fn(async () => 'mem-1'),
+}));
 
 const preview = (over: Partial<BriefPreview> = {}): BriefPreview => ({
   ticketId: 'wi-61',

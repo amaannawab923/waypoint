@@ -3,11 +3,20 @@ import {
   deleteStoredAccountCredential,
   isAccountSecureStorageAvailable,
   readStoredAccountCredential,
+  setStoredActiveWorkspaceId,
   toAccountIdentity,
   writeStoredAccountCredential,
 } from './accountAuth';
 import { cancelSignIn, checkInstanceSetupStatus, revokeAccountSession, startSignIn } from './accountSignIn';
-import type { AccountConnectionSnapshot, AccountIdentity, AccountResult, InstanceSetupStatus } from './accountTypes';
+import { hostedFetch } from './hostedApi';
+import type {
+  AccountConnectionSnapshot,
+  AccountIdentity,
+  AccountResult,
+  HostedFetchRequest,
+  HostedFetchResponse,
+  InstanceSetupStatus,
+} from './accountTypes';
 
 // AT10 (ROAD-145). Every `account:*` channel, in one place — mirrors
 // jiraIpc.ts's own shape and the same rule its header states: nothing that
@@ -65,7 +74,12 @@ export function registerAccountIpc(): void {
       // proven live. Not new exposure: the token this same redirect
       // already carries is the actual bearer secret.
       const { backendUrl, token, email, fullName, avatarUrl } = result.value;
-      const credential = { backendUrl, token, email, fullName, avatarUrl };
+      // AT12: a fresh sign-in always starts with no active workspace —
+      // set explicitly afterward, either right after creating one or by
+      // picking one from the switcher. Preserving a prior selection here
+      // would risk pointing a NEW session at a workspace this sign-in
+      // was never proven to still belong to.
+      const credential = { backendUrl, token, email, fullName, avatarUrl, activeWorkspaceId: null };
       try {
         writeStoredAccountCredential(credential);
       } catch {
@@ -99,4 +113,30 @@ export function registerAccountIpc(): void {
     deleteStoredAccountCredential();
     return { ok: true };
   });
+
+  // AT12 (ROAD-147).
+  ipcMain.handle('account:activeWorkspace:set', (_event, args: unknown): { ok: boolean } => {
+    const input = (args ?? {}) as Record<string, unknown>;
+    const workspaceId = typeof input.workspaceId === 'string' && input.workspaceId ? input.workspaceId : null;
+    try {
+      return { ok: setStoredActiveWorkspaceId(workspaceId) };
+    } catch {
+      // Same locked-keychain/full-disk hazard writeStoredAccountCredential
+      // always carries — resolved false, not rejected, so a switcher click
+      // gets a clean "didn't take" instead of an unsettled invoke.
+      return { ok: false };
+    }
+  });
+
+  // The one generic proxy every hosted-workspace renderer call goes
+  // through — see hostedApi.ts's own comment for why this is a single
+  // channel rather than one per feature. `req.path` is plain string
+  // concatenation onto credential.backendUrl in hostedApi.ts, never URL
+  // resolution (new URL(path, base)), so a "//evil.com/x"-shaped path
+  // can't escape the stored backend's own origin the way protocol-
+  // relative resolution would allow.
+  ipcMain.handle(
+    'account:hostedFetch',
+    (_event, req: HostedFetchRequest): Promise<HostedFetchResponse> => hostedFetch(req),
+  );
 }

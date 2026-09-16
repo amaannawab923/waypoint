@@ -28,6 +28,7 @@ import {
 import type { Sprint } from '@/types/entities';
 import { listRecents, type RecentEntry, type RecentType } from '@/lib/recents';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { TeamWorkspaceDialog } from '@/components/settings/TeamWorkspaceDialog';
 import { parseSprintDate } from '@/pages/sprints/sprint-utils';
 
 interface ActiveSprintSummary {
@@ -45,20 +46,41 @@ interface ActiveSprintSummary {
 // returns the first one whose date range currently contains today, so a
 // workspace mid-sprint on more than one project just shows whichever is
 // found first rather than trying to rank them.
-async function findActiveSprint(projectIds: { id: string; name: string }[]): Promise<ActiveSprintSummary | null> {
+async function findActiveSprint(
+  projectIds: { id: string; name: string }[],
+): Promise<ActiveSprintSummary | null> {
   const now = new Date();
   for (const project of projectIds) {
     const sprints = await listSprints(project.id);
-    const active = sprints.find((s) => parseSprintDate(s.startDate) <= now && now <= parseSprintDate(s.endDate));
+    const active = sprints.find(
+      (s) =>
+        parseSprintDate(s.startDate) <= now &&
+        now <= parseSprintDate(s.endDate),
+    );
     if (!active) continue;
     const [tickets, states] = await Promise.all([
       listTickets(project.id, { v: 1, sprintIds: [active.id] }),
       listStates(project.id),
     ]);
-    const completedStateIds = new Set(states.filter((s) => s.group === 'completed').map((s) => s.id));
+    const completedStateIds = new Set(
+      states.filter((s) => s.group === 'completed').map((s) => s.id),
+    );
     const done = tickets.filter((t) => completedStateIds.has(t.stateId)).length;
-    const daysLeft = Math.max(0, Math.ceil((parseSprintDate(active.endDate).getTime() - now.getTime()) / 86_400_000));
-    return { sprint: active, projectName: project.name, projectId: project.id, done, total: tickets.length, daysLeft };
+    const daysLeft = Math.max(
+      0,
+      Math.ceil(
+        (parseSprintDate(active.endDate).getTime() - now.getTime()) /
+          86_400_000,
+      ),
+    );
+    return {
+      sprint: active,
+      projectName: project.name,
+      projectId: project.id,
+      done,
+      total: tickets.length,
+      daysLeft,
+    };
   }
   return null;
 }
@@ -89,7 +111,8 @@ function RecentsFilterDropdown({
   useEffect(() => {
     if (!open) return;
     function onDown(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      if (ref.current && !ref.current.contains(e.target as Node))
+        setOpen(false);
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') setOpen(false);
@@ -102,7 +125,9 @@ function RecentsFilterDropdown({
     };
   }, [open]);
 
-  const current = RECENTS_FILTER_OPTIONS.find((o) => o.value === value) ?? RECENTS_FILTER_OPTIONS[0];
+  const current =
+    RECENTS_FILTER_OPTIONS.find((o) => o.value === value) ??
+    RECENTS_FILTER_OPTIONS[0];
 
   return (
     <div className="relative" ref={ref}>
@@ -127,7 +152,9 @@ function RecentsFilterDropdown({
               className="flex w-full items-center justify-between gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-sm text-text hover:bg-surface-2"
             >
               {option.label}
-              {option.value === value && <Check size={14} className="text-accent" />}
+              {option.value === value && (
+                <Check size={14} className="text-accent" />
+              )}
             </button>
           ))}
         </div>
@@ -167,18 +194,31 @@ const RECENT_TYPE_ICON: Record<RecentType, typeof LayoutList> = {
   workstream: Boxes,
 };
 
-const QUICKSTART_CARDS = [
+interface QuickstartCard {
+  icon: typeof FolderPlus;
+  title: string;
+  description: string;
+  /** Present for every card except 'invite-team', which opens a dialog instead of navigating. */
+  to?: string;
+  id?: 'invite-team';
+}
+
+const QUICKSTART_CARDS: QuickstartCard[] = [
   {
     icon: FolderPlus,
     title: 'Create a project',
-    description: 'Spin up a project to start tracking tickets, sprints, and workstreams.',
+    description:
+      'Spin up a project to start tracking tickets, sprints, and workstreams.',
     to: '/projects',
   },
   {
     icon: UserPlus,
     title: 'Invite your team',
-    description: 'Bring teammates in so work can be assigned and reviewed together.',
-    to: '/settings/members',
+    description:
+      'Bring teammates in so work can be assigned and reviewed together.',
+    // AT12 (ROAD-147): opens the create-workspace-and-invite dialog directly
+    // instead of routing to Settings.
+    id: 'invite-team',
   },
   {
     icon: Settings2,
@@ -197,17 +237,25 @@ const QUICKSTART_CARDS = [
 export default function Home() {
   const { data: user } = useAsync(() => getCurrentUser(), []);
   const { data: projects } = useAsync(() => listProjects(), []);
-  const { data: proposalCounts } = useAsync<ReviewQueueCounts>(() => getProposalCounts(), []);
+  const { data: proposalCounts } = useAsync<ReviewQueueCounts>(
+    () => getProposalCounts(),
+    [],
+  );
   const { data: activeSprint } = useAsync(async () => {
     if (!projects) return null;
-    return findActiveSprint(projects.filter((p) => p.primitiveCounts.sprints > 0));
+    return findActiveSprint(
+      projects.filter((p) => p.primitiveCounts.sprints > 0),
+    );
   }, [projects]);
   const [quickstartDismissed, setQuickstartDismissed] = useState(true);
+  const [inviteTeamOpen, setInviteTeamOpen] = useState(false);
   const [recents, setRecents] = useState<RecentEntry[]>([]);
   const [recentsFilter, setRecentsFilter] = useState<RecentsFilter>('all');
 
   useEffect(() => {
-    setQuickstartDismissed(localStorage.getItem(QUICKSTART_DISMISSED_KEY) === '1');
+    setQuickstartDismissed(
+      localStorage.getItem(QUICKSTART_DISMISSED_KEY) === '1',
+    );
     setRecents(listRecents(RECENTS_FETCH_LIMIT));
   }, []);
 
@@ -222,9 +270,13 @@ export default function Home() {
   // showing a permanent "get started" block on top of real content would
   // be exactly the kind of unconditional promotional clutter the removed
   // Quicklinks card was cut for.
-  const showQuickstart = !quickstartDismissed && projects !== undefined && projects.length === 0;
+  const showQuickstart =
+    !quickstartDismissed && projects !== undefined && projects.length === 0;
 
-  const projectById = useMemo(() => new Map((projects ?? []).map((p) => [p.id, p])), [projects]);
+  const projectById = useMemo(
+    () => new Map((projects ?? []).map((p) => [p.id, p])),
+    [projects],
+  );
 
   const filteredRecents = useMemo(
     () =>
@@ -249,15 +301,21 @@ export default function Home() {
           {greeting}
           {user ? `, ${user.displayName}` : ''}
         </h1>
-        <p className="mt-1 text-sm text-text-secondary">{dateLabel} · running locally, on this machine</p>
+        <p className="mt-1 text-sm text-text-secondary">
+          {dateLabel} · running locally, on this machine
+        </p>
       </div>
 
       {showQuickstart && (
         <section className="rounded-[var(--radius-lg)] border border-border bg-surface p-5">
           <div className="mb-4 flex items-center justify-between">
             <div>
-              <h2 className="font-display text-sm font-medium text-text">Quickstart guide</h2>
-              <p className="mt-0.5 text-xs text-text-secondary">A few things to get your workspace going.</p>
+              <h2 className="font-display text-sm font-medium text-text">
+                Quickstart guide
+              </h2>
+              <p className="mt-0.5 text-xs text-text-secondary">
+                A few things to get your workspace going.
+              </p>
             </div>
             <button
               type="button"
@@ -269,24 +327,53 @@ export default function Home() {
             </button>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {QUICKSTART_CARDS.map((card) => (
-              <Link
-                key={card.title}
-                to={card.to}
-                className="group flex flex-col gap-3 rounded-[var(--radius)] border border-border bg-bg p-4 transition-colors hover:border-accent"
-              >
-                <div className="flex size-9 items-center justify-center rounded-[var(--radius-sm)] bg-accent-soft-bg text-accent-soft-text">
-                  <card.icon size={17} />
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-text">{card.title}</p>
-                  <p className="mt-1 text-xs text-text-secondary">{card.description}</p>
-                </div>
-              </Link>
-            ))}
+            {QUICKSTART_CARDS.map((card) => {
+              const cardClassName =
+                'group flex flex-col gap-3 rounded-[var(--radius)] border border-border bg-bg p-4 text-left transition-colors hover:border-accent';
+              const cardBody = (
+                <>
+                  <div className="flex size-9 items-center justify-center rounded-[var(--radius-sm)] bg-accent-soft-bg text-accent-soft-text">
+                    <card.icon size={17} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-text">
+                      {card.title}
+                    </p>
+                    <p className="mt-1 text-xs text-text-secondary">
+                      {card.description}
+                    </p>
+                  </div>
+                </>
+              );
+              if (card.id === 'invite-team') {
+                return (
+                  <button
+                    key={card.title}
+                    type="button"
+                    onClick={() => setInviteTeamOpen(true)}
+                    className={cardClassName}
+                  >
+                    {cardBody}
+                  </button>
+                );
+              }
+              return (
+                <Link
+                  key={card.title}
+                  to={card.to ?? '/'}
+                  className={cardClassName}
+                >
+                  {cardBody}
+                </Link>
+              );
+            })}
           </div>
         </section>
       )}
+      <TeamWorkspaceDialog
+        open={inviteTeamOpen}
+        onClose={() => setInviteTeamOpen(false)}
+      />
 
       {proposalCounts && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -296,10 +383,12 @@ export default function Home() {
           >
             <div className="flex items-center gap-2 font-display text-sm font-medium text-text">
               <ClipboardCheck size={16} />
-              {proposalCounts.proposed} proposal{proposalCounts.proposed === 1 ? '' : 's'} waiting on you
+              {proposalCounts.proposed} proposal
+              {proposalCounts.proposed === 1 ? '' : 's'} waiting on you
             </div>
             <p className="text-xs text-text-secondary">
-              {proposalCounts.blocked} blocked · {proposalCounts.recent} resolved in the last 24h
+              {proposalCounts.blocked} blocked · {proposalCounts.recent}{' '}
+              resolved in the last 24h
             </p>
           </Link>
 
@@ -324,8 +413,15 @@ export default function Home() {
 
       <section className="rounded-[var(--radius-lg)] border border-border bg-surface p-5">
         <div className="flex items-center justify-between">
-          <h2 className="font-display text-sm font-medium text-text">Recents</h2>
-          {recents.length > 0 && <RecentsFilterDropdown value={recentsFilter} onChange={setRecentsFilter} />}
+          <h2 className="font-display text-sm font-medium text-text">
+            Recents
+          </h2>
+          {recents.length > 0 && (
+            <RecentsFilterDropdown
+              value={recentsFilter}
+              onChange={setRecentsFilter}
+            />
+          )}
         </div>
         <div className="mt-2">
           {filteredRecents.length > 0 ? (
@@ -342,14 +438,20 @@ export default function Home() {
                     <div className="flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-sm)] bg-accent-soft-bg text-accent-soft-text">
                       <Icon size={15} />
                     </div>
-                    <span className="min-w-0 flex-1 truncate text-sm text-text">{recent.title}</span>
+                    <span className="min-w-0 flex-1 truncate text-sm text-text">
+                      {recent.title}
+                    </span>
                     {project && (
                       <span className="flex shrink-0 items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-xs text-text-secondary">
                         <span>{project.icon}</span>
-                        <span className="max-w-[120px] truncate">{project.name}</span>
+                        <span className="max-w-[120px] truncate">
+                          {project.name}
+                        </span>
                       </span>
                     )}
-                    <span className="shrink-0 text-xs text-text-muted">{formatRelativeTime(recent.viewedAt)}</span>
+                    <span className="shrink-0 text-xs text-text-muted">
+                      {formatRelativeTime(recent.viewedAt)}
+                    </span>
                   </Link>
                 );
               })}

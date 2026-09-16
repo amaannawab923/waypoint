@@ -8,6 +8,8 @@ import type {
   AccountConnectionSnapshot,
   AccountIdentity,
   AccountResult,
+  HostedFetchRequest,
+  HostedFetchResponse,
   InstanceSetupStatus,
 } from './account/accountTypes';
 import type {
@@ -691,6 +693,19 @@ const electronHandler = {
     },
     signOut(): Promise<{ ok: true }> {
       return ipcRenderer.invoke('account:signOut');
+    },
+    // AT12 (ROAD-147).
+    setActiveWorkspace(workspaceId: string | null): Promise<{ ok: boolean }> {
+      return ipcRenderer.invoke('account:activeWorkspace:set', { workspaceId });
+    },
+    // The one generic proxy every hosted-workspace call goes through —
+    // see main/account/hostedApi.ts's own comment for why this is a
+    // single channel rather than one per feature. Nothing about `T` is
+    // enforced at the IPC boundary itself; callers (renderer/data/
+    // hostedWorkspace.ts) own matching it to what the backend route
+    // they're calling actually returns.
+    hostedFetch<T = unknown>(req: HostedFetchRequest): Promise<HostedFetchResponse<T>> {
+      return ipcRenderer.invoke('account:hostedFetch', req);
     },
   },
 };

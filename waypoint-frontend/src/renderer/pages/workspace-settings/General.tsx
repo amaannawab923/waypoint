@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { updateWorkspace } from '@/data/api';
 import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { HostedWorkspaceSwitcher } from '@/components/settings/HostedWorkspaceSwitcher';
 import { useWorkspaceSettings } from '@/pages/workspace-settings/WorkspaceSettingsLayout';
 
 const COMPANY_SIZES = ['Just myself', '2-10', '11-50', '51-200', '200+'];
@@ -32,7 +33,11 @@ const inputClass =
 const labelClass = 'mb-1.5 block text-sm font-medium text-text';
 
 export default function General() {
-  const { workspace, workspaceLoading: loading, reloadWorkspace } = useWorkspaceSettings();
+  const {
+    workspace,
+    workspaceLoading: loading,
+    reloadWorkspace,
+  } = useWorkspaceSettings();
   const [name, setName] = useState('');
   const [companySize, setCompanySize] = useState(COMPANY_SIZES[0]);
   const [timezone, setTimezone] = useState(TIMEZONES[0]);
@@ -61,12 +66,16 @@ export default function General() {
   }
 
   const dirty = workspace
-    ? name !== workspace.name || companySize !== workspace.companySize || timezone !== workspace.timezone
+    ? name !== workspace.name ||
+      companySize !== workspace.companySize ||
+      timezone !== workspace.timezone
     : false;
 
   return (
     <div className="max-w-lg">
-      <h2 className="mb-6 font-display text-lg font-medium text-text">General</h2>
+      <h2 className="mb-6 font-display text-lg font-medium text-text">
+        General
+      </h2>
 
       {loading && !workspace && (
         <Skeleton className="flex flex-col gap-5">
@@ -136,19 +145,32 @@ export default function General() {
           </div>
 
           <div className="flex items-center gap-3 pt-1">
-            <Button variant="primary" disabled={!dirty || saving} onClick={handleSave}>
+            <Button
+              variant="primary"
+              disabled={!dirty || saving}
+              onClick={handleSave}
+            >
               {saving ? 'Saving…' : 'Save changes'}
             </Button>
             {saved && <span className="text-sm text-success">Saved</span>}
           </div>
 
+          <HostedWorkspaceSwitcher />
+
           <div className="mt-6 rounded-[var(--radius-lg)] border border-danger/30 bg-danger-bg p-5">
-            <h3 className="mb-1 font-display text-sm font-medium text-danger">Delete workspace</h3>
+            <h3 className="mb-1 font-display text-sm font-medium text-danger">
+              Delete workspace
+            </h3>
             <p className="mb-4 text-sm text-text-secondary">
-              When you delete a workspace, all of the data in it — projects, tickets, sprints,
-              workstreams, docs, and members — is permanently removed. This action cannot be undone.
+              When you delete a workspace, all of the data in it — projects,
+              tickets, sprints, workstreams, docs, and members — is permanently
+              removed. This action cannot be undone.
             </p>
-            <Button variant="danger" disabled title="There's no way to delete a workspace's data yet.">
+            <Button
+              variant="danger"
+              disabled
+              title="There's no way to delete a workspace's data yet."
+            >
               Delete workspace
             </Button>
           </div>

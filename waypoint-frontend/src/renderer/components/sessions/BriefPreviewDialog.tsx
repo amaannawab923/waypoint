@@ -6,7 +6,7 @@ import { Modal } from '@/components/ui/Modal';
 import { Switch } from '@/components/ui/Switch';
 import { IconFolder, IconGitBranch } from '@/components/icons';
 import { getWorkspace } from '@/data/api';
-import { CURRENT_USER_ID } from '@/data/currentUser';
+import { getActiveMemberId } from '@/data/activeIdentity';
 import {
   chooseFolder,
   dispatchRun,
@@ -253,7 +253,7 @@ export function BriefPreviewDialog({
         mayChangeFiles: mayChangeFiles ?? request.mayChangeFiles ?? false,
         autoApprove: writing ? autoApprove : false,
         baseRef: preview.baseRef ?? '',
-        ownerMemberId: CURRENT_USER_ID,
+        ownerMemberId: await getActiveMemberId(),
         providerId,
         copilotConversationId,
         ...(folder ? { folder: folder.handle } : {}),

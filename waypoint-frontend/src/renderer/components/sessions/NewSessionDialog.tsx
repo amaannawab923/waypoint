@@ -6,7 +6,7 @@ import { Modal } from '@/components/ui/Modal';
 import { Switch } from '@/components/ui/Switch';
 import { IconChevron } from '@/components/icons';
 import { getWorkspace } from '@/data/api';
-import { CURRENT_USER_ID } from '@/data/currentUser';
+import { getActiveMemberId } from '@/data/activeIdentity';
 import {
   chooseFolder,
   listRecentFolders,
@@ -302,7 +302,7 @@ export function NewSessionDialog({
     try {
       const run: AgentRun = await startRun({
         folder: selected.handle,
-        ownerMemberId: CURRENT_USER_ID,
+        ownerMemberId: await getActiveMemberId(),
         providerId,
         isolation,
         autoApprove,

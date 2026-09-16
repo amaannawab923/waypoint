@@ -9,8 +9,14 @@ import { errorHandler } from '../middleware/errorHandler.js';
 // instance.service.integration.test.ts against real Postgres.
 vi.mock('../db/client.js', () => ({ db: {} }));
 vi.mock('../services/instance.service.js');
+// AT12 (ROAD-147): admin.routes.ts now sits behind requireUser, which
+// resolves a real bearer token via auth/sessions.js's resolveSession —
+// mocked here rather than injecting req.user directly, since that's the
+// actual dependency the route now has.
+vi.mock('../auth/sessions.js');
 
 const service = await import('../services/instance.service.js');
+const sessions = await import('../auth/sessions.js');
 const { instanceRouter } = await import('./instance.routes.js');
 const { adminRouter } = await import('./admin.routes.js');
 const { requireInstanceAdmin } = await import('../middleware/auth.js');
@@ -27,16 +33,18 @@ const ADMIN = {
   createdAt: new Date(),
 };
 
+// AT12 (ROAD-147): when `user` is given, resolveSession resolves the
+// literal 'Bearer test-token' to it — callers set that header, the same
+// bearer-token shape requireUser actually depends on now.
 function app(user?: typeof ADMIN) {
+  vi.mocked(sessions.resolveSession).mockImplementation(async (token) =>
+    user && token === 'test-token'
+      ? { user, session: { id: 'sess-1', userId: user.id, tokenHash: 'x', createdAt: new Date(), expiresAt: new Date(), lastSeenAt: null, deviceLabel: null } }
+      : null,
+  );
+  vi.mocked(sessions.touchSession).mockResolvedValue(undefined);
   const a = express();
   a.use(express.json());
-  if (user) {
-    // Stand-in for AT11's session middleware: attach req.user directly.
-    a.use((req, _res, next) => {
-      req.user = user;
-      next();
-    });
-  }
   a.use(instanceRouter);
   a.use(adminRouter);
   a.use(errorHandler);
@@ -128,7 +136,7 @@ describe('POST /instance/setup', () => {
 });
 
 describe('/admin/instance', () => {
-  it('401s with no user — closed until AT11 attaches one', async () => {
+  it('401s with no bearer token at all', async () => {
     expect((await request(app()).get('/admin/instance')).status).toBe(401);
     expect((await request(app()).patch('/admin/instance').send({ signupMode: 'open' })).status).toBe(401);
     expect(service.getInstance).not.toHaveBeenCalled();
@@ -136,7 +144,9 @@ describe('/admin/instance', () => {
   });
 
   it('403s a signed-in non-admin', async () => {
-    const res = await request(app({ ...ADMIN, isInstanceAdmin: false })).get('/admin/instance');
+    const res = await request(app({ ...ADMIN, isInstanceAdmin: false }))
+      .get('/admin/instance')
+      .set('Authorization', 'Bearer test-token');
     expect(res.status).toBe(403);
     expect(service.getInstance).not.toHaveBeenCalled();
   });
@@ -144,16 +154,23 @@ describe('/admin/instance', () => {
   it('serves and patches for an instance admin', async () => {
     vi.mocked(service.getInstance).mockResolvedValue({ id: 'instance', counts: { workspaces: 1, users: 1 } } as never);
     vi.mocked(service.updateInstance).mockResolvedValue({ id: 'instance', signupMode: 'open' } as never);
-    const get = await request(app(ADMIN)).get('/admin/instance');
+    const app_ = app(ADMIN);
+    const get = await request(app_).get('/admin/instance').set('Authorization', 'Bearer test-token');
     expect(get.status).toBe(200);
     expect(get.body.counts).toEqual({ workspaces: 1, users: 1 });
-    const patch = await request(app(ADMIN)).patch('/admin/instance').send({ signupMode: 'open' });
+    const patch = await request(app_)
+      .patch('/admin/instance')
+      .set('Authorization', 'Bearer test-token')
+      .send({ signupMode: 'open' });
     expect(patch.status).toBe(200);
     expect(service.updateInstance).toHaveBeenCalledWith({ signupMode: 'open' });
   });
 
   it('400s an empty patch', async () => {
-    const res = await request(app(ADMIN)).patch('/admin/instance').send({});
+    const res = await request(app(ADMIN))
+      .patch('/admin/instance')
+      .set('Authorization', 'Bearer test-token')
+      .send({});
     expect(res.status).toBe(400);
   });
 });

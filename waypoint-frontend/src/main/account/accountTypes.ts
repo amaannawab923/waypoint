@@ -21,6 +21,14 @@ export interface AccountCredential {
   email: string;
   fullName: string;
   avatarUrl: string | null;
+  /** AT12 (ROAD-147). Which of the signed-in user's workspaces the app is
+   * currently pointed at — the X-Waypoint-Workspace-Id header hostedApi.ts
+   * attaches to every hostedFetch call. Null until the workspace switcher
+   * (or the create/join flow) sets one; not a secret, but scoped to this
+   * one credential the same way the token is, so signing out (a new
+   * credential file, or none) clears it too rather than leaking a stale
+   * selection into a different account. */
+  activeWorkspaceId: string | null;
 }
 
 /** The renderer-safe projection — the credential minus `token`. The ONLY
@@ -30,6 +38,7 @@ export interface AccountIdentity {
   email: string;
   fullName: string;
   avatarUrl: string | null;
+  activeWorkspaceId: string | null;
 }
 
 export interface AccountConnectionSnapshot {
@@ -68,3 +77,25 @@ export type AccountResult<T> = { ok: true; value: T } | AccountFailure;
  * opaque string round-tripped through the backend.
  */
 export type SignInPurpose = string;
+
+// AT12 (ROAD-147). hostedApi.ts's one generic proxy — see that file's own
+// comment for why a single request/response shape, rather than one IPC
+// channel per new hosted-workspace feature, is the boundary: the renderer
+// must never see the raw session token (accountAuth.ts's own rule), so
+// every hosted-workspace API call has to be made IN main, with the
+// renderer only ever sending "what to call" and receiving "what came
+// back."
+export interface HostedFetchRequest {
+  path: string;
+  method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
+  body?: unknown;
+}
+
+export type HostedFetchResponse<T = unknown> =
+  | { ok: true; status: number; body: T }
+  // A real HTTP response the backend sent (status present) is distinct
+  // from a call that never reached it at all (not signed in, no active
+  // workspace, a network failure) — status is absent for the latter, so a
+  // caller can tell "the backend said no" from "there was no backend to
+  // ask" without parsing message text.
+  | { ok: false; status?: number; message: string };

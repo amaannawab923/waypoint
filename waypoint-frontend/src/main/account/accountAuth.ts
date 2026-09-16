@@ -67,10 +67,30 @@ export function readStoredAccountCredential(): AccountCredential | null {
       email: decrypted.email,
       fullName: isNonEmptyString(decrypted.fullName) ? decrypted.fullName : decrypted.email,
       avatarUrl: isNonEmptyString(decrypted.avatarUrl) ? decrypted.avatarUrl : null,
+      // AT12: absent on a credential written before this field existed —
+      // same "missing means null" reading as avatarUrl above.
+      activeWorkspaceId: isNonEmptyString(decrypted.activeWorkspaceId) ? decrypted.activeWorkspaceId : null,
     };
   } catch {
     return null;
   }
+}
+
+/** AT12 (ROAD-147). Re-encrypts the whole credential with a patched
+ * activeWorkspaceId — there's no partial-write primitive for a
+ * safeStorage-sealed file, so this reads, patches the one field, and
+ * writes the whole thing back through writeStoredAccountCredential.
+ * Returns false (not signed in — switching workspaces without an account
+ * makes no sense) or throws (the same locked-keychain/full-disk failure
+ * writeStoredAccountCredential itself documents; callers, e.g.
+ * accountIpc.ts's account:signIn handler already does for the same
+ * throw, catch it and report storage_unavailable rather than letting an
+ * IPC invoke hang unsettled). */
+export function setStoredActiveWorkspaceId(workspaceId: string | null): boolean {
+  const existing = readStoredAccountCredential();
+  if (!existing) return false;
+  writeStoredAccountCredential({ ...existing, activeWorkspaceId: workspaceId });
+  return true;
 }
 
 /** Throws on a locked keychain or a full disk — callers are expected to
@@ -108,6 +128,7 @@ export function toAccountIdentity(credential: AccountCredential): AccountIdentit
     email: credential.email,
     fullName: credential.fullName,
     avatarUrl: credential.avatarUrl,
+    activeWorkspaceId: credential.activeWorkspaceId,
   };
 }
 

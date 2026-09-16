@@ -97,16 +97,48 @@ export const authFlows = pgTable('auth_flows', {
   // identity the click proves.
   email: text('email'),
   // Where the desktop asked to be sent back — validated as a loopback
-  // callback when the flow starts (AT10 owns that server).
-  redirectUri: text('redirect_uri').notNull(),
-  // The desktop's own CSRF value, echoed back to it untouched.
+  // callback when the flow starts (AT10 owns that server). Nullable as of
+  // AT12: a join-flow row (inviteToken set below) has no loopback
+  // callback at all — the join page itself is the final destination, so
+  // completion renders a page directly instead of building a redirect.
+  redirectUri: text('redirect_uri'),
+  // The desktop's own CSRF value, echoed back to it untouched. Still
+  // required even on a join-flow row (a random value is generated and
+  // simply never read back) — keeping one shape for every row is simpler
+  // than making this nullable too for a case that doesn't use it.
   clientState: text('client_state').notNull(),
   // What the sign-in is for: a workspace slug or 'sync' — display only in
   // this ticket; AT12 reads it to land an invitee on the right board.
   purpose: text('purpose'),
+  // AT12 (ROAD-147). Set only on a join-flow row: the raw workspace-invite
+  // token this sign-in is accepting. Looked back up against
+  // workspace_invites.tokenHash at completion time — never trusted on its
+  // own, same as every other value this table carries pre-verification.
+  inviteToken: text('invite_token'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   consumedAt: timestamp('consumed_at', { withTimezone: true }),
+});
+
+// AT12 (ROAD-147). One invite link per row — spec §7. Lower-stakes than a
+// session (design doc's own words), same hashed-secret/single-use
+// discipline as sessions and auth_flows regardless: acceptedAt makes a
+// row single-use, matching authFlows.consumedAt's shape.
+export const workspaceInvites = pgTable('workspace_invites', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id')
+    .notNull()
+    .references(() => workspaces.id, { onDelete: 'cascade' }),
+  tokenHash: text('token_hash').notNull().unique(),
+  // Only set by "Email invite instead" — the plain "Copy link" path never
+  // collects one up front (mockup step 9), so acceptance has to handle
+  // both a pre-known and an unknown invitee email; see acceptInvite.
+  email: text('email'),
+  createdByMemberId: text('created_by_member_id').references(() => members.id, { onDelete: 'set null' }),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+  acceptedByUserId: text('accepted_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 // AT7 (ROAD-142). Singleton — id is always the literal 'instance'. Holds
@@ -160,4 +192,12 @@ export const members = pgTable('members', {
   // means "use the page's own defaults", so a member row from before this
   // column existed doesn't need a backfill.
   notificationPrefs: jsonb('notification_prefs'),
+  // AT12 (ROAD-147). A hosted member's own Jira credential, replacing the
+  // single-machine jira-auth.json for the hosted path — spec §7.
+  // AES-256-GCM ciphertext (base64: iv + tag + ciphertext), never the raw
+  // credential; see lib/credentialCipher.ts. Storage only for now — the
+  // MCP/Jira request path still reads the per-request header exactly as
+  // before; wiring that to prefer this column is a deferred follow-up.
+  jiraCredentialEncrypted: text('jira_credential_encrypted'),
+  jiraCredentialUpdatedAt: timestamp('jira_credential_updated_at', { withTimezone: true }),
 }, (t) => [unique('members_workspace_id_email_unique').on(t.workspaceId, t.email)]);

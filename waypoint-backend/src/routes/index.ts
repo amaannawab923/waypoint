@@ -25,10 +25,17 @@ import { devRouter } from './dev.routes.js';
 import { instanceRouter } from './instance.routes.js';
 import { adminRouter } from './admin.routes.js';
 import { authRouter } from './auth.routes.js';
+import { joinRouter } from './join.routes.js';
+import { workspacesRouter } from './workspaces.routes.js';
+import { workspaceInvitesRouter } from './workspaceInvites.routes.js';
 
 export const apiRouter = Router();
 
 apiRouter.use(workspaceRouter);
+// AT12: needs req.member/currentWorkspaceId() from resolveMember — see
+// workspaceInvites.routes.ts's own comment on why this can't join
+// workspacesRouter in identityOnlyRouter below.
+apiRouter.use(workspaceInvitesRouter);
 apiRouter.use(membersRouter);
 apiRouter.use(projectsRouter);
 apiRouter.use(statesRouter);
@@ -52,12 +59,25 @@ apiRouter.use(copilotRouter);
 apiRouter.use(proposalsRouter);
 apiRouter.use(reviewQueueRouter);
 apiRouter.use(mcpRouter);
-// AT8: first-run setup status + token-gated setup; admin routes answer
-// 401 until AT11 attaches req.user.
-apiRouter.use(instanceRouter);
-apiRouter.use(adminRouter);
-// AT9: the browser-facing sign-in page and provider callbacks.
-apiRouter.use(authRouter);
 if (process.env.NODE_ENV !== 'production') {
   apiRouter.use(devRouter);
 }
+
+// AT12 (ROAD-147). Every route here either needs no identity at all
+// (instance setup-status, the sign-in/join browser pages, provider
+// callbacks) or needs only req.user via requireUser (workspace creation/
+// listing, instance admin) — never req.member/currentWorkspaceId(). None
+// of them can sit behind apiRouter: app.ts mounts resolveMember's global
+// middleware before apiRouter, and resolveMember hard-refuses (400) any
+// request that carries a bearer token but no X-Waypoint-Workspace-Id
+// header, regardless of what the route beneath it actually needs. That
+// silently broke /auth/signout (a real bearer token, no workspace
+// header — see accountSignIn.ts's revokeAccountSession) well before
+// this ticket; AT12 found it while wiring workspace creation into the
+// same gate. app.ts mounts this router before resolveMember instead.
+export const identityOnlyRouter = Router();
+identityOnlyRouter.use(instanceRouter);
+identityOnlyRouter.use(adminRouter);
+identityOnlyRouter.use(authRouter);
+identityOnlyRouter.use(joinRouter);
+identityOnlyRouter.use(workspacesRouter);

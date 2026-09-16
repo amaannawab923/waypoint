@@ -7,6 +7,7 @@
 
 import { http } from '@/data/httpClient';
 import { CURRENT_USER_ID } from '@/data/currentUser';
+import { getActiveMemberId } from '@/data/activeIdentity';
 import type { Probe } from '@/types/probe';
 import type { AgentRun } from '@/types/agentRuns';
 import type {
@@ -1136,11 +1137,16 @@ interface RunPage {
 export async function listMyAgentRuns(): Promise<AgentRun[]> {
   const items: AgentRun[] = [];
   let cursor: string | null = null;
+  // AT12 (ROAD-147): the real signed-in member's own id when a hosted
+  // Team workspace is active, else the unchanged Personal constant — see
+  // activeIdentity.ts's own comment. Resolved once per call, not once per
+  // page: this loop's pages all belong to the same "whose runs" question.
+  const ownerMemberId = await getActiveMemberId();
   // Bounded: the backend's page cap is 100; a hundred pages is not a
   // person's session list, it is a runaway cursor (ROAD-108's bug class).
   for (let page = 0; page < 100; page += 1) {
     const search = new URLSearchParams({
-      ownerMemberId: CURRENT_USER_ID,
+      ownerMemberId,
       limit: '100',
     });
     if (cursor) search.set('cursor', cursor);
