@@ -33,6 +33,17 @@ COPY drizzle ./drizzle
 COPY drizzle.config.ts ./
 COPY docker-entrypoint.sh ./
 RUN chmod +x docker-entrypoint.sh && chown -R node:node /app
+# AT13 (ROAD-148): docker-compose.yml mounts the waypoint_secrets named
+# volume here, so the AT12 Jira-credential encryption key
+# (WAYPOINT_KEY_FILE) survives a container rebuild instead of defaulting
+# to a path inside this image's own ephemeral filesystem. A brand-new
+# named volume is created owned by root — Docker copies whatever's
+# already at the mount point's path in the image (ownership included)
+# into the volume the first time it attaches, which is the only reason
+# this directory needs to exist, with the right owner, before that
+# happens: without it, the `node` user this container actually runs as
+# (below) gets EACCES the first time it tries to write the key.
+RUN mkdir -p /data/secrets && chown node:node /data/secrets
 
 USER node
 EXPOSE 4000
