@@ -75,27 +75,32 @@ describe('corsOriginsForBackend', () => {
     expect(corsOriginsForBackend('https://waypoint.example.com')).toEqual(['https://waypoint.example.com']);
   });
 
-  it('falls back to the raw string, rather than throwing, for an unparseable value', () => {
-    expect(corsOriginsForBackend('not a url')).toEqual(['not a url']);
+  it('returns nothing — not the raw string — for an unparseable value', () => {
+    // Round-5 review: an earlier version returned [rawString] here,
+    // reasoning no raw string could ever match a real Origin header.
+    // False for exactly one input — see the next test.
+    expect(corsOriginsForBackend('not a url')).toEqual([]);
   });
 
-  // Round-4 review, the real finding: a schemeless value like
-  // "localhost:14000" is NOT unparseable — the part before the first
-  // colon becomes the URL's scheme, and WHATWG's `.origin` for any
-  // non-http(s) scheme is the literal string "null". That string is
-  // also the real Origin header value a browser sends for an opaque
-  // origin (a sandboxed iframe, a data: document) — trusting it blindly
-  // would allowlist exactly the request class this check exists to
-  // block. Every one of these must fall back to the inert raw-string
-  // form, the same as a genuinely unparseable value, not to "null".
+  // Round-4 review found a schemeless value like "localhost:14000" is
+  // NOT unparseable — the part before the first colon becomes the URL's
+  // scheme, and WHATWG's `.origin` for any non-http(s) scheme is the
+  // literal string "null". Round-5 review found the *other* rejection
+  // path (a genuinely unparseable value, via the catch above) had the
+  // exact same hole from a different direction: `new URL('null')`
+  // itself throws, so 'null' the literal string used to survive as
+  // [publicBaseUrlValue] unchanged. Either path landing on the string
+  // "null" is unsafe — it's the real Origin header value a browser
+  // sends for an opaque origin (a sandboxed iframe, a data: document),
+  // and allowlisting it would let exactly the request class this check
+  // exists to block. Both paths now return [] instead.
   it.each([
     ['localhost:14000', 'missing scheme — "localhost:" becomes the protocol, not the host'],
     ['waypoint.example.com:8443', 'same shape with a real-looking hostname'],
     ['app://waypoint', 'a real, non-http(s) scheme'],
     ['file:///srv/waypoint', 'a file: URL'],
+    ['null', 'the literal string a misconfigured env value can render as — this one throws in new URL(), the others above parse and get caught by the protocol check instead'],
   ])('never allowlists the opaque-origin string "null" for %s (%s)', (value) => {
-    const result = corsOriginsForBackend(value);
-    expect(result).not.toContain('null');
-    expect(result).toEqual([value]);
+    expect(corsOriginsForBackend(value)).toEqual([]);
   });
 });

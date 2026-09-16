@@ -42,23 +42,32 @@ const LOOPBACK_HOSTNAME_SIBLINGS: Record<string, string[]> = {
 };
 
 export function corsOriginsForBackend(publicBaseUrlValue: string): string[] {
+  // Empty, not [publicBaseUrlValue], on both rejection paths below.
+  // Round-5 review: an earlier version returned the raw string here,
+  // reasoning that a non-origin string could never match a real Origin
+  // header — true for almost every string, but not for the one that
+  // matters: `new URL('null')` throws (falls into the catch below), and
+  // "null" is exactly the literal Origin header value a browser sends
+  // for a genuinely opaque origin (a sandboxed iframe, a data:
+  // document). A misconfigured PUBLIC_BASE_URL=null (a config layer
+  // rendering an unset value as the string "null" — a template
+  // interpolating a JSON/YAML null, a stray env default) would have
+  // allowlisted exactly that. A raw string can never legitimately equal
+  // a real Origin anyway (an Origin is only ever scheme://host[:port]
+  // or the literal "null"), and an unparseable/non-http(s)
+  // PUBLIC_BASE_URL already breaks every OAuth callback URL built from
+  // it — there's no deployment this fallback ever helped.
   let u: URL;
   try {
     u = new URL(publicBaseUrlValue);
   } catch {
-    return [publicBaseUrlValue];
+    return [];
   }
   // WHATWG URL gives a "null" string for `.origin` on any non-special
-  // scheme (round-4 review, live-verified: a schemeless value like
+  // scheme too (round-4 review, live-verified: a schemeless value like
   // "localhost:14000" parses fine — the part before the first colon just
-  // becomes the scheme — and produces exactly this). "null" is also the
-  // literal Origin header value a real browser sends for an opaque
-  // origin (a sandboxed iframe, a data: document, some cross-origin
-  // redirects) — allowlisting the string "null" would let exactly the
-  // request class this whole check exists to stop through. Refuse to
-  // return anything for a value that isn't a real http(s) origin, rather
-  // than trusting `.origin` blindly.
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') return [publicBaseUrlValue];
+  // becomes the scheme — and produces exactly this).
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return [];
   const origins = [u.origin];
   const siblings = LOOPBACK_HOSTNAME_SIBLINGS[u.hostname];
   if (siblings) {

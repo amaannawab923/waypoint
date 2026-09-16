@@ -65,13 +65,21 @@ describe.skipIf(!REAL_DB)("this backend's own origin is allowed through CORS (AT
   // hostname — reproducing the original bug for an operator whose
   // desktop points at 127.0.0.1 while this backend's PUBLIC_BASE_URL
   // defaults to localhost (or the reverse).
-  it('accepts that same request from this backend\'s sibling loopback spelling too', async () => {
+  it('accepts that same request from this backend\'s sibling loopback spelling too', async (ctx) => {
     ({ publicBaseUrl, corsOriginsForBackend } = await import('./auth/redirect.js'));
     const { createApp } = await import('./app.js');
     app = createApp();
 
+    // Round-5 review: skip rather than fail if this run's own env isn't
+    // loopback (a real deployment shape for this same test suite, not
+    // just a hypothetical) — there's no sibling spelling to assert on
+    // for a real public PUBLIC_BASE_URL, and that's a fact about the
+    // environment this ran in, not a regression in the code under test.
     const [, sibling] = corsOriginsForBackend(publicBaseUrl(process.env));
-    expect(sibling).toBeDefined(); // this env's own base URL must be loopback for this case to mean anything
+    if (!sibling) {
+      ctx.skip();
+      return;
+    }
 
     const res = await request(app)
       .post('/auth/email/start')

@@ -36,4 +36,36 @@ describe('createSmtpMailer', () => {
     createSmtpMailer(baseEnv({ SMTP_PORT: '  2525  ' }));
     expect(createTransport).toHaveBeenLastCalledWith(expect.objectContaining({ port: 2525, secure: false }));
   });
+
+  // Round-5 review: Number.isInteger alone isn't a port check — 0,
+  // negative numbers, and anything past 65535 all pass it. Each of these
+  // must still fall back to 587, with a warning naming the rejected
+  // value rather than a silent, wrong-port send.
+  it.each([
+    ['smtp', 'not a number at all'],
+    ['587.5', 'not an integer'],
+    ['0', 'zero is not a real port'],
+    ['-1', 'negative'],
+    ['99999', 'past the real port range'],
+    ['"2525"', 'a stray quote surviving a compose env_file'],
+  ])('falls back to 587, and warns, for an invalid SMTP_PORT=%s (%s)', (value) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      createSmtpMailer(baseEnv({ SMTP_PORT: value }));
+      expect(createTransport).toHaveBeenLastCalledWith(expect.objectContaining({ port: 587 }));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(JSON.stringify(value)));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('does not warn for a real, valid port', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      createSmtpMailer(baseEnv({ SMTP_PORT: '2525' }));
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });
