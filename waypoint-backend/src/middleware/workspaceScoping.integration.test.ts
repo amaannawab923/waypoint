@@ -40,6 +40,7 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
   let schema: typeof import('../db/schema/index.js');
   let eq: typeof import('drizzle-orm')['eq'];
   let and: typeof import('drizzle-orm')['and'];
+  let inArray: typeof import('drizzle-orm')['inArray'];
   let issueSession: typeof import('../auth/sessions.js')['issueSession'];
   let app: express.Express;
 
@@ -62,6 +63,8 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
     linkId: `link-at11-a-${stamp}`,
     conversationId: `conv-at11-a-${stamp}`,
     proposalId: `prop-at11-a-${stamp}`,
+    agentRunId: `run-at11-a-${stamp}`,
+    runProposalId: `prop-at11-run-a-${stamp}`,
     token: '',
   };
   const B = {
@@ -80,6 +83,8 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
     linkId: `link-at11-b-${stamp}`,
     conversationId: `conv-at11-b-${stamp}`,
     proposalId: `prop-at11-b-${stamp}`,
+    agentRunId: `run-at11-b-${stamp}`,
+    runProposalId: `prop-at11-run-b-${stamp}`,
   };
 
   function asA() {
@@ -209,12 +214,33 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
       status: 'proposed',
       expiresAt: new Date(Date.now() + 60 * 60 * 1000),
     });
+    // A second, agent_run-origin proposal — proposalWorkspaceCondition's
+    // OTHER branch (conversationId is null here; only agentRunId is set),
+    // otherwise entirely unexercised by this suite.
+    await db.insert(schema.agentRuns).values({
+      id: t.agentRunId,
+      ownerMemberId: t.memberId,
+      entry: 'independent',
+      providerId: 'claude',
+    });
+    await db.insert(schema.proposals).values({
+      id: t.runProposalId,
+      origin: 'agent_run',
+      agentRunId: t.agentRunId,
+      projectId: t.projectId,
+      kind: 'comment',
+      ticketId: t.ticketId,
+      payload: { body: `AT11 run proposal ${t.workspaceId}` },
+      snapshot: { identifier: `AT11 run ${t.workspaceId}`, title: 'AT11 run proposal snapshot' },
+      status: 'proposed',
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    });
   }
 
   beforeAll(async () => {
     ({ db } = await import('../db/client.js'));
     schema = await import('../db/schema/index.js');
-    ({ eq, and } = await import('drizzle-orm'));
+    ({ eq, and, inArray } = await import('drizzle-orm'));
     ({ issueSession } = await import('../auth/sessions.js'));
     const { createApp } = await import('../app.js');
     app = createApp();
@@ -238,6 +264,13 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
     // workstreams/sprints/agent_assignments via their own projectId/
     // ticketId FKs) first removes every such referencing row before
     // members are ever touched.
+    // agent_runs.owner_member_id -> members is also RESTRICT, and its own
+    // proposal (agentRunId) is only ON DELETE SET NULL, not cascade — a
+    // bare agent_runs delete would orphan the run-origin proposal rows
+    // (both conversationId and agentRunId null, matching neither branch
+    // of proposalWorkspaceCondition forever) rather than removing them.
+    await db.delete(schema.proposals).where(inArray(schema.proposals.agentRunId, [A.agentRunId, B.agentRunId]));
+    await db.delete(schema.agentRuns).where(inArray(schema.agentRuns.id, [A.agentRunId, B.agentRunId]));
     await db.delete(schema.agents).where(eq(schema.agents.workspaceId, A.workspaceId));
     await db.delete(schema.agents).where(eq(schema.agents.workspaceId, B.workspaceId));
     await db.delete(schema.projects).where(eq(schema.projects.id, A.projectId));
@@ -765,6 +798,97 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
     const ids = (res.body.proposals as Array<{ id: string }>).map((p) => p.id);
     expect(ids).toContain(A.proposalId);
     expect(ids).not.toContain(B.proposalId);
+  });
+
+  // Fourth review round: the case above only ever exercised
+  // proposalWorkspaceCondition's copilot-origin (conversationId) branch —
+  // its OTHER branch (agentRunId, for an agent_run-origin proposal, which
+  // has no conversationId at all) had zero coverage anywhere in this
+  // suite, exactly the gap the review flagged.
+  it('GET /proposals (review queue) never includes B\'s agent-run-origin proposal, and does include A\'s own', async () => {
+    const res = await request(app).get('/proposals').set(asA()).query({ status: 'proposed' });
+    expect(res.status).toBe(200);
+    const ids = (res.body.proposals as Array<{ id: string }>).map((p) => p.id);
+    expect(ids).toContain(A.runProposalId);
+    expect(ids).not.toContain(B.runProposalId);
+  });
+
+  it('GET /proposals/stats/approved-per-day and /proposals/stats/health never fail against B\'s data', async () => {
+    // These two endpoints report an aggregate number, not a list — there's
+    // no per-row id to assert absent. The regression this round fixed
+    // wasn't a value assertion so much as "the query used to have no
+    // workspace filter at all"; the meaningful proof is the revert-test
+    // (see PR history), not a value comparison here. Kept as a smoke test
+    // that both routes still respond correctly now that they carry joins.
+    const perDay = await request(app).get('/proposals/stats/approved-per-day').set(asA());
+    expect(perDay.status).toBe(200);
+    const health = await request(app).get('/proposals/stats/health').set(asA());
+    expect(health.status).toBe(200);
+  });
+
+  // Fourth review round's structural finding: proposalWorkspaceCondition
+  // trusts agent_runs.ownerMemberId and agent_runs.copilotConversationId
+  // — both previously writable straight from the request body with no
+  // ownership check. An attacker naming a real victim's memberId/
+  // conversationId here could get their own agent run (and, via
+  // createRunProposal, their own proposal) to render inside the victim's
+  // review queue.
+  it('POST /agent-runs ignores a client-supplied ownerMemberId naming B, and always uses the real caller', async () => {
+    const res = await request(app)
+      .post('/agent-runs')
+      .set(asA())
+      .send({ ownerMemberId: B.memberId, entry: 'independent', providerId: 'claude' });
+    try {
+      expect(res.status).toBe(201);
+      expect(res.body.ownerMemberId).toBe(A.memberId);
+      expect(res.body.ownerMemberId).not.toBe(B.memberId);
+    } finally {
+      // agent_runs.owner_member_id -> members is ON DELETE RESTRICT — a
+      // row left behind here blocks afterAll's member cleanup, so this
+      // runs even when an assertion above throws (a real created run's
+      // id is still known from res.body.id either way).
+      if (res.body?.id) await db.delete(schema.agentRuns).where(eq(schema.agentRuns.id, res.body.id));
+    }
+  });
+
+  it('POST /agent-runs refuses a copilotConversationId naming B\'s conversation as 404, and creates no run', async () => {
+    const res = await request(app)
+      .post('/agent-runs')
+      .set(asA())
+      .send({ ownerMemberId: A.memberId, entry: 'independent', providerId: 'claude', copilotConversationId: B.conversationId });
+    try {
+      expect(res.status).toBe(404);
+      const rows = await db
+        .select()
+        .from(schema.agentRuns)
+        .where(eq(schema.agentRuns.copilotConversationId, B.conversationId));
+      expect(rows).toHaveLength(0);
+    } finally {
+      // Safety net if the refusal above ever regresses: a run really
+      // would get created here, and must not block afterAll's cleanup.
+      if (res.body?.id) await db.delete(schema.agentRuns).where(eq(schema.agentRuns.id, res.body.id));
+    }
+  });
+
+  it('PATCH /agent-runs/:id refuses to repoint A\'s own run at B\'s conversation as 404, and leaves it unset', async () => {
+    const runId = `run-at11-repoint-${stamp}`;
+    await db.insert(schema.agentRuns).values({
+      id: runId,
+      ownerMemberId: A.memberId,
+      entry: 'independent',
+      providerId: 'claude',
+    });
+    try {
+      const res = await request(app)
+        .patch(`/agent-runs/${runId}`)
+        .set(asA())
+        .send({ copilotConversationId: B.conversationId });
+      expect(res.status).toBe(404);
+      const [row] = await db.select().from(schema.agentRuns).where(eq(schema.agentRuns.id, runId));
+      expect(row?.copilotConversationId).toBeNull();
+    } finally {
+      await db.delete(schema.agentRuns).where(eq(schema.agentRuns.id, runId));
+    }
   });
 
   it('a scratch note authored while signed in as A is invisible to B, with an explicit workspace column (not just authorId)', async () => {

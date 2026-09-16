@@ -1557,13 +1557,22 @@ export interface ApprovedPerActiveDayStats {
 }
 
 export async function getApprovedPerActiveDayStats(): Promise<ApprovedPerActiveDayStats> {
+  // Third review round: this ran with no workspace filter at all — a
+  // cross-tenant aggregate leak (every other workspace's approval volume
+  // and cadence, visible to any signed-in member) in the very file this
+  // whole round was about, sitting between the two functions just above
+  // and below it that already got scoped.
   const [row] = await db
     .select({
       approvedCount: count(),
       activeDays: countDistinct(sql`date_trunc('day', ${proposals.resolvedAt})`),
     })
     .from(proposals)
-    .where(and(eq(proposals.status, 'executed'), eq(proposals.decidedBy, 'user')));
+    .leftJoin(copilotConversations, eq(copilotConversations.id, proposals.conversationId))
+    .leftJoin(proposalConversationMember, eq(proposalConversationMember.id, copilotConversations.memberId))
+    .leftJoin(agentRuns, eq(agentRuns.id, proposals.agentRunId))
+    .leftJoin(proposalRunMember, eq(proposalRunMember.id, agentRuns.ownerMemberId))
+    .where(and(eq(proposals.status, 'executed'), eq(proposals.decidedBy, 'user'), proposalWorkspaceCondition()));
   const approvedCount = row?.approvedCount ?? 0;
   const activeDays = row?.activeDays ?? 0;
   return {
@@ -1612,6 +1621,7 @@ export interface ReviewHealthStats {
 }
 
 export async function getReviewHealthStats(): Promise<ReviewHealthStats> {
+  // Third review round — same gap as getApprovedPerActiveDayStats above.
   const [row] = await db
     .select({
       executed: sql<string | number>`count(*) filter (where ${proposals.status} = 'executed')`,
@@ -1622,7 +1632,17 @@ export async function getReviewHealthStats(): Promise<ReviewHealthStats> {
       medianMs: sql<string | number | null>`percentile_cont(0.5) within group (order by ${proposals.decisionLatencyMs})`,
     })
     .from(proposals)
-    .where(and(eq(proposals.decidedBy, 'user'), inArray(proposals.status, ['executed', 'rejected'])));
+    .leftJoin(copilotConversations, eq(copilotConversations.id, proposals.conversationId))
+    .leftJoin(proposalConversationMember, eq(proposalConversationMember.id, copilotConversations.memberId))
+    .leftJoin(agentRuns, eq(agentRuns.id, proposals.agentRunId))
+    .leftJoin(proposalRunMember, eq(proposalRunMember.id, agentRuns.ownerMemberId))
+    .where(
+      and(
+        eq(proposals.decidedBy, 'user'),
+        inArray(proposals.status, ['executed', 'rejected']),
+        proposalWorkspaceCondition(),
+      ),
+    );
 
   const executed = Number(row?.executed ?? 0);
   const rejected = Number(row?.rejected ?? 0);

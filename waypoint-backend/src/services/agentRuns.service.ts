@@ -4,6 +4,8 @@ import { agentRuns, agentRunEvents, agentRunTranscripts, ticketRefs, tickets } f
 import { newId } from '../lib/ids.js';
 import { ConflictError, NotFoundError, ValidationError } from '../middleware/errors.js';
 import { isExternalRef } from '../lib/externalRefs.js';
+import { currentMemberId } from '../lib/requestContext.js';
+import { assertConversationOwnedByMember } from './copilot.service.js';
 import {
   canTransition,
   describeRefusedTransition,
@@ -119,6 +121,21 @@ async function writeEvent(
 }
 
 export async function createRun(input: CreateAgentRunInput): Promise<AgentRun> {
+  // AT11 (ROAD-146) third review round: two fields this function used to
+  // write straight from the request body turned out to be load-bearing
+  // for proposals.service.ts's own workspace check — createRunProposal
+  // copies a run's ownerMemberId/copilotConversationId onto every
+  // proposal it files, and proposalWorkspaceCondition trusts those
+  // columns to know whose workspace a run-origin proposal belongs to.
+  // An attacker naming a real victim's memberId/conversationId here could
+  // get their own proposal to render inside the victim's review queue or
+  // Copilot panel. ownerMemberId is now always the real caller,
+  // regardless of what the request claims; copilotConversationId, if
+  // given, must actually belong to that same caller.
+  const ownerMemberId = currentMemberId();
+  if (input.copilotConversationId) {
+    await assertConversationOwnedByMember(input.copilotConversationId, ownerMemberId);
+  }
   return db.transaction(async (tx) => {
     if (input.ticketId && isExternalRef(input.ticketId)) {
       // W5b (ROAD-126): a run on a Jira issue names the issue's ledger
@@ -182,7 +199,7 @@ export async function createRun(input: CreateAgentRunInput): Promise<AgentRun> {
         id: newId('run'),
         projectId: input.projectId ?? null,
         ticketId: input.ticketId ?? null,
-        ownerMemberId: input.ownerMemberId,
+        ownerMemberId,
         agentId: input.agentId ?? null,
         entry: input.entry,
         providerId: input.providerId,
@@ -324,6 +341,14 @@ export async function updateRun(runId: string, input: UpdateAgentRunInput): Prom
   return db.transaction(async (tx) => {
     const current = await lockRun(tx, runId);
     const { status, reason, ...fields } = input;
+    // AT11 (ROAD-146) third review round: same reasoning as createRun's
+    // own copilotConversationId check above — this field is load-bearing
+    // for proposals.service.ts's workspace check, so a PATCH cannot be
+    // allowed to repoint an existing run at a conversation the caller
+    // doesn't own either.
+    if (fields.copilotConversationId) {
+      await assertConversationOwnedByMember(fields.copilotConversationId, currentMemberId());
+    }
     // A finished run is evidence. Found in review: the header promised
     // "nothing here updates a finished run's worktree or outcome" while a
     // field-only patch on a cancelled run went straight through. The one
