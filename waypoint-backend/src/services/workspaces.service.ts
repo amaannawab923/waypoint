@@ -2,8 +2,8 @@ import { eq, and, isNull, gt } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { workspaces, members, users, workspaceInvites } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
-import { NotFoundError } from '../middleware/errors.js';
-import { currentMemberId, currentWorkspaceId } from '../lib/requestContext.js';
+import { ConflictError, NotFoundError } from '../middleware/errors.js';
+import { currentIdentity, currentMemberId, currentWorkspaceId } from '../lib/requestContext.js';
 import { hashSecret, newSecret } from '../auth/tokens.js';
 
 // AT12 (ROAD-147). Team workspace creation + the switcher's own listing —
@@ -15,6 +15,7 @@ import { hashSecret, newSecret } from '../auth/tokens.js';
 // Callers sit behind middleware/auth.ts's requireUser, not resolveMember.
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type Executor = typeof db | Tx;
 
 const FOUNDING_MEMBER_COLOR = '#9c9280';
 
@@ -32,14 +33,25 @@ function slugify(name: string): string {
 // sequence handling elsewhere in this codebase — checked inside the same
 // transaction as the insert below, so two workspaces racing on the same
 // name still can't both win the same slug.
+//
+// Review finding (round 1, M5): an unbounded sequential scan here is an
+// O(n) amplification per call and O(n²) across n workspaces sharing a
+// name, each round trip inside an open transaction. Capped: after a
+// small number of real collisions, a short random suffix replaces the
+// incrementing counter, bounding the cost regardless of how many
+// same-named workspaces already exist.
+const SLUG_SEQUENTIAL_ATTEMPTS = 20;
 async function uniqueSlug(tx: Tx, base: string): Promise<string> {
   let candidate = base;
-  let suffix = 1;
-  for (;;) {
+  for (let suffix = 1; suffix <= SLUG_SEQUENTIAL_ATTEMPTS; suffix++) {
     const [existing] = await tx.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.slug, candidate));
     if (!existing) return candidate;
-    suffix += 1;
-    candidate = `${base}-${suffix}`;
+    candidate = `${base}-${suffix + 1}`;
+  }
+  for (;;) {
+    candidate = `${base}-${newSecret(4)}`;
+    const [existing] = await tx.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.slug, candidate));
+    if (!existing) return candidate;
   }
 }
 
@@ -76,7 +88,11 @@ export async function createWorkspace(input: CreateWorkspaceInput, user: AuthedU
         workspaceId: workspace.id,
         fullName: user.fullName,
         displayName: user.fullName,
-        email: user.email,
+        // Round 1 review finding (M6): lowercased, matching every other
+        // member-email write this ticket makes — members_workspace_id_
+        // email_unique is case-sensitive, so an inconsistently-cased
+        // write here is how the same person ends up as two rows later.
+        email: user.email.trim().toLowerCase(),
         avatarColor: FOUNDING_MEMBER_COLOR,
         role: 'admin',
         authMethod: user.authMethod,
@@ -118,7 +134,22 @@ export interface CreateInviteInput {
 // way every id-in-URL guard in the AT11 audit works: a foreign workspace
 // id 404s, it doesn't silently create an invite into someone else's
 // workspace.
+//
+// Round 1 review finding (H3): that guard alone isn't enough here,
+// unlike everywhere else it's used. resolveMember's "no Authorization
+// header → Personal" fallback (correct and load-bearing for reading/
+// writing a Personal install's own local data) means an UNAUTHENTICATED
+// caller resolves to the seeded Personal identity — currentWorkspaceId()
+// returns the real 'ws-1' constant, so `workspaceId === currentWorkspaceId()`
+// trivially passes for anyone supplying "ws-1" with no credentials at
+// all. Every other route this audit has scoped only ever reads or
+// writes existing data under that fallback; this one MINTS a credential
+// (a working invite link, and — via acceptInvite — a real users row).
+// currentIdentity() being unset means "no real bearer session resolved
+// this request", which this route now refuses outright rather than
+// silently operating as Personal.
 export async function createInvite(workspaceId: string, input: CreateInviteInput) {
+  if (!currentIdentity()) throw new NotFoundError('workspace');
   if (workspaceId !== currentWorkspaceId()) throw new NotFoundError('workspace');
   const now = new Date();
   const secret = newSecret();
@@ -138,7 +169,11 @@ export async function createInvite(workspaceId: string, input: CreateInviteInput
   // "Email invite instead" pre-creates the pending membership row (the
   // members.userId schema comment's "an issued invite, AT12") — decision
   // 4 in the plan: acceptInvite claims this row rather than inserting a
-  // second one for the same person.
+  // second one for the same person. Always role: 'member' — nothing in
+  // this function ever lets the caller request an elevated role for an
+  // invite-created row (see acceptInvite/claimOrCreateMember's own
+  // comment on why an existing row with any other role is refused, not
+  // claimed).
   if (email) {
     const [existing] = await db
       .select({ id: members.id })
@@ -160,6 +195,24 @@ export async function createInvite(workspaceId: string, input: CreateInviteInput
     }
   }
   return { id: invite.id, token: secret, expiresAt: invite.expiresAt };
+}
+
+// Round 1 review finding (M2): an invite had no way to be taken back —
+// a departed member's outstanding links stayed live for the full TTL.
+// :id checked the same way createInvite's own workspaceId is (a foreign
+// workspace's invite 404s, not 403 — existence of an invite in a
+// workspace you're not in is not this route's business to confirm or
+// deny), and the invite itself is looked up scoped to that workspace
+// too, so guessing a real invite id from a workspace you're not in
+// still 404s.
+export async function revokeInvite(workspaceId: string, inviteId: string): Promise<void> {
+  if (!currentIdentity()) throw new NotFoundError('invite');
+  if (workspaceId !== currentWorkspaceId()) throw new NotFoundError('invite');
+  const [row] = await db
+    .delete(workspaceInvites)
+    .where(and(eq(workspaceInvites.id, inviteId), eq(workspaceInvites.workspaceId, workspaceId)))
+    .returning({ id: workspaceInvites.id });
+  if (!row) throw new NotFoundError('invite');
 }
 
 // The public, unauthenticated half — what GET /join/:token shows before
@@ -192,9 +245,17 @@ export async function getInvitePreview(token: string) {
 // single-use even if the same link is opened twice at once (a two-tab
 // double-click, or an attacker replaying a captured completion): only one
 // caller ever wins the row.
-export async function acceptInvite(token: string, user: AuthedUser) {
+//
+// Round 1 review finding (H1/M3): the caller (auth/flows.ts's
+// finishFlow) now runs this inside the SAME transaction it creates/
+// resolves the signing-in user in — a failure here (the common case:
+// the invite already got consumed) rolls the user creation back with
+// it, rather than leaving a real, usable account behind that bypassed
+// signup mode for nothing. `tx` defaults to the plain db client so any
+// other caller (there are none yet) still works standalone.
+export async function acceptInvite(token: string, user: AuthedUser, tx: Executor = db) {
   const now = new Date();
-  const [invite] = await db
+  const [invite] = await tx
     .update(workspaceInvites)
     .set({ acceptedAt: now, acceptedByUserId: user.id })
     .where(
@@ -207,8 +268,20 @@ export async function acceptInvite(token: string, user: AuthedUser) {
     .returning();
   if (!invite) throw new NotFoundError('invite (expired, already used, or unknown)');
 
-  const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, invite.workspaceId));
+  const [workspace] = await tx.select().from(workspaces).where(eq(workspaces.id, invite.workspaceId));
   if (!workspace) throw new NotFoundError('workspace');
+
+  const email = user.email.trim().toLowerCase();
+  // Round 1 review finding (M1): invite.email was written at creation
+  // and then never read again — an "Email invite instead" link was
+  // actually a bearer credential, usable by anyone who obtained it
+  // (a forward, a compromised mailbox), silently orphaning the pending
+  // row it was meant to target. A "Copy link" invite (email null) still
+  // accepts any signed-in identity, unchanged — that one is genuinely
+  // meant to be shared.
+  if (invite.email && invite.email !== email) {
+    throw new ConflictError('This invite was sent to a specific email address — sign in with that address to accept it.');
+  }
 
   // Claim-or-create (decision 4): a pending row from "Email invite
   // instead" (userId null, matching email) gets claimed; a row that
@@ -218,23 +291,43 @@ export async function acceptInvite(token: string, user: AuthedUser) {
   // (workspaceId, email) accepted concurrently — members_workspace_id_
   // email_unique is the real guard; a losing insert here re-reads and
   // claims the winner's row instead of failing the whole acceptance.
-  const email = user.email.trim().toLowerCase();
-  const member = await claimOrCreateMember(invite.workspaceId, email, user);
+  const member = await claimOrCreateMember(invite.workspaceId, email, user, tx);
   return { workspace, member };
 }
 
-async function claimOrCreateMember(workspaceId: string, email: string, user: AuthedUser): Promise<typeof members.$inferSelect> {
-  const [existing] = await db
+async function claimOrCreateMember(
+  workspaceId: string,
+  email: string,
+  user: AuthedUser,
+  tx: Executor = db,
+): Promise<typeof members.$inferSelect> {
+  const [existing] = await tx
     .select()
     .from(members)
     .where(and(eq(members.workspaceId, workspaceId), eq(members.email, email)));
   if (existing && !existing.userId) {
-    const [claimed] = await db.update(members).set({ userId: user.id }).where(eq(members.id, existing.id)).returning();
+    // Round 1 review finding (H2), the most severe one: this used to
+    // claim ANY pending row with a matching email regardless of its
+    // role. members.service.ts's pre-existing (and pre-AT7) inviteMember
+    // lets any signed-in member create a pending row with role: 'admin'
+    // — harmless on its own (a userId-less row can never authenticate,
+    // resolveMember's lookup requires eq(members.userId, user.id)) until
+    // something binds a real user to it. That something is this
+    // function. A generic join must never be the thing that grants an
+    // elevated role — createInvite above only ever pre-creates role:
+    // 'member' rows, so the only way an existing pending row could carry
+    // anything else is exactly the escalation path this closes.
+    if (existing.role !== 'member') {
+      throw new ConflictError(
+        'This workspace already has a pending invitation for this email address with a different role — ask a workspace admin to resolve it before joining.',
+      );
+    }
+    const [claimed] = await tx.update(members).set({ userId: user.id }).where(eq(members.id, existing.id)).returning();
     return claimed;
   }
   if (existing) return existing;
   try {
-    const [created] = await db
+    const [created] = await tx
       .insert(members)
       .values({
         id: newId('mem'),
@@ -250,7 +343,7 @@ async function claimOrCreateMember(workspaceId: string, email: string, user: Aut
       .returning();
     return created;
   } catch (err) {
-    if (isUniqueViolation(err)) return claimOrCreateMember(workspaceId, email, user);
+    if (isUniqueViolation(err)) return claimOrCreateMember(workspaceId, email, user, tx);
     throw err;
   }
 }

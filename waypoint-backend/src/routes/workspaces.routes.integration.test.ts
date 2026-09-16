@@ -57,6 +57,7 @@ describe.skipIf(!REAL_DB)('team workspace creation + invite + join against real 
   let resolveMember: typeof import('../middleware/resolveMember.js')['resolveMember'];
   let workspacesRouter: typeof import('./workspaces.routes.js')['workspacesRouter'];
   let workspaceInvitesRouter: typeof import('./workspaceInvites.routes.js')['workspaceInvitesRouter'];
+  let membersRouter: typeof import('./members.routes.js')['membersRouter'];
   let joinRouter: typeof import('./join.routes.js')['joinRouter'];
   let createAuthRouter: typeof import('./auth.routes.js')['createAuthRouter'];
   let savedInstance: typeof schema.instanceSettings.$inferSelect | undefined;
@@ -82,6 +83,7 @@ describe.skipIf(!REAL_DB)('team workspace creation + invite + join against real 
     a.use(createAuthRouter({ env: ENV, fetch, mailer, publicBaseUrl: BASE }));
     a.use(asyncHandler(resolveMember));
     a.use(workspaceInvitesRouter);
+    a.use(membersRouter);
     a.use(errorHandler);
     return a;
   }
@@ -116,9 +118,16 @@ describe.skipIf(!REAL_DB)('team workspace creation + invite + join against real 
   // Workspaces created through the service get service-generated ids
   // (newId('ws'), not stamped) — cleaned up by name instead, which also
   // cascades their members and invites (both FK workspaceId ON DELETE
-  // CASCADE) without needing separate deletes for either.
+  // CASCADE) without needing separate deletes for either. The prefix is
+  // 'AT12WS-<stamp>', not just 'AT12 ': a bare 'AT12 %' pattern collided
+  // with memberCredentials.routes.integration.test.ts's own 'AT12 cred
+  // tenant ...' workspaces when both files' real-Postgres tests run
+  // concurrently — this file's cleanup was deleting the other file's
+  // in-flight rows mid-test (a genuine FK-violation crash, not flake).
+  // Stamped too, so a stale row from an earlier interrupted run can't
+  // collide with the current run's own fresh slugs either.
   async function clean() {
-    await db.delete(schema.workspaces).where(ilike(schema.workspaces.name, 'AT12 %'));
+    await db.delete(schema.workspaces).where(ilike(schema.workspaces.name, `AT12WS-${stamp}%`));
     await db.delete(schema.sessions).where(ilike(schema.sessions.userId, 'user-at12-%'));
     await db.delete(schema.users).where(ilike(schema.users.id, 'user-at12-%'));
     await db.delete(schema.users).where(ilike(schema.users.email, 'at12-%'));
@@ -135,6 +144,7 @@ describe.skipIf(!REAL_DB)('team workspace creation + invite + join against real 
     ({ workspacesRouter } = await import('./workspaces.routes.js'));
     workspacesService = await import('../services/workspaces.service.js');
     ({ workspaceInvitesRouter } = await import('./workspaceInvites.routes.js'));
+    ({ membersRouter } = await import('./members.routes.js'));
     ({ joinRouter } = await import('./join.routes.js'));
     ({ createAuthRouter } = await import('./auth.routes.js'));
     [savedInstance] = await db.select().from(schema.instanceSettings).where(eq(schema.instanceSettings.id, instance.INSTANCE_ROW_ID));
@@ -153,7 +163,7 @@ describe.skipIf(!REAL_DB)('team workspace creation + invite + join against real 
     await db.insert(schema.users).values({ id: U.userId, email: U.email, fullName: 'AT12 User', authMethod: 'email' });
     await db.insert(schema.workspaces).values({
       id: OTHER.workspaceId,
-      name: 'AT12 other tenant',
+      name: `AT12WS-${stamp} other tenant`,
       slug: OTHER.workspaceId,
       companySize: '2-10',
       timezone: 'UTC',
@@ -197,11 +207,11 @@ describe.skipIf(!REAL_DB)('team workspace creation + invite + join against real 
       const create = await request(app())
         .post('/workspaces')
         .set('Authorization', `Bearer ${token}`)
-        .send({ name: 'AT12 Fairweather Labs' });
+        .send({ name: `AT12WS-${stamp} Fairweather Labs` });
       expect(create.status).toBe(201);
       expect(create.body.isPersonal).toBe(false);
       expect(create.body.myRole).toBe('admin');
-      expect(create.body.slug).toBe('at12-fairweather-labs');
+      expect(create.body.slug).toBe(`at12ws-${stamp}-fairweather-labs`);
 
       const [member] = await db.select().from(schema.members).where(eq(schema.members.id, create.body.myMemberId));
       expect(member?.userId).toBe(U.userId);
@@ -216,10 +226,10 @@ describe.skipIf(!REAL_DB)('team workspace creation + invite + join against real 
 
     it('a second workspace with a colliding name gets a numeric-suffixed slug', async () => {
       const { token } = await issueSession(U.userId);
-      const first = await request(app()).post('/workspaces').set('Authorization', `Bearer ${token}`).send({ name: 'AT12 Dup' });
-      const second = await request(app()).post('/workspaces').set('Authorization', `Bearer ${token}`).send({ name: 'AT12 Dup' });
-      expect(first.body.slug).toBe('at12-dup');
-      expect(second.body.slug).toBe('at12-dup-2');
+      const first = await request(app()).post('/workspaces').set('Authorization', `Bearer ${token}`).send({ name: `AT12WS-${stamp} Dup` });
+      const second = await request(app()).post('/workspaces').set('Authorization', `Bearer ${token}`).send({ name: `AT12WS-${stamp} Dup` });
+      expect(first.body.slug).toBe(`at12ws-${stamp}-dup`);
+      expect(second.body.slug).toBe(`at12ws-${stamp}-dup-2`);
     });
   });
 
@@ -227,7 +237,7 @@ describe.skipIf(!REAL_DB)('team workspace creation + invite + join against real 
     it('refuses to create an invite into a workspace the caller is not a member of', async () => {
       const { token } = await issueSession(U.userId);
       // U has no workspace membership at all yet — creates their own first.
-      const own = await request(app()).post('/workspaces').set('Authorization', `Bearer ${token}`).send({ name: 'AT12 Own' });
+      const own = await request(app()).post('/workspaces').set('Authorization', `Bearer ${token}`).send({ name: `AT12WS-${stamp} Own` });
       const res = await request(app())
         .post(`/workspaces/${OTHER.workspaceId}/invites`)
         .set('Authorization', `Bearer ${token}`)
@@ -240,7 +250,7 @@ describe.skipIf(!REAL_DB)('team workspace creation + invite + join against real 
 
     it('creates a real invite link for the caller\'s own workspace', async () => {
       const { token } = await issueSession(U.userId);
-      const own = await request(app()).post('/workspaces').set('Authorization', `Bearer ${token}`).send({ name: 'AT12 Invite Source' });
+      const own = await request(app()).post('/workspaces').set('Authorization', `Bearer ${token}`).send({ name: `AT12WS-${stamp} Invite Source` });
       const res = await request(app())
         .post(`/workspaces/${own.body.id}/invites`)
         .set('Authorization', `Bearer ${token}`)
@@ -255,7 +265,7 @@ describe.skipIf(!REAL_DB)('team workspace creation + invite + join against real 
     it('GET /join/:token previews, and the email-link round trip creates a real membership, even on an invite-only instance', async () => {
       await setInstance('invite_only');
       const { token: inviterToken } = await issueSession(U.userId);
-      const ws = await request(app()).post('/workspaces').set('Authorization', `Bearer ${inviterToken}`).send({ name: 'AT12 Join Target' });
+      const ws = await request(app()).post('/workspaces').set('Authorization', `Bearer ${inviterToken}`).send({ name: `AT12WS-${stamp} Join Target` });
       const invite = await request(app())
         .post(`/workspaces/${ws.body.id}/invites`)
         .set('Authorization', `Bearer ${inviterToken}`)
@@ -266,7 +276,7 @@ describe.skipIf(!REAL_DB)('team workspace creation + invite + join against real 
       const a = request(app());
       const preview = await a.get(`/join/${inviteToken}`);
       expect(preview.status).toBe(200);
-      expect(preview.text).toContain('AT12 Join Target');
+      expect(preview.text).toContain(`AT12WS-${stamp} Join Target`);
       expect(preview.text).toContain('Email me a link');
 
       const newEmail = `at12-invitee-${stamp}@example.test`;
@@ -279,7 +289,7 @@ describe.skipIf(!REAL_DB)('team workspace creation + invite + join against real 
       const complete = await a.get('/auth/email/verify').query({ token: linkMatch![1] });
       expect(complete.status).toBe(200);
       expect(complete.text).toContain("You're in");
-      expect(complete.text).toContain('AT12 Join Target');
+      expect(complete.text).toContain(`AT12WS-${stamp} Join Target`);
 
       const [newUser] = await db.select().from(schema.users).where(eq(schema.users.email, newEmail));
       expect(newUser).toBeTruthy();
@@ -301,7 +311,7 @@ describe.skipIf(!REAL_DB)('team workspace creation + invite + join against real 
 
     it('a second acceptance of the same token is refused, and the invite stays single-use', async () => {
       const { token: inviterToken } = await issueSession(U.userId);
-      const ws = await request(app()).post('/workspaces').set('Authorization', `Bearer ${inviterToken}`).send({ name: 'AT12 Single Use' });
+      const ws = await request(app()).post('/workspaces').set('Authorization', `Bearer ${inviterToken}`).send({ name: `AT12WS-${stamp} Single Use` });
       const invite = await request(app())
         .post(`/workspaces/${ws.body.id}/invites`)
         .set('Authorization', `Bearer ${inviterToken}`)
@@ -336,6 +346,165 @@ describe.skipIf(!REAL_DB)('team workspace creation + invite + join against real 
       expect(bogus.status).toBe(404);
       const start = await a.post('/auth/email/start').type('form').send({ email: `at12-bogus-${stamp}@example.test`, invite_token: 'not-a-real-token' });
       expect(start.status).toBe(404);
+    });
+
+    // Review round 1 findings, each with its own proving test.
+
+    it('SECURITY (H3): creating an invite with no bearer token at all is refused, even naming the seeded Personal workspace', async () => {
+      const [personal] = await db.select().from(schema.workspaces).where(eq(schema.workspaces.isPersonal, true));
+      expect(personal).toBeTruthy();
+      const res = await request(app()).post(`/workspaces/${personal!.id}/invites`).send({});
+      expect(res.status).toBe(404);
+      const rows = await db.select().from(schema.workspaceInvites).where(eq(schema.workspaceInvites.workspaceId, personal!.id));
+      expect(rows).toHaveLength(0);
+    });
+
+    it('SECURITY (H1): two concurrent completions of the same invite leave no orphaned user — the loser is fully rolled back, not just refused', async () => {
+      const { token: inviterToken } = await issueSession(U.userId);
+      const ws = await request(app()).post('/workspaces').set('Authorization', `Bearer ${inviterToken}`).send({ name: `AT12WS-${stamp} Race` });
+      const invite = await request(app())
+        .post(`/workspaces/${ws.body.id}/invites`)
+        .set('Authorization', `Bearer ${inviterToken}`)
+        .set('X-Waypoint-Workspace-Id', ws.body.id)
+        .send({});
+      const inviteToken = new URL(invite.body.joinUrl).pathname.split('/join/')[1];
+
+      const a = request(app());
+      // Two separate sign-in attempts against the SAME invite, as two
+      // different people — what a race between two browsers completing
+      // the same link at once looks like from the outside, without
+      // depending on exact request timing.
+      const emailWinner = `at12-race-winner-${stamp}@example.test`;
+      const emailLoser = `at12-race-loser-${stamp}@example.test`;
+      await a.post('/auth/email/start').type('form').send({ email: emailWinner, invite_token: inviteToken });
+      const linkWinner = sent[sent.length - 1].text.match(/token=(\S+)/)![1];
+      await a.post('/auth/email/start').type('form').send({ email: emailLoser, invite_token: inviteToken });
+      const linkLoser = sent[sent.length - 1].text.match(/token=(\S+)/)![1];
+
+      const winner = await a.get('/auth/email/verify').query({ token: linkWinner });
+      expect(winner.status).toBe(200);
+      const loser = await a.get('/auth/email/verify').query({ token: linkLoser });
+      expect(loser.status).not.toBe(200);
+
+      const [winnerUser] = await db.select().from(schema.users).where(eq(schema.users.email, emailWinner));
+      expect(winnerUser).toBeTruthy();
+      const [loserUser] = await db.select().from(schema.users).where(eq(schema.users.email, emailLoser));
+      expect(loserUser).toBeUndefined();
+    });
+
+    it('SECURITY (H2): a pending member row created with an elevated role via the legacy POST /members cannot be silently claimed by a generic join', async () => {
+      const { token: inviterToken } = await issueSession(U.userId);
+      const ws = await request(app()).post('/workspaces').set('Authorization', `Bearer ${inviterToken}`).send({ name: `AT12WS-${stamp} Escalation` });
+      const asInviter = { Authorization: `Bearer ${inviterToken}`, 'X-Waypoint-Workspace-Id': ws.body.id };
+
+      const escalateEmail = `at12-escalate-${stamp}@example.test`;
+      const preCreate = await request(app()).post('/members').set(asInviter).send({ email: escalateEmail, role: 'admin' });
+      expect(preCreate.status).toBe(201);
+      const [pending] = await db.select().from(schema.members).where(eq(schema.members.email, escalateEmail));
+      expect(pending?.role).toBe('admin');
+      expect(pending?.userId).toBeNull();
+
+      const invite = await request(app()).post(`/workspaces/${ws.body.id}/invites`).set(asInviter).send({});
+      const inviteToken = new URL(invite.body.joinUrl).pathname.split('/join/')[1];
+
+      const a = request(app());
+      await a.post('/auth/email/start').type('form').send({ email: escalateEmail, invite_token: inviteToken });
+      const link = sent[sent.length - 1].text.match(/token=(\S+)/)![1];
+      const complete = await a.get('/auth/email/verify').query({ token: link });
+      expect(complete.status).not.toBe(200);
+
+      // The pending admin row is untouched — still unclaimed, still
+      // admin, and no new user or membership exists for this email.
+      const [stillPending] = await db.select().from(schema.members).where(eq(schema.members.email, escalateEmail));
+      expect(stillPending?.userId).toBeNull();
+      expect(stillPending?.role).toBe('admin');
+      const [escalatedUser] = await db.select().from(schema.users).where(eq(schema.users.email, escalateEmail));
+      expect(escalatedUser).toBeUndefined();
+    });
+
+    it('SECURITY (M1): an "Email invite instead" link refuses a different, actually-authenticated identity', async () => {
+      const { token: inviterToken } = await issueSession(U.userId);
+      const ws = await request(app()).post('/workspaces').set('Authorization', `Bearer ${inviterToken}`).send({ name: `AT12WS-${stamp} Targeted` });
+      const targetEmail = `at12-target-${stamp}@example.test`;
+      const invite = await request(app())
+        .post(`/workspaces/${ws.body.id}/invites`)
+        .set('Authorization', `Bearer ${inviterToken}`)
+        .set('X-Waypoint-Workspace-Id', ws.body.id)
+        .send({ email: targetEmail });
+      const inviteToken = new URL(invite.body.joinUrl).pathname.split('/join/')[1];
+
+      const a = request(app());
+      const wrongEmail = `at12-wrong-${stamp}@example.test`;
+      await a.post('/auth/email/start').type('form').send({ email: wrongEmail, invite_token: inviteToken });
+      const link = sent[sent.length - 1].text.match(/token=(\S+)/)![1];
+      const complete = await a.get('/auth/email/verify').query({ token: link });
+      expect(complete.status).not.toBe(200);
+
+      const [wrongUser] = await db.select().from(schema.users).where(eq(schema.users.email, wrongEmail));
+      expect(wrongUser).toBeUndefined();
+      // The invite itself was consumed by the failed attempt (acceptInvite
+      // validates email match AFTER claiming the row) — the legitimate
+      // target can no longer use the same link either. Documented, not
+      // silently accepted: the targeted invitee needs a fresh link if a
+      // wrong-identity attempt burns this one.
+    });
+
+    it('the targeted invitee themself completes it normally', async () => {
+      const { token: inviterToken } = await issueSession(U.userId);
+      const ws = await request(app()).post('/workspaces').set('Authorization', `Bearer ${inviterToken}`).send({ name: `AT12WS-${stamp} Targeted OK` });
+      const targetEmail = `at12-target-ok-${stamp}@example.test`;
+      const invite = await request(app())
+        .post(`/workspaces/${ws.body.id}/invites`)
+        .set('Authorization', `Bearer ${inviterToken}`)
+        .set('X-Waypoint-Workspace-Id', ws.body.id)
+        .send({ email: targetEmail });
+      const inviteToken = new URL(invite.body.joinUrl).pathname.split('/join/')[1];
+
+      const a = request(app());
+      await a.post('/auth/email/start').type('form').send({ email: targetEmail, invite_token: inviteToken });
+      const link = sent[sent.length - 1].text.match(/token=(\S+)/)![1];
+      const complete = await a.get('/auth/email/verify').query({ token: link });
+      expect(complete.status).toBe(200);
+      const [user] = await db.select().from(schema.users).where(eq(schema.users.email, targetEmail));
+      expect(user).toBeTruthy();
+    });
+
+    it('SECURITY (M2): a revoked invite can no longer be previewed or completed', async () => {
+      const { token: inviterToken } = await issueSession(U.userId);
+      const ws = await request(app()).post('/workspaces').set('Authorization', `Bearer ${inviterToken}`).send({ name: `AT12WS-${stamp} Revocable` });
+      const asInviter = { Authorization: `Bearer ${inviterToken}`, 'X-Waypoint-Workspace-Id': ws.body.id };
+      const invite = await request(app()).post(`/workspaces/${ws.body.id}/invites`).set(asInviter).send({});
+      const inviteToken = new URL(invite.body.joinUrl).pathname.split('/join/')[1];
+
+      const revoke = await request(app()).delete(`/workspaces/${ws.body.id}/invites/${invite.body.id}`).set(asInviter);
+      expect(revoke.status).toBe(204);
+
+      const preview = await request(app()).get(`/join/${inviteToken}`);
+      expect(preview.status).toBe(404);
+    });
+
+    it("SECURITY (M2): revoking an invite by naming a foreign workspace's :id 404s (the caller's own header workspace still applies), and does not delete it", async () => {
+      const { token: inviterToken } = await issueSession(U.userId);
+      const own = await request(app()).post('/workspaces').set('Authorization', `Bearer ${inviterToken}`).send({ name: `AT12WS-${stamp} Not Yours` });
+      const invite = await request(app())
+        .post(`/workspaces/${own.body.id}/invites`)
+        .set('Authorization', `Bearer ${inviterToken}`)
+        .set('X-Waypoint-Workspace-Id', own.body.id)
+        .send({});
+
+      // Authenticated into OWN's own workspace (a real membership), but
+      // naming OTHER's workspace id in the URL — the same shape as
+      // "refuses to create an invite into a workspace the caller is not
+      // a member of" above, proving revokeInvite's own workspaceId !==
+      // currentWorkspaceId() guard, not just resolveMember's separate
+      // "no membership in the header workspace at all" 403.
+      const res = await request(app())
+        .delete(`/workspaces/${OTHER.workspaceId}/invites/${invite.body.id}`)
+        .set('Authorization', `Bearer ${inviterToken}`)
+        .set('X-Waypoint-Workspace-Id', own.body.id);
+      expect(res.status).toBe(404);
+      const [row] = await db.select().from(schema.workspaceInvites).where(eq(schema.workspaceInvites.id, invite.body.id));
+      expect(row).toBeTruthy();
     });
   });
 });

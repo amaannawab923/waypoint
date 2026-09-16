@@ -27,3 +27,12 @@ workspaceInvitesRouter.post(
     });
   }),
 );
+
+// Round 1 review finding (M2): an invite had no way to be revoked.
+workspaceInvitesRouter.delete(
+  '/workspaces/:id/invites/:inviteId',
+  asyncHandler(async (req, res) => {
+    await workspacesService.revokeInvite(req.params.id, req.params.inviteId);
+    res.status(204).end();
+  }),
+);

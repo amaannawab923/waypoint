@@ -146,6 +146,9 @@ export type ResolvedIdentity = {
 // Signup mode is enforced only when a brand-new row would be needed: an
 // existing row is by definition someone already let in (an invitee's row
 // is pre-created by AT12).
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type Executor = typeof db | Tx;
+
 export async function resolveOrCreateUser(
   identity: ResolvedIdentity,
   deps: FlowDeps,
@@ -155,12 +158,17 @@ export async function resolveOrCreateUser(
   // Never derived from anything client-supplied; resolveFlowTarget/
   // acceptInvite own the real invite validation, not this flag.
   opts: { skipSignupModeCheck?: boolean } = {},
+  // Ninth-round-style review fix (AT12): a join-flow completion passes
+  // its own transaction here so a users row created by this function
+  // rolls back together with a subsequent acceptInvite failure — see
+  // finishFlow. Every other caller keeps using the plain db client.
+  executor: Executor = db,
 ) {
   const email = identity.email.trim().toLowerCase();
   const now = deps.now();
 
   const [byProvider] = identity.providerId
-    ? await db
+    ? await executor
         .select()
         .from(users)
         .where(and(eq(users.authMethod, identity.provider), eq(users.authProviderId, identity.providerId)))
@@ -169,7 +177,7 @@ export async function resolveOrCreateUser(
     const patch: Partial<typeof users.$inferInsert> = {};
     if (identity.emailVerified && !byProvider.emailVerifiedAt) patch.emailVerifiedAt = now;
     if (!byProvider.avatarUrl && identity.avatarUrl) patch.avatarUrl = identity.avatarUrl;
-    return { user: await applyPatch(byProvider, patch), created: false };
+    return { user: await applyPatch(byProvider, patch, executor), created: false };
   }
 
   if (!identity.emailVerified) {
@@ -178,7 +186,7 @@ export async function resolveOrCreateUser(
     );
   }
 
-  const [byEmail] = await db.select().from(users).where(sql`lower(${users.email}) = ${email}`);
+  const [byEmail] = await executor.select().from(users).where(sql`lower(${users.email}) = ${email}`);
   if (byEmail) {
     const patch: Partial<typeof users.$inferInsert> = {};
     if (identity.providerId && !byEmail.authProviderId) {
@@ -194,7 +202,7 @@ export async function resolveOrCreateUser(
     // sensitive, so "Me@x" and "me@x" would otherwise be two people.
     if (byEmail.email !== email) patch.email = email;
     if (!byEmail.avatarUrl && identity.avatarUrl) patch.avatarUrl = identity.avatarUrl;
-    return { user: await applyPatch(byEmail, patch), created: false };
+    return { user: await applyPatch(byEmail, patch, executor), created: false };
   }
 
   const status = await getSetupStatus(deps.env);
@@ -202,7 +210,7 @@ export async function resolveOrCreateUser(
     throw new ConflictError('This instance is invite-only. Ask a workspace member for an invite link.');
   }
   try {
-    const [created] = await db
+    const [created] = await executor
       .insert(users)
       .values({
         id: newId('user'),
@@ -225,9 +233,13 @@ export async function resolveOrCreateUser(
   }
 }
 
-async function applyPatch(existing: typeof users.$inferSelect, patch: Partial<typeof users.$inferInsert>) {
+async function applyPatch(
+  existing: typeof users.$inferSelect,
+  patch: Partial<typeof users.$inferInsert>,
+  executor: Executor = db,
+) {
   if (Object.keys(patch).length === 0) return existing;
-  const [updated] = await db.update(users).set(patch).where(eq(users.id, existing.id)).returning();
+  const [updated] = await executor.update(users).set(patch).where(eq(users.id, existing.id)).returning();
   return updated;
 }
 
@@ -270,16 +282,31 @@ async function finishFlow(
   identity: ResolvedIdentity,
   deps: FlowDeps,
 ): Promise<FlowCompletion> {
-  const { user } = await resolveOrCreateUser(identity, deps, { skipSignupModeCheck: !!flow.inviteToken });
-  const { token } = await issueSession(user.id, { now: deps.now() });
   if (flow.inviteToken) {
-    // acceptInvite re-validates the invite from scratch (expiry, not
-    // already accepted) rather than trusting resolveFlowTarget's earlier
-    // check — a link can expire or get consumed by someone else during
-    // the OAuth round trip in between.
-    const { workspace } = await acceptInvite(flow.inviteToken, user);
-    return { kind: 'html', body: renderJoinCompletePage(workspace.name) };
+    // Ninth-round review finding: resolving/creating the user and
+    // accepting the invite used to be two separate, uncommitted-together
+    // statements — a users row (and its signup-mode bypass) committed
+    // even when acceptInvite failed immediately afterward (the invite
+    // already consumed by a concurrent completion, expired mid-flow,
+    // etc.), leaving a real account that could then sign in normally
+    // forever, invite-only or not. One transaction: if acceptInvite
+    // throws, the user (and session) this same flow just created rolls
+    // back with it — a join either fully succeeds or leaves nothing
+    // behind, not a real account with no membership.
+    const inviteToken = flow.inviteToken;
+    return db.transaction(async (tx) => {
+      const { user } = await resolveOrCreateUser(identity, deps, { skipSignupModeCheck: true }, tx);
+      await issueSession(user.id, { now: deps.now() }, tx);
+      // acceptInvite re-validates the invite from scratch (expiry, not
+      // already accepted) rather than trusting resolveFlowTarget's
+      // earlier check — a link can expire or get consumed by someone
+      // else during the OAuth round trip in between.
+      const { workspace } = await acceptInvite(inviteToken, user, tx);
+      return { kind: 'html', body: renderJoinCompletePage(workspace.name) };
+    });
   }
+  const { user } = await resolveOrCreateUser(identity, deps);
+  const { token } = await issueSession(user.id, { now: deps.now() });
   return { kind: 'redirect', to: finishRedirect(flow, token, user) };
 }
 
