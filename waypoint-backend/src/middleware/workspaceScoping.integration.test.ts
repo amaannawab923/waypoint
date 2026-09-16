@@ -39,6 +39,7 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
   let db: typeof import('../db/client.js')['db'];
   let schema: typeof import('../db/schema/index.js');
   let eq: typeof import('drizzle-orm')['eq'];
+  let and: typeof import('drizzle-orm')['and'];
   let issueSession: typeof import('../auth/sessions.js')['issueSession'];
   let app: express.Express;
 
@@ -198,7 +199,7 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
   beforeAll(async () => {
     ({ db } = await import('../db/client.js'));
     schema = await import('../db/schema/index.js');
-    ({ eq } = await import('drizzle-orm'));
+    ({ eq, and } = await import('drizzle-orm'));
     ({ issueSession } = await import('../auth/sessions.js'));
     const { createApp } = await import('../app.js');
     app = createApp();
@@ -322,6 +323,33 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
     expect(row?.title).not.toBe('pwned');
   });
 
+  // Second review round: patch.parentId was a bare, unvalidated ticket id
+  // — re-parenting A's own ticket under B's real one, AND writing an
+  // activity line containing A's ticket identifier into B's own activity
+  // feed, a cross-tenant write with attacker-chosen content. Refused as
+  // 404 before either write happens.
+  it('PATCH /tickets/:id with parentId set to B\'s ticket refuses as 404, re-parents nothing, and writes nothing into B\'s activity', async () => {
+    const res = await request(app).patch(`/tickets/${A.ticketId}`).set(asA()).send({ parentId: B.ticketId });
+    expect(res.status).toBe(404);
+    const [row] = await db.select().from(schema.tickets).where(eq(schema.tickets.id, A.ticketId));
+    expect(row?.parentId).not.toBe(B.ticketId);
+    const activity = await db
+      .select()
+      .from(schema.activityEntries)
+      .where(eq(schema.activityEntries.ticketId, B.ticketId));
+    expect(activity.some((a) => a.verb === 'sub_item_added')).toBe(false);
+  });
+
+  it('POST /tickets with parentId set to B\'s ticket refuses as 404, and writes no ticket', async () => {
+    const res = await request(app)
+      .post('/tickets')
+      .set(asA())
+      .send({ projectId: A.projectId, title: 'pwned parent', stateId: A.stateId, parentId: B.ticketId });
+    expect(res.status).toBe(404);
+    const rows = await db.select().from(schema.tickets).where(eq(schema.tickets.title, 'pwned parent'));
+    expect(rows).toHaveLength(0);
+  });
+
   it('POST /tickets/:id/assignees/:memberId/toggle refuses B\'s ticket as 404', async () => {
     const res = await request(app)
       .post(`/tickets/${B.ticketId}/assignees/${A.memberId}/toggle`)
@@ -362,6 +390,30 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
     expect(res.status).toBe(404);
     const [row] = await db.select().from(schema.ticketLinks).where(eq(schema.ticketLinks.id, B.linkId));
     expect(row).toBeDefined();
+  });
+
+  // Second review round: the previous case above only exercises the
+  // direction the ticket guard already covers (B's ticket, B's link) —
+  // it 404s before ever reaching the linkId. This is the direction that
+  // actually exercised the bug: A's OWN ticket (passes the ticket guard)
+  // paired with B's real linkId, which the delete used to key on alone
+  // with no correlation back to the ticket at all — deleting B's row and
+  // leaking B's link's label/url into A's own activity feed. Correlating
+  // both the select and the delete on (linkId, ticketId) makes this a
+  // no-op, same idempotent-delete convention as this codebase's other
+  // routes — not a 404 (the ticket itself is real and unchanged), 200
+  // with B's row surviving and nothing about it reaching A's activity.
+  it('DELETE /tickets/:id/links/:linkId against A\'s own ticket with B\'s linkId is a no-op — B\'s link survives, nothing about it reaches A\'s activity', async () => {
+    const res = await request(app).delete(`/tickets/${A.ticketId}/links/${B.linkId}`).set(asA());
+    expect(res.status).toBe(200);
+    const [row] = await db.select().from(schema.ticketLinks).where(eq(schema.ticketLinks.id, B.linkId));
+    expect(row).toBeDefined();
+    expect(row?.ticketId).toBe(B.ticketId);
+    const activity = await db
+      .select()
+      .from(schema.activityEntries)
+      .where(eq(schema.activityEntries.ticketId, A.ticketId));
+    expect(activity.some((a) => a.detail?.includes('AT11 link'))).toBe(false);
   });
 
   it('DELETE /tickets/:id against B\'s ticket is a silent no-op (204), and B\'s row survives', async () => {
@@ -523,6 +575,35 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
     expect(res.status).toBe(404);
   });
 
+  // Second review round: the ticket guard above only proves the ticket is
+  // A's — nothing previously checked the agentIds themselves. Attaching
+  // B's real agent onto A's own ticket used to succeed silently.
+  it('POST /tickets/:id/agent-assignments onto A\'s own ticket with B\'s agentId refuses as 404, and writes no assignment', async () => {
+    const res = await request(app)
+      .post(`/tickets/${A.ticketId}/agent-assignments`)
+      .set(asA())
+      .send({ agentIds: [B.agentId] });
+    expect(res.status).toBe(404);
+    const rows = await db
+      .select()
+      .from(schema.agentAssignments)
+      .where(and(eq(schema.agentAssignments.ticketId, A.ticketId), eq(schema.agentAssignments.agentId, B.agentId)));
+    expect(rows).toHaveLength(0);
+  });
+
+  // Same underlying gap (validateAssigneeIds had no workspace filter),
+  // reached through the plain human/agent assignee toggle instead of the
+  // agent-assignments endpoint.
+  it('POST /tickets/:id/assignees/:memberId/toggle onto A\'s own ticket with B\'s memberId refuses as 409, and adds no assignee', async () => {
+    const res = await request(app).post(`/tickets/${A.ticketId}/assignees/${B.memberId}/toggle`).set(asA());
+    expect(res.status).toBe(409);
+    const rows = await db
+      .select()
+      .from(schema.ticketAssignees)
+      .where(and(eq(schema.ticketAssignees.ticketId, A.ticketId), eq(schema.ticketAssignees.assigneeId, B.memberId)));
+    expect(rows).toHaveLength(0);
+  });
+
   it('POST /tickets/:id/agents/:agentId/toggle refuses B\'s ticket as 404', async () => {
     const res = await request(app).post(`/tickets/${B.ticketId}/agents/${A.agentId}/toggle`).set(asA());
     expect(res.status).toBe(404);
@@ -585,6 +666,51 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
       .from(schema.copilotMessages)
       .where(eq(schema.copilotMessages.conversationId, B.conversationId));
     expect(rows).toHaveLength(0);
+  });
+
+  // Second review round found this exact bypass: POST /agent-runs lets its
+  // own caller set copilotConversationId to any conversation id, with no
+  // ownership check of its own — so an attacker's own, self-owned run row
+  // could still name a victim's conversation. resolveNoteConversation's
+  // fix checks the resolved conversation's own memberId, independent of
+  // what the run row claims or who owns it — this seeds exactly that
+  // attack shape (A's own run row pointing at B's conversation) directly
+  // via the database, the same way createRun's own lack of validation
+  // would let a real caller do it, and proves the note still never
+  // reaches B's conversation.
+  it('POST /copilot/notes via a runId whose own copilotConversationId points at B\'s conversation still writes nothing to B', async () => {
+    const runId = `run-at11-hijack-${stamp}`;
+    await db.insert(schema.agentRuns).values({
+      id: runId,
+      ownerMemberId: A.memberId,
+      entry: 'independent',
+      providerId: 'claude',
+      copilotConversationId: B.conversationId,
+    });
+    try {
+      const before = await db
+        .select()
+        .from(schema.copilotMessages)
+        .where(eq(schema.copilotMessages.conversationId, B.conversationId));
+
+      const res = await request(app).post('/copilot/notes').set(asA()).send({ runId, content: 'pwned via runId' });
+
+      // A has their own seeded conversation, so the fallback lands there —
+      // 201, but into A.conversationId, never B's.
+      expect(res.status).toBe(201);
+      expect(res.body.conversationId).toBe(A.conversationId);
+      expect(res.body.conversationId).not.toBe(B.conversationId);
+      const after = await db
+        .select()
+        .from(schema.copilotMessages)
+        .where(eq(schema.copilotMessages.conversationId, B.conversationId));
+      expect(after).toHaveLength(before.length);
+    } finally {
+      // agent_runs.owner_member_id -> members is ON DELETE RESTRICT — a
+      // row left behind here blocks afterAll's member cleanup, so this
+      // runs even when an assertion above throws.
+      await db.delete(schema.agentRuns).where(eq(schema.agentRuns.id, runId));
+    }
   });
 
   it('a scratch note authored while signed in as A is invisible to B, with an explicit workspace column (not just authorId)', async () => {

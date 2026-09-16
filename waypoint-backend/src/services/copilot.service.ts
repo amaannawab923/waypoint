@@ -186,10 +186,21 @@ export async function resolveNoteConversation(
   runId: string | null,
 ): Promise<string | null> {
   if (runId) {
+    // Second review round: this used to trust agent_runs.copilot_conversation_id
+    // outright — but POST /agent-runs lets its own caller set that field to
+    // any conversation id, with no check it's theirs (createRun writes it
+    // straight through). Scoping this lookup by the *run's* ownerMemberId
+    // alone doesn't close that: an attacker's own run, self-owned, can still
+    // carry someone else's conversationId. Joining to copilotConversations
+    // and checking memberId there verifies the conversation itself belongs
+    // to the caller, independent of what the run row claims — the same
+    // ownership check postSystemNote itself deliberately doesn't do (see
+    // its own comment), moved to where it's actually decidable.
     const [run] = await db
       .select({ conversationId: agentRuns.copilotConversationId })
       .from(agentRuns)
-      .where(eq(agentRuns.id, runId))
+      .innerJoin(copilotConversations, eq(copilotConversations.id, agentRuns.copilotConversationId))
+      .where(and(eq(agentRuns.id, runId), eq(copilotConversations.memberId, memberId)))
       .limit(1);
     if (run?.conversationId) return run.conversationId;
   }
@@ -209,10 +220,14 @@ export async function resolveNoteConversation(
 // request/caller identity at all (not just a different member's). Both
 // of postSystemNote's callers already resolve conversationId through a
 // path that's ownership-safe by construction: proposals.service.ts via
-// resolveNoteConversation(run.ownerMemberId, ...), which only ever
-// returns a conversation matching that memberId; and the
-// POST /copilot/notes route below, which verifies a caller-supplied
-// conversationId against currentMemberId() itself before calling this.
+// resolveNoteConversation(run.ownerMemberId, ...) — which verifies the
+// resolved conversation's own memberId, not merely which member owns
+// the run (a second review round caught that the run's own
+// copilotConversationId is client-set on creation with no ownership
+// check of its own, so checking only the run's owner wasn't enough) —
+// and the POST /copilot/notes route below, which verifies a
+// caller-supplied conversationId against currentMemberId() itself
+// before calling this.
 /**
  * For the one caller that takes a conversationId straight from a request
  * body rather than deriving it itself (POST /copilot/notes below): throws

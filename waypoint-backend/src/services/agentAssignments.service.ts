@@ -2,7 +2,8 @@ import { eq, and, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { agentAssignments, agents, members, tickets } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
-import { currentMemberId } from '../lib/requestContext.js';
+import { NotFoundError } from '../middleware/errors.js';
+import { currentMemberId, currentWorkspaceId } from '../lib/requestContext.js';
 import { assertTicketInWorkspace, workspaceProjectIdsSubquery } from '../lib/workspaceGuard.js';
 import { toggleTicketAssignee } from './tickets.service.js';
 import { addComment } from './comments.service.js';
@@ -40,6 +41,18 @@ async function ensureAgentAssignment(ticketId: string, agentId: string) {
 
 export async function ensureAgentAssignments(ticketId: string, agentIds: string[]) {
   await assertTicketInWorkspace(ticketId);
+  if (agentIds.length === 0) return;
+  // Second review round: the ticket guard above says nothing about the
+  // agent ids themselves — without this, another workspace's real agent
+  // id could be attached to your ticket (and a fake id would 500 on the
+  // FK instead of failing cleanly, a second, separate existence oracle).
+  const owned = await db
+    .select({ id: agents.id })
+    .from(agents)
+    .where(and(inArray(agents.id, agentIds), eq(agents.workspaceId, currentWorkspaceId())));
+  const ownedIds = new Set(owned.map((a) => a.id));
+  const unknown = agentIds.filter((id) => !ownedIds.has(id));
+  if (unknown.length) throw new NotFoundError('agent');
   for (const agentId of agentIds) await ensureAgentAssignment(ticketId, agentId);
 }
 
@@ -56,10 +69,17 @@ export async function toggleTicketAgent(ticketId: string, agentId: string) {
 // Toggle off, close out the run record, and post a hand-off comment from the
 // current user — reuses addComment's own activity-logging rather than
 // duplicating it, same as the mock's call into addComment.
+//
+// Second review round: the two reads below used to run BEFORE
+// toggleTicketAssignee's guard, contradicting this file's own header
+// comment about ordering. Not itself exploitable — a throw from the
+// guard aborts the function before either read result is ever used —
+// but reordered to actually match the stated invariant, and so a
+// doomed cross-tenant call doesn't run two queries it'll never use.
 export async function takeBackOverFromAgent(ticketId: string, agentId: string) {
+  const item = await toggleTicketAssignee(ticketId, agentId);
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId));
   const [me] = await db.select().from(members).where(eq(members.id, currentMemberId()));
-  const item = await toggleTicketAssignee(ticketId, agentId);
   await db
     .update(agentAssignments)
     .set({ status: 'done', updatedAt: new Date() })

@@ -13,8 +13,8 @@ import {
 } from '../db/schema/index.js';
 import { NotFoundError, ConflictError } from '../middleware/errors.js';
 import { newId } from '../lib/ids.js';
-import { currentMemberId } from '../lib/requestContext.js';
-import { assertProjectInWorkspace, workspaceProjectIdsSubquery } from '../lib/workspaceGuard.js';
+import { currentMemberId, currentWorkspaceId } from '../lib/requestContext.js';
+import { assertProjectInWorkspace, assertTicketInWorkspace, workspaceProjectIdsSubquery } from '../lib/workspaceGuard.js';
 import { logActivity } from './activity.service.js';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -22,11 +22,16 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 // assigneeId is polymorphic (member OR agent, see tickets.ts schema
 // comment) — no DB-level FK is possible, so existence is checked here
 // instead. Without this, toggling a garbage id silently persists it.
+// Second review round: this existence check had no workspace filter —
+// any other workspace's real member or agent id passed the check and
+// got assigned onto your own ticket, and the accept/reject split was
+// itself an id-existence oracle across tenants. Scoped to the caller's
+// current workspace, same as everywhere else in this audit.
 async function validateAssigneeIds(tx: Tx, ids: string[]): Promise<void> {
   if (ids.length === 0) return;
   const [memberRows, agentRows] = await Promise.all([
-    tx.select({ id: members.id }).from(members).where(inArray(members.id, ids)),
-    tx.select({ id: agents.id }).from(agents).where(inArray(agents.id, ids)),
+    tx.select({ id: members.id }).from(members).where(and(inArray(members.id, ids), eq(members.workspaceId, currentWorkspaceId()))),
+    tx.select({ id: agents.id }).from(agents).where(and(inArray(agents.id, ids), eq(agents.workspaceId, currentWorkspaceId()))),
   ]);
   const known = new Set([...memberRows.map((m) => m.id), ...agentRows.map((a) => a.id)]);
   const unknown = ids.filter((id) => !known.has(id));
@@ -482,6 +487,10 @@ export async function createTicket(input: CreateTicketInput) {
   // workspace's real project's sequence counter and insert a ticket
   // into it.
   await assertProjectInWorkspace(input.projectId);
+  // Second review round: parentId is a bare, unvalidated ticket id —
+  // without this, a ticket could be created pointing its parentId at
+  // any other workspace's real ticket.
+  if (input.parentId) await assertTicketInWorkspace(input.parentId);
   return db.transaction(async (tx) => {
     // sequenceId comes from a persistent per-project counter (ROAD-38), not
     // from scanning existing tickets — the old MAX(sequenceId) approach
@@ -645,6 +654,12 @@ export async function updateTicket(
       .from(tickets)
       .where(and(eq(tickets.id, id), inArray(tickets.projectId, workspaceProjectIdsSubquery())));
     if (!current) throw new NotFoundError('ticket');
+    // Second review round: patch.parentId is a bare, unvalidated ticket
+    // id — without this, it could both re-parent this ticket under
+    // another workspace's real ticket AND (via the activity log below)
+    // write this ticket's own identifier into that foreign ticket's
+    // activity feed, a cross-tenant write with attacker-chosen content.
+    if (patch.parentId) await assertTicketInWorkspace(patch.parentId);
     const [currentEnriched] = await attachRelations([current], tx);
 
     const stateChanged = Boolean(patch.stateId && patch.stateId !== current.stateId);
@@ -872,8 +887,18 @@ export async function removeTicketLink(ticketId: string, linkId: string) {
       .from(tickets)
       .where(and(eq(tickets.id, ticketId), inArray(tickets.projectId, workspaceProjectIdsSubquery())));
     if (!ticket) throw new NotFoundError('ticket');
-    const [link] = await tx.select().from(ticketLinks).where(eq(ticketLinks.id, linkId));
-    await tx.delete(ticketLinks).where(eq(ticketLinks.id, linkId));
+    // Second review round: the ticket guard above only proves `ticketId`
+    // is ours — it says nothing about `linkId`, and this was still
+    // keyed on linkId alone. A cross-tenant ticketId/linkId pair (your
+    // own ticket, someone else's link id) deleted their real row, and
+    // logActivity below wrote their link's own label/url into YOUR
+    // ticket's activity feed — a read primitive, not just a write one.
+    // Correlate the link to the ticket it's claimed to belong to.
+    const [link] = await tx
+      .select()
+      .from(ticketLinks)
+      .where(and(eq(ticketLinks.id, linkId), eq(ticketLinks.ticketId, ticketId)));
+    await tx.delete(ticketLinks).where(and(eq(ticketLinks.id, linkId), eq(ticketLinks.ticketId, ticketId)));
     const [{ n }] = await tx.select({ n: sql<number>`count(*)::int` }).from(ticketLinks).where(eq(ticketLinks.ticketId, ticketId));
     const [row] = await tx
       .update(tickets)
