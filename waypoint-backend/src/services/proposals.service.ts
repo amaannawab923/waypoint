@@ -1,6 +1,7 @@
-import { eq, and, or, lt, gte, desc, count, countDistinct, inArray, asc, isNull, sql } from 'drizzle-orm';
+import { eq, and, or, lt, gte, desc, count, countDistinct, inArray, asc, isNull, sql, getTableColumns } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { db } from '../db/client.js';
-import { proposals, copilotConversations, copilotMessages, tickets } from '../db/schema/index.js';
+import { proposals, copilotConversations, copilotMessages, tickets, members } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
 import { ConflictError, NotFoundError, ValidationError } from '../middleware/errors.js';
 import { buildCopilotCommentHtml, disclosureFor } from '../lib/commentHtml.js';
@@ -8,6 +9,7 @@ import { buildCopilotJiraCommentAdf } from '../lib/jira/adf.js';
 import type { JiraCredential } from '../lib/jira/client.js';
 import { baseSnapshot, externalSnapshot, jiraTransitionSnapshot } from '../lib/proposalSnapshot.js';
 import { getJiraProvider, isExternalRef, type JiraProvider } from '../providers/jira.js';
+import { currentWorkspaceId } from '../lib/requestContext.js';
 import * as ticketsService from './tickets.service.js';
 import * as commentsService from './comments.service.js';
 import * as statesService from './states.service.js';
@@ -16,6 +18,52 @@ import * as projectsService from './projects.service.js';
 import * as agentRunsService from './agentRuns.service.js';
 import * as copilotService from './copilot.service.js';
 import { agentRuns } from '../db/schema/index.js';
+
+// AT11 (ROAD-146) second review round: proposals have no workspaceId
+// column of their own, and split into two disjoint origins that each
+// carry a different reference — conversationId (non-null only for
+// origin='copilot') or agentRunId (non-null only for origin='agent_run').
+// Both ultimately trace to exactly one member, and every member belongs
+// to exactly one workspace — so "does this proposal belong to my
+// workspace" is really "was it raised by a conversation or run that
+// belongs to a member of my workspace," true regardless of whether the
+// proposal also targets a native ticket (has a real projectId) or an
+// external Jira issue (projectId null — ticket_refs itself has no
+// workspace concept yet, so this is the one basis available for those
+// too). Two aliases of `members`, not a subquery per origin: a proposal
+// row is LEFT JOINed to both paths at once (only one is ever non-null
+// per row) and the WHERE checks whichever one matched — one query, not
+// three, which keeps every caller below to exactly one extra db call.
+const proposalConversationMember = alias(members, 'proposal_conversation_member');
+const proposalRunMember = alias(members, 'proposal_run_member');
+
+// Exported so tests can reconstruct the exact expected condition (same
+// alias objects, so a deep-equal against a captured where() call args
+// actually matches) — same reasoning as workspaceGuard.ts's own exported
+// workspaceProjectIdsSubquery.
+export function proposalWorkspaceCondition() {
+  const workspaceId = currentWorkspaceId();
+  return or(
+    eq(proposalConversationMember.workspaceId, workspaceId),
+    eq(proposalRunMember.workspaceId, workspaceId),
+  )!;
+}
+
+/** Throws NotFoundError('proposal') unless `id` belongs to the current
+ * request's workspace, via proposalWorkspaceCondition above. Call this
+ * first, before any claim/status-changing write, in every function that
+ * takes a bare proposal id. */
+async function assertProposalInWorkspace(id: string): Promise<void> {
+  const [row] = await db
+    .select({ id: proposals.id })
+    .from(proposals)
+    .leftJoin(copilotConversations, eq(copilotConversations.id, proposals.conversationId))
+    .leftJoin(proposalConversationMember, eq(proposalConversationMember.id, copilotConversations.memberId))
+    .leftJoin(agentRuns, eq(agentRuns.id, proposals.agentRunId))
+    .leftJoin(proposalRunMember, eq(proposalRunMember.id, agentRuns.ownerMemberId))
+    .where(and(eq(proposals.id, id), proposalWorkspaceCondition()));
+  if (!row) throw new NotFoundError('proposal');
+}
 
 // A proposal the user hasn't acted on within a day is more likely to be
 // forgotten context than a still-wanted change — approve refuses it (and
@@ -1106,6 +1154,14 @@ export async function approveProposal(
   id: string,
   jiraCredential: JiraCredential | null = null,
 ): Promise<ProposalView> {
+  // Second review round: this whole function, and reject/edit below it,
+  // previously ran against a bare id with no workspace check at all —
+  // any signed-in member could approve or reject another tenant's
+  // pending proposal, which EXECUTES a real write (a ticket state
+  // change, a comment, or a live Jira write for an external one).
+  // Checked before the claim UPDATE below, not after, so a cross-tenant
+  // id never even gets claimed.
+  await assertProposalInWorkspace(id);
   const jira = getJiraProvider(jiraCredential);
   const { displayName } = await membersService.getCurrentUser();
 
@@ -1221,6 +1277,8 @@ export async function approveProposal(
 }
 
 export async function rejectProposal(id: string): Promise<ProposalView> {
+  // Second review round — same gap as approveProposal above.
+  await assertProposalInWorkspace(id);
   const { displayName } = await membersService.getCurrentUser();
   // 'stale' is rejectable too — dismissing a stale card finalizes it as
   // rejected. statusReason is deliberately not touched, so a stale card's
@@ -1271,6 +1329,8 @@ export async function rejectProposal(id: string): Promise<ProposalView> {
  * person who edited and approved it.
  */
 export async function editProposalBody(id: string, body: string): Promise<ProposalView> {
+  // Second review round — same gap as approveProposal above.
+  await assertProposalInWorkspace(id);
   const { displayName } = await membersService.getCurrentUser();
   const updated = await db.transaction(async (tx) => {
     const [row] = await tx.select().from(proposals).where(eq(proposals.id, id)).for('update').limit(1);
@@ -1423,8 +1483,19 @@ async function computeReviewQueueCounts(): Promise<ReviewQueueCounts> {
   // "Load more" page) and every refreshCounts poll after an approve/reject,
   // so it's one of this app's hottest reads, and none of the three queries
   // depends on another's result.
+  // Second review round: this whole function ran with no workspace
+  // filter — the sidebar's Review badge counted every tenant's pending
+  // proposals, not just the caller's own.
+  const workspaceScope = proposalWorkspaceCondition();
   const [proposedRow, blockedRow, recentRow] = await Promise.all([
-    db.select({ n: count() }).from(proposals).where(eq(proposals.status, 'proposed')),
+    db
+      .select({ n: count() })
+      .from(proposals)
+      .leftJoin(copilotConversations, eq(copilotConversations.id, proposals.conversationId))
+      .leftJoin(proposalConversationMember, eq(proposalConversationMember.id, copilotConversations.memberId))
+      .leftJoin(agentRuns, eq(agentRuns.id, proposals.agentRunId))
+      .leftJoin(proposalRunMember, eq(proposalRunMember.id, agentRuns.ownerMemberId))
+      .where(and(eq(proposals.status, 'proposed'), workspaceScope)),
     // ROAD-14: "Blocked" was designed to project a future agent_runs.status
     // ='blocked' into this same card shape (architecture §4.4) — that table
     // doesn't exist yet (agent-run infrastructure is deferred per the
@@ -1435,11 +1506,22 @@ async function computeReviewQueueCounts(): Promise<ReviewQueueCounts> {
     // blocked item: something that needs a human's attention and has no
     // other aggregate home. Not time-windowed like 'recent' — a stale row
     // stays "blocked" until someone dismisses it, however long that takes.
-    db.select({ n: count() }).from(proposals).where(eq(proposals.status, 'stale')),
     db
       .select({ n: count() })
       .from(proposals)
-      .where(and(inArray(proposals.status, RECENT_SEGMENT_STATUSES), gte(proposals.resolvedAt, cutoff))),
+      .leftJoin(copilotConversations, eq(copilotConversations.id, proposals.conversationId))
+      .leftJoin(proposalConversationMember, eq(proposalConversationMember.id, copilotConversations.memberId))
+      .leftJoin(agentRuns, eq(agentRuns.id, proposals.agentRunId))
+      .leftJoin(proposalRunMember, eq(proposalRunMember.id, agentRuns.ownerMemberId))
+      .where(and(eq(proposals.status, 'stale'), workspaceScope)),
+    db
+      .select({ n: count() })
+      .from(proposals)
+      .leftJoin(copilotConversations, eq(copilotConversations.id, proposals.conversationId))
+      .leftJoin(proposalConversationMember, eq(proposalConversationMember.id, copilotConversations.memberId))
+      .leftJoin(agentRuns, eq(agentRuns.id, proposals.agentRunId))
+      .leftJoin(proposalRunMember, eq(proposalRunMember.id, agentRuns.ownerMemberId))
+      .where(and(inArray(proposals.status, RECENT_SEGMENT_STATUSES), gte(proposals.resolvedAt, cutoff), workspaceScope)),
   ]);
   return {
     proposed: proposedRow[0].n,
@@ -1582,6 +1664,12 @@ export async function listReviewQueue(params: ReviewQueueParams): Promise<Review
             gte(proposals.resolvedAt, new Date(Date.now() - RECENT_WINDOW_MS)),
           ];
 
+  // Second review round: despite this router's own header comment calling
+  // it "the workspace-scoped aggregate surface," nothing here actually
+  // filtered by workspace — every tenant's whole review queue was visible
+  // to every other tenant.
+  conditions.push(proposalWorkspaceCondition());
+
   if (params.agentId) conditions.push(eq(proposals.agentId, params.agentId));
   if (params.projectId) conditions.push(eq(proposals.projectId, params.projectId));
   if (params.kind) conditions.push(eq(proposals.kind, params.kind));
@@ -1598,9 +1686,17 @@ export async function listReviewQueue(params: ReviewQueueParams): Promise<Review
     );
   }
 
+  // Explicit column selection, not bare .select(): with the joins below
+  // in play, an unqualified select() would nest every joined table's
+  // columns under its own key instead of returning the flat proposals
+  // row toView() below expects.
   const rows = await db
-    .select()
+    .select(getTableColumns(proposals))
     .from(proposals)
+    .leftJoin(copilotConversations, eq(copilotConversations.id, proposals.conversationId))
+    .leftJoin(proposalConversationMember, eq(proposalConversationMember.id, copilotConversations.memberId))
+    .leftJoin(agentRuns, eq(agentRuns.id, proposals.agentRunId))
+    .leftJoin(proposalRunMember, eq(proposalRunMember.id, agentRuns.ownerMemberId))
     .where(and(...conditions))
     .orderBy(desc(proposals.createdAt), desc(proposals.id))
     .limit(limit + 1);
@@ -1694,11 +1790,19 @@ export async function bulkRejectProposals(ids: string[]): Promise<BulkProposalRe
 
 // Ticket-detail's inline section (architecture §4.4).
 export async function listProposalsForTicket(ticketId: string, status?: ProposalStatus): Promise<ProposalView[]> {
-  const conditions = [eq(proposals.ticketId, ticketId)];
+  // Second review round: ticketId is polymorphic (a native "wi-…" id or a
+  // Jira ledger handle, per proposals.ticketId's own schema comment) with
+  // no FK to scope through directly — the same workspace-membership check
+  // used everywhere else in this file covers both shapes uniformly.
+  const conditions = [eq(proposals.ticketId, ticketId), proposalWorkspaceCondition()];
   if (status) conditions.push(eq(proposals.status, status));
   const rows = await db
-    .select()
+    .select(getTableColumns(proposals))
     .from(proposals)
+    .leftJoin(copilotConversations, eq(copilotConversations.id, proposals.conversationId))
+    .leftJoin(proposalConversationMember, eq(proposalConversationMember.id, copilotConversations.memberId))
+    .leftJoin(agentRuns, eq(agentRuns.id, proposals.agentRunId))
+    .leftJoin(proposalRunMember, eq(proposalRunMember.id, agentRuns.ownerMemberId))
     .where(and(...conditions))
     .orderBy(desc(proposals.createdAt));
   const { displayName } = await membersService.getCurrentUser();
@@ -1712,11 +1816,15 @@ export async function listProposalsForTicket(ticketId: string, status?: Proposal
 // yet, so this returns [] until a later unit (a triage agent, or Copilot
 // proposing against a request) sets it.
 export async function listProposalsForRequest(requestId: string, status?: ProposalStatus): Promise<ProposalView[]> {
-  const conditions = [eq(proposals.sourceRequestId, requestId)];
+  const conditions = [eq(proposals.sourceRequestId, requestId), proposalWorkspaceCondition()];
   if (status) conditions.push(eq(proposals.status, status));
   const rows = await db
-    .select()
+    .select(getTableColumns(proposals))
     .from(proposals)
+    .leftJoin(copilotConversations, eq(copilotConversations.id, proposals.conversationId))
+    .leftJoin(proposalConversationMember, eq(proposalConversationMember.id, copilotConversations.memberId))
+    .leftJoin(agentRuns, eq(agentRuns.id, proposals.agentRunId))
+    .leftJoin(proposalRunMember, eq(proposalRunMember.id, agentRuns.ownerMemberId))
     .where(and(...conditions))
     .orderBy(desc(proposals.createdAt));
   const { displayName } = await membersService.getCurrentUser();

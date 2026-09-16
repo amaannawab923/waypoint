@@ -61,6 +61,7 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
     agentAssignmentId: `aa-at11-a-${stamp}`,
     linkId: `link-at11-a-${stamp}`,
     conversationId: `conv-at11-a-${stamp}`,
+    proposalId: `prop-at11-a-${stamp}`,
     token: '',
   };
   const B = {
@@ -78,6 +79,7 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
     agentAssignmentId: `aa-at11-b-${stamp}`,
     linkId: `link-at11-b-${stamp}`,
     conversationId: `conv-at11-b-${stamp}`,
+    proposalId: `prop-at11-b-${stamp}`,
   };
 
   function asA() {
@@ -193,6 +195,19 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
       id: t.conversationId,
       memberId: t.memberId,
       title: `AT11 conversation ${t.workspaceId}`,
+    });
+    await db.insert(schema.proposals).values({
+      id: t.proposalId,
+      origin: 'copilot',
+      conversationId: t.conversationId,
+      anchorSeq: 1,
+      projectId: t.projectId,
+      kind: 'comment',
+      ticketId: t.ticketId,
+      payload: { body: `AT11 proposal ${t.workspaceId}` },
+      snapshot: { identifier: `AT11 ${t.workspaceId}`, title: 'AT11 proposal snapshot' },
+      status: 'proposed',
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
     });
   }
 
@@ -711,6 +726,45 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
       // runs even when an assertion above throws.
       await db.delete(schema.agentRuns).where(eq(schema.agentRuns.id, runId));
     }
+  });
+
+  // Second review round: approveProposal/rejectProposal/editProposalBody
+  // had NO workspace check at all — any signed-in member could approve
+  // (executing a real write) or reject or edit another tenant's proposal
+  // by id.
+  it('POST /copilot/proposals/:id/approve refuses B\'s proposal as 404, and never claims or executes it', async () => {
+    const res = await request(app).post(`/copilot/proposals/${B.proposalId}/approve`).set(asA()).send({});
+    expect(res.status).toBe(404);
+    const [row] = await db.select().from(schema.proposals).where(eq(schema.proposals.id, B.proposalId));
+    expect(row?.status).toBe('proposed');
+  });
+
+  it('POST /copilot/proposals/:id/reject refuses B\'s proposal as 404, and leaves it proposed', async () => {
+    const res = await request(app).post(`/copilot/proposals/${B.proposalId}/reject`).set(asA()).send({});
+    expect(res.status).toBe(404);
+    const [row] = await db.select().from(schema.proposals).where(eq(schema.proposals.id, B.proposalId));
+    expect(row?.status).toBe('proposed');
+  });
+
+  it('PATCH /copilot/proposals/:id refuses to edit B\'s proposal as 404, and does not touch its payload', async () => {
+    const res = await request(app)
+      .patch(`/copilot/proposals/${B.proposalId}`)
+      .set(asA())
+      .send({ body: 'pwned' });
+    expect(res.status).toBe(404);
+    const [row] = await db.select().from(schema.proposals).where(eq(schema.proposals.id, B.proposalId));
+    expect((row?.payload as { body?: string } | null)?.body).not.toBe('pwned');
+  });
+
+  // The review's own headline finding for this file: despite this route's
+  // header comment calling it "the workspace-scoped aggregate surface,"
+  // the review queue had no workspace filter at all.
+  it('GET /proposals (review queue) never includes B\'s proposal', async () => {
+    const res = await request(app).get('/proposals').set(asA()).query({ status: 'proposed' });
+    expect(res.status).toBe(200);
+    const ids = (res.body.proposals as Array<{ id: string }>).map((p) => p.id);
+    expect(ids).toContain(A.proposalId);
+    expect(ids).not.toContain(B.proposalId);
   });
 
   it('a scratch note authored while signed in as A is invisible to B, with an explicit workspace column (not just authorId)', async () => {
