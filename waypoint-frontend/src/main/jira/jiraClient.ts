@@ -143,6 +143,24 @@ function messageFromErrorBody(body: unknown, fallback: string): string {
   return fallback;
 }
 
+// Chain-of-trust verification failures specifically — not expiry
+// (CERT_HAS_EXPIRED) or hostname mismatch (ERR_TLS_CERT_ALTNAME_INVALID),
+// which point at a real problem with Jira's own certificate rather than
+// this computer's trust store, and would make the message below wrong.
+// installSystemCaTrust() (main/net/systemCaTrust.ts) already resolves the
+// common case of this — a corporate TLS-inspecting proxy whose root is in
+// the OS trust store — before a request ever gets here; this branch is the
+// actionable message for whatever's left (a store that read failed, an
+// older Electron/Node build, a root that isn't in the OS store at all).
+const CERT_TRUST_ERROR_CODES = new Set([
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'UNABLE_TO_GET_ISSUER_CERT',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'CERT_UNTRUSTED',
+]);
+
 function classifyNetworkError(err: unknown): JiraFailure {
   if (err instanceof Error && err.name === 'AbortError') {
     return failure('network', 'Jira took too long to respond — try again.');
@@ -153,6 +171,18 @@ function classifyNetworkError(err: unknown): JiraFailure {
     return failure(
       'site_not_found',
       "That site doesn't exist — check the address (e.g. yourteam.atlassian.net).",
+    );
+  }
+  if (CERT_TRUST_ERROR_CODES.has(code)) {
+    // Not "set NODE_EXTRA_CA_CERTS": that's a real fallback (see this
+    // repo's README), but it's an env var a packaged app launched from
+    // Finder/the Dock has no supported way to set — telling someone who
+    // will only ever see this dialog to do that would just send them to a
+    // second, unresolved ticket. Point them at the one thing that is
+    // actionable for them.
+    return failure(
+      'network',
+      "Couldn't verify Jira's certificate. If you're on a corporate network that inspects HTTPS traffic, check with IT — this computer's trust settings may need updating.",
     );
   }
   return failure(
