@@ -729,7 +729,7 @@ describe('jiraProvider.getFilter / searchFilters (ROAD-157)', () => {
     expect(await provider().getFilter('10123')).toBeNull();
   });
 
-  it('searchFilters sends filterName only when a name filter is given', async () => {
+  it('searchFilters sends filterName when a real name filter is given', async () => {
     vi.mocked(jiraGet).mockResolvedValue(ok({ values: [{ id: '10123', name: 'My Team Board' }] }));
 
     await provider().searchFilters('team', 20);
@@ -737,10 +737,21 @@ describe('jiraProvider.getFilter / searchFilters (ROAD-157)', () => {
       maxResults: '20',
       filterName: 'team',
     });
-
-    await provider().searchFilters(undefined, 20);
-    expect(jiraGet).toHaveBeenCalledWith(CREDENTIAL, '/rest/api/3/filter/search', { maxResults: '20' });
   });
+
+  // Round-3 review (ROAD-157): this used to fall back to an unfiltered page
+  // of every saved filter the account can see — the exact disclosure
+  // aperture rounds 1/2 were trying to close, previously guarded only at
+  // dashboardTools.ts's one call site. The refusal now lives here, in the
+  // producer, so every caller (present and future) inherits it rather than
+  // having to remember to re-derive the same guard.
+  it.each([undefined, '', '   '])(
+    'refuses without ever calling Jira when nameContains is %j — no unfiltered page, ever',
+    async (nameContains) => {
+      expect(await provider().searchFilters(nameContains, 20)).toEqual([]);
+      expect(jiraGet).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe('jiraProvider.searchIssuesByFilter (ROAD-157)', () => {

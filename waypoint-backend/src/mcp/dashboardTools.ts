@@ -168,17 +168,15 @@ export async function searchDashboardGadgetIssuesHandler(
       // filter this account can see (round-1 review, ROAD-157) — an
       // unnarrowed search returns whatever 20 filters Jira lists first,
       // which can include filters shared by other users and unrelated to
-      // anything this request named. Round-2 review: the narrowing term
-      // must never silently fall back to "no filter" (which searchFilters
-      // treats as "return everything") — that regresses to the exact
-      // unfiltered page this fix exists to avoid, and is reachable whenever
-      // gadgetId doesn't match anything in `gadgets` (a stale or
-      // wrong-dashboard id) or the matched gadget has no title. In either
-      // case, returning no filters is the honest answer — there is nothing
-      // real to narrow by — not a wider, unrequested page.
+      // anything this request named. jira.searchFilters itself now refuses
+      // (returns []) on an empty/missing name (round-3 review: that guard
+      // moved into the provider so every caller inherits it, not just this
+      // one) — the ternary here is only a cheap short-circuit to skip the
+      // round trip entirely when there's plainly nothing to narrow by
+      // (gadgetId not found in `gadgets`, or the matched gadget has no
+      // title), not the thing making this safe.
       const thisGadget = gadgets.find((g) => g.id === gadgetId);
-      const nameContains = thisGadget?.title.trim();
-      const filters = nameContains ? await jira.searchFilters(nameContains, 20) : [];
+      const filters = await jira.searchFilters(thisGadget?.title, 20);
       return jsonResult({
         needsBinding: true,
         reason: binding.reason,

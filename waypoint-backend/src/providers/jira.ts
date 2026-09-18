@@ -577,6 +577,20 @@ export class JiraProvider implements TicketProvider {
       gadgets?: { id?: unknown; title?: unknown; moduleKey?: unknown }[];
     }>(this.credential, `/rest/api/3/dashboard/${encodeURIComponent(dashboardId)}/gadget`);
     if (!result.ok) {
+      // Deliberately narrower than getGadgetConfig/getFilter's own
+      // not_found-or-forbidden → null (round-3 review flagged the
+      // divergence; this is the considered answer, not an oversight).
+      // Here, unlike those two, null carries an overloaded meaning callers
+      // rely on: dashboardTools.ts treats a null return from THIS method as
+      // "the dashboard itself doesn't exist" (see describeJiraDashboardHandler
+      // and the needsBinding branch, both `if (!gadgets) return
+      // notFoundResult('dashboard')`). Folding 'forbidden' in here would
+      // make "I can see this dashboard but not its gadget list" report as
+      // "this dashboard doesn't exist" — a worse, actively misleading
+      // answer, not just a less helpful one. A forbidden gadget-list read
+      // surfacing as "Jira could not be reached" is the honest fallback
+      // until this method's return type can distinguish all three cases
+      // explicitly.
       if (result.reason === 'not_found') return null;
       unavailable(result);
     }
@@ -706,18 +720,33 @@ export class JiraProvider implements TicketProvider {
     return { id: idStr(result.value.id), name: str(result.value.name), jql: str(result.value.jql) };
   }
 
-  /** Saved filters visible to this account, optionally narrowed by name.
-   *  `filterName` IS a real query parameter on `/rest/api/3/filter/search`
-   *  (unlike dashboard listing above) — sent straight through rather than
-   *  filtered client-side. */
+  /**
+   * Saved filters visible to this account, narrowed by name. `filterName` IS
+   * a real query parameter on `/rest/api/3/filter/search` (unlike dashboard
+   * listing above) — sent straight through rather than filtered
+   * client-side.
+   *
+   * Requires a real, non-empty `nameContains` — this does NOT fall back to
+   * "return an unfiltered page" the way listDashboards' own name filter
+   * does. Round-3 review (ROAD-157): the guard against handing the model an
+   * arbitrary, unrequested page of every saved filter this account can see
+   * (round-1/round-2's finding) used to live only at dashboardTools.ts's one
+   * call site — a future second caller that forgot the same ternary would
+   * silently reopen it, and nothing here would stop it. Putting the refusal
+   * in the producer means every current and future caller inherits it,
+   * matching how resolveGadgetBinding's own projectKey fix was placed in the
+   * producer rather than trusted to each consumer.
+   */
   async searchFilters(
     nameContains: string | undefined,
     limit: number,
   ): Promise<{ id: string; name: string }[]> {
+    const needle = nameContains?.trim();
+    if (!needle) return [];
     const result = await jiraGet<{ values?: { id?: unknown; name?: unknown }[] }>(
       this.credential,
       '/rest/api/3/filter/search',
-      { maxResults: String(limit), ...(nameContains ? { filterName: nameContains } : {}) },
+      { maxResults: String(limit), filterName: needle },
     );
     if (!result.ok) unavailable(result);
     return (result.value?.values ?? [])

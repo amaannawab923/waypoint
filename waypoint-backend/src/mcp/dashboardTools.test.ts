@@ -283,6 +283,68 @@ describe('searchDashboardGadgetIssuesHandler — dashboard+gadget path', () => {
     });
   });
 
+  // Round-3 review (ROAD-157): round 2's needsBinding narrowing fix landed
+  // with only the happy-path case covered — the three fallback branches it
+  // actually exists for (a stale/wrong-dashboard gadgetId, the dashboard
+  // itself gone, an untitled gadget) had no regression test, which is
+  // exactly the shape of gap round 2 flagged in the first place. These pin
+  // each one directly against the handler's observable behavior, not just
+  // the provider guard underneath it.
+  it('reports the dashboard as not found (not an empty needsBinding) when it no longer exists', async () => {
+    const stub = connectJira();
+    stub.resolveGadgetBinding.mockResolvedValue({ kind: 'unresolved', reason: 'no config' });
+    stub.getDashboardGadgets.mockResolvedValue(null);
+
+    const result = await searchDashboardGadgetIssuesHandler(jira, {
+      assigneeScope: 'me',
+      dashboardId: '99999',
+      gadgetId: '161155',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe('dashboard not found');
+    expect(stub.searchFilters).not.toHaveBeenCalled();
+  });
+
+  it('passes no real narrowing term (and gets no candidate filters back) when gadgetId is not on the dashboard', async () => {
+    const stub = connectJira();
+    stub.resolveGadgetBinding.mockResolvedValue({ kind: 'unresolved', reason: 'no config' });
+    // A different gadget id than the one asked about — the stale/
+    // wrong-dashboard case.
+    stub.getDashboardGadgets.mockResolvedValue([{ id: '10001', title: 'Spaces', moduleKey: 'x' }]);
+
+    const result = await searchDashboardGadgetIssuesHandler(jira, {
+      assigneeScope: 'me',
+      dashboardId: '10810',
+      gadgetId: '161155',
+    });
+
+    // jira.searchFilters is still called (the real provider — not this
+    // stub — is what refuses an unfiltered search; see jira.test.ts's own
+    // coverage of that refusal), but with no real title to narrow by.
+    expect(stub.searchFilters).toHaveBeenCalledWith(undefined, 20);
+    const parsed = parse(result);
+    expect(parsed.needsBinding).toBe(true);
+    expect(parsed.visibleFilters).toEqual([]);
+  });
+
+  it('passes no real narrowing term (and gets no candidate filters back) when the matched gadget has no title', async () => {
+    const stub = connectJira();
+    stub.resolveGadgetBinding.mockResolvedValue({ kind: 'unresolved', reason: 'no config' });
+    stub.getDashboardGadgets.mockResolvedValue([{ id: '161155', title: '', moduleKey: 'x' }]);
+
+    const result = await searchDashboardGadgetIssuesHandler(jira, {
+      assigneeScope: 'me',
+      dashboardId: '10810',
+      gadgetId: '161155',
+    });
+
+    expect(stub.searchFilters).toHaveBeenCalledWith('', 20);
+    const parsed = parse(result);
+    expect(parsed.needsBinding).toBe(true);
+    expect(parsed.visibleFilters).toEqual([]);
+  });
+
   it('refuses a project-bound gadget with a message pointing at search_tickets instead of guessing', async () => {
     const stub = connectJira();
     stub.resolveGadgetBinding.mockResolvedValue({ kind: 'project', projectKey: 'ENG' });
