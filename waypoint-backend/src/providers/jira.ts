@@ -551,10 +551,23 @@ export class JiraProvider implements TicketProvider {
     // previously hardcoded '100', silently below that ceiling).
     const result = await jiraGet<{
       dashboards?: { id?: unknown; name?: unknown; isFavourite?: unknown }[];
+      total?: unknown;
     }>(this.credential, '/rest/api/3/dashboard', { maxResults: String(DASHBOARD_FETCH_SIZE) });
     if (!result.ok) unavailable(result);
 
     const rawDashboards = result.value?.dashboards ?? [];
+    // The endpoint's own authoritative count of dashboards on the site —
+    // confirmed live (round-6 review, ROAD-157) that `/rest/api/3/dashboard`
+    // really does return this, same as any standard Jira paginated bean.
+    // Preferred over the round-2 heuristic (rawDashboards.length >=
+    // DASHBOARD_FETCH_SIZE), which is only a correct "there may be more"
+    // signal if Jira happens to honor maxResults exactly — but kept as the
+    // fallback for the one case a real `total` can't cover: a response that
+    // omits it entirely (a future API version, a proxy that strips unknown
+    // fields), rather than trusting an absent field as "there is no more".
+    const rawTotal = result.value?.total;
+    const sitePoolTruncated =
+      typeof rawTotal === 'number' ? rawTotal > rawDashboards.length : rawDashboards.length >= DASHBOARD_FETCH_SIZE;
     const needle = nameContains?.trim().toLowerCase();
     const dashboards = rawDashboards
       .filter((d): d is Record<string, unknown> => !!d && typeof d === 'object')
@@ -573,14 +586,15 @@ export class JiraProvider implements TicketProvider {
       //  1. dashboards.length > limit — more NAME MATCHES existed than the
       //     requested page size returned (the ordinary meaning, matching
       //     ticketTools.ts's page() convention elsewhere in this codebase).
-      //  2. rawDashboards.length >= DASHBOARD_FETCH_SIZE — Jira's own
-      //     response was exactly the page size asked for, so there may be
-      //     MORE dashboards on the site than this account-wide,
-      //     unpaginated read saw AT ALL, before the name filter even runs
-      //     (round-2 review) — without this, a name search against a site
-      //     with 200+ dashboards can come back with a plain empty result
-      //     indistinguishable from "no such dashboard".
-      truncated: dashboards.length > limit || rawDashboards.length >= DASHBOARD_FETCH_SIZE,
+      //  2. sitePoolTruncated — the site's own reported dashboard count
+      //     exceeds what this account-wide, unpaginated read actually
+      //     fetched, so there may be MORE dashboards than this saw AT ALL,
+      //     before the name filter even runs (round-2 review, tightened in
+      //     round-6 to read the real total instead of only inferring it) —
+      //     without this, a name search against a site with more
+      //     dashboards than this read covers can come back with a plain
+      //     empty result indistinguishable from "no such dashboard".
+      truncated: dashboards.length > limit || sitePoolTruncated,
     };
   }
 
@@ -758,19 +772,25 @@ export class JiraProvider implements TicketProvider {
   async searchFilters(
     nameContains: string | undefined,
     limit: number,
-  ): Promise<{ id: string; name: string }[]> {
+  ): Promise<{ filters: { id: string; name: string }[]; truncated: boolean }> {
     const needle = nameContains?.trim();
-    if (!needle) return [];
-    const result = await jiraGet<{ values?: { id?: unknown; name?: unknown }[] }>(
-      this.credential,
-      '/rest/api/3/filter/search',
-      { maxResults: String(limit), filterName: needle },
-    );
+    if (!needle) return { filters: [], truncated: false };
+    const result = await jiraGet<{
+      values?: { id?: unknown; name?: unknown }[];
+      isLast?: unknown;
+    }>(this.credential, '/rest/api/3/filter/search', { maxResults: String(limit), filterName: needle });
     if (!result.ok) unavailable(result);
-    return (result.value?.values ?? [])
+    const filters = (result.value?.values ?? [])
       .filter((f): f is Record<string, unknown> => !!f && typeof f === 'object')
       .map((f) => ({ id: idStr(f.id), name: str(f.name) }))
       .filter((f) => f.id);
+    // `/rest/api/3/filter/search` is a real, standard paginated endpoint —
+    // confirmed live: its response carries its own `isLast` (round-6
+    // review, ROAD-157: every truncation signal in this feature used to be
+    // inferred from row counts against the requested page size, and this
+    // one had none at all). `isLast === false` is the authoritative "there
+    // is more" signal; a row-count comparison is not needed alongside it.
+    return { filters, truncated: result.value?.isLast === false };
   }
 
   /**
@@ -818,20 +838,31 @@ export class JiraProvider implements TicketProvider {
     }
     const jql = `${clauses.join(' AND ')} ORDER BY issuetype ASC, updated DESC`;
 
-    const result = await jiraGet<{ issues?: unknown[] }>(this.credential, '/rest/api/3/search/jql', {
-      jql,
-      fields: ISSUE_FIELDS,
-      maxResults: String(options.limit + 1),
-    });
+    // `/rest/api/3/search/jql` is Jira's cursor-paginated issue-search
+    // endpoint — confirmed live (round-6 review, ROAD-157) that it answers
+    // with `isLast`/`nextPageToken`, not a `total`, and that a page shorter
+    // than `maxResults` is fully within its contract even when more issues
+    // match. The previous approach (request limit+1, call it truncated if
+    // more than `limit` came back) assumed classic offset pagination this
+    // endpoint doesn't use — a response could legitimately return exactly
+    // `limit` rows with nothing left, or fewer than `limit` rows with more
+    // still to come, and the row-count comparison would get BOTH wrong.
+    // `isLast` is the endpoint's own authoritative answer, so this now
+    // requests exactly `limit` (no sentinel row) and trusts that field
+    // directly instead of inferring anything from how many rows came back.
+    const result = await jiraGet<{ issues?: unknown[]; isLast?: unknown }>(
+      this.credential,
+      '/rest/api/3/search/jql',
+      { jql, fields: ISSUE_FIELDS, maxResults: String(options.limit) },
+    );
     if (!result.ok) unavailable(result);
 
     const issues = (result.value?.issues ?? []).filter(
       (issue): issue is JiraIssue => !!issue && typeof issue === 'object' && !!str((issue as JiraIssue).key),
     );
-    const truncated = issues.length > options.limit;
-    const page = truncated ? issues.slice(0, options.limit) : issues;
+    const truncated = result.value?.isLast === false;
 
-    return { jql, issues: page.map((issue) => toSummaryForGadget(issue)), truncated };
+    return { jql, issues: issues.map((issue) => toSummaryForGadget(issue)), truncated };
   }
 
   // ---------------------------------------------------------------------

@@ -31,7 +31,10 @@ function jiraStub() {
           | { kind: 'unresolved'; reason: string },
     ),
     getFilter: vi.fn(async () => null as { id: string; name: string; jql: string } | null),
-    searchFilters: vi.fn(async () => [] as { id: string; name: string }[]),
+    searchFilters: vi.fn(async () => ({
+      filters: [] as { id: string; name: string }[],
+      truncated: false,
+    })),
     searchIssuesByFilter: vi.fn(async () => ({
       jql: 'filter = 10123 AND assignee = currentUser()',
       issues: [] as { key: string; summary: string; status: string; issueType: string; updated: string }[],
@@ -266,7 +269,7 @@ describe('searchDashboardGadgetIssuesHandler — dashboard+gadget path', () => {
     const stub = connectJira();
     stub.resolveGadgetBinding.mockResolvedValue({ kind: 'unresolved', reason: "doesn't match a recognized binding" });
     stub.getDashboardGadgets.mockResolvedValue([{ id: '161155', title: 'Two-dimensional filter', moduleKey: 'x' }]);
-    stub.searchFilters.mockResolvedValue([{ id: '10123', name: 'My Team Board' }]);
+    stub.searchFilters.mockResolvedValue({ filters: [{ id: '10123', name: 'My Team Board' }], truncated: false });
 
     const result = await searchDashboardGadgetIssuesHandler(jira, {
       assigneeScope: 'me',
@@ -285,7 +288,26 @@ describe('searchDashboardGadgetIssuesHandler — dashboard+gadget path', () => {
       dashboardGadgets: [{ id: '161155', title: 'Two-dimensional filter', moduleKey: 'x' }],
       dashboardGadgetsTruncated: false,
       visibleFilters: [{ id: '10123', name: 'My Team Board' }],
+      visibleFiltersTruncated: false,
     });
+  });
+
+  // Round-6 review (ROAD-157): searchFilters' own isLast now says whether
+  // more real name matches exist beyond the 20 shown — confirmed threaded
+  // through to this payload, not just computed and dropped.
+  it('reports visibleFiltersTruncated from searchFilters\' own isLast signal', async () => {
+    const stub = connectJira();
+    stub.resolveGadgetBinding.mockResolvedValue({ kind: 'unresolved', reason: 'no config' });
+    stub.getDashboardGadgets.mockResolvedValue([{ id: '161155', title: 'Bugs', moduleKey: 'x' }]);
+    stub.searchFilters.mockResolvedValue({ filters: [{ id: '10123', name: 'Bugs board' }], truncated: true });
+
+    const result = await searchDashboardGadgetIssuesHandler(jira, {
+      assigneeScope: 'me',
+      dashboardId: '10810',
+      gadgetId: '161155',
+    });
+
+    expect(parse(result).visibleFiltersTruncated).toBe(true);
   });
 
   // Round-4 review (ROAD-157): describeJiraDashboardHandler reports

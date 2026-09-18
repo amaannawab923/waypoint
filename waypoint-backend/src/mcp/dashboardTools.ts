@@ -174,7 +174,7 @@ export async function searchDashboardGadgetIssuesHandler(
       // provider now, not a ternary here, so every caller inherits it —
       // this site doesn't need its own copy of the check, on purpose).
       const thisGadget = gadgets.find((g) => g.id === gadgetId);
-      const filters = await jira.searchFilters(thisGadget?.title, 20);
+      const { filters, truncated: visibleFiltersTruncated } = await jira.searchFilters(thisGadget?.title, 20);
       // find() above already searched the FULL, unsliced list — the cap
       // below only affects what's reported, not the narrowing term used
       // just above, so a gadget past index 25 is still correctly resolved
@@ -184,13 +184,18 @@ export async function searchDashboardGadgetIssuesHandler(
       // truncated; this sibling cap silently didn't, so a dashboard whose
       // matching gadget landed past the cap looked, to the model, like a
       // complete dashboard that simply doesn't contain the gadget it just
-      // asked about).
+      // asked about). visibleFiltersTruncated is the same idea for the
+      // OTHER list in this payload (round-6 review): searchFilters' own
+      // `isLast` now says whether more real name matches exist beyond the
+      // 20 shown, so "none of these are it" doesn't get misread as "this
+      // gadget can't be resolved" when the real match was #24.
       return jsonResult({
         needsBinding: true,
         reason: binding.reason,
         dashboardGadgets: gadgets.slice(0, MAX_GADGETS_TO_DESCRIBE),
         dashboardGadgetsTruncated: gadgets.length > MAX_GADGETS_TO_DESCRIBE,
         visibleFilters: filters,
+        visibleFiltersTruncated,
       });
     }
     if (binding.kind === 'project') {

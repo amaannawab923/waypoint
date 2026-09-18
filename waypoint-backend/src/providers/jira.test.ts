@@ -597,12 +597,11 @@ describe('jiraProvider.listDashboards (ROAD-157)', () => {
     });
   });
 
-  // Round-2 review (ROAD-157): a hit exactly at DASHBOARD_FETCH_SIZE is the
-  // only signal this account-wide, unpaginated read has that there might be
-  // MORE dashboards than it saw — without it, a name search against a site
-  // with 200+ dashboards returns a plain empty list indistinguishable from
-  // "no such dashboard".
-  it('reports truncated when Jira returns exactly DASHBOARD_FETCH_SIZE dashboards', async () => {
+  // Round-2 review (ROAD-157) established this signal; round-6 confirmed
+  // live that /rest/api/3/dashboard actually returns a real `total`, and
+  // this is the fallback for when a response omits it (kept as a floor,
+  // not the primary signal any more — see the two tests below for that).
+  it('falls back to "rawDashboards.length >= DASHBOARD_FETCH_SIZE" when the response has no total field', async () => {
     const dashboards = Array.from({ length: 200 }, (_, i) => ({ id: `${i}`, name: `Dashboard ${i}` }));
     vi.mocked(jiraGet).mockResolvedValue(ok({ dashboards }));
 
@@ -610,6 +609,27 @@ describe('jiraProvider.listDashboards (ROAD-157)', () => {
 
     expect(result.dashboards).toEqual([]);
     expect(result.truncated).toBe(true);
+  });
+
+  it('reports truncated from a real total, even with fewer than DASHBOARD_FETCH_SIZE dashboards returned', async () => {
+    // Only 60 came back (well under the 200-row fallback threshold), but
+    // Jira's own total says there are 250 on the site — the precise signal
+    // the fallback above can't express.
+    const dashboards = Array.from({ length: 60 }, (_, i) => ({ id: `${i}`, name: `Dashboard ${i}` }));
+    vi.mocked(jiraGet).mockResolvedValue(ok({ dashboards, total: 250 }));
+
+    const result = await provider().listDashboards('does-not-exist', 50);
+
+    expect(result.truncated).toBe(true);
+  });
+
+  it('trusts a real total over the row-count fallback when it says everything was seen', async () => {
+    const dashboards = [{ id: '10000', name: 'Default dashboard' }];
+    vi.mocked(jiraGet).mockResolvedValue(ok({ dashboards, total: 1 }));
+
+    const result = await provider().listDashboards(undefined, 50);
+
+    expect(result.truncated).toBe(false);
   });
 });
 
@@ -734,13 +754,29 @@ describe('jiraProvider.getFilter / searchFilters (ROAD-157)', () => {
     expect(await provider().getFilter('10123')).toBeNull();
   });
 
-  it('searchFilters sends filterName when a real name filter is given', async () => {
-    vi.mocked(jiraGet).mockResolvedValue(ok({ values: [{ id: '10123', name: 'My Team Board' }] }));
+  it('searchFilters sends filterName when a real name filter is given, and reports truncated from isLast', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(ok({ values: [{ id: '10123', name: 'My Team Board' }], isLast: true }));
 
-    await provider().searchFilters('team', 20);
+    const result = await provider().searchFilters('team', 20);
     expect(jiraGet).toHaveBeenCalledWith(CREDENTIAL, '/rest/api/3/filter/search', {
       maxResults: '20',
       filterName: 'team',
+    });
+    expect(result).toEqual({ filters: [{ id: '10123', name: 'My Team Board' }], truncated: false });
+  });
+
+  // Round-6 review (ROAD-157): confirmed live that /rest/api/3/filter/search
+  // is a real paginated endpoint carrying its own isLast — read directly
+  // rather than inferred from a row-count comparison (there was previously
+  // no truncation signal on this method at all).
+  it('reports truncated: true from isLast: false, even with fewer rows than limit', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(
+      ok({ values: [{ id: '10123', name: 'My Team Board' }], isLast: false }),
+    );
+
+    expect(await provider().searchFilters('team', 20)).toEqual({
+      filters: [{ id: '10123', name: 'My Team Board' }],
+      truncated: true,
     });
   });
 
@@ -753,7 +789,7 @@ describe('jiraProvider.getFilter / searchFilters (ROAD-157)', () => {
   it.each([undefined, '', '   '])(
     'refuses without ever calling Jira when nameContains is %j — no unfiltered page, ever',
     async (nameContains) => {
-      expect(await provider().searchFilters(nameContains, 20)).toEqual([]);
+      expect(await provider().searchFilters(nameContains, 20)).toEqual({ filters: [], truncated: false });
       expect(jiraGet).not.toHaveBeenCalled();
     },
   );
@@ -843,21 +879,40 @@ describe('jiraProvider.searchIssuesByFilter (ROAD-157)', () => {
     expect(jiraGet).not.toHaveBeenCalled();
   });
 
-  it('reports truncated when more than limit issues came back, and trims to limit', async () => {
-    const issues = Array.from({ length: 6 }, (_, i) => ({
+  // Round-6 review (ROAD-157): confirmed live that /rest/api/3/search/jql is
+  // cursor-paginated (isLast/nextPageToken), not classic offset pagination —
+  // a page can come back SHORTER than maxResults with more still to come,
+  // which the old "request limit+1, truncated if more than limit came back"
+  // sentinel would have missed entirely. Requests exactly `limit` now (no
+  // sentinel row) and trusts isLast directly.
+  it('reports truncated from isLast: false, even when fewer than limit rows came back', async () => {
+    const issues = Array.from({ length: 3 }, (_, i) => ({
       key: `ENG-${i}`,
       fields: { summary: `Issue ${i}`, status: { name: 'Open' }, issuetype: { name: 'Task' }, updated: '2026-08-20T00:00:00.000Z' },
     }));
-    vi.mocked(jiraGet).mockResolvedValue(ok({ issues }));
+    vi.mocked(jiraGet).mockResolvedValue(ok({ issues, isLast: false }));
 
     const result = await provider().searchIssuesByFilter({ filterId: '10123', assigneeScope: 'me', limit: 5 });
 
     expect(result.truncated).toBe(true);
-    expect(result.issues).toHaveLength(5);
+    expect(result.issues).toHaveLength(3);
     expect(jiraGet).toHaveBeenCalledWith(
       CREDENTIAL,
       '/rest/api/3/search/jql',
-      expect.objectContaining({ maxResults: '6' }),
+      expect.objectContaining({ maxResults: '5' }),
     );
+  });
+
+  it('reports truncated: false from isLast: true, even when exactly limit rows came back', async () => {
+    const issues = Array.from({ length: 5 }, (_, i) => ({
+      key: `ENG-${i}`,
+      fields: { summary: `Issue ${i}`, status: { name: 'Open' }, issuetype: { name: 'Task' }, updated: '2026-08-20T00:00:00.000Z' },
+    }));
+    vi.mocked(jiraGet).mockResolvedValue(ok({ issues, isLast: true }));
+
+    const result = await provider().searchIssuesByFilter({ filterId: '10123', assigneeScope: 'me', limit: 5 });
+
+    expect(result.truncated).toBe(false);
+    expect(result.issues).toHaveLength(5);
   });
 });
