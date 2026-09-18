@@ -67,7 +67,12 @@ const COPILOT_SYSTEM_PROMPT_BASE = [
   'assigneeScope "me"; only use assigneeScope "accountId" when the user',
   'names someone else. When you report the result, mention the JQL',
   'search_dashboard_gadget_issues ran so the user can verify or open it in',
-  'Jira themselves.',
+  'Jira themselves. Render each of its result groups as its own markdown',
+  'table — columns Key, Summary, Status, Updated — never as a',
+  'comma-separated list of bare issue keys; a group with only one or two',
+  'issues can stay a short sentence. Reproducing the two-dimensional table',
+  'a Jira gadget shows (one axis already grouped into these tables, the',
+  'other in each table\'s own columns) is the whole point of these tools.',
 ];
 
 // V3's codebase-grounding half of the prompt. Conditional rather than
