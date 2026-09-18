@@ -706,6 +706,11 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     const nativeMatch = /^\/projects\/([^/]+)\/tickets\/([^/]+)$/.exec(href);
     if (nativeMatch) {
       if (!SAFE_ID.test(nativeMatch[1]) || !SAFE_ID.test(nativeMatch[2])) {
+        // A shape this app itself would never emit (round-12 review) — still
+        // consumed, not left to fall through to default navigation, which
+        // in the packaged app would same-window-load app://waypoint/... and
+        // blow away SPA state for no reason worth allowing.
+        e.preventDefault();
         return;
       }
       e.preventDefault();
