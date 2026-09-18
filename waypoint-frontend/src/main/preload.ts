@@ -356,6 +356,9 @@ const electronHandler = {
     listTickets(): Promise<JiraResult<JiraTicketQueryResult>> {
       return ipcRenderer.invoke('jira:tickets:list');
     },
+    getTicket(ticketId: string): Promise<JiraResult<JiraWireTicket>> {
+      return ipcRenderer.invoke('jira:tickets:get', ticketId);
+    },
     listTransitions(
       ticketId: string,
     ): Promise<JiraResult<JiraWireTransition[]>> {

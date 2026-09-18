@@ -26,6 +26,13 @@ export function renderMarkdown(src: string): string {
   // renders as plain escaped text instead of a link, since the URL comes
   // from LLM-generated chat content, not a trusted source.
   const SAFE_URL = /^(https?:|mailto:)/i;
+  // A single leading slash is this app's own in-app route (e.g. a native
+  // ticket's /projects/:id/tickets/:identifier) — safe for the same reason
+  // SAFE_URL's schemes are: it can't be pointed at an external host. Two
+  // leading slashes is a protocol-relative URL (//evil.example/x resolves
+  // against whatever origin loads it), which is exactly the external-host
+  // redirect this guard exists to block, so it's deliberately excluded.
+  const isInAppPath = (url: string) => url.startsWith('/') && !url.startsWith('//');
 
   function inline(text: string): string {
     let out = escapeHtml(text);
@@ -35,7 +42,9 @@ export function renderMarkdown(src: string): string {
     out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label, url) =>
       SAFE_URL.test(url)
         ? `<a href="${url}" target="_blank" rel="noreferrer">${label}</a>`
-        : match,
+        : isInAppPath(url)
+          ? `<a href="${url}">${label}</a>`
+          : match,
     );
     return out;
   }

@@ -537,6 +537,21 @@ export function registerJiraIpc(getWindow: () => BrowserWindow | null): void {
     (): Promise<JiraResult<JiraTicketQueryResult>> => client.listMyTickets(),
   );
 
+  // Copilot's rendered issue-key links (ROAD-157 follow-up): a key the model
+  // cited may belong to an issue outside the connected account's own queue
+  // (someone else's, or a filter/gadget result), so the drawer it opens on
+  // click can't assume the ticket is already in listMyTickets' cache — it
+  // has to fetch that one issue directly, by key or numeric id (Jira's own
+  // /rest/api/3/issue/{idOrKey} accepts either).
+  ipcMain.handle(
+    'jira:tickets:get',
+    async (_event, rawTicketId: unknown): Promise<JiraResult<JiraWireTicket>> => {
+      const ticketId = readTicketId(rawTicketId);
+      if (!ticketId) return failure('invalid_input', 'Unknown Jira issue.');
+      return client.getTicket(ticketId);
+    },
+  );
+
   ipcMain.handle(
     'jira:tickets:transitions',
     async (

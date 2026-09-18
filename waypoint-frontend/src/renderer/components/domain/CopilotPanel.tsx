@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { clsx } from 'clsx';
@@ -40,9 +41,15 @@ import type {
 } from '@/lib/copilotSessions';
 import { renderMarkdown } from '@/lib/markdown';
 import { IconButton, Button } from '@/components/ui/Button';
+import { showErrorToast } from '@/lib/toast';
+import { useLoadedJiraConnection } from '@/lib/jiraStore';
+import { getJiraTicketByKey } from '@/data/jiraApi';
+import type { JiraTicket } from '@/types/jira';
 import { CopilotSessionList } from './CopilotSessionList';
 import { CopilotProposalCard } from './CopilotProposalCard';
 import { CopilotConnectModal } from './CopilotConnectModal';
+import { TicketDrawer } from './TicketDrawer';
+import { JiraTicketDrawer } from './JiraTicketDrawer';
 
 // One rendered row of the transcript: everything interleaveProposals already
 // produces, plus V3's "link a repo" card, which is positioned the same way a
@@ -636,6 +643,20 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
   } | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
   const unsubscribeStreamRef = useRef<(() => void) | null>(null);
+  // Chunks arrive far more often than the display needs to repaint —
+  // markdown.ts re-parses the WHOLE accumulated reply on every update
+  // (there's no incremental parse), so committing every chunk straight to
+  // `streaming` state re-renders every table already on screen from
+  // scratch, row count included, on each one. For a multi-row table (e.g.
+  // ROAD-157's gadget results) that reads as the table itself visibly
+  // resizing and flickering for as long as the reply is still arriving.
+  // Buffering chunks here and flushing at most once per animation frame
+  // collapses a burst of chunks into one repaint without changing what the
+  // rendered text ever says.
+  const streamBufferRef = useRef<{ sessionId: string; text: string } | null>(
+    null,
+  );
+  const streamFrameRef = useRef<number | null>(null);
 
   // W5a: session offers the model made (dispatch_session), per
   // conversation; the brief preview a verb or a slash command opened; the
@@ -648,6 +669,60 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
   const [keyTickets, setKeyTickets] = useState<
     Array<{ identifier: string; title: string }>
   >([]);
+
+  // ROAD-157 follow-up: clicking a ticket key Copilot renders opens the same
+  // drawer preview the rest of the app uses — a native ticket's own
+  // TicketDrawer, or a fetched-on-demand JiraTicketDrawer — rather than
+  // navigating away from the conversation or bouncing straight to Jira in a
+  // browser tab. Two independent slots (not one tagged union) because both
+  // can coexist: opening one doesn't have to close the other, matching how
+  // this app treats every other drawer/panel pairing.
+  const [nativePeek, setNativePeek] = useState<{
+    projectId: string;
+    identifier: string;
+  } | null>(null);
+  const [jiraPeek, setJiraPeek] = useState<JiraTicket | null>(null);
+  const jiraConnection = useLoadedJiraConnection();
+
+  // Delegated on the transcript container rather than per-message: the
+  // rendered markdown is raw HTML (dangerouslySetInnerHTML), not React
+  // elements, so individual <a> tags can't carry their own onClick — a
+  // single listener here catches every link in every bubble, past and
+  // future, without re-attaching per message. Only two link shapes this app
+  // itself renders are intercepted; anything else (a URL the user pasted
+  // and asked about, say) keeps its ordinary click-to-open-externally
+  // behavior.
+  function handleTranscriptClick(e: ReactMouseEvent<HTMLDivElement>) {
+    const anchor = (e.target as HTMLElement).closest('a');
+    if (!anchor) return;
+    const href = anchor.getAttribute('href');
+    if (!href) return;
+
+    const nativeMatch = /^\/projects\/([^/]+)\/tickets\/([^/]+)$/.exec(href);
+    if (nativeMatch) {
+      e.preventDefault();
+      setNativePeek({ projectId: nativeMatch[1], identifier: nativeMatch[2] });
+      return;
+    }
+
+    const site = jiraConnection?.site;
+    if (!site) return;
+    const jiraMatch = new RegExp(
+      `^https://${site.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/browse/([^/?#]+)$`,
+    ).exec(href);
+    if (!jiraMatch) return;
+    e.preventDefault();
+    const key = decodeURIComponent(jiraMatch[1]);
+    getJiraTicketByKey(key)
+      .then(setJiraPeek)
+      .catch((err: unknown) => {
+        showErrorToast(
+          err instanceof Error
+            ? err.message
+            : `Couldn't open ${key} from Jira.`,
+        );
+      });
+  }
 
   useEffect(() => {
     if (!SESSIONS_ENABLED) return undefined;
@@ -887,6 +962,9 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     return () => {
       unsubscribeStreamRef.current?.();
+      if (streamFrameRef.current !== null) {
+        cancelAnimationFrame(streamFrameRef.current);
+      }
     };
   }, []);
 
@@ -905,6 +983,16 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     runGenerationRef.current.set(sessionId, generation);
     const isStale = () =>
       runGenerationRef.current.get(sessionId) !== generation;
+    // Drops whatever the batched flush above hasn't committed yet — without
+    // this, a frame already in flight when the run ends could still fire
+    // afterward and resurrect a streaming bubble the run just cleared.
+    const clearStreamBuffer = () => {
+      if (streamFrameRef.current !== null) {
+        cancelAnimationFrame(streamFrameRef.current);
+        streamFrameRef.current = null;
+      }
+      streamBufferRef.current = null;
+    };
 
     // Resolved here rather than passed in, so every entry point into a run
     // (a fresh send, a retry, the post-connect auto-retry) grounds in
@@ -912,6 +1000,8 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     // §4 of the V3 design settled on, not a value pinned to the conversation.
     const groundingProject = routeProject.project;
 
+    clearStreamBuffer();
+    streamBufferRef.current = { sessionId, text: '' };
     setStreaming({ sessionId, text: '' });
     setRunError(null);
     setLastFailedPrompt(null);
@@ -946,11 +1036,25 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
           {
             onChunk: (text) => {
               if (isStale()) return;
-              setStreaming((prev) =>
-                prev && prev.sessionId === sessionId
-                  ? { sessionId, text: prev.text + text }
-                  : prev,
-              );
+              const prevText =
+                streamBufferRef.current?.sessionId === sessionId
+                  ? streamBufferRef.current.text
+                  : '';
+              streamBufferRef.current = {
+                sessionId,
+                text: prevText + text,
+              };
+              // A frame is already scheduled to pick up the latest buffer —
+              // no need to schedule a second one.
+              if (streamFrameRef.current !== null) return;
+              streamFrameRef.current = requestAnimationFrame(() => {
+                streamFrameRef.current = null;
+                if (isStale()) return;
+                const buffered = streamBufferRef.current;
+                if (buffered && buffered.sessionId === sessionId) {
+                  setStreaming(buffered);
+                }
+              });
             },
             onDone: async ({
               fullText,
@@ -958,6 +1062,7 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
               needsRepoLink,
             }) => {
               if (isStale()) return;
+              clearStreamBuffer();
               setStreaming(null);
               // The turn is over either way — refetch proposal cards even
               // when the reply is empty or fails to save below, since the
@@ -1078,6 +1183,7 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
             },
             onError: (err) => {
               if (isStale()) return;
+              clearStreamBuffer();
               setStreaming(null);
               // A failed run can still have proposed before dying —
               // refetch so those cards appear instead of silently waiting
@@ -1092,6 +1198,7 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
         );
         unsubscribeStreamRef.current = unsubscribe;
       } catch (err) {
+        clearStreamBuffer();
         setStreaming(null);
         setRunError({
           sessionId,
@@ -1434,6 +1541,7 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
         <>
           <div
             ref={transcriptRef}
+            onClick={handleTranscriptClick}
             className="thin-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4"
           >
             {loadingMessages && (
@@ -1590,6 +1698,21 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
           }
         }}
       />
+
+      {nativePeek && (
+        <TicketDrawer
+          projectId={nativePeek.projectId}
+          identifier={nativePeek.identifier}
+          onClose={() => setNativePeek(null)}
+        />
+      )}
+      {jiraPeek && (
+        <JiraTicketDrawer
+          ticket={jiraPeek}
+          onTicketUpdated={setJiraPeek}
+          onClose={() => setJiraPeek(null)}
+        />
+      )}
 
       {/* Scoped rules for MessageBubble's rendered markdown — same
           inline-<style> convention AgentDetailPage.tsx uses for its own

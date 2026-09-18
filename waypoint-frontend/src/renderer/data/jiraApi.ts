@@ -531,6 +531,19 @@ export async function listMyJiraTickets(): Promise<JiraQueueRead> {
 }
 
 /**
+ * One Jira issue, by key or numeric id, fetched directly rather than found
+ * in `listMyJiraTickets`' own cache — for an issue Copilot cites that isn't
+ * necessarily the connected account's own (someone else's, or a saved-filter/
+ * gadget result). Not remembered in that cache and not conflict-checked
+ * against a previous read (`toTicket` with no `previous`): this is a single
+ * on-demand peek, not part of the queue this app polls and writes against.
+ */
+export async function getJiraTicketByKey(key: string): Promise<JiraTicket> {
+  const wire = unwrap(await bridge().getTicket(key));
+  return toTicket(wire);
+}
+
+/**
  * Guarantees at least one real ticket read has happened this session before
  * resolving with a status whose counts can be trusted — a no-op the moment
  * `lastSyncAt` is already set (whichever caller gets there first, including
