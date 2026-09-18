@@ -778,6 +778,7 @@ export class JiraProvider implements TicketProvider {
     const result = await jiraGet<{
       values?: { id?: unknown; name?: unknown }[];
       isLast?: unknown;
+      total?: unknown;
     }>(this.credential, '/rest/api/3/filter/search', { maxResults: String(limit), filterName: needle });
     if (!result.ok) unavailable(result);
     const filters = (result.value?.values ?? [])
@@ -785,12 +786,24 @@ export class JiraProvider implements TicketProvider {
       .map((f) => ({ id: idStr(f.id), name: str(f.name) }))
       .filter((f) => f.id);
     // `/rest/api/3/filter/search` is a real, standard paginated endpoint —
-    // confirmed live: its response carries its own `isLast` (round-6
-    // review, ROAD-157: every truncation signal in this feature used to be
-    // inferred from row counts against the requested page size, and this
-    // one had none at all). `isLast === false` is the authoritative "there
-    // is more" signal; a row-count comparison is not needed alongside it.
-    return { filters, truncated: result.value?.isLast === false };
+    // confirmed live: its response carries both `isLast` AND `total`
+    // (round-6 review, ROAD-157: every truncation signal in this feature
+    // used to be inferred from row counts against the requested page size,
+    // and this one had none at all). `isLast` is preferred when present and
+    // boolean-shaped; `total` is the fallback for a response that omits it
+    // (round-7 review: a fallback matching listDashboards' own pattern,
+    // closing the one signal-absent gap this method didn't originally
+    // cover) — only falling all the way back to a plain row-count
+    // comparison if both are missing.
+    const rawIsLast = result.value?.isLast;
+    const rawTotal = result.value?.total;
+    const truncated =
+      typeof rawIsLast === 'boolean'
+        ? rawIsLast === false
+        : typeof rawTotal === 'number'
+          ? rawTotal > filters.length
+          : filters.length >= limit;
+    return { filters, truncated };
   }
 
   /**
@@ -846,11 +859,18 @@ export class JiraProvider implements TicketProvider {
     // more than `limit` came back) assumed classic offset pagination this
     // endpoint doesn't use — a response could legitimately return exactly
     // `limit` rows with nothing left, or fewer than `limit` rows with more
-    // still to come, and the row-count comparison would get BOTH wrong.
-    // `isLast` is the endpoint's own authoritative answer, so this now
-    // requests exactly `limit` (no sentinel row) and trusts that field
-    // directly instead of inferring anything from how many rows came back.
-    const result = await jiraGet<{ issues?: unknown[]; isLast?: unknown }>(
+    // still to come, and the row-count comparison would get BOTH wrong. So
+    // this requests exactly `limit` (no sentinel row) and trusts the
+    // endpoint's own signals instead of inferring anything from row counts.
+    //
+    // Both isLast AND nextPageToken are checked (round-7 review): isLast
+    // confirmed present live, but nextPageToken is the field actually
+    // documented as the endpoint's own pagination contract — a present,
+    // non-empty nextPageToken is an unambiguous "there is another page"
+    // regardless of whether isLast is also populated on a given response,
+    // so relying on isLast alone would silently under-report truncation on
+    // any response that carries one but not the other.
+    const result = await jiraGet<{ issues?: unknown[]; isLast?: unknown; nextPageToken?: unknown }>(
       this.credential,
       '/rest/api/3/search/jql',
       { jql, fields: ISSUE_FIELDS, maxResults: String(options.limit) },
@@ -860,9 +880,19 @@ export class JiraProvider implements TicketProvider {
     const issues = (result.value?.issues ?? []).filter(
       (issue): issue is JiraIssue => !!issue && typeof issue === 'object' && !!str((issue as JiraIssue).key),
     );
-    const truncated = result.value?.isLast === false;
+    const truncated =
+      result.value?.isLast === false ||
+      (typeof result.value?.nextPageToken === 'string' && result.value.nextPageToken.length > 0);
+    // Bounded to `limit` regardless of how many rows Jira actually returned
+    // (round-7 review: this bound was dropped when the +1 sentinel was
+    // removed in round 6, leaving nothing but maxResults itself limiting
+    // the model's context — maxResults is a real ceiling in practice, but
+    // this restores the same application-side guarantee every other list
+    // tool in this codebase makes explicitly, rather than trusting a remote
+    // API's own enforcement of its own contract).
+    const page = issues.length > options.limit ? issues.slice(0, options.limit) : issues;
 
-    return { jql, issues: issues.map((issue) => toSummaryForGadget(issue)), truncated };
+    return { jql, issues: page.map((issue) => toSummaryForGadget(issue)), truncated };
   }
 
   // ---------------------------------------------------------------------

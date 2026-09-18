@@ -780,6 +780,28 @@ describe('jiraProvider.getFilter / searchFilters (ROAD-157)', () => {
     });
   });
 
+  // Round-7 review (ROAD-157): isLast confirmed present live, but a
+  // response that omits it must not silently report complete — falls back
+  // to the also-confirmed-present `total` field.
+  it('falls back to total when isLast is absent from the response', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(
+      ok({ values: [{ id: '10123', name: 'My Team Board' }], total: 5 }),
+    );
+
+    expect(await provider().searchFilters('team', 20)).toEqual({
+      filters: [{ id: '10123', name: 'My Team Board' }],
+      truncated: true,
+    });
+  });
+
+  it('falls back to a plain row-count comparison when both isLast and total are absent', async () => {
+    const values = Array.from({ length: 20 }, (_, i) => ({ id: `${i}`, name: `Filter ${i}` }));
+    vi.mocked(jiraGet).mockResolvedValue(ok({ values }));
+
+    const result = await provider().searchFilters('team', 20);
+    expect(result.truncated).toBe(true);
+  });
+
   // Round-3 review (ROAD-157): this used to fall back to an unfiltered page
   // of every saved filter the account can see — the exact disclosure
   // aperture rounds 1/2 were trying to close, previously guarded only at
@@ -913,6 +935,44 @@ describe('jiraProvider.searchIssuesByFilter (ROAD-157)', () => {
     const result = await provider().searchIssuesByFilter({ filterId: '10123', assigneeScope: 'me', limit: 5 });
 
     expect(result.truncated).toBe(false);
+    expect(result.issues).toHaveLength(5);
+  });
+
+  // Round-7 review (ROAD-157): isLast was confirmed present live, but
+  // nextPageToken is the field this endpoint's own pagination contract
+  // documents — a response carrying a real nextPageToken without isLast
+  // populated must still be reported truncated, not silently trusted as
+  // complete just because the one field this code originally checked
+  // happened to be absent.
+  it('reports truncated from a present nextPageToken even when isLast is absent', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(ok({ issues: [TYPED_ISSUE], nextPageToken: 'abc123' }));
+
+    const result = await provider().searchIssuesByFilter({ filterId: '10123', assigneeScope: 'me', limit: 50 });
+
+    expect(result.truncated).toBe(true);
+  });
+
+  it('does not treat an empty-string nextPageToken as a real one', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(ok({ issues: [TYPED_ISSUE], nextPageToken: '' }));
+
+    const result = await provider().searchIssuesByFilter({ filterId: '10123', assigneeScope: 'me', limit: 50 });
+
+    expect(result.truncated).toBe(false);
+  });
+
+  // Round-7 review: this bound was dropped as collateral when the +1
+  // sentinel was removed in round 6, leaving nothing application-side
+  // limiting how many rows reach the model's context if Jira ever answers
+  // with more than maxResults asked for.
+  it('bounds the returned issues to limit even if Jira answers with more rows than requested', async () => {
+    const issues = Array.from({ length: 8 }, (_, i) => ({
+      key: `ENG-${i}`,
+      fields: { summary: `Issue ${i}`, status: { name: 'Open' }, issuetype: { name: 'Task' }, updated: '2026-08-20T00:00:00.000Z' },
+    }));
+    vi.mocked(jiraGet).mockResolvedValue(ok({ issues, isLast: true }));
+
+    const result = await provider().searchIssuesByFilter({ filterId: '10123', assigneeScope: 'me', limit: 5 });
+
     expect(result.issues).toHaveLength(5);
   });
 });
