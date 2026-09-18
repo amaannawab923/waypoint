@@ -698,8 +698,16 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     const href = anchor.getAttribute('href');
     if (!href) return;
 
+    // Same id-shape jiraIpc.ts's readTicketId enforces at its own IPC
+    // boundary — round-11 review: `[^/]+` here admitted `\`, `..`, `%`, `?`,
+    // `#`, which an href this app never emits itself but an LLM reply can,
+    // and TicketDrawer forwards both captures unvalidated into a fetch path.
+    const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$/;
     const nativeMatch = /^\/projects\/([^/]+)\/tickets\/([^/]+)$/.exec(href);
     if (nativeMatch) {
+      if (!SAFE_ID.test(nativeMatch[1]) || !SAFE_ID.test(nativeMatch[2])) {
+        return;
+      }
       e.preventDefault();
       setNativePeek({ projectId: nativeMatch[1], identifier: nativeMatch[2] });
       return;
@@ -712,7 +720,17 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     ).exec(href);
     if (!jiraMatch) return;
     e.preventDefault();
-    const key = decodeURIComponent(jiraMatch[1]);
+    let key: string;
+    try {
+      key = decodeURIComponent(jiraMatch[1]);
+    } catch {
+      // A malformed %-escape in a model-authored href — not decodable,
+      // so there is nothing safe to open (round-11 review: this used to
+      // throw a URIError past this handler, consuming the click with no
+      // feedback at all).
+      showErrorToast("That link isn't a valid Jira issue URL.");
+      return;
+    }
     getJiraTicketByKey(key)
       .then(setJiraPeek)
       .catch((err: unknown) => {

@@ -557,7 +557,7 @@ export async function getTicketByIdentifier(
 ): Promise<Ticket | undefined> {
   return normalizeTicketMaybe(
     await http.get<(Ticket & { sortOrder?: string }) | undefined>(
-      `/tickets/by-identifier/${identifier}`,
+      `/tickets/by-identifier/${encodeURIComponent(identifier)}`,
       {
         notFoundAsUndefined: true,
       },

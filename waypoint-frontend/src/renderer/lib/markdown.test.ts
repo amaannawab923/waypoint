@@ -49,6 +49,33 @@ describe('renderMarkdown', () => {
     );
   });
 
+  // Round-11 review: a bare `startsWith('/') && !startsWith('//')` check —
+  // this file's own earlier version — still let this through. A browser's
+  // URL parser treats `\` as a path separator for a standard scheme exactly
+  // like `/`, so `/\evil.example/y` collapses to `//evil.example/y` at
+  // resolution time: the same external-host redirect the `//` guard above
+  // exists to block, just spelled with a backslash instead.
+  it('does not treat a backslash-prefixed path as an in-app path either — it also collapses to a protocol-relative URL', () => {
+    expect(renderMarkdown('[x](/\\evil.example/y)')).toBe(
+      '<p>[x](/\\evil.example/y)</p>',
+    );
+  });
+
+  it('rejects a traversal segment inside the ticket path shape', () => {
+    expect(
+      renderMarkdown('[x](/projects/p/tickets/..\\..\\admin)'),
+    ).toBe('<p>[x](/projects/p/tickets/..\\..\\admin)</p>');
+  });
+
+  it('only treats the exact native-ticket path shape as an in-app link, not any single-leading-slash path', () => {
+    expect(renderMarkdown('[x](/projects/proj-cw/tickets/ROAD-40/extra)')).toBe(
+      '<p>[x](/projects/proj-cw/tickets/ROAD-40/extra)</p>',
+    );
+    expect(renderMarkdown('[x](/some/other/route)')).toBe(
+      '<p>[x](/some/other/route)</p>',
+    );
+  });
+
   it('escapes quotes in the URL so a link cannot break out of the href attribute', () => {
     // A URL containing a literal `"` must not be able to close the href
     // attribute early and inject a new one (e.g. an onmouseover handler).

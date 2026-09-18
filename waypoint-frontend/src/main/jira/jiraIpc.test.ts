@@ -41,6 +41,7 @@ jest.mock('./jiraAuth', () => ({
 
 const validateCredentialMock = jest.fn();
 const listMyTicketsMock = jest.fn();
+const getTicketMock = jest.fn();
 const listTransitionsMock = jest.fn();
 const transitionTicketMock = jest.fn();
 const listPriorityOptionsMock = jest.fn();
@@ -61,6 +62,7 @@ jest.mock('./jiraClient', () => ({
   uploadAttachment: (...args: unknown[]) => uploadAttachmentMock(...args),
   validateCredential: (...args: unknown[]) => validateCredentialMock(...args),
   listMyTickets: (...args: unknown[]) => listMyTicketsMock(...args),
+  getTicket: (...args: unknown[]) => getTicketMock(...args),
   listTransitions: (...args: unknown[]) => listTransitionsMock(...args),
   transitionTicket: (...args: unknown[]) => transitionTicketMock(...args),
   listPriorityOptions: (...args: unknown[]) => listPriorityOptionsMock(...args),
@@ -282,6 +284,7 @@ describe('per-ticket channels', () => {
     'jira:tickets:transitions',
     'jira:tickets:priority-options',
     'jira:comments:list',
+    'jira:tickets:get',
   ])('%s refuses a ticket id that is not one', async (channel) => {
     expect(await getHandler(channel)({}, '../../../admin')).toMatchObject({
       ok: false,
@@ -290,6 +293,20 @@ describe('per-ticket channels', () => {
     expect(listTransitionsMock).not.toHaveBeenCalled();
     expect(listPriorityOptionsMock).not.toHaveBeenCalled();
     expect(listCommentsMock).not.toHaveBeenCalled();
+    expect(getTicketMock).not.toHaveBeenCalled();
+  });
+
+  // ROAD-157 follow-up: the one caller today (CopilotPanel, opening a
+  // drawer for an issue key Copilot cited) validates its own capture group
+  // before ever reaching this channel — this is the IPC boundary's own,
+  // independent guard, same discipline every other per-ticket channel above
+  // already gets.
+  it('jira:tickets:get delegates a real key or numeric id to the client', async () => {
+    getTicketMock.mockResolvedValue({ ok: true, value: {} });
+
+    await getHandler('jira:tickets:get')({}, 'ENG-77');
+
+    expect(getTicketMock).toHaveBeenCalledWith('ENG-77');
   });
 
   it('jira:tickets:set-priority refuses a ticket id that is not one', async () => {

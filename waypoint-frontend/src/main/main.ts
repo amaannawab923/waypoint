@@ -283,7 +283,18 @@ const createWindow = async () => {
     try {
       const target = new URL(url);
       const current = new URL(mainWindow.webContents.getURL());
-      if (target.origin !== current.origin) {
+      // protocol+host, not .origin (round-11 review): Node's URL only
+      // considers http/https/etc "special" enough to carry a real origin —
+      // for the packaged app's own app:// scheme (registered as `standard`
+      // with Chromium via registerAppProtocol, which Node's URL parser
+      // knows nothing about) .origin is unconditionally the string "null"
+      // on BOTH sides, so this check silently allowed every app://<anyhost>
+      // navigation in production. Dev's http://localhost origin was the
+      // only case this ever actually enforced.
+      if (
+        target.protocol !== current.protocol ||
+        target.host !== current.host
+      ) {
         event.preventDefault();
       }
     } catch {

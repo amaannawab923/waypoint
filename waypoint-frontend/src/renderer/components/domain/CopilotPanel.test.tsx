@@ -2480,4 +2480,40 @@ describe('ticket links open a drawer preview (ROAD-157 follow-up)', () => {
     expect(getJiraTicketByKey).not.toHaveBeenCalled();
     expect(screen.queryByTestId('jira-ticket-drawer')).not.toBeInTheDocument();
   });
+
+  // Round-11 review: the click handler validates its own two captures
+  // (readTicketId's own id-shape) independently of markdown.ts's own
+  // allowlist, on purpose — defense in depth at the point TicketDrawer's
+  // props actually get built, not only at the point the href was rendered.
+  // markdown.ts's allowlist already refuses to linkify a traversal payload
+  // (see markdown.test.ts), so proving this second guard actually holds
+  // means reaching the click handler with a link markdown itself would
+  // never produce — done here by editing the rendered bubble's real DOM
+  // directly, the same "assume this got here some other way" the review
+  // asked for.
+  it('rejects a traversal payload in a ticket link even if it reaches the DOM some other way', async () => {
+    render(
+      <MemoryRouter>
+        <CopilotPanel onClose={jest.fn()} />
+      </MemoryRouter>,
+    );
+    await screen.findByText(/No sessions yet/i);
+    await createAndOpenSession();
+    await typeAndSend('hello');
+    const handlers = await waitForRun('hello');
+
+    act(() => handlers.onChunk('hi'));
+    await flushStreamFrame();
+
+    const bubble = document.querySelector('.copilot-md');
+    if (!bubble) throw new Error('no rendered assistant bubble');
+    bubble.innerHTML =
+      '<a href="/projects/p/tickets/..%2f..%2fadmin">click</a>';
+
+    fireEvent.click(screen.getByRole('link', { name: 'click' }));
+
+    expect(
+      screen.queryByTestId('native-ticket-drawer'),
+    ).not.toBeInTheDocument();
+  });
 });
