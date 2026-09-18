@@ -168,19 +168,28 @@ export async function searchDashboardGadgetIssuesHandler(
       // filter this account can see (round-1 review, ROAD-157) — an
       // unnarrowed search returns whatever 20 filters Jira lists first,
       // which can include filters shared by other users and unrelated to
-      // anything this request named. jira.searchFilters itself now refuses
-      // (returns []) on an empty/missing name (round-3 review: that guard
-      // moved into the provider so every caller inherits it, not just this
-      // one) — the ternary here is only a cheap short-circuit to skip the
-      // round trip entirely when there's plainly nothing to narrow by
-      // (gadgetId not found in `gadgets`, or the matched gadget has no
-      // title), not the thing making this safe.
+      // anything this request named. The call below is unconditional —
+      // jira.searchFilters itself refuses (returns [], no network call) on
+      // an empty/missing name (round-3 review: that guard lives in the
+      // provider now, not a ternary here, so every caller inherits it —
+      // this site doesn't need its own copy of the check, on purpose).
       const thisGadget = gadgets.find((g) => g.id === gadgetId);
       const filters = await jira.searchFilters(thisGadget?.title, 20);
+      // find() above already searched the FULL, unsliced list — the cap
+      // below only affects what's reported, not the narrowing term used
+      // just above, so a gadget past index 25 is still correctly resolved
+      // against, even though it won't appear in dashboardGadgets itself.
+      // dashboardGadgetsTruncated says so explicitly (round-4 review,
+      // ROAD-157: describeJiraDashboardHandler's own gadget cap reports
+      // truncated; this sibling cap silently didn't, so a dashboard whose
+      // matching gadget landed past the cap looked, to the model, like a
+      // complete dashboard that simply doesn't contain the gadget it just
+      // asked about).
       return jsonResult({
         needsBinding: true,
         reason: binding.reason,
         dashboardGadgets: gadgets.slice(0, MAX_GADGETS_TO_DESCRIBE),
+        dashboardGadgetsTruncated: gadgets.length > MAX_GADGETS_TO_DESCRIBE,
         visibleFilters: filters,
       });
     }

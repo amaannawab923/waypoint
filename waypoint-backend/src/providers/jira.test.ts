@@ -573,9 +573,14 @@ describe('jiraProvider.listDashboards (ROAD-157)', () => {
     // client-side against this response, so a small `limit` (1, here) must
     // not also shrink the pool Jira is asked to search within.
     expect(jiraGet).toHaveBeenCalledWith(CREDENTIAL, '/rest/api/3/dashboard', { maxResults: '200' });
+    // Two dashboards actually match "sprint" (Sprint Health, Sprint Retro)
+    // but limit=1 only returns one — truncated must say so. Round-4 review:
+    // this exact case used to assert truncated: false here, pinning the
+    // bug (a real second match silently reported as a complete result) as
+    // intended behavior.
     expect(result).toEqual({
       dashboards: [{ id: '10810', name: 'Sprint Health', isFavourite: true }],
-      truncated: false,
+      truncated: true,
     });
   });
 

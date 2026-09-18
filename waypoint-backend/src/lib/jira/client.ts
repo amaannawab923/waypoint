@@ -13,9 +13,10 @@
  * actual mistake.
  *
  * Scope is deliberately narrow, and enforced rather than just described: see
- * ALLOWED_PATH_PREFIXES below. Writes go through the same allowlist as reads
- * (jiraPost included) — narrowness is a runtime property of this client, not
- * a comment that can rot silently as callers are added.
+ * ALLOWED_PATHS below (path AND method — round-2 review, ROAD-157). Writes
+ * go through the same allowlist as reads (jiraPost included) — narrowness
+ * is a runtime property of this client, not a comment that can rot silently
+ * as callers are added.
  */
 
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -52,10 +53,10 @@ const REQUEST_TIMEOUT_MS = 20_000;
  * line up; assertAllowedPath below checks the boundary explicitly rather
  * than trusting every entry to end with its own "/".
  *
- * Method-scoped, not just path-scoped (round-2 review, ROAD-157): the three
- * writes this client performs (transition, comment, and — nowhere yet —
- * anything else) are all under `/rest/api/3/issue`, and every prefix added
- * for the read-only dashboard/gadget/filter tools has no write caller today.
+ * Method-scoped, not just path-scoped (round-2 review, ROAD-157): the two
+ * writes this client performs today (transition, comment) are both under
+ * `/rest/api/3/issue`, and every prefix added for the read-only
+ * dashboard/gadget/filter tools has no write caller today.
  * Without a per-prefix method list, jiraPost would silently be as permitted
  * on `/rest/api/3/dashboard` as jiraGet is the moment ANY future caller
  * composes a POST to a path under one of those prefixes — exactly the

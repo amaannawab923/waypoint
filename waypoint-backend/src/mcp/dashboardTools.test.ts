@@ -279,8 +279,36 @@ describe('searchDashboardGadgetIssuesHandler — dashboard+gadget path', () => {
       needsBinding: true,
       reason: "doesn't match a recognized binding",
       dashboardGadgets: [{ id: '161155', title: 'Two-dimensional filter', moduleKey: 'x' }],
+      dashboardGadgetsTruncated: false,
       visibleFilters: [{ id: '10123', name: 'My Team Board' }],
     });
+  });
+
+  // Round-4 review (ROAD-157): describeJiraDashboardHandler reports
+  // truncated when its own 25-gadget cap trims the list; this sibling cap
+  // (same MAX_GADGETS_TO_DESCRIBE) used to trim silently. The find() that
+  // narrows the filter search still searches the FULL list — a gadget past
+  // the cap is still correctly resolved against — but a caller reading
+  // dashboardGadgets alone should know it isn't the complete set.
+  it('reports dashboardGadgetsTruncated when the dashboard has more gadgets than the cap, without affecting the narrowing search itself', async () => {
+    const stub = connectJira();
+    stub.resolveGadgetBinding.mockResolvedValue({ kind: 'unresolved', reason: 'no config' });
+    const gadgets = Array.from({ length: 30 }, (_, i) => ({ id: `g${i}`, title: `Gadget ${i}`, moduleKey: 'x' }));
+    // The requested gadget is past index 25 — outside what gets reported.
+    stub.getDashboardGadgets.mockResolvedValue(gadgets);
+
+    const result = await searchDashboardGadgetIssuesHandler(jira, {
+      assigneeScope: 'me',
+      dashboardId: '10810',
+      gadgetId: 'g27',
+    });
+
+    // Narrowing is unaffected by the cap: the full list was searched, so
+    // the real title for g27 reaches searchFilters.
+    expect(stub.searchFilters).toHaveBeenCalledWith('Gadget 27', 20);
+    const parsed = parse(result);
+    expect(parsed.dashboardGadgets).toHaveLength(25);
+    expect(parsed.dashboardGadgetsTruncated).toBe(true);
   });
 
   // Round-3 review (ROAD-157): round 2's needsBinding narrowing fix landed

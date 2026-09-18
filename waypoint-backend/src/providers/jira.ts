@@ -526,7 +526,16 @@ export class JiraProvider implements TicketProvider {
    *  parameter (unlike `/rest/api/3/filter/search`, which does), so an
    *  unfiltered page is fetched and narrowed client-side. Exists so Copilot
    *  can turn "my scrum master's dashboard" into a real id instead of
-   *  guessing one. */
+   *  guessing one.
+   *
+   *  Unlike searchFilters below, an absent `nameContains` here returns
+   *  everything rather than refusing — deliberately, not an inconsistency:
+   *  this IS list_jira_dashboards' own advertised contract ("optionally
+   *  narrowed by name"), every row is a dashboard the account already sees
+   *  and only carries {id, name, isFavourite}, and the result is bounded by
+   *  DASHBOARD_FETCH_SIZE/limit either way. searchFilters is never itself a
+   *  tool — only an unrequested-disclosure risk if it fell back the same
+   *  way (round-3 review, ROAD-157). */
   async listDashboards(
     nameContains: string | undefined,
     limit: number,
@@ -553,16 +562,25 @@ export class JiraProvider implements TicketProvider {
       .filter((d) => d.id && (!needle || d.name.toLowerCase().includes(needle)));
     return {
       dashboards: dashboards.slice(0, limit),
-      // True when Jira's own response was exactly the page size asked for
-      // — the honest signal that there may be MORE dashboards on the site
-      // than this account-wide, unpaginated read saw at all (round-2
-      // review, ROAD-157). A name search against a site with more than
-      // DASHBOARD_FETCH_SIZE dashboards could otherwise come back with a
-      // plain empty result indistinguishable from "no such dashboard",
-      // when the real answer is "maybe — this only looked at the first
-      // 200". Distinct from dashboards.length > limit (the ordinary
-      // result-count cap, already covered by the slice above).
-      truncated: rawDashboards.length >= DASHBOARD_FETCH_SIZE,
+      // True on EITHER of two distinct reasons the caller saw an
+      // incomplete picture — merged into one flag because every other list
+      // tool's `truncated` means exactly one thing ("there was more than
+      // this returned"), and round-3 review found this field diverging
+      // from that meaning was itself the bug: it used to report only the
+      // second reason below, so a real name match beyond `limit` (matches.length
+      // > limit, the ordinary, everyday case) silently reported
+      // truncated: false, the same as a genuinely complete result.
+      //  1. dashboards.length > limit — more NAME MATCHES existed than the
+      //     requested page size returned (the ordinary meaning, matching
+      //     ticketTools.ts's page() convention elsewhere in this codebase).
+      //  2. rawDashboards.length >= DASHBOARD_FETCH_SIZE — Jira's own
+      //     response was exactly the page size asked for, so there may be
+      //     MORE dashboards on the site than this account-wide,
+      //     unpaginated read saw AT ALL, before the name filter even runs
+      //     (round-2 review) — without this, a name search against a site
+      //     with 200+ dashboards can come back with a plain empty result
+      //     indistinguishable from "no such dashboard".
+      truncated: dashboards.length > limit || rawDashboards.length >= DASHBOARD_FETCH_SIZE,
     };
   }
 
