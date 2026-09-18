@@ -41,7 +41,7 @@ const ACCOUNT_ID_SCHEMA = z.string().regex(/^[A-Za-z0-9:-]{1,128}$/, 'must be a 
 
 type Jira = JiraProvider | null;
 
-type GadgetIssue = { key: string; summary: string; status: string; issueType: string; updated: string };
+type GadgetIssue = { key: string; summary: string; status: string; issueType: string; updated: string; url: string };
 
 // Presentation only — searchIssuesByFilter (providers/jira.ts) returns
 // issues flat in Jira's own order; how to bucket them for display is a tool-
@@ -340,7 +340,8 @@ export function registerDashboardTools(server: McpServer, jiraCredential: JiraCr
         'When needsBinding is returned, check visibleFiltersSearched before reading visibleFilters: false means the gadget had no name to search by (an untitled gadget, or gadgetId wasn\'t found on that dashboard) and no search ran at all — do not say "there are no matching filters" in that case, since none were looked for; ask the user for a filterId directly instead. ' +
         'A small set of Jira\'s built-in table gadgets (currently: "Assigned to Me") resolve automatically to that gadget\'s own fixed definition — most other gadget types, and anything not table-shaped (pie charts, two-dimensional stats), still come back unresolved; do not assume a gadget is supported just because it has a recognizable name. For a built-in gadget, assigneeScope "accountId" is refused — the gadget already means the connected account\'s own issues, so pass filterId directly instead if you need a different person\'s. ' +
         'There is no raw-JQL parameter: build the query from filterId/issueTypes/assigneeScope only. ' +
-        'There is no total/count field: the number of issues actually in the response (sum of groups[].count) is a real count of what\'s here, but is a FLOOR on the real match count whenever truncated is true — never state or imply a total without checking truncated first, and say so ("at least N, more may exist") rather than reporting a possibly-partial count as complete.',
+        'There is no total/count field: the number of issues actually in the response (sum of groups[].count) is a real count of what\'s here, but is a FLOOR on the real match count whenever truncated is true — never state or imply a total without checking truncated first, and say so ("at least N, more may exist") rather than reporting a possibly-partial count as complete. ' +
+        'Each issue carries its own Jira url — link its key to that url when you render it rather than showing the bare key.',
       inputSchema: {
         dashboardId: DASHBOARD_ID.optional().describe('With gadgetId: the dashboard to resolve a gadget on.'),
         gadgetId: GADGET_ID.optional().describe('With dashboardId: which gadget on it to resolve.'),

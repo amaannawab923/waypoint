@@ -38,12 +38,12 @@ function jiraStub() {
     })),
     searchIssuesByFilter: vi.fn(async () => ({
       jql: 'filter = 10123 AND assignee = currentUser()',
-      issues: [] as { key: string; summary: string; status: string; issueType: string; updated: string }[],
+      issues: [] as { key: string; summary: string; status: string; issueType: string; updated: string; url: string }[],
       truncated: false,
     })),
     searchIssuesByBuiltinQuery: vi.fn(async () => ({
       jql: 'assignee = currentUser() AND statusCategory != 3 ORDER BY issuetype ASC, updated DESC',
-      issues: [] as { key: string; summary: string; status: string; issueType: string; updated: string }[],
+      issues: [] as { key: string; summary: string; status: string; issueType: string; updated: string; url: string }[],
       truncated: false,
     })),
   };
@@ -264,7 +264,16 @@ describe('searchDashboardGadgetIssuesHandler — filterId path', () => {
     const stub = connectJira();
     stub.searchIssuesByFilter.mockResolvedValue({
       jql: 'filter = 10123 AND assignee = currentUser()',
-      issues: [{ key: 'ENG-4', summary: 'Login bug', status: 'In Progress', issueType: 'Bug', updated: '2026-08-20' }],
+      issues: [
+        {
+          key: 'ENG-4',
+          summary: 'Login bug',
+          status: 'In Progress',
+          issueType: 'Bug',
+          updated: '2026-08-20',
+          url: 'https://yourteam.atlassian.net/browse/ENG-4',
+        },
+      ],
       truncated: false,
     });
 
@@ -287,7 +296,20 @@ describe('searchDashboardGadgetIssuesHandler — filterId path', () => {
     // literally named `total` invited exactly that misreading.
     expect(parsed).not.toHaveProperty('total');
     expect(parsed.groups).toEqual([
-      { key: 'Bug', count: 1, issues: [{ key: 'ENG-4', summary: 'Login bug', status: 'In Progress', issueType: 'Bug', updated: '2026-08-20' }] },
+      {
+        key: 'Bug',
+        count: 1,
+        issues: [
+          {
+            key: 'ENG-4',
+            summary: 'Login bug',
+            status: 'In Progress',
+            issueType: 'Bug',
+            updated: '2026-08-20',
+            url: 'https://yourteam.atlassian.net/browse/ENG-4',
+          },
+        ],
+      },
     ]);
   });
 });
@@ -335,7 +357,16 @@ describe('searchDashboardGadgetIssuesHandler — dashboard+gadget path', () => {
     });
     stub.searchIssuesByBuiltinQuery.mockResolvedValue({
       jql: 'assignee = currentUser() AND statusCategory != 3 ORDER BY issuetype ASC, updated DESC',
-      issues: [{ key: 'ENG-29', summary: 'The audit log', status: 'In Progress', issueType: 'Bug', updated: '2026-09-18' }],
+      issues: [
+        {
+          key: 'ENG-29',
+          summary: 'The audit log',
+          status: 'In Progress',
+          issueType: 'Bug',
+          updated: '2026-09-18',
+          url: 'https://yourteam.atlassian.net/browse/ENG-29',
+        },
+      ],
       truncated: false,
     });
 
@@ -367,7 +398,16 @@ describe('searchDashboardGadgetIssuesHandler — dashboard+gadget path', () => {
       {
         key: 'Bug',
         count: 1,
-        issues: [{ key: 'ENG-29', summary: 'The audit log', status: 'In Progress', issueType: 'Bug', updated: '2026-09-18' }],
+        issues: [
+          {
+            key: 'ENG-29',
+            summary: 'The audit log',
+            status: 'In Progress',
+            issueType: 'Bug',
+            updated: '2026-09-18',
+            url: 'https://yourteam.atlassian.net/browse/ENG-29',
+          },
+        ],
       },
     ]);
   });
@@ -557,9 +597,9 @@ describe('searchDashboardGadgetIssuesHandler — dashboard+gadget path', () => {
 
 describe('searchDashboardGadgetIssuesHandler — grouping', () => {
   const ISSUES = [
-    { key: 'ENG-1', summary: 'A', status: 'Open', issueType: 'Bug', updated: '2026-08-20' },
-    { key: 'ENG-2', summary: 'B', status: 'Open', issueType: 'Epic', updated: '2026-08-19' },
-    { key: 'ENG-3', summary: 'C', status: 'In Progress', issueType: 'Bug', updated: '2026-08-18' },
+    { key: 'ENG-1', summary: 'A', status: 'Open', issueType: 'Bug', updated: '2026-08-20', url: 'https://yourteam.atlassian.net/browse/ENG-1' },
+    { key: 'ENG-2', summary: 'B', status: 'Open', issueType: 'Epic', updated: '2026-08-19', url: 'https://yourteam.atlassian.net/browse/ENG-2' },
+    { key: 'ENG-3', summary: 'C', status: 'In Progress', issueType: 'Bug', updated: '2026-08-18', url: 'https://yourteam.atlassian.net/browse/ENG-3' },
   ];
 
   it('groups by issueType by default', async () => {

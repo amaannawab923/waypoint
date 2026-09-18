@@ -291,7 +291,8 @@ function issueUrl(site: string, key: string): string {
  */
 function toSummaryForGadget(
   issue: JiraIssue,
-): { key: string; summary: string; status: string; issueType: string; updated: string } {
+  site: string,
+): { key: string; summary: string; status: string; issueType: string; updated: string; url: string } {
   const fields = issue.fields ?? {};
   const key = str(issue.key);
   return {
@@ -300,6 +301,12 @@ function toSummaryForGadget(
     status: nested(fields, 'status', 'name'),
     issueType: nested(fields, 'issuetype', 'name'),
     updated: str(fields.updated),
+    // ROAD-157 P0: without this, Copilot's rendered gadget tables have no
+    // way to link a Key cell anywhere — the model can only echo the bare
+    // key, which the user then has to retype into Jira themselves. Same
+    // issueUrl helper toNormalized already uses for every other issue shape
+    // this provider returns.
+    url: issueUrl(site, key),
   };
 }
 
@@ -1052,7 +1059,7 @@ export class JiraProvider implements TicketProvider {
       result.value?.isLast === false ||
       (typeof result.value?.nextPageToken === 'string' && result.value.nextPageToken.length > 0);
 
-    return { jql, issues: page.map((issue) => toSummaryForGadget(issue)), truncated };
+    return { jql, issues: page.map((issue) => toSummaryForGadget(issue, this.site)), truncated };
   }
 
   // ---------------------------------------------------------------------

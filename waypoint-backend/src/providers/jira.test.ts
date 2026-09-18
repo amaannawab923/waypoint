@@ -971,7 +971,16 @@ describe('jiraProvider.searchIssuesByFilter (ROAD-157)', () => {
     );
     expect(result).toEqual({
       jql: 'filter = 10123 AND assignee = currentUser() ORDER BY issuetype ASC, updated DESC',
-      issues: [{ key: 'ENG-4', summary: 'Login times out', status: 'In Progress', issueType: 'Bug', updated: '2026-08-20T00:00:00.000Z' }],
+      issues: [
+        {
+          key: 'ENG-4',
+          summary: 'Login times out',
+          status: 'In Progress',
+          issueType: 'Bug',
+          updated: '2026-08-20T00:00:00.000Z',
+          url: `https://${SITE}/browse/ENG-4`,
+        },
+      ],
       truncated: false,
     });
   });
