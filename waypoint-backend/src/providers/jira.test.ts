@@ -568,7 +568,11 @@ describe('jiraProvider.listDashboards (ROAD-157)', () => {
 
     const result = await provider().listDashboards('sprint', 1);
 
-    expect(jiraGet).toHaveBeenCalledWith(CREDENTIAL, '/rest/api/3/dashboard', { maxResults: '100' });
+    // Fixed at DASHBOARD_FETCH_SIZE (200), independent of the `limit`
+    // passed in — round-1 review (ROAD-157): the name filter runs
+    // client-side against this response, so a small `limit` (1, here) must
+    // not also shrink the pool Jira is asked to search within.
+    expect(jiraGet).toHaveBeenCalledWith(CREDENTIAL, '/rest/api/3/dashboard', { maxResults: '200' });
     expect(result).toEqual([{ id: '10810', name: 'Sprint Health', isFavourite: true }]);
   });
 
@@ -633,6 +637,19 @@ describe('jiraProvider.resolveGadgetBinding (ROAD-157)', () => {
 
   it('comes back unresolved, not a guess, when the gadget has no config at all', async () => {
     vi.mocked(jiraGet).mockResolvedValue(fail('not_found'));
+
+    expect(await provider().resolveGadgetBinding('10810', '161155')).toEqual({
+      kind: 'unresolved',
+      reason: 'This gadget has no stored configuration to resolve.',
+    });
+  });
+
+  // Round-1 review (ROAD-157): describeJiraDashboardHandler resolves every
+  // gadget on a dashboard concurrently — one gadget this account can't read
+  // the config of ('forbidden') must degrade to unresolved the same way
+  // 'not_found' does, not throw and fail the whole batch.
+  it('comes back unresolved, not a throw, when this account cannot read the gadget config', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(fail('forbidden'));
 
     expect(await provider().resolveGadgetBinding('10810', '161155')).toEqual({
       kind: 'unresolved',

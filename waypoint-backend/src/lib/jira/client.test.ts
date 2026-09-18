@@ -323,4 +323,28 @@ describe('path allowlist', () => {
     await jiraGet(CREDENTIAL, path);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  // Round-1 review (ROAD-157): a "../" segment in an interpolated id (e.g. a
+  // dashboard gadget id, which comes from Jira's own response body, not a
+  // literal this codebase wrote) resolves away under new URL(...) before
+  // fetch ever sees it — so the check has to run against the NORMALIZED
+  // path, not the pre-normalization string a naive prefix test would see.
+  it('checks the path fetch will actually receive, not the pre-normalization string', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ ok: true }));
+
+    // Would prefix-match '/rest/api/3/dashboard' as a raw string, but
+    // normalizes (via new URL) to '/rest/api/3/gadget' — outside every
+    // allowed prefix.
+    await expect(
+      jiraGet(CREDENTIAL, `/rest/api/3/dashboard/${encodeURIComponent('..')}/gadget`),
+    ).rejects.toThrow(/outside this client's allowed path scope/);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // Normalizes to '/rest/api/3/', which is still inside the allowed
+    // '/rest/api/3/filter' family only by accident of this specific example
+    // — asserting the actually-dispatched URL, not just that fetch fired,
+    // so a future prefix change can't silently make this vacuous.
+    await jiraGet(CREDENTIAL, `/rest/api/3/filter/${encodeURIComponent('..')}/filter/10123`);
+    expect(call()[0]).toBe('https://waypoint123.atlassian.net/rest/api/3/filter/10123');
+  });
 });

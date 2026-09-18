@@ -75,15 +75,29 @@ export async function listJiraDashboardsHandler(
   return jsonResult({ dashboards });
 }
 
+// Round-1 review (ROAD-157): describeJiraDashboardHandler fires up to two
+// requests PER gadget (one config read, plus one more if that config
+// resolves to a filter) — unlike every other list tool in this codebase, a
+// dashboard's own gadget count isn't something this app's own query
+// controls (see LIMIT_SCHEMA's own doc comment on every other list tool).
+// A wide, real, org-shared dashboard could otherwise mean dozens of
+// concurrent authenticated Jira requests from one tool call, and Jira
+// rate-limiting even one of them fails the whole batch (getGadgetConfig's
+// own comment on why 'forbidden' degrades to null rather than throwing
+// doesn't help against a genuine 429). Capped well below LIMIT_SCHEMA's own
+// ceiling — a dashboard's gadgets are a fixed, author-curated layout, not a
+// query result a user would ever want paged through the way a ticket list
+// is.
+const MAX_GADGETS_TO_DESCRIBE = 25;
+
 export async function describeJiraDashboardHandler(jira: Jira, { dashboardId }: { dashboardId: string }) {
   if (!jira) return validationErrorResult(JIRA_NOT_CONNECTED);
-  const gadgets = await jira.getDashboardGadgets(dashboardId);
-  if (!gadgets) return notFoundResult('dashboard');
+  const allGadgets = await jira.getDashboardGadgets(dashboardId);
+  if (!allGadgets) return notFoundResult('dashboard');
 
-  // One resolveGadgetBinding call per gadget — each is its own request (a
-  // dashboard's gadget list carries no config), so this is bounded by how
-  // many gadgets a real dashboard has (typically single digits), not by any
-  // list this app controls the size of.
+  const truncated = allGadgets.length > MAX_GADGETS_TO_DESCRIBE;
+  const gadgets = truncated ? allGadgets.slice(0, MAX_GADGETS_TO_DESCRIBE) : allGadgets;
+
   const described = await Promise.all(
     gadgets.map(async (gadget) => ({
       gadgetId: gadget.id,
@@ -92,7 +106,7 @@ export async function describeJiraDashboardHandler(jira: Jira, { dashboardId }: 
       binding: await jira.resolveGadgetBinding(dashboardId, gadget.id),
     })),
   );
-  return jsonResult({ dashboardId, gadgets: described });
+  return jsonResult({ dashboardId, gadgets: described, truncated });
 }
 
 export async function searchDashboardGadgetIssuesHandler(
@@ -142,14 +156,21 @@ export async function searchDashboardGadgetIssuesHandler(
       // A first-class outcome, not an error: hand back what's on the
       // dashboard and what filters this account can see, so Copilot can ask
       // the user which one backs the gadget instead of guessing or giving up.
-      const [gadgets, filters] = await Promise.all([
-        jira.getDashboardGadgets(dashboardId),
-        jira.searchFilters(undefined, 20),
-      ]);
+      const gadgets = await jira.getDashboardGadgets(dashboardId);
+      // Narrowed by the gadget's own title, not an unfiltered page of every
+      // filter this account can see (round-1 review, ROAD-157) — an
+      // unnarrowed search returns whatever 20 filters Jira lists first,
+      // which can include filters shared by other users and unrelated to
+      // anything this request named; a name-matched set is at least
+      // responsive to the dashboard the user actually asked about, and
+      // still leaves "no match" (an empty list) as an honest answer rather
+      // than a wrong guess.
+      const thisGadget = gadgets?.find((g) => g.id === gadgetId);
+      const filters = await jira.searchFilters(thisGadget?.title, 20);
       return jsonResult({
         needsBinding: true,
         reason: binding.reason,
-        dashboardGadgets: gadgets ?? [],
+        dashboardGadgets: (gadgets ?? []).slice(0, MAX_GADGETS_TO_DESCRIBE),
         visibleFilters: filters,
       });
     }
@@ -220,7 +241,8 @@ export function registerDashboardTools(server: McpServer, jiraCredential: JiraCr
       description:
         "List one dashboard's gadgets, and for each gadget, what it's bound to: a saved filter (with its id, name, and JQL), a project, or \"unresolved\" — a gadget whose configuration doesn't map to either. " +
         'Unresolved is a normal, expected outcome (not every gadget type is a filter/project source) — when you see it and still need that gadget\'s issues, ask the user which saved filter backs it, or call this dashboard\'s search_dashboard_gadget_issues with an explicit filterId if you already know one. ' +
-        "Always call this before search_dashboard_gadget_issues so you're citing a real gadget/filter rather than guessing.",
+        "Always call this before search_dashboard_gadget_issues so you're citing a real gadget/filter rather than guessing. " +
+        'A truncated flag in the result means only the first 25 gadgets on an unusually large dashboard were resolved — tell the user rather than assuming you saw everything.',
       inputSchema: { dashboardId: DASHBOARD_ID.describe('A dashboard id, from list_jira_dashboards.') },
     },
     withErrorSafetyNet(

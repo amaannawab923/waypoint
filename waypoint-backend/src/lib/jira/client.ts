@@ -21,17 +21,25 @@
 const REQUEST_TIMEOUT_MS = 20_000;
 
 /**
- * Every path prefix this client will send a request to, checked before any
- * network call in jiraRequest below.
+ * Every path prefix this client will send a request to, checked in
+ * jiraRequest below against url.pathname — the normalized path `fetch` will
+ * actually be sent, not the raw `path` a caller passed in.
  *
- * `path` is never external input — it is always a hardcoded literal in this
- * file's callers (providers/jira.ts), with only already-encoded id segments
- * interpolated in (see e.g. encodeURIComponent(key) at each call site) — so
- * this cannot be reached by a model or a network caller today. It exists as a
- * defense against this client's own scope quietly growing: a future caller
- * adding a new Jira endpoint has to widen this list in the same diff, which
- * is the point at which a reviewer sees it, rather than the scope drifting
- * past whatever the header comment happened to still say.
+ * The normalization matters: most of `path` is a hardcoded literal in this
+ * file's callers (providers/jira.ts), but an id segment interpolated into it
+ * is not always this codebase's own value — resolveGadgetBinding's gadgetId
+ * comes from a dashboard's own gadget list, which is Jira's response body,
+ * not a literal this file wrote (round-1 review, ROAD-157). `new URL(...)`
+ * resolves ".." segments before assertAllowedPath ever sees the string, so
+ * checking the pre-normalization `path` would let a crafted id like ".."
+ * pass a prefix test on a string that is not what actually goes out over
+ * the network. Checking url.pathname closes that regardless of where a
+ * future id segment's value originates.
+ *
+ * It exists as a defense against this client's own scope quietly growing: a
+ * future caller adding a new Jira endpoint has to widen this list in the
+ * same diff, which is the point at which a reviewer sees it, rather than the
+ * scope drifting past whatever the header comment happened to still say.
  *
  * A mismatch is this codebase's own bug, never a caller-recoverable outcome,
  * so it throws rather than degrading to a JiraResult failure the model could
@@ -160,8 +168,18 @@ async function jiraRequest<T>(
     body?: unknown;
   },
 ): Promise<JiraResult<T>> {
-  assertAllowedPath(init.path);
   const url = new URL(`https://${credential.site}${init.path}`);
+  // Checked against url.pathname — what `fetch` will actually be sent —
+  // never against init.path directly. Round-1 review (ROAD-157): a value
+  // interpolated into init.path can itself be Jira-response-derived (a
+  // dashboard's own gadget id, not a hardcoded literal — see
+  // providers/jira.ts's resolveGadgetBinding chain), so "is a hardcoded
+  // caller" is no longer a safe assumption to check the pre-normalization
+  // string against. `new URL` resolves ".." segments before this ever sees
+  // the string; checking init.path instead would let a crafted id like ".."
+  // pass a prefix test while the request that actually goes out lands
+  // somewhere else in this same allowed host.
+  assertAllowedPath(url.pathname);
   for (const [key, value] of Object.entries(init.query ?? {})) url.searchParams.set(key, value);
 
   const controller = new AbortController();

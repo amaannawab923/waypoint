@@ -100,6 +100,17 @@ const NUMERIC_ID = /^\d+$/;
 const ACCOUNT_ID = /^[A-Za-z0-9:-]{1,128}$/;
 
 /**
+ * How many dashboards listDashboards asks Jira for, regardless of the
+ * caller's own `limit` — matches mcp/ticketTools.ts's MAX_LIST_LIMIT (not
+ * imported directly: providers/ is the layer mcp/ builds on, and importing
+ * the other way would invert that). Fixed rather than tied to `limit`
+ * because the name filter runs client-side against whatever this returns —
+ * a small `limit` (the common case) must not also mean "search a smaller
+ * pool for a name match" (round-1 review, ROAD-157).
+ */
+const DASHBOARD_FETCH_SIZE = 200;
+
+/**
  * Quotes a value for JQL.
  *
  * This is the security boundary for a model-supplied search string. JQL is a
@@ -520,9 +531,18 @@ export class JiraProvider implements TicketProvider {
     nameContains: string | undefined,
     limit: number,
   ): Promise<{ id: string; name: string; isFavourite: boolean }[]> {
+    // Always requests DASHBOARD_FETCH_SIZE from Jira, not `limit` — the name
+    // filter below runs client-side against whatever Jira returns, so tying
+    // the fetch size to the caller's final result-count cap would make a
+    // small `limit` (the common case) silently search a smaller pool for a
+    // name match, which is the opposite of what limit means for every other
+    // list tool in this codebase. Fixed at the tool schema's own ceiling
+    // (MAX_LIST_LIMIT) so this can never under-serve a caller regardless of
+    // what `limit` they asked for (round-1 review, ROAD-157: this
+    // previously hardcoded '100', silently below that ceiling).
     const result = await jiraGet<{
       dashboards?: { id?: unknown; name?: unknown; isFavourite?: unknown }[];
-    }>(this.credential, '/rest/api/3/dashboard', { maxResults: '100' });
+    }>(this.credential, '/rest/api/3/dashboard', { maxResults: String(DASHBOARD_FETCH_SIZE) });
     if (!result.ok) unavailable(result);
 
     const needle = nameContains?.trim().toLowerCase();
@@ -569,7 +589,13 @@ export class JiraProvider implements TicketProvider {
       `/rest/api/3/dashboard/${encodeURIComponent(dashboardId)}/items/${encodeURIComponent(gadgetId)}/properties/config`,
     );
     if (!result.ok) {
-      if (result.reason === 'not_found') return null;
+      // 'forbidden', not just 'not_found', is treated as "nothing to
+      // resolve" (round-1 review, ROAD-157): describeJiraDashboardHandler
+      // resolves every gadget on a dashboard concurrently, and one gadget
+      // this account can't read the config of must not fail the whole
+      // batch — same posture getFilter below already takes for the
+      // equivalent case on a filter.
+      if (result.reason === 'not_found' || result.reason === 'forbidden') return null;
       unavailable(result);
     }
     const value = result.value?.value;

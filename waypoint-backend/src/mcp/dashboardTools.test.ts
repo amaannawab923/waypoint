@@ -120,7 +120,29 @@ describe('describeJiraDashboardHandler', () => {
           binding: { kind: 'unresolved', reason: 'no config' },
         },
       ],
+      truncated: false,
     });
+  });
+
+  // Round-1 review (ROAD-157): resolving every gadget concurrently is
+  // bounded, not open-ended — a dashboard's gadget count is not something
+  // this app's own query controls, unlike every other list tool's `limit`.
+  it('resolves at most 25 gadgets and reports truncated, rather than firing an unbounded burst of requests', async () => {
+    const stub = connectJira();
+    const gadgets = Array.from({ length: 30 }, (_, i) => ({
+      id: `${10000 + i}`,
+      title: `Gadget ${i}`,
+      moduleKey: 'x',
+    }));
+    stub.getDashboardGadgets.mockResolvedValue(gadgets);
+    stub.resolveGadgetBinding.mockResolvedValue({ kind: 'unresolved', reason: 'no config' });
+
+    const result = await describeJiraDashboardHandler(jira, { dashboardId: '10810' });
+
+    expect(stub.resolveGadgetBinding).toHaveBeenCalledTimes(25);
+    const parsed = parse(result);
+    expect(parsed.gadgets).toHaveLength(25);
+    expect(parsed.truncated).toBe(true);
   });
 });
 
@@ -232,6 +254,9 @@ describe('searchDashboardGadgetIssuesHandler — dashboard+gadget path', () => {
 
     expect(result.isError).toBeUndefined();
     expect(stub.searchIssuesByFilter).not.toHaveBeenCalled();
+    // Narrowed by the unresolved gadget's own title, not an unfiltered page
+    // of every filter this account can see (round-1 review, ROAD-157).
+    expect(stub.searchFilters).toHaveBeenCalledWith('Two-dimensional filter', 20);
     expect(parse(result)).toEqual({
       needsBinding: true,
       reason: "doesn't match a recognized binding",
