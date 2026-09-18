@@ -819,6 +819,21 @@ describe('jiraProvider.getFilter / searchFilters (ROAD-157)', () => {
     expect(result.truncated).toBe(true);
   });
 
+  // Round-9 review (ROAD-157): the same application-side bound
+  // searchIssuesByFilter and listDashboards already make for themselves —
+  // trusting maxResults alone would leave this the only list producer in
+  // the feature without one. Confirms the bound doesn't distort truncated,
+  // which is computed from the pre-slice row count either way.
+  it('bounds the returned filters to limit even if Jira answers with more rows than requested', async () => {
+    const values = Array.from({ length: 25 }, (_, i) => ({ id: `${i}`, name: `Filter ${i}` }));
+    vi.mocked(jiraGet).mockResolvedValue(ok({ values, isLast: true }));
+
+    const result = await provider().searchFilters('team', 20);
+
+    expect(result.filters).toHaveLength(20);
+    expect(result.truncated).toBe(true);
+  });
+
   // Round-3 review (ROAD-157): this used to fall back to an unfiltered page
   // of every saved filter the account can see — the exact disclosure
   // aperture rounds 1/2 were trying to close, previously guarded only at

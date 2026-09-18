@@ -287,6 +287,7 @@ describe('searchDashboardGadgetIssuesHandler — dashboard+gadget path', () => {
       reason: "doesn't match a recognized binding",
       dashboardGadgets: [{ id: '161155', title: 'Two-dimensional filter', moduleKey: 'x' }],
       dashboardGadgetsTruncated: false,
+      visibleFiltersSearched: true,
       visibleFilters: [{ id: '10123', name: 'My Team Board' }],
       visibleFiltersTruncated: false,
     });
@@ -380,6 +381,12 @@ describe('searchDashboardGadgetIssuesHandler — dashboard+gadget path', () => {
     const parsed = parse(result);
     expect(parsed.needsBinding).toBe(true);
     expect(parsed.visibleFilters).toEqual([]);
+    // Round-9 review (ROAD-157): visibleFilters: [] here means "no search
+    // ran" (no real title to narrow by), NOT "searched and found nothing"
+    // — visibleFiltersSearched: false is the signal that tells them apart,
+    // so Copilot doesn't report "your account has no visible saved
+    // filters" when no search was actually attempted.
+    expect(parsed.visibleFiltersSearched).toBe(false);
   });
 
   it('passes no real narrowing term (and gets no candidate filters back) when the matched gadget has no title', async () => {
@@ -397,6 +404,7 @@ describe('searchDashboardGadgetIssuesHandler — dashboard+gadget path', () => {
     const parsed = parse(result);
     expect(parsed.needsBinding).toBe(true);
     expect(parsed.visibleFilters).toEqual([]);
+    expect(parsed.visibleFiltersSearched).toBe(false);
   });
 
   it('refuses a project-bound gadget with a message pointing at search_tickets instead of guessing', async () => {

@@ -803,13 +803,27 @@ export class JiraProvider implements TicketProvider {
     // short of `limit`/`total` and wrongly report complete.
     const rawIsLast = result.value?.isLast;
     const rawTotal = result.value?.total;
+    // rawValues.length > limit is checked FIRST, unconditionally (round-9
+    // review) — the exact fix round 8 had to add to searchIssuesByFilter
+    // after the same omission there: without this leading disjunct, a
+    // response that over-returns AND claims isLast: true would have the
+    // excess silently discarded by the slice below while every tier of the
+    // isLast/total/row-count chain agreed the page was complete.
     const truncated =
-      typeof rawIsLast === 'boolean'
+      rawValues.length > limit ||
+      (typeof rawIsLast === 'boolean'
         ? rawIsLast === false
         : typeof rawTotal === 'number'
           ? rawTotal > rawValues.length
-          : rawValues.length >= limit;
-    return { filters, truncated };
+          : rawValues.length >= limit);
+    // Bounded to `limit` regardless of how many rows Jira actually returned
+    // (round-9 review) — the same application-side guarantee
+    // searchIssuesByFilter makes for itself (round 7) and listDashboards
+    // already made from the start, rather than trusting maxResults alone
+    // to be honored. Doesn't affect `truncated`: the tiers above already
+    // compare against rawValues.length, the pre-slice count.
+    const page = filters.length > limit ? filters.slice(0, limit) : filters;
+    return { filters: page, truncated };
   }
 
   /**

@@ -174,6 +174,19 @@ export async function searchDashboardGadgetIssuesHandler(
       // provider now, not a ternary here, so every caller inherits it —
       // this site doesn't need its own copy of the check, on purpose).
       const thisGadget = gadgets.find((g) => g.id === gadgetId);
+      // A real, non-empty narrowing term — the same condition
+      // jira.searchFilters itself gates its own refusal on. Tracked here,
+      // separately from the call's result, because "no term" and "term
+      // found nothing" produce the IDENTICAL {filters: [], truncated:
+      // false} shape from searchFilters, and round-9 review found that
+      // collapse meant an untitled or stale-gadgetId request (both
+      // ordinary, reachable inputs — not malformed Jira responses) reported
+      // visibleFiltersTruncated: false on a payload where no search ever
+      // ran, actively asserting "your account has no visible saved
+      // filters" rather than the true "nothing to narrow by, so nothing
+      // was searched". visibleFiltersSearched below is that missing third
+      // state, distinct from both truncated:false readings.
+      const hasNarrowingTerm = !!thisGadget?.title.trim();
       const { filters, truncated: visibleFiltersTruncated } = await jira.searchFilters(thisGadget?.title, 20);
       // find() above already searched the FULL, unsliced list — the cap
       // below only affects what's reported, not the narrowing term used
@@ -194,6 +207,7 @@ export async function searchDashboardGadgetIssuesHandler(
         reason: binding.reason,
         dashboardGadgets: gadgets.slice(0, MAX_GADGETS_TO_DESCRIBE),
         dashboardGadgetsTruncated: gadgets.length > MAX_GADGETS_TO_DESCRIBE,
+        visibleFiltersSearched: hasNarrowingTerm,
         visibleFilters: filters,
         visibleFiltersTruncated,
       });
@@ -293,6 +307,7 @@ export function registerDashboardTools(server: McpServer, jiraCredential: JiraCr
         'Pass EITHER (dashboardId and gadgetId) — resolved automatically via the same binding describe_jira_dashboard shows — OR filterId directly, never both. ' +
         'The exact JQL that ran is always echoed back in the result, so the user can audit it or open it in Jira themselves. ' +
         'If the gadget cannot be auto-resolved, this returns needsBinding with the dashboard\'s gadgets and the account\'s visible filters instead of guessing — ask the user which filter backs it. ' +
+        'When needsBinding is returned, check visibleFiltersSearched before reading visibleFilters: false means the gadget had no name to search by (an untitled gadget, or gadgetId wasn\'t found on that dashboard) and no search ran at all — do not say "there are no matching filters" in that case, since none were looked for; ask the user for a filterId directly instead. ' +
         'There is no raw-JQL parameter: build the query from filterId/issueTypes/assigneeScope only. ' +
         'There is no total/count field: the number of issues actually in the response (sum of groups[].count) is a real count of what\'s here, but is a FLOOR on the real match count whenever truncated is true — never state or imply a total without checking truncated first, and say so ("at least N, more may exist") rather than reporting a possibly-partial count as complete.',
       inputSchema: {
