@@ -794,6 +794,23 @@ describe('jiraProvider.getFilter / searchFilters (ROAD-157)', () => {
     });
   });
 
+  // Round-8 review (ROAD-157): the tier gate is `typeof rawIsLast ===
+  // 'boolean'`, not a truthiness check — a present-but-non-boolean isLast
+  // (a malformed or proxied response rendering it as the string "false")
+  // must fall through to the total tier rather than being coerced. This
+  // pins that the gate itself, not just the fallback chain's ordering, is
+  // what a future "simplify this" pass could break.
+  it('falls through to total when isLast is present but not boolean-shaped', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(
+      ok({ values: [{ id: '10123', name: 'My Team Board' }], isLast: 'false', total: 5 }),
+    );
+
+    expect(await provider().searchFilters('team', 20)).toEqual({
+      filters: [{ id: '10123', name: 'My Team Board' }],
+      truncated: true,
+    });
+  });
+
   it('falls back to a plain row-count comparison when both isLast and total are absent', async () => {
     const values = Array.from({ length: 20 }, (_, i) => ({ id: `${i}`, name: `Filter ${i}` }));
     vi.mocked(jiraGet).mockResolvedValue(ok({ values }));
@@ -964,7 +981,13 @@ describe('jiraProvider.searchIssuesByFilter (ROAD-157)', () => {
   // sentinel was removed in round 6, leaving nothing application-side
   // limiting how many rows reach the model's context if Jira ever answers
   // with more than maxResults asked for.
-  it('bounds the returned issues to limit even if Jira answers with more rows than requested', async () => {
+  // Round-8 review (ROAD-157): the slice below existed before this test
+  // gained its truncated assertion — without the `issues.length >
+  // options.limit` disjunct, this exact scenario (Jira over-returns AND
+  // claims isLast: true) silently discarded the excess rows while
+  // reporting truncated: false, the precise failure this feature's whole
+  // truncation machinery exists to prevent.
+  it('bounds the returned issues to limit, and reports truncated, even if Jira answers with more rows than requested', async () => {
     const issues = Array.from({ length: 8 }, (_, i) => ({
       key: `ENG-${i}`,
       fields: { summary: `Issue ${i}`, status: { name: 'Open' }, issuetype: { name: 'Task' }, updated: '2026-08-20T00:00:00.000Z' },
@@ -974,5 +997,6 @@ describe('jiraProvider.searchIssuesByFilter (ROAD-157)', () => {
     const result = await provider().searchIssuesByFilter({ filterId: '10123', assigneeScope: 'me', limit: 5 });
 
     expect(result.issues).toHaveLength(5);
+    expect(result.truncated).toBe(true);
   });
 });

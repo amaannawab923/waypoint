@@ -781,7 +781,8 @@ export class JiraProvider implements TicketProvider {
       total?: unknown;
     }>(this.credential, '/rest/api/3/filter/search', { maxResults: String(limit), filterName: needle });
     if (!result.ok) unavailable(result);
-    const filters = (result.value?.values ?? [])
+    const rawValues = result.value?.values ?? [];
+    const filters = rawValues
       .filter((f): f is Record<string, unknown> => !!f && typeof f === 'object')
       .map((f) => ({ id: idStr(f.id), name: str(f.name) }))
       .filter((f) => f.id);
@@ -794,15 +795,20 @@ export class JiraProvider implements TicketProvider {
     // (round-7 review: a fallback matching listDashboards' own pattern,
     // closing the one signal-absent gap this method didn't originally
     // cover) — only falling all the way back to a plain row-count
-    // comparison if both are missing.
+    // comparison if both are missing. Every tier compares against
+    // rawValues.length, the count BEFORE the id-less-row filter above, not
+    // filters.length (round-8 review, matching listDashboards' own use of
+    // its pre-filter rawDashboards.length) — a response with a full page
+    // where one row happened to lack a usable id would otherwise read as
+    // short of `limit`/`total` and wrongly report complete.
     const rawIsLast = result.value?.isLast;
     const rawTotal = result.value?.total;
     const truncated =
       typeof rawIsLast === 'boolean'
         ? rawIsLast === false
         : typeof rawTotal === 'number'
-          ? rawTotal > filters.length
-          : filters.length >= limit;
+          ? rawTotal > rawValues.length
+          : rawValues.length >= limit;
     return { filters, truncated };
   }
 
@@ -880,9 +886,6 @@ export class JiraProvider implements TicketProvider {
     const issues = (result.value?.issues ?? []).filter(
       (issue): issue is JiraIssue => !!issue && typeof issue === 'object' && !!str((issue as JiraIssue).key),
     );
-    const truncated =
-      result.value?.isLast === false ||
-      (typeof result.value?.nextPageToken === 'string' && result.value.nextPageToken.length > 0);
     // Bounded to `limit` regardless of how many rows Jira actually returned
     // (round-7 review: this bound was dropped when the +1 sentinel was
     // removed in round 6, leaving nothing but maxResults itself limiting
@@ -891,6 +894,17 @@ export class JiraProvider implements TicketProvider {
     // tool in this codebase makes explicitly, rather than trusting a remote
     // API's own enforcement of its own contract).
     const page = issues.length > options.limit ? issues.slice(0, options.limit) : issues;
+    // issues.length > options.limit is itself a truncation reason, ORed in
+    // alongside isLast/nextPageToken (round-8 review): round 7 added the
+    // slice above without this disjunct, so a response that over-returned
+    // AND claimed isLast: true had the excess silently discarded while
+    // truncated reported false — reporting a shorter list as complete,
+    // which is the one thing every fix in this feature exists to prevent.
+    // Mirrors listDashboards' own `dashboards.length > limit || …` pattern.
+    const truncated =
+      issues.length > options.limit ||
+      result.value?.isLast === false ||
+      (typeof result.value?.nextPageToken === 'string' && result.value.nextPageToken.length > 0);
 
     return { jql, issues: page.map((issue) => toSummaryForGadget(issue)), truncated };
   }
