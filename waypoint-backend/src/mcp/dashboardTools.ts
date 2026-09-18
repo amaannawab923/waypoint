@@ -103,7 +103,7 @@ export async function describeJiraDashboardHandler(jira: Jira, { dashboardId }: 
       gadgetId: gadget.id,
       title: gadget.title,
       moduleKey: gadget.moduleKey,
-      binding: await jira.resolveGadgetBinding(dashboardId, gadget.id),
+      binding: await jira.resolveGadgetBinding(dashboardId, gadget.id, gadget.moduleKey),
     })),
   );
   return jsonResult({ dashboardId, gadgets: described, truncated });
@@ -141,29 +141,37 @@ export async function searchDashboardGadgetIssuesHandler(
     return validationErrorResult('accountId is required when assigneeScope is "accountId".');
   }
 
-  let filterId: string;
   let resolvedFrom: Record<string, unknown>;
+  // Either path below ends by populating exactly one of these — never both,
+  // never neither — and the shared execution/response code after the
+  // if/else dispatches on which one is set rather than re-deriving anything
+  // about how the search was resolved.
+  let filterRun: { filterId: string } | undefined;
+  let builtinRun: { jql: string } | undefined;
 
   if (hasFilter) {
-    filterId = args.filterId as string;
-    resolvedFrom = { kind: 'filter', filterId };
+    filterRun = { filterId: args.filterId as string };
+    resolvedFrom = { kind: 'filter', filterId: args.filterId };
   } else {
     const dashboardId = args.dashboardId as string;
     const gadgetId = args.gadgetId as string;
-    const binding = await jira.resolveGadgetBinding(dashboardId, gadgetId);
+    // Fetched once, up front (round-10 review) — resolveGadgetBinding needs
+    // this gadget's moduleKey to check the built-in-gadget JQL map before
+    // touching the network for a config read that a recognized built-in
+    // doesn't have anything useful in anyway, and the (formerly separate)
+    // fetch inside the `unresolved` branch below reused the exact same call
+    // with the exact same arguments — one fetch now serves both.
+    const gadgets = await jira.getDashboardGadgets(dashboardId);
+    if (!gadgets) return notFoundResult('dashboard');
+    const thisGadget = gadgets.find((g) => g.id === gadgetId);
+
+    const binding = await jira.resolveGadgetBinding(dashboardId, gadgetId, thisGadget?.moduleKey);
 
     if (binding.kind === 'unresolved') {
       // A first-class outcome, not an error: hand back what's on the
       // dashboard and what filters this account can see, so Copilot can ask
       // the user which one backs the gadget instead of guessing or giving up.
-      const gadgets = await jira.getDashboardGadgets(dashboardId);
-      // resolveGadgetBinding above degrades a nonexistent dashboard/gadget
-      // to 'unresolved' too (its own config read just 404s the same as a
-      // real gadget with no config) — so this is the first point that can
-      // actually tell "the dashboard is gone" apart from "the gadget has no
-      // recognized binding", and the two deserve different answers.
-      if (!gadgets) return notFoundResult('dashboard');
-
+      //
       // Narrowed by the gadget's own title, not an unfiltered page of every
       // filter this account can see (round-1 review, ROAD-157) — an
       // unnarrowed search returns whatever 20 filters Jira lists first,
@@ -173,7 +181,7 @@ export async function searchDashboardGadgetIssuesHandler(
       // an empty/missing name (round-3 review: that guard lives in the
       // provider now, not a ternary here, so every caller inherits it —
       // this site doesn't need its own copy of the check, on purpose).
-      const thisGadget = gadgets.find((g) => g.id === gadgetId);
+      //
       // A real, non-empty narrowing term — the same condition
       // jira.searchFilters itself gates its own refusal on. Tracked here,
       // separately from the call's result, because "no term" and "term
@@ -219,24 +227,46 @@ export async function searchDashboardGadgetIssuesHandler(
           `Use search_tickets with provider="jira" and projectId="${binding.projectKey}" instead.`,
       );
     }
-    filterId = binding.filterId;
-    resolvedFrom = {
-      kind: 'filter',
-      filterId: binding.filterId,
-      filterName: binding.filterName,
-      dashboardId,
-      gadgetId,
-    };
+    if (binding.kind === 'builtinQuery') {
+      // The built-in's own definition already IS an assignee scope (see
+      // searchIssuesByBuiltinQuery's own doc comment) — accepting
+      // assigneeScope:'accountId' here would silently contradict the
+      // gadget's own meaning ("Assigned to Me", but for someone else),
+      // which is not a request this gadget can honor, so it's refused
+      // explicitly rather than either ignored or quietly honored wrong.
+      if (args.assigneeScope === 'accountId') {
+        return validationErrorResult(
+          `This gadget ("${binding.label}") always means the connected account's own issues — ` +
+            'assigneeScope "accountId" isn\'t supported for it. Omit assigneeScope, or pass filterId directly for a different assignee.',
+        );
+      }
+      builtinRun = { jql: binding.jql };
+      resolvedFrom = { kind: 'builtinGadget', label: binding.label, dashboardId, gadgetId };
+    } else {
+      filterRun = { filterId: binding.filterId };
+      resolvedFrom = {
+        kind: 'filter',
+        filterId: binding.filterId,
+        filterName: binding.filterName,
+        dashboardId,
+        gadgetId,
+      };
+    }
   }
 
   const effectiveLimit = resolveLimit(args.limit);
-  const result = await jira.searchIssuesByFilter({
-    filterId,
-    assigneeScope: args.assigneeScope,
-    accountId: args.accountId,
-    issueTypes: args.issueTypes,
-    limit: effectiveLimit,
-  });
+  const result = filterRun
+    ? await jira.searchIssuesByFilter({
+        filterId: filterRun.filterId,
+        assigneeScope: args.assigneeScope,
+        accountId: args.accountId,
+        issueTypes: args.issueTypes,
+        limit: effectiveLimit,
+      })
+    : await jira.searchIssuesByBuiltinQuery((builtinRun as { jql: string }).jql, {
+        issueTypes: args.issueTypes,
+        limit: effectiveLimit,
+      });
 
   // No `total` field, deliberately (round-5 review, ROAD-157): the only
   // candidate value was result.issues.length AFTER searchIssuesByFilter's
@@ -287,8 +317,8 @@ export function registerDashboardTools(server: McpServer, jiraCredential: JiraCr
     'describe_jira_dashboard',
     {
       description:
-        "List one dashboard's gadgets, and for each gadget, what it's bound to: a saved filter (with its id, name, and JQL), a project, or \"unresolved\" — a gadget whose configuration doesn't map to either. " +
-        'Unresolved is a normal, expected outcome (not every gadget type is a filter/project source) — when you see it and still need that gadget\'s issues, ask the user which saved filter backs it, or call this dashboard\'s search_dashboard_gadget_issues with an explicit filterId if you already know one. ' +
+        "List one dashboard's gadgets, and for each gadget, what it's bound to: a saved filter (with its id, name, and JQL), a project, a recognized built-in gadget's own fixed query (e.g. \"Assigned to Me\"), or \"unresolved\" — a gadget whose configuration doesn't map to any of those. " +
+        'Unresolved is a normal, expected outcome (most gadget types, including charts and anything not table-shaped, aren\'t supported yet) — when you see it and still need that gadget\'s issues, ask the user which saved filter backs it, or call this dashboard\'s search_dashboard_gadget_issues with an explicit filterId if you already know one. ' +
         "Always call this before search_dashboard_gadget_issues so you're citing a real gadget/filter rather than guessing. " +
         'A truncated flag in the result means only the first 25 gadgets on an unusually large dashboard were resolved — tell the user rather than assuming you saw everything.',
       inputSchema: { dashboardId: DASHBOARD_ID.describe('A dashboard id, from list_jira_dashboards.') },
@@ -308,6 +338,7 @@ export function registerDashboardTools(server: McpServer, jiraCredential: JiraCr
         'The exact JQL that ran is always echoed back in the result, so the user can audit it or open it in Jira themselves. ' +
         'If the gadget cannot be auto-resolved, this returns needsBinding with the dashboard\'s gadgets and the account\'s visible filters instead of guessing — ask the user which filter backs it. ' +
         'When needsBinding is returned, check visibleFiltersSearched before reading visibleFilters: false means the gadget had no name to search by (an untitled gadget, or gadgetId wasn\'t found on that dashboard) and no search ran at all — do not say "there are no matching filters" in that case, since none were looked for; ask the user for a filterId directly instead. ' +
+        'A small set of Jira\'s built-in table gadgets (currently: "Assigned to Me") resolve automatically to that gadget\'s own fixed definition — most other gadget types, and anything not table-shaped (pie charts, two-dimensional stats), still come back unresolved; do not assume a gadget is supported just because it has a recognizable name. For a built-in gadget, assigneeScope "accountId" is refused — the gadget already means the connected account\'s own issues, so pass filterId directly instead if you need a different person\'s. ' +
         'There is no raw-JQL parameter: build the query from filterId/issueTypes/assigneeScope only. ' +
         'There is no total/count field: the number of issues actually in the response (sum of groups[].count) is a real count of what\'s here, but is a FLOOR on the real match count whenever truncated is true — never state or imply a total without checking truncated first, and say so ("at least N, more may exist") rather than reporting a possibly-partial count as complete.',
       inputSchema: {

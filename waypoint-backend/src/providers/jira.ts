@@ -111,6 +111,42 @@ const ACCOUNT_ID = /^[A-Za-z0-9:-]{1,128}$/;
 const DASHBOARD_FETCH_SIZE = 200;
 
 /**
+ * Fixed JQL definitions for a small, explicit allowlist of Jira's own
+ * built-in dashboard gadgets — table-shaped ones only, per moduleKey
+ * (round-10, ROAD-157).
+ *
+ * These gadgets store no filter/project reference at all in their config
+ * (confirmed live: "Assigned to Me"'s own config is just
+ * `{"isConfigured":"true"}` — see getGadgetConfig's doc comment), so
+ * resolveGadgetBinding's filter/project resolution can never find one to
+ * read. What each built-in gadget actually queries is instead a FIXED
+ * definition Jira's own frontend has hardcoded — proven live by capturing
+ * the network request that gadget's "maximize" view makes
+ * (`/rest/gadget/1.0/issueTable/jql?jql=assignee+%3D+currentUser()+AND+
+ * statusCategory+!%3D+3…`), which is the request a gadget's own render
+ * calls, not a lookup this backend could make server-side for an arbitrary
+ * gadgetId — there is no "ask Jira for gadget X's JQL" endpoint. So this is
+ * not a new external API integration: it is this file's own record of a
+ * few gadgets whose meaning is fixed and already known, run through the
+ * exact same `/rest/api/3/search/jql` pipeline every other tool in this
+ * file already uses — no new endpoint, no new trust boundary.
+ *
+ * Deliberately small and only ever grown by adding a live-verified entry
+ * here, never by guessing a gadget's JQL from its name or moduleKey
+ * pattern. Every other built-in and every non-table gadget type (pie
+ * charts, two-dimensional stats — a genuinely different shape, not
+ * addressed by this map) stays `unresolved`, same as before this existed.
+ */
+const BUILTIN_GADGET_JQL: Record<string, { label: string; jql: string }> = {
+  'com.atlassian.jira.gadgets:assigned-to-me-gadget': {
+    label: 'Assigned to Me',
+    // statusCategory 3 is Jira's fixed "Done" category id — this is the
+    // exact JQL captured live from the gadget's own maximized view.
+    jql: 'assignee = currentUser() AND statusCategory != 3',
+  },
+};
+
+/**
  * Quotes a value for JQL.
  *
  * This is the security boundary for a model-supplied search string. JQL is a
@@ -207,6 +243,30 @@ function idStr(value: unknown): string {
   if (typeof value === 'string') return value;
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   return '';
+}
+
+/**
+ * A dashboard gadget's moduleKey — from the `moduleKey` field when present,
+ * or extracted from `uri` when it isn't (round-10 review, ROAD-157: caught
+ * live, not anticipated — `/rest/api/3/dashboard/{id}/gadget` gives a
+ * "module"-style gadget (confirmed for the stock Introduction gadget) a
+ * direct `moduleKey` field, but gives an older "URI"-style gadget (Assigned
+ * to Me, Spaces/project-gadget, the Activity Stream gadget — every OTHER
+ * gadget on the one real dashboard this was tested against) a `uri` field
+ * instead, shaped like
+ * "rest/gadgets/1.0/g/com.atlassian.jira.gadgets:assigned-to-me-gadget/
+ * gadgets/assigned-to-me-gadget.xml" — the moduleKey is the path segment
+ * right after "/g/". A plain `str(g.moduleKey)` alone silently returned ''
+ * for every gadget shaped this way, which is most of them: BUILTIN_GADGET_JQL
+ * lookups always missed, and — more subtly — an empty moduleKey isn't `''`
+ * by coincidence with any BUILTIN_GADGET_JQL key, so this was a silent
+ * miss, not a crash, and needed a live round trip to surface at all.
+ */
+function moduleKeyOf(gadget: Record<string, unknown>): string {
+  const direct = str(gadget.moduleKey);
+  if (direct) return direct;
+  const uriMatch = /\/g\/([^/]+)\//.exec(str(gadget.uri));
+  return uriMatch ? uriMatch[1] : '';
 }
 
 function nested(fields: Record<string, unknown>, field: string, key: string): string {
@@ -606,7 +666,7 @@ export class JiraProvider implements TicketProvider {
     dashboardId: string,
   ): Promise<{ id: string; title: string; moduleKey: string }[] | null> {
     const result = await jiraGet<{
-      gadgets?: { id?: unknown; title?: unknown; moduleKey?: unknown }[];
+      gadgets?: { id?: unknown; title?: unknown; moduleKey?: unknown; uri?: unknown }[];
     }>(this.credential, `/rest/api/3/dashboard/${encodeURIComponent(dashboardId)}/gadget`);
     if (!result.ok) {
       // Deliberately narrower than getGadgetConfig/getFilter's own
@@ -628,7 +688,7 @@ export class JiraProvider implements TicketProvider {
     }
     return (result.value?.gadgets ?? [])
       .filter((g): g is Record<string, unknown> => !!g && typeof g === 'object')
-      .map((g) => ({ id: idStr(g.id), title: str(g.title), moduleKey: str(g.moduleKey) }))
+      .map((g) => ({ id: idStr(g.id), title: str(g.title), moduleKey: moduleKeyOf(g) }))
       .filter((g) => g.id);
   }
 
@@ -667,8 +727,8 @@ export class JiraProvider implements TicketProvider {
   }
 
   /**
-   * Resolves a gadget to what backs it: a saved filter, a project, or
-   * unresolved.
+   * Resolves a gadget to what backs it: a saved filter, a project, a
+   * well-known built-in gadget's own fixed query, or unresolved.
    *
    * The preference key names below (`filterid` holding `filter-<id>` or
    * `project-<id>`, `filterId`, `projectOrFilterId`) are Jira's known gadget-
@@ -678,19 +738,37 @@ export class JiraProvider implements TicketProvider {
    * per-gadget key/value data), NOT yet confirmed against a live
    * Two-Dimensional Filter Statistics gadget specifically, since none exists
    * on the Jira site this was developed against. Tried in order; the first
-   * one present wins. A gadget whose config matches none of them comes back
-   * `unresolved` rather than a guess — see describe_jira_dashboard's tool
-   * description, which tells Copilot this is an expected, first-class
-   * outcome to ask the user about, not an error to retry.
+   * one present wins. A gadget whose config matches none of them, and isn't
+   * a recognized built-in either, comes back `unresolved` rather than a
+   * guess — see describe_jira_dashboard's tool description, which tells
+   * Copilot this is an expected, first-class outcome to ask the user about,
+   * not an error to retry.
+   *
+   * `moduleKey` is checked FIRST, before any config read (round-10 review):
+   * a recognized built-in has no useful config to fetch (confirmed live —
+   * "Assigned to Me"'s config is just `{"isConfigured":"true"}`), so
+   * checking the fixed-in-code map first skips a network round trip for
+   * exactly the gadgets it can answer for. `moduleKey` is optional — every
+   * existing caller before round 10 didn't have it in scope, and omitting
+   * it just means every gadget falls through to config-based resolution as
+   * it always has, never a behavior change for a caller that hasn't been
+   * updated to pass it.
    */
   async resolveGadgetBinding(
     dashboardId: string,
     gadgetId: string,
+    moduleKey?: string,
   ): Promise<
     | { kind: 'filter'; filterId: string; filterName: string; jql: string }
     | { kind: 'project'; projectKey: string }
+    | { kind: 'builtinQuery'; label: string; jql: string }
     | { kind: 'unresolved'; reason: string }
   > {
+    if (moduleKey && BUILTIN_GADGET_JQL[moduleKey]) {
+      const { label, jql } = BUILTIN_GADGET_JQL[moduleKey];
+      return { kind: 'builtinQuery', label, jql };
+    }
+
     const config = await this.getGadgetConfig(dashboardId, gadgetId);
     if (!config) {
       return { kind: 'unresolved', reason: 'This gadget has no stored configuration to resolve.' };
@@ -858,14 +936,68 @@ export class JiraProvider implements TicketProvider {
     if (!NUMERIC_ID.test(options.filterId)) {
       throw new Error('searchIssuesByFilter: filterId must be a bare numeric id.');
     }
+    return this.runIssueSearch(`filter = ${options.filterId}`, options);
+  }
+
+  /**
+   * Runs a well-known built-in gadget's own fixed JQL definition (see
+   * BUILTIN_GADGET_JQL), narrowed the same way searchIssuesByFilter narrows a
+   * saved filter — except by issue type only, not assignee: a built-in like
+   * "Assigned to Me" already IS `assignee = currentUser()` by definition
+   * (round-10, ROAD-157 — the user's own live capture of
+   * `/rest/gadget/1.0/issueTable/jql`'s response confirmed this exact JQL
+   * shape for that gadget), so accepting a second, possibly-conflicting
+   * assigneeScope here would either be silently redundant (scope 'me') or
+   * silently contradict the gadget's own meaning (scope 'accountId' — "the
+   * issues assigned to me, but for a different person" is not a coherent
+   * request). Callers must not reach this with assigneeScope 'accountId';
+   * dashboardTools.ts refuses that combination before calling in.
+   *
+   * `jqlTemplate` is never external input — it is always one of this file's
+   * own BUILTIN_GADGET_JQL literals, looked up by moduleKey, never
+   * constructed from a gadget's title, config, or any other Jira-response
+   * field. That is what makes concatenating it directly (no jqlQuoted) safe:
+   * jqlQuoted exists for text this codebase did not write itself.
+   */
+  async searchIssuesByBuiltinQuery(
+    jqlTemplate: string,
+    options: { issueTypes?: string[]; limit: number },
+  ): Promise<{
+    jql: string;
+    issues: ReturnType<typeof toSummaryForGadget>[];
+    truncated: boolean;
+  }> {
+    return this.runIssueSearch(jqlTemplate, options);
+  }
+
+  /**
+   * Shared by searchIssuesByFilter and searchIssuesByBuiltinQuery — both
+   * already have a safe base JQL clause in hand (a numeric `filter = <id>`
+   * reference, or one of this file's own hardcoded built-in-gadget
+   * templates) by the time they call this; this method's job is only to
+   * layer the assignee/issueType narrowing on top and run the search, not to
+   * decide whether the base clause was safe to build.
+   */
+  private async runIssueSearch(
+    baseClause: string,
+    options: { assigneeScope?: 'me' | 'accountId'; accountId?: string; issueTypes?: string[]; limit: number },
+  ): Promise<{
+    jql: string;
+    issues: ReturnType<typeof toSummaryForGadget>[];
+    truncated: boolean;
+  }> {
     if (options.assigneeScope === 'accountId' && !ACCOUNT_ID.test(options.accountId ?? '')) {
-      throw new Error('searchIssuesByFilter: accountId has an unexpected shape.');
+      throw new Error('runIssueSearch: accountId has an unexpected shape.');
     }
 
-    const clauses = [`filter = ${options.filterId}`];
-    clauses.push(
-      options.assigneeScope === 'me' ? 'assignee = currentUser()' : `assignee = ${jqlQuoted(options.accountId ?? '')}`,
-    );
+    const clauses = [baseClause];
+    if (options.assigneeScope) {
+      clauses.push(
+        options.assigneeScope === 'me'
+          ? 'assignee = currentUser()'
+          : `assignee = ${jqlQuoted(options.accountId ?? '')}`,
+      );
+    }
     if (options.issueTypes?.length) {
       clauses.push(`issuetype IN (${options.issueTypes.map(jqlQuoted).join(', ')})`);
     }

@@ -654,6 +654,110 @@ describe('jiraProvider.getDashboardGadgets (ROAD-157)', () => {
     vi.mocked(jiraGet).mockResolvedValue(fail('network'));
     await expect(provider().getDashboardGadgets('10810')).rejects.toBeInstanceOf(ProviderUnavailableError);
   });
+
+  // Round-10 review (ROAD-157) — caught live, not anticipated: real Jira
+  // gives a "URI"-style gadget no `moduleKey` field at all, only a `uri`
+  // shaped like the one below. This is the actual shape captured live for
+  // Assigned to Me, Spaces, and Activity Stream — every gadget on the one
+  // real dashboard this was tested against EXCEPT the stock Introduction
+  // gadget, which does return a direct moduleKey. A plain
+  // `str(g.moduleKey)` silently returned '' for all three of these, so
+  // BUILTIN_GADGET_JQL could never match them no matter what the map
+  // contained — this failure mode produced no error, just a gadget
+  // reported as `unresolved` for the wrong reason.
+  it('extracts moduleKey from `uri` when the field itself is absent — the real shape for most gadgets', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(
+      ok({
+        gadgets: [
+          {
+            id: 10002,
+            title: 'Assigned to Me',
+            uri: 'rest/gadgets/1.0/g/com.atlassian.jira.gadgets:assigned-to-me-gadget/gadgets/assigned-to-me-gadget.xml',
+          },
+        ],
+      }),
+    );
+
+    expect(await provider().getDashboardGadgets('10000')).toEqual([
+      { id: '10002', title: 'Assigned to Me', moduleKey: 'com.atlassian.jira.gadgets:assigned-to-me-gadget' },
+    ]);
+  });
+
+  it('prefers a direct moduleKey field over uri when both happen to be present', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(
+      ok({
+        gadgets: [
+          {
+            id: 10000,
+            title: 'Introduction',
+            moduleKey: 'com.atlassian.jira.gadgets:introduction-dashboard-item',
+            uri: 'rest/gadgets/1.0/g/some-other-key/gadgets/x.xml',
+          },
+        ],
+      }),
+    );
+
+    expect(await provider().getDashboardGadgets('10000')).toEqual([
+      { id: '10000', title: 'Introduction', moduleKey: 'com.atlassian.jira.gadgets:introduction-dashboard-item' },
+    ]);
+  });
+
+  it('returns an empty moduleKey, not a throw, when neither moduleKey nor a parseable uri is present', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(
+      ok({ gadgets: [{ id: 10099, title: 'Some custom gadget', uri: 'not a gadget uri at all' }] }),
+    );
+
+    expect(await provider().getDashboardGadgets('10000')).toEqual([
+      { id: '10099', title: 'Some custom gadget', moduleKey: '' },
+    ]);
+  });
+});
+
+describe('jiraProvider.resolveGadgetBinding — built-in gadgets (round-10, ROAD-157)', () => {
+  it('resolves a recognized built-in gadget from its moduleKey alone, with no network call', async () => {
+    const binding = await provider().resolveGadgetBinding(
+      '10810',
+      '10002',
+      'com.atlassian.jira.gadgets:assigned-to-me-gadget',
+    );
+
+    expect(binding).toEqual({
+      kind: 'builtinQuery',
+      label: 'Assigned to Me',
+      jql: 'assignee = currentUser() AND statusCategory != 3',
+    });
+    // The whole point of checking moduleKey first: a recognized built-in
+    // has nothing useful in its config (confirmed live — see
+    // BUILTIN_GADGET_JQL's own comment), so this must not spend a request
+    // fetching it.
+    expect(jiraGet).not.toHaveBeenCalled();
+  });
+
+  it('falls through to config-based resolution for an unrecognized moduleKey', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(fail('not_found'));
+
+    const binding = await provider().resolveGadgetBinding(
+      '10810',
+      '10001',
+      'com.atlassian.jira.gadgets:project-gadget',
+    );
+
+    expect(binding).toEqual({
+      kind: 'unresolved',
+      reason: 'This gadget has no stored configuration to resolve.',
+    });
+    expect(jiraGet).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls through to config-based resolution when moduleKey is omitted entirely', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(ok({ key: 'config', value: { filterid: 'filter-10123' } }));
+
+    // No third argument — the pre-round-10 call shape, still supported.
+    const binding = await provider().resolveGadgetBinding('10810', '10002');
+
+    expect(binding.kind).not.toBe('builtinQuery');
+    expect(jiraGet).toHaveBeenCalled();
+  });
 });
 
 describe('jiraProvider.resolveGadgetBinding (ROAD-157)', () => {
@@ -1012,6 +1116,65 @@ describe('jiraProvider.searchIssuesByFilter (ROAD-157)', () => {
     const result = await provider().searchIssuesByFilter({ filterId: '10123', assigneeScope: 'me', limit: 5 });
 
     expect(result.issues).toHaveLength(5);
+    expect(result.truncated).toBe(true);
+  });
+});
+
+describe('jiraProvider.searchIssuesByBuiltinQuery (round-10, ROAD-157)', () => {
+  const BUILTIN_ISSUE = {
+    key: 'ENG-29',
+    fields: { summary: 'The audit log', status: { name: 'In Progress' }, issuetype: { name: 'Bug' }, updated: '2026-09-18T00:00:00.000Z' },
+  };
+
+  it('runs the given JQL template as-is, with no assignee clause added', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(ok({ issues: [BUILTIN_ISSUE], isLast: true }));
+
+    const result = await provider().searchIssuesByBuiltinQuery(
+      'assignee = currentUser() AND statusCategory != 3',
+      { limit: 50 },
+    );
+
+    // No second `assignee = currentUser()` clause appended — the template
+    // itself already defines the gadget's scope, and runIssueSearch only
+    // adds an assignee clause when assigneeScope is explicitly passed
+    // (searchIssuesByBuiltinQuery's own options type has no such field).
+    expect(jiraGet).toHaveBeenCalledWith(
+      CREDENTIAL,
+      '/rest/api/3/search/jql',
+      expect.objectContaining({
+        jql: 'assignee = currentUser() AND statusCategory != 3 ORDER BY issuetype ASC, updated DESC',
+      }),
+    );
+    expect(result.jql).toBe('assignee = currentUser() AND statusCategory != 3 ORDER BY issuetype ASC, updated DESC');
+  });
+
+  it('adds a quoted issuetype IN (...) clause when issueTypes is given, same as searchIssuesByFilter', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(ok({ issues: [] }));
+
+    await provider().searchIssuesByBuiltinQuery('assignee = currentUser() AND statusCategory != 3', {
+      issueTypes: ['Bug', 'Epic'],
+      limit: 50,
+    });
+
+    expect(jiraGet).toHaveBeenCalledWith(
+      CREDENTIAL,
+      '/rest/api/3/search/jql',
+      expect.objectContaining({
+        jql: 'assignee = currentUser() AND statusCategory != 3 AND issuetype IN ("Bug", "Epic") ORDER BY issuetype ASC, updated DESC',
+      }),
+    );
+  });
+
+  it('bounds results to limit and reports truncated, same guarantees as searchIssuesByFilter', async () => {
+    const issues = Array.from({ length: 5 }, (_, i) => ({
+      key: `ENG-${i}`,
+      fields: { summary: `Issue ${i}`, status: { name: 'Open' }, issuetype: { name: 'Task' }, updated: '2026-08-20T00:00:00.000Z' },
+    }));
+    vi.mocked(jiraGet).mockResolvedValue(ok({ issues, isLast: true }));
+
+    const result = await provider().searchIssuesByBuiltinQuery('assignee = currentUser()', { limit: 3 });
+
+    expect(result.issues).toHaveLength(3);
     expect(result.truncated).toBe(true);
   });
 });

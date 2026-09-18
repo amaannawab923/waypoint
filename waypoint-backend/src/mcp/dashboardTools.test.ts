@@ -28,6 +28,7 @@ function jiraStub() {
         ({ kind: 'unresolved', reason: 'stub default' }) as
           | { kind: 'filter'; filterId: string; filterName: string; jql: string }
           | { kind: 'project'; projectKey: string }
+          | { kind: 'builtinQuery'; label: string; jql: string }
           | { kind: 'unresolved'; reason: string },
     ),
     getFilter: vi.fn(async () => null as { id: string; name: string; jql: string } | null),
@@ -37,6 +38,11 @@ function jiraStub() {
     })),
     searchIssuesByFilter: vi.fn(async () => ({
       jql: 'filter = 10123 AND assignee = currentUser()',
+      issues: [] as { key: string; summary: string; status: string; issueType: string; updated: string }[],
+      truncated: false,
+    })),
+    searchIssuesByBuiltinQuery: vi.fn(async () => ({
+      jql: 'assignee = currentUser() AND statusCategory != 3 ORDER BY issuetype ASC, updated DESC',
       issues: [] as { key: string; summary: string; status: string; issueType: string; updated: string }[],
       truncated: false,
     })),
@@ -123,8 +129,16 @@ describe('describeJiraDashboardHandler', () => {
 
     const result = await describeJiraDashboardHandler(jira, { dashboardId: '10810' });
 
-    expect(stub.resolveGadgetBinding).toHaveBeenCalledWith('10810', '161155');
-    expect(stub.resolveGadgetBinding).toHaveBeenCalledWith('10810', '10001');
+    expect(stub.resolveGadgetBinding).toHaveBeenCalledWith(
+      '10810',
+      '161155',
+      'com.atlassian.jira.gadgets:twodimensional-stats-gadget',
+    );
+    expect(stub.resolveGadgetBinding).toHaveBeenCalledWith(
+      '10810',
+      '10001',
+      'com.atlassian.jira.gadgets:project-gadget',
+    );
     expect(parse(result)).toEqual({
       dashboardId: '10810',
       gadgets: [
@@ -164,6 +178,41 @@ describe('describeJiraDashboardHandler', () => {
     const parsed = parse(result);
     expect(parsed.gadgets).toHaveLength(25);
     expect(parsed.truncated).toBe(true);
+  });
+
+  // Round-10 review (ROAD-157): a recognized built-in gadget's binding
+  // surfaces through describe_jira_dashboard the same way a filter/project
+  // binding does — just a new `kind`, not a different shape a caller has to
+  // special-case.
+  it('reports a builtinQuery binding for a recognized built-in gadget', async () => {
+    const stub = connectJira();
+    stub.getDashboardGadgets.mockResolvedValue([
+      { id: '10002', title: 'Assigned to Me', moduleKey: 'com.atlassian.jira.gadgets:assigned-to-me-gadget' },
+    ]);
+    stub.resolveGadgetBinding.mockResolvedValue({
+      kind: 'builtinQuery',
+      label: 'Assigned to Me',
+      jql: 'assignee = currentUser() AND statusCategory != 3',
+    });
+
+    const result = await describeJiraDashboardHandler(jira, { dashboardId: '10810' });
+
+    expect(parse(result)).toEqual({
+      dashboardId: '10810',
+      gadgets: [
+        {
+          gadgetId: '10002',
+          title: 'Assigned to Me',
+          moduleKey: 'com.atlassian.jira.gadgets:assigned-to-me-gadget',
+          binding: {
+            kind: 'builtinQuery',
+            label: 'Assigned to Me',
+            jql: 'assignee = currentUser() AND statusCategory != 3',
+          },
+        },
+      ],
+      truncated: false,
+    });
   });
 });
 
@@ -259,10 +308,92 @@ describe('searchDashboardGadgetIssuesHandler — dashboard+gadget path', () => {
       gadgetId: '161155',
     });
 
-    expect(stub.resolveGadgetBinding).toHaveBeenCalledWith('10810', '161155');
+    // Third arg is the matched gadget's moduleKey — undefined here because
+    // the stub's default getDashboardGadgets() returns [] (no gadget with
+    // id '161155' to find), not because resolveGadgetBinding was called
+    // with only two arguments.
+    expect(stub.resolveGadgetBinding).toHaveBeenCalledWith('10810', '161155', undefined);
     expect(stub.searchIssuesByFilter).toHaveBeenCalledWith(
       expect.objectContaining({ filterId: '10123' }),
     );
+  });
+
+  // Round-10 review (ROAD-157): the matched gadget's real moduleKey reaches
+  // resolveGadgetBinding this time (unlike the filter-path test above,
+  // which relies on the stub's default empty gadget list) — getDashboardGadgets
+  // is now fetched unconditionally before resolveGadgetBinding is called,
+  // specifically so a recognized built-in's moduleKey is available to check.
+  it('resolves a recognized built-in gadget and queries it via searchIssuesByBuiltinQuery, not searchIssuesByFilter', async () => {
+    const stub = connectJira();
+    stub.getDashboardGadgets.mockResolvedValue([
+      { id: '10002', title: 'Assigned to Me', moduleKey: 'com.atlassian.jira.gadgets:assigned-to-me-gadget' },
+    ]);
+    stub.resolveGadgetBinding.mockResolvedValue({
+      kind: 'builtinQuery',
+      label: 'Assigned to Me',
+      jql: 'assignee = currentUser() AND statusCategory != 3',
+    });
+    stub.searchIssuesByBuiltinQuery.mockResolvedValue({
+      jql: 'assignee = currentUser() AND statusCategory != 3 ORDER BY issuetype ASC, updated DESC',
+      issues: [{ key: 'ENG-29', summary: 'The audit log', status: 'In Progress', issueType: 'Bug', updated: '2026-09-18' }],
+      truncated: false,
+    });
+
+    const result = await searchDashboardGadgetIssuesHandler(jira, {
+      assigneeScope: 'me',
+      dashboardId: '10810',
+      gadgetId: '10002',
+    });
+
+    expect(stub.resolveGadgetBinding).toHaveBeenCalledWith(
+      '10810',
+      '10002',
+      'com.atlassian.jira.gadgets:assigned-to-me-gadget',
+    );
+    expect(stub.searchIssuesByBuiltinQuery).toHaveBeenCalledWith(
+      'assignee = currentUser() AND statusCategory != 3',
+      { issueTypes: undefined, limit: 50 },
+    );
+    expect(stub.searchIssuesByFilter).not.toHaveBeenCalled();
+    const parsed = parse(result);
+    expect(parsed.resolvedFrom).toEqual({
+      kind: 'builtinGadget',
+      label: 'Assigned to Me',
+      dashboardId: '10810',
+      gadgetId: '10002',
+    });
+    expect(parsed.jql).toBe('assignee = currentUser() AND statusCategory != 3 ORDER BY issuetype ASC, updated DESC');
+    expect(parsed.groups).toEqual([
+      {
+        key: 'Bug',
+        count: 1,
+        issues: [{ key: 'ENG-29', summary: 'The audit log', status: 'In Progress', issueType: 'Bug', updated: '2026-09-18' }],
+      },
+    ]);
+  });
+
+  it('refuses assigneeScope "accountId" against a built-in gadget instead of silently contradicting its own definition', async () => {
+    const stub = connectJira();
+    stub.getDashboardGadgets.mockResolvedValue([
+      { id: '10002', title: 'Assigned to Me', moduleKey: 'com.atlassian.jira.gadgets:assigned-to-me-gadget' },
+    ]);
+    stub.resolveGadgetBinding.mockResolvedValue({
+      kind: 'builtinQuery',
+      label: 'Assigned to Me',
+      jql: 'assignee = currentUser() AND statusCategory != 3',
+    });
+
+    const result = await searchDashboardGadgetIssuesHandler(jira, {
+      assigneeScope: 'accountId',
+      accountId: '712020:05c45d40-ca2a-4829-84ad-df1f5429a4d0',
+      dashboardId: '10810',
+      gadgetId: '10002',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/Assigned to Me/);
+    expect(result.content[0].text).toMatch(/accountId/);
+    expect(stub.searchIssuesByBuiltinQuery).not.toHaveBeenCalled();
   });
 
   it('returns needsBinding (not an error) when the gadget cannot be auto-resolved, with gadgets and filters to choose from', async () => {
