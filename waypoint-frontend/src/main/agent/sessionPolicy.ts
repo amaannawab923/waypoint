@@ -95,6 +95,11 @@ const MCP_TOOLS = [
   'mcp__waypoint__list_projects',
   'mcp__waypoint__list_sprints',
   'mcp__waypoint__get_sprint',
+  // ROAD-157: dashboard/gadget/filter reads — same read-only posture as
+  // every tool above it, no write path.
+  'mcp__waypoint__list_jira_dashboards',
+  'mcp__waypoint__describe_jira_dashboard',
+  'mcp__waypoint__search_dashboard_gadget_issues',
   'mcp__waypoint__propose_comment',
   'mcp__waypoint__propose_state_change',
   'mcp__waypoint__propose_assignee_change',

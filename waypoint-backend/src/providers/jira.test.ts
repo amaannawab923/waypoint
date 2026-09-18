@@ -553,3 +553,238 @@ describe('JiraProvider.postComment', () => {
     },
   );
 });
+
+describe('jiraProvider.listDashboards (ROAD-157)', () => {
+  it('filters by name client-side and applies the limit', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(
+      ok({
+        dashboards: [
+          { id: '10000', name: 'Default dashboard', isFavourite: false },
+          { id: '10810', name: 'Sprint Health', isFavourite: true },
+          { id: '10811', name: 'Sprint Retro', isFavourite: false },
+        ],
+      }),
+    );
+
+    const result = await provider().listDashboards('sprint', 1);
+
+    expect(jiraGet).toHaveBeenCalledWith(CREDENTIAL, '/rest/api/3/dashboard', { maxResults: '100' });
+    expect(result).toEqual([{ id: '10810', name: 'Sprint Health', isFavourite: true }]);
+  });
+
+  it('is case-insensitive and returns everything when no name filter is given', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(ok({ dashboards: [{ id: '10000', name: 'Default DASHBOARD' }] }));
+
+    expect(await provider().listDashboards(undefined, 50)).toEqual([
+      { id: '10000', name: 'Default DASHBOARD', isFavourite: false },
+    ]);
+    expect(await provider().listDashboards('dashboard', 50)).toEqual([
+      { id: '10000', name: 'Default DASHBOARD', isFavourite: false },
+    ]);
+  });
+});
+
+describe('jiraProvider.getDashboardGadgets (ROAD-157)', () => {
+  it('maps id/title/moduleKey', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(
+      ok({ gadgets: [{ id: 161155, title: 'Two-dimensional filter', moduleKey: 'com.atlassian.jira.gadgets:twodimensional-stats-gadget' }] }),
+    );
+
+    expect(await provider().getDashboardGadgets('10810')).toEqual([
+      { id: '161155', title: 'Two-dimensional filter', moduleKey: 'com.atlassian.jira.gadgets:twodimensional-stats-gadget' },
+    ]);
+    expect(jiraGet).toHaveBeenCalledWith(CREDENTIAL, '/rest/api/3/dashboard/10810/gadget');
+  });
+
+  it('returns null for a dashboard the account cannot see, same as a real 404', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(fail('not_found'));
+    expect(await provider().getDashboardGadgets('99999')).toBeNull();
+  });
+
+  it('throws (does not silently empty out) on a genuine outage', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(fail('network'));
+    await expect(provider().getDashboardGadgets('10810')).rejects.toBeInstanceOf(ProviderUnavailableError);
+  });
+});
+
+describe('jiraProvider.resolveGadgetBinding (ROAD-157)', () => {
+  it('resolves a filter-bound gadget via the "filter-<id>" config convention', async () => {
+    vi.mocked(jiraGet)
+      .mockResolvedValueOnce(ok({ key: 'config', value: { filterid: 'filter-10123', xstattype: 'issuetype' } }))
+      .mockResolvedValueOnce(ok({ id: '10123', name: 'My Team Board', jql: 'project = ENG' }));
+
+    const binding = await provider().resolveGadgetBinding('10810', '161155');
+
+    expect(binding).toEqual({ kind: 'filter', filterId: '10123', filterName: 'My Team Board', jql: 'project = ENG' });
+    expect(jiraGet).toHaveBeenNthCalledWith(
+      1,
+      CREDENTIAL,
+      '/rest/api/3/dashboard/10810/items/161155/properties/config',
+    );
+    expect(jiraGet).toHaveBeenNthCalledWith(2, CREDENTIAL, '/rest/api/3/filter/10123');
+  });
+
+  it('resolves a project-bound gadget via the "project-<key>" config convention, with no filter lookup', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(ok({ key: 'config', value: { filterid: 'project-ENG' } }));
+
+    expect(await provider().resolveGadgetBinding('10810', '161155')).toEqual({ kind: 'project', projectKey: 'ENG' });
+    expect(jiraGet).toHaveBeenCalledTimes(1);
+  });
+
+  it('comes back unresolved, not a guess, when the gadget has no config at all', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(fail('not_found'));
+
+    expect(await provider().resolveGadgetBinding('10810', '161155')).toEqual({
+      kind: 'unresolved',
+      reason: 'This gadget has no stored configuration to resolve.',
+    });
+  });
+
+  it('comes back unresolved when the bound filter itself cannot be read (deleted or unshared)', async () => {
+    vi.mocked(jiraGet)
+      .mockResolvedValueOnce(ok({ key: 'config', value: { filterid: 'filter-99999' } }))
+      .mockResolvedValueOnce(fail('not_found'));
+
+    const binding = await provider().resolveGadgetBinding('10810', '161155');
+    expect(binding.kind).toBe('unresolved');
+  });
+
+  it('comes back unresolved when config exists but matches no known binding shape', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(ok({ key: 'config', value: { numofentries: '5' } }));
+
+    expect(await provider().resolveGadgetBinding('10810', '161155')).toEqual({
+      kind: 'unresolved',
+      reason: "This gadget's configuration doesn't match a recognized filter or project binding — pass a filterId directly instead.",
+    });
+  });
+});
+
+describe('jiraProvider.getFilter / searchFilters (ROAD-157)', () => {
+  it('getFilter maps id/name/jql', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(ok({ id: '10123', name: 'My Team Board', jql: 'project = ENG' }));
+    expect(await provider().getFilter('10123')).toEqual({ id: '10123', name: 'My Team Board', jql: 'project = ENG' });
+  });
+
+  it('getFilter returns null on not_found or forbidden, not a throw', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(fail('not_found'));
+    expect(await provider().getFilter('10123')).toBeNull();
+    vi.mocked(jiraGet).mockResolvedValue(fail('forbidden'));
+    expect(await provider().getFilter('10123')).toBeNull();
+  });
+
+  it('searchFilters sends filterName only when a name filter is given', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(ok({ values: [{ id: '10123', name: 'My Team Board' }] }));
+
+    await provider().searchFilters('team', 20);
+    expect(jiraGet).toHaveBeenCalledWith(CREDENTIAL, '/rest/api/3/filter/search', {
+      maxResults: '20',
+      filterName: 'team',
+    });
+
+    await provider().searchFilters(undefined, 20);
+    expect(jiraGet).toHaveBeenCalledWith(CREDENTIAL, '/rest/api/3/filter/search', { maxResults: '20' });
+  });
+});
+
+describe('jiraProvider.searchIssuesByFilter (ROAD-157)', () => {
+  const TYPED_ISSUE = {
+    key: 'ENG-4',
+    fields: { summary: 'Login times out', status: { name: 'In Progress' }, issuetype: { name: 'Bug' }, updated: '2026-08-20T00:00:00.000Z' },
+  };
+
+  it('builds "assignee = currentUser()" for assigneeScope "me", never touching accountId', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(ok({ issues: [TYPED_ISSUE] }));
+
+    const result = await provider().searchIssuesByFilter({ filterId: '10123', assigneeScope: 'me', limit: 50 });
+
+    expect(jiraGet).toHaveBeenCalledWith(
+      CREDENTIAL,
+      '/rest/api/3/search/jql',
+      expect.objectContaining({ jql: 'filter = 10123 AND assignee = currentUser() ORDER BY issuetype ASC, updated DESC' }),
+    );
+    expect(result).toEqual({
+      jql: 'filter = 10123 AND assignee = currentUser() ORDER BY issuetype ASC, updated DESC',
+      issues: [{ key: 'ENG-4', summary: 'Login times out', status: 'In Progress', issueType: 'Bug', updated: '2026-08-20T00:00:00.000Z' }],
+      truncated: false,
+    });
+  });
+
+  it('quotes an explicit accountId like any other model-influenced string', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(ok({ issues: [] }));
+
+    await provider().searchIssuesByFilter({
+      filterId: '10123',
+      assigneeScope: 'accountId',
+      accountId: '712020:05c45d40-ca2a-4829-84ad-df1f5429a4d0',
+      limit: 50,
+    });
+
+    expect(jiraGet).toHaveBeenCalledWith(
+      CREDENTIAL,
+      '/rest/api/3/search/jql',
+      expect.objectContaining({
+        jql: 'filter = 10123 AND assignee = "712020:05c45d40-ca2a-4829-84ad-df1f5429a4d0" ORDER BY issuetype ASC, updated DESC',
+      }),
+    );
+  });
+
+  it('adds a quoted issuetype IN (...) clause when issueTypes is given', async () => {
+    vi.mocked(jiraGet).mockResolvedValue(ok({ issues: [] }));
+
+    await provider().searchIssuesByFilter({
+      filterId: '10123',
+      assigneeScope: 'me',
+      issueTypes: ['Bug', 'Epic'],
+      limit: 50,
+    });
+
+    expect(jiraGet).toHaveBeenCalledWith(
+      CREDENTIAL,
+      '/rest/api/3/search/jql',
+      expect.objectContaining({
+        jql: 'filter = 10123 AND assignee = currentUser() AND issuetype IN ("Bug", "Epic") ORDER BY issuetype ASC, updated DESC',
+      }),
+    );
+  });
+
+  // The actual security boundary: a non-numeric filterId would otherwise be
+  // interpolated BARE into JQL (never jqlQuoted — "filter = 10123" takes an
+  // id, not a string), so the shape check has to happen before that
+  // interpolation, not after.
+  it('rejects a non-numeric filterId rather than interpolating it bare into JQL', async () => {
+    await expect(
+      provider().searchIssuesByFilter({ filterId: '10123 OR 1=1', assigneeScope: 'me', limit: 50 }),
+    ).rejects.toThrow(/bare numeric id/);
+    expect(jiraGet).not.toHaveBeenCalled();
+  });
+
+  it('rejects an accountId with an unexpected shape even before jqlQuoted would run', async () => {
+    await expect(
+      provider().searchIssuesByFilter({
+        filterId: '10123',
+        assigneeScope: 'accountId',
+        accountId: 'not an account id"',
+        limit: 50,
+      }),
+    ).rejects.toThrow(/accountId has an unexpected shape/);
+    expect(jiraGet).not.toHaveBeenCalled();
+  });
+
+  it('reports truncated when more than limit issues came back, and trims to limit', async () => {
+    const issues = Array.from({ length: 6 }, (_, i) => ({
+      key: `ENG-${i}`,
+      fields: { summary: `Issue ${i}`, status: { name: 'Open' }, issuetype: { name: 'Task' }, updated: '2026-08-20T00:00:00.000Z' },
+    }));
+    vi.mocked(jiraGet).mockResolvedValue(ok({ issues }));
+
+    const result = await provider().searchIssuesByFilter({ filterId: '10123', assigneeScope: 'me', limit: 5 });
+
+    expect(result.truncated).toBe(true);
+    expect(result.issues).toHaveLength(5);
+    expect(jiraGet).toHaveBeenCalledWith(
+      CREDENTIAL,
+      '/rest/api/3/search/jql',
+      expect.objectContaining({ maxResults: '6' }),
+    );
+  });
+});

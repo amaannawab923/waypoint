@@ -81,7 +81,7 @@ describe('request building', () => {
   it('appends query params via URLSearchParams', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ ok: true }));
 
-    await jiraGet(CREDENTIAL, '/rest/api/3/search', { jql: 'project = ENG', maxResults: '50' });
+    await jiraGet(CREDENTIAL, '/rest/api/3/search/jql', { jql: 'project = ENG', maxResults: '50' });
 
     const params = new URL(call()[0]).searchParams;
     expect(params.get('jql')).toBe('project = ENG');
@@ -91,7 +91,7 @@ describe('request building', () => {
   it('authenticates with HTTP Basic over base64(email:apiToken)', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ ok: true }));
 
-    await jiraGet(CREDENTIAL, '/rest/api/3/myself');
+    await jiraGet(CREDENTIAL, '/rest/api/3/issue/ENG-4');
 
     expect(headerValue(0, 'Authorization')).toBe(
       `Basic ${Buffer.from(`${CREDENTIAL.email}:${CREDENTIAL.apiToken}`).toString('base64')}`,
@@ -103,7 +103,7 @@ describe('request building', () => {
   it('never puts the token or email in the URL', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ ok: true }));
 
-    await jiraGet(CREDENTIAL, '/rest/api/3/myself');
+    await jiraGet(CREDENTIAL, '/rest/api/3/issue/ENG-4');
 
     expect(call()[0]).not.toContain(CREDENTIAL.apiToken);
     expect(call()[0]).not.toContain(CREDENTIAL.email);
@@ -112,7 +112,7 @@ describe('request building', () => {
   it('sends no Content-Type or body on a GET', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ ok: true }));
 
-    await jiraGet(CREDENTIAL, '/rest/api/3/myself');
+    await jiraGet(CREDENTIAL, '/rest/api/3/issue/ENG-4');
 
     expect(headerValue(0, 'Content-Type')).toBeUndefined();
     expect(call()[1].body).toBeUndefined();
@@ -158,7 +158,7 @@ describe('success responses', () => {
   it('reports a 200 that is not JSON as site_not_found, not a parse crash', async () => {
     fetchMock.mockResolvedValue(textResponse('<!doctype html><title>Parked domain</title>'));
 
-    expect(await jiraGet(CREDENTIAL, '/rest/api/3/myself')).toEqual({
+    expect(await jiraGet(CREDENTIAL, '/rest/api/3/issue/ENG-4')).toEqual({
       ok: false,
       reason: 'site_not_found',
       message: 'That address answered, but not like a Jira Cloud site — check the site address.',
@@ -170,7 +170,7 @@ describe('status-code classification', () => {
   it('reports 401 as invalid_credentials', async () => {
     fetchMock.mockResolvedValue(emptyResponse(401));
 
-    expect(await jiraGet(CREDENTIAL, '/rest/api/3/myself')).toMatchObject({
+    expect(await jiraGet(CREDENTIAL, '/rest/api/3/issue/ENG-4')).toMatchObject({
       ok: false,
       reason: 'invalid_credentials',
     });
@@ -208,7 +208,7 @@ describe('status-code classification', () => {
   it('reports 429 as rate_limited', async () => {
     fetchMock.mockResolvedValue(emptyResponse(429));
 
-    expect(await jiraGet(CREDENTIAL, '/rest/api/3/myself')).toMatchObject({
+    expect(await jiraGet(CREDENTIAL, '/rest/api/3/issue/ENG-4')).toMatchObject({
       ok: false,
       reason: 'rate_limited',
     });
@@ -232,7 +232,7 @@ describe('status-code classification', () => {
   it('falls back to a status-bearing message when a non-2xx body is not JSON at all', async () => {
     fetchMock.mockResolvedValue(textResponse('<html>Internal Server Error</html>', 500));
 
-    expect(await jiraGet(CREDENTIAL, '/rest/api/3/myself')).toEqual({
+    expect(await jiraGet(CREDENTIAL, '/rest/api/3/issue/ENG-4')).toEqual({
       ok: false,
       reason: 'jira_error',
       message: 'Jira returned 500.',
@@ -244,7 +244,7 @@ describe('network-error classification', () => {
   it('reports an aborted request (timeout) as network, with the timeout-specific message', async () => {
     fetchMock.mockRejectedValue(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }));
 
-    expect(await jiraGet(CREDENTIAL, '/rest/api/3/myself')).toEqual({
+    expect(await jiraGet(CREDENTIAL, '/rest/api/3/issue/ENG-4')).toEqual({
       ok: false,
       reason: 'network',
       message: 'Jira took too long to respond.',
@@ -257,7 +257,7 @@ describe('network-error classification', () => {
   it('reports a DNS-resolution failure (ENOTFOUND) as site_not_found', async () => {
     fetchMock.mockRejectedValue(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } }));
 
-    expect(await jiraGet(CREDENTIAL, '/rest/api/3/myself')).toMatchObject({
+    expect(await jiraGet(CREDENTIAL, '/rest/api/3/issue/ENG-4')).toMatchObject({
       ok: false,
       reason: 'site_not_found',
     });
@@ -266,7 +266,7 @@ describe('network-error classification', () => {
   it('reports EAI_AGAIN (transient DNS failure) as site_not_found too', async () => {
     fetchMock.mockRejectedValue(Object.assign(new TypeError('fetch failed'), { cause: { code: 'EAI_AGAIN' } }));
 
-    expect(await jiraGet(CREDENTIAL, '/rest/api/3/myself')).toMatchObject({
+    expect(await jiraGet(CREDENTIAL, '/rest/api/3/issue/ENG-4')).toMatchObject({
       ok: false,
       reason: 'site_not_found',
     });
@@ -275,10 +275,52 @@ describe('network-error classification', () => {
   it('reports any other network failure (e.g. connection refused) as a generic network error', async () => {
     fetchMock.mockRejectedValue(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } }));
 
-    expect(await jiraGet(CREDENTIAL, '/rest/api/3/myself')).toEqual({
+    expect(await jiraGet(CREDENTIAL, '/rest/api/3/issue/ENG-4')).toEqual({
       ok: false,
       reason: 'network',
       message: "Couldn't reach Jira.",
     });
+  });
+});
+
+// ROAD-157: the allowlist added alongside the dashboard/filter endpoints —
+// narrowness enforced as a runtime property (see client.ts's own header
+// comment), not just described. Every prefix here has to have a real,
+// reviewed caller in providers/jira.ts; this file's job is only to prove the
+// gate itself works, both ways, not to re-verify each caller's own path.
+describe('path allowlist', () => {
+  it('rejects a path outside every allowed prefix, before any fetch happens', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ ok: true }));
+
+    await expect(jiraGet(CREDENTIAL, '/rest/gadget/1.0/portal/foo')).rejects.toThrow(
+      /outside this client's allowed path scope/,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a path that only shares a prefix by accident (no trailing slash/segment boundary)', async () => {
+    // '/rest/api/3/issue/' (with the trailing slash) is allowed;
+    // '/rest/api/3/issuetype' is a real, different Jira endpoint this client
+    // has never called and must not be let through just because the two
+    // strings share a run of characters.
+    await expect(jiraGet(CREDENTIAL, '/rest/api/3/issuetype')).rejects.toThrow(
+      /outside this client's allowed path scope/,
+    );
+  });
+
+  it.each([
+    '/rest/api/3/issue/ENG-4',
+    '/rest/api/3/issue/ENG-4/comment',
+    '/rest/api/3/issue/ENG-4/transitions',
+    '/rest/api/3/search/jql',
+    '/rest/api/3/dashboard',
+    '/rest/api/3/dashboard/10000/gadget',
+    '/rest/api/3/dashboard/10000/items/10001/properties/config',
+    '/rest/api/3/filter/10123',
+    '/rest/api/3/filter/search',
+  ])('allows %s straight through to fetch', async (path) => {
+    fetchMock.mockResolvedValue(jsonResponse({ ok: true }));
+    await jiraGet(CREDENTIAL, path);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

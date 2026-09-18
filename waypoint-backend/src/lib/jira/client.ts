@@ -12,12 +12,48 @@
  * settled correctly there and re-deciding them differently would be the
  * actual mistake.
  *
- * Scope is deliberately narrow: three GETs. Nothing here writes to Jira, and
- * that is the point of this pass — read tools ship and are proven before any
- * write path exists.
+ * Scope is deliberately narrow, and enforced rather than just described: see
+ * ALLOWED_PATH_PREFIXES below. Writes go through the same allowlist as reads
+ * (jiraPost included) — narrowness is a runtime property of this client, not
+ * a comment that can rot silently as callers are added.
  */
 
 const REQUEST_TIMEOUT_MS = 20_000;
+
+/**
+ * Every path prefix this client will send a request to, checked before any
+ * network call in jiraRequest below.
+ *
+ * `path` is never external input — it is always a hardcoded literal in this
+ * file's callers (providers/jira.ts), with only already-encoded id segments
+ * interpolated in (see e.g. encodeURIComponent(key) at each call site) — so
+ * this cannot be reached by a model or a network caller today. It exists as a
+ * defense against this client's own scope quietly growing: a future caller
+ * adding a new Jira endpoint has to widen this list in the same diff, which
+ * is the point at which a reviewer sees it, rather than the scope drifting
+ * past whatever the header comment happened to still say.
+ *
+ * A mismatch is this codebase's own bug, never a caller-recoverable outcome,
+ * so it throws rather than degrading to a JiraResult failure the model could
+ * see and retry.
+ *
+ * Each entry matches itself exactly OR itself plus "/…" — never a bare
+ * string-prefix match. Without a segment boundary, "/rest/api/3/issue" would
+ * also let "/rest/api/3/issuetype" through (a real, different Jira endpoint
+ * this client has never called) purely because the characters happen to
+ * line up; assertAllowedPath below checks the boundary explicitly rather
+ * than trusting every entry to end with its own "/".
+ */
+const ALLOWED_PATH_PREFIXES = ['/rest/api/3/issue', '/rest/api/3/search/jql', '/rest/api/3/dashboard', '/rest/api/3/filter'];
+
+function assertAllowedPath(path: string): void {
+  const allowed = ALLOWED_PATH_PREFIXES.some(
+    (prefix) => path === prefix || path.startsWith(`${prefix}/`),
+  );
+  if (!allowed) {
+    throw new Error(`jiraGet/jiraPost: "${path}" is outside this client's allowed path scope.`);
+  }
+}
 
 export interface JiraCredential {
   /** Bare hostname, e.g. "yourteam.atlassian.net" — no scheme, no path. */
@@ -124,6 +160,7 @@ async function jiraRequest<T>(
     body?: unknown;
   },
 ): Promise<JiraResult<T>> {
+  assertAllowedPath(init.path);
   const url = new URL(`https://${credential.site}${init.path}`);
   for (const [key, value] of Object.entries(init.query ?? {})) url.searchParams.set(key, value);
 

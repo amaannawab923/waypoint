@@ -74,6 +74,32 @@ const ISSUE_FIELDS = [
 const ISSUE_KEY = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
 
 /**
+ * A bare positive integer — the shape of a Jira dashboard, gadget, and
+ * filter id. Checked before any of those three is interpolated directly into
+ * a request path or a JQL clause (`filter = <id>`, not `filter = "<id>"`,
+ * since `filter =` takes a numeric id, not a quoted string) — jqlQuoted
+ * cannot be reused for this the way it is for a free-text value, because a
+ * numeric id has to reach Jira unquoted to mean "this filter", not "a string
+ * matching this filter's name". This regex is what makes interpolating it
+ * bare safe: anything that isn't only digits is refused before it ever
+ * reaches a request.
+ */
+const NUMERIC_ID = /^\d+$/;
+
+/**
+ * A Jira Cloud accountId's shape — seen in practice as
+ * "712020:05c45d40-ca2a-4829-84ad-df1f5429a4d0" (a numeric prefix, a colon,
+ * a UUID) but not guaranteed to stay exactly that by Atlassian's own
+ * documentation, so this is intentionally a permissive charset rather than
+ * that literal shape: letters, digits, colon, and hyphen, nothing else. It
+ * exists so a value this loose still cannot contain a quote, a backslash, or
+ * whitespace that could matter to JQL — jqlQuoted is applied on top of this
+ * regardless (see searchIssuesByFilter), so this is a second, independent
+ * gate rather than the only one.
+ */
+const ACCOUNT_ID = /^[A-Za-z0-9:-]{1,128}$/;
+
+/**
  * Quotes a value for JQL.
  *
  * This is the security boundary for a model-supplied search string. JQL is a
@@ -154,6 +180,24 @@ function str(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
+/**
+ * An id field, tolerant of Jira serializing it as either a JSON string or a
+ * JSON number — confirmed live to differ BETWEEN dashboard endpoints on the
+ * same site: `/rest/api/3/dashboard`'s own dashboard ids come back as
+ * strings ("10000"), but that same dashboard's gadgets from
+ * `/rest/api/3/dashboard/{id}/gadget` come back with a numeric `id` (10000,
+ * no quotes). listTransitions above hit the identical inconsistency for
+ * transition ids and solved it the same way (see its own comment). str()
+ * alone would silently turn every numeric id into an empty string here —
+ * exactly the bug a live-tested unit case caught in review, not something
+ * this function's existence is guessing might happen.
+ */
+function idStr(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return '';
+}
+
 function nested(fields: Record<string, unknown>, field: string, key: string): string {
   const value = fields[field];
   if (!value || typeof value !== 'object') return '';
@@ -162,6 +206,30 @@ function nested(fields: Record<string, unknown>, field: string, key: string): st
 
 function issueUrl(site: string, key: string): string {
   return `https://${site}/browse/${encodeURIComponent(key)}`;
+}
+
+/**
+ * A minimal per-issue projection for search_dashboard_gadget_issues — not
+ * toSummary/toNormalized's shape, and deliberately so: those exist to
+ * satisfy TicketProvider's cross-provider contract (an `id`/`ref` a later
+ * get_ticket call can use), but a gadget-query result is grouped by issue
+ * type already, doesn't remember a ticket_refs row for every hit the way
+ * search() does, and is meant to be read directly rather than drilled into.
+ * Callers that want a full record still call get_ticket_by_identifier with
+ * the key this returns.
+ */
+function toSummaryForGadget(
+  issue: JiraIssue,
+): { key: string; summary: string; status: string; issueType: string; updated: string } {
+  const fields = issue.fields ?? {};
+  const key = str(issue.key);
+  return {
+    key,
+    summary: str(fields.summary),
+    status: nested(fields, 'status', 'name'),
+    issueType: nested(fields, 'issuetype', 'name'),
+    updated: str(fields.updated),
+  };
 }
 
 /**
@@ -421,6 +489,252 @@ export class JiraProvider implements TicketProvider {
     // Returned oldest-first, matching what list_comments already does for
     // native comments (ordered by createdAt ascending in commentsService).
     return comments.reverse();
+  }
+
+  // ---------------------------------------------------------------------
+  // Dashboards, gadgets, and filters (ROAD-157).
+  //
+  // Jira Cloud's public API exposes dashboard METADATA and per-gadget
+  // CONFIGURATION, but never a gadget's own rendered output — there is no
+  // "read this table" endpoint, and this deliberately does not try to
+  // reimplement one. A dashboard's Two-Dimensional Filter Statistics gadget
+  // (and every other stats/filter-results gadget) is always backed by a
+  // saved Jira filter — a normal search, not a gadget-specific computation —
+  // so the shape here is: resolve a gadget to the filter (or project) behind
+  // it, then run an ordinary JQL search against that. searchIssuesByFilter
+  // below returns the matching issues flat, in Jira's own order; grouping
+  // them by field (issue type, status, or not at all) is a presentation
+  // choice that lives in mcp/dashboardTools.ts, the same division search
+  // Jira's own gadget uses — Jira computes the answer, something above it
+  // decides how to bucket it for display — rather than this provider baking
+  // in one grouping.
+  // ---------------------------------------------------------------------
+
+  /** The dashboards this account can see. `nameContains` is applied here,
+   *  not sent to Jira: `/rest/api/3/dashboard` has no name-filter query
+   *  parameter (unlike `/rest/api/3/filter/search`, which does), so an
+   *  unfiltered page is fetched and narrowed client-side. Exists so Copilot
+   *  can turn "my scrum master's dashboard" into a real id instead of
+   *  guessing one. */
+  async listDashboards(
+    nameContains: string | undefined,
+    limit: number,
+  ): Promise<{ id: string; name: string; isFavourite: boolean }[]> {
+    const result = await jiraGet<{
+      dashboards?: { id?: unknown; name?: unknown; isFavourite?: unknown }[];
+    }>(this.credential, '/rest/api/3/dashboard', { maxResults: '100' });
+    if (!result.ok) unavailable(result);
+
+    const needle = nameContains?.trim().toLowerCase();
+    const dashboards = (result.value?.dashboards ?? [])
+      .filter((d): d is Record<string, unknown> => !!d && typeof d === 'object')
+      .map((d) => ({ id: idStr(d.id), name: str(d.name), isFavourite: d.isFavourite === true }))
+      .filter((d) => d.id && (!needle || d.name.toLowerCase().includes(needle)));
+    return dashboards.slice(0, limit);
+  }
+
+  /** The gadgets placed on one dashboard — id, title, moduleKey. Read-only
+   *  metadata; resolving what each one is BOUND to is a separate step (see
+   *  resolveGadgetBinding), because that needs a second call per gadget and
+   *  a caller listing gadgets to pick one from doesn't need it yet. */
+  async getDashboardGadgets(
+    dashboardId: string,
+  ): Promise<{ id: string; title: string; moduleKey: string }[] | null> {
+    const result = await jiraGet<{
+      gadgets?: { id?: unknown; title?: unknown; moduleKey?: unknown }[];
+    }>(this.credential, `/rest/api/3/dashboard/${encodeURIComponent(dashboardId)}/gadget`);
+    if (!result.ok) {
+      if (result.reason === 'not_found') return null;
+      unavailable(result);
+    }
+    return (result.value?.gadgets ?? [])
+      .filter((g): g is Record<string, unknown> => !!g && typeof g === 'object')
+      .map((g) => ({ id: idStr(g.id), title: str(g.title), moduleKey: str(g.moduleKey) }))
+      .filter((g) => g.id);
+  }
+
+  /** One gadget's stored preferences, or null if it has none under the
+   *  "config" key (Jira's own convention for a gadget's user preferences —
+   *  confirmed live against real dashboard items: every configurable stock
+   *  gadget exposes exactly this key, e.g. the Activity Stream gadget's
+   *  preferences come back as {"numofentries":"5","keys":"__all_projects__",...}
+   *  under the same key). Values are always strings — Jira's gadget
+   *  preference storage is a flat string-to-string map, never nested JSON. */
+  private async getGadgetConfig(
+    dashboardId: string,
+    gadgetId: string,
+  ): Promise<Record<string, string> | null> {
+    const result = await jiraGet<{ key?: unknown; value?: unknown }>(
+      this.credential,
+      `/rest/api/3/dashboard/${encodeURIComponent(dashboardId)}/items/${encodeURIComponent(gadgetId)}/properties/config`,
+    );
+    if (!result.ok) {
+      if (result.reason === 'not_found') return null;
+      unavailable(result);
+    }
+    const value = result.value?.value;
+    if (!value || typeof value !== 'object') return null;
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (typeof v === 'string') out[k] = v;
+    }
+    return out;
+  }
+
+  /**
+   * Resolves a gadget to what backs it: a saved filter, a project, or
+   * unresolved.
+   *
+   * The preference key names below (`filterid` holding `filter-<id>` or
+   * `project-<id>`, `filterId`, `projectOrFilterId`) are Jira's known gadget-
+   * preference conventions for its stats/filter-results gadget family
+   * (Two-Dimensional Filter Statistics, Filter Results, Pie Chart, and
+   * others) — confirmed live only for what "config" itself returns (real,
+   * per-gadget key/value data), NOT yet confirmed against a live
+   * Two-Dimensional Filter Statistics gadget specifically, since none exists
+   * on the Jira site this was developed against. Tried in order; the first
+   * one present wins. A gadget whose config matches none of them comes back
+   * `unresolved` rather than a guess — see describe_jira_dashboard's tool
+   * description, which tells Copilot this is an expected, first-class
+   * outcome to ask the user about, not an error to retry.
+   */
+  async resolveGadgetBinding(
+    dashboardId: string,
+    gadgetId: string,
+  ): Promise<
+    | { kind: 'filter'; filterId: string; filterName: string; jql: string }
+    | { kind: 'project'; projectKey: string }
+    | { kind: 'unresolved'; reason: string }
+  > {
+    const config = await this.getGadgetConfig(dashboardId, gadgetId);
+    if (!config) {
+      return { kind: 'unresolved', reason: 'This gadget has no stored configuration to resolve.' };
+    }
+
+    const combined = config.filterid ?? config.projectOrFilterId;
+    if (combined) {
+      const filterMatch = /^filter-(\d+)$/.exec(combined);
+      const projectMatch = /^project-(.+)$/.exec(combined);
+      if (filterMatch) {
+        const filter = await this.getFilter(filterMatch[1]);
+        if (filter) return { kind: 'filter', filterId: filter.id, filterName: filter.name, jql: filter.jql };
+        return {
+          kind: 'unresolved',
+          reason: `This gadget is bound to filter ${filterMatch[1]}, which could not be read (deleted, or not shared with this account).`,
+        };
+      }
+      if (projectMatch) return { kind: 'project', projectKey: projectMatch[1] };
+    }
+
+    const bareFilterId = config.filterId && NUMERIC_ID.test(config.filterId) ? config.filterId : undefined;
+    if (bareFilterId) {
+      const filter = await this.getFilter(bareFilterId);
+      if (filter) return { kind: 'filter', filterId: filter.id, filterName: filter.name, jql: filter.jql };
+    }
+
+    return {
+      kind: 'unresolved',
+      reason:
+        "This gadget's configuration doesn't match a recognized filter or project binding — pass a filterId directly instead.",
+    };
+  }
+
+  /** One saved filter's id, name, and JQL — or null if it doesn't exist or
+   *  isn't shared with this account. `filterId` must already be validated
+   *  numeric by the caller (see NUMERIC_ID); it is interpolated bare into the
+   *  path, never into JQL text here. */
+  async getFilter(filterId: string): Promise<{ id: string; name: string; jql: string } | null> {
+    const result = await jiraGet<{ id?: unknown; name?: unknown; jql?: unknown }>(
+      this.credential,
+      `/rest/api/3/filter/${encodeURIComponent(filterId)}`,
+    );
+    if (!result.ok) {
+      if (result.reason === 'not_found' || result.reason === 'forbidden') return null;
+      unavailable(result);
+    }
+    if (!result.value || !idStr(result.value.id)) return null;
+    return { id: idStr(result.value.id), name: str(result.value.name), jql: str(result.value.jql) };
+  }
+
+  /** Saved filters visible to this account, optionally narrowed by name.
+   *  `filterName` IS a real query parameter on `/rest/api/3/filter/search`
+   *  (unlike dashboard listing above) — sent straight through rather than
+   *  filtered client-side. */
+  async searchFilters(
+    nameContains: string | undefined,
+    limit: number,
+  ): Promise<{ id: string; name: string }[]> {
+    const result = await jiraGet<{ values?: { id?: unknown; name?: unknown }[] }>(
+      this.credential,
+      '/rest/api/3/filter/search',
+      { maxResults: String(limit), ...(nameContains ? { filterName: nameContains } : {}) },
+    );
+    if (!result.ok) unavailable(result);
+    return (result.value?.values ?? [])
+      .filter((f): f is Record<string, unknown> => !!f && typeof f === 'object')
+      .map((f) => ({ id: idStr(f.id), name: str(f.name) }))
+      .filter((f) => f.id);
+  }
+
+  /**
+   * Runs a saved filter's JQL, narrowed by assignee and (optionally) issue
+   * type, and groups the results by issue type.
+   *
+   * The filter's own JQL is never parsed or concatenated as text — it is
+   * referenced by id (`filter = <id>`, Jira's own supported JQL function),
+   * which composes safely with anything appended after it regardless of what
+   * the filter's saved query contains (its own ORDER BY, a nested filter,
+   * anything). filterId must already be validated numeric by the caller.
+   * assigneeScope 'me' emits the literal `currentUser()` and never touches
+   * caller input; an explicit accountId goes through jqlQuoted like any other
+   * model-influenced string. issueTypes go through jqlQuoted individually.
+   */
+  async searchIssuesByFilter(options: {
+    filterId: string;
+    assigneeScope: 'me' | 'accountId';
+    accountId?: string;
+    issueTypes?: string[];
+    limit: number;
+  }): Promise<{
+    jql: string;
+    issues: ReturnType<typeof toSummaryForGadget>[];
+    truncated: boolean;
+  }> {
+    // Defense in depth: the MCP tool schema (dashboardTools.ts) already
+    // shapes filterId as \d+ and accountId against a strict charset before
+    // either reaches here, but this method builds JQL from both directly, so
+    // it re-checks rather than trusting the caller — the same posture
+    // jqlQuoted's own doc comment takes for free-text input.
+    if (!NUMERIC_ID.test(options.filterId)) {
+      throw new Error('searchIssuesByFilter: filterId must be a bare numeric id.');
+    }
+    if (options.assigneeScope === 'accountId' && !ACCOUNT_ID.test(options.accountId ?? '')) {
+      throw new Error('searchIssuesByFilter: accountId has an unexpected shape.');
+    }
+
+    const clauses = [`filter = ${options.filterId}`];
+    clauses.push(
+      options.assigneeScope === 'me' ? 'assignee = currentUser()' : `assignee = ${jqlQuoted(options.accountId ?? '')}`,
+    );
+    if (options.issueTypes?.length) {
+      clauses.push(`issuetype IN (${options.issueTypes.map(jqlQuoted).join(', ')})`);
+    }
+    const jql = `${clauses.join(' AND ')} ORDER BY issuetype ASC, updated DESC`;
+
+    const result = await jiraGet<{ issues?: unknown[] }>(this.credential, '/rest/api/3/search/jql', {
+      jql,
+      fields: ISSUE_FIELDS,
+      maxResults: String(options.limit + 1),
+    });
+    if (!result.ok) unavailable(result);
+
+    const issues = (result.value?.issues ?? []).filter(
+      (issue): issue is JiraIssue => !!issue && typeof issue === 'object' && !!str((issue as JiraIssue).key),
+    );
+    const truncated = issues.length > options.limit;
+    const page = truncated ? issues.slice(0, options.limit) : issues;
+
+    return { jql, issues: page.map((issue) => toSummaryForGadget(issue)), truncated };
   }
 
   // ---------------------------------------------------------------------
