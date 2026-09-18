@@ -219,10 +219,19 @@ export async function searchDashboardGadgetIssuesHandler(
     limit: effectiveLimit,
   });
 
+  // No `total` field, deliberately (round-5 review, ROAD-157): the only
+  // candidate value was result.issues.length AFTER searchIssuesByFilter's
+  // own limit slice — a floor on the real match count, not a count, for a
+  // feature whose whole point is reproducing a *Statistics* gadget. A field
+  // literally named `total` reads as authoritative in exactly the situation
+  // (truncated: true) where it most isn't. `groups[].count` plus the page's
+  // own `issues.length` already say how many rows are IN this response;
+  // `truncated` is what says whether that's everything — there is no
+  // shorter path to a wrong-sounding-right answer than inventing a second
+  // field for the same fact under a more confident name.
   return jsonResult({
     resolvedFrom,
     jql: result.jql,
-    total: result.issues.length,
     truncated: result.truncated,
     groups: groupIssues(result.issues, args.groupBy ?? 'issueType'),
   });
@@ -279,7 +288,8 @@ export function registerDashboardTools(server: McpServer, jiraCredential: JiraCr
         'Pass EITHER (dashboardId and gadgetId) — resolved automatically via the same binding describe_jira_dashboard shows — OR filterId directly, never both. ' +
         'The exact JQL that ran is always echoed back in the result, so the user can audit it or open it in Jira themselves. ' +
         'If the gadget cannot be auto-resolved, this returns needsBinding with the dashboard\'s gadgets and the account\'s visible filters instead of guessing — ask the user which filter backs it. ' +
-        'There is no raw-JQL parameter: build the query from filterId/issueTypes/assigneeScope only.',
+        'There is no raw-JQL parameter: build the query from filterId/issueTypes/assigneeScope only. ' +
+        'There is no total/count field: the number of issues actually in the response (sum of groups[].count) is a real count of what\'s here, but is a FLOOR on the real match count whenever truncated is true — never state or imply a total without checking truncated first, and say so ("at least N, more may exist") rather than reporting a possibly-partial count as complete.',
       inputSchema: {
         dashboardId: DASHBOARD_ID.optional().describe('With gadgetId: the dashboard to resolve a gadget on.'),
         gadgetId: GADGET_ID.optional().describe('With dashboardId: which gadget on it to resolve.'),

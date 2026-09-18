@@ -229,7 +229,11 @@ describe('searchDashboardGadgetIssuesHandler — filterId path', () => {
     const parsed = parse(result);
     expect(parsed.resolvedFrom).toEqual({ kind: 'filter', filterId: '10123' });
     expect(parsed.jql).toBe('filter = 10123 AND assignee = currentUser()');
-    expect(parsed.total).toBe(1);
+    // No `total` field (round-5 review, ROAD-157) — result.issues.length
+    // after searchIssuesByFilter's own limit slice is a floor on the real
+    // match count whenever truncated is true, not a count, and a field
+    // literally named `total` invited exactly that misreading.
+    expect(parsed).not.toHaveProperty('total');
     expect(parsed.groups).toEqual([
       { key: 'Bug', count: 1, issues: [{ key: 'ENG-4', summary: 'Login bug', status: 'In Progress', issueType: 'Bug', updated: '2026-08-20' }] },
     ]);

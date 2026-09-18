@@ -340,10 +340,12 @@ describe('path allowlist', () => {
     ).rejects.toThrow(/outside this client's allowed path\/method scope/);
     expect(fetchMock).not.toHaveBeenCalled();
 
-    // Normalizes to '/rest/api/3/', which is still inside the allowed
-    // '/rest/api/3/filter' family only by accident of this specific example
-    // — asserting the actually-dispatched URL, not just that fetch fired,
-    // so a future prefix change can't silently make this vacuous.
+    // Normalizes to '/rest/api/3/filter/10123' (the ".." pops the first
+    // "filter" segment, then "filter/10123" is appended back) — still
+    // inside the allowed '/rest/api/3/filter' family, this time for real
+    // rather than by accident, since the path both starts AND ends inside
+    // it. Asserting the actually-dispatched URL, not just that fetch
+    // fired, so a future prefix change can't silently make this vacuous.
     await jiraGet(CREDENTIAL, `/rest/api/3/filter/${encodeURIComponent('..')}/filter/10123`);
     expect(call()[0]).toBe('https://waypoint123.atlassian.net/rest/api/3/filter/10123');
   });
