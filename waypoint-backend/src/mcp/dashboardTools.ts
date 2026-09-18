@@ -71,8 +71,8 @@ export async function listJiraDashboardsHandler(
   { nameContains, limit }: { nameContains?: string; limit?: number },
 ) {
   if (!jira) return validationErrorResult(JIRA_NOT_CONNECTED);
-  const dashboards = await jira.listDashboards(nameContains, resolveLimit(limit));
-  return jsonResult({ dashboards });
+  const { dashboards, truncated } = await jira.listDashboards(nameContains, resolveLimit(limit));
+  return jsonResult({ dashboards, truncated });
 }
 
 // Round-1 review (ROAD-157): describeJiraDashboardHandler fires up to two
@@ -157,20 +157,32 @@ export async function searchDashboardGadgetIssuesHandler(
       // dashboard and what filters this account can see, so Copilot can ask
       // the user which one backs the gadget instead of guessing or giving up.
       const gadgets = await jira.getDashboardGadgets(dashboardId);
+      // resolveGadgetBinding above degrades a nonexistent dashboard/gadget
+      // to 'unresolved' too (its own config read just 404s the same as a
+      // real gadget with no config) — so this is the first point that can
+      // actually tell "the dashboard is gone" apart from "the gadget has no
+      // recognized binding", and the two deserve different answers.
+      if (!gadgets) return notFoundResult('dashboard');
+
       // Narrowed by the gadget's own title, not an unfiltered page of every
       // filter this account can see (round-1 review, ROAD-157) — an
       // unnarrowed search returns whatever 20 filters Jira lists first,
       // which can include filters shared by other users and unrelated to
-      // anything this request named; a name-matched set is at least
-      // responsive to the dashboard the user actually asked about, and
-      // still leaves "no match" (an empty list) as an honest answer rather
-      // than a wrong guess.
-      const thisGadget = gadgets?.find((g) => g.id === gadgetId);
-      const filters = await jira.searchFilters(thisGadget?.title, 20);
+      // anything this request named. Round-2 review: the narrowing term
+      // must never silently fall back to "no filter" (which searchFilters
+      // treats as "return everything") — that regresses to the exact
+      // unfiltered page this fix exists to avoid, and is reachable whenever
+      // gadgetId doesn't match anything in `gadgets` (a stale or
+      // wrong-dashboard id) or the matched gadget has no title. In either
+      // case, returning no filters is the honest answer — there is nothing
+      // real to narrow by — not a wider, unrequested page.
+      const thisGadget = gadgets.find((g) => g.id === gadgetId);
+      const nameContains = thisGadget?.title.trim();
+      const filters = nameContains ? await jira.searchFilters(nameContains, 20) : [];
       return jsonResult({
         needsBinding: true,
         reason: binding.reason,
-        dashboardGadgets: (gadgets ?? []).slice(0, MAX_GADGETS_TO_DESCRIBE),
+        dashboardGadgets: gadgets.slice(0, MAX_GADGETS_TO_DESCRIBE),
         visibleFilters: filters,
       });
     }
@@ -218,7 +230,8 @@ export function registerDashboardTools(server: McpServer, jiraCredential: JiraCr
     'list_jira_dashboards',
     {
       description:
-        "List Jira dashboards visible to the connected account, optionally narrowed by name. Use this when the user names a dashboard (e.g. \"my scrum master's dashboard\") but you don't already have its numeric id — never invent one.",
+        "List Jira dashboards visible to the connected account, optionally narrowed by name. Use this when the user names a dashboard (e.g. \"my scrum master's dashboard\") but you don't already have its numeric id — never invent one. " +
+        'A true truncated flag means this account has more dashboards than this search could see — an empty result with truncated=true is "not found in the first 200", not "does not exist"; ask the user for the dashboard id instead of concluding it doesn\'t exist.',
       inputSchema: {
         nameContains: z
           .string()
@@ -271,7 +284,8 @@ export function registerDashboardTools(server: McpServer, jiraCredential: JiraCr
           ),
         accountId: ACCOUNT_ID_SCHEMA.optional().describe('Required, and only used, when assigneeScope is "accountId".'),
         issueTypes: z
-          .array(z.string().trim().min(1))
+          .array(z.string().trim().min(1).max(64))
+          .max(50)
           .optional()
           .describe('e.g. ["Bug","Epic"]. Omit to include every issue type the filter returns.'),
         groupBy: z

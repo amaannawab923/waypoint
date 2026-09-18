@@ -51,15 +51,33 @@ const REQUEST_TIMEOUT_MS = 20_000;
  * this client has never called) purely because the characters happen to
  * line up; assertAllowedPath below checks the boundary explicitly rather
  * than trusting every entry to end with its own "/".
+ *
+ * Method-scoped, not just path-scoped (round-2 review, ROAD-157): the three
+ * writes this client performs (transition, comment, and — nowhere yet —
+ * anything else) are all under `/rest/api/3/issue`, and every prefix added
+ * for the read-only dashboard/gadget/filter tools has no write caller today.
+ * Without a per-prefix method list, jiraPost would silently be as permitted
+ * on `/rest/api/3/dashboard` as jiraGet is the moment ANY future caller
+ * composes a POST to a path under one of those prefixes — exactly the
+ * "scope drifting past whatever the comment says" failure this allowlist
+ * exists to catch, just moved from the path dimension to the method
+ * dimension. `methods` is checked in addition to the path prefix, not
+ * instead of it.
  */
-const ALLOWED_PATH_PREFIXES = ['/rest/api/3/issue', '/rest/api/3/search/jql', '/rest/api/3/dashboard', '/rest/api/3/filter'];
+const ALLOWED_PATHS: { prefix: string; methods: readonly ('GET' | 'POST')[] }[] = [
+  { prefix: '/rest/api/3/issue', methods: ['GET', 'POST'] },
+  { prefix: '/rest/api/3/search/jql', methods: ['GET'] },
+  { prefix: '/rest/api/3/dashboard', methods: ['GET'] },
+  { prefix: '/rest/api/3/filter', methods: ['GET'] },
+];
 
-function assertAllowedPath(path: string): void {
-  const allowed = ALLOWED_PATH_PREFIXES.some(
-    (prefix) => path === prefix || path.startsWith(`${prefix}/`),
+function assertAllowedPath(method: 'GET' | 'POST', path: string): void {
+  const allowed = ALLOWED_PATHS.some(
+    ({ prefix, methods }) =>
+      (path === prefix || path.startsWith(`${prefix}/`)) && methods.includes(method),
   );
   if (!allowed) {
-    throw new Error(`jiraGet/jiraPost: "${path}" is outside this client's allowed path scope.`);
+    throw new Error(`${method} "${path}" is outside this client's allowed path/method scope.`);
   }
 }
 
@@ -179,7 +197,7 @@ async function jiraRequest<T>(
   // the string; checking init.path instead would let a crafted id like ".."
   // pass a prefix test while the request that actually goes out lands
   // somewhere else in this same allowed host.
-  assertAllowedPath(url.pathname);
+  assertAllowedPath(init.method, url.pathname);
   for (const [key, value] of Object.entries(init.query ?? {})) url.searchParams.set(key, value);
 
   const controller = new AbortController();

@@ -530,7 +530,7 @@ export class JiraProvider implements TicketProvider {
   async listDashboards(
     nameContains: string | undefined,
     limit: number,
-  ): Promise<{ id: string; name: string; isFavourite: boolean }[]> {
+  ): Promise<{ dashboards: { id: string; name: string; isFavourite: boolean }[]; truncated: boolean }> {
     // Always requests DASHBOARD_FETCH_SIZE from Jira, not `limit` — the name
     // filter below runs client-side against whatever Jira returns, so tying
     // the fetch size to the caller's final result-count cap would make a
@@ -545,12 +545,25 @@ export class JiraProvider implements TicketProvider {
     }>(this.credential, '/rest/api/3/dashboard', { maxResults: String(DASHBOARD_FETCH_SIZE) });
     if (!result.ok) unavailable(result);
 
+    const rawDashboards = result.value?.dashboards ?? [];
     const needle = nameContains?.trim().toLowerCase();
-    const dashboards = (result.value?.dashboards ?? [])
+    const dashboards = rawDashboards
       .filter((d): d is Record<string, unknown> => !!d && typeof d === 'object')
       .map((d) => ({ id: idStr(d.id), name: str(d.name), isFavourite: d.isFavourite === true }))
       .filter((d) => d.id && (!needle || d.name.toLowerCase().includes(needle)));
-    return dashboards.slice(0, limit);
+    return {
+      dashboards: dashboards.slice(0, limit),
+      // True when Jira's own response was exactly the page size asked for
+      // — the honest signal that there may be MORE dashboards on the site
+      // than this account-wide, unpaginated read saw at all (round-2
+      // review, ROAD-157). A name search against a site with more than
+      // DASHBOARD_FETCH_SIZE dashboards could otherwise come back with a
+      // plain empty result indistinguishable from "no such dashboard",
+      // when the real answer is "maybe — this only looked at the first
+      // 200". Distinct from dashboards.length > limit (the ordinary
+      // result-count cap, already covered by the slice above).
+      truncated: rawDashboards.length >= DASHBOARD_FETCH_SIZE,
+    };
   }
 
   /** The gadgets placed on one dashboard — id, title, moduleKey. Read-only
@@ -640,7 +653,18 @@ export class JiraProvider implements TicketProvider {
     const combined = config.filterid ?? config.projectOrFilterId;
     if (combined) {
       const filterMatch = /^filter-(\d+)$/.exec(combined);
-      const projectMatch = /^project-(.+)$/.exec(combined);
+      // Anchored to Jira's own project-key shape (round-2 review, ROAD-157)
+      // — this used to be `/^project-(.+)$/`, which accepted anything
+      // (quotes, whitespace, arbitrary length) as a "project key" that
+      // dashboardTools.ts then echoes verbatim inside an imperative,
+      // model-facing sentence ("Use search_tickets with ... projectKey=…").
+      // The gadget config is Jira-controlled, not model-controlled, but
+      // it's still authored by whoever configured the dashboard — an
+      // unbounded match would let that person's text ride into Copilot's
+      // context wrapped in a directive. A value that doesn't look like a
+      // real project key falls through to unresolved below rather than
+      // being trusted.
+      const projectMatch = /^project-([A-Z][A-Z0-9_]{1,9})$/.exec(combined);
       if (filterMatch) {
         const filter = await this.getFilter(filterMatch[1]);
         if (filter) return { kind: 'filter', filterId: filter.id, filterName: filter.name, jql: filter.jql };

@@ -18,7 +18,10 @@ const {
 function jiraStub() {
   return {
     kind: 'jira' as const,
-    listDashboards: vi.fn(async () => [] as { id: string; name: string; isFavourite: boolean }[]),
+    listDashboards: vi.fn(async () => ({
+      dashboards: [] as { id: string; name: string; isFavourite: boolean }[],
+      truncated: false,
+    })),
     getDashboardGadgets: vi.fn(async () => [] as { id: string; title: string; moduleKey: string }[] | null),
     resolveGadgetBinding: vi.fn(
       async () =>
@@ -63,12 +66,27 @@ describe('listJiraDashboardsHandler', () => {
 
   it('passes nameContains and the resolved limit straight through', async () => {
     const stub = connectJira();
-    stub.listDashboards.mockResolvedValue([{ id: '10810', name: 'Sprint Health', isFavourite: true }]);
+    stub.listDashboards.mockResolvedValue({
+      dashboards: [{ id: '10810', name: 'Sprint Health', isFavourite: true }],
+      truncated: false,
+    });
 
     const result = await listJiraDashboardsHandler(jira, { nameContains: 'sprint', limit: 10 });
 
     expect(stub.listDashboards).toHaveBeenCalledWith('sprint', 10);
-    expect(parse(result)).toEqual({ dashboards: [{ id: '10810', name: 'Sprint Health', isFavourite: true }] });
+    expect(parse(result)).toEqual({
+      dashboards: [{ id: '10810', name: 'Sprint Health', isFavourite: true }],
+      truncated: false,
+    });
+  });
+
+  it('surfaces truncated so the model can tell "not found" apart from "not found in the first page"', async () => {
+    const stub = connectJira();
+    stub.listDashboards.mockResolvedValue({ dashboards: [], truncated: true });
+
+    const result = await listJiraDashboardsHandler(jira, { nameContains: 'does-not-exist' });
+
+    expect(parse(result)).toEqual({ dashboards: [], truncated: true });
   });
 });
 

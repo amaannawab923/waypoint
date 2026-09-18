@@ -293,7 +293,7 @@ describe('path allowlist', () => {
     fetchMock.mockResolvedValue(jsonResponse({ ok: true }));
 
     await expect(jiraGet(CREDENTIAL, '/rest/gadget/1.0/portal/foo')).rejects.toThrow(
-      /outside this client's allowed path scope/,
+      /outside this client's allowed path\/method scope/,
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -304,7 +304,7 @@ describe('path allowlist', () => {
     // has never called and must not be let through just because the two
     // strings share a run of characters.
     await expect(jiraGet(CREDENTIAL, '/rest/api/3/issuetype')).rejects.toThrow(
-      /outside this client's allowed path scope/,
+      /outside this client's allowed path\/method scope/,
     );
   });
 
@@ -337,7 +337,7 @@ describe('path allowlist', () => {
     // allowed prefix.
     await expect(
       jiraGet(CREDENTIAL, `/rest/api/3/dashboard/${encodeURIComponent('..')}/gadget`),
-    ).rejects.toThrow(/outside this client's allowed path scope/);
+    ).rejects.toThrow(/outside this client's allowed path\/method scope/);
     expect(fetchMock).not.toHaveBeenCalled();
 
     // Normalizes to '/rest/api/3/', which is still inside the allowed
@@ -346,5 +346,25 @@ describe('path allowlist', () => {
     // so a future prefix change can't silently make this vacuous.
     await jiraGet(CREDENTIAL, `/rest/api/3/filter/${encodeURIComponent('..')}/filter/10123`);
     expect(call()[0]).toBe('https://waypoint123.atlassian.net/rest/api/3/filter/10123');
+  });
+
+  // Round-2 review (ROAD-157): the allowlist gates jiraPost identically to
+  // jiraGet (same jiraRequest, same assertAllowedPath call) — a path prefix
+  // added for a read-only tool must not silently also permit a write to
+  // that same prefix just because no caller happens to send one today.
+  it.each(['/rest/api/3/search/jql', '/rest/api/3/dashboard', '/rest/api/3/filter/10123'])(
+    'rejects a POST to %s — these prefixes were added read-only',
+    async (path) => {
+      await expect(jiraPost(CREDENTIAL, path, {})).rejects.toThrow(
+        /outside this client's allowed path\/method scope/,
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it('still allows a POST under /rest/api/3/issue — the one prefix with a real write caller', async () => {
+    fetchMock.mockResolvedValue(emptyResponse(204));
+    await jiraPost(CREDENTIAL, '/rest/api/3/issue/ENG-4/transitions', { transition: { id: '31' } });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
