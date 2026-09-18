@@ -7,7 +7,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * request's own provider), so a stub is passed in directly rather than
  * mocking providers/jira.js — the real provider methods (JQL construction,
  * the allowlist, id-shape tolerance) are covered in jira.test.ts instead.
+ *
+ * db/client.js IS mocked, though, same as that same sibling file: importing
+ * dashboardTools.ts (to reach the handlers under test) pulls in the real
+ * providers/jira.js at module scope regardless of the stub above, which
+ * pulls in services/ticketRefs.service.js, which imports db/client.js —
+ * and that file throws at import time (not just on first use) when
+ * DATABASE_URL isn't set. The CI lane this suite runs in deliberately has
+ * no Postgres (see .github/workflows/test.yml's own comment on the
+ * "Backend unit tests" job) — without this, every test below fails before
+ * any of them run, not from anything they actually exercise.
  */
+
+vi.mock('../db/client.js', () => ({ db: {} }));
 
 const {
   listJiraDashboardsHandler,
