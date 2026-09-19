@@ -43,7 +43,16 @@ let cache = readStarred();
 // referentially stable value when nothing changed, and listJiraStarredKeys'
 // own `[...cache]` is a fresh array on every call, not stable across renders
 // that didn't touch the store at all.
-let cacheSnapshot: string[] = [...cache];
+//
+// Reversed, not plain insertion order: `Set` iterates oldest-inserted
+// first, but jiraClient.ts's listTicketsByKeys silently caps a bulk read at
+// LIST_BY_KEYS_MAX (50) keys, keeping only the FIRST 50 of whatever order
+// it's given. Past 50 stars, plain insertion order would silently keep the
+// 50 OLDEST stars and drop the ones just starred — the exact tickets
+// someone starred most recently would vanish from their own Starred tab
+// with no error, no truncation notice, nothing. Newest-first here is what
+// makes the cap keep the right end of the list.
+let cacheSnapshot: string[] = [...cache].reverse();
 const listeners = new Set<() => void>();
 
 function notify(): void {
@@ -66,16 +75,17 @@ export function toggleJiraStarred(key: string): boolean {
   if (nowStarred) next.add(key);
   else next.delete(key);
   cache = next;
-  cacheSnapshot = [...cache];
+  cacheSnapshot = [...cache].reverse();
   writeStarred(cache);
   notify();
   return nowStarred;
 }
 
-/** Every starred key, in no particular order — the Starred tab sorts the
- *  real tickets it resolves them to, same as every other tab. */
+/** Every starred key, most-recently-starred first — see cacheSnapshot's own
+ *  comment for why this order matters once there are more than
+ *  LIST_BY_KEYS_MAX of them. */
 export function listJiraStarredKeys(): string[] {
-  return [...cache];
+  return [...cache].reverse();
 }
 
 /** Live-subscribes to one key's starred state, for a star toggle button

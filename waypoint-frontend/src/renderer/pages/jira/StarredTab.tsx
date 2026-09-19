@@ -60,16 +60,34 @@ export default function StarredTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tickets]);
 
+  // Snapshotted once, at open time — deliberately NOT derived from `tickets`
+  // on every render (`tickets.find(t => t.id === drawerTicketId)`, this
+  // tab's own earlier approach). Unstarring is an action taken FROM inside
+  // this exact drawer: it changes `starredKeys`, which re-runs the
+  // useAsync fetch above with the ticket's own key now missing, which
+  // replaces `tickets` without it — and a derived lookup would go straight
+  // to null the instant that refetch lands, unmounting the drawer the user
+  // is actively looking at out from under them. This still updates for a
+  // genuine field edit (updateTicket, e.g. a state/priority/comment
+  // change), just never because the SET OF STARRED KEYS changed. Doubles
+  // as "is the drawer open" — no separate id needed alongside it.
+  const [drawerTicket, setDrawerTicket] = useState<JiraTicket | null>(null);
+
   function updateTicket(updated: JiraTicket) {
     setTickets((ts) => ts.map((t) => (t.id === updated.id ? updated : t)));
+    setDrawerTicket((prev) =>
+      prev && prev.id === updated.id ? updated : prev,
+    );
   }
 
   const paged = usePagedTickets(tickets);
 
-  const [drawerTicketId, setDrawerTicketId] = useState<string | null>(null);
-  const drawerTicket = drawerTicketId
-    ? (tickets.find((t) => t.id === drawerTicketId) ?? null)
-    : null;
+  function openDrawer(id: string) {
+    // The id always comes from a currently-rendered row, i.e. from this
+    // same `tickets` array — the lookup can't miss.
+    const found = tickets.find((t) => t.id === id);
+    if (found) setDrawerTicket(found);
+  }
 
   // See RoleTicketsTab's own header for why these throw instead of
   // silently no-op: neither read this tab performs ever produces a
@@ -112,7 +130,7 @@ export default function StarredTab({
                 <JiraTicketRow
                   key={ticket.id}
                   ticket={ticket}
-                  onOpenDrawer={setDrawerTicketId}
+                  onOpenDrawer={openDrawer}
                   onTicketUpdated={updateTicket}
                   onResolveConflict={neverResolvesConflict}
                   onDismissTombstone={neverDismissesTombstone}
@@ -137,7 +155,7 @@ export default function StarredTab({
         <JiraTicketDrawer
           ticket={drawerTicket}
           onTicketUpdated={updateTicket}
-          onClose={() => setDrawerTicketId(null)}
+          onClose={() => setDrawerTicket(null)}
         />
       )}
     </div>

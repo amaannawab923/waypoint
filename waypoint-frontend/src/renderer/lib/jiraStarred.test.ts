@@ -45,6 +45,27 @@ describe('jiraStarred', () => {
     expect(listJiraStarredKeys()).toEqual(['PLAT-2']);
   });
 
+  // jiraClient.ts's listTicketsByKeys silently caps a bulk read at 50 keys,
+  // keeping only the FIRST 50 of whatever order it's given — so past 50
+  // stars, this order is what decides whether the tickets someone just
+  // starred are the ones that show up, or the ones that silently vanish.
+  it('lists starred keys most-recently-starred first', () => {
+    toggleJiraStarred('ENG-1');
+    toggleJiraStarred('ENG-2');
+    toggleJiraStarred('ENG-3');
+
+    expect(listJiraStarredKeys()).toEqual(['ENG-3', 'ENG-2', 'ENG-1']);
+  });
+
+  it('re-starring a previously unstarred key moves it back to the front', () => {
+    toggleJiraStarred('ENG-1');
+    toggleJiraStarred('ENG-2');
+    toggleJiraStarred('ENG-1'); // unstar
+    toggleJiraStarred('ENG-1'); // re-star
+
+    expect(listJiraStarredKeys()).toEqual(['ENG-1', 'ENG-2']);
+  });
+
   it('persists across a fresh read of the module-level cache (survives a reload)', () => {
     toggleJiraStarred('ENG-1');
 

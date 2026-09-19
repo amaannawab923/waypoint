@@ -1,5 +1,6 @@
 import '@testing-library/jest-dom';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { listTicketsByJiraKeys } from '@/data/jiraApi';
 import { useJiraStarredKeys } from '@/lib/jiraStarred';
 import type { JiraTicket } from '@/types/jira';
@@ -105,6 +106,51 @@ describe('StarredTab', () => {
 
     expect(await screen.findByText('Nothing starred yet.')).toBeInTheDocument();
     expect(listTicketsByJiraKeys).not.toHaveBeenCalled();
+  });
+
+  // Found in review: unstarring happens from inside this exact drawer (the
+  // star toggle lives in JiraTicketDetail), which changes the tab's own
+  // starredKeys and re-runs the bulk read without that ticket — this
+  // asserts the drawer survives that refetch instead of getting unmounted
+  // out from under the person who just clicked its own star button.
+  it('keeps the drawer open when the ticket it is showing gets unstarred, instead of unmounting it', async () => {
+    jest.mocked(useJiraStarredKeys).mockReturnValue(['ENG-1']);
+    jest
+      .mocked(listTicketsByJiraKeys)
+      .mockResolvedValue([ticket({ title: 'Webhook receiver drops events' })]);
+
+    const { rerender } = render(
+      <MemoryRouter>
+        <StarredTab />
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByText('Webhook receiver drops events'));
+    // The star toggle button is drawer-only content (this test's mocked
+    // connection has no site, so the "Open in Jira" link never renders —
+    // not a useful marker here), which is exactly what confirms the drawer
+    // itself is mounted, independent of the row list behind it.
+    expect(
+      await screen.findByRole('button', { name: 'Star ENG-1' }),
+    ).toBeInTheDocument();
+
+    // Simulate the unstar this same drawer's own star button would trigger:
+    // the key list no longer includes ENG-1, so the bulk read re-runs and
+    // comes back without it.
+    jest.mocked(useJiraStarredKeys).mockReturnValue([]);
+    jest.mocked(listTicketsByJiraKeys).mockResolvedValue([]);
+    rerender(
+      <MemoryRouter>
+        <StarredTab />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Nothing starred yet.')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Star ENG-1' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Webhook receiver drops events'),
+    ).toBeInTheDocument();
   });
 
   it('reports the ticket count via onCountChange', async () => {
