@@ -57,6 +57,66 @@ services:
       # service's own host-side 127.0.0.1 publish rule are what actually
       # keep it off the LAN, not the in-container bind address.
       HOST: 0.0.0.0
+      #
+      # --- Everything below is what a self-hoster actually configures on
+      # day one (docs/design/self-hosted-auth-and-multitenancy.md §8) —
+      # unlike DATABASE_URL/PORT/HOST above, these use Compose's ${...}
+      # substitution, which Compose fills in from a `waypoint-backend/.env`
+      # file if one exists (see setup docs at
+      # docs/operations/self-hosted-setup.md) or from your shell
+      # environment. Leaving all of them unset is a supported, honest
+      # failure mode, not a bug: POST /instance/setup answers 503 without
+      # INSTANCE_SETUP_TOKEN, and refuses to complete without at least one
+      # sign-in method below — an instance with nothing configured simply
+      # can't produce an account anyone could sign into.
+      #
+      # First-run setup is gated on this token (spec §4/§8): whoever holds
+      # it owns the instance, the same trust boundary as DATABASE_URL
+      # above. Generate your own — this is not a value we issue.
+      INSTANCE_SETUP_TOKEN: ${INSTANCE_SETUP_TOKEN:-}
+      #
+      # Sign-in methods (§8) — each pair below is independently optional;
+      # at least one full pair (or SMTP_HOST+SMTP_FROM) must be set. A
+      # GitHub OAuth App and a Google Cloud OAuth client are both free,
+      # self-service, five-minute registrations you make yourself — see
+      # the setup docs for exactly what to register and what callback URL
+      # to give each provider.
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      # SMTP_PORT/SMTP_USER/SMTP_PASS are optional beyond SMTP_HOST/
+      # SMTP_FROM — a local, unauthenticated relay needs none of them.
+      # Port 465 is implicit TLS; anything else starts plain and upgrades
+      # with STARTTLS.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      #
+      # The URL GitHub/Google send the browser back to, and the magic link
+      # points at — this backend as your team actually reaches it, not as
+      # this container sees itself. Defaults to http://localhost:<PORT>,
+      # which is only correct for local dev against the published port
+      # above; set this once you put your own reverse proxy/TLS in front
+      # of this container (see the loopback-only note on the port mapping
+      # below — that part of this file is unchanged by this epic, and
+      # putting this instance on a real network is deliberately your own
+      # infra decision, not something this compose file does for you).
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      #
+      # Encryption key for a hosted member's own Jira credential (AT12) —
+      # optional, and normally left unset: a 32-byte key is generated on
+      # first use. Pointed at the waypoint_secrets volume below rather
+      # than left at its container-filesystem default so it survives a
+      # rebuild/recreate; every stored credential opens under whichever
+      # key answers at this path, so losing the volume is equivalent to
+      # every Team member's stored Jira connection needing to be redone —
+      # survivable, but worth the one-line fix of persisting it.
+      WAYPOINT_KEY_FILE: /data/secrets/secret.key
+    volumes:
+      - waypoint_secrets:/data/secrets
     ports:
       - '127.0.0.1:14000:14000'
     depends_on:
@@ -65,3 +125,4 @@ services:
 
 volumes:
   waypoint_pgdata:
+  waypoint_secrets:

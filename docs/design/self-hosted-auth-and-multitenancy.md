@@ -464,7 +464,12 @@ individually, at least one auth method required):**
 - `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` —
   their own relay (any provider), for email-link sign-in.
 - `INSTANCE_SIGNUP_MODE` default (`open`/`invite_only`) — settable at
-  first-run instead if left unset.
+  first-run instead if left unset. **Never implemented as an env var**
+  (AT13, ROAD-148, §"Built in AT13" below) — set via `POST
+  /instance/setup`'s own request body at first-run, changed afterward
+  via `PATCH /admin/instance`. Kept in this list because "settable at
+  first-run instead" already anticipated the env-var half might not
+  ship; only that half didn't.
 - Nothing else. No account with us, no API key from us, no license
   check to defeat (003 §5) — a self-hoster who configures none of the
   above simply can't complete first-run setup, which is an honest failure
@@ -478,6 +483,33 @@ always `false` for any customer reaching it (§4) — our own "God Mode"
 account is internal ops tooling, never customer-facing. Billing (AT6) is
 the other cloud-only layer, already a separate module per 003 §7 and
 untouched by this doc.
+
+### Built in AT13 (ROAD-148) — decisions made at implementation
+
+- `docker-compose.yml`'s `api` service now sets every env var listed above
+  via Compose `${...}` substitution from `waypoint-backend/.env`, plus a
+  `waypoint_secrets` named volume with `WAYPOINT_KEY_FILE` pointed at it —
+  the AT12 Jira-credential encryption key otherwise defaulted to a path
+  inside the container's own ephemeral filesystem, which this doc's own
+  compose file didn't previously persist across a rebuild.
+- `INSTANCE_SIGNUP_MODE` as an env var was never actually implemented
+  (there is no `process.env.INSTANCE_SIGNUP_MODE` read anywhere in
+  `waypoint-backend/src`) — `signupMode` is set once, in the
+  `POST /instance/setup` request body (AT8), and changed afterward via
+  `PATCH /admin/instance`. This doc's own "settable at first-run instead
+  if left unset" phrasing already anticipated either path was acceptable;
+  the env-var half of that just isn't real, and `docs/operations/
+  self-hosted-setup.md` (new, this ticket) documents the one that is
+  rather than wiring a no-op env var into the compose file.
+- There is no first-run setup wizard screen in the desktop app yet —
+  `docs/operations/self-hosted-setup.md` walks an operator through
+  `POST /instance/setup` as a one-time `curl` call instead. Building that
+  screen is real, separate desktop UI work, out of scope for a packaging
+  ticket.
+- The loopback-only `127.0.0.1:14000:14000` publish rule is unchanged, as
+  planned — documented plainly as the operator's own reverse-proxy/TLS
+  responsibility rather than something this ticket solves (see the setup
+  doc's "Reaching this instance beyond localhost").
 
 ## 9. What's out of scope, deliberately, and why the design still holds under it
 
