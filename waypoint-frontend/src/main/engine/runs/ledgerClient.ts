@@ -268,6 +268,18 @@ export interface LedgerClient {
   /** Every page of `listRuns`, for the callers (reconcile) that need all of a filter. */
   listAllRuns(query: Omit<ListAgentRunsQuery, 'cursor'>): Promise<AgentRun[]>;
   updateRun(id: string, patch: UpdateAgentRunInput): Promise<AgentRun>;
+  /**
+   * Revives an interrupted/failed/cancelled run back to `provisioning`
+   * (ROAD-XXX: resume dead sessions) — the one way past updateRun's
+   * read-only guard on a terminal row; see the backend's reopenRun for the
+   * preconditions it enforces (owner-only, not superseded by a retry, no
+   * second live writer, backoff). Throws LedgerRequestError(409) with the
+   * backend's own sentence on any refusal.
+   */
+  reopenRun(
+    id: string,
+    reason?: string,
+  ): Promise<{ run: AgentRun; from: AgentRunStatus }>;
   appendEvent(
     id: string,
     kind: ClientEventKind,
@@ -546,6 +558,16 @@ export function createLedgerClient(deps: LedgerClientDeps = {}): LedgerClient {
       assertRunId(id);
       return (await request<AgentRun>('PATCH', `/agent-runs/${id}`, patch))
         .body;
+    },
+    async reopenRun(id, reason) {
+      assertRunId(id);
+      return (
+        await request<{ run: AgentRun; from: AgentRunStatus }>(
+          'POST',
+          `/agent-runs/${id}/reopen`,
+          reason !== undefined ? { reason } : {},
+        )
+      ).body;
     },
     async appendEvent(id, kind, payload) {
       assertRunId(id);

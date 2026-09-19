@@ -807,7 +807,15 @@ export type ResumeRunOutcome =
    * first message.
    */
   | 'replaced-by-new'
-  /** Only an `interrupted` run can be resumed; this one is `status`. */
+  /**
+   * Only an interrupted/failed/cancelled run can be resumed (ROAD-XXX);
+   * this one is `status` (never dead — done/needs-review/live), or a Stop
+   * arrived mid-resume and `status` is wherever that landed. A refusal
+   * `reopenRun` itself makes (superseded by a retry, another live writer
+   * on the ticket, backoff, not the owner) is not this outcome — it
+   * throws, carrying the backend's own sentence, the same as a daemon
+   * failure does.
+   */
   | 'not-resumable'
   /** The run's worktree is no longer on disk; there is nothing to resume on. */
   | 'worktree-gone';

@@ -28,6 +28,7 @@ import {
 import { assertUnder } from './runs/worktrees';
 import { listRunBranches, resumeRun, startRun } from './runs/startRun';
 import { buildBriefPreview, dispatchTicketRun } from './runs/dispatch';
+import { withRunLock } from './runs/runLock';
 import {
   describeRunTicket,
   JIRA_NOT_CONNECTED,
@@ -625,7 +626,16 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
       path.join(path.dirname(deps.recentsFile), 'jira-project-repos.json'),
   };
   deps.host.handle(RUNS_IPC.start, (input) => startRun(startDeps, input));
-  deps.host.handle(RUNS_IPC.resume, (runId) => resumeRun(startDeps, runId));
+  // ROAD-XXX: the same per-run lock a transparent resume-on-message
+  // (sendPrompt.ts) takes — see runLock.ts's own doc comment for why both
+  // paths must share it. A non-string runId skips the lock and goes
+  // straight to resumeRun's own validation, which throws the right
+  // sentence for it; there's nothing to key a lock on otherwise.
+  deps.host.handle(RUNS_IPC.resume, (runId) =>
+    typeof runId === 'string'
+      ? withRunLock(runId, () => resumeRun(startDeps, runId))
+      : resumeRun(startDeps, runId),
+  );
   // W5a: a session on a ticket. The renderer names a ticket and a verb;
   // main builds the brief from the ledger and resolves the project's
   // repository itself (runs/dispatch.ts).

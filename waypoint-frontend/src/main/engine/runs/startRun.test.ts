@@ -127,6 +127,14 @@ function fakeLedger(seed: AgentRun[] = []) {
       rows.set(id, next);
       return next;
     }),
+    reopenRun: jest.fn(async (id: string) => {
+      const current = rows.get(id);
+      if (!current) throw new Error(`no row ${id}`);
+      const from = current.status;
+      const next = { ...current, status: 'provisioning' } as AgentRun;
+      rows.set(id, next);
+      return { run: next, from };
+    }),
     appendEvent: jest.fn(async () => ({}) as never),
     listRuns: jest.fn(),
     listAllRuns: jest.fn(),
@@ -654,9 +662,11 @@ describe('resumeRun', () => {
     });
   }
 
-  it('is not-resumable for any status but interrupted, and worktree-gone without a worktree', async () => {
+  it('is not-resumable for a live or successfully-ended status, and worktree-gone without a worktree', async () => {
     const { ledger } = fakeLedger([
       run({ id: 'run-r1', status: 'running' }),
+      run({ id: 'run-d1', status: 'done' }),
+      run({ id: 'run-nr1', status: 'needs-review' }),
       interrupted({ id: 'run-i2', worktreePath: null }),
       interrupted({
         id: 'run-i3',
@@ -668,6 +678,14 @@ describe('resumeRun', () => {
       outcome: 'not-resumable',
       status: 'running',
     });
+    await expect(resumeRun(deps, 'run-d1')).resolves.toEqual({
+      outcome: 'not-resumable',
+      status: 'done',
+    });
+    await expect(resumeRun(deps, 'run-nr1')).resolves.toEqual({
+      outcome: 'not-resumable',
+      status: 'needs-review',
+    });
     await expect(resumeRun(deps, 'run-i2')).resolves.toEqual({
       outcome: 'worktree-gone',
       status: 'interrupted',
@@ -677,6 +695,83 @@ describe('resumeRun', () => {
       status: 'interrupted',
     });
     expect(ledger.updateRun).not.toHaveBeenCalled();
+    expect(ledger.reopenRun).not.toHaveBeenCalled();
+  });
+
+  // ROAD-XXX: resume dead sessions — failed and cancelled runs now come
+  // back the same way an interrupted one always has.
+  it.each(['interrupted', 'failed', 'cancelled'] as const)(
+    'revives a %s run: reopens it, then starts the session',
+    async (status) => {
+      const { ledger, rows } = fakeLedger([interrupted({ status })]);
+      const daemon = fakeDaemon({
+        startSession: jest.fn(async () => ({ sessionId: 'sess-old' })),
+      });
+      const deps = depsWith(ledger, daemon);
+
+      await expect(resumeRun(deps, 'run-i1')).resolves.toEqual({
+        outcome: 'loaded',
+        status: 'running',
+      });
+      expect(ledger.reopenRun).toHaveBeenCalledWith(
+        'run-i1',
+        'Resume from the sessions panel',
+      );
+      expect(rows.get('run-i1')?.status).toBe('running');
+    },
+  );
+
+  it('a daemon refusal returns the run to its ORIGINAL status, not unconditionally interrupted — a failed run whose resume also fails stays failed', async () => {
+    const { ledger, rows } = fakeLedger([interrupted({ status: 'failed' })]);
+    const daemon = fakeDaemon({
+      startSession: jest.fn(async () => {
+        throw new Error('spawn-failed: no such provider');
+      }),
+    });
+    const deps = depsWith(ledger, daemon);
+
+    await expect(resumeRun(deps, 'run-i1')).rejects.toThrow(/spawn-failed/);
+    expect(rows.get('run-i1')).toMatchObject({
+      status: 'failed',
+      errorKind: 'resume',
+    });
+    expect(
+      deps.notify.mock.calls.map(([c]: [{ status: string }]) => c.status),
+    ).toEqual(['provisioning', 'failed']);
+  });
+
+  it('a refusal from reopenRun itself (superseded, live writer, backoff, not owner) propagates and never reaches the daemon', async () => {
+    const { ledger } = fakeLedger([interrupted({ status: 'cancelled' })]);
+    const daemon = fakeDaemon();
+    const deps = depsWith(ledger, daemon);
+    (ledger.reopenRun as jest.Mock).mockRejectedValueOnce(
+      new Error(
+        'Run run-i1 was superseded by a retry (run-i9); open that one instead.',
+      ),
+    );
+
+    await expect(resumeRun(deps, 'run-i1')).rejects.toThrow(
+      /superseded by a retry/,
+    );
+    expect(daemon.startSession).not.toHaveBeenCalled();
+  });
+
+  it('checks the worktree gitdir BEFORE starting the session, not only inside the fire-and-forget resume note', async () => {
+    const { ledger } = fakeLedger([interrupted({ status: 'failed' })]);
+    const daemon = fakeDaemon({
+      startSession: jest.fn(async () => ({ sessionId: 'sess-old' })),
+    });
+    const assertWorktreeGitDir = jest.fn(async () => {
+      throw new Error('not a linked worktree');
+    });
+    const deps = depsWith(ledger, daemon, { assertWorktreeGitDir });
+
+    await expect(resumeRun(deps, 'run-i1')).resolves.toEqual({
+      outcome: 'worktree-gone',
+      status: 'failed',
+    });
+    expect(daemon.startSession).not.toHaveBeenCalled();
+    expect(ledger.reopenRun).not.toHaveBeenCalled();
   });
 
   it('refuses a worktree path outside worktreesDir', async () => {
@@ -891,7 +986,12 @@ describe('buildResumeNote', () => {
     }));
     const note = await buildResumeNote(
       { git, assertWorktreeGitDir: jest.fn(async () => {}) },
-      { worktreePath: '/wt', branch: 'session/x', baseRef: null },
+      {
+        worktreePath: '/wt',
+        branch: 'session/x',
+        baseRef: null,
+        providerSessionId: 'prov-old',
+      },
     );
     expect(note).toContain('c39 commit 39');
     expect(note).not.toContain('c40 commit 40');

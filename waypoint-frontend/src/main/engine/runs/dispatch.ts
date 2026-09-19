@@ -24,6 +24,7 @@ import {
 import { describeFolder } from './folders';
 import { lookupJiraRepo, projectKeyOf, rememberJiraRepo } from './jiraRepos';
 import { JIRA_NOT_CONNECTED, type JiraRunDeps } from './jiraRuns';
+import { serializeBy } from './keyedQueue';
 import {
   assertRunId,
   isTicketRef,
@@ -604,11 +605,12 @@ export function validateDispatchInput(input: unknown): ValidatedDispatchInput {
  *
  * Scope: this serializes dispatches within this one Electron main
  * process. The ledger itself — a shared HTTP backend, `LedgerClient` —
- * enforces nothing of its own about one-writer-per-ticket, so a second
- * app instance, a process restart mid-provision, or any other ledger
- * client can still race past this queue and double-create. Closing that
- * for real needs a constraint on the backend's own `/agent-runs` route
- * (a conditional insert or a partial unique index); tracked separately.
+ * enforces nothing of its own on this route about one-writer-per-ticket,
+ * so a second app instance, a process restart mid-provision, or any
+ * other ledger client can still race past this queue and double-create.
+ * ROAD-XXX's `agent_runs_one_live_writer_per_ticket` partial unique
+ * index closes that for `reopenRun`; `createRun`'s own dispatch route
+ * still has no such backstop.
  */
 const dispatchQueues = new Map<string, Promise<unknown>>();
 
@@ -616,17 +618,7 @@ function withTicketDispatchLock<T>(
   ticketId: string,
   fn: () => Promise<T>,
 ): Promise<T> {
-  const previous = dispatchQueues.get(ticketId) ?? Promise.resolve();
-  const settled = previous.then(fn, fn);
-  const bare = settled.then(
-    () => undefined,
-    () => undefined,
-  );
-  dispatchQueues.set(ticketId, bare);
-  void bare.then(() => {
-    if (dispatchQueues.get(ticketId) === bare) dispatchQueues.delete(ticketId);
-  });
-  return settled;
+  return serializeBy(dispatchQueues, ticketId, fn);
 }
 
 // The actual body of a Start, run only once `dispatchTicketRun` below has

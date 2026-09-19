@@ -8,6 +8,7 @@ import {
   reconcileRunsAtBoot,
   type ReconcileInput,
 } from './reconcile';
+import { withRunLock } from './runLock';
 
 const session = (conversationId: string) => ({ conversationId });
 const run = (id: string, status: AgentRunStatus) => ({ id, status });
@@ -253,9 +254,13 @@ describe('reconcileRunsAtBoot', () => {
     expect(ledger.listAllRuns).toHaveBeenCalledWith({
       status: ['provisioning', 'running', 'blocked', 'finishing'],
     });
-    // Only the daemon's run-named sessions that are not live get looked up.
+    // Only the daemon's run-named sessions that are not live get looked
+    // up — 'run-old' twice: once building `otherRuns`, once more inside
+    // kill-stale's own re-read under the run lock (ROAD-XXX), since a
+    // resume could have landed between the plan and this action's turn.
     expect(ledger.getRun.mock.calls.map((c) => c[0]).sort()).toEqual([
       'run-back',
+      'run-old',
       'run-old',
       'run-x',
     ]);
@@ -307,6 +312,66 @@ describe('reconcileRunsAtBoot', () => {
     });
     // leave: nothing at all for a conversation that is not ours.
     expect(daemon.killSession).not.toHaveBeenCalledWith('conv-other');
+  });
+
+  // ROAD-XXX: resume dead sessions — a resume can land between this
+  // action's plan and its turn to apply, since bootReconcile runs on
+  // every daemon (re)connect, not just at launch.
+  it('kill-stale skips, without killing anything, when a resume already holds the run lock', async () => {
+    const daemon = fakeDaemon({
+      listSessions: jest.fn(async () => ({
+        'run-old': { conversationId: 'run-old' } as never,
+      })),
+    });
+    const ledger = fakeLedger({ 'run-old': { status: 'failed' } });
+
+    let releaseResume: (() => void) | null = null;
+    const resuming = withRunLock('run-old', async () => {
+      await new Promise<void>((resolve) => {
+        releaseResume = resolve;
+      });
+    });
+
+    const report = await reconcileRunsAtBoot({ daemon, ledger, logger });
+
+    expect(report.actions.map((a) => a.kind)).toEqual(['kill-stale']);
+    expect(report.failures).toEqual([]);
+    expect(daemon.killSession).not.toHaveBeenCalled();
+    expect(ledger.appendEvent).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      'engine: kill-stale skipped — a resume is in flight for this run',
+      { runId: 'run-old' },
+    );
+
+    releaseResume!();
+    await resuming;
+  });
+
+  it('kill-stale re-reads under the lock and skips when the run was revived by the time its turn comes up', async () => {
+    const daemon = fakeDaemon({
+      listSessions: jest.fn(async () => ({
+        'run-old': { conversationId: 'run-old' } as never,
+      })),
+    });
+    const ledger = fakeLedger({ 'run-old': { status: 'failed' } });
+    let getRunCalls = 0;
+    (ledger.getRun as jest.Mock).mockImplementation(async (id: string) => {
+      if (id !== 'run-old') return null;
+      getRunCalls += 1;
+      // The plan-building read (via listAllRuns/otherRuns) sees `failed`;
+      // by the time kill-stale re-reads under the lock, a resume has
+      // already revived the run to `provisioning`.
+      return getRunCalls === 1
+        ? ({ id, status: 'failed' } as AgentRun)
+        : ({ id, status: 'provisioning' } as AgentRun);
+    });
+
+    const report = await reconcileRunsAtBoot({ daemon, ledger, logger });
+
+    expect(report.actions.map((a) => a.kind)).toEqual(['kill-stale']);
+    expect(report.failures).toEqual([]);
+    expect(daemon.killSession).not.toHaveBeenCalled();
+    expect(ledger.appendEvent).not.toHaveBeenCalled();
   });
 
   it('isolates a failing action: the rest of the plan still runs and the failure is reported', async () => {

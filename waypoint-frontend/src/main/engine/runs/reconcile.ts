@@ -4,6 +4,7 @@ import type {
   DaemonWorkspaceRecord,
 } from './daemonApi';
 import type { AgentRun, AgentRunStatus, LedgerClient } from './ledgerClient';
+import { tryWithRunLock } from './runLock';
 
 /**
  * Boot-time reconcile: the daemon's live sessions against the ledger's
@@ -199,13 +200,34 @@ async function applyAction(
         note: 'daemon resumed the session while Waypoint was away',
       });
       return;
-    case 'kill-stale':
-      await deps.daemon.killSession(action.runId);
-      await deps.ledger.appendEvent(action.runId, 'session_ended', {
-        at: 'boot',
-        note: `run was already ${action.status}; stale daemon session killed`,
+    case 'kill-stale': {
+      // ROAD-XXX: a resume (button or a transparent revive on message)
+      // can land between this plan being built and applied — bootReconcile
+      // runs on every daemon (re)connect, not only at launch, so this is a
+      // real window, not just a startup race. A blocking wait here would
+      // stall the rest of this reconcile pass behind someone else's
+      // resume; skipping past it is the safe failure — the run is left
+      // alone, and the next reconcile pass gets another look if it's
+      // truly stale. When the lock IS free, re-read under it: the plan's
+      // `action.status` is a snapshot, and the run may have already been
+      // revived by the time this action's turn comes up.
+      const outcome = await tryWithRunLock(action.runId, async () => {
+        const fresh = await deps.ledger.getRun(action.runId);
+        if (!fresh || !ENDED_RUN_STATUSES.includes(fresh.status)) return;
+        await deps.daemon.killSession(action.runId);
+        await deps.ledger.appendEvent(action.runId, 'session_ended', {
+          at: 'boot',
+          note: `run was already ${fresh.status}; stale daemon session killed`,
+        });
       });
+      if (!outcome.acquired) {
+        deps.logger.info(
+          'engine: kill-stale skipped — a resume is in flight for this run',
+          { runId: action.runId },
+        );
+      }
       return;
+    }
     case 'orphan':
       deps.logger.warn(
         'engine: daemon session with no ledger row — left running',
