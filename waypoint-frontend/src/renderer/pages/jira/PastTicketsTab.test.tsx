@@ -123,6 +123,22 @@ describe('PastTicketsTab', () => {
     expect(onCountChange).toHaveBeenLastCalledWith(1);
   });
 
+  // Found in review: this read shares runTicketSearch's own page-cap
+  // truncation with RoleTicketsTab's role queries, but this tab silently
+  // dropped the flag on the floor — a 500-issue prefix presented as the
+  // WHOLE history, with no indication anything was cut off.
+  it('shows the page-cap truncation banner when the read reports it', async () => {
+    jest
+      .mocked(listPastJiraTickets)
+      .mockResolvedValue(queueRead([ticket()], 'page-cap'));
+
+    render(<PastTicketsTab />);
+
+    expect(
+      await screen.findByText(/first 500, most recently updated/),
+    ).toBeInTheDocument();
+  });
+
   it('shows a load error, not the empty-state copy, for a genuine failure', async () => {
     jest
       .mocked(listPastJiraTickets)

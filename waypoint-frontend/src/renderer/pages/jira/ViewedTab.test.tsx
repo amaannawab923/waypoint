@@ -126,6 +126,23 @@ describe('ViewedTab', () => {
     await waitFor(() => expect(onCountChange).toHaveBeenLastCalledWith(2));
   });
 
+  // Found in review: this tab's own read can come back truncated at Jira's
+  // page cap (runTicketSearch's own MAX_PAGES × PAGE_SIZE crawl limit) the
+  // same as RoleTicketsTab's role queries do — but unlike that tab, this one
+  // silently dropped the flag on the floor, presenting a 500-issue prefix as
+  // someone's WHOLE view history with no indication anything was cut off.
+  it('shows the page-cap truncation banner when the read reports it', async () => {
+    jest
+      .mocked(listViewedJiraTickets)
+      .mockResolvedValue(queueRead([ticket()], 'page-cap'));
+
+    render(<ViewedTab />);
+
+    expect(
+      await screen.findByText(/first 500, most recently viewed/),
+    ).toBeInTheDocument();
+  });
+
   it('shows a load error, not the empty-state copy, for a genuine failure', async () => {
     jest
       .mocked(listViewedJiraTickets)

@@ -74,6 +74,15 @@ export default function PastTicketsTab({
         Tickets that used to be assigned to you and aren&apos;t anymore —
         reassigned away, not resolved.
       </p>
+
+      {fetchedRead?.truncated && (
+        <div className="mb-3 rounded-[var(--radius-sm)] border border-warning/30 bg-warning-bg px-3 py-2 text-[11.5px] leading-relaxed text-warning">
+          {fetchedRead.truncated === 'page-cap'
+            ? 'Jira had more issues than this app reads in one go — this is the first 500, most recently updated.'
+            : 'Jira reported more issues than it would hand over, so this list may be incomplete. Try refreshing.'}
+        </div>
+      )}
+
       <div className="overflow-hidden rounded-[var(--radius)] border border-border bg-surface shadow-sm">
         {loading && tickets.length === 0 ? (
           <SkeletonListRows />
