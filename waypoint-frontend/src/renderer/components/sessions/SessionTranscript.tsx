@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { ChatView } from '@emdash/chat-ui';
 import { ChatTranscript } from '@/components/chat/ChatTranscript';
+import { IconMessage } from '@/components/icons';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { cancelTurn, resolvePermission, sendPrompt } from '@/data/engineApi';
 import { refreshSessions, useSessionsSnapshot } from '@/lib/sessionsStore';
 import { showErrorToast } from '@/lib/toast';
@@ -86,6 +88,26 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
   const [answering, setAnswering] = useState<string | null>(null);
   const status = statusView(run.status);
 
+  // A run that ended without ever producing a turn (stopped while
+  // provisioning, or a run that genuinely never got anywhere) reads history
+  // fine — the history read is `ready`, just with nothing in it — and
+  // chat-ui's own canvas has nothing to draw, so the pane was rendering
+  // completely blank (found in PM review: "SESS-23 stop while
+  // provisioning", ROAD-61). `loading` and `failed` are excluded so this
+  // never flashes over a fetch in flight or a real read error, and `live`
+  // runs are excluded so a session that has simply not produced its first
+  // turn yet — still watchable, still promptable — keeps its normal
+  // (empty-for-now) canvas instead of being told it is over.
+  const showEmptyTranscript =
+    historyStatus.kind === 'ready' && turnCount === 0 && !status.live;
+
+  // ChatTranscript unmounts (and disposes its chat-ui view) once the empty
+  // state takes over; drop the stale view handle with it so the dock below
+  // does not try to portal into a disposed composer slot.
+  useEffect(() => {
+    if (showEmptyTranscript) setView(null);
+  }, [showEmptyTranscript]);
+
   // A draft outlives an interruption (the run comes back), not an ending.
   useEffect(() => {
     if (
@@ -156,6 +178,40 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
     [run.id],
   );
 
+  let transcriptBody: ReactNode;
+  if (showEmptyTranscript) {
+    transcriptBody = (
+      <div className="flex h-full items-center justify-center">
+        <EmptyState
+          icon={<IconMessage size={28} />}
+          title="Nothing to show"
+          description="This session ended before any activity — there's no transcript to show."
+        />
+      </div>
+    );
+  } else if (state) {
+    transcriptBody = (
+      <ChatTranscript
+        context={context}
+        state={state}
+        composer="slot"
+        composerPlacement="bottom"
+        stickToBottom
+        onReady={setView}
+        commands={commands}
+        className="h-full"
+      />
+    );
+  } else {
+    transcriptBody = (
+      <div className="p-4 text-xs text-text-muted">
+        {run.status === 'queued' || run.status === 'provisioning'
+          ? 'Starting the session…'
+          : 'Connecting…'}
+      </div>
+    );
+  }
+
   const dock = (
     <>
       <PermissionBand
@@ -202,26 +258,7 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
           The transcript shows what was last received.
         </div>
       )}
-      <div className="min-h-0 flex-1">
-        {state ? (
-          <ChatTranscript
-            context={context}
-            state={state}
-            composer="slot"
-            composerPlacement="bottom"
-            stickToBottom
-            onReady={setView}
-            commands={commands}
-            className="h-full"
-          />
-        ) : (
-          <div className="p-4 text-xs text-text-muted">
-            {run.status === 'queued' || run.status === 'provisioning'
-              ? 'Starting the session…'
-              : 'Connecting…'}
-          </div>
-        )}
-      </div>
+      <div className="min-h-0 flex-1">{transcriptBody}</div>
       {view?.composerSlot ? createPortal(dock, view.composerSlot) : null}
       <UsageStrip
         turnCount={turnCount}
