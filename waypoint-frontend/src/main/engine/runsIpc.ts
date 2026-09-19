@@ -460,6 +460,39 @@ export async function assertWorktreeGitDir(
   }
 }
 
+/**
+ * The one cwd a run's branch may be pushed from — proven, not assumed.
+ * Mirrors exactly what `pullRequests.ts`'s own `publish` derives
+ * (`run.worktreePath ?? run.cwd`), so the two can never check a
+ * different path than the one git actually runs in (ROAD-131 review,
+ * round 2: an earlier version of this gate branched on `run.isolation`
+ * instead, which happened to agree with `worktreePath ?? cwd` for every
+ * *current* writer but was not the same check). A worktree path is
+ * proven under `worktreesDir` and proven a genuine linked worktree
+ * (`assertWorktreeGitDir`); a direct run's own folder (no worktree at
+ * all) only has to still exist — it is the person's own repository,
+ * where the agent already runs.
+ */
+export async function assertPublishableCwd(
+  run: Pick<AgentRun, 'worktreePath' | 'cwd'>,
+  worktreesDir: string,
+): Promise<string> {
+  if (run.worktreePath) {
+    await assertUnder(run.worktreePath, worktreesDir);
+    await assertWorktreeGitDir(run.worktreePath);
+    return run.worktreePath;
+  }
+  if (!run.cwd) throw new Error('This run has no folder to publish from.');
+  const present = await fs
+    .stat(run.cwd)
+    .then((s) => s.isDirectory())
+    .catch(() => false);
+  if (!present) {
+    throw new Error(`${run.cwd} is not a folder on this machine any more.`);
+  }
+  return run.cwd;
+}
+
 /** What registration hands back to main: the verbs other modules (Copilot's tools) may call. */
 export interface RunsHostApi {
   /** W6: push a run's branch and open its pull request, as the person. */
@@ -525,12 +558,10 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
     // `open_pull_request` tool with no human in the loop, that is the one
     // path here that most needs the same worktree-provenance gate the
     // read-only diff/reveal handlers already apply before touching git.
-    if (run.isolation === 'directory') {
-      await directoryOf(run);
-    } else {
-      const worktree = await worktreeOf(run);
-      await assertWorktreeGitDir(worktree);
-    }
+    // Proves the exact cwd `publish` itself will use (round 2 of this
+    // review: branching on `run.isolation` here checked a *different*
+    // path than `worktreePath ?? cwd`, which is what `publish` derives).
+    await assertPublishableCwd(run, deps.worktreesDir);
     let closing = run.summary ?? '';
     let title = run.title ?? run.branch;
     let ticketUrl: string | null = null;

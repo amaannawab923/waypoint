@@ -1,3 +1,4 @@
+import { promises as fs } from 'node:fs';
 import { PLAN_MODE_ID, AUTO_APPROVE_MODE_ID } from '../types';
 import {
   agentEnvFor,
@@ -83,8 +84,21 @@ describe('scrubbedAgentEnv', () => {
     ]) {
       expect(CREDENTIAL_FILE_OVERRIDES).toHaveProperty(key);
       expect(env[key]).toBe(CREDENTIAL_FILE_OVERRIDES[key]);
-      expect(env[key]).not.toBe('');
     }
+  });
+
+  it('every relocated path is genuinely unreadable, not merely a non-empty string', async () => {
+    // The point of pointing these at /dev/null/<name> is that /dev/null is
+    // a character device, not a directory — nothing can live "inside" it,
+    // so the path can never resolve to a real file the agent's tool could
+    // read. Asserting only that the override is a non-empty string (the
+    // previous version of this test) would pass just as well for a path
+    // that quietly leaks the real credential.
+    await Promise.all(
+      Object.values(CREDENTIAL_FILE_OVERRIDES).map((value) =>
+        expect(fs.readFile(value)).rejects.toMatchObject({ code: 'ENOTDIR' }),
+      ),
+    );
   });
 
   it("redirects other coding-agent CLIs' config dirs the same way GH_CONFIG_DIR is, but leaves CLAUDE_CONFIG_DIR alone", () => {

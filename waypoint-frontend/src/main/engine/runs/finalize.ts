@@ -63,6 +63,16 @@ export interface FinalizeDeps {
   /** The hardened git runner and worktree check (runsIpc.ts), for the Fix comment's file list. */
   git?: NoteGitRunner;
   assertWorktreeGitDir?: (worktreePath: string) => Promise<void>;
+  /**
+   * W6, ROAD-131: proves a run's cwd (`worktreePath ?? cwd`, the same
+   * derivation `pullRequests.ts`'s own `publish` makes) before this file
+   * ever pushes a branch or opens a PR in it — the same gate
+   * `runsIpc.ts`'s retry button applies, shared so the two can never
+   * check a different path than the one git actually runs in. Required,
+   * not optional like the read-only `assertWorktreeGitDir` above: a
+   * missing dep here must refuse the push, not skip the check.
+   */
+  assertPublishableCwd: (run: AgentRun) => Promise<string>;
   /** Told after `needs-review` or `failed` lands: the notification hook (engine/notifications.ts). */
   onRunStatus?: (run: AgentRun, previous: AgentRunStatus) => void;
   /** The transcript snapshot taken before the session is killed (ROAD-124). */
@@ -509,15 +519,38 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         })
         .catch(() => {});
     } else if (deps.pullRequests && isDispatchedWriter(run) && run.branch) {
-      published = await deps.pullRequests.publish({
-        run,
-        closingMessage: closing,
-        title: ticket
-          ? `${ticket.identifier}: ${ticket.title}`
-          : (run.title ?? run.branch),
-        ticketUrl: ticket?.url ?? null,
-      });
-      if (published.kind === 'opened') run = { ...run, prUrl: published.url };
+      // ROAD-131: this call used to run straight to `publish` — which
+      // pushes and, as the person, opens a real PR — trusting the
+      // ledger row's own `worktreePath`/`cwd` with no proof they are
+      // still what they claim. The ledger arrives over HTTP from the
+      // backend, and the worktree is writable by the very agent whose
+      // session just ended, so both are untrusted input by the time
+      // this runs. Unlike the retry button (runsIpc.ts's
+      // openRunPullRequest), nobody is in the loop here to catch a
+      // surprise PR — so this is where the check matters most, and it
+      // must fail closed: a provenance failure is reported the same way
+      // a push failure already is, never silently skipped.
+      try {
+        await deps.assertPublishableCwd(run);
+        published = await deps.pullRequests.publish({
+          run,
+          closingMessage: closing,
+          title: ticket
+            ? `${ticket.identifier}: ${ticket.title}`
+            : (run.title ?? run.branch),
+          ticketUrl: ticket?.url ?? null,
+        });
+        if (published.kind === 'opened') run = { ...run, prUrl: published.url };
+      } catch (error) {
+        published = { kind: 'failed', stage: 'push', message: describe(error) };
+        deps.logger.warn(
+          'engine: refused to publish — cwd provenance check failed',
+          {
+            runId: run.id,
+            message: describe(error),
+          },
+        );
+      }
     }
 
     // The proposals: the board-shaped comment (the verdict, the Summary,

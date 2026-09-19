@@ -35,6 +35,7 @@ import { createTranscriptKeeper } from './runs/transcripts';
 import { createPullRequestPublisher } from './runs/pullRequests';
 import { registerTopicsIpc } from './topicsIpc';
 import {
+  assertPublishableCwd,
   assertWorktreeGitDir,
   execGit,
   registerRunsIpc,
@@ -252,6 +253,7 @@ export function registerEngineIpc(
     notify: (change) => send(RUNS_IPC.changed, change),
     git: execGit,
     assertWorktreeGitDir,
+    assertPublishableCwd: (run) => assertPublishableCwd(run, worktreesDir),
     onRunStatus: notifications.onRunStatus,
     transcripts,
     pullRequests,

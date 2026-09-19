@@ -601,6 +601,14 @@ export function validateDispatchInput(input: unknown): ValidatedDispatchInput {
  * press waits, then is refused with the normal "already live" error
  * rather than racing it. A rejected dispatch does not jam the queue for
  * the ticket: the next one still runs once it is this dispatch's turn.
+ *
+ * Scope: this serializes dispatches within this one Electron main
+ * process. The ledger itself — a shared HTTP backend, `LedgerClient` —
+ * enforces nothing of its own about one-writer-per-ticket, so a second
+ * app instance, a process restart mid-provision, or any other ledger
+ * client can still race past this queue and double-create. Closing that
+ * for real needs a constraint on the backend's own `/agent-runs` route
+ * (a conditional insert or a partial unique index); tracked separately.
  */
 const dispatchQueues = new Map<string, Promise<unknown>>();
 
