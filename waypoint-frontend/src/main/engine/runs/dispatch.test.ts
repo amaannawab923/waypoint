@@ -961,7 +961,7 @@ describe('dispatchTicketRun', () => {
     // correctly serialized pair (the fix) never hangs — the second
     // dispatch simply is not in flight yet when the first one reads.
     const { ledger, rows } = fakeLedger();
-    let waiting: Array<() => void> = [];
+    const waiting: Array<() => void> = [];
     ledger.listAllRuns.mockImplementation(
       () =>
         new Promise((resolve) => {

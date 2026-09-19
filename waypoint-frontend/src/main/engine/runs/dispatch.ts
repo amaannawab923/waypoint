@@ -621,24 +621,9 @@ function withTicketDispatchLock<T>(
   return settled;
 }
 
-/**
- * Start. Answers once the row is `provisioning`; the worktree and the
- * session follow in main through `continueStart`. Refuses before a row
- * is written: engine down, no such ticket, no linked repository, an
- * unknown base branch, a writing session already live on the ticket —
- * and, per-ticket, serialized against a concurrent Start on the same
- * ticket (ROAD-131) so two presses cannot both win that check.
- */
-export async function dispatchTicketRun(
-  deps: DispatchDeps,
-  rawInput: unknown,
-): Promise<AgentRun> {
-  const input = validateDispatchInput(rawInput);
-  return withTicketDispatchLock(input.ticketId, () =>
-    dispatchTicketRunLocked(deps, input),
-  );
-}
-
+// The actual body of a Start, run only once `dispatchTicketRun` below has
+// this ticket's dispatch lock — see `dispatchTicketRun`'s own doc comment
+// for the externally-visible contract this implements.
 async function dispatchTicketRunLocked(
   deps: DispatchDeps,
   input: ValidatedDispatchInput,
@@ -724,4 +709,22 @@ async function dispatchTicketRunLocked(
     },
   );
   return run;
+}
+
+/**
+ * Start. Answers once the row is `provisioning`; the worktree and the
+ * session follow in main through `continueStart`. Refuses before a row
+ * is written: engine down, no such ticket, no linked repository, an
+ * unknown base branch, a writing session already live on the ticket —
+ * and, per-ticket, serialized against a concurrent Start on the same
+ * ticket (ROAD-131) so two presses cannot both win that check.
+ */
+export async function dispatchTicketRun(
+  deps: DispatchDeps,
+  rawInput: unknown,
+): Promise<AgentRun> {
+  const input = validateDispatchInput(rawInput);
+  return withTicketDispatchLock(input.ticketId, () =>
+    dispatchTicketRunLocked(deps, input),
+  );
 }
