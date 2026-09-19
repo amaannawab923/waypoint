@@ -552,6 +552,29 @@ export async function listRoleJiraTickets(
 }
 
 /**
+ * The Viewed tab: Jira's own view history for this account. Uncached and
+ * unconflict-checked, same reasoning as listRoleJiraTickets just above —
+ * this is its own query, not part of the "my work" queue this module
+ * tracks writes against.
+ */
+export async function listViewedJiraTickets(): Promise<JiraQueueRead> {
+  const { tickets, truncated } = unwrap(await bridge().listViewedTickets());
+  return { tickets: tickets.map((item) => toTicket(item)), truncated };
+}
+
+/**
+ * The My past tickets tab: issues real Jira history says were once assigned
+ * to this account and no longer are (see jiraClient.ts's PAST_TICKETS_JQL) —
+ * the honest replacement for the isTombstoned guesswork toTicket below
+ * never actually enables. Uncached and unconflict-checked, same reasoning
+ * as the other per-tab reads.
+ */
+export async function listPastJiraTickets(): Promise<JiraQueueRead> {
+  const { tickets, truncated } = unwrap(await bridge().listPastTickets());
+  return { tickets: tickets.map((item) => toTicket(item)), truncated };
+}
+
+/**
  * One Jira issue, by key or numeric id, fetched directly rather than found
  * in `listMyJiraTickets`' own cache — for an issue Copilot cites that isn't
  * necessarily the connected account's own (someone else's, or a saved-filter/

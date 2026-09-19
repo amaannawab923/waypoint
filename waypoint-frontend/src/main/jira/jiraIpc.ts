@@ -605,6 +605,12 @@ export function registerJiraIpc(getWindow: () => BrowserWindow | null): void {
     (): Promise<JiraResult<JiraTicketQueryResult>> => client.listViewedTickets(),
   );
 
+  // ROAD-158: the My past tickets tab. Same shape as list-viewed — no input.
+  ipcMain.handle(
+    'jira:tickets:list-past',
+    (): Promise<JiraResult<JiraTicketQueryResult>> => client.listPastTickets(),
+  );
+
   // Copilot's rendered issue-key links (ROAD-157 follow-up): a key the model
   // cited may belong to an issue outside the connected account's own queue
   // (someone else's, or a filter/gadget result), so the drawer it opens on

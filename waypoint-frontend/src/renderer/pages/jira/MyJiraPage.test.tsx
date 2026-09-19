@@ -6,6 +6,8 @@ import {
   getJiraTransitions,
   listJiraComments,
   listMyJiraTickets,
+  listRoleJiraTickets,
+  listTicketsByJiraKeys,
 } from '@/data/jiraApi';
 import {
   setJiraConnection,
@@ -14,6 +16,7 @@ import {
 } from '@/lib/jiraStore';
 import { JiraApiError } from '@/types/jira';
 import type { JiraComment, JiraTicket, JiraTruncation } from '@/types/jira';
+import { resetJiraStarredForTests } from '@/lib/jiraStarred';
 import MyJiraPage from './MyJiraPage';
 import { resetMyJiraQueueForTests } from './useMyJiraQueue';
 
@@ -29,6 +32,13 @@ jest.mock('@/data/jiraApi', () => ({
   // this file navigate straight to the All Tickets tab and never call these.
   listRoleJiraTickets: jest.fn(async () => ({ tickets: [], truncated: false })),
   listTicketsByJiraKeys: jest.fn(async () => []),
+  // Viewed and My past tickets' own reads — same reasoning as
+  // listRoleJiraTickets just above.
+  listViewedJiraTickets: jest.fn(async () => ({
+    tickets: [],
+    truncated: false,
+  })),
+  listPastJiraTickets: jest.fn(async () => ({ tickets: [], truncated: false })),
   dismissJiraTombstone: jest.fn(),
   resolveJiraConflict: jest.fn(),
   getJiraTransitions: jest.fn(),
@@ -216,6 +226,10 @@ beforeEach(() => {
   // clicks a filter chip silently changes the starting state of every test
   // after it, and the failures read as flake rather than as leakage.
   resetMyJiraQueueForTests();
+  // The Starred tab and the drawer's own star toggle both read/write a
+  // module-level Set that otherwise outlives any one `it()` block, the same
+  // leakage resetMyJiraQueueForTests exists to prevent just above.
+  resetJiraStarredForTests();
 });
 
 describe('MyJiraPage — project + role filtering (combined)', () => {
@@ -969,6 +983,117 @@ describe('MyJiraPage — initial tab from the ?tab= query param', () => {
     expect(
       await screen.findByText('No agent runs against a Jira issue yet.'),
     ).toBeInTheDocument();
+  });
+
+  it('loads directly on Viewed when the param says so', async () => {
+    mountAt('/my-jira?tab=viewed');
+
+    expect(
+      await screen.findByText('Nothing in your Jira view history yet.'),
+    ).toBeInTheDocument();
+  });
+
+  it('loads directly on Starred when the param says so', async () => {
+    mountAt('/my-jira?tab=starred');
+
+    expect(await screen.findByText('Nothing starred yet.')).toBeInTheDocument();
+  });
+
+  it('loads directly on My past tickets when the param says so', async () => {
+    mountAt('/my-jira?tab=past');
+
+    expect(
+      await screen.findByText('Nothing was ever reassigned away from you.'),
+    ).toBeInTheDocument();
+  });
+});
+
+// A tab's own count is the concrete, visible proof that switching tabs
+// actually changed what's being asked for — not just that the page looks
+// different underneath.
+describe('MyJiraPage — live tab counts', () => {
+  function mountOnAssigned() {
+    // MyJiraPage's own top-level read runs unconditionally regardless of
+    // which tab is active (see its fetchedRead effect) — needs a real
+    // resolved value or useAsync's fn().then(...) throws on an unconfigured
+    // mock.
+    jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead([]));
+    jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
+    jest.mocked(listRoleJiraTickets).mockResolvedValue({
+      tickets: [
+        ticket({ id: 't1' }),
+        ticket({ id: 't2' }),
+        ticket({ id: 't3' }),
+      ],
+      truncated: false,
+    });
+    return render(
+      <MemoryRouter initialEntries={['/my-jira?tab=assigned']}>
+        <MyJiraPage />
+      </MemoryRouter>,
+    );
+  }
+
+  it("shows the Assigned tab's own live count once its read settles", async () => {
+    mountOnAssigned();
+
+    const tab = await screen.findByRole('tab', { name: /Assigned/ });
+    await waitFor(() => expect(tab).toHaveTextContent('3'));
+  });
+
+  it('does not show a count on a tab that has not read anything yet', async () => {
+    mountOnAssigned();
+    await screen.findByRole('tab', { name: /Assigned\s*3/ });
+
+    const connectionTab = screen.getByRole('tab', { name: 'Connection' });
+    expect(connectionTab).toHaveTextContent('Connection');
+    expect(connectionTab.textContent).toBe('Connection');
+  });
+});
+
+// The one place a person can star a ticket today (the drawer header) and
+// the one place that shows what's starred (the Starred tab) are two
+// different components entirely — this is the seam between them.
+describe('MyJiraPage — starring a ticket from its drawer', () => {
+  it('shows a starred ticket on the Starred tab immediately, with no reload', async () => {
+    jest
+      .mocked(listMyJiraTickets)
+      .mockResolvedValue(
+        queueRead([ticket({ id: 't-star', key: 'ENG-9', title: 'Star me' })]),
+      );
+    jest.mocked(getJiraTransitions).mockResolvedValue([]);
+    jest.mocked(listJiraComments).mockResolvedValue({ comments: [], total: 0 });
+    jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
+    jest
+      .mocked(listTicketsByJiraKeys)
+      .mockImplementation(async (keys) =>
+        keys.includes('ENG-9')
+          ? [ticket({ id: 't-star', key: 'ENG-9', title: 'Star me' })]
+          : [],
+      );
+
+    render(
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
+        <MyJiraPage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByText('Star me'));
+    const starButton = await screen.findByRole('button', {
+      name: 'Star ENG-9',
+    });
+    fireEvent.click(starButton);
+    // Confirms the toggle itself landed before blaming StarredTab for not
+    // picking it up, if this ever regresses.
+    expect(
+      await screen.findByRole('button', { name: 'Unstar ENG-9' }),
+    ).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Starred/ }));
+
+    expect(await screen.findByText('Star me')).toBeInTheDocument();
+    expect(screen.queryByText('Nothing starred yet.')).not.toBeInTheDocument();
   });
 });
 

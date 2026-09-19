@@ -1,61 +1,36 @@
 import { useEffect, useState } from 'react';
-import { listWorkedOnJiraKeys } from '@/data/api';
-import { listTicketsByJiraKeys } from '@/data/jiraApi';
+import { listViewedJiraTickets } from '@/data/jiraApi';
 import { useAsync } from '@/lib/useAsync';
-import { useLoadedJiraConnection } from '@/lib/jiraStore';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
 import { JiraTicketRow } from '@/components/domain/JiraTicketRow';
 import { JiraTicketDrawer } from '@/components/domain/JiraTicketDrawer';
 import { JiraLoadError } from '@/components/domain/JiraLoadError';
-import { JiraApiError } from '@/types/jira';
 import type { JiraTicket } from '@/types/jira';
 
 /**
- * The Worked-on tab: every Jira issue this member has an agent run against,
- * on the connected site — two reads chained (the backend's own history via
- * data/api.ts's listWorkedOnJiraKeys, then those keys resolved to real
- * ticket rows via jiraApi.ts's listTicketsByJiraKeys), not one. A key the
- * backend still remembers but Jira no longer returns (deleted, moved to a
- * project this account can no longer see) is silently absent from the
- * result — listTicketsByJiraKeys' own comment covers why that is a normal
- * outcome here, not an error.
- *
- * Self-contained like RoleTicketsTab, and for the same reason: one of
- * several sibling tab components a thin page shell mounts one at a time.
- * No search box — unlike the per-role tabs, nothing in the redesign asked
- * for one here.
+ * The Viewed tab: Jira's own view history for this account (see
+ * jiraClient.ts's VIEWED_JQL and its own live-verification note), newest
+ * first. Self-contained like RoleTicketsTab/WorkedOnTab, and for the same
+ * reason. No search box — nothing in the redesign asked for one here either.
  */
-export default function WorkedOnTab({
+export default function ViewedTab({
   onCountChange,
 }: {
   /** Reports the live tickets count up to the page's own tab label — see
    * MyJiraPage.tsx's TAB_COUNTS state and RoleTicketsTab's identical prop. */
   onCountChange?: (count: number) => void;
 } = {}) {
-  const connection = useLoadedJiraConnection();
-
   const {
-    data: fetchedTickets,
+    data: fetchedRead,
     loading,
     error,
     reload,
-  } = useAsync(async () => {
-    // Not yet known whether an account is connected — neither a real
-    // result nor a real failure, so this resolves through as "nothing
-    // yet" rather than throwing; the effect re-runs once
-    // useLoadedJiraConnection settles the real status below.
-    if (!connection) return [];
-    if (!connection.connected) {
-      throw new JiraApiError('No Jira account is connected.', 'not_connected');
-    }
-    const keys = await listWorkedOnJiraKeys(connection.site);
-    return listTicketsByJiraKeys(keys);
-  }, [connection === undefined, connection?.connected, connection?.site]);
+  } = useAsync(() => listViewedJiraTickets(), []);
 
   const [tickets, setTickets] = useState<JiraTicket[]>([]);
   useEffect(() => {
-    if (fetchedTickets) setTickets(fetchedTickets);
-  }, [fetchedTickets]);
+    if (fetchedRead) setTickets(fetchedRead.tickets);
+  }, [fetchedRead]);
   useEffect(() => {
     onCountChange?.(tickets.length);
     // onCountChange intentionally omitted — see RoleTicketsTab's identical
@@ -77,10 +52,10 @@ export default function WorkedOnTab({
   // hasConflict/isTombstoned ticket, so JiraTicketRow should never call
   // either.
   async function neverResolvesConflict(): Promise<void> {
-    throw new Error('WorkedOnTab: hasConflict is always false here');
+    throw new Error('ViewedTab: hasConflict is always false here');
   }
   async function neverDismissesTombstone(): Promise<void> {
-    throw new Error('WorkedOnTab: isTombstoned is always false here');
+    throw new Error('ViewedTab: isTombstoned is always false here');
   }
 
   return (
@@ -92,14 +67,14 @@ export default function WorkedOnTab({
           <>
             {error && (
               <JiraLoadError
-                what="what you've worked on"
+                what="what you've viewed"
                 error={error}
                 onRetry={reload}
               />
             )}
             {!error && tickets.length === 0 && (
               <div className="px-4 py-6 text-center text-sm text-text-muted">
-                No agent runs against a Jira issue yet.
+                Nothing in your Jira view history yet.
               </div>
             )}
             {!error &&

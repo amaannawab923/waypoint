@@ -1,56 +1,51 @@
 import { useEffect, useState } from 'react';
-import { listWorkedOnJiraKeys } from '@/data/api';
 import { listTicketsByJiraKeys } from '@/data/jiraApi';
 import { useAsync } from '@/lib/useAsync';
-import { useLoadedJiraConnection } from '@/lib/jiraStore';
+import { useJiraStarredKeys } from '@/lib/jiraStarred';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
 import { JiraTicketRow } from '@/components/domain/JiraTicketRow';
 import { JiraTicketDrawer } from '@/components/domain/JiraTicketDrawer';
 import { JiraLoadError } from '@/components/domain/JiraLoadError';
-import { JiraApiError } from '@/types/jira';
 import type { JiraTicket } from '@/types/jira';
 
 /**
- * The Worked-on tab: every Jira issue this member has an agent run against,
- * on the connected site — two reads chained (the backend's own history via
- * data/api.ts's listWorkedOnJiraKeys, then those keys resolved to real
- * ticket rows via jiraApi.ts's listTicketsByJiraKeys), not one. A key the
- * backend still remembers but Jira no longer returns (deleted, moved to a
- * project this account can no longer see) is silently absent from the
- * result — listTicketsByJiraKeys' own comment covers why that is a normal
- * outcome here, not an error.
+ * Starred: this device's own pinned set (jiraStarred.ts — local-only,
+ * doesn't survive a reinstall, the founder's own call over Jira issue
+ * properties). Re-resolves through listTicketsByJiraKeys (ROAD-158's bulk
+ * by-key read) the moment the starred key set itself changes — starring or
+ * unstarring a ticket from its own drawer updates this tab immediately, not
+ * only on next mount, since useJiraStarredKeys is a live subscription.
  *
- * Self-contained like RoleTicketsTab, and for the same reason: one of
- * several sibling tab components a thin page shell mounts one at a time.
- * No search box — unlike the per-role tabs, nothing in the redesign asked
- * for one here.
+ * Unstarring a row itself still only happens from the ticket's own drawer
+ * for now — an inline star button on every row is JiraTicketRow's own
+ * layout to add (ROAD-158's later row-redesign phase), not something this
+ * tab reaches in and bolts on for itself.
  */
-export default function WorkedOnTab({
+export default function StarredTab({
   onCountChange,
 }: {
   /** Reports the live tickets count up to the page's own tab label — see
    * MyJiraPage.tsx's TAB_COUNTS state and RoleTicketsTab's identical prop. */
   onCountChange?: (count: number) => void;
 } = {}) {
-  const connection = useLoadedJiraConnection();
+  const starredKeys = useJiraStarredKeys();
 
   const {
     data: fetchedTickets,
     loading,
     error,
     reload,
-  } = useAsync(async () => {
-    // Not yet known whether an account is connected — neither a real
-    // result nor a real failure, so this resolves through as "nothing
-    // yet" rather than throwing; the effect re-runs once
-    // useLoadedJiraConnection settles the real status below.
-    if (!connection) return [];
-    if (!connection.connected) {
-      throw new JiraApiError('No Jira account is connected.', 'not_connected');
-    }
-    const keys = await listWorkedOnJiraKeys(connection.site);
-    return listTicketsByJiraKeys(keys);
-  }, [connection === undefined, connection?.connected, connection?.site]);
+  } = useAsync(
+    // Skipped here, not just inside listTicketsByJiraKeys' own short-circuit
+    // — nothing starred is this tab's single most common state (a brand new
+    // install starts here), and there is no reason to cross the IPC
+    // boundary at all to learn what an empty array already tells us.
+    () =>
+      starredKeys.length === 0
+        ? Promise.resolve([])
+        : listTicketsByJiraKeys(starredKeys),
+    [starredKeys],
+  );
 
   const [tickets, setTickets] = useState<JiraTicket[]>([]);
   useEffect(() => {
@@ -77,10 +72,10 @@ export default function WorkedOnTab({
   // hasConflict/isTombstoned ticket, so JiraTicketRow should never call
   // either.
   async function neverResolvesConflict(): Promise<void> {
-    throw new Error('WorkedOnTab: hasConflict is always false here');
+    throw new Error('StarredTab: hasConflict is always false here');
   }
   async function neverDismissesTombstone(): Promise<void> {
-    throw new Error('WorkedOnTab: isTombstoned is always false here');
+    throw new Error('StarredTab: isTombstoned is always false here');
   }
 
   return (
@@ -92,14 +87,20 @@ export default function WorkedOnTab({
           <>
             {error && (
               <JiraLoadError
-                what="what you've worked on"
+                what="your starred tickets"
                 error={error}
                 onRetry={reload}
               />
             )}
             {!error && tickets.length === 0 && (
               <div className="px-4 py-6 text-center text-sm text-text-muted">
-                No agent runs against a Jira issue yet.
+                <p className="font-semibold text-text-secondary">
+                  Nothing starred yet.
+                </p>
+                <p className="mt-1">
+                  Open a ticket and star it to pin it here — kept on this device
+                  only.
+                </p>
               </div>
             )}
             {!error &&

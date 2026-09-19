@@ -57,12 +57,17 @@ const TAB_COPY: Record<
  */
 export default function RoleTicketsTab({
   queryRole,
+  onCountChange,
 }: {
   // Not named `role`: eslint's jsx-a11y/aria-role reads any JSX prop literally
   // named `role` as an ARIA role attribute, which produces a false positive
   // on a plain custom-component prop — sidestepped by naming it for what it
   // actually is, matching JiraTicketQueryRole's own name.
   queryRole: JiraTicketQueryRole;
+  /** Reports the live tickets count up to the page's own tab label — see
+   * MyJiraPage.tsx's TAB_COUNTS state. Fires with the search-filtered count,
+   * same as what the list itself shows, not a separate unfiltered total. */
+  onCountChange?: (count: number) => void;
 }) {
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
@@ -88,6 +93,14 @@ export default function RoleTicketsTab({
   useEffect(() => {
     if (fetchedRead) setTickets(fetchedRead.tickets);
   }, [fetchedRead]);
+  useEffect(() => {
+    onCountChange?.(tickets.length);
+    // onCountChange intentionally omitted: MyJiraPage passes a plain inline
+    // callback (not memoized), and depending on it here would re-fire this
+    // effect on every page render rather than only when the count itself
+    // changes — see useAsync.ts's own `run` callback for the same pattern.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tickets]);
 
   const [drawerTicketId, setDrawerTicketId] = useState<string | null>(null);
   const drawerTicket = drawerTicketId
@@ -123,7 +136,7 @@ export default function RoleTicketsTab({
         onChange={(e) => setQuery(e.target.value)}
         placeholder={copy.placeholder}
         aria-label={copy.placeholder}
-        className="w-full rounded-[var(--radius-sm)] border border-border bg-bg px-3 py-2 text-[13px] text-text placeholder:text-text-muted focus:border-accent focus:outline-none"
+        className="block w-full max-w-[360px] rounded-[var(--radius-sm)] border border-border bg-bg px-3 py-2 text-[13px] text-text placeholder:text-text-muted focus:border-accent focus:outline-none"
       />
 
       {fetchedRead?.truncated && (

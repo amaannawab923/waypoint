@@ -1,61 +1,42 @@
 import { useEffect, useState } from 'react';
-import { listWorkedOnJiraKeys } from '@/data/api';
-import { listTicketsByJiraKeys } from '@/data/jiraApi';
+import { listPastJiraTickets } from '@/data/jiraApi';
 import { useAsync } from '@/lib/useAsync';
-import { useLoadedJiraConnection } from '@/lib/jiraStore';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
 import { JiraTicketRow } from '@/components/domain/JiraTicketRow';
 import { JiraTicketDrawer } from '@/components/domain/JiraTicketDrawer';
 import { JiraLoadError } from '@/components/domain/JiraLoadError';
-import { JiraApiError } from '@/types/jira';
 import type { JiraTicket } from '@/types/jira';
 
 /**
- * The Worked-on tab: every Jira issue this member has an agent run against,
- * on the connected site — two reads chained (the backend's own history via
- * data/api.ts's listWorkedOnJiraKeys, then those keys resolved to real
- * ticket rows via jiraApi.ts's listTicketsByJiraKeys), not one. A key the
- * backend still remembers but Jira no longer returns (deleted, moved to a
- * project this account can no longer see) is silently absent from the
- * result — listTicketsByJiraKeys' own comment covers why that is a normal
- * outcome here, not an error.
+ * My past tickets: issues real Jira history says were once assigned to this
+ * account and no longer are (see jiraClient.ts's PAST_TICKETS_JQL) — real
+ * tombstoning via Jira's own `WAS` operator, not the disappearance-guessing
+ * toTicket's own isTombstoned field has always stayed false for.
  *
- * Self-contained like RoleTicketsTab, and for the same reason: one of
- * several sibling tab components a thin page shell mounts one at a time.
- * No search box — unlike the per-role tabs, nothing in the redesign asked
- * for one here.
+ * Self-contained like the other tabs. Not showing who reassigned it or when
+ * yet — that needs one more read per matched ticket (the issue's own
+ * changelog) to name, which this tab's own live-verification (this ticket's
+ * conversation, and jiraClient.ts's PAST_TICKETS_JQL comment) explicitly
+ * left for a follow-up: the query only finds which tickets qualify.
  */
-export default function WorkedOnTab({
+export default function PastTicketsTab({
   onCountChange,
 }: {
   /** Reports the live tickets count up to the page's own tab label — see
    * MyJiraPage.tsx's TAB_COUNTS state and RoleTicketsTab's identical prop. */
   onCountChange?: (count: number) => void;
 } = {}) {
-  const connection = useLoadedJiraConnection();
-
   const {
-    data: fetchedTickets,
+    data: fetchedRead,
     loading,
     error,
     reload,
-  } = useAsync(async () => {
-    // Not yet known whether an account is connected — neither a real
-    // result nor a real failure, so this resolves through as "nothing
-    // yet" rather than throwing; the effect re-runs once
-    // useLoadedJiraConnection settles the real status below.
-    if (!connection) return [];
-    if (!connection.connected) {
-      throw new JiraApiError('No Jira account is connected.', 'not_connected');
-    }
-    const keys = await listWorkedOnJiraKeys(connection.site);
-    return listTicketsByJiraKeys(keys);
-  }, [connection === undefined, connection?.connected, connection?.site]);
+  } = useAsync(() => listPastJiraTickets(), []);
 
   const [tickets, setTickets] = useState<JiraTicket[]>([]);
   useEffect(() => {
-    if (fetchedTickets) setTickets(fetchedTickets);
-  }, [fetchedTickets]);
+    if (fetchedRead) setTickets(fetchedRead.tickets);
+  }, [fetchedRead]);
   useEffect(() => {
     onCountChange?.(tickets.length);
     // onCountChange intentionally omitted — see RoleTicketsTab's identical
@@ -77,14 +58,18 @@ export default function WorkedOnTab({
   // hasConflict/isTombstoned ticket, so JiraTicketRow should never call
   // either.
   async function neverResolvesConflict(): Promise<void> {
-    throw new Error('WorkedOnTab: hasConflict is always false here');
+    throw new Error('PastTicketsTab: hasConflict is always false here');
   }
   async function neverDismissesTombstone(): Promise<void> {
-    throw new Error('WorkedOnTab: isTombstoned is always false here');
+    throw new Error('PastTicketsTab: isTombstoned is always false here');
   }
 
   return (
     <div>
+      <p className="mb-3 max-w-[70ch] text-[12px] text-text-muted">
+        Tickets that used to be assigned to you and aren&apos;t anymore —
+        reassigned away, not resolved.
+      </p>
       <div className="overflow-hidden rounded-[var(--radius)] border border-border bg-surface shadow-sm">
         {loading && tickets.length === 0 ? (
           <SkeletonListRows />
@@ -92,14 +77,14 @@ export default function WorkedOnTab({
           <>
             {error && (
               <JiraLoadError
-                what="what you've worked on"
+                what="your past tickets"
                 error={error}
                 onRetry={reload}
               />
             )}
             {!error && tickets.length === 0 && (
               <div className="px-4 py-6 text-center text-sm text-text-muted">
-                No agent runs against a Jira issue yet.
+                Nothing was ever reassigned away from you.
               </div>
             )}
             {!error &&

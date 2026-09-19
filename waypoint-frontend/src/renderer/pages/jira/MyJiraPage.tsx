@@ -26,27 +26,53 @@ import MyJiraPager from './MyJiraPager';
 import { useMyJiraQueue } from './useMyJiraQueue';
 import RoleTicketsTab from './RoleTicketsTab';
 import WorkedOnTab from './WorkedOnTab';
+import ViewedTab from './ViewedTab';
+import StarredTab from './StarredTab';
+import PastTicketsTab from './PastTicketsTab';
 
 // ROAD-158 redesign: the old single 'work' tab (the assignee/reporter/
 // watcher union query) is now 'all' — "All Tickets", the old screen kept
 // intact under a name that matches what it actually shows once Assigned/
 // Reported/Watching exist as their own, narrower tabs. Assigned is now the
-// default landing tab, per the founder's own call on the mockup.
-//
-// Viewed, My past tickets and Starred are named in the finalized plan but
-// not built yet (their own client/IPC/component work is still pending) —
-// left out of this list rather than added as tabs with nothing behind them.
+// default landing tab, per the founder's own call on the mockup. Order and
+// full tab set match the approved mockup exactly.
 type TabKey =
-  'assigned' | 'reported' | 'watching' | 'worked-on' | 'all' | 'connection';
+  | 'assigned'
+  | 'reported'
+  | 'watching'
+  | 'worked-on'
+  | 'viewed'
+  | 'starred'
+  | 'past'
+  | 'all'
+  | 'connection';
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'assigned', label: 'Assigned' },
   { key: 'reported', label: 'Reported' },
   { key: 'watching', label: 'Watching' },
   { key: 'worked-on', label: 'Worked on' },
+  { key: 'viewed', label: 'Viewed' },
+  { key: 'starred', label: 'Starred' },
+  { key: 'past', label: 'My past tickets' },
   { key: 'all', label: 'All Tickets' },
   { key: 'connection', label: 'Connection' },
 ];
+
+// Tabs whose own count this page tracks and shows next to their label — the
+// self-contained tab components report it live via onCountChange as their
+// own read settles. 'all' and 'connection' are deliberately absent: 'all'
+// already shows its own "N issues · M projects" line inside its body (adding
+// a second count next to the tab would just be the same fact said twice),
+// and 'connection' has no ticket count to show at all.
+type CountedTabKey =
+  | 'assigned'
+  | 'reported'
+  | 'watching'
+  | 'worked-on'
+  | 'viewed'
+  | 'starred'
+  | 'past';
 
 // The three per-role tabs' own TabKey -> the query role RoleTicketsTab
 // actually takes. A lookup rather than a nested ternary at the call site.
@@ -129,6 +155,22 @@ export default function MyJiraPage() {
     isTabKey(initialTab) ? initialTab : 'assigned',
   );
   const [drawerTicketId, setDrawerTicketId] = useState<string | null>(null);
+
+  // Live per-tab ticket counts, shown next to each tab's own label — see
+  // CountedTabKey's own comment for which tabs report one and why. A
+  // functional update that bails out when the incoming count already
+  // matches keeps a tab's own re-render (its useAsync settling again on an
+  // unrelated re-mount) from cascading into a fresh page-level render when
+  // nothing actually changed.
+  const [counts, setCounts] = useState<Partial<Record<CountedTabKey, number>>>(
+    {},
+  );
+  function countHandler(key: CountedTabKey) {
+    return (count: number) =>
+      setCounts((prev) =>
+        prev[key] === count ? prev : { ...prev, [key]: count },
+      );
+  }
 
   const connection = useLoadedJiraConnection();
   const {
@@ -254,34 +296,70 @@ export default function MyJiraPage() {
         aria-label="My Jira sections"
         className="mt-3.5 ml-[41px] flex gap-1 border-b border-border"
       >
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            role="tab"
-            aria-selected={tab === t.key}
-            onClick={() => setTab(t.key)}
-            className={clsx(
-              'cursor-pointer border-b-2 px-3 py-2 text-sm font-semibold transition-colors',
-              tab === t.key
-                ? 'border-accent text-text'
-                : 'border-transparent text-text-muted hover:text-text-secondary',
-            )}
-          >
-            {t.label}
-          </button>
-        ))}
+        {TABS.map((t) => {
+          const count = counts[t.key as CountedTabKey];
+          return (
+            <button
+              key={t.key}
+              type="button"
+              role="tab"
+              aria-selected={tab === t.key}
+              onClick={() => setTab(t.key)}
+              className={clsx(
+                'flex cursor-pointer items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-semibold transition-colors',
+                tab === t.key
+                  ? 'border-accent text-text'
+                  : 'border-transparent text-text-muted hover:text-text-secondary',
+              )}
+            >
+              {t.label}
+              {count !== undefined && (
+                <span
+                  className={clsx(
+                    'rounded-full px-1.5 py-0.5 font-mono text-[10.5px] font-medium',
+                    tab === t.key
+                      ? 'bg-jira-bg text-jira'
+                      : 'bg-surface-2 text-text-muted',
+                  )}
+                >
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {(tab === 'assigned' || tab === 'reported' || tab === 'watching') && (
-        <div className="mt-4 ml-[41px] max-w-[460px]">
-          <RoleTicketsTab queryRole={ROLE_TAB_QUERY_ROLE[tab]} />
+        <div className="mt-4 ml-[41px]">
+          <RoleTicketsTab
+            queryRole={ROLE_TAB_QUERY_ROLE[tab]}
+            onCountChange={countHandler(tab)}
+          />
         </div>
       )}
 
       {tab === 'worked-on' && (
-        <div className="mt-4 ml-[41px] max-w-[460px]">
-          <WorkedOnTab />
+        <div className="mt-4 ml-[41px]">
+          <WorkedOnTab onCountChange={countHandler('worked-on')} />
+        </div>
+      )}
+
+      {tab === 'viewed' && (
+        <div className="mt-4 ml-[41px]">
+          <ViewedTab onCountChange={countHandler('viewed')} />
+        </div>
+      )}
+
+      {tab === 'starred' && (
+        <div className="mt-4 ml-[41px]">
+          <StarredTab onCountChange={countHandler('starred')} />
+        </div>
+      )}
+
+      {tab === 'past' && (
+        <div className="mt-4 ml-[41px]">
+          <PastTicketsTab onCountChange={countHandler('past')} />
         </div>
       )}
 

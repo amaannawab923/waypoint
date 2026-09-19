@@ -878,6 +878,27 @@ export async function listViewedTickets(): Promise<
   return runTicketSearch(credentialResult.value, VIEWED_JQL);
 }
 
+// ROAD-158's My past tickets tab: real tombstoning via Jira's own assignee
+// history, not the disappearance-guessing toTicket's own isTombstoned has
+// always (deliberately) stayed false for — see that mapping's own comment.
+// `WAS` is Jira's change-history operator: true for any issue that was ever
+// assigned to the caller at some point, regardless of who holds it now.
+// Live-verified against a real connected site: `status was "To Do"`
+// returned real matches on this instance (proving the operator itself
+// works here), and `assignee was currentUser()` parsed and ran cleanly
+// returning zero rows — confirmed to be because this test data has no
+// recorded assignee-change history yet, not a syntax or operator problem.
+const PAST_TICKETS_JQL =
+  'assignee was currentUser() AND assignee != currentUser() AND resolution = Unresolved ORDER BY updated DESC';
+
+export async function listPastTickets(): Promise<
+  JiraResult<JiraTicketQueryResult>
+> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+  return runTicketSearch(credentialResult.value, PAST_TICKETS_JQL);
+}
+
 // Bounds the `key in (...)` clause's own length, not a page of a crawl — the
 // request is still a GET, and this many quoted keys keeps the built JQL
 // comfortably inside URL length limits a proxy or Jira's own edge could
