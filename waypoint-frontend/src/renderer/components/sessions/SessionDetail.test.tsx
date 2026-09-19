@@ -100,7 +100,7 @@ describe('SessionDetail (W4)', () => {
     );
   });
 
-  it('shows Resume only for an interrupted run, beside Stop', () => {
+  it('shows Resume only for a resumable run, beside Stop when the run is also stoppable', () => {
     const { rerender } = renderDetail(run({ status: 'running' }));
     expect(
       screen.queryByRole('button', { name: /Resume/ }),
@@ -117,6 +117,19 @@ describe('SessionDetail (W4)', () => {
     expect(screen.getByRole('button', { name: 'Resume' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
   });
+
+  // ROAD-XXX: resume dead sessions — failed/cancelled runs get Resume too,
+  // but neither is stoppable (already ended), so no Stop beside it.
+  it.each(['failed', 'cancelled'] as const)(
+    'shows Resume for a %s run too, with no Stop beside it',
+    (status) => {
+      renderDetail(run({ status }));
+      expect(screen.getByRole('button', { name: 'Resume' })).toBeEnabled();
+      expect(
+        screen.queryByRole('button', { name: 'Stop' }),
+      ).not.toBeInTheDocument();
+    },
+  );
 
   it('Resume is disabled, with the reason, when the run has no folder', () => {
     renderDetail(run({ status: 'interrupted', worktreePath: null, cwd: null }));

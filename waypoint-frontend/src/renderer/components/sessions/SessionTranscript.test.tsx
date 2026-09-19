@@ -1,6 +1,7 @@
 import '@testing-library/jest-dom';
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import type { AgentRun } from '@/types/agentRuns';
+import { sendPrompt } from '@/data/engineApi';
 import { SessionTranscript } from './SessionTranscript';
 import { useSessionTranscript } from './useSessionTranscript';
 // chatUiRuntime is mapped to this mock by jest (package.json
@@ -27,6 +28,7 @@ jest.mock('@/data/engineApi', () => ({
 }));
 
 const mockUseSessionTranscript = useSessionTranscript as jest.Mock;
+const mockSendPrompt = sendPrompt as jest.Mock;
 
 const run = (over: Partial<AgentRun> = {}): AgentRun =>
   ({
@@ -184,5 +186,136 @@ describe('SessionTranscript — empty transcript state', () => {
     expect(screen.getByLabelText('Message this session')).toBeInTheDocument();
 
     document.body.removeChild(slot);
+  });
+});
+
+// ROAD-XXX: resume dead sessions — the composer stays open for a
+// resumable (dead) run, and a send that fails for any reason (a rejected
+// promise, or a resolved-but-undelivered outcome) must leave the typed
+// text in the box, not just log a toast and clear it.
+describe('SessionTranscript — resume on message', () => {
+  function withComposerSlot() {
+    const slot = document.createElement('div');
+    document.body.appendChild(slot);
+    fakeView.composerSlot = slot;
+    return () => document.body.removeChild(slot);
+  }
+
+  it.each(['interrupted', 'failed', 'cancelled'] as const)(
+    'the composer stays enabled for a %s run, with the resume placeholder',
+    (status) => {
+      const cleanup = withComposerSlot();
+      mockUseSessionTranscript.mockReturnValue(
+        hookState({ historyStatus: { kind: 'ready' }, turnCount: 0 }),
+      );
+      render(<SessionTranscript run={run({ status })} />);
+
+      const box = screen.getByLabelText('Message this session');
+      expect(box).not.toBeDisabled();
+      expect(box).toHaveAttribute(
+        'placeholder',
+        'Sending will resume this session in the same worktree…',
+      );
+      cleanup();
+    },
+  );
+
+  it.each(['done', 'needs-review', 'provisioning', 'queued'] as const)(
+    'the composer stays disabled for a %s run',
+    (status) => {
+      const cleanup = withComposerSlot();
+      mockUseSessionTranscript.mockReturnValue(
+        hookState({ historyStatus: { kind: 'ready' }, turnCount: 3 }),
+      );
+      render(<SessionTranscript run={run({ status })} />);
+
+      expect(screen.getByLabelText('Message this session')).toBeDisabled();
+      cleanup();
+    },
+  );
+
+  it('a resumable run with no worktree left disables the composer with an honest reason, distinct from "ended"', () => {
+    const cleanup = withComposerSlot();
+    mockUseSessionTranscript.mockReturnValue(
+      hookState({ historyStatus: { kind: 'ready' }, turnCount: 0 }),
+    );
+    render(
+      <SessionTranscript
+        run={run({ status: 'failed', cwd: null, worktreePath: null })}
+      />,
+    );
+
+    const box = screen.getByLabelText('Message this session');
+    expect(box).toBeDisabled();
+    expect(box).toHaveAttribute(
+      'placeholder',
+      'This run has no worktree left to resume on.',
+    );
+    cleanup();
+  });
+
+  // hookState()'s default `state` is a bare `{id}` stand-in — fine for the
+  // earlier tests, which never actually call onSend, but onSend itself
+  // needs `state.session.setPendingPrompt`, so these two tests supply a
+  // fuller fake.
+  const fakeState = () =>
+    ({
+      id: 'run-abc1234',
+      session: { setPendingPrompt: jest.fn() },
+    }) as unknown as ReturnType<typeof useSessionTranscript>['state'];
+
+  it('a send that resolves worktree-gone keeps the typed text in the box — resolved, not rejected, but still undelivered', async () => {
+    const cleanup = withComposerSlot();
+    mockSendPrompt.mockResolvedValueOnce({
+      outcome: 'worktree-gone',
+      status: 'failed',
+    });
+    mockUseSessionTranscript.mockReturnValue(
+      hookState({
+        historyStatus: { kind: 'ready' },
+        turnCount: 0,
+        state: fakeState(),
+      }),
+    );
+    render(<SessionTranscript run={run({ status: 'failed' })} />);
+
+    const box = screen.getByLabelText('Message this session');
+    fireEvent.change(box, { target: { value: 'still there?' } });
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Send'));
+    });
+
+    expect(mockSendPrompt).toHaveBeenCalledWith('run-abc1234', 'still there?');
+    // The text was NOT cleared — SessionComposer only clears on a
+    // fulfilled onSend, and SessionTranscript's onSend must have thrown
+    // for this outcome even though the sendPrompt promise itself resolved.
+    expect(box).toHaveValue('still there?');
+    cleanup();
+  });
+
+  it('a send that succeeds after reviving a replaced-by-new session clears the text and warns about lost context', async () => {
+    const cleanup = withComposerSlot();
+    mockSendPrompt.mockResolvedValueOnce({
+      outcome: 'resumed-and-sent',
+      status: 'running',
+      resume: 'replaced-by-new',
+    });
+    mockUseSessionTranscript.mockReturnValue(
+      hookState({
+        historyStatus: { kind: 'ready' },
+        turnCount: 0,
+        state: fakeState(),
+      }),
+    );
+    render(<SessionTranscript run={run({ status: 'cancelled' })} />);
+
+    const box = screen.getByLabelText('Message this session');
+    fireEvent.change(box, { target: { value: 'hello again' } });
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Send'));
+    });
+
+    expect(box).toHaveValue('');
+    cleanup();
   });
 });

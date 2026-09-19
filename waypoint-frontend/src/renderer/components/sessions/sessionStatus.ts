@@ -19,6 +19,12 @@ export interface StatusView {
   sentence: string;
   /** The daemon should have a live session for it: the transcript can move, the composer can send. */
   live: boolean;
+  /**
+   * Ended abnormally, with its worktree and provider session still on
+   * record: the composer stays open, and sending a message revives it
+   * (ROAD-XXX). Never true together with `live`.
+   */
+  resumable: boolean;
   /** Stop makes sense: the run can still be cancelled (runStatusMachine.ts). */
   stoppable: boolean;
 }
@@ -30,6 +36,7 @@ export const STATUS_VIEW: Record<AgentRunStatus, StatusView> = {
     dotClass: 'bg-text-muted',
     sentence: 'Asked for; nothing has started yet.',
     live: false,
+    resumable: false,
     stoppable: true,
   },
   provisioning: {
@@ -38,6 +45,7 @@ export const STATUS_VIEW: Record<AgentRunStatus, StatusView> = {
     dotClass: 'bg-info',
     sentence: 'Creating the worktree and starting the session.',
     live: false,
+    resumable: false,
     stoppable: true,
   },
   running: {
@@ -46,6 +54,7 @@ export const STATUS_VIEW: Record<AgentRunStatus, StatusView> = {
     dotClass: 'bg-info',
     sentence: 'The agent is working.',
     live: true,
+    resumable: false,
     stoppable: true,
   },
   blocked: {
@@ -54,6 +63,7 @@ export const STATUS_VIEW: Record<AgentRunStatus, StatusView> = {
     dotClass: 'bg-warning',
     sentence: 'Waiting on you.',
     live: true,
+    resumable: false,
     stoppable: true,
   },
   finishing: {
@@ -62,6 +72,7 @@ export const STATUS_VIEW: Record<AgentRunStatus, StatusView> = {
     dotClass: 'bg-info',
     sentence: 'The agent is done; pushing and proposing.',
     live: true,
+    resumable: false,
     stoppable: true,
   },
   'needs-review': {
@@ -70,6 +81,7 @@ export const STATUS_VIEW: Record<AgentRunStatus, StatusView> = {
     dotClass: 'bg-warning',
     sentence: 'Proposals are waiting for your decision in Review.',
     live: false,
+    resumable: false,
     stoppable: false,
   },
   done: {
@@ -78,6 +90,7 @@ export const STATUS_VIEW: Record<AgentRunStatus, StatusView> = {
     dotClass: 'bg-success',
     sentence: 'Finished.',
     live: false,
+    resumable: false,
     stoppable: false,
   },
   interrupted: {
@@ -86,16 +99,19 @@ export const STATUS_VIEW: Record<AgentRunStatus, StatusView> = {
     outline: true,
     dotClass: 'bg-border-strong',
     sentence:
-      'The engine or Waypoint went away mid-run; the worktree is still there.',
+      'The engine or Waypoint went away mid-run; the worktree is still there. Sending a message resumes it.',
     live: false,
+    resumable: true,
     stoppable: true,
   },
   failed: {
     label: 'Failed',
     tone: 'danger',
     dotClass: 'bg-danger',
-    sentence: 'Ended with an error.',
+    sentence:
+      'Ended with an error. Sending a message resumes it in the same worktree.',
     live: false,
+    resumable: true,
     stoppable: false,
   },
   cancelled: {
@@ -103,8 +119,10 @@ export const STATUS_VIEW: Record<AgentRunStatus, StatusView> = {
     tone: 'neutral',
     outline: true,
     dotClass: 'bg-border-strong',
-    sentence: 'Stopped by a person.',
+    sentence:
+      'Stopped by a person. Sending a message resumes it in the same worktree.',
     live: false,
+    resumable: true,
     stoppable: false,
   },
 };

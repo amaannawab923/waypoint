@@ -47,6 +47,8 @@ export function SessionComposer({
   disabledReason,
   attachedToBand,
   autoFocus,
+  placeholder,
+  sendingLabel,
 }: {
   /** The run id: what the draft is remembered under. Absent, nothing is remembered. */
   draftKey?: string;
@@ -56,6 +58,13 @@ export function SessionComposer({
   /** A permission band sits directly above: square off the top corners. */
   attachedToBand: boolean;
   autoFocus?: boolean;
+  /**
+   * Overrides the default enabled-box placeholder — ROAD-XXX: a resumable
+   * (dead) run says so, rather than reading like an ordinary live one.
+   */
+  placeholder?: string;
+  /** ROAD-XXX: the placeholder while a send is in flight, when sending it may first revive the run (a real wait, not a moment). */
+  sendingLabel?: string;
 }) {
   const [text, setText] = useState(() =>
     draftKey ? readSessionDraft(draftKey) : '',
@@ -131,7 +140,12 @@ export function SessionComposer({
         onChange={(e) => setText(e.target.value)}
         onKeyDown={onKeyDown}
         disabled={!!disabledReason || sending}
-        placeholder={disabledReason ?? 'Message this session…  (⌘↵ to send)'}
+        placeholder={
+          disabledReason ??
+          (sending ? sendingLabel : undefined) ??
+          placeholder ??
+          'Message this session…  (⌘↵ to send)'
+        }
         aria-label="Message this session"
         rows={Math.min(6, Math.max(1, text.split('\n').length))}
         className="thin-scroll min-h-[24px] flex-1 resize-none bg-transparent text-[12px] leading-5 text-text outline-none placeholder:text-text-muted disabled:cursor-not-allowed"

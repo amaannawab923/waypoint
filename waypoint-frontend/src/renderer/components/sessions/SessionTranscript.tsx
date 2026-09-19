@@ -7,12 +7,33 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { cancelTurn, resolvePermission, sendPrompt } from '@/data/engineApi';
 import { refreshSessions, useSessionsSnapshot } from '@/lib/sessionsStore';
 import { showErrorToast } from '@/lib/toast';
-import type { AgentRun } from '@/types/agentRuns';
+import type { AgentRun, SendRunPromptResult } from '@/types/agentRuns';
 import { PermissionBand } from './PermissionBand';
 import { clearSessionDraft, SessionComposer } from './SessionComposer';
 import { intentView, runTitle, statusView } from './sessionStatus';
 import { UsageStrip } from './UsageStrip';
 import { useSessionTranscript } from './useSessionTranscript';
+
+/**
+ * ROAD-XXX: the sentence a send that did NOT deliver the message gets —
+ * worktree-gone/not-resumable/not-ready are all "nothing was sent",
+ * distinguished only by why, and the composer keeps the typed text
+ * regardless (SessionComposer's own catch, once onSend rethrows below).
+ */
+function messageForUndeliveredSend(
+  result: SendRunPromptResult,
+  run: AgentRun,
+): string {
+  if (result.outcome === 'worktree-gone') {
+    return run.isolation === 'directory'
+      ? "This run's folder is no longer on disk; there was nothing to resume, and your message was not sent."
+      : "This run's worktree is no longer on disk; there was nothing to resume, and your message was not sent.";
+  }
+  if (result.outcome === 'not-ready') {
+    return 'This session is still starting; try again once it is running.';
+  }
+  return `This run is ${result.status}; your message was not sent.`;
+}
 
 /**
  * The Brief bar (W5a): a dispatched run's first prompt, folded out of
@@ -62,6 +83,15 @@ function BriefBar({ brief, label }: { brief: string; label: string }) {
  * no session to prompt — and the engine's.
  */
 export function SessionTranscript({ run }: { run: AgentRun }) {
+  // ROAD-XXX: set right before a message-triggered resume attempt and
+  // cleared once it settles — suppresses useSessionTranscript's own
+  // teardown-and-rebuild for exactly that transition (below), so a
+  // message that just revived the run doesn't flash "Starting the
+  // session…" over the reply that's about to arrive on the very same
+  // conversation. Local, not derived from run.status: the button's own
+  // resume (SessionDetail.tsx) is untouched by this and keeps its
+  // existing teardown behavior.
+  const [resuming, setResuming] = useState(false);
   const {
     context,
     state,
@@ -76,7 +106,8 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
     reloadHistory,
     brief,
   } = useSessionTranscript(run.id, {
-    awaitingSession: run.status === 'queued' || run.status === 'provisioning',
+    awaitingSession:
+      (run.status === 'queued' || run.status === 'provisioning') && !resuming,
     // A dispatched run's first prompt is its brief: folded (W5a).
     foldBrief: run.entry === 'dispatched' ? { label: runTitle(run) } : null,
   });
@@ -100,59 +131,99 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
   // a session that has simply not produced its first *committed* turn
   // yet — still watchable, still promptable, or stopped a moment before its
   // turn's commit landed — keeps its normal canvas instead of being told
-  // nothing happened. `interrupted` is excluded too: unlike `done`/`failed`/
-  // `cancelled` it does not mean the session ended — the daemon or the app
-  // just isn't reachable right now (sessionStatus.ts) — so "nothing to
-  // show" would assert something this status doesn't support; and `queued`/
-  // `provisioning` are excluded directly (not just via `awaitingSession`
-  // upstream) so a resume's one transitional render, where `historyStatus`/
-  // `turnCount` are still the prior session's stale values but `run.status`
-  // has already flipped, can't flash this over the "Starting the
-  // session…" state that's about to replace it.
+  // nothing happened. Every `resumable` status (interrupted/failed/
+  // cancelled, ROAD-XXX) is excluded too: none of them mean the session is
+  // over for good any more — sending a message revives it — so "nothing
+  // to show" would assert something none of them actually support; and
+  // `queued`/`provisioning` are excluded directly (not just via
+  // `awaitingSession` upstream) so a resume's one transitional render,
+  // where `historyStatus`/`turnCount` are still the prior session's stale
+  // values but `run.status` has already flipped, can't flash this over
+  // the "Starting the session…" state that's about to replace it.
   const showEmptyTranscript =
     historyStatus.kind === 'ready' &&
     turnCount === 0 &&
     !hasActiveTurn &&
     !status.live &&
-    run.status !== 'interrupted' &&
+    !status.resumable &&
     run.status !== 'queued' &&
     run.status !== 'provisioning';
 
-  // A draft outlives an interruption (the run comes back), not an ending.
+  // A draft outlives anything revivable (the run comes back), not a
+  // genuine ending — ROAD-XXX widens "revivable" to failed/cancelled too,
+  // so only done/needs-review (successful endings) still clear it.
   useEffect(() => {
-    if (
-      run.status === 'done' ||
-      run.status === 'failed' ||
-      run.status === 'cancelled'
-    ) {
+    if (run.status === 'done' || run.status === 'needs-review') {
       clearSessionDraft(run.id);
     }
   }, [run.id, run.status]);
 
+  // ROAD-XXX: a resumable run's cwd/worktree must still exist for a send
+  // to have anywhere to revive into — a run that died before either was
+  // ever recorded (queued straight to failed, say) has nothing to resume.
+  const hasPlace = Boolean(run.cwd ?? run.worktreePath);
+  const canResume = status.resumable && hasPlace;
+  const canCompose = status.live || canResume;
   const engineDown = engine !== undefined && engine.kind !== 'running';
   let disabledReason: string | null = null;
   if (engineDown) disabledReason = 'The agent engine is not running.';
-  else if (!status.live)
+  else if (run.status === 'queued' || run.status === 'provisioning')
+    disabledReason = 'The session is still starting.';
+  else if (status.resumable && !hasPlace)
+    disabledReason =
+      run.isolation === 'directory'
+        ? 'This run has no folder left to resume in.'
+        : 'This run has no worktree left to resume on.';
+  else if (!canCompose)
     disabledReason = `This session has ended (${status.label.toLowerCase()}).`;
 
-  // Fire and forget, the way emdash's own composer does: the daemon
-  // answers acp.sendPrompt when the agent's TURN ends, which can be
-  // minutes (found in review — awaiting it greyed the composer out for
-  // the whole turn). The prompt shows at once as chat-ui's pending
-  // prompt; the live activeTurn replaces it when the daemon starts the
-  // turn, and a refusal takes it back with the daemon's sentence.
+  // ROAD-XXX: awaited now, unlike before — but only because main's own
+  // `runs:send-prompt` handler goes through daemonApi.ts's `sendPrompt`
+  // facade, which resolves at hand-off (racing the daemon's own turn-end
+  // answer against a short window), not at the agent's actual turn end.
+  // The prior non-await here existed specifically because awaiting a RAW
+  // `acp.sendPrompt` greyed the composer out for an entire turn (found in
+  // review) — that regression would come right back if this awaited
+  // anything that didn't have the same hand-off-only contract.
   const onSend = async (text: string) => {
-    if (!state) return;
+    if (!state) throw new Error('not connected yet');
     const id = `pending-${Date.now()}`;
     state.session.setPendingPrompt({ id, text });
-    sendPrompt(run.id, text)
-      .then(() => refreshSessions())
-      .catch((error: unknown) => {
+    if (canResume) setResuming(true);
+    try {
+      const result = await sendPrompt(run.id, text);
+      if (
+        result.outcome === 'worktree-gone' ||
+        result.outcome === 'not-resumable' ||
+        result.outcome === 'not-ready'
+      ) {
         state.session.setPendingPrompt(null);
+        showErrorToast(messageForUndeliveredSend(result, run));
+        await refreshSessions();
+        // SessionComposer's own catch (below) keeps the typed text for a
+        // retry rather than clearing it — the point of awaiting at all.
+        throw new Error('not sent');
+      }
+      if (result.resume === 'replaced-by-new') {
+        // The one toast channel there is; this is a warning in any case,
+        // matching SessionDetail.tsx's own resume button.
+        showErrorToast(
+          'The provider could not restore the previous conversation; your message was sent to a fresh session in the same worktree, with the branch state attached.',
+        );
+      }
+      await refreshSessions();
+    } catch (error) {
+      state.session.setPendingPrompt(null);
+      if (!(error instanceof Error && error.message === 'not sent')) {
         showErrorToast(
           error instanceof Error ? error.message : 'The prompt was not sent.',
         );
-      });
+        await refreshSessions();
+      }
+      throw error;
+    } finally {
+      if (canResume) setResuming(false);
+    }
   };
 
   const onAnswer = async (requestId: string, optionId: string) => {
@@ -237,6 +308,12 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
         disabledReason={disabledReason}
         attachedToBand={pendingPermissions.length > 0}
         autoFocus
+        placeholder={
+          canResume
+            ? 'Sending will resume this session in the same worktree…'
+            : undefined
+        }
+        sendingLabel={canResume ? 'Resuming…' : undefined}
       />
     </>
   );

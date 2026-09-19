@@ -47,6 +47,19 @@ describe('STATUS_VIEW', () => {
       'cancelled',
     ]);
   });
+
+  // ROAD-XXX: resume dead sessions — exactly the three abnormal endings,
+  // never true together with `live`.
+  it('resumable is exactly interrupted/failed/cancelled', () => {
+    expect(ALL.filter((s) => STATUS_VIEW[s].resumable)).toEqual([
+      'interrupted',
+      'failed',
+      'cancelled',
+    ]);
+    expect(
+      ALL.every((s) => !(STATUS_VIEW[s].live && STATUS_VIEW[s].resumable)),
+    ).toBe(true);
+  });
 });
 
 describe('waitingReason', () => {

@@ -117,7 +117,7 @@ export function SessionDetail({
           break;
         case 'not-resumable':
           showErrorToast(
-            `This run is ${result.status}; only an interrupted run can be resumed.`,
+            `This run is ${result.status}; there is nothing to resume.`,
           );
           break;
         default:
@@ -349,7 +349,7 @@ export function SessionDetail({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          {run.status === 'interrupted' && (
+          {view.resumable && (
             <Button
               size="xs"
               variant="primary"
