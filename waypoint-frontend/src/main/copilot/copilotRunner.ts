@@ -229,4 +229,24 @@ export function registerCopilotIpc(
       void runSession(policy, prompt, hooks);
     },
   );
+
+  // Renderer-initiated Stop: closes the same Query killAllCopilotProcesses
+  // closes in bulk on app quit, just one at a time and on request. A
+  // request/response handle (not another .on) so the Stop button can tell
+  // "a live run was actually cancelled" from "it had already finished" —
+  // useful to the renderer even though the current UI treats both the same.
+  ipcMain.handle('copilot:run:cancel', (_event, requestId: unknown) => {
+    if (typeof requestId !== 'string' || !requestId) return false;
+    const query = inFlight.get(requestId);
+    if (!query) return false;
+    try {
+      query.close();
+    } catch {
+      // Best-effort — claudeSession.ts's own loop still runs its onError/
+      // onQueryEnded cleanup for this query regardless of whether close()
+      // itself threw.
+    }
+    inFlight.delete(requestId);
+    return true;
+  });
 }
