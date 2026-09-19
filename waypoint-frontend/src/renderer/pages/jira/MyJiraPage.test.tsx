@@ -23,6 +23,12 @@ import { resetMyJiraQueueForTests } from './useMyJiraQueue';
 // possible to render the real page tree.
 jest.mock('@/data/jiraApi', () => ({
   listMyJiraTickets: jest.fn(),
+  // RoleTicketsTab and WorkedOnTab (the Assigned/Reported/Watching/Worked-on
+  // tabs) are mounted by MyJiraPage now too — present here for the same
+  // reason every other export in this factory is, even though most tests in
+  // this file navigate straight to the All Tickets tab and never call these.
+  listRoleJiraTickets: jest.fn(async () => ({ tickets: [], truncated: false })),
+  listTicketsByJiraKeys: jest.fn(async () => []),
   dismissJiraTombstone: jest.fn(),
   resolveJiraConflict: jest.fn(),
   getJiraTransitions: jest.fn(),
@@ -56,8 +62,15 @@ jest.mock('@/data/jiraApi', () => ({
     editAll: false,
     editOwn: false,
   })),
-  buildJiraCommentPermalink: jest.fn(() => 'https://example.invalid/browse/ENG-1?focusedCommentId=1'),
+  buildJiraCommentPermalink: jest.fn(
+    () => 'https://example.invalid/browse/ENG-1?focusedCommentId=1',
+  ),
   getJiraConnectionStatus: jest.fn(),
+}));
+// WorkedOnTab's own first read, before it ever gets to listTicketsByJiraKeys
+// above.
+jest.mock('@/data/api', () => ({
+  listWorkedOnJiraKeys: jest.fn(async () => []),
 }));
 // useJiraConnection is here because the drawer and the comment composer both
 // read the connected account from the same store — the drawer to build the
@@ -164,8 +177,14 @@ function mount() {
   jest.mocked(getJiraTransitions).mockResolvedValue([]);
   jest.mocked(listJiraComments).mockResolvedValue({ comments: [], total: 0 });
   jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
+  // ROAD-158: Assigned is the page's real default landing tab now (see the
+  // dedicated 'lands on Assigned by default' test below) — every test in
+  // this file predates that redesign and was written against the "My work"
+  // queue, which is what the All Tickets tab shows today. Landing directly
+  // on it here keeps all of that coverage meaning what it already asserts,
+  // rather than rewriting every test to click a tab first.
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/my-jira?tab=all']}>
       <MyJiraPage />
     </MemoryRouter>,
   );
@@ -293,7 +312,7 @@ function mountWith(tickets: JiraTicket[]) {
   jest.mocked(listJiraComments).mockResolvedValue({ comments: [], total: 0 });
   jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/my-jira?tab=all']}>
       <MyJiraPage />
     </MemoryRouter>,
   );
@@ -457,7 +476,7 @@ describe('MyJiraPage — empty queue is not the same as no match', () => {
       .mockRejectedValue(new Error("Couldn't reach Jira."));
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );
@@ -562,7 +581,7 @@ describe('MyJiraPage — honesty fixes (ROAD-22)', () => {
     jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(TICKETS));
     jest.mocked(useLoadedJiraConnection).mockReturnValue(connectionStatus());
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );
@@ -587,7 +606,7 @@ describe('MyJiraPage — honesty fixes (ROAD-22)', () => {
     jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(TICKETS));
     jest.mocked(useLoadedJiraConnection).mockReturnValue(connectionStatus());
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );
@@ -611,7 +630,7 @@ describe('MyJiraPage — honesty fixes (ROAD-22)', () => {
       .mockResolvedValue(queueRead(TICKETS, 'page-cap'));
     jest.mocked(useLoadedJiraConnection).mockReturnValue(connectionStatus());
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );
@@ -635,7 +654,7 @@ describe('MyJiraPage — a page-capped read says so', () => {
     jest.mocked(getJiraTransitions).mockResolvedValue([]);
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
     return render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );
@@ -693,7 +712,7 @@ describe('MyJiraPage — a failed ticket read is not an empty queue', () => {
     jest.mocked(listMyJiraTickets).mockRejectedValue(error);
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
     return render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );
@@ -760,7 +779,7 @@ describe('MyJiraPage — sync indicator', () => {
     jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(TICKETS));
     jest.mocked(useLoadedJiraConnection).mockReturnValue(connection(null));
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );
@@ -775,7 +794,7 @@ describe('MyJiraPage — sync indicator', () => {
       .mocked(useLoadedJiraConnection)
       .mockReturnValue(connection(new Date().toISOString()));
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );
@@ -824,7 +843,7 @@ describe('MyJiraPage — refreshes the shared connection snapshot once real coun
     jest.mocked(getJiraConnectionStatus).mockResolvedValue(freshStatus);
 
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );
@@ -843,7 +862,7 @@ describe('MyJiraPage — refreshes the shared connection snapshot once real coun
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
 
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );
@@ -855,11 +874,12 @@ describe('MyJiraPage — refreshes the shared connection snapshot once real coun
 });
 
 // `JiraConnectionCard` on the All-Projects page links straight here with
-// `?tab=connection` so the click lands on the tab it promised, not on "My
-// work" with the user left to find Connection themselves. These three cases
-// are the whole contract: a valid tab loads directly on it, and anything
-// else — no param at all, or a value nobody put there on purpose — falls
-// back to 'work' rather than rendering neither tab's body.
+// `?tab=connection` so the click lands on the tab it promised, not on
+// Assigned with the user left to find Connection themselves. These three
+// cases are the whole contract: a valid tab loads directly on it, and
+// anything else — no param at all, or a value nobody put there on purpose —
+// falls back to 'assigned' (ROAD-158's new default) rather than rendering
+// neither tab's body.
 describe('MyJiraPage — initial tab from the ?tab= query param', () => {
   function connectionStatus() {
     return {
@@ -899,26 +919,56 @@ describe('MyJiraPage — initial tab from the ?tab= query param', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('falls back to My work when the param is absent', async () => {
+  it('falls back to Assigned when the param is absent', async () => {
     mountAt('/my-jira');
 
     expect(
-      await screen.findByLabelText('Search your Jira queue'),
+      await screen.findByPlaceholderText(/search what.s assigned to you/i),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'Refresh now' }),
     ).not.toBeInTheDocument();
   });
 
-  it('falls back to My work for a value that is not a real tab', async () => {
+  it('falls back to Assigned for a value that is not a real tab', async () => {
     mountAt('/my-jira?tab=nonsense');
 
     expect(
-      await screen.findByLabelText('Search your Jira queue'),
+      await screen.findByPlaceholderText(/search what.s assigned to you/i),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'Refresh now' }),
     ).not.toBeInTheDocument();
+  });
+
+  it('loads on All Tickets when the param says so, showing the old "My work" queue', async () => {
+    mountAt('/my-jira?tab=all');
+
+    expect(
+      await screen.findByLabelText('Search your Jira queue'),
+    ).toBeInTheDocument();
+  });
+
+  it.each([
+    ['reported', /search what you.ve reported/i],
+    ['watching', /search what you.re watching/i],
+  ])(
+    'loads directly on the %s tab when the param says so',
+    async (tabKey, placeholder) => {
+      mountAt(`/my-jira?tab=${tabKey}`);
+
+      expect(
+        await screen.findByPlaceholderText(placeholder),
+      ).toBeInTheDocument();
+    },
+  );
+
+  it('loads directly on Worked on when the param says so', async () => {
+    mountAt('/my-jira?tab=worked-on');
+
+    expect(
+      await screen.findByText('No agent runs against a Jira issue yet.'),
+    ).toBeInTheDocument();
   });
 });
 
@@ -939,7 +989,7 @@ describe('JiraTicketDrawer — description wrapping', () => {
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
     jest.mocked(useJiraConnection).mockReturnValue(undefined);
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );
@@ -985,7 +1035,7 @@ describe('JiraTicketDrawer — comment timestamps', () => {
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
     jest.mocked(useJiraConnection).mockReturnValue(undefined);
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );
@@ -1016,7 +1066,7 @@ describe('JiraTransitionPopover — escapes the list clipping container', () => 
     ]);
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
     const { container } = render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );

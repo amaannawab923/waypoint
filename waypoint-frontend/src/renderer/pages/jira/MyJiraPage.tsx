@@ -16,17 +16,48 @@ import { JiraTicketRow } from '@/components/domain/JiraTicketRow';
 import { JiraTicketDrawer } from '@/components/domain/JiraTicketDrawer';
 import { JiraLoadError } from '@/components/domain/JiraLoadError';
 import { JiraConnectionPanel } from '@/components/domain/JiraConnectionPanel';
-import type { JiraTicket, JiraTruncation } from '@/types/jira';
+import type {
+  JiraTicket,
+  JiraTicketQueryRole,
+  JiraTruncation,
+} from '@/types/jira';
 import MyJiraToolbar from './MyJiraToolbar';
 import MyJiraPager from './MyJiraPager';
 import { useMyJiraQueue } from './useMyJiraQueue';
+import RoleTicketsTab from './RoleTicketsTab';
+import WorkedOnTab from './WorkedOnTab';
 
-type TabKey = 'work' | 'connection';
+// ROAD-158 redesign: the old single 'work' tab (the assignee/reporter/
+// watcher union query) is now 'all' — "All Tickets", the old screen kept
+// intact under a name that matches what it actually shows once Assigned/
+// Reported/Watching exist as their own, narrower tabs. Assigned is now the
+// default landing tab, per the founder's own call on the mockup.
+//
+// Viewed, My past tickets and Starred are named in the finalized plan but
+// not built yet (their own client/IPC/component work is still pending) —
+// left out of this list rather than added as tabs with nothing behind them.
+type TabKey =
+  'assigned' | 'reported' | 'watching' | 'worked-on' | 'all' | 'connection';
 
 const TABS: { key: TabKey; label: string }[] = [
-  { key: 'work', label: 'My work' },
+  { key: 'assigned', label: 'Assigned' },
+  { key: 'reported', label: 'Reported' },
+  { key: 'watching', label: 'Watching' },
+  { key: 'worked-on', label: 'Worked on' },
+  { key: 'all', label: 'All Tickets' },
   { key: 'connection', label: 'Connection' },
 ];
+
+// The three per-role tabs' own TabKey -> the query role RoleTicketsTab
+// actually takes. A lookup rather than a nested ternary at the call site.
+const ROLE_TAB_QUERY_ROLE: Record<
+  'assigned' | 'reported' | 'watching',
+  JiraTicketQueryRole
+> = {
+  assigned: 'assignee',
+  reported: 'reporter',
+  watching: 'watcher',
+};
 
 /** True only for a real `TabKey` — used to validate the `?tab=` param below
  * against the actual union rather than trusting a string a link (this app's
@@ -87,15 +118,15 @@ export function LiveSyncIndicator({
 export default function MyJiraPage() {
   // `JiraConnectionCard` on the All-Projects page links straight to the
   // Connection tab (`/my-jira?tab=connection`) rather than always landing on
-  // My work — read once at mount, the same way TicketsLayout/AllTicketsPage
+  // Assigned — read once at mount, the same way TicketsLayout/AllTicketsPage
   // seed state from their own query params. An absent or garbage value
   // (someone hand-editing the URL, or a future link that gets the param
-  // wrong) falls back to 'work' via `isTabKey` rather than rendering neither
-  // tab's body.
+  // wrong) falls back to 'assigned' via `isTabKey` rather than rendering
+  // neither tab's body.
   const [searchParams] = useSearchParams();
   const initialTab = searchParams.get('tab');
   const [tab, setTab] = useState<TabKey>(
-    isTabKey(initialTab) ? initialTab : 'work',
+    isTabKey(initialTab) ? initialTab : 'assigned',
   );
   const [drawerTicketId, setDrawerTicketId] = useState<string | null>(null);
 
@@ -197,16 +228,38 @@ export default function MyJiraPage() {
         {connection && <LiveSyncIndicator lastSyncAt={connection.lastSyncAt} />}
       </div>
 
-      <p className="mt-1.5 ml-[41px] max-w-[70ch] text-[12.5px] text-text-secondary">
-        Everything assigned to you, reported by you, or watched by you — across{' '}
-        <b>every</b> Jira project you can see, not one board.
-      </p>
+      {/* Only All Tickets keeps this sentence: it is the one tab whose own
+          query is a union across roles, and the one place "every project you
+          can see, not one board" is still the whole story. The per-role tabs
+          say what they show in their own tab label; describing them again
+          here would be the same on-screen JQL restatement Phase 1 removed,
+          just moved up a level. */}
+      {tab === 'all' && (
+        <p className="mt-1.5 ml-[41px] max-w-[70ch] text-[12.5px] text-text-secondary">
+          Everything assigned to you, reported by you, or watched by you —
+          across <b>every</b> Jira project you can see, not one board.
+        </p>
+      )}
 
-      <div className="mt-3.5 ml-[41px] flex gap-1 border-b border-border">
+      {/* role="tablist"/"tab": real ARIA tab semantics, not generic buttons
+          — both because this genuinely is a tab strip and because "Assigned"
+          /"Reported"/"Watching" are now real words on this page twice, once
+          here and once as the All Tickets tab's own role-filter chip labels
+          (MyJiraToolbar.tsx's ROLE_FILTERS). Identical visible text at two
+          different roles ("tab" vs the chip's plain "button") is what keeps
+          them unambiguous to a query by name, the same way a sighted person
+          tells them apart by where they sit on screen. */}
+      <div
+        role="tablist"
+        aria-label="My Jira sections"
+        className="mt-3.5 ml-[41px] flex gap-1 border-b border-border"
+      >
         {TABS.map((t) => (
           <button
             key={t.key}
             type="button"
+            role="tab"
+            aria-selected={tab === t.key}
             onClick={() => setTab(t.key)}
             className={clsx(
               'cursor-pointer border-b-2 px-3 py-2 text-sm font-semibold transition-colors',
@@ -220,7 +273,19 @@ export default function MyJiraPage() {
         ))}
       </div>
 
-      {tab === 'work' && (
+      {(tab === 'assigned' || tab === 'reported' || tab === 'watching') && (
+        <div className="mt-4 ml-[41px] max-w-[460px]">
+          <RoleTicketsTab queryRole={ROLE_TAB_QUERY_ROLE[tab]} />
+        </div>
+      )}
+
+      {tab === 'worked-on' && (
+        <div className="mt-4 ml-[41px] max-w-[460px]">
+          <WorkedOnTab />
+        </div>
+      )}
+
+      {tab === 'all' && (
         <div className="mt-4 ml-[41px]">
           {loading && !fetchedRead ? (
             <SkeletonListRows />
@@ -389,8 +454,8 @@ export default function MyJiraPage() {
                     explicit click, and to nothing else. */}
                 <div className="mt-3 flex items-start gap-2 rounded-[var(--radius-sm)] border border-jira/30 bg-jira-bg px-3 py-2.5 text-[12.5px] text-jira">
                   <span>
-                    Your own clicks write straight to Jira — no approval
-                    step. Copilot&apos;s never do.
+                    Your own clicks write straight to Jira — no approval step.
+                    Copilot&apos;s never do.
                   </span>
                 </div>
               </div>
