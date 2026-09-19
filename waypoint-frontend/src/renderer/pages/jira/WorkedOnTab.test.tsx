@@ -14,6 +14,7 @@ jest.mock('@/data/api', () => ({
 // (rather than per-component) is what makes it possible to render the real
 // component tree, same reasoning as RoleTicketsTab.test.tsx's own mock.
 jest.mock('@/data/jiraApi', () => ({
+  LIST_BY_KEYS_MAX: 50,
   listTicketsByJiraKeys: jest.fn(),
   getJiraTransitions: jest.fn(async () => []),
   transitionJiraTicket: jest.fn(),
@@ -169,5 +170,39 @@ describe('WorkedOnTab', () => {
     expect(
       screen.queryByText('No agent runs against a Jira issue yet.'),
     ).not.toBeInTheDocument();
+  });
+
+  // Found in review: listTicketsByJiraKeys silently caps a bulk read at
+  // LIST_BY_KEYS_MAX keys — past that many worked-on issues, the pager's
+  // own "of 50" was the only number on screen, with nothing distinguishing
+  // "you worked on 50 tickets" from "you worked on 80 and 30 aren't shown".
+  it('warns when more issues were worked on than the bulk read will ever show', async () => {
+    const keys = Array.from({ length: 80 }, (_, i) => `ENG-${i}`);
+    jest.mocked(useLoadedJiraConnection).mockReturnValue(CONNECTED);
+    jest.mocked(listWorkedOnJiraKeys).mockResolvedValue(keys);
+    jest
+      .mocked(listTicketsByJiraKeys)
+      .mockResolvedValue(
+        Array.from({ length: 50 }, (_, i) =>
+          ticket({ id: `t${i}`, key: `ENG-${i}` }),
+        ),
+      );
+
+    render(<WorkedOnTab />);
+
+    expect(
+      await screen.findByText(/You've worked on 80 tickets/),
+    ).toBeInTheDocument();
+  });
+
+  it('shows no warning when the worked-on count fits within the bulk-read cap', async () => {
+    jest.mocked(useLoadedJiraConnection).mockReturnValue(CONNECTED);
+    jest.mocked(listWorkedOnJiraKeys).mockResolvedValue(['ENG-1']);
+    jest.mocked(listTicketsByJiraKeys).mockResolvedValue([ticket()]);
+
+    render(<WorkedOnTab />);
+
+    await screen.findByText('A ticket');
+    expect(screen.queryByText(/You've worked on/)).not.toBeInTheDocument();
   });
 });

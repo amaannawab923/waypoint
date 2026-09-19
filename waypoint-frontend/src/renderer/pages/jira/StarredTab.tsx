@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { listTicketsByJiraKeys } from '@/data/jiraApi';
+import { LIST_BY_KEYS_MAX, listTicketsByJiraKeys } from '@/data/jiraApi';
 import { useAsync } from '@/lib/useAsync';
 import { useJiraStarredKeys } from '@/lib/jiraStarred';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
@@ -31,6 +31,12 @@ export default function StarredTab({
   onCountChange?: (count: number) => void;
 } = {}) {
   const starredKeys = useJiraStarredKeys();
+  // Found in review: listTicketsByJiraKeys silently caps at
+  // LIST_BY_KEYS_MAX — past that many stars, the pager's own "of N" was the
+  // only number on screen, and it counted the tickets that LOADED, not the
+  // tickets actually starred. Someone who starred 80 tickets saw "Showing
+  // 1–25 of 50" with nothing saying 30 of their own stars weren't there.
+  const keysTruncated = starredKeys.length > LIST_BY_KEYS_MAX;
 
   const {
     data: fetchedTickets,
@@ -102,6 +108,13 @@ export default function StarredTab({
 
   return (
     <div>
+      {keysTruncated && (
+        <div className="mb-3 rounded-[var(--radius-sm)] border border-warning/30 bg-warning-bg px-3 py-2 text-[11.5px] leading-relaxed text-warning">
+          You&apos;ve starred {starredKeys.length} tickets — showing the{' '}
+          {LIST_BY_KEYS_MAX} most recently starred.
+        </div>
+      )}
+
       <div className="overflow-hidden rounded-[var(--radius)] border border-border bg-surface shadow-sm">
         {loading && tickets.length === 0 ? (
           <SkeletonListRows />

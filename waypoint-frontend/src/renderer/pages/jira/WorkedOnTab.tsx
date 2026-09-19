@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { listWorkedOnJiraKeys } from '@/data/api';
-import { listTicketsByJiraKeys } from '@/data/jiraApi';
+import { LIST_BY_KEYS_MAX, listTicketsByJiraKeys } from '@/data/jiraApi';
 import { useAsync } from '@/lib/useAsync';
 import { useLoadedJiraConnection } from '@/lib/jiraStore';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
@@ -37,7 +37,7 @@ export default function WorkedOnTab({
   const connection = useLoadedJiraConnection();
 
   const {
-    data: fetchedTickets,
+    data: fetchedResult,
     loading,
     error,
     reload,
@@ -46,18 +46,29 @@ export default function WorkedOnTab({
     // result nor a real failure, so this resolves through as "nothing
     // yet" rather than throwing; the effect re-runs once
     // useLoadedJiraConnection settles the real status below.
-    if (!connection) return [];
+    if (!connection) return { tickets: [], keyCount: 0 };
     if (!connection.connected) {
       throw new JiraApiError('No Jira account is connected.', 'not_connected');
     }
     const keys = await listWorkedOnJiraKeys(connection.site);
-    return listTicketsByJiraKeys(keys);
+    const tickets = await listTicketsByJiraKeys(keys);
+    return { tickets, keyCount: keys.length };
   }, [connection === undefined, connection?.connected, connection?.site]);
 
   const [tickets, setTickets] = useState<JiraTicket[]>([]);
+  // Found in review: listTicketsByJiraKeys silently caps at
+  // LIST_BY_KEYS_MAX — past that many worked-on issues, the pager's own
+  // "of N" was the only number on screen, and it counted the tickets that
+  // LOADED, not the tickets actually worked on. keyCount (the true count,
+  // known before the bulk read even ran) is what makes that distinguishable.
+  const [keyCount, setKeyCount] = useState(0);
   useEffect(() => {
-    if (fetchedTickets) setTickets(fetchedTickets);
-  }, [fetchedTickets]);
+    if (fetchedResult) {
+      setTickets(fetchedResult.tickets);
+      setKeyCount(fetchedResult.keyCount);
+    }
+  }, [fetchedResult]);
+  const keysTruncated = keyCount > LIST_BY_KEYS_MAX;
   useEffect(() => {
     onCountChange?.(tickets.length);
     // onCountChange intentionally omitted — see RoleTicketsTab's identical
@@ -89,6 +100,13 @@ export default function WorkedOnTab({
 
   return (
     <div>
+      {keysTruncated && (
+        <div className="mb-3 rounded-[var(--radius-sm)] border border-warning/30 bg-warning-bg px-3 py-2 text-[11.5px] leading-relaxed text-warning">
+          You&apos;ve worked on {keyCount} tickets — showing the{' '}
+          {LIST_BY_KEYS_MAX} most recent.
+        </div>
+      )}
+
       <div className="overflow-hidden rounded-[var(--radius)] border border-border bg-surface shadow-sm">
         {loading && tickets.length === 0 ? (
           <SkeletonListRows />

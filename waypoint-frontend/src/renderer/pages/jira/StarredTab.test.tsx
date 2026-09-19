@@ -11,6 +11,7 @@ import StarredTab from './StarredTab';
 // (rather than per-component) is what makes it possible to render the real
 // component tree, same reasoning as RoleTicketsTab.test.tsx's own mock.
 jest.mock('@/data/jiraApi', () => ({
+  LIST_BY_KEYS_MAX: 50,
   listTicketsByJiraKeys: jest.fn(),
   getJiraTransitions: jest.fn(async () => []),
   transitionJiraTicket: jest.fn(),
@@ -162,5 +163,37 @@ describe('StarredTab', () => {
 
     await screen.findByText('A ticket');
     expect(onCountChange).toHaveBeenLastCalledWith(1);
+  });
+
+  // Found in review: listTicketsByJiraKeys silently caps a bulk read at
+  // LIST_BY_KEYS_MAX keys — past that many stars, the pager's own "of 50"
+  // was the only number on screen, with nothing distinguishing "you starred
+  // 50 tickets" from "you starred 80 and 30 of them aren't shown".
+  it('warns when more tickets are starred than the bulk read will ever show', async () => {
+    const keys = Array.from({ length: 80 }, (_, i) => `ENG-${i}`);
+    jest.mocked(useJiraStarredKeys).mockReturnValue(keys);
+    jest
+      .mocked(listTicketsByJiraKeys)
+      .mockResolvedValue(
+        Array.from({ length: 50 }, (_, i) =>
+          ticket({ id: `t${i}`, key: `ENG-${i}` }),
+        ),
+      );
+
+    render(<StarredTab />);
+
+    expect(
+      await screen.findByText(/You've starred 80 tickets/),
+    ).toBeInTheDocument();
+  });
+
+  it('shows no warning when the starred count fits within the bulk-read cap', async () => {
+    jest.mocked(useJiraStarredKeys).mockReturnValue(['ENG-1']);
+    jest.mocked(listTicketsByJiraKeys).mockResolvedValue([ticket()]);
+
+    render(<StarredTab />);
+
+    await screen.findByText('A ticket');
+    expect(screen.queryByText(/You've starred/)).not.toBeInTheDocument();
   });
 });
