@@ -113,6 +113,17 @@ export const listAgentRunEventsQuerySchema = z
   })
   .strict();
 
+// ROAD-158's Worked-on tab: `site` is a Jira hostname, e.g.
+// "waypoint123.atlassian.net" — same bare min(1) bound
+// workspace.schema.ts's own `site` field uses, since ticket_refs.external_site
+// is just whatever hostname a live Jira read already recorded, not a value
+// this route re-derives or re-validates the shape of.
+export const listWorkedOnJiraKeysQuerySchema = z
+  .object({
+    site: z.string().min(1).max(255),
+  })
+  .strict();
+
 // The kinds a client may append. `created` and `status_changed` are
 // deliberately absent: the service writes those itself, inside the same
 // transaction as the row change they describe, and a client writing them

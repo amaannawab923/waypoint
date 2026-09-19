@@ -30,6 +30,7 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
   let eq: typeof import('drizzle-orm')['eq'];
   let asc: typeof import('drizzle-orm')['asc'];
   let sql: typeof import('drizzle-orm')['sql'];
+  let inArray: typeof import('drizzle-orm')['inArray'];
   let runWithIdentity: typeof import('../lib/requestContext.js')['runWithIdentity'];
 
   const stamp = Date.now();
@@ -111,7 +112,7 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
     ({ db } = await import('../db/client.js'));
     service = await import('./agentRuns.service.js');
     schema = await import('../db/schema/index.js');
-    ({ eq, asc, sql } = await import('drizzle-orm'));
+    ({ eq, asc, sql, inArray } = await import('drizzle-orm'));
     ({ runWithIdentity } = await import('../lib/requestContext.js'));
 
     await db.insert(schema.workspaces).values({
@@ -531,6 +532,151 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
     } finally {
       if (runId) await db.delete(schema.agentRuns).where(eq(schema.agentRuns.id, runId));
       await db.delete(schema.ticketRefs).where(eq(schema.ticketRefs.id, ref.id));
+    }
+  });
+
+  // ROAD-158: the Worked-on tab's own read, the reverse of listRunsForTicket
+  // above — member + site to distinct Jira keys. Real-database because the
+  // one thing worth proving is the join itself: a native ticket's 'wi-…' id
+  // never matches a ticket_refs row, so it has to be excluded by the join
+  // failing to match rather than by any filter this function writes.
+  it('W5b/ROAD-158: lists a member’s own distinct Jira keys on one site, newest-worked first, excluding native-ticket runs and other members’/sites’', async () => {
+    const otherMember = `mem-woj-${stamp}`;
+    await db.insert(schema.members).values({
+      id: otherMember,
+      workspaceId,
+      fullName: 'Other Worker',
+      displayName: 'Other',
+      email: `${otherMember}@example.test`,
+      avatarColor: '#000000',
+    });
+
+    const refA = { id: `tref-woja${stamp}`, key: `WOJ-A-${stamp}` };
+    const refB = { id: `tref-wojb${stamp}`, key: `WOJ-B-${stamp}` };
+    const refOtherSite = { id: `tref-wojc${stamp}`, key: `WOJ-C-${stamp}` };
+    const refOtherMember = { id: `tref-wojd${stamp}`, key: `WOJ-D-${stamp}` };
+    const site = 'worked-on.atlassian.net';
+
+    await db.insert(schema.ticketRefs).values([
+      {
+        id: refA.id,
+        provider: 'jira',
+        externalId: refA.key,
+        externalSite: site,
+        cachedIdentifier: refA.key,
+        cachedTitle: 'Worked on, earlier',
+        cachedUrl: null,
+        lastSeenAt: new Date(),
+      },
+      {
+        id: refB.id,
+        provider: 'jira',
+        externalId: refB.key,
+        externalSite: site,
+        cachedIdentifier: refB.key,
+        cachedTitle: 'Worked on, later — two runs',
+        cachedUrl: null,
+        lastSeenAt: new Date(),
+      },
+      {
+        id: refOtherSite.id,
+        provider: 'jira',
+        externalId: refOtherSite.key,
+        externalSite: 'someone-elses-site.atlassian.net',
+        cachedIdentifier: refOtherSite.key,
+        cachedTitle: 'Same member, different site',
+        cachedUrl: null,
+        lastSeenAt: new Date(),
+      },
+      {
+        id: refOtherMember.id,
+        provider: 'jira',
+        externalId: refOtherMember.key,
+        externalSite: site,
+        cachedIdentifier: refOtherMember.key,
+        cachedTitle: "Another member's own work",
+        cachedUrl: null,
+        lastSeenAt: new Date(),
+      },
+    ]);
+
+    const runIds = [
+      `run-woja0001`,
+      `run-wojb0001`,
+      // A second run against refB: proves GROUP BY collapses two runs on
+      // the same ticket into one key, not two.
+      `run-wojb0002`,
+      `run-wojc0001`,
+      `run-wojd0001`,
+      // A run against the plain native ticket every test in this file
+      // shares — proves it is excluded by the join, not filtered out by
+      // some ticketId-prefix check this function does not have.
+      `run-wojnat01`,
+    ];
+    await db.insert(schema.agentRuns).values([
+      {
+        id: runIds[0],
+        ticketId: refA.id,
+        ownerMemberId: memberId,
+        entry: 'dispatched',
+        providerId: 'claude',
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      },
+      {
+        id: runIds[1],
+        ticketId: refB.id,
+        ownerMemberId: memberId,
+        entry: 'dispatched',
+        providerId: 'claude',
+        createdAt: new Date('2026-01-02T00:00:00.000Z'),
+      },
+      {
+        id: runIds[2],
+        ticketId: refB.id,
+        ownerMemberId: memberId,
+        entry: 'dispatched',
+        providerId: 'claude',
+        // Newest activity on refB — this is the timestamp that should
+        // decide refB's place in the ordering, not the first run's.
+        createdAt: new Date('2026-01-05T00:00:00.000Z'),
+      },
+      {
+        id: runIds[3],
+        ticketId: refOtherSite.id,
+        ownerMemberId: memberId,
+        entry: 'dispatched',
+        providerId: 'claude',
+        createdAt: new Date('2026-01-03T00:00:00.000Z'),
+      },
+      {
+        id: runIds[4],
+        ticketId: refOtherMember.id,
+        ownerMemberId: otherMember,
+        entry: 'dispatched',
+        providerId: 'claude',
+        createdAt: new Date('2026-01-04T00:00:00.000Z'),
+      },
+      {
+        id: runIds[5],
+        ticketId,
+        ownerMemberId: memberId,
+        entry: 'dispatched',
+        providerId: 'claude',
+        createdAt: new Date('2026-01-06T00:00:00.000Z'),
+      },
+    ]);
+
+    try {
+      const keys = await service.listWorkedOnJiraTickets(memberId, site);
+      // refB (last touched 2026-01-05) before refA (2026-01-01); neither
+      // the other member's key nor the other site's key present.
+      expect(keys).toEqual([refB.key, refA.key]);
+    } finally {
+      await db.delete(schema.agentRuns).where(inArray(schema.agentRuns.id, runIds));
+      await db.delete(schema.ticketRefs).where(
+        inArray(schema.ticketRefs.id, [refA.id, refB.id, refOtherSite.id, refOtherMember.id]),
+      );
+      await db.delete(schema.members).where(eq(schema.members.id, otherMember));
     }
   });
 

@@ -365,6 +365,42 @@ export async function listRunsForTicket(ticketId: string): Promise<AgentRun[]> {
     .orderBy(desc(agentRuns.createdAt), desc(agentRuns.id));
 }
 
+/**
+ * The reverse of listRunsForTicket: every distinct Jira key this member has
+ * ever dispatched or worked a run against on the given site, newest activity
+ * first — ROAD-158's "Worked on" tab.
+ *
+ * Scoped by `ownerMemberId`, not by workspace like listRunsForTicket above:
+ * this is inherently a "my own history" read (a Jira key someone else on the
+ * team worked is not what "Worked on" means to the person looking at it),
+ * so there is no cross-member case here for a workspace-wide filter to add.
+ *
+ * `ticket_refs.id = agent_runs.ticket_id` is an inner join, not a lookup
+ * keyed off the 'tref-' prefix agent_runs.ticketId's own check constraint
+ * documents — a native ticket's 'wi-…' id simply never matches any
+ * ticket_refs row, so the join alone excludes native-ticket runs without
+ * this function needing to know the prefix convention at all. Every status
+ * counts, including a run still in flight: "worked on" is a fact about
+ * having touched the ticket, not about how that work turned out.
+ */
+export async function listWorkedOnJiraTickets(ownerMemberId: string, site: string): Promise<string[]> {
+  const lastWorkedAt = sql<Date>`max(${agentRuns.createdAt})`;
+  const rows = await db
+    .select({ key: ticketRefs.cachedIdentifier, lastWorkedAt })
+    .from(agentRuns)
+    .innerJoin(ticketRefs, eq(ticketRefs.id, agentRuns.ticketId))
+    .where(
+      and(
+        eq(agentRuns.ownerMemberId, ownerMemberId),
+        eq(ticketRefs.provider, 'jira'),
+        eq(ticketRefs.externalSite, site),
+      ),
+    )
+    .groupBy(ticketRefs.cachedIdentifier)
+    .orderBy(desc(lastWorkedAt));
+  return rows.map((row) => row.key);
+}
+
 export async function listEvents(
   runId: string,
   options: { afterSeq?: number; limit?: number } = {},

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { JIRA_CREDENTIAL_HEADER, parseJiraCredentialHeader } from '../lib/jira/credentialHeader.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { NotFoundError } from '../middleware/errors.js';
+import { currentMemberId } from '../lib/requestContext.js';
 import * as agentRunsService from '../services/agentRuns.service.js';
 import * as proposalsService from '../services/proposals.service.js';
 import {
@@ -10,6 +11,7 @@ import {
   createRunProposalSchema,
   listAgentRunEventsQuerySchema,
   listAgentRunsQuerySchema,
+  listWorkedOnJiraKeysQuerySchema,
   saveAgentRunTranscriptSchema,
   updateAgentRunSchema,
 } from '../validation/agentRuns.schema.js';
@@ -34,6 +36,17 @@ agentRunsRouter.get(
   asyncHandler(async (req, res) => {
     const query = listAgentRunsQuerySchema.parse(req.query);
     res.json(await agentRunsService.listRuns(query));
+  }),
+);
+
+// ROAD-158: the Worked-on tab. Registered ahead of GET /agent-runs/:id —
+// Express matches route order, and 'worked-on-jira-keys' would otherwise be
+// read as an :id and 404 from getRun instead of ever reaching this handler.
+agentRunsRouter.get(
+  '/agent-runs/worked-on-jira-keys',
+  asyncHandler(async (req, res) => {
+    const { site } = listWorkedOnJiraKeysQuerySchema.parse(req.query);
+    res.json(await agentRunsService.listWorkedOnJiraTickets(currentMemberId(), site));
   }),
 );
 
