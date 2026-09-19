@@ -55,9 +55,22 @@ function failure(reason: JiraFailure['reason'], message: string): JiraFailure {
   return { ok: false, reason, message };
 }
 
-function readString(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
+// Optional, and unused by most callers (transitionId, priorityId, accountId
+// and the like are naturally short) — added specifically for the search
+// boundary below, found in review to be the one string guard in this file
+// with no size bound at all. Truncating rather than refusing: a long search
+// term is still a meaningful (if narrower) search, not a malformed request.
+function readString(value: unknown, maxLength?: number): string {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  return typeof maxLength === 'number' ? trimmed.slice(0, maxLength) : trimmed;
 }
+
+// This file's own header says renderer input is validated here, at the
+// boundary — search and the ticket-keys list (below) were the only two
+// guards with no size bound at all. jqlQuoted is still the real injection
+// boundary; this is a different concern — an unbounded search string or key
+// list becomes an unbounded `jql` query parameter on a GET to Jira.
+const SEARCH_MAX_LENGTH = 200;
 
 /** Guards every per-ticket channel. Jira issue ids and keys are alphanumeric
  * with a hyphen at most — refusing anything else here means no caller-supplied
@@ -85,14 +98,29 @@ function readTicketRole(value: unknown): client.JiraTicketQueryRole | null {
     : null;
 }
 
+// jiraClient.ts's own listTicketsByKeys caps at LIST_BY_KEYS_MAX (50)
+// before building the JQL clause — this is a looser, earlier belt-and-
+// braces bound at the IPC boundary itself, so a caller (buggy or
+// otherwise) can't hand this channel megabytes of keys to begin with.
+// TICKET_KEY_MAX_LENGTH is generous for a real Jira key ("PROJECT-12345"
+// is 14 chars) without hardcoding Jira's own key-format limits here.
+const TICKET_KEY_MAX_LENGTH = 64;
+const TICKET_KEYS_MAX_COUNT = 100;
+
 /** Guards `jira:tickets:list-by-keys`. See that channel's own comment for
  * why this drops only what could never be a usable key rather than
  * enforcing Jira's key shape — client.jqlQuoted is the real boundary. */
 function readTicketKeys(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value
-    .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
-    .map((v) => v.trim());
+    .filter(
+      (v): v is string =>
+        typeof v === 'string' &&
+        v.trim().length > 0 &&
+        v.trim().length <= TICKET_KEY_MAX_LENGTH,
+    )
+    .map((v) => v.trim())
+    .slice(0, TICKET_KEYS_MAX_COUNT);
 }
 
 /**
@@ -580,7 +608,10 @@ export function registerJiraIpc(getWindow: () => BrowserWindow | null): void {
       }
       // A blank search is legitimate — it is what the tab sends before
       // anyone has typed anything, and it means "no search clause at all".
-      return client.listRoleTickets(role, readString(input.search));
+      return client.listRoleTickets(
+        role,
+        readString(input.search, SEARCH_MAX_LENGTH),
+      );
     },
   );
 
@@ -602,7 +633,8 @@ export function registerJiraIpc(getWindow: () => BrowserWindow | null): void {
   // carries no arguments.
   ipcMain.handle(
     'jira:tickets:list-viewed',
-    (): Promise<JiraResult<JiraTicketQueryResult>> => client.listViewedTickets(),
+    (): Promise<JiraResult<JiraTicketQueryResult>> =>
+      client.listViewedTickets(),
   );
 
   // ROAD-158: the My past tickets tab. Same shape as list-viewed — no input.
@@ -619,7 +651,10 @@ export function registerJiraIpc(getWindow: () => BrowserWindow | null): void {
   // /rest/api/3/issue/{idOrKey} accepts either).
   ipcMain.handle(
     'jira:tickets:get',
-    async (_event, rawTicketId: unknown): Promise<JiraResult<JiraWireTicket>> => {
+    async (
+      _event,
+      rawTicketId: unknown,
+    ): Promise<JiraResult<JiraWireTicket>> => {
       const ticketId = readTicketId(rawTicketId);
       if (!ticketId) return failure('invalid_input', 'Unknown Jira issue.');
       return client.getTicket(ticketId);
