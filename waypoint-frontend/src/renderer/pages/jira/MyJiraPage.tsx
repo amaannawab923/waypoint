@@ -200,13 +200,6 @@ export default function MyJiraPage() {
       <p className="mt-1.5 ml-[41px] max-w-[70ch] text-[12.5px] text-text-secondary">
         Everything assigned to you, reported by you, or watched by you — across{' '}
         <b>every</b> Jira project you can see, not one board.
-        {/* The literal JQL that runs — parentheses included. JQL binds AND
-            tighter than OR, so without them the Unresolved filter would apply
-            to the watcher clause alone; see jiraClient.ts's MY_WORK_JQL. */}
-        <span className="mt-1 block font-mono text-[11px] text-text-muted">
-          (assignee = currentUser() OR reporter = currentUser() OR watcher =
-          currentUser()) AND resolution = Unresolved
-        </span>
       </p>
 
       <div className="mt-3.5 ml-[41px] flex gap-1 border-b border-border">
