@@ -67,6 +67,7 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
     state,
     historyStatus,
     turnCount,
+    hasActiveTurn,
     pendingPermissions,
     usage,
     liveStatus,
@@ -94,19 +95,28 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
   // chat-ui's own canvas has nothing to draw, so the pane was rendering
   // completely blank (found in PM review: "SESS-23 stop while
   // provisioning", ROAD-61). `loading` and `failed` are excluded so this
-  // never flashes over a fetch in flight or a real read error, and `live`
-  // runs are excluded so a session that has simply not produced its first
-  // turn yet — still watchable, still promptable — keeps its normal
-  // (empty-for-now) canvas instead of being told it is over.
+  // never flashes over a fetch in flight or a real read error; `live` runs
+  // and a run with a turn still in flight (`hasActiveTurn`) are excluded so
+  // a session that has simply not produced its first *committed* turn
+  // yet — still watchable, still promptable, or stopped a moment before its
+  // turn's commit landed — keeps its normal canvas instead of being told
+  // nothing happened. `interrupted` is excluded too: unlike `done`/`failed`/
+  // `cancelled` it does not mean the session ended — the daemon or the app
+  // just isn't reachable right now (sessionStatus.ts) — so "nothing to
+  // show" would assert something this status doesn't support; and `queued`/
+  // `provisioning` are excluded directly (not just via `awaitingSession`
+  // upstream) so a resume's one transitional render, where `historyStatus`/
+  // `turnCount` are still the prior session's stale values but `run.status`
+  // has already flipped, can't flash this over the "Starting the
+  // session…" state that's about to replace it.
   const showEmptyTranscript =
-    historyStatus.kind === 'ready' && turnCount === 0 && !status.live;
-
-  // ChatTranscript unmounts (and disposes its chat-ui view) once the empty
-  // state takes over; drop the stale view handle with it so the dock below
-  // does not try to portal into a disposed composer slot.
-  useEffect(() => {
-    if (showEmptyTranscript) setView(null);
-  }, [showEmptyTranscript]);
+    historyStatus.kind === 'ready' &&
+    turnCount === 0 &&
+    !hasActiveTurn &&
+    !status.live &&
+    run.status !== 'interrupted' &&
+    run.status !== 'queued' &&
+    run.status !== 'provisioning';
 
   // A draft outlives an interruption (the run comes back), not an ending.
   useEffect(() => {
@@ -259,7 +269,14 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
         </div>
       )}
       <div className="min-h-0 flex-1">{transcriptBody}</div>
-      {view?.composerSlot ? createPortal(dock, view.composerSlot) : null}
+      {/* Gated on showEmptyTranscript directly, in render, rather than
+          clearing `view` from an effect — an effect-based clear lands one
+          commit after ChatTranscript has already unmounted (disposing this
+          same view), so the portal would still fire once into a slot that
+          no longer exists before the effect catches up. */}
+      {!showEmptyTranscript && view?.composerSlot
+        ? createPortal(dock, view.composerSlot)
+        : null}
       <UsageStrip
         turnCount={turnCount}
         usage={usage}

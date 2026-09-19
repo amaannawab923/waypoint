@@ -277,6 +277,17 @@ export function useSessionTranscript(
     () => unit?.source.sessionState.getSnapshot()?.queuedPrompts?.length ?? 0,
     () => 0,
   );
+  // Whether the daemon currently has a turn in flight for this run — a
+  // signal separate from `turnCount` (committed history only). Found in
+  // review: a run stopped mid-first-turn can flip its ledger status to
+  // non-live before the turn's own commit → loadHistory round trip lands,
+  // so `turnCount` alone would read as "nothing ever happened" over
+  // content that's still on screen.
+  const activeTurn = useSyncExternalStore(
+    unit ? (l) => unit.source.activeTurn.subscribe(l) : noop,
+    () => unit?.source.activeTurn.getSnapshot() ?? null,
+    () => null,
+  );
 
   return {
     context,
@@ -284,6 +295,7 @@ export function useSessionTranscript(
     state: unit && unit.runId === runId ? unit.state : null,
     historyStatus,
     turnCount,
+    hasActiveTurn: activeTurn !== null,
     /** The folded first prompt (W5a), when `foldBrief` was asked and history had one. */
     brief,
     pendingPermissions,
