@@ -3,7 +3,10 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import type { CopilotDetectResult } from './copilot/copilotDetect';
 import type { SessionOffer as CopilotSessionOffer } from './copilot/sessionTools';
-import type { JiraCommentPermissions } from './jira/jiraClient';
+import type {
+  JiraCommentPermissions,
+  JiraTicketQueryRole,
+} from './jira/jiraClient';
 import type {
   AccountConnectionSnapshot,
   AccountIdentity,
@@ -355,6 +358,12 @@ const electronHandler = {
     },
     listTickets(): Promise<JiraResult<JiraTicketQueryResult>> {
       return ipcRenderer.invoke('jira:tickets:list');
+    },
+    listTicketsByRole(args: {
+      role: JiraTicketQueryRole;
+      search: string;
+    }): Promise<JiraResult<JiraTicketQueryResult>> {
+      return ipcRenderer.invoke('jira:tickets:list-by-role', args);
     },
     getTicket(ticketId: string): Promise<JiraResult<JiraWireTicket>> {
       return ipcRenderer.invoke('jira:tickets:get', ticketId);

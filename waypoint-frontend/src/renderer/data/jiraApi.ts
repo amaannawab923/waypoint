@@ -29,6 +29,7 @@ import type {
   JiraConnectionStatus,
   JiraPriorityOption,
   JiraTicket,
+  JiraTicketQueryRole,
   JiraTransition,
   JiraUserOption,
 } from '@/types/jira';
@@ -528,6 +529,26 @@ export async function listMyJiraTickets(): Promise<JiraQueueRead> {
   } finally {
     listInFlight = null;
   }
+}
+
+/**
+ * One read of a single per-role tab's own queue (Assigned/Reported/
+ * Watching), each scoped to exactly the role its tab name promises rather
+ * than the union `listMyJiraTickets` reads. Deliberately NOT folded into
+ * `lastTickets`/`rememberTickets` — that cache is the All Tickets/Connection
+ * counts' source of truth today, and mixing a filtered read into it would
+ * make those counts wrong the moment anyone switched tabs. ROAD-158's own
+ * plan calls this out explicitly as its own later phase (a shared
+ * `ticketById` cache across every tab), not something to half-do here.
+ */
+export async function listRoleJiraTickets(
+  role: JiraTicketQueryRole,
+  search: string,
+): Promise<JiraQueueRead> {
+  const { tickets, truncated } = unwrap(
+    await bridge().listTicketsByRole({ role, search }),
+  );
+  return { tickets: tickets.map((item) => toTicket(item)), truncated };
 }
 
 /**

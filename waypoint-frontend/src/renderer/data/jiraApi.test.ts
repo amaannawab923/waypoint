@@ -14,6 +14,7 @@ const bridge = {
   connect: jest.fn(),
   disconnect: jest.fn(),
   listTickets: jest.fn(),
+  listTicketsByRole: jest.fn(),
   getTicket: jest.fn(),
   listTransitions: jest.fn(),
   transition: jest.fn(),
@@ -252,6 +253,74 @@ describe('listMyJiraTickets', () => {
     const { tickets } = await api.listMyJiraTickets();
 
     expect(tickets[0].updatedAt).toBe('2026-03-04T05:06:07.008Z');
+  });
+});
+
+describe('listRoleJiraTickets', () => {
+  it('sends the role and search straight through to the bridge', async () => {
+    const api = freshApi();
+    bridge.listTicketsByRole.mockResolvedValue(ticketsResult([]));
+
+    await api.listRoleJiraTickets('reporter', 'webhook');
+
+    expect(bridge.listTicketsByRole).toHaveBeenCalledWith({
+      role: 'reporter',
+      search: 'webhook',
+    });
+  });
+
+  it('maps the returned issues the same way listMyJiraTickets does', async () => {
+    const api = freshApi();
+    bridge.listTicketsByRole.mockResolvedValue(
+      ticketsResult([wireTicket({ id: '1', stateCategory: 'in-progress' })]),
+    );
+
+    const { tickets } = await api.listRoleJiraTickets('assignee', '');
+
+    expect(tickets).toMatchObject([{ id: '1', stateColor: 'var(--warning)' }]);
+  });
+
+  it('carries truncation through untouched', async () => {
+    const api = freshApi();
+    bridge.listTicketsByRole.mockResolvedValue(
+      ticketsResult([wireTicket()], 'page-cap'),
+    );
+
+    expect(await api.listRoleJiraTickets('watcher', '')).toMatchObject({
+      truncated: 'page-cap',
+    });
+  });
+
+  // A per-role read is never conflict-checked against a previous read (no
+  // `previous` is passed to toTicket) — there is no meaningful "previous"
+  // for a filtered tab that can gain and lose tickets just by someone
+  // reassigning work, unlike the one steady queue listMyJiraTickets tracks.
+  it('never reports a conflict on a per-role read', async () => {
+    const api = freshApi();
+    bridge.listTicketsByRole.mockResolvedValue(ticketsResult([wireTicket()]));
+
+    const { tickets } = await api.listRoleJiraTickets('assignee', '');
+
+    expect(tickets[0]).toMatchObject({ hasConflict: false, conflict: null });
+  });
+
+  // The whole reason this is a separate function rather than a parameter on
+  // listMyJiraTickets: a filtered tab's read must never overwrite the
+  // Connection tab's/sidebar's counts, which are meant to reflect the WHOLE
+  // queue, not whichever tab a person last switched to.
+  it("does not touch listMyJiraTickets' own cache or the derived counts", async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue(ticketsResult([wireTicket()]));
+    await api.listMyJiraTickets();
+
+    bridge.listTicketsByRole.mockResolvedValue(
+      ticketsResult([wireTicket(), wireTicket({ id: '2' })]),
+    );
+    await api.listRoleJiraTickets('watcher', '');
+
+    expect(await api.getJiraConnectionStatus()).toMatchObject({
+      issueCount: 1,
+    });
   });
 });
 

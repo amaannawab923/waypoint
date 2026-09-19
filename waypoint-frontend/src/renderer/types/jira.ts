@@ -100,6 +100,17 @@ export function isJiraCredentialFailure(err: unknown): boolean {
  * data/jiraApi.ts), so the pill has to be able to say so. */
 export type JiraTicketRole = 'assignee' | 'reporter' | 'watcher' | 'none';
 
+/**
+ * Which per-role tab's own query to run (Assigned/Reported/Watching) — not
+ * to be confused with JiraTicketRole just above. That one is "what is this
+ * ticket to me" (a per-ticket display tag, mutually inclusive, has 'none');
+ * this one is "which tab's JQL clause to build" (a query selector, exactly
+ * one at a time, no 'none' — there is no tab for "not mine at all"). Named
+ * distinctly on purpose rather than reusing JiraTicketRole for both, after
+ * the two very nearly collided under one name.
+ */
+export type JiraTicketQueryRole = 'assignee' | 'reporter' | 'watcher';
+
 export interface JiraTransitionField {
   key: string;
   label: string;

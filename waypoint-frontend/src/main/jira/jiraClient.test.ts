@@ -20,6 +20,7 @@ import {
   jqlQuoted,
   listComments,
   listMyTickets,
+  listRoleTickets,
   listPriorityOptions,
   listTransitions,
   postComment,
@@ -733,6 +734,80 @@ describe('listMyTickets', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({ ok: true, value: { truncated: false } });
     expect(result.ok && result.value.tickets).toHaveLength(2);
+  });
+});
+
+// ROAD-158: the pagination/truncation behavior itself (cursor following,
+// the page cap, the stranded-cursor case) is already covered above via
+// listMyTickets — both go through the same runTicketSearch. This suite
+// covers only what's unique to the per-role tabs: which JQL clause each
+// role sends, and how a typed search term is folded in.
+describe('listRoleTickets', () => {
+  it('refuses without a stored credential rather than calling out unauthenticated', async () => {
+    readStoredJiraCredentialMock.mockReturnValue(null);
+
+    expect(await listRoleTickets('assignee', undefined)).toMatchObject({
+      ok: false,
+      reason: 'not_connected',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['assignee', 'assignee = currentUser()'],
+    ['reporter', 'reporter = currentUser()'],
+    ['watcher', 'watcher = currentUser()'],
+  ] as const)('scopes the %s tab to its own role clause only', async (role, clause) => {
+    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+
+    await listRoleTickets(role, undefined);
+
+    const jql = new URL(call()[0]).searchParams.get('jql') ?? '';
+    expect(jql).toContain(clause);
+    expect(jql).toContain('AND resolution = Unresolved');
+    // Each tab's own role clause only — never unioned with the other two,
+    // unlike MY_WORK_JQL's combined queue. (Matches " OR " with spaces so
+    // this doesn't false-positive on "ORDER BY".)
+    expect(jql).not.toMatch(/ OR /);
+  });
+
+  it('sends no search clause at all when the search box is empty', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+
+    await listRoleTickets('assignee', undefined);
+
+    const jql = new URL(call()[0]).searchParams.get('jql') ?? '';
+    expect(jql).not.toContain('summary');
+  });
+
+  it('treats a whitespace-only search the same as no search', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+
+    await listRoleTickets('assignee', '   ');
+
+    const jql = new URL(call()[0]).searchParams.get('jql') ?? '';
+    expect(jql).not.toContain('summary');
+  });
+
+  it('folds a typed search into the query, quoted through the jqlQuoted boundary', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+
+    await listRoleTickets('reporter', 'webhook drops');
+
+    const jql = new URL(call()[0]).searchParams.get('jql') ?? '';
+    expect(jql).toContain(`summary ~ "webhook drops"`);
+  });
+
+  // The same injection concern jqlQuoted's own tests cover in isolation,
+  // proven here end to end: a search term crafted to break out of its
+  // clause must not reach the request unescaped.
+  it('quotes a search term that would otherwise break out of its clause', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+
+    await listRoleTickets('assignee', '" OR project = "SECRET');
+
+    const jql = new URL(call()[0]).searchParams.get('jql') ?? '';
+    expect(jql).toContain(`summary ~ "\\" OR project = \\"SECRET"`);
   });
 });
 

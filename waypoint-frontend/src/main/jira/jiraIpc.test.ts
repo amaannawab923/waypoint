@@ -41,6 +41,7 @@ jest.mock('./jiraAuth', () => ({
 
 const validateCredentialMock = jest.fn();
 const listMyTicketsMock = jest.fn();
+const listRoleTicketsMock = jest.fn();
 const getTicketMock = jest.fn();
 const listTransitionsMock = jest.fn();
 const transitionTicketMock = jest.fn();
@@ -62,6 +63,7 @@ jest.mock('./jiraClient', () => ({
   uploadAttachment: (...args: unknown[]) => uploadAttachmentMock(...args),
   validateCredential: (...args: unknown[]) => validateCredentialMock(...args),
   listMyTickets: (...args: unknown[]) => listMyTicketsMock(...args),
+  listRoleTickets: (...args: unknown[]) => listRoleTicketsMock(...args),
   getTicket: (...args: unknown[]) => getTicketMock(...args),
   listTransitions: (...args: unknown[]) => listTransitionsMock(...args),
   transitionTicket: (...args: unknown[]) => transitionTicketMock(...args),
@@ -1279,6 +1281,52 @@ describe('per-ticket channels', () => {
     expect(await getHandler('jira:tickets:list')({})).toEqual({
       ok: true,
       value: { tickets: [], truncated: false },
+    });
+  });
+
+  describe('jira:tickets:list-by-role', () => {
+    it('passes a valid role and the trimmed search straight to the client', async () => {
+      listRoleTicketsMock.mockResolvedValue({
+        ok: true,
+        value: { tickets: [], truncated: false },
+      });
+
+      const result = await getHandler('jira:tickets:list-by-role')({}, {
+        role: 'reporter',
+        search: '  webhook  ',
+      });
+
+      expect(result).toEqual({ ok: true, value: { tickets: [], truncated: false } });
+      expect(listRoleTicketsMock).toHaveBeenCalledWith('reporter', 'webhook');
+    });
+
+    it('treats an absent search as blank, not undefined-crashes', async () => {
+      listRoleTicketsMock.mockResolvedValue({
+        ok: true,
+        value: { tickets: [], truncated: false },
+      });
+
+      await getHandler('jira:tickets:list-by-role')({}, { role: 'assignee' });
+
+      expect(listRoleTicketsMock).toHaveBeenCalledWith('assignee', '');
+    });
+
+    // The hard security rule this channel exists to enforce: role is a
+    // closed enum, never free text passed through to the JQL builder.
+    it('refuses a role outside the closed enum instead of forwarding it', async () => {
+      const result = await getHandler('jira:tickets:list-by-role')({}, {
+        role: 'admin',
+      });
+
+      expect(result).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(listRoleTicketsMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses a missing role', async () => {
+      const result = await getHandler('jira:tickets:list-by-role')({}, {});
+
+      expect(result).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(listRoleTicketsMock).not.toHaveBeenCalled();
     });
   });
 });

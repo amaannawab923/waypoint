@@ -698,13 +698,16 @@ interface SearchResponse {
   isLast?: boolean;
 }
 
-export async function listMyTickets(): Promise<
-  JiraResult<JiraTicketQueryResult>
-> {
-  const credentialResult = requireCredential();
-  if (!credentialResult.ok) return credentialResult;
-  const credential = credentialResult.value;
-
+/**
+ * The paginated `/search/jql` crawl shared by every JQL-driven ticket list
+ * in this file (listMyTickets, listRoleTickets, and — per ROAD-158's later
+ * phases — Viewed and My past tickets too). One cursor loop, one truncation
+ * policy, so every caller's "incomplete" claim means the same thing.
+ */
+async function runTicketSearch(
+  credential: JiraCredential,
+  jql: string,
+): Promise<JiraResult<JiraTicketQueryResult>> {
   const tickets: JiraWireTicket[] = [];
   let nextPageToken: string | undefined;
   // Two flags, because one was doing two jobs that disagree in exactly the
@@ -724,7 +727,7 @@ export async function listMyTickets(): Promise<
 
   for (let page = 0; page < MAX_PAGES && hasNextPage; page += 1) {
     const query: Record<string, string> = {
-      jql: MY_WORK_JQL,
+      jql,
       fields: ISSUE_FIELDS,
       expand: SEARCH_EXPAND,
       maxResults: String(PAGE_SIZE),
@@ -806,6 +809,58 @@ export async function listMyTickets(): Promise<
   })();
 
   return { ok: true, value: { tickets, truncated } };
+}
+
+export async function listMyTickets(): Promise<
+  JiraResult<JiraTicketQueryResult>
+> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+  return runTicketSearch(credentialResult.value, MY_WORK_JQL);
+}
+
+/**
+ * The three per-role tabs (Assigned/Reported/Watching) each person's queue
+ * scoped to exactly the role its tab name promises — unlike MY_WORK_JQL,
+ * these are never unioned together, so switching tabs is switching JQL
+ * clauses, not filtering one shared list client-side.
+ */
+export type JiraTicketQueryRole = 'assignee' | 'reporter' | 'watcher';
+
+const ROLE_JQL_FIELD: Record<JiraTicketQueryRole, string> = {
+  assignee: 'assignee',
+  reporter: 'reporter',
+  watcher: 'watcher',
+};
+
+/**
+ * `search` is free text a person typed into that tab's own search box — the
+ * first renderer-typed input this file has ever folded into a JQL clause, so
+ * it goes through jqlQuoted (this file's security boundary; see its own doc
+ * comment) unconditionally. `role` never reaches here as free text: the IPC
+ * boundary in jiraIpc.ts validates it against this same closed union before
+ * this function is ever called, so ROLE_JQL_FIELD is always a safe lookup.
+ */
+function roleTicketsJql(
+  role: JiraTicketQueryRole,
+  search: string | undefined,
+): string {
+  const clauses = [
+    `${ROLE_JQL_FIELD[role]} = currentUser()`,
+    'resolution = Unresolved',
+  ];
+  const trimmed = search?.trim();
+  if (trimmed) clauses.push(`summary ~ ${jqlQuoted(trimmed)}`);
+  return `${clauses.join(' AND ')} ORDER BY updated DESC`;
+}
+
+export async function listRoleTickets(
+  role: JiraTicketQueryRole,
+  search: string | undefined,
+): Promise<JiraResult<JiraTicketQueryResult>> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+  return runTicketSearch(credentialResult.value, roleTicketsJql(role, search));
 }
 
 // -----------------------------------------------------------------------

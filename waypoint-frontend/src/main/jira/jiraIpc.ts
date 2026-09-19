@@ -68,6 +68,23 @@ function readTicketId(value: unknown): string | null {
   return /^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$/.test(id) ? id : null;
 }
 
+// ROAD-158: guards `jira:tickets:list-by-role`. A closed enum, not a free
+// string — client.roleTicketsJql looks the role up in a fixed map to build
+// its JQL clause, so a value outside this set must never reach it. This is
+// the only thing that channel takes besides free-text search, which goes
+// through jqlQuoted in the client instead.
+const TICKET_ROLES: ReadonlySet<string> = new Set<client.JiraTicketQueryRole>([
+  'assignee',
+  'reporter',
+  'watcher',
+]);
+
+function readTicketRole(value: unknown): client.JiraTicketQueryRole | null {
+  return typeof value === 'string' && TICKET_ROLES.has(value)
+    ? (value as client.JiraTicketQueryRole)
+    : null;
+}
+
 /**
  * Guards the attachment channels.
  *
@@ -535,6 +552,26 @@ export function registerJiraIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle(
     'jira:tickets:list',
     (): Promise<JiraResult<JiraTicketQueryResult>> => client.listMyTickets(),
+  );
+
+  // ROAD-158: the Assigned/Reported/Watching tabs, each scoped to exactly
+  // one role's own queue with an optional search — see roleTicketsJql's own
+  // doc comment in jiraClient.ts for why `role` is a closed enum guarded
+  // here rather than trusted as free text.
+  ipcMain.handle(
+    'jira:tickets:list-by-role',
+    (_event, args: unknown): Promise<JiraResult<JiraTicketQueryResult>> => {
+      const input = (args ?? {}) as Record<string, unknown>;
+      const role = readTicketRole(input.role);
+      if (!role) {
+        return Promise.resolve(
+          failure('invalid_input', 'Unknown ticket role.'),
+        );
+      }
+      // A blank search is legitimate — it is what the tab sends before
+      // anyone has typed anything, and it means "no search clause at all".
+      return client.listRoleTickets(role, readString(input.search));
+    },
   );
 
   // Copilot's rendered issue-key links (ROAD-157 follow-up): a key the model
