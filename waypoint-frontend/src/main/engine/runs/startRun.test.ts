@@ -121,6 +121,15 @@ function fakeLedger(seed: AgentRun[] = []) {
     updateRun: jest.fn(async (id: string, patch) => {
       const current = rows.get(id);
       if (!current) throw new Error(`no row ${id}`);
+      // The real ledger's rule (agentRuns.service.ts): a finished row is
+      // read-only — found live when reprovisionWorktree wrote to a
+      // cancelled row and died on the 409. Modelled here so a write in
+      // the wrong order can't pass these tests again.
+      if (current.status === 'failed' || current.status === 'cancelled') {
+        throw new Error(
+          `A ${current.status} run is finished; its record is read-only.`,
+        );
+      }
       const fields = { ...patch };
       delete fields.reason;
       const next = { ...current, ...fields } as AgentRun;
@@ -662,16 +671,11 @@ describe('resumeRun', () => {
     });
   }
 
-  it('is not-resumable for a live or successfully-ended status, and worktree-gone without a worktree', async () => {
+  it('is not-resumable for a live or successfully-ended status', async () => {
     const { ledger } = fakeLedger([
       run({ id: 'run-r1', status: 'running' }),
       run({ id: 'run-d1', status: 'done' }),
       run({ id: 'run-nr1', status: 'needs-review' }),
-      interrupted({ id: 'run-i2', worktreePath: null }),
-      interrupted({
-        id: 'run-i3',
-        worktreePath: path.join(worktreesDir, 'never-made'),
-      }),
     ]);
     const deps = depsWith(ledger, fakeDaemon());
     await expect(resumeRun(deps, 'run-r1')).resolves.toEqual({
@@ -686,15 +690,123 @@ describe('resumeRun', () => {
       outcome: 'not-resumable',
       status: 'needs-review',
     });
-    await expect(resumeRun(deps, 'run-i2')).resolves.toEqual({
-      outcome: 'worktree-gone',
-      status: 'interrupted',
-    });
-    await expect(resumeRun(deps, 'run-i3')).resolves.toEqual({
-      outcome: 'worktree-gone',
-      status: 'interrupted',
-    });
     expect(ledger.updateRun).not.toHaveBeenCalled();
+    expect(ledger.reopenRun).not.toHaveBeenCalled();
+  });
+
+  // ROAD-XXX: found live (the founder's own words) — a worktree missing,
+  // or never successfully made, used to end the run for good. Now it is
+  // recreated transparently: the run's own branch when it still exists,
+  // else a fresh one of the same name from baseRef.
+  it('reprovisions a missing worktree instead of refusing, reusing the run’s own branch when it still exists', async () => {
+    const { ledger, rows } = fakeLedger([
+      interrupted({ id: 'run-i2', worktreePath: null, branch: null }),
+      interrupted({
+        id: 'run-i3',
+        worktreePath: path.join(worktreesDir, 'never-made'),
+      }),
+    ]);
+    const daemon = fakeDaemon({
+      startSession: jest.fn(async () => ({ sessionId: 'sess-old' })),
+    });
+    const deps = depsWith(ledger, daemon);
+
+    // run-i2 never had a branch (died before provisionWorktree got that
+    // far) — chooseBranchName mints one, session/i2, since the daemon's
+    // own listLocalBranches ('main', 'feat/x') doesn't have it.
+    await expect(resumeRun(deps, 'run-i2')).resolves.toEqual({
+      outcome: 'loaded',
+      status: 'running',
+      worktreeRecreated: true,
+      branchReused: false,
+    });
+    expect(daemon.createWorktree).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: 'run-i2',
+        branch: 'session/i2',
+        baseRef: 'main',
+        path: path.join(worktreesDir, 'run-i2'),
+      }),
+    );
+    // The recreated worktree's fields land on the row — but only after
+    // reopenRun, the row being read-only until then (the fake ledger
+    // above refuses the write on a terminal row, as the real one does).
+    // (The branch recorded is the daemon's own answer, not the requested
+    // name — fakeDaemon's record says session/new0001 — the same
+    // "daemon is authoritative" rule provisionWorktree keeps.)
+    expect(ledger.updateRun).toHaveBeenCalledWith(
+      'run-i2',
+      expect.objectContaining({
+        worktreePath: path.join(worktreesDir, 'run-i2'),
+        baseRef: 'main',
+        daemonWorkspaceId: 'run-i2',
+      }),
+    );
+    expect(rows.get('run-i2')).toMatchObject({
+      status: 'running',
+      worktreePath: path.join(worktreesDir, 'run-i2'),
+    });
+
+    // run-i3 already has a branch (session/i1, from the interrupted()
+    // fixture) that the daemon's listLocalBranches doesn't know about —
+    // still reused as the target name; whether it's genuinely reused or
+    // freshly cut from baseRef is the daemon's own git-level call, not
+    // Waypoint's (branchReused here reflects only what Waypoint could see
+    // from listLocalBranches).
+    await expect(resumeRun(deps, 'run-i3')).resolves.toEqual({
+      outcome: 'loaded',
+      status: 'running',
+      worktreeRecreated: true,
+      branchReused: false,
+    });
+    expect(daemon.createWorktree).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: 'run-i3',
+        branch: 'session/i1',
+        path: path.join(worktreesDir, 'run-i3'),
+      }),
+    );
+  });
+
+  it('still refuses — worktree-gone — when there is no linked repository to reprovision from', async () => {
+    const { ledger } = fakeLedger([
+      interrupted({
+        id: 'run-i4',
+        worktreePath: null,
+        projectId: 'proj-nolink',
+      }),
+      interrupted({
+        id: 'run-i5',
+        worktreePath: null,
+        projectId: 'proj-ghost',
+      }),
+    ]);
+    const deps = depsWith(ledger, fakeDaemon());
+    // proj-nolink: a real project, but nothing is linked (repoPath: null).
+    await expect(resumeRun(deps, 'run-i4')).resolves.toEqual({
+      outcome: 'worktree-gone',
+      status: 'interrupted',
+    });
+    // proj-ghost: not a project getProject knows at all.
+    await expect(resumeRun(deps, 'run-i5')).resolves.toEqual({
+      outcome: 'worktree-gone',
+      status: 'interrupted',
+    });
+    expect(ledger.reopenRun).not.toHaveBeenCalled();
+  });
+
+  it('worktree-gone when reprovisioning itself fails', async () => {
+    const { ledger } = fakeLedger([interrupted({ worktreePath: null })]);
+    const daemon = fakeDaemon({
+      createWorktree: jest.fn(async () => {
+        throw new Error('daemon: repository unreachable');
+      }),
+    });
+    const deps = depsWith(ledger, daemon);
+    await expect(resumeRun(deps, 'run-i1')).resolves.toEqual({
+      outcome: 'worktree-gone',
+      status: 'interrupted',
+    });
     expect(ledger.reopenRun).not.toHaveBeenCalled();
   });
 
@@ -756,7 +868,14 @@ describe('resumeRun', () => {
     expect(daemon.startSession).not.toHaveBeenCalled();
   });
 
-  it('checks the worktree gitdir BEFORE starting the session, not only inside the fire-and-forget resume note', async () => {
+  // ROAD-XXX: a gitdir check that fails no longer refuses outright — it
+  // reprovisions instead (found live: a worktree that fails this check is
+  // exactly as unusable as one that's outright missing, and deserves the
+  // same recovery). What this test still pins: the check runs BEFORE
+  // `daemon.startSession`, gating what cwd that call actually receives —
+  // not only reached later, inside the fire-and-forget resume note, once
+  // the (wrong) session has already started.
+  it('checks the worktree gitdir BEFORE starting the session — a failure reprovisions rather than handing the daemon the untrusted cwd', async () => {
     const { ledger } = fakeLedger([interrupted({ status: 'failed' })]);
     const daemon = fakeDaemon({
       startSession: jest.fn(async () => ({ sessionId: 'sess-old' })),
@@ -767,11 +886,23 @@ describe('resumeRun', () => {
     const deps = depsWith(ledger, daemon, { assertWorktreeGitDir });
 
     await expect(resumeRun(deps, 'run-i1')).resolves.toEqual({
-      outcome: 'worktree-gone',
-      status: 'failed',
+      outcome: 'loaded',
+      status: 'running',
+      worktreeRecreated: true,
+      branchReused: false,
     });
-    expect(daemon.startSession).not.toHaveBeenCalled();
-    expect(ledger.reopenRun).not.toHaveBeenCalled();
+    expect(assertWorktreeGitDir).toHaveBeenCalledWith(
+      path.join(worktreesDir, 'run-i1'),
+    );
+    // createWorktree ran, and startSession only after it — the reprovision
+    // this check triggered, not a straight pass-through of the untrusted
+    // cwd once the check had already failed.
+    expect(daemon.createWorktree).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: 'run-i1' }),
+    );
+    expect(daemon.createWorktree.mock.invocationCallOrder[0]).toBeLessThan(
+      daemon.startSession.mock.invocationCallOrder[0],
+    );
   });
 
   it('refuses a worktree path outside worktreesDir', async () => {

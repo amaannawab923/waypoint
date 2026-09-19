@@ -85,6 +85,12 @@ async function sendRunPromptLocked(
     outcome: 'resumed-and-sent',
     status: 'running',
     resume: resumed.outcome,
+    ...(resumed.worktreeRecreated
+      ? {
+          worktreeRecreated: true,
+          branchReused: resumed.branchReused,
+        }
+      : {}),
   };
 }
 

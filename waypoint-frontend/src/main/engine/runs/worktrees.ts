@@ -78,7 +78,7 @@ export interface WorktreeDeps {
   };
 }
 
-const DEFAULT_BASE_REF = 'main';
+export const DEFAULT_BASE_REF = 'main';
 
 /** `run-abc1234` → `abc1234`: the part after the prefix, as ids.ts mints it. */
 export function shortRunId(runId: string): string {
@@ -414,4 +414,128 @@ export async function assertUnder(
   throw new Error(
     `The daemon placed the worktree at ${candidate}, outside ${root}. Refusing to use it.`,
   );
+}
+
+export interface ReprovisionedWorktree extends ProvisionedWorktree {
+  /**
+   * Whether `run.branch` already existed in the repository and was
+   * checked out as-is (its commits intact) — false when it (or the run
+   * never having one at all) meant a fresh branch of the same name was
+   * cut from `baseRef` instead, the only distinction `buildResumeNote`
+   * needs to tell the agent (and the person) how much of the run's prior
+   * state actually survived.
+   */
+  branchReused: boolean;
+}
+
+/**
+ * `provisionWorktree`, run again for a run whose worktree is no longer
+ * usable — gone from disk, or never successfully created in the first
+ * place (a run that died during its own provisioning). ROAD-XXX: found in
+ * live use (the founder's own words) — a resumable run whose worktree
+ * had been removed was refused forever instead of just being given a new
+ * one, "which should be absolutely impossible for any text field to be
+ * disabled." Mirrors emdash's own `replayWorktreeCreation`
+ * (apps/emdash-desktop/src/core/features/tasks/api/node/task-service.ts):
+ * reuse the run's own branch if it still exists (its commits intact, only
+ * the checkout was missing), else cut a fresh branch of that same name
+ * from `baseRef` — the same choice `createWorktree`'s own daemon-side
+ * pipeline already makes for `git worktree add` internally; Waypoint's
+ * job here is only deciding *which* branch name to ask for, the same
+ * split of responsibility `provisionWorktree` above already keeps.
+ *
+ * Unlike `provisionWorktree`, this never mints a NEW branch name via
+ * `chooseBranchName` when the run already has one (`run.branch`) — a
+ * resume that renamed the branch out from under an existing PR or a
+ * person's own `git checkout` of it would be a worse surprise than
+ * reusing the name and letting the daemon's own branch-exists check do
+ * the right thing. `chooseBranchName` only applies to the one case where
+ * there truly is no name to preserve: a run that died before
+ * `provisionWorktree` ever got far enough to choose one at all.
+ *
+ * Unlike `provisionWorktree`, this does NOT write the run's fields
+ * (`worktreePath`/`branch`/`baseRef`/`daemonWorkspaceId`) itself: it runs
+ * on a dead row — interrupted/failed/cancelled, the two latter terminal —
+ * and the ledger refuses every patch to a terminal row ("its record is
+ * read-only", found live: the very first live resume of a deleted
+ * worktree recreated it on disk, then died right here on a 409). The
+ * caller (`resumeRunCore`) writes them once `reopenRun` has made the row
+ * `provisioning` again — safe under the write-once guard either way: a
+ * worktree that already had these recorded gets the identical,
+ * deterministic values back (same path, same daemon record id), and a
+ * run that never had them gets its first write. The `worktree_created`
+ * event IS written here, at the moment the recreation physically
+ * happened — events append fine on a terminal row.
+ */
+export async function reprovisionWorktree(
+  deps: WorktreeDeps,
+  run: Pick<AgentRun, 'id' | 'entry' | 'branch' | 'baseRef'>,
+  repoPath: string,
+): Promise<ReprovisionedWorktree> {
+  assertRunId(run.id);
+  const baseRef = run.baseRef ?? DEFAULT_BASE_REF;
+  if (!baseRef.split('/').every(isRefSafeComponent)) {
+    throw new Error(`Not a usable base ref: ${JSON.stringify(baseRef)}`);
+  }
+  const repositoryId = repositoryRecordId(repoPath);
+  const requestedPath = worktreePathFor(deps.worktreesDir, run.id);
+
+  const repository = await deps.daemon.registerRepository(
+    repositoryId,
+    repoPath,
+  );
+  await deps.daemon.disableArtifactCopy(repository.id);
+  const existingBranches = await deps.daemon.listLocalBranches(repository.path);
+  const branch =
+    run.branch && isRefSafeComponent(run.branch)
+      ? run.branch
+      : chooseBranchName(run, null, existingBranches);
+  const branchReused = existingBranches.includes(branch);
+  deps.logger.info('engine: reprovisioning run worktree', {
+    runId: run.id,
+    branch,
+    baseRef,
+    branchReused,
+    path: requestedPath,
+  });
+
+  // A daemon record from before the worktree went missing — deleted
+  // outside Waypoint (`git worktree remove`, a disk cleanup), or one the
+  // daemon itself still holds for a directory that is not there any more
+  // — would make `createWorktree` see this workspaceId as already
+  // claimed under a spec that may no longer match
+  // (`createWorktreeWithFallback`'s own precedent above:
+  // "immutable-field-mismatch, not a retry"). Clearing it first is safe
+  // either way — `releaseWorktree`'s own rule is that a worktree already
+  // gone is success, not a failure to react to.
+  await deps.daemon
+    .deleteWorktree(run.id, { deleteBranch: false })
+    .catch(() => {});
+
+  const record = await deps.daemon.createWorktree({
+    workspaceId: run.id,
+    repositoryId: repository.id,
+    branch,
+    baseRef,
+    path: requestedPath,
+  });
+  await assertUnder(record.path, deps.worktreesDir);
+
+  const provisioned: ReprovisionedWorktree = {
+    worktreePath: record.path,
+    branch: record.creation?.branch ?? branch,
+    baseRef,
+    daemonWorkspaceId: record.id,
+    repositoryId: repository.id,
+    branchReused,
+  };
+  await deps.ledger.appendEvent(run.id, 'worktree_created', {
+    path: provisioned.worktreePath,
+    branch: provisioned.branch,
+    baseRef,
+    repositoryId: repository.id,
+    reprovisioned: true,
+    branchReused,
+  });
+  return provisioned;
 }

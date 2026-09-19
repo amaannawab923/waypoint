@@ -23,7 +23,14 @@ import type { AgentRun } from '@/types/agentRuns';
 import { useHomeDir } from '@/lib/useHomeDir';
 import { AutoMark, IntentChip, ProviderChip, VerdictChip } from './SessionRow';
 import { SessionStatusPill } from './SessionStatusPill';
-import { providerView, runTitle, runWhere, statusView } from './sessionStatus';
+import {
+  providerView,
+  runTitle,
+  runWhere,
+  statusView,
+  worktreeGoneNotice,
+  worktreeRecreatedNotice,
+} from './sessionStatus';
 import { SessionTranscript } from './SessionTranscript';
 import { DiffPane } from './DiffPane';
 
@@ -97,6 +104,12 @@ export function SessionDetail({
     setResuming(true);
     try {
       const result = await resumeRun(run.id);
+      // ROAD-XXX: a missing worktree is recreated by main rather than
+      // refused; the person hears about it, before the conversation
+      // note when both apply — files on disk are the bigger discontinuity.
+      if (result.worktreeRecreated) {
+        showErrorToast(worktreeRecreatedNotice(result.branchReused === true));
+      }
       switch (result.outcome) {
         case 'loaded':
           patchSessionRun(run.id, { status: 'running' });
@@ -109,11 +122,7 @@ export function SessionDetail({
           );
           break;
         case 'worktree-gone':
-          showErrorToast(
-            run.isolation === 'directory'
-              ? 'This run’s folder is no longer on disk; there is nothing to resume in.'
-              : 'This run’s worktree is no longer on disk; there is nothing to resume on.',
-          );
+          showErrorToast(worktreeGoneNotice(run.isolation));
           break;
         case 'not-resumable':
           showErrorToast(

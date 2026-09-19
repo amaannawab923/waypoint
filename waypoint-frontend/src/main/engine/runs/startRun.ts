@@ -21,8 +21,10 @@ import {
 } from './ledgerClient';
 import {
   assertUnder,
+  DEFAULT_BASE_REF,
   isRefSafeComponent,
   provisionWorktree,
+  reprovisionWorktree,
 } from './worktrees';
 
 /**
@@ -234,6 +236,36 @@ export async function listRunBranches(
     branches[0] ||
     null;
   return { branches, suggested };
+}
+
+/**
+ * Whether `cwd` is still a genuine, present linked worktree under
+ * `worktreesDir` — the three checks `resumeRunCore` used to apply
+ * unconditionally before refusing a resume outright; now the gate for
+ * whether it needs `reprovisionWorktree` (ROAD-XXX) instead.
+ *
+ * `assertUnder` is deliberately NOT one of the checks folded into this
+ * boolean and left to throw straight out of `resumeRunCore`: a worktree
+ * gone, or never made, is ordinary and worth healing transparently, but a
+ * ledger row naming a place outside `worktreesDir` at all is a row
+ * someone edited (or a bug), not a cwd Waypoint provisioned — reprovision
+ * always targets the run's own correct, in-bounds path regardless, so
+ * silently "healing" this case would quietly paper over exactly the
+ * tampering `assertUnder` exists to catch instead of surfacing it.
+ */
+async function isUsableWorktree(
+  deps: Pick<StartRunDeps, 'assertWorktreeGitDir'>,
+  cwd: string,
+): Promise<boolean> {
+  const linked = await deps.assertWorktreeGitDir(cwd).then(
+    () => true,
+    () => false,
+  );
+  if (!linked) return false;
+  return fs
+    .stat(cwd)
+    .then((s) => s.isDirectory())
+    .catch(() => false);
 }
 
 /** True while nobody has moved the run off `provisioning` (a Stop would). */
@@ -512,6 +544,44 @@ function firstLines(text: string, max: number): string {
   return `${lines.slice(0, max).join('\n')}\n… (${lines.length - max} more)`;
 }
 
+/** Whether the run's worktree had to be recreated for this resume (ROAD-XXX), and how much of its prior state survived. */
+export interface ResumeWorktreeState {
+  recreated: boolean;
+  /** recreated only: the run's own branch still existed and was reused, vs. a fresh branch of the same name from baseRef. Meaningless when `recreated` is false. */
+  branchReused: boolean;
+}
+
+const WORKTREE_INTACT: ResumeWorktreeState = {
+  recreated: false,
+  branchReused: true,
+};
+
+/** The note's first sentence: the one thing about this resume the agent most needs to hear. */
+function resumeOpening(
+  providerSessionId: string | null,
+  worktree: ResumeWorktreeState,
+): string {
+  // A recreated worktree (this run's own checkout was gone, or never
+  // successfully made) takes priority over the conversation framings
+  // below — it is the more consequential discontinuity (files on disk,
+  // not just the provider's own memory of the conversation), and worth
+  // naming plainly rather than folding into the ordinary "fresh session"
+  // note.
+  if (worktree.recreated) {
+    return worktree.branchReused
+      ? 'Waypoint resumed this run, but its worktree had been removed since it last ran (or was never successfully made); it was recreated by checking out the same branch again, so your committed work is intact. Only UNCOMMITTED changes from before are gone. Here is where things stand now.'
+      : 'Waypoint resumed this run, but its worktree — and the branch itself — were both gone; Waypoint could not recover your prior state, so this is a fresh branch from the base, in a new worktree. Here is where things stand now.';
+  }
+  // ROAD-XXX: a run that died before any session ever started (queued or
+  // provisioning straight to failed, say) has never had a "previous
+  // conversation" to fail to restore — this is its first session, not a
+  // fresh one replacing a lost one.
+  if (providerSessionId === null) {
+    return 'Waypoint resumed this run; it never had a session running before, so this is its first one, in the worktree as it stands. Here is where things stand.';
+  }
+  return 'Waypoint resumed this run after an interruption, but your previous conversation could not be restored, so this is a fresh session in the same worktree. Here is where things stand.';
+}
+
 /**
  * What a fresh session is told about the worktree it woke up in: the
  * branch, the commits on it since the base, the uncommitted changes.
@@ -524,6 +594,7 @@ export async function buildResumeNote(
     AgentRun,
     'worktreePath' | 'branch' | 'baseRef' | 'providerSessionId'
   >,
+  worktree: ResumeWorktreeState = WORKTREE_INTACT,
 ): Promise<string> {
   const cwd = run.worktreePath;
   if (!cwd) throw new Error('This run has no worktree.');
@@ -550,14 +621,7 @@ export async function buildResumeNote(
   const commits = log.code === 0 ? firstLines(log.stdout, NOTE_MAX_LINES) : '';
   const changes =
     status.code === 0 ? firstLines(status.stdout, NOTE_MAX_LINES) : '';
-  // ROAD-XXX: a run that died before any session ever started (queued or
-  // provisioning straight to failed, say) has never had a "previous
-  // conversation" to fail to restore — this is its first session, not a
-  // fresh one replacing a lost one.
-  const opening =
-    run.providerSessionId === null
-      ? 'Waypoint resumed this run; it never had a session running before, so this is its first one, in the worktree as it stands. Here is where things stand.'
-      : 'Waypoint resumed this run after an interruption, but your previous conversation could not be restored, so this is a fresh session in the same worktree. Here is where things stand.';
+  const opening = resumeOpening(run.providerSessionId, worktree);
   return [
     opening,
     '',
@@ -576,8 +640,15 @@ async function sendResumeNote(
   deps: StartRunDeps,
   daemon: DaemonRunsApi,
   run: AgentRun,
+  /** The cwd/branch actually used for this resume — may differ from `run`'s own (stale, possibly null) fields when the worktree was just recreated. */
+  resumed: { cwd: string; branch: string | null },
+  worktree: ResumeWorktreeState,
 ): Promise<void> {
-  const note = await buildResumeNote(deps, run);
+  const note = await buildResumeNote(
+    deps,
+    { ...run, worktreePath: resumed.cwd, branch: resumed.branch },
+    worktree,
+  );
   await daemon.sendPrompt(run.id, note);
   await deps.ledger.appendEvent(run.id, 'prompt_sent', {
     by: 'waypoint',
@@ -625,37 +696,76 @@ export async function resumeRunCore(
     return { outcome: 'not-resumable', status: run.status };
   }
   const originalStatus = run.status;
-  const cwd = run.cwd ?? run.worktreePath;
-  if (!cwd) {
-    return { outcome: 'worktree-gone', status: run.status };
-  }
-  // A worktree run's cwd must be under worktreesDir — the same rule every
-  // other main-side use of the path applies: a row naming a place outside
-  // it is a row someone edited, not a cwd to hand an agent. A direct
-  // run's cwd is the folder the person picked; it only has to exist.
-  if (run.isolation !== 'directory') {
-    await assertUnder(cwd, deps.worktreesDir);
-    // Proves the worktree is still a genuine linked worktree of a
-    // legitimate gitdir before handing it to the agent — moved here (was
-    // previously only reached inside buildResumeNote, after the session
-    // had already started) so a poisoned or pruned worktree is caught
-    // before spawn, not after. A worktree that sat untouched since this
-    // run died deserves the same scrutiny as one just created.
-    const linked = await deps.assertWorktreeGitDir(cwd).then(
-      () => true,
-      () => false,
-    );
-    if (!linked) return { outcome: 'worktree-gone', status: run.status };
-  }
-  const present = await fs
-    .stat(cwd)
-    .then((s) => s.isDirectory())
-    .catch(() => false);
-  if (!present) {
-    return { outcome: 'worktree-gone', status: run.status };
-  }
   const daemon = deps.daemon();
   if (!daemon) throw new Error(ENGINE_NOT_RUNNING);
+
+  let cwd = run.cwd ?? run.worktreePath;
+  let { branch } = run;
+  let worktreeRecreated = false;
+  let branchReused = true;
+  if (run.isolation === 'directory') {
+    // A hand-picked folder, not a Waypoint-managed worktree — there is no
+    // branch or repo to recreate it from, so this stays a plain existence
+    // check, same as before.
+    const present =
+      cwd !== null &&
+      (await fs
+        .stat(cwd)
+        .then((s) => s.isDirectory())
+        .catch(() => false));
+    if (!present) return { outcome: 'worktree-gone', status: run.status };
+  } else {
+    // A row naming a place outside worktreesDir at all is a row someone
+    // edited (or a bug) — this throws straight out, not folded into the
+    // reprovision path below (isUsableWorktree's own doc comment).
+    if (cwd !== null) await assertUnder(cwd, deps.worktreesDir);
+    const usable = cwd !== null && (await isUsableWorktree(deps, cwd));
+    if (!usable) {
+      // ROAD-XXX: gone from disk (`git worktree remove`, a cleanup) or
+      // never successfully made at all (the run died during its own
+      // provisioning) used to end the run here for good — "a text field
+      // disabled forever" was the exact complaint. Mirrors emdash's own
+      // `replayWorktreeCreation`: recreate it, on the run's own branch
+      // when that still exists (history intact), else a fresh branch of
+      // the same name from baseRef — and say so honestly in the resume
+      // note below, rather than silently pretending nothing happened.
+      const project = run.projectId
+        ? await deps.ledger.getProject(run.projectId)
+        : null;
+      if (!project?.repoPath) {
+        return { outcome: 'worktree-gone', status: run.status };
+      }
+      try {
+        const reprovisioned = await reprovisionWorktree(
+          {
+            daemon,
+            ledger: deps.ledger,
+            worktreesDir: deps.worktreesDir,
+            logger: deps.logger,
+          },
+          run,
+          project.repoPath,
+        );
+        cwd = reprovisioned.worktreePath;
+        branch = reprovisioned.branch;
+        branchReused = reprovisioned.branchReused;
+        worktreeRecreated = true;
+      } catch (error) {
+        deps.logger.warn(
+          'engine: could not recreate the run worktree for resume',
+          { runId: run.id, message: describe(error) },
+        );
+        return { outcome: 'worktree-gone', status: run.status };
+      }
+    }
+  }
+  if (!cwd) {
+    // Unreachable in practice — every path above either returns
+    // worktree-gone or leaves cwd a real string (an existing, present
+    // directory, or reprovisionWorktree's fresh one) — closing the type
+    // gap for daemon.startSession's cwd below.
+    return { outcome: 'worktree-gone', status: run.status };
+  }
 
   const { run: provisioning } = await deps.ledger.reopenRun(
     run.id,
@@ -676,6 +786,21 @@ export async function resumeRunCore(
       { runId: run.id, status: current?.status },
     );
     return { outcome: 'not-resumable', status: current?.status ?? 'cancelled' };
+  }
+
+  if (worktreeRecreated) {
+    // The fields reprovisionWorktree deliberately leaves for the caller
+    // (its own doc comment): only now, past reopenRun, is the row no
+    // longer terminal and so writable at all. Same values as a fresh
+    // provisionWorktree would write, and identical to what a
+    // previously-recorded worktree already carries, so the write-once
+    // guard is satisfied in every case.
+    await deps.ledger.updateRun(run.id, {
+      worktreePath: cwd,
+      branch,
+      baseRef: run.baseRef ?? DEFAULT_BASE_REF,
+      daemonWorkspaceId: run.id,
+    });
   }
 
   let sessionId: string;
@@ -730,21 +855,42 @@ export async function resumeRunCore(
     from: originalStatus,
     providerSessionId: sessionId,
     previousProviderSessionId: run.providerSessionId,
+    ...(worktreeRecreated ? { worktreeRecreated, branchReused } : {}),
   });
   deps.notify({ runId: run.id, status: running.status });
-  deps.logger.info('engine: run resumed', { runId: run.id, outcome, trigger });
+  deps.logger.info('engine: run resumed', {
+    runId: run.id,
+    outcome,
+    trigger,
+    worktreeRecreated,
+  });
 
-  if (!loaded) {
+  // A recreated worktree needs the note even when the provider's own
+  // session was `loaded` — the agent's memory of the conversation may be
+  // intact while the files it remembers touching are not, which is its
+  // own kind of confusion the ordinary "loaded fine" silence doesn't
+  // cover.
+  if (!loaded || worktreeRecreated) {
     // Fire and forget: the note is the fresh session's first turn, and a
     // turn is not something a resume waits on. Its failure is logged.
-    void sendResumeNote(deps, daemon, run).catch((error: unknown) =>
+    void sendResumeNote(
+      deps,
+      daemon,
+      run,
+      { cwd, branch },
+      { recreated: worktreeRecreated, branchReused },
+    ).catch((error: unknown) =>
       deps.logger.warn('engine: resume note was not delivered', {
         runId: run.id,
         message: describe(error),
       }),
     );
   }
-  return { outcome, status: running.status };
+  return {
+    outcome,
+    status: running.status,
+    ...(worktreeRecreated ? { worktreeRecreated, branchReused } : {}),
+  };
 }
 
 /** The explicit "Resume" action (SessionDetail's button). */

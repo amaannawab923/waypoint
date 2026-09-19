@@ -71,6 +71,16 @@ function deadRun(overrides: Partial<AgentRun> = {}): AgentRun {
 function fakeLedger(seed: AgentRun[] = []) {
   const rows = new Map(seed.map((r) => [r.id, r]));
   const ledger = {
+    // A missing worktree's reprovision path (resumeRunCore, ROAD-XXX)
+    // reads the run's project for a repoPath to recreate from — proj-1
+    // has one (so a missing worktree recovers); proj-nolink does not (so
+    // it still genuinely refuses).
+    getProject: jest.fn(async (id: string) => {
+      if (id === 'proj-1')
+        return { id, name: 'Waypoint', repoPath: worktreesDir };
+      if (id === 'proj-nolink') return { id, name: 'Docs', repoPath: null };
+      return null;
+    }),
     getRun: jest.fn(async (id: string) => rows.get(id) ?? null),
     updateRun: jest.fn(async (id: string, patch) => {
       const current = rows.get(id);
@@ -100,6 +110,33 @@ function fakeDaemon(
   return {
     startSession: jest.fn(async () => ({ sessionId: 'sess-old' })),
     sendPrompt: jest.fn(async () => {}),
+    // Only exercised by a resume that needs to reprovision a missing
+    // worktree (ROAD-XXX) — a plain, present worktree never reaches these.
+    registerRepository: jest.fn(async (id: string, p: string) => ({
+      id,
+      kind: 'repository' as const,
+      path: p,
+      parentId: null,
+      observedStatus: 'present' as const,
+      creation: null,
+      lastCreateOutcome: null,
+    })),
+    disableArtifactCopy: jest.fn(async () => {}),
+    listLocalBranches: jest.fn(async () => ['main']),
+    deleteWorktree: jest.fn(async () => {}),
+    createWorktree: jest.fn(async (req: { workspaceId: string }) => ({
+      id: req.workspaceId,
+      kind: 'worktree' as const,
+      path: path.join(worktreesDir, req.workspaceId),
+      parentId: 'repo-1',
+      observedStatus: 'present' as const,
+      creation: {
+        branch: 'session/abc1234',
+        baseRef: 'main',
+        requestedPath: '',
+      },
+      lastCreateOutcome: { status: 'succeeded' as const, at: 1 },
+    })),
     ...overrides,
   } as unknown as jest.Mocked<DaemonRunsApi>;
 }
@@ -211,9 +248,12 @@ describe('sendRunPrompt', () => {
   });
 
   it('worktree-gone: the message is NOT sent, and no reopen is attempted past the pre-flight', async () => {
+    // proj-nolink has no repoPath (fakeLedger's getProject) — nothing to
+    // reprovision from, so this stays a genuine refusal (ROAD-XXX).
     const { ledger } = fakeLedger([
       run({
         status: 'failed',
+        projectId: 'proj-nolink',
         worktreePath: path.join(worktreesDir, 'never-made'),
       }),
     ]);
@@ -225,6 +265,35 @@ describe('sendRunPrompt', () => {
     ).resolves.toEqual({ outcome: 'worktree-gone', status: 'failed' });
     expect(daemon.sendPrompt).not.toHaveBeenCalled();
     expect(daemon.startSession).not.toHaveBeenCalled();
+  });
+
+  // ROAD-XXX: a missing worktree with a real repo to recreate from
+  // reprovisions and still delivers the message — the founder's own
+  // complaint about the old behavior, exercised through sendRunPrompt.
+  it('reprovisions a missing worktree, then sends — resumed-and-sent, not worktree-gone', async () => {
+    const { ledger } = fakeLedger([
+      run({
+        status: 'failed',
+        worktreePath: path.join(worktreesDir, 'never-made'),
+      }),
+    ]);
+    const daemon = fakeDaemon();
+    const deps = depsWith(ledger, daemon);
+
+    await expect(
+      sendRunPrompt(deps, { runId: 'run-abc1234', text: 'still there?' }),
+    ).resolves.toEqual({
+      outcome: 'resumed-and-sent',
+      status: 'running',
+      resume: 'loaded',
+      worktreeRecreated: true,
+      branchReused: false,
+    });
+    expect(daemon.createWorktree).toHaveBeenCalled();
+    expect(daemon.sendPrompt).toHaveBeenCalledWith(
+      'run-abc1234',
+      'still there?',
+    );
   });
 
   it('done and needs-review: not-resumable, message NOT sent', async () => {

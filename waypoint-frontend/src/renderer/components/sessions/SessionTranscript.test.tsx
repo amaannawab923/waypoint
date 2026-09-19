@@ -235,7 +235,11 @@ describe('SessionTranscript — resume on message', () => {
     },
   );
 
-  it('a resumable run with no worktree left disables the composer with an honest reason, distinct from "ended"', () => {
+  // ROAD-XXX, found live: a run that died before a worktree was ever
+  // recorded used to disable the box forever ("no worktree left to resume
+  // on"). Main recreates the worktree on send now, so the box stays open —
+  // whether a resume can land is main's call, not a guess made here.
+  it('a resumable run with no worktree recorded still has an open composer — main recreates it on send', () => {
     const cleanup = withComposerSlot();
     mockUseSessionTranscript.mockReturnValue(
       hookState({ historyStatus: { kind: 'ready' }, turnCount: 0 }),
@@ -247,10 +251,10 @@ describe('SessionTranscript — resume on message', () => {
     );
 
     const box = screen.getByLabelText('Message this session');
-    expect(box).toBeDisabled();
+    expect(box).not.toBeDisabled();
     expect(box).toHaveAttribute(
       'placeholder',
-      'This run has no worktree left to resume on.',
+      'Sending will resume this session in the same worktree…',
     );
     cleanup();
   });

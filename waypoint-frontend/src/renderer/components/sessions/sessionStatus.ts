@@ -236,6 +236,29 @@ export function runWhere(
   return null;
 }
 
+/**
+ * What to tell the person when a resume had to recreate the run's
+ * worktree (ROAD-XXX) — one sentence, shared by the composer's send and
+ * the Resume button so the two can't drift. `branchReused` is the only
+ * distinction that changes what actually survived.
+ */
+export function worktreeRecreatedNotice(branchReused: boolean): string {
+  return branchReused
+    ? "This run's worktree had been removed; Waypoint recreated it from its branch. Committed work is intact, but any uncommitted changes from before are gone."
+    : "This run's worktree and its branch were both gone; Waypoint recreated a fresh branch from the base. Prior work on this run could not be recovered.";
+}
+
+/**
+ * The toast for a resume that could not recreate a missing worktree at
+ * all (ROAD-XXX) — recreation is attempted first, so this is no longer
+ * "nothing to resume", it is "the attempt itself failed".
+ */
+export function worktreeGoneNotice(isolation: AgentRun['isolation']): string {
+  return isolation === 'directory'
+    ? "This run's folder is no longer on disk, and a plain folder can't be recreated; there is nothing to resume in."
+    : "Waypoint could not recreate this run's worktree — its repository may be gone or unreachable.";
+}
+
 /** What a dispatched run was asked to do, as the chip says it (W5a). */
 export function intentView(
   run: Pick<AgentRun, 'intent' | 'modeId' | 'autoApprove' | 'entry'>,

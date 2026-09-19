@@ -825,13 +825,24 @@ export type ResumeRunOutcome =
    * failure does.
    */
   | 'not-resumable'
-  /** The run's worktree is no longer on disk; there is nothing to resume on. */
+  /**
+   * A directory-isolation run whose folder is gone (nothing to recreate
+   * it from), or a worktree run whose repository itself could not be
+   * resolved or whose recreation attempt failed (ROAD-XXX:
+   * `reprovisionWorktree`) — a worktree merely missing or never made is
+   * NOT this outcome any more; that is recreated transparently instead
+   * (see `worktreeRecreated` on the result).
+   */
   | 'worktree-gone';
 
 export interface ResumeRunResult {
   outcome: ResumeRunOutcome;
   /** The ledger's status after the action. */
   status: string;
+  /** loaded/replaced-by-new only: the run's worktree was gone (or never made) and had to be recreated (ROAD-XXX). */
+  worktreeRecreated?: boolean;
+  /** worktreeRecreated only: the run's own branch still existed and was reused (commits intact) vs. a fresh branch of the same name cut from baseRef. */
+  branchReused?: boolean;
 }
 
 export type SendPromptOutcome =
@@ -839,7 +850,7 @@ export type SendPromptOutcome =
   | 'sent'
   /** The run was dead; revived, then the message was handed to the daemon. */
   | 'resumed-and-sent'
-  /** The run has no worktree/folder left to resume on; the message was NOT sent. */
+  /** Nothing could be resumed into — a missing folder (directory isolation) or a worktree recreation that itself failed (ROAD-XXX); the message was NOT sent. */
   | 'worktree-gone'
   /** done/needs-review, or a reopenRun refusal; the message was NOT sent. */
   | 'not-resumable'
@@ -852,6 +863,10 @@ export interface SendRunPromptResult {
   status: string;
   /** resumed-and-sent only: whether the provider restored the prior conversation. */
   resume?: ResumeRunOutcome;
+  /** resumed-and-sent only: the run's worktree was gone (or never made) and had to be recreated (ROAD-XXX). */
+  worktreeRecreated?: boolean;
+  /** worktreeRecreated only: whether the run's own branch was reused (commits intact) vs. a fresh one cut from baseRef. */
+  branchReused?: boolean;
 }
 
 export interface RunBranches {

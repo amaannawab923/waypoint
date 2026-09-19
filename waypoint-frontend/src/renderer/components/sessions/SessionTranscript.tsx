@@ -10,7 +10,13 @@ import { showErrorToast } from '@/lib/toast';
 import type { AgentRun, SendRunPromptResult } from '@/types/agentRuns';
 import { PermissionBand } from './PermissionBand';
 import { clearSessionDraft, SessionComposer } from './SessionComposer';
-import { intentView, runTitle, statusView } from './sessionStatus';
+import {
+  intentView,
+  runTitle,
+  statusView,
+  worktreeGoneNotice,
+  worktreeRecreatedNotice,
+} from './sessionStatus';
 import { UsageStrip } from './UsageStrip';
 import { useSessionTranscript } from './useSessionTranscript';
 
@@ -25,9 +31,7 @@ function messageForUndeliveredSend(
   run: AgentRun,
 ): string {
   if (result.outcome === 'worktree-gone') {
-    return run.isolation === 'directory'
-      ? "This run's folder is no longer on disk; there was nothing to resume, and your message was not sent."
-      : "This run's worktree is no longer on disk; there was nothing to resume, and your message was not sent.";
+    return `${worktreeGoneNotice(run.isolation)} Your message was not sent.`;
   }
   if (result.outcome === 'not-ready') {
     return 'This session is still starting; try again once it is running.';
@@ -159,22 +163,24 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
     }
   }, [run.id, run.status]);
 
-  // ROAD-XXX: a resumable run's cwd/worktree must still exist for a send
-  // to have anywhere to revive into — a run that died before either was
-  // ever recorded (queued straight to failed, say) has nothing to resume.
-  const hasPlace = Boolean(run.cwd ?? run.worktreePath);
-  const canResume = status.resumable && hasPlace;
+  // ROAD-XXX: a resumable run's composer is simply open. Whether there is
+  // somewhere to revive into is main's call, not a guess made here from
+  // whether cwd/worktreePath happen to be recorded: a worktree that is
+  // missing (or was never made — a run that died during its own
+  // provisioning) is recreated by main on send (startRun.ts's
+  // reprovisionWorktree), and the one case that genuinely can't be — no
+  // repository to recreate from — fails at that moment through the same
+  // undelivered-send path as any other refusal, with the typed text kept.
+  // The earlier gate here (`hasPlace`) disabled the box forever for
+  // exactly those runs; the founder's own words: "which should be
+  // absolutely impossible for any text field to be disabled."
+  const canResume = status.resumable;
   const canCompose = status.live || canResume;
   const engineDown = engine !== undefined && engine.kind !== 'running';
   let disabledReason: string | null = null;
   if (engineDown) disabledReason = 'The agent engine is not running.';
   else if (run.status === 'queued' || run.status === 'provisioning')
     disabledReason = 'The session is still starting.';
-  else if (status.resumable && !hasPlace)
-    disabledReason =
-      run.isolation === 'directory'
-        ? 'This run has no folder left to resume in.'
-        : 'This run has no worktree left to resume on.';
   else if (!canCompose)
     disabledReason = `This session has ended (${status.label.toLowerCase()}).`;
 
@@ -215,6 +221,11 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
         // restart, not a resume that leaves the engine's own status
         // untouched.
         reconnect();
+      }
+      if (result.worktreeRecreated) {
+        // Said before the conversation-restore note below when both
+        // apply: files on disk are the bigger discontinuity.
+        showErrorToast(worktreeRecreatedNotice(result.branchReused === true));
       }
       if (result.resume === 'replaced-by-new') {
         // The one toast channel there is; this is a warning in any case,

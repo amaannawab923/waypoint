@@ -201,6 +201,46 @@ describe('SessionDetail (W4)', () => {
     );
   });
 
+  // ROAD-XXX: a missing worktree is recreated by main rather than refused;
+  // the person is told what survived, in the one channel there is.
+  it.each([
+    [true, 'Committed work is intact'],
+    [false, 'could not be recovered'],
+  ] as const)(
+    'worktreeRecreated (branchReused=%s): still lands on running, and says what survived',
+    async (branchReused, phrase) => {
+      (resumeRun as jest.Mock).mockResolvedValue({
+        outcome: 'loaded',
+        status: 'running',
+        worktreeRecreated: true,
+        branchReused,
+      });
+      renderDetail(run({ status: 'failed' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+      await waitFor(() => expect(refreshSessions).toHaveBeenCalled());
+      expect(patchSessionRun).toHaveBeenCalledWith('run-abc1234', {
+        status: 'running',
+      });
+      expect(showErrorToast).toHaveBeenCalledWith(
+        expect.stringContaining(phrase),
+      );
+    },
+  );
+
+  it('worktree-gone now reads as a failed recreation, not "nothing to resume"', async () => {
+    (resumeRun as jest.Mock).mockResolvedValue({
+      outcome: 'worktree-gone',
+      status: 'failed',
+    });
+    renderDetail(run({ status: 'failed' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    await waitFor(() => expect(refreshSessions).toHaveBeenCalled());
+    expect(showErrorToast).toHaveBeenCalledWith(
+      expect.stringContaining('could not recreate'),
+    );
+    expect(patchSessionRun).not.toHaveBeenCalled();
+  });
+
   it("a refused resume shows main's sentence and re-reads (the run is back to interrupted there)", async () => {
     (resumeRun as jest.Mock).mockRejectedValue(
       new Error('acp.start: auth-required'),

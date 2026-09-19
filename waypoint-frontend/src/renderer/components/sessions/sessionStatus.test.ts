@@ -5,6 +5,8 @@ import {
   shortRunId,
   STATUS_VIEW,
   waitingReason,
+  worktreeGoneNotice,
+  worktreeRecreatedNotice,
 } from './sessionStatus';
 
 const ALL: AgentRunStatus[] = [
@@ -59,6 +61,25 @@ describe('STATUS_VIEW', () => {
     expect(
       ALL.every((s) => !(STATUS_VIEW[s].live && STATUS_VIEW[s].resumable)),
     ).toBe(true);
+  });
+});
+
+// ROAD-XXX: the two worktree notices a resume can end in — recreated
+// (what survived depends only on whether the branch did), or genuinely
+// unrecoverable (which now means the recreation attempt failed, not that
+// none was made). A plain folder has no branch to recreate from at all.
+describe('worktree notices', () => {
+  it('recreated: names what survived by whether the branch did', () => {
+    expect(worktreeRecreatedNotice(true)).toMatch(/Committed work is intact/);
+    expect(worktreeRecreatedNotice(true)).toMatch(/uncommitted changes.*gone/);
+    expect(worktreeRecreatedNotice(false)).toMatch(/could not be recovered/);
+    expect(worktreeRecreatedNotice(false)).toMatch(/fresh branch/);
+  });
+
+  it('gone: a worktree says recreation failed; a plain folder says it cannot be recreated', () => {
+    expect(worktreeGoneNotice('worktree')).toMatch(/could not recreate/);
+    expect(worktreeGoneNotice('directory')).toMatch(/can't be recreated/);
+    expect(worktreeGoneNotice('directory')).not.toMatch(/could not recreate/);
   });
 });
 
