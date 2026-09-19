@@ -14,6 +14,7 @@ const bridge = {
   connect: jest.fn(),
   disconnect: jest.fn(),
   listTickets: jest.fn(),
+  getTicket: jest.fn(),
   listTransitions: jest.fn(),
   transition: jest.fn(),
   listPriorityOptions: jest.fn(),
@@ -523,6 +524,38 @@ describe('getJiraTransitions', () => {
 
     expect(await api.getJiraTransitions('99999')).toEqual([]);
     expect(bridge.listTransitions).toHaveBeenCalledWith('99999');
+  });
+});
+
+describe('getJiraTicketByKey', () => {
+  // The one caller today (CopilotPanel, opening a drawer for an issue key
+  // Copilot cited) has no pre-loaded queue to look this ticket up in — this
+  // always makes a real per-issue call, unlike getJiraTransitions above,
+  // which prefers the bulk search's own cache first.
+  it('fetches the issue directly by key and maps it to a JiraTicket', async () => {
+    const api = freshApi();
+    bridge.getTicket.mockResolvedValue({
+      ok: true,
+      value: wireTicket({ id: '10500', key: 'ENG-77' }),
+    });
+
+    const ticket = await api.getJiraTicketByKey('ENG-77');
+
+    expect(bridge.getTicket).toHaveBeenCalledWith('ENG-77');
+    expect(ticket).toMatchObject({ id: '10500', key: 'ENG-77' });
+  });
+
+  it("throws with Jira's own message when the key doesn't resolve", async () => {
+    const api = freshApi();
+    bridge.getTicket.mockResolvedValue({
+      ok: false,
+      reason: 'not_found',
+      message: "Jira didn't return that issue.",
+    });
+
+    await expect(api.getJiraTicketByKey('ENG-99999')).rejects.toThrow(
+      "Jira didn't return that issue.",
+    );
   });
 });
 

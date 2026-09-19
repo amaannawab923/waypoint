@@ -284,14 +284,19 @@ export function JiraTicketRow({
         className="relative flex items-center gap-2.5 px-3.5 py-2.5 hover:bg-surface-2"
         style={{ borderLeft: `3px solid ${projectColor}` }}
       >
-        <span className="w-[76px] shrink-0 font-mono text-[11.5px] font-semibold text-text-muted">
-          <b style={{ color: projectColor }}>{ticket.projectKey}</b>-
-          {ticket.key.split('-')[1]}
-        </span>
         <button
           type="button"
           onClick={() => onOpenDrawer(ticket.id)}
-          className="min-w-0 flex-1 truncate text-left text-[13.5px] font-medium text-text hover:underline"
+          title={`Open ${ticket.key}`}
+          className="w-[76px] shrink-0 cursor-pointer text-left font-mono text-[11.5px] font-semibold text-text-muted hover:underline"
+        >
+          <b style={{ color: projectColor }}>{ticket.projectKey}</b>-
+          {ticket.key.split('-')[1]}
+        </button>
+        <button
+          type="button"
+          onClick={() => onOpenDrawer(ticket.id)}
+          className="min-w-0 flex-1 cursor-pointer truncate text-left text-[13.5px] font-medium text-text hover:underline"
         >
           {ticket.title}
         </button>

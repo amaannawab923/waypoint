@@ -26,6 +26,9 @@ import {
 } from '@/data/api';
 import type { ProposalView, Project } from '@/types/entities';
 import { resetProposalStoreForTests } from '@/lib/proposalStore';
+import { getJiraTicketByKey } from '@/data/jiraApi';
+import { useLoadedJiraConnection } from '@/lib/jiraStore';
+import type { JiraTicket } from '@/types/jira';
 import { CopilotPanel } from './CopilotPanel';
 
 jest.mock('@/lib/featureFlags', () => ({
@@ -58,6 +61,50 @@ jest.mock('@/data/api', () => ({
   markCopilotProposalsNotified: jest.fn(),
   getProject: jest.fn(),
   updateProject: jest.fn(),
+}));
+jest.mock('@/data/jiraApi', () => ({
+  getJiraTicketByKey: jest.fn(),
+}));
+jest.mock('@/lib/jiraStore', () => ({
+  useLoadedJiraConnection: jest.fn(),
+}));
+// Stood in rather than the real drawers: both are thin shells around
+// TicketDetailContent/JiraTicketDetail, which bring their own data-fetching
+// and IPC requirements that are out of scope for a test about WHICH drawer
+// opens with WHICH identifier — not what that drawer then renders.
+jest.mock('./TicketDrawer', () => ({
+  TicketDrawer: ({
+    projectId,
+    identifier,
+    onClose,
+  }: {
+    projectId: string;
+    identifier: string;
+    onClose: () => void;
+  }) => (
+    <div data-testid="native-ticket-drawer">
+      native peek: {projectId}/{identifier}
+      <button type="button" onClick={onClose}>
+        close native peek
+      </button>
+    </div>
+  ),
+}));
+jest.mock('./JiraTicketDrawer', () => ({
+  JiraTicketDrawer: ({
+    ticket,
+    onClose,
+  }: {
+    ticket: { key: string };
+    onClose: () => void;
+  }) => (
+    <div data-testid="jira-ticket-drawer">
+      jira peek: {ticket.key}
+      <button type="button" onClick={onClose}>
+        close jira peek
+      </button>
+    </div>
+  ),
 }));
 
 type RunPromptHandlers = {
@@ -427,6 +474,17 @@ async function waitForRun(prompt: string) {
   return copilotIpc.getHandlers();
 }
 
+// CopilotPanel batches onChunk updates to at most one commit per animation
+// frame (see its own streamFrameRef comment) rather than re-rendering on
+// every chunk — waiting for one real rAF tick here (registered after the
+// component's own, so it resolves after the component's callback has run)
+// is what lets a test assert on the DOM right after firing a chunk.
+async function flushStreamFrame() {
+  await act(async () => {
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+  });
+}
+
 beforeEach(() => {
   copilotIpc = mockCopilotIpc();
   // A plain assignment, not Object.defineProperty: the pre-multi-session
@@ -438,6 +496,12 @@ beforeEach(() => {
     copilot: { runPrompt: copilotIpc.runPrompt },
     repo: { chooseFolder: chooseFolderMock },
   } as unknown as typeof window.electron;
+  jest
+    .mocked(useLoadedJiraConnection)
+    .mockReturnValue({ site: 'waypoint123.atlassian.net' } as ReturnType<
+      typeof useLoadedJiraConnection
+    >);
+  jest.mocked(getJiraTicketByKey).mockReset();
 });
 
 afterEach(() => {
@@ -659,6 +723,7 @@ describe('CopilotPanel', () => {
 
       act(() => handlers.onChunk('Your '));
       act(() => handlers.onChunk('sprint is on track.'));
+      await flushStreamFrame();
       expect(
         screen.getByText('Your sprint is on track.', { selector: 'p' }),
       ).toBeInTheDocument();
@@ -1034,6 +1099,7 @@ describe('CopilotPanel', () => {
       expect(copilotIpc.runPrompt).toHaveBeenCalledTimes(2);
 
       act(() => secondHandlers.onChunk('Second run reply'));
+      await flushStreamFrame();
       expect(
         screen.getByText('Second run reply', { selector: 'p' }),
       ).toBeInTheDocument();
@@ -1041,6 +1107,7 @@ describe('CopilotPanel', () => {
       // The first run's process is still alive somewhere and emits a late
       // chunk — it must not touch the bubble the second run now owns.
       act(() => firstHandlers.onChunk('stale text from the dead run'));
+      await flushStreamFrame();
 
       expect(
         screen.queryByText(/stale text from the dead run/),
@@ -1195,6 +1262,7 @@ describe('CopilotPanel', () => {
       expect(document.querySelector('.copilot-typing')).toBeInTheDocument();
 
       act(() => handlers.onChunk('Here is '));
+      await flushStreamFrame();
 
       // The first chunk replaces the indicator with the real streamed text.
       expect(document.querySelector('.copilot-typing')).not.toBeInTheDocument();
@@ -2286,5 +2354,166 @@ describe('sessions in the conversation (W5a)', () => {
       intent: 'fix',
       mayChangeFiles: true,
     });
+  });
+});
+
+// ROAD-157 follow-up: clicking a ticket key Copilot rendered opens a drawer
+// preview in place, rather than navigating away or bouncing to a browser
+// tab. TicketDrawer/JiraTicketDrawer are mocked (see the top of this file)
+// to isolate WHICH drawer opens with WHAT identifier from what that drawer
+// then renders — their own real rendering is covered by their own tests.
+describe('ticket links open a drawer preview (ROAD-157 follow-up)', () => {
+  it('opens the native TicketDrawer for an in-app ticket path, and closes it', async () => {
+    render(
+      <MemoryRouter>
+        <CopilotPanel onClose={jest.fn()} />
+      </MemoryRouter>,
+    );
+    await screen.findByText(/No sessions yet/i);
+    await createAndOpenSession();
+    await typeAndSend('what is ROAD-40?');
+    const handlers = await waitForRun('what is ROAD-40?');
+
+    act(() =>
+      handlers.onChunk(
+        "It's [ROAD-40](/projects/proj-cw/tickets/ROAD-40).",
+      ),
+    );
+    await flushStreamFrame();
+
+    fireEvent.click(screen.getByRole('link', { name: 'ROAD-40' }));
+
+    expect(await screen.findByTestId('native-ticket-drawer')).toHaveTextContent(
+      'native peek: proj-cw/ROAD-40',
+    );
+    expect(screen.queryByTestId('jira-ticket-drawer')).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'close native peek' }),
+    );
+    expect(screen.queryByTestId('native-ticket-drawer')).not.toBeInTheDocument();
+  });
+
+  it('fetches and opens the JiraTicketDrawer for a browse link on the connected site', async () => {
+    jest
+      .mocked(getJiraTicketByKey)
+      .mockResolvedValue({ key: 'ENG-77' } as JiraTicket);
+
+    render(
+      <MemoryRouter>
+        <CopilotPanel onClose={jest.fn()} />
+      </MemoryRouter>,
+    );
+    await screen.findByText(/No sessions yet/i);
+    await createAndOpenSession();
+    await typeAndSend('what is ENG-77?');
+    const handlers = await waitForRun('what is ENG-77?');
+
+    act(() =>
+      handlers.onChunk(
+        "It's [ENG-77](https://waypoint123.atlassian.net/browse/ENG-77).",
+      ),
+    );
+    await flushStreamFrame();
+
+    fireEvent.click(screen.getByRole('link', { name: 'ENG-77' }));
+
+    expect(getJiraTicketByKey).toHaveBeenCalledWith('ENG-77');
+    expect(await screen.findByTestId('jira-ticket-drawer')).toHaveTextContent(
+      'jira peek: ENG-77',
+    );
+    expect(
+      screen.queryByTestId('native-ticket-drawer'),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'close jira peek' }));
+    expect(screen.queryByTestId('jira-ticket-drawer')).not.toBeInTheDocument();
+  });
+
+  it('leaves an ordinary external link (e.g. a PR URL) alone — neither drawer opens', async () => {
+    render(
+      <MemoryRouter>
+        <CopilotPanel onClose={jest.fn()} />
+      </MemoryRouter>,
+    );
+    await screen.findByText(/No sessions yet/i);
+    await createAndOpenSession();
+    await typeAndSend('is there a PR?');
+    const handlers = await waitForRun('is there a PR?');
+
+    act(() =>
+      handlers.onChunk(
+        'Yes: [PR #64](https://github.com/amaannawab923/waypoint/pull/64).',
+      ),
+    );
+    await flushStreamFrame();
+
+    fireEvent.click(screen.getByRole('link', { name: 'PR #64' }));
+
+    expect(getJiraTicketByKey).not.toHaveBeenCalled();
+    expect(
+      screen.queryByTestId('native-ticket-drawer'),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId('jira-ticket-drawer')).not.toBeInTheDocument();
+  });
+
+  it("does not confuse a browse URL on a site other than the one connected", async () => {
+    render(
+      <MemoryRouter>
+        <CopilotPanel onClose={jest.fn()} />
+      </MemoryRouter>,
+    );
+    await screen.findByText(/No sessions yet/i);
+    await createAndOpenSession();
+    await typeAndSend('what about OTHER-1?');
+    const handlers = await waitForRun('what about OTHER-1?');
+
+    act(() =>
+      handlers.onChunk(
+        "It's [OTHER-1](https://someone-elses-site.atlassian.net/browse/OTHER-1).",
+      ),
+    );
+    await flushStreamFrame();
+
+    fireEvent.click(screen.getByRole('link', { name: 'OTHER-1' }));
+
+    expect(getJiraTicketByKey).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('jira-ticket-drawer')).not.toBeInTheDocument();
+  });
+
+  // Round-11 review: the click handler validates its own two captures
+  // (readTicketId's own id-shape) independently of markdown.ts's own
+  // allowlist, on purpose — defense in depth at the point TicketDrawer's
+  // props actually get built, not only at the point the href was rendered.
+  // markdown.ts's allowlist already refuses to linkify a traversal payload
+  // (see markdown.test.ts), so proving this second guard actually holds
+  // means reaching the click handler with a link markdown itself would
+  // never produce — done here by editing the rendered bubble's real DOM
+  // directly, the same "assume this got here some other way" the review
+  // asked for.
+  it('rejects a traversal payload in a ticket link even if it reaches the DOM some other way', async () => {
+    render(
+      <MemoryRouter>
+        <CopilotPanel onClose={jest.fn()} />
+      </MemoryRouter>,
+    );
+    await screen.findByText(/No sessions yet/i);
+    await createAndOpenSession();
+    await typeAndSend('hello');
+    const handlers = await waitForRun('hello');
+
+    act(() => handlers.onChunk('hi'));
+    await flushStreamFrame();
+
+    const bubble = document.querySelector('.copilot-md');
+    if (!bubble) throw new Error('no rendered assistant bubble');
+    bubble.innerHTML =
+      '<a href="/projects/p/tickets/..%2f..%2fadmin">click</a>';
+
+    fireEvent.click(screen.getByRole('link', { name: 'click' }));
+
+    expect(
+      screen.queryByTestId('native-ticket-drawer'),
+    ).not.toBeInTheDocument();
   });
 });

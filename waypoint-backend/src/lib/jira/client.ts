@@ -12,12 +12,75 @@
  * settled correctly there and re-deciding them differently would be the
  * actual mistake.
  *
- * Scope is deliberately narrow: three GETs. Nothing here writes to Jira, and
- * that is the point of this pass — read tools ship and are proven before any
- * write path exists.
+ * Scope is deliberately narrow, and enforced rather than just described: see
+ * ALLOWED_PATHS below (path AND method — round-2 review, ROAD-157). Writes
+ * go through the same allowlist as reads (jiraPost included) — narrowness
+ * is a runtime property of this client, not a comment that can rot silently
+ * as callers are added.
  */
 
 const REQUEST_TIMEOUT_MS = 20_000;
+
+/**
+ * Every path prefix this client will send a request to, checked in
+ * jiraRequest below against url.pathname — the normalized path `fetch` will
+ * actually be sent, not the raw `path` a caller passed in.
+ *
+ * The normalization matters: most of `path` is a hardcoded literal in this
+ * file's callers (providers/jira.ts), but an id segment interpolated into it
+ * is not always this codebase's own value — resolveGadgetBinding's gadgetId
+ * comes from a dashboard's own gadget list, which is Jira's response body,
+ * not a literal this file wrote (round-1 review, ROAD-157). `new URL(...)`
+ * resolves ".." segments before assertAllowedPath ever sees the string, so
+ * checking the pre-normalization `path` would let a crafted id like ".."
+ * pass a prefix test on a string that is not what actually goes out over
+ * the network. Checking url.pathname closes that regardless of where a
+ * future id segment's value originates.
+ *
+ * It exists as a defense against this client's own scope quietly growing: a
+ * future caller adding a new Jira endpoint has to widen this list in the
+ * same diff, which is the point at which a reviewer sees it, rather than the
+ * scope drifting past whatever the header comment happened to still say.
+ *
+ * A mismatch is this codebase's own bug, never a caller-recoverable outcome,
+ * so it throws rather than degrading to a JiraResult failure the model could
+ * see and retry.
+ *
+ * Each entry matches itself exactly OR itself plus "/…" — never a bare
+ * string-prefix match. Without a segment boundary, "/rest/api/3/issue" would
+ * also let "/rest/api/3/issuetype" through (a real, different Jira endpoint
+ * this client has never called) purely because the characters happen to
+ * line up; assertAllowedPath below checks the boundary explicitly rather
+ * than trusting every entry to end with its own "/".
+ *
+ * Method-scoped, not just path-scoped (round-2 review, ROAD-157): the two
+ * writes this client performs today (transition, comment) are both under
+ * `/rest/api/3/issue`, and every prefix added for the read-only
+ * dashboard/gadget/filter tools has no write caller today.
+ * Without a per-prefix method list, jiraPost would silently be as permitted
+ * on `/rest/api/3/dashboard` as jiraGet is the moment ANY future caller
+ * composes a POST to a path under one of those prefixes — exactly the
+ * "scope drifting past whatever the comment says" failure this allowlist
+ * exists to catch, just moved from the path dimension to the method
+ * dimension. `methods` is checked in addition to the path prefix, not
+ * instead of it.
+ */
+const ALLOWED_PATHS: { prefix: string; methods: readonly ('GET' | 'POST')[] }[] = [
+  { prefix: '/rest/api/3/issue', methods: ['GET', 'POST'] },
+  { prefix: '/rest/api/3/search/jql', methods: ['GET'] },
+  { prefix: '/rest/api/3/dashboard', methods: ['GET'] },
+  { prefix: '/rest/api/3/filter', methods: ['GET'] },
+];
+
+function assertAllowedPath(method: 'GET' | 'POST', path: string): void {
+  const allowed = ALLOWED_PATHS.some(
+    ({ prefix, methods }) =>
+      (path === prefix || path.startsWith(`${prefix}/`)) && methods.includes(method),
+  );
+  if (!allowed) {
+    throw new Error(`${method} "${path}" is outside this client's allowed path/method scope.`);
+  }
+}
 
 export interface JiraCredential {
   /** Bare hostname, e.g. "yourteam.atlassian.net" — no scheme, no path. */
@@ -125,6 +188,17 @@ async function jiraRequest<T>(
   },
 ): Promise<JiraResult<T>> {
   const url = new URL(`https://${credential.site}${init.path}`);
+  // Checked against url.pathname — what `fetch` will actually be sent —
+  // never against init.path directly. Round-1 review (ROAD-157): a value
+  // interpolated into init.path can itself be Jira-response-derived (a
+  // dashboard's own gadget id, not a hardcoded literal — see
+  // providers/jira.ts's resolveGadgetBinding chain), so "is a hardcoded
+  // caller" is no longer a safe assumption to check the pre-normalization
+  // string against. `new URL` resolves ".." segments before this ever sees
+  // the string; checking init.path instead would let a crafted id like ".."
+  // pass a prefix test while the request that actually goes out lands
+  // somewhere else in this same allowed host.
+  assertAllowedPath(init.method, url.pathname);
   for (const [key, value] of Object.entries(init.query ?? {})) url.searchParams.set(key, value);
 
   const controller = new AbortController();

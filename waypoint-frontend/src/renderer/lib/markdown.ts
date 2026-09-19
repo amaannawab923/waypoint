@@ -26,6 +26,21 @@ export function renderMarkdown(src: string): string {
   // renders as plain escaped text instead of a link, since the URL comes
   // from LLM-generated chat content, not a trusted source.
   const SAFE_URL = /^(https?:|mailto:)/i;
+  // This app's own in-app route for a native ticket
+  // (/projects/:id/tickets/:identifier) — safe for the same reason SAFE_URL's
+  // schemes are: it can't be pointed at an external host. Allowlisted to the
+  // EXACT shape CopilotPanel.tsx's system prompt actually asks the model to
+  // emit, rather than a denylist of what to reject, on purpose (round-11
+  // review): a bare `startsWith('/') && !startsWith('//')` check still let
+  // `/\evil.example/x` through, since a browser's URL parser treats a
+  // backslash as a path separator for a standard scheme just like a forward
+  // slash — `\` collapses to `//`, an external host, the same redirect this
+  // guard exists to block. Denying `//` and `/\` one at a time invites a
+  // third variant next time; an allowlist of the two known-safe ids doesn't.
+  const isInAppPath = (url: string) =>
+    /^\/projects\/[A-Za-z0-9][A-Za-z0-9_-]{0,254}\/tickets\/[A-Za-z0-9][A-Za-z0-9_-]{0,254}$/.test(
+      url,
+    );
 
   function inline(text: string): string {
     let out = escapeHtml(text);
@@ -35,7 +50,9 @@ export function renderMarkdown(src: string): string {
     out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label, url) =>
       SAFE_URL.test(url)
         ? `<a href="${url}" target="_blank" rel="noreferrer">${label}</a>`
-        : match,
+        : isInAppPath(url)
+          ? `<a href="${url}">${label}</a>`
+          : match,
     );
     return out;
   }

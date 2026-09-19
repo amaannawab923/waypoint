@@ -106,7 +106,8 @@ export const JIRA_NOT_CONNECTED =
 // shape and same reasoning as proposalTools.ts's validationErrorResult: the
 // message has to be specific enough for the model to correct itself on the
 // next call, because the model is the only thing that will read it.
-function validationErrorResult(message: string) {
+// Exported for dashboardTools.ts, same reason jsonResult/notFoundResult are.
+export function validationErrorResult(message: string) {
   return { content: [{ type: 'text' as const, text: message }], isError: true };
 }
 

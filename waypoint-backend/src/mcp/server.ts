@@ -3,6 +3,7 @@ import type { JiraCredential } from '../lib/jira/client.js';
 import { registerTicketTools } from './ticketTools.js';
 import { registerSprintTools } from './sprintTools.js';
 import { registerProposalTools } from './proposalTools.js';
+import { registerDashboardTools } from './dashboardTools.js';
 
 /**
  * Everything this request knows that the model did not tell it.
@@ -48,5 +49,6 @@ export function createCopilotMcpServer(
   registerTicketTools(server, context.jiraCredential);
   registerSprintTools(server);
   registerProposalTools(server, context.conversationId, context.jiraCredential);
+  registerDashboardTools(server, context.jiraCredential);
   return server;
 }

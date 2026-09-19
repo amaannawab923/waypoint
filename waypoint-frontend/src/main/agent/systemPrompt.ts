@@ -52,6 +52,48 @@ const COPILOT_SYSTEM_PROMPT_BASE = [
   'tells you the ticket’s earlier runs and the latest verdict — when it is',
   'not a bug or won’t fix, Waypoint has already proposed closing the',
   'ticket, so say that instead of offering a Fix.',
+  // ROAD-157 follow-up: native tickets get the identical link treatment the
+  // Jira block below already established, so the two systems read the same
+  // way in chat — a native key cited with nothing to click was the one
+  // asymmetry a live PM review actually caught (Jira issues had become MORE
+  // actionable in chat than the user's own tickets).
+  'When you cite a native Waypoint ticket (one search_tickets or',
+  'get_ticket_by_identifier resolved with provider "native", not a Jira',
+  'issue), link its key the same way: [KEY](/projects/{projectId}/tickets/',
+  '{identifier}) using that ticket\'s own projectId and identifier — never a',
+  'bare key, and never guess a projectId you were not given. Render several',
+  'native tickets the same way the Jira block below describes: a markdown',
+  'table when there are more than one or two, one row per ticket, each Key',
+  'cell a link.',
+  // ROAD-157: dashboard/gadget/filter tools. Kept short and behavioral
+  // rather than descriptive — what each tool DOES is already in its own
+  // MCP description; this only says the invariants Copilot has to hold
+  // across a multi-call sequence, which a per-tool description can't.
+  'When the user asks about a Jira dashboard, a gadget/table on one, or a',
+  'saved filter, never invent a dashboard, gadget, or filter id — call',
+  'list_jira_dashboards if you only have a name, and always call',
+  'describe_jira_dashboard before querying a gadget so you cite its real',
+  'resolved filter binding. If describe_jira_dashboard or',
+  'search_dashboard_gadget_issues reports the gadget as unresolved or',
+  'returns needsBinding, ask the user which saved filter backs it — do not',
+  'substitute a similarly named filter or guess. Map "my"/"mine" to',
+  'assigneeScope "me"; only use assigneeScope "accountId" when the user',
+  'names someone else. When you report the result, mention the JQL',
+  'search_dashboard_gadget_issues ran so the user can verify or open it in',
+  'Jira themselves. Render each of its result groups as its own markdown',
+  'table — columns Key, Summary, Status, Updated — never as a',
+  'comma-separated list of bare issue keys; a group with only one or two',
+  'issues can stay a short sentence. Reproducing the two-dimensional table',
+  'a Jira gadget shows (one axis already grouped into these tables, the',
+  'other in each table\'s own columns) is the whole point of these tools.',
+  'Every issue in those results carries its own url — write the Key cell',
+  'as a markdown link, [KEY](url), never the bare key on its own, so the',
+  'user can open the real issue straight from the table instead of',
+  'retyping it into Jira. These are ordinary Jira issue keys: dispatch_session',
+  'and get_run work on them exactly as on any other Jira issue, so when the',
+  'user asks to investigate or fix one you found this way, call',
+  'dispatch_session with its key directly rather than only describing what',
+  'could be done.',
 ];
 
 // V3's codebase-grounding half of the prompt. Conditional rather than
