@@ -123,6 +123,19 @@ export function useCopilotPanelResizingState(): boolean {
   );
 }
 
+/** Test-only escape hatch, matching jiraStarred.ts's own
+ * resetJiraStarredForTests and copilotOpenStore.ts's
+ * resetCopilotOpenStateForTests — these module-level primitives otherwise
+ * outlive any one `it()` block within a test file. Re-reads storage rather
+ * than hardcoding DEFAULT_PANEL_WIDTH, the same as a real app restart would
+ * — sharedWidth only ever hydrates once, at module load, so a test that
+ * wants to exercise "a previously stored width" has to call this again
+ * AFTER setting localStorage, not rely on it as a blank reset alone. */
+export function resetCopilotPanelWidthForTests(): void {
+  sharedWidth = readStoredWidth();
+  resizing = false;
+}
+
 /**
  * The Copilot panel's own width, resizable by dragging a handle on its left
  * edge and persisted across restarts — same localStorage-backed pattern as
@@ -149,6 +162,9 @@ export function useCopilotPanelWidth(): {
 
   const startResize = useCallback(
     (e: ReactPointerEvent) => {
+      // Left button only — a right- or middle-click on the handle (context
+      // menu, autoscroll) has no business starting a drag.
+      if (e.button !== 0) return;
       e.preventDefault();
       startXRef.current = e.clientX;
       startWidthRef.current = width;
@@ -180,10 +196,22 @@ export function useCopilotPanelWidth(): {
 
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
+    // A cancelled gesture (e.g. the OS interrupts the drag) must end the
+    // drag the same way pointerup does — otherwise `resizing` never clears
+    // and both nothing-to-do-with-Copilot ticket drawers stay pinned to
+    // `transition-transform` (no right-offset transition) forever.
+    window.addEventListener('pointercancel', onUp);
     return () => {
       document.body.style.userSelect = previousUserSelect;
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      // Mirrors onUp: if THIS component unmounts mid-drag (the panel
+      // closes, a route change, an HMR reload) rather than the drag ending
+      // normally, the shared "is resizing" flag must not be left stuck at
+      // true — nothing else would ever clear it, since setSharedResizing(false)
+      // otherwise only runs from onUp above.
+      setSharedResizing(false);
     };
   }, [isResizing]);
 

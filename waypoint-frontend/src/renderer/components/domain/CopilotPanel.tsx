@@ -1061,6 +1061,17 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     runGenerationRef.current.set(sessionId, generation);
     const isStale = () =>
       runGenerationRef.current.get(sessionId) !== generation;
+    // Captured once, by THIS run's own onRequestId callback below — not
+    // read back out of requestIdBySessionRef inside onDone/onError, which
+    // is keyed by sessionId and gets overwritten the moment a newer run
+    // starts for the same session. Reading it back there would check the
+    // WRONG requestId against cancelledRequestIdsRef for a stale callback
+    // arriving after a retry already began, silently leaking this run's
+    // entry in the cancelled set forever instead of clearing it.
+    let requestIdForThisRun: string | undefined;
+    const wasCancelled = () =>
+      !!requestIdForThisRun &&
+      cancelledRequestIdsRef.current.delete(requestIdForThisRun);
     // Drops whatever the batched flush above hasn't committed yet — without
     // this, a frame already in flight when the run ends could still fire
     // afterward and resurrect a streaming bubble the run just cleared.
@@ -1113,6 +1124,7 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
           },
           {
             onRequestId: (id) => {
+              requestIdForThisRun = id;
               requestIdBySessionRef.current.set(sessionId, id);
             },
             onChunk: (text) => {
@@ -1142,6 +1154,18 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
               sessionId: claudeSessionId,
               needsRepoLink,
             }) => {
+              // Checked first, before isStale(): a Stop click races the SDK
+              // producing a final result — main can still call onDone for a
+              // run the user already asked to cancel if the CLI's own reply
+              // was already in flight when close() reached it. Without this,
+              // a reply the user explicitly stopped could still appear a
+              // moment later, unprompted. Also the only place this run's own
+              // entry in cancelledRequestIdsRef ever gets cleared on the
+              // success path, so it doesn't leak.
+              if (wasCancelled()) {
+                resolve();
+                return;
+              }
               if (isStale()) return;
               clearStreamBuffer();
               setStreaming(null);
@@ -1263,23 +1287,21 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
               resolve();
             },
             onError: (err) => {
-              if (isStale()) return;
-              clearStreamBuffer();
-              setStreaming(null);
               // query.close() (Stop button) makes claudeSession.ts's own
               // loop exit through this exact same onError path — checked
-              // BEFORE treating this as a real failure, so a user-requested
-              // stop lands back on a plain ready composer instead of an
-              // error banner with a "try again" that re-runs a turn nobody
-              // asked to retry.
-              const requestId = requestIdBySessionRef.current.get(sessionId);
-              if (
-                requestId &&
-                cancelledRequestIdsRef.current.delete(requestId)
-              ) {
+              // BEFORE isStale() and before treating this as a real
+              // failure, so a user-requested stop lands back on a plain
+              // ready composer instead of an error banner with a "try
+              // again" that re-runs a turn nobody asked to retry, and so
+              // this run's entry in cancelledRequestIdsRef always clears
+              // even if a retry has already made this callback stale.
+              if (wasCancelled()) {
                 resolve();
                 return;
               }
+              if (isStale()) return;
+              clearStreamBuffer();
+              setStreaming(null);
               // A failed run can still have proposed before dying —
               // refetch so those cards appear instead of silently waiting
               // for the next successful turn. Fire-and-forget: the error

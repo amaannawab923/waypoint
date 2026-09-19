@@ -119,6 +119,7 @@ type RunPromptHandlers = {
     needsRepoLink?: boolean;
   }) => void;
   onError: (err: { kind: string; message: string }) => void;
+  onRequestId?: (id: string) => void;
 };
 
 // window.electron.copilot.runPrompt (issue #7) is a synchronous,
@@ -130,7 +131,9 @@ type RunPromptHandlers = {
 // used the same double.
 function mockCopilotIpc() {
   let handlers: RunPromptHandlers | null = null;
+  let requestId = 0;
   const unsubscribe = jest.fn();
+  const cancelRun = jest.fn(async () => true);
   const runPrompt = jest.fn(
     (
       _args: {
@@ -143,16 +146,24 @@ function mockCopilotIpc() {
       h: RunPromptHandlers,
     ) => {
       handlers = h;
+      requestId += 1;
+      // Real preload.ts fires this synchronously, before runPrompt even
+      // returns — the Stop button (CopilotPanel.tsx's requestIdBySessionRef)
+      // depends on that ordering to have a requestId to cancel by the time
+      // a user could possibly click it.
+      h.onRequestId?.(`req-${requestId}`);
       return unsubscribe;
     },
   );
   return {
     runPrompt,
     unsubscribe,
+    cancelRun,
     getHandlers: () => {
       if (!handlers) throw new Error('runPrompt was not called yet');
       return handlers;
     },
+    lastRequestId: () => `req-${requestId}`,
   };
 }
 
@@ -493,7 +504,10 @@ beforeEach(() => {
   // tests — window.electron.copilot.runPrompt kept pointing at the *first*
   // test's mock. Plain assignment doesn't have that problem.
   (window as unknown as { electron: typeof window.electron }).electron = {
-    copilot: { runPrompt: copilotIpc.runPrompt },
+    copilot: {
+      runPrompt: copilotIpc.runPrompt,
+      cancelRun: copilotIpc.cancelRun,
+    },
     repo: { chooseFolder: chooseFolderMock },
   } as unknown as typeof window.electron;
   jest
@@ -1322,6 +1336,129 @@ describe('CopilotPanel', () => {
 
       const handlers = await waitForRun('enter key send');
       expect(handlers).toBeDefined();
+    });
+  });
+
+  describe('Stop button', () => {
+    function getStopButton() {
+      return screen.getByRole('button', { name: 'Stop' }) as HTMLButtonElement;
+    }
+
+    it('replaces Send with Stop while streaming, and back once the run settles', async () => {
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
+      await screen.findByText(/No sessions yet/i);
+      await createAndOpenSession();
+
+      await typeAndSend('how are things');
+      const handlers = await waitForRun('how are things');
+
+      expect(getStopButton()).toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: 'Send' }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByText(/Copilot is working/i)).toBeInTheDocument();
+
+      await act(async () => {
+        await handlers.onDone({ fullText: 'Fine.', sessionId: 'sess-1' });
+      });
+
+      expect(getSendButton()).toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: 'Stop' }),
+      ).not.toBeInTheDocument();
+      // Settled all the way through, not just the UI flip: the same
+      // extra wait 'sending a message'.'appends the user message
+      // immediately...' uses, so this test's own onDone doesn't leave a
+      // pending postCopilotAssistantMessage promise to resolve mid-way
+      // through a LATER test.
+      await waitFor(() =>
+        expect(postCopilotAssistantMessage).toHaveBeenCalledWith(
+          expect.any(String),
+          'Fine.',
+          'sess-1',
+        ),
+      );
+    });
+
+    it('clicking Stop cancels the in-flight run and returns to a ready composer with no error banner', async () => {
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
+      await screen.findByText(/No sessions yet/i);
+      await createAndOpenSession();
+
+      await typeAndSend('long-running question');
+      const handlers = await waitForRun('long-running question');
+
+      fireEvent.click(getStopButton());
+
+      // Optimistic: back to Send immediately, before main even answers the
+      // cancel request.
+      expect(getSendButton()).toBeInTheDocument();
+      expect(copilotIpc.cancelRun).toHaveBeenCalledWith(
+        copilotIpc.lastRequestId(),
+      );
+
+      // query.close() (what cancelRun triggers in main) makes the SDK loop
+      // exit through the same onError path a genuine failure would — this
+      // is what the Stop click must be recognized against.
+      await act(async () => {
+        handlers.onError({
+          kind: 'generic',
+          message: 'exited without responding',
+        });
+      });
+
+      expect(
+        screen.queryByText(/exited without responding/i),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByText(/try again/i)).not.toBeInTheDocument();
+    });
+
+    // Found in review: a Stop click races the SDK producing a final
+    // result — main can still call onDone for a run the user already asked
+    // to cancel, if the CLI's own reply was already in flight when
+    // cancelRun's query.close() reached it. Without checking the cancelled
+    // set in onDone too, a reply the user explicitly stopped would still
+    // appear on screen a moment later, unprompted.
+    it('does not show a reply that arrives after Stop was clicked', async () => {
+      render(
+        <MemoryRouter>
+          <CopilotPanel onClose={jest.fn()} />
+        </MemoryRouter>,
+      );
+      await screen.findByText(/No sessions yet/i);
+      await createAndOpenSession();
+
+      await typeAndSend('long-running question');
+      const handlers = await waitForRun('long-running question');
+
+      fireEvent.click(getStopButton());
+
+      // The SDK's reply was already in flight — onDone fires instead of
+      // onError, despite the cancel.
+      await act(async () => {
+        await handlers.onDone({
+          fullText: 'Here is the answer anyway.',
+          sessionId: 'sess-1',
+        });
+      });
+
+      expect(
+        screen.queryByText('Here is the answer anyway.', { selector: 'p' }),
+      ).not.toBeInTheDocument();
+      expect(postCopilotAssistantMessage).not.toHaveBeenCalledWith(
+        expect.any(String),
+        'Here is the answer anyway.',
+        expect.anything(),
+      );
+      expect(getSendButton()).toBeInTheDocument();
     });
   });
 
@@ -2375,9 +2512,7 @@ describe('ticket links open a drawer preview (ROAD-157 follow-up)', () => {
     const handlers = await waitForRun('what is ROAD-40?');
 
     act(() =>
-      handlers.onChunk(
-        "It's [ROAD-40](/projects/proj-cw/tickets/ROAD-40).",
-      ),
+      handlers.onChunk("It's [ROAD-40](/projects/proj-cw/tickets/ROAD-40)."),
     );
     await flushStreamFrame();
 
@@ -2388,10 +2523,10 @@ describe('ticket links open a drawer preview (ROAD-157 follow-up)', () => {
     );
     expect(screen.queryByTestId('jira-ticket-drawer')).not.toBeInTheDocument();
 
-    fireEvent.click(
-      screen.getByRole('button', { name: 'close native peek' }),
-    );
-    expect(screen.queryByTestId('native-ticket-drawer')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'close native peek' }));
+    expect(
+      screen.queryByTestId('native-ticket-drawer'),
+    ).not.toBeInTheDocument();
   });
 
   it('fetches and opens the JiraTicketDrawer for a browse link on the connected site', async () => {
@@ -2457,7 +2592,7 @@ describe('ticket links open a drawer preview (ROAD-157 follow-up)', () => {
     expect(screen.queryByTestId('jira-ticket-drawer')).not.toBeInTheDocument();
   });
 
-  it("does not confuse a browse URL on a site other than the one connected", async () => {
+  it('does not confuse a browse URL on a site other than the one connected', async () => {
     render(
       <MemoryRouter>
         <CopilotPanel onClose={jest.fn()} />
