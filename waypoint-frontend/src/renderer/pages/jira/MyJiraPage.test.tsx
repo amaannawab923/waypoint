@@ -2,10 +2,13 @@ import '@testing-library/jest-dom';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import {
+  ensureJiraSynced,
   getJiraConnectionStatus,
   getJiraTransitions,
   listJiraComments,
   listMyJiraTickets,
+  listRoleJiraTickets,
+  listTicketsByJiraKeys,
 } from '@/data/jiraApi';
 import {
   setJiraConnection,
@@ -14,6 +17,7 @@ import {
 } from '@/lib/jiraStore';
 import { JiraApiError } from '@/types/jira';
 import type { JiraComment, JiraTicket, JiraTruncation } from '@/types/jira';
+import { resetJiraStarredForTests } from '@/lib/jiraStarred';
 import MyJiraPage from './MyJiraPage';
 import { resetMyJiraQueueForTests } from './useMyJiraQueue';
 
@@ -23,6 +27,37 @@ import { resetMyJiraQueueForTests } from './useMyJiraQueue';
 // possible to render the real page tree.
 jest.mock('@/data/jiraApi', () => ({
   listMyJiraTickets: jest.fn(),
+  // Found in review: this page now calls ensureJiraSynced() unconditionally
+  // on mount (see MyJiraPage.tsx's own comment on why — the header's sync
+  // indicator needs real numbers regardless of which tab is open, without
+  // repeating the full crawl on every visit). Every test in this file
+  // already forces `?tab=all`, so listMyJiraTickets above is still called
+  // exactly as before for the tab body itself; this mock just needs to
+  // exist so the new effect doesn't call undefined.
+  ensureJiraSynced: jest.fn(async () => ({
+    connected: true,
+    accountName: 'Max Chen',
+    accountEmail: 'max@northwind.dev',
+    accountId: '5f8a',
+    site: 'waypoint123.atlassian.net',
+    lastSyncAt: '2026-09-01T10:00:00.000Z',
+    issueCount: 0,
+    projectCount: 0,
+    countsTruncated: false,
+  })),
+  // RoleTicketsTab and WorkedOnTab (the Assigned/Reported/Watching/Worked-on
+  // tabs) are mounted by MyJiraPage now too — present here for the same
+  // reason every other export in this factory is, even though most tests in
+  // this file navigate straight to the All Tickets tab and never call these.
+  listRoleJiraTickets: jest.fn(async () => ({ tickets: [], truncated: false })),
+  listTicketsByJiraKeys: jest.fn(async () => []),
+  // Viewed and My past tickets' own reads — same reasoning as
+  // listRoleJiraTickets just above.
+  listViewedJiraTickets: jest.fn(async () => ({
+    tickets: [],
+    truncated: false,
+  })),
+  listPastJiraTickets: jest.fn(async () => ({ tickets: [], truncated: false })),
   dismissJiraTombstone: jest.fn(),
   resolveJiraConflict: jest.fn(),
   getJiraTransitions: jest.fn(),
@@ -56,8 +91,15 @@ jest.mock('@/data/jiraApi', () => ({
     editAll: false,
     editOwn: false,
   })),
-  buildJiraCommentPermalink: jest.fn(() => 'https://example.invalid/browse/ENG-1?focusedCommentId=1'),
+  buildJiraCommentPermalink: jest.fn(
+    () => 'https://example.invalid/browse/ENG-1?focusedCommentId=1',
+  ),
   getJiraConnectionStatus: jest.fn(),
+}));
+// WorkedOnTab's own first read, before it ever gets to listTicketsByJiraKeys
+// above.
+jest.mock('@/data/api', () => ({
+  listWorkedOnJiraKeys: jest.fn(async () => []),
 }));
 // useJiraConnection is here because the drawer and the comment composer both
 // read the connected account from the same store — the drawer to build the
@@ -164,8 +206,14 @@ function mount() {
   jest.mocked(getJiraTransitions).mockResolvedValue([]);
   jest.mocked(listJiraComments).mockResolvedValue({ comments: [], total: 0 });
   jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
+  // ROAD-158: Assigned is the page's real default landing tab now (see the
+  // dedicated 'lands on Assigned by default' test below) — every test in
+  // this file predates that redesign and was written against the "My work"
+  // queue, which is what the All Tickets tab shows today. Landing directly
+  // on it here keeps all of that coverage meaning what it already asserts,
+  // rather than rewriting every test to click a tab first.
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/my-jira?tab=all']}>
       <MyJiraPage />
     </MemoryRouter>,
   );
@@ -197,6 +245,10 @@ beforeEach(() => {
   // clicks a filter chip silently changes the starting state of every test
   // after it, and the failures read as flake rather than as leakage.
   resetMyJiraQueueForTests();
+  // The Starred tab and the drawer's own star toggle both read/write a
+  // module-level Set that otherwise outlives any one `it()` block, the same
+  // leakage resetMyJiraQueueForTests exists to prevent just above.
+  resetJiraStarredForTests();
 });
 
 describe('MyJiraPage — project + role filtering (combined)', () => {
@@ -293,7 +345,7 @@ function mountWith(tickets: JiraTicket[]) {
   jest.mocked(listJiraComments).mockResolvedValue({ comments: [], total: 0 });
   jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/my-jira?tab=all']}>
       <MyJiraPage />
     </MemoryRouter>,
   );
@@ -457,7 +509,7 @@ describe('MyJiraPage — empty queue is not the same as no match', () => {
       .mockRejectedValue(new Error("Couldn't reach Jira."));
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );
@@ -562,7 +614,7 @@ describe('MyJiraPage — honesty fixes (ROAD-22)', () => {
     jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(TICKETS));
     jest.mocked(useLoadedJiraConnection).mockReturnValue(connectionStatus());
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );
@@ -587,7 +639,7 @@ describe('MyJiraPage — honesty fixes (ROAD-22)', () => {
     jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(TICKETS));
     jest.mocked(useLoadedJiraConnection).mockReturnValue(connectionStatus());
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );
@@ -611,7 +663,7 @@ describe('MyJiraPage — honesty fixes (ROAD-22)', () => {
       .mockResolvedValue(queueRead(TICKETS, 'page-cap'));
     jest.mocked(useLoadedJiraConnection).mockReturnValue(connectionStatus());
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );
@@ -635,7 +687,7 @@ describe('MyJiraPage — a page-capped read says so', () => {
     jest.mocked(getJiraTransitions).mockResolvedValue([]);
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
     return render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );
@@ -693,7 +745,7 @@ describe('MyJiraPage — a failed ticket read is not an empty queue', () => {
     jest.mocked(listMyJiraTickets).mockRejectedValue(error);
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
     return render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );
@@ -760,7 +812,7 @@ describe('MyJiraPage — sync indicator', () => {
     jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead(TICKETS));
     jest.mocked(useLoadedJiraConnection).mockReturnValue(connection(null));
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );
@@ -775,7 +827,7 @@ describe('MyJiraPage — sync indicator', () => {
       .mocked(useLoadedJiraConnection)
       .mockReturnValue(connection(new Date().toISOString()));
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );
@@ -824,7 +876,7 @@ describe('MyJiraPage — refreshes the shared connection snapshot once real coun
     jest.mocked(getJiraConnectionStatus).mockResolvedValue(freshStatus);
 
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );
@@ -843,7 +895,7 @@ describe('MyJiraPage — refreshes the shared connection snapshot once real coun
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
 
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );
@@ -855,11 +907,12 @@ describe('MyJiraPage — refreshes the shared connection snapshot once real coun
 });
 
 // `JiraConnectionCard` on the All-Projects page links straight here with
-// `?tab=connection` so the click lands on the tab it promised, not on "My
-// work" with the user left to find Connection themselves. These three cases
-// are the whole contract: a valid tab loads directly on it, and anything
-// else — no param at all, or a value nobody put there on purpose — falls
-// back to 'work' rather than rendering neither tab's body.
+// `?tab=connection` so the click lands on the tab it promised, not on
+// Assigned with the user left to find Connection themselves. These three
+// cases are the whole contract: a valid tab loads directly on it, and
+// anything else — no param at all, or a value nobody put there on purpose —
+// falls back to 'assigned' (ROAD-158's new default) rather than rendering
+// neither tab's body.
 describe('MyJiraPage — initial tab from the ?tab= query param', () => {
   function connectionStatus() {
     return {
@@ -899,26 +952,190 @@ describe('MyJiraPage — initial tab from the ?tab= query param', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('falls back to My work when the param is absent', async () => {
+  it('falls back to Assigned when the param is absent', async () => {
     mountAt('/my-jira');
 
     expect(
-      await screen.findByLabelText('Search your Jira queue'),
+      await screen.findByPlaceholderText(/search what.s assigned to you/i),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'Refresh now' }),
     ).not.toBeInTheDocument();
   });
 
-  it('falls back to My work for a value that is not a real tab', async () => {
+  // Found in review: this page used to run the full "My work" crawl
+  // unconditionally on every mount, even though the default tab has been
+  // Assigned (its own scoped read) since this redesign shipped. The header's
+  // sync indicator still needs real numbers regardless of tab, which is what
+  // ensureJiraSynced is for — a real read the first time nothing has synced
+  // yet this session, a no-op every time after.
+  it('syncs the header via ensureJiraSynced but does not run the full My Work crawl on the default Assigned tab', async () => {
+    mountAt('/my-jira');
+
+    await screen.findByPlaceholderText(/search what.s assigned to you/i);
+
+    expect(ensureJiraSynced).toHaveBeenCalledTimes(1);
+    expect(listMyJiraTickets).not.toHaveBeenCalled();
+  });
+
+  it('does run the full My Work crawl once the All Tickets tab is actually opened', async () => {
+    mountAt('/my-jira?tab=all');
+
+    await screen.findByLabelText('Search your Jira queue');
+
+    expect(listMyJiraTickets).toHaveBeenCalled();
+  });
+
+  it('falls back to Assigned for a value that is not a real tab', async () => {
     mountAt('/my-jira?tab=nonsense');
 
     expect(
-      await screen.findByLabelText('Search your Jira queue'),
+      await screen.findByPlaceholderText(/search what.s assigned to you/i),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'Refresh now' }),
     ).not.toBeInTheDocument();
+  });
+
+  it('loads on All Tickets when the param says so, showing the old "My work" queue', async () => {
+    mountAt('/my-jira?tab=all');
+
+    expect(
+      await screen.findByLabelText('Search your Jira queue'),
+    ).toBeInTheDocument();
+  });
+
+  it.each([
+    ['reported', /search what you.ve reported/i],
+    ['watching', /search what you.re watching/i],
+  ])(
+    'loads directly on the %s tab when the param says so',
+    async (tabKey, placeholder) => {
+      mountAt(`/my-jira?tab=${tabKey}`);
+
+      expect(
+        await screen.findByPlaceholderText(placeholder),
+      ).toBeInTheDocument();
+    },
+  );
+
+  it('loads directly on Worked on when the param says so', async () => {
+    mountAt('/my-jira?tab=worked-on');
+
+    expect(
+      await screen.findByText('No agent runs against a Jira issue yet.'),
+    ).toBeInTheDocument();
+  });
+
+  it('loads directly on Viewed when the param says so', async () => {
+    mountAt('/my-jira?tab=viewed');
+
+    expect(
+      await screen.findByText('Nothing in your Jira view history yet.'),
+    ).toBeInTheDocument();
+  });
+
+  it('loads directly on Starred when the param says so', async () => {
+    mountAt('/my-jira?tab=starred');
+
+    expect(await screen.findByText('Nothing starred yet.')).toBeInTheDocument();
+  });
+
+  it('loads directly on My past tickets when the param says so', async () => {
+    mountAt('/my-jira?tab=past');
+
+    expect(
+      await screen.findByText('Nothing was ever reassigned away from you.'),
+    ).toBeInTheDocument();
+  });
+});
+
+// A tab's own count is the concrete, visible proof that switching tabs
+// actually changed what's being asked for — not just that the page looks
+// different underneath.
+describe('MyJiraPage — live tab counts', () => {
+  function mountOnAssigned() {
+    // MyJiraPage's own top-level read runs unconditionally regardless of
+    // which tab is active (see its fetchedRead effect) — needs a real
+    // resolved value or useAsync's fn().then(...) throws on an unconfigured
+    // mock.
+    jest.mocked(listMyJiraTickets).mockResolvedValue(queueRead([]));
+    jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
+    jest.mocked(listRoleJiraTickets).mockResolvedValue({
+      tickets: [
+        ticket({ id: 't1' }),
+        ticket({ id: 't2' }),
+        ticket({ id: 't3' }),
+      ],
+      truncated: false,
+    });
+    return render(
+      <MemoryRouter initialEntries={['/my-jira?tab=assigned']}>
+        <MyJiraPage />
+      </MemoryRouter>,
+    );
+  }
+
+  it("shows the Assigned tab's own live count once its read settles", async () => {
+    mountOnAssigned();
+
+    const tab = await screen.findByRole('tab', { name: /Assigned/ });
+    await waitFor(() => expect(tab).toHaveTextContent('3'));
+  });
+
+  it('does not show a count on a tab that has not read anything yet', async () => {
+    mountOnAssigned();
+    await screen.findByRole('tab', { name: /Assigned\s*3/ });
+
+    const connectionTab = screen.getByRole('tab', { name: 'Connection' });
+    expect(connectionTab).toHaveTextContent('Connection');
+    expect(connectionTab.textContent).toBe('Connection');
+  });
+});
+
+// The one place a person can star a ticket today (the drawer header) and
+// the one place that shows what's starred (the Starred tab) are two
+// different components entirely — this is the seam between them.
+describe('MyJiraPage — starring a ticket from its drawer', () => {
+  it('shows a starred ticket on the Starred tab immediately, with no reload', async () => {
+    jest
+      .mocked(listMyJiraTickets)
+      .mockResolvedValue(
+        queueRead([ticket({ id: 't-star', key: 'ENG-9', title: 'Star me' })]),
+      );
+    jest.mocked(getJiraTransitions).mockResolvedValue([]);
+    jest.mocked(listJiraComments).mockResolvedValue({ comments: [], total: 0 });
+    jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
+    jest
+      .mocked(listTicketsByJiraKeys)
+      .mockImplementation(async (keys) =>
+        keys.includes('ENG-9')
+          ? [ticket({ id: 't-star', key: 'ENG-9', title: 'Star me' })]
+          : [],
+      );
+
+    render(
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
+        <MyJiraPage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByText('Star me'));
+    const starButton = await screen.findByRole('button', {
+      name: 'Star ENG-9',
+    });
+    fireEvent.click(starButton);
+    // Confirms the toggle itself landed before blaming StarredTab for not
+    // picking it up, if this ever regresses.
+    expect(
+      await screen.findByRole('button', { name: 'Unstar ENG-9' }),
+    ).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Starred/ }));
+
+    expect(await screen.findByText('Star me')).toBeInTheDocument();
+    expect(screen.queryByText('Nothing starred yet.')).not.toBeInTheDocument();
   });
 });
 
@@ -939,7 +1156,7 @@ describe('JiraTicketDrawer — description wrapping', () => {
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
     jest.mocked(useJiraConnection).mockReturnValue(undefined);
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );
@@ -985,7 +1202,7 @@ describe('JiraTicketDrawer — comment timestamps', () => {
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
     jest.mocked(useJiraConnection).mockReturnValue(undefined);
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );
@@ -1016,7 +1233,7 @@ describe('JiraTransitionPopover — escapes the list clipping container', () => 
     ]);
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
     const { container } = render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/my-jira?tab=all']}>
         <MyJiraPage />
       </MemoryRouter>,
     );

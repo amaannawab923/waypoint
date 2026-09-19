@@ -66,6 +66,31 @@ const TRANSFER_TIMEOUT_MS = 120_000;
  */
 export const MAX_TRANSFER_BYTES = 100 * 1024 * 1024;
 
+/**
+ * Quotes a value for JQL.
+ *
+ * This is the security boundary for a renderer-supplied search string —
+ * ROAD-158's per-role tabs (Assigned/Reported/Watching) are the first thing
+ * in this file to ever build a JQL clause from free text a person typed, and
+ * without quoting, a crafted search term would be able to rewrite the query
+ * it was supposed to be a term in, reading issues outside the intended
+ * scope. Same escaping, same reasoning as providers/jira.ts's own
+ * `jqlQuoted` on the backend — that one stays private (tested only through
+ * its own caller's JQL assembly); this one is exported and directly tested
+ * instead, landing in its own commit ahead of its first real caller, so the
+ * boundary itself is reviewable before anything depends on it.
+ *
+ * Backslash first, then quote: reversing the order would re-escape the
+ * backslashes this function just added. Control characters are stripped
+ * rather than escaped — a newline inside a JQL string literal is not
+ * something a legitimate search term contains, and JQL has no escape for it.
+ */
+export function jqlQuoted(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  const stripped = value.replace(/[\u0000-\u001F\u007F]/g, ' ');
+  return `"${stripped.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
 // One personal queue is 10-40 issues. 100 per page with a hard cap of 5 pages
 // means the normal case is a single request and a pathological account still
 // can't turn "load my work" into an unbounded crawl of someone's Jira.
@@ -673,13 +698,16 @@ interface SearchResponse {
   isLast?: boolean;
 }
 
-export async function listMyTickets(): Promise<
-  JiraResult<JiraTicketQueryResult>
-> {
-  const credentialResult = requireCredential();
-  if (!credentialResult.ok) return credentialResult;
-  const credential = credentialResult.value;
-
+/**
+ * The paginated `/search/jql` crawl shared by every JQL-driven ticket list
+ * in this file (listMyTickets, listRoleTickets, and — per ROAD-158's later
+ * phases — Viewed and My past tickets too). One cursor loop, one truncation
+ * policy, so every caller's "incomplete" claim means the same thing.
+ */
+async function runTicketSearch(
+  credential: JiraCredential,
+  jql: string,
+): Promise<JiraResult<JiraTicketQueryResult>> {
   const tickets: JiraWireTicket[] = [];
   let nextPageToken: string | undefined;
   // Two flags, because one was doing two jobs that disagree in exactly the
@@ -699,7 +727,7 @@ export async function listMyTickets(): Promise<
 
   for (let page = 0; page < MAX_PAGES && hasNextPage; page += 1) {
     const query: Record<string, string> = {
-      jql: MY_WORK_JQL,
+      jql,
       fields: ISSUE_FIELDS,
       expand: SEARCH_EXPAND,
       maxResults: String(PAGE_SIZE),
@@ -781,6 +809,151 @@ export async function listMyTickets(): Promise<
   })();
 
   return { ok: true, value: { tickets, truncated } };
+}
+
+export async function listMyTickets(): Promise<
+  JiraResult<JiraTicketQueryResult>
+> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+  return runTicketSearch(credentialResult.value, MY_WORK_JQL);
+}
+
+/**
+ * The three per-role tabs (Assigned/Reported/Watching) each person's queue
+ * scoped to exactly the role its tab name promises — unlike MY_WORK_JQL,
+ * these are never unioned together, so switching tabs is switching JQL
+ * clauses, not filtering one shared list client-side.
+ */
+export type JiraTicketQueryRole = 'assignee' | 'reporter' | 'watcher';
+
+const ROLE_JQL_FIELD: Record<JiraTicketQueryRole, string> = {
+  assignee: 'assignee',
+  reporter: 'reporter',
+  watcher: 'watcher',
+};
+
+/**
+ * `search` is free text a person typed into that tab's own search box — the
+ * first renderer-typed input this file has ever folded into a JQL clause, so
+ * it goes through jqlQuoted (this file's security boundary; see its own doc
+ * comment) unconditionally. `role` never reaches here as free text: the IPC
+ * boundary in jiraIpc.ts validates it against this same closed union before
+ * this function is ever called, so ROLE_JQL_FIELD is always a safe lookup.
+ */
+function roleTicketsJql(
+  role: JiraTicketQueryRole,
+  search: string | undefined,
+): string {
+  const clauses = [
+    `${ROLE_JQL_FIELD[role]} = currentUser()`,
+    'resolution = Unresolved',
+  ];
+  const trimmed = search?.trim();
+  if (trimmed) clauses.push(`summary ~ ${jqlQuoted(trimmed)}`);
+  return `${clauses.join(' AND ')} ORDER BY updated DESC`;
+}
+
+export async function listRoleTickets(
+  role: JiraTicketQueryRole,
+  search: string | undefined,
+): Promise<JiraResult<JiraTicketQueryResult>> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+  return runTicketSearch(credentialResult.value, roleTicketsJql(role, search));
+}
+
+// ROAD-158's Viewed tab. No interpolation at all — issueHistory() is Jira's
+// own function for "issues this account has opened," so there is no free
+// text here for jqlQuoted to ever need to guard. Live-verified against a
+// real connected site (both the Basic and JQL search UIs accept it and
+// return real results) rather than assumed from documentation alone.
+const VIEWED_JQL = 'issuekey in issueHistory() ORDER BY lastViewed DESC';
+
+export async function listViewedTickets(): Promise<
+  JiraResult<JiraTicketQueryResult>
+> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+  return runTicketSearch(credentialResult.value, VIEWED_JQL);
+}
+
+// ROAD-158's My past tickets tab: real tombstoning via Jira's own assignee
+// history, not the disappearance-guessing toTicket's own isTombstoned has
+// always (deliberately) stayed false for — see that mapping's own comment.
+// `WAS` is Jira's change-history operator: true for any issue that was ever
+// assigned to the caller at some point, regardless of who holds it now.
+// Live-verified against a real connected site: `status was "To Do"`
+// returned real matches on this instance (proving the operator itself
+// works here), and `assignee was currentUser()` parsed and ran cleanly
+// returning zero rows — confirmed to be because this test data has no
+// recorded assignee-change history yet, not a syntax or operator problem.
+//
+// `(assignee != currentUser() OR assignee is EMPTY)`, not a bare
+// `assignee != currentUser()`: JQL's `!=`, like SQL's, never matches a NULL
+// — so a ticket reassigned away to someone else would qualify, but the
+// same ticket simply UNASSIGNED after leaving you (arguably the most
+// common "past ticket" of all) silently would not, with nothing to say why
+// it's missing.
+const PAST_TICKETS_JQL =
+  'assignee was currentUser() AND (assignee != currentUser() OR assignee is EMPTY) AND resolution = Unresolved ORDER BY updated DESC';
+
+export async function listPastTickets(): Promise<
+  JiraResult<JiraTicketQueryResult>
+> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+  return runTicketSearch(credentialResult.value, PAST_TICKETS_JQL);
+}
+
+// Bounds the `key in (...)` clause's own length, not a page of a crawl — the
+// request is still a GET, and this many quoted keys keeps the built JQL
+// comfortably inside URL length limits a proxy or Jira's own edge could
+// otherwise reject. Well above what one bulk read plausibly asks for: the
+// Worked-on tab this exists for reads a person's own history, not a whole
+// project.
+const LIST_BY_KEYS_MAX = 50;
+
+/**
+ * A bulk read of specific issues by key — ROAD-158's Worked-on tab, whose
+ * own list of keys comes from this app's backend (agent_runs joined to
+ * ticket_refs), not a person typing. Still routed through jqlQuoted for
+ * every key regardless: that function is this file's security boundary for
+ * anything reaching a JQL clause, and the boundary is about where a value
+ * ENDS UP, not where it came from — a compromised or buggy backend response
+ * is exactly the case defense in depth exists for.
+ *
+ * Returns the bare tickets, not a JiraTicketQueryResult: `truncated` answers
+ * "did the crawl get cut off", which is not a meaningful question when the
+ * result set size is bounded by the caller's own key list rather than by
+ * how much of an open-ended query Jira was willing to hand over. A caller
+ * with more than LIST_BY_KEYS_MAX keys gets the first
+ * LIST_BY_KEYS_MAX's worth, silently — see that constant's own comment for
+ * why that is not expected to matter in practice for this tab.
+ */
+export async function listTicketsByKeys(
+  keys: string[],
+): Promise<JiraResult<JiraWireTicket[]>> {
+  if (keys.length === 0) return { ok: true, value: [] };
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+  const cappedKeys = keys.slice(0, LIST_BY_KEYS_MAX);
+  const jql = `key in (${cappedKeys.map((key) => jqlQuoted(key)).join(', ')})`;
+  const result = await runTicketSearch(credentialResult.value, jql);
+  if (!result.ok) return result;
+  // `key in (...)` carries no meaningful order of its own — Jira hands
+  // results back in whatever internal order it likes, not the order the
+  // keys were listed in. Every current caller's key list is already
+  // ordered by recency (Worked-on: newest-worked-on-first from the
+  // backend; Starred: newest-starred-first from jiraStarred.ts), and that
+  // ordering would otherwise silently scramble on the way through this
+  // read. Re-sorted back into the caller's own order rather than left to
+  // Jira's.
+  const orderIndex = new Map(cappedKeys.map((key, i) => [key, i]));
+  const sorted = [...result.value.tickets].sort(
+    (a, b) => (orderIndex.get(a.key) ?? 0) - (orderIndex.get(b.key) ?? 0),
+  );
+  return { ok: true, value: sorted };
 }
 
 // -----------------------------------------------------------------------

@@ -6,9 +6,13 @@ import type { JiraCredential } from '../jira/jiraAuth';
 import type { Options, Query, SDKMessage } from './claudeSdkClient';
 
 const ipcMainOnMock = jest.fn();
+const ipcMainHandleMock = jest.fn();
 const getPathMock = jest.fn(() => '/fake/userData');
 jest.mock('electron', () => ({
-  ipcMain: { on: (...args: unknown[]) => ipcMainOnMock(...args) },
+  ipcMain: {
+    on: (...args: unknown[]) => ipcMainOnMock(...args),
+    handle: (...args: unknown[]) => ipcMainHandleMock(...args),
+  },
   app: { getPath: getPathMock },
 }));
 
@@ -181,6 +185,17 @@ function getRegisteredHandler() {
   const call = ipcMainOnMock.mock.calls.find((c) => c[0] === 'copilot:run');
   if (!call) throw new Error('ipcMain.on was never called with "copilot:run"');
   return call[1] as (event: unknown, args: unknown) => void;
+}
+
+function cancel(requestId: unknown): boolean {
+  const call = ipcMainHandleMock.mock.calls.find(
+    (c) => c[0] === 'copilot:run:cancel',
+  );
+  if (!call) {
+    throw new Error('ipcMain.handle was never called with "copilot:run:cancel"');
+  }
+  const handler = call[1] as (event: unknown, requestId: unknown) => boolean;
+  return handler({}, requestId);
 }
 
 function run(args: {
@@ -1249,6 +1264,74 @@ describe('killAllCopilotProcesses', () => {
     killAllCopilotProcesses();
 
     expect(queries[0].closeMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('copilot:run:cancel (Stop button)', () => {
+  it('closes the in-flight query for the given requestId and reports true', async () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+    run({ requestId: 'req-1', prompt: 'hi' });
+    await flush();
+
+    expect(cancel('req-1')).toBe(true);
+    expect(queries[0].closeMock).toHaveBeenCalled();
+  });
+
+  it('leaves other in-flight queries alone', async () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+    run({ requestId: 'req-1', prompt: 'hi' });
+    run({ requestId: 'req-2', prompt: 'hi' });
+    await flush();
+
+    cancel('req-1');
+
+    expect(queries[0].closeMock).toHaveBeenCalled();
+    expect(queries[1].closeMock).not.toHaveBeenCalled();
+  });
+
+  // Not a real scenario yet (there is exactly one Stop button, for the one
+  // run currently shown), but the renderer's requestId comes from a ref the
+  // panel controls — an id for a run that already finished on its own
+  // (killAllCopilotProcesses's own sibling test above covers the same
+  // untracking) must report false rather than throwing or closing the wrong
+  // query.
+  it('reports false for an unknown requestId, without touching any tracked query', async () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+    run({ requestId: 'req-1', prompt: 'hi' });
+    await flush();
+
+    expect(cancel('not-a-real-request-id')).toBe(false);
+    expect(queries[0].closeMock).not.toHaveBeenCalled();
+  });
+
+  // Defense in depth, same reasoning as the malformed-resumeSessionId test
+  // above: this handler is reachable from anything the renderer sends over
+  // IPC, not just this app's own well-behaved preload bridge.
+  it('reports false for a non-string requestId', async () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+    run({ requestId: 'req-1', prompt: 'hi' });
+    await flush();
+
+    expect(cancel(42)).toBe(false);
+    expect(cancel(null)).toBe(false);
+    expect(cancel(undefined)).toBe(false);
+    expect(queries[0].closeMock).not.toHaveBeenCalled();
+  });
+
+  it('untracks the cancelled query, so a later killAllCopilotProcesses does not close it a second time', async () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+    run({ requestId: 'req-1', prompt: 'hi' });
+    await flush();
+
+    cancel('req-1');
+    killAllCopilotProcesses();
+
+    expect(queries[0].closeMock).toHaveBeenCalledTimes(1);
   });
 });
 

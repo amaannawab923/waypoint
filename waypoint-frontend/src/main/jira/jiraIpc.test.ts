@@ -41,6 +41,9 @@ jest.mock('./jiraAuth', () => ({
 
 const validateCredentialMock = jest.fn();
 const listMyTicketsMock = jest.fn();
+const listRoleTicketsMock = jest.fn();
+const listTicketsByKeysMock = jest.fn();
+const listViewedTicketsMock = jest.fn();
 const getTicketMock = jest.fn();
 const listTransitionsMock = jest.fn();
 const transitionTicketMock = jest.fn();
@@ -62,6 +65,9 @@ jest.mock('./jiraClient', () => ({
   uploadAttachment: (...args: unknown[]) => uploadAttachmentMock(...args),
   validateCredential: (...args: unknown[]) => validateCredentialMock(...args),
   listMyTickets: (...args: unknown[]) => listMyTicketsMock(...args),
+  listRoleTickets: (...args: unknown[]) => listRoleTicketsMock(...args),
+  listTicketsByKeys: (...args: unknown[]) => listTicketsByKeysMock(...args),
+  listViewedTickets: (...args: unknown[]) => listViewedTicketsMock(...args),
   getTicket: (...args: unknown[]) => getTicketMock(...args),
   listTransitions: (...args: unknown[]) => listTransitionsMock(...args),
   transitionTicket: (...args: unknown[]) => transitionTicketMock(...args),
@@ -925,7 +931,11 @@ describe('per-ticket channels', () => {
       expect(
         await getHandler('jira:comments:update')(
           {},
-          { ticketId: '../../etc/passwd', commentId: '10500', body: ADF_TEXT_ONLY },
+          {
+            ticketId: '../../etc/passwd',
+            commentId: '10500',
+            body: ADF_TEXT_ONLY,
+          },
         ),
       ).toMatchObject({ ok: false, reason: 'invalid_input' });
       expect(updateCommentMock).not.toHaveBeenCalled();
@@ -935,7 +945,11 @@ describe('per-ticket channels', () => {
       expect(
         await getHandler('jira:comments:update')(
           {},
-          { ticketId: '10421', commentId: '../../etc/passwd', body: ADF_TEXT_ONLY },
+          {
+            ticketId: '10421',
+            commentId: '../../etc/passwd',
+            body: ADF_TEXT_ONLY,
+          },
         ),
       ).toMatchObject({ ok: false, reason: 'invalid_input' });
       expect(updateCommentMock).not.toHaveBeenCalled();
@@ -1277,6 +1291,160 @@ describe('per-ticket channels', () => {
     });
 
     expect(await getHandler('jira:tickets:list')({})).toEqual({
+      ok: true,
+      value: { tickets: [], truncated: false },
+    });
+  });
+
+  describe('jira:tickets:list-by-role', () => {
+    it('passes a valid role and the trimmed search straight to the client', async () => {
+      listRoleTicketsMock.mockResolvedValue({
+        ok: true,
+        value: { tickets: [], truncated: false },
+      });
+
+      const result = await getHandler('jira:tickets:list-by-role')(
+        {},
+        {
+          role: 'reporter',
+          search: '  webhook  ',
+        },
+      );
+
+      expect(result).toEqual({
+        ok: true,
+        value: { tickets: [], truncated: false },
+      });
+      expect(listRoleTicketsMock).toHaveBeenCalledWith('reporter', 'webhook');
+    });
+
+    it('treats an absent search as blank, not undefined-crashes', async () => {
+      listRoleTicketsMock.mockResolvedValue({
+        ok: true,
+        value: { tickets: [], truncated: false },
+      });
+
+      await getHandler('jira:tickets:list-by-role')({}, { role: 'assignee' });
+
+      expect(listRoleTicketsMock).toHaveBeenCalledWith('assignee', '');
+    });
+
+    // The hard security rule this channel exists to enforce: role is a
+    // closed enum, never free text passed through to the JQL builder.
+    it('refuses a role outside the closed enum instead of forwarding it', async () => {
+      const result = await getHandler('jira:tickets:list-by-role')(
+        {},
+        {
+          role: 'admin',
+        },
+      );
+
+      expect(result).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(listRoleTicketsMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses a missing role', async () => {
+      const result = await getHandler('jira:tickets:list-by-role')({}, {});
+
+      expect(result).toMatchObject({ ok: false, reason: 'invalid_input' });
+      expect(listRoleTicketsMock).not.toHaveBeenCalled();
+    });
+
+    // Found in review: this file's own header says renderer input is
+    // validated at this boundary, but search had no size bound at all — an
+    // unbounded string here becomes an unbounded `jql` query parameter on a
+    // GET to Jira. Truncated, not refused: a long search term is still a
+    // meaningful (if narrower) search.
+    it('truncates an oversized search term instead of forwarding it whole', async () => {
+      listRoleTicketsMock.mockResolvedValue({
+        ok: true,
+        value: { tickets: [], truncated: false },
+      });
+
+      await getHandler('jira:tickets:list-by-role')(
+        {},
+        {
+          role: 'assignee',
+          search: 'x'.repeat(5000),
+        },
+      );
+
+      const forwarded = listRoleTicketsMock.mock.calls[0][1] as string;
+      expect(forwarded.length).toBe(200);
+    });
+  });
+
+  describe('jira:tickets:list-by-keys', () => {
+    it('passes the keys straight through, trimmed', async () => {
+      listTicketsByKeysMock.mockResolvedValue({ ok: true, value: [] });
+
+      const result = await getHandler('jira:tickets:list-by-keys')({}, [
+        'ENG-1',
+        '  PLAT-2  ',
+      ]);
+
+      expect(result).toEqual({ ok: true, value: [] });
+      expect(listTicketsByKeysMock).toHaveBeenCalledWith(['ENG-1', 'PLAT-2']);
+    });
+
+    it('drops non-string and blank entries rather than forwarding them', async () => {
+      listTicketsByKeysMock.mockResolvedValue({ ok: true, value: [] });
+
+      await getHandler('jira:tickets:list-by-keys')({}, [
+        'ENG-1',
+        '',
+        '   ',
+        42,
+        null,
+        undefined,
+      ]);
+
+      expect(listTicketsByKeysMock).toHaveBeenCalledWith(['ENG-1']);
+    });
+
+    it('treats a non-array payload as no keys, without throwing', async () => {
+      listTicketsByKeysMock.mockResolvedValue({ ok: true, value: [] });
+
+      const result = await getHandler('jira:tickets:list-by-keys')({}, 'ENG-1');
+
+      expect(result).toEqual({ ok: true, value: [] });
+      expect(listTicketsByKeysMock).toHaveBeenCalledWith([]);
+    });
+
+    // Found in review: no bound on either the array length or an individual
+    // key's length — a caller (buggy or otherwise) could hand this channel
+    // megabytes of "keys" before jiraClient.ts's own LIST_BY_KEYS_MAX ever
+    // gets a chance to cap it down to 50.
+    it('drops a key longer than a real Jira key could ever be', async () => {
+      listTicketsByKeysMock.mockResolvedValue({ ok: true, value: [] });
+
+      await getHandler('jira:tickets:list-by-keys')({}, [
+        'ENG-1',
+        'x'.repeat(1000),
+      ]);
+
+      expect(listTicketsByKeysMock).toHaveBeenCalledWith(['ENG-1']);
+    });
+
+    it("caps the number of keys forwarded, not just each key's own length", async () => {
+      listTicketsByKeysMock.mockResolvedValue({ ok: true, value: [] });
+      const keys = Array.from({ length: 250 }, (_, i) => `ENG-${i}`);
+
+      await getHandler('jira:tickets:list-by-keys')({}, keys);
+
+      const forwarded = listTicketsByKeysMock.mock.calls[0][0] as string[];
+      expect(forwarded).toHaveLength(100);
+      expect(forwarded[0]).toBe('ENG-0');
+    });
+  });
+
+  it('jira:tickets:list-viewed delegates straight to the client', async () => {
+    listViewedTicketsMock.mockResolvedValue({
+      ok: true,
+      value: { tickets: [], truncated: false },
+    });
+
+    expect(await getHandler('jira:tickets:list-viewed')({})).toEqual({
       ok: true,
       value: { tickets: [], truncated: false },
     });

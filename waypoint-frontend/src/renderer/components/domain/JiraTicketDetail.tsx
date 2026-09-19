@@ -20,8 +20,9 @@ import {
 import { showErrorToast } from '@/lib/toast';
 import { useAsync } from '@/lib/useAsync';
 import { useJiraConnection } from '@/lib/jiraStore';
+import { toggleJiraStarred, useJiraStarred } from '@/lib/jiraStarred';
 import { Avatar } from '@/components/ui/Avatar';
-import { Maximize2 } from 'lucide-react';
+import { Maximize2, Star } from 'lucide-react';
 import { IconChevronRight, IconLock, IconX } from '@/components/icons';
 import {
   JiraAssigneeChip,
@@ -568,6 +569,7 @@ export function JiraTicketDetail({
   const stateChipRef = useRef<HTMLButtonElement>(null);
   const priorityChipRef = useRef<HTMLButtonElement>(null);
   const connection = useJiraConnection();
+  const starred = useJiraStarred(ticket.key);
 
   const {
     data: fetchedComments,
@@ -1423,6 +1425,21 @@ export function JiraTicketDetail({
           )}
 
           <div className="ml-auto flex shrink-0 items-center gap-1">
+            <button
+              type="button"
+              aria-label={
+                starred ? `Unstar ${ticket.key}` : `Star ${ticket.key}`
+              }
+              aria-pressed={starred}
+              title={starred ? 'Unstar' : 'Star'}
+              onClick={() => toggleJiraStarred(ticket.key)}
+              className={clsx(
+                'flex size-7 shrink-0 items-center justify-center rounded hover:bg-surface-2',
+                starred ? 'text-warning' : 'text-text-muted hover:text-text',
+              )}
+            >
+              <Star size={15} fill={starred ? 'currentColor' : 'none'} />
+            </button>
             {jiraUrl && (
               <a
                 href={jiraUrl}

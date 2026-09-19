@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { clsx } from 'clsx';
 import {
   dismissJiraTombstone,
+  ensureJiraSynced,
   getJiraConnectionStatus,
   listMyJiraTickets,
   resolveJiraConflict,
@@ -16,17 +17,74 @@ import { JiraTicketRow } from '@/components/domain/JiraTicketRow';
 import { JiraTicketDrawer } from '@/components/domain/JiraTicketDrawer';
 import { JiraLoadError } from '@/components/domain/JiraLoadError';
 import { JiraConnectionPanel } from '@/components/domain/JiraConnectionPanel';
-import type { JiraTicket, JiraTruncation } from '@/types/jira';
+import type {
+  JiraTicket,
+  JiraTicketQueryRole,
+  JiraTruncation,
+} from '@/types/jira';
 import MyJiraToolbar from './MyJiraToolbar';
 import MyJiraPager from './MyJiraPager';
 import { useMyJiraQueue } from './useMyJiraQueue';
+import RoleTicketsTab from './RoleTicketsTab';
+import WorkedOnTab from './WorkedOnTab';
+import ViewedTab from './ViewedTab';
+import StarredTab from './StarredTab';
+import PastTicketsTab from './PastTicketsTab';
 
-type TabKey = 'work' | 'connection';
+// ROAD-158 redesign: the old single 'work' tab (the assignee/reporter/
+// watcher union query) is now 'all' — "All Tickets", the old screen kept
+// intact under a name that matches what it actually shows once Assigned/
+// Reported/Watching exist as their own, narrower tabs. Assigned is now the
+// default landing tab, per the founder's own call on the mockup. Order and
+// full tab set match the approved mockup exactly.
+type TabKey =
+  | 'assigned'
+  | 'reported'
+  | 'watching'
+  | 'worked-on'
+  | 'viewed'
+  | 'starred'
+  | 'past'
+  | 'all'
+  | 'connection';
 
 const TABS: { key: TabKey; label: string }[] = [
-  { key: 'work', label: 'My work' },
+  { key: 'assigned', label: 'Assigned' },
+  { key: 'reported', label: 'Reported' },
+  { key: 'watching', label: 'Watching' },
+  { key: 'worked-on', label: 'Worked on' },
+  { key: 'viewed', label: 'Viewed' },
+  { key: 'starred', label: 'Starred' },
+  { key: 'past', label: 'My past tickets' },
+  { key: 'all', label: 'All Tickets' },
   { key: 'connection', label: 'Connection' },
 ];
+
+// Tabs whose own count this page tracks and shows next to their label — the
+// self-contained tab components report it live via onCountChange as their
+// own read settles. 'all' and 'connection' are deliberately absent: 'all'
+// already shows its own "N issues · M projects" line inside its body (adding
+// a second count next to the tab would just be the same fact said twice),
+// and 'connection' has no ticket count to show at all.
+type CountedTabKey =
+  | 'assigned'
+  | 'reported'
+  | 'watching'
+  | 'worked-on'
+  | 'viewed'
+  | 'starred'
+  | 'past';
+
+// The three per-role tabs' own TabKey -> the query role RoleTicketsTab
+// actually takes. A lookup rather than a nested ternary at the call site.
+const ROLE_TAB_QUERY_ROLE: Record<
+  'assigned' | 'reported' | 'watching',
+  JiraTicketQueryRole
+> = {
+  assigned: 'assignee',
+  reported: 'reporter',
+  watching: 'watcher',
+};
 
 /** True only for a real `TabKey` — used to validate the `?tab=` param below
  * against the actual union rather than trusting a string a link (this app's
@@ -87,19 +145,61 @@ export function LiveSyncIndicator({
 export default function MyJiraPage() {
   // `JiraConnectionCard` on the All-Projects page links straight to the
   // Connection tab (`/my-jira?tab=connection`) rather than always landing on
-  // My work — read once at mount, the same way TicketsLayout/AllTicketsPage
+  // Assigned — read once at mount, the same way TicketsLayout/AllTicketsPage
   // seed state from their own query params. An absent or garbage value
   // (someone hand-editing the URL, or a future link that gets the param
-  // wrong) falls back to 'work' via `isTabKey` rather than rendering neither
-  // tab's body.
+  // wrong) falls back to 'assigned' via `isTabKey` rather than rendering
+  // neither tab's body.
   const [searchParams] = useSearchParams();
   const initialTab = searchParams.get('tab');
   const [tab, setTab] = useState<TabKey>(
-    isTabKey(initialTab) ? initialTab : 'work',
+    isTabKey(initialTab) ? initialTab : 'assigned',
   );
   const [drawerTicketId, setDrawerTicketId] = useState<string | null>(null);
 
+  // Live per-tab ticket counts, shown next to each tab's own label — see
+  // CountedTabKey's own comment for which tabs report one and why. A
+  // functional update that bails out when the incoming count already
+  // matches keeps a tab's own re-render (its useAsync settling again on an
+  // unrelated re-mount) from cascading into a fresh page-level render when
+  // nothing actually changed.
+  const [counts, setCounts] = useState<Partial<Record<CountedTabKey, number>>>(
+    {},
+  );
+  function countHandler(key: CountedTabKey) {
+    return (count: number) =>
+      setCounts((prev) =>
+        prev[key] === count ? prev : { ...prev, [key]: count },
+      );
+  }
+
   const connection = useLoadedJiraConnection();
+
+  // Found in review: this page used to call listMyJiraTickets() — a real,
+  // full 5-page crawl — unconditionally on every mount, even though the
+  // default landing tab is now Assigned, which has nothing to do with its
+  // result. The header's sync indicator (just below, rendered regardless of
+  // which tab is open) still needs SOME real numbers, though — ensureJiraSynced
+  // is the primitive that exists precisely for "guarantee at least one real
+  // read has happened this session" without repeating it on every later
+  // visit: a no-op the moment lastSyncAt is already set, from this page or
+  // anywhere else (the All Projects tile, the sidebar).
+  useEffect(() => {
+    // Never rejects (see ensureJiraSynced's own comment — a failed
+    // background sync resolves with the pre-read status rather than
+    // throwing), but a bare .then() with nothing to answer to still reads
+    // as an unhandled rejection risk to the linter.
+    ensureJiraSynced()
+      .then(setJiraConnection)
+      .catch(() => {});
+  }, []);
+
+  // The full "my work" ticket list itself is only actually consumed by the
+  // All Tickets tab's own body below — the other eight tabs each run their
+  // own scoped read — and by the Connection tab's Refresh button, wired to
+  // reloadTickets. Gated on tab rather than fetched unconditionally, for
+  // the same reason as the effect above: visiting Assigned, Reported, or
+  // any other tab has no use for a list it never renders.
   const {
     data: fetchedRead,
     loading,
@@ -109,7 +209,13 @@ export default function MyJiraPage() {
     // the list body below.
     error: ticketsError,
     reload: reloadTickets,
-  } = useAsync(() => listMyJiraTickets(), []);
+  } = useAsync(
+    () =>
+      tab === 'all' || tab === 'connection'
+        ? listMyJiraTickets()
+        : Promise.resolve(null),
+    [tab === 'all' || tab === 'connection'],
+  );
   const [tickets, setTickets] = useState<JiraTicket[]>([]);
   // Held separately from `tickets` rather than read off `fetchedRead` at
   // render, because `tickets` is patched in place by every write on this page
@@ -197,37 +303,100 @@ export default function MyJiraPage() {
         {connection && <LiveSyncIndicator lastSyncAt={connection.lastSyncAt} />}
       </div>
 
-      <p className="mt-1.5 ml-[41px] max-w-[70ch] text-[12.5px] text-text-secondary">
-        Everything assigned to you, reported by you, or watched by you — across{' '}
-        <b>every</b> Jira project you can see, not one board.
-        {/* The literal JQL that runs — parentheses included. JQL binds AND
-            tighter than OR, so without them the Unresolved filter would apply
-            to the watcher clause alone; see jiraClient.ts's MY_WORK_JQL. */}
-        <span className="mt-1 block font-mono text-[11px] text-text-muted">
-          (assignee = currentUser() OR reporter = currentUser() OR watcher =
-          currentUser()) AND resolution = Unresolved
-        </span>
-      </p>
+      {/* Only All Tickets keeps this sentence: it is the one tab whose own
+          query is a union across roles, and the one place "every project you
+          can see, not one board" is still the whole story. The per-role tabs
+          say what they show in their own tab label; describing them again
+          here would be the same on-screen JQL restatement Phase 1 removed,
+          just moved up a level. */}
+      {tab === 'all' && (
+        <p className="mt-1.5 ml-[41px] max-w-[70ch] text-[12.5px] text-text-secondary">
+          Everything assigned to you, reported by you, or watched by you —
+          across <b>every</b> Jira project you can see, not one board.
+        </p>
+      )}
 
-      <div className="mt-3.5 ml-[41px] flex gap-1 border-b border-border">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            onClick={() => setTab(t.key)}
-            className={clsx(
-              'cursor-pointer border-b-2 px-3 py-2 text-sm font-semibold transition-colors',
-              tab === t.key
-                ? 'border-accent text-text'
-                : 'border-transparent text-text-muted hover:text-text-secondary',
-            )}
-          >
-            {t.label}
-          </button>
-        ))}
+      {/* role="tablist"/"tab": real ARIA tab semantics, not generic buttons
+          — both because this genuinely is a tab strip and because "Assigned"
+          /"Reported"/"Watching" are now real words on this page twice, once
+          here and once as the All Tickets tab's own role-filter chip labels
+          (MyJiraToolbar.tsx's ROLE_FILTERS). Identical visible text at two
+          different roles ("tab" vs the chip's plain "button") is what keeps
+          them unambiguous to a query by name, the same way a sighted person
+          tells them apart by where they sit on screen. */}
+      <div
+        role="tablist"
+        aria-label="My Jira sections"
+        className="mt-3.5 ml-[41px] flex gap-1 overflow-x-auto border-b border-border"
+      >
+        {TABS.map((t) => {
+          const count = counts[t.key as CountedTabKey];
+          return (
+            <button
+              key={t.key}
+              type="button"
+              role="tab"
+              aria-selected={tab === t.key}
+              onClick={() => setTab(t.key)}
+              className={clsx(
+                'flex shrink-0 cursor-pointer items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-semibold whitespace-nowrap transition-colors',
+                tab === t.key
+                  ? 'border-accent text-text'
+                  : 'border-transparent text-text-muted hover:text-text-secondary',
+              )}
+            >
+              {t.label}
+              {count !== undefined && (
+                <span
+                  className={clsx(
+                    'rounded-full px-1.5 py-0.5 font-mono text-[10.5px] font-medium',
+                    tab === t.key
+                      ? 'bg-jira-bg text-jira'
+                      : 'bg-surface-2 text-text-muted',
+                  )}
+                >
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
-      {tab === 'work' && (
+      {(tab === 'assigned' || tab === 'reported' || tab === 'watching') && (
+        <div className="mt-4 ml-[41px]">
+          <RoleTicketsTab
+            queryRole={ROLE_TAB_QUERY_ROLE[tab]}
+            onCountChange={countHandler(tab)}
+          />
+        </div>
+      )}
+
+      {tab === 'worked-on' && (
+        <div className="mt-4 ml-[41px]">
+          <WorkedOnTab onCountChange={countHandler('worked-on')} />
+        </div>
+      )}
+
+      {tab === 'viewed' && (
+        <div className="mt-4 ml-[41px]">
+          <ViewedTab onCountChange={countHandler('viewed')} />
+        </div>
+      )}
+
+      {tab === 'starred' && (
+        <div className="mt-4 ml-[41px]">
+          <StarredTab onCountChange={countHandler('starred')} />
+        </div>
+      )}
+
+      {tab === 'past' && (
+        <div className="mt-4 ml-[41px]">
+          <PastTicketsTab onCountChange={countHandler('past')} />
+        </div>
+      )}
+
+      {tab === 'all' && (
         <div className="mt-4 ml-[41px]">
           {loading && !fetchedRead ? (
             <SkeletonListRows />
@@ -396,8 +565,8 @@ export default function MyJiraPage() {
                     explicit click, and to nothing else. */}
                 <div className="mt-3 flex items-start gap-2 rounded-[var(--radius-sm)] border border-jira/30 bg-jira-bg px-3 py-2.5 text-[12.5px] text-jira">
                   <span>
-                    Your own clicks write straight to Jira — no approval
-                    step. Copilot&apos;s never do.
+                    Your own clicks write straight to Jira — no approval step.
+                    Copilot&apos;s never do.
                   </span>
                 </div>
               </div>

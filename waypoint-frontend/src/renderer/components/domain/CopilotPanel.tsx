@@ -3,7 +3,7 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { clsx } from 'clsx';
-import { ArrowLeft, FolderGit2, Send } from 'lucide-react';
+import { ArrowLeft, FolderGit2, Loader2, Send, Square } from 'lucide-react';
 import { IconPlus, IconSparkles, IconX } from '@/components/icons';
 import {
   listTickets,
@@ -20,17 +20,20 @@ import {
   slashCompletionStage,
   type ParsedSlash,
 } from '@/lib/copilotSlash';
-import { BriefPreviewDialog } from '@/components/sessions/BriefPreviewDialog';
+import {
+  BriefPreviewDialog,
+  INTENT_LABEL,
+} from '@/components/sessions/BriefPreviewDialog';
 import { SESSIONS_ENABLED } from '@/lib/featureFlags';
 import type {
   BriefPreviewInput,
   RunIntent,
   SessionOfferHistory,
 } from '@/types/agentRuns';
-import { INTENT_LABEL } from '@/components/sessions/BriefPreviewDialog';
 import { statusView } from '@/components/sessions/sessionStatus';
 import { verdictLabel } from '@/lib/runVerdict';
 import { useCopilotConversations } from '@/lib/useCopilotConversations';
+import { useCopilotPanelWidth } from '@/lib/useCopilotPanelWidth';
 import { useCopilotProposals } from '@/lib/useCopilotProposals';
 import { useCurrentRouteProject } from '@/lib/useCurrentRouteProject';
 import { interleaveProposals } from '@/lib/copilotTranscript';
@@ -334,12 +337,19 @@ function CopilotRepoLinkCard({
 
 function Composer({
   disabled,
+  isStreaming,
   onSend,
+  onStop,
   onSlash,
   tickets,
 }: {
   disabled: boolean;
+  /** A reply is currently streaming — distinct from `sending` below (which
+   * only covers the synchronous send/slash await): this is what swaps Send
+   * for Stop and shows the "Copilot is working…" indicator. */
+  isStreaming: boolean;
   onSend: (content: string) => Promise<void>;
+  onStop: () => void;
   /** W5a: a complete slash command — opens the brief preview, sends nothing. */
   onSlash?: (parsed: ParsedSlash) => Promise<void>;
   /** The open project's tickets, for `/fix RO…` key completion. */
@@ -349,6 +359,21 @@ function Composer({
   const [sending, setSending] = useState(false);
   const [slashError, setSlashError] = useState<string | null>(null);
   const [highlight, setHighlight] = useState(0);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-grow: the textarea has no intrinsic sense of its own content height
+  // (rows={1} pins it to one line), so pasting or typing a long message just
+  // scrolled inside a fixed 36px box with no visual cue there was more to
+  // read. Resetting to 'auto' before measuring scrollHeight is required —
+  // without it the box can only grow, never shrink back down (e.g. after
+  // deleting a long paste or sending the message), since scrollHeight keeps
+  // reporting the taller box's own last height.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, [value]);
 
   // W5a: the `/` menu. Shown while the caret is on the command word or
   // the key; a complete command is submitted on Enter, an incomplete one
@@ -460,7 +485,17 @@ function Composer({
           {slashError}
         </div>
       )}
+      {isStreaming && !menuOpen && !slashError && (
+        <div
+          className="absolute bottom-full left-4 mb-1 flex items-center gap-1.5 text-[11px] text-text-muted"
+          role="status"
+        >
+          <Loader2 size={11} className="animate-spin" />
+          Copilot is working…
+        </div>
+      )}
       <textarea
+        ref={textareaRef}
         value={value}
         // readOnly, NOT disabled: a *disabled* form control is forced out of
         // the tab order and force-blurred by the browser the instant the
@@ -517,16 +552,22 @@ function Composer({
         }}
         rows={1}
         placeholder="Ask Copilot…"
-        className="thin-scroll max-h-28 min-h-9 flex-1 resize-none rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 py-2 text-sm outline-none focus:border-accent read-only:opacity-50"
+        className="thin-scroll max-h-64 min-h-9 flex-1 resize-none overflow-y-auto rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 py-2 text-sm outline-none focus:border-accent read-only:opacity-50"
       />
-      <IconButton
-        label="Send"
-        onClick={submit}
-        disabled={composerDisabled || !value.trim()}
-        className="mb-0.5 disabled:opacity-40"
-      >
-        <Send size={16} />
-      </IconButton>
+      {isStreaming ? (
+        <IconButton label="Stop" onClick={onStop} className="mb-0.5">
+          <Square size={14} fill="currentColor" />
+        </IconButton>
+      ) : (
+        <IconButton
+          label="Send"
+          onClick={submit}
+          disabled={composerDisabled || !value.trim()}
+          className="mb-0.5 disabled:opacity-40"
+        >
+          <Send size={16} />
+        </IconButton>
+      )}
     </div>
   );
 }
@@ -561,6 +602,7 @@ function Composer({
 export function CopilotPanel({ onClose }: { onClose: () => void }) {
   const [visible, setVisible] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  const { width: panelWidth, isResizing, startResize } = useCopilotPanelWidth();
   const sessionStore = useCopilotConversations();
   const { sessions, loading: listLoading, error: listError } = sessionStore;
   // Which project's repo (if any) grounds the NEXT message — read from the
@@ -657,6 +699,19 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     null,
   );
   const streamFrameRef = useRef<number | null>(null);
+  // Stop button support. Keyed by sessionId (not one bare ref) because a run
+  // left going in a session the user has navigated away from is still
+  // cancellable from wherever they land — see runAndPersist's own comment on
+  // per-session generations for the same reasoning. onRequestId (preload.ts)
+  // fires synchronously before the run's first chunk, so the id is always
+  // here by the time a Stop click could possibly happen.
+  const requestIdBySessionRef = useRef<Map<string, string>>(new Map());
+  // A cancelRun() close() surfaces through the exact same onError path a
+  // real failure does (claudeSession.ts's catch block can't tell a
+  // user-requested stop from the CLI dying on its own) — this is what lets
+  // onError distinguish them and skip the scary "try again" banner for a
+  // stop the user asked for.
+  const cancelledRequestIdsRef = useRef<Set<string>>(new Set());
 
   // W5a: session offers the model made (dispatch_session), per
   // conversation; the brief preview a verb or a slash command opened; the
@@ -1006,6 +1061,17 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     runGenerationRef.current.set(sessionId, generation);
     const isStale = () =>
       runGenerationRef.current.get(sessionId) !== generation;
+    // Captured once, by THIS run's own onRequestId callback below — not
+    // read back out of requestIdBySessionRef inside onDone/onError, which
+    // is keyed by sessionId and gets overwritten the moment a newer run
+    // starts for the same session. Reading it back there would check the
+    // WRONG requestId against cancelledRequestIdsRef for a stale callback
+    // arriving after a retry already began, silently leaking this run's
+    // entry in the cancelled set forever instead of clearing it.
+    let requestIdForThisRun: string | undefined;
+    const wasCancelled = () =>
+      !!requestIdForThisRun &&
+      cancelledRequestIdsRef.current.delete(requestIdForThisRun);
     // Drops whatever the batched flush above hasn't committed yet — without
     // this, a frame already in flight when the run ends could still fire
     // afterward and resurrect a streaming bubble the run just cleared.
@@ -1057,6 +1123,10 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
               : {}),
           },
           {
+            onRequestId: (id) => {
+              requestIdForThisRun = id;
+              requestIdBySessionRef.current.set(sessionId, id);
+            },
             onChunk: (text) => {
               if (isStale()) return;
               const prevText =
@@ -1084,6 +1154,18 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
               sessionId: claudeSessionId,
               needsRepoLink,
             }) => {
+              // Checked first, before isStale(): a Stop click races the SDK
+              // producing a final result — main can still call onDone for a
+              // run the user already asked to cancel if the CLI's own reply
+              // was already in flight when close() reached it. Without this,
+              // a reply the user explicitly stopped could still appear a
+              // moment later, unprompted. Also the only place this run's own
+              // entry in cancelledRequestIdsRef ever gets cleared on the
+              // success path, so it doesn't leak.
+              if (wasCancelled()) {
+                resolve();
+                return;
+              }
               if (isStale()) return;
               clearStreamBuffer();
               setStreaming(null);
@@ -1205,6 +1287,18 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
               resolve();
             },
             onError: (err) => {
+              // query.close() (Stop button) makes claudeSession.ts's own
+              // loop exit through this exact same onError path — checked
+              // BEFORE isStale() and before treating this as a real
+              // failure, so a user-requested stop lands back on a plain
+              // ready composer instead of an error banner with a "try
+              // again" that re-runs a turn nobody asked to retry, and so
+              // this run's entry in cancelledRequestIdsRef always clears
+              // even if a retry has already made this callback stale.
+              if (wasCancelled()) {
+                resolve();
+                return;
+              }
               if (isStale()) return;
               clearStreamBuffer();
               setStreaming(null);
@@ -1231,6 +1325,27 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
         setLastFailedPrompt(content);
         resolve();
       }
+    });
+  }
+
+  // Stop button. Optimistic, like the rest of this panel's send flow: the
+  // composer flips back to ready immediately rather than waiting on the
+  // main-process round trip through cancelRun — onError's own cleanup below
+  // (once it arrives) is then a no-op re-application of state already set
+  // here, not the thing the user is waiting on.
+  function stopStreaming(sessionId: string) {
+    if (streamFrameRef.current !== null) {
+      cancelAnimationFrame(streamFrameRef.current);
+      streamFrameRef.current = null;
+    }
+    streamBufferRef.current = null;
+    setStreaming(null);
+    const requestId = requestIdBySessionRef.current.get(sessionId);
+    if (!requestId) return;
+    cancelledRequestIdsRef.current.add(requestId);
+    window.electron.copilot.cancelRun(requestId).catch(() => {
+      // Nothing left to do client-side either way — the composer is
+      // already back to ready above.
     });
   }
 
@@ -1475,9 +1590,30 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     <div
       ref={panelRef}
       data-copilot-panel
-      className="fixed top-12 right-0 bottom-0 z-40 flex w-full max-w-[400px] flex-col border-l border-border bg-surface shadow-2xl transition-transform duration-200 ease-out"
-      style={{ transform: visible ? 'translateX(0)' : 'translateX(100%)' }}
+      className={clsx(
+        'fixed top-12 right-0 bottom-0 z-40 flex max-w-[95vw] flex-col border-l border-border bg-surface shadow-2xl',
+        !isResizing && 'transition-transform duration-200 ease-out',
+      )}
+      style={{
+        width: panelWidth,
+        transform: visible ? 'translateX(0)' : 'translateX(100%)',
+      }}
     >
+      {/* Drag handle: widens the panel leftward, since it's pinned to the
+          right edge — see useCopilotPanelWidth.ts. A few px wider than the
+          visible border it sits over so it's actually easy to grab, not a
+          1px hairline. select-none stops a fast drag from also selecting
+          the transcript text underneath. */}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize Copilot panel"
+        onPointerDown={startResize}
+        className={clsx(
+          'absolute top-0 bottom-0 left-0 z-10 w-1.5 -translate-x-1/2 cursor-col-resize select-none',
+          isResizing ? 'bg-accent' : 'bg-transparent hover:bg-accent/50',
+        )}
+      />
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-3.5">
         <div className="flex min-w-0 items-center gap-1">
           {activeSession && (
@@ -1683,7 +1819,9 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
 
           <Composer
             disabled={isStreamingHere}
+            isStreaming={isStreamingHere}
             onSend={handleSend}
+            onStop={() => activeSessionId && stopStreaming(activeSessionId)}
             {...(SESSIONS_ENABLED
               ? { onSlash: handleSlash, tickets: keyTickets }
               : {})}

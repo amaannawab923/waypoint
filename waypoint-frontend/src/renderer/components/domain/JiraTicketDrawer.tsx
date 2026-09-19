@@ -4,6 +4,10 @@ import { useNavigate } from 'react-router-dom';
 import { clsx } from 'clsx';
 import { JiraTicketDetail } from '@/components/domain/JiraTicketDetail';
 import { useCopilotOpenState } from '@/lib/copilotOpenStore';
+import {
+  useCopilotPanelResizingState,
+  useCopilotPanelWidthState,
+} from '@/lib/useCopilotPanelWidth';
 import type { JiraTicket } from '@/types/jira';
 
 /**
@@ -56,6 +60,15 @@ export function JiraTicketDrawer({
   // see lib/copilotOpenStore.ts for why this reads a module-level store
   // instead of route-scoped context.
   const copilotOpen = useCopilotOpenState();
+  // Copilot's panel is resizable (see useCopilotPanelWidth.ts) — this reads
+  // its live width rather than assuming the old fixed 400px, or a resize
+  // past that would leave this drawer overlapping Copilot instead of
+  // docking beside it. copilotResizing suspends the `right` transition
+  // below for the same reason CopilotPanel.tsx suspends its own slide
+  // transition while dragging — otherwise this drawer's edge lags a few
+  // frames behind the panel's true width on every pointermove.
+  const copilotWidth = useCopilotPanelWidthState();
+  const copilotResizing = useCopilotPanelResizingState();
 
   useEffect(() => {
     const raf = requestAnimationFrame(() => setVisible(true));
@@ -119,11 +132,10 @@ export function JiraTicketDrawer({
       className={clsx(
         // 720px, matching TicketDrawer — the 460px this used to be is what
         // made "Open in Jira" the only comfortable way to read a real thread.
-        'thin-scroll fixed top-12 bottom-0 z-50 flex w-full max-w-[720px] flex-col border-l border-border bg-surface transition-[right,transform] duration-200 ease-out',
-        // Shifted left by Copilot's own width while it's open, so the two
-        // dock side by side instead of one covering the other — see
-        // lib/copilotOpenStore.ts.
-        copilotOpen ? 'right-[400px]' : 'right-0',
+        'thin-scroll fixed top-12 bottom-0 z-50 flex w-full max-w-[720px] flex-col border-l border-border bg-surface duration-200 ease-out',
+        copilotResizing
+          ? 'transition-transform'
+          : 'transition-[right,transform]',
         // shadow-2xl belongs only to the "floating over the main content
         // list" state. A negative x-offset was tried first to keep it while
         // aiming the blur away from Copilot, but box-shadow's blur has no
@@ -138,7 +150,14 @@ export function JiraTicketDrawer({
         // amount of blur tuning can ever bleed onto a docked neighbor again.
         copilotOpen ? 'shadow-none' : 'shadow-2xl',
       )}
-      style={{ transform: visible ? 'translateX(0)' : 'translateX(100%)' }}
+      style={{
+        // Shifted left by Copilot's own CURRENT width while it's open, so
+        // the two dock side by side instead of overlapping — a plain
+        // Tailwind class can't do this since the offset is a runtime value,
+        // not one of a fixed set Tailwind's build-time scan can see.
+        right: copilotOpen ? copilotWidth : 0,
+        transform: visible ? 'translateX(0)' : 'translateX(100%)',
+      }}
     >
       <JiraTicketDetail
         ticket={ticket}

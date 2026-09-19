@@ -17,8 +17,13 @@ import {
   getComment,
   getMyPermissions,
   getTicket,
+  jqlQuoted,
   listComments,
   listMyTickets,
+  listRoleTickets,
+  listTicketsByKeys,
+  listPastTickets,
+  listViewedTickets,
   listPriorityOptions,
   listTransitions,
   postComment,
@@ -72,6 +77,33 @@ beforeEach(() => {
   jest.clearAllMocks();
   readStoredJiraCredentialMock.mockReturnValue(CREDENTIAL);
   (global as unknown as { fetch: jest.Mock }).fetch = fetchMock;
+});
+
+// ROAD-158: the security boundary for the renderer-supplied search strings
+// the upcoming per-role tabs (Assigned/Reported/Watching) will build JQL
+// from. Mirrors providers/jira.ts's own jqlQuoted test coverage exactly —
+// same escaping, same injection attempts — landing ahead of its first real
+// caller so the boundary itself is reviewable in isolation.
+describe('jqlQuoted', () => {
+  it('wraps a plain value in double quotes', () => {
+    expect(jqlQuoted('login')).toBe('"login"');
+  });
+
+  it('quotes a value that would otherwise break out of its JQL string literal', () => {
+    expect(jqlQuoted('" OR project = "SECRET')).toBe(
+      '"\\" OR project = \\"SECRET"',
+    );
+  });
+
+  it('escapes a backslash before the quote it would otherwise escape', () => {
+    // The backslash is doubled first, so the value's own backslash cannot
+    // consume the escape this function adds for the quote.
+    expect(jqlQuoted('a\\"b')).toBe('"a\\\\\\"b"');
+  });
+
+  it('strips control characters instead of escaping them', () => {
+    expect(jqlQuoted('a\nb\tc')).toBe('"a b c"');
+  });
 });
 
 describe('request building', () => {
@@ -705,6 +737,320 @@ describe('listMyTickets', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({ ok: true, value: { truncated: false } });
     expect(result.ok && result.value.tickets).toHaveLength(2);
+  });
+});
+
+// ROAD-158: the pagination/truncation behavior itself (cursor following,
+// the page cap, the stranded-cursor case) is already covered above via
+// listMyTickets — both go through the same runTicketSearch. This suite
+// covers only what's unique to the per-role tabs: which JQL clause each
+// role sends, and how a typed search term is folded in.
+describe('listRoleTickets', () => {
+  it('refuses without a stored credential rather than calling out unauthenticated', async () => {
+    readStoredJiraCredentialMock.mockReturnValue(null);
+
+    expect(await listRoleTickets('assignee', undefined)).toMatchObject({
+      ok: false,
+      reason: 'not_connected',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['assignee', 'assignee = currentUser()'],
+    ['reporter', 'reporter = currentUser()'],
+    ['watcher', 'watcher = currentUser()'],
+  ] as const)(
+    'scopes the %s tab to its own role clause only',
+    async (role, clause) => {
+      fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+
+      await listRoleTickets(role, undefined);
+
+      const jql = new URL(call()[0]).searchParams.get('jql') ?? '';
+      expect(jql).toContain(clause);
+      expect(jql).toContain('AND resolution = Unresolved');
+      // Each tab's own role clause only — never unioned with the other two,
+      // unlike MY_WORK_JQL's combined queue. (Matches " OR " with spaces so
+      // this doesn't false-positive on "ORDER BY".)
+      expect(jql).not.toMatch(/ OR /);
+    },
+  );
+
+  it('sends no search clause at all when the search box is empty', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+
+    await listRoleTickets('assignee', undefined);
+
+    const jql = new URL(call()[0]).searchParams.get('jql') ?? '';
+    expect(jql).not.toContain('summary');
+  });
+
+  it('treats a whitespace-only search the same as no search', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+
+    await listRoleTickets('assignee', '   ');
+
+    const jql = new URL(call()[0]).searchParams.get('jql') ?? '';
+    expect(jql).not.toContain('summary');
+  });
+
+  it('folds a typed search into the query, quoted through the jqlQuoted boundary', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+
+    await listRoleTickets('reporter', 'webhook drops');
+
+    const jql = new URL(call()[0]).searchParams.get('jql') ?? '';
+    expect(jql).toContain(`summary ~ "webhook drops"`);
+  });
+
+  // The same injection concern jqlQuoted's own tests cover in isolation,
+  // proven here end to end: a search term crafted to break out of its
+  // clause must not reach the request unescaped.
+  it('quotes a search term that would otherwise break out of its clause', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+
+    await listRoleTickets('assignee', '" OR project = "SECRET');
+
+    const jql = new URL(call()[0]).searchParams.get('jql') ?? '';
+    expect(jql).toContain(`summary ~ "\\" OR project = \\"SECRET"`);
+  });
+});
+
+describe('listTicketsByKeys', () => {
+  it('returns an empty list without calling Jira at all', async () => {
+    const result = await listTicketsByKeys([]);
+
+    expect(result).toEqual({ ok: true, value: [] });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses without a stored credential rather than calling out unauthenticated', async () => {
+    readStoredJiraCredentialMock.mockReturnValue(null);
+
+    expect(await listTicketsByKeys(['ENG-1'])).toMatchObject({
+      ok: false,
+      reason: 'not_connected',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('builds a key-in JQL clause with every key quoted', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+
+    await listTicketsByKeys(['ENG-1', 'PLAT-2']);
+
+    const jql = new URL(call()[0]).searchParams.get('jql') ?? '';
+    expect(jql).toBe('key in ("ENG-1", "PLAT-2")');
+  });
+
+  // Same boundary as listRoleTickets' own search — these keys come from
+  // this app's own backend, not a person typing, but jqlQuoted's whole
+  // point is that it does not matter where a value came from.
+  it('quotes a key that would otherwise break out of the clause', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+
+    await listTicketsByKeys(['ENG-1") OR project = ("SECRET']);
+
+    const jql = new URL(call()[0]).searchParams.get('jql') ?? '';
+    expect(jql).toBe('key in ("ENG-1\\") OR project = (\\"SECRET")');
+  });
+
+  it('caps the key list rather than building an unbounded clause', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+    const keys = Array.from({ length: 60 }, (_, i) => `ENG-${i}`);
+
+    await listTicketsByKeys(keys);
+
+    const jql = new URL(call()[0]).searchParams.get('jql') ?? '';
+    expect(jql).toContain('ENG-49');
+    expect(jql).not.toContain('ENG-50');
+  });
+
+  it('returns the bare mapped tickets, not a truncation-carrying queue read', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        issues: [
+          {
+            id: '10421',
+            key: 'ENG-421',
+            fields: {
+              summary: 'Webhook receiver drops events',
+              project: { key: 'ENG' },
+              status: { name: 'To Do', statusCategory: { key: 'new' } },
+            },
+          },
+        ],
+        isLast: true,
+      }),
+    );
+
+    const result = await listTicketsByKeys(['ENG-421']);
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: [{ id: '10421', key: 'ENG-421' }],
+    });
+    expect(result.ok && 'truncated' in result.value).toBe(false);
+  });
+
+  // `key in (...)` carries no order of its own — Jira can (and, verified
+  // live, does) return matches in an order that has nothing to do with the
+  // order they were listed in. A caller whose key list means something
+  // (Worked-on: newest-worked-on-first; Starred: newest-starred-first)
+  // needs that ordering preserved through this read, not silently
+  // replaced by whatever order Jira happened to answer in.
+  it("returns tickets re-sorted into the order the caller's own keys were given, not Jira's own response order", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        issues: [
+          // Deliberately NOT in ENG-1/ENG-2/ENG-3 order, standing in for
+          // Jira's own arbitrary response order.
+          {
+            id: '3',
+            key: 'ENG-3',
+            fields: {
+              summary: 'Third',
+              project: { key: 'ENG' },
+              status: { name: 'To Do', statusCategory: { key: 'new' } },
+            },
+          },
+          {
+            id: '1',
+            key: 'ENG-1',
+            fields: {
+              summary: 'First',
+              project: { key: 'ENG' },
+              status: { name: 'To Do', statusCategory: { key: 'new' } },
+            },
+          },
+          {
+            id: '2',
+            key: 'ENG-2',
+            fields: {
+              summary: 'Second',
+              project: { key: 'ENG' },
+              status: { name: 'To Do', statusCategory: { key: 'new' } },
+            },
+          },
+        ],
+        isLast: true,
+      }),
+    );
+
+    const result = await listTicketsByKeys(['ENG-1', 'ENG-2', 'ENG-3']);
+
+    expect(result.ok && result.value.map((t) => t.key)).toEqual([
+      'ENG-1',
+      'ENG-2',
+      'ENG-3',
+    ]);
+  });
+});
+
+describe('listViewedTickets', () => {
+  it('refuses without a stored credential rather than calling out unauthenticated', async () => {
+    readStoredJiraCredentialMock.mockReturnValue(null);
+
+    expect(await listViewedTickets()).toMatchObject({
+      ok: false,
+      reason: 'not_connected',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('sends the fixed issueHistory JQL, unmodified', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+
+    await listViewedTickets();
+
+    const jql = new URL(call()[0]).searchParams.get('jql') ?? '';
+    expect(jql).toBe('issuekey in issueHistory() ORDER BY lastViewed DESC');
+  });
+
+  it('maps the returned issues and carries truncation the same way listMyTickets does', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        issues: [
+          {
+            id: '10421',
+            key: 'ENG-421',
+            fields: {
+              summary: 'Webhook receiver drops events',
+              project: { key: 'ENG' },
+              status: { name: 'To Do', statusCategory: { key: 'new' } },
+            },
+          },
+        ],
+        isLast: true,
+      }),
+    );
+
+    const result = await listViewedTickets();
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        tickets: [{ id: '10421', key: 'ENG-421' }],
+        truncated: false,
+      },
+    });
+  });
+});
+
+describe('listPastTickets', () => {
+  it('refuses without a stored credential rather than calling out unauthenticated', async () => {
+    readStoredJiraCredentialMock.mockReturnValue(null);
+
+    expect(await listPastTickets()).toMatchObject({
+      ok: false,
+      reason: 'not_connected',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // Catches the exact bug this JQL had before: a bare `assignee !=
+  // currentUser()` never matches a NULL assignee in JQL (same as SQL), so
+  // a ticket unassigned away from you — not reassigned to someone else —
+  // would silently never appear. `is EMPTY` is what closes that gap.
+  it('sends the fixed WAS-based JQL, including the unassigned case', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+
+    await listPastTickets();
+
+    const jql = new URL(call()[0]).searchParams.get('jql') ?? '';
+    expect(jql).toBe(
+      'assignee was currentUser() AND (assignee != currentUser() OR assignee is EMPTY) AND resolution = Unresolved ORDER BY updated DESC',
+    );
+  });
+
+  it('maps the returned issues and carries truncation the same way listMyTickets does', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        issues: [
+          {
+            id: '10555',
+            key: 'ENG-555',
+            fields: {
+              summary: 'Reassigned away from me',
+              project: { key: 'ENG' },
+              status: { name: 'To Do', statusCategory: { key: 'new' } },
+            },
+          },
+        ],
+        isLast: true,
+      }),
+    );
+
+    const result = await listPastTickets();
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        tickets: [{ id: '10555', key: 'ENG-555' }],
+        truncated: false,
+      },
+    });
   });
 });
 

@@ -22,6 +22,10 @@ import {
 import { useProject } from '@/layouts/ProjectLayout';
 import { resetProposalStoreForTests } from '@/lib/proposalStore';
 import { useCopilotOpenState } from '@/lib/copilotOpenStore';
+import {
+  useCopilotPanelResizingState,
+  useCopilotPanelWidthState,
+} from '@/lib/useCopilotPanelWidth';
 import type { Member, Project, Ticket } from '@/types/entities';
 import { TicketDrawer } from './TicketDrawer';
 
@@ -69,6 +73,13 @@ jest.mock('@/layouts/ProjectLayout', () => ({ useProject: jest.fn() }));
 // only the "docks beside Copilot" describe block below overrides this.
 jest.mock('@/lib/copilotOpenStore', () => ({
   useCopilotOpenState: jest.fn(() => false),
+}));
+// Fixed at the old default width, resizing off — only the "docks beside
+// Copilot" describe block below cares about the actual value, and it sets
+// its own expectation against this same fixed number.
+jest.mock('@/lib/useCopilotPanelWidth', () => ({
+  useCopilotPanelWidthState: jest.fn(() => 400),
+  useCopilotPanelResizingState: jest.fn(() => false),
 }));
 
 const PROJECT: Project = {
@@ -271,8 +282,7 @@ describe('docks beside Copilot when it is open', () => {
     mountDrawer();
 
     await screen.findByDisplayValue('Responsive nav breaks on iPad landscape');
-    expect(drawerRoot().className).toContain('right-0');
-    expect(drawerRoot().className).not.toContain('right-[400px]');
+    expect(drawerRoot().style.right).toBe('0px');
   });
 
   it('shifts left by Copilot panel width while Copilot is open', async () => {
@@ -280,7 +290,34 @@ describe('docks beside Copilot when it is open', () => {
     mountDrawer();
 
     await screen.findByDisplayValue('Responsive nav breaks on iPad landscape');
-    expect(drawerRoot().className).toContain('right-[400px]');
-    expect(drawerRoot().className).not.toContain('right-0');
+    expect(drawerRoot().style.right).toBe('400px');
+  });
+
+  // ROAD-158 follow-up UX bug: a resized Copilot panel used to leave this
+  // drawer at a stale, hardcoded 400px offset — wide enough to overlap a
+  // panel the user had dragged wider than that. Asserted directly against a
+  // width the mock above did NOT use for the two tests above, so this can't
+  // pass by coincidence.
+  it('shifts left by the ACTUAL Copilot panel width, not a fixed 400px, once resized', async () => {
+    jest.mocked(useCopilotOpenState).mockReturnValue(true);
+    jest.mocked(useCopilotPanelWidthState).mockReturnValue(650);
+    mountDrawer();
+
+    await screen.findByDisplayValue('Responsive nav breaks on iPad landscape');
+    expect(drawerRoot().style.right).toBe('650px');
+  });
+
+  it('suspends its own right/transform transition while Copilot is actively being dragged', async () => {
+    jest.mocked(useCopilotOpenState).mockReturnValue(true);
+    jest.mocked(useCopilotPanelResizingState).mockReturnValue(true);
+    mountDrawer();
+
+    await screen.findByDisplayValue('Responsive nav breaks on iPad landscape');
+    // transform still animates (the open/close slide), but `right` must
+    // track the drag pointer 1:1 with no transition lag of its own —
+    // otherwise this drawer's edge trails a few frames behind the panel's
+    // true width on every pointermove, opening a brief visible overlap.
+    expect(drawerRoot().className).toContain('transition-transform');
+    expect(drawerRoot().className).not.toContain('transition-[right,transform]');
   });
 });

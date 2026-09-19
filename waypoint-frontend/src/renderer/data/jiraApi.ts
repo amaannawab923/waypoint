@@ -29,6 +29,7 @@ import type {
   JiraConnectionStatus,
   JiraPriorityOption,
   JiraTicket,
+  JiraTicketQueryRole,
   JiraTransition,
   JiraUserOption,
 } from '@/types/jira';
@@ -531,6 +532,49 @@ export async function listMyJiraTickets(): Promise<JiraQueueRead> {
 }
 
 /**
+ * One read of a single per-role tab's own queue (Assigned/Reported/
+ * Watching), each scoped to exactly the role its tab name promises rather
+ * than the union `listMyJiraTickets` reads. Deliberately NOT folded into
+ * `lastTickets`/`rememberTickets` — that cache is the All Tickets/Connection
+ * counts' source of truth today, and mixing a filtered read into it would
+ * make those counts wrong the moment anyone switched tabs. ROAD-158's own
+ * plan calls this out explicitly as its own later phase (a shared
+ * `ticketById` cache across every tab), not something to half-do here.
+ */
+export async function listRoleJiraTickets(
+  role: JiraTicketQueryRole,
+  search: string,
+): Promise<JiraQueueRead> {
+  const { tickets, truncated } = unwrap(
+    await bridge().listTicketsByRole({ role, search }),
+  );
+  return { tickets: tickets.map((item) => toTicket(item)), truncated };
+}
+
+/**
+ * The Viewed tab: Jira's own view history for this account. Uncached and
+ * unconflict-checked, same reasoning as listRoleJiraTickets just above —
+ * this is its own query, not part of the "my work" queue this module
+ * tracks writes against.
+ */
+export async function listViewedJiraTickets(): Promise<JiraQueueRead> {
+  const { tickets, truncated } = unwrap(await bridge().listViewedTickets());
+  return { tickets: tickets.map((item) => toTicket(item)), truncated };
+}
+
+/**
+ * The My past tickets tab: issues real Jira history says were once assigned
+ * to this account and no longer are (see jiraClient.ts's PAST_TICKETS_JQL) —
+ * the honest replacement for the isTombstoned guesswork toTicket below
+ * never actually enables. Uncached and unconflict-checked, same reasoning
+ * as the other per-tab reads.
+ */
+export async function listPastJiraTickets(): Promise<JiraQueueRead> {
+  const { tickets, truncated } = unwrap(await bridge().listPastTickets());
+  return { tickets: tickets.map((item) => toTicket(item)), truncated };
+}
+
+/**
  * One Jira issue, by key or numeric id, fetched directly rather than found
  * in `listMyJiraTickets`' own cache — for an issue Copilot cites that isn't
  * necessarily the connected account's own (someone else's, or a saved-filter/
@@ -541,6 +585,39 @@ export async function listMyJiraTickets(): Promise<JiraQueueRead> {
 export async function getJiraTicketByKey(key: string): Promise<JiraTicket> {
   const wire = unwrap(await bridge().getTicket(key));
   return toTicket(wire);
+}
+
+/**
+ * A bulk read of specific issues by key — ROAD-158's Worked-on tab, whose
+ * key list comes from data/api.ts's listWorkedOnJiraKeys, not from any
+ * queue this module already has cached. Same reasoning as
+ * getJiraTicketByKey just above for why this is uncached and
+ * unconflict-checked: a one-off read of a specific set of issues, not part
+ * of the polled queue this module tracks writes against. Jira may not
+ * return every key asked for (deleted, moved to a project the account can't
+ * see) — silently fewer tickets than keys, not an error, matching how a
+ * page-capped queue read already treats "fewer than the whole truth" as a
+ * normal outcome rather than a failure.
+ */
+// Mirrors main/jira/jiraClient.ts's own LIST_BY_KEYS_MAX — main caps the
+// bulk `key in (...)` read at this many keys regardless of how many this
+// function is asked for, silently. Exported so a caller with its OWN key
+// list in hand (Starred, Worked-on) can tell up front whether it's about to
+// hand over more than main will actually read, without adding a truncation
+// flag to this function's own return shape — the caller already knows its
+// key count before calling this at all, which is exactly the information a
+// truncation flag would otherwise have to round-trip through main to say.
+// Found in review: without this, a tab that starred/worked on more than 50
+// tickets silently showed 50 as if that were the whole count, with no
+// indication anything was left out.
+export const LIST_BY_KEYS_MAX = 50;
+
+export async function listTicketsByJiraKeys(
+  keys: string[],
+): Promise<JiraTicket[]> {
+  if (keys.length === 0) return [];
+  const wire = unwrap(await bridge().listTicketsByKeys(keys));
+  return wire.map((item) => toTicket(item));
 }
 
 /**
@@ -1605,10 +1682,9 @@ function wrapWithMark(raw: string, mark: unknown): string | null {
     case 'code':
       return `\`${raw}\``;
     case 'link': {
-      const attrs = mark.attrs;
+      const { attrs } = mark;
       const rawHref = isAdfRecord(attrs) ? attrs.href : undefined;
-      const href =
-        typeof rawHref === 'string' ? postableHref(rawHref) : null;
+      const href = typeof rawHref === 'string' ? postableHref(rawHref) : null;
       return href ? `[${raw}](${href})` : null;
     }
     default:
@@ -1657,7 +1733,7 @@ function inlineContentToLineText(
     if (!isAdfRecord(node) || typeof node.type !== 'string') return null;
     if (node.type === 'mention') {
       if (node.marks !== undefined) return null;
-      const attrs = node.attrs;
+      const { attrs } = node;
       if (
         !isAdfRecord(attrs) ||
         typeof attrs.id !== 'string' ||
@@ -1713,7 +1789,7 @@ function blockToLines(
   }
 
   if (raw.type === 'heading') {
-    const attrs = raw.attrs;
+    const { attrs } = raw;
     const level = isAdfRecord(attrs) ? attrs.level : undefined;
     if (level !== 1 && level !== 2 && level !== 3) return null;
     const inline = inlineContentToLineText(
@@ -1913,7 +1989,7 @@ function normalizeAdfForCompare(value: unknown): unknown {
     // object, where the builder emits no attrs key at all. Treat those as
     // the same rather than failing on a difference that is now empty by
     // definition.
-    const attrs = out.attrs;
+    const { attrs } = out;
     if (
       attrs &&
       typeof attrs === 'object' &&

@@ -1209,6 +1209,24 @@ export async function listTicketAgentRuns(
 }
 
 /**
+ * ROAD-158's Worked-on tab: every distinct Jira key the signed-in caller has
+ * an agent run against on the given site, newest activity first. No
+ * ownerMemberId to pass — unlike listMyAgentRuns above, the backend route
+ * derives the caller's own member id from the request itself
+ * (currentMemberId()), so there is no "whose runs" question for this call to
+ * answer client-side.
+ */
+export async function listWorkedOnJiraKeys(site: string): Promise<string[]> {
+  // silent: the Worked-on tab renders its own JiraLoadError from the thrown
+  // error (same pattern RoleTicketsTab already uses for its Jira-side
+  // reads) — without this, the same failure would also pop a toast.
+  return http.get<string[]>(
+    `/agent-runs/worked-on-jira-keys?${new URLSearchParams({ site }).toString()}`,
+    { silent: true },
+  );
+}
+
+/**
  * W5b: what a Jira issue's ledger handle (`tref-…`) stands for — the key,
  * the summary as last seen, the issue's URL. Display data for a run's
  * label; the issue itself is read live through main's Jira client.

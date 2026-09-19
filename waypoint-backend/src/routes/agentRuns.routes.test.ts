@@ -245,6 +245,45 @@ describe('GET /agent-runs', () => {
   });
 });
 
+describe('GET /agent-runs/worked-on-jira-keys', () => {
+  // The one thing this route's own placement exists to prove: registered
+  // ahead of GET /agent-runs/:id, so 'worked-on-jira-keys' is never read as
+  // an :id and swallowed by getRun (which 404s on anything it doesn't
+  // recognize) before this handler ever runs.
+  it('is not shadowed by GET /agent-runs/:id', async () => {
+    vi.mocked(service.listWorkedOnJiraTickets).mockResolvedValue(['ENG-1']);
+
+    const res = await request(buildTestApp()).get(
+      '/agent-runs/worked-on-jira-keys?site=waypoint123.atlassian.net',
+    );
+
+    expect(res.status).toBe(200);
+    expect(service.getRun).not.toHaveBeenCalled();
+  });
+
+  it("passes the caller's own member id and the site straight through", async () => {
+    vi.mocked(service.listWorkedOnJiraTickets).mockResolvedValue(['ENG-1', 'PLAT-2']);
+
+    const res = await request(buildTestApp()).get(
+      '/agent-runs/worked-on-jira-keys?site=waypoint123.atlassian.net',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(['ENG-1', 'PLAT-2']);
+    expect(service.listWorkedOnJiraTickets).toHaveBeenCalledWith(
+      expect.any(String),
+      'waypoint123.atlassian.net',
+    );
+  });
+
+  it('rejects a request with no site', async () => {
+    const res = await request(buildTestApp()).get('/agent-runs/worked-on-jira-keys');
+
+    expect(res.status).toBe(400);
+    expect(service.listWorkedOnJiraTickets).not.toHaveBeenCalled();
+  });
+});
+
 describe('GET /agent-runs/:id', () => {
   it('returns the run', async () => {
     vi.mocked(service.getRun).mockResolvedValue(run());

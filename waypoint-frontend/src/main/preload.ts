@@ -3,7 +3,10 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import type { CopilotDetectResult } from './copilot/copilotDetect';
 import type { SessionOffer as CopilotSessionOffer } from './copilot/sessionTools';
-import type { JiraCommentPermissions } from './jira/jiraClient';
+import type {
+  JiraCommentPermissions,
+  JiraTicketQueryRole,
+} from './jira/jiraClient';
 import type {
   AccountConnectionSnapshot,
   AccountIdentity,
@@ -141,9 +144,17 @@ const electronHandler = {
           needsRepoLink: boolean;
         }) => void;
         onError: (err: { kind: CopilotErrorKind; message: string }) => void;
+        // Optional: fired synchronously, once, with the requestId this run
+        // was just given — the only way the caller can learn it, since
+        // runPrompt's own return value has to stay a bare unsubscribe
+        // function (existing call sites destructure it directly). Lets a
+        // caller wire up cancelRun() below for a Stop button without a
+        // second correlated channel of its own.
+        onRequestId?: (id: string) => void;
       },
     ): () => void {
       const requestId = randomUUID();
+      handlers.onRequestId?.(requestId);
 
       const subscription = (
         _event: IpcRendererEvent,
@@ -182,12 +193,21 @@ const electronHandler = {
       ipcRenderer.send('copilot:run', { requestId, ...args });
 
       // Stops listening on this side only — does not cancel the
-      // main-process subprocess. If the panel closes mid-stream, the run is
-      // left to finish and its result is simply dropped rather than wasted;
-      // see CopilotPanel.tsx's unmount effect.
+      // main-process subprocess; call cancelRun(requestId) below for that.
+      // If the panel closes mid-stream without cancelling, the run is left
+      // to finish and its result is simply dropped rather than wasted; see
+      // CopilotPanel.tsx's unmount effect.
       return () => {
         ipcRenderer.removeListener('copilot:stream', subscription);
       };
+    },
+    // Stop button: asks the main process to close the still-running Query
+    // for this requestId (copilotRunner.ts's inFlight map). Resolves true
+    // only if a live run was actually found and closed — false means it had
+    // already finished (or the id is stale), which the caller can treat the
+    // same as a successful cancel either way.
+    cancelRun(requestId: string): Promise<boolean> {
+      return ipcRenderer.invoke('copilot:run:cancel', requestId);
     },
     // Request/response, not the stream bridge above — invoke/handle fits a
     // single answer per call better than hand-rolling a send/on pair for
@@ -355,6 +375,21 @@ const electronHandler = {
     },
     listTickets(): Promise<JiraResult<JiraTicketQueryResult>> {
       return ipcRenderer.invoke('jira:tickets:list');
+    },
+    listTicketsByRole(args: {
+      role: JiraTicketQueryRole;
+      search: string;
+    }): Promise<JiraResult<JiraTicketQueryResult>> {
+      return ipcRenderer.invoke('jira:tickets:list-by-role', args);
+    },
+    listTicketsByKeys(keys: string[]): Promise<JiraResult<JiraWireTicket[]>> {
+      return ipcRenderer.invoke('jira:tickets:list-by-keys', keys);
+    },
+    listViewedTickets(): Promise<JiraResult<JiraTicketQueryResult>> {
+      return ipcRenderer.invoke('jira:tickets:list-viewed');
+    },
+    listPastTickets(): Promise<JiraResult<JiraTicketQueryResult>> {
+      return ipcRenderer.invoke('jira:tickets:list-past');
     },
     getTicket(ticketId: string): Promise<JiraResult<JiraWireTicket>> {
       return ipcRenderer.invoke('jira:tickets:get', ticketId);
@@ -688,7 +723,9 @@ const electronHandler = {
     setupStatus(): Promise<AccountResult<InstanceSetupStatus>> {
       return ipcRenderer.invoke('account:setupStatus');
     },
-    signIn(args: { purpose?: string }): Promise<AccountResult<AccountIdentity>> {
+    signIn(args: {
+      purpose?: string;
+    }): Promise<AccountResult<AccountIdentity>> {
       return ipcRenderer.invoke('account:signIn', args);
     },
     cancelSignIn(): Promise<{ ok: true }> {
@@ -707,7 +744,9 @@ const electronHandler = {
     // enforced at the IPC boundary itself; callers (renderer/data/
     // hostedWorkspace.ts) own matching it to what the backend route
     // they're calling actually returns.
-    hostedFetch<T = unknown>(req: HostedFetchRequest): Promise<HostedFetchResponse<T>> {
+    hostedFetch<T = unknown>(
+      req: HostedFetchRequest,
+    ): Promise<HostedFetchResponse<T>> {
       return ipcRenderer.invoke('account:hostedFetch', req);
     },
   },

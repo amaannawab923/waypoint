@@ -4,6 +4,10 @@ import { useNavigate } from 'react-router-dom';
 import { clsx } from 'clsx';
 import { TicketDetailContent } from '@/pages/tickets/TicketDetailPage';
 import { useCopilotOpenState } from '@/lib/copilotOpenStore';
+import {
+  useCopilotPanelResizingState,
+  useCopilotPanelWidthState,
+} from '@/lib/useCopilotPanelWidth';
 
 /**
  * Controlled "peek" panel: slides in from the right edge showing a ticket's
@@ -42,6 +46,16 @@ export function TicketDrawer({
   // see lib/copilotOpenStore.ts for why this reads a module-level store
   // instead of route-scoped context.
   const copilotOpen = useCopilotOpenState();
+  // Copilot's panel is resizable (see useCopilotPanelWidth.ts) — this reads
+  // its live width rather than assuming the old fixed 400px, or a resize
+  // past that would leave this drawer overlapping Copilot instead of
+  // docking beside it.
+  const copilotWidth = useCopilotPanelWidthState();
+  // Suspended for the same reason CopilotPanel.tsx suspends its own slide
+  // transition while dragging — otherwise this drawer's `right` offset lags
+  // a few frames behind the panel's true edge on every pointermove, opening
+  // a brief overlap or gap instead of tracking the drag 1:1.
+  const copilotResizing = useCopilotPanelResizingState();
 
   useEffect(() => {
     const raf = requestAnimationFrame(() => setVisible(true));
@@ -101,11 +115,10 @@ export function TicketDrawer({
       ref={panelRef}
       data-ticket-drawer
       className={clsx(
-        'thin-scroll fixed top-12 bottom-0 z-50 flex w-full max-w-[720px] flex-col border-l border-border bg-surface transition-[right,transform] duration-200 ease-out',
-        // Shifted left by Copilot's own width while it's open, so the two
-        // dock side by side instead of one covering the other — see
-        // lib/copilotOpenStore.ts.
-        copilotOpen ? 'right-[400px]' : 'right-0',
+        'thin-scroll fixed top-12 bottom-0 z-50 flex w-full max-w-[720px] flex-col border-l border-border bg-surface duration-200 ease-out',
+        copilotResizing
+          ? 'transition-transform'
+          : 'transition-[right,transform]',
         // shadow-2xl belongs only to the "floating over the main content
         // list" state (see JiraTicketDrawer.tsx's identical comment for the
         // full story: a negative x-offset was tried first, but box-shadow
@@ -117,7 +130,14 @@ export function TicketDrawer({
         // already the correct affordance for two separate peer surfaces.
         copilotOpen ? 'shadow-none' : 'shadow-2xl',
       )}
-      style={{ transform: visible ? 'translateX(0)' : 'translateX(100%)' }}
+      style={{
+        // Shifted left by Copilot's own CURRENT width while it's open, so
+        // the two dock side by side instead of overlapping — a plain
+        // Tailwind class can't do this since the offset is a runtime value,
+        // not one of a fixed set Tailwind's build-time scan can see.
+        right: copilotOpen ? copilotWidth : 0,
+        transform: visible ? 'translateX(0)' : 'translateX(100%)',
+      }}
     >
       <TicketDetailContent
         projectId={projectId}
