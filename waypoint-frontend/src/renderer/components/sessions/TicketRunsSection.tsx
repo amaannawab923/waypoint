@@ -175,23 +175,21 @@ function TicketRuns({ ticketId }: { ticketId: string }) {
             const openRun = () =>
               navigate(`/sessions/${encodeURIComponent(run.id)}`);
             return (
+              // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- mouse-only affordance; see the onClick comment below for why this is deliberate rather than a role="button"
               <div
                 key={run.id}
-                role="button"
-                tabIndex={0}
-                onClick={openRun}
-                onKeyDown={(e) => {
-                  // Same fix as JiraConnectionCard's row: without the target
-                  // check, Enter/Space on the nested PR link or "Open
-                  // session" button would bubble up and fire this too,
-                  // double-handling one keypress as two different actions.
-                  if (
-                    (e.key === 'Enter' || e.key === ' ') &&
-                    e.target === e.currentTarget
-                  ) {
-                    e.preventDefault();
-                    openRun();
-                  }
+                onClick={() => {
+                  // A mouse-only affordance — the row itself isn't a
+                  // focusable/keyboard control (the "Open session →" button
+                  // below already is that), so it doesn't need `role="button"`.
+                  // That role would mark its own children (the PR link, the
+                  // button) as ARIA-presentational, stripping their
+                  // accessible roles/names for no benefit. Skipping a click
+                  // that lands here as the end of a text-selection drag,
+                  // since the row's own branch/id text is the one thing here
+                  // worth copying.
+                  if (!window.getSelection()?.isCollapsed) return;
+                  openRun();
                 }}
                 className="flex cursor-pointer items-center gap-2.5 rounded-[var(--radius)] border border-border bg-surface px-3 py-2 text-xs transition-colors hover:border-border-strong hover:bg-bg-inset"
               >
