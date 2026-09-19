@@ -590,16 +590,59 @@ export function validateDispatchInput(input: unknown): ValidatedDispatchInput {
 }
 
 /**
+ * ROAD-131: `findLiveWriter` reads the ticket's runs, then, well below,
+ * `createRun` writes the new one — nothing serializes the two. Two Start
+ * presses on the same ticket (the drawer and a Copilot-offered card, or
+ * just a double-click) can both read "no live writer" before either write
+ * lands, and both pass, producing two writing sessions (two worktrees) on
+ * one ticket. This queues every dispatch on the same ticket behind
+ * whichever one started first, so a later call's live-writer check always
+ * sees the effect of an earlier call that is still in flight — the second
+ * press waits, then is refused with the normal "already live" error
+ * rather than racing it. A rejected dispatch does not jam the queue for
+ * the ticket: the next one still runs once it is this dispatch's turn.
+ */
+const dispatchQueues = new Map<string, Promise<unknown>>();
+
+function withTicketDispatchLock<T>(
+  ticketId: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const previous = dispatchQueues.get(ticketId) ?? Promise.resolve();
+  const settled = previous.then(fn, fn);
+  const bare = settled.then(
+    () => undefined,
+    () => undefined,
+  );
+  dispatchQueues.set(ticketId, bare);
+  void bare.then(() => {
+    if (dispatchQueues.get(ticketId) === bare) dispatchQueues.delete(ticketId);
+  });
+  return settled;
+}
+
+/**
  * Start. Answers once the row is `provisioning`; the worktree and the
  * session follow in main through `continueStart`. Refuses before a row
  * is written: engine down, no such ticket, no linked repository, an
- * unknown base branch, a writing session already live on the ticket.
+ * unknown base branch, a writing session already live on the ticket —
+ * and, per-ticket, serialized against a concurrent Start on the same
+ * ticket (ROAD-131) so two presses cannot both win that check.
  */
 export async function dispatchTicketRun(
   deps: DispatchDeps,
   rawInput: unknown,
 ): Promise<AgentRun> {
   const input = validateDispatchInput(rawInput);
+  return withTicketDispatchLock(input.ticketId, () =>
+    dispatchTicketRunLocked(deps, input),
+  );
+}
+
+async function dispatchTicketRunLocked(
+  deps: DispatchDeps,
+  input: ValidatedDispatchInput,
+): Promise<AgentRun> {
   const daemon = deps.daemon();
   if (!daemon) throw new Error(ENGINE_NOT_RUNNING);
   const context = await ticketContext(deps, input.ticketId, input.folder);

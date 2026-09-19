@@ -949,6 +949,57 @@ describe('dispatchTicketRun', () => {
     ).resolves.toBeDefined();
   });
 
+  it('ROAD-131: two concurrent Start presses on the same ticket create only one writing session', async () => {
+    // Unlike the static fixture above, listAllRuns here must reflect what
+    // createRun/updateRun have actually written so far — the same way a
+    // real ledger would — so a second dispatch's live-writer check can
+    // observe a first dispatch that is still in flight. It is also
+    // rendezvous-gated: it resolves as soon as a second call is
+    // in flight too (reproducing the exact race window ROAD-131
+    // describes — two reads in flight before either write lands),
+    // falling back to resolving alone after a short wait so a
+    // correctly serialized pair (the fix) never hangs — the second
+    // dispatch simply is not in flight yet when the first one reads.
+    const { ledger, rows } = fakeLedger();
+    let waiting: Array<() => void> = [];
+    ledger.listAllRuns.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          const release = () => resolve([...rows.values()]);
+          waiting.push(release);
+          if (waiting.length >= 2) {
+            const toRelease = waiting.splice(0);
+            toRelease.forEach((r) => r());
+          } else {
+            setTimeout(() => {
+              const idx = waiting.indexOf(release);
+              if (idx !== -1) {
+                waiting.splice(idx, 1);
+                release();
+              }
+            }, 50);
+          }
+        }),
+    );
+    const deps = depsWith(ledger, fakeDaemon());
+
+    const [a, b] = await Promise.allSettled([
+      dispatchTicketRun(deps, { ...dispatchInput, intent: 'fix' }),
+      dispatchTicketRun(deps, { ...dispatchInput, intent: 'fix' }),
+    ]);
+
+    const fulfilled = [a, b].filter((o) => o.status === 'fulfilled');
+    const rejected = [a, b].filter((o) => o.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason.message).toMatch(
+      /already live on ROAD-116/,
+    );
+    // The second press waited for the first, then was refused by the
+    // normal check — it never raced its way into creating a second row.
+    expect(ledger.createRun).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses with the engine down, before any row is written', async () => {
     const { ledger } = fakeLedger();
     await expect(
