@@ -22,6 +22,7 @@ import {
   listMyTickets,
   listRoleTickets,
   listTicketsByKeys,
+  listViewedTickets,
   listPriorityOptions,
   listTransitions,
   postComment,
@@ -887,6 +888,56 @@ describe('listTicketsByKeys', () => {
       value: [{ id: '10421', key: 'ENG-421' }],
     });
     expect(result.ok && 'truncated' in result.value).toBe(false);
+  });
+});
+
+describe('listViewedTickets', () => {
+  it('refuses without a stored credential rather than calling out unauthenticated', async () => {
+    readStoredJiraCredentialMock.mockReturnValue(null);
+
+    expect(await listViewedTickets()).toMatchObject({
+      ok: false,
+      reason: 'not_connected',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('sends the fixed issueHistory JQL, unmodified', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+
+    await listViewedTickets();
+
+    const jql = new URL(call()[0]).searchParams.get('jql') ?? '';
+    expect(jql).toBe('issuekey in issueHistory() ORDER BY lastViewed DESC');
+  });
+
+  it('maps the returned issues and carries truncation the same way listMyTickets does', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        issues: [
+          {
+            id: '10421',
+            key: 'ENG-421',
+            fields: {
+              summary: 'Webhook receiver drops events',
+              project: { key: 'ENG' },
+              status: { name: 'To Do', statusCategory: { key: 'new' } },
+            },
+          },
+        ],
+        isLast: true,
+      }),
+    );
+
+    const result = await listViewedTickets();
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        tickets: [{ id: '10421', key: 'ENG-421' }],
+        truncated: false,
+      },
+    });
   });
 });
 

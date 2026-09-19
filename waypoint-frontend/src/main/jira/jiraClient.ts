@@ -863,6 +863,21 @@ export async function listRoleTickets(
   return runTicketSearch(credentialResult.value, roleTicketsJql(role, search));
 }
 
+// ROAD-158's Viewed tab. No interpolation at all — issueHistory() is Jira's
+// own function for "issues this account has opened," so there is no free
+// text here for jqlQuoted to ever need to guard. Live-verified against a
+// real connected site (both the Basic and JQL search UIs accept it and
+// return real results) rather than assumed from documentation alone.
+const VIEWED_JQL = 'issuekey in issueHistory() ORDER BY lastViewed DESC';
+
+export async function listViewedTickets(): Promise<
+  JiraResult<JiraTicketQueryResult>
+> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+  return runTicketSearch(credentialResult.value, VIEWED_JQL);
+}
+
 // Bounds the `key in (...)` clause's own length, not a page of a crawl — the
 // request is still a GET, and this many quoted keys keeps the built JQL
 // comfortably inside URL length limits a proxy or Jira's own edge could

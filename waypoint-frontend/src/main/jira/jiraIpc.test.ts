@@ -43,6 +43,7 @@ const validateCredentialMock = jest.fn();
 const listMyTicketsMock = jest.fn();
 const listRoleTicketsMock = jest.fn();
 const listTicketsByKeysMock = jest.fn();
+const listViewedTicketsMock = jest.fn();
 const getTicketMock = jest.fn();
 const listTransitionsMock = jest.fn();
 const transitionTicketMock = jest.fn();
@@ -66,6 +67,7 @@ jest.mock('./jiraClient', () => ({
   listMyTickets: (...args: unknown[]) => listMyTicketsMock(...args),
   listRoleTickets: (...args: unknown[]) => listRoleTicketsMock(...args),
   listTicketsByKeys: (...args: unknown[]) => listTicketsByKeysMock(...args),
+  listViewedTickets: (...args: unknown[]) => listViewedTicketsMock(...args),
   getTicket: (...args: unknown[]) => getTicketMock(...args),
   listTransitions: (...args: unknown[]) => listTransitionsMock(...args),
   transitionTicket: (...args: unknown[]) => transitionTicketMock(...args),
@@ -1363,6 +1365,18 @@ describe('per-ticket channels', () => {
 
       expect(result).toEqual({ ok: true, value: [] });
       expect(listTicketsByKeysMock).toHaveBeenCalledWith([]);
+    });
+  });
+
+  it('jira:tickets:list-viewed delegates straight to the client', async () => {
+    listViewedTicketsMock.mockResolvedValue({
+      ok: true,
+      value: { tickets: [], truncated: false },
+    });
+
+    expect(await getHandler('jira:tickets:list-viewed')({})).toEqual({
+      ok: true,
+      value: { tickets: [], truncated: false },
     });
   });
 });

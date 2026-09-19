@@ -597,6 +597,14 @@ export function registerJiraIpc(getWindow: () => BrowserWindow | null): void {
       client.listTicketsByKeys(readTicketKeys(rawKeys)),
   );
 
+  // ROAD-158: the Viewed tab. No input at all, so nothing for this handler
+  // to validate — unlike every other jira:tickets:* channel, the request
+  // carries no arguments.
+  ipcMain.handle(
+    'jira:tickets:list-viewed',
+    (): Promise<JiraResult<JiraTicketQueryResult>> => client.listViewedTickets(),
+  );
+
   // Copilot's rendered issue-key links (ROAD-157 follow-up): a key the model
   // cited may belong to an issue outside the connected account's own queue
   // (someone else's, or a filter/gadget result), so the drawer it opens on
