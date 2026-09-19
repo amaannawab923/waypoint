@@ -104,6 +104,7 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
     isGenerating,
     queuedCount,
     reloadHistory,
+    reconnect,
     brief,
   } = useSessionTranscript(run.id, {
     awaitingSession:
@@ -203,6 +204,17 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
         // SessionComposer's own catch (below) keeps the typed text for a
         // retry rather than clearing it — the point of awaiting at all.
         throw new Error('not sent');
+      }
+      if (result.outcome === 'resumed-and-sent') {
+        // The daemon now has a genuinely new session for this run, but
+        // `resuming` (above) kept this unit's followers alive rather than
+        // torn down, so they're still closed on the one that died —
+        // reconnect them now that resume has actually landed. The only
+        // other place this fires is `useSessionTranscript`'s own
+        // `onEngineStatusChanged` handler, which covers an engine
+        // restart, not a resume that leaves the engine's own status
+        // untouched.
+        reconnect();
       }
       if (result.resume === 'replaced-by-new') {
         // The one toast channel there is; this is a warning in any case,

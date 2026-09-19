@@ -304,5 +304,18 @@ export function useSessionTranscript(
     isGenerating,
     queuedCount,
     reloadHistory: () => (unit ? loadHistory(unit) : Promise.resolve()),
+    // A message-triggered resume (ROAD-XXX) keeps this same unit alive
+    // (awaitingSession suppressed, see SessionTranscript.tsx's `resuming`)
+    // so the daemon's new session never runs this effect's own creation
+    // path — the one place `source.reconnect()`/`usage.reconnect()` are
+    // otherwise called. Exposed so the caller can reconnect explicitly
+    // once that resume's daemon call actually resolves, the same way
+    // `onEngineStatusChanged`'s "running" case already does for an engine
+    // restart; the followers are keyed by runId, so a reconnect picks up
+    // whatever live session the daemon now has for it either way.
+    reconnect: () => {
+      unit?.source.reconnect();
+      unit?.usage.reconnect();
+    },
   };
 }

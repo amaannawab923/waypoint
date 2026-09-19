@@ -69,6 +69,7 @@ function hookState(over: Partial<ReturnType<typeof useSessionTranscript>>) {
     isGenerating: false,
     queuedCount: 0,
     reloadHistory: jest.fn(async () => {}),
+    reconnect: jest.fn(),
     ...over,
   } as unknown as ReturnType<typeof useSessionTranscript>;
 }
@@ -316,6 +317,68 @@ describe('SessionTranscript — resume on message', () => {
     });
 
     expect(box).toHaveValue('');
+    cleanup();
+  });
+
+  // Live-discovered (manual walkthrough, ROAD-XXX): `resuming` correctly
+  // keeps the transcript's followers alive across a message-triggered
+  // resume instead of tearing them down, but that means nothing else ever
+  // told them to reconnect — they were last left `closed` on the session
+  // that died, and the daemon's new one went unheard until a manual
+  // reload. `reconnect` is the fix; this pins it firing exactly on a
+  // successful resume, not on an ordinary live send.
+  it('a send that revives the run reconnects the transcript followers, left closed on the dead session', async () => {
+    const cleanup = withComposerSlot();
+    mockSendPrompt.mockResolvedValueOnce({
+      outcome: 'resumed-and-sent',
+      status: 'running',
+      resume: 'loaded',
+    });
+    const reconnect = jest.fn();
+    mockUseSessionTranscript.mockReturnValue(
+      hookState({
+        historyStatus: { kind: 'ready' },
+        turnCount: 0,
+        state: fakeState(),
+        reconnect,
+      }),
+    );
+    render(<SessionTranscript run={run({ status: 'interrupted' })} />);
+
+    const box = screen.getByLabelText('Message this session');
+    fireEvent.change(box, { target: { value: 'still there?' } });
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Send'));
+    });
+
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    cleanup();
+  });
+
+  it('an ordinary send on a live run never reconnects — nothing died to reconnect to', async () => {
+    const cleanup = withComposerSlot();
+    mockSendPrompt.mockResolvedValueOnce({
+      outcome: 'sent',
+      status: 'running',
+    });
+    const reconnect = jest.fn();
+    mockUseSessionTranscript.mockReturnValue(
+      hookState({
+        historyStatus: { kind: 'ready' },
+        turnCount: 3,
+        state: fakeState(),
+        reconnect,
+      }),
+    );
+    render(<SessionTranscript run={run({ status: 'running' })} />);
+
+    const box = screen.getByLabelText('Message this session');
+    fireEvent.change(box, { target: { value: 'another turn' } });
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Send'));
+    });
+
+    expect(reconnect).not.toHaveBeenCalled();
     cleanup();
   });
 });
