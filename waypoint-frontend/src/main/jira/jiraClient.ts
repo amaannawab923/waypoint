@@ -888,8 +888,15 @@ export async function listViewedTickets(): Promise<
 // works here), and `assignee was currentUser()` parsed and ran cleanly
 // returning zero rows — confirmed to be because this test data has no
 // recorded assignee-change history yet, not a syntax or operator problem.
+//
+// `(assignee != currentUser() OR assignee is EMPTY)`, not a bare
+// `assignee != currentUser()`: JQL's `!=`, like SQL's, never matches a NULL
+// — so a ticket reassigned away to someone else would qualify, but the
+// same ticket simply UNASSIGNED after leaving you (arguably the most
+// common "past ticket" of all) silently would not, with nothing to say why
+// it's missing.
 const PAST_TICKETS_JQL =
-  'assignee was currentUser() AND assignee != currentUser() AND resolution = Unresolved ORDER BY updated DESC';
+  'assignee was currentUser() AND (assignee != currentUser() OR assignee is EMPTY) AND resolution = Unresolved ORDER BY updated DESC';
 
 export async function listPastTickets(): Promise<
   JiraResult<JiraTicketQueryResult>
@@ -930,13 +937,23 @@ export async function listTicketsByKeys(
   if (keys.length === 0) return { ok: true, value: [] };
   const credentialResult = requireCredential();
   if (!credentialResult.ok) return credentialResult;
-  const jql = `key in (${keys
-    .slice(0, LIST_BY_KEYS_MAX)
-    .map((key) => jqlQuoted(key))
-    .join(', ')})`;
+  const cappedKeys = keys.slice(0, LIST_BY_KEYS_MAX);
+  const jql = `key in (${cappedKeys.map((key) => jqlQuoted(key)).join(', ')})`;
   const result = await runTicketSearch(credentialResult.value, jql);
   if (!result.ok) return result;
-  return { ok: true, value: result.value.tickets };
+  // `key in (...)` carries no meaningful order of its own — Jira hands
+  // results back in whatever internal order it likes, not the order the
+  // keys were listed in. Every current caller's key list is already
+  // ordered by recency (Worked-on: newest-worked-on-first from the
+  // backend; Starred: newest-starred-first from jiraStarred.ts), and that
+  // ordering would otherwise silently scramble on the way through this
+  // read. Re-sorted back into the caller's own order rather than left to
+  // Jira's.
+  const orderIndex = new Map(cappedKeys.map((key, i) => [key, i]));
+  const sorted = [...result.value.tickets].sort(
+    (a, b) => (orderIndex.get(a.key) ?? 0) - (orderIndex.get(b.key) ?? 0),
+  );
+  return { ok: true, value: sorted };
 }
 
 // -----------------------------------------------------------------------

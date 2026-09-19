@@ -22,6 +22,7 @@ import {
   listMyTickets,
   listRoleTickets,
   listTicketsByKeys,
+  listPastTickets,
   listViewedTickets,
   listPriorityOptions,
   listTransitions,
@@ -759,19 +760,22 @@ describe('listRoleTickets', () => {
     ['assignee', 'assignee = currentUser()'],
     ['reporter', 'reporter = currentUser()'],
     ['watcher', 'watcher = currentUser()'],
-  ] as const)('scopes the %s tab to its own role clause only', async (role, clause) => {
-    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+  ] as const)(
+    'scopes the %s tab to its own role clause only',
+    async (role, clause) => {
+      fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
 
-    await listRoleTickets(role, undefined);
+      await listRoleTickets(role, undefined);
 
-    const jql = new URL(call()[0]).searchParams.get('jql') ?? '';
-    expect(jql).toContain(clause);
-    expect(jql).toContain('AND resolution = Unresolved');
-    // Each tab's own role clause only — never unioned with the other two,
-    // unlike MY_WORK_JQL's combined queue. (Matches " OR " with spaces so
-    // this doesn't false-positive on "ORDER BY".)
-    expect(jql).not.toMatch(/ OR /);
-  });
+      const jql = new URL(call()[0]).searchParams.get('jql') ?? '';
+      expect(jql).toContain(clause);
+      expect(jql).toContain('AND resolution = Unresolved');
+      // Each tab's own role clause only — never unioned with the other two,
+      // unlike MY_WORK_JQL's combined queue. (Matches " OR " with spaces so
+      // this doesn't false-positive on "ORDER BY".)
+      expect(jql).not.toMatch(/ OR /);
+    },
+  );
 
   it('sends no search clause at all when the search box is empty', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
@@ -889,6 +893,59 @@ describe('listTicketsByKeys', () => {
     });
     expect(result.ok && 'truncated' in result.value).toBe(false);
   });
+
+  // `key in (...)` carries no order of its own — Jira can (and, verified
+  // live, does) return matches in an order that has nothing to do with the
+  // order they were listed in. A caller whose key list means something
+  // (Worked-on: newest-worked-on-first; Starred: newest-starred-first)
+  // needs that ordering preserved through this read, not silently
+  // replaced by whatever order Jira happened to answer in.
+  it("returns tickets re-sorted into the order the caller's own keys were given, not Jira's own response order", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        issues: [
+          // Deliberately NOT in ENG-1/ENG-2/ENG-3 order, standing in for
+          // Jira's own arbitrary response order.
+          {
+            id: '3',
+            key: 'ENG-3',
+            fields: {
+              summary: 'Third',
+              project: { key: 'ENG' },
+              status: { name: 'To Do', statusCategory: { key: 'new' } },
+            },
+          },
+          {
+            id: '1',
+            key: 'ENG-1',
+            fields: {
+              summary: 'First',
+              project: { key: 'ENG' },
+              status: { name: 'To Do', statusCategory: { key: 'new' } },
+            },
+          },
+          {
+            id: '2',
+            key: 'ENG-2',
+            fields: {
+              summary: 'Second',
+              project: { key: 'ENG' },
+              status: { name: 'To Do', statusCategory: { key: 'new' } },
+            },
+          },
+        ],
+        isLast: true,
+      }),
+    );
+
+    const result = await listTicketsByKeys(['ENG-1', 'ENG-2', 'ENG-3']);
+
+    expect(result.ok && result.value.map((t) => t.key)).toEqual([
+      'ENG-1',
+      'ENG-2',
+      'ENG-3',
+    ]);
+  });
 });
 
 describe('listViewedTickets', () => {
@@ -935,6 +992,62 @@ describe('listViewedTickets', () => {
       ok: true,
       value: {
         tickets: [{ id: '10421', key: 'ENG-421' }],
+        truncated: false,
+      },
+    });
+  });
+});
+
+describe('listPastTickets', () => {
+  it('refuses without a stored credential rather than calling out unauthenticated', async () => {
+    readStoredJiraCredentialMock.mockReturnValue(null);
+
+    expect(await listPastTickets()).toMatchObject({
+      ok: false,
+      reason: 'not_connected',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // Catches the exact bug this JQL had before: a bare `assignee !=
+  // currentUser()` never matches a NULL assignee in JQL (same as SQL), so
+  // a ticket unassigned away from you — not reassigned to someone else —
+  // would silently never appear. `is EMPTY` is what closes that gap.
+  it('sends the fixed WAS-based JQL, including the unassigned case', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+
+    await listPastTickets();
+
+    const jql = new URL(call()[0]).searchParams.get('jql') ?? '';
+    expect(jql).toBe(
+      'assignee was currentUser() AND (assignee != currentUser() OR assignee is EMPTY) AND resolution = Unresolved ORDER BY updated DESC',
+    );
+  });
+
+  it('maps the returned issues and carries truncation the same way listMyTickets does', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        issues: [
+          {
+            id: '10555',
+            key: 'ENG-555',
+            fields: {
+              summary: 'Reassigned away from me',
+              project: { key: 'ENG' },
+              status: { name: 'To Do', statusCategory: { key: 'new' } },
+            },
+          },
+        ],
+        isLast: true,
+      }),
+    );
+
+    const result = await listPastTickets();
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        tickets: [{ id: '10555', key: 'ENG-555' }],
         truncated: false,
       },
     });
