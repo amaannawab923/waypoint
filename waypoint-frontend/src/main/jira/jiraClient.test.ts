@@ -17,6 +17,7 @@ import {
   getComment,
   getMyPermissions,
   getTicket,
+  jqlQuoted,
   listComments,
   listMyTickets,
   listPriorityOptions,
@@ -72,6 +73,33 @@ beforeEach(() => {
   jest.clearAllMocks();
   readStoredJiraCredentialMock.mockReturnValue(CREDENTIAL);
   (global as unknown as { fetch: jest.Mock }).fetch = fetchMock;
+});
+
+// ROAD-158: the security boundary for the renderer-supplied search strings
+// the upcoming per-role tabs (Assigned/Reported/Watching) will build JQL
+// from. Mirrors providers/jira.ts's own jqlQuoted test coverage exactly —
+// same escaping, same injection attempts — landing ahead of its first real
+// caller so the boundary itself is reviewable in isolation.
+describe('jqlQuoted', () => {
+  it('wraps a plain value in double quotes', () => {
+    expect(jqlQuoted('login')).toBe('"login"');
+  });
+
+  it('quotes a value that would otherwise break out of its JQL string literal', () => {
+    expect(jqlQuoted('" OR project = "SECRET')).toBe(
+      '"\\" OR project = \\"SECRET"',
+    );
+  });
+
+  it('escapes a backslash before the quote it would otherwise escape', () => {
+    // The backslash is doubled first, so the value's own backslash cannot
+    // consume the escape this function adds for the quote.
+    expect(jqlQuoted('a\\"b')).toBe('"a\\\\\\"b"');
+  });
+
+  it('strips control characters instead of escaping them', () => {
+    expect(jqlQuoted('a\nb\tc')).toBe('"a b c"');
+  });
 });
 
 describe('request building', () => {

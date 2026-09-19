@@ -66,6 +66,31 @@ const TRANSFER_TIMEOUT_MS = 120_000;
  */
 export const MAX_TRANSFER_BYTES = 100 * 1024 * 1024;
 
+/**
+ * Quotes a value for JQL.
+ *
+ * This is the security boundary for a renderer-supplied search string —
+ * ROAD-158's per-role tabs (Assigned/Reported/Watching) are the first thing
+ * in this file to ever build a JQL clause from free text a person typed, and
+ * without quoting, a crafted search term would be able to rewrite the query
+ * it was supposed to be a term in, reading issues outside the intended
+ * scope. Same escaping, same reasoning as providers/jira.ts's own
+ * `jqlQuoted` on the backend — that one stays private (tested only through
+ * its own caller's JQL assembly); this one is exported and directly tested
+ * instead, landing in its own commit ahead of its first real caller, so the
+ * boundary itself is reviewable before anything depends on it.
+ *
+ * Backslash first, then quote: reversing the order would re-escape the
+ * backslashes this function just added. Control characters are stripped
+ * rather than escaped — a newline inside a JQL string literal is not
+ * something a legitimate search term contains, and JQL has no escape for it.
+ */
+export function jqlQuoted(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  const stripped = value.replace(/[\u0000-\u001F\u007F]/g, ' ');
+  return `"${stripped.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
 // One personal queue is 10-40 issues. 100 per page with a hard cap of 5 pages
 // means the normal case is a single request and a pathological account still
 // can't turn "load my work" into an unbounded crawl of someone's Jira.
