@@ -460,6 +460,39 @@ export async function assertWorktreeGitDir(
   }
 }
 
+/**
+ * The one cwd a run's branch may be pushed from — proven, not assumed.
+ * Mirrors exactly what `pullRequests.ts`'s own `publish` derives
+ * (`run.worktreePath ?? run.cwd`), so the two can never check a
+ * different path than the one git actually runs in (ROAD-131 review,
+ * round 2: an earlier version of this gate branched on `run.isolation`
+ * instead, which happened to agree with `worktreePath ?? cwd` for every
+ * *current* writer but was not the same check). A worktree path is
+ * proven under `worktreesDir` and proven a genuine linked worktree
+ * (`assertWorktreeGitDir`); a direct run's own folder (no worktree at
+ * all) only has to still exist — it is the person's own repository,
+ * where the agent already runs.
+ */
+export async function assertPublishableCwd(
+  run: Pick<AgentRun, 'worktreePath' | 'cwd'>,
+  worktreesDir: string,
+): Promise<string> {
+  if (run.worktreePath) {
+    await assertUnder(run.worktreePath, worktreesDir);
+    await assertWorktreeGitDir(run.worktreePath);
+    return run.worktreePath;
+  }
+  if (!run.cwd) throw new Error('This run has no folder to publish from.');
+  const present = await fs
+    .stat(run.cwd)
+    .then((s) => s.isDirectory())
+    .catch(() => false);
+  if (!present) {
+    throw new Error(`${run.cwd} is not a folder on this machine any more.`);
+  }
+  return run.cwd;
+}
+
 /** What registration hands back to main: the verbs other modules (Copilot's tools) may call. */
 export interface RunsHostApi {
   /** W6: push a run's branch and open its pull request, as the person. */
@@ -489,6 +522,24 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
   };
 
   /**
+   * A direct run's cwd is the folder the person picked (W4b): it only has
+   * to still be a directory. It is the person's own repository, where the
+   * agent already runs, so the worktree provenance check does not apply
+   * — the hardened git config and minimal env do.
+   */
+  const directoryOf = async (run: AgentRun): Promise<string> => {
+    if (!run.cwd) throw new Error('This run has no folder.');
+    const present = await fs
+      .stat(run.cwd)
+      .then((s) => s.isDirectory())
+      .catch(() => false);
+    if (!present) {
+      throw new Error(`${run.cwd} is not a folder on this machine any more.`);
+    }
+    return run.cwd;
+  };
+
+  /**
    * W6: push the run's branch and open its pull request, as the person.
    * The body is the run's own comment (its closing message), else its
    * summary. Idempotent through the publisher (a PR gh says exists is
@@ -500,6 +551,17 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
     if (run.entry !== 'dispatched' || !run.branch) {
       return { kind: 'skipped', reason: 'This run has no branch to publish.' };
     }
+    // ROAD-131: unlike stop/diff/reveal, this path used to run straight
+    // to `deps.pullRequests.publish` — which runs git (and, as the
+    // person, `gh pr create`) in the run's own cwd — with no check that
+    // the cwd is actually what it claims to be. Reachable from Copilot's
+    // `open_pull_request` tool with no human in the loop, that is the one
+    // path here that most needs the same worktree-provenance gate the
+    // read-only diff/reveal handlers already apply before touching git.
+    // Proves the exact cwd `publish` itself will use (round 2 of this
+    // review: branching on `run.isolation` here checked a *different*
+    // path than `worktreePath ?? cwd`, which is what `publish` derives).
+    await assertPublishableCwd(run, deps.worktreesDir);
     let closing = run.summary ?? '';
     let title = run.title ?? run.branch;
     let ticketUrl: string | null = null;
@@ -694,24 +756,6 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
       status: updated.status,
     };
   });
-
-  /**
-   * A direct run's cwd is the folder the person picked (W4b): it only has
-   * to still be a directory. It is the person's own repository, where the
-   * agent already runs, so the worktree provenance check does not apply
-   * — the hardened git config and minimal env do.
-   */
-  const directoryOf = async (run: AgentRun): Promise<string> => {
-    if (!run.cwd) throw new Error('This run has no folder.');
-    const present = await fs
-      .stat(run.cwd)
-      .then((s) => s.isDirectory())
-      .catch(() => false);
-    if (!present) {
-      throw new Error(`${run.cwd} is not a folder on this machine any more.`);
-    }
-    return run.cwd;
-  };
 
   deps.host.handle(RUNS_IPC.diff, async (runId): Promise<RunDiff> => {
     const run = await loadRun(runId);

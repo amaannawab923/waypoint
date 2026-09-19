@@ -425,6 +425,132 @@ describe('assertWorktreeGitDir', () => {
   });
 });
 
+describe('runs:open-pr', () => {
+  /**
+   * ROAD-131: unlike stop/diff/reveal, openRunPullRequest used to go
+   * straight to the publisher with no worktree-provenance check — the one
+   * path here Copilot's own `open_pull_request` tool can reach with no
+   * human gate. These reproduce the review's exact finding: a planted
+   * worktree (or a directory-isolation run whose folder is gone) must be
+   * refused before the publisher — which pushes and opens a real PR, as
+   * the person — ever runs.
+   */
+  it('refuses to publish a worktree-isolation run whose .git is not a real linked worktree, and never calls the publisher', async () => {
+    const { host, invoke } = fakeHost();
+    const planted = path.join(worktreesDir, 'run-openprplanted');
+    mkdirSync(path.join(planted, '.evil'), { recursive: true });
+    writeFileSync(path.join(planted, '.git'), 'gitdir: ./.evil\n');
+    const publish = jest.fn();
+    registerRunsIpc({
+      supervisor: supervisorWith(true),
+      host,
+      worktreesDir,
+      ledger: fakeLedger({
+        'run-openprplanted': {
+          status: 'needs-review',
+          entry: 'dispatched',
+          branch: 'agent/road-131',
+          worktreePath: planted,
+          ticketId: null,
+        },
+      }),
+      git: scriptedGit({}),
+      reveal: jest.fn(),
+      notify: jest.fn(),
+      chooseDirectory: async () => null,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
+      daemon: () => null,
+      logger,
+      pullRequests: { publish },
+    });
+
+    await expect(invoke(RUNS_IPC.openPr, 'run-openprplanted')).rejects.toThrow(
+      /Refusing/,
+    );
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('refuses to publish a directory-isolation run whose folder no longer exists, and never calls the publisher', async () => {
+    const { host, invoke } = fakeHost();
+    const gone = path.join(worktreesDir, 'run-openprgone-path');
+    const publish = jest.fn();
+    registerRunsIpc({
+      supervisor: supervisorWith(true),
+      host,
+      worktreesDir,
+      ledger: fakeLedger({
+        'run-openprgone': {
+          status: 'needs-review',
+          entry: 'dispatched',
+          branch: 'agent/road-131',
+          isolation: 'directory',
+          cwd: gone,
+          worktreePath: null,
+          ticketId: null,
+        },
+      }),
+      git: scriptedGit({}),
+      reveal: jest.fn(),
+      notify: jest.fn(),
+      chooseDirectory: async () => null,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
+      daemon: () => null,
+      logger,
+      pullRequests: { publish },
+    });
+
+    await expect(invoke(RUNS_IPC.openPr, 'run-openprgone')).rejects.toThrow(
+      /not a folder on this machine any more/,
+    );
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('publishes a dispatched run in a genuine linked worktree', async () => {
+    const { host, invoke } = fakeHost();
+    const legit = worktreeOf('run-openprlegit');
+    const publish = jest.fn(async () => ({
+      kind: 'opened' as const,
+      url: 'https://github.com/acme/widgets/pull/9',
+      pushed: true as const,
+    }));
+    const notify = jest.fn();
+    const ledger = {
+      ...fakeLedger({
+        'run-openprlegit': {
+          status: 'needs-review',
+          entry: 'dispatched',
+          branch: 'agent/road-131',
+          worktreePath: legit,
+          ticketId: null,
+          summary: 'Fixed the thing.',
+          title: null,
+        },
+      }),
+      postCopilotNote: jest.fn(async () => true),
+    };
+    registerRunsIpc({
+      supervisor: supervisorWith(true),
+      host,
+      worktreesDir,
+      ledger,
+      git: scriptedGit({}),
+      reveal: jest.fn(),
+      notify,
+      chooseDirectory: async () => null,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
+      daemon: () => null,
+      logger,
+      pullRequests: { publish },
+    });
+
+    await expect(invoke(RUNS_IPC.openPr, 'run-openprlegit')).resolves.toEqual({
+      kind: 'opened',
+      url: 'https://github.com/acme/widgets/pull/9',
+    });
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('execGit hardening', () => {
   it('every call carries the config overrides and a minimal environment', async () => {
     // A real git, in a real (empty) directory: `git --version` is enough

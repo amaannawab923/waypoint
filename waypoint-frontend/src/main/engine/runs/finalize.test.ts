@@ -190,6 +190,12 @@ function depsWith(
     onRunStatus,
     logger: { info: jest.fn(), warn: jest.fn() },
     confirmMs: 0,
+    // Proves whatever cwd the run claims by default — tests that care
+    // about a refused cwd override this directly.
+    assertPublishableCwd: jest.fn(
+      async (r: { worktreePath?: string | null; cwd?: string | null }) =>
+        r.worktreePath ?? r.cwd ?? '',
+    ),
     ...extra,
   };
   return { deps, notify, onRunStatus };
@@ -1056,6 +1062,48 @@ describe('W6: the branch is published before the proposals', () => {
     expect(ledger.postCopilotNote).toHaveBeenCalledWith(
       'run-abc1234',
       expect.stringContaining('the branch was not published (push failed)'),
+    );
+  });
+
+  it('ROAD-131: a run whose cwd fails the provenance check is never published — refused before publish is ever called, and the failure is reported the same way a push failure is', async () => {
+    const { ledger, rows } = fakeLedger(
+      run({
+        intent: 'fix',
+        modeId: 'bypassPermissions',
+        title: 'ROAD-116 · Fix',
+        worktreePath: '/wt/poisoned',
+      }),
+    );
+    (ledger as unknown as { getTicket: jest.Mock }).getTicket = jest.fn(
+      async () => null,
+    );
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          { kind: 'message', role: 'assistant', text: 'Guarded the write.' },
+        ]),
+      ],
+    });
+    const publish = jest.fn();
+    const assertPublishableCwd = jest.fn(async () => {
+      throw new Error(
+        "This worktree's gitdir is inside the worktree itself, where the agent writes. Refusing to run git in it.",
+      );
+    });
+    const { deps } = depsWith(ledger, daemon, {
+      pullRequests: { publish },
+      assertPublishableCwd,
+    });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+
+    expect(assertPublishableCwd).toHaveBeenCalledWith(
+      expect.objectContaining({ worktreePath: '/wt/poisoned' }),
+    );
+    expect(publish).not.toHaveBeenCalled();
+    expect(rows.get('run-abc1234')?.status).toBe('needs-review');
+    const [, comment] = ledger.createRunProposal.mock.calls[0];
+    expect((comment as { body: string }).body).toContain(
+      "push failed: This worktree's gitdir is inside the worktree itself",
     );
   });
 });
