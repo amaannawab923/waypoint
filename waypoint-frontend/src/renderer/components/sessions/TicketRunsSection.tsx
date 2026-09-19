@@ -172,10 +172,28 @@ function TicketRuns({ ticketId }: { ticketId: string }) {
         <div className="flex flex-col gap-2">
           {runs.map((run) => {
             const reason = waitingReason(run);
+            const openRun = () =>
+              navigate(`/sessions/${encodeURIComponent(run.id)}`);
             return (
               <div
                 key={run.id}
-                className="flex items-center gap-2.5 rounded-[var(--radius)] border border-border bg-surface px-3 py-2 text-xs"
+                role="button"
+                tabIndex={0}
+                onClick={openRun}
+                onKeyDown={(e) => {
+                  // Same fix as JiraConnectionCard's row: without the target
+                  // check, Enter/Space on the nested PR link or "Open
+                  // session" button would bubble up and fire this too,
+                  // double-handling one keypress as two different actions.
+                  if (
+                    (e.key === 'Enter' || e.key === ' ') &&
+                    e.target === e.currentTarget
+                  ) {
+                    e.preventDefault();
+                    openRun();
+                  }
+                }}
+                className="flex cursor-pointer items-center gap-2.5 rounded-[var(--radius)] border border-border bg-surface px-3 py-2 text-xs transition-colors hover:border-border-strong hover:bg-bg-inset"
               >
                 <SessionStatusPill status={run.status} />
                 {run.entry === 'dispatched' ? (
@@ -204,6 +222,7 @@ function TicketRuns({ ticketId }: { ticketId: string }) {
                     href={run.prUrl}
                     target="_blank"
                     rel="noreferrer"
+                    onClick={(e) => e.stopPropagation()}
                     className="shrink-0 font-medium text-text-secondary underline-offset-2 hover:underline"
                   >
                     PR ↗
@@ -214,9 +233,10 @@ function TicketRuns({ ticketId }: { ticketId: string }) {
                 </span>
                 <button
                   type="button"
-                  onClick={() =>
-                    navigate(`/sessions/${encodeURIComponent(run.id)}`)
-                  }
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openRun();
+                  }}
                   className="shrink-0 font-medium text-text underline-offset-2 hover:underline"
                 >
                   Open session →

@@ -151,6 +151,27 @@ describe('TicketRunsSection', () => {
     expect(screen.getByText('panel')).toBeInTheDocument();
   });
 
+  it.each<AgentRun['status']>([
+    'running',
+    'done',
+    'cancelled',
+    'interrupted',
+    'failed',
+  ])(
+    'opens the session when clicking anywhere on a %s run row, not just the "Open session" link',
+    async (status) => {
+      (listTicketAgentRuns as jest.Mock).mockResolvedValue([
+        run('run-c', status),
+      ]);
+      renderSection();
+      await flush();
+      // Click the row itself — its branch text — not the "Open session →"
+      // link, which is the only thing that used to be clickable.
+      fireEvent.click(screen.getByText('feat/run-c'));
+      expect(screen.getByText('panel')).toBeInTheDocument();
+    },
+  );
+
   it('Investigate opens the brief preview for the ticket in plan mode', async () => {
     (listTicketAgentRuns as jest.Mock).mockResolvedValue([]);
     (getBriefPreview as jest.Mock).mockResolvedValue(preview());
