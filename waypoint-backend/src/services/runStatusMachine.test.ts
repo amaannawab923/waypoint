@@ -5,6 +5,7 @@ import {
   describeRefusedTransition,
   isAgentRunStatus,
   isLive,
+  isRevivable,
   isTerminal,
   type AgentRunStatus,
 } from './runStatusMachine.js';
@@ -79,6 +80,30 @@ describe('runStatusMachine', () => {
     expect(isAgentRunStatus('running')).toBe(true);
     expect(isAgentRunStatus('awaiting_review')).toBe(false);
     expect(isAgentRunStatus(42)).toBe(false);
+  });
+
+  it('isRevivable is exactly interrupted/failed/cancelled — TRANSITIONS itself stays untouched', () => {
+    for (const s of ['interrupted', 'failed', 'cancelled'] as const) {
+      expect(isRevivable(s)).toBe(true);
+    }
+    for (const s of [
+      'queued',
+      'provisioning',
+      'running',
+      'blocked',
+      'finishing',
+      'needs-review',
+      'done',
+    ] as const) {
+      expect(isRevivable(s)).toBe(false);
+    }
+    // Revival is a deliberately separate arrow from reopenRun, not a
+    // TRANSITIONS entry — canTransition to 'provisioning' must still be
+    // false for failed/cancelled, or reopenRun's own dedicated verb has
+    // silently been made redundant by a table edit.
+    expect(canTransition('failed', 'provisioning')).toBe(false);
+    expect(canTransition('cancelled', 'provisioning')).toBe(false);
+    expect(canTransition('interrupted', 'provisioning')).toBe(true);
   });
 
   it('describes a refusal as a sentence naming the legal moves', () => {

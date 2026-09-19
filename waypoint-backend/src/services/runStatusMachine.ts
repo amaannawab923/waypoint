@@ -71,6 +71,28 @@ export const LIVE_RUN_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
   'finishing',
 ]);
 
+/**
+ * Ended abnormally, with its worktree and provider session still on
+ * record: `reopenRun` (agentRuns.service.ts) can revive one of these back
+ * to `provisioning`. Deliberately NOT wired into `TRANSITIONS` — that
+ * table is what the general `PATCH /agent-runs/:id` route enforces, and a
+ * revive must only ever happen through `reopenRun`'s own preconditions
+ * (ownership, not-superseded-by-a-retry, no second live writer, backoff),
+ * never through a plain status-only patch. `done`/`needs-review` are not
+ * here: those are successful endings, not dead sessions — reviving under
+ * an already-reviewed or already-merged run is a different feature
+ * (`retryOfRunId` already covers "start fresh from a finished run").
+ */
+export const REVIVABLE_RUN_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
+  'interrupted',
+  'failed',
+  'cancelled',
+]);
+
+export function isRevivable(status: AgentRunStatus): boolean {
+  return REVIVABLE_RUN_STATUSES.has(status);
+}
+
 export function isAgentRunStatus(value: unknown): value is AgentRunStatus {
   return typeof value === 'string' && (AGENT_RUN_STATUSES as readonly string[]).includes(value);
 }

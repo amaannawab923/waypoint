@@ -40,6 +40,13 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
   const stateId = `st-runs-${stamp}`;
   const ticketId = `wi-runs-${stamp}`;
   const conversationId = `conv-runs-${stamp}`;
+  // ROAD-XXX (resume dead sessions): a dedicated ticket for the
+  // reopenRun/write-once tests below, so their dispatched-and-live runs
+  // never collide with the many other tests in this file that all share
+  // `ticketId` above — the one-live-writer-per-ticket unique index (new,
+  // same feature) enforces a real invariant those unrelated tests were
+  // never written to respect.
+  const resumeTicketId = `wi-resume-${stamp}`;
 
   const base = () => ({
     projectId,
@@ -48,6 +55,9 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
     entry: 'dispatched' as const,
     providerId: 'claude',
   });
+  // ROAD-XXX: the reopenRun/write-once tests' own dedicated ticket (see
+  // resumeTicketId above) — same shape as base(), pointed there instead.
+  const resumeBase = () => ({ ...base(), ticketId: resumeTicketId });
 
   // AT11 (ROAD-146) third review round: createRun/updateRun now force
   // ownerMemberId to the real caller's identity (currentMemberId()) and
@@ -107,6 +117,11 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
       service.appendEvent(runId, input),
     );
   }
+  function reopenRun(id: string, reason?: string, asMemberId = memberId) {
+    return runWithIdentity({ userId: `user-${asMemberId}`, memberId: asMemberId, workspaceId, role: 'admin' }, () =>
+      service.reopenRun(id, reason),
+    );
+  }
 
   beforeAll(async () => {
     ({ db } = await import('../db/client.js'));
@@ -155,6 +170,15 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
       identifier: `RUN-${stamp}`,
       sequenceId: 1,
       title: 'A ticket with runs',
+      stateId,
+      createdById: memberId,
+    });
+    await db.insert(schema.tickets).values({
+      id: resumeTicketId,
+      projectId,
+      identifier: `RESUME-${stamp}`,
+      sequenceId: 2,
+      title: 'A ticket for the resume-dead-sessions tests',
       stateId,
       createdById: memberId,
     });
@@ -238,6 +262,12 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
     expect(after?.summary).toBeNull();
     const events = await listEvents(run.id);
     expect(events).toHaveLength(3); // created + two moves
+
+    // ROAD-XXX: leave the shared ticket free — this run stayed live
+    // (running) on purpose to prove the refused move above, but the new
+    // one-live-writer-per-ticket index means every later test that also
+    // dispatches on this shared ticket needs it actually cleared.
+    await updateRun(run.id, { status: 'cancelled' });
   });
 
   it('a status-only patch to the current status is an idempotent no-op, not a 409', async () => {
@@ -410,6 +440,9 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
     expect(last.kind).toBe('blocked_reason_changed');
     expect(last.payload).toEqual({ from: 'first question', to: 'second question' });
     expect((await getRun(run.id))?.status).toBe('blocked');
+
+    // ROAD-XXX: leave the shared ticket free (see the identical note above).
+    await updateRun(run.id, { status: 'cancelled' });
   });
 
   it('retrying an interrupted run cancels it under the lock, so there is never a second live run on the ticket', async () => {
@@ -451,6 +484,9 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
     if (resume.status === 'fulfilled') {
       expect(retry.status).toBe('rejected');
       expect(after?.status).toBe('running');
+      // ROAD-XXX: only this branch leaves the shared ticket occupied
+      // (the other branch already lands on cancelled, terminal).
+      await updateRun(first.id, { status: 'cancelled' });
     } else {
       expect(retry.status).toBe('fulfilled');
       expect(after?.status).toBe('cancelled');
@@ -721,5 +757,226 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
     const updated = await updateRun(run.id, { summary: 'y'.repeat(25_000) });
     expect(updated.summary).toHaveLength(20_000);
     expect(updated.summary?.endsWith('…')).toBe(true);
+  });
+
+  // ROAD-XXX: resume dead sessions. reopenRun is the one way an
+  // interrupted/failed/cancelled run comes back — these prove its
+  // preconditions hold under a real database, not just under mocks.
+  describe('reopenRun', () => {
+    async function deadRun(overrides: Partial<Parameters<typeof service.createRun>[0]> = {}) {
+      const run = await createRun({ ...resumeBase(), ...overrides });
+      await updateRun(run.id, { status: 'provisioning' });
+      await updateRun(run.id, {
+        status: 'running',
+        worktreePath: `/tmp/wt-${run.id}`,
+        providerSessionId: `prov-${run.id}`,
+      });
+      await updateRun(run.id, { status: 'failed', errorKind: 'generic', errorMessage: 'boom' });
+      return (await getRun(run.id))!;
+    }
+
+    it('revives a failed run to provisioning, leaves endedAt/errorKind/errorMessage alone, and writes run_reopened then status_changed', async () => {
+      const run = await deadRun();
+      const before = run.endedAt;
+      expect(before).not.toBeNull();
+
+      const { run: reopened, from } = await reopenRun(run.id, 'testing revive');
+      expect(from).toBe('failed');
+      expect(reopened.status).toBe('provisioning');
+      // Not nulled by reopenRun itself — only a successful resume clears it.
+      expect(reopened.endedAt?.getTime()).toBe(before!.getTime());
+      expect(reopened.reopenCount).toBe(1);
+      expect(reopened.lastReopenedAt).not.toBeNull();
+      expect(reopened.errorKind).toBe('generic');
+      expect(reopened.errorMessage).toBe('boom');
+      expect(reopened.worktreePath).toBe(`/tmp/wt-${run.id}`);
+
+      const events = await listEvents(run.id);
+      const lastTwo = events.slice(-2);
+      expect(lastTwo.map((e) => e.kind)).toEqual(['run_reopened', 'status_changed']);
+      expect(lastTwo[0].payload).toMatchObject({
+        from: 'failed',
+        errorKind: 'generic',
+        errorMessage: 'boom',
+        reason: 'testing revive',
+      });
+      expect(lastTwo[1].payload).toEqual({ from: 'failed', to: 'provisioning' });
+
+      // Leave the ticket free for the tests that follow.
+      await updateRun(run.id, { status: 'cancelled' });
+    });
+
+    it('revives an interrupted run and a cancelled run too', async () => {
+      const interrupted = await createRun(resumeBase());
+      await updateRun(interrupted.id, { status: 'provisioning' });
+      await updateRun(interrupted.id, { status: 'interrupted' });
+      expect((await reopenRun(interrupted.id)).run.status).toBe('provisioning');
+      await updateRun(interrupted.id, { status: 'cancelled' });
+
+      const cancelled = await createRun({ ...base(), ticketId: null, entry: 'independent' });
+      await updateRun(cancelled.id, { status: 'cancelled' });
+      expect((await reopenRun(cancelled.id)).run.status).toBe('provisioning');
+      await updateRun(cancelled.id, { status: 'cancelled' });
+    });
+
+    it('refuses done and needs-review — a successful ending is not a dead session', async () => {
+      const done = await createRun({ ...base(), ticketId: null, entry: 'independent' });
+      await updateRun(done.id, { status: 'provisioning' });
+      await updateRun(done.id, { status: 'running' });
+      await updateRun(done.id, { status: 'finishing' });
+      await updateRun(done.id, { status: 'done' });
+      await expect(reopenRun(done.id)).rejects.toThrow('finished successfully');
+
+      const needsReview = await createRun({ ...base(), ticketId: null, entry: 'independent' });
+      await updateRun(needsReview.id, { status: 'provisioning' });
+      await updateRun(needsReview.id, { status: 'running' });
+      await updateRun(needsReview.id, { status: 'finishing' });
+      await updateRun(needsReview.id, { status: 'needs-review' });
+      await expect(reopenRun(needsReview.id)).rejects.toThrow('finished successfully');
+    });
+
+    it('refuses a run a retry has already superseded — the reverse-lookup fix (architecture review)', async () => {
+      const first = await createRun(resumeBase());
+      await updateRun(first.id, { status: 'provisioning' });
+      await updateRun(first.id, { status: 'interrupted' });
+      await createRun({ ...resumeBase(), retryOfRunId: first.id }); // cancels `first` under the lock
+
+      expect((await getRun(first.id))?.status).toBe('cancelled');
+      await expect(reopenRun(first.id)).rejects.toThrow(/superseded by a retry/);
+    });
+
+    it('refuses a non-owner', async () => {
+      const otherMember = `mem-reopen-owner-${stamp}`;
+      await db.insert(schema.members).values({
+        id: otherMember,
+        workspaceId,
+        fullName: 'Other Owner',
+        displayName: 'Other',
+        email: `${otherMember}@example.test`,
+        avatarColor: '#000000',
+      });
+      try {
+        const run = await deadRun();
+        await expect(reopenRun(run.id, undefined, otherMember)).rejects.toThrow(/belongs to another member/);
+      } finally {
+        await db.delete(schema.members).where(eq(schema.members.id, otherMember));
+      }
+    });
+
+    it('refuses a second live writer already on the ticket; allows a plan-mode run or a ticket-less run alongside one', async () => {
+      // `dead` goes through its own full dead-and-back-alive-to-provisioning-
+      // then-failed lifecycle FIRST, while the ticket is still free — it
+      // needs to pass through `running` itself (deadRun), which would
+      // collide with the DB's own one-live-writer index if `live` already
+      // occupied the ticket. Only once `dead` is safely terminal does
+      // `live` take the ticket's one live slot, so the refusal this test
+      // is actually about (reopenRun's own application-level check) is
+      // what fires — not the DB constraint colliding during setup.
+      const dead = await deadRun();
+      const live = await createRun(resumeBase());
+      await updateRun(live.id, { status: 'provisioning' });
+      await updateRun(live.id, { status: 'running' });
+
+      await expect(reopenRun(dead.id)).rejects.toThrow(/already live on this ticket/);
+
+      // A plan-mode dead run on the same ticket never writes, so it's fine
+      // even while `live` still occupies the ticket.
+      const planRun = await createRun({ ...resumeBase(), modeId: 'plan' });
+      await updateRun(planRun.id, { status: 'provisioning' });
+      await updateRun(planRun.id, { status: 'failed', errorKind: 'generic', errorMessage: 'boom' });
+      expect((await reopenRun(planRun.id)).run.status).toBe('provisioning');
+      await updateRun(planRun.id, { status: 'cancelled' });
+
+      // A ticket-less run is unaffected by any ticket's live writer.
+      const noTicket = await createRun({ ...base(), ticketId: null, entry: 'independent' });
+      await updateRun(noTicket.id, { status: 'failed', errorKind: 'generic', errorMessage: 'boom' });
+      expect((await reopenRun(noTicket.id)).run.status).toBe('provisioning');
+      await updateRun(noTicket.id, { status: 'cancelled' });
+
+      // Leave the ticket free for the tests that follow.
+      await updateRun(live.id, { status: 'cancelled' });
+    });
+
+    it('refuses within the backoff window, and past the reopen cap', async () => {
+      const run = await deadRun();
+      await reopenRun(run.id); // reopenCount -> 1, lastReopenedAt -> now
+      // Back to a revivable status directly, so the SECOND call's refusal
+      // is the backoff, not the (also-true) not-revivable check.
+      await db.update(schema.agentRuns).set({ status: 'failed' }).where(eq(schema.agentRuns.id, run.id));
+      await expect(reopenRun(run.id)).rejects.toThrow(/wait a moment/);
+
+      // The cap, forced directly rather than looping 20 real reopens; an
+      // old lastReopenedAt clears the backoff so the cap is what refuses.
+      await db.update(schema.agentRuns)
+        .set({ reopenCount: 20, lastReopenedAt: new Date(Date.now() - 3_600_000), status: 'failed' })
+        .where(eq(schema.agentRuns.id, run.id));
+      await expect(reopenRun(run.id)).rejects.toThrow(/reopened 20 times/);
+    });
+
+    it('two concurrent reopens of the same run: one wins, the other is refused, never two run_reopened events', async () => {
+      const run = await deadRun();
+      const results = await Promise.allSettled([reopenRun(run.id), reopenRun(run.id)]);
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
+      const events = await listEvents(run.id);
+      expect(events.filter((e) => e.kind === 'run_reopened')).toHaveLength(1);
+
+      // Leave the ticket free for the tests that follow.
+      await updateRun(run.id, { status: 'cancelled' });
+    });
+  });
+
+  // ROAD-XXX, security review's critical finding: once a run is non-
+  // terminal again (reopened, or plainly interrupted), updateRun's
+  // isTerminal guard no longer applies to it — these columns must refuse a
+  // rewrite regardless of status, since they are handed straight to the
+  // agent process as its execution directory.
+  describe('write-once columns: cwd / worktreePath / daemonWorkspaceId', () => {
+    it('refuses to change any of the three once set, even on a live, non-terminal row', async () => {
+      const run = await createRun(resumeBase());
+      await updateRun(run.id, { status: 'provisioning' });
+      await updateRun(run.id, {
+        status: 'running',
+        worktreePath: '/tmp/original',
+        daemonWorkspaceId: 'dw-1',
+      });
+
+      await expect(updateRun(run.id, { worktreePath: '/tmp/somewhere-else' })).rejects.toThrow(
+        'worktreePath cannot be changed once set.',
+      );
+      await expect(updateRun(run.id, { daemonWorkspaceId: 'dw-evil' })).rejects.toThrow(
+        'daemonWorkspaceId cannot be changed once set.',
+      );
+      // The same value back is a no-op patch, not a change — allowed.
+      const same = await updateRun(run.id, { worktreePath: '/tmp/original' });
+      expect(same.worktreePath).toBe('/tmp/original');
+
+      // Leave the ticket free for the tests that follow.
+      await updateRun(run.id, { status: 'cancelled' });
+    });
+
+    it('the regression this guard exists for: a reopened run stays un-patchable on these columns', async () => {
+      const run = await createRun(resumeBase());
+      await updateRun(run.id, { status: 'provisioning', cwd: '/tmp/legit' });
+      await updateRun(run.id, { status: 'running', worktreePath: '/tmp/legit' });
+      await updateRun(run.id, { status: 'failed', errorKind: 'generic', errorMessage: 'boom' });
+
+      const { run: reopened } = await reopenRun(run.id);
+      expect(reopened.status).toBe('provisioning'); // non-terminal — isTerminal alone would no longer refuse a patch here
+      await expect(updateRun(run.id, { cwd: '/anything' })).rejects.toThrow('cwd cannot be changed once set.');
+      await expect(updateRun(run.id, { worktreePath: '/anything' })).rejects.toThrow(
+        'worktreePath cannot be changed once set.',
+      );
+
+      // Leave the ticket free for the tests that follow.
+      await updateRun(run.id, { status: 'cancelled' });
+    });
+
+    it('the first write is allowed — this is how worktree provisioning itself sets cwd', async () => {
+      const run = await createRun(base());
+      const updated = await updateRun(run.id, { cwd: '/tmp/fresh' });
+      expect(updated.cwd).toBe('/tmp/fresh');
+      await expect(updateRun(run.id, { cwd: '/tmp/other' })).rejects.toThrow('cwd cannot be changed once set.');
+    });
   });
 });

@@ -1,0 +1,4 @@
+ALTER TABLE "agent_runs" ADD COLUMN "reopen_count" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "agent_runs" ADD COLUMN "last_reopened_at" timestamp with time zone;--> statement-breakpoint
+CREATE INDEX "agent_runs_retry_of_run_id_idx" ON "agent_runs" USING btree ("retry_of_run_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "agent_runs_one_live_writer_per_ticket" ON "agent_runs" USING btree ("ticket_id") WHERE "agent_runs"."entry" = 'dispatched' AND "agent_runs"."status" IN ('provisioning','running','blocked','finishing') AND ("agent_runs"."mode_id" IS NULL OR "agent_runs"."mode_id" <> 'plan');

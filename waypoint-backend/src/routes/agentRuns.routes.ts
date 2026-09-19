@@ -12,6 +12,7 @@ import {
   listAgentRunEventsQuerySchema,
   listAgentRunsQuerySchema,
   listWorkedOnJiraKeysQuerySchema,
+  reopenAgentRunSchema,
   saveAgentRunTranscriptSchema,
   updateAgentRunSchema,
 } from '../validation/agentRuns.schema.js';
@@ -70,6 +71,20 @@ agentRunsRouter.patch(
     // lives here, at the one call site that's always a real request.
     await agentRunsService.assertRunInWorkspace(req.params.id);
     res.json(await agentRunsService.updateRun(req.params.id, patch));
+  }),
+);
+
+// ROAD-XXX: revive an interrupted/failed/cancelled run. Deliberately not
+// PATCH — see reopenRun's own doc comment for why this is a scoped verb
+// rather than a wider write to the general route, and why the workspace
+// check lives inside the service's own transaction instead of here (unlike
+// PATCH above, reopenRun has no request-less caller to make an exception
+// for).
+agentRunsRouter.post(
+  '/agent-runs/:id/reopen',
+  asyncHandler(async (req, res) => {
+    const { reason } = reopenAgentRunSchema.parse(req.body ?? {});
+    res.json(await agentRunsService.reopenRun(req.params.id, reason));
   }),
 );
 

@@ -124,9 +124,10 @@ export const listWorkedOnJiraKeysQuerySchema = z
   })
   .strict();
 
-// The kinds a client may append. `created` and `status_changed` are
-// deliberately absent: the service writes those itself, inside the same
-// transaction as the row change they describe, and a client writing them
+// The kinds a client may append. `created`, `status_changed`, and
+// `run_reopened` are deliberately absent: the service writes those itself,
+// inside the same transaction as the row change they describe, and a
+// client writing them
 // directly could make the trail say something the ledger does not.
 export const CLIENT_EVENT_KINDS = [
   'worktree_created',
@@ -169,6 +170,16 @@ export const createRunProposalSchema = z
     z.object({ kind: z.literal('state_change'), stateId: id }).strict(),
   ]);
 export type CreateRunProposalInput = z.infer<typeof createRunProposalSchema>;
+
+// ROAD-XXX: revive an interrupted/failed/cancelled run. Deliberately not a
+// PATCH — the body names no column, so reopenRun can only ever do what its
+// name says (see agentRuns.service.ts's reopenRun).
+export const reopenAgentRunSchema = z
+  .object({
+    reason: z.string().max(2000).optional(),
+  })
+  .strict();
+export type ReopenAgentRunInput = z.infer<typeof reopenAgentRunSchema>;
 
 // Everything a run's owner-side process may write back as it learns things:
 // the daemon's handles once provisioning has them, the branch and PR, the

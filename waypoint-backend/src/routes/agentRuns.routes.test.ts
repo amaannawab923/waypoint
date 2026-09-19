@@ -387,6 +387,72 @@ describe('PATCH /agent-runs/:id', () => {
   });
 });
 
+// ROAD-XXX: revive an interrupted/failed/cancelled run — see reopenRun's
+// own doc comment (agentRuns.service.ts) for the preconditions it enforces;
+// this is the HTTP contract only, same posture as PATCH's own tests above.
+describe('POST /agent-runs/:id/reopen', () => {
+  it('reopens a run and returns 200, with an optional reason passed through', async () => {
+    vi.mocked(service.reopenRun).mockResolvedValue({
+      run: run({ status: 'provisioning' }),
+      from: 'failed',
+    } as never);
+
+    const res = await request(buildTestApp())
+      .post('/agent-runs/run-abc1234/reopen')
+      .send({ reason: 'resumed by a new message' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.run.status).toBe('provisioning');
+    expect(res.body.from).toBe('failed');
+    expect(service.reopenRun).toHaveBeenCalledWith('run-abc1234', 'resumed by a new message');
+  });
+
+  it('reopens with no body at all — reason is optional', async () => {
+    vi.mocked(service.reopenRun).mockResolvedValue({ run: run({ status: 'provisioning' }), from: 'cancelled' } as never);
+
+    const res = await request(buildTestApp()).post('/agent-runs/run-abc1234/reopen').send();
+
+    expect(res.status).toBe(200);
+    expect(service.reopenRun).toHaveBeenCalledWith('run-abc1234', undefined);
+  });
+
+  it('rejects an unknown body field with 400, without calling the service', async () => {
+    const res = await request(buildTestApp())
+      .post('/agent-runs/run-abc1234/reopen')
+      .send({ status: 'provisioning' });
+
+    expect(res.status).toBe(400);
+    expect(service.reopenRun).not.toHaveBeenCalled();
+  });
+
+  it('maps every refusal the service can throw to its HTTP status', async () => {
+    const app = buildTestApp();
+
+    vi.mocked(service.reopenRun).mockRejectedValueOnce(new NotFoundError('agent run'));
+    const notFound = await request(app).post('/agent-runs/run-nope/reopen').send();
+    expect(notFound.status).toBe(404);
+
+    vi.mocked(service.reopenRun).mockRejectedValueOnce(
+      new ConflictError('A done run finished successfully; it cannot be resumed.'),
+    );
+    const notRevivable = await request(app).post('/agent-runs/run-abc1234/reopen').send();
+    expect(notRevivable.status).toBe(409);
+    expect(notRevivable.body.error).toBe('A done run finished successfully; it cannot be resumed.');
+
+    vi.mocked(service.reopenRun).mockRejectedValueOnce(
+      new ConflictError('Run run-abc1234 was superseded by a retry (run-xyz); open that one instead.'),
+    );
+    const superseded = await request(app).post('/agent-runs/run-abc1234/reopen').send();
+    expect(superseded.status).toBe(409);
+
+    vi.mocked(service.reopenRun).mockRejectedValueOnce(
+      new ConflictError('Run run-abc1234 belongs to another member; only its owner can resume it.'),
+    );
+    const notOwner = await request(app).post('/agent-runs/run-abc1234/reopen').send();
+    expect(notOwner.status).toBe(409);
+  });
+});
+
 describe('POST /agent-runs/:id/events', () => {
   it('appends a client event and returns 201', async () => {
     vi.mocked(service.appendEvent).mockResolvedValue({

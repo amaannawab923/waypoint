@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, getTableColumns, gt, inArray, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gt, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { agentRuns, agentRunEvents, agentRunTranscripts, agents, members, projects, ticketRefs, tickets } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
@@ -9,7 +9,9 @@ import { assertConversationOwnedByMember } from './copilot.service.js';
 import {
   canTransition,
   describeRefusedTransition,
+  isRevivable,
   isTerminal,
+  LIVE_RUN_STATUSES,
   type AgentRunStatus,
 } from './runStatusMachine.js';
 import type {
@@ -41,6 +43,7 @@ export type AgentRunEventKind =
   | 'created'
   | 'status_changed'
   | 'blocked_reason_changed'
+  | 'run_reopened'
   | AppendAgentRunEventInput['kind'];
 
 const DEFAULT_PAGE = 50;
@@ -49,6 +52,12 @@ const DEFAULT_PAGE = 50;
 // because the message the model wrote is still the most useful thing to
 // keep when it ran long.
 const MAX_SUMMARY_CHARS = 20_000;
+// ROAD-XXX: reopenRun's abuse guard — nothing else in this codebase
+// rate-limits an inbound route, and a successful reopen spawns a real,
+// billable agent process. Capped exponential backoff, then a hard stop.
+const REOPEN_BACKOFF_MS = 10_000;
+const MAX_REOPEN_BACKOFF_MS = 10 * 60_000;
+const MAX_REOPENS = 20;
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -507,6 +516,22 @@ export async function updateRun(runId: string, input: UpdateAgentRunInput): Prom
     if (fields.copilotConversationId) {
       await assertConversationOwnedByMember(fields.copilotConversationId, current.ownerMemberId);
     }
+    // ROAD-XXX (resume dead sessions), security review: these three are
+    // daemon-observed FACTS, written exactly once elsewhere in this
+    // codebase (cwd by startRun.ts's continueStart, worktreePath by
+    // worktrees.ts's provisionWorktree, daemonWorkspaceId alongside it) and
+    // never legitimately rewritten after — resumeRun only ever reads them.
+    // Write-once regardless of the run's current status: the isTerminal
+    // guard right below stops applying the instant a run leaves a terminal
+    // status (e.g. reopenRun reviving it to `provisioning`), and cwd/
+    // worktreePath are handed straight to the agent process as its
+    // execution directory — a caller who could rewrite them on a
+    // non-terminal row could redirect a live agent anywhere on disk.
+    for (const key of ['cwd', 'worktreePath', 'daemonWorkspaceId'] as const) {
+      if (fields[key] !== undefined && current[key] !== null && fields[key] !== current[key]) {
+        throw new ConflictError(`${key} cannot be changed once set.`);
+      }
+    }
     // A finished run is evidence. Found in review: the header promised
     // "nothing here updates a finished run's worktree or outcome" while a
     // field-only patch on a cancelled run went straight through. The one
@@ -586,5 +611,128 @@ export async function updateRun(runId: string, input: UpdateAgentRunInput): Prom
       });
     }
     return updated;
+  });
+}
+
+export interface ReopenRunResult {
+  run: AgentRun;
+  from: AgentRunStatus;
+}
+
+/**
+ * Revive an interrupted/failed/cancelled run back to `provisioning`, so
+ * `startRun.ts`'s resumeRun can hand its still-recorded `worktreePath`/
+ * `providerSessionId` back to the daemon (ROAD-XXX). The one way past this:
+ * not a wider PATCH — `updateRun` above still refuses every other patch to
+ * a terminal row unconditionally, and `runStatusMachine.ts`'s TRANSITIONS
+ * table was deliberately left untouched (see its isRevivable doc comment).
+ * This function owns its own preconditions instead:
+ *
+ *  - owner only (resuming starts a process on someone's machine, in their
+ *    worktree — workspace membership alone is not enough for that, unlike
+ *    a read);
+ *  - not a successful ending (done/needs-review are not "dead" — that's a
+ *    different, unbuilt feature: retryOfRunId already covers "start fresh
+ *    from a finished run");
+ *  - not superseded — createRun's retry branch above cancels the run a
+ *    retry replaces specifically so that arrow stays closed for good; this
+ *    is the reverse lookup that keeps it closed (a run doesn't know its own
+ *    successor, only a successor knows what it replaced);
+ *  - no second live writer already on the same ticket (a check the button-
+ *    only `interrupted` resume never had until now — a strict improvement,
+ *    not a new restriction, backed by the DB's own partial unique index for
+ *    the cross-process case this application check alone cannot close);
+ *  - a capped, backed-off rate — nothing else in this codebase throttles an
+ *    inbound route, and a successful reopen spawns a real, billable agent
+ *    process; a stuck retry loop (transparent resume-on-message, in
+ *    particular) must not be able to spawn it unboundedly.
+ *
+ * `endedAt` is deliberately left alone here — cleared only once the resume
+ * actually reaches `running` (startRun.ts, alongside errorKind/
+ * errorMessage) — so a reopen that never completes still carries when this
+ * run last died, which the backoff above depends on.
+ */
+export async function reopenRun(runId: string, reason?: string): Promise<ReopenRunResult> {
+  return db.transaction(async (tx) => {
+    const current = await lockRun(tx, runId);
+
+    // Scoped inside the transaction, not at the route (unlike most bare-id
+    // routes): reopenRun has no request-less caller — unlike updateRun's
+    // settleRunIfDecided sweep — so there's no reason to accept the TOCTOU
+    // window a pre-transaction check would leave.
+    if ((await ownerWorkspaceId(tx, current.ownerMemberId)) !== currentWorkspaceId()) {
+      throw new NotFoundError('agent run');
+    }
+    if (current.ownerMemberId !== currentMemberId()) {
+      throw new ConflictError(`Run ${runId} belongs to another member; only its owner can resume it.`);
+    }
+    if (!isRevivable(current.status)) {
+      throw new ConflictError(`A ${current.status} run finished successfully; it cannot be resumed.`);
+    }
+
+    const [successor] = await tx
+      .select({ id: agentRuns.id })
+      .from(agentRuns)
+      .where(eq(agentRuns.retryOfRunId, runId))
+      .limit(1);
+    if (successor) {
+      throw new ConflictError(
+        `Run ${runId} was superseded by a retry (${successor.id}); open that one instead.`,
+      );
+    }
+
+    if (current.ticketId && current.entry === 'dispatched' && current.modeId !== 'plan') {
+      const [live] = await tx
+        .select({ id: agentRuns.id })
+        .from(agentRuns)
+        .where(
+          and(
+            eq(agentRuns.ticketId, current.ticketId),
+            eq(agentRuns.entry, 'dispatched'),
+            ne(agentRuns.id, runId),
+            inArray(agentRuns.status, [...LIVE_RUN_STATUSES]),
+            or(isNull(agentRuns.modeId), ne(agentRuns.modeId, 'plan')),
+          ),
+        )
+        .limit(1);
+      if (live) {
+        throw new ConflictError(
+          `A writing session is already live on this ticket (${live.id}); resuming this one would make two.`,
+        );
+      }
+    }
+
+    const now = new Date();
+    const cooldownMs = Math.min(
+      REOPEN_BACKOFF_MS * 2 ** Math.min(current.reopenCount, 6),
+      MAX_REOPEN_BACKOFF_MS,
+    );
+    if (current.lastReopenedAt && now.getTime() - current.lastReopenedAt.getTime() < cooldownMs) {
+      throw new ConflictError('This run was just reopened; wait a moment before trying again.');
+    }
+    if (current.reopenCount >= MAX_REOPENS) {
+      throw new ConflictError(`This run has been reopened ${MAX_REOPENS} times; open a fresh session instead.`);
+    }
+
+    const [updated] = await tx
+      .update(agentRuns)
+      .set({
+        status: 'provisioning',
+        reopenCount: current.reopenCount + 1,
+        lastReopenedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(agentRuns.id, runId))
+      .returning();
+
+    await writeEvent(tx, runId, 'run_reopened', {
+      from: current.status,
+      errorKind: current.errorKind,
+      errorMessage: current.errorMessage,
+      ...(reason !== undefined ? { reason } : {}),
+    });
+    await writeEvent(tx, runId, 'status_changed', { from: current.status, to: 'provisioning' });
+
+    return { run: updated, from: current.status };
   });
 }
