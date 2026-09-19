@@ -2,16 +2,17 @@ import '@testing-library/jest-dom';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import {
+  getJiraTicketByKey,
   getJiraTransitions,
   listJiraComments,
-  listMyJiraTickets,
 } from '@/data/jiraApi';
 import { useJiraConnection, useLoadedJiraConnection } from '@/lib/jiraStore';
-import type { JiraTicket, JiraTruncation } from '@/types/jira';
+import { JiraApiError } from '@/types/jira';
+import type { JiraTicket } from '@/types/jira';
 import JiraTicketPage from './JiraTicketPage';
 
 jest.mock('@/data/jiraApi', () => ({
-  listMyJiraTickets: jest.fn(),
+  getJiraTicketByKey: jest.fn(),
   getJiraTransitions: jest.fn(),
   transitionJiraTicket: jest.fn(),
   getJiraPriorityOptions: jest.fn(),
@@ -84,12 +85,7 @@ function ticket(overrides: Partial<JiraTicket> = {}): JiraTicket {
   };
 }
 
-function mountAt(
-  key: string,
-  tickets: JiraTicket[],
-  truncated: JiraTruncation = false,
-) {
-  jest.mocked(listMyJiraTickets).mockResolvedValue({ tickets, truncated });
+function mountAt(key: string) {
   jest.mocked(getJiraTransitions).mockResolvedValue([]);
   jest.mocked(listJiraComments).mockResolvedValue({ comments: [], total: 0 });
   jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
@@ -108,53 +104,48 @@ beforeEach(() => {
 });
 
 describe('JiraTicketPage', () => {
-  it('renders the issue it finds in the queue read', async () => {
-    mountAt('ENG-1', [ticket({ title: 'Webhook receiver drops events' })]);
+  // ROAD-158: fetches the issue directly by key now, not by re-running the
+  // old "my work" list query and searching it — so this asserts the fetch
+  // itself is by-key, not just that the ticket renders.
+  it('renders the issue it fetches by key', async () => {
+    jest.mocked(getJiraTicketByKey).mockResolvedValue(
+      ticket({ key: 'ENG-1', title: 'Webhook receiver drops events' }),
+    );
+
+    mountAt('ENG-1');
 
     expect(
       await screen.findByText('Webhook receiver drops events'),
     ).toBeInTheDocument();
+    expect(getJiraTicketByKey).toHaveBeenCalledWith('ENG-1');
   });
 
-  it('says the issue is outside your queue when the read was complete', async () => {
-    mountAt('ENG-999', [ticket()]);
+  it('says the issue isn\'t here when Jira answers not found', async () => {
+    jest
+      .mocked(getJiraTicketByKey)
+      .mockRejectedValue(new JiraApiError('Jira found no such issue.', 'not_found'));
 
-    expect(await screen.findByText(/isn't in your queue/)).toBeInTheDocument();
+    mountAt('ENG-999');
+
+    expect(await screen.findByText(/ENG-999 isn't here/)).toBeInTheDocument();
     expect(
-      screen.getByText(/assigned, reported or watching/),
+      screen.getByText(/may not exist, or.*may not be visible/),
     ).toBeInTheDocument();
   });
 
-  // The distinction the truncation flag exists to make sayable. "This issue
-  // isn't one of those" is a claim about a set the app never finished
-  // reading, and stating it over a capped read is simply false — the issue
-  // may be squarely in the user's queue and have fallen off the last page.
-  it('admits the page cap instead, when the read was capped', async () => {
-    mountAt('ENG-999', [ticket()], 'page-cap');
+  // A not-found and a genuine failure (offline, revoked token, Jira down)
+  // are different facts and must not collapse into the same "isn't here"
+  // copy — that would tell an offline user their issue doesn't exist.
+  it('shows a load error, not a not-found state, for a non-404 failure', async () => {
+    jest
+      .mocked(getJiraTicketByKey)
+      .mockRejectedValue(new JiraApiError('Jira is rate-limiting this account.', 'jira_error'));
 
-    expect(
-      await screen.findByText(/more issues than this app reads in one go/),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByText(/assigned, reported or watching/),
-    ).not.toBeInTheDocument();
-  });
+    mountAt('ENG-1');
 
-  // The other way a read can be a prefix, and the reason `truncated` carries
-  // a reason instead of a boolean. This case says nothing about how much was
-  // read — it can happen on page one — so naming the cap here would invent a
-  // cause the data does not support.
-  it('does not blame the page cap when Jira simply stopped paging', async () => {
-    mountAt('ENG-999', [ticket()], 'no-cursor');
-
-    expect(
-      await screen.findByText(/more issues than it would hand over/),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByText(/first few hundred/),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByText(/assigned, reported or watching/),
-    ).not.toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Jira is rate-limiting this account.',
+    );
+    expect(screen.queryByText(/isn't here/)).not.toBeInTheDocument();
   });
 });
