@@ -13,14 +13,15 @@ module.exports = {
     sourceType: 'module',
     ecmaFeatures: { jsx: true },
   },
-  // Registered (but not enabled — nothing from either plugin is turned on
-  // below) purely so ESLint recognizes rule IDs named in this codebase's
-  // existing `// eslint-disable-next-line @typescript-eslint/...` and
-  // `// eslint-disable-next-line react-hooks/...` comments. Without this,
+  // Registered (but not enabled — nothing from any of these plugins is
+  // turned on below) purely so ESLint recognizes rule IDs named in this
+  // codebase's existing `// eslint-disable-next-line @typescript-eslint/...`,
+  // `// eslint-disable-next-line react-hooks/...` and
+  // `// eslint-disable-next-line jsx-a11y/...` comments. Without this,
   // --no-eslintrc means those plugins are never loaded, and ESLint reports
   // every such comment as "Definition for rule '...' was not found" — noise
   // from the main lint job's rules leaking into this unrelated, required gate.
-  plugins: ['@typescript-eslint', 'react-hooks'],
+  plugins: ['@typescript-eslint', 'react-hooks', 'jsx-a11y'],
   rules: {
     'no-inert-control': 'error',
     'no-actionless-button': 'error',

@@ -151,6 +151,46 @@ describe('TicketRunsSection', () => {
     expect(screen.getByText('panel')).toBeInTheDocument();
   });
 
+  it.each<AgentRun['status']>(['done', 'blocked'])(
+    'opens the session when clicking anywhere on a %s run row, not just the "Open session" link',
+    async (status) => {
+      (listTicketAgentRuns as jest.Mock).mockResolvedValue([
+        run('run-c', status),
+      ]);
+      renderSection();
+      await flush();
+      // Click the row itself — its branch text — not the "Open session →"
+      // link, which is the only thing that used to be clickable. 'blocked'
+      // also covers the one status that renders an extra waitingReason span
+      // inside the row.
+      fireEvent.click(screen.getByText('feat/run-c'));
+      expect(screen.getByText('panel')).toBeInTheDocument();
+    },
+  );
+
+  it('does not navigate when the click ends a text-selection drag inside the row', async () => {
+    (listTicketAgentRuns as jest.Mock).mockResolvedValue([
+      run('run-c', 'done'),
+    ]);
+    jest
+      .spyOn(window, 'getSelection')
+      .mockReturnValue({ isCollapsed: false } as Selection);
+    renderSection();
+    await flush();
+    fireEvent.click(screen.getByText('feat/run-c'));
+    expect(screen.queryByText('panel')).not.toBeInTheDocument();
+  });
+
+  it('lets the PR link navigate to the PR instead of the session', async () => {
+    (listTicketAgentRuns as jest.Mock).mockResolvedValue([
+      run('run-c', 'done', { prUrl: 'https://github.com/o/r/pull/1' }),
+    ]);
+    renderSection();
+    await flush();
+    fireEvent.click(screen.getByText('PR ↗'));
+    expect(screen.queryByText('panel')).not.toBeInTheDocument();
+  });
+
   it('Investigate opens the brief preview for the ticket in plan mode', async () => {
     (listTicketAgentRuns as jest.Mock).mockResolvedValue([]);
     (getBriefPreview as jest.Mock).mockResolvedValue(preview());

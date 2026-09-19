@@ -172,10 +172,26 @@ function TicketRuns({ ticketId }: { ticketId: string }) {
         <div className="flex flex-col gap-2">
           {runs.map((run) => {
             const reason = waitingReason(run);
+            const openRun = () =>
+              navigate(`/sessions/${encodeURIComponent(run.id)}`);
             return (
+              // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- mouse-only affordance; see the onClick comment below for why this is deliberate rather than a role="button"
               <div
                 key={run.id}
-                className="flex items-center gap-2.5 rounded-[var(--radius)] border border-border bg-surface px-3 py-2 text-xs"
+                onClick={() => {
+                  // A mouse-only affordance — the row itself isn't a
+                  // focusable/keyboard control (the "Open session →" button
+                  // below already is that), so it doesn't need `role="button"`.
+                  // That role would mark its own children (the PR link, the
+                  // button) as ARIA-presentational, stripping their
+                  // accessible roles/names for no benefit. Skipping a click
+                  // that lands here as the end of a text-selection drag,
+                  // since the row's own branch/id text is the one thing here
+                  // worth copying.
+                  if (!window.getSelection()?.isCollapsed) return;
+                  openRun();
+                }}
+                className="flex cursor-pointer items-center gap-2.5 rounded-[var(--radius)] border border-border bg-surface px-3 py-2 text-xs transition-colors hover:border-border-strong hover:bg-bg-inset"
               >
                 <SessionStatusPill status={run.status} />
                 {run.entry === 'dispatched' ? (
@@ -204,6 +220,7 @@ function TicketRuns({ ticketId }: { ticketId: string }) {
                     href={run.prUrl}
                     target="_blank"
                     rel="noreferrer"
+                    onClick={(e) => e.stopPropagation()}
                     className="shrink-0 font-medium text-text-secondary underline-offset-2 hover:underline"
                   >
                     PR ↗
@@ -214,9 +231,10 @@ function TicketRuns({ ticketId }: { ticketId: string }) {
                 </span>
                 <button
                   type="button"
-                  onClick={() =>
-                    navigate(`/sessions/${encodeURIComponent(run.id)}`)
-                  }
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openRun();
+                  }}
                   className="shrink-0 font-medium text-text underline-offset-2 hover:underline"
                 >
                   Open session →
