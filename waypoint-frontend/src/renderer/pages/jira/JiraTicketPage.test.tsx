@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom';
-import { render, screen } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import {
   getJiraTicketByKey,
   getJiraTransitions,
@@ -44,7 +44,9 @@ jest.mock('@/data/jiraApi', () => ({
     editAll: false,
     editOwn: false,
   })),
-  buildJiraCommentPermalink: jest.fn(() => 'https://example.invalid/browse/ENG-1?focusedCommentId=1'),
+  buildJiraCommentPermalink: jest.fn(
+    () => 'https://example.invalid/browse/ENG-1?focusedCommentId=1',
+  ),
 }));
 jest.mock('@/lib/jiraStore', () => ({
   useLoadedJiraConnection: jest.fn(),
@@ -99,6 +101,33 @@ function mountAt(key: string) {
   );
 }
 
+// A real in-app navigation between two keys, unlike mountAt: keeps the SAME
+// JiraTicketPage instance mounted across the URL change (matching, from the
+// drawer's own "expand" button) so a test can exercise what actually
+// happens on navigation rather than two independent mounts, each with its
+// own fresh state.
+function mountWithNav(initialKey: string, nextKey: string) {
+  jest.mocked(getJiraTransitions).mockResolvedValue([]);
+  jest.mocked(listJiraComments).mockResolvedValue({ comments: [], total: 0 });
+  jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
+  jest.mocked(useJiraConnection).mockReturnValue(undefined);
+  return render(
+    <MemoryRouter initialEntries={[`/my-jira/${initialKey}`]}>
+      <Routes>
+        <Route
+          path="/my-jira/:ticketKey"
+          element={
+            <>
+              <Link to={`/my-jira/${nextKey}`}>go to {nextKey}</Link>
+              <JiraTicketPage />
+            </>
+          }
+        />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
 });
@@ -108,9 +137,11 @@ describe('JiraTicketPage', () => {
   // old "my work" list query and searching it — so this asserts the fetch
   // itself is by-key, not just that the ticket renders.
   it('renders the issue it fetches by key', async () => {
-    jest.mocked(getJiraTicketByKey).mockResolvedValue(
-      ticket({ key: 'ENG-1', title: 'Webhook receiver drops events' }),
-    );
+    jest
+      .mocked(getJiraTicketByKey)
+      .mockResolvedValue(
+        ticket({ key: 'ENG-1', title: 'Webhook receiver drops events' }),
+      );
 
     mountAt('ENG-1');
 
@@ -120,10 +151,12 @@ describe('JiraTicketPage', () => {
     expect(getJiraTicketByKey).toHaveBeenCalledWith('ENG-1');
   });
 
-  it('says the issue isn\'t here when Jira answers not found', async () => {
+  it("says the issue isn't here when Jira answers not found", async () => {
     jest
       .mocked(getJiraTicketByKey)
-      .mockRejectedValue(new JiraApiError('Jira found no such issue.', 'not_found'));
+      .mockRejectedValue(
+        new JiraApiError('Jira found no such issue.', 'not_found'),
+      );
 
     mountAt('ENG-999');
 
@@ -139,7 +172,9 @@ describe('JiraTicketPage', () => {
   it('shows a load error, not a not-found state, for a non-404 failure', async () => {
     jest
       .mocked(getJiraTicketByKey)
-      .mockRejectedValue(new JiraApiError('Jira is rate-limiting this account.', 'jira_error'));
+      .mockRejectedValue(
+        new JiraApiError('Jira is rate-limiting this account.', 'jira_error'),
+      );
 
     mountAt('ENG-1');
 
@@ -147,5 +182,36 @@ describe('JiraTicketPage', () => {
       'Jira is rate-limiting this account.',
     );
     expect(screen.queryByText(/isn't here/)).not.toBeInTheDocument();
+  });
+
+  // Found in review: useAsync never clears `data` on a re-run — only a
+  // successful fetch calls setData — so navigating straight from one real
+  // issue to a key that then 404s left the PREVIOUS issue's detail on
+  // screen under the new URL: `notFound` skipped the error branch, and the
+  // stale `ticket` skipped the "isn't here" branch too. Reproduced here
+  // with a real in-app navigation (mountWithNav), the same mechanism that
+  // actually triggers it, rather than two independent mounts that would
+  // each get their own fresh state and never exercise the bug at all.
+  it('clears the previous issue immediately on navigation, instead of leaving it on screen under a 404 key', async () => {
+    jest
+      .mocked(getJiraTicketByKey)
+      .mockResolvedValueOnce(
+        ticket({ key: 'ENG-1', title: 'Webhook receiver drops events' }),
+      )
+      .mockRejectedValueOnce(
+        new JiraApiError('Jira found no such issue.', 'not_found'),
+      );
+
+    mountWithNav('ENG-1', 'ENG-2');
+    await screen.findByText('Webhook receiver drops events');
+
+    fireEvent.click(screen.getByText('go to ENG-2'));
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText('Webhook receiver drops events'),
+      ).not.toBeInTheDocument(),
+    );
+    expect(await screen.findByText(/ENG-2 isn't here/)).toBeInTheDocument();
   });
 });

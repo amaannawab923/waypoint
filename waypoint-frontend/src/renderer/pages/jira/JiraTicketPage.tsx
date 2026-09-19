@@ -26,12 +26,7 @@ export default function JiraTicketPage() {
   const { ticketKey } = useParams<{ ticketKey: string }>();
   const [ticket, setTicket] = useState<JiraTicket | null>(null);
 
-  const {
-    data,
-    loading,
-    error,
-    reload,
-  } = useAsync(
+  const { data, loading, error, reload } = useAsync(
     () => (ticketKey ? getJiraTicketByKey(ticketKey) : Promise.resolve(null)),
     [ticketKey],
   );
@@ -39,13 +34,26 @@ export default function JiraTicketPage() {
   useEffect(() => {
     setTicket(data ?? null);
   }, [data]);
+  // useAsync never clears `data` on a re-run — only a SUCCESSFUL fetch ever
+  // calls its own setData, so navigating straight from one issue to a key
+  // that then 404s left `ticket` (and `data`) still holding the PREVIOUS
+  // issue: `notFound` was true so the error branch was skipped, and `ticket`
+  // was still truthy so the "isn't here" branch was skipped too — this page
+  // rendered the previous issue's detail under the new, nonexistent key's
+  // URL. Cleared here, keyed on ticketKey itself rather than `data`, so it
+  // fires immediately on navigation instead of waiting for (or depending
+  // entirely on) the new fetch to resolve.
+  useEffect(() => {
+    setTicket(null);
+  }, [ticketKey]);
 
   // Jira answering "no such issue" (or "not visible to you", which Jira
   // itself does not distinguish from not existing) is a normal, expected
   // outcome here — not a load failure. Every other reason getJiraTicketByKey
   // can fail (network, credentials, a genuine Jira outage) still goes
   // through JiraLoadError below.
-  const notFound = error instanceof JiraApiError && error.reason === 'not_found';
+  const notFound =
+    error instanceof JiraApiError && error.reason === 'not_found';
 
   if (error && !notFound) {
     return (
