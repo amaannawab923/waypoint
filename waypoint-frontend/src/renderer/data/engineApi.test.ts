@@ -21,6 +21,7 @@ const engine = {
   onRunChanged: jest.fn(),
   startRun: jest.fn(),
   resumeRun: jest.fn(),
+  sendRunPrompt: jest.fn(),
   resolveTicket: jest.fn(),
   listRunBranches: jest.fn(),
 };
@@ -58,18 +59,11 @@ describe('callEngineFallible', () => {
 });
 
 describe('the session procedures send exactly the allowlisted shapes', () => {
-  it('sendPrompt is text only, resolvePermission is one request and one option, cancelTurn is the id', async () => {
-    engine.call.mockResolvedValue({ success: true, data: { queued: false } });
-    await expect(sendPrompt('run-a1', 'Run the tests')).resolves.toEqual({
-      queued: false,
-    });
+  it('resolvePermission is one request and one option, cancelTurn is the id', async () => {
+    engine.call.mockResolvedValue({ success: true, data: {} });
     await resolvePermission('run-a1', 'perm-1', 'allow_once');
     await cancelTurn('run-a1');
     expect(engine.call.mock.calls).toEqual([
-      [
-        'acp.sendPrompt',
-        { conversationId: 'run-a1', prompt: { text: 'Run the tests' } },
-      ],
       [
         'acp.resolvePermission',
         {
@@ -80,6 +74,38 @@ describe('the session procedures send exactly the allowlisted shapes', () => {
       ],
       ['acp.cancelTurn', { conversationId: 'run-a1' }],
     ]);
+  });
+});
+
+// ROAD-XXX: sendPrompt goes through main's own runs:send-prompt channel,
+// not the generic acp.* bridge — it can transparently revive a dead run,
+// which the generic bridge has no way to do.
+describe('sendPrompt', () => {
+  it('is text only, sent through runs:send-prompt', async () => {
+    engine.sendRunPrompt.mockResolvedValueOnce({
+      outcome: 'sent',
+      status: 'running',
+    });
+    await expect(sendPrompt('run-a1', 'Run the tests')).resolves.toEqual({
+      outcome: 'sent',
+      status: 'running',
+    });
+    expect(engine.sendRunPrompt).toHaveBeenCalledWith({
+      runId: 'run-a1',
+      text: 'Run the tests',
+    });
+    expect(engine.call).not.toHaveBeenCalled();
+  });
+
+  it('unwraps main’s own rejection the same way every other run channel does', async () => {
+    engine.sendRunPrompt.mockRejectedValueOnce(
+      new Error(
+        'This run has been reopened 20 times; open a fresh session instead.',
+      ),
+    );
+    await expect(sendPrompt('run-a1', 'hello')).rejects.toThrow(
+      'reopened 20 times',
+    );
   });
 });
 

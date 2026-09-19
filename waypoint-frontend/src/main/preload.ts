@@ -56,6 +56,7 @@ import {
   type RunBranches,
   type RunChanged,
   type RunDiff,
+  type SendRunPromptResult,
   type SessionFolder,
   type StartRunInput,
   type StopRunResult,
@@ -648,6 +649,14 @@ const electronHandler = {
     },
     resumeRun(runId: string): Promise<ResumeRunResult> {
       return ipcRenderer.invoke(RUNS_IPC.resume, runId);
+    },
+    // ROAD-XXX: transparently revives a dead run before sending, when
+    // needed (engine/runs/sendPrompt.ts).
+    sendRunPrompt(input: {
+      runId: string;
+      text: string;
+    }): Promise<SendRunPromptResult> {
+      return ipcRenderer.invoke(RUNS_IPC.sendPrompt, input);
     },
     listRunBranches(folderHandle: string): Promise<RunBranches> {
       return ipcRenderer.invoke(RUNS_IPC.listBranches, folderHandle);

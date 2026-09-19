@@ -29,6 +29,7 @@ import { assertUnder } from './runs/worktrees';
 import { listRunBranches, resumeRun, startRun } from './runs/startRun';
 import { buildBriefPreview, dispatchTicketRun } from './runs/dispatch';
 import { withRunLock } from './runs/runLock';
+import { sendRunPrompt } from './runs/sendPrompt';
 import {
   describeRunTicket,
   JIRA_NOT_CONNECTED,
@@ -635,6 +636,11 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
     typeof runId === 'string'
       ? withRunLock(runId, () => resumeRun(startDeps, runId))
       : resumeRun(startDeps, runId),
+  );
+  // ROAD-XXX: takes the same per-run lock itself (sendRunPrompt already
+  // wraps its own body in withRunLock — see runLock.ts).
+  deps.host.handle(RUNS_IPC.sendPrompt, (input) =>
+    sendRunPrompt(startDeps, input),
   );
   // W5a: a session on a ticket. The renderer names a ticket and a verb;
   // main builds the brief from the ledger and resolves the project's

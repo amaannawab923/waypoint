@@ -607,8 +607,12 @@ export type ResumeTrigger = 'button' | 'message';
  * the status it was actually in before this call — not unconditionally
  * `interrupted` — so a `failed` run whose resume also fails stays `failed`
  * rather than being relabeled as a mere interruption.
+ *
+ * Exported for `sendPrompt.ts`'s transparent resume-on-message, which
+ * shares this rather than duplicating the daemon-start/outcome-detection/
+ * note logic — the only other caller besides this file's own `resumeRun`.
  */
-async function resumeRunCore(
+export async function resumeRunCore(
   deps: StartRunDeps,
   runId: unknown,
   trigger: ResumeTrigger,

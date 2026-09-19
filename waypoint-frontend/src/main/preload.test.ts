@@ -109,6 +109,7 @@ function getElectronHandler() {
       revealRunWorktree: (runId: string) => Promise<void>;
       startRun: (input: unknown) => Promise<unknown>;
       resumeRun: (runId: string) => Promise<unknown>;
+      sendRunPrompt: (input: unknown) => Promise<unknown>;
       listRunBranches: (folder: string) => Promise<unknown>;
       chooseFolder: () => Promise<unknown>;
       listRecentFolders: () => Promise<unknown>;
@@ -506,6 +507,19 @@ describe('electronHandler.engine', () => {
       id: 'run-1',
     });
     expect(ipcRendererMock.invoke).toHaveBeenCalledWith('runs:start', input);
+
+    // ROAD-XXX
+    ipcRendererMock.invoke.mockResolvedValueOnce({
+      outcome: 'sent',
+      status: 'running',
+    });
+    await expect(
+      electronHandler.engine.sendRunPrompt({ runId: 'run-1', text: 'hi' }),
+    ).resolves.toEqual({ outcome: 'sent', status: 'running' });
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith('runs:send-prompt', {
+      runId: 'run-1',
+      text: 'hi',
+    });
 
     ipcRendererMock.invoke.mockResolvedValueOnce({
       branches: ['main'],

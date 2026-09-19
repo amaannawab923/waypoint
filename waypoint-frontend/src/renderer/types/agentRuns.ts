@@ -27,6 +27,8 @@ export type {
   ResumeRunResult,
   RunBranches,
   RunIsolation,
+  SendPromptOutcome,
+  SendRunPromptResult,
   SessionFolder,
   RunChanged,
   RunDiff,

@@ -525,6 +525,14 @@ export const RUNS_IPC = {
   start: 'runs:start',
   /** (runId) → ResumeRunResult. An interrupted run, back on its worktree (ROAD-69). */
   resume: 'runs:resume',
+  /**
+   * ({ runId, text }) → SendRunPromptResult. ROAD-XXX: sends a chat
+   * message to a run, transparently reviving it first if it's dead
+   * (interrupted/failed/cancelled) — replaces the renderer's old direct
+   * use of the generic `acp.sendPrompt` daemon-bridge procedure, which
+   * has no run-status awareness at all.
+   */
+  sendPrompt: 'runs:send-prompt',
   /** (folder handle) → RunBranches. The folder's local branches, through the engine. */
   listBranches: 'runs:list-branches',
   /**
@@ -824,6 +832,26 @@ export interface ResumeRunResult {
   outcome: ResumeRunOutcome;
   /** The ledger's status after the action. */
   status: string;
+}
+
+export type SendPromptOutcome =
+  /** The run was already live; handed straight to the daemon. */
+  | 'sent'
+  /** The run was dead; revived, then the message was handed to the daemon. */
+  | 'resumed-and-sent'
+  /** The run has no worktree/folder left to resume on; the message was NOT sent. */
+  | 'worktree-gone'
+  /** done/needs-review, or a reopenRun refusal; the message was NOT sent. */
+  | 'not-resumable'
+  /** queued/provisioning: a session is already on its way. The message was NOT sent — send again once it's live. */
+  | 'not-ready';
+
+export interface SendRunPromptResult {
+  outcome: SendPromptOutcome;
+  /** The ledger's status after the action. */
+  status: string;
+  /** resumed-and-sent only: whether the provider restored the prior conversation. */
+  resume?: ResumeRunOutcome;
 }
 
 export interface RunBranches {
