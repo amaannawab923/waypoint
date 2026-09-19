@@ -863,6 +863,46 @@ export async function listRoleTickets(
   return runTicketSearch(credentialResult.value, roleTicketsJql(role, search));
 }
 
+// Bounds the `key in (...)` clause's own length, not a page of a crawl — the
+// request is still a GET, and this many quoted keys keeps the built JQL
+// comfortably inside URL length limits a proxy or Jira's own edge could
+// otherwise reject. Well above what one bulk read plausibly asks for: the
+// Worked-on tab this exists for reads a person's own history, not a whole
+// project.
+const LIST_BY_KEYS_MAX = 50;
+
+/**
+ * A bulk read of specific issues by key — ROAD-158's Worked-on tab, whose
+ * own list of keys comes from this app's backend (agent_runs joined to
+ * ticket_refs), not a person typing. Still routed through jqlQuoted for
+ * every key regardless: that function is this file's security boundary for
+ * anything reaching a JQL clause, and the boundary is about where a value
+ * ENDS UP, not where it came from — a compromised or buggy backend response
+ * is exactly the case defense in depth exists for.
+ *
+ * Returns the bare tickets, not a JiraTicketQueryResult: `truncated` answers
+ * "did the crawl get cut off", which is not a meaningful question when the
+ * result set size is bounded by the caller's own key list rather than by
+ * how much of an open-ended query Jira was willing to hand over. A caller
+ * with more than LIST_BY_KEYS_MAX keys gets the first
+ * LIST_BY_KEYS_MAX's worth, silently — see that constant's own comment for
+ * why that is not expected to matter in practice for this tab.
+ */
+export async function listTicketsByKeys(
+  keys: string[],
+): Promise<JiraResult<JiraWireTicket[]>> {
+  if (keys.length === 0) return { ok: true, value: [] };
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+  const jql = `key in (${keys
+    .slice(0, LIST_BY_KEYS_MAX)
+    .map((key) => jqlQuoted(key))
+    .join(', ')})`;
+  const result = await runTicketSearch(credentialResult.value, jql);
+  if (!result.ok) return result;
+  return { ok: true, value: result.value.tickets };
+}
+
 // -----------------------------------------------------------------------
 // 3. Transitions
 // -----------------------------------------------------------------------

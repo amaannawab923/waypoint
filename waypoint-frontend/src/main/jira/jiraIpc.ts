@@ -85,6 +85,16 @@ function readTicketRole(value: unknown): client.JiraTicketQueryRole | null {
     : null;
 }
 
+/** Guards `jira:tickets:list-by-keys`. See that channel's own comment for
+ * why this drops only what could never be a usable key rather than
+ * enforcing Jira's key shape — client.jqlQuoted is the real boundary. */
+function readTicketKeys(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+    .map((v) => v.trim());
+}
+
 /**
  * Guards the attachment channels.
  *
@@ -572,6 +582,19 @@ export function registerJiraIpc(getWindow: () => BrowserWindow | null): void {
       // anyone has typed anything, and it means "no search clause at all".
       return client.listRoleTickets(role, readString(input.search));
     },
+  );
+
+  // ROAD-158: the Worked-on tab's bulk read, given the keys the renderer
+  // already got back from the backend's worked-on-jira-keys route. No shape
+  // constraint on each key beyond "a non-empty string" — client.jqlQuoted is
+  // this feature's real safety boundary for anything reaching a JQL clause,
+  // regardless of shape, so there is nothing this guard needs to reject for
+  // safety; it only drops what could never be a usable key. The array-size
+  // cap lives in jiraClient.ts's own LIST_BY_KEYS_MAX, not duplicated here.
+  ipcMain.handle(
+    'jira:tickets:list-by-keys',
+    (_event, rawKeys: unknown): Promise<JiraResult<JiraWireTicket[]>> =>
+      client.listTicketsByKeys(readTicketKeys(rawKeys)),
   );
 
   // Copilot's rendered issue-key links (ROAD-157 follow-up): a key the model

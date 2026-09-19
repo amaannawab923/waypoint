@@ -42,6 +42,7 @@ jest.mock('./jiraAuth', () => ({
 const validateCredentialMock = jest.fn();
 const listMyTicketsMock = jest.fn();
 const listRoleTicketsMock = jest.fn();
+const listTicketsByKeysMock = jest.fn();
 const getTicketMock = jest.fn();
 const listTransitionsMock = jest.fn();
 const transitionTicketMock = jest.fn();
@@ -64,6 +65,7 @@ jest.mock('./jiraClient', () => ({
   validateCredential: (...args: unknown[]) => validateCredentialMock(...args),
   listMyTickets: (...args: unknown[]) => listMyTicketsMock(...args),
   listRoleTickets: (...args: unknown[]) => listRoleTicketsMock(...args),
+  listTicketsByKeys: (...args: unknown[]) => listTicketsByKeysMock(...args),
   getTicket: (...args: unknown[]) => getTicketMock(...args),
   listTransitions: (...args: unknown[]) => listTransitionsMock(...args),
   transitionTicket: (...args: unknown[]) => transitionTicketMock(...args),
@@ -1327,6 +1329,40 @@ describe('per-ticket channels', () => {
 
       expect(result).toMatchObject({ ok: false, reason: 'invalid_input' });
       expect(listRoleTicketsMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('jira:tickets:list-by-keys', () => {
+    it('passes the keys straight through, trimmed', async () => {
+      listTicketsByKeysMock.mockResolvedValue({ ok: true, value: [] });
+
+      const result = await getHandler('jira:tickets:list-by-keys')(
+        {},
+        ['ENG-1', '  PLAT-2  '],
+      );
+
+      expect(result).toEqual({ ok: true, value: [] });
+      expect(listTicketsByKeysMock).toHaveBeenCalledWith(['ENG-1', 'PLAT-2']);
+    });
+
+    it('drops non-string and blank entries rather than forwarding them', async () => {
+      listTicketsByKeysMock.mockResolvedValue({ ok: true, value: [] });
+
+      await getHandler('jira:tickets:list-by-keys')(
+        {},
+        ['ENG-1', '', '   ', 42, null, undefined],
+      );
+
+      expect(listTicketsByKeysMock).toHaveBeenCalledWith(['ENG-1']);
+    });
+
+    it('treats a non-array payload as no keys, without throwing', async () => {
+      listTicketsByKeysMock.mockResolvedValue({ ok: true, value: [] });
+
+      const result = await getHandler('jira:tickets:list-by-keys')({}, 'ENG-1');
+
+      expect(result).toEqual({ ok: true, value: [] });
+      expect(listTicketsByKeysMock).toHaveBeenCalledWith([]);
     });
   });
 });

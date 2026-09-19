@@ -15,6 +15,7 @@ const bridge = {
   disconnect: jest.fn(),
   listTickets: jest.fn(),
   listTicketsByRole: jest.fn(),
+  listTicketsByKeys: jest.fn(),
   getTicket: jest.fn(),
   listTransitions: jest.fn(),
   transition: jest.fn(),
@@ -321,6 +322,45 @@ describe('listRoleJiraTickets', () => {
     expect(await api.getJiraConnectionStatus()).toMatchObject({
       issueCount: 1,
     });
+  });
+});
+
+describe('listTicketsByJiraKeys', () => {
+  it('returns an empty list without calling the bridge at all', async () => {
+    const api = freshApi();
+
+    const tickets = await api.listTicketsByJiraKeys([]);
+
+    expect(tickets).toEqual([]);
+    expect(bridge.listTicketsByKeys).not.toHaveBeenCalled();
+  });
+
+  it('sends the keys straight through and maps what comes back', async () => {
+    const api = freshApi();
+    bridge.listTicketsByKeys.mockResolvedValue({
+      ok: true,
+      value: [wireTicket({ id: '1', key: 'ENG-1', stateCategory: 'done' })],
+    });
+
+    const tickets = await api.listTicketsByJiraKeys(['ENG-1', 'PLAT-2']);
+
+    expect(bridge.listTicketsByKeys).toHaveBeenCalledWith(['ENG-1', 'PLAT-2']);
+    expect(tickets).toMatchObject([{ id: '1', key: 'ENG-1', stateColor: 'var(--success)' }]);
+  });
+
+  // Same reasoning as listRoleJiraTickets: a one-off read, never checked
+  // against a previous one, since this module tracks no baseline for keys
+  // outside the "my work" queue.
+  it('never reports a conflict on a by-keys read', async () => {
+    const api = freshApi();
+    bridge.listTicketsByKeys.mockResolvedValue({
+      ok: true,
+      value: [wireTicket()],
+    });
+
+    const tickets = await api.listTicketsByJiraKeys(['ENG-421']);
+
+    expect(tickets[0]).toMatchObject({ hasConflict: false, conflict: null });
   });
 });
 

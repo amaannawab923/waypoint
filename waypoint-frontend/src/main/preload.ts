@@ -365,6 +365,9 @@ const electronHandler = {
     }): Promise<JiraResult<JiraTicketQueryResult>> {
       return ipcRenderer.invoke('jira:tickets:list-by-role', args);
     },
+    listTicketsByKeys(keys: string[]): Promise<JiraResult<JiraWireTicket[]>> {
+      return ipcRenderer.invoke('jira:tickets:list-by-keys', keys);
+    },
     getTicket(ticketId: string): Promise<JiraResult<JiraWireTicket>> {
       return ipcRenderer.invoke('jira:tickets:get', ticketId);
     },

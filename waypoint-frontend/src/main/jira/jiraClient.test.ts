@@ -21,6 +21,7 @@ import {
   listComments,
   listMyTickets,
   listRoleTickets,
+  listTicketsByKeys,
   listPriorityOptions,
   listTransitions,
   postComment,
@@ -808,6 +809,84 @@ describe('listRoleTickets', () => {
 
     const jql = new URL(call()[0]).searchParams.get('jql') ?? '';
     expect(jql).toContain(`summary ~ "\\" OR project = \\"SECRET"`);
+  });
+});
+
+describe('listTicketsByKeys', () => {
+  it('returns an empty list without calling Jira at all', async () => {
+    const result = await listTicketsByKeys([]);
+
+    expect(result).toEqual({ ok: true, value: [] });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses without a stored credential rather than calling out unauthenticated', async () => {
+    readStoredJiraCredentialMock.mockReturnValue(null);
+
+    expect(await listTicketsByKeys(['ENG-1'])).toMatchObject({
+      ok: false,
+      reason: 'not_connected',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('builds a key-in JQL clause with every key quoted', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+
+    await listTicketsByKeys(['ENG-1', 'PLAT-2']);
+
+    const jql = new URL(call()[0]).searchParams.get('jql') ?? '';
+    expect(jql).toBe('key in ("ENG-1", "PLAT-2")');
+  });
+
+  // Same boundary as listRoleTickets' own search — these keys come from
+  // this app's own backend, not a person typing, but jqlQuoted's whole
+  // point is that it does not matter where a value came from.
+  it('quotes a key that would otherwise break out of the clause', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+
+    await listTicketsByKeys(['ENG-1") OR project = ("SECRET']);
+
+    const jql = new URL(call()[0]).searchParams.get('jql') ?? '';
+    expect(jql).toBe('key in ("ENG-1\\") OR project = (\\"SECRET")');
+  });
+
+  it('caps the key list rather than building an unbounded clause', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ issues: [] }));
+    const keys = Array.from({ length: 60 }, (_, i) => `ENG-${i}`);
+
+    await listTicketsByKeys(keys);
+
+    const jql = new URL(call()[0]).searchParams.get('jql') ?? '';
+    expect(jql).toContain('ENG-49');
+    expect(jql).not.toContain('ENG-50');
+  });
+
+  it('returns the bare mapped tickets, not a truncation-carrying queue read', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        issues: [
+          {
+            id: '10421',
+            key: 'ENG-421',
+            fields: {
+              summary: 'Webhook receiver drops events',
+              project: { key: 'ENG' },
+              status: { name: 'To Do', statusCategory: { key: 'new' } },
+            },
+          },
+        ],
+        isLast: true,
+      }),
+    );
+
+    const result = await listTicketsByKeys(['ENG-421']);
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: [{ id: '10421', key: 'ENG-421' }],
+    });
+    expect(result.ok && 'truncated' in result.value).toBe(false);
   });
 });
 

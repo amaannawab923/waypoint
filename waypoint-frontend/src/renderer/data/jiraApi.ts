@@ -565,6 +565,26 @@ export async function getJiraTicketByKey(key: string): Promise<JiraTicket> {
 }
 
 /**
+ * A bulk read of specific issues by key — ROAD-158's Worked-on tab, whose
+ * key list comes from data/api.ts's listWorkedOnJiraKeys, not from any
+ * queue this module already has cached. Same reasoning as
+ * getJiraTicketByKey just above for why this is uncached and
+ * unconflict-checked: a one-off read of a specific set of issues, not part
+ * of the polled queue this module tracks writes against. Jira may not
+ * return every key asked for (deleted, moved to a project the account can't
+ * see) — silently fewer tickets than keys, not an error, matching how a
+ * page-capped queue read already treats "fewer than the whole truth" as a
+ * normal outcome rather than a failure.
+ */
+export async function listTicketsByJiraKeys(
+  keys: string[],
+): Promise<JiraTicket[]> {
+  if (keys.length === 0) return [];
+  const wire = unwrap(await bridge().listTicketsByKeys(keys));
+  return wire.map((item) => toTicket(item));
+}
+
+/**
  * Guarantees at least one real ticket read has happened this session before
  * resolving with a status whose counts can be trusted — a no-op the moment
  * `lastSyncAt` is already set (whichever caller gets there first, including
