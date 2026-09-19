@@ -2,6 +2,7 @@ import '@testing-library/jest-dom';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import {
+  ensureJiraSynced,
   getJiraConnectionStatus,
   getJiraTransitions,
   listJiraComments,
@@ -26,6 +27,24 @@ import { resetMyJiraQueueForTests } from './useMyJiraQueue';
 // possible to render the real page tree.
 jest.mock('@/data/jiraApi', () => ({
   listMyJiraTickets: jest.fn(),
+  // Found in review: this page now calls ensureJiraSynced() unconditionally
+  // on mount (see MyJiraPage.tsx's own comment on why — the header's sync
+  // indicator needs real numbers regardless of which tab is open, without
+  // repeating the full crawl on every visit). Every test in this file
+  // already forces `?tab=all`, so listMyJiraTickets above is still called
+  // exactly as before for the tab body itself; this mock just needs to
+  // exist so the new effect doesn't call undefined.
+  ensureJiraSynced: jest.fn(async () => ({
+    connected: true,
+    accountName: 'Max Chen',
+    accountEmail: 'max@northwind.dev',
+    accountId: '5f8a',
+    site: 'waypoint123.atlassian.net',
+    lastSyncAt: '2026-09-01T10:00:00.000Z',
+    issueCount: 0,
+    projectCount: 0,
+    countsTruncated: false,
+  })),
   // RoleTicketsTab and WorkedOnTab (the Assigned/Reported/Watching/Worked-on
   // tabs) are mounted by MyJiraPage now too — present here for the same
   // reason every other export in this factory is, even though most tests in
@@ -942,6 +961,29 @@ describe('MyJiraPage — initial tab from the ?tab= query param', () => {
     expect(
       screen.queryByRole('button', { name: 'Refresh now' }),
     ).not.toBeInTheDocument();
+  });
+
+  // Found in review: this page used to run the full "My work" crawl
+  // unconditionally on every mount, even though the default tab has been
+  // Assigned (its own scoped read) since this redesign shipped. The header's
+  // sync indicator still needs real numbers regardless of tab, which is what
+  // ensureJiraSynced is for — a real read the first time nothing has synced
+  // yet this session, a no-op every time after.
+  it('syncs the header via ensureJiraSynced but does not run the full My Work crawl on the default Assigned tab', async () => {
+    mountAt('/my-jira');
+
+    await screen.findByPlaceholderText(/search what.s assigned to you/i);
+
+    expect(ensureJiraSynced).toHaveBeenCalledTimes(1);
+    expect(listMyJiraTickets).not.toHaveBeenCalled();
+  });
+
+  it('does run the full My Work crawl once the All Tickets tab is actually opened', async () => {
+    mountAt('/my-jira?tab=all');
+
+    await screen.findByLabelText('Search your Jira queue');
+
+    expect(listMyJiraTickets).toHaveBeenCalled();
   });
 
   it('falls back to Assigned for a value that is not a real tab', async () => {

@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { clsx } from 'clsx';
 import {
   dismissJiraTombstone,
+  ensureJiraSynced,
   getJiraConnectionStatus,
   listMyJiraTickets,
   resolveJiraConflict,
@@ -173,6 +174,32 @@ export default function MyJiraPage() {
   }
 
   const connection = useLoadedJiraConnection();
+
+  // Found in review: this page used to call listMyJiraTickets() — a real,
+  // full 5-page crawl — unconditionally on every mount, even though the
+  // default landing tab is now Assigned, which has nothing to do with its
+  // result. The header's sync indicator (just below, rendered regardless of
+  // which tab is open) still needs SOME real numbers, though — ensureJiraSynced
+  // is the primitive that exists precisely for "guarantee at least one real
+  // read has happened this session" without repeating it on every later
+  // visit: a no-op the moment lastSyncAt is already set, from this page or
+  // anywhere else (the All Projects tile, the sidebar).
+  useEffect(() => {
+    // Never rejects (see ensureJiraSynced's own comment — a failed
+    // background sync resolves with the pre-read status rather than
+    // throwing), but a bare .then() with nothing to answer to still reads
+    // as an unhandled rejection risk to the linter.
+    ensureJiraSynced()
+      .then(setJiraConnection)
+      .catch(() => {});
+  }, []);
+
+  // The full "my work" ticket list itself is only actually consumed by the
+  // All Tickets tab's own body below — the other eight tabs each run their
+  // own scoped read — and by the Connection tab's Refresh button, wired to
+  // reloadTickets. Gated on tab rather than fetched unconditionally, for
+  // the same reason as the effect above: visiting Assigned, Reported, or
+  // any other tab has no use for a list it never renders.
   const {
     data: fetchedRead,
     loading,
@@ -182,7 +209,13 @@ export default function MyJiraPage() {
     // the list body below.
     error: ticketsError,
     reload: reloadTickets,
-  } = useAsync(() => listMyJiraTickets(), []);
+  } = useAsync(
+    () =>
+      tab === 'all' || tab === 'connection'
+        ? listMyJiraTickets()
+        : Promise.resolve(null),
+    [tab === 'all' || tab === 'connection'],
+  );
   const [tickets, setTickets] = useState<JiraTicket[]>([]);
   // Held separately from `tickets` rather than read off `fetchedRead` at
   // render, because `tickets` is patched in place by every write on this page
