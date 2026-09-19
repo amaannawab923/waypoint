@@ -294,7 +294,7 @@ export default function MyJiraPage() {
       <div
         role="tablist"
         aria-label="My Jira sections"
-        className="mt-3.5 ml-[41px] flex gap-1 border-b border-border"
+        className="mt-3.5 ml-[41px] flex gap-1 overflow-x-auto border-b border-border"
       >
         {TABS.map((t) => {
           const count = counts[t.key as CountedTabKey];
@@ -306,7 +306,7 @@ export default function MyJiraPage() {
               aria-selected={tab === t.key}
               onClick={() => setTab(t.key)}
               className={clsx(
-                'flex cursor-pointer items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-semibold transition-colors',
+                'flex shrink-0 cursor-pointer items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-semibold whitespace-nowrap transition-colors',
                 tab === t.key
                   ? 'border-accent text-text'
                   : 'border-transparent text-text-muted hover:text-text-secondary',

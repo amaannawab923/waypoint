@@ -9,6 +9,8 @@ import { JiraTicketDrawer } from '@/components/domain/JiraTicketDrawer';
 import { JiraLoadError } from '@/components/domain/JiraLoadError';
 import { JiraApiError } from '@/types/jira';
 import type { JiraTicket } from '@/types/jira';
+import { usePagedTickets } from './usePagedTickets';
+import JiraTicketPager from './JiraTicketPager';
 
 /**
  * The Worked-on tab: every Jira issue this member has an agent run against,
@@ -67,6 +69,8 @@ export default function WorkedOnTab({
     setTickets((ts) => ts.map((t) => (t.id === updated.id ? updated : t)));
   }
 
+  const paged = usePagedTickets(tickets);
+
   const [drawerTicketId, setDrawerTicketId] = useState<string | null>(null);
   const drawerTicket = drawerTicketId
     ? (tickets.find((t) => t.id === drawerTicketId) ?? null)
@@ -103,7 +107,7 @@ export default function WorkedOnTab({
               </div>
             )}
             {!error &&
-              tickets.map((ticket) => (
+              paged.pageItems.map((ticket) => (
                 <JiraTicketRow
                   key={ticket.id}
                   ticket={ticket}
@@ -116,6 +120,17 @@ export default function WorkedOnTab({
           </>
         )}
       </div>
+
+      {!error && tickets.length > 0 && (
+        <JiraTicketPager
+          page={paged.page}
+          pageCount={paged.pageCount}
+          rangeStart={paged.rangeStart}
+          rangeEnd={paged.rangeEnd}
+          total={paged.total}
+          onPageChange={paged.setPage}
+        />
+      )}
 
       {drawerTicket && (
         <JiraTicketDrawer

@@ -6,6 +6,8 @@ import { JiraTicketRow } from '@/components/domain/JiraTicketRow';
 import { JiraTicketDrawer } from '@/components/domain/JiraTicketDrawer';
 import { JiraLoadError } from '@/components/domain/JiraLoadError';
 import type { JiraTicket } from '@/types/jira';
+import { usePagedTickets } from './usePagedTickets';
+import JiraTicketPager from './JiraTicketPager';
 
 /**
  * The Viewed tab: Jira's own view history for this account (see
@@ -41,6 +43,8 @@ export default function ViewedTab({
   function updateTicket(updated: JiraTicket) {
     setTickets((ts) => ts.map((t) => (t.id === updated.id ? updated : t)));
   }
+
+  const paged = usePagedTickets(tickets);
 
   const [drawerTicketId, setDrawerTicketId] = useState<string | null>(null);
   const drawerTicket = drawerTicketId
@@ -78,7 +82,7 @@ export default function ViewedTab({
               </div>
             )}
             {!error &&
-              tickets.map((ticket) => (
+              paged.pageItems.map((ticket) => (
                 <JiraTicketRow
                   key={ticket.id}
                   ticket={ticket}
@@ -91,6 +95,17 @@ export default function ViewedTab({
           </>
         )}
       </div>
+
+      {!error && tickets.length > 0 && (
+        <JiraTicketPager
+          page={paged.page}
+          pageCount={paged.pageCount}
+          rangeStart={paged.rangeStart}
+          rangeEnd={paged.rangeEnd}
+          total={paged.total}
+          onPageChange={paged.setPage}
+        />
+      )}
 
       {drawerTicket && (
         <JiraTicketDrawer

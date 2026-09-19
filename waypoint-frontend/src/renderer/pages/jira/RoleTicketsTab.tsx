@@ -6,6 +6,8 @@ import { JiraTicketRow } from '@/components/domain/JiraTicketRow';
 import { JiraTicketDrawer } from '@/components/domain/JiraTicketDrawer';
 import { JiraLoadError } from '@/components/domain/JiraLoadError';
 import type { JiraTicket, JiraTicketQueryRole } from '@/types/jira';
+import { usePagedTickets } from './usePagedTickets';
+import JiraTicketPager from './JiraTicketPager';
 
 // Long enough that a normal typing rate sends one search per word rather
 // than one per keystroke, short enough that results have caught up by the
@@ -93,14 +95,34 @@ export default function RoleTicketsTab({
   useEffect(() => {
     if (fetchedRead) setTickets(fetchedRead.tickets);
   }, [fetchedRead]);
+  // Found in manual testing: switching Assigned -> Reported -> Watching
+  // re-renders this SAME component instance with a new queryRole (all three
+  // tabs mount it at the same position in MyJiraPage's tree, so React
+  // reuses it rather than remounting) — without this, the previous role's
+  // tickets stayed on screen, untouched, for the entire round trip of the
+  // new fetch, with no loading state ever showing (the skeleton only
+  // appears when `tickets` is empty). Someone switching to Watching saw
+  // Reported's own rows and had no way to tell they were stale. Clearing
+  // immediately on a role change — not waiting for the new data — is what
+  // makes `loading && tickets.length === 0` below correctly show the
+  // skeleton for every role switch, not just the first mount.
   useEffect(() => {
-    onCountChange?.(tickets.length);
+    setTickets([]);
+  }, [queryRole]);
+  useEffect(() => {
+    // Not reported while a fetch is in flight — the interim `tickets: []`
+    // the effect above clears to would otherwise flash the tab's own count
+    // badge to 0 and back on every role switch, which is exactly the kind
+    // of "is this real or stale" confusion this whole fix exists to remove.
+    if (!loading) onCountChange?.(tickets.length);
     // onCountChange intentionally omitted: MyJiraPage passes a plain inline
     // callback (not memoized), and depending on it here would re-fire this
     // effect on every page render rather than only when the count itself
     // changes — see useAsync.ts's own `run` callback for the same pattern.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tickets]);
+  }, [tickets, loading]);
+
+  const paged = usePagedTickets(tickets);
 
   const [drawerTicketId, setDrawerTicketId] = useState<string | null>(null);
   const drawerTicket = drawerTicketId
@@ -161,7 +183,7 @@ export default function RoleTicketsTab({
               </div>
             )}
             {!error &&
-              tickets.map((ticket) => (
+              paged.pageItems.map((ticket) => (
                 <JiraTicketRow
                   key={ticket.id}
                   ticket={ticket}
@@ -174,6 +196,17 @@ export default function RoleTicketsTab({
           </>
         )}
       </div>
+
+      {!error && tickets.length > 0 && (
+        <JiraTicketPager
+          page={paged.page}
+          pageCount={paged.pageCount}
+          rangeStart={paged.rangeStart}
+          rangeEnd={paged.rangeEnd}
+          total={paged.total}
+          onPageChange={paged.setPage}
+        />
+      )}
 
       {drawerTicket && (
         <JiraTicketDrawer

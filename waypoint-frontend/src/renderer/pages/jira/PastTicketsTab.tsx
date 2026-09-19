@@ -6,6 +6,8 @@ import { JiraTicketRow } from '@/components/domain/JiraTicketRow';
 import { JiraTicketDrawer } from '@/components/domain/JiraTicketDrawer';
 import { JiraLoadError } from '@/components/domain/JiraLoadError';
 import type { JiraTicket } from '@/types/jira';
+import { usePagedTickets } from './usePagedTickets';
+import JiraTicketPager from './JiraTicketPager';
 
 /**
  * My past tickets: issues real Jira history says were once assigned to this
@@ -48,6 +50,8 @@ export default function PastTicketsTab({
     setTickets((ts) => ts.map((t) => (t.id === updated.id ? updated : t)));
   }
 
+  const paged = usePagedTickets(tickets);
+
   const [drawerTicketId, setDrawerTicketId] = useState<string | null>(null);
   const drawerTicket = drawerTicketId
     ? (tickets.find((t) => t.id === drawerTicketId) ?? null)
@@ -88,7 +92,7 @@ export default function PastTicketsTab({
               </div>
             )}
             {!error &&
-              tickets.map((ticket) => (
+              paged.pageItems.map((ticket) => (
                 <JiraTicketRow
                   key={ticket.id}
                   ticket={ticket}
@@ -101,6 +105,17 @@ export default function PastTicketsTab({
           </>
         )}
       </div>
+
+      {!error && tickets.length > 0 && (
+        <JiraTicketPager
+          page={paged.page}
+          pageCount={paged.pageCount}
+          rangeStart={paged.rangeStart}
+          rangeEnd={paged.rangeEnd}
+          total={paged.total}
+          onPageChange={paged.setPage}
+        />
+      )}
 
       {drawerTicket && (
         <JiraTicketDrawer

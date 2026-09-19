@@ -183,4 +183,61 @@ describe('RoleTicketsTab', () => {
 
     expect(await screen.findByText('Recovered ticket')).toBeInTheDocument();
   });
+
+  // Found in manual testing: MyJiraPage mounts one RoleTicketsTab at a
+  // single position in its tree for Assigned/Reported/Watching alike, so
+  // switching between them re-renders this SAME instance with a new
+  // queryRole prop rather than unmounting and remounting. Reproduced here
+  // with `rerender`, the same mechanism React actually uses, rather than
+  // three separate `render()` calls that would each get their own fresh
+  // instance and never exercise the bug at all.
+  it("clears the previous role's tickets immediately on a role switch, before the new read resolves", async () => {
+    jest
+      .mocked(listRoleJiraTickets)
+      .mockResolvedValueOnce(
+        queueRead([ticket({ id: 'a', title: 'Assigned ticket' })]),
+      );
+
+    const { rerender } = render(<RoleTicketsTab queryRole="assignee" />);
+    await screen.findByText('Assigned ticket');
+
+    // A second call that never resolves during this test — standing in for
+    // "the new fetch is still in flight" so the assertion below is
+    // specifically about what happens BEFORE the watcher data arrives, not
+    // after.
+    jest.mocked(listRoleJiraTickets).mockReturnValueOnce(new Promise(() => {}));
+    rerender(<RoleTicketsTab queryRole="watcher" />);
+
+    await waitFor(() =>
+      expect(screen.queryByText('Assigned ticket')).not.toBeInTheDocument(),
+    );
+  });
+
+  it('paginates a queue larger than one page, 25 tickets at a time', async () => {
+    const many = Array.from({ length: 30 }, (_, i) =>
+      ticket({ id: `t${i}`, key: `ENG-${i}`, title: `Ticket ${i}` }),
+    );
+    jest.mocked(listRoleJiraTickets).mockResolvedValue(queueRead(many));
+
+    render(<RoleTicketsTab queryRole="assignee" />);
+
+    await screen.findByText('Ticket 0');
+    expect(screen.getByText('Showing 1–25 of 30')).toBeInTheDocument();
+    expect(screen.queryByText('Ticket 25')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next ›' }));
+
+    expect(await screen.findByText('Ticket 25')).toBeInTheDocument();
+    expect(screen.queryByText('Ticket 0')).not.toBeInTheDocument();
+    expect(screen.getByText('Showing 26–30 of 30')).toBeInTheDocument();
+  });
+
+  it('renders no pager at all when the queue fits on one page', async () => {
+    jest.mocked(listRoleJiraTickets).mockResolvedValue(queueRead([ticket()]));
+
+    render(<RoleTicketsTab queryRole="assignee" />);
+
+    await screen.findByText('A ticket');
+    expect(screen.queryByRole('navigation')).not.toBeInTheDocument();
+  });
 });
