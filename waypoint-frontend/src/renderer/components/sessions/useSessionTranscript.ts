@@ -203,16 +203,27 @@ export function useSessionTranscript(
     [],
   );
 
+  // Two overlapping calls on the SAME live unit — `onRunChanged` can fire
+  // several times back-to-back (design §7's own note: a 3-event burst
+  // during an outbox drain) — race if left unguarded: whichever resolves
+  // LAST wins even when it started first, so an older read can overwrite
+  // a newer one (found in review). `unitRef.current !== target` alone
+  // only catches a torn-down/replaced unit, not this; a call token does.
+  const refreshTokenRef = useRef(0);
   // The events and the outbox, fresh; a change in the markers re-seeds
   // the current history so the new line shows where it belongs.
   const refreshMarkers = useCallback(async (target: TranscriptUnit) => {
+    refreshTokenRef.current += 1;
+    const myToken = refreshTokenRef.current;
     const [events, rows] = await Promise.all([
       markerLabelRef.current
         ? listAgentRunEvents(target.runId).catch((): AgentRunEvent[] => [])
         : Promise.resolve<AgentRunEvent[]>([]),
       listPendingPrompts(target.runId).catch((): PendingPrompt[] => []),
     ]);
-    if (unitRef.current !== target) return false;
+    if (unitRef.current !== target || refreshTokenRef.current !== myToken) {
+      return false;
+    }
     setPending(
       rows.filter(
         (row) => row.state !== 'delivered' && row.state !== 'dropped',

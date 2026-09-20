@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { createPortal } from 'react-dom';
 import type { ChatView } from '@emdash/chat-ui';
 import { ChatTranscript } from '@/components/chat/ChatTranscript';
@@ -205,6 +212,46 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
   } | null>(null);
   const composerSlot =
     state && ready?.state === state ? ready.view.composerSlot : null;
+  // `dock`'s real, permanent home: one DOM node, created exactly once
+  // for this component's lifetime and NEVER swapped — `createPortal`
+  // below always targets this same reference, so React's own
+  // reconciliation of `dock`'s subtree never sees a change at this
+  // position and never has reason to remount it (found in review:
+  // `composerSlot ? createPortal(dock, composerSlot) : dock` switched
+  // between a bare child and a portal — a type change React can't
+  // reconcile across — the instant chat-ui's slot showed up, usually a
+  // beat after the first render, resetting `SessionComposer`'s focus
+  // and in-progress text on essentially every session-tab open. A
+  // *second* attempt — always calling `createPortal` but varying its
+  // container argument — turned out to have the exact same problem:
+  // verified live, in the test below, that a portal's own container
+  // changing is enough to remount its children too). What moves instead
+  // is this node's PARENT — a plain DOM `appendChild`, outside React
+  // entirely, in the layout effect below.
+  const dockHome = useRef<HTMLDivElement | null>(null);
+  if (dockHome.current === null) {
+    dockHome.current = document.createElement('div');
+    dockHome.current.style.display = 'contents';
+  }
+  const localWrapper = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const target = composerSlot ?? localWrapper.current;
+    const home = dockHome.current;
+    if (target && home && home.parentElement !== target) {
+      // The move itself is what a browser blurs an element for — the
+      // node, its value and every hook's state survive intact, only
+      // focus doesn't, so it comes right back before paint (a keystroke
+      // is never lost either way; this just keeps the cursor from
+      // visibly leaving the box for the one frame this takes).
+      const focused =
+        document.activeElement instanceof HTMLElement &&
+        home.contains(document.activeElement)
+          ? document.activeElement
+          : null;
+      target.appendChild(home);
+      focused?.focus();
+    }
+  });
   const [answering, setAnswering] = useState<string | null>(null);
   const [outboxBusy, setOutboxBusy] = useState(false);
   const status = statusView(run.status);
@@ -233,10 +280,15 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
     return () => {
       gone = true;
     };
-    // Once per run per engine-up; the status can flip underneath
-    // without meaning a new warm-up is due.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [run.id, engineDown]);
+    // `run.status` is a real dependency, not just `run.id`/`engineDown`
+    // (found in review): a pane opened while `queued`/`provisioning`
+    // used to warm nothing, ever, for that mount — the one invocation
+    // this pair of deps got was spent on the early return above, and
+    // nothing re-ran once the run actually reached a status worth
+    // warming. Re-running per status change is cheap and safe: `warm.ts`
+    // early-outs with no daemon call for every live status, and its own
+    // `warmed` map plus already-live guard rule out a duplicate spawn.
+  }, [run.id, engineDown, run.status, status.live]);
 
   // A run that ended without ever producing a turn (stopped while
   // provisioning, or one that never got anywhere) has nothing for
@@ -513,10 +565,11 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
         </div>
       )}
       <div className="min-h-0 flex-1">{transcriptBody}</div>
-      {/* chat-ui's sticky composer slot when the view is up; inline
-          underneath otherwise (before the first frame, or while a start
-          is awaited) — the composer is mounted either way. */}
-      {composerSlot ? createPortal(dock, composerSlot) : dock}
+      {/* Where `dockHome` sits before the layout effect has anywhere
+          better to put it (the very first paint) — the composer is
+          mounted either way; see `dockHome`'s own comment above. */}
+      <div ref={localWrapper} style={{ display: 'contents' }} />
+      {createPortal(dock, dockHome.current)}
       <UsageStrip
         turnCount={turnCount}
         usage={usage}

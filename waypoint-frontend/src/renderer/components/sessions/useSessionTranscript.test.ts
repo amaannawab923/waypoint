@@ -487,4 +487,62 @@ describe('markers and the outbox (never-lock)', () => {
     const seeded = state.transcript.history.seed.mock.calls.at(-1)[0];
     expect(seeded[0].items).toHaveLength(2);
   });
+
+  // Found in review: `onRunChanged` can fire several times back-to-back
+  // for one run (design §7: a burst during an outbox drain) — an older,
+  // slower-resolving refresh finishing AFTER a newer, faster one used to
+  // just overwrite it, since only the torn-down-unit guard existed.
+  it('an older, slower refresh never overwrites a newer one that resolved first', async () => {
+    const olderFinalized = {
+      ...finalized,
+      seq: 4,
+      payload: { ...finalized.payload, verdict: 'stale-in-flight' },
+    };
+    const newerFinalized = {
+      ...finalized,
+      seq: 9,
+      payload: { ...finalized.payload, verdict: 'current' },
+    };
+    const fb = fakeBridge({}, turns);
+    runtime.connectSession.mockImplementation(() => jest.fn());
+    renderHook(() =>
+      useSessionTranscript('run-a', { bridge: fb.bridge, markerLabel: 'X' }),
+    );
+    await flush();
+    const state = runtime.createChatState.mock.results[0].value;
+    const notify = onRunChanged.mock.calls[0][0] as (c: {
+      runId: string;
+      status: string;
+    }) => void;
+
+    let resolveOlder: ((events: unknown[]) => void) | null = null;
+    listAgentRunEvents.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOlder = resolve;
+        }),
+    );
+    // The older call starts and hangs — not yet resolved.
+    const older = act(async () =>
+      notify({ runId: 'run-a', status: 'running' }),
+    );
+
+    // The newer call starts after it, and resolves first.
+    listAgentRunEvents.mockResolvedValueOnce([newerFinalized]);
+    await act(async () => notify({ runId: 'run-a', status: 'done' }));
+    await flush();
+    expect(
+      state.transcript.history.seed.mock.calls.at(-1)[0][0].items.at(-1),
+    ).toMatchObject({ text: expect.stringContaining('current') });
+
+    // The older call finally resolves — its stale result must not win.
+    resolveOlder!([olderFinalized]);
+    await older;
+    await flush();
+    const lastSeed = state.transcript.history.seed.mock.calls.at(-1)[0];
+    expect(lastSeed[0].items.at(-1)).toMatchObject({
+      text: expect.stringContaining('current'),
+    });
+    expect(JSON.stringify(lastSeed)).not.toContain('stale-in-flight');
+  });
 });

@@ -211,6 +211,43 @@ describe('SessionTranscript — the composer is never locked', () => {
     cleanup();
   });
 
+  // Found in review: chat-ui's own slot usually arrives a beat after the
+  // first render (its mount effect runs after the parent's), so this
+  // transition — no slot yet, then a real one — happens on essentially
+  // every session-tab open, not a rare edge case. The old
+  // `composerSlot ? createPortal(...) : dock` switched between a bare
+  // child and a portal at the same JSX position — a type change React
+  // remounts across — which reset the composer (lost focus, lost the
+  // in-progress keystroke) the instant the slot showed up.
+  it('the composer keeps its identity — focus, in-progress text — across the transition from no chat-ui slot to a real one', () => {
+    fakeView.composerSlot = null;
+    mockUseSessionTranscript.mockReturnValue(
+      hookState({ historyStatus: { kind: 'ready' }, turnCount: 2 }),
+    );
+    const { rerender } = render(
+      <SessionTranscript run={run({ status: 'running' })} />,
+    );
+    const before = screen.getByLabelText('Message this session');
+    fireEvent.change(before, { target: { value: 'still typing' } });
+    before.focus();
+    expect(document.activeElement).toBe(before);
+
+    // chat-ui's slot shows up; a re-render is all that takes (SessionTranscript
+    // reads `ready.view.composerSlot` fresh each render — see its own comment).
+    const slot = document.createElement('div');
+    document.body.appendChild(slot);
+    fakeView.composerSlot = slot;
+    rerender(<SessionTranscript run={run({ status: 'running' })} />);
+
+    const after = screen.getByLabelText('Message this session');
+    expect(after).toBe(before); // the very same DOM node — no remount
+    expect(document.activeElement).toBe(after);
+    expect(after).toHaveValue('still typing');
+    expect(slot.contains(after)).toBe(true);
+
+    document.body.removeChild(slot);
+  });
+
   it.each([
     ['loading', { historyStatus: { kind: 'loading' }, turnCount: 0 }],
     ['live', { turnCount: 0, liveStatus: { kind: 'live' } }],
@@ -299,6 +336,26 @@ describe('SessionTranscript — what a send does, said in the placeholder', () =
       />,
     );
     expect(mockWarmRun).not.toHaveBeenCalled();
+  });
+
+  // Found in review: the warm-up effect's dependency array used to be
+  // `[run.id, engineDown]` — neither changes across a queued/provisioning
+  // run progressing to a terminal status, so a pane opened early (the
+  // one case most likely to be watched start-to-finish) never warmed at
+  // all for that mount; the one invocation the old deps gave it was
+  // spent on the early-return branch.
+  it('warms once the run leaves queued/provisioning — a pane opened early is not warmed forever', () => {
+    mockUseSessionTranscript.mockReturnValue(hookState({ turnCount: 0 }));
+    const { rerender } = render(
+      <SessionTranscript run={run({ id: 'run-early001', status: 'queued' })} />,
+    );
+    expect(mockWarmRun).not.toHaveBeenCalled();
+
+    rerender(
+      <SessionTranscript run={run({ id: 'run-early001', status: 'done' })} />,
+    );
+    expect(mockWarmRun).toHaveBeenCalledWith('run-early001');
+    expect(mockWarmRun).toHaveBeenCalledTimes(1);
   });
 });
 
