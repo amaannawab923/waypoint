@@ -8,6 +8,7 @@ import {
   onEngineStatusChanged,
 } from '@/data/engineApi';
 import { listProjects, detectLocalClaudeCode } from '@/data/api';
+import { ENGINE_PIN } from '@/types/engine';
 import MachinePage from './MachinePage';
 
 // This file covers only the "Agent engine" section (ROAD-48/51) — the rest
@@ -117,9 +118,15 @@ describe('MachinePage — Agent engine section', () => {
     jest.mocked(installEngine).mockResolvedValue(STOPPED);
     await mount();
 
+    // The commit is the fork's (engine.lock.json / ENGINE_PIN move together
+    // on every re-pin), so the assertion reads it from the pin rather than
+    // hard-coding a value that changes with each fork build.
     expect(
-      await screen.findByText('emdash-workspace-server 0.1.0 · 9b102a5f3'),
+      await screen.findByText(
+        `${ENGINE_PIN.name} ${ENGINE_PIN.version} · ${ENGINE_PIN.sourceCommit}`,
+      ),
     ).toBeInTheDocument();
+    expect(ENGINE_PIN.sourceCommit).toMatch(/^[0-9a-f]{9}$/);
   });
 
   it('shows a loading skeleton before install() has answered', async () => {
@@ -149,9 +156,7 @@ describe('MachinePage — Agent engine section', () => {
     expect(
       await screen.findByText(`Not installed at ${NOT_INSTALLED.installDir}`),
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole('button', { name: 'Install' }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Install' })).toBeInTheDocument();
   });
 
   it('stopped: shows the installed version and a Start action that calls startEngine()', async () => {
@@ -181,7 +186,9 @@ describe('MachinePage — Agent engine section', () => {
     // nothing refreshes it, so "up for 1m 5s" would be false one second
     // after render (review, M5). The connection time stays true.
     expect(
-      await screen.findByText(/^Running · version 0\.1\.0 · connected \d{1,2}:\d{2}/),
+      await screen.findByText(
+        /^Running · version 0\.1\.0 · connected \d{1,2}:\d{2}/,
+      ),
     ).toBeInTheDocument();
     const stopButton = screen.getByRole('button', { name: 'Stop' });
 
