@@ -119,14 +119,26 @@ function finalizedText(
   return `Waypoint · ${parts.join(' · ')}`;
 }
 
-function resumedText(payload: Record<string, unknown>): string {
+/**
+ * Only when a resume was NOT the ordinary, expected case — the whole
+ * point of never-lock is that continuing a finished run feels seamless,
+ * so a "Continued from done · conversation restored" line on literally
+ * every message defeats that (founder, 2026-09-20: repeating on every
+ * message pollutes the chat history). `null` for the routine case: the
+ * reply arriving IS the confirmation. A genuinely noteworthy outcome —
+ * the agent's memory of the prior turns is gone, or the worktree had to
+ * be rebuilt from disk — still gets a line, since either one is
+ * information a person could not infer just by reading the reply.
+ */
+function resumedText(payload: Record<string, unknown>): string | null {
   const from = str(pick(payload, 'from')) as string;
   const outcome = str(pick(payload, 'outcome'));
+  const worktreeRecreated = pick(payload, 'worktreeRecreated') === true;
+  if (outcome !== 'replaced-by-new' && !worktreeRecreated) return null;
   const parts: string[] = [`Continued from ${escapeMdText(from)}`];
   if (outcome === 'replaced-by-new')
     parts.push('fresh session in the same worktree');
-  else if (outcome === 'loaded') parts.push('conversation restored');
-  if (pick(payload, 'worktreeRecreated') === true) {
+  if (worktreeRecreated) {
     parts.push(
       pick(payload, 'branchReused') === false
         ? 'worktree recreated on a fresh branch'

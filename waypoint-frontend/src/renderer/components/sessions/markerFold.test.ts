@@ -95,14 +95,28 @@ describe('deriveMarkers', () => {
     expect(none.afterTurnId).toBeNull();
   });
 
-  it('a resume reads "Continued from <status>" with what the provider did and what happened to the worktree', () => {
-    const [loaded, fresh, recreated] = deriveMarkers(
+  // Founder, 2026-09-20: "conversation restored" on literally every
+  // message pollutes the chat history — never-lock's whole point is
+  // that continuing feels seamless, so the ordinary, expected outcome
+  // (loaded, nothing rebuilt) gets no marker at all; only a genuinely
+  // noteworthy one does.
+  it('is silent for an ordinary resume (loaded, nothing rebuilt) — the routine case gets no marker', () => {
+    const markers = deriveMarkers(
       [
         event(1, 'session_resumed', {
           from: 'done',
           outcome: 'loaded',
           afterTurnId: 't1',
         }),
+      ],
+      'X',
+    );
+    expect(markers).toEqual([]);
+  });
+
+  it('a resume that lost the conversation, or had to rebuild the worktree, still gets a line', () => {
+    const [fresh, recreated] = deriveMarkers(
+      [
         event(2, 'session_resumed', {
           from: 'failed',
           outcome: 'replaced-by-new',
@@ -115,9 +129,6 @@ describe('deriveMarkers', () => {
         }),
       ],
       'X',
-    );
-    expect(loaded.text).toBe(
-      'Waypoint · Continued from done · conversation restored',
     );
     expect(fresh.text).toBe(
       'Waypoint · Continued from failed · fresh session in the same worktree',
@@ -211,13 +222,13 @@ describe('deriveMarkers', () => {
         [
           event(1, 'session_resumed', {
             from: '`code`',
-            outcome: 'loaded',
+            outcome: 'replaced-by-new',
           }),
         ],
         'X',
       );
       expect(marker.text).toBe(
-        'Waypoint · Continued from \\`code\\` · conversation restored',
+        'Waypoint · Continued from \\`code\\` · fresh session in the same worktree',
       );
     });
 
@@ -282,7 +293,7 @@ describe('overlayMarkers', () => {
       }),
       event(8, 'session_resumed', {
         from: 'done',
-        outcome: 'loaded',
+        outcome: 'replaced-by-new',
         afterTurnId: 't2',
       }),
       event(9, 'note', {
