@@ -124,6 +124,21 @@ export async function updatePendingPrompt(
 
     const me = currentMemberId();
     const isOwner = me === run.ownerMemberId;
+    // Found in review (round 2): `sending` is the claim itself — "the host
+    // makes BEFORE the daemon call" per this file's own header — so a
+    // second `sending` request against a row that is already `sending`
+    // is never this caller's claim; it is someone else's. Below, an
+    // unchanged value is treated as an idempotent no-op (the caller
+    // asked for what's already true, nothing to do), which is correct
+    // for `queued`/`delivered`/`dropped`/`unresolved`. It would be wrong
+    // here: two racing drain attempts (two Waypoint processes for the
+    // same owner, or a stale retry) would both read back a 200 with
+    // `state: 'sending'` and neither could tell it lost the race — risking
+    // a double-send if a caller ever trusted that 200 as proof of
+    // ownership.
+    if (input.state === 'sending' && current.state === 'sending') {
+      throw new ConflictError(`Pending prompt ${pendingId} is already claimed by another delivery attempt.`);
+    }
     const patch: Partial<typeof agentRunPendingPrompts.$inferInsert> = {};
     if (input.state !== undefined && input.state !== current.state) {
       if (!ALLOWED[current.state]?.includes(input.state)) {

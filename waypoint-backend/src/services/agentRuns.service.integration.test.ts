@@ -965,6 +965,40 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
       // Leave the ticket free for the tests that follow.
       await updateRun(run.id, { status: 'cancelled' });
     });
+
+    // Round 2 of review, found missing: reopenRun took no advisory lock at
+    // all, so a concurrent createRun on the same ticket could run its own
+    // live-writer check against a stale, pre-commit read of the run being
+    // reopened — the ticket-scoped `pg_advisory_xact_lock` createRun and
+    // claimPublish already serialize on existed, reopenRun just never
+    // joined it. Proven directly, the same way the two existing "one wins"
+    // tests above prove serialization — not indirectly through timing.
+    it('takes the same ticket-scoped advisory lock createRun and claimPublish use — a concurrent holder blocks it', async () => {
+      const run = await deadRun();
+      const raw = postgres(process.env.DATABASE_URL!, { max: 1, onnotice: () => {} });
+      try {
+        await raw`SELECT pg_advisory_lock(hashtext(${resumeTicketId}))`;
+        let resolved = false;
+        const pending = reopenRun(run.id).then((r) => {
+          resolved = true;
+          return r;
+        });
+        await new Promise((r) => {
+          setTimeout(r, 300);
+        });
+        // Still blocked: reopenRun is waiting on the same lock key.
+        expect(resolved).toBe(false);
+        await raw`SELECT pg_advisory_unlock(hashtext(${resumeTicketId}))`;
+        const { run: reopened } = await pending;
+        expect(resolved).toBe(true);
+        expect(reopened.status).toBe('provisioning');
+      } finally {
+        await raw.end({ timeout: 3 });
+      }
+
+      // Leave the ticket free for the tests that follow.
+      await updateRun(run.id, { status: 'cancelled' });
+    });
   });
 
   // ROAD-XXX, security review's critical finding: once a run is non-
@@ -1157,6 +1191,38 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
       await expect(as(() => pending.updatePendingPrompt(run.id, row.id, { state: 'queued' }))).rejects.toThrow(
         /cannot become queued/,
       );
+    });
+
+    // Found in review (round 2): a same-value `state` PATCH used to be a
+    // silent no-op 200 for every state, `sending` included — so a losing
+    // racer's claim attempt against a row someone else just claimed
+    // returned success indistinguishable from actually winning it.
+    it('a second claim on an already-claimed row is a conflict, not a silent no-op', async () => {
+      const run = await createRun({ ...base(), ticketId: null, entry: 'independent' });
+      const row = await as(() => pending.createPendingPrompt(run.id, { text: 'hi', reason: 'finishing' }));
+      const first = await as(() => pending.updatePendingPrompt(run.id, row.id, { state: 'sending' }));
+      expect(first.state).toBe('sending');
+      const claimedAt = first.claimedAt;
+
+      await expect(as(() => pending.updatePendingPrompt(run.id, row.id, { state: 'sending' }))).rejects.toThrow(
+        /already claimed by another delivery attempt/,
+      );
+      // The loser's request changed nothing about the winner's claim.
+      const [still] = await db
+        .select()
+        .from(schema.agentRunPendingPrompts)
+        .where(eq(schema.agentRunPendingPrompts.id, row.id));
+      expect(still.state).toBe('sending');
+      expect(still.claimedAt?.getTime()).toBe(claimedAt?.getTime());
+
+      // Two concurrent claims land the same way, not just sequential ones.
+      const second = await as(() => pending.createPendingPrompt(run.id, { text: 'two', reason: 'finishing' }));
+      await as(() => pending.updatePendingPrompt(run.id, second.id, { state: 'sending' }));
+      const results = await Promise.allSettled([
+        as(() => pending.updatePendingPrompt(run.id, second.id, { state: 'sending' })),
+        as(() => pending.updatePendingPrompt(run.id, second.id, { state: 'sending' })),
+      ]);
+      expect(results.every((r) => r.status === 'rejected')).toBe(true);
     });
 
     it('a teammate may enqueue (owner-offline, attributed) and drop their own, but never deliver', async () => {

@@ -703,6 +703,29 @@ export interface ReopenRunResult {
  */
 export async function reopenRun(runId: string, reason?: string): Promise<ReopenRunResult> {
   return db.transaction(async (tx) => {
+    // Peeked unlocked, only to decide whether a ticket-scoped advisory
+    // lock is needed — every authoritative check still happens below,
+    // after the row lock. Advisory → row, the same order createRun and
+    // claimPublish use, so this can never deadlock against either.
+    //
+    // Found in review (round 2): without this, reopenRun could revive a
+    // dispatched run on a ticket in the same window createRun or
+    // claimPublish decides — under their own advisory lock — that the
+    // ticket has no live writer, landing two dispatched writers on one
+    // ticket at once. That's exactly the race those callers' own checks
+    // exist to prevent; reopenRun just wasn't holding the same lock they
+    // serialize on.
+    const [peek] = await tx
+      .select({ ticketId: agentRuns.ticketId, entry: agentRuns.entry, modeId: agentRuns.modeId })
+      .from(agentRuns)
+      .where(eq(agentRuns.id, runId));
+    if (!peek) throw new NotFoundError('agent run');
+    const dispatchTicketId =
+      peek.entry === 'dispatched' && peek.ticketId && peek.modeId !== 'plan' ? peek.ticketId : null;
+    if (dispatchTicketId) {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${dispatchTicketId}))`);
+    }
+
     const current = await lockRun(tx, runId);
 
     // Scoped inside the transaction, not at the route (unlike most bare-id
