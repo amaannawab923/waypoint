@@ -123,6 +123,14 @@ const MCP_TOOLS = [
 // allowedTools with no server behind it is harmless, but keeping the two
 // together is what makes the prompt, the flag, and the grant impossible to
 // get out of step.
+//
+// Known (POC): the never-do list — own tabs only, no sign-in, no
+// data-changing forms — lives in the system prompt (systemPrompt.ts's
+// COPILOT_BROWSER_PROMPT), not in the grant. The wildcard cannot scope the
+// bridge to a tab, and `canUseTool` is deliberately unset for Copilot, so a
+// model that ignores the prompt is not stopped by this file. Tool-level
+// scoping (a `canUseTool` that refuses `tabs_*` on tabs the turn did not
+// open) is the hardening step if this leaves POC.
 const BROWSER_TOOLS = ['mcp__claude-in-chrome__*'];
 
 // Matches waypoint-backend's newId('conv') shape (and is re-validated

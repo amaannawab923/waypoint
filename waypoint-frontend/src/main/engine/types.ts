@@ -45,9 +45,9 @@ export const ENGINE_PIN = {
   /** Commit of Waypoint's fork of emdash (amaannawab923/emdash, branch
    *  `waypoint`) the archive was built from — upstream 9b102a5f3 plus
    *  Waypoint's own commits. */
-  sourceCommit: 'df96f094a',
+  sourceCommit: '713011e42',
   target: 'darwin-arm64',
-  sha256: 'ebf0b83ab0c9b87e89db14bc8795abc9ddefe6af3e96f238f32a66dfbbbf9304',
+  sha256: 'ccace3c0b9d843e77669039e10fc034f5a159a998f3a7690453df12bf66b0591',
   /** Inside the extracted archive: the shell launcher that execs the bundled
    *  `node` on `dist/index.mjs`. Takes the CLI commands in `EngineCommand`. */
   launcherRelPath: 'emdash-workspace-server/bin/emdash-workspace-server',

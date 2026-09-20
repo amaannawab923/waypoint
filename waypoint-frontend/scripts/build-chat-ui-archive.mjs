@@ -196,6 +196,11 @@ writeFileSync(
 mkdirSync(outDir, { recursive: true });
 const file = `emdash-chat-ui-${pkg.version}-${short}.tar.gz`;
 const archive = join(outDir, file);
+// Not byte-reproducible: bsdtar records the staged files' mtimes and this
+// runs on a developer machine, so two builds of one commit hash
+// differently. The lock pins the sha of THE archive that was published,
+// which is the contract; if this is ever run in CI as a check against
+// source, normalize mtimes and ordering first.
 execFileSync('/usr/bin/tar', ['-czf', archive, '-C', stage, 'emdash-chat-ui']);
 rmSync(stage, { recursive: true, force: true });
 const sha256 = createHash('sha256').update(readFileSync(archive)).digest('hex');

@@ -39,16 +39,54 @@ export interface TranscriptKeeper {
   capture(runId: string, turns?: DaemonTranscriptTurn[]): Promise<void>;
 }
 
-/** The newest turns that fit the cap. */
+/**
+ * A tool item's images (screenshots, base64 — the transcript's one heavy
+ * field since the emdash fork carries them) removed, everything else
+ * kept. Recursive: a group's children are tool items too.
+ */
+function withoutImages(item: unknown): unknown {
+  if (!item || typeof item !== 'object') return item;
+  const rest = { ...(item as Record<string, unknown>) };
+  delete rest.images;
+  return {
+    ...rest,
+    ...(Array.isArray(rest.children)
+      ? { children: rest.children.map(withoutImages) }
+      : {}),
+  };
+}
+
+function stripImages(turn: DaemonTranscriptTurn): DaemonTranscriptTurn {
+  return {
+    ...turn,
+    items: turn.items.map(withoutImages) as DaemonTranscriptTurn['items'],
+  };
+}
+
+/**
+ * The newest turns that fit the cap. Oldest turns go first; then, before
+ * the last turn would go, its images — the text of a run's final report
+ * outranks its screenshots, and a single verification turn's screenshots
+ * can exceed the cap on their own (found in review: the loop below used
+ * to shrink to one turn and then return NOTHING, emptying the run's saved
+ * history exactly when it held the most evidence).
+ */
 export function fitTurns(
   turns: DaemonTranscriptTurn[],
   maxBytes = MAX_TRANSCRIPT_BYTES,
 ): DaemonTranscriptTurn[] {
+  const size = (t: DaemonTranscriptTurn[]) => JSON.stringify(t).length;
   let kept = turns;
-  while (kept.length > 0 && JSON.stringify(kept).length > maxBytes) {
+  while (kept.length > 1 && size(kept) > maxBytes) {
     kept = kept.slice(Math.max(1, Math.ceil(kept.length / 10)));
   }
-  return kept;
+  if (kept.length === 0 || size(kept) <= maxBytes) return kept;
+  // Down to what the cap cannot fit whole: images go, oldest turn first.
+  kept = [...kept];
+  for (let i = 0; i < kept.length && size(kept) > maxBytes; i += 1) {
+    kept[i] = stripImages(kept[i]);
+  }
+  return size(kept) <= maxBytes ? kept : [];
 }
 
 function fingerprint(turns: DaemonTranscriptTurn[]): string {

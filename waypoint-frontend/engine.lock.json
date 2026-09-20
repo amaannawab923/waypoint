@@ -4,14 +4,14 @@
   "version": "0.1.0",
   "protocolVersion": "1.0.0",
   "sourceRepo": "https://github.com/amaannawab923/emdash",
-  "sourceCommit": "df96f094a",
+  "sourceCommit": "713011e42",
   "license": "Apache-2.0",
-  "builtWith": "pnpm run package --target darwin-arm64 --verify (apps/workspace-server, 2026-09-20) from the waypoint branch of the fork: upstream generalaction/emdash 9b102a5f3 + Waypoint commits",
+  "builtWith": "pnpm run package --target darwin-arm64 --verify (apps/workspace-server, 2026-09-21) from the waypoint branch of the fork: upstream generalaction/emdash 9b102a5f3 + Waypoint commits",
   "targets": {
     "darwin-arm64": {
       "file": "emdash-workspace-server-0.1.0-darwin-arm64.tar.gz",
-      "sha256": "ebf0b83ab0c9b87e89db14bc8795abc9ddefe6af3e96f238f32a66dfbbbf9304",
-      "release": "https://github.com/amaannawab923/waypoint/releases/tag/engine-0.1.0-df96f094a"
+      "sha256": "ccace3c0b9d843e77669039e10fc034f5a159a998f3a7690453df12bf66b0591",
+      "release": "https://github.com/amaannawab923/waypoint/releases/tag/engine-0.1.0-713011e42"
     }
   },
   "launcherRelPath": "emdash-workspace-server/bin/emdash-workspace-server",
