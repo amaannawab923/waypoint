@@ -1152,7 +1152,13 @@ describe('resumeRun', () => {
 
   it("a warmed session (warm.ts) is used as-is: no startSession, the warm-up's outcome decides loaded vs replaced-by-new", async () => {
     const { ledger, rows } = fakeLedger([interrupted({ status: 'done' })]);
-    const daemon = fakeDaemon();
+    const daemon = fakeDaemon({
+      // The warm-up's own session, still live per the daemon — the
+      // liveness re-check (found in review: a warm-up never touches the
+      // ledger, so a concurrent kill-stale can silently kill it) must
+      // see this and trust the warm-up, not fall through to a fresh spawn.
+      listSessions: jest.fn(async () => ({ 'run-i1': { conversationId: 'run-i1' } })),
+    });
     const result = await resumeRunCore(
       depsWith(ledger, daemon),
       'run-i1',
@@ -1173,6 +1179,33 @@ describe('resumeRun', () => {
       'session_resumed',
       expect.objectContaining({ trigger: 'open-then-message', from: 'done' }),
     );
+  });
+
+  // Found in review: warm.ts never touches the ledger, so boot reconcile's
+  // kill-stale can kill a warmed session in the window between the
+  // warm-up and this resume — trusting `warmed` unconditionally would
+  // write the ledger to `running` for a session that no longer exists.
+  it('a warmed session the daemon no longer has falls through to a real spawn, not a blind trust of the stale id', async () => {
+    const { ledger, rows } = fakeLedger([interrupted({ status: 'done' })]);
+    const daemon = fakeDaemon({
+      // kill-stale got to it first: the daemon has nothing for this run.
+      listSessions: jest.fn(async () => ({})),
+      startSession: jest.fn(async () => ({ sessionId: 'sess-fresh' })),
+    });
+    const result = await resumeRunCore(
+      depsWith(ledger, daemon),
+      'run-i1',
+      'open-then-message',
+      { sessionId: 'sess-old', loaded: true },
+    );
+    expect(daemon.startSession).toHaveBeenCalledTimes(1);
+    // A fresh spawn against a `done` run's own recorded session id counts
+    // as `replaced-by-new`, same as the no-warm-up path would.
+    expect(result).toMatchObject({ status: 'running' });
+    expect(rows.get('run-i1')).toMatchObject({
+      status: 'running',
+      providerSessionId: 'sess-fresh',
+    });
   });
 
   it("a recreated worktree on a fresh branch clears the run's PR, since the branch it was for is gone", async () => {

@@ -11,7 +11,7 @@ import {
   type StartRunInput,
 } from '../types';
 import { agentEnvFor } from './agentEnv';
-import type { DaemonRunsApi } from './daemonApi';
+import type { DaemonRunsApi, DaemonSessionSummary } from './daemonApi';
 import { describeFolder, rememberFolder, type FolderDeps } from './folders';
 import { claimForInitialQueue, markDelivered, revertClaimed } from './outbox';
 import {
@@ -942,9 +942,28 @@ export async function resumeRunCore(
     }
   }
 
+  // Found in review: a warm-up (warm.ts) never touches the ledger, so
+  // boot reconcile's kill-stale — which only re-reads the LEDGER's status
+  // under its own lock before killing — cannot see one and can kill this
+  // exact daemon session in the window between the warm-up and this
+  // resume actually using it. Trusting `warmed` unconditionally past that
+  // point would write the ledger to `running` for a session that no
+  // longer exists, with nothing catching it until the caller's own
+  // `daemon.sendPrompt` fails afterward. One cheap re-check closes it —
+  // if the daemon no longer has ANY session for this run, the warm-up is
+  // stale: fall through to a real spawn below, exactly as if there had
+  // been no warm-up at all.
+  let effectiveWarmed = warmed;
+  if (effectiveWarmed) {
+    const sessions = await daemon
+      .listSessions()
+      .catch((): Record<string, DaemonSessionSummary> => ({}));
+    if (!sessions[run.id]) effectiveWarmed = null;
+  }
+
   let sessionId: string;
-  if (warmed) {
-    ({ sessionId } = warmed);
+  if (effectiveWarmed) {
+    ({ sessionId } = effectiveWarmed);
   } else {
     try {
       ({ sessionId } = await daemon.startSession({
@@ -984,8 +1003,8 @@ export async function resumeRunCore(
     }
   }
 
-  const loaded = warmed
-    ? warmed.loaded
+  const loaded = effectiveWarmed
+    ? effectiveWarmed.loaded
     : run.providerSessionId !== null && sessionId === run.providerSessionId;
   const outcome = loaded ? 'loaded' : 'replaced-by-new';
   if (afterTurnId === null && loaded) {
