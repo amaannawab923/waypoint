@@ -58,7 +58,16 @@ export function sessionBrowserEntryCandidates(appPath: string): string[] {
     'bin',
     'chrome-devtools-mcp.js',
   ];
+  // Packaged: app.getAppPath() is `…/Resources/app.asar`, and the server
+  // is asarUnpacked (package.json) — a SEPARATE node process cannot read
+  // inside an archive, so the real files live beside it under
+  // `app.asar.unpacked`. That path first; the archive path is never a
+  // valid spawn target.
+  const unpacked = /\.asar$/.test(appPath)
+    ? [path.join(`${appPath}.unpacked`, 'node_modules', ...rel)]
+    : [];
   return [
+    ...unpacked,
     path.join(appPath, 'node_modules', ...rel),
     path.join(appPath, 'release', 'app', 'node_modules', ...rel),
   ];

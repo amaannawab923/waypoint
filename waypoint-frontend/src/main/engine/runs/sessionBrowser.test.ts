@@ -99,6 +99,15 @@ describe('sessionBrowserServer', () => {
       '/app/node_modules/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js',
       '/app/release/app/node_modules/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js',
     ]);
+    // Packaged: the unpacked copy first — a spawned process cannot read
+    // inside the archive.
+    expect(
+      sessionBrowserEntryCandidates(
+        '/Applications/Waypoint.app/Contents/Resources/app.asar',
+      )[0],
+    ).toBe(
+      '/Applications/Waypoint.app/Contents/Resources/app.asar.unpacked/node_modules/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js',
+    );
     // Nothing installed: the packaged path, for the warning to name.
     expect(sessionBrowserEntry('/nowhere')).toBe(
       '/nowhere/node_modules/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js',
