@@ -767,4 +767,34 @@ describe('retryPendingPrompt', () => {
       undefined,
     );
   });
+
+  // Found in review, round 4: of the three resume-then-deliver paths,
+  // this one alone never handed the daemon's live session to the resume.
+  // A done/needs-review run whose session finalize kept alive is not LIVE
+  // (running/blocked), and warm.ts never warms an already-live session,
+  // so `takeWarmed` was empty — resumeRunCore took the session for cold
+  // and asked the daemon to start a conversation it already had.
+  it('a retry on a finished run whose session is still alive continues it — never a second startSession', async () => {
+    const { ledger, pending } = fakeLedger([
+      deadRun({ status: 'done', providerSessionId: 'sess-old' }),
+    ]);
+    const row = await ledger.createPendingPrompt('run-abc1234', {
+      text: 'again',
+      reason: 'finishing',
+    });
+    const daemon = fakeDaemon({
+      listSessions: jest.fn(async () => live('run-abc1234')),
+    });
+    const result = await retryPendingPrompt(depsWith(ledger, daemon), {
+      runId: 'run-abc1234',
+    });
+    expect(daemon.startSession).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ outcome: 'resumed-and-sent' });
+    expect(pending.get(row.id)?.state).toBe('delivered');
+    expect(daemon.sendPrompt).toHaveBeenCalledWith(
+      'run-abc1234',
+      'again',
+      undefined,
+    );
+  });
 });

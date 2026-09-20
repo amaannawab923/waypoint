@@ -241,18 +241,39 @@ async function applyAction(
       }
       await drainOutboxIfLive(deps, action.runId);
       return;
-    case 'adopt':
-      await deps.ledger.updateRun(action.runId, {
-        status: 'running',
-        reason: 'daemon session found live at boot; the daemon resumed it',
-        daemonSessionId: action.runId,
+    case 'adopt': {
+      // The same guard kill-stale has (found in review, round 4: only
+      // kill-stale ever got it). The plan saw `interrupted`; a resume
+      // landing between plan and apply moves the run to provisioning →
+      // running itself, and an unguarded write here would stamp
+      // `running` over a row mid-resume, plus a second session_resumed.
+      // Skip, never wait, when a resume holds the lock; re-read when it
+      // is free and act only on what the plan actually saw.
+      const outcome = await tryWithRunLock(action.runId, async () => {
+        const fresh = await deps.ledger.getRun(action.runId);
+        if (fresh?.status !== 'interrupted') return false;
+        await deps.ledger.updateRun(action.runId, {
+          status: 'running',
+          reason: 'daemon session found live at boot; the daemon resumed it',
+          daemonSessionId: action.runId,
+        });
+        await deps.ledger.appendEvent(action.runId, 'session_resumed', {
+          at: 'boot',
+          note: 'daemon resumed the session while Waypoint was away',
+        });
+        return true;
       });
-      await deps.ledger.appendEvent(action.runId, 'session_resumed', {
-        at: 'boot',
-        note: 'daemon resumed the session while Waypoint was away',
-      });
-      await drainOutboxIfLive(deps, action.runId);
+      if (!outcome.acquired) {
+        deps.logger.info(
+          'engine: adopt skipped — a resume is in flight for this run',
+          { runId: action.runId },
+        );
+        return;
+      }
+      // Outside the lock: the drain takes the run lock itself.
+      if (outcome.result) await drainOutboxIfLive(deps, action.runId);
       return;
+    }
     case 'kill-stale': {
       // ROAD-XXX: a resume (button or a transparent revive on message)
       // can land between this plan being built and applied — bootReconcile
@@ -298,15 +319,39 @@ async function applyAction(
         },
       );
       return;
-    case 'interrupt':
-      await deps.ledger.updateRun(action.runId, {
-        status: 'interrupted',
-        reason: action.worktreePresent
-          ? 'no daemon session at boot; the worktree is still on disk'
-          : 'no daemon session at boot; the worktree is gone too',
-        daemonSessionId: null,
+    case 'interrupt': {
+      // Guarded like kill-stale (found in review, round 4: this write ran
+      // straight off the plan's snapshot). The plan saw a live status
+      // with no daemon session; a send landing in between takes exactly
+      // that case as "the session died, start it again" (sendPrompt.ts's
+      // live-status-no-session branch) and leaves the status `running`
+      // with a fresh session — so a status re-read alone proves nothing
+      // here. The precondition is the daemon's, so the daemon is asked
+      // again under the lock: a session now → someone revived it, leave
+      // it. Skip, never wait, while a resume holds the lock.
+      const outcome = await tryWithRunLock(action.runId, async () => {
+        const fresh = await deps.ledger.getRun(action.runId);
+        if (!fresh || !LIVE_RUN_STATUSES.includes(fresh.status)) return;
+        const sessions = await deps.daemon
+          .listSessions()
+          .catch((): Record<string, DaemonSessionSummary> => ({}));
+        if (sessions[action.runId]) return;
+        await deps.ledger.updateRun(action.runId, {
+          status: 'interrupted',
+          reason: action.worktreePresent
+            ? 'no daemon session at boot; the worktree is still on disk'
+            : 'no daemon session at boot; the worktree is gone too',
+          daemonSessionId: null,
+        });
       });
+      if (!outcome.acquired) {
+        deps.logger.info(
+          'engine: interrupt skipped — a resume is in flight for this run',
+          { runId: action.runId },
+        );
+      }
       return;
+    }
   }
 }
 

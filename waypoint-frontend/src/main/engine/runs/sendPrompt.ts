@@ -524,7 +524,8 @@ export function retryPendingPrompt(
     const sessions = await daemon
       .listSessions()
       .catch((): Record<string, DaemonSessionSummary> => ({}));
-    if (sessions[run.id] && LIVE.has(run.status)) {
+    const live = sessions[run.id];
+    if (live && LIVE.has(run.status)) {
       const drained = await drain(deps, daemon, run, {
         trigger: 'retry',
         memberName: deps.memberName,
@@ -537,11 +538,20 @@ export function retryPendingPrompt(
     if (!RESUMABLE_RUN_STATUSES.includes(run.status)) {
       return { outcome: 'outboxed', status: run.status };
     }
+    // A session the daemon still holds for a finished run (done /
+    // needs-review — reconcile.ts's FINISHED_ALIVE) is handed to the
+    // resume as already alive, exactly as sendRunPromptLocked and
+    // deliverPendingAfterFinalize do (found in review, round 4: this
+    // path alone passed only `takeWarmed`, which is empty for a session
+    // warm.ts never had to warm — so resumeRunCore treated a live
+    // session as cold and asked the daemon to start it again).
     const resumed = await resumeRunCore(
       deps,
       runId,
       'message',
-      takeWarmed(runId),
+      live
+        ? { sessionId: run.providerSessionId ?? run.id, loaded: true }
+        : takeWarmed(runId),
     );
     if (resumed.outcome === 'loaded' || resumed.outcome === 'replaced-by-new') {
       const after = await deps.ledger.getRun(runId);

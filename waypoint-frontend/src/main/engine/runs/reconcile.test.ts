@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { DaemonRunsApi } from './daemonApi';
+import type { DaemonRunsApi, DaemonSessionSummary } from './daemonApi';
 import type { AgentRun, AgentRunStatus, LedgerClient } from './ledgerClient';
 import {
   LIVE_RUN_STATUSES,
@@ -287,11 +287,16 @@ describe('reconcileRunsAtBoot', () => {
     // re-read under the run lock (ROAD-XXX), since a resume could have
     // landed between the plan and this action's turn; 'run-back' and
     // 'run-live' again for their outbox drain (never-lock, design
-    // §2.4 trigger 3 — reattach/adopt's own re-read before draining).
+    // §2.4 trigger 3 — reattach/adopt's own re-read before draining);
+    // 'run-back' a third time and 'run-lost' once more for adopt's and
+    // interrupt's own re-reads under the run lock (review round 4 —
+    // the same guard kill-stale has).
     expect(ledger.getRun.mock.calls.map((c) => c[0]).sort()).toEqual([
       'run-back',
       'run-back',
+      'run-back',
       'run-live',
+      'run-lost',
       'run-old',
       'run-old',
       'run-x',
@@ -404,6 +409,98 @@ describe('reconcileRunsAtBoot', () => {
     expect(report.failures).toEqual([]);
     expect(daemon.killSession).not.toHaveBeenCalled();
     expect(ledger.appendEvent).not.toHaveBeenCalled();
+  });
+
+  // Review round 4: kill-stale alone had the guard above; interrupt and
+  // adopt wrote straight off the plan's snapshot. The window is the
+  // same one — a send or resume landing between plan and apply.
+  describe('interrupt and adopt take the same guard kill-stale does', () => {
+    it('interrupt skips while a resume holds the run lock', async () => {
+      const daemon = fakeDaemon({ listSessions: jest.fn(async () => ({})) });
+      const ledger = fakeLedger({ 'run-lost': { status: 'running' } });
+      let release: (() => void) | null = null;
+      const resuming = withRunLock('run-lost', async () => {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      });
+
+      const report = await reconcileRunsAtBoot({ daemon, ledger, logger });
+
+      expect(report.actions.map((a) => a.kind)).toEqual(['interrupt']);
+      expect(report.failures).toEqual([]);
+      expect(ledger.updateRun).not.toHaveBeenCalled();
+      expect(logger.info).toHaveBeenCalledWith(
+        'engine: interrupt skipped — a resume is in flight for this run',
+        { runId: 'run-lost' },
+      );
+      release!();
+      await resuming;
+    });
+
+    it('interrupt asks the daemon again under the lock and leaves a run someone revived meanwhile — the status alone would not have said so', async () => {
+      // A send on a live-status run the daemon lost starts the session
+      // again and leaves the status `running` (sendPrompt.ts): the plan's
+      // read and the re-read agree on the status, so only the daemon can
+      // tell that the precondition is gone.
+      let asked = 0;
+      const daemon = fakeDaemon({
+        listSessions: jest.fn(
+          async (): Promise<Record<string, DaemonSessionSummary>> => {
+            asked += 1;
+            return asked === 1
+              ? {}
+              : { 'run-lost': { conversationId: 'run-lost' } as never };
+          },
+        ),
+      });
+      const ledger = fakeLedger({ 'run-lost': { status: 'running' } });
+
+      const report = await reconcileRunsAtBoot({ daemon, ledger, logger });
+
+      expect(report.actions.map((a) => a.kind)).toEqual(['interrupt']);
+      expect(report.failures).toEqual([]);
+      expect(ledger.updateRun).not.toHaveBeenCalled();
+    });
+
+    it('adopt skips while a resume holds the run lock, and re-reads to skip a run already revived', async () => {
+      const daemon = fakeDaemon({
+        listSessions: jest.fn(async () => ({
+          'run-back': { conversationId: 'run-back' } as never,
+        })),
+      });
+      const held = fakeLedger({ 'run-back': { status: 'interrupted' } });
+      let release: (() => void) | null = null;
+      const resuming = withRunLock('run-back', async () => {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      });
+      const first = await reconcileRunsAtBoot({ daemon, ledger: held, logger });
+      expect(first.actions.map((a) => a.kind)).toEqual(['adopt']);
+      expect(held.updateRun).not.toHaveBeenCalled();
+      expect(held.appendEvent).not.toHaveBeenCalled();
+      release!();
+      await resuming;
+
+      const revived = fakeLedger({ 'run-back': { status: 'interrupted' } });
+      let reads = 0;
+      (revived.getRun as jest.Mock).mockImplementation(async (id: string) => {
+        if (id !== 'run-back') return null;
+        reads += 1;
+        return reads === 1
+          ? ({ id, status: 'interrupted' } as AgentRun)
+          : ({ id, status: 'provisioning' } as AgentRun);
+      });
+      const second = await reconcileRunsAtBoot({
+        daemon,
+        ledger: revived,
+        logger,
+      });
+      expect(second.actions.map((a) => a.kind)).toEqual(['adopt']);
+      expect(revived.updateRun).not.toHaveBeenCalled();
+      expect(revived.appendEvent).not.toHaveBeenCalled();
+    });
   });
 
   // Never-lock (design §2.4 trigger 3 / §7.2): a reattach or an adopt
