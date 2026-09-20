@@ -148,7 +148,7 @@ describe('SessionTranscript — the composer is never locked', () => {
     },
   );
 
-  it.each(['done', 'needs-review'] as const)(
+  it.each(ALL_STATUSES)(
     'a %s run with zero turns and the engine DOWN still has the box open — only Send is held',
     (status) => {
       mockUseSessionsSnapshot.mockReturnValue({ engine: { kind: 'stopped' } });
@@ -360,6 +360,35 @@ describe('SessionTranscript — what a send does, said in the placeholder', () =
 });
 
 describe('SessionTranscript — every send lands somewhere', () => {
+  // Found in review: the outcome-specific tests below (outboxed,
+  // cancelled-mid-resume, continued, …) only drove 4 of the 10 statuses
+  // between them. onSend's own switch reads only `result.outcome`, never
+  // `run.status` — so this is deliberately complementary, not redundant:
+  // it proves every status can even REACH a send at all (never held back
+  // by the composer itself), not that each status maps to a particular
+  // outcome, which is main's call, not the renderer's.
+  it.each(ALL_STATUSES)(
+    'a %s run can always attempt a send — sendPrompt is reached with the text',
+    async (status) => {
+      const cleanup = withComposerSlot();
+      mockSendPrompt.mockResolvedValueOnce({ outcome: 'sent', status });
+      mockUseSessionTranscript.mockReturnValue(
+        hookState({ turnCount: 1, state: fakeState() }),
+      );
+      render(<SessionTranscript run={run({ status })} />);
+      const box = screen.getByLabelText('Message this session');
+      fireEvent.change(box, { target: { value: `hello from ${status}` } });
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText('Send'));
+      });
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        'run-abc1234',
+        `hello from ${status}`,
+      );
+      cleanup();
+    },
+  );
+
   it('outboxed: the box is cleared, the strip shows the row, and the outbox is re-read', async () => {
     const cleanup = withComposerSlot();
     mockSendPrompt.mockResolvedValueOnce({
@@ -568,6 +597,77 @@ describe('SessionTranscript — the outbox strip', () => {
       fireEvent.click(screen.getAllByText('Discard')[1]);
     });
     expect(mockDrop).toHaveBeenCalledWith('run-abc1234', 'pp-2');
+    cleanup();
+  });
+
+  // Found in review: every PendingPromptReason had a unit test for its
+  // sentence (sessionStatus.test.ts), but never one through the actual
+  // OutboxStrip the person sees — this renders each reason for real and
+  // checks its sentence lands in the DOM.
+  it.each([
+    ['starting', /session is starting/],
+    ['finishing', /filing the run's report/],
+    ['folder-missing', /folder is not on disk/],
+    ['repository-missing', /repository is not linked/],
+    ['spawn-failed', /agent could not be started/],
+    ['owner-offline', /Waypoint; it is sent when they are online/],
+    ['blocked-by-earlier', /behind an earlier message/],
+  ] as const)('renders the real sentence for reason %s', (reason, expected) => {
+    const cleanup = withComposerSlot();
+    mockUseSessionTranscript.mockReturnValue(
+      hookState({
+        turnCount: 1,
+        pending: [
+          {
+            id: 'pp-r',
+            runId: 'run-abc1234',
+            seq: 1,
+            byMemberId: 'mem-1',
+            text: 'a waiting message',
+            reason,
+            state: 'queued',
+            autoAttempts: 0,
+            lastError: null,
+            claimedAt: null,
+            resolvedAt: null,
+            createdAt: '2026-09-20T00:00:00Z',
+          },
+        ] as unknown as never[],
+      }),
+    );
+    render(<SessionTranscript run={run({ status: 'failed' })} />);
+    expect(screen.getByText(expected)).toBeInTheDocument();
+    cleanup();
+  });
+
+  it('a `sending` row (a crash-recovery check in flight) reads "Checking…", never its stale original reason', () => {
+    const cleanup = withComposerSlot();
+    mockUseSessionTranscript.mockReturnValue(
+      hookState({
+        turnCount: 1,
+        pending: [
+          {
+            id: 'pp-s',
+            runId: 'run-abc1234',
+            seq: 1,
+            byMemberId: 'mem-1',
+            text: 'was it delivered?',
+            reason: 'starting',
+            state: 'sending',
+            autoAttempts: 0,
+            lastError: null,
+            claimedAt: null,
+            resolvedAt: null,
+            createdAt: '2026-09-20T00:00:00Z',
+          },
+        ] as unknown as never[],
+      }),
+    );
+    render(<SessionTranscript run={run({ status: 'running' })} />);
+    expect(
+      screen.getByText(/Checking whether this reached the agent/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/session is starting/)).toBeNull();
     cleanup();
   });
 });

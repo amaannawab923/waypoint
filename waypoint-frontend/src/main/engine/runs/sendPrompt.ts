@@ -318,6 +318,14 @@ async function sendRunPromptLocked(
   // delivered — a pending row if there is one, else this message.
   const { hiddenContext } = resumed;
   const after = (await deps.ledger.getRun(run.id)) ?? run;
+  // Noted, not fixed (found in review): the ledger already committed
+  // reopenRun → running and fired notify() above, before this call's own
+  // unguarded daemon.sendPrompt — a rejection here (unlikely: the
+  // session was JUST confirmed alive) leaves the UI reading "running"
+  // with the typed text still in the composer for a moment. Not a data
+  // loss — the caller's own catch keeps the text and a retry lands
+  // straight on the now-live session — just a subtler window than the
+  // other two call sites, which run before any ledger write.
   const fate = await deliverAround(
     deps,
     daemon,
