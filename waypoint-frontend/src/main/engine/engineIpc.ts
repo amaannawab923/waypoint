@@ -206,7 +206,7 @@ export function registerEngineIpc(
   registerBootReconcile({ supervisor, logger });
   // Sessions' isolated browser (runs/sessionBrowser.ts): registered with
   // the daemon on the same per-connection cadence as the reconcile.
-  registerSessionBrowser({ supervisor, logger });
+  registerSessionBrowser({ supervisor, appPath: app.getAppPath(), logger });
 
   // W5a: the two notifications a run sends (blocked, needs review), and
   // host-side finalize for a dispatched run whose turn ended — both hang

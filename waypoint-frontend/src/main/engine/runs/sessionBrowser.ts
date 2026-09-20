@@ -1,3 +1,5 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { EngineSupervisor } from '../supervisor';
 import type { Unsubscribe } from '../types';
 import { createDaemonRunsApi, type DaemonMcpServer } from './daemonApi';
@@ -25,34 +27,63 @@ import { createDaemonRunsApi, type DaemonMcpServer } from './daemonApi';
  * server too while it is registered — an isolated headless browser tool,
  * nothing that reaches their accounts.
  *
- * Packaging note (POC): `npx` resolves the server from the person's PATH,
- * which a GUI-launched packaged app may not have. The pinned engine ships
- * its own node; a shipped copy of the server run by that node is the
- * production shape — not attempted here.
+ * How it runs: the server is a dependency of this app (package.json pins
+ * chrome-devtools-mcp exactly) and is started by THIS app's own binary as
+ * node — `process.execPath` with `ELECTRON_RUN_AS_NODE=1` — never by an
+ * `npx` from the person's PATH. Found on the first live run: the daemon's
+ * PATH resolved `npx` to a Node 18 the server refuses, and the session
+ * silently fell back to whatever other browser MCP the person happened to
+ * have. Electron's node is 22, present wherever Waypoint is, and the same
+ * in dev and packaged (packaging still has to unpack the module from the
+ * asar — a build-config step, not a runtime one).
  */
 export const SESSION_BROWSER_SERVER_NAME = 'waypoint-browser';
-
-/** Pinned: the exact tool surface the brief's verification text names. */
-export const SESSION_BROWSER_PACKAGE = 'chrome-devtools-mcp@1.9.0';
 
 /** Where a session saves screenshots, relative to its worktree; git-excluded by worktrees.ts. */
 export const EVIDENCE_DIR = '.waypoint/evidence';
 
-export function sessionBrowserServer(): DaemonMcpServer {
+/**
+ * The server's stdio entry under this app's own node_modules. Built from
+ * a path, not `require.resolve`: webpack rewrites that to a cwd-relative
+ * `./node_modules/…` inside the main bundle (seen live), and the daemon
+ * spawns from its own cwd. `appPath` is `app.getAppPath()` — the checkout
+ * in development, the bundle when packaged.
+ */
+export function sessionBrowserEntry(appPath: string): string {
+  return path.join(
+    appPath,
+    'node_modules',
+    'chrome-devtools-mcp',
+    'build',
+    'src',
+    'bin',
+    'chrome-devtools-mcp.js',
+  );
+}
+
+export function sessionBrowserServer(
+  execPath: string,
+  entry: string,
+): DaemonMcpServer {
   return {
     name: SESSION_BROWSER_SERVER_NAME,
     transport: 'stdio',
-    command: 'npx',
+    command: execPath,
     // `--isolated`: a throwaway profile the server creates and discards, so
     // no session sees another's state or anyone's login. `--headless`: N
     // sessions must not raise N windows; the screenshots are the evidence.
-    args: ['-y', SESSION_BROWSER_PACKAGE, '--isolated', '--headless'],
+    args: [entry, '--isolated', '--headless'],
+    env: { ELECTRON_RUN_AS_NODE: '1' },
     providers: ['claude'],
   };
 }
 
 export interface SessionBrowserDeps {
   supervisor: EngineSupervisor;
+  /** `app.getAppPath()`; where the vendored server lives. */
+  appPath: string;
+  /** `process.execPath` — this app's binary, run as node. */
+  execPath?: string;
   logger: {
     info: (m: string, meta?: Record<string, unknown>) => void;
     warn: (m: string, meta?: Record<string, unknown>) => void;
@@ -68,6 +99,8 @@ export interface SessionBrowserDeps {
  */
 export function registerSessionBrowser(deps: SessionBrowserDeps): Unsubscribe {
   let registeredSince: number | null = null;
+  const entry = sessionBrowserEntry(deps.appPath);
+  const server = sessionBrowserServer(deps.execPath ?? process.execPath, entry);
 
   const register = (since: number) => {
     if (registeredSince === since) return;
@@ -75,8 +108,19 @@ export function registerSessionBrowser(deps: SessionBrowserDeps): Unsubscribe {
     if (!client) return;
     registeredSince = since;
     const attempt = async () => {
+      // A registration naming a file that is not there would leave every
+      // session with a server that fails to start — worse than none, since
+      // the brief tells the agent to expect it. Checked per connection,
+      // not once at build time.
+      if (!fs.existsSync(entry)) {
+        deps.logger.warn(
+          'engine: session browser not registered; its server is not installed',
+          { entry },
+        );
+        return;
+      }
       try {
-        await createDaemonRunsApi(client).saveMcpServer(sessionBrowserServer());
+        await createDaemonRunsApi(client).saveMcpServer(server);
         deps.logger.info('engine: session browser registered', {
           name: SESSION_BROWSER_SERVER_NAME,
         });
