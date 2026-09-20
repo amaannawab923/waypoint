@@ -146,8 +146,29 @@ export interface DrainResult {
   /** A row that could not be sent and now blocks the rest, with why. */
   blockedBy: {
     row: PendingPrompt;
-    why: 'unresolved' | 'spawn-failed' | 'no-session' | 'still-generating';
+    /** `ledger-unreachable`: a bookkeeping write itself failed — the row is left as it was, for the next drain. */
+    why:
+      | 'unresolved'
+      | 'spawn-failed'
+      | 'still-generating'
+      | 'ledger-unreachable';
   } | null;
+}
+
+/** A bookkeeping write's failure, as a drain reports it — never thrown. */
+function ledgerFailed(
+  deps: OutboxDeps,
+  run: AgentRun,
+  row: PendingPrompt,
+  step: string,
+  error: unknown,
+): void {
+  deps.logger.warn('engine: outbox bookkeeping write failed', {
+    runId: run.id,
+    pendingId: row.id,
+    step,
+    message: error instanceof Error ? error.message : String(error),
+  });
 }
 
 /**
@@ -184,8 +205,19 @@ export async function drain(
     // A claim left by a dead host comes first — nothing newer is sent
     // past a message whose fate is unknown.
     if (row.state === 'sending') {
-      // eslint-disable-next-line no-await-in-loop
-      const fate = await resolveStale(deps, daemon, run, row);
+      let fate: Awaited<ReturnType<typeof resolveStale>>;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        fate = await resolveStale(deps, daemon, run, row);
+      } catch (error) {
+        // Found in review (round 4): this function promises never to
+        // throw for a row's own failure, but its ledger writes were
+        // unguarded — a transient backend failure here escaped up
+        // through the send itself. The row is exactly as it was
+        // (`sending`); the next drain resolves it again.
+        ledgerFailed(deps, run, row, 'resolve-stale', error);
+        return { delivered, blockedBy: { row, why: 'ledger-unreachable' } };
+      }
       if (fate === 'delivered') {
         delivered += 1;
         // eslint-disable-next-line no-continue
@@ -203,8 +235,16 @@ export async function drain(
     if (automatic && row.autoAttempts >= MAX_AUTO_ATTEMPTS) {
       return { delivered, blockedBy: { row, why: 'spawn-failed' } };
     }
-    // eslint-disable-next-line no-await-in-loop
-    await deps.ledger.updatePendingPrompt(run.id, row.id, { state: 'sending' });
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await deps.ledger.updatePendingPrompt(run.id, row.id, {
+        state: 'sending',
+      });
+    } catch (error) {
+      // No claim, no send: the row stays `queued` for the next drain.
+      ledgerFailed(deps, run, row, 'claim', error);
+      return { delivered, blockedBy: { row, why: 'ledger-unreachable' } };
+    }
     try {
       // eslint-disable-next-line no-await-in-loop
       await daemon.sendPrompt(
@@ -216,13 +256,20 @@ export async function drain(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       // A refusal inside the acceptance window: nothing was queued — safe
-      // to try again later, counted against the automatic bound.
+      // to try again later, counted against the automatic bound. Should
+      // the revert itself fail, the row stays `sending` and the next
+      // drain's resolveStale settles it (no session, or the text not in
+      // history → back to queued, or a person's Resend).
       // eslint-disable-next-line no-await-in-loop
-      await deps.ledger.updatePendingPrompt(run.id, row.id, {
-        state: 'queued',
-        autoAttempts: automatic ? row.autoAttempts + 1 : 0,
-        lastError: message,
-      });
+      await deps.ledger
+        .updatePendingPrompt(run.id, row.id, {
+          state: 'queued',
+          autoAttempts: automatic ? row.autoAttempts + 1 : 0,
+          lastError: message,
+        })
+        .catch((revertError: unknown) =>
+          ledgerFailed(deps, run, row, 'revert', revertError),
+        );
       deps.logger.warn('engine: outbox delivery refused', {
         runId: run.id,
         pendingId: row.id,
@@ -230,10 +277,15 @@ export async function drain(
       });
       return { delivered, blockedBy: { row, why: 'spawn-failed' } };
     }
+    // The prompt is with the daemon either way: a failed `delivered`
+    // write leaves the row `sending`, and the next drain's resolveStale
+    // finds the text in history and marks it delivered then.
     // eslint-disable-next-line no-await-in-loop
-    await deps.ledger.updatePendingPrompt(run.id, row.id, {
-      state: 'delivered',
-    });
+    await deps.ledger
+      .updatePendingPrompt(run.id, row.id, { state: 'delivered' })
+      .catch((error: unknown) =>
+        ledgerFailed(deps, run, row, 'delivered', error),
+      );
     delivered += 1;
   }
   return { delivered, blockedBy: null };

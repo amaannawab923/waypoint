@@ -255,6 +255,58 @@ describe('drain', () => {
     });
   });
 
+  // Found in review, round 4: drain promises never to throw for a row's
+  // own failure, but only the daemon call was guarded — a bookkeeping
+  // write that failed (the claim, resolveStale's own writes) escaped up
+  // through the send itself, breaking "every send lands somewhere".
+  describe('a bookkeeping write that fails is a blocked result, never a throw', () => {
+    it('the claim: the row stays queued, nothing is sent', async () => {
+      const { ledger, rows } = store([row({ seq: 1 })]);
+      ledger.updatePendingPrompt.mockRejectedValueOnce(
+        new Error('ledger unreachable'),
+      );
+      const daemon = daemonWith();
+      const result = await drain({ ledger, logger }, daemon, run, {
+        trigger: 'send',
+      });
+      expect(result).toEqual({
+        delivered: 0,
+        blockedBy: { row: rows.get('pp-1'), why: 'ledger-unreachable' },
+      });
+      expect(daemon.sendPrompt).not.toHaveBeenCalled();
+      expect(rows.get('pp-1')?.state).toBe('queued');
+    });
+
+    it('resolving a stale claim: the row is left exactly as it was', async () => {
+      const { ledger, rows } = store([row({ seq: 1, state: 'sending' })]);
+      const daemon = daemonWith({ listSessions: jest.fn(async () => ({})) });
+      // No session → resolveStale writes `queued`; that write fails.
+      ledger.updatePendingPrompt.mockRejectedValueOnce(
+        new Error('ledger unreachable'),
+      );
+      const result = await drain({ ledger, logger }, daemon, run, {
+        trigger: 'mount',
+      });
+      expect(result.blockedBy?.why).toBe('ledger-unreachable');
+      expect(daemon.sendPrompt).not.toHaveBeenCalled();
+      expect(rows.get('pp-1')?.state).toBe('sending');
+    });
+
+    it('the delivered mark: the prompt still counts as delivered — the next drain’s history check settles the row', async () => {
+      const { ledger, rows } = store([row({ seq: 1 })]);
+      ledger.updatePendingPrompt
+        .mockImplementationOnce(ledger.updatePendingPrompt.getMockImplementation()!)
+        .mockRejectedValueOnce(new Error('ledger unreachable'));
+      const daemon = daemonWith();
+      const result = await drain({ ledger, logger }, daemon, run, {
+        trigger: 'send',
+      });
+      expect(result).toEqual({ delivered: 1, blockedBy: null });
+      expect(daemon.sendPrompt).toHaveBeenCalledTimes(1);
+      expect(rows.get('pp-1')?.state).toBe('sending');
+    });
+  });
+
   it('`only` delivers just those rows — a send’s older-first, then its own text, then the rest', async () => {
     const { ledger, rows } = store([
       row({ seq: 1, text: 'older' }),
