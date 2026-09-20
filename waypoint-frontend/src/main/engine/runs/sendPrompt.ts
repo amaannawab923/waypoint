@@ -20,7 +20,7 @@ import {
   resumeRunCore,
   type StartRunDeps,
 } from './startRun';
-import { takeWarmed } from './warm';
+import { aliveSessionFor } from './warmed';
 
 export interface ValidatedSendPromptInput {
   runId: string;
@@ -149,36 +149,6 @@ export async function waitingBefore(
   return new Set(
     rows.filter((r) => (byRun?.get(r.id) ?? -1) < arrival).map((r) => r.id),
   );
-}
-
-/**
- * What session a resume can take over, for a run that is not live in the
- * ledger — the ONE answer all three resume-then-deliver paths use
- * (sendRunPromptLocked, retryPendingPrompt, deliverPendingAfterFinalize).
- * Three review rounds each found one of them diverging from the others;
- * this is the fix for the class, not the instance.
- *
- * A warm-up's own record comes first: warm.ts asked the daemon and was
- * told whether the provider restored the run's session or replaced it —
- * `loaded` — and which id it is running now. Guessing `{providerSessionId,
- * loaded: true}` just because the daemon lists a session (round 5 of
- * review: all three paths did exactly that) threw that answer away, so a
- * warm-up that lost the conversation was reported as continuous: the
- * agent never got the context-lost note, the person never got the
- * marker, and the ledger kept the dead session id. Only with no warm-up
- * record does a listed session mean what finalize left alive — the run's
- * own session, restored. The record is consumed either way, so a stale
- * one can never be trusted by a later send.
- */
-function aliveSessionFor(
-  run: AgentRun,
-  live: DaemonSessionSummary | undefined,
-): { sessionId: string; loaded: boolean } | null {
-  const warmed = takeWarmed(run.id);
-  if (warmed) return warmed;
-  return live
-    ? { sessionId: run.providerSessionId ?? run.id, loaded: true }
-    : null;
 }
 
 /**

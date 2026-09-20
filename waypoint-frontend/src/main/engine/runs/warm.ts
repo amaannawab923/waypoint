@@ -4,12 +4,15 @@ import { agentEnvFor } from './agentEnv';
 import type { DaemonSessionSummary } from './daemonApi';
 import { assertRunId } from './ledgerClient';
 import { withRunLock } from './runLock';
+import { hasWarmed, recordWarmed } from './warmed';
 import {
   ENGINE_NOT_RUNNING,
   RESUMABLE_RUN_STATUSES,
   sessionModeOf,
   type StartRunDeps,
 } from './startRun';
+
+export { clearWarmed, takeWarmed, type Warmed } from './warmed';
 
 /**
  * Start on open (never-lock, design §2.5; parity with emdash's `start()`
@@ -26,26 +29,6 @@ import {
  * and goes to the outbox (sendPrompt.ts) rather than waiting a cold
  * spawn out. A failure is logged only; the send path handles it again.
  */
-
-export interface Warmed {
-  sessionId: string;
-  /** The provider restored the same session (vs. started a fresh one in the same cwd). */
-  loaded: boolean;
-}
-
-const warmed = new Map<string, Warmed>();
-
-/** What a warm-up learned for `runId`, consumed once by the first send. */
-export function takeWarmed(runId: string): Warmed | null {
-  const w = warmed.get(runId) ?? null;
-  warmed.delete(runId);
-  return w;
-}
-
-/** For tests. */
-export function clearWarmed(): void {
-  warmed.clear();
-}
 
 export async function warmRun(
   deps: StartRunDeps,
@@ -67,7 +50,7 @@ export async function warmRun(
       .listSessions()
       .catch((): Record<string, DaemonSessionSummary> => ({}));
     if (sessions[runId]) return { kind: 'already-live' };
-    if (warmed.has(runId)) return { kind: 'already-live' };
+    if (hasWarmed(runId)) return { kind: 'already-live' };
 
     const cwd = run.cwd ?? run.worktreePath;
     if (!cwd) return { kind: 'skipped', why: 'no-cwd' };
@@ -98,7 +81,7 @@ export async function warmRun(
       });
       const loaded =
         run.providerSessionId !== null && sessionId === run.providerSessionId;
-      warmed.set(runId, { sessionId, loaded });
+      recordWarmed(runId, { sessionId, loaded });
       deps.logger.info('engine: run warmed on open', { runId, loaded });
       return { kind: 'warmed', loaded };
     } catch (error) {

@@ -15,6 +15,7 @@ import type { DaemonRunsApi, DaemonSessionSummary } from './daemonApi';
 import { describeFolder, rememberFolder, type FolderDeps } from './folders';
 import { claimForInitialQueue, markDelivered, revertClaimed } from './outbox';
 import { withRunLock } from './runLock';
+import { aliveSessionFor, type Warmed } from './warmed';
 import {
   assertRunId,
   type AgentRun,
@@ -349,6 +350,15 @@ async function continueStartLocked(
 ): Promise<void> {
   const { ledger, daemonApi: daemon } = deps;
   let stage: 'worktree' | 'session' = 'worktree';
+  // Once the daemon has answered a session, nothing below may mark the
+  // run failed (round 6 of review): a bookkeeping write that failed
+  // after that used to fall into the same catch as a failed spawn and
+  // write `failed` over a run whose session was up and working — and
+  // the next reconcile, seeing an ended status with a live session,
+  // killed it as stale. Past this point a failure is logged and the
+  // status left alone: `provisioning` with a live session reattaches
+  // at the next reconcile, and the next send continues it.
+  let sessionStarted = false;
   try {
     let cwd = folderPath;
     let branch: string | null = null;
@@ -412,6 +422,7 @@ async function continueStartLocked(
       ...(initialQueue.length ? { initialQueue } : {}),
       ...(options.env ? { env: options.env } : {}),
     });
+    sessionStarted = true;
     // The stillProvisioning check runs BEFORE marking these delivered
     // (found in review): a Stop landing in the window while startSession
     // was in flight kills the session right below, and this same start
@@ -481,6 +492,19 @@ async function continueStartLocked(
       providerSessionId: sessionId,
     });
   } catch (error) {
+    if (sessionStarted) {
+      deps.logger.warn(
+        'engine: session started but its bookkeeping did not land; leaving the run as it is',
+        { runId: run.id, message: describe(error) },
+      );
+      await ledger
+        .appendEvent(run.id, 'error', {
+          stage: 'start-bookkeeping',
+          message: clip(describe(error), MAX_EVENT_MESSAGE),
+        })
+        .catch(() => {});
+      return;
+    }
     // A Stop that landed while the worktree was being made: the ledger
     // says cancelled and refused the worktree write (409). The person's
     // verdict stands; the worktree stays on disk as W2's rule says.
@@ -1007,24 +1031,40 @@ export async function resumeRunCore(
     } catch (error) {
       const message = describe(error);
       deps.logger.warn('engine: resume failed', { runId: run.id, message });
+      // Back where it was — where the status machine allows it. A
+      // finished run (done / needs-review, revivable under never-lock)
+      // has no way back from `provisioning`: the backend refuses
+      // provisioning → done (found in review, round 6: that 409 was
+      // swallowed here and the row stayed `provisioning` — live in the
+      // ledger, no session, nothing to send to). `interrupted` is the
+      // honest status for "its session is not up", and revivable.
+      const landing: AgentRunStatus =
+        originalStatus === 'done' || originalStatus === 'needs-review'
+          ? 'interrupted'
+          : originalStatus;
       await deps.ledger
         .updateRun(run.id, {
-          status: originalStatus,
+          status: landing,
           reason: 'Resume failed; the run is back where it was',
           errorKind: 'resume',
           errorMessage: clip(message, MAX_ERROR_MESSAGE),
         })
-        .catch(() => {});
+        .catch((ledgerError: unknown) =>
+          deps.logger.warn('engine: resume failure could not be recorded', {
+            runId: run.id,
+            message: describe(ledgerError),
+          }),
+        );
       await deps.ledger
         .appendEvent(run.id, 'error', {
           stage: 'resume',
           message: clip(message, MAX_EVENT_MESSAGE),
         })
         .catch(() => {});
-      deps.notify({ runId: run.id, status: originalStatus });
+      deps.notify({ runId: run.id, status: landing });
       return {
         outcome: 'spawn-failed',
-        status: originalStatus,
+        status: landing,
         reason: 'spawn-failed',
         message,
       };
@@ -1107,10 +1147,25 @@ export async function resumeRun(
   deps: StartRunDeps,
   runId: unknown,
 ): Promise<ResumeRunResult> {
+  if (typeof runId !== 'string') throw new Error('Not a run id.');
+  assertRunId(runId);
+  // The same answer every send-side path takes (warmed.ts): a warm-up
+  // that already loaded this run's session is taken over, never started
+  // a second time (round 6 of review — this path alone skipped it).
+  const run = await deps.ledger.getRun(runId);
+  const daemon = deps.daemon();
+  let alive: Warmed | null = null;
+  if (run && daemon && RESUMABLE_RUN_STATUSES.includes(run.status)) {
+    const sessions = await daemon
+      .listSessions()
+      .catch((): Record<string, DaemonSessionSummary> => ({}));
+    alive = aliveSessionFor(run, sessions[runId]);
+  }
   const { hiddenContext: _note, ...result } = await resumeRunCore(
     deps,
     runId,
     'button',
+    alive,
   );
   return result;
 }

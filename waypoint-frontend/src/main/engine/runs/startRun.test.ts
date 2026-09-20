@@ -10,6 +10,7 @@ import {
 } from './ledgerClient';
 import { createFolderRegistry, type FolderDeps } from './folders';
 import { isRunBusy, tryWithRunLock } from './runLock';
+import { recordWarmed } from './warmed';
 import {
   buildResumeNote,
   continueStart,
@@ -215,7 +216,8 @@ function fakeDaemon(
       remoteHeads: [{ remote: 'origin', branch: 'master' }],
     })),
     listWorkspaceRecords: jest.fn(),
-    listSessions: jest.fn(),
+    // None live unless a test says so (resumeRun asks, round 6).
+    listSessions: jest.fn(async () => ({})),
     startSession: jest.fn(async () => ({ sessionId: 'sess-1' })),
     sendPrompt: jest.fn(async () => {}),
     cancelTurn: jest.fn(async () => {}),
@@ -720,6 +722,44 @@ describe('continueStart (W4b)', () => {
     expect(rows.get('run-d2')?.status).toBe('running');
   });
 
+  // Round 6 of review: a bookkeeping write that failed AFTER the daemon
+  // had answered a session fell into the same catch as a failed spawn
+  // and wrote `failed` over a run whose session was up — and the next
+  // reconcile, seeing an ended status with a live session, killed it.
+  it('a bookkeeping failure after the session started never marks the run failed', async () => {
+    const { ledger, rows } = fakeLedger([
+      run({
+        id: 'run-d3',
+        status: 'provisioning',
+        isolation: 'directory',
+        cwd: plainDir,
+        baseRef: null,
+      }),
+    ]);
+    const real = ledger.updateRun.getMockImplementation()!;
+    (ledger.updateRun as jest.Mock).mockImplementation(
+      async (id: string, patch: Parameters<typeof real>[1]) => {
+        if (patch.status === 'running') throw new Error('ledger unreachable');
+        return real(id, patch);
+      },
+    );
+    const daemon = fakeDaemon();
+    const deps = depsWith(ledger, daemon);
+    await continueStart(deps, rows.get('run-d3') as AgentRun, plainDir);
+    expect(daemon.startSession).toHaveBeenCalledTimes(1);
+    expect(rows.get('run-d3')?.status).toBe('provisioning');
+    expect(
+      (ledger.updateRun as jest.Mock).mock.calls.some(
+        ([, patch]: [string, { status?: string }]) => patch.status === 'failed',
+      ),
+    ).toBe(false);
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-d3',
+      'error',
+      expect.objectContaining({ stage: 'start-bookkeeping' }),
+    );
+  });
+
   it('auto-approve starts the session in the bypass mode; the first message rides in as the initial queue and is recorded', async () => {
     const { ledger, rows } = fakeLedger([
       run({
@@ -1001,6 +1041,60 @@ describe('resumeRun', () => {
     expect(
       deps.notify.mock.calls.map(([c]: [{ status: string }]) => c.status),
     ).toEqual(['provisioning', 'failed']);
+  });
+
+  // Round 6 of review: a finished run (done / needs-review) is revivable
+  // under never-lock, but the status machine has no way back from
+  // `provisioning` to either — the revert 409'd, the 409 was swallowed,
+  // and the row stayed `provisioning`: live in the ledger, no session.
+  it.each(['done', 'needs-review'] as const)(
+    'a failed resume of a %s run lands on interrupted — a status the machine allows and a person can revive',
+    async (status) => {
+      const { ledger, rows } = fakeLedger([interrupted({ status })]);
+      // The real ledger refuses provisioning → done / needs-review.
+      const real = ledger.updateRun.getMockImplementation()!;
+      (ledger.updateRun as jest.Mock).mockImplementation(
+        async (id: string, patch: Parameters<typeof real>[1]) => {
+          if (patch.status === 'done' || patch.status === 'needs-review') {
+            throw new LedgerRequestError(409, `provisioning → ${patch.status} is not a transition`);
+          }
+          return real(id, patch);
+        },
+      );
+      const daemon = fakeDaemon({
+        listSessions: jest.fn(async () => ({})),
+        startSession: jest.fn(async () => {
+          throw new Error('spawn-failed: no such provider');
+        }),
+      });
+      const deps = depsWith(ledger, daemon);
+      await expect(resumeRun(deps, 'run-i1')).resolves.toMatchObject({
+        outcome: 'spawn-failed',
+        status: 'interrupted',
+      });
+      expect(rows.get('run-i1')?.status).toBe('interrupted');
+      expect(
+        deps.notify.mock.calls.map(([c]: [{ status: string }]) => c.status),
+      ).toEqual(['provisioning', 'interrupted']);
+    },
+  );
+
+  // Round 6 of review: the explicit resume was the one path that never
+  // asked what a warm-up had already loaded — after a warm-up it started
+  // the daemon's conversation a second time.
+  it('an explicit resume after a warm-up takes the warmed session over — never a second startSession', async () => {
+    const { ledger, rows } = fakeLedger([interrupted({ status: 'done', providerSessionId: 'sess-old' })]);
+    const daemon = fakeDaemon({
+      // The warm-up's own session, live now; the provider had replaced it.
+      listSessions: jest.fn(async () => ({ 'run-i1': { conversationId: 'run-i1' } })),
+    });
+    const deps = depsWith(ledger, daemon);
+    recordWarmed('run-i1', { sessionId: 'sess-new', loaded: false });
+
+    const result = await resumeRun(deps, 'run-i1');
+    expect(daemon.startSession).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ outcome: 'replaced-by-new', status: 'running' });
+    expect(rows.get('run-i1')?.providerSessionId).toBe('sess-new');
   });
 
   it("a refusal from reopenRun itself (live, or another member's run) propagates and never reaches the daemon", async () => {
