@@ -1,5 +1,6 @@
 import {
   MAX_FIRST_MESSAGE_CHARS,
+  type PendingPrompt,
   type PendingPromptReason,
   type SendRunPromptResult,
 } from '../types';
@@ -106,28 +107,45 @@ export function arrivalEntriesForTests(runId: string): number {
   return arrivalOf.get(runId)?.size ?? 0;
 }
 
+// An entry only ever needs to outlive its own row being open — once
+// delivered, dropped, or otherwise settled, nothing will compare against
+// it again. Originally only called from `waitingBefore` (found in
+// review, round 2: a row this process outboxed while busy, then never
+// sent another plain message for that run, orphaned its entry for the
+// process's whole lifetime — smaller than the pre-run-scoping leak this
+// closed, since it can't outgrow the run's own open rows, but still not
+// bounded the way the fix claimed). Now also called from every other
+// place that already has a fresh open-rows picture for a run, so an
+// entry is pruned as soon as ITS row settles, not only when the next
+// plain send happens to land.
+function pruneArrivals(runId: string, openIds: ReadonlySet<string>): void {
+  const byRun = arrivalOf.get(runId);
+  if (!byRun) return;
+  [...byRun.keys()]
+    .filter((id) => !openIds.has(id))
+    .forEach((id) => byRun.delete(id));
+  if (byRun.size === 0) arrivalOf.delete(runId);
+}
+
+/** Fresh open rows for a run, pruning `arrivalOf` against them on the way. */
+async function openRowsPruned(
+  deps: SendPromptDeps,
+  runId: string,
+): Promise<PendingPrompt[]> {
+  const rows = openRows(
+    await deps.ledger.listPendingPrompts(runId).catch(() => []),
+  );
+  pruneArrivals(runId, new Set(rows.map((r) => r.id)));
+  return rows;
+}
+
 export async function waitingBefore(
   deps: SendPromptDeps,
   runId: string,
   arrival: number,
 ): Promise<Set<string>> {
-  const rows = openRows(
-    await deps.ledger.listPendingPrompts(runId).catch(() => []),
-  );
+  const rows = await openRowsPruned(deps, runId);
   const byRun = arrivalOf.get(runId);
-  // An entry only ever needs to outlive its own row being open — once
-  // delivered, dropped, or otherwise settled, nothing will compare
-  // against it again. Pruned here, on every ordinary send for this run
-  // (found in review: unbounded growth otherwise — one entry per
-  // message ever outboxed via the busy path, for the process's whole
-  // lifetime).
-  if (byRun) {
-    const open = new Set(rows.map((r) => r.id));
-    [...byRun.keys()]
-      .filter((id) => !open.has(id))
-      .forEach((id) => byRun.delete(id));
-    if (byRun.size === 0) arrivalOf.delete(runId);
-  }
   return new Set(
     rows.filter((r) => (byRun?.get(r.id) ?? -1) < arrival).map((r) => r.id),
   );
@@ -368,6 +386,10 @@ export async function drainIfLive(
   runId: string,
   trigger: DrainTrigger = 'mount',
 ): Promise<void> {
+  // Mount/focus/boot all reach here for a run whether or not it has any
+  // open rows — a cheap, regular point to prune a settled busy-send
+  // entry that a plain send may never revisit (found in review, round 2).
+  await openRowsPruned(deps, runId);
   const run = await deps.ledger.getRun(runId);
   if (!run) return;
   const daemon = deps.daemon();
@@ -445,7 +467,7 @@ export function deliverPendingAfterFinalize(
   runId: string,
 ): Promise<void> {
   return withRunLock(runId, async () => {
-    const rows = openRows(await deps.ledger.listPendingPrompts(runId));
+    const rows = await openRowsPruned(deps, runId);
     if (rows.length === 0) return;
     const run = await deps.ledger.getRun(runId);
     if (!run) return;
@@ -493,6 +515,7 @@ export function retryPendingPrompt(
   if (typeof runId !== 'string') throw new Error('Not a run id.');
   assertRunId(runId);
   return withRunLock(runId, async () => {
+    await openRowsPruned(deps, runId);
     await resetAutoAttempts(deps, runId);
     const run = await deps.ledger.getRun(runId);
     if (!run) throw new Error(`No run ${runId} in the ledger.`);
@@ -549,4 +572,8 @@ export async function dropPendingPrompt(
   assertRunId(runId);
   assertRunId(pendingId);
   await deps.ledger.updatePendingPrompt(runId, pendingId, { state: 'dropped' });
+  // Exact and cheap: this row just left the open set, so its own entry
+  // (if any) can go now rather than waiting on the next prune elsewhere.
+  arrivalOf.get(runId)?.delete(pendingId);
+  if (arrivalOf.get(runId)?.size === 0) arrivalOf.delete(runId);
 }

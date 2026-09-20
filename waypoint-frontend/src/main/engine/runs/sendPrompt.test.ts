@@ -7,6 +7,8 @@ import { clearWarmed, warmRun } from './warm';
 import {
   arrivalEntriesForTests,
   deliverPendingAfterFinalize,
+  drainIfLive,
+  dropPendingPrompt,
   recordArrival,
   retryPendingPrompt,
   sendRunPrompt,
@@ -631,6 +633,46 @@ describe('sendRunPrompt', () => {
       // A naive flat map, pruned by "not in run-b's open rows", would
       // have deleted 'pp-a1' too — it is still here.
       expect(arrivalEntriesForTests('run-a')).toBe(1);
+    });
+
+    // Found in review, round 2: pruning only ever ran inside
+    // `waitingBefore`, reached only by a plain (non-busy) send. A row
+    // outboxed while the run was busy — recorded via `recordArrival` at
+    // its `sendRunPrompt` call site — settles through the busy path's own
+    // follow-up drain (or a Retry, a Drop, finalize's delivery), never
+    // through another plain send for that run: its entry orphaned
+    // indefinitely. `drainIfLive` is exactly that follow-up drain (mount,
+    // focus, boot, and the busy path's own fire-and-forget call all reach
+    // it), so it now prunes too, even on a run that no longer exists —
+    // the prune runs before the rest of the function has anything to do.
+    it('drainIfLive prunes a settled entry too — the follow-up path a busy send actually takes, not just a later plain send', async () => {
+      recordArrival('run-c', 'pp-c1', 0);
+      expect(arrivalEntriesForTests('run-c')).toBe(1);
+
+      // The row already delivered/dropped elsewhere; the run itself no
+      // longer resolves — the prune still has to run before any of that
+      // is known, since it happens first.
+      const deps = depsWith(
+        {
+          listPendingPrompts: jest.fn(async () => []),
+          getRun: jest.fn(async () => undefined),
+        } as unknown as LedgerClient,
+        fakeDaemon(),
+      );
+      await drainIfLive(deps, 'run-c');
+      expect(arrivalEntriesForTests('run-c')).toBe(0);
+    });
+
+    it('dropPendingPrompt prunes the exact row it drops, without waiting for any drain', async () => {
+      recordArrival('run-d', 'pp-d1', 0);
+      const deps = depsWith(
+        {
+          updatePendingPrompt: jest.fn(async () => ({}) as PendingPrompt),
+        } as unknown as LedgerClient,
+        fakeDaemon(),
+      );
+      await dropPendingPrompt(deps, { runId: 'run-d', pendingId: 'pp-d1' });
+      expect(arrivalEntriesForTests('run-d')).toBe(0);
     });
   });
 
