@@ -278,11 +278,24 @@ function buildMcpServers(
 // Zero-friction propose_* execution is preserved by construction rather than
 // by adding anything: `canUseTool` is never set, so there is no permission
 // callback to gate any allowed tool.
+//
+// `extraArgs: { chrome: null }` (a bare `--chrome` on the CLI's argv) is how
+// the user's own Chrome reaches a turn. The SDK has no typed option for the
+// Claude in Chrome bridge — `extraArgs` is its documented escape hatch for
+// exactly this — and verified live on the vendored 0.3.x SDK: with this flag
+// and NOTHING else changed (settingSources still [], strictMcpConfig still
+// true, tools still []), the init message lists one extra MCP server,
+// "claude-in-chrome", with its tools callable under the policy's allowlist.
+// Not a settings-file source, so the `settingSources: []` isolation is
+// unaffected; not an MCP config, so strictMcpConfig doesn't drop it. Set
+// only from the policy's `browser` field, which sessionPolicy.ts sets only
+// when copilotBrowser.ts said yes for this turn.
 function buildSdkOptions(
   policy: SessionPolicy,
   effectiveResumeSessionId: string | undefined,
   repoLinked: boolean,
 ): Options {
+  const browser = policy.browser === 'claude-in-chrome';
   return {
     settingSources: [],
     tools: repoLinked ? [...policy.builtinTools] : [],
@@ -292,7 +305,8 @@ function buildSdkOptions(
       ? [...policy.mcpTools, ...policy.builtinTools]
       : [...policy.mcpTools],
     includePartialMessages: true,
-    systemPrompt: policy.buildSystemPrompt(repoLinked),
+    systemPrompt: policy.buildSystemPrompt(repoLinked, browser),
+    ...(browser ? { extraArgs: { chrome: null } } : {}),
     ...(repoLinked ? { disallowedTools: REPO_DENYLIST_PATTERNS } : {}),
     ...(effectiveResumeSessionId &&
     SESSION_ID_PATTERN.test(effectiveResumeSessionId)

@@ -11,6 +11,7 @@ import {
   type LedgerClient,
 } from '../engine/runs/ledgerClient';
 import { jiraCredentialHeader } from '../jira/borrowedCredential';
+import { browserAccessGrantedForTurn } from './copilotBrowser';
 import {
   sessionToolsServer,
   type OpenPullRequestOutcome,
@@ -207,6 +208,10 @@ export function registerCopilotIpc(
         resumeSessionId,
         conversationId,
         promptPreamble: outcomePreamble,
+        // Decided here, per turn, from the stored preference plus a live
+        // probe of the bridge (copilotBrowser.ts) — never from the IPC
+        // payload, so the renderer cannot hand a turn the user's browser.
+        useMyChrome: browserAccessGrantedForTurn(),
         ...(conversationId
           ? {
               sessionTools: sessionToolsServer({

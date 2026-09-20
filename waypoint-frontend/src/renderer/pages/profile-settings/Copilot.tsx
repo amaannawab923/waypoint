@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { IconCheck, IconKey, IconSparkles } from '@/components/icons';
+import { IconCheck, IconEye, IconKey, IconSparkles } from '@/components/icons';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
+import { Switch } from '@/components/ui/Switch';
 import { CopilotConnectModal } from '@/components/domain/CopilotConnectModal';
 import { ClaudeCodeStatus } from '@/components/domain/ClaudeCodeStatus';
 import { useAsync } from '@/lib/useAsync';
@@ -11,6 +12,114 @@ const inputClass =
   'h-9 w-full rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 font-mono text-sm text-text outline-none focus:border-accent';
 
 type Status = { connected: boolean; last4: string | null };
+
+type BrowserAccess = Awaited<
+  ReturnType<typeof window.electron.copilot.browser.status>
+>;
+
+/**
+ * "Use my Chrome" (POC). The switch stores the opt-in; the line under it
+ * reports whether the Claude in Chrome bridge is actually on this machine,
+ * because the switch alone does nothing without it — main re-probes that
+ * on every Copilot turn (copilotBrowser.ts), so this only has to tell the
+ * user what to do, never gate anything itself.
+ */
+function BrowserAccessCard() {
+  const [access, setAccess] = useState<BrowserAccess | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const s = await window.electron.copilot.browser.status();
+        if (!cancelled) setAccess(s);
+      } catch {
+        if (!cancelled) setError("Couldn't check browser access.");
+      }
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function toggle(next: boolean) {
+    if (saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      setAccess(await window.electron.copilot.browser.setEnabled(next));
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Couldn't save — try again.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const bridgeLine = (() => {
+    if (!access) return null;
+    switch (access.state) {
+      case 'ready':
+        return access.enabled
+          ? 'Ready — ask Copilot to check something in your browser.'
+          : 'The Claude in Chrome extension is set up on this machine.';
+      case 'host-missing':
+        return 'Not set up yet: install the Claude in Chrome extension, then run `claude --chrome` once in a terminal so Chrome knows how to reach it.';
+      case 'unsupported-platform':
+        return 'Not available on this platform yet.';
+      default:
+        return null;
+    }
+  })();
+
+  return (
+    <div className="mb-8 flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-border bg-surface p-3.5">
+        <div className="flex items-center gap-3">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-[var(--radius-sm)] bg-surface-2 text-text-secondary">
+            <IconEye size={16} />
+          </span>
+          <div>
+            <p className="text-sm text-text">Let Copilot use my Chrome</p>
+            <p className="text-xs text-text-muted">
+              Opens its own tabs in your signed-in browser to check or reproduce
+              things when you ask. Never touches your existing tabs.
+            </p>
+          </div>
+        </div>
+        <Switch
+          id="copilot-use-my-chrome"
+          label="Let Copilot use my Chrome"
+          checked={access?.enabled ?? false}
+          disabled={
+            !access || saving || access.state === 'unsupported-platform'
+          }
+          onChange={toggle}
+        />
+      </div>
+      {bridgeLine && (
+        <p
+          className={
+            access?.state === 'ready'
+              ? 'text-xs text-text-muted'
+              : 'text-xs text-warning'
+          }
+        >
+          {bridgeLine}
+        </p>
+      )}
+      {error && (
+        <Badge tone="danger" outline>
+          {error}
+        </Badge>
+      )}
+    </div>
+  );
+}
 
 /**
  * Lets a user connect their own Claude subscription to Copilot without ever
@@ -123,9 +232,7 @@ export default function Copilot() {
       setStatus({ connected: false, last4: null });
     } catch (err) {
       setDisconnectError(
-        err instanceof Error
-          ? err.message
-          : "Couldn't disconnect — try again.",
+        err instanceof Error ? err.message : "Couldn't disconnect — try again.",
       );
     } finally {
       setDisconnecting(false);
@@ -163,7 +270,9 @@ export default function Copilot() {
                 <IconKey size={16} />
               </span>
               <div>
-                <p className="text-sm text-text">Claude subscription connected</p>
+                <p className="text-sm text-text">
+                  Claude subscription connected
+                </p>
                 <p className="font-mono text-xs text-text-muted">
                   •••• {status.last4}
                 </p>
@@ -192,6 +301,8 @@ export default function Copilot() {
           Connected — Copilot will use this from now on.
         </div>
       )}
+
+      <BrowserAccessCard />
 
       {status && !status.connected && (
         <div className="mb-8 flex flex-col gap-4">

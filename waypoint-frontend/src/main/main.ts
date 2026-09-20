@@ -21,6 +21,7 @@ import {
   killAllCopilotProcesses,
 } from './copilot/copilotRunner';
 import { registerCopilotAuthIpc } from './copilot/copilotAuth';
+import { registerCopilotBrowserIpc } from './copilot/copilotBrowser';
 import {
   registerCopilotConnectIpc,
   killAllCopilotConnectProcesses,
@@ -128,6 +129,7 @@ registerCopilotIpc(() => mainWindow, {
   },
 });
 registerCopilotAuthIpc();
+registerCopilotBrowserIpc();
 registerCopilotConnectIpc(() => mainWindow);
 registerCopilotDetectIpc();
 // No window getter: approving a proposal is one HTTP round trip with one
