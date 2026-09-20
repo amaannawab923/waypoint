@@ -1,6 +1,6 @@
 {
-  "id": "752935af-da88-4b94-9d14-c8a19b8bf90e",
-  "prevId": "86002ef9-c490-490d-93d6-e8a107cab31b",
+  "id": "0d4a43ec-9bec-468e-9365-754fd0a69b58",
+  "prevId": "752935af-da88-4b94-9d14-c8a19b8bf90e",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -3382,22 +3382,6 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "agent_runs_one_live_writer_per_ticket": {
-          "name": "agent_runs_one_live_writer_per_ticket",
-          "columns": [
-            {
-              "expression": "ticket_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"agent_runs\".\"entry\" = 'dispatched' AND \"agent_runs\".\"status\" IN ('provisioning','running','blocked','finishing') AND (\"agent_runs\".\"mode_id\" IS NULL OR \"agent_runs\".\"mode_id\" <> 'plan')",
           "concurrently": false,
           "method": "btree",
           "with": {}

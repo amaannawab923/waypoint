@@ -1,14 +1,3 @@
--- Never-lock (2026-09-20): the DROP INDEX is last, after the backfill —
--- found in review. `drizzle-kit migrate` wraps every statement in this
--- file in one transaction (drizzle-orm/pg-core/dialect.js's `migrate()`),
--- and DROP INDEX takes an ACCESS EXCLUSIVE lock on agent_runs that is
--- held until COMMIT, not just for its own statement. With it first, that
--- lock spans the whole backfill UPDATE's table scan — every query
--- against agent_runs, reads included, queues behind it for as long as
--- the scan takes. With it last, the backfill runs first under only a
--- plain row-exclusive lock (readers unaffected via MVCC), and the
--- ACCESS EXCLUSIVE window shrinks to the DROP INDEX statement itself —
--- a catalog-only change, effectively instant.
 CREATE TABLE "agent_run_pending_prompts" (
 	"id" text PRIMARY KEY NOT NULL,
 	"run_id" text NOT NULL,
@@ -28,6 +17,4 @@ ALTER TABLE "agent_runs" ADD COLUMN "finalize_count" integer DEFAULT 0 NOT NULL;
 ALTER TABLE "agent_runs" ADD COLUMN "finalized_head_sha" text;--> statement-breakpoint
 ALTER TABLE "agent_run_pending_prompts" ADD CONSTRAINT "agent_run_pending_prompts_run_id_agent_runs_id_fk" FOREIGN KEY ("run_id") REFERENCES "public"."agent_runs"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "agent_run_pending_prompts" ADD CONSTRAINT "agent_run_pending_prompts_by_member_id_members_id_fk" FOREIGN KEY ("by_member_id") REFERENCES "public"."members"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-CREATE INDEX "agent_run_pending_prompts_run_idx" ON "agent_run_pending_prompts" USING btree ("run_id","seq");--> statement-breakpoint
-UPDATE "agent_runs" SET "finalize_count" = 1 WHERE "entry" = 'dispatched' AND "status" IN ('needs-review','done');--> statement-breakpoint
-DROP INDEX "agent_runs_one_live_writer_per_ticket";
+CREATE INDEX "agent_run_pending_prompts_run_idx" ON "agent_run_pending_prompts" USING btree ("run_id","seq");

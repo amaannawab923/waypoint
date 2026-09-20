@@ -5,28 +5,44 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { db } from '../client.js';
 import { sql } from 'drizzle-orm';
 
-// Never-lock (2026-09-20): a regression test for `0026_never_lock_sessions.sql`'s
-// backfill (found missing in review — the migration's own correctness had
-// no test). Rather than hand-copy the UPDATE and risk it drifting from the
-// file that actually runs, this reads the real migration file and executes
-// its backfill statement verbatim — against a scratch schema holding only
-// the columns that statement touches, so it needs no 26-migration chain.
+// Never-lock (2026-09-20): a regression test for
+// `0027_never_lock_sessions_backfill.sql`'s backfill (found missing in
+// review — the migration's own correctness had no test). Rather than
+// hand-copy the UPDATE and risk it drifting from the file that actually
+// runs, this reads the real migration file and executes its backfill
+// statement verbatim — against a scratch schema holding only the columns
+// that statement touches, so it needs no 27-migration chain.
+//
+// Round 2 (found in review): the backfill originally lived in 0026 itself,
+// sharing that migration's transaction with `ALTER TABLE agent_runs ADD
+// COLUMN` — which meant the backfill ran under the ACCESS EXCLUSIVE lock
+// those ADD COLUMN statements took, no matter where DROP INDEX sat in the
+// file (Postgres never releases a lock mid-transaction). Moved to its own
+// migration/transaction so it starts with no exclusive lock on agent_runs
+// at all.
 
 const migrationPath = resolve(
   dirname(fileURLToPath(import.meta.url)),
-  '../../../drizzle/0026_never_lock_sessions.sql',
+  '../../../drizzle/0027_never_lock_sessions_backfill.sql',
 );
 
 function backfillStatement(): string {
   const sqlText = readFileSync(migrationPath, 'utf8');
   const statements = sqlText.split('--> statement-breakpoint');
-  const update = statements.find((s) => /^\s*UPDATE\s+"agent_runs"/i.test(s.trim()));
-  if (!update) throw new Error('0026 no longer has an UPDATE "agent_runs" statement — update this test.');
-  return update.trim();
+  const stripped = statements.map((s) =>
+    s
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('--'))
+      .join('\n')
+      .trim(),
+  );
+  const update = stripped.find((s) => /^UPDATE\s+"agent_runs"/i.test(s));
+  if (!update) throw new Error('0027 no longer has an UPDATE "agent_runs" statement — update this test.');
+  return update;
 }
 
-describe('0026_never_lock_sessions.sql backfill', () => {
-  const schemaName = `test_0026_backfill_${Date.now()}`;
+describe('0027_never_lock_sessions_backfill.sql backfill', () => {
+  const schemaName = `test_0027_backfill_${Date.now()}`;
 
   beforeAll(async () => {
     await db.execute(sql.raw(`CREATE SCHEMA "${schemaName}"`));
