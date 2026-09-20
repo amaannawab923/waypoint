@@ -27,6 +27,8 @@ import type {
   OpenPrResult,
   ResolvedTicket,
   ResumeRunResult,
+  PendingPrompt,
+  WarmRunResult,
   RunFocus,
   RunBranches,
   SendRunPromptResult,
@@ -212,6 +214,27 @@ export function startRun(input: StartRunInput): Promise<AgentRun> {
 
 export function resumeRun(runId: string): Promise<ResumeRunResult> {
   return bridge().resumeRun(runId).catch(unwrapIpcError);
+}
+
+/** Never-lock §2.5: on opening a run, load its gone session — daemon only. */
+export function warmRun(runId: string): Promise<WarmRunResult> {
+  return bridge().warmRun(runId).catch(unwrapIpcError);
+}
+
+/** Never-lock: the run's outbox, for the transcript's pending rows. */
+export function listPendingPrompts(runId: string): Promise<PendingPrompt[]> {
+  return bridge().listPendingPrompts(runId).catch(unwrapIpcError);
+}
+
+export function dropPendingPrompt(
+  runId: string,
+  pendingId: string,
+): Promise<void> {
+  return bridge().dropPendingPrompt({ runId, pendingId }).catch(unwrapIpcError);
+}
+
+export function retryPendingPrompt(runId: string): Promise<SendRunPromptResult> {
+  return bridge().retryPendingPrompt({ runId }).catch(unwrapIpcError);
 }
 
 export function listRunBranches(folderHandle: string): Promise<RunBranches> {

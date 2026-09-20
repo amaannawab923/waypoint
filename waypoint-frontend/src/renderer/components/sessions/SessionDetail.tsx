@@ -11,7 +11,6 @@ import {
 import { renameAgentRun } from '@/data/api';
 import {
   openRunPullRequest,
-  resumeRun,
   revealRunWorktree,
   stopRun,
 } from '@/data/engineApi';
@@ -23,14 +22,7 @@ import type { AgentRun } from '@/types/agentRuns';
 import { useHomeDir } from '@/lib/useHomeDir';
 import { AutoMark, IntentChip, ProviderChip, VerdictChip } from './SessionRow';
 import { SessionStatusPill } from './SessionStatusPill';
-import {
-  providerView,
-  runTitle,
-  runWhere,
-  statusView,
-  worktreeGoneNotice,
-  worktreeRecreatedNotice,
-} from './sessionStatus';
+import { providerView, runTitle, runWhere, statusView } from './sessionStatus';
 import { SessionTranscript } from './SessionTranscript';
 import { DiffPane } from './DiffPane';
 
@@ -72,7 +64,6 @@ export function SessionDetail({
   const provider = providerView(run.providerId);
   const [tab, setTab] = useState<SessionTab>('transcript');
   const [stopping, setStopping] = useState(false);
-  const [resuming, setResuming] = useState(false);
   const [diffCount, setDiffCount] = useState<number | null>(null);
 
   const stop = async () => {
@@ -97,52 +88,10 @@ export function SessionDetail({
     }
   };
 
-  // W4, ROAD-69: the daemon loads the same provider session in the same
-  // worktree; when the provider cannot, main starts a fresh one there and
-  // says so — here as a toast, and in the transcript as its first message.
-  const resume = async () => {
-    setResuming(true);
-    try {
-      const result = await resumeRun(run.id);
-      // ROAD-XXX: a missing worktree is recreated by main rather than
-      // refused; the person hears about it, before the conversation
-      // note when both apply — files on disk are the bigger discontinuity.
-      if (result.worktreeRecreated) {
-        showErrorToast(worktreeRecreatedNotice(result.branchReused === true));
-      }
-      switch (result.outcome) {
-        case 'loaded':
-          patchSessionRun(run.id, { status: 'running' });
-          break;
-        case 'replaced-by-new':
-          patchSessionRun(run.id, { status: 'running' });
-          // The one toast channel there is; this is a warning in any case.
-          showErrorToast(
-            'The provider could not restore the previous conversation; a fresh session was started in the same worktree with the branch state as its first message.',
-          );
-          break;
-        case 'worktree-gone':
-          showErrorToast(worktreeGoneNotice(run.isolation));
-          break;
-        case 'not-resumable':
-          showErrorToast(
-            `This run is ${result.status}; there is nothing to resume.`,
-          );
-          break;
-        default:
-      }
-      await refreshSessions();
-    } catch (error) {
-      showErrorToast(
-        error instanceof Error
-          ? error.message
-          : 'Could not resume the session.',
-      );
-      await refreshSessions();
-    } finally {
-      setResuming(false);
-    }
-  };
+  // Never-lock: there is no Resume button. A run that is not live is
+  // continued by messaging it (SessionTranscript's composer, open for
+  // every status), and the pane warms its session on open — the explicit
+  // verb had nothing left to do that a message does not.
 
   // W6: a writing run whose branch was not published (the push or the PR
   // failed at finalize) can be published from here, as the person.
@@ -157,7 +106,7 @@ export function SessionDetail({
     setPublishing(true);
     try {
       const outcome = await openRunPullRequest(run.id);
-      if (outcome.kind === 'opened') {
+      if (outcome.kind === 'opened' || outcome.kind === 'updated') {
         patchSessionRun(run.id, { prUrl: outcome.url });
       } else if (outcome.kind === 'failed') {
         showErrorToast(
@@ -358,21 +307,6 @@ export function SessionDetail({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          {view.resumable && (
-            <Button
-              size="xs"
-              variant="primary"
-              onClick={resume}
-              disabled={resuming || !(run.cwd ?? run.worktreePath)}
-              title={
-                (run.cwd ?? run.worktreePath)
-                  ? undefined
-                  : 'This run has no folder to resume in.'
-              }
-            >
-              {resuming ? 'Resuming…' : 'Resume'}
-            </Button>
-          )}
           {view.stoppable && (
             <Button
               size="xs"

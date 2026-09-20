@@ -14,7 +14,7 @@ describe('SessionComposer', () => {
     render(
       <SessionComposer
         onSend={onSend}
-        disabledReason={null}
+        sendBlockedReason={null}
         attachedToBand={false}
       />,
     );
@@ -36,7 +36,7 @@ describe('SessionComposer', () => {
     render(
       <SessionComposer
         onSend={onSend}
-        disabledReason={null}
+        sendBlockedReason={null}
         attachedToBand={false}
       />,
     );
@@ -51,21 +51,73 @@ describe('SessionComposer', () => {
     expect(box).toHaveValue('hello');
   });
 
-  it('is disabled with the reason as its placeholder', () => {
+  it('never disables the box: with Send held back (engine down) the text is still typed and kept, and only the button is off', () => {
     render(
       <SessionComposer
+        draftKey="run-blocked"
         onSend={jest.fn()}
-        disabledReason="This session has ended (done)."
+        sendBlockedReason="The agent engine is not running — your message is kept here until it is."
         attachedToBand={false}
       />,
     );
     const box = screen.getByLabelText('Message this session');
-    expect(box).toBeDisabled();
+    expect(box).not.toBeDisabled();
+    expect(box).not.toHaveAttribute('readonly');
     expect(box).toHaveAttribute(
       'placeholder',
-      'This session has ended (done).',
+      'The agent engine is not running — your message is kept here until it is.',
     );
+    fireEvent.change(box, { target: { value: 'while you were out' } });
+    expect(box).toHaveValue('while you were out');
     expect(screen.getByLabelText('Send')).toBeDisabled();
+  });
+
+  it('is never rendered disabled under any prop combination (never-lock)', () => {
+    [null, 'engine down'].forEach((sendBlockedReason) => {
+      [false, true].forEach((attachedToBand) => {
+        const { unmount } = render(
+          <SessionComposer
+            onSend={jest.fn()}
+            sendBlockedReason={sendBlockedReason}
+            attachedToBand={attachedToBand}
+            placeholder="anything"
+          />,
+        );
+        expect(
+          screen.getByLabelText('Message this session'),
+        ).not.toBeDisabled();
+        unmount();
+      });
+    });
+  });
+
+  it('empties the box the moment a send starts, and puts the text back — ahead of anything typed since — when it did not land', async () => {
+    let settle: (ok: boolean) => void = () => {};
+    const onSend = jest.fn(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          settle = (ok) => (ok ? resolve() : reject(new Error('not sent')));
+        }),
+    );
+    render(
+      <SessionComposer
+        onSend={onSend}
+        sendBlockedReason={null}
+        attachedToBand={false}
+      />,
+    );
+    const box = screen.getByLabelText('Message this session');
+    fireEvent.change(box, { target: { value: 'first' } });
+    await act(async () => {
+      fireEvent.keyDown(box, { key: 'Enter', metaKey: true });
+    });
+    expect(box).toHaveValue('');
+    expect(box).not.toBeDisabled();
+    fireEvent.change(box, { target: { value: 'second' } });
+    await act(async () => {
+      settle(false);
+    });
+    expect(box).toHaveValue('first\nsecond');
   });
 
   describe('draft per run (W4, ROAD-68)', () => {
@@ -82,7 +134,7 @@ describe('SessionComposer', () => {
         <SessionComposer
           draftKey="run-a"
           onSend={onSend}
-          disabledReason={null}
+          sendBlockedReason={null}
           attachedToBand={false}
         />,
       );
@@ -108,7 +160,7 @@ describe('SessionComposer', () => {
         <SessionComposer
           draftKey="run-b"
           onSend={jest.fn(async () => {})}
-          disabledReason={null}
+          sendBlockedReason={null}
           attachedToBand={false}
         />,
       );

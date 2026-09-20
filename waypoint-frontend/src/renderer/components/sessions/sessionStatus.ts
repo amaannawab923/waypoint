@@ -1,4 +1,8 @@
-import type { AgentRun, AgentRunStatus } from '@/types/agentRuns';
+import type {
+  AgentRun,
+  AgentRunStatus,
+  PendingPromptReason,
+} from '@/types/agentRuns';
 import type { BadgeTone } from '@/components/ui/Badge';
 
 /**
@@ -17,14 +21,13 @@ export interface StatusView {
   /** Tailwind background class for the list row's dot. */
   dotClass: string;
   sentence: string;
-  /** The daemon should have a live session for it: the transcript can move, the composer can send. */
-  live: boolean;
   /**
-   * Ended abnormally, with its worktree and provider session still on
-   * record: the composer stays open, and sending a message revives it
-   * (ROAD-XXX). Never true together with `live`.
+   * The daemon should have a live session for it: the transcript can
+   * move. Never a gate on the composer — every status can be messaged
+   * (never-lock, 2026-09-20); main resumes, continues, or outboxes as the
+   * status needs.
    */
-  resumable: boolean;
+  live: boolean;
   /** Stop makes sense: the run can still be cancelled (runStatusMachine.ts). */
   stoppable: boolean;
 }
@@ -34,18 +37,18 @@ export const STATUS_VIEW: Record<AgentRunStatus, StatusView> = {
     label: 'Queued',
     tone: 'neutral',
     dotClass: 'bg-text-muted',
-    sentence: 'Asked for; nothing has started yet.',
+    sentence:
+      'Asked for; nothing has started yet. A message you send now goes with it.',
     live: false,
-    resumable: false,
     stoppable: true,
   },
   provisioning: {
     label: 'Provisioning',
     tone: 'info',
     dotClass: 'bg-info',
-    sentence: 'Creating the worktree and starting the session.',
+    sentence:
+      'Creating the worktree and starting the session. A message you send now goes with it.',
     live: false,
-    resumable: false,
     stoppable: true,
   },
   running: {
@@ -54,7 +57,6 @@ export const STATUS_VIEW: Record<AgentRunStatus, StatusView> = {
     dotClass: 'bg-info',
     sentence: 'The agent is working.',
     live: true,
-    resumable: false,
     stoppable: true,
   },
   blocked: {
@@ -63,34 +65,31 @@ export const STATUS_VIEW: Record<AgentRunStatus, StatusView> = {
     dotClass: 'bg-warning',
     sentence: 'Waiting on you.',
     live: true,
-    resumable: false,
     stoppable: true,
   },
   finishing: {
     label: 'Finishing',
     tone: 'info',
     dotClass: 'bg-info',
-    sentence: 'The agent is done; pushing and proposing.',
+    sentence: "Filing the run's report; a message you send now goes next.",
     live: true,
-    resumable: false,
     stoppable: true,
   },
   'needs-review': {
     label: 'Needs review',
     tone: 'warning',
     dotClass: 'bg-warning',
-    sentence: 'Proposals are waiting for your decision in Review.',
+    sentence:
+      'Proposals are waiting for your decision in Review. Message it to continue.',
     live: false,
-    resumable: false,
     stoppable: false,
   },
   done: {
     label: 'Done',
     tone: 'success',
     dotClass: 'bg-success',
-    sentence: 'Finished.',
+    sentence: 'Finished. Message it to continue.',
     live: false,
-    resumable: false,
     stoppable: false,
   },
   interrupted: {
@@ -99,19 +98,16 @@ export const STATUS_VIEW: Record<AgentRunStatus, StatusView> = {
     outline: true,
     dotClass: 'bg-border-strong',
     sentence:
-      'The engine or Waypoint went away mid-run; the worktree is still there. Sending a message resumes it.',
+      'The engine or Waypoint went away mid-run. Message it to continue.',
     live: false,
-    resumable: true,
     stoppable: true,
   },
   failed: {
     label: 'Failed',
     tone: 'danger',
     dotClass: 'bg-danger',
-    sentence:
-      'Ended with an error. Sending a message resumes it in the same worktree.',
+    sentence: 'Ended with an error. Message it to continue.',
     live: false,
-    resumable: true,
     stoppable: false,
   },
   cancelled: {
@@ -119,10 +115,8 @@ export const STATUS_VIEW: Record<AgentRunStatus, StatusView> = {
     tone: 'neutral',
     outline: true,
     dotClass: 'bg-border-strong',
-    sentence:
-      'Stopped by a person. Sending a message resumes it in the same worktree.',
+    sentence: 'Stopped by a person. Message it to continue.',
     live: false,
-    resumable: true,
     stoppable: false,
   },
 };
@@ -249,14 +243,34 @@ export function worktreeRecreatedNotice(branchReused: boolean): string {
 }
 
 /**
- * The toast for a resume that could not recreate a missing worktree at
- * all (ROAD-XXX) — recreation is attempted first, so this is no longer
- * "nothing to resume", it is "the attempt itself failed".
+ * Why a message is waiting in the run's outbox rather than with the
+ * daemon (never-lock, design §2.4), and when Waypoint sends it — the
+ * pending row's second line. Never a refusal: the text has left the box.
  */
-export function worktreeGoneNotice(isolation: AgentRun['isolation']): string {
-  return isolation === 'directory'
-    ? "This run's folder is no longer on disk, and a plain folder can't be recreated; there is nothing to resume in."
-    : "Waypoint could not recreate this run's worktree — its repository may be gone or unreachable.";
+export function pendingReasonSentence(
+  reason: PendingPromptReason,
+  detail: {
+    cwd?: string | null;
+    lastError?: string | null;
+    ownerName?: string | null;
+  } = {},
+): string {
+  switch (reason) {
+    case 'starting':
+      return 'Waiting to send — the session is starting. Waypoint sends it as soon as the session is up.';
+    case 'finishing':
+      return "Waiting to send — Waypoint is filing the run's report; your message goes next.";
+    case 'folder-missing':
+      return `Waiting to send — this run's folder is not on disk${detail.cwd ? ` at ${detail.cwd}` : ''}. Put it back and press Retry, or reopen this pane.`;
+    case 'repository-missing':
+      return "Waiting to send — the project's repository is not linked. Link it in project settings, then press Retry.";
+    case 'spawn-failed':
+      return `Waiting to send — the agent could not be started${detail.lastError ? ` (${detail.lastError})` : ''}. Waypoint retries when you send again, or press Retry.`;
+    case 'owner-offline':
+      return `Queued for ${detail.ownerName ?? 'the run owner'}'s Waypoint; it is sent when they are online.`;
+    default:
+      return 'Waiting to send.';
+  }
 }
 
 /** What a dispatched run was asked to do, as the chip says it (W5a). */

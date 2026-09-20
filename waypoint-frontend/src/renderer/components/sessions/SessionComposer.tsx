@@ -6,14 +6,23 @@ import { IconSend } from '@/components/icons';
  * The message box under the transcript (W3, ROAD-62). Text only —
  * attachments are not in W3's allowlist. `⌘Enter` (or Ctrl+Enter) sends;
  * plain Enter is a newline, since a prompt to an agent is usually more
- * than one line. Disabled, with the sentence that says why, when the run
- * cannot take a prompt (ended, or the engine is down).
+ * than one line.
+ *
+ * Never-lock (2026-09-20; emdash parity): the box is NEVER disabled. A
+ * person can always type into a run — done, needs-review, failed,
+ * cancelled, interrupted, provisioning, engine down — and the draft is
+ * kept. Only the Send button is held back, and only while the engine is
+ * not running (`sendBlockedReason`, said in the placeholder) or a send
+ * is in flight (a moment: main answers at hand-off, not at turn end).
+ * Where the message goes is main's business (sendPrompt.ts): straight to
+ * the session, queued for the next turn, a resume first, or the run's
+ * outbox until the obstacle clears — every send lands somewhere.
  *
  * W4 (ROAD-68): the unsent text is a draft per run, kept on this device
  * (`localStorage`, `DRAFT_PREFIX + run id`) so switching runs — or
  * restarting Waypoint — does not lose it. Written after a short pause,
- * removed on send; a run's draft is also dropped when the run reaches a
- * status that cannot take a prompt (`clearSessionDraft`).
+ * removed on send. Never cleared by a status change: a draft outlives
+ * every status, since every status can be messaged.
  */
 
 export const DRAFT_PREFIX = 'waypoint:sessionDraft:';
@@ -44,7 +53,7 @@ export function clearSessionDraft(key: string): void {
 export function SessionComposer({
   draftKey,
   onSend,
-  disabledReason,
+  sendBlockedReason,
   attachedToBand,
   autoFocus,
   placeholder,
@@ -53,17 +62,18 @@ export function SessionComposer({
   /** The run id: what the draft is remembered under. Absent, nothing is remembered. */
   draftKey?: string;
   onSend: (text: string) => Promise<void>;
-  /** When set, the box is disabled and this is the placeholder. */
-  disabledReason: string | null;
+  /**
+   * When set, Send is held back and this is the placeholder — the ONE
+   * reason there is: the engine is not running. The box itself still
+   * takes text (never-lock).
+   */
+  sendBlockedReason: string | null;
   /** A permission band sits directly above: square off the top corners. */
   attachedToBand: boolean;
   autoFocus?: boolean;
-  /**
-   * Overrides the default enabled-box placeholder — ROAD-XXX: a resumable
-   * (dead) run says so, rather than reading like an ordinary live one.
-   */
+  /** Overrides the default placeholder — what a send will do for this run right now. */
   placeholder?: string;
-  /** ROAD-XXX: the placeholder while a send is in flight, when sending it may first revive the run (a real wait, not a moment). */
+  /** The placeholder while a send is in flight ("Sending…", "Resuming…"). */
   sendingLabel?: string;
 }) {
   const [text, setText] = useState(() =>
@@ -76,8 +86,8 @@ export function SessionComposer({
   );
 
   useEffect(() => {
-    if (autoFocus && !disabledReason) ref.current?.focus();
-  }, [autoFocus, disabledReason]);
+    if (autoFocus) ref.current?.focus();
+  }, [autoFocus]);
 
   // The draft follows the text, a beat behind; unmounting flushes the
   // latest text so a switch away mid-word loses nothing. Two effects on
@@ -104,14 +114,21 @@ export function SessionComposer({
 
   const send = async () => {
     const trimmed = text.trim();
-    if (!trimmed || sending || disabledReason) return;
+    if (!trimmed || sending || sendBlockedReason) return;
     setSending(true);
+    // The box empties at once — the message is on its way (the transcript
+    // shows it pending), and the next one can be typed while a resume
+    // takes its time. A send that did not land puts the text back.
+    setText('');
+    if (draftKey) clearSessionDraft(draftKey);
     try {
       await onSend(trimmed);
-      setText('');
-      if (draftKey) clearSessionDraft(draftKey);
     } catch {
-      // onSend has already said why (a toast); the text stays for a retry.
+      // onSend has already said why (a toast); the text comes back — to
+      // the box and, through the draft effect, to the draft.
+      setText((current) =>
+        current.trim() ? `${trimmed}\n${current}` : trimmed,
+      );
     } finally {
       setSending(false);
     }
@@ -139,22 +156,22 @@ export function SessionComposer({
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={onKeyDown}
-        disabled={!!disabledReason || sending}
         placeholder={
-          disabledReason ??
+          sendBlockedReason ??
           (sending ? sendingLabel : undefined) ??
           placeholder ??
           'Message this session…  (⌘↵ to send)'
         }
         aria-label="Message this session"
         rows={Math.min(6, Math.max(1, text.split('\n').length))}
-        className="thin-scroll min-h-[24px] flex-1 resize-none bg-transparent text-[12px] leading-5 text-text outline-none placeholder:text-text-muted disabled:cursor-not-allowed"
+        className="thin-scroll min-h-[24px] flex-1 resize-none bg-transparent text-[12px] leading-5 text-text outline-none placeholder:text-text-muted"
       />
       <button
         type="button"
         aria-label="Send"
         onClick={() => send().catch(() => {})}
-        disabled={!!disabledReason || sending || !text.trim()}
+        disabled={!!sendBlockedReason || sending || !text.trim()}
+        title={sendBlockedReason ?? undefined}
         className="flex size-6 shrink-0 items-center justify-center rounded-[5px] bg-accent bg-[image:var(--accent-gradient)] text-on-accent disabled:opacity-40"
       >
         <IconSend size={12} />
