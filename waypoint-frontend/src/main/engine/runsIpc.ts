@@ -614,7 +614,28 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
         if (error instanceof LedgerRequestError && error.status === 409) {
           return { kind: 'skipped', reason: error.message };
         }
-        throw error;
+        // Found in review (round 4): the same non-409 rethrow finalize.ts's
+        // own claim used to have — a timeout or a 5xx here escaped past the
+        // ticket lock as a bare IPC rejection, with no trail. A failed
+        // outcome instead, exactly like a push that fails.
+        const message = error instanceof Error ? error.message : String(error);
+        deps.logger.warn('engine: could not claim the publish', {
+          runId: run.id,
+          message,
+        });
+        await ledger
+          .appendEvent(run.id, 'note', {
+            stage: 'open-pr',
+            publish: 'failed',
+            claim: 'failed',
+            reason: message,
+          })
+          .catch(() => {});
+        return {
+          kind: 'failed',
+          stage: 'push',
+          message: `Could not claim the publish for this ticket: ${message}`,
+        };
       }
       return deps.pullRequests!.publishFollowUp({
         run,

@@ -1461,7 +1461,12 @@ describe('follow-up finalize (a continued run)', () => {
       'run-abc1234',
       expect.objectContaining({
         kind: 'comment',
-        body: expect.stringContaining('Follow-up 2'),
+        // The filed comment itself names the updated PR (review round 4:
+        // runComment.ts's 'updated' case was only unit-tested; this is
+        // the real path through finalize).
+        body: expect.stringMatching(
+          /Follow-up 2[\s\S]*Pull request updated: https:\/\/github\.com\/a\/b\/pull\/1/,
+        ),
       }),
       expect.anything(),
     );

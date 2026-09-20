@@ -603,6 +603,56 @@ describe('runs:open-pr', () => {
     expect(publishFollowUp).not.toHaveBeenCalled();
   });
 
+  // Found in review, round 4: the header's own claim had the same non-409
+  // rethrow finalize.ts's had until round 3 — a timeout or 5xx escaped
+  // the ticket lock as a bare IPC rejection, with no trail at all.
+  it('a claim that fails for any other reason is a failed outcome with a note on the run — never a rejected IPC call', async () => {
+    const { host, invoke } = fakeHost();
+    const legit = worktreeOf('run-openprboom');
+    const publishFollowUp = jest.fn();
+    const ledger = {
+      ...fakeLedger({
+        'run-openprboom': {
+          status: 'done',
+          entry: 'dispatched',
+          branch: 'agent/road-131',
+          worktreePath: legit,
+          ticketId: null,
+        },
+      }),
+      claimPublish: jest.fn(async () => {
+        throw new Error('ledger request timed out');
+      }),
+    };
+    registerRunsIpc({
+      supervisor: supervisorWith(true),
+      host,
+      worktreesDir,
+      ledger,
+      git: scriptedGit({}),
+      reveal: jest.fn(),
+      notify: jest.fn(),
+      chooseDirectory: async () => null,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
+      daemon: () => null,
+      logger,
+      pullRequests: { publish: jest.fn(), publishFollowUp },
+    });
+
+    await expect(invoke(RUNS_IPC.openPr, 'run-openprboom')).resolves.toEqual({
+      kind: 'failed',
+      stage: 'push',
+      message:
+        'Could not claim the publish for this ticket: ledger request timed out',
+    });
+    expect(publishFollowUp).not.toHaveBeenCalled();
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-openprboom',
+      'note',
+      expect.objectContaining({ stage: 'open-pr', claim: 'failed' }),
+    );
+  });
+
   // Never-lock (found in review): the backend's publish claim only
   // refuses a SECOND run's claim on the same ticket — it does nothing
   // to stop this run's own two concurrent callers, e.g. this button and
