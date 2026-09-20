@@ -50,6 +50,36 @@ export function clearSessionDraft(key: string): void {
   writeSessionDraft(key, '');
 }
 
+/**
+ * A send that failed after its composer was gone hands the text back
+ * here (round 4 and 5 of review): to the draft in storage, for the next
+ * composer to mount for this run — and to any composer ALREADY mounted
+ * for it, which would otherwise never learn of it and, on its next
+ * debounced write, overwrite the draft with its own text. One or the
+ * other always exists; a message a person typed is never simply gone.
+ */
+const recoveries = new Map<string, Set<(text: string) => void>>();
+
+function onDraftRecovered(key: string, listener: (text: string) => void) {
+  const set = recoveries.get(key) ?? new Set();
+  set.add(listener);
+  recoveries.set(key, set);
+  return () => {
+    set.delete(listener);
+    if (set.size === 0) recoveries.delete(key);
+  };
+}
+
+function recoverDraft(key: string, text: string): void {
+  const mounted = recoveries.get(key);
+  if (mounted && mounted.size > 0) {
+    mounted.forEach((listener) => listener(text));
+    return;
+  }
+  const stored = readSessionDraft(key);
+  writeSessionDraft(key, stored.trim() ? `${text}\n${stored}` : text);
+}
+
 export function SessionComposer({
   draftKey,
   onSend,
@@ -111,6 +141,17 @@ export function SessionComposer({
     if (!draftKey) return undefined;
     return () => writeSessionDraft(draftKey, latest.current);
   }, [draftKey]);
+  // The recovered text of a send that failed — ours, or an earlier
+  // instance's for the same run — goes ahead of whatever is typed since,
+  // and the draft effect above then writes the merged text.
+  useEffect(() => {
+    if (!draftKey) return undefined;
+    return onDraftRecovered(draftKey, (recovered) =>
+      setText((current) =>
+        current.trim() ? `${recovered}\n${current}` : recovered,
+      ),
+    );
+  }, [draftKey]);
 
   const send = async () => {
     const trimmed = text.trim();
@@ -124,24 +165,18 @@ export function SessionComposer({
     try {
       await onSend(trimmed);
     } catch {
-      // onSend has already said why (a toast); the text comes back — to
-      // the box and, through the draft effect, to the draft. The draft
-      // is written here directly as well (found in review, round 4):
-      // this composer is mounted per run, so a person who switched runs
-      // while the send was in flight has already unmounted it — the
-      // setText below is dropped on the floor and the draft effect never
-      // runs, and the message would simply be gone. Storage doesn't care
-      // whether the box still exists.
-      if (draftKey) {
-        const stored = readSessionDraft(draftKey);
-        writeSessionDraft(
-          draftKey,
-          stored.trim() ? `${trimmed}\n${stored}` : trimmed,
+      // onSend has already said why (a toast); the text comes back. This
+      // composer is mounted per run, so a person who switched runs while
+      // the send was in flight has already unmounted it (found in review,
+      // round 4) — and may have come back to a fresh one since (round 5).
+      // `recoverDraft` reaches whichever exists: this instance if still
+      // mounted, a newer one for the same run, or the draft in storage.
+      if (draftKey) recoverDraft(draftKey, trimmed);
+      else {
+        setText((current) =>
+          current.trim() ? `${trimmed}\n${current}` : trimmed,
         );
       }
-      setText((current) =>
-        current.trim() ? `${trimmed}\n${current}` : trimmed,
-      );
     } finally {
       setSending(false);
     }

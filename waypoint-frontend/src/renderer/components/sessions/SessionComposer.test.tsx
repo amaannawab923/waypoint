@@ -208,5 +208,57 @@ describe('SessionComposer', () => {
       expect(readSessionDraft('run-c')).toBe('the message');
       clearSessionDraft('run-c');
     });
+
+    // Round 5 of review: the fix above wrote the recovered text to storage
+    // — but a person who switched away and BACK had a fresh composer for
+    // the same run by then, typing, and its next debounced draft write
+    // overwrote storage with its own text: the recovered message was gone
+    // again. A recovery now goes to the mounted composer when there is
+    // one, so it lands in the box, ahead of what was typed since.
+    it('a send that fails after the person switched away and back lands in the new composer, ahead of what they typed since', async () => {
+      let settle: (ok: boolean) => void = () => {};
+      const onSend = jest.fn(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            settle = (ok) => (ok ? resolve() : reject(new Error('not sent')));
+          }),
+      );
+      const first = render(
+        <SessionComposer
+          draftKey="run-d"
+          onSend={onSend}
+          sendBlockedReason={null}
+          attachedToBand={false}
+        />,
+      );
+      const box = screen.getByLabelText('Message this session');
+      fireEvent.change(box, { target: { value: 'the message' } });
+      await act(async () => {
+        fireEvent.keyDown(box, { key: 'Enter', metaKey: true });
+      });
+      first.unmount();
+
+      // Back to the same run: a fresh composer, typing.
+      render(
+        <SessionComposer
+          draftKey="run-d"
+          onSend={jest.fn(async () => {})}
+          sendBlockedReason={null}
+          attachedToBand={false}
+        />,
+      );
+      const again = screen.getByLabelText('Message this session');
+      fireEvent.change(again, { target: { value: 'hi' } });
+      await act(async () => {
+        settle(false);
+      });
+      expect(again).toHaveValue('the message\nhi');
+      // And the next debounced write keeps it.
+      act(() => {
+        jest.advanceTimersByTime(DRAFT_WRITE_MS);
+      });
+      expect(readSessionDraft('run-d')).toBe('the message\nhi');
+      clearSessionDraft('run-d');
+    });
   });
 });
