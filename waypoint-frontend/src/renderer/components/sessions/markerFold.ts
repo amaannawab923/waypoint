@@ -30,10 +30,57 @@ const pick = (payload: Record<string, unknown>, key: string): unknown =>
 const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
 const num = (v: unknown): number | null => (typeof v === 'number' ? v : null);
 
-/** The last path segment of a PR url, for "PR #42". */
+/**
+ * Markdown-escapes free text before it lands in a marker line chat-ui
+ * renders as Markdown (found in review: a run's title, a verdict, a
+ * publish-failure reason all ride in from `agent_run_events` payloads —
+ * `finalized`/`session_resumed`/`note` are all in the backend's
+ * CLIENT_EVENT_KINDS, so any workspace member can POST one with an
+ * arbitrary payload; unescaped, `[label](url)`-shaped text becomes a
+ * spoofed link, and `<...>` becomes raw HTML). Every CommonMark
+ * punctuation character that starts syntax gets a backslash — always a
+ * no-op for ordinary prose (a backslash-escaped ordinary character
+ * still renders as itself), never a partial escape an attacker can
+ * work around.
+ */
+function escapeMdText(text: string): string {
+  return text.replace(/[\\`*_[\]()<>~|#]/g, (c) => `\\${c}`);
+}
+
+/**
+ * A URL from the same untrusted payloads, used as a real link's href —
+ * only ever a plain http(s) URL, or the link is not built at all (the
+ * text-only fallback the caller already has for a missing url). Closes
+ * the same gap as `escapeMdText` for the one place escaping alone isn't
+ * enough: a scheme like `javascript:` in the href position runs on
+ * click, no matter how the label text is escaped.
+ */
+function safeHref(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:'
+      ? url
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The last path segment of a PR url, for "PR #42" — always safe: digits pulled by regex, nothing interpolated verbatim. */
 function prLabel(url: string): string {
   const m = /\/(\d+)\/?$/.exec(url);
   return m ? `PR #${m[1]}` : 'PR';
+}
+
+/**
+ * `[label](url)` when the url is safe to link to; the label alone
+ * otherwise. `label` is always Waypoint's own text (`prLabel`'s output,
+ * digits pulled by regex — never escaped, because it's never untrusted);
+ * only `url` came from the payload, so only it needs validating.
+ */
+function prLink(label: string, url: string | null): string {
+  const href = url === null ? null : safeHref(url);
+  return href ? `[${label}](${href})` : label;
 }
 
 function finalizedText(
@@ -46,24 +93,25 @@ function finalizedText(
     ? (pick(payload, 'proposals') as unknown[]).length
     : 0;
   const pr = (pick(payload, 'pr') ?? {}) as Record<string, unknown>;
+  const escapedLabel = escapeMdText(label);
   const parts: string[] = [
     sequence > 1
-      ? `Follow-up ${sequence} filed for ${label}`
-      : `Completed ${label}`,
+      ? `Follow-up ${sequence} filed for ${escapedLabel}`
+      : `Completed ${escapedLabel}`,
   ];
-  if (verdict) parts.push(`verdict ${verdict}`);
+  if (verdict) parts.push(`verdict ${escapeMdText(verdict)}`);
   const action = str(pick(pr, 'action'));
   const url = str(pick(pr, 'url'));
-  if (action === 'opened' && url)
-    parts.push(`[${prLabel(url)} opened](${url})`);
-  else if (action === 'updated' && url)
-    parts.push(`[${prLabel(url)} updated](${url})`);
-  else if (action === 'failed')
-    parts.push(
-      `not published: ${str(pick(pr, 'reason')) ?? 'the push failed'}`,
-    );
-  else if (action === 'skipped' && str(pick(pr, 'reason')))
-    parts.push(`not published: ${str(pick(pr, 'reason'))}`);
+  const reason = str(pick(pr, 'reason'));
+  if (action === 'opened' && url) {
+    parts.push(prLink(`${prLabel(url)} opened`, url));
+  } else if (action === 'updated' && url) {
+    parts.push(prLink(`${prLabel(url)} updated`, url));
+  } else if (action === 'failed') {
+    parts.push(`not published: ${escapeMdText(reason ?? 'the push failed')}`);
+  } else if (action === 'skipped' && reason) {
+    parts.push(`not published: ${escapeMdText(reason)}`);
+  }
   if (proposals > 0)
     parts.push(
       `${proposals} proposal${proposals === 1 ? '' : 's'} filed for review`,
@@ -74,7 +122,7 @@ function finalizedText(
 function resumedText(payload: Record<string, unknown>): string {
   const from = str(pick(payload, 'from')) as string;
   const outcome = str(pick(payload, 'outcome'));
-  const parts: string[] = [`Continued from ${from}`];
+  const parts: string[] = [`Continued from ${escapeMdText(from)}`];
   if (outcome === 'replaced-by-new')
     parts.push('fresh session in the same worktree');
   else if (outcome === 'loaded') parts.push('conversation restored');
@@ -112,7 +160,10 @@ export function deriveMarkers(
         text = `Waypoint · ${commits} new commit${commits === 1 ? '' : 's'} on the branch, not published — ask the agent to summarize its changes to publish`;
       } else if (pick(payload, 'publish') === 'pr-superseded') {
         const previous = str(pick(payload, 'previousUrl'));
-        text = `Waypoint · the branch was recreated; ${previous ? `[the earlier ${prLabel(previous)}](${previous})` : 'the earlier PR'} is superseded — the next report opens a new one`;
+        const named = previous
+          ? prLink(`the earlier ${prLabel(previous)}`, previous)
+          : 'the earlier PR';
+        text = `Waypoint · the branch was recreated; ${named} is superseded — the next report opens a new one`;
       }
     }
     if (text === null) return [];

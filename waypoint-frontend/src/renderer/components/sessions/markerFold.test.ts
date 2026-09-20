@@ -166,6 +166,110 @@ describe('deriveMarkers', () => {
       /\[the earlier PR #7\]\(https:\/\/github.com\/o\/r\/pull\/7\) is superseded/,
     );
   });
+
+  // Never-lock (found in review): `finalized`/`session_resumed`/`note`
+  // are all in the backend's CLIENT_EVENT_KINDS — any workspace member
+  // can POST one with an arbitrary payload, and this text renders as
+  // real Markdown in every viewer's transcript. A run's title (`label`),
+  // a verdict, a PR failure reason, and a resumed run's `from` all ride
+  // in from that payload unescaped before this fix.
+  describe('untrusted text is never live Markdown (security)', () => {
+    it('escapes link/emphasis/code/raw-HTML syntax in the run label, the verdict, and a PR failure reason', () => {
+      const [spoofedLabel] = deriveMarkers(
+        [event(1, 'finalized', { sequence: 1, verdict: 'fixed' })],
+        '[click me](https://evil.example) <img src=x onerror=alert(1)>',
+      );
+      expect(spoofedLabel.text).toBe(
+        'Waypoint · Completed \\[click me\\]\\(https://evil.example\\) \\<img src=x onerror=alert\\(1\\)\\> · verdict fixed',
+      );
+      expect(spoofedLabel.text).not.toMatch(/(?<!\\)[[(<]/);
+
+      const [spoofedVerdict] = deriveMarkers(
+        [event(1, 'finalized', { sequence: 1, verdict: '`rm -rf /`' })],
+        'X',
+      );
+      expect(spoofedVerdict.text).toBe(
+        'Waypoint · Completed X · verdict \\`rm -rf /\\`',
+      );
+
+      const [spoofedReason] = deriveMarkers(
+        [
+          event(1, 'finalized', {
+            sequence: 1,
+            pr: { action: 'failed', reason: '[bait](javascript:alert(1))' },
+          }),
+        ],
+        'X',
+      );
+      expect(spoofedReason.text).toBe(
+        'Waypoint · Completed X · not published: \\[bait\\]\\(javascript:alert\\(1\\)\\)',
+      );
+    });
+
+    it('escapes a forged `from` on session_resumed', () => {
+      const [marker] = deriveMarkers(
+        [
+          event(1, 'session_resumed', {
+            from: '`code`',
+            outcome: 'loaded',
+          }),
+        ],
+        'X',
+      );
+      expect(marker.text).toBe(
+        'Waypoint · Continued from \\`code\\` · conversation restored',
+      );
+    });
+
+    it('refuses a non-http(s) PR url as a link — it renders as text, never as a clickable href', () => {
+      const [marker] = deriveMarkers(
+        [
+          event(1, 'finalized', {
+            sequence: 1,
+            // eslint-disable-next-line no-script-url -- exactly the href scheme the fix must refuse
+            pr: { action: 'opened', url: 'javascript:alert(document.cookie)' },
+          }),
+        ],
+        'X',
+      );
+      expect(marker.text).toBe('Waypoint · Completed X · PR opened');
+      // eslint-disable-next-line no-script-url -- asserting the scheme's own text never appears
+      expect(marker.text).not.toContain('javascript:');
+      expect(marker.text).not.toContain('[');
+    });
+
+    it('still links a genuine https PR url — the fix does not break the ordinary case', () => {
+      const [marker] = deriveMarkers(
+        [
+          event(1, 'finalized', {
+            sequence: 1,
+            pr: { action: 'opened', url: 'https://github.com/o/r/pull/9' },
+          }),
+        ],
+        'X',
+      );
+      expect(marker.text).toContain(
+        '[PR #9 opened](https://github.com/o/r/pull/9)',
+      );
+    });
+
+    it('refuses a non-http(s) previousUrl on a superseded PR note the same way', () => {
+      const [marker] = deriveMarkers(
+        [
+          event(1, 'note', {
+            stage: 'resume',
+            publish: 'pr-superseded',
+            previousUrl: 'data:text/html,<script>alert(1)</script>',
+          }),
+        ],
+        'X',
+      );
+      expect(marker.text).toBe(
+        'Waypoint · the branch was recreated; the earlier PR is superseded — the next report opens a new one',
+      );
+      expect(marker.text).not.toContain('data:');
+    });
+  });
 });
 
 describe('overlayMarkers', () => {
