@@ -5,9 +5,12 @@ import type { DaemonRunsApi } from './daemonApi';
 import type { AgentRun, LedgerClient } from './ledgerClient';
 import { clearWarmed, warmRun } from './warm';
 import {
+  arrivalEntriesForTests,
   deliverPendingAfterFinalize,
+  recordArrival,
   retryPendingPrompt,
   sendRunPrompt,
+  waitingBefore,
   type SendPromptDeps,
 } from './sendPrompt';
 import type { PendingPrompt } from '../types';
@@ -563,6 +566,72 @@ describe('sendRunPrompt', () => {
       'and this',
     ]);
     expect([...pending.values()][0].state).toBe('delivered');
+  });
+
+  // Found in review: the arrival tracker that decides FIFO order for a
+  // busy-outboxed row is a process-wide table, one entry per message
+  // ever outboxed via the busy path, for the process's whole lifetime —
+  // unbounded unless pruned. Pruning it by "not in THIS run's open
+  // rows", done naively (a flat `Map<pendingId, arrival>`), would delete
+  // another run's still-open entry too, since pending ids carry no run
+  // of their own to check against — the fix nests the table by runId so
+  // pruning stays correctly scoped. Tested directly against
+  // `waitingBefore` (the one place the table is read and pruned) rather
+  // than through a full send/warm-up/deliver choreography — the table's
+  // own bookkeeping has nothing to do with the daemon or the lock, and a
+  // direct test is deterministic where an end-to-end one would be at the
+  // mercy of the busy path's own fire-and-forget background drain.
+  describe('the arrival table (waitingBefore)', () => {
+    const depsFor = (rows: PendingPrompt[]) =>
+      depsWith(
+        {
+          listPendingPrompts: jest.fn(async () => rows),
+        } as unknown as LedgerClient,
+        fakeDaemon(),
+      );
+    const row = (id: string, seq: number): PendingPrompt =>
+      ({
+        id,
+        runId: 'irrelevant-to-waitingBefore',
+        seq,
+        byMemberId: 'mem-1',
+        text: 'x',
+        reason: 'starting',
+        state: 'queued',
+        autoAttempts: 0,
+        lastError: null,
+        claimedAt: null,
+        resolvedAt: null,
+        createdAt: '2026-09-20T00:00:00.000Z',
+      }) as PendingPrompt;
+
+    it('prunes an entry the instant its row is no longer open, and never before', async () => {
+      recordArrival('run-a', 'pp-1', 0);
+      expect(arrivalEntriesForTests('run-a')).toBe(1);
+
+      // Still open: not pruned.
+      await waitingBefore(depsFor([row('pp-1', 1)]), 'run-a', 99);
+      expect(arrivalEntriesForTests('run-a')).toBe(1);
+
+      // Delivered now (excluded by openRows): pruned on the very next read.
+      await waitingBefore(depsFor([]), 'run-a', 100);
+      expect(arrivalEntriesForTests('run-a')).toBe(0);
+    });
+
+    it("never touches another run's entries — the direct regression for the naive flat-map bug", async () => {
+      recordArrival('run-a', 'pp-a1', 0);
+      recordArrival('run-b', 'pp-b1', 1);
+      expect(arrivalEntriesForTests('run-a')).toBe(1);
+      expect(arrivalEntriesForTests('run-b')).toBe(1);
+
+      // run-b's own row settles and its own waitingBefore call prunes it —
+      // run-a is never named here at all.
+      await waitingBefore(depsFor([]), 'run-b', 50);
+      expect(arrivalEntriesForTests('run-b')).toBe(0);
+      // A naive flat map, pruned by "not in run-b's open rows", would
+      // have deleted 'pp-a1' too — it is still here.
+      expect(arrivalEntriesForTests('run-a')).toBe(1);
+    });
   });
 
   it('two concurrent sends to one dead run produce exactly one reopen and both messages, in order', async () => {

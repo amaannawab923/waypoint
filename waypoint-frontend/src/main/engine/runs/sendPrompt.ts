@@ -79,9 +79,34 @@ async function outboxed(
  * which has none) before its own text, and the rest after.
  */
 let arrivals = 0;
-const arrivalOf = new Map<string, number>();
+// Run-scoped on purpose (found in review): a flat `Map<pendingId,
+// arrival>` pruned by "not in this run's open rows" would delete other
+// runs' still-open entries too, since pending ids are opaque across
+// runs. Nesting by runId keeps pruning correctly scoped to the one run
+// a send is actually about, and lets a run whose outbox is empty drop
+// its whole sub-map, not just its rows one at a time.
+const arrivalOf = new Map<string, Map<string, number>>();
 
-async function waitingBefore(
+/** Exported alongside `waitingBefore` below: a direct, deterministic test seam over the module-private arrival table. */
+export function recordArrival(
+  runId: string,
+  pendingId: string,
+  arrival: number,
+) {
+  let byRun = arrivalOf.get(runId);
+  if (!byRun) {
+    byRun = new Map();
+    arrivalOf.set(runId, byRun);
+  }
+  byRun.set(pendingId, arrival);
+}
+
+/** Test seam only: how many arrival entries a run is still carrying. */
+export function arrivalEntriesForTests(runId: string): number {
+  return arrivalOf.get(runId)?.size ?? 0;
+}
+
+export async function waitingBefore(
   deps: SendPromptDeps,
   runId: string,
   arrival: number,
@@ -89,8 +114,22 @@ async function waitingBefore(
   const rows = openRows(
     await deps.ledger.listPendingPrompts(runId).catch(() => []),
   );
+  const byRun = arrivalOf.get(runId);
+  // An entry only ever needs to outlive its own row being open — once
+  // delivered, dropped, or otherwise settled, nothing will compare
+  // against it again. Pruned here, on every ordinary send for this run
+  // (found in review: unbounded growth otherwise — one entry per
+  // message ever outboxed via the busy path, for the process's whole
+  // lifetime).
+  if (byRun) {
+    const open = new Set(rows.map((r) => r.id));
+    [...byRun.keys()]
+      .filter((id) => !open.has(id))
+      .forEach((id) => byRun.delete(id));
+    if (byRun.size === 0) arrivalOf.delete(runId);
+  }
   return new Set(
-    rows.filter((r) => (arrivalOf.get(r.id) ?? -1) < arrival).map((r) => r.id),
+    rows.filter((r) => (byRun?.get(r.id) ?? -1) < arrival).map((r) => r.id),
   );
 }
 
@@ -368,7 +407,7 @@ export function sendRunPrompt(
       const run = await deps.ledger.getRun(runId);
       if (!run) throw new Error(`No run ${runId} in the ledger.`);
       const pending = await enqueue(deps, runId, text, 'starting');
-      arrivalOf.set(pending.id, arrival);
+      recordArrival(runId, pending.id, arrival);
       // Delivered as soon as whatever holds the lock lets go.
       withRunLock(runId, () => drainIfLive(deps, runId)).catch(
         (error: unknown) =>
