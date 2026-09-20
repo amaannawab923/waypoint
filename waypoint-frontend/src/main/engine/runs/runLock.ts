@@ -11,10 +11,15 @@ import { isBusy, serializeBy } from './keyedQueue';
  * This is NOT what keeps a ticket to one automatic dispatch — that is
  * `dispatch.ts`'s own per-TICKET lock and the backend's advisory lock in
  * createRun, a different invariant enforced a different way. This lock's
- * invariant is narrower: one run, one revive at a time. Not reentrant,
- * and never held at the same time as the per-ticket lock — nothing here
- * needs both, and nesting a non-reentrant queue inside itself deadlocks
- * trivially, so keep it that way.
+ * invariant is narrower: one run, one revive at a time — and, since
+ * round 5 of review, one run's first start too (startRun.ts's
+ * continueStart), so reconcile's interrupt cannot land on a run mid-
+ * provisioning. Not reentrant, and never AWAITED while the per-ticket
+ * lock is held: dispatch.ts fires continueStart without awaiting it from
+ * inside its ticket lock, which is fine — the queue only runs the body on
+ * a later microtask, and no path holding this lock ever waits on the
+ * ticket lock, so there is no cycle. Nesting a non-reentrant queue inside
+ * itself deadlocks trivially, so keep it that way.
  */
 const runQueues = new Map<string, Promise<unknown>>();
 

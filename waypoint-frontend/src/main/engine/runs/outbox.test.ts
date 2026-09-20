@@ -194,6 +194,46 @@ describe('drain', () => {
       expect(daemon.sendPrompt).not.toHaveBeenCalled();
     });
 
+    // Round 5 of review: on a busy run the delivered text can have
+    // scrolled past the first 20-turn window by the next drain — and
+    // "not in the last 20" was taken for "never sent", inviting a Resend
+    // that would be a real duplicate.
+    it('looks further back when the first window is full before calling anything unresolved', async () => {
+      const { ledger, rows } = store([
+        row({ seq: 1, state: 'sending', text: 'old but delivered' }),
+      ]);
+      const filler = (n: number, from = 0) =>
+        Array.from({ length: n }, (_, i) => ({
+          id: `t${from + i}`,
+          seq: from + i,
+          initiator: 'user',
+          items: [{ kind: 'message', role: 'user', text: `noise ${from + i}` }],
+        }));
+      const getHistory = jest.fn(async (_id: string, limit: number) =>
+        limit <= 20
+          ? filler(20, 100) // a full first window, none of it ours
+          : [
+              {
+                id: 't1',
+                seq: 1,
+                initiator: 'user',
+                items: [
+                  { kind: 'message', role: 'user', text: 'old but delivered' },
+                ],
+              },
+              ...filler(20, 100),
+            ],
+      );
+      const daemon = daemonWith({ getHistory });
+      const result = await drain({ ledger, logger }, daemon, run, {
+        trigger: 'boot',
+      });
+      expect(getHistory.mock.calls.map((c) => c[1])).toEqual([20, 500]);
+      expect(result).toEqual({ delivered: 1, blockedBy: null });
+      expect(rows.get('pp-1')?.state).toBe('delivered');
+      expect(daemon.sendPrompt).not.toHaveBeenCalled();
+    });
+
     it('goes back to queued — and is sent — when the daemon has no session for the run any more', async () => {
       const { ledger, rows } = store([
         row({ seq: 1, state: 'sending', text: 'lost?' }),

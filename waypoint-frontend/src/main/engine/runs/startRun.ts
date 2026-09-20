@@ -14,6 +14,7 @@ import { agentEnvFor } from './agentEnv';
 import type { DaemonRunsApi, DaemonSessionSummary } from './daemonApi';
 import { describeFolder, rememberFolder, type FolderDeps } from './folders';
 import { claimForInitialQueue, markDelivered, revertClaimed } from './outbox';
+import { withRunLock } from './runLock';
 import {
   assertRunId,
   type AgentRun,
@@ -339,13 +340,12 @@ export function sessionModeOf(
   return run.autoApprove ? AUTO_APPROVE_MODE_ID : null;
 }
 
-export async function continueStart(
+async function continueStartLocked(
   deps: StartRunDeps & { daemonApi: DaemonRunsApi },
   run: AgentRun,
-  /** The picked folder: the repository to take a worktree of, or the cwd itself. */
   folderPath: string,
-  firstMessage: string | null = null,
-  options: ContinueStartOptions = {},
+  firstMessage: string | null,
+  options: ContinueStartOptions,
 ): Promise<void> {
   const { ledger, daemonApi: daemon } = deps;
   let stage: 'worktree' | 'session' = 'worktree';
@@ -493,6 +493,34 @@ export async function continueStart(
     }
     await failStart(deps, run.id, stage, error);
   }
+}
+
+export function continueStart(
+  deps: StartRunDeps & { daemonApi: DaemonRunsApi },
+  run: AgentRun,
+  /** The picked folder: the repository to take a worktree of, or the cwd itself. */
+  folderPath: string,
+  firstMessage: string | null = null,
+  options: ContinueStartOptions = {},
+): Promise<void> {
+  // Under the run's own lock, worktree through session start (round 5 of
+  // review): this was the one path that starts a session for a run
+  // without it. Boot reconcile runs on every daemon reconnect and, seeing
+  // a `provisioning` row with no daemon session — true of every run
+  // right here, for as long as its worktree takes — planned an
+  // `interrupt`; its guard re-reads the ledger and re-asks the daemon
+  // under this lock, and both still said "provisioning, no session", so
+  // it wrote `interrupted`, `stillProvisioning` below bailed, and the
+  // first message — a bare argument, never in the outbox — was gone.
+  // With the lock held, reconcile skips the run (its own safe failure)
+  // and looks again next pass. A send arriving meanwhile is outboxed as
+  // `starting` either way (sendPrompt.ts's busy check), so nothing waits.
+  // The two callers fire this and return without awaiting it, so the
+  // per-ticket lock dispatch.ts holds at that moment is never awaited
+  // from inside this one (runLock.ts's ordering rule).
+  return withRunLock(run.id, () =>
+    continueStartLocked(deps, run, folderPath, firstMessage, options),
+  );
 }
 
 /**

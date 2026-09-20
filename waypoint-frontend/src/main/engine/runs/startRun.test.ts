@@ -9,6 +9,7 @@ import {
   type LedgerClient,
 } from './ledgerClient';
 import { createFolderRegistry, type FolderDeps } from './folders';
+import { isRunBusy, tryWithRunLock } from './runLock';
 import {
   buildResumeNote,
   continueStart,
@@ -669,6 +670,54 @@ describe('continueStart (W4b)', () => {
       'session_started',
       expect.objectContaining({ isolation: 'directory', branch: null }),
     );
+  });
+
+  // Round 5 of review: this was the one path that starts a session for a
+  // run without the run lock, so boot reconcile (every daemon reconnect)
+  // could `interrupt` a run mid-provisioning — its guard re-reads the
+  // ledger and re-asks the daemon, and both genuinely say "provisioning,
+  // no session" right here — and the first message, a bare argument, was
+  // gone. The lock is held from the worktree through the session start.
+  it('holds the run lock from the worktree through the session start, so a concurrent reconcile skips the run', async () => {
+    const { ledger, rows } = fakeLedger([
+      run({
+        id: 'run-d2',
+        status: 'provisioning',
+        isolation: 'directory',
+        cwd: plainDir,
+        baseRef: null,
+      }),
+    ]);
+    let releaseStart!: () => void;
+    const daemon = fakeDaemon({
+      startSession: jest.fn(
+        () =>
+          new Promise<{ sessionId: string }>((resolve) => {
+            releaseStart = () => resolve({ sessionId: 'sess-1' });
+          }),
+      ),
+    });
+    const deps = depsWith(ledger, daemon);
+
+    const starting = continueStart(deps, rows.get('run-d2') as AgentRun, plainDir, 'first');
+    await new Promise<void>((r) => {
+      setTimeout(r, 10);
+    });
+    expect(daemon.startSession).toHaveBeenCalledTimes(1);
+    expect(isRunBusy('run-d2')).toBe(true);
+    // What reconcile's interrupt does: a non-blocking try that must lose.
+    expect(await tryWithRunLock('run-d2', async () => 'ran')).toEqual({
+      acquired: false,
+    });
+
+    releaseStart();
+    await starting;
+    // The queue frees its key on a later microtask (keyedQueue.ts).
+    await new Promise<void>((r) => {
+      setTimeout(r, 0);
+    });
+    expect(isRunBusy('run-d2')).toBe(false);
+    expect(rows.get('run-d2')?.status).toBe('running');
   });
 
   it('auto-approve starts the session in the bypass mode; the first message rides in as the initial queue and is recorded', async () => {

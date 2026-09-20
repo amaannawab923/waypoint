@@ -1,5 +1,5 @@
 import type { PendingPrompt, PendingPromptReason } from '../types';
-import type { DaemonRunsApi } from './daemonApi';
+import type { DaemonRunsApi, DaemonTranscriptTurn } from './daemonApi';
 import type { AgentRun } from './ledgerClient';
 import type { StartRunDeps } from './startRun';
 
@@ -26,8 +26,18 @@ import type { StartRunDeps } from './startRun';
 
 /** Automatic drains (mount, focus, boot, finalize) that may end `spawn-failed` for one row before it waits for the person. */
 export const MAX_AUTO_ATTEMPTS = 3;
-/** How many recent turns the crash resolution reads back. */
+/** How many recent turns the crash resolution reads back first. */
 const RESOLVE_HISTORY_TURNS = 20;
+/**
+ * And how far it looks when those were all full (round 5 of review): a
+ * claimed row whose `delivered` write failed is settled by finding its
+ * text in history — on a busy run, that text can have scrolled past the
+ * first window by the next drain, and "not in the last 20 turns" is not
+ * "never sent". A wrongly `unresolved` row invites a Resend that IS a
+ * duplicate, the one thing this file exists to prevent. So a full first
+ * window widens the read once before concluding anything.
+ */
+const RESOLVE_HISTORY_TURNS_WIDE = 500;
 
 export type DrainTrigger =
   'send' | 'retry' | 'mount' | 'focus' | 'boot' | 'finalize' | 'resume';
@@ -109,18 +119,26 @@ async function resolveStale(
     await deps.ledger.updatePendingPrompt(run.id, row.id, { state: 'queued' });
     return 'queued';
   }
-  const history = await daemon
+  const mentions = (turns: DaemonTranscriptTurn[]) =>
+    turns.some((turn) =>
+      turn.items.some(
+        (item) =>
+          item.kind === 'message' &&
+          item.role === 'user' &&
+          typeof item.text === 'string' &&
+          item.text.trim() === wanted,
+      ),
+    );
+  let history = await daemon
     .getHistory(run.id, RESOLVE_HISTORY_TURNS)
-    .catch(() => []);
-  const seen = history.some((turn) =>
-    turn.items.some(
-      (item) =>
-        item.kind === 'message' &&
-        item.role === 'user' &&
-        typeof item.text === 'string' &&
-        item.text.trim() === wanted,
-    ),
-  );
+    .catch((): DaemonTranscriptTurn[] => []);
+  let seen = mentions(history);
+  if (!seen && history.length >= RESOLVE_HISTORY_TURNS) {
+    history = await daemon
+      .getHistory(run.id, RESOLVE_HISTORY_TURNS_WIDE)
+      .catch((): DaemonTranscriptTurn[] => []);
+    seen = mentions(history);
+  }
   if (seen) {
     await deps.ledger.updatePendingPrompt(run.id, row.id, {
       state: 'delivered',

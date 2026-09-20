@@ -570,6 +570,75 @@ describe('sendRunPrompt', () => {
     expect([...pending.values()][0].state).toBe('delivered');
   });
 
+  // Round 5 of review: all three resume-then-deliver paths guessed
+  // `{providerSessionId, loaded: true}` the moment the daemon listed a
+  // session — and after a warm-up it always does — so warm.ts's own
+  // answer (the provider REPLACED the session) was thrown away: the send
+  // said `loaded`, no context-lost note reached the agent, and the ledger
+  // kept the dead session id. One helper decides now, warm-up first.
+  describe('a warm-up that lost the conversation is honored by every path that sends next', () => {
+    const warmedReplaced = async () => {
+      const { ledger, rows, pending } = fakeLedger([
+        deadRun({ status: 'done', providerSessionId: 'sess-old' }),
+      ]);
+      const daemon = fakeDaemon({
+        // The provider could not restore sess-old: a fresh session.
+        startSession: jest.fn(async () => ({ sessionId: 'sess-new' })),
+        listSessions: jest.fn(async () => ({})),
+      });
+      const deps = depsWith(ledger, daemon);
+      await expect(warmRun(deps, 'run-abc1234')).resolves.toMatchObject({
+        kind: 'warmed',
+        loaded: false,
+      });
+      // From here on the daemon lists the warmed session as live.
+      daemon.listSessions.mockImplementation(async () => live('run-abc1234'));
+      daemon.startSession.mockClear();
+      return { ledger, rows, pending, daemon, deps };
+    };
+
+    it('sendRunPrompt: replaced-by-new, the note rides along, the new id is recorded', async () => {
+      const { rows, daemon, deps } = await warmedReplaced();
+      const result = await sendRunPrompt(deps, {
+        runId: 'run-abc1234',
+        text: 'go on',
+      });
+      expect(result).toMatchObject({
+        outcome: 'continued',
+        resume: 'replaced-by-new',
+      });
+      expect(daemon.startSession).not.toHaveBeenCalled();
+      const [, , hidden] = daemon.sendPrompt.mock.calls[0];
+      expect(hidden).toMatch(/could not be restored|fresh session/i);
+      expect(rows.get('run-abc1234')?.providerSessionId).toBe('sess-new');
+    });
+
+    it('retryPendingPrompt: the same', async () => {
+      const { ledger, rows, daemon, deps } = await warmedReplaced();
+      await ledger.createPendingPrompt('run-abc1234', {
+        text: 'again',
+        reason: 'finishing',
+      });
+      const result = await retryPendingPrompt(deps, { runId: 'run-abc1234' });
+      expect(result).toMatchObject({ resume: 'replaced-by-new' });
+      expect(daemon.startSession).not.toHaveBeenCalled();
+      expect(rows.get('run-abc1234')?.providerSessionId).toBe('sess-new');
+    });
+
+    it('deliverPendingAfterFinalize: the same', async () => {
+      const { ledger, rows, daemon, deps } = await warmedReplaced();
+      await ledger.createPendingPrompt('run-abc1234', {
+        text: 'after',
+        reason: 'finishing',
+      });
+      await deliverPendingAfterFinalize(deps, 'run-abc1234');
+      expect(daemon.startSession).not.toHaveBeenCalled();
+      const [, , hidden] = daemon.sendPrompt.mock.calls[0];
+      expect(hidden).toMatch(/could not be restored|fresh session/i);
+      expect(rows.get('run-abc1234')?.providerSessionId).toBe('sess-new');
+    });
+  });
+
   // Found in review: the arrival tracker that decides FIFO order for a
   // busy-outboxed row is a process-wide table, one entry per message
   // ever outboxed via the busy path, for the process's whole lifetime —

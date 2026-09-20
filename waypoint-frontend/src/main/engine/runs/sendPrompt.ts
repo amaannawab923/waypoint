@@ -152,6 +152,36 @@ export async function waitingBefore(
 }
 
 /**
+ * What session a resume can take over, for a run that is not live in the
+ * ledger — the ONE answer all three resume-then-deliver paths use
+ * (sendRunPromptLocked, retryPendingPrompt, deliverPendingAfterFinalize).
+ * Three review rounds each found one of them diverging from the others;
+ * this is the fix for the class, not the instance.
+ *
+ * A warm-up's own record comes first: warm.ts asked the daemon and was
+ * told whether the provider restored the run's session or replaced it —
+ * `loaded` — and which id it is running now. Guessing `{providerSessionId,
+ * loaded: true}` just because the daemon lists a session (round 5 of
+ * review: all three paths did exactly that) threw that answer away, so a
+ * warm-up that lost the conversation was reported as continuous: the
+ * agent never got the context-lost note, the person never got the
+ * marker, and the ledger kept the dead session id. Only with no warm-up
+ * record does a listed session mean what finalize left alive — the run's
+ * own session, restored. The record is consumed either way, so a stale
+ * one can never be trusted by a later send.
+ */
+function aliveSessionFor(
+  run: AgentRun,
+  live: DaemonSessionSummary | undefined,
+): { sessionId: string; loaded: boolean } | null {
+  const warmed = takeWarmed(run.id);
+  if (warmed) return warmed;
+  return live
+    ? { sessionId: run.providerSessionId ?? run.id, loaded: true }
+    : null;
+}
+
+/**
  * Deliver in arrival order around this send's own text: the rows that
  * were waiting when it began, then the text, then whatever arrived
  * meanwhile (a send outboxed while this one held the lock).
@@ -295,16 +325,13 @@ async function sendRunPromptLocked(
   // finalize left alive — is `continued`: reopen and hand over in one
   // step, no spawn. Otherwise resume (recreating the worktree if it must),
   // then hand over.
-  const warmed = takeWarmed(run.id);
-  const alive = live
-    ? { sessionId: run.providerSessionId ?? run.id, loaded: true }
-    : warmed;
+  const alive = aliveSessionFor(run, live);
   let resumed: Awaited<ReturnType<typeof resumeRunCore>>;
   try {
     resumed = await resumeRunCore(
       deps,
       runId,
-      warmed || live ? 'open-then-message' : 'message',
+      alive ? 'open-then-message' : 'message',
       alive,
     );
   } catch (error) {
@@ -489,9 +516,7 @@ export function deliverPendingAfterFinalize(
       deps,
       runId,
       'message',
-      live
-        ? { sessionId: run.providerSessionId ?? run.id, loaded: true }
-        : takeWarmed(runId),
+      aliveSessionFor(run, live),
     );
     if (resumed.outcome !== 'loaded' && resumed.outcome !== 'replaced-by-new')
       return;
@@ -538,20 +563,11 @@ export function retryPendingPrompt(
     if (!RESUMABLE_RUN_STATUSES.includes(run.status)) {
       return { outcome: 'outboxed', status: run.status };
     }
-    // A session the daemon still holds for a finished run (done /
-    // needs-review — reconcile.ts's FINISHED_ALIVE) is handed to the
-    // resume as already alive, exactly as sendRunPromptLocked and
-    // deliverPendingAfterFinalize do (found in review, round 4: this
-    // path alone passed only `takeWarmed`, which is empty for a session
-    // warm.ts never had to warm — so resumeRunCore treated a live
-    // session as cold and asked the daemon to start it again).
     const resumed = await resumeRunCore(
       deps,
       runId,
       'message',
-      live
-        ? { sessionId: run.providerSessionId ?? run.id, loaded: true }
-        : takeWarmed(runId),
+      aliveSessionFor(run, live),
     );
     if (resumed.outcome === 'loaded' || resumed.outcome === 'replaced-by-new') {
       const after = await deps.ledger.getRun(runId);
