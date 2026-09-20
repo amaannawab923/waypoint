@@ -256,11 +256,9 @@ export function registerEngineIpc(
   // held the row; the runs API that owns that path is built below, so
   // this is late-bound.
   let runsHost: RunsHostApi | null = null;
-  const evidenceDir = path.join(path.dirname(worktreesDir), 'run-evidence');
   const finalizer = createRunFinalizer({
     ledger,
     daemon,
-    evidence: { evidenceDir, logger },
     notify: (change) => send(RUNS_IPC.changed, change),
     git: execGit,
     assertWorktreeGitDir,
@@ -362,7 +360,6 @@ export function registerEngineIpc(
     // null for every Jira key).
     ledger,
     worktreesDir,
-    evidenceDir,
     reveal: (absolutePath) => shell.showItemInFolder(absolutePath),
     notify: (change) => send(RUNS_IPC.changed, change),
     // W4b: the OS folder picker, parented to the window (the same two

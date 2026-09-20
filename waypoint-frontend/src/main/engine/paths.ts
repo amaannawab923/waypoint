@@ -84,6 +84,5 @@ export function resolveEnginePaths(
     // worktree two directories from the launcher main spawns is two
     // directories too close (review round 2). userData/worktrees/<run id>.
     worktreesDir: path.join(userData, 'worktrees'),
-    evidenceDir: path.join(userData, 'run-evidence'),
   };
 }

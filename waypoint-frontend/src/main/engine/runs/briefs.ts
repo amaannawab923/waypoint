@@ -1,7 +1,6 @@
 import type { RunIntent } from '../types';
 import type { JiraWireComment, JiraWireTicket } from '../../jira/jiraTypes';
 import type { LedgerComment, LedgerMember, LedgerTicket } from './ledgerClient';
-import { EVIDENCE_DIR } from './sessionBrowser';
 
 /**
  * The brief a dispatched session is given as its first prompt — W5a,
@@ -211,7 +210,7 @@ function closingRule(
     ...(verify
       ? [
           `## Verification`,
-          `What you drove in the browser, step by step, and what each screenshot shows, named by file (\`01-….png\`); then whether the behaviour now matches the ${noun}. Waypoint posts this section on the ${noun} too and shows the screenshots beside the run. If you could not start the app or drive the steps, say exactly that here.`,
+          `What you drove in the browser, step by step, and what each screenshot shows (first, second, … in the order you took them); then whether the behaviour now matches the ${noun}. Waypoint posts this section on the ${noun} too; the screenshots themselves are in the run's transcript. If you could not start the app or drive the steps, say exactly that here.`,
         ]
       : []),
     `## Details`,
@@ -224,16 +223,16 @@ function closingRule(
  * The verification paragraph a writing session gets with the switch on.
  * Names the server (sessionBrowser.ts registers it as `waypoint-browser`)
  * and its tools by name — a model given a bare "verify in the browser"
- * reaches for curl or a unit test; told which tools exist and where the
- * screenshots go, it drives the page. The evidence folder is relative to
- * the worktree (the brief is built before the run has an id) and git-
- * excluded by worktrees.ts; the brief repeats the rule for a session that
- * commits with `git add -A` anyway.
+ * reaches for curl or a unit test; told which tools exist, it drives the
+ * page. Screenshots are taken WITHOUT a filePath: the tool then returns
+ * the image as content, the transcript keeps it on that tool call, and
+ * the run's chat shows it at the moment it was taken (emdash fork,
+ * 2026-09-20) — no folder, nothing to commit, nothing to copy.
  */
 function verificationTask(noun: 'ticket' | 'issue'): string {
   return [
     `Then verify the change in a browser. Start the app from this worktree (the README or package scripts say how; use a free port), open it with the waypoint-browser tools — navigate_page, take_snapshot, click, fill, take_screenshot — and walk the ${noun}'s reproduction steps against your change.`,
-    `Save a screenshot of each step that matters with take_screenshot's filePath under ${EVIDENCE_DIR}/ in this worktree, numbered in order (01-before.png, 02-after-click.png …); never commit that folder. Stop the app when you are done.`,
+    `Take a screenshot at each step that matters — before you act and after — with take_screenshot and NO filePath, so the image lands in your transcript where the ${noun}'s readers see it; say in your narration what each one shows. Stop the app when you are done.`,
     `A change you could not verify this way is partial, not fixed — say what stopped you (the app would not start, a login was needed, the steps could not be driven) rather than claiming it works.`,
   ].join(' ');
 }

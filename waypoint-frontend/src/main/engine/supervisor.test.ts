@@ -33,7 +33,6 @@ const PATHS: EnginePaths = {
   socketPath: '/userdata/engine/run/workspace.sock',
   stateDir: '/userdata/engine/state',
   worktreesDir: '/userdata/worktrees',
-  evidenceDir: '/userdata/run-evidence',
   logPath: '/userdata/engine/engine.log',
 };
 

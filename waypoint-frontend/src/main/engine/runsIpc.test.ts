@@ -300,63 +300,6 @@ describe('runs:stop', () => {
   });
 });
 
-describe('runs:list-evidence and runs:read-evidence', () => {
-  it('lists what the session saved under the worktree, copies it into evidenceDir, and reads one file back; refuses a bad name', async () => {
-    const { host, invoke } = fakeHost();
-    const inside = worktreeOf('run-ev1');
-    mkdirSync(path.join(inside, '.waypoint', 'evidence'), {
-      recursive: true,
-    });
-    const png = Buffer.from('89504e470d0a1a0a', 'hex');
-    writeFileSync(
-      path.join(inside, '.waypoint', 'evidence', '01-after.png'),
-      png,
-    );
-    const evidenceDir = path.join(worktreesDir, '..', 'run-evidence');
-    const ledger = fakeLedger({
-      'run-ev1': { status: 'done', worktreePath: inside, baseRef: 'main' },
-      'run-none': { status: 'queued', worktreePath: null, baseRef: null },
-    });
-    registerRunsIpc({
-      supervisor: supervisorWith(true),
-      host,
-      worktreesDir,
-      evidenceDir,
-      ledger,
-      reveal: jest.fn(),
-      notify: jest.fn(),
-      chooseDirectory: async () => null,
-      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
-      daemon: () => null,
-      logger,
-    });
-
-    const items = (await invoke(RUNS_IPC.listEvidence, 'run-ev1')) as Array<{
-      name: string;
-      bytes: number;
-    }>;
-    expect(items.map((i) => [i.name, i.bytes])).toEqual([['01-after.png', 8]]);
-    expect(existsSync(path.join(evidenceDir, 'run-ev1', '01-after.png'))).toBe(
-      true,
-    );
-    expect(await invoke(RUNS_IPC.listEvidence, 'run-none')).toEqual([]);
-
-    const file = (await invoke(RUNS_IPC.readEvidence, {
-      runId: 'run-ev1',
-      name: '01-after.png',
-    })) as { name: string; dataUrl: string };
-    expect(file.dataUrl).toBe(
-      `data:image/png;base64,${png.toString('base64')}`,
-    );
-    await expect(
-      invoke(RUNS_IPC.readEvidence, { runId: 'run-ev1', name: '../x.png' }),
-    ).rejects.toThrow('Not an evidence file.');
-    await expect(
-      invoke(RUNS_IPC.readEvidence, { runId: 'run-ev1' }),
-    ).rejects.toThrow('Not an evidence file.');
-  });
-});
-
 describe('runs:diff and runs:reveal-worktree', () => {
   it('runs git only in a worktree the ledger names under worktreesDir, and reveals the same path', async () => {
     const { host, invoke } = fakeHost();

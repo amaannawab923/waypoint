@@ -201,23 +201,6 @@ export function getRunDiff(runId: string): Promise<RunDiff> {
   return bridge().runDiff(runId).catch(unwrapIpcError);
 }
 
-export type RunEvidenceItem = {
-  name: string;
-  bytes: number;
-  modifiedAt: string;
-};
-
-export function listRunEvidence(runId: string): Promise<RunEvidenceItem[]> {
-  return bridge().listRunEvidence(runId).catch(unwrapIpcError);
-}
-
-export function readRunEvidence(
-  runId: string,
-  name: string,
-): Promise<{ name: string; dataUrl: string }> {
-  return bridge().readRunEvidence(runId, name).catch(unwrapIpcError);
-}
-
 export function revealRunWorktree(runId: string): Promise<void> {
   return bridge().revealRunWorktree(runId).catch(unwrapIpcError);
 }

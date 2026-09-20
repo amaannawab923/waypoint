@@ -111,12 +111,13 @@ describe('buildBrief', () => {
   // Session verification (2026-09-20): the switch adds the browser task
   // and the Verification closing section to a writing session, and
   // nothing to a plan-mode one — a plan changes nothing to verify.
-  it('Fix with the verify switch: the browser task, the evidence folder, and a Verification section in the closing shape', () => {
+  it('Fix with the verify switch: the browser task, screenshots as transcript content, and a Verification section in the closing shape', () => {
     const brief = buildBrief(input({ intent: 'fix', verifyInBrowser: true }));
     expect(brief).toContain('Then verify the change in a browser.');
     expect(brief).toContain('waypoint-browser tools');
-    expect(brief).toContain('under .waypoint/evidence/ in this worktree');
-    expect(brief).toContain('never commit that folder');
+    expect(brief).toContain('with take_screenshot and NO filePath');
+    expect(brief).toContain('lands in your transcript');
+    expect(brief).not.toContain('.waypoint');
     expect(brief).toContain('## Verification');
     expect(brief).toContain(
       'A change you could not verify this way is partial, not fixed',

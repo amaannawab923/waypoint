@@ -25,9 +25,8 @@ import { SessionStatusPill } from './SessionStatusPill';
 import { providerView, runTitle, runWhere, statusView } from './sessionStatus';
 import { SessionTranscript } from './SessionTranscript';
 import { DiffPane } from './DiffPane';
-import { EvidencePane } from './EvidencePane';
 
-export type SessionTab = 'transcript' | 'diff' | 'evidence';
+export type SessionTab = 'transcript' | 'diff';
 
 /** The ledger's error_kind vocabulary, as a person reads it. */
 const ERROR_KIND_LABEL: Record<string, string> = {
@@ -66,8 +65,6 @@ export function SessionDetail({
   const [tab, setTab] = useState<SessionTab>('transcript');
   const [stopping, setStopping] = useState(false);
   const [diffCount, setDiffCount] = useState<number | null>(null);
-  // The Evidence tab's count, read by its pane; null until read.
-  const [evidenceCount, setEvidenceCount] = useState<number | null>(null);
 
   const stop = async () => {
     setStopping(true);
@@ -355,12 +352,6 @@ export function SessionDetail({
                 ? changesLabel
                 : `${changesLabel} · ${diffCount} file${diffCount === 1 ? '' : 's'}`,
             ],
-            [
-              'evidence',
-              evidenceCount === null || evidenceCount === 0
-                ? 'Evidence'
-                : `Evidence · ${evidenceCount}`,
-            ],
           ] as const
         ).map(([key, label]) => (
           <button
@@ -387,9 +378,6 @@ export function SessionDetail({
         {tab === 'transcript' && <SessionTranscript key={run.id} run={run} />}
         {tab === 'diff' && (
           <DiffPane key={run.id} run={run} onFileCount={setDiffCount} />
-        )}
-        {tab === 'evidence' && (
-          <EvidencePane key={run.id} run={run} onCount={setEvidenceCount} />
         )}
       </div>
     </section>

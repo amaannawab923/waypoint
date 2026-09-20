@@ -42,10 +42,12 @@ export const ENGINE_PIN = {
   version: '0.1.0',
   /** The daemon's own Wire protocol version, from its manifest.json. */
   protocolVersion: '1.0.0',
-  /** emdash commit the archive was built from. */
-  sourceCommit: '9b102a5f3',
+  /** Commit of Waypoint's fork of emdash (amaannawab923/emdash, branch
+   *  `waypoint`) the archive was built from — upstream 9b102a5f3 plus
+   *  Waypoint's own commits. */
+  sourceCommit: 'df96f094a',
   target: 'darwin-arm64',
-  sha256: '1fa9056e65fcc000c9aaec1c397ec85a97d41a9adedbfdd3b18f5af5dc02b9a6',
+  sha256: 'ebf0b83ab0c9b87e89db14bc8795abc9ddefe6af3e96f238f32a66dfbbbf9304',
   /** Inside the extracted archive: the shell launcher that execs the bundled
    *  `node` on `dist/index.mjs`. Takes the CLI commands in `EngineCommand`. */
   launcherRelPath: 'emdash-workspace-server/bin/emdash-workspace-server',
@@ -132,12 +134,6 @@ export interface EnginePaths {
    * and remove.
    */
   worktreesDir: string;
-  /**
-   * Where a run's evidence — the screenshots a session saved while
-   * verifying in its browser — is kept after its worktree is gone
-   * (runs/evidence.ts). userData/run-evidence/<run id>.
-   */
-  evidenceDir: string;
 }
 
 /**
@@ -547,10 +543,6 @@ export const RUNS_IPC = {
    * `start()` on tab open.
    */
   warm: 'runs:warm',
-  /** (runId) → EvidenceItem[]. The run's kept screenshots, collecting new ones first (runs/evidence.ts). */
-  listEvidence: 'runs:list-evidence',
-  /** ({ runId, name }) → { name, dataUrl }. One kept screenshot, for an <img>. */
-  readEvidence: 'runs:read-evidence',
   /** (runId) → PendingPrompt[]. The run's outbox, for the transcript's pending rows. */
   listPendingPrompts: 'runs:list-pending-prompts',
   /** ({ runId, pendingId }) → PendingPrompt. The person drops an outbox row. */
@@ -676,8 +668,9 @@ export interface BriefPreviewInput {
   mayChangeFiles?: boolean;
   /**
    * Writing sessions: after the change, start the app and drive the
-   * reproduction in the session's isolated browser, saving screenshots
-   * as evidence (runs/sessionBrowser.ts). Ignored for plan mode.
+   * reproduction in the session's isolated browser, taking screenshots
+   * that land in the transcript (runs/sessionBrowser.ts). Ignored for
+   * plan mode.
    */
   verifyInBrowser?: boolean;
   /** The base branch for the worktree; null = the repository's suggested one. */

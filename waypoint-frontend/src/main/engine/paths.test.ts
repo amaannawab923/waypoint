@@ -5,13 +5,13 @@ import { resolveEnginePaths } from './paths';
 const USER_DATA = '/Users/max/Library/Application Support/Waypoint';
 
 describe('resolveEnginePaths', () => {
-  it('nests every engine path under <userData>/engine/, never ~/.emdash; worktrees and evidence beside it', () => {
+  it('nests every engine path under <userData>/engine/, never ~/.emdash; worktrees beside it', () => {
     const paths = resolveEnginePaths(USER_DATA);
 
     Object.entries(paths).forEach(([key, value]) => {
       expect(value.startsWith(USER_DATA)).toBe(true);
       expect(value).not.toContain('.emdash');
-      if (key !== 'worktreesDir' && key !== 'evidenceDir') {
+      if (key !== 'worktreesDir') {
         expect(value.startsWith(path.join(USER_DATA, 'engine'))).toBe(true);
       }
     });

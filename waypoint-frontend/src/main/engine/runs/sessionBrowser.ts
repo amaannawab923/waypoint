@@ -39,9 +39,6 @@ import { createDaemonRunsApi, type DaemonMcpServer } from './daemonApi';
  */
 export const SESSION_BROWSER_SERVER_NAME = 'waypoint-browser';
 
-/** Where a session saves screenshots, relative to its worktree; git-excluded by worktrees.ts. */
-export const EVIDENCE_DIR = '.waypoint/evidence';
-
 /**
  * The server's stdio entry under this app's own node_modules. Built from
  * a path, not `require.resolve`: webpack rewrites that to a cwd-relative

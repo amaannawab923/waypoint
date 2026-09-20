@@ -30,7 +30,6 @@ import {
   type Verdict,
 } from './report';
 import { buildRunComment, type BranchWork } from './runComment';
-import { collectEvidence, type EvidenceDeps } from './evidence';
 
 /**
  * Host-side finalize — W5a, ROAD-120 (docs/design/w5a-investigate-fix.md
@@ -81,8 +80,6 @@ export interface FinalizeDeps {
   transcripts?: TranscriptKeeper;
   /** W6: pushes a writing run's branch and opens the PR before the proposals are filed. */
   pullRequests?: PullRequestPublisher;
-  /** Where a run's screenshots are kept (runs/evidence.ts); absent = nothing collected. */
-  evidence?: EvidenceDeps;
   /** W5b: main's Jira reads, for the transition a Fix on a Jira issue proposes (runs/jiraRuns.ts). */
   jira?: JiraRunDeps;
   /**
@@ -1010,14 +1007,6 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
       return;
     }
     const closing = closingMessageOf(turns);
-    // The turn is over: whatever the session saved while verifying in its
-    // browser is copied into Waypoint's keep now, before any later step
-    // (a merge's worktree removal, say) can take the worktree away.
-    // Best effort and never a failed run — a run with no evidence folder
-    // is the ordinary case.
-    if (deps.evidence) {
-      await collectEvidence(deps.evidence, run).catch(() => {});
-    }
     if (!closing) {
       if (followUp) {
         await rest(run, 'The agent ended its turn without a closing message.', {
