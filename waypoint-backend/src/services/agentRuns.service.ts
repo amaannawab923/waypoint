@@ -55,8 +55,16 @@ const DEFAULT_PAGE = 50;
 const MAX_SUMMARY_CHARS = 20_000;
 // A publish claim (claimPublish) whose holder died mid-push is ignored
 // after this long — a claim is otherwise released only by the holder's
-// own `finalized` event.
-export const PUBLISH_CLAIM_TTL_MS = 3 * 60_000;
+// own `finalized` event. The holder never renews it, so this MUST exceed
+// the longest a publish can legitimately take: the host bounds every
+// command it runs with a hard timeout (pullRequests.ts — a PR lookup,
+// a few git reads, the push, the PR create), and the sum of those is the
+// most a live claimant can be "still working" for. Found in review
+// (round 4): at 3 minutes this was already below that sum, so a slow but
+// healthy push could be preempted by a second claimant — exactly the two-
+// competing-PRs race the claim exists to prevent. pullRequests.test.ts
+// pins the relationship by reading this constant out of this file.
+export const PUBLISH_CLAIM_TTL_MS = 10 * 60_000;
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -715,13 +723,23 @@ export async function reopenRun(runId: string, reason?: string): Promise<ReopenR
     // ticket at once. That's exactly the race those callers' own checks
     // exist to prevent; reopenRun just wasn't holding the same lock they
     // serialize on.
+    //
+    // Found in review (round 4): the decision is made from an UNLOCKED
+    // read, so it may only depend on fields that cannot change between
+    // this peek and the row lock below. `entry` and `ticketId` are
+    // create-only (updateAgentRunSchema has neither); `modeId` is not —
+    // a plan-mode run patched to a writing mode in that window used to
+    // slip past the lock entirely, since the peek had already decided
+    // no lock was needed. So unlike createRun (whose input is its own
+    // and can't move under it), every dispatched ticketed run takes the
+    // lock here, plan-mode or not: a needless lock on a plan run costs a
+    // moment; a missing one costs the invariant.
     const [peek] = await tx
-      .select({ ticketId: agentRuns.ticketId, entry: agentRuns.entry, modeId: agentRuns.modeId })
+      .select({ ticketId: agentRuns.ticketId, entry: agentRuns.entry })
       .from(agentRuns)
       .where(eq(agentRuns.id, runId));
     if (!peek) throw new NotFoundError('agent run');
-    const dispatchTicketId =
-      peek.entry === 'dispatched' && peek.ticketId && peek.modeId !== 'plan' ? peek.ticketId : null;
+    const dispatchTicketId = peek.entry === 'dispatched' && peek.ticketId ? peek.ticketId : null;
     if (dispatchTicketId) {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${dispatchTicketId}))`);
     }

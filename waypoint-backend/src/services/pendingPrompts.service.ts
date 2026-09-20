@@ -36,13 +36,17 @@ async function ownerWorkspaceId(tx: Tx, ownerMemberId: string): Promise<string |
   return row?.workspaceId ?? null;
 }
 
-async function lockRunInWorkspace(tx: Tx, runId: string) {
-  const [run] = await tx.select().from(agentRuns).where(eq(agentRuns.id, runId)).for('update');
+async function runInWorkspace(tx: Tx, runId: string, lock: 'for-update' | 'read') {
+  const query = tx.select().from(agentRuns).where(eq(agentRuns.id, runId));
+  const [run] = lock === 'for-update' ? await query.for('update') : await query;
   if (!run || (await ownerWorkspaceId(tx, run.ownerMemberId)) !== currentWorkspaceId()) {
     throw new NotFoundError('agent run');
   }
   return run;
 }
+
+/** Writers: the run's row lock is what mints `seq` and serializes state moves. */
+const lockRunInWorkspace = (tx: Tx, runId: string) => runInWorkspace(tx, runId, 'for-update');
 
 async function writeEvent(tx: Tx, runId: string, kind: string, payload: Record<string, unknown>) {
   const [{ max }] = await tx
@@ -54,7 +58,11 @@ async function writeEvent(tx: Tx, runId: string, kind: string, payload: Record<s
 
 export async function listPendingPrompts(runId: string): Promise<PendingPrompt[]> {
   return db.transaction(async (tx) => {
-    await lockRunInWorkspace(tx, runId);
+    // A plain read (found in review, round 4): this used to take the same
+    // FOR UPDATE row lock the writers do, so every poll of the outbox
+    // queued behind — or briefly stalled — a real reopen/claim/update on
+    // the same row. The workspace check is all a listing needs.
+    await runInWorkspace(tx, runId, 'read');
     return tx
       .select()
       .from(agentRunPendingPrompts)

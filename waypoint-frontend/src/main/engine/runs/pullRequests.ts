@@ -80,6 +80,24 @@ export interface PullRequestsDeps {
 
 export const PUSH_TIMEOUT_MS = 2 * 60_000;
 export const PR_TIMEOUT_MS = 60_000;
+/** The bound on every small git read here (remote url, log, diff). */
+export const GIT_READ_TIMEOUT_MS = 20_000;
+/**
+ * The longest a single publish can take, by construction: the longest
+ * path (a follow-up whose PR is over, so it looks the old one up, then
+ * publishes afresh) runs these bounded commands in sequence — remote
+ * url, PR lookup, remote url again, the branch facts, the push, the PR
+ * create. The backend's PUBLISH_CLAIM_TTL_MS must exceed this, since a
+ * claimant never renews its claim mid-push (pullRequests.test.ts pins it
+ * against the backend source).
+ */
+export const MAX_PUBLISH_MS =
+  GIT_READ_TIMEOUT_MS +
+  PR_TIMEOUT_MS +
+  GIT_READ_TIMEOUT_MS +
+  GIT_READ_TIMEOUT_MS +
+  PUSH_TIMEOUT_MS +
+  PR_TIMEOUT_MS;
 /** The most of the closing message the PR body carries. */
 export const MAX_PR_BODY_CHARS = 60_000;
 export const MAX_PR_TITLE_CHARS = 200;
@@ -438,7 +456,7 @@ export function createPullRequestPublisher(
                 `${base}..HEAD`,
                 '--',
               ],
-              { cwd, timeoutMs: 20_000 },
+              { cwd, timeoutMs: GIT_READ_TIMEOUT_MS },
             ).catch(() => null),
             runCommand(
               'git',
@@ -449,7 +467,7 @@ export function createPullRequestPublisher(
                 `${base}..HEAD`,
                 '--',
               ],
-              { cwd, timeoutMs: 20_000 },
+              { cwd, timeoutMs: GIT_READ_TIMEOUT_MS },
             ).catch(() => null),
           ]);
           if (log && log.code === 0) {
@@ -480,7 +498,7 @@ export function createPullRequestPublisher(
         const remote = await runCommand(
           'git',
           [...PUSH_SAFE_CONFIG, 'remote', 'get-url', 'origin'],
-          { cwd, timeoutMs: 20_000 },
+          { cwd, timeoutMs: GIT_READ_TIMEOUT_MS },
         ).catch((error: unknown) => ({
           stdout: '',
           stderr: describe(error),
@@ -609,7 +627,7 @@ export function createPullRequestPublisher(
       const remote = await runCommand(
         'git',
         [...PUSH_SAFE_CONFIG, 'remote', 'get-url', 'origin'],
-        { cwd, timeoutMs: 20_000 },
+        { cwd, timeoutMs: GIT_READ_TIMEOUT_MS },
       ).catch((error: unknown) => ({
         stdout: '',
         stderr: describe(error),

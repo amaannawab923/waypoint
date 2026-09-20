@@ -1,3 +1,5 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { AgentRun } from './ledgerClient';
 import {
   buildPrBody,
@@ -5,6 +7,7 @@ import {
   createPullRequestPublisher,
   describePublish,
   githubRepoOf,
+  MAX_PUBLISH_MS,
   prUrlOf,
   type CommandResult,
   type HostCommandRunner,
@@ -12,6 +15,42 @@ import {
 
 // W6: the host publishes a writing run's branch — push, then gh —
 // against a scripted command runner. Every outcome the design names.
+
+// Round 4 of review: the backend forgets a publish claim after
+// PUBLISH_CLAIM_TTL_MS, taking its holder for dead — but the holder never
+// renews it, so a slow, healthy push that outlived the TTL could be
+// preempted by a second claimant: two competing PRs, the very race the
+// claim exists to prevent. The publish is hard-bounded by its command
+// timeouts (MAX_PUBLISH_MS), so the TTL just has to clear that sum — pinned
+// here against the backend source the same way startRun.test.ts pins
+// RESUMABLE_RUN_STATUSES.
+describe('the publish claim TTL', () => {
+  it("exceeds the longest a publish can take, by the backend's own constant", () => {
+    const backend = fs.readFileSync(
+      path.join(
+        __dirname,
+        '..',
+        '..',
+        '..',
+        '..',
+        '..',
+        'waypoint-backend',
+        'src',
+        'services',
+        'agentRuns.service.ts',
+      ),
+      'utf8',
+    );
+    const match = backend.match(
+      /export const PUBLISH_CLAIM_TTL_MS = ([0-9_]+) \* ([0-9_]+);/,
+    );
+    expect(match).not.toBeNull();
+    const ttl =
+      Number(match![1].replace(/_/g, '')) * Number(match![2].replace(/_/g, ''));
+    // Some headroom for the claim request and the cwd check around it.
+    expect(ttl).toBeGreaterThanOrEqual(MAX_PUBLISH_MS * 1.5);
+  });
+});
 
 function run(overrides: Partial<AgentRun> = {}): AgentRun {
   return {

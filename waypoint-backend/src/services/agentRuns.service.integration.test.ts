@@ -999,6 +999,35 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
       // Leave the ticket free for the tests that follow.
       await updateRun(run.id, { status: 'cancelled' });
     });
+
+    // Round 4 of review: the lock decision used to read `modeId` from the
+    // unlocked peek and skip the lock for a plan-mode run — but `modeId`
+    // is patchable, so a plan run flipped to a writing mode between the
+    // peek and the row lock reopened as a real dispatched writer without
+    // ever taking the lock. Now every dispatched ticketed run takes it.
+    it('a plan-mode dispatched run takes the ticket lock too — the decision no longer trusts a mutable field read before the lock', async () => {
+      const run = await deadRun({ modeId: 'plan' });
+      expect(run.modeId).toBe('plan');
+      const raw = postgres(process.env.DATABASE_URL!, { max: 1, onnotice: () => {} });
+      try {
+        await raw`SELECT pg_advisory_lock(hashtext(${resumeTicketId}))`;
+        let resolved = false;
+        const pending = reopenRun(run.id).then((r) => {
+          resolved = true;
+          return r;
+        });
+        await new Promise((r) => {
+          setTimeout(r, 300);
+        });
+        expect(resolved).toBe(false);
+        await raw`SELECT pg_advisory_unlock(hashtext(${resumeTicketId}))`;
+        await pending;
+        expect(resolved).toBe(true);
+      } finally {
+        await raw.end({ timeout: 3 });
+      }
+      await updateRun(run.id, { status: 'cancelled' });
+    });
   });
 
   // ROAD-XXX, security review's critical finding: once a run is non-
@@ -1197,6 +1226,30 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
     // silent no-op 200 for every state, `sending` included — so a losing
     // racer's claim attempt against a row someone else just claimed
     // returned success indistinguishable from actually winning it.
+    // Round 4 of review: the listing used to take the writers' FOR UPDATE
+    // row lock, so a poll of the outbox queued behind a real writer on the
+    // same run row. A read needs the workspace check, not the lock.
+    it('listing pending prompts does not wait on a writer holding the run row', async () => {
+      const run = await createRun({ ...base(), ticketId: null, entry: 'independent' });
+      await as(() => pending.createPendingPrompt(run.id, { text: 'hi', reason: 'starting' }));
+      const raw = postgres(process.env.DATABASE_URL!, { max: 1, onnotice: () => {} });
+      try {
+        await raw`BEGIN`;
+        await raw`SELECT id FROM agent_runs WHERE id = ${run.id} FOR UPDATE`;
+        const listed = await Promise.race([
+          as(() => pending.listPendingPrompts(run.id)),
+          new Promise<'blocked'>((r) => {
+            setTimeout(() => r('blocked'), 400);
+          }),
+        ]);
+        expect(listed).not.toBe('blocked');
+        expect((listed as { text: string }[]).map((r) => r.text)).toEqual(['hi']);
+        await raw`ROLLBACK`;
+      } finally {
+        await raw.end({ timeout: 3 });
+      }
+    });
+
     it('a second claim on an already-claimed row is a conflict, not a silent no-op', async () => {
       const run = await createRun({ ...base(), ticketId: null, entry: 'independent' });
       const row = await as(() => pending.createPendingPrompt(run.id, { text: 'hi', reason: 'finishing' }));
