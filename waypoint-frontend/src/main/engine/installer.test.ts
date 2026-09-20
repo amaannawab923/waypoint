@@ -68,6 +68,7 @@ function makeFixture(
     socketPath: path.join(base, 'userData', 'engine', 'run', 'workspace.sock'),
     stateDir: path.join(base, 'userData', 'engine', 'state'),
     worktreesDir: path.join(base, 'userData', 'worktrees'),
+    evidenceDir: path.join(base, 'userData', 'run-evidence'),
     logPath: path.join(base, 'userData', 'engine', 'engine.log'),
   };
   return { pin, paths, bundledArchiveDir, archivePath };

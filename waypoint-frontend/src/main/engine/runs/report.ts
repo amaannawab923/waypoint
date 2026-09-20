@@ -47,9 +47,19 @@ export interface Report {
   verdict: Verdict | null;
   /** The board-shaped part: what a ticket's readers need. */
   summary: string;
+  /**
+   * The `## Verification` section a session asked to verify in the
+   * browser writes (briefs.ts verificationTask): what it drove and what
+   * each screenshot shows. Posted on the ticket beside the summary; null
+   * when the message has no such section. Lifted OUT of `details`.
+   */
+  verification: string | null;
   /** The rest, kept with the run; null when the message was all summary. */
   details: string | null;
 }
+
+/** The most of a Verification section that goes on a ticket. */
+export const MAX_VERIFICATION_CHARS = 2_000;
 
 /** The most of a summary that goes on a ticket when the session gave no Summary heading. */
 export const MAX_FALLBACK_SUMMARY_CHARS = 1_400;
@@ -103,6 +113,43 @@ function isSummaryHeading(line: string): boolean {
   return !!m && /^(summary|tl;?dr|bottom line|outcome|result)\b/i.test(m[1]);
 }
 
+function isVerificationHeading(line: string): boolean {
+  const m = HEADING.exec(line);
+  // Not "how i verified": that is a Details cue (isDetailsHeading) the
+  // fallback split relies on, and the brief names this exact heading.
+  return !!m && /^(verification|verified)\b/i.test(m[1]);
+}
+
+/**
+ * Lifts the Verification section out of `lines`: the heading and its
+ * body up to the next heading or rule. Its own pass, before the summary
+ * split, so the section never lands in the details or the fallback
+ * summary — and so a heading in the details' own vocabulary ("how i
+ * verified") is read as verification first.
+ */
+function liftVerification(lines: string[]): {
+  verification: string | null;
+  rest: string[];
+} {
+  const at = lines.findIndex(isVerificationHeading);
+  if (at === -1) return { verification: null, rest: lines };
+  let end = lines.length;
+  for (let i = at + 1; i < lines.length; i += 1) {
+    if (HEADING.test(lines[i]) || RULE.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  const body = lines
+    .slice(at + 1, end)
+    .join('\n')
+    .trim();
+  return {
+    verification: body.length ? body : null,
+    rest: [...lines.slice(0, at), ...lines.slice(end)],
+  };
+}
+
 function isDetailsHeading(line: string): boolean {
   const m = HEADING.exec(line);
   return (
@@ -131,8 +178,10 @@ function clip(
 /** The closing message read as a report. */
 export function parseReport(closing: string): Report {
   const raw = closing.replace(/\r\n/g, '\n').trim();
-  if (!raw) return { verdict: null, summary: '', details: null };
-  const { verdict, rest } = stripVerdictLine(raw.split('\n'));
+  if (!raw)
+    return { verdict: null, summary: '', verification: null, details: null };
+  const { verdict, rest: afterVerdict } = stripVerdictLine(raw.split('\n'));
+  const { verification, rest } = liftVerification(afterVerdict);
 
   // A Summary heading: its section is the summary, everything else is
   // the details (what came before it included — a title line, say).
@@ -152,7 +201,12 @@ export function parseReport(closing: string): Report {
     const before = rest.slice(0, summaryAt);
     const after = rest.slice(end);
     const details = [...before, ...after].join('\n').trim();
-    return { verdict, summary, details: details.length ? details : null };
+    return {
+      verdict,
+      summary,
+      verification,
+      details: details.length ? details : null,
+    };
   }
 
   // No Summary heading: up to the first Details-like heading or rule.
@@ -169,6 +223,7 @@ export function parseReport(closing: string): Report {
     return {
       verdict,
       summary: summary.text,
+      verification,
       details: details.length ? details : null,
     };
   }
@@ -183,7 +238,12 @@ export function parseReport(closing: string): Report {
     MAX_FALLBACK_SUMMARY_CHARS,
     MAX_FALLBACK_SUMMARY_LINES,
   );
-  return { verdict, summary: text, details: clipped ? nonEmpty : null };
+  return {
+    verdict,
+    summary: text,
+    verification,
+    details: clipped ? nonEmpty : null,
+  };
 }
 
 /** The verdict a session reports when it names none, by verb. */

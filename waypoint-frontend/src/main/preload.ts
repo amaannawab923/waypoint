@@ -67,6 +67,7 @@ import {
   type TopicSubscription,
 } from './engine/types';
 import type { AgentRun as AgentRunRow } from './engine/runs/ledgerClient';
+import type { EvidenceItem as RunEvidenceItem } from './engine/runs/evidence';
 
 // The global Web Crypto API, not Node's `crypto` module: this preload script
 // runs in Electron's sandboxed renderer context by default (Electron 20+),
@@ -655,6 +656,18 @@ const electronHandler = {
     },
     revealRunWorktree(runId: string): Promise<void> {
       return ipcRenderer.invoke(RUNS_IPC.revealWorktree, runId);
+    },
+    // The run's evidence — screenshots the session saved while verifying
+    // in its browser (engine/runs/evidence.ts). Names only on the list;
+    // the bytes come one file at a time as a data URL, on demand.
+    listRunEvidence(runId: string): Promise<RunEvidenceItem[]> {
+      return ipcRenderer.invoke(RUNS_IPC.listEvidence, runId);
+    },
+    readRunEvidence(
+      runId: string,
+      name: string,
+    ): Promise<{ name: string; dataUrl: string }> {
+      return ipcRenderer.invoke(RUNS_IPC.readEvidence, { runId, name });
     },
     // W4: starting and resuming (engine/runs/startRun.ts). The renderer
     // names a project, a provider and a branch; main resolves the

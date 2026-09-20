@@ -415,6 +415,7 @@ function validatePreviewInput(input: unknown): Required<
 > & {
   instructions: string | null;
   mayChangeFiles: boolean;
+  verifyInBrowser: boolean;
   baseRef: string | null;
   folder: string | null;
 } {
@@ -445,6 +446,7 @@ function validatePreviewInput(input: unknown): Required<
     intent: raw.intent,
     instructions,
     mayChangeFiles,
+    verifyInBrowser: raw.verifyInBrowser === true,
     baseRef: cleanBaseRef(raw.baseRef),
     folder: cleanFolder(raw.folder),
   };
@@ -488,6 +490,8 @@ export async function buildBriefPreview(
     intent: input.intent,
     instructions: input.instructions,
     mayChangeFiles: mode === 'write',
+    // A plan-mode session changes nothing, so there is nothing to verify.
+    verifyInBrowser: mode === 'write' && input.verifyInBrowser,
     approvedRca: rca?.body ?? null,
     priorFixBranch: input.intent === 'fix' ? findPriorFixBranch(runs) : null,
   });

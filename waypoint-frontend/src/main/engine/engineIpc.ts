@@ -26,6 +26,7 @@ import { registerBootReconcile } from './runs/bootReconcile';
 import { withTicketDispatchLock } from './runs/dispatch';
 import { registerLiveLedgerFollower } from './runs/liveLedgerFollower';
 import { createDaemonRunsApi } from './runs/daemonApi';
+import { registerSessionBrowser } from './runs/sessionBrowser';
 import { createRunFinalizer } from './runs/finalize';
 import { createLedgerClient } from './runs/ledgerClient';
 import type { JiraRunDeps } from './runs/jiraRuns';
@@ -203,6 +204,9 @@ export function registerEngineIpc(
   // connection. A fake supervisor with no client (every engineIpc test)
   // makes this a no-op.
   registerBootReconcile({ supervisor, logger });
+  // Sessions' isolated browser (runs/sessionBrowser.ts): registered with
+  // the daemon on the same per-connection cadence as the reconcile.
+  registerSessionBrowser({ supervisor, logger });
 
   // W5a: the two notifications a run sends (blocked, needs review), and
   // host-side finalize for a dispatched run whose turn ended — both hang
@@ -252,9 +256,11 @@ export function registerEngineIpc(
   // held the row; the runs API that owns that path is built below, so
   // this is late-bound.
   let runsHost: RunsHostApi | null = null;
+  const evidenceDir = path.join(path.dirname(worktreesDir), 'run-evidence');
   const finalizer = createRunFinalizer({
     ledger,
     daemon,
+    evidence: { evidenceDir, logger },
     notify: (change) => send(RUNS_IPC.changed, change),
     git: execGit,
     assertWorktreeGitDir,
@@ -356,6 +362,7 @@ export function registerEngineIpc(
     // null for every Jira key).
     ledger,
     worktreesDir,
+    evidenceDir,
     reveal: (absolutePath) => shell.showItemInFolder(absolutePath),
     notify: (change) => send(RUNS_IPC.changed, change),
     // W4b: the OS folder picker, parented to the window (the same two

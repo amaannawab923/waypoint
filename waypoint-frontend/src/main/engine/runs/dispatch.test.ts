@@ -361,6 +361,30 @@ describe('buildBriefPreview', () => {
     expect(ledger.listTicketProposals).not.toHaveBeenCalled();
   });
 
+  it('verifyInBrowser adds the browser verification to a writing brief and never to a plan-mode one', async () => {
+    const { ledger } = fakeLedger();
+    const fix = await buildBriefPreview(depsWith(ledger, fakeDaemon()), {
+      ticketId: 'wi-1',
+      intent: 'fix',
+      verifyInBrowser: true,
+    });
+    expect(fix.brief).toContain('## Verification');
+    expect(fix.brief).toContain('waypoint-browser');
+    const plan = await buildBriefPreview(depsWith(ledger, fakeDaemon()), {
+      ticketId: 'wi-1',
+      intent: 'investigate',
+      verifyInBrowser: true,
+    });
+    expect(plan.brief).not.toContain('## Verification');
+    // Anything but a literal true is off.
+    const off = await buildBriefPreview(depsWith(ledger, fakeDaemon()), {
+      ticketId: 'wi-1',
+      intent: 'fix',
+      ...({ verifyInBrowser: 'yes' } as object),
+    });
+    expect(off.brief).not.toContain('## Verification');
+  });
+
   it('refuses a project with no linked repository, naming the settings', async () => {
     const { ledger } = fakeLedger({ repoPath: null });
     await expect(
@@ -373,7 +397,7 @@ describe('buildBriefPreview', () => {
 
   it('refuses a linked repository that is gone from this machine', async () => {
     const { ledger } = fakeLedger({
-      repoPath: path.join(os.tmpdir(), 'wp-nope-' + Date.now()),
+      repoPath: path.join(os.tmpdir(), `wp-nope-${Date.now()}`),
     });
     await expect(
       buildBriefPreview(depsWith(ledger, fakeDaemon()), {

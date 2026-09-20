@@ -18,6 +18,40 @@ describe('parseReport', () => {
     expect(r.details).toBe('## Details\nEvidence: a.ts:12\n- more');
   });
 
+  it('lifts a Verification section out, leaving Summary and Details as they were', () => {
+    const r = parseReport(
+      'Verdict: fixed\n## Summary\nThe button works.\n## Verification\nStarted the app on :5173.\n01-before.png: the old label.\n02-after.png: the new one.\n## Details\nsrc/x.ts:4',
+    );
+    expect(r.verdict).toBe('fixed');
+    expect(r.summary).toBe('The button works.');
+    expect(r.verification).toBe(
+      'Started the app on :5173.\n01-before.png: the old label.\n02-after.png: the new one.',
+    );
+    expect(r.details).toBe('## Details\nsrc/x.ts:4');
+    // "Verified" too; "How I verified it" stays a Details cue (the
+    // fallback split below relies on it) — the brief asks for the exact
+    // heading, so a session that was asked to verify writes it.
+    expect(
+      parseReport(
+        'Verdict: fixed\n## Summary\ns\n### Verified\nclicked\n## Details\nd',
+      ).verification,
+    ).toBe('clicked');
+    expect(
+      parseReport(
+        'Verdict: fixed\n## Summary\ns\n### How I verified it\nclicked',
+      ).verification,
+    ).toBeNull();
+    expect(
+      parseReport('Verdict: fixed\n## Summary\ns\n## Details\nd').verification,
+    ).toBeNull();
+    // An empty section is null, not an empty string.
+    expect(
+      parseReport(
+        'Verdict: fixed\n## Summary\ns\n## Verification\n## Details\nd',
+      ).verification,
+    ).toBeNull();
+  });
+
   it('tolerates a bold verdict, a title above it, and synonyms', () => {
     const r = parseReport(
       '# ROAD-43 — report\n**Verdict:** Root cause\n\n## Summary\nfound it\n\n## Evidence\nx',
@@ -65,6 +99,7 @@ describe('parseReport', () => {
     expect(parseReport('   ')).toEqual({
       verdict: null,
       summary: '',
+      verification: null,
       details: null,
     });
     expect(parseVerdictWord('fixed')).toBe('fixed');

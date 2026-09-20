@@ -1,5 +1,10 @@
 import type { PublishOutcome } from './pullRequests';
-import { verdictLabel, type Report, type Verdict } from './report';
+import {
+  MAX_VERIFICATION_CHARS,
+  verdictLabel,
+  type Report,
+  type Verdict,
+} from './report';
 
 /**
  * The comment a finished run files on its ticket — W5c, the PM's first
@@ -89,6 +94,17 @@ export function buildRunComment(input: RunCommentInput): string {
   if (input.verdict) blocks.push(`**Verdict:** ${verdictLabel(input.verdict)}`);
   const summary = input.report.summary.trim();
   if (summary) blocks.push(summary);
+  // A session asked to verify in the browser reports what it drove; that
+  // is the "visual proof" a ticket's readers asked for, so it goes on the
+  // ticket — bounded, with the screenshots themselves on the run.
+  const verification = input.report.verification?.trim();
+  if (verification) {
+    const text =
+      verification.length > MAX_VERIFICATION_CHARS
+        ? `${verification.slice(0, MAX_VERIFICATION_CHARS - 1)}…`
+        : verification;
+    blocks.push(`**Verification**\n${text}`);
+  }
 
   const facts = [
     input.work ? describeWork(input.work) : null,

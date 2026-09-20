@@ -132,6 +132,12 @@ export interface EnginePaths {
    * and remove.
    */
   worktreesDir: string;
+  /**
+   * Where a run's evidence — the screenshots a session saved while
+   * verifying in its browser — is kept after its worktree is gone
+   * (runs/evidence.ts). userData/run-evidence/<run id>.
+   */
+  evidenceDir: string;
 }
 
 /**
@@ -541,6 +547,10 @@ export const RUNS_IPC = {
    * `start()` on tab open.
    */
   warm: 'runs:warm',
+  /** (runId) → EvidenceItem[]. The run's kept screenshots, collecting new ones first (runs/evidence.ts). */
+  listEvidence: 'runs:list-evidence',
+  /** ({ runId, name }) → { name, dataUrl }. One kept screenshot, for an <img>. */
+  readEvidence: 'runs:read-evidence',
   /** (runId) → PendingPrompt[]. The run's outbox, for the transcript's pending rows. */
   listPendingPrompts: 'runs:list-pending-prompts',
   /** ({ runId, pendingId }) → PendingPrompt. The person drops an outbox row. */
@@ -664,6 +674,12 @@ export interface BriefPreviewInput {
   instructions?: string | null;
   /** *Something else…*: whether the session may edit files (else plan mode). */
   mayChangeFiles?: boolean;
+  /**
+   * Writing sessions: after the change, start the app and drive the
+   * reproduction in the session's isolated browser, saving screenshots
+   * as evidence (runs/sessionBrowser.ts). Ignored for plan mode.
+   */
+  verifyInBrowser?: boolean;
   /** The base branch for the worktree; null = the repository's suggested one. */
   baseRef?: string | null;
   /**

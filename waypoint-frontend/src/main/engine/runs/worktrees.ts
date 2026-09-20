@@ -80,6 +80,43 @@ export interface WorktreeDeps {
 
 export const DEFAULT_BASE_REF = 'main';
 
+/** `.waypoint/` — the run-private folder under a worktree (evidence today). */
+export const EVIDENCE_EXCLUDE_PATTERN = '.waypoint/';
+
+/**
+ * Appends `pattern` to the repository's `info/exclude` unless present.
+ * `info/` is shared across worktrees (gitrepository-layout: it lives in
+ * `$GIT_COMMON_DIR`), so a linked worktree's `.git` FILE is followed to
+ * its admin dir and that dir's `commondir` to the repository's `.git`.
+ * A plain checkout (a `.git` directory) is its own common dir.
+ */
+export async function excludeFromGit(
+  worktreePath: string,
+  pattern: string,
+): Promise<void> {
+  const dotGit = path.join(worktreePath, '.git');
+  let gitDir = dotGit;
+  if ((await fs.stat(dotGit)).isFile()) {
+    const m = /^gitdir:\s*(.+?)\s*$/m.exec(await fs.readFile(dotGit, 'utf8'));
+    if (!m) throw new Error(`${dotGit} has no gitdir: line`);
+    gitDir = path.resolve(worktreePath, m[1]);
+  }
+  let commonDir = gitDir;
+  const commondirFile = path.join(gitDir, 'commondir');
+  try {
+    const rel = (await fs.readFile(commondirFile, 'utf8')).trim();
+    if (rel) commonDir = path.resolve(gitDir, rel);
+  } catch {
+    // No commondir file: not a linked worktree; gitDir is the common dir.
+  }
+  const excludePath = path.join(commonDir, 'info', 'exclude');
+  const current = await fs.readFile(excludePath, 'utf8').catch(() => '');
+  if (current.split('\n').some((line) => line.trim() === pattern)) return;
+  await fs.mkdir(path.dirname(excludePath), { recursive: true });
+  const sep = current.length === 0 || current.endsWith('\n') ? '' : '\n';
+  await fs.appendFile(excludePath, `${sep}${pattern}\n`, 'utf8');
+}
+
 /** `run-abc1234` → `abc1234`: the part after the prefix, as ids.ts mints it. */
 export function shortRunId(runId: string): string {
   const dash = runId.indexOf('-');
@@ -253,6 +290,19 @@ export async function provisionWorktree(
     // a record that says otherwise is not a worktree we will run an agent
     // in (review round 2).
     await assertUnder(record.path, deps.worktreesDir);
+    // The session's screenshots (sessionBrowser.ts EVIDENCE_DIR) must
+    // never ride into a commit: excluded through git's own local exclude
+    // file, which a `git add -A` honours like a .gitignore, without
+    // touching the tracked tree. Best effort — a worktree without the
+    // exclude still works, the brief also says not to commit the folder.
+    await excludeFromGit(record.path, EVIDENCE_EXCLUDE_PATTERN).catch(
+      (error: unknown) => {
+        deps.logger.warn('engine: could not git-exclude the evidence dir', {
+          runId: run.id,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      },
+    );
     if (record.lifecycle?.steps.some((step) => step.id === 'copy-artifacts')) {
       await deps.daemon
         .deleteWorktree(record.id, { deleteBranch: true })

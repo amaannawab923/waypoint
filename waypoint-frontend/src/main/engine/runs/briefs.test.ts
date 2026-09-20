@@ -108,6 +108,57 @@ describe('buildBrief', () => {
     );
   });
 
+  // Session verification (2026-09-20): the switch adds the browser task
+  // and the Verification closing section to a writing session, and
+  // nothing to a plan-mode one — a plan changes nothing to verify.
+  it('Fix with the verify switch: the browser task, the evidence folder, and a Verification section in the closing shape', () => {
+    const brief = buildBrief(input({ intent: 'fix', verifyInBrowser: true }));
+    expect(brief).toContain('Then verify the change in a browser.');
+    expect(brief).toContain('waypoint-browser tools');
+    expect(brief).toContain('under .waypoint/evidence/ in this worktree');
+    expect(brief).toContain('never commit that folder');
+    expect(brief).toContain('## Verification');
+    expect(brief).toContain(
+      'A change you could not verify this way is partial, not fixed',
+    );
+    // The section sits between Summary and Details, where the rule reads it.
+    expect(brief.indexOf('## Summary')).toBeLessThan(
+      brief.indexOf('## Verification'),
+    );
+    expect(brief.indexOf('## Verification')).toBeLessThan(
+      brief.indexOf('## Details'),
+    );
+  });
+
+  it('without the verify switch, and in plan mode regardless of it, no browser task', () => {
+    expect(buildBrief(input({ intent: 'fix' }))).not.toContain(
+      '## Verification',
+    );
+    expect(buildBrief(input({ intent: 'fix' }))).not.toContain(
+      'waypoint-browser',
+    );
+    const plan = buildBrief(
+      input({
+        intent: 'custom',
+        instructions: 'List every IPC channel.',
+        mayChangeFiles: false,
+        verifyInBrowser: true,
+      }),
+    );
+    expect(plan).not.toContain('## Verification');
+    expect(plan).not.toContain('waypoint-browser');
+    const write = buildBrief(
+      input({
+        intent: 'custom',
+        instructions: 'Rename the button.',
+        mayChangeFiles: true,
+        verifyInBrowser: true,
+      }),
+    );
+    expect(write).toContain('## Verification');
+    expect(write).toContain('waypoint-browser tools');
+  });
+
   it('Fix without an RCA says nothing about one', () => {
     const brief = buildBrief(input({ intent: 'fix' }));
     expect(brief).not.toContain('Root cause');

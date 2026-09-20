@@ -1,4 +1,11 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import {
@@ -8,7 +15,9 @@ import {
 } from './daemonApi';
 import type { AgentRun, LedgerClient } from './ledgerClient';
 import {
+  EVIDENCE_EXCLUDE_PATTERN,
   chooseBranchName,
+  excludeFromGit,
   isRefSafeComponent,
   preferredBranchName,
   provisionWorktree,
@@ -761,5 +770,48 @@ describe('releaseWorktree', () => {
       ),
     ).rejects.toThrow('Refusing to remove it');
     expect(daemon.deleteWorktree).not.toHaveBeenCalled();
+  });
+});
+
+describe('excludeFromGit', () => {
+  let base = '';
+  beforeEach(() => {
+    base = mkdtempSync(path.join(tmpdir(), 'waypoint-exclude-'));
+  });
+  afterEach(() => rmSync(base, { recursive: true, force: true }));
+
+  it("appends the pattern to a plain checkout's .git/info/exclude, once", async () => {
+    const repo = path.join(base, 'repo');
+    mkdirSync(path.join(repo, '.git'), { recursive: true });
+    await excludeFromGit(repo, EVIDENCE_EXCLUDE_PATTERN);
+    await excludeFromGit(repo, EVIDENCE_EXCLUDE_PATTERN);
+    expect(
+      readFileSync(path.join(repo, '.git', 'info', 'exclude'), 'utf8'),
+    ).toBe('.waypoint/\n');
+  });
+
+  it("follows a linked worktree's .git file and its commondir to the repository's shared info/exclude", async () => {
+    // The layout `git worktree add` leaves: <repo>/.git/worktrees/<id>/
+    // holds the worktree's admin dir with a `commondir` back-link, and
+    // <wt>/.git is a one-line file naming that admin dir.
+    const repo = path.join(base, 'repo');
+    const admin = path.join(repo, '.git', 'worktrees', 'run-1');
+    mkdirSync(admin, { recursive: true });
+    writeFileSync(path.join(admin, 'commondir'), '../..\n');
+    mkdirSync(path.join(repo, '.git', 'info'), { recursive: true });
+    writeFileSync(
+      path.join(repo, '.git', 'info', 'exclude'),
+      '# existing\n*.log',
+    );
+    const wt = path.join(base, 'wt');
+    mkdirSync(wt);
+    writeFileSync(path.join(wt, '.git'), `gitdir: ${admin}\n`);
+
+    await excludeFromGit(wt, EVIDENCE_EXCLUDE_PATTERN);
+    expect(
+      readFileSync(path.join(repo, '.git', 'info', 'exclude'), 'utf8'),
+    ).toBe('# existing\n*.log\n.waypoint/\n');
+    // Nothing written into the worktree's private admin dir.
+    expect(() => readFileSync(path.join(admin, 'info', 'exclude'))).toThrow();
   });
 });

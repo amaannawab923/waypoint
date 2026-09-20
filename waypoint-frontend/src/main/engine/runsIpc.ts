@@ -48,6 +48,7 @@ import {
   type JiraRunDeps,
 } from './runs/jiraRuns';
 import type { TranscriptKeeper } from './runs/transcripts';
+import { listEvidence, readEvidence, type EvidenceItem } from './runs/evidence';
 import type { PullRequestPublisher } from './runs/pullRequests';
 import {
   createFolderRegistry,
@@ -98,6 +99,8 @@ export interface RunsIpcDeps {
   host: RunsIpcHost;
   /** EnginePaths.worktreesDir — the only place a run's worktree may be. */
   worktreesDir: string;
+  /** EnginePaths.evidenceDir — where a run's screenshots are kept (runs/evidence.ts); defaults beside worktreesDir. */
+  evidenceDir?: string;
   ledger?: LedgerClient;
   git?: GitRunner;
   /** `shell.showItemInFolder`. */
@@ -890,6 +893,36 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
     await assertWorktreeGitDir(worktree);
     return computeRunDiff(git, worktree, run.baseRef);
   });
+
+  // The run's evidence (runs/evidence.ts): what the session saved while
+  // verifying in its browser, copied into Waypoint's keep on every read
+  // so a still-working run shows what it has and a merged run's proof
+  // outlives its worktree. Read-only, and only ever under evidenceDir.
+  const evidence = {
+    evidenceDir:
+      deps.evidenceDir ??
+      path.join(path.dirname(deps.worktreesDir), 'run-evidence'),
+    logger: deps.logger,
+  };
+  deps.host.handle(
+    RUNS_IPC.listEvidence,
+    async (runId): Promise<EvidenceItem[]> => {
+      const run = await loadRun(runId);
+      return listEvidence(evidence, run);
+    },
+  );
+  deps.host.handle(
+    RUNS_IPC.readEvidence,
+    async (input): Promise<{ name: string; dataUrl: string }> => {
+      const { runId, name } = (input ?? {}) as {
+        runId?: unknown;
+        name?: unknown;
+      };
+      if (typeof name !== 'string') throw new Error('Not an evidence file.');
+      const run = await loadRun(runId);
+      return readEvidence(evidence, run.id, name);
+    },
+  );
 
   deps.host.handle(RUNS_IPC.revealWorktree, async (runId): Promise<void> => {
     const run = await loadRun(runId);
