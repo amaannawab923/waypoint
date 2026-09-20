@@ -290,6 +290,41 @@ describe('claimForInitialQueue / markDelivered / resetAutoAttempts', () => {
     expect(rows.get('pp-2')?.state).toBe('delivered');
   });
 
+  // Found in review: a mid-loop failure (the second row's own claim
+  // request throwing) used to leave the first row wedged `sending`
+  // forever — nothing reverted it, since the function never returned a
+  // partial list for anyone to act on. Same bug class `revertClaimed`
+  // exists for (a claim with nowhere to land), just triggered here by
+  // the claiming loop's own I/O failing partway through.
+  it('a mid-loop claim failure reverts whatever it already claimed, then still rethrows', async () => {
+    const { ledger, rows } = store([
+      row({ seq: 1, text: 'a' }),
+      row({ seq: 2, text: 'b' }),
+    ]);
+    const boom = new Error('backend unreachable');
+    ledger.updatePendingPrompt = jest
+      .fn()
+      .mockImplementationOnce(async (_id: string, pendingId: string, patch: Partial<PendingPrompt>) => {
+        const next = { ...rows.get(pendingId)!, ...patch } as PendingPrompt;
+        rows.set(pendingId, next);
+        return next;
+      })
+      .mockRejectedValueOnce(boom)
+      // The revert's own call for pp-1, back to queued.
+      .mockImplementationOnce(async (_id: string, pendingId: string, patch: Partial<PendingPrompt>) => {
+        const next = { ...rows.get(pendingId)!, ...patch } as PendingPrompt;
+        rows.set(pendingId, next);
+        return next;
+      });
+
+    await expect(claimForInitialQueue({ ledger, logger }, run)).rejects.toBe(
+      boom,
+    );
+    // pp-1 was claimed, then the loop failed on pp-2 — pp-1 must not be
+    // left `sending` with no daemon call ever going to happen for it.
+    expect(rows.get('pp-1')?.state).toBe('queued');
+  });
+
   it('resetAutoAttempts zeroes only the rows that have any', async () => {
     const { ledger } = store([
       row({ seq: 1, autoAttempts: 2 }),

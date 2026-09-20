@@ -254,11 +254,29 @@ export async function claimForInitialQueue(
     (r) => r.state === 'queued',
   );
   const claimed: Array<{ row: PendingPrompt; text: string }> = [];
-  // eslint-disable-next-line no-restricted-syntax -- sequential on purpose: FIFO
-  for (const row of rows) {
-    // eslint-disable-next-line no-await-in-loop
-    await deps.ledger.updatePendingPrompt(run.id, row.id, { state: 'sending' });
-    claimed.push({ row, text: deliveredText(row, run, memberName) });
+  try {
+    // eslint-disable-next-line no-restricted-syntax -- sequential on purpose: FIFO
+    for (const row of rows) {
+      // eslint-disable-next-line no-await-in-loop
+      await deps.ledger.updatePendingPrompt(run.id, row.id, {
+        state: 'sending',
+      });
+      claimed.push({ row, text: deliveredText(row, run, memberName) });
+    }
+  } catch (error) {
+    // Found in review: a mid-loop failure (the Nth claim's own request
+    // fails) used to leave the first N-1 rows wedged `sending` with no
+    // revert — the same "claim doesn't reflect reality" bug class
+    // `revertClaimed` above exists for, just triggered by this loop's own
+    // I/O failing instead of the caller never getting to use the claim.
+    // Still rethrown: the caller (continueStart) needs to know this
+    // failed, same as before this fix.
+    await revertClaimed(
+      deps,
+      run.id,
+      claimed.map((c) => c.row),
+    );
+    throw error;
   }
   return claimed;
 }
