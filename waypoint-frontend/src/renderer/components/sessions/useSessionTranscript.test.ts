@@ -545,4 +545,58 @@ describe('markers and the outbox (never-lock)', () => {
     });
     expect(JSON.stringify(lastSeed)).not.toContain('stale-in-flight');
   });
+
+  // Found in review, round 4: the guard above was given to refreshMarkers
+  // only. loadHistory has three uncoordinated triggers on one unit (the
+  // connect, every turn commit, onRunChanged's re-seed), two of which
+  // coincide on every send and finalize — and the same older-resolves-
+  // last race there wound the transcript back to stale turns.
+  it('an older, slower history read never overwrites a newer one that resolved first', async () => {
+    const olderTurns = [
+      {
+        id: 't1',
+        seq: 1,
+        initiator: 'user',
+        items: [],
+        stale: 'stale-history',
+      },
+    ];
+    const newerTurns = [
+      { id: 't1', seq: 1, initiator: 'user', items: [] },
+      { id: 't2', seq: 2, initiator: 'user', items: [], fresh: 'current' },
+    ];
+    const fb = fakeBridge({}, []);
+    runtime.connectSession.mockImplementation(() => jest.fn());
+    renderHook(() => useSessionTranscript('run-a', { bridge: fb.bridge }));
+    await flush();
+    const state = runtime.createChatState.mock.results[0].value;
+    const options = runtime.connectSession.mock.calls[0][2];
+
+    let resolveOlder: ((page: unknown) => void) | null = null;
+    (fb.bridge.call as jest.Mock).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOlder = resolve;
+        }),
+    );
+    // A turn commit starts a read that hangs.
+    const older = act(async () => options.onTurnCommitted());
+
+    // A second commit starts a newer read, which resolves first.
+    (fb.bridge.call as jest.Mock).mockResolvedValueOnce({
+      turns: newerTurns,
+      nextCursor: null,
+    });
+    await act(async () => options.onTurnCommitted());
+    await flush();
+    expect(state.transcript.history.seed.mock.calls.at(-1)[0]).toHaveLength(2);
+
+    // The older read finally resolves — it must not seed.
+    resolveOlder!({ turns: olderTurns, nextCursor: null });
+    await older;
+    await flush();
+    const lastSeed = state.transcript.history.seed.mock.calls.at(-1)[0];
+    expect(lastSeed).toHaveLength(2);
+    expect(JSON.stringify(lastSeed)).not.toContain('stale-history');
+  });
 });

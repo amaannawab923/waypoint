@@ -125,7 +125,19 @@ export function useSessionTranscript(
   markerLabelRef.current = markerLabel;
   const [pending, setPending] = useState<PendingPrompt[]>([]);
 
+  // The same last-write-wins guard `refreshMarkers` has (below), found
+  // missing here in review (round 4): `loadHistory` is reached from
+  // three uncoordinated triggers on one live unit — the first connect,
+  // every turn commit, and `onRunChanged`'s re-seed — and two of those
+  // routinely coincide (a send or finalize lands with a commit). Without
+  // a token, an older read resolving after a newer one re-seeds the
+  // transcript with stale turns, visibly winding it back.
+  const historyTokenRef = useRef(0);
   const loadHistory = useCallback(async (target: TranscriptUnit) => {
+    historyTokenRef.current += 1;
+    const myToken = historyTokenRef.current;
+    const stale = () =>
+      unitRef.current !== target || historyTokenRef.current !== myToken;
     // The daemon's history first; the ledger's snapshot when the daemon
     // has nothing (ROAD-124: a session killed at finalize or stop, or a
     // daemon restarted since) — the same turn shape, seeded the same way.
@@ -138,11 +150,11 @@ export function useSessionTranscript(
     } catch (error) {
       daemonError = error;
     }
-    if (unitRef.current !== target) return;
+    if (stale()) return;
     if (!turns) {
       try {
         const kept = await getAgentRunTranscript(target.runId);
-        if (unitRef.current !== target) return;
+        if (stale()) return;
         if (kept && kept.turns.length > 0) {
           turns = kept.turns as NonNullable<typeof turns>;
         }

@@ -173,5 +173,40 @@ describe('SessionComposer', () => {
       clearSessionDraft('run-b');
       expect(readSessionDraft('run-b')).toBe('');
     });
+
+    // Found in review, round 4: the composer is mounted per run, so a
+    // person who switched runs while a send was in flight had already
+    // unmounted it by the time the send failed — the catch's setText was
+    // dropped by React, the draft effect never ran, and the message was
+    // simply gone, toast or no toast.
+    it('a send that fails after the person has switched away still puts the text back in the run’s draft', async () => {
+      let settle: (ok: boolean) => void = () => {};
+      const onSend = jest.fn(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            settle = (ok) => (ok ? resolve() : reject(new Error('not sent')));
+          }),
+      );
+      const { unmount } = render(
+        <SessionComposer
+          draftKey="run-c"
+          onSend={onSend}
+          sendBlockedReason={null}
+          attachedToBand={false}
+        />,
+      );
+      const box = screen.getByLabelText('Message this session');
+      fireEvent.change(box, { target: { value: 'the message' } });
+      await act(async () => {
+        fireEvent.keyDown(box, { key: 'Enter', metaKey: true });
+      });
+      expect(readSessionDraft('run-c')).toBe('');
+      unmount();
+      await act(async () => {
+        settle(false);
+      });
+      expect(readSessionDraft('run-c')).toBe('the message');
+      clearSessionDraft('run-c');
+    });
   });
 });

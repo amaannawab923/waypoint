@@ -217,6 +217,35 @@ describe('deriveMarkers', () => {
       );
     });
 
+    // Round 4 of review: the escape set covered inline syntax and `#`,
+    // but block syntax — a `---` underline turning the marker into a
+    // heading, a `- [x]` list — starts at a line start, and a payload
+    // carrying its own newlines could put one there. Every marker is one
+    // line; every kind of line break in untrusted text becomes a space.
+    it('collapses line breaks in untrusted text, so block Markdown (a rule, a list, a heading underline) can never start on a line of its own', () => {
+      const [marker] = deriveMarkers(
+        [
+          event(1, 'finalized', {
+            sequence: 1,
+            verdict:
+              'fixed\n\n---\n\n- [x] fake step\r\n1. numbered\u2028> quoted',
+          }),
+        ],
+        'ROAD-116 · Fix',
+      );
+      expect(marker.text).toBe(
+        'Waypoint · Completed ROAD-116 · Fix · verdict fixed --- - \\[x\\] fake step 1. numbered \\> quoted',
+      );
+      expect(marker.text).not.toMatch(/[\r\n\u2028\u2029]/);
+      // Ordinary prose with the same characters is untouched.
+      expect(
+        deriveMarkers(
+          [event(2, 'finalized', { sequence: 1, verdict: 'v1.2-rc' })],
+          'ROAD-1',
+        )[0].text,
+      ).toBe('Waypoint · Completed ROAD-1 · verdict v1.2-rc');
+    });
+
     it('escapes a forged `from` on session_resumed', () => {
       const [marker] = deriveMarkers(
         [

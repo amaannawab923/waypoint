@@ -38,13 +38,24 @@ const num = (v: unknown): number | null => (typeof v === 'number' ? v : null);
  * CLIENT_EVENT_KINDS, so any workspace member can POST one with an
  * arbitrary payload; unescaped, `[label](url)`-shaped text becomes a
  * spoofed link, and `<...>` becomes raw HTML). Every CommonMark
- * punctuation character that starts syntax gets a backslash — always a
- * no-op for ordinary prose (a backslash-escaped ordinary character
- * still renders as itself), never a partial escape an attacker can
- * work around.
+ * punctuation character that starts INLINE syntax gets a backslash —
+ * always a no-op for ordinary prose (a backslash-escaped ordinary
+ * character still renders as itself), never a partial escape an
+ * attacker can work around.
+ *
+ * Block syntax — a heading underline (`---`), a thematic break, a list
+ * item (`- `, `+ `, `1. `), a blockquote — only ever starts at the start
+ * of a line, and a marker is one line that always starts with
+ * `Waypoint · `. So the block vector is a line break inside the text,
+ * and that is what is removed (found in review, round 4: the escape set
+ * above handled `#` but let `\n---\n` and `\n- [x] …` through). Every
+ * kind of line break, collapsed to one space; the block characters
+ * themselves stay unescaped so `ROAD-116` still reads as `ROAD-116`.
  */
 function escapeMdText(text: string): string {
-  return text.replace(/[\\`*_[\]()<>~|#]/g, (c) => `\\${c}`);
+  return text
+    .replace(/[\r\n\u2028\u2029]+/g, ' ')
+    .replace(/[\\`*_[\]()<>~|#]/g, (c) => `\\${c}`);
 }
 
 /**

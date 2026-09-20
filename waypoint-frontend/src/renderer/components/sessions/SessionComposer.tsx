@@ -125,7 +125,20 @@ export function SessionComposer({
       await onSend(trimmed);
     } catch {
       // onSend has already said why (a toast); the text comes back — to
-      // the box and, through the draft effect, to the draft.
+      // the box and, through the draft effect, to the draft. The draft
+      // is written here directly as well (found in review, round 4):
+      // this composer is mounted per run, so a person who switched runs
+      // while the send was in flight has already unmounted it — the
+      // setText below is dropped on the floor and the draft effect never
+      // runs, and the message would simply be gone. Storage doesn't care
+      // whether the box still exists.
+      if (draftKey) {
+        const stored = readSessionDraft(draftKey);
+        writeSessionDraft(
+          draftKey,
+          stored.trim() ? `${trimmed}\n${stored}` : trimmed,
+        );
+      }
       setText((current) =>
         current.trim() ? `${trimmed}\n${current}` : trimmed,
       );
