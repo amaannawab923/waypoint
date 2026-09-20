@@ -72,9 +72,9 @@ function finalizedText(
 }
 
 function resumedText(payload: Record<string, unknown>): string {
-  const from = str(pick(payload, 'from'));
+  const from = str(pick(payload, 'from')) as string;
   const outcome = str(pick(payload, 'outcome'));
-  const parts: string[] = [from ? `Continued from ${from}` : 'Continued'];
+  const parts: string[] = [`Continued from ${from}`];
   if (outcome === 'replaced-by-new')
     parts.push('fresh session in the same worktree');
   else if (outcome === 'loaded') parts.push('conversation restored');
@@ -99,7 +99,12 @@ export function deriveMarkers(
     let text: string | null = null;
     if (event.kind === 'finalized') {
       text = finalizedText(payload, label);
-    } else if (event.kind === 'session_resumed') {
+    } else if (event.kind === 'session_resumed' && str(pick(payload, 'from'))) {
+      // Only a resume that continued the conversation (startRun.ts's
+      // resumeRunCore writes `from`). Boot reconcile writes the same kind
+      // for a daemon session it found live and re-attached (`at:'boot'`)
+      // — bookkeeping, one per launch, found live as a wall of
+      // "Continued" lines on a run Waypoint had merely restarted under.
       text = resumedText(payload);
     } else if (event.kind === 'note') {
       const commits = num(pick(payload, 'unpublishedCommits'));

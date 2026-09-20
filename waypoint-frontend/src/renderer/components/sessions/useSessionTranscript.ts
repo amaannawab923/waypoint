@@ -176,11 +176,16 @@ export function useSessionTranscript(
     // (chat-ui's ChatHistory contract). Found live: a turn in flight
     // vanished from the pane the moment history landed after the live
     // snapshot. So the follower's current turn is put back right after.
+    // The pending prompt goes BEFORE the seed. chat-ui builds a row's
+    // component once, by role; a seed that adds a row where the pending
+    // prompt's user card stood recycles that card for the new row —
+    // found live (never-lock): a marker drawn as a user bubble, the
+    // person's own message painted over it.
+    target.state.session.setPendingPrompt(null);
     target.state.transcript.history.seed(seeded);
     target.state.transcript.activeTurn.set(
       foldActive(target.source.activeTurn.getSnapshot() ?? null),
     );
-    target.state.session.setPendingPrompt(null);
     setTurnCount(turns?.length ?? 0);
     setHistoryStatus({ kind: 'ready' });
   }, []);

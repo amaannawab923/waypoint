@@ -147,6 +147,12 @@ describe('deriveMarkers', () => {
           kind: 'message',
           continued: true,
         }),
+        // Boot reconcile's re-attach/adopt bookkeeping: the same kind,
+        // no `from` — found live as a wall of "Continued" lines.
+        event(7, 'session_resumed', {
+          at: 'boot',
+          note: 'daemon session found live; re-attached',
+        }),
         event(5, 'status_changed', { from: 'running', to: 'done' }),
         event(6, 'session_started', {}),
       ],

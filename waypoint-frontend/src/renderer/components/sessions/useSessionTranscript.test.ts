@@ -430,6 +430,15 @@ describe('markers and the outbox (never-lock)', () => {
     });
     expect(result.current.pending.map((p) => p.id)).toEqual(['pp-1']);
     expect(listAgentRunEvents).toHaveBeenCalledWith('run-a');
+    // The pending prompt is cleared BEFORE the seed: chat-ui builds a
+    // row's component once, by role, and a seed that adds a marker where
+    // the pending prompt's user card stood recycles that card for it
+    // (found live: a marker drawn as a user bubble).
+    expect(
+      state.session.setPendingPrompt.mock.invocationCallOrder.at(-1),
+    ).toBeLessThan(
+      state.transcript.history.seed.mock.invocationCallOrder.at(-1),
+    );
   });
 
   it('re-reads the events on a run change for this run only, and re-seeds when a marker was added', async () => {
