@@ -20,6 +20,7 @@ import {
 import { refreshSessions, useSessionsSnapshot } from '@/lib/sessionsStore';
 import { showErrorToast } from '@/lib/toast';
 import type { AgentRun, PendingPrompt } from '@/types/agentRuns';
+import { ImageViewer } from './ImageViewer';
 import { PermissionBand } from './PermissionBand';
 import { SessionComposer } from './SessionComposer';
 import {
@@ -462,6 +463,13 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
     }
   };
 
+  // A screenshot the session took (chat-ui renders it under the tool row;
+  // a click hands the image here), shown full size in a modal.
+  const [viewing, setViewing] = useState<{
+    name: string;
+    dataUrl: string;
+  } | null>(null);
+
   // One object per run, so ChatTranscript pushes it to the view once, not
   // on every render.
   const commands = useMemo(
@@ -474,6 +482,14 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
               : 'The turn was not cancelled.',
           ),
         );
+      },
+      onViewImage: ({
+        attachment,
+      }: {
+        attachment: { id: string; name: string; dataUrl?: string };
+      }) => {
+        if (attachment.dataUrl)
+          setViewing({ name: attachment.name, dataUrl: attachment.dataUrl });
       },
     }),
     [run.id],
@@ -575,6 +591,7 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
         </div>
       )}
       <div className="min-h-0 flex-1">{transcriptBody}</div>
+      <ImageViewer image={viewing} onClose={() => setViewing(null)} />
       {/* Where `dockHome` sits before the layout effect has anywhere
           better to put it (the very first paint) — the composer is
           mounted either way; see `dockHome`'s own comment above. */}
