@@ -149,6 +149,17 @@ export interface RepositoryRefs {
   remoteHeads: Array<{ remote: string; branch: string }>;
 }
 
+/** The daemon's `agentConfig.saveMcpServer` input (emdash `mcpServerSchema`), the stdio half. */
+export interface DaemonMcpServer {
+  name: string;
+  transport: 'stdio';
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+  /** Provider ids the server is written for (`claude`). */
+  providers: string[];
+}
+
 export interface DaemonRunsApi {
   /**
    * Registers the repository at `repoPath` under `preferredId`, or returns
@@ -174,6 +185,14 @@ export interface DaemonRunsApi {
   ): Promise<void>;
   /** Local branch names of the repository at `repoPath`. */
   listLocalBranches(repoPath: string): Promise<string[]>;
+  /**
+   * Registers (or overwrites, by name) an MCP server in each named
+   * provider's own config — for `claude`, `~/.claude.json` — the way
+   * emdash's MCP settings page does; every session that provider starts
+   * afterwards lists it. See runs/sessionBrowser.ts for the one caller and
+   * the gap it accepts (the daemon reads the person's real home).
+   */
+  saveMcpServer(server: DaemonMcpServer): Promise<void>;
   /** Local branches plus what the remotes' HEADs point at. */
   listRefs(repoPath: string): Promise<RepositoryRefs>;
   /**
@@ -402,6 +421,9 @@ export function createDaemonRunsApi(client: WireClient): DaemonRunsApi {
     },
     async listLocalBranches(repoPath) {
       return (await listRefs(repoPath)).branches;
+    },
+    async saveMcpServer(server) {
+      await fallible<unknown>('agentConfig.saveMcpServer', { server });
     },
     listRefs,
     startSession(request) {

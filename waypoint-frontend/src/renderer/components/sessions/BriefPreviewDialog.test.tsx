@@ -185,6 +185,50 @@ describe('BriefPreviewDialog', () => {
     ).toBeInTheDocument();
   });
 
+  it('Verify in the browser: off by default, rebuilds the brief with the flag when switched on', async () => {
+    (getBriefPreview as jest.Mock)
+      .mockResolvedValueOnce(preview())
+      .mockResolvedValueOnce(
+        preview({ brief: 'The brief, with ## Verification.' }),
+      );
+    renderDialog();
+    await flush();
+    const verify = screen.getByRole('switch', {
+      name: 'Verify in the browser',
+    });
+    expect(verify).toHaveAttribute('aria-checked', 'false');
+    expect(getBriefPreview).toHaveBeenLastCalledWith({
+      ticketId: 'wi-61',
+      intent: 'fix',
+    });
+    fireEvent.click(verify);
+    await flush();
+    expect(getBriefPreview).toHaveBeenLastCalledWith({
+      ticketId: 'wi-61',
+      intent: 'fix',
+      verifyInBrowser: true,
+    });
+    expect(
+      screen.getByDisplayValue('The brief, with ## Verification.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/brings back screenshots/)).toBeInTheDocument();
+  });
+
+  it('a plan-mode session has no Verify switch — nothing to verify', async () => {
+    (getBriefPreview as jest.Mock).mockResolvedValue(
+      preview({
+        intent: 'investigate',
+        mode: 'plan',
+        autoApproveDefault: false,
+      }),
+    );
+    renderDialog({ request: { ticketId: 'wi-61', intent: 'investigate' } });
+    await flush();
+    expect(
+      screen.queryByRole('switch', { name: 'Verify in the browser' }),
+    ).not.toBeInTheDocument();
+  });
+
   it('a live writer on the ticket is said, Start refused, and the live run opened from the notice', async () => {
     (getBriefPreview as jest.Mock).mockResolvedValue(
       preview({ liveWriterRunId: 'run-fix00001' }),

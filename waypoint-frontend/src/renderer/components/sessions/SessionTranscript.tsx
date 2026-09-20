@@ -20,6 +20,8 @@ import {
 import { refreshSessions, useSessionsSnapshot } from '@/lib/sessionsStore';
 import { showErrorToast } from '@/lib/toast';
 import type { AgentRun, PendingPrompt } from '@/types/agentRuns';
+import { ImageViewer, type ViewerImage } from './ImageViewer';
+import { collectTranscriptImages } from './transcriptImages';
 import { PermissionBand } from './PermissionBand';
 import { SessionComposer } from './SessionComposer';
 import {
@@ -462,6 +464,18 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
     }
   };
 
+  // A screenshot the session took (chat-ui renders it under the tool row;
+  // a click hands the image here): the viewer opens on it with every
+  // other image in the transcript beside it, collected at click time —
+  // the list is only needed while the viewer is open, and a run that is
+  // still working may add more before the next click.
+  const [viewing, setViewing] = useState<{
+    images: ViewerImage[];
+    initialId: string;
+  } | null>(null);
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
   // One object per run, so ChatTranscript pushes it to the view once, not
   // on every render.
   const commands = useMemo(
@@ -474,6 +488,32 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
               : 'The turn was not cancelled.',
           ),
         );
+      },
+      onViewImage: ({
+        attachment,
+      }: {
+        attachment: { id: string; name: string; dataUrl?: string };
+      }) => {
+        const transcript = stateRef.current?.transcript.state;
+        const turns = transcript
+          ? [
+              ...transcript.committedTurns,
+              ...(transcript.activeTurnSnapshot
+                ? [transcript.activeTurnSnapshot]
+                : []),
+            ]
+          : [];
+        const images = collectTranscriptImages(turns);
+        // The clicked image is always shown, even if the walk somehow
+        // missed it (a shape this collector does not know yet).
+        if (!images.some((i) => i.id === attachment.id) && attachment.dataUrl) {
+          images.push({
+            id: attachment.id,
+            name: attachment.name,
+            dataUrl: attachment.dataUrl,
+          });
+        }
+        if (images.length) setViewing({ images, initialId: attachment.id });
       },
     }),
     [run.id],
@@ -575,6 +615,11 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
         </div>
       )}
       <div className="min-h-0 flex-1">{transcriptBody}</div>
+      <ImageViewer
+        images={viewing?.images ?? []}
+        initialId={viewing?.initialId ?? null}
+        onClose={() => setViewing(null)}
+      />
       {/* Where `dockHome` sits before the layout effect has anywhere
           better to put it (the very first paint) — the composer is
           mounted either way; see `dockHome`'s own comment above. */}

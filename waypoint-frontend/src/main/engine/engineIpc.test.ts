@@ -11,6 +11,9 @@ jest.mock('electron', () => ({
   ipcMain: { handle: ipcMainHandleMock },
   app: {
     getPath: jest.fn(() => '/tmp/waypoint-test-userdata'),
+    // runs/sessionBrowser.ts resolves its vendored server under the app
+    // path; nowhere, here, so nothing is registered (and nothing spawned).
+    getAppPath: jest.fn(() => '/tmp/waypoint-test-app'),
     on: appOnMock,
     off: jest.fn(),
   },

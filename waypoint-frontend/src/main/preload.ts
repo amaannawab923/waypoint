@@ -1,6 +1,7 @@
 // Disable no-unused-vars, broken for spread args
 /* eslint no-unused-vars: off */
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
+import type { BrowserAccessStatus as CopilotBrowserAccessStatus } from './copilot/copilotBrowser';
 import type { CopilotDetectResult } from './copilot/copilotDetect';
 import type { SessionOffer as CopilotSessionOffer } from './copilot/sessionTools';
 import type {
@@ -303,6 +304,18 @@ const electronHandler = {
       // OAuth host — see copilotConnect.ts's own handler.
       openExternal(url: string): Promise<{ ok: boolean }> {
         return ipcRenderer.invoke('copilot:auth:open-external', url);
+      },
+    },
+    // "Use my Chrome" (copilot/copilotBrowser.ts): the stored opt-in plus a
+    // live probe of the Claude in Chrome bridge. Request/response like
+    // `auth` — and the preference is the ONLY thing the renderer can set;
+    // whether a turn actually gets the browser is decided in main.
+    browser: {
+      status(): Promise<CopilotBrowserAccessStatus> {
+        return ipcRenderer.invoke('copilot:browser:status');
+      },
+      setEnabled(enabled: boolean): Promise<CopilotBrowserAccessStatus> {
+        return ipcRenderer.invoke('copilot:browser:set-enabled', enabled);
       },
     },
     // W5a: the model asked to offer a session on a ticket
@@ -667,7 +680,10 @@ const electronHandler = {
     listPendingPrompts(runId: string): Promise<PendingPrompt[]> {
       return ipcRenderer.invoke(RUNS_IPC.listPendingPrompts, runId);
     },
-    dropPendingPrompt(input: { runId: string; pendingId: string }): Promise<void> {
+    dropPendingPrompt(input: {
+      runId: string;
+      pendingId: string;
+    }): Promise<void> {
       return ipcRenderer.invoke(RUNS_IPC.dropPendingPrompt, input);
     },
     retryPendingPrompt(input: { runId: string }): Promise<SendRunPromptResult> {

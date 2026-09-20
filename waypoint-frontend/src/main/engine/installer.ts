@@ -96,10 +96,38 @@ async function exists(p: string): Promise<boolean> {
  * its own so the supervisor's `install()` can answer "installed?" on every
  * launch without re-extracting anything.
  */
+/**
+ * Beside the extracted archive: the sha256 of the archive it came from.
+ * The manifest names a version and a protocol, and the launcher hash names
+ * a nine-line script — none of which changes when the daemon is rebuilt
+ * from a new commit of Waypoint's emdash fork under the same version (the
+ * first fork build, 2026-09-20: every check below passed against the OLD
+ * extraction and the new archive was never unpacked). The pin is the
+ * archive's sha; an install must be able to say which archive it is.
+ */
+export const INSTALLED_ARCHIVE_SHA_FILE = '.archive-sha256';
+
+function installedShaPath(paths: EnginePaths, pin: EnginePin): string {
+  return path.join(paths.installDir, pin.name, INSTALLED_ARCHIVE_SHA_FILE);
+}
+
 export async function verifyInstalledEngine(
   paths: EnginePaths,
   pin: EnginePin = ENGINE_PIN,
 ): Promise<EngineInstallResult> {
+  const installedSha = await fs
+    .readFile(installedShaPath(paths, pin), 'utf8')
+    .then((t) => t.trim())
+    .catch(() => null);
+  if (installedSha !== pin.sha256) {
+    return {
+      ok: false,
+      reason: 'manifest-mismatch',
+      message: installedSha
+        ? `The engine at ${paths.installDir} was extracted from archive ${installedSha.slice(0, 12)}…, pinned is ${pin.sha256.slice(0, 12)}…. Reinstalling.`
+        : `The engine at ${paths.installDir} does not record which archive it came from. Reinstalling.`,
+    };
+  }
   if (!(await exists(paths.launcherPath))) {
     return {
       ok: false,
@@ -239,6 +267,19 @@ export async function installEngine(
     await fs.chmod(paths.launcherPath, 0o755);
   } catch {
     // verifyInstalledEngine reports the missing launcher with a better message.
+  }
+  // Written last, after everything above succeeded: a marker that says
+  // "these files came from archive X" must never outlive a failed extract.
+  try {
+    await fs.writeFile(installedShaPath(paths, pin), `${actual}\n`, 'utf8');
+  } catch (err) {
+    return {
+      ok: false,
+      reason: 'extract-failed',
+      message: `Could not record the installed archive's sha256: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    };
   }
   return verifyInstalledEngine(paths, pin);
 }

@@ -92,6 +92,11 @@ export function BriefPreviewDialog({
   // *Something else…* only: the switch, when the request came without one
   // (a slash command); null = as the request said.
   const [mayChangeFiles, setMayChangeFiles] = useState<boolean | null>(null);
+  // Writing sessions: verify the change in the session's isolated browser
+  // and bring back screenshots (the brief gains the verification task;
+  // the run gains an Evidence tab). Off by default — it costs the session
+  // a running app and a browser, which not every fix warrants.
+  const [verifyInBrowser, setVerifyInBrowser] = useState(false);
   // W5b, Jira issues: the folder chosen in this dialog (a handle), the
   // picker's list, and whether the picker is open over a remembered folder.
   const [folder, setFolder] = useState<SessionFolder | null>(null);
@@ -119,10 +124,16 @@ export function BriefPreviewDialog({
       lastRequest.current = request;
       autoApproveTouched.current = false;
       setChoosing(false);
-      if (baseRef !== null || mayChangeFiles !== null || folder !== null) {
+      if (
+        baseRef !== null ||
+        mayChangeFiles !== null ||
+        folder !== null ||
+        verifyInBrowser
+      ) {
         setBaseRef(null);
         setMayChangeFiles(null);
         setFolder(null);
+        setVerifyInBrowser(false);
         return undefined;
       }
     }
@@ -136,6 +147,7 @@ export function BriefPreviewDialog({
           ...request,
           ...(baseRef ? { baseRef } : {}),
           ...(mayChangeFiles !== null ? { mayChangeFiles } : {}),
+          ...(verifyInBrowser ? { verifyInBrowser } : {}),
           ...(folder ? { folder: folder.handle } : {}),
         });
         if (cancelled) return;
@@ -158,7 +170,7 @@ export function BriefPreviewDialog({
     return () => {
       cancelled = true;
     };
-  }, [request, baseRef, mayChangeFiles, folder]);
+  }, [request, baseRef, mayChangeFiles, folder, verifyInBrowser]);
 
   // W5b: the picker's list, read when the picker is shown — a Jira issue
   // with no folder yet, or *Change* on a remembered one. Git repositories
@@ -438,6 +450,26 @@ export function BriefPreviewDialog({
               </dd>
               {writing && (
                 <>
+                  <dt className="text-text-muted">Verify</dt>
+                  <dd className="flex items-center gap-2.5">
+                    <Switch
+                      id="brief-preview-verify-browser"
+                      label="Verify in the browser"
+                      checked={verifyInBrowser}
+                      disabled={starting}
+                      onChange={(next) => setVerifyInBrowser(next)}
+                    />
+                    <label
+                      htmlFor="brief-preview-verify-browser"
+                      className={clsx(
+                        verifyInBrowser ? 'text-text' : 'text-text-secondary',
+                      )}
+                    >
+                      {verifyInBrowser
+                        ? 'After the change, the agent starts the app, drives the steps in its own browser, and brings back screenshots.'
+                        : 'The agent verifies however it can; no screenshots.'}
+                    </label>
+                  </dd>
                   <dt className="text-text-muted">Auto-approve</dt>
                   <dd className="flex items-center gap-2.5">
                     <Switch

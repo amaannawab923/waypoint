@@ -10,6 +10,7 @@ import {
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import {
+  INSTALLED_ARCHIVE_SHA_FILE,
   installEngine,
   verifyInstalledEngine,
   type EnginePin,
@@ -115,6 +116,104 @@ describe('installEngine', () => {
     );
     expect(again.ok).toBe(true);
     expect(readFileSync(marker, 'utf8')).toBe('still here');
+  });
+
+  // The fork (2026-09-20): a daemon rebuilt from a new commit of Waypoint's
+  // emdash fork under the SAME version has the same launcher, the same
+  // manifest — and a different archive. Before this, every check passed
+  // against the old extraction and the new archive was never unpacked.
+  it('re-extracts when the pinned archive changed under the same version, and records which archive it installed', async () => {
+    const f = makeFixture('first', { ...GOOD_MANIFEST });
+    await installEngine(
+      f.paths,
+      { bundledArchiveDir: f.bundledArchiveDir, ...DARWIN_ARM },
+      f.pin,
+    );
+    expect(
+      readFileSync(
+        path.join(
+          f.paths.installDir,
+          ENGINE_PIN.name,
+          INSTALLED_ARCHIVE_SHA_FILE,
+        ),
+        'utf8',
+      ).trim(),
+    ).toBe(f.pin.sha256);
+
+    // A second archive: same launcher and manifest, one more file inside
+    // (a rebuilt daemon), so a different sha — pointed at the same
+    // installDir.
+    const g = makeFixture('second', { ...GOOD_MANIFEST });
+    writeFileSync(
+      path.join(tmp, 'second', 'stage', ENGINE_PIN.name, 'dist.txt'),
+      'new build',
+    );
+    execFileSync('tar', [
+      '-czf',
+      g.archivePath,
+      '-C',
+      path.join(tmp, 'second', 'stage'),
+      ENGINE_PIN.name,
+    ]);
+    const sha256 = createHash('sha256')
+      .update(readFileSync(g.archivePath))
+      .digest('hex');
+    expect(sha256).not.toBe(f.pin.sha256);
+    const pin2 = { ...g.pin, sha256 };
+
+    const before = await verifyInstalledEngine(f.paths, pin2);
+    expect(before.ok).toBe(false);
+    if (!before.ok)
+      expect(before.message).toContain('was extracted from archive');
+
+    const result = await installEngine(
+      f.paths,
+      { bundledArchiveDir: g.bundledArchiveDir, ...DARWIN_ARM },
+      pin2,
+    );
+    expect(result.ok).toBe(true);
+    expect(
+      readFileSync(
+        path.join(f.paths.installDir, ENGINE_PIN.name, 'dist.txt'),
+        'utf8',
+      ),
+    ).toBe('new build');
+    expect(
+      readFileSync(
+        path.join(
+          f.paths.installDir,
+          ENGINE_PIN.name,
+          INSTALLED_ARCHIVE_SHA_FILE,
+        ),
+        'utf8',
+      ).trim(),
+    ).toBe(sha256);
+  });
+
+  it('an install with no record of its archive is reinstalled', async () => {
+    const f = makeFixture('unrecorded', GOOD_MANIFEST);
+    await installEngine(
+      f.paths,
+      { bundledArchiveDir: f.bundledArchiveDir, ...DARWIN_ARM },
+      f.pin,
+    );
+    rmSync(
+      path.join(
+        f.paths.installDir,
+        ENGINE_PIN.name,
+        INSTALLED_ARCHIVE_SHA_FILE,
+      ),
+    );
+    const before = await verifyInstalledEngine(f.paths, f.pin);
+    expect(before.ok).toBe(false);
+    if (!before.ok)
+      expect(before.message).toContain('does not record which archive');
+    const again = await installEngine(
+      f.paths,
+      { bundledArchiveDir: f.bundledArchiveDir, ...DARWIN_ARM },
+      f.pin,
+    );
+    expect(again.ok).toBe(true);
   });
 
   // Review round 2: the archive was hash-checked once, at extraction, and

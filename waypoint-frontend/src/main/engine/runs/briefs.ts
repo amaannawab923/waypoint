@@ -76,6 +76,8 @@ export interface BriefInput {
   approvedRca?: string | null;
   /** Fix: the branch of an earlier Fix on the same ticket, named so the agent knows it exists (§2.9). */
   priorFixBranch?: string | null;
+  /** Writing sessions: verify the change in the isolated browser and bring back screenshots. */
+  verifyInBrowser?: boolean;
 }
 
 /** The newest comments the brief carries. */
@@ -195,16 +197,44 @@ function when(iso: string): string {
 // The closing-message contract, common to every verb — W5c: the report
 // shape (report.ts reads it back). The Summary goes on the ticket, so it
 // is written for the ticket's readers; the Details stay with the run.
-function closingRule(noun: 'ticket' | 'issue', verdicts: string[]): string {
+function closingRule(
+  noun: 'ticket' | 'issue',
+  verdicts: string[],
+  verify = false,
+): string {
   return [
     `Waypoint reads only the final message of this turn, so end the turn with one message in exactly this shape, and nothing after it:`,
     `Verdict: <one of ${verdicts.join(' | ')}>`,
     `## Summary`,
     `Three to eight lines for the ${noun}'s readers — a product manager and a reviewer who has not seen the code: what you concluded, the one or two facts that support it, and what happens next. No file paths or commands here. Waypoint posts this section on the ${noun}, as a comment a person approves first.`,
+    ...(verify
+      ? [
+          `## Verification`,
+          `What you drove in the browser, step by step, and what each screenshot shows (first, second, … in the order you took them); then whether the behaviour now matches the ${noun}. Waypoint posts this section on the ${noun} too; the screenshots themselves are in the run's transcript. If you could not start the app or drive the steps, say exactly that here.`,
+        ]
+      : []),
     `## Details`,
     `Everything else — evidence with files and lines, what you tried, how you verified it, what you could not settle. This stays with the run in Waypoint and is not posted on the ${noun}.`,
     `Do not ask questions at the end; state what you found and what you would do next.`,
   ].join('\n');
+}
+
+/**
+ * The verification paragraph a writing session gets with the switch on.
+ * Names the server (sessionBrowser.ts registers it as `waypoint-browser`)
+ * and its tools by name — a model given a bare "verify in the browser"
+ * reaches for curl or a unit test; told which tools exist, it drives the
+ * page. Screenshots are taken WITHOUT a filePath: the tool then returns
+ * the image as content, the transcript keeps it on that tool call, and
+ * the run's chat shows it at the moment it was taken (emdash fork,
+ * 2026-09-20) — no folder, nothing to commit, nothing to copy.
+ */
+function verificationTask(noun: 'ticket' | 'issue'): string {
+  return [
+    `Then verify the change in a browser. Start the app from this worktree (the README or package scripts say how; use a free port), open it with the waypoint-browser tools — navigate_page, take_snapshot, click, fill, take_screenshot — and walk the ${noun}'s reproduction steps against your change.`,
+    `Take a screenshot at each step that matters — before you act and after — with take_screenshot and NO filePath, so the image lands in your transcript where the ${noun}'s readers see it; say in your narration what each one shows. Stop the app when you are done.`,
+    `A change you could not verify this way is partial, not fixed — say what stopped you (the app would not start, a login was needed, the steps could not be driven) rather than claiming it works.`,
+  ].join(' ');
 }
 
 const INVESTIGATE_VERDICTS = ['root-cause', 'not-a-bug', 'needs-info'];
@@ -234,8 +264,9 @@ function taskSection(input: BriefInput): string {
         ...(note ? [`Note from the ${noun} owner: ${note}`] : []),
         `Implement the fix on this branch. Commit as you go with clear messages. Do not touch anything outside this worktree.${input.approvedRca ? ' Start from the approved root cause above; if the code says otherwise, say so in your closing message.' : ''}`,
         `Waypoint pushes this branch and opens the pull request itself once you finish — you cannot push from this session and must not try, and your report must not say the branch was not pushed or that a PR is still to be opened; Waypoint adds those facts to the comment.`,
+        ...(input.verifyInBrowser ? [verificationTask(noun)] : []),
         `Your verdict: fixed when the change is on the branch and verified; partial when it is on the branch but does not close the ${noun} (say what is left); not-a-bug or wont-fix when the ${noun} should be closed instead of fixed — then change nothing and say why; needs-info when a person must decide first. Waypoint proposes moving the ${noun} to review for fixed and partial, and closing it for not-a-bug and wont-fix.`,
-        closingRule(noun, FIX_VERDICTS),
+        closingRule(noun, FIX_VERDICTS, input.verifyInBrowser === true),
       ].join('\n');
     }
     case 'custom': {
@@ -246,7 +277,14 @@ function taskSection(input: BriefInput): string {
         input.mayChangeFiles
           ? 'You may edit files on this branch; commit as you go. Do not touch anything outside this worktree. Waypoint pushes the branch and opens the pull request itself once you finish; you cannot push from this session.'
           : 'Do not change any file: this session is in plan mode. Read, run read-only commands, and report.',
-        closingRule(noun, CUSTOM_VERDICTS),
+        ...(input.mayChangeFiles && input.verifyInBrowser
+          ? [verificationTask(noun)]
+          : []),
+        closingRule(
+          noun,
+          CUSTOM_VERDICTS,
+          input.mayChangeFiles === true && input.verifyInBrowser === true,
+        ),
       ].join('\n');
     }
   }

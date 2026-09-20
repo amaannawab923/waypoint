@@ -215,7 +215,8 @@
     "afterSign": ".erb/scripts/notarize.js",
     "asarUnpack": [
       "**\\*.{node,dll}",
-      "**/node_modules/@anthropic-ai/claude-agent-sdk*/**"
+      "**/node_modules/@anthropic-ai/claude-agent-sdk*/**",
+      "**/node_modules/chrome-devtools-mcp/**"
     ],
     "files": [
       "dist",

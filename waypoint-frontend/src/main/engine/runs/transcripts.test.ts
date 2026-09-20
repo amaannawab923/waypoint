@@ -113,6 +113,67 @@ describe('fitTurns', () => {
     const turns = [turn(1), turn(2)];
     expect(fitTurns(turns)).toBe(turns);
   });
+
+  // Found in review: a single turn over the cap — a verification turn's
+  // screenshots — used to empty the whole snapshot. Its images go first;
+  // its text stays.
+  it('a lone turn over the cap keeps its text and loses its images, never the whole snapshot', () => {
+    const shot = (data: string) => ({
+      kind: 'unknown-tool-call',
+      id: 'shot',
+      seq: 2,
+      toolCallId: 't',
+      title: 'take_screenshot',
+      status: 'done',
+      images: [{ mimeType: 'image/png', data }],
+    });
+    const big = {
+      ...turn(1, 'The report.'),
+      items: [
+        { kind: 'message', role: 'user', text: 'verify' },
+        shot('x'.repeat(30_000)),
+        {
+          kind: 'tool-group',
+          id: 'g',
+          seq: 3,
+          children: [shot('y'.repeat(30_000))],
+        },
+        { kind: 'message', role: 'assistant', text: 'The report.' },
+      ],
+    } as unknown as DaemonTranscriptTurn;
+    const kept = fitTurns([big], 20_000);
+    expect(kept).toHaveLength(1);
+    expect(JSON.stringify(kept)).not.toContain('images');
+    expect(JSON.stringify(kept)).toContain('The report.');
+    expect(JSON.stringify(kept)).toContain('take_screenshot');
+    expect(JSON.stringify(kept).length).toBeLessThanOrEqual(20_000);
+  });
+
+  it('sheds old turns before any images, and only the images it must', () => {
+    const withShot = (seq: number, data: string): DaemonTranscriptTurn =>
+      ({
+        ...turn(seq, 'text'),
+        items: [
+          {
+            kind: 'unknown-tool-call',
+            id: `shot-${seq}`,
+            seq: 1,
+            images: [{ mimeType: 'image/png', data }],
+          },
+        ],
+      }) as unknown as DaemonTranscriptTurn;
+    // Two turns, each ~6 KB of image: together over 10 KB, each alone under.
+    const kept = fitTurns(
+      [withShot(1, 'a'.repeat(6_000)), withShot(2, 'b'.repeat(6_000))],
+      10_000,
+    );
+    expect(kept.map((t) => t.seq)).toEqual([2]);
+    expect(JSON.stringify(kept)).toContain('bbbb');
+  });
+
+  it('is empty only when even a text-only last turn cannot fit', () => {
+    expect(fitTurns([turn(1, 'x'.repeat(50_000))], 20_000)).toEqual([]);
+  });
 });
 
 // Never-lock (design §5.4): a session the provider could not restore

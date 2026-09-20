@@ -26,6 +26,7 @@ import { registerBootReconcile } from './runs/bootReconcile';
 import { withTicketDispatchLock } from './runs/dispatch';
 import { registerLiveLedgerFollower } from './runs/liveLedgerFollower';
 import { createDaemonRunsApi } from './runs/daemonApi';
+import { registerSessionBrowser } from './runs/sessionBrowser';
 import { createRunFinalizer } from './runs/finalize';
 import { createLedgerClient } from './runs/ledgerClient';
 import type { JiraRunDeps } from './runs/jiraRuns';
@@ -203,6 +204,9 @@ export function registerEngineIpc(
   // connection. A fake supervisor with no client (every engineIpc test)
   // makes this a no-op.
   registerBootReconcile({ supervisor, logger });
+  // Sessions' isolated browser (runs/sessionBrowser.ts): registered with
+  // the daemon on the same per-connection cadence as the reconcile.
+  registerSessionBrowser({ supervisor, appPath: app.getAppPath(), logger });
 
   // W5a: the two notifications a run sends (blocked, needs review), and
   // host-side finalize for a dispatched run whose turn ended — both hang

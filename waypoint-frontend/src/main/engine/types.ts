@@ -42,10 +42,12 @@ export const ENGINE_PIN = {
   version: '0.1.0',
   /** The daemon's own Wire protocol version, from its manifest.json. */
   protocolVersion: '1.0.0',
-  /** emdash commit the archive was built from. */
-  sourceCommit: '9b102a5f3',
+  /** Commit of Waypoint's fork of emdash (amaannawab923/emdash, branch
+   *  `waypoint`) the archive was built from — upstream 9b102a5f3 plus
+   *  Waypoint's own commits. */
+  sourceCommit: '713011e42',
   target: 'darwin-arm64',
-  sha256: '1fa9056e65fcc000c9aaec1c397ec85a97d41a9adedbfdd3b18f5af5dc02b9a6',
+  sha256: 'ccace3c0b9d843e77669039e10fc034f5a159a998f3a7690453df12bf66b0591',
   /** Inside the extracted archive: the shell launcher that execs the bundled
    *  `node` on `dist/index.mjs`. Takes the CLI commands in `EngineCommand`. */
   launcherRelPath: 'emdash-workspace-server/bin/emdash-workspace-server',
@@ -664,6 +666,13 @@ export interface BriefPreviewInput {
   instructions?: string | null;
   /** *Something else…*: whether the session may edit files (else plan mode). */
   mayChangeFiles?: boolean;
+  /**
+   * Writing sessions: after the change, start the app and drive the
+   * reproduction in the session's isolated browser, taking screenshots
+   * that land in the transcript (runs/sessionBrowser.ts). Ignored for
+   * plan mode.
+   */
+  verifyInBrowser?: boolean;
   /** The base branch for the worktree; null = the repository's suggested one. */
   baseRef?: string | null;
   /**

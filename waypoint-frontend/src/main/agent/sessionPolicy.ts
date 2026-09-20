@@ -1,3 +1,4 @@
+import { createBrowserGuard, type BrowserGuard } from '../copilot/browserGuard';
 import type { InProcessServerSpec } from '../copilot/claudeSdkClient';
 import { SESSION_TOOL_NAMES } from '../copilot/sessionTools';
 import {
@@ -40,6 +41,15 @@ export interface SessionPolicy {
    * — never a tool input, so the model can never choose or spoof where its
    * proposals land or whose Jira it reads. */
   mcpHeaders: Record<string, string>;
+  /** The user's own Chrome, via Anthropic's Claude in Chrome bridge
+   * (copilot/copilotBrowser.ts). Set only when the user opted in AND the
+   * bridge was found on this turn; claudeSession.ts turns it into the
+   * SDK's `--chrome` flag, and the matching tool names must be in
+   * `mcpTools`. Absent means exactly V3's options — no flag, no tools. */
+  browser?: 'claude-in-chrome';
+  /** With `browser`: this turn's tool-level guardrails (copilot/browserGuard.ts),
+   * one instance per turn — claudeSession.ts turns it into SDK hooks. */
+  browserGuard?: BrowserGuard;
   /** In-process MCP servers beside the backend's — W5a's session tools
    * (copilot/sessionTools.ts), specified per turn with the conversation
    * and a push to the renderer captured, built by claudeSdkClient.ts on
@@ -50,7 +60,7 @@ export interface SessionPolicy {
    * not a precomputed string, for the same reason repoPath above is raw:
    * repoLinked is re-derived fresh per attempt, and the prompt variant must
    * never be able to disagree with the tool grant it's paired with. */
-  buildSystemPrompt: (repoLinked: boolean) => string;
+  buildSystemPrompt: (repoLinked: boolean, browser: boolean) => string;
   /** Prepended (with a blank line) to the prompt on the FIRST attempt only.
    * A stale-session retry replaces this entirely with its own continuation
    * note (see claudeSession.ts's RETRY_CONTINUATION_NOTE) rather than
@@ -108,6 +118,24 @@ const MCP_TOOLS = [
   // W5a (ROAD-121): the session tools, served in-process from main.
   ...SESSION_TOOL_NAMES,
 ];
+
+// Every tool the Claude in Chrome bridge serves (the SDK names its server
+// "claude-in-chrome"; Claude Code's own rule syntax takes the server-wide
+// wildcard) — verified live that this form skips the approval prompt under
+// Copilot's exact `tools: []` + `strictMcpConfig` options. Granted only
+// alongside `browser: 'claude-in-chrome'`, never on its own: a name in
+// allowedTools with no server behind it is harmless, but keeping the two
+// together is what makes the prompt, the flag, and the grant impossible to
+// get out of step.
+//
+// Known (POC): the never-do list — own tabs only, no sign-in, no
+// data-changing forms — lives in the system prompt (systemPrompt.ts's
+// COPILOT_BROWSER_PROMPT), not in the grant. The wildcard cannot scope the
+// bridge to a tab, and `canUseTool` is deliberately unset for Copilot, so a
+// model that ignores the prompt is not stopped by this file. Tool-level
+// scoping (a `canUseTool` that refuses `tabs_*` on tabs the turn did not
+// open) is the hardening step if this leaves POC.
+const BROWSER_TOOLS = ['mcp__claude-in-chrome__*'];
 
 // Matches waypoint-backend's newId('conv') shape (and is re-validated
 // server-side in mcp.routes.ts). Checked before the id is ever embedded into
@@ -173,6 +201,10 @@ export interface CopilotSessionPolicyInput {
   promptPreamble?: string;
   /** The session tools server for this turn (copilot/sessionTools.ts); absent in probes. */
   sessionTools?: InProcessServerSpec;
+  /** copilotBrowser.ts's per-turn answer: the user opted in AND the bridge
+   * is present right now. Decided by the runner, not here — this policy
+   * only turns a yes into the flag + grant pair. */
+  useMyChrome?: boolean;
 }
 
 // The one constructor this unit builds — for the Copilot panel's IPC
@@ -182,11 +214,18 @@ export interface CopilotSessionPolicyInput {
 export function buildCopilotSessionPolicy(
   input: CopilotSessionPolicyInput,
 ): SessionPolicy {
+  const browser = input.useMyChrome === true;
   return {
     repoPath: input.repoPath ?? null,
     builtinTools: REPO_READ_TOOLS,
-    mcpTools: MCP_TOOLS,
+    mcpTools: browser ? [...MCP_TOOLS, ...BROWSER_TOOLS] : MCP_TOOLS,
     mcpHeaders: buildMcpHeaders(input.conversationId),
+    ...(browser
+      ? {
+          browser: 'claude-in-chrome' as const,
+          browserGuard: createBrowserGuard(),
+        }
+      : {}),
     ...(input.sessionTools ? { inProcessServers: [input.sessionTools] } : {}),
     buildSystemPrompt,
     promptPreamble: input.promptPreamble,

@@ -233,7 +233,9 @@ export function dropPendingPrompt(
   return bridge().dropPendingPrompt({ runId, pendingId }).catch(unwrapIpcError);
 }
 
-export function retryPendingPrompt(runId: string): Promise<SendRunPromptResult> {
+export function retryPendingPrompt(
+  runId: string,
+): Promise<SendRunPromptResult> {
   return bridge().retryPendingPrompt({ runId }).catch(unwrapIpcError);
 }
 

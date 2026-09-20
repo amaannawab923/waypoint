@@ -107,7 +107,9 @@ describe('buildRunComment', () => {
         pushed: true,
       },
     });
-    expect(body).toContain('Pull request updated: https://github.com/o/r/pull/9');
+    expect(body).toContain(
+      'Pull request updated: https://github.com/o/r/pull/9',
+    );
   });
 
   it('a closing verdict the host chose not to publish says so', () => {
@@ -133,9 +135,38 @@ describe('buildRunComment', () => {
     );
   });
 
+  it('a Verification section rides on the comment after the summary, bounded', () => {
+    const body = buildRunComment({
+      report: parseReport(
+        'Verdict: fixed\n## Summary\nDone.\n## Verification\nDrove the form; 01-after.png shows the fix.\n## Details\nx',
+      ),
+      verdict: 'fixed',
+      runLabel: 'r',
+      work: null,
+      published: null,
+    });
+    expect(body).toContain(
+      'Done.\n\n**Verification**\nDrove the form; 01-after.png shows the fix.',
+    );
+    const long = buildRunComment({
+      report: {
+        verdict: 'fixed',
+        summary: 's',
+        verification: 'v'.repeat(5000),
+        details: null,
+      },
+      verdict: 'fixed',
+      runLabel: 'r',
+      work: null,
+      published: null,
+    });
+    expect(long).toContain(`${'v'.repeat(1999)}…`);
+    expect(long).not.toContain('v'.repeat(2001));
+  });
+
   it('no verdict, no summary: the facts and the footer alone', () => {
     const body = buildRunComment({
-      report: { verdict: null, summary: '', details: null },
+      report: { verdict: null, summary: '', verification: null, details: null },
       verdict: null,
       runLabel: 'r',
       work: null,

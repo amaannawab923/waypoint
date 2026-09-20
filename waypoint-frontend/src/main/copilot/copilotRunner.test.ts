@@ -43,6 +43,17 @@ jest.mock('../jira/jiraAuth', () => ({
   readStoredJiraCredential: () => readStoredJiraCredentialMock(),
 }));
 
+// "Use my Chrome" (copilotBrowser.ts). Defaults to "not granted" (false) so
+// every pre-existing assertion below keeps proving V3's exact options; the
+// tests that care grant it explicitly. Stubbed rather than left real for the
+// same reason as the Jira store: the real probe reads THIS developer's Chrome
+// profile directory, and the machine this suite runs on happens to have the
+// bridge installed.
+const browserAccessGrantedForTurnMock = jest.fn<boolean, []>(() => false);
+jest.mock('./copilotBrowser', () => ({
+  browserAccessGrantedForTurn: () => browserAccessGrantedForTurnMock(),
+}));
+
 // The mocking seam for the whole SDK. claudeSdkClient.ts is the only module
 // in the app that touches @anthropic-ai/claude-agent-sdk, so mocking it
 // wholesale keeps the real (pure-ESM) package out of every test — the same
@@ -192,7 +203,9 @@ function cancel(requestId: unknown): boolean {
     (c) => c[0] === 'copilot:run:cancel',
   );
   if (!call) {
-    throw new Error('ipcMain.handle was never called with "copilot:run:cancel"');
+    throw new Error(
+      'ipcMain.handle was never called with "copilot:run:cancel"',
+    );
   }
   const handler = call[1] as (event: unknown, requestId: unknown) => boolean;
   return handler({}, requestId);
@@ -247,6 +260,7 @@ beforeEach(() => {
   // test that assumes the default.
   getStoredSubscriptionTokenMock.mockReturnValue(null);
   readStoredJiraCredentialMock.mockReturnValue(null);
+  browserAccessGrantedForTurnMock.mockReturnValue(false);
   delete process.env.WAYPOINT_API_BASE_URL;
 });
 
@@ -1360,5 +1374,69 @@ describe('session tools (W5a)', () => {
       inProcessServers?: unknown;
     };
     expect(without.inProcessServers).toBeUndefined();
+  });
+});
+
+describe('use my Chrome (Claude in Chrome bridge, POC)', () => {
+  it('is off by construction: no --chrome flag, no browser tools, no browser prompt', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi' });
+
+    expect(optionsAt(0).extraArgs).toBeUndefined();
+    expect(optionsAt(0).allowedTools).toEqual(ALL_MCP_TOOLS);
+    expect(optionsAt(0).systemPrompt).not.toContain('claude-in-chrome');
+    expect(optionsAt(0).hooks).toBeUndefined();
+  });
+
+  it("when granted for the turn, passes a bare --chrome via extraArgs, allows the bridge's tools, and tells the model the rules", () => {
+    browserAccessGrantedForTurnMock.mockReturnValue(true);
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    run({ requestId: 'req-1', prompt: 'hi' });
+
+    // `null` is the SDK's spelling of a boolean flag (`--chrome`, no value).
+    expect(optionsAt(0).extraArgs).toEqual({ chrome: null });
+    expect(optionsAt(0).allowedTools).toEqual([
+      ...ALL_MCP_TOOLS,
+      'mcp__claude-in-chrome__*',
+    ]);
+    expect(optionsAt(0).systemPrompt).toContain('claude-in-chrome');
+    expect(optionsAt(0).systemPrompt).toContain('never browse');
+    // The tool-level guardrails ride as hooks on the browser tools only;
+    // canUseTool stays unset (zero-friction propose_* execution).
+    expect(optionsAt(0).hooks?.PreToolUse?.[0].matcher).toBe(
+      'mcp__claude-in-chrome__.*',
+    );
+    expect(optionsAt(0).hooks?.PostToolUse?.[0].matcher).toBe(
+      'mcp__claude-in-chrome__.*',
+    );
+    expect(optionsAt(0).canUseTool).toBeUndefined();
+    // The isolation that keeps Copilot to OUR servers is untouched by the
+    // flag — the bridge is not an MCP config entry, so strict mode can
+    // stay on, and it is not a settings source either.
+    expect(optionsAt(0).strictMcpConfig).toBe(true);
+    expect(optionsAt(0).settingSources).toEqual([]);
+    expect(optionsAt(0).mcpServers).toEqual({
+      waypoint: { type: 'http', url: 'http://localhost:14000/mcp/copilot' },
+    });
+  });
+
+  it('is decided in main per turn, never by the IPC payload', () => {
+    const win = fakeWindow();
+    registerCopilotIpc(() => win as unknown as BrowserWindow);
+
+    // A renderer (or anything speaking its channel) asking for the browser
+    // gets exactly the options it would have gotten without asking.
+    run({
+      requestId: 'req-1',
+      prompt: 'hi',
+      ...({ useMyChrome: true } as object),
+    });
+
+    expect(optionsAt(0).extraArgs).toBeUndefined();
+    expect(optionsAt(0).allowedTools).toEqual(ALL_MCP_TOOLS);
   });
 });

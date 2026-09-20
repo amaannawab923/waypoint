@@ -375,9 +375,8 @@ export function SessionDetail({
       {/* Keyed by run: a different run is a different transcript and a
           different diff, with nothing carried over from the last one. */}
       <div className="flex min-h-0 flex-1 flex-col">
-        {tab === 'transcript' ? (
-          <SessionTranscript key={run.id} run={run} />
-        ) : (
+        {tab === 'transcript' && <SessionTranscript key={run.id} run={run} />}
+        {tab === 'diff' && (
           <DiffPane key={run.id} run={run} onFileCount={setDiffCount} />
         )}
       </div>
