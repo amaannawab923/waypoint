@@ -357,6 +357,34 @@ describe('SessionTranscript — what a send does, said in the placeholder', () =
     expect(mockWarmRun).toHaveBeenCalledWith('run-early001');
     expect(mockWarmRun).toHaveBeenCalledTimes(1);
   });
+
+  // Found in review: neither of the warm-up effect's early returns reset
+  // `warming` — a warm cycle still in flight when the run turns live and
+  // idle (a resume landing before the daemon reports `isGenerating`)
+  // stranded the placeholder on "Connecting…" for a session that was
+  // actually already up and answering.
+  it('does not strand the placeholder on "Connecting…" once the run turns live while a warm-up is still in flight', () => {
+    mockWarmRun.mockImplementationOnce(() => new Promise(() => {})); // never settles
+    mockUseSessionTranscript.mockReturnValue(hookState({ turnCount: 2 }));
+    const { rerender } = render(
+      <SessionTranscript run={run({ id: 'run-stuck001', status: 'done' })} />,
+    );
+    expect(
+      screen.getByLabelText('Message this session'),
+    ).toHaveAttribute('placeholder', expect.stringMatching(/Connecting/));
+
+    mockUseSessionTranscript.mockReturnValue(
+      hookState({ turnCount: 2, isGenerating: false }),
+    );
+    rerender(
+      <SessionTranscript
+        run={run({ id: 'run-stuck001', status: 'running' })}
+      />,
+    );
+    const box = screen.getByLabelText('Message this session');
+    const placeholder = box.getAttribute('placeholder');
+    expect(placeholder ?? '').not.toMatch(/Connecting/);
+  });
 });
 
 describe('SessionTranscript — every send lands somewhere', () => {

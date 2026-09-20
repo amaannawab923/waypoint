@@ -266,9 +266,19 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
   // when the session is up.
   const [warming, setWarming] = useState(false);
   useEffect(() => {
-    if (engineDown || status.live) return undefined;
-    if (run.status === 'queued' || run.status === 'provisioning')
+    // Found in review: neither early return reset `warming` — a warm
+    // cycle that was mid-flight when the run turned live/idle (a resume
+    // landing right before the daemon reports `isGenerating`) could leave
+    // the placeholder stuck on "Connecting…" for a session that was
+    // actually already up.
+    if (engineDown || status.live) {
+      setWarming(false);
       return undefined;
+    }
+    if (run.status === 'queued' || run.status === 'provisioning') {
+      setWarming(false);
+      return undefined;
+    }
     let gone = false;
     setWarming(true);
     const settle = () => {
