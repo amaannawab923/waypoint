@@ -483,6 +483,29 @@ describe('publishFollowUp', () => {
     );
   });
 
+  // Found in review, round 3: the old regex was a bare "could not
+  // resolve", which a DNS failure phrased as "could not resolve host
+  // github.com" would ALSO match — misclassifying a network blip as "the
+  // PR is gone" and needlessly clearing a still-valid prUrl (as the test
+  // above does correctly for gh's own "Could not resolve to a
+  // PullRequest..." GraphQL phrasing). Narrowed to require "resolve to
+  // a", which a plain host-resolution failure never says.
+  it('a DNS/network "could not resolve host" failure is a plain pr failure, not treated as the PR being gone', async () => {
+    const dns = harness({
+      remote,
+      ghView: bad('curl: (6) Could not resolve host: github.com'),
+    });
+    expect(await dns.publisher.publishFollowUp(input(tracked()))).toEqual({
+      kind: 'failed',
+      stage: 'pr',
+      message: 'curl: (6) Could not resolve host: github.com',
+    });
+    expect(dns.ledger.updateRun).not.toHaveBeenCalledWith('run-abc1234', {
+      prUrl: null,
+    });
+    expect(dns.calls.some((c) => c.args.includes('push'))).toBe(false);
+  });
+
   it('an auth failure from gh is a pr failure with no push; a timeout or other failure likewise', async () => {
     const auth = harness({
       remote,

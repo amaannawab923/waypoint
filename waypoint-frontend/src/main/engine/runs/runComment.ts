@@ -61,6 +61,14 @@ function publishLine(input: RunCommentInput): string | null {
     switch (published.kind) {
       case 'opened':
         return `Pull request: ${published.url}`;
+      // Found in review, round 3: this switch had no case for 'updated'
+      // — a follow-up that pushed new commits to an already-open PR —
+      // so its own filed comment (what a person actually reviews on the
+      // board) silently said nothing about the PR at all, even though
+      // the Copilot note (finishedNote's own switch, which does handle
+      // it) got it right.
+      case 'updated':
+        return `Pull request updated: ${published.url}`;
       case 'pushed-only':
       case 'skipped':
         return published.reason;

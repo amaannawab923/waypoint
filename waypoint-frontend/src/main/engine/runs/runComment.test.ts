@@ -85,6 +85,31 @@ describe('buildRunComment', () => {
     );
   });
 
+  // Found in review, round 3: publishLine's switch had no case for
+  // 'updated' — a follow-up that pushed new commits to an already-open
+  // PR — so the filed comment (what a person reviews on the board)
+  // silently said nothing about the PR at all.
+  it('a follow-up that updates an already-open PR says so in the comment', () => {
+    const body = buildRunComment({
+      report: parseReport('Verdict: fixed\n## Summary\nAlso handled DST.'),
+      verdict: 'fixed',
+      runLabel: 'ROAD-1 · Fix',
+      work: {
+        branch: 'agent/ROAD-1',
+        baseRef: 'main',
+        commits: 1,
+        files: 1,
+        uncommitted: 0,
+      },
+      published: {
+        kind: 'updated',
+        url: 'https://github.com/o/r/pull/9',
+        pushed: true,
+      },
+    });
+    expect(body).toContain('Pull request updated: https://github.com/o/r/pull/9');
+  });
+
   it('a closing verdict the host chose not to publish says so', () => {
     const body = buildRunComment({
       report: parseReport(

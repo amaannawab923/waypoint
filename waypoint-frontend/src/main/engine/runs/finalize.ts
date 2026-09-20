@@ -325,7 +325,17 @@ export function finishedNote(
     pr = ` · PR opened: ${outcome.published.url}`;
   else if (outcome.published?.kind === 'updated')
     pr = ` · PR updated: ${outcome.published.url}`;
-  else if (outcome.published?.kind === 'skipped' && outcome.followUp)
+  else if (
+    outcome.published?.kind === 'skipped' ||
+    outcome.published?.kind === 'pushed-only'
+  )
+    // Found in review, round 3: this line used to only show for a
+    // follow-up (`&& outcome.followUp`) — harmless while a first-ever
+    // publish could only ever come back 'opened'/'updated'/'failed', but
+    // now that it also takes the same publish claim as a follow-up
+    // (claimAndPublish, above), a first publish can genuinely come back
+    // 'skipped' too (another run holds the ticket's claim) — and this
+    // note would otherwise say nothing about why.
     pr = ` · ${outcome.published.reason}`;
   else if (outcome.published?.kind === 'failed')
     pr = ` · the branch was not published (${outcome.published.stage} failed)`;
@@ -601,13 +611,72 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
   };
 
   /**
+   * Claim the ticket's publish slot (§3.3b), then attempt the push/PR
+   * under it — every failure, claim or push, becomes a `PublishOutcome`,
+   * never a throw. A publish problem is a sentence on the comment and an
+   * event, never a stuck run (found in review, round 3: this used to
+   * only catch the claim's 409 case; any other claim failure — a
+   * timeout, a 5xx — propagated uncaught past the caller's
+   * `withTicketLock`, wedging the run at `finishing` forever, since
+   * nothing re-finalizes a run that already left `running`). Shared by
+   * both the first-ever publish and every follow-up's, which used to
+   * diverge here: only the follow-up path took this claim at all (found
+   * in review, round 3) — a run's first publish went straight to
+   * `push()` with no ticket-level coordination, so two runs finalizing
+   * for the first time on the same ticket at once could each open a
+   * competing PR.
+   */
+  const claimAndPublish = async (
+    run: AgentRun,
+    headSha: string | null,
+    push: () => Promise<PublishOutcome>,
+  ): Promise<PublishOutcome> => {
+    try {
+      await deps.ledger.claimPublish(run.id, headSha);
+    } catch (error) {
+      if (error instanceof LedgerRequestError && error.status === 409) {
+        await deps.ledger
+          .appendEvent(run.id, 'note', {
+            stage: 'finalize',
+            publish: 'skipped',
+            claim: 'refused',
+            reason: error.message,
+          })
+          .catch(() => {});
+        return {
+          kind: 'skipped',
+          reason: `${error.message} Open PR from the run header, or ask the agent to summarize its changes again.`,
+        };
+      }
+      deps.logger.warn('engine: could not claim the publish', {
+        runId: run.id,
+        message: describe(error),
+      });
+      return {
+        kind: 'failed',
+        stage: 'push',
+        message: `Could not claim the publish for this ticket: ${describe(error)}`,
+      };
+    }
+    try {
+      await deps.assertPublishableCwd(run);
+      return await push();
+    } catch (error) {
+      deps.logger.warn('engine: publish failed', {
+        runId: run.id,
+        message: describe(error),
+      });
+      return { kind: 'failed', stage: 'push', message: describe(error) };
+    }
+  };
+
+  /**
    * FOLLOW-UP (design §4.3): a continued run's turn ends. File iff the
    * closing message carries an explicit `Verdict:`; the verb's default
    * verdict is NOT applied. Commits are for the marker, never the
    * trigger. A duplicate of the last filed summary is conversation.
    */
   const finalizeFollowUp = async (
-    daemon: DaemonRunsApi,
     run: AgentRun,
     turns: DaemonTranscriptTurn[],
     closing: string,
@@ -662,45 +731,21 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
     if (closes && isDispatchedWriter(run) && run.branch) {
       notPublishedBecause = `the session's verdict was ${verdictLabel(verdict)}`;
     } else if (wantsPublish && deps.pullRequests) {
-      const publishOnce = async (): Promise<PublishOutcome> => {
-        // The backend's claim first (§3.3b): one publisher per ticket.
-        try {
-          await deps.ledger.claimPublish(run.id, headSha);
-        } catch (error) {
-          if (error instanceof LedgerRequestError && error.status === 409) {
-            await deps.ledger
-              .appendEvent(run.id, 'note', {
-                stage: 'finalize',
-                publish: 'skipped',
-                claim: 'refused',
-                reason: error.message,
-              })
-              .catch(() => {});
-            return {
-              kind: 'skipped',
-              reason: `${error.message} Open PR from the run header, or ask the agent to summarize its changes again.`,
-            };
-          }
-          throw error;
-        }
-        try {
-          await deps.assertPublishableCwd(run);
-          return await deps.pullRequests!.publishFollowUp({
-            run,
-            closingMessage: closing,
-            title: ticket
-              ? `${ticket.identifier}: ${ticket.title}`
-              : (run.title ?? run.branch!),
-            ticketUrl: ticket?.url ?? null,
-          });
-        } catch (error) {
-          return { kind: 'failed', stage: 'push', message: describe(error) };
-        }
-      };
+      const push = () =>
+        deps.pullRequests!.publishFollowUp({
+          run,
+          closingMessage: closing,
+          title: ticket
+            ? `${ticket.identifier}: ${ticket.title}`
+            : (run.title ?? run.branch!),
+          ticketUrl: ticket?.url ?? null,
+        });
       published =
         run.ticketId && deps.withTicketLock
-          ? await deps.withTicketLock(run.ticketId, publishOnce)
-          : await publishOnce();
+          ? await deps.withTicketLock(run.ticketId, () =>
+              claimAndPublish(run, headSha, push),
+            )
+          : await claimAndPublish(run, headSha, push);
       if (published.kind === 'opened' || published.kind === 'updated') {
         current = { ...run, prUrl: published.url };
       }
@@ -800,9 +845,25 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         finalizedHeadSha: headSha,
       });
     } catch (error) {
-      warn('engine: follow-up finalize could not write needs-review', error, {
-        runId: run.id,
-      });
+      // Found in review, round 3: this used to only warn and return,
+      // leaving the run at `finishing` forever — its proposals (filed
+      // just above, successfully) exist, but nothing ever moves the row
+      // off `finishing`, and no later idle event retries a run that has
+      // already left `running`. `fail()` makes the same outcome visible
+      // and actionable instead of a silent wedge: `failed` is revivable
+      // (never-lock), so a person can pick the conversation back up. The
+      // session itself is left alone — follow-ups keep it alive on
+      // purpose — so the outbox still gets a chance to drain.
+      await fail(
+        run,
+        `Could not record the follow-up's report: ${describe(error)}`,
+        { stage: 'needs-review-write', followUp: sequence },
+      );
+      await deps.drainOutbox?.(run.id).catch((drainError: unknown) =>
+        warn('engine: outbox drain after a wedged follow-up failed', drainError, {
+          runId: run.id,
+        }),
+      );
       return;
     }
     await deps.ledger
@@ -939,7 +1000,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
     }
 
     if (followUp) {
-      await finalizeFollowUp(daemon, run, turns, closing);
+      await finalizeFollowUp(run, turns, closing);
       return;
     }
 
@@ -953,6 +1014,9 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
     // its label for the PR, and which write path its proposals take.
     const ticket = await describeRunTicket(deps.ledger, run.ticketId);
     const external = ticket?.external === true;
+    // Computed here, once, so claimPublish (below) and the finalized
+    // event's own headSha (further down) always agree.
+    const headSha = await headShaOf(run);
 
     // W6: a writing run's branch is pushed and its PR opened first — by
     // the host, as the person — so the comment can lead with the link.
@@ -972,38 +1036,41 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         })
         .catch(() => {});
     } else if (deps.pullRequests && isDispatchedWriter(run) && run.branch) {
-      // ROAD-131: this call used to run straight to `publish` — which
-      // pushes and, as the person, opens a real PR — trusting the
-      // ledger row's own `worktreePath`/`cwd` with no proof they are
-      // still what they claim. The ledger arrives over HTTP from the
-      // backend, and the worktree is writable by the very agent whose
-      // session just ended, so both are untrusted input by the time
-      // this runs. Unlike the retry button (runsIpc.ts's
+      // ROAD-131: `assertPublishableCwd` proves the ledger row's
+      // `worktreePath`/`cwd` before this ever pushes a branch or opens a
+      // PR in it — untrusted by the time this runs (the ledger arrives
+      // over HTTP, the worktree is writable by the very agent whose
+      // session just ended). Unlike the retry button (runsIpc.ts's
       // openRunPullRequest), nobody is in the loop here to catch a
-      // surprise PR — so this is where the check matters most, and it
-      // must fail closed: a provenance failure is reported the same way
-      // a push failure already is, never silently skipped.
-      try {
-        await deps.assertPublishableCwd(run);
-        published = await deps.pullRequests.publish({
-          run,
+      // surprise PR — so this is where it matters most, and it must fail
+      // closed: a provenance failure is reported the same way a push
+      // failure already is, never silently skipped. `claimAndPublish`
+      // (found missing here in review, round 3) is the same one-
+      // publisher-per-ticket claim finalizeFollowUp already took below —
+      // a run's first-ever publish used to skip it entirely, so two runs
+      // finalizing for the first time on one ticket at once could each
+      // open a competing PR with nothing to serialize them.
+      // `run` is `let`-bound and reassigned below, so a closure over it
+      // loses TypeScript's non-null narrowing — captured once, here,
+      // as the row this publish attempt actually runs against.
+      const runToPublish = run;
+      const branch = run.branch;
+      const push = () =>
+        deps.pullRequests!.publish({
+          run: runToPublish,
           closingMessage: closing,
           title: ticket
             ? `${ticket.identifier}: ${ticket.title}`
-            : (run.title ?? run.branch),
+            : (runToPublish.title ?? branch),
           ticketUrl: ticket?.url ?? null,
         });
-        if (published.kind === 'opened') run = { ...run, prUrl: published.url };
-      } catch (error) {
-        published = { kind: 'failed', stage: 'push', message: describe(error) };
-        deps.logger.warn(
-          'engine: refused to publish — cwd provenance check failed',
-          {
-            runId: run.id,
-            message: describe(error),
-          },
-        );
-      }
+      published =
+        runToPublish.ticketId && deps.withTicketLock
+          ? await deps.withTicketLock(runToPublish.ticketId, () =>
+              claimAndPublish(runToPublish, headSha, push),
+            )
+          : await claimAndPublish(runToPublish, headSha, push);
+      if (published.kind === 'opened') run = { ...run, prUrl: published.url };
     }
 
     // The proposals: the board-shaped comment (the verdict, the Summary,
@@ -1099,7 +1166,6 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
     }
 
     const turnCount = countTurns(turns);
-    const headSha = await headShaOf(run);
     let reviewed: AgentRun;
     try {
       const headline = report.summary || closing;
@@ -1116,9 +1182,15 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         finalizedHeadSha: headSha,
       });
     } catch (error) {
-      warn('engine: finalize could not write needs-review', error, {
-        runId: run.id,
-      });
+      // Found in review, round 3: this used to only warn, kill the
+      // session, and return — leaving the run at `finishing` forever,
+      // same wedge as the follow-up path's identical failure (fixed
+      // above). `fail()` makes it visible and actionable instead.
+      await fail(
+        run,
+        `Could not record the finalized report: ${describe(error)}`,
+        { stage: 'needs-review-write' },
+      );
       await killSession(daemon, run, turns);
       return;
     }

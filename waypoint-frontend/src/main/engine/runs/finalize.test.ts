@@ -1150,6 +1150,156 @@ describe('W6: the branch is published before the proposals', () => {
       "push failed: This worktree's gitdir is inside the worktree itself",
     );
   });
+
+  // Found in review, round 3: a run's first-ever publish used to skip
+  // both the claim and the ticket lock entirely — only a follow-up's
+  // publish took either. Two runs finalizing for the first time on the
+  // same ticket at once could each open a competing PR with nothing to
+  // serialize them.
+  it('a run’s first-ever publish takes the same claim and ticket lock a follow-up’s does', async () => {
+    const { ledger, rows } = fakeLedger(
+      run({ intent: 'fix', modeId: 'bypassPermissions' }),
+    );
+    const daemon = fakeDaemon({
+      turns: [
+        turn([{ kind: 'message', role: 'assistant', text: 'Fixed it.' }]),
+      ],
+    });
+    const publish = jest.fn(async () => ({
+      kind: 'opened' as const,
+      url: 'https://github.com/o/r/pull/1',
+      pushed: true as const,
+    }));
+    const order: string[] = [];
+    const withTicketLock = jest.fn(
+      async <T>(_t: string, fn: () => Promise<T>): Promise<T> => {
+        order.push('lock');
+        const r = await fn();
+        order.push('unlock');
+        return r;
+      },
+    ) as unknown as FinalizeDeps['withTicketLock'] & jest.Mock;
+    (ledger.claimPublish as jest.Mock).mockImplementation(async () => {
+      order.push('claim');
+    });
+    const { deps } = depsWith(ledger, daemon, {
+      git: (args: string[]) =>
+        Promise.resolve(
+          args[0] === 'rev-parse'
+            ? { stdout: 'aaaaaaa\n', stderr: '', code: 0 }
+            : { stdout: '', stderr: '', code: 0 },
+        ),
+      assertWorktreeGitDir: jest.fn(async () => {}),
+      pullRequests: { publish, publishFollowUp: jest.fn() },
+      withTicketLock,
+    });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+
+    expect(order).toEqual(['lock', 'claim', 'unlock']);
+    expect(withTicketLock).toHaveBeenCalledWith('wi-1', expect.any(Function));
+    expect(ledger.claimPublish).toHaveBeenCalledWith('run-abc1234', 'aaaaaaa');
+    expect(publish).toHaveBeenCalledTimes(1);
+    // Publish happens inside the lock, strictly before the claim is
+    // released — proven by `order` above; the row itself only needs to
+    // reach needs-review (the real publisher, not this bare mock, is
+    // what writes prUrl to the ledger — covered in pullRequests.test.ts).
+    expect(rows.get('run-abc1234')?.status).toBe('needs-review');
+  });
+
+  it('a refused publish claim on a first-ever publish still files the comment, unpublished — the note says why, not just the follow-up path', async () => {
+    const { ledger, rows } = fakeLedger(
+      run({ intent: 'fix', modeId: 'bypassPermissions' }),
+    );
+    const daemon = fakeDaemon({
+      turns: [
+        turn([{ kind: 'message', role: 'assistant', text: 'Fixed it.' }]),
+      ],
+    });
+    (ledger.claimPublish as jest.Mock).mockRejectedValue(
+      new LedgerRequestError(
+        409,
+        'Not published: this ticket has a live writer (Other).',
+      ),
+    );
+    const publish = jest.fn();
+    const { deps } = depsWith(ledger, daemon, {
+      pullRequests: { publish, publishFollowUp: jest.fn() },
+    });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(rows.get('run-abc1234')?.status).toBe('needs-review');
+    const [, comment] = ledger.createRunProposal.mock.calls[0];
+    expect((comment as { body: string }).body).toContain('live writer (Other)');
+    // The Copilot note must say why too — this line used to be
+    // suppressed for a first-ever publish (finishedNote's own `&&
+    // outcome.followUp` guard), which would have gone silent here.
+    expect(ledger.postCopilotNote).toHaveBeenCalledWith(
+      'run-abc1234',
+      expect.stringContaining('live writer (Other)'),
+    );
+  });
+
+  it('a non-409 claim failure on a first-ever publish never throws past this — the run still reaches needs-review, not wedged at finishing', async () => {
+    const { ledger, rows } = fakeLedger(
+      run({ intent: 'fix', modeId: 'bypassPermissions' }),
+    );
+    const daemon = fakeDaemon({
+      turns: [
+        turn([{ kind: 'message', role: 'assistant', text: 'Fixed it.' }]),
+      ],
+    });
+    (ledger.claimPublish as jest.Mock).mockRejectedValue(
+      new Error('ledger request timed out'),
+    );
+    const publish = jest.fn();
+    const { deps } = depsWith(ledger, daemon, {
+      pullRequests: { publish, publishFollowUp: jest.fn() },
+    });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+
+    expect(publish).not.toHaveBeenCalled();
+    // The old bug: this used to throw out of the whole finalize call,
+    // leaving the row at `finishing` forever.
+    expect(rows.get('run-abc1234')?.status).toBe('needs-review');
+    const [, comment] = ledger.createRunProposal.mock.calls[0];
+    expect((comment as { body: string }).body).toContain(
+      'Could not claim the publish',
+    );
+  });
+
+  // Found in review, round 3: this failure used to only warn, kill the
+  // session, and return — leaving the run at `finishing` forever, same
+  // wedge as the follow-up path's identical failure.
+  it('a failure writing needs-review does not wedge the first finalize at finishing — it becomes failed (revivable) instead', async () => {
+    const { ledger, rows } = fakeLedger(
+      run({ intent: 'investigate' }),
+    );
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          { kind: 'message', role: 'assistant', text: 'The root cause is X.' },
+        ]),
+      ],
+    });
+    const realUpdateRun = ledger.updateRun.getMockImplementation()!;
+    (ledger.updateRun as jest.Mock).mockImplementation(
+      async (id: string, patch: Record<string, unknown>) => {
+        if (patch.status === 'needs-review') {
+          throw new Error('ledger unreachable');
+        }
+        return realUpdateRun(id, patch);
+      },
+    );
+    const { deps } = depsWith(ledger, daemon);
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+
+    expect(rows.get('run-abc1234')?.status).toBe('failed');
+    expect(rows.get('run-abc1234')?.errorMessage).toContain(
+      'Could not record the finalized report',
+    );
+    expect(daemon.killSession).toHaveBeenCalled();
+  });
 });
 
 // Never-lock (design §4): a run whose report is filed (finalizeCount > 0)
@@ -1381,6 +1531,100 @@ describe('follow-up finalize (a continued run)', () => {
         }),
       }),
     );
+  });
+
+  // Found in review, round 3: a non-409 claim failure (a timeout, a 5xx)
+  // used to rethrow uncaught out of publishOnce, past withTicketLock,
+  // wedging the run at `finishing` forever — no later idle event ever
+  // retries a run once it has left `running`.
+  it('a non-409 claim failure never throws past this — the follow-up still files its comment and reaches needs-review, not wedged at finishing', async () => {
+    const { ledger, rows } = fakeLedger(filed());
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: 'Verdict: fixed\n\n## Summary\nMore.',
+          },
+        ]),
+      ],
+    });
+    (ledger.claimPublish as jest.Mock).mockRejectedValue(
+      new Error('ledger request timed out'),
+    );
+    const publishFollowUp = jest.fn();
+    const { deps } = depsWith(ledger, daemon, {
+      git: gitWith({ head: 'ccccccc', count: '3' }),
+      assertWorktreeGitDir: jest.fn(async () => {}),
+      pullRequests: { publish: jest.fn(), publishFollowUp },
+    });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+    expect(publishFollowUp).not.toHaveBeenCalled();
+    expect(ledger.createRunProposal).toHaveBeenCalledTimes(1);
+    // The old bug: this used to throw out of the whole finalize call,
+    // leaving the row at `finishing` forever.
+    expect(rows.get('run-abc1234')?.status).toBe('needs-review');
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'finalized',
+      expect.objectContaining({
+        pr: expect.objectContaining({
+          action: 'failed',
+          reason: expect.stringContaining('Could not claim the publish'),
+        }),
+      }),
+    );
+  });
+
+  // Found in review, round 3: a failure writing the final `needs-review`
+  // status used to only warn and return, leaving the run at `finishing`
+  // forever — its proposals (filed just before, successfully) exist, but
+  // the row itself never moves, and no later idle event retries it.
+  it('a failure writing needs-review does not wedge the follow-up at finishing — it becomes failed (revivable) instead, and the outbox still gets a drain attempt', async () => {
+    const { ledger, rows } = fakeLedger(filed());
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: 'Verdict: fixed\n\n## Summary\nMore.',
+          },
+        ]),
+      ],
+    });
+    const realUpdateRun = ledger.updateRun.getMockImplementation()!;
+    (ledger.updateRun as jest.Mock).mockImplementation(
+      async (id: string, patch: Record<string, unknown>) => {
+        if (patch.status === 'needs-review') {
+          throw new Error('ledger unreachable');
+        }
+        return realUpdateRun(id, patch);
+      },
+    );
+    const drainOutbox = jest.fn(async () => {});
+    const publishFollowUp = jest.fn(async () => ({
+      kind: 'updated' as const,
+      url: 'https://github.com/a/b/pull/1',
+      pushed: true as const,
+    }));
+    const { deps } = depsWith(ledger, daemon, {
+      git: gitWith({ head: 'ccccccc', count: '3' }),
+      assertWorktreeGitDir: jest.fn(async () => {}),
+      pullRequests: { publish: jest.fn(), publishFollowUp },
+      drainOutbox,
+    });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+
+    expect(rows.get('run-abc1234')?.status).toBe('failed');
+    expect(rows.get('run-abc1234')?.errorMessage).toContain(
+      "Could not record the follow-up's report",
+    );
+    expect(drainOutbox).toHaveBeenCalledWith('run-abc1234');
+    // Follow-ups keep the session alive on purpose — this failure is not
+    // a reason to kill it.
+    expect(daemon.killSession).not.toHaveBeenCalled();
   });
 
   // Found in review: the follow-up path's own closing-verdict branch

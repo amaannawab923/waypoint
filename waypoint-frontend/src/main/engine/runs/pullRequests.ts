@@ -327,7 +327,14 @@ export function createPullRequestPublisher(
         return { kind: 'auth', message: firstLine(err) };
       }
       if (
-        /could not resolve|no pull requests found|not found|Could not find/i.test(
+        // "could not resolve to a" is gh's own GraphQL phrasing for a
+        // repository/PR that no longer exists (e.g. "Could not resolve
+        // to a PullRequest with the number of 7") — narrower than a bare
+        // "could not resolve", which a DNS failure ("could not resolve
+        // host github.com") could also match, misclassifying a network
+        // blip as "the PR is gone" and needlessly clearing a still-valid
+        // prUrl (found in review, round 3).
+        /could not resolve to a|no pull requests found|not found|Could not find/i.test(
           err,
         )
       ) {
