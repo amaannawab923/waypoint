@@ -675,6 +675,35 @@ describe('reprovisionWorktree', () => {
     ).rejects.toThrow('Not a usable base ref');
     expect(daemon.registerRepository).not.toHaveBeenCalled();
   });
+
+  // Found in review: unlike provisionWorktree, a failed recreation left no
+  // trail at all — no way to distinguish it from any other resume failure.
+  it('leaves an `error` event on a failed recreation attempt — never a ledger field write, since the row is still terminal here', async () => {
+    const daemon = fakeDaemon({
+      createWorktree: jest
+        .fn()
+        .mockRejectedValue(new Error('stage-failed: add-worktree: locked')),
+    });
+    const ledger = fakeLedger();
+    const deps = { daemon, ledger, worktreesDir: WORKTREES, logger };
+
+    await expect(
+      reprovisionWorktree(deps, run(), '/Users/me/proj'),
+    ).rejects.toThrow('stage-failed: add-worktree: locked');
+
+    expect(ledger.appendEvent).toHaveBeenCalledWith('run-abc1234', 'error', {
+      stage: 'worktree',
+      message: 'stage-failed: add-worktree: locked',
+    });
+    // The doc comment's own rule: this runs on a row the ledger still
+    // treats as terminal — a field write here would just 409, so it is
+    // never attempted; only the caller, after reopenRun, writes fields.
+    expect(ledger.updateRun).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'engine: run worktree reprovision failed',
+      { runId: 'run-abc1234', message: 'stage-failed: add-worktree: locked' },
+    );
+  });
 });
 
 describe('releaseWorktree', () => {

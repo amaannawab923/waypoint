@@ -26,6 +26,7 @@ import {
   registerRunsIpc,
   type GitRunner,
 } from './runsIpc';
+import { withTicketDispatchLock } from './runs/dispatch';
 
 // A real tmp dir: assertUnder realpaths both sides, so a made-up path
 // would fail containment for the wrong reason (worktrees.test.ts does the
@@ -600,6 +601,157 @@ describe('runs:open-pr', () => {
       reason: 'Not published: this ticket has a live writer (Other).',
     });
     expect(publishFollowUp).not.toHaveBeenCalled();
+  });
+
+  // Never-lock (found in review): the backend's publish claim only
+  // refuses a SECOND run's claim on the same ticket — it does nothing
+  // to stop this run's own two concurrent callers, e.g. this button and
+  // an in-flight automatic follow-up finalize for the very same run.
+  // finalize.ts's own publish already goes under the ticket dispatch
+  // lock; the header must take the same one, or the two can push and
+  // `gh pr create` for the same run at once.
+  it("waits for an in-flight publish on the same ticket before claiming or publishing — never races finalize's own withTicketDispatchLock", async () => {
+    const { host, invoke } = fakeHost();
+    const legit = worktreeOf('run-openprraced');
+    const publish = jest.fn(async () => ({
+      kind: 'opened' as const,
+      url: 'https://github.com/acme/widgets/pull/11',
+      pushed: true as const,
+    }));
+    const claimPublish = jest.fn(async () => {});
+    const ledger = {
+      ...fakeLedger({
+        'run-openprraced': {
+          status: 'needs-review',
+          entry: 'dispatched',
+          branch: 'agent/road-131',
+          worktreePath: legit,
+          ticketId: 'ticket-raced',
+          summary: 'Fixed the thing.',
+          title: null,
+        },
+      }),
+      postCopilotNote: jest.fn(async () => true),
+      claimPublish,
+      // A real ticketId drives openRunPullRequest through describeRunTicket
+      // and the ticket's own proposals — neither exists for this test's
+      // ticket, so both come back empty.
+      listTicketProposals: jest.fn(async () => []),
+      getTicket: jest.fn(async () => null),
+      getTicketRef: jest.fn(async () => null),
+    };
+    registerRunsIpc({
+      supervisor: supervisorWith(true),
+      host,
+      worktreesDir,
+      ledger,
+      git: scriptedGit({}),
+      reveal: jest.fn(),
+      notify: jest.fn(),
+      chooseDirectory: async () => null,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
+      daemon: () => null,
+      logger,
+      pullRequests: { publish: jest.fn(), publishFollowUp: publish },
+    });
+
+    const order: string[] = [];
+    claimPublish.mockImplementation(async () => {
+      order.push('claim');
+    });
+    publish.mockImplementation(async () => {
+      order.push('publish');
+      return {
+        kind: 'opened' as const,
+        url: 'https://github.com/acme/widgets/pull/11',
+        pushed: true as const,
+      };
+    });
+
+    let releaseFinalize: (() => void) | null = null;
+    const finalizeHoldingTheLock = withTicketDispatchLock(
+      'ticket-raced',
+      async () => {
+        order.push('finalize-holds-lock');
+        await new Promise<void>((resolve) => {
+          releaseFinalize = resolve;
+        });
+      },
+    );
+
+    const openPr = invoke(RUNS_IPC.openPr, 'run-openprraced');
+    // The header's call is queued behind finalize's hold — neither the
+    // claim nor the publisher has run yet.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(claimPublish).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+
+    releaseFinalize!();
+    await finalizeHoldingTheLock;
+    await expect(openPr).resolves.toEqual({
+      kind: 'opened',
+      url: 'https://github.com/acme/widgets/pull/11',
+    });
+    expect(order).toEqual(['finalize-holds-lock', 'claim', 'publish']);
+  });
+});
+
+describe('runs:list-pending-prompts', () => {
+  it('refuses a malformed id before it ever reaches the ledger (found in review: this handler used to skip the loadRun boundary check every sibling handler goes through)', async () => {
+    const { host, invoke } = fakeHost();
+    const ledger = fakeLedger({});
+    (
+      ledger as unknown as { listPendingPrompts: jest.Mock }
+    ).listPendingPrompts = jest.fn(async () => []);
+    registerRunsIpc({
+      supervisor: supervisorWith(true),
+      host,
+      worktreesDir,
+      ledger,
+      git: scriptedGit({}),
+      reveal: jest.fn(),
+      notify: jest.fn(),
+      chooseDirectory: async () => null,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
+      daemon: () => null,
+      logger,
+    });
+
+    await expect(
+      invoke(RUNS_IPC.listPendingPrompts, 'not-a-run-id; DROP TABLE'),
+    ).rejects.toThrow(/Not a run id/);
+    expect(
+      (ledger as unknown as { listPendingPrompts: jest.Mock })
+        .listPendingPrompts,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('answers with the ledger’s rows for a well-formed id', async () => {
+    const { host, invoke } = fakeHost();
+    const rows = [{ id: 'pp-1', runId: 'run-listpp01', text: 'hi' }];
+    const ledger = fakeLedger({ 'run-listpp01': { status: 'running' } });
+    (
+      ledger as unknown as { listPendingPrompts: jest.Mock }
+    ).listPendingPrompts = jest.fn(async () => rows);
+    registerRunsIpc({
+      supervisor: supervisorWith(true),
+      host,
+      worktreesDir,
+      ledger,
+      git: scriptedGit({}),
+      reveal: jest.fn(),
+      notify: jest.fn(),
+      chooseDirectory: async () => null,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
+      daemon: () => null,
+      logger,
+    });
+
+    await expect(
+      invoke(RUNS_IPC.listPendingPrompts, 'run-listpp01'),
+    ).resolves.toEqual(rows);
   });
 });
 

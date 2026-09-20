@@ -1383,6 +1383,57 @@ describe('follow-up finalize (a continued run)', () => {
     );
   });
 
+  // Found in review: the follow-up path's own closing-verdict branch
+  // (hand-duplicated from the first-finalize one at line ~498) had no
+  // test of its own — only the non-closing publish/REST paths were
+  // covered in this describe block.
+  it("a follow-up that concludes won't fix: not published, same as a first finalize's own closing branch — never a re-file of the closed verdict", async () => {
+    const { ledger, rows } = fakeLedger(filed({ verdict: 'wont-fix' }));
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: "Verdict: won't fix\n## Summary\nStill conflicts with the pricing rule on a second look.",
+          },
+        ]),
+      ],
+    });
+    const publishFollowUp = jest.fn();
+    const { deps } = depsWith(ledger, daemon, {
+      git: gitWith({ head: 'ddddddd', count: '1' }),
+      assertWorktreeGitDir: jest.fn(async () => {}),
+      pullRequests: { publish: jest.fn(), publishFollowUp },
+    });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+
+    expect(publishFollowUp).not.toHaveBeenCalled();
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'finalized',
+      expect.objectContaining({
+        sequence: 2,
+        pr: {
+          action: 'skipped',
+          reason: "the session's verdict was won't fix",
+        },
+      }),
+    );
+    const [, comment] = ledger.createRunProposal.mock.calls[0];
+    expect((comment as { body: string }).body).toContain(
+      "Not published: the session's verdict was won't fix",
+    );
+    // Same verdict as before this follow-up (`wont-fix` → `wont-fix`):
+    // no second state-change proposal for a closing state already set.
+    expect(ledger.createRunProposal).toHaveBeenCalledTimes(1);
+    expect(rows.get('run-abc1234')).toMatchObject({
+      status: 'needs-review',
+      finalizeCount: 2,
+      verdict: 'wont-fix',
+    });
+  });
+
   it('a report that repeats the last filed summary is conversation: RESTS', async () => {
     const { ledger } = fakeLedger(filed());
     (ledger.listEvents as jest.Mock).mockResolvedValue([

@@ -28,7 +28,11 @@ import {
 } from './runs/ledgerClient';
 import { assertUnder } from './runs/worktrees';
 import { listRunBranches, resumeRun, startRun } from './runs/startRun';
-import { buildBriefPreview, dispatchTicketRun } from './runs/dispatch';
+import {
+  buildBriefPreview,
+  dispatchTicketRun,
+  withTicketDispatchLock,
+} from './runs/dispatch';
 import { withRunLock } from './runs/runLock';
 import {
   deliverPendingAfterFinalize,
@@ -603,20 +607,31 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
     // Never-lock §3.3b: the header's retry takes the same publish claim
     // finalize does — one publisher per ticket — and goes through
     // publishFollowUp, so a run whose PR was merged since gets a new one.
-    try {
-      await ledger.claimPublish(run.id, null);
-    } catch (error) {
-      if (error instanceof LedgerRequestError && error.status === 409) {
-        return { kind: 'skipped', reason: error.message };
+    const claimAndPublish = async (): Promise<OpenPrResult> => {
+      try {
+        await ledger.claimPublish(run.id, null);
+      } catch (error) {
+        if (error instanceof LedgerRequestError && error.status === 409) {
+          return { kind: 'skipped', reason: error.message };
+        }
+        throw error;
       }
-      throw error;
-    }
-    const outcome = await deps.pullRequests.publishFollowUp({
-      run,
-      closingMessage: closing,
-      title,
-      ticketUrl,
-    });
+      return deps.pullRequests!.publishFollowUp({
+        run,
+        closingMessage: closing,
+        title,
+        ticketUrl,
+      });
+    };
+    // The publish claim only refuses a SECOND run's claim on the same
+    // ticket — it does nothing to stop this run's own two concurrent
+    // callers (this button and an in-flight automatic follow-up
+    // finalize both racing to publish the same run's report). Same lock
+    // finalize's own publish takes (found in review): so the two can
+    // never interleave their push/`gh pr create` calls.
+    const outcome = run.ticketId
+      ? await withTicketDispatchLock(run.ticketId, claimAndPublish)
+      : await claimAndPublish();
     if (outcome.kind === 'opened' || outcome.kind === 'updated') {
       deps.notify({ runId: run.id, status: run.status });
       await ledger
@@ -669,8 +684,15 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
     sendRunPrompt(startDeps, input),
   );
   deps.host.handle(RUNS_IPC.warm, (runId) => warmRun(startDeps, runId));
-  deps.host.handle(RUNS_IPC.listPendingPrompts, (runId) => {
+  deps.host.handle(RUNS_IPC.listPendingPrompts, async (runId) => {
+    // The same boundary check every sibling single-runId handler goes
+    // through `loadRun` for (found in review: this one used its own
+    // inline check, format-only — `assertRunId` closes the gap a copy
+    // of this handler could otherwise inherit by accident). `async` so
+    // that check's throw is a rejection like every sibling's, not a
+    // throw from the IPC call itself.
     if (typeof runId !== 'string') throw new Error('Not a run id.');
+    assertRunId(runId);
     return ledger.listPendingPrompts(runId);
   });
   deps.host.handle(RUNS_IPC.dropPendingPrompt, (input) =>

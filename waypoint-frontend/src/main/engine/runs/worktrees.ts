@@ -480,62 +480,89 @@ export async function reprovisionWorktree(
   const repositoryId = repositoryRecordId(repoPath);
   const requestedPath = worktreePathFor(deps.worktreesDir, run.id);
 
-  const repository = await deps.daemon.registerRepository(
-    repositoryId,
-    repoPath,
-  );
-  await deps.daemon.disableArtifactCopy(repository.id);
-  const existingBranches = await deps.daemon.listLocalBranches(repository.path);
-  const branch =
-    run.branch && isRefSafeComponent(run.branch)
-      ? run.branch
-      : chooseBranchName(run, null, existingBranches);
-  const branchReused = existingBranches.includes(branch);
-  deps.logger.info('engine: reprovisioning run worktree', {
-    runId: run.id,
-    branch,
-    baseRef,
-    branchReused,
-    path: requestedPath,
-  });
+  try {
+    const repository = await deps.daemon.registerRepository(
+      repositoryId,
+      repoPath,
+    );
+    await deps.daemon.disableArtifactCopy(repository.id);
+    const existingBranches = await deps.daemon.listLocalBranches(
+      repository.path,
+    );
+    const branch =
+      run.branch && isRefSafeComponent(run.branch)
+        ? run.branch
+        : chooseBranchName(run, null, existingBranches);
+    const branchReused = existingBranches.includes(branch);
+    deps.logger.info('engine: reprovisioning run worktree', {
+      runId: run.id,
+      branch,
+      baseRef,
+      branchReused,
+      path: requestedPath,
+    });
 
-  // A daemon record from before the worktree went missing — deleted
-  // outside Waypoint (`git worktree remove`, a disk cleanup), or one the
-  // daemon itself still holds for a directory that is not there any more
-  // — would make `createWorktree` see this workspaceId as already
-  // claimed under a spec that may no longer match
-  // (`createWorktreeWithFallback`'s own precedent above:
-  // "immutable-field-mismatch, not a retry"). Clearing it first is safe
-  // either way — `releaseWorktree`'s own rule is that a worktree already
-  // gone is success, not a failure to react to.
-  await deps.daemon
-    .deleteWorktree(run.id, { deleteBranch: false })
-    .catch(() => {});
+    // A daemon record from before the worktree went missing — deleted
+    // outside Waypoint (`git worktree remove`, a disk cleanup), or one the
+    // daemon itself still holds for a directory that is not there any more
+    // — would make `createWorktree` see this workspaceId as already
+    // claimed under a spec that may no longer match
+    // (`createWorktreeWithFallback`'s own precedent above:
+    // "immutable-field-mismatch, not a retry"). Clearing it first is safe
+    // either way — `releaseWorktree`'s own rule is that a worktree already
+    // gone is success, not a failure to react to.
+    await deps.daemon
+      .deleteWorktree(run.id, { deleteBranch: false })
+      .catch(() => {});
 
-  const record = await deps.daemon.createWorktree({
-    workspaceId: run.id,
-    repositoryId: repository.id,
-    branch,
-    baseRef,
-    path: requestedPath,
-  });
-  await assertUnder(record.path, deps.worktreesDir);
+    const record = await deps.daemon.createWorktree({
+      workspaceId: run.id,
+      repositoryId: repository.id,
+      branch,
+      baseRef,
+      path: requestedPath,
+    });
+    await assertUnder(record.path, deps.worktreesDir);
 
-  const provisioned: ReprovisionedWorktree = {
-    worktreePath: record.path,
-    branch: record.creation?.branch ?? branch,
-    baseRef,
-    daemonWorkspaceId: record.id,
-    repositoryId: repository.id,
-    branchReused,
-  };
-  await deps.ledger.appendEvent(run.id, 'worktree_created', {
-    path: provisioned.worktreePath,
-    branch: provisioned.branch,
-    baseRef,
-    repositoryId: repository.id,
-    reprovisioned: true,
-    branchReused,
-  });
-  return provisioned;
+    const provisioned: ReprovisionedWorktree = {
+      worktreePath: record.path,
+      branch: record.creation?.branch ?? branch,
+      baseRef,
+      daemonWorkspaceId: record.id,
+      repositoryId: repository.id,
+      branchReused,
+    };
+    await deps.ledger.appendEvent(run.id, 'worktree_created', {
+      path: provisioned.worktreePath,
+      branch: provisioned.branch,
+      baseRef,
+      repositoryId: repository.id,
+      reprovisioned: true,
+      branchReused,
+    });
+    return provisioned;
+  } catch (error) {
+    // Found in review: unlike `provisionWorktree` above, this had no
+    // failure-path event at all — a failed recreation attempt left no
+    // trail distinguishing it from any other resume failure. No
+    // `updateRun` here, on purpose, matching this function's own
+    // doc comment: it runs on a row that is very likely still terminal
+    // (the caller writes fields only once `reopenRun` has made it
+    // `provisioning`), so a field write would just 409 same as
+    // `provisionWorktree`'s own handled case — but an event appends
+    // fine on a terminal row, same as this function's success path
+    // already relies on.
+    const message = describeDaemonError(error);
+    deps.logger.warn('engine: run worktree reprovision failed', {
+      runId: run.id,
+      message,
+    });
+    await deps.ledger
+      .appendEvent(run.id, 'error', {
+        stage: 'worktree',
+        message: clip(message, MAX_EVENT_MESSAGE),
+      })
+      .catch(() => {});
+    throw error;
+  }
 }
