@@ -11,7 +11,9 @@ import { ConflictError, NotFoundError } from '../middleware/errors.js';
 vi.mock('../db/client.js', () => ({ db: {} }));
 vi.mock('../services/agentRuns.service.js');
 vi.mock('../services/proposals.service.js');
+vi.mock('../services/pendingPrompts.service.js');
 const service = await import('../services/agentRuns.service.js');
+const pendingService = await import('../services/pendingPrompts.service.js');
 const proposalsService = await import('../services/proposals.service.js');
 const { agentRunsRouter } = await import('./agentRuns.routes.js');
 
@@ -387,6 +389,72 @@ describe('PATCH /agent-runs/:id', () => {
   });
 });
 
+// ROAD-XXX: revive an interrupted/failed/cancelled run — see reopenRun's
+// own doc comment (agentRuns.service.ts) for the preconditions it enforces;
+// this is the HTTP contract only, same posture as PATCH's own tests above.
+describe('POST /agent-runs/:id/reopen', () => {
+  it('reopens a run and returns 200, with an optional reason passed through', async () => {
+    vi.mocked(service.reopenRun).mockResolvedValue({
+      run: run({ status: 'provisioning' }),
+      from: 'failed',
+    } as never);
+
+    const res = await request(buildTestApp())
+      .post('/agent-runs/run-abc1234/reopen')
+      .send({ reason: 'resumed by a new message' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.run.status).toBe('provisioning');
+    expect(res.body.from).toBe('failed');
+    expect(service.reopenRun).toHaveBeenCalledWith('run-abc1234', 'resumed by a new message');
+  });
+
+  it('reopens with no body at all — reason is optional', async () => {
+    vi.mocked(service.reopenRun).mockResolvedValue({ run: run({ status: 'provisioning' }), from: 'cancelled' } as never);
+
+    const res = await request(buildTestApp()).post('/agent-runs/run-abc1234/reopen').send();
+
+    expect(res.status).toBe(200);
+    expect(service.reopenRun).toHaveBeenCalledWith('run-abc1234', undefined);
+  });
+
+  it('rejects an unknown body field with 400, without calling the service', async () => {
+    const res = await request(buildTestApp())
+      .post('/agent-runs/run-abc1234/reopen')
+      .send({ status: 'provisioning' });
+
+    expect(res.status).toBe(400);
+    expect(service.reopenRun).not.toHaveBeenCalled();
+  });
+
+  it('maps every refusal the service can throw to its HTTP status', async () => {
+    const app = buildTestApp();
+
+    vi.mocked(service.reopenRun).mockRejectedValueOnce(new NotFoundError('agent run'));
+    const notFound = await request(app).post('/agent-runs/run-nope/reopen').send();
+    expect(notFound.status).toBe(404);
+
+    vi.mocked(service.reopenRun).mockRejectedValueOnce(
+      new ConflictError('A done run finished successfully; it cannot be resumed.'),
+    );
+    const notRevivable = await request(app).post('/agent-runs/run-abc1234/reopen').send();
+    expect(notRevivable.status).toBe(409);
+    expect(notRevivable.body.error).toBe('A done run finished successfully; it cannot be resumed.');
+
+    vi.mocked(service.reopenRun).mockRejectedValueOnce(
+      new ConflictError('Run run-abc1234 was superseded by a retry (run-xyz); open that one instead.'),
+    );
+    const superseded = await request(app).post('/agent-runs/run-abc1234/reopen').send();
+    expect(superseded.status).toBe(409);
+
+    vi.mocked(service.reopenRun).mockRejectedValueOnce(
+      new ConflictError('Run run-abc1234 belongs to another member; only its owner can resume it.'),
+    );
+    const notOwner = await request(app).post('/agent-runs/run-abc1234/reopen').send();
+    expect(notOwner.status).toBe(409);
+  });
+});
+
 describe('POST /agent-runs/:id/events', () => {
   it('appends a client event and returns 201', async () => {
     vi.mocked(service.appendEvent).mockResolvedValue({
@@ -542,5 +610,61 @@ describe('the transcript snapshot (ROAD-124)', () => {
     expect((await request(buildTestApp()).put('/agent-runs/run-abc1234/transcript').send({ turns: 'x' })).status).toBe(400);
     expect((await request(buildTestApp()).put('/agent-runs/run-abc1234/transcript').send({ turns: [], extra: 1 })).status).toBe(400);
     expect(service.saveTranscript).not.toHaveBeenCalled();
+  });
+});
+
+// Never-lock: the publish claim and the per-run outbox.
+describe('POST /agent-runs/:id/publish-claim', () => {
+  it('claims with a headSha and returns 200; headSha is optional', async () => {
+    vi.mocked(service.claimPublish).mockResolvedValue({ run: run({ status: 'finishing' }), claimedAt: new Date() } as never);
+    const res = await request(buildTestApp()).post('/agent-runs/run-abc1234/publish-claim').send({ headSha: 'abc1234' });
+    expect(res.status).toBe(200);
+    expect(service.claimPublish).toHaveBeenCalledWith('run-abc1234', 'abc1234');
+
+    await request(buildTestApp()).post('/agent-runs/run-abc1234/publish-claim').send();
+    expect(service.claimPublish).toHaveBeenLastCalledWith('run-abc1234', null);
+  });
+
+  it('rejects a headSha that is not a hex sha, and an unknown body field, with 400', async () => {
+    expect((await request(buildTestApp()).post('/agent-runs/run-abc1234/publish-claim').send({ headSha: 'HEAD' })).status).toBe(400);
+    expect((await request(buildTestApp()).post('/agent-runs/run-abc1234/publish-claim').send({ status: 'done' })).status).toBe(400);
+    expect(service.claimPublish).not.toHaveBeenCalled();
+  });
+
+  it('a refused claim is the service\'s 409 sentence', async () => {
+    const { ConflictError } = await import('../middleware/errors.js');
+    vi.mocked(service.claimPublish).mockRejectedValue(new ConflictError('Not published: this ticket has a live writer (Other).'));
+    const res = await request(buildTestApp()).post('/agent-runs/run-abc1234/publish-claim').send();
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/live writer \(Other\)/);
+  });
+});
+
+describe('pending prompts routes', () => {
+  const row = { id: 'pp-1', runId: 'run-abc1234', seq: 1, byMemberId: 'mem-1', text: 'hi', reason: 'starting', state: 'queued', autoAttempts: 0, lastError: null, claimedAt: null, resolvedAt: null, createdAt: new Date() };
+
+  it('GET lists; POST creates with 201; PATCH updates', async () => {
+    vi.mocked(pendingService.listPendingPrompts).mockResolvedValue([row] as never);
+    vi.mocked(pendingService.createPendingPrompt).mockResolvedValue(row as never);
+    vi.mocked(pendingService.updatePendingPrompt).mockResolvedValue({ ...row, state: 'sending' } as never);
+
+    expect((await request(buildTestApp()).get('/agent-runs/run-abc1234/pending-prompts')).body).toHaveLength(1);
+    const created = await request(buildTestApp()).post('/agent-runs/run-abc1234/pending-prompts').send({ text: 'hi', reason: 'starting' });
+    expect(created.status).toBe(201);
+    expect(pendingService.createPendingPrompt).toHaveBeenCalledWith('run-abc1234', { text: 'hi', reason: 'starting' });
+    const patched = await request(buildTestApp()).patch('/agent-runs/run-abc1234/pending-prompts/pp-1').send({ state: 'sending' });
+    expect(patched.status).toBe(200);
+    expect(pendingService.updatePendingPrompt).toHaveBeenCalledWith('run-abc1234', 'pp-1', { state: 'sending' });
+  });
+
+  it('validates: an unknown reason, an unknown state, empty text, over-long text, an empty patch', async () => {
+    const app = buildTestApp();
+    expect((await request(app).post('/agent-runs/run-abc1234/pending-prompts').send({ text: 'hi', reason: 'later' })).status).toBe(400);
+    expect((await request(app).post('/agent-runs/run-abc1234/pending-prompts').send({ text: '', reason: 'starting' })).status).toBe(400);
+    expect((await request(app).post('/agent-runs/run-abc1234/pending-prompts').send({ text: 'x'.repeat(20_001), reason: 'starting' })).status).toBe(400);
+    expect((await request(app).patch('/agent-runs/run-abc1234/pending-prompts/pp-1').send({ state: 'lost' })).status).toBe(400);
+    expect((await request(app).patch('/agent-runs/run-abc1234/pending-prompts/pp-1').send({})).status).toBe(400);
+    expect(pendingService.createPendingPrompt).not.toHaveBeenCalled();
+    expect(pendingService.updatePendingPrompt).not.toHaveBeenCalled();
   });
 });

@@ -56,6 +56,9 @@ import {
   type RunBranches,
   type RunChanged,
   type RunDiff,
+  type SendRunPromptResult,
+  type PendingPrompt,
+  type WarmRunResult,
   type SessionFolder,
   type StartRunInput,
   type StopRunResult,
@@ -648,6 +651,27 @@ const electronHandler = {
     },
     resumeRun(runId: string): Promise<ResumeRunResult> {
       return ipcRenderer.invoke(RUNS_IPC.resume, runId);
+    },
+    // Never-lock: every send lands somewhere — sent, queued, continued,
+    // resumed, or accepted into the run's outbox (engine/runs/sendPrompt.ts).
+    sendRunPrompt(input: {
+      runId: string;
+      text: string;
+    }): Promise<SendRunPromptResult> {
+      return ipcRenderer.invoke(RUNS_IPC.sendPrompt, input);
+    },
+    // Never-lock: start on open (daemon only), and the run's outbox.
+    warmRun(runId: string): Promise<WarmRunResult> {
+      return ipcRenderer.invoke(RUNS_IPC.warm, runId);
+    },
+    listPendingPrompts(runId: string): Promise<PendingPrompt[]> {
+      return ipcRenderer.invoke(RUNS_IPC.listPendingPrompts, runId);
+    },
+    dropPendingPrompt(input: { runId: string; pendingId: string }): Promise<void> {
+      return ipcRenderer.invoke(RUNS_IPC.dropPendingPrompt, input);
+    },
+    retryPendingPrompt(input: { runId: string }): Promise<SendRunPromptResult> {
+      return ipcRenderer.invoke(RUNS_IPC.retryPendingPrompt, input);
     },
     listRunBranches(folderHandle: string): Promise<RunBranches> {
       return ipcRenderer.invoke(RUNS_IPC.listBranches, folderHandle);

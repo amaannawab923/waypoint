@@ -27,8 +27,11 @@ import type {
   OpenPrResult,
   ResolvedTicket,
   ResumeRunResult,
+  PendingPrompt,
+  WarmRunResult,
   RunFocus,
   RunBranches,
+  SendRunPromptResult,
   SessionFolder,
   RunChanged,
   RunDiff,
@@ -213,6 +216,27 @@ export function resumeRun(runId: string): Promise<ResumeRunResult> {
   return bridge().resumeRun(runId).catch(unwrapIpcError);
 }
 
+/** Never-lock §2.5: on opening a run, load its gone session — daemon only. */
+export function warmRun(runId: string): Promise<WarmRunResult> {
+  return bridge().warmRun(runId).catch(unwrapIpcError);
+}
+
+/** Never-lock: the run's outbox, for the transcript's pending rows. */
+export function listPendingPrompts(runId: string): Promise<PendingPrompt[]> {
+  return bridge().listPendingPrompts(runId).catch(unwrapIpcError);
+}
+
+export function dropPendingPrompt(
+  runId: string,
+  pendingId: string,
+): Promise<void> {
+  return bridge().dropPendingPrompt({ runId, pendingId }).catch(unwrapIpcError);
+}
+
+export function retryPendingPrompt(runId: string): Promise<SendRunPromptResult> {
+  return bridge().retryPendingPrompt({ runId }).catch(unwrapIpcError);
+}
+
 export function listRunBranches(folderHandle: string): Promise<RunBranches> {
   return bridge().listRunBranches(folderHandle).catch(unwrapIpcError);
 }
@@ -297,15 +321,18 @@ export function onRunFocus(cb: (focus: RunFocus) => void): () => void {
   }
 }
 
-/** Text only: the panel's composer has no attachments in W3. */
+// ROAD-XXX: text only (the panel's composer has no attachments in W3).
+// Goes through main's `runs:send-prompt`, not the raw `acp.sendPrompt`
+// daemon-bridge procedure — that generic bridge has no run-status
+// awareness, so it has no way to revive a dead run first. main's own
+// handler is what still resolves at hand-off rather than turn-end (the
+// same daemonApi.ts facade `acp.sendPrompt` itself goes through once a
+// run is live), so this stays safe to await from the composer.
 export function sendPrompt(
   runId: string,
   text: string,
-): Promise<{ queued: boolean }> {
-  return callEngineFallible<{ queued: boolean }>('acp.sendPrompt', {
-    conversationId: runId,
-    prompt: { text },
-  });
+): Promise<SendRunPromptResult> {
+  return bridge().sendRunPrompt({ runId, text }).catch(unwrapIpcError);
 }
 
 export function resolvePermission(

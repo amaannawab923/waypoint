@@ -51,10 +51,13 @@ function fakeSupervisor(initial: EngineStatus) {
 
 function fakeLedger(
   listAllRuns: jest.Mock = jest.fn(async () => []),
+  rows: Array<{ id: string; status: string }> = [],
 ): LedgerClient {
   return {
     listAllRuns,
-    getRun: jest.fn(),
+    // The rows by id — interrupt/adopt re-read the run under the run
+    // lock before writing (review round 4).
+    getRun: jest.fn(async (id: string) => rows.find((r) => r.id === id) ?? null),
     updateRun: jest.fn(),
     appendEvent: jest.fn(),
   } as unknown as LedgerClient;
@@ -180,10 +183,9 @@ describe('registerBootReconcile', () => {
     const supervisor = fakeSupervisor(running(1));
     // One live run the daemon lacks → an `interrupt` action; the first
     // updateRun fails (backend restarted mid-reconcile), the second lands.
-    const listAllRuns = jest.fn(async () => [
-      { id: 'run-lost', status: 'running' },
-    ]);
-    const ledger = fakeLedger(listAllRuns);
+    const rows = [{ id: 'run-lost', status: 'running' }];
+    const listAllRuns = jest.fn(async () => rows);
+    const ledger = fakeLedger(listAllRuns, rows);
     (ledger.updateRun as jest.Mock)
       .mockRejectedValueOnce(new Error('fetch failed'))
       .mockResolvedValue({});

@@ -192,8 +192,23 @@ export const agentRuns = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     // First entry into `running`; null while queued/provisioning.
     startedAt: timestamp('started_at', { withTimezone: true }),
-    // Set once, on entering a terminal status.
+    // Set once, on entering a terminal status; cleared by updateRun once a
+    // reopenRun-initiated continuation actually reaches `running` again —
+    // NOT nulled by reopenRun itself, so a reopen that never completes
+    // still carries when this run last stopped.
     endedAt: timestamp('ended_at', { withTimezone: true }),
+    // How many times reopenRun has continued this run, and when it last
+    // did — audit facts (never-lock, 2026-09-20: no longer a throttle).
+    // Never touched by the general PATCH route (not in updateAgentRunSchema).
+    reopenCount: integer('reopen_count').notNull().default(0),
+    lastReopenedAt: timestamp('last_reopened_at', { withTimezone: true }),
+    // Never-lock: how many times the host's finalize has filed this run's
+    // report (0 = never), and the branch HEAD it last filed at. A
+    // continued run's later turns file again only on an explicit report
+    // (finalize.ts, report-triggered); the sha is for the "N new commits,
+    // not published" marker, never for the trigger.
+    finalizeCount: integer('finalize_count').notNull().default(0),
+    finalizedHeadSha: text('finalized_head_sha'),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -204,13 +219,56 @@ export const agentRuns = pgTable(
     index('agent_runs_ticket_idx').on(t.ticketId),
     // Boot-time reconcile: "every run that thinks it is live".
     index('agent_runs_status_idx').on(t.status),
+    // A retry supersedes the run it names; the drawer shows the chain.
+    index('agent_runs_retry_of_run_id_idx').on(t.retryOfRunId),
     // W5b: a ticket id is a native ticket's or a Jira ref's, never a bare
     // key or anything else — the shape the service dispatches on.
     check(
       'agent_runs_ticket_id_shape',
       sql`${t.ticketId} IS NULL OR ${t.ticketId} LIKE 'wi-%' OR ${t.ticketId} LIKE 'tref-%'`,
     ),
+    // There is deliberately NO one-live-writer-per-ticket index any more
+    // (never-lock, 2026-09-20): any number of conversations may be live on
+    // one ticket. What stays single — one automatic dispatch, one
+    // publisher — is held by createRun's and claimPublish's transaction-
+    // scoped advisory lock on the ticket (agentRuns.service.ts), which is
+    // what actually serializes across processes.
   ],
+);
+
+// Never-lock (2026-09-20): a message that could not be handed to the
+// daemon right now — the session is still starting, finalize holds the
+// row, the worktree's folder or repository is not reachable, the spawn
+// failed, or the sender is not the owner whose Waypoint runs the session
+// — is accepted here instead of refused, and delivered at most once when
+// it can be. A row has state, which is why this is a table and not only
+// events (events are appended alongside for the transcript's markers).
+export const agentRunPendingPrompts = pgTable(
+  'agent_run_pending_prompts',
+  {
+    id: text('id').primaryKey(),
+    runId: text('run_id')
+      .notNull()
+      .references(() => agentRuns.id, { onDelete: 'cascade' }),
+    // FIFO position, minted under the run's row lock.
+    seq: integer('seq').notNull(),
+    byMemberId: text('by_member_id')
+      .notNull()
+      .references(() => members.id),
+    text: text('text').notNull(),
+    // starting | finishing | folder-missing | repository-missing | spawn-failed | owner-offline
+    reason: text('reason').notNull(),
+    // queued | sending | delivered | unresolved | dropped
+    state: text('state').notNull().default('queued'),
+    // Automatic drains that ended spawn-failed for this item; any user
+    // send on the run resets it. The only runaway guard left.
+    autoAttempts: integer('auto_attempts').notNull().default(0),
+    lastError: text('last_error'),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('agent_run_pending_prompts_run_idx').on(t.runId, t.seq)],
 );
 
 // Append-only, per run: the audit trail ROAD-3 asked for, written by the

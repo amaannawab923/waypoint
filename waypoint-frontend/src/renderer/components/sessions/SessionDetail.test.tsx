@@ -1,15 +1,16 @@
 import '@testing-library/jest-dom';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { resumeRun, stopRun } from '@/data/engineApi';
-import { patchSessionRun, refreshSessions } from '@/lib/sessionsStore';
+import { stopRun } from '@/data/engineApi';
+import { patchSessionRun } from '@/lib/sessionsStore';
 import { showErrorToast } from '@/lib/toast';
 import type { AgentRun } from '@/types/agentRuns';
 import { SessionDetail } from './SessionDetail';
 
-// The header's W4 additions — Resume for an interrupted run and the
-// failure sentence — with the two heavy panes stubbed; the transcript and
-// the diff have their own tests.
+// The header — Stop, the failure sentence, rename, Open PR — with the two
+// heavy panes stubbed; the transcript and the diff have their own tests.
+// Never-lock (2026-09-20): there is no Resume button any more; a run that
+// is not live is continued by messaging it.
 jest.mock('./SessionTranscript', () => ({
   SessionTranscript: () => <div data-testid="transcript" />,
 }));
@@ -20,7 +21,6 @@ jest.mock('@/lib/useTicketLabel', () => ({
   useTicketSummary: () => null,
 }));
 jest.mock('@/data/engineApi', () => ({
-  resumeRun: jest.fn(),
   stopRun: jest.fn(),
   revealRunWorktree: jest.fn(),
   openRunPullRequest: jest.fn(),
@@ -100,33 +100,25 @@ describe('SessionDetail (W4)', () => {
     );
   });
 
-  it('shows Resume only for an interrupted run, beside Stop', () => {
-    const { rerender } = renderDetail(run({ status: 'running' }));
-    expect(
-      screen.queryByRole('button', { name: /Resume/ }),
-    ).not.toBeInTheDocument();
-    rerender(
-      <MemoryRouter>
-        <SessionDetail
-          run={run({ status: 'interrupted' })}
-          narrow={false}
-          onBack={jest.fn()}
-        />
-      </MemoryRouter>,
-    );
-    expect(screen.getByRole('button', { name: 'Resume' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
-  });
-
-  it('Resume is disabled, with the reason, when the run has no folder', () => {
-    renderDetail(run({ status: 'interrupted', worktreePath: null, cwd: null }));
-    const resume = screen.getByRole('button', { name: 'Resume' });
-    expect(resume).toBeDisabled();
-    expect(resume).toHaveAttribute(
-      'title',
-      'This run has no folder to resume in.',
-    );
-  });
+  it.each([
+    'queued',
+    'provisioning',
+    'running',
+    'blocked',
+    'finishing',
+    'needs-review',
+    'done',
+    'interrupted',
+    'failed',
+    'cancelled',
+  ] as const)(
+    'never offers a Resume button for a %s run (never-lock)',
+    (status) => {
+      renderDetail(run({ status, worktreePath: null, cwd: null }));
+      expect(screen.queryByRole('button', { name: /Resume/ })).toBeNull();
+      expect(screen.queryByText(/no folder to resume/)).toBeNull();
+    },
+  );
 
   it('a direct run reads "in ~/folder", is named by its folder, and carries the auto mark (W4b)', async () => {
     renderDetail(
@@ -155,50 +147,6 @@ describe('SessionDetail (W4)', () => {
     expect(
       screen.getByRole('button', { name: 'Show in Finder' }),
     ).toBeInTheDocument();
-  });
-
-  it('loaded: patches the run to running and re-reads, no toast', async () => {
-    (resumeRun as jest.Mock).mockResolvedValue({
-      outcome: 'loaded',
-      status: 'running',
-    });
-    renderDetail(run({ status: 'interrupted' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
-    await waitFor(() => expect(refreshSessions).toHaveBeenCalled());
-    expect(resumeRun).toHaveBeenCalledWith('run-abc1234');
-    expect(patchSessionRun).toHaveBeenCalledWith('run-abc1234', {
-      status: 'running',
-    });
-    expect(showErrorToast).not.toHaveBeenCalled();
-  });
-
-  it('replaced-by-new: says so', async () => {
-    (resumeRun as jest.Mock).mockResolvedValue({
-      outcome: 'replaced-by-new',
-      status: 'running',
-    });
-    renderDetail(run({ status: 'interrupted' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
-    await waitFor(() => expect(refreshSessions).toHaveBeenCalled());
-    expect(patchSessionRun).toHaveBeenCalledWith('run-abc1234', {
-      status: 'running',
-    });
-    expect(showErrorToast).toHaveBeenCalledWith(
-      expect.stringContaining('could not restore the previous conversation'),
-    );
-  });
-
-  it("a refused resume shows main's sentence and re-reads (the run is back to interrupted there)", async () => {
-    (resumeRun as jest.Mock).mockRejectedValue(
-      new Error('acp.start: auth-required'),
-    );
-    renderDetail(run({ status: 'interrupted' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
-    await waitFor(() =>
-      expect(showErrorToast).toHaveBeenCalledWith('acp.start: auth-required'),
-    );
-    expect(patchSessionRun).not.toHaveBeenCalled();
-    expect(refreshSessions).toHaveBeenCalled();
   });
 
   it('a failed run shows its error kind and message under the meta row', () => {
@@ -302,6 +250,20 @@ describe('Open PR (W6)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open PR' }));
     await waitFor(() =>
       expect(showErrorToast).toHaveBeenCalledWith('Push failed: denied'),
+    );
+
+    // Never-lock: a branch whose PR is still open gets its new commits
+    // pushed to it — `updated` patches the link in the same way.
+    (patchSessionRun as jest.Mock).mockClear();
+    openRunPullRequest.mockResolvedValueOnce({
+      kind: 'updated',
+      url: 'https://github.com/o/r/pull/61',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Open PR' }));
+    await waitFor(() =>
+      expect(patchSessionRun).toHaveBeenCalledWith('run-1', {
+        prUrl: 'https://github.com/o/r/pull/61',
+      }),
     );
   });
 

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, getTableColumns, gt, inArray, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gt, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { agentRuns, agentRunEvents, agentRunTranscripts, agents, members, projects, ticketRefs, tickets } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
@@ -9,7 +9,9 @@ import { assertConversationOwnedByMember } from './copilot.service.js';
 import {
   canTransition,
   describeRefusedTransition,
+  isRevivable,
   isTerminal,
+  LIVE_RUN_STATUSES,
   type AgentRunStatus,
 } from './runStatusMachine.js';
 import type {
@@ -41,6 +43,8 @@ export type AgentRunEventKind =
   | 'created'
   | 'status_changed'
   | 'blocked_reason_changed'
+  | 'run_reopened'
+  | 'publish_claimed'
   | AppendAgentRunEventInput['kind'];
 
 const DEFAULT_PAGE = 50;
@@ -49,6 +53,18 @@ const DEFAULT_PAGE = 50;
 // because the message the model wrote is still the most useful thing to
 // keep when it ran long.
 const MAX_SUMMARY_CHARS = 20_000;
+// A publish claim (claimPublish) whose holder died mid-push is ignored
+// after this long — a claim is otherwise released only by the holder's
+// own `finalized` event. The holder never renews it, so this MUST exceed
+// the longest a publish can legitimately take: the host bounds every
+// command it runs with a hard timeout (pullRequests.ts — a PR lookup,
+// a few git reads, the push, the PR create), and the sum of those is the
+// most a live claimant can be "still working" for. Found in review
+// (round 4): at 3 minutes this was already below that sum, so a slow but
+// healthy push could be preempted by a second claimant — exactly the two-
+// competing-PRs race the claim exists to prevent. pullRequests.test.ts
+// pins the relationship by reading this constant out of this file.
+export const PUBLISH_CLAIM_TTL_MS = 10 * 60_000;
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -230,6 +246,16 @@ export async function createRun(input: CreateAgentRunInput): Promise<AgentRun> {
       const [agent] = await tx.select({ workspaceId: agents.workspaceId }).from(agents).where(eq(agents.id, input.agentId));
       if (!agent || agent.workspaceId !== currentWorkspaceId()) throw new ValidationError('agentId does not exist');
     }
+    // Taken here, before the retry branch's row lock below, so this
+    // function's lock order is advisory → row — the same order
+    // claimPublish uses — and the two can never deadlock on a ticket.
+    // The check itself runs after the retry branch (which may cancel the
+    // very run it would otherwise see as live), just before the insert.
+    const dispatchTicketId =
+      input.entry === 'dispatched' && input.ticketId && input.modeId !== 'plan' ? input.ticketId : null;
+    if (dispatchTicketId) {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${dispatchTicketId}))`);
+    }
     if (input.retryOfRunId) {
       // The retried run must exist and be over: retrying a run that is
       // still going would race it for the same ticket's worktree. Read
@@ -270,6 +296,37 @@ export async function createRun(input: CreateAgentRunInput): Promise<AgentRun> {
           to: 'cancelled',
           reason: 'superseded by a retry',
         });
+      }
+    }
+    // One *automatic dispatch* of a ticket at a time. This used to be a
+    // partial unique index over live statuses; that also refused a person
+    // continuing an old conversation on the ticket (never-lock, 2026-09-20:
+    // many conversations may be live on one ticket — what stays single is
+    // this, and the publisher, claimPublish). A transaction-scoped
+    // advisory lock on the ticket serializes two dispatches racing each
+    // other across connections and processes; the select under it sees
+    // any row already committed, including a reopened conversation, which
+    // also refuses a fresh dispatch — the person is already on it.
+    // `queued` counts: a dispatch is a writer from the moment its row
+    // exists, not only once provisioning starts. claimPublish takes the
+    // same key, so a dispatch and a publish on one ticket serialize too.
+    if (dispatchTicketId) {
+      const [live] = await tx
+        .select({ id: agentRuns.id })
+        .from(agentRuns)
+        .where(
+          and(
+            eq(agentRuns.ticketId, dispatchTicketId),
+            eq(agentRuns.entry, 'dispatched'),
+            inArray(agentRuns.status, ['queued', ...LIVE_RUN_STATUSES]),
+            or(isNull(agentRuns.modeId), ne(agentRuns.modeId, 'plan')),
+          ),
+        )
+        .limit(1);
+      if (live) {
+        throw new ConflictError(
+          `A writing session is already live on this ticket (${live.id}); it is not dispatched twice.`,
+        );
       }
     }
     const [run] = await tx
@@ -507,6 +564,22 @@ export async function updateRun(runId: string, input: UpdateAgentRunInput): Prom
     if (fields.copilotConversationId) {
       await assertConversationOwnedByMember(fields.copilotConversationId, current.ownerMemberId);
     }
+    // ROAD-XXX (resume dead sessions), security review: these three are
+    // daemon-observed FACTS, written exactly once elsewhere in this
+    // codebase (cwd by startRun.ts's continueStart, worktreePath by
+    // worktrees.ts's provisionWorktree, daemonWorkspaceId alongside it) and
+    // never legitimately rewritten after — resumeRun only ever reads them.
+    // Write-once regardless of the run's current status: the isTerminal
+    // guard right below stops applying the instant a run leaves a terminal
+    // status (e.g. reopenRun reviving it to `provisioning`), and cwd/
+    // worktreePath are handed straight to the agent process as its
+    // execution directory — a caller who could rewrite them on a
+    // non-terminal row could redirect a live agent anywhere on disk.
+    for (const key of ['cwd', 'worktreePath', 'daemonWorkspaceId'] as const) {
+      if (fields[key] !== undefined && current[key] !== null && fields[key] !== current[key]) {
+        throw new ConflictError(`${key} cannot be changed once set.`);
+      }
+    }
     // A finished run is evidence. Found in review: the header promised
     // "nothing here updates a finished run's worktree or outcome" while a
     // field-only patch on a cancelled run went straight through. The one
@@ -550,6 +623,13 @@ export async function updateRun(runId: string, input: UpdateAgentRunInput): Prom
       const now = new Date();
       if (status === 'running' && current.startedAt === null) patch.startedAt = now;
       if (isTerminal(status)) patch.endedAt = now;
+      // A continuation reaching `running` again (reopenRun set
+      // lastReopenedAt on its way to provisioning) is no longer ended;
+      // reopenRun itself leaves endedAt alone so a reopen that never gets
+      // this far still says when the run last stopped.
+      if (status === 'running' && current.status === 'provisioning' && current.lastReopenedAt !== null) {
+        patch.endedAt = null;
+      }
       // Leaving `blocked` clears what it was blocked on, unless the caller
       // set a new one in the same patch (a blocked → blocked re-ask is not
       // a transition, so that case never reaches here).
@@ -586,5 +666,220 @@ export async function updateRun(runId: string, input: UpdateAgentRunInput): Prom
       });
     }
     return updated;
+  });
+}
+
+export interface ReopenRunResult {
+  run: AgentRun;
+  from: AgentRunStatus;
+}
+
+/**
+ * Continue a run that is not live — needs-review, done, interrupted,
+ * failed, cancelled — back to `provisioning`, so `startRun.ts` can hand
+ * its still-recorded `worktreePath`/`providerSessionId` back to the daemon
+ * (or recreate the worktree, or start fresh). The one way past this: not a
+ * wider PATCH — `updateRun` above still refuses every other patch to a
+ * terminal row unconditionally, and `runStatusMachine.ts`'s TRANSITIONS
+ * table was deliberately left untouched (see its isRevivable doc comment).
+ *
+ * Never-lock (2026-09-20): a conversation is never refused. The only
+ * preconditions are the workspace (a read-scope rule) and the owner
+ * (continuing starts a process on someone's machine, in their worktree —
+ * a teammate's message reaches the owner's Waypoint through the run's
+ * pending-prompts outbox instead). What this function used to refuse —
+ * a successful ending, a run superseded by a retry, a second live writer
+ * on the ticket, a reopen cooldown and cap — is gone on purpose:
+ *
+ *  - many conversations may be live on one ticket at once (parity with
+ *    emdash, where a task has any number of conversations). What stays
+ *    single is the *automatic dispatch* of a ticket (createRun's advisory
+ *    lock) and the *publisher* (claimPublish below) — a person talking to
+ *    an old run is neither;
+ *  - a superseded run is still a conversation someone may want to reopen
+ *    to ask what it did; the retry that replaced it does its own work on
+ *    its own branch;
+ *  - the rate limit protected against a runaway automatic resume loop;
+ *    that guard now lives where the automation is (the outbox's
+ *    `autoAttempts`), not in front of a person's message.
+ *
+ * `endedAt` is left alone here and cleared by `updateRun` once the
+ * continuation actually reaches `running` (see the `provisioning →
+ * running` clause there), so a reopen that never completes still carries
+ * when this run last stopped. `reopenCount`/`lastReopenedAt` are kept as
+ * facts about the row, no longer as a throttle.
+ */
+export async function reopenRun(runId: string, reason?: string): Promise<ReopenRunResult> {
+  return db.transaction(async (tx) => {
+    // Peeked unlocked, only to decide whether a ticket-scoped advisory
+    // lock is needed — every authoritative check still happens below,
+    // after the row lock. Advisory → row, the same order createRun and
+    // claimPublish use, so this can never deadlock against either.
+    //
+    // Found in review (round 2): without this, reopenRun could revive a
+    // dispatched run on a ticket in the same window createRun or
+    // claimPublish decides — under their own advisory lock — that the
+    // ticket has no live writer, landing two dispatched writers on one
+    // ticket at once. That's exactly the race those callers' own checks
+    // exist to prevent; reopenRun just wasn't holding the same lock they
+    // serialize on.
+    //
+    // Found in review (round 4): the decision is made from an UNLOCKED
+    // read, so it may only depend on fields that cannot change between
+    // this peek and the row lock below. `entry` and `ticketId` are
+    // create-only (updateAgentRunSchema has neither); `modeId` is not —
+    // a plan-mode run patched to a writing mode in that window used to
+    // slip past the lock entirely, since the peek had already decided
+    // no lock was needed. So unlike createRun (whose input is its own
+    // and can't move under it), every dispatched ticketed run takes the
+    // lock here, plan-mode or not: a needless lock on a plan run costs a
+    // moment; a missing one costs the invariant.
+    const [peek] = await tx
+      .select({ ticketId: agentRuns.ticketId, entry: agentRuns.entry })
+      .from(agentRuns)
+      .where(eq(agentRuns.id, runId));
+    if (!peek) throw new NotFoundError('agent run');
+    const dispatchTicketId = peek.entry === 'dispatched' && peek.ticketId ? peek.ticketId : null;
+    if (dispatchTicketId) {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${dispatchTicketId}))`);
+    }
+
+    const current = await lockRun(tx, runId);
+
+    // Scoped inside the transaction, not at the route (unlike most bare-id
+    // routes): reopenRun has no request-less caller — unlike updateRun's
+    // settleRunIfDecided sweep — so there's no reason to accept the TOCTOU
+    // window a pre-transaction check would leave.
+    if ((await ownerWorkspaceId(tx, current.ownerMemberId)) !== currentWorkspaceId()) {
+      throw new NotFoundError('agent run');
+    }
+    if (current.ownerMemberId !== currentMemberId()) {
+      throw new ConflictError(`Run ${runId} belongs to another member; only its owner can resume it.`);
+    }
+    if (!isRevivable(current.status)) {
+      // Only a live status reaches here — nothing to reopen; the caller
+      // sends to the live session instead.
+      throw new ConflictError(`Run ${runId} is ${current.status}; it is live, not something to reopen.`);
+    }
+
+    const now = new Date();
+    const [updated] = await tx
+      .update(agentRuns)
+      .set({
+        status: 'provisioning',
+        reopenCount: current.reopenCount + 1,
+        lastReopenedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(agentRuns.id, runId))
+      .returning();
+
+    await writeEvent(tx, runId, 'run_reopened', {
+      from: current.status,
+      errorKind: current.errorKind,
+      errorMessage: current.errorMessage,
+      ...(reason !== undefined ? { reason } : {}),
+    });
+    await writeEvent(tx, runId, 'status_changed', { from: current.status, to: 'provisioning' });
+
+    return { run: updated, from: current.status };
+  });
+}
+
+export interface PublishClaimResult {
+  run: AgentRun;
+  /** The claim that now holds the ticket, for the caller's trail. */
+  claimedAt: Date;
+}
+
+/**
+ * At most one publisher per ticket at publish time (never-lock, 2026-09-20,
+ * §3.3b of the design). Many conversations may be live on one ticket; the
+ * one thing that must stay single is who pushes the branch and opens or
+ * updates the PR. Called by the host's finalize right before it publishes,
+ * and by the header's Open PR. Two distinct mechanisms — do not conflate:
+ *
+ *  (i) the in-transaction race: `pg_advisory_xact_lock(hashtext(ticketId))`
+ *      — the same key createRun takes, in the same order (advisory, then
+ *      the row). Two claims for one ticket, from any number of backend
+ *      processes, serialize here; the second's select runs after the
+ *      first committed. Released with the transaction; it needs no expiry
+ *      and never outlives a request.
+ *
+ *  (ii) a claimant that died mid-push: lock-free, by the trail. Another
+ *      dispatched writer on the ticket that is live, or whose latest
+ *      `publish_claimed` is newer than its latest `finalized` AND younger
+ *      than PUBLISH_CLAIM_TTL_MS, holds the ticket. The TTL applies to
+ *      this check only — it is how a claim left behind by a host that
+ *      died between claim and push stops blocking other publishers.
+ *
+ * A refusal is a ConflictError naming the writer; the host files its
+ * comment unpublished and the transcript marker says how to retry. Never
+ * a status move.
+ */
+export async function claimPublish(runId: string, headSha: string | null): Promise<PublishClaimResult> {
+  return db.transaction(async (tx) => {
+    const [peek] = await tx
+      .select({ ticketId: agentRuns.ticketId, ownerMemberId: agentRuns.ownerMemberId })
+      .from(agentRuns)
+      .where(eq(agentRuns.id, runId));
+    if (!peek || (await ownerWorkspaceId(tx, peek.ownerMemberId)) !== currentWorkspaceId()) {
+      throw new NotFoundError('agent run');
+    }
+    if (peek.ticketId) {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${peek.ticketId}))`);
+    }
+    const current = await lockRun(tx, runId);
+    if (current.ownerMemberId !== currentMemberId()) {
+      throw new ConflictError(`Run ${runId} belongs to another member; only its owner can publish it.`);
+    }
+    const now = new Date();
+    if (current.ticketId && current.entry === 'dispatched') {
+      const [live] = await tx
+        .select({ id: agentRuns.id, title: agentRuns.title })
+        .from(agentRuns)
+        .where(
+          and(
+            eq(agentRuns.ticketId, current.ticketId),
+            eq(agentRuns.entry, 'dispatched'),
+            ne(agentRuns.id, runId),
+            inArray(agentRuns.status, [...LIVE_RUN_STATUSES]),
+            or(isNull(agentRuns.modeId), ne(agentRuns.modeId, 'plan')),
+          ),
+        )
+        .limit(1);
+      if (live) {
+        throw new ConflictError(`Not published: this ticket has a live writer (${live.title ?? live.id}).`);
+      }
+      // ISO text, not a Date: postgres-js's raw `sql` tag binds a Date as bytes.
+      const since = new Date(now.getTime() - PUBLISH_CLAIM_TTL_MS).toISOString();
+      const [claimed] = await tx.execute<{ run_id: string; title: string | null }>(sql`
+        SELECT c.run_id, r.title
+        FROM ${agentRunEvents} c
+        JOIN ${agentRuns} r ON r.id = c.run_id
+        WHERE c.kind = 'publish_claimed'
+          AND c.run_id <> ${runId}
+          AND r.ticket_id = ${current.ticketId}
+          AND r.entry = 'dispatched'
+          AND c.at > ${since}::timestamptz
+          AND NOT EXISTS (
+            SELECT 1 FROM ${agentRunEvents} f
+            WHERE f.run_id = c.run_id AND f.kind = 'finalized' AND f.seq > c.seq
+          )
+        ORDER BY c.at DESC
+        LIMIT 1
+      `);
+      if (claimed) {
+        throw new ConflictError(
+          `Not published: this ticket has a live writer (${claimed.title ?? claimed.run_id}); its publish is in progress.`,
+        );
+      }
+    }
+    await writeEvent(tx, runId, 'publish_claimed', {
+      headSha,
+      ticketId: current.ticketId,
+      by: currentMemberId(),
+    });
+    return { run: current, claimedAt: now };
   });
 }

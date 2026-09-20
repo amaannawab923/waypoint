@@ -9,7 +9,7 @@ import { http } from '@/data/httpClient';
 import { CURRENT_USER_ID } from '@/data/currentUser';
 import { getActiveMemberId } from '@/data/activeIdentity';
 import type { Probe } from '@/types/probe';
-import type { AgentRun } from '@/types/agentRuns';
+import type { AgentRun, AgentRunEvent } from '@/types/agentRuns';
 import type {
   Workspace,
   Member,
@@ -1187,6 +1187,21 @@ export async function getAgentRunTranscript(
   >(`/agent-runs/${encodeURIComponent(runId)}/transcript`, {
     notFoundAsUndefined: true,
   });
+}
+
+/**
+ * Never-lock (design §5): the run's events, oldest first — what the
+ * transcript's markers ("Completed ROAD-116 …", "Continued from done")
+ * are drawn from. Bounded by the route's own cap; a run's events are
+ * dozens.
+ */
+export async function listAgentRunEvents(
+  runId: string,
+): Promise<AgentRunEvent[]> {
+  return http.get<AgentRunEvent[]>(
+    `/agent-runs/${encodeURIComponent(runId)}/events?limit=500`,
+    { silent: true },
+  );
 }
 
 /** W5a §1.10: rename a run from its header — the W4 `title` column. */

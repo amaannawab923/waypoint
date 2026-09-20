@@ -1,4 +1,8 @@
-import type { AgentRun, AgentRunStatus } from '@/types/agentRuns';
+import type {
+  AgentRun,
+  AgentRunStatus,
+  PendingPromptReason,
+} from '@/types/agentRuns';
 import type { BadgeTone } from '@/components/ui/Badge';
 
 /**
@@ -17,7 +21,12 @@ export interface StatusView {
   /** Tailwind background class for the list row's dot. */
   dotClass: string;
   sentence: string;
-  /** The daemon should have a live session for it: the transcript can move, the composer can send. */
+  /**
+   * The daemon should have a live session for it: the transcript can
+   * move. Never a gate on the composer — every status can be messaged
+   * (never-lock, 2026-09-20); main resumes, continues, or outboxes as the
+   * status needs.
+   */
   live: boolean;
   /** Stop makes sense: the run can still be cancelled (runStatusMachine.ts). */
   stoppable: boolean;
@@ -28,7 +37,8 @@ export const STATUS_VIEW: Record<AgentRunStatus, StatusView> = {
     label: 'Queued',
     tone: 'neutral',
     dotClass: 'bg-text-muted',
-    sentence: 'Asked for; nothing has started yet.',
+    sentence:
+      'Asked for; nothing has started yet. A message you send now goes with it.',
     live: false,
     stoppable: true,
   },
@@ -36,7 +46,8 @@ export const STATUS_VIEW: Record<AgentRunStatus, StatusView> = {
     label: 'Provisioning',
     tone: 'info',
     dotClass: 'bg-info',
-    sentence: 'Creating the worktree and starting the session.',
+    sentence:
+      'Creating the worktree and starting the session. A message you send now goes with it.',
     live: false,
     stoppable: true,
   },
@@ -60,7 +71,7 @@ export const STATUS_VIEW: Record<AgentRunStatus, StatusView> = {
     label: 'Finishing',
     tone: 'info',
     dotClass: 'bg-info',
-    sentence: 'The agent is done; pushing and proposing.',
+    sentence: "Filing the run's report; a message you send now goes next.",
     live: true,
     stoppable: true,
   },
@@ -68,7 +79,8 @@ export const STATUS_VIEW: Record<AgentRunStatus, StatusView> = {
     label: 'Needs review',
     tone: 'warning',
     dotClass: 'bg-warning',
-    sentence: 'Proposals are waiting for your decision in Review.',
+    sentence:
+      'Proposals are waiting for your decision in Review. Message it to continue.',
     live: false,
     stoppable: false,
   },
@@ -76,7 +88,7 @@ export const STATUS_VIEW: Record<AgentRunStatus, StatusView> = {
     label: 'Done',
     tone: 'success',
     dotClass: 'bg-success',
-    sentence: 'Finished.',
+    sentence: 'Finished. Message it to continue.',
     live: false,
     stoppable: false,
   },
@@ -86,7 +98,7 @@ export const STATUS_VIEW: Record<AgentRunStatus, StatusView> = {
     outline: true,
     dotClass: 'bg-border-strong',
     sentence:
-      'The engine or Waypoint went away mid-run; the worktree is still there.',
+      'The engine or Waypoint went away mid-run. Message it to continue.',
     live: false,
     stoppable: true,
   },
@@ -94,7 +106,7 @@ export const STATUS_VIEW: Record<AgentRunStatus, StatusView> = {
     label: 'Failed',
     tone: 'danger',
     dotClass: 'bg-danger',
-    sentence: 'Ended with an error.',
+    sentence: 'Ended with an error. Message it to continue.',
     live: false,
     stoppable: false,
   },
@@ -103,7 +115,7 @@ export const STATUS_VIEW: Record<AgentRunStatus, StatusView> = {
     tone: 'neutral',
     outline: true,
     dotClass: 'bg-border-strong',
-    sentence: 'Stopped by a person.',
+    sentence: 'Stopped by a person. Message it to continue.',
     live: false,
     stoppable: false,
   },
@@ -216,6 +228,51 @@ export function runWhere(
   if (run.branch)
     return { kind: 'branch', branch: run.branch, baseRef: run.baseRef };
   return null;
+}
+
+/**
+ * What to tell the person when a resume had to recreate the run's
+ * worktree (ROAD-XXX) — one sentence, shared by the composer's send and
+ * the Resume button so the two can't drift. `branchReused` is the only
+ * distinction that changes what actually survived.
+ */
+export function worktreeRecreatedNotice(branchReused: boolean): string {
+  return branchReused
+    ? "This run's worktree had been removed; Waypoint recreated it from its branch. Committed work is intact, but any uncommitted changes from before are gone."
+    : "This run's worktree and its branch were both gone; Waypoint recreated a fresh branch from the base. Prior work on this run could not be recovered.";
+}
+
+/**
+ * Why a message is waiting in the run's outbox rather than with the
+ * daemon (never-lock, design §2.4), and when Waypoint sends it — the
+ * pending row's second line. Never a refusal: the text has left the box.
+ */
+export function pendingReasonSentence(
+  reason: PendingPromptReason,
+  detail: {
+    cwd?: string | null;
+    lastError?: string | null;
+    ownerName?: string | null;
+  } = {},
+): string {
+  switch (reason) {
+    case 'starting':
+      return 'Waiting to send — the session is starting. Waypoint sends it as soon as the session is up.';
+    case 'finishing':
+      return "Waiting to send — Waypoint is filing the run's report; your message goes next.";
+    case 'folder-missing':
+      return `Waiting to send — this run's folder is not on disk${detail.cwd ? ` at ${detail.cwd}` : ''}. Put it back and press Resend, or reopen this pane.`;
+    case 'repository-missing':
+      return "Waiting to send — the project's repository is not linked. Link it in project settings, then press Resend.";
+    case 'spawn-failed':
+      return `Waiting to send — the agent could not be started${detail.lastError ? ` (${detail.lastError})` : ''}. Waypoint retries when you send again, or press Resend.`;
+    case 'owner-offline':
+      return `Queued for ${detail.ownerName ?? 'the run owner'}'s Waypoint; it is sent when they are online.`;
+    case 'blocked-by-earlier':
+      return 'Waiting to send — behind an earlier message in this run’s outbox. Waypoint sends it right after.';
+    default:
+      return 'Waiting to send.';
+  }
 }
 
 /** What a dispatched run was asked to do, as the chip says it (W5a). */

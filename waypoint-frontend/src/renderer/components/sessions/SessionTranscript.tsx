@@ -1,16 +1,34 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { createPortal } from 'react-dom';
 import type { ChatView } from '@emdash/chat-ui';
 import { ChatTranscript } from '@/components/chat/ChatTranscript';
-import { IconMessage } from '@/components/icons';
-import { EmptyState } from '@/components/ui/EmptyState';
-import { cancelTurn, resolvePermission, sendPrompt } from '@/data/engineApi';
+import {
+  cancelTurn,
+  dropPendingPrompt,
+  resolvePermission,
+  retryPendingPrompt,
+  sendPrompt,
+  warmRun,
+} from '@/data/engineApi';
 import { refreshSessions, useSessionsSnapshot } from '@/lib/sessionsStore';
 import { showErrorToast } from '@/lib/toast';
-import type { AgentRun } from '@/types/agentRuns';
+import type { AgentRun, PendingPrompt } from '@/types/agentRuns';
 import { PermissionBand } from './PermissionBand';
-import { clearSessionDraft, SessionComposer } from './SessionComposer';
-import { intentView, runTitle, statusView } from './sessionStatus';
+import { SessionComposer } from './SessionComposer';
+import {
+  intentView,
+  pendingReasonSentence,
+  runTitle,
+  statusView,
+  worktreeRecreatedNotice,
+} from './sessionStatus';
 import { UsageStrip } from './UsageStrip';
 import { useSessionTranscript } from './useSessionTranscript';
 
@@ -53,15 +71,108 @@ function BriefBar({ brief, label }: { brief: string; label: string }) {
   );
 }
 
+/** The outbox strip's second line, per row state — never a nested ternary. */
+function outboxRowSentence(
+  row: PendingPrompt,
+  run: Pick<AgentRun, 'cwd' | 'worktreePath'>,
+): string {
+  if (row.state === 'unresolved') {
+    return 'Waypoint could not tell whether this reached the agent — check the transcript, then resend or discard it.';
+  }
+  if (row.state === 'sending') {
+    // A host that restarted mid-turn leaves a row claimed this way
+    // while the agent may still be working on it (never-lock,
+    // outbox.ts's resolveStale) — not the row's own `reason`, which is
+    // stale once it's gotten this far.
+    return 'Checking whether this reached the agent…';
+  }
+  return pendingReasonSentence(row.reason, {
+    cwd: run.cwd ?? run.worktreePath,
+    lastError: row.lastError,
+  });
+}
+
+/**
+ * The outbox strip (never-lock, design §2.4): every message the person
+ * sent that is not with the daemon yet — accepted, kept in the ledger,
+ * and delivered when its reason clears — one row each, with the reason
+ * and the two things a person can do about it. Sits above the composer
+ * so the box is never the thing that says "not now".
+ */
+function OutboxStrip({
+  rows,
+  run,
+  onRetry,
+  onDrop,
+  busy,
+}: {
+  rows: PendingPrompt[];
+  run: AgentRun;
+  onRetry: () => void;
+  onDrop: (row: PendingPrompt) => void;
+  busy: boolean;
+}) {
+  if (rows.length === 0) return null;
+  return (
+    <div
+      data-outbox-strip
+      className="mx-4 mt-2 flex flex-col gap-1 rounded-[var(--radius-sm)] border border-border bg-bg-inset px-3 py-2 text-xs"
+    >
+      {rows.map((row, i) => (
+        <div key={row.id} className="flex items-start gap-2" data-outbox-row>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-text" title={row.text}>
+              {row.text}
+            </div>
+            <div className="text-text-muted">{outboxRowSentence(row, run)}</div>
+          </div>
+          {i === 0 && (
+            <button
+              type="button"
+              onClick={onRetry}
+              disabled={busy}
+              className="shrink-0 font-medium text-text-secondary underline-offset-2 hover:text-text hover:underline disabled:opacity-50"
+            >
+              Resend
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => onDrop(row)}
+            disabled={busy}
+            className="shrink-0 font-medium text-text-muted underline-offset-2 hover:text-text hover:underline disabled:opacity-50"
+          >
+            Discard
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /**
  * The Transcript tab (W3, ROAD-62/63): the vendored chat-ui view for the
- * run, fed by useSessionTranscript; the permission band and the composer
- * portaled into chat-ui's own sticky composer slot so the transcript's
- * bottom padding follows their height; and the usage strip. What the
- * composer may do follows the ledger's status — a run that has ended has
- * no session to prompt — and the engine's.
+ * run, fed by useSessionTranscript; the permission band, the outbox strip
+ * and the composer portaled into chat-ui's own sticky composer slot so
+ * the transcript's bottom padding follows their height (inline below
+ * the body when there is no slot yet — the composer is mounted whatever
+ * the run's state); and the usage strip.
+ *
+ * Never-lock (2026-09-20; emdash parity, see SessionComposer): the
+ * composer is open for EVERY status. What a send does is main's answer
+ * (sendPrompt.ts) — sent, queued for the next turn, continued from a
+ * finished run, resumed first, or held in the run's outbox until the
+ * obstacle clears — and this pane only reports it. Nothing here decides
+ * from the status that a message cannot be sent.
  */
 export function SessionTranscript({ run }: { run: AgentRun }) {
+  // Set for the duration of a send: suppresses useSessionTranscript's own
+  // teardown-and-rebuild for the provisioning a resume passes through
+  // (below), so a message that just revived the run doesn't flash
+  // "Starting the session…" over the reply that's about to arrive on the
+  // very same conversation. Local, not derived from run.status.
+  const [sendInFlight, setSendInFlight] = useState(false);
+  const label = runTitle(run);
   const {
     context,
     state,
@@ -74,85 +185,265 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
     isGenerating,
     queuedCount,
     reloadHistory,
+    reconnect,
     brief,
+    pending,
+    refreshPending,
   } = useSessionTranscript(run.id, {
-    awaitingSession: run.status === 'queued' || run.status === 'provisioning',
+    awaitingSession:
+      (run.status === 'queued' || run.status === 'provisioning') &&
+      !sendInFlight,
     // A dispatched run's first prompt is its brief: folded (W5a).
-    foldBrief: run.entry === 'dispatched' ? { label: runTitle(run) } : null,
+    foldBrief: run.entry === 'dispatched' ? { label } : null,
+    markerLabel: label,
   });
   const briefLabel =
     run.entry === 'dispatched'
-      ? `${runTitle(run)}${intentView(run)?.mode ? ` · ${intentView(run)?.mode}` : ''}`
+      ? `${label}${intentView(run)?.mode ? ` · ${intentView(run)?.mode}` : ''}`
       : null;
   const { engine } = useSessionsSnapshot();
-  const [view, setView] = useState<ChatView | null>(null);
+  // The chat-ui view, remembered with the state it was built for: a
+  // unit torn down (a start awaited) leaves a view whose slot is off the
+  // document, and a portal into it would hide the composer — so the slot
+  // only counts while its state is the current one.
+  const [ready, setReady] = useState<{
+    state: NonNullable<typeof state>;
+    view: ChatView;
+  } | null>(null);
+  const composerSlot =
+    state && ready?.state === state ? ready.view.composerSlot : null;
+  // `dock`'s real, permanent home: one DOM node, created exactly once
+  // for this component's lifetime and NEVER swapped — `createPortal`
+  // below always targets this same reference, so React's own
+  // reconciliation of `dock`'s subtree never sees a change at this
+  // position and never has reason to remount it (found in review:
+  // `composerSlot ? createPortal(dock, composerSlot) : dock` switched
+  // between a bare child and a portal — a type change React can't
+  // reconcile across — the instant chat-ui's slot showed up, usually a
+  // beat after the first render, resetting `SessionComposer`'s focus
+  // and in-progress text on essentially every session-tab open. A
+  // *second* attempt — always calling `createPortal` but varying its
+  // container argument — turned out to have the exact same problem:
+  // verified live, in the test below, that a portal's own container
+  // changing is enough to remount its children too). What moves instead
+  // is this node's PARENT — a plain DOM `appendChild`, outside React
+  // entirely, in the layout effect below.
+  const dockHome = useRef<HTMLDivElement | null>(null);
+  if (dockHome.current === null) {
+    dockHome.current = document.createElement('div');
+    dockHome.current.style.display = 'contents';
+  }
+  const localWrapper = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const target = composerSlot ?? localWrapper.current;
+    const home = dockHome.current;
+    if (target && home && home.parentElement !== target) {
+      // The move itself is what a browser blurs an element for — the
+      // node, its value and every hook's state survive intact, only
+      // focus doesn't, so it comes right back before paint (a keystroke
+      // is never lost either way; this just keeps the cursor from
+      // visibly leaving the box for the one frame this takes).
+      const focused =
+        document.activeElement instanceof HTMLElement &&
+        home.contains(document.activeElement)
+          ? document.activeElement
+          : null;
+      target.appendChild(home);
+      focused?.focus();
+    }
+  });
   const [answering, setAnswering] = useState<string | null>(null);
+  const [outboxBusy, setOutboxBusy] = useState(false);
   const status = statusView(run.status);
+  const engineDown = engine !== undefined && engine.kind !== 'running';
+
+  // Start on open (never-lock, design §2.5; emdash's `start()` on tab
+  // open): a run whose daemon session is gone is loaded again as soon as
+  // the pane shows it, so the first message goes to a warm session
+  // rather than waiting a cold spawn out. Daemon only — nothing about
+  // the run changes for having been looked at. `warming` is only the
+  // placeholder; a send during it goes to the outbox and is delivered
+  // when the session is up.
+  const [warming, setWarming] = useState(false);
+  useEffect(() => {
+    // Found in review: neither early return reset `warming` — a warm
+    // cycle that was mid-flight when the run turned live/idle (a resume
+    // landing right before the daemon reports `isGenerating`) could leave
+    // the placeholder stuck on "Connecting…" for a session that was
+    // actually already up.
+    if (engineDown || status.live) {
+      setWarming(false);
+      return undefined;
+    }
+    if (run.status === 'queued' || run.status === 'provisioning') {
+      setWarming(false);
+      return undefined;
+    }
+    let gone = false;
+    setWarming(true);
+    const settle = () => {
+      if (!gone) setWarming(false);
+    };
+    warmRun(run.id)
+      .then(settle, settle)
+      .catch(() => {});
+    return () => {
+      gone = true;
+    };
+    // `run.status` is a real dependency, not just `run.id`/`engineDown`
+    // (found in review): a pane opened while `queued`/`provisioning`
+    // used to warm nothing, ever, for that mount — the one invocation
+    // this pair of deps got was spent on the early return above, and
+    // nothing re-ran once the run actually reached a status worth
+    // warming. Re-running per status change is cheap and safe: `warm.ts`
+    // early-outs with no daemon call for every live status, and its own
+    // `warmed` map plus already-live guard rule out a duplicate spawn.
+  }, [run.id, engineDown, run.status, status.live]);
 
   // A run that ended without ever producing a turn (stopped while
-  // provisioning, or a run that genuinely never got anywhere) reads history
-  // fine — the history read is `ready`, just with nothing in it — and
-  // chat-ui's own canvas has nothing to draw, so the pane was rendering
-  // completely blank (found in PM review: "SESS-23 stop while
-  // provisioning", ROAD-61). `loading` and `failed` are excluded so this
-  // never flashes over a fetch in flight or a real read error; `live` runs
-  // and a run with a turn still in flight (`hasActiveTurn`) are excluded so
-  // a session that has simply not produced its first *committed* turn
-  // yet — still watchable, still promptable, or stopped a moment before its
-  // turn's commit landed — keeps its normal canvas instead of being told
-  // nothing happened. `interrupted` is excluded too: unlike `done`/`failed`/
-  // `cancelled` it does not mean the session ended — the daemon or the app
-  // just isn't reachable right now (sessionStatus.ts) — so "nothing to
-  // show" would assert something this status doesn't support; and `queued`/
-  // `provisioning` are excluded directly (not just via `awaitingSession`
-  // upstream) so a resume's one transitional render, where `historyStatus`/
-  // `turnCount` are still the prior session's stale values but `run.status`
-  // has already flipped, can't flash this over the "Starting the
-  // session…" state that's about to replace it.
-  const showEmptyTranscript =
+  // provisioning, or one that never got anywhere) has nothing for
+  // chat-ui's canvas to draw; the pane used to swap the whole canvas —
+  // composer included — for "Nothing to show". Now it is a line above a
+  // canvas that stays put, with the composer under it (ROAD-61 found the
+  // blank pane; never-lock forbids the swap). `loading`/`failed` are
+  // excluded so it never flashes over a fetch or a read error; live runs
+  // and a turn in flight are excluded because they are not empty, only
+  // early.
+  const nothingYet =
     historyStatus.kind === 'ready' &&
     turnCount === 0 &&
     !hasActiveTurn &&
+    pending.length === 0 &&
     !status.live &&
-    run.status !== 'interrupted' &&
     run.status !== 'queued' &&
     run.status !== 'provisioning';
 
-  // A draft outlives an interruption (the run comes back), not an ending.
-  useEffect(() => {
-    if (
-      run.status === 'done' ||
-      run.status === 'failed' ||
-      run.status === 'cancelled'
-    ) {
-      clearSessionDraft(run.id);
-    }
-  }, [run.id, run.status]);
+  // What a send will do right now — the placeholder says it, so a person
+  // typing into a finished run is not surprised by what comes back.
+  let placeholder: string | undefined;
+  let sendingLabel = 'Sending…';
+  if (isGenerating)
+    placeholder = 'Add a follow-up…  (⌘↵ queues it for the next turn)';
+  else if (run.status === 'queued' || run.status === 'provisioning')
+    placeholder =
+      'Starting the session… your message goes with it  (⌘↵ to send)';
+  else if (run.status === 'finishing')
+    placeholder = 'Filing the report… your message goes next  (⌘↵ to send)';
+  else if (warming) placeholder = 'Connecting… you can type  (⌘↵ to send)';
+  else if (!status.live) {
+    placeholder = 'Message this session to continue it…  (⌘↵ to send)';
+    sendingLabel = 'Resuming…';
+  }
 
-  const engineDown = engine !== undefined && engine.kind !== 'running';
-  let disabledReason: string | null = null;
-  if (engineDown) disabledReason = 'The agent engine is not running.';
-  else if (!status.live)
-    disabledReason = `This session has ended (${status.label.toLowerCase()}).`;
-
-  // Fire and forget, the way emdash's own composer does: the daemon
-  // answers acp.sendPrompt when the agent's TURN ends, which can be
-  // minutes (found in review — awaiting it greyed the composer out for
-  // the whole turn). The prompt shows at once as chat-ui's pending
-  // prompt; the live activeTurn replaces it when the daemon starts the
-  // turn, and a refusal takes it back with the daemon's sentence.
+  // Awaited — safe only because main's `runs:send-prompt` handler goes
+  // through daemonApi.ts's `sendPrompt` facade, which resolves at
+  // hand-off (racing the daemon's own turn-end answer against a short
+  // window), not at the agent's actual turn end. The prior non-await
+  // here existed specifically because awaiting a RAW `acp.sendPrompt`
+  // greyed the composer out for an entire turn — that regression would
+  // come right back if this awaited anything without the same
+  // hand-off-only contract.
   const onSend = async (text: string) => {
-    if (!state) return;
     const id = `pending-${Date.now()}`;
-    state.session.setPendingPrompt({ id, text });
-    sendPrompt(run.id, text)
-      .then(() => refreshSessions())
-      .catch((error: unknown) => {
-        state.session.setPendingPrompt(null);
+    state?.session.setPendingPrompt({ id, text });
+    setSendInFlight(true);
+    try {
+      const result = await sendPrompt(run.id, text);
+      switch (result.outcome) {
+        case 'cancelled-mid-resume':
+          // A Stop landed between the reopen and the session start: the
+          // person overrode the send. Not an error — the text goes back.
+          state?.session.setPendingPrompt(null);
+          showErrorToast(
+            'Stopped before your message reached the agent; it is back in the box.',
+          );
+          await refreshSessions();
+          throw new Error('not sent');
+        case 'outboxed':
+          // Accepted, kept, delivered when the reason clears — the strip
+          // above the composer shows it; the transcript's pending prompt
+          // would claim the daemon has it, which it does not.
+          state?.session.setPendingPrompt(null);
+          break;
+        case 'continued':
+        case 'resumed-and-sent':
+          // The daemon now has a session for this run again, but
+          // `sendInFlight` (above) kept this unit's followers alive rather
+          // than torn down, so they're still closed on the one that
+          // ended — reconnect them now that it has actually landed.
+          reconnect();
+          break;
+        default:
+      }
+      if (result.worktreeRecreated) {
+        // Said before the conversation-restore note below when both
+        // apply: files on disk are the bigger discontinuity.
+        showErrorToast(worktreeRecreatedNotice(result.branchReused === true));
+      }
+      if (result.resume === 'replaced-by-new') {
+        // The one toast channel there is; this is a warning in any case.
+        showErrorToast(
+          'The provider could not restore the previous conversation; your message went to a fresh session in the same worktree, with the branch state attached.',
+        );
+      }
+      await Promise.all([refreshSessions(), refreshPending()]);
+    } catch (error) {
+      state?.session.setPendingPrompt(null);
+      if (!(error instanceof Error && error.message === 'not sent')) {
         showErrorToast(
           error instanceof Error ? error.message : 'The prompt was not sent.',
         );
-      });
+        await refreshSessions();
+      }
+      throw error;
+    } finally {
+      setSendInFlight(false);
+    }
+  };
+
+  const onRetry = async () => {
+    setOutboxBusy(true);
+    setSendInFlight(true);
+    try {
+      const result = await retryPendingPrompt(run.id);
+      if (
+        result.outcome === 'continued' ||
+        result.outcome === 'resumed-and-sent'
+      )
+        reconnect();
+      if (result.outcome === 'outboxed' && result.pending) {
+        showErrorToast(
+          pendingReasonSentence(result.pending.reason, {
+            cwd: run.cwd ?? run.worktreePath,
+            lastError: result.pending.lastError,
+          }),
+        );
+      }
+      await Promise.all([refreshSessions(), refreshPending()]);
+    } catch (error) {
+      showErrorToast(
+        error instanceof Error ? error.message : 'The message was not resent.',
+      );
+    } finally {
+      setOutboxBusy(false);
+      setSendInFlight(false);
+    }
+  };
+
+  const onDrop = async (row: PendingPrompt) => {
+    setOutboxBusy(true);
+    try {
+      await dropPendingPrompt(run.id, row.id);
+      await refreshPending();
+    } catch (error) {
+      showErrorToast(
+        error instanceof Error
+          ? error.message
+          : 'The message was not discarded.',
+      );
+    } finally {
+      setOutboxBusy(false);
+    }
   };
 
   const onAnswer = async (requestId: string, optionId: string) => {
@@ -189,17 +480,7 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
   );
 
   let transcriptBody: ReactNode;
-  if (showEmptyTranscript) {
-    transcriptBody = (
-      <div className="flex h-full items-center justify-center">
-        <EmptyState
-          icon={<IconMessage size={28} />}
-          title="Nothing to show"
-          description="This session ended before any activity — there's no transcript to show."
-        />
-      </div>
-    );
-  } else if (state) {
+  if (state) {
     transcriptBody = (
       <ChatTranscript
         context={context}
@@ -207,7 +488,7 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
         composer="slot"
         composerPlacement="bottom"
         stickToBottom
-        onReady={setView}
+        onReady={(view) => setReady({ state, view })}
         commands={commands}
         className="h-full"
       />
@@ -231,12 +512,29 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
         }}
         answering={answering}
       />
+      <OutboxStrip
+        rows={pending}
+        run={run}
+        onRetry={() => {
+          onRetry().catch(() => {});
+        }}
+        onDrop={(row) => {
+          onDrop(row).catch(() => {});
+        }}
+        busy={outboxBusy}
+      />
       <SessionComposer
         draftKey={run.id}
         onSend={onSend}
-        disabledReason={disabledReason}
+        sendBlockedReason={
+          engineDown
+            ? 'The agent engine is not running — your message is kept here until it is.'
+            : null
+        }
         attachedToBand={pendingPermissions.length > 0}
         autoFocus
+        placeholder={placeholder}
+        sendingLabel={sendingLabel}
       />
     </>
   );
@@ -268,15 +566,20 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
           The transcript shows what was last received.
         </div>
       )}
+      {nothingYet && (
+        <div
+          data-nothing-yet
+          className="mx-4 mt-3 rounded-[var(--radius-sm)] border border-border bg-bg-inset px-3 py-2 text-xs text-text-secondary"
+        >
+          No activity in this session yet — {status.sentence}
+        </div>
+      )}
       <div className="min-h-0 flex-1">{transcriptBody}</div>
-      {/* Gated on showEmptyTranscript directly, in render, rather than
-          clearing `view` from an effect — an effect-based clear lands one
-          commit after ChatTranscript has already unmounted (disposing this
-          same view), so the portal would still fire once into a slot that
-          no longer exists before the effect catches up. */}
-      {!showEmptyTranscript && view?.composerSlot
-        ? createPortal(dock, view.composerSlot)
-        : null}
+      {/* Where `dockHome` sits before the layout effect has anywhere
+          better to put it (the very first paint) — the composer is
+          mounted either way; see `dockHome`'s own comment above. */}
+      <div ref={localWrapper} style={{ display: 'contents' }} />
+      {createPortal(dock, dockHome.current)}
       <UsageStrip
         turnCount={turnCount}
         usage={usage}

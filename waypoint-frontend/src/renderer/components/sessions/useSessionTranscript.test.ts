@@ -11,10 +11,19 @@ import { useSessionTranscript } from './useSessionTranscript';
 jest.mock('@/data/engineApi', () => ({
   engineSessionBridge: {},
   onEngineStatusChanged: jest.fn(() => () => {}),
+  onRunChanged: jest.fn(() => () => {}),
+  listPendingPrompts: jest.fn(async () => []),
 }));
 jest.mock('@/data/api', () => ({
   getAgentRunTranscript: jest.fn(async () => undefined),
+  listAgentRunEvents: jest.fn(async () => []),
 }));
+const { onRunChanged, listPendingPrompts } = jest.requireMock(
+  '@/data/engineApi',
+) as { onRunChanged: jest.Mock; listPendingPrompts: jest.Mock };
+const { listAgentRunEvents } = jest.requireMock('@/data/api') as {
+  listAgentRunEvents: jest.Mock;
+};
 
 type Handlers = {
   onUpdate: (update: LiveUpdate) => void;
@@ -361,5 +370,233 @@ describe('the folded brief (W5a)', () => {
     const seeded = state.transcript.history.seed.mock.calls.at(-1)[0];
     expect(seeded[0].items[0].text).toBe(long);
     expect(result.current.brief).toBeNull();
+  });
+});
+
+// Never-lock (design §5.3): the markers are laid over every seed, from
+// the run's events, and the outbox rows are handed back; both are
+// re-read when main says the run changed.
+describe('markers and the outbox (never-lock)', () => {
+  const turns = [
+    {
+      id: 't1',
+      seq: 1,
+      initiator: 'user',
+      items: [
+        { kind: 'message', id: 'm1', seq: 1, role: 'user', text: 'fix it' },
+        { kind: 'message', id: 'm2', seq: 2, role: 'assistant', text: 'done' },
+      ],
+    },
+  ];
+  const finalized = {
+    runId: 'run-a',
+    seq: 4,
+    kind: 'finalized',
+    payload: {
+      sequence: 1,
+      verdict: 'fixed',
+      proposals: [],
+      afterTurnId: 't1',
+    },
+    at: '2026-09-20T00:00:04.000Z',
+  };
+
+  it('seeds the history with the markers after their turns, and hands back the open outbox rows', async () => {
+    listAgentRunEvents.mockResolvedValueOnce([finalized]);
+    listPendingPrompts.mockResolvedValueOnce([
+      { id: 'pp-1', state: 'queued', text: 'later' },
+      { id: 'pp-2', state: 'delivered', text: 'gone' },
+      { id: 'pp-3', state: 'dropped', text: 'gone too' },
+    ]);
+    const fb = fakeBridge({}, turns);
+    runtime.connectSession.mockImplementation(() => jest.fn());
+    const { result } = renderHook(() =>
+      useSessionTranscript('run-a', {
+        bridge: fb.bridge,
+        markerLabel: 'ROAD-1 · Fix',
+      }),
+    );
+    await flush();
+    const state = runtime.createChatState.mock.results[0].value;
+    const seeded = state.transcript.history.seed.mock.calls.at(-1)[0];
+    expect(seeded[0].items.map((i: { id: string }) => i.id)).toEqual([
+      'm1',
+      'm2',
+      'marker:4',
+    ]);
+    expect(seeded[0].items[2]).toMatchObject({
+      role: 'thought',
+      text: 'Waypoint · Completed ROAD-1 · Fix · verdict fixed',
+    });
+    expect(result.current.pending.map((p) => p.id)).toEqual(['pp-1']);
+    expect(listAgentRunEvents).toHaveBeenCalledWith('run-a');
+    // The pending prompt is cleared BEFORE the seed: chat-ui builds a
+    // row's component once, by role, and a seed that adds a marker where
+    // the pending prompt's user card stood recycles that card for it
+    // (found live: a marker drawn as a user bubble).
+    expect(
+      state.session.setPendingPrompt.mock.invocationCallOrder.at(-1),
+    ).toBeLessThan(
+      state.transcript.history.seed.mock.invocationCallOrder.at(-1),
+    );
+  });
+
+  it('re-reads the events on a run change for this run only, and re-seeds when a marker was added', async () => {
+    const fb = fakeBridge({}, turns);
+    runtime.connectSession.mockImplementation(() => jest.fn());
+    renderHook(() =>
+      useSessionTranscript('run-a', { bridge: fb.bridge, markerLabel: 'X' }),
+    );
+    await flush();
+    const state = runtime.createChatState.mock.results[0].value;
+    const seedsBefore = state.transcript.history.seed.mock.calls.length;
+    const notify = onRunChanged.mock.calls[0][0] as (c: {
+      runId: string;
+      status: string;
+    }) => void;
+
+    // Another run: nothing read.
+    await act(async () => notify({ runId: 'run-b', status: 'done' }));
+    await flush();
+    expect(listAgentRunEvents).toHaveBeenCalledTimes(1);
+
+    // This run, no new marker: read, but not re-seeded.
+    await act(async () => notify({ runId: 'run-a', status: 'running' }));
+    await flush();
+    expect(listAgentRunEvents).toHaveBeenCalledTimes(2);
+    expect(state.transcript.history.seed.mock.calls.length).toBe(seedsBefore);
+
+    // This run, a marker appeared: re-seeded with it.
+    listAgentRunEvents.mockResolvedValueOnce([finalized]);
+    await act(async () => notify({ runId: 'run-a', status: 'done' }));
+    await flush();
+    expect(state.transcript.history.seed.mock.calls.length).toBe(
+      seedsBefore + 1,
+    );
+    const seeded = state.transcript.history.seed.mock.calls.at(-1)[0];
+    expect(seeded[0].items.at(-1).id).toBe('marker:4');
+  });
+
+  it('without a marker label, the events are not read and the history is seeded as it is', async () => {
+    const fb = fakeBridge({}, turns);
+    runtime.connectSession.mockImplementation(() => jest.fn());
+    renderHook(() => useSessionTranscript('run-a', { bridge: fb.bridge }));
+    await flush();
+    expect(listAgentRunEvents).not.toHaveBeenCalled();
+    const state = runtime.createChatState.mock.results[0].value;
+    const seeded = state.transcript.history.seed.mock.calls.at(-1)[0];
+    expect(seeded[0].items).toHaveLength(2);
+  });
+
+  // Found in review: `onRunChanged` can fire several times back-to-back
+  // for one run (design §7: a burst during an outbox drain) — an older,
+  // slower-resolving refresh finishing AFTER a newer, faster one used to
+  // just overwrite it, since only the torn-down-unit guard existed.
+  it('an older, slower refresh never overwrites a newer one that resolved first', async () => {
+    const olderFinalized = {
+      ...finalized,
+      seq: 4,
+      payload: { ...finalized.payload, verdict: 'stale-in-flight' },
+    };
+    const newerFinalized = {
+      ...finalized,
+      seq: 9,
+      payload: { ...finalized.payload, verdict: 'current' },
+    };
+    const fb = fakeBridge({}, turns);
+    runtime.connectSession.mockImplementation(() => jest.fn());
+    renderHook(() =>
+      useSessionTranscript('run-a', { bridge: fb.bridge, markerLabel: 'X' }),
+    );
+    await flush();
+    const state = runtime.createChatState.mock.results[0].value;
+    const notify = onRunChanged.mock.calls[0][0] as (c: {
+      runId: string;
+      status: string;
+    }) => void;
+
+    let resolveOlder: ((events: unknown[]) => void) | null = null;
+    listAgentRunEvents.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOlder = resolve;
+        }),
+    );
+    // The older call starts and hangs — not yet resolved.
+    const older = act(async () =>
+      notify({ runId: 'run-a', status: 'running' }),
+    );
+
+    // The newer call starts after it, and resolves first.
+    listAgentRunEvents.mockResolvedValueOnce([newerFinalized]);
+    await act(async () => notify({ runId: 'run-a', status: 'done' }));
+    await flush();
+    expect(
+      state.transcript.history.seed.mock.calls.at(-1)[0][0].items.at(-1),
+    ).toMatchObject({ text: expect.stringContaining('current') });
+
+    // The older call finally resolves — its stale result must not win.
+    resolveOlder!([olderFinalized]);
+    await older;
+    await flush();
+    const lastSeed = state.transcript.history.seed.mock.calls.at(-1)[0];
+    expect(lastSeed[0].items.at(-1)).toMatchObject({
+      text: expect.stringContaining('current'),
+    });
+    expect(JSON.stringify(lastSeed)).not.toContain('stale-in-flight');
+  });
+
+  // Found in review, round 4: the guard above was given to refreshMarkers
+  // only. loadHistory has three uncoordinated triggers on one unit (the
+  // connect, every turn commit, onRunChanged's re-seed), two of which
+  // coincide on every send and finalize — and the same older-resolves-
+  // last race there wound the transcript back to stale turns.
+  it('an older, slower history read never overwrites a newer one that resolved first', async () => {
+    const olderTurns = [
+      {
+        id: 't1',
+        seq: 1,
+        initiator: 'user',
+        items: [],
+        stale: 'stale-history',
+      },
+    ];
+    const newerTurns = [
+      { id: 't1', seq: 1, initiator: 'user', items: [] },
+      { id: 't2', seq: 2, initiator: 'user', items: [], fresh: 'current' },
+    ];
+    const fb = fakeBridge({}, []);
+    runtime.connectSession.mockImplementation(() => jest.fn());
+    renderHook(() => useSessionTranscript('run-a', { bridge: fb.bridge }));
+    await flush();
+    const state = runtime.createChatState.mock.results[0].value;
+    const options = runtime.connectSession.mock.calls[0][2];
+
+    let resolveOlder: ((page: unknown) => void) | null = null;
+    (fb.bridge.call as jest.Mock).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOlder = resolve;
+        }),
+    );
+    // A turn commit starts a read that hangs.
+    const older = act(async () => options.onTurnCommitted());
+
+    // A second commit starts a newer read, which resolves first.
+    (fb.bridge.call as jest.Mock).mockResolvedValueOnce({
+      turns: newerTurns,
+      nextCursor: null,
+    });
+    await act(async () => options.onTurnCommitted());
+    await flush();
+    expect(state.transcript.history.seed.mock.calls.at(-1)[0]).toHaveLength(2);
+
+    // The older read finally resolves — it must not seed.
+    resolveOlder!({ turns: olderTurns, nextCursor: null });
+    await older;
+    await flush();
+    const lastSeed = state.transcript.history.seed.mock.calls.at(-1)[0];
+    expect(lastSeed).toHaveLength(2);
+    expect(JSON.stringify(lastSeed)).not.toContain('stale-history');
   });
 });

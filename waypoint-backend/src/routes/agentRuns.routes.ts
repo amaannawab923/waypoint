@@ -4,16 +4,21 @@ import { asyncHandler } from '../middleware/asyncHandler.js';
 import { NotFoundError } from '../middleware/errors.js';
 import { currentMemberId } from '../lib/requestContext.js';
 import * as agentRunsService from '../services/agentRuns.service.js';
+import * as pendingPromptsService from '../services/pendingPrompts.service.js';
 import * as proposalsService from '../services/proposals.service.js';
 import {
   appendAgentRunEventSchema,
+  claimPublishSchema,
   createAgentRunSchema,
+  createPendingPromptSchema,
   createRunProposalSchema,
   listAgentRunEventsQuerySchema,
   listAgentRunsQuerySchema,
   listWorkedOnJiraKeysQuerySchema,
+  reopenAgentRunSchema,
   saveAgentRunTranscriptSchema,
   updateAgentRunSchema,
+  updatePendingPromptSchema,
 } from '../validation/agentRuns.schema.js';
 
 // The agent-runs ledger's HTTP surface — ROAD-54, plus the ticket relation
@@ -70,6 +75,51 @@ agentRunsRouter.patch(
     // lives here, at the one call site that's always a real request.
     await agentRunsService.assertRunInWorkspace(req.params.id);
     res.json(await agentRunsService.updateRun(req.params.id, patch));
+  }),
+);
+
+// Continue a run that is not live. Deliberately not PATCH — see
+// reopenRun's own doc comment for why this is a scoped verb rather than a
+// wider write to the general route, and why the workspace check lives
+// inside the service's own transaction instead of here (unlike PATCH
+// above, reopenRun has no request-less caller to make an exception for).
+agentRunsRouter.post(
+  '/agent-runs/:id/reopen',
+  asyncHandler(async (req, res) => {
+    const { reason } = reopenAgentRunSchema.parse(req.body ?? {});
+    res.json(await agentRunsService.reopenRun(req.params.id, reason));
+  }),
+);
+
+// Never-lock: one publisher per ticket at publish time. A 409 names the
+// writer that holds it; the host files its comment unpublished.
+agentRunsRouter.post(
+  '/agent-runs/:id/publish-claim',
+  asyncHandler(async (req, res) => {
+    const { headSha } = claimPublishSchema.parse(req.body ?? {});
+    res.json(await agentRunsService.claimPublish(req.params.id, headSha ?? null));
+  }),
+);
+
+// Never-lock: the per-run outbox (pendingPrompts.service.ts).
+agentRunsRouter.get(
+  '/agent-runs/:id/pending-prompts',
+  asyncHandler(async (req, res) => {
+    res.json(await pendingPromptsService.listPendingPrompts(req.params.id));
+  }),
+);
+agentRunsRouter.post(
+  '/agent-runs/:id/pending-prompts',
+  asyncHandler(async (req, res) => {
+    const input = createPendingPromptSchema.parse(req.body);
+    res.status(201).json(await pendingPromptsService.createPendingPrompt(req.params.id, input));
+  }),
+);
+agentRunsRouter.patch(
+  '/agent-runs/:id/pending-prompts/:ppId',
+  asyncHandler(async (req, res) => {
+    const input = updatePendingPromptSchema.parse(req.body);
+    res.json(await pendingPromptsService.updatePendingPrompt(req.params.id, req.params.ppId, input));
   }),
 );
 

@@ -46,9 +46,14 @@ export interface BranchFacts {
 
 export type PublishOutcome =
   | { kind: 'opened'; url: string; pushed: true }
+  /** Never-lock: a follow-up pushed new commits to the PR that was already open. */
+  | { kind: 'updated'; url: string; pushed: true }
   | { kind: 'pushed-only'; reason: string }
   | { kind: 'skipped'; reason: string }
   | { kind: 'failed'; stage: 'push' | 'pr'; message: string };
+
+/** `gh pr view --json state` as this module reads it. */
+export type PrState = 'OPEN' | 'MERGED' | 'CLOSED';
 
 export interface CommandResult {
   stdout: string;
@@ -75,6 +80,24 @@ export interface PullRequestsDeps {
 
 export const PUSH_TIMEOUT_MS = 2 * 60_000;
 export const PR_TIMEOUT_MS = 60_000;
+/** The bound on every small git read here (remote url, log, diff). */
+export const GIT_READ_TIMEOUT_MS = 20_000;
+/**
+ * The longest a single publish can take, by construction: the longest
+ * path (a follow-up whose PR is over, so it looks the old one up, then
+ * publishes afresh) runs these bounded commands in sequence — remote
+ * url, PR lookup, remote url again, the branch facts, the push, the PR
+ * create. The backend's PUBLISH_CLAIM_TTL_MS must exceed this, since a
+ * claimant never renews its claim mid-push (pullRequests.test.ts pins it
+ * against the backend source).
+ */
+export const MAX_PUBLISH_MS =
+  GIT_READ_TIMEOUT_MS +
+  PR_TIMEOUT_MS +
+  GIT_READ_TIMEOUT_MS +
+  GIT_READ_TIMEOUT_MS +
+  PUSH_TIMEOUT_MS +
+  PR_TIMEOUT_MS;
 /** The most of the closing message the PR body carries. */
 export const MAX_PR_BODY_CHARS = 60_000;
 export const MAX_PR_TITLE_CHARS = 200;
@@ -233,7 +256,24 @@ export function buildPrBody(
 export interface PullRequestPublisher {
   /** Push the run's branch and open the PR; never throws. Records the outcome on the run. */
   publish(input: PublishInput): Promise<PublishOutcome>;
+  /**
+   * Never-lock (design §4.5): a continued run's later report. With no PR
+   * yet, `publish`; with one still open, push to it (`updated`); with one
+   * merged, closed, or not resolvable under origin's repository, clear
+   * `prUrl` and `publish` a new one. Return-value only, like `publish`.
+   * The caller (finalize) holds the ticket lock and the backend's publish
+   * claim before calling this.
+   */
+  publishFollowUp(input: PublishInput): Promise<PublishOutcome>;
 }
+
+/** What `gh pr view` said about the PR a run tracks. */
+export type PrLookup =
+  | { kind: 'state'; state: PrState; url: string }
+  | { kind: 'not-found' }
+  | { kind: 'auth'; message: string }
+  | { kind: 'no-gh' }
+  | { kind: 'failed'; message: string };
 
 export function createPullRequestPublisher(
   deps: PullRequestsDeps,
@@ -250,6 +290,12 @@ export function createPullRequestPublisher(
         await deps.ledger.appendEvent(run.id, 'pr_opened', {
           url: outcome.url,
           branch: run.branch,
+        });
+      } else if (outcome.kind === 'updated') {
+        await deps.ledger.appendEvent(run.id, 'pr_opened', {
+          url: outcome.url,
+          branch: run.branch,
+          updated: true,
         });
       } else if (outcome.kind === 'failed') {
         await deps.ledger.appendEvent(run.id, 'error', {
@@ -270,7 +316,109 @@ export function createPullRequestPublisher(
     }
   };
 
-  return {
+  /**
+   * `gh pr view <url> --repo <origin's repo> --json state,url` — new
+   * surface (nothing queried a PR's state before; `publish` only ever
+   * read `gh pr create`'s stderr). Read-only, return-value only.
+   */
+  const lookupPr = async (
+    prUrl: string,
+    repo: string,
+    cwd: string,
+  ): Promise<PrLookup> => {
+    let result: CommandResult;
+    try {
+      result = await runCommand(
+        'gh',
+        ['pr', 'view', prUrl, '--repo', repo, '--json', 'state,url'],
+        { cwd, timeoutMs: PR_TIMEOUT_MS },
+      );
+    } catch (error) {
+      const message = describe(error);
+      if (/ENOENT|not found|no such file/i.test(message))
+        return { kind: 'no-gh' };
+      return { kind: 'failed', message };
+    }
+    if (result.code !== 0) {
+      const err = result.stderr;
+      if (/gh auth login|authentication|not logged in/i.test(err)) {
+        return { kind: 'auth', message: firstLine(err) };
+      }
+      if (
+        // "could not resolve to a" is gh's own GraphQL phrasing for a
+        // repository/PR that no longer exists (e.g. "Could not resolve
+        // to a PullRequest with the number of 7") — narrower than a bare
+        // "could not resolve", which a DNS failure ("could not resolve
+        // host github.com") could also match, misclassifying a network
+        // blip as "the PR is gone" and needlessly clearing a still-valid
+        // prUrl (found in review, round 3).
+        /could not resolve to a|no pull requests found|not found|Could not find/i.test(
+          err,
+        )
+      ) {
+        return { kind: 'not-found' };
+      }
+      return {
+        kind: 'failed',
+        message: firstLine(err) || `gh pr view exited ${result.code}`,
+      };
+    }
+    try {
+      const parsed = JSON.parse(result.stdout) as {
+        state?: unknown;
+        url?: unknown;
+      };
+      const { state } = parsed;
+      if (state !== 'OPEN' && state !== 'MERGED' && state !== 'CLOSED') {
+        return {
+          kind: 'failed',
+          message: `gh answered an unknown PR state: ${String(state)}`,
+        };
+      }
+      const url =
+        typeof parsed.url === 'string' ? (prUrlOf(parsed.url) ?? prUrl) : prUrl;
+      return { kind: 'state', state, url };
+    } catch (error) {
+      return {
+        kind: 'failed',
+        message: `gh pr view did not answer JSON: ${describe(error)}`,
+      };
+    }
+  };
+
+  const pushExisting = async (
+    run: AgentRun,
+    cwd: string,
+    branch: string,
+  ): Promise<PublishOutcome | null> => {
+    let push: CommandResult;
+    try {
+      push = await runCommand(
+        'git',
+        [...PUSH_SAFE_CONFIG, 'push', 'origin', branch],
+        { cwd, timeoutMs: PUSH_TIMEOUT_MS },
+      );
+    } catch (error) {
+      return { kind: 'failed', stage: 'push', message: describe(error) };
+    }
+    if (push.code !== 0) {
+      return {
+        kind: 'failed',
+        stage: 'push',
+        message: firstLine(push.stderr) || `git push exited ${push.code}`,
+      };
+    }
+    await deps.ledger
+      .appendEvent(run.id, 'pushed', {
+        branch,
+        remote: 'origin',
+        followUp: true,
+      })
+      .catch(() => {});
+    return null;
+  };
+
+  const publisher: PullRequestPublisher = {
     async publish(input) {
       const { run } = input;
       const cwd = run.worktreePath ?? run.cwd;
@@ -308,7 +456,7 @@ export function createPullRequestPublisher(
                 `${base}..HEAD`,
                 '--',
               ],
-              { cwd, timeoutMs: 20_000 },
+              { cwd, timeoutMs: GIT_READ_TIMEOUT_MS },
             ).catch(() => null),
             runCommand(
               'git',
@@ -319,7 +467,7 @@ export function createPullRequestPublisher(
                 `${base}..HEAD`,
                 '--',
               ],
-              { cwd, timeoutMs: 20_000 },
+              { cwd, timeoutMs: GIT_READ_TIMEOUT_MS },
             ).catch(() => null),
           ]);
           if (log && log.code === 0) {
@@ -350,7 +498,7 @@ export function createPullRequestPublisher(
         const remote = await runCommand(
           'git',
           [...PUSH_SAFE_CONFIG, 'remote', 'get-url', 'origin'],
-          { cwd, timeoutMs: 20_000 },
+          { cwd, timeoutMs: GIT_READ_TIMEOUT_MS },
         ).catch((error: unknown) => ({
           stdout: '',
           stderr: describe(error),
@@ -462,7 +610,88 @@ export function createPullRequestPublisher(
       await record(run, outcome);
       return outcome;
     },
+
+    async publishFollowUp(input) {
+      const { run } = input;
+      const cwd = run.worktreePath ?? run.cwd;
+      if (!run.prUrl) return publisher.publish(input);
+      const { branch } = run;
+      if (!cwd || !branch || !branch.split('/').every(isRefSafeComponent)) {
+        const outcome: PublishOutcome = {
+          kind: 'skipped',
+          reason: 'The run has no branch to push.',
+        };
+        await record(run, outcome);
+        return outcome;
+      }
+      const remote = await runCommand(
+        'git',
+        [...PUSH_SAFE_CONFIG, 'remote', 'get-url', 'origin'],
+        { cwd, timeoutMs: GIT_READ_TIMEOUT_MS },
+      ).catch((error: unknown) => ({
+        stdout: '',
+        stderr: describe(error),
+        code: null,
+      }));
+      const repo = remote.code === 0 ? githubRepoOf(remote.stdout) : null;
+
+      // Waypoint only ever publishes to origin, so the PR it tracks must
+      // be resolvable under origin's repository; anything else — a fork,
+      // another remote — is "not ours any more" and gets a new PR.
+      const looked: PrLookup = repo
+        ? await lookupPr(run.prUrl, repo, cwd)
+        : { kind: 'no-gh' };
+
+      if (looked.kind === 'auth' || looked.kind === 'failed') {
+        const outcome: PublishOutcome = {
+          kind: 'failed',
+          stage: 'pr',
+          message: looked.message,
+        };
+        await record(run, outcome);
+        return outcome;
+      }
+      if (looked.kind === 'state' && looked.state === 'OPEN') {
+        const failed = await pushExisting(run, cwd, branch);
+        const outcome: PublishOutcome = failed ?? {
+          kind: 'updated',
+          url: looked.url,
+          pushed: true,
+        };
+        await record(run, outcome);
+        deps.logger.info('engine: run follow-up published', {
+          runId: run.id,
+          outcome: outcome.kind,
+        });
+        return outcome;
+      }
+      if (looked.kind === 'no-gh') {
+        // gh is not here (or origin is not GitHub): push to the branch
+        // and say so, as publish does.
+        const failed = await pushExisting(run, cwd, branch);
+        const outcome: PublishOutcome = failed ?? {
+          kind: 'pushed-only',
+          reason: `Pushed ${branch} to origin; the pull request's state could not be read, so it was left as it is.`,
+        };
+        await record(run, outcome);
+        return outcome;
+      }
+      // MERGED / CLOSED / not found under origin: the PR the run tracks
+      // is over. Clear it (legal on a finishing row) and open a new one —
+      // `publish` records that outcome itself.
+      await deps.ledger.updateRun(run.id, { prUrl: null }).catch(() => {});
+      await deps.ledger
+        .appendEvent(run.id, 'note', {
+          stage: 'finalize',
+          publish: 'pr-superseded',
+          previousUrl: run.prUrl,
+          state: looked.kind === 'state' ? looked.state : 'not-found',
+        })
+        .catch(() => {});
+      return publisher.publish({ ...input, run: { ...run, prUrl: null } });
+    },
   };
+  return publisher;
 }
 
 /** The line a comment and a note lead with. */
@@ -470,6 +699,8 @@ export function describePublish(outcome: PublishOutcome): string {
   switch (outcome.kind) {
     case 'opened':
       return `Pull request: ${outcome.url}`;
+    case 'updated':
+      return `Pull request updated: ${outcome.url}`;
     case 'pushed-only':
       return outcome.reason;
     case 'skipped':

@@ -1,5 +1,5 @@
 import type { DaemonTranscriptTurn } from './daemonApi';
-import { createTranscriptKeeper, fitTurns } from './transcripts';
+import { createTranscriptKeeper, mergeTurns, fitTurns } from './transcripts';
 
 // The transcript kept in the ledger (ROAD-124): read from the daemon or
 // given, skipped when nothing changed, the oldest turns dropped to fit.
@@ -21,12 +21,13 @@ function harness(history: DaemonTranscriptTurn[] | Error = [turn(1), turn(2)]) {
     return history;
   });
   const logger = { info: jest.fn(), warn: jest.fn() };
+  const getTranscript = jest.fn(async () => null);
   const keeper = createTranscriptKeeper({
-    ledger: { saveTranscript },
+    ledger: { saveTranscript, getTranscript },
     daemon: () => ({ getHistory }),
     logger,
   });
-  return { keeper, saveTranscript, getHistory, logger };
+  return { keeper, saveTranscript, getHistory, getTranscript, logger };
 }
 
 describe('createTranscriptKeeper', () => {
@@ -88,7 +89,7 @@ describe('createTranscriptKeeper', () => {
   it('does nothing with the engine down', async () => {
     const saveTranscript = jest.fn();
     const keeper = createTranscriptKeeper({
-      ledger: { saveTranscript },
+      ledger: { saveTranscript, getTranscript: jest.fn(async () => null) },
       daemon: () => null,
       logger: { info: jest.fn(), warn: jest.fn() },
     });
@@ -111,5 +112,70 @@ describe('fitTurns', () => {
   it('keeps a transcript that fits as it is', () => {
     const turns = [turn(1), turn(2)];
     expect(fitTurns(turns)).toBe(turns);
+  });
+});
+
+// Never-lock (design §5.4): a session the provider could not restore
+// starts its history afresh; the snapshot's earlier turns are kept in
+// front of the daemon's page so a continued conversation reads whole.
+describe('mergeTurns', () => {
+  const mk = (id: string, seq: number): DaemonTranscriptTurn => ({
+    id,
+    seq,
+    initiator: 'user',
+    items: [],
+    outcome: { kind: 'done' },
+  });
+
+  it('keeps the snapshot turns the page lacks, in order, then the page; the page wins on a shared id', () => {
+    const snapshot = [mk('a', 1), mk('b', 2), mk('c', 3)];
+    const page = [
+      {
+        ...mk('c', 1),
+        items: [{ kind: 'message', role: 'user', text: 'newer' }],
+      },
+      mk('d', 2),
+    ];
+    expect(mergeTurns(snapshot, page).map((t) => t.id)).toEqual([
+      'a',
+      'b',
+      'c',
+      'd',
+    ]);
+    expect(mergeTurns(snapshot, page)[2].items).toHaveLength(1);
+  });
+
+  it('is the page itself when nothing is missing', () => {
+    const page = [mk('a', 1)];
+    expect(mergeTurns([mk('a', 1)], page)).toBe(page);
+    expect(mergeTurns([], page)).toBe(page);
+  });
+
+  it("the keeper stitches: a fresh page of one turn is saved behind the snapshot's two", async () => {
+    const saveTranscript = jest.fn(async (_id: string, turns: unknown[]) => ({
+      turnCount: turns.length,
+    }));
+    const getTranscript = jest.fn(async () => ({
+      turns: [mk('a', 1), mk('b', 2)],
+      turnCount: 2,
+    }));
+    const keeper = createTranscriptKeeper({
+      ledger: { saveTranscript, getTranscript },
+      daemon: () => ({ getHistory: jest.fn(async () => [mk('c', 1)]) }),
+      logger: { info: jest.fn(), warn: jest.fn() },
+    });
+    await keeper.capture('run-a');
+    expect(saveTranscript).toHaveBeenCalledWith(
+      'run-a',
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'a' }),
+        expect.objectContaining({ id: 'c' }),
+      ]),
+    );
+    expect((saveTranscript.mock.calls[0][1] as unknown[]).length).toBe(3);
+    // Read once per run per process.
+    await keeper.capture('run-a', [mk('c', 1), mk('d', 2)]);
+    expect(getTranscript).toHaveBeenCalledTimes(1);
+    expect((saveTranscript.mock.calls[1][1] as unknown[]).length).toBe(4);
   });
 });

@@ -4,6 +4,8 @@ import type {
   DaemonWorkspaceRecord,
 } from './daemonApi';
 import type { AgentRun, AgentRunStatus, LedgerClient } from './ledgerClient';
+import { drain } from './outbox';
+import { tryWithRunLock } from './runLock';
 
 /**
  * Boot-time reconcile: the daemon's live sessions against the ledger's
@@ -72,7 +74,8 @@ export const LIVE_RUN_STATUSES: readonly AgentRunStatus[] = [
 export const RUN_ID_PREFIX = 'run-';
 
 export type ReconcileAction =
-  | { kind: 'reattach'; runId: string }
+  /** `finished`: a done/needs-review run whose session lives on (never-lock) — kept, no event, so a boot leaves no marker in its transcript. */
+  | { kind: 'reattach'; runId: string; finished?: boolean }
   | { kind: 'adopt'; runId: string }
   | { kind: 'kill-stale'; runId: string; status: AgentRunStatus }
   /** A session for a run in a non-live, non-ended status: logged, left. */
@@ -87,12 +90,18 @@ export type ReconcileAction =
     }
   | { kind: 'leave'; conversationId: string };
 
-/** Ended for good — the only statuses whose leftover session is killed. */
-const ENDED_RUN_STATUSES: readonly AgentRunStatus[] = [
-  'done',
-  'failed',
-  'cancelled',
-];
+/**
+ * The only statuses whose leftover session is killed at boot. `done` is
+ * deliberately not here any more (never-lock, 2026-09-20): finalize
+ * keeps a finished run's session alive so the conversation can be
+ * continued, and reconcile reattaches to it like any other. A failed or
+ * cancelled run's session is stale — those runs are revivable too, but a
+ * resume starts them fresh from their provider session id.
+ */
+const ENDED_RUN_STATUSES: readonly AgentRunStatus[] = ['failed', 'cancelled'];
+
+/** A finished run whose session is still alive: reattach, the same as a live one (never-lock §7.2). */
+const FINISHED_ALIVE: readonly AgentRunStatus[] = ['done', 'needs-review'];
 
 export interface ReconcileInput {
   /** `acp.sessions.list`, by conversation id. */
@@ -129,6 +138,8 @@ export function planReconcile(input: ReconcileInput): ReconcileAction[] {
       actions.push({ kind: 'orphan', conversationId });
     } else if (other.status === 'interrupted') {
       actions.push({ kind: 'adopt', runId: other.id });
+    } else if (FINISHED_ALIVE.includes(other.status)) {
+      actions.push({ kind: 'reattach', runId: other.id, finished: true });
     } else if (ENDED_RUN_STATUSES.includes(other.status)) {
       actions.push({
         kind: 'kill-stale',
@@ -175,6 +186,45 @@ export interface ReconcileReport {
   failures: Array<{ action: ReconcileAction; message: string }>;
 }
 
+/**
+ * Never-lock (design §2.4 trigger 3 / §7.2): a run this reconcile just
+ * found (or confirmed) has a live daemon session may also have rows
+ * sitting in its outbox — messages that arrived while nobody was home,
+ * or a `sending` claim a crash left behind. Nothing else was draining
+ * them (found in review: this trigger was documented, never wired up),
+ * so a stale claim could sit forever on a run nobody happened to reopen.
+ * Non-blocking, like `kill-stale`'s own lock use just below: reconcile
+ * runs on every daemon (re)connect, not only at launch, and a resume
+ * genuinely in flight for this exact run owns the lock legitimately —
+ * skip it this pass rather than stall the rest of reconcile behind it;
+ * the run's own next mount/focus/send drains it same as any other.
+ */
+async function drainOutboxIfLive(
+  deps: ReconcileDeps,
+  runId: string,
+): Promise<void> {
+  // A bonus cleanup riding on `reattach`/`adopt`, not their point — its
+  // own failure never marks the reconcile action itself failed.
+  try {
+    const outcome = await tryWithRunLock(runId, async () => {
+      const run = await deps.ledger.getRun(runId);
+      if (!run) return;
+      await drain(deps, deps.daemon, run, { trigger: 'boot' });
+    });
+    if (!outcome.acquired) {
+      deps.logger.info(
+        'engine: boot outbox drain skipped — the run lock is held',
+        { runId },
+      );
+    }
+  } catch (error) {
+    deps.logger.warn('engine: boot outbox drain failed', {
+      runId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 async function applyAction(
   deps: ReconcileDeps,
   action: ReconcileAction,
@@ -183,29 +233,75 @@ async function applyAction(
     case 'leave':
       return;
     case 'reattach':
-      await deps.ledger.appendEvent(action.runId, 'session_resumed', {
-        at: 'boot',
-        note: 'daemon session found live; re-attached',
-      });
+      if (!action.finished) {
+        await deps.ledger.appendEvent(action.runId, 'session_resumed', {
+          at: 'boot',
+          note: 'daemon session found live; re-attached',
+        });
+      }
+      await drainOutboxIfLive(deps, action.runId);
       return;
-    case 'adopt':
-      await deps.ledger.updateRun(action.runId, {
-        status: 'running',
-        reason: 'daemon session found live at boot; the daemon resumed it',
-        daemonSessionId: action.runId,
+    case 'adopt': {
+      // The same guard kill-stale has (found in review, round 4: only
+      // kill-stale ever got it). The plan saw `interrupted`; a resume
+      // landing between plan and apply moves the run to provisioning →
+      // running itself, and an unguarded write here would stamp
+      // `running` over a row mid-resume, plus a second session_resumed.
+      // Skip, never wait, when a resume holds the lock; re-read when it
+      // is free and act only on what the plan actually saw.
+      const outcome = await tryWithRunLock(action.runId, async () => {
+        const fresh = await deps.ledger.getRun(action.runId);
+        if (fresh?.status !== 'interrupted') return false;
+        await deps.ledger.updateRun(action.runId, {
+          status: 'running',
+          reason: 'daemon session found live at boot; the daemon resumed it',
+          daemonSessionId: action.runId,
+        });
+        await deps.ledger.appendEvent(action.runId, 'session_resumed', {
+          at: 'boot',
+          note: 'daemon resumed the session while Waypoint was away',
+        });
+        return true;
       });
-      await deps.ledger.appendEvent(action.runId, 'session_resumed', {
-        at: 'boot',
-        note: 'daemon resumed the session while Waypoint was away',
-      });
+      if (!outcome.acquired) {
+        deps.logger.info(
+          'engine: adopt skipped — a resume is in flight for this run',
+          { runId: action.runId },
+        );
+        return;
+      }
+      // Outside the lock: the drain takes the run lock itself.
+      if (outcome.result) await drainOutboxIfLive(deps, action.runId);
       return;
-    case 'kill-stale':
-      await deps.daemon.killSession(action.runId);
-      await deps.ledger.appendEvent(action.runId, 'session_ended', {
-        at: 'boot',
-        note: `run was already ${action.status}; stale daemon session killed`,
+    }
+    case 'kill-stale': {
+      // ROAD-XXX: a resume (button or a transparent revive on message)
+      // can land between this plan being built and applied — bootReconcile
+      // runs on every daemon (re)connect, not only at launch, so this is a
+      // real window, not just a startup race. A blocking wait here would
+      // stall the rest of this reconcile pass behind someone else's
+      // resume; skipping past it is the safe failure — the run is left
+      // alone, and the next reconcile pass gets another look if it's
+      // truly stale. When the lock IS free, re-read under it: the plan's
+      // `action.status` is a snapshot, and the run may have already been
+      // revived by the time this action's turn comes up.
+      const outcome = await tryWithRunLock(action.runId, async () => {
+        const fresh = await deps.ledger.getRun(action.runId);
+        if (!fresh || !ENDED_RUN_STATUSES.includes(fresh.status)) return;
+        await deps.daemon.killSession(action.runId);
+        await deps.ledger.appendEvent(action.runId, 'session_ended', {
+          at: 'boot',
+          note: `run was already ${fresh.status}; stale daemon session killed`,
+        });
       });
+      if (!outcome.acquired) {
+        deps.logger.info(
+          'engine: kill-stale skipped — a resume is in flight for this run',
+          { runId: action.runId },
+        );
+      }
       return;
+    }
     case 'orphan':
       deps.logger.warn(
         'engine: daemon session with no ledger row — left running',
@@ -223,15 +319,39 @@ async function applyAction(
         },
       );
       return;
-    case 'interrupt':
-      await deps.ledger.updateRun(action.runId, {
-        status: 'interrupted',
-        reason: action.worktreePresent
-          ? 'no daemon session at boot; the worktree is still on disk'
-          : 'no daemon session at boot; the worktree is gone too',
-        daemonSessionId: null,
+    case 'interrupt': {
+      // Guarded like kill-stale (found in review, round 4: this write ran
+      // straight off the plan's snapshot). The plan saw a live status
+      // with no daemon session; a send landing in between takes exactly
+      // that case as "the session died, start it again" (sendPrompt.ts's
+      // live-status-no-session branch) and leaves the status `running`
+      // with a fresh session — so a status re-read alone proves nothing
+      // here. The precondition is the daemon's, so the daemon is asked
+      // again under the lock: a session now → someone revived it, leave
+      // it. Skip, never wait, while a resume holds the lock.
+      const outcome = await tryWithRunLock(action.runId, async () => {
+        const fresh = await deps.ledger.getRun(action.runId);
+        if (!fresh || !LIVE_RUN_STATUSES.includes(fresh.status)) return;
+        const sessions = await deps.daemon
+          .listSessions()
+          .catch((): Record<string, DaemonSessionSummary> => ({}));
+        if (sessions[action.runId]) return;
+        await deps.ledger.updateRun(action.runId, {
+          status: 'interrupted',
+          reason: action.worktreePresent
+            ? 'no daemon session at boot; the worktree is still on disk'
+            : 'no daemon session at boot; the worktree is gone too',
+          daemonSessionId: null,
+        });
       });
+      if (!outcome.acquired) {
+        deps.logger.info(
+          'engine: interrupt skipped — a resume is in flight for this run',
+          { runId: action.runId },
+        );
+      }
       return;
+    }
   }
 }
 

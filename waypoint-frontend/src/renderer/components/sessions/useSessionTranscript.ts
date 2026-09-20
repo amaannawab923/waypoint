@@ -10,8 +10,13 @@ import type { SessionUsage } from '@emdash/core/runtimes/acp/api/client' with {
   'resolution-mode': 'import',
 };
 import { getChatUiRuntime } from '@/components/chat/chatUiRuntime';
-import { getAgentRunTranscript } from '@/data/api';
-import { engineSessionBridge, onEngineStatusChanged } from '@/data/engineApi';
+import { getAgentRunTranscript, listAgentRunEvents } from '@/data/api';
+import {
+  engineSessionBridge,
+  listPendingPrompts,
+  onEngineStatusChanged,
+  onRunChanged,
+} from '@/data/engineApi';
 import {
   createLiveFollower,
   type FollowerStatus,
@@ -24,7 +29,9 @@ import {
   type SessionSource,
 } from '@/data/live/sessionSource';
 import { getSharedChatContext } from '@/lib/chatContext';
+import type { AgentRunEvent, PendingPrompt } from '@/types/agentRuns';
 import { briefTurnSeq, foldBrief, foldTurn } from './briefFold';
+import { deriveMarkers, overlayMarkers, type Marker } from './markerFold';
 
 /** How the transcript's history read stands. */
 export type HistoryStatus =
@@ -73,6 +80,12 @@ export interface SessionTranscriptOptions {
    * (briefFold.ts). The label names the run in the placeholder.
    */
   foldBrief?: { label: string } | null;
+  /**
+   * Never-lock (design §5): the label the markers name the run by
+   * ("Completed ROAD-116 · Fix …"). Markers are drawn from the run's
+   * ledger events, laid over every history seed; null draws none.
+   */
+  markerLabel?: string | null;
 }
 
 export function useSessionTranscript(
@@ -83,6 +96,7 @@ export function useSessionTranscript(
     awaitingSession = false,
     bridge = engineSessionBridge,
     foldBrief: fold = null,
+    markerLabel = null,
   } = options;
   const foldLabel = fold?.label ?? null;
   const runtime = getChatUiRuntime();
@@ -101,8 +115,29 @@ export function useSessionTranscript(
   const briefSeqRef = useRef<number | null>(null);
   const foldLabelRef = useRef<string | null>(foldLabel);
   foldLabelRef.current = foldLabel;
+  // Never-lock: the ledger's events → markers, and the run's outbox →
+  // pending rows. Both are read on unit creation and again whenever main
+  // says the run changed (a finalize, a resume, a delivery); the markers
+  // are laid over the turns on every seed (below), the pending rows are
+  // the caller's to show (SessionTranscript's outbox strip).
+  const markersRef = useRef<Marker[]>([]);
+  const markerLabelRef = useRef<string | null>(markerLabel);
+  markerLabelRef.current = markerLabel;
+  const [pending, setPending] = useState<PendingPrompt[]>([]);
 
+  // The same last-write-wins guard `refreshMarkers` has (below), found
+  // missing here in review (round 4): `loadHistory` is reached from
+  // three uncoordinated triggers on one live unit — the first connect,
+  // every turn commit, and `onRunChanged`'s re-seed — and two of those
+  // routinely coincide (a send or finalize lands with a commit). Without
+  // a token, an older read resolving after a newer one re-seeds the
+  // transcript with stale turns, visibly winding it back.
+  const historyTokenRef = useRef(0);
   const loadHistory = useCallback(async (target: TranscriptUnit) => {
+    historyTokenRef.current += 1;
+    const myToken = historyTokenRef.current;
+    const stale = () =>
+      unitRef.current !== target || historyTokenRef.current !== myToken;
     // The daemon's history first; the ledger's snapshot when the daemon
     // has nothing (ROAD-124: a session killed at finalize or stop, or a
     // daemon restarted since) — the same turn shape, seeded the same way.
@@ -115,11 +150,11 @@ export function useSessionTranscript(
     } catch (error) {
       daemonError = error;
     }
-    if (unitRef.current !== target) return;
+    if (stale()) return;
     if (!turns) {
       try {
         const kept = await getAgentRunTranscript(target.runId);
-        if (unitRef.current !== target) return;
+        if (stale()) return;
         if (kept && kept.turns.length > 0) {
           turns = kept.turns as NonNullable<typeof turns>;
         }
@@ -146,15 +181,23 @@ export function useSessionTranscript(
       briefSeqRef.current = folded.seq;
       setBrief(folded.brief);
     }
+    // Then the markers (never-lock, design §5.3): after the fold, before
+    // the seed, so every commit and every restart re-applies them.
+    seeded = overlayMarkers(seeded, markersRef.current);
     // `seed` replaces the committed history AND resets the active turn
     // (chat-ui's ChatHistory contract). Found live: a turn in flight
     // vanished from the pane the moment history landed after the live
     // snapshot. So the follower's current turn is put back right after.
+    // The pending prompt goes BEFORE the seed. chat-ui builds a row's
+    // component once, by role; a seed that adds a row where the pending
+    // prompt's user card stood recycles that card for the new row —
+    // found live (never-lock): a marker drawn as a user bubble, the
+    // person's own message painted over it.
+    target.state.session.setPendingPrompt(null);
     target.state.transcript.history.seed(seeded);
     target.state.transcript.activeTurn.set(
       foldActive(target.source.activeTurn.getSnapshot() ?? null),
     );
-    target.state.session.setPendingPrompt(null);
     setTurnCount(turns?.length ?? 0);
     setHistoryStatus({ kind: 'ready' });
   }, []);
@@ -171,6 +214,46 @@ export function useSessionTranscript(
     },
     [],
   );
+
+  // Two overlapping calls on the SAME live unit — `onRunChanged` can fire
+  // several times back-to-back (design §7's own note: a 3-event burst
+  // during an outbox drain) — race if left unguarded: whichever resolves
+  // LAST wins even when it started first, so an older read can overwrite
+  // a newer one (found in review). `unitRef.current !== target` alone
+  // only catches a torn-down/replaced unit, not this; a call token does.
+  const refreshTokenRef = useRef(0);
+  // The events and the outbox, fresh; a change in the markers re-seeds
+  // the current history so the new line shows where it belongs.
+  const refreshMarkers = useCallback(async (target: TranscriptUnit) => {
+    refreshTokenRef.current += 1;
+    const myToken = refreshTokenRef.current;
+    const [events, rows] = await Promise.all([
+      markerLabelRef.current
+        ? listAgentRunEvents(target.runId).catch((): AgentRunEvent[] => [])
+        : Promise.resolve<AgentRunEvent[]>([]),
+      listPendingPrompts(target.runId).catch((): PendingPrompt[] => []),
+    ]);
+    if (unitRef.current !== target || refreshTokenRef.current !== myToken) {
+      return false;
+    }
+    setPending(
+      rows.filter(
+        (row) => row.state !== 'delivered' && row.state !== 'dropped',
+      ),
+    );
+    const next = markerLabelRef.current
+      ? deriveMarkers(events, markerLabelRef.current)
+      : [];
+    const changed =
+      next.length !== markersRef.current.length ||
+      next.some(
+        (m, i) =>
+          m.id !== markersRef.current[i].id ||
+          m.text !== markersRef.current[i].text,
+      );
+    markersRef.current = next;
+    return changed;
+  }, []);
 
   useEffect(() => {
     if (awaitingSession) {
@@ -197,6 +280,8 @@ export function useSessionTranscript(
     setTurnCount(0);
     setBrief(null);
     briefSeqRef.current = null;
+    markersRef.current = [];
+    setPending([]);
 
     // History first, then the live connection — emdash's own order
     // (acp-chat-store.ts's _runBootstrap): connectSession's first sync
@@ -206,7 +291,11 @@ export function useSessionTranscript(
     let disconnect: (() => void) | null = null;
     let gone = false;
     const connectAfterHistory = async () => {
-      // loadHistory never rejects (a failure becomes historyStatus).
+      // Markers first, so the first seed already carries them; then the
+      // history (loadHistory never rejects — a failure becomes
+      // historyStatus).
+      await refreshMarkers(created).catch(() => {});
+      if (gone) return;
       await loadHistory(created);
       if (gone) return;
       disconnect = runtime.connectSession(
@@ -233,10 +322,24 @@ export function useSessionTranscript(
         created.usage.reconnect();
       }
     });
+    // A finalize, a resume, a delivery: main wrote the ledger — the
+    // markers and the outbox may have changed; a changed marker set
+    // re-seeds so the new line lands in the transcript now, not at the
+    // next commit.
+    const offRun = onRunChanged((change) => {
+      if (change.runId !== runId || gone) return;
+      refreshMarkers(created)
+        .then((changed) => {
+          if (changed && !gone) return loadHistory(created);
+          return undefined;
+        })
+        .catch(() => {});
+    });
     return () => {
       gone = true;
       if (unitRef.current === created) unitRef.current = null;
       offEngine();
+      offRun();
       disconnect?.();
       created.usage.dispose();
       created.source.dispose();
@@ -304,5 +407,27 @@ export function useSessionTranscript(
     isGenerating,
     queuedCount,
     reloadHistory: () => (unit ? loadHistory(unit) : Promise.resolve()),
+    /** The run's outbox: messages accepted but not yet with the daemon (never-lock, §2.4). */
+    pending,
+    /** Re-read the events and the outbox now (after a send, a retry, a drop). */
+    refreshPending: () =>
+      unit
+        ? refreshMarkers(unit)
+            .then((changed) => (changed ? loadHistory(unit) : undefined))
+            .catch(() => {})
+        : Promise.resolve(),
+    // A message-triggered resume (ROAD-XXX) keeps this same unit alive
+    // (awaitingSession suppressed, see SessionTranscript.tsx's `resuming`)
+    // so the daemon's new session never runs this effect's own creation
+    // path — the one place `source.reconnect()`/`usage.reconnect()` are
+    // otherwise called. Exposed so the caller can reconnect explicitly
+    // once that resume's daemon call actually resolves, the same way
+    // `onEngineStatusChanged`'s "running" case already does for an engine
+    // restart; the followers are keyed by runId, so a reconnect picks up
+    // whatever live session the daemon now has for it either way.
+    reconnect: () => {
+      unit?.source.reconnect();
+      unit?.usage.reconnect();
+    },
   };
 }

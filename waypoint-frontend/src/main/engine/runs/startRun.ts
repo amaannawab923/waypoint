@@ -11,13 +11,23 @@ import {
   type StartRunInput,
 } from '../types';
 import { agentEnvFor } from './agentEnv';
-import type { DaemonRunsApi } from './daemonApi';
+import type { DaemonRunsApi, DaemonSessionSummary } from './daemonApi';
 import { describeFolder, rememberFolder, type FolderDeps } from './folders';
-import { assertRunId, type AgentRun, type LedgerClient } from './ledgerClient';
+import { claimForInitialQueue, markDelivered, revertClaimed } from './outbox';
+import { withRunLock } from './runLock';
+import { aliveSessionFor, type Warmed } from './warmed';
+import {
+  assertRunId,
+  type AgentRun,
+  type AgentRunStatus,
+  type LedgerClient,
+} from './ledgerClient';
 import {
   assertUnder,
+  DEFAULT_BASE_REF,
   isRefSafeComponent,
   provisionWorktree,
+  reprovisionWorktree,
 } from './worktrees';
 
 /**
@@ -231,6 +241,36 @@ export async function listRunBranches(
   return { branches, suggested };
 }
 
+/**
+ * Whether `cwd` is still a genuine, present linked worktree under
+ * `worktreesDir` — the three checks `resumeRunCore` used to apply
+ * unconditionally before refusing a resume outright; now the gate for
+ * whether it needs `reprovisionWorktree` (ROAD-XXX) instead.
+ *
+ * `assertUnder` is deliberately NOT one of the checks folded into this
+ * boolean and left to throw straight out of `resumeRunCore`: a worktree
+ * gone, or never made, is ordinary and worth healing transparently, but a
+ * ledger row naming a place outside `worktreesDir` at all is a row
+ * someone edited (or a bug), not a cwd Waypoint provisioned — reprovision
+ * always targets the run's own correct, in-bounds path regardless, so
+ * silently "healing" this case would quietly paper over exactly the
+ * tampering `assertUnder` exists to catch instead of surfacing it.
+ */
+async function isUsableWorktree(
+  deps: Pick<StartRunDeps, 'assertWorktreeGitDir'>,
+  cwd: string,
+): Promise<boolean> {
+  const linked = await deps.assertWorktreeGitDir(cwd).then(
+    () => true,
+    () => false,
+  );
+  if (!linked) return false;
+  return fs
+    .stat(cwd)
+    .then((s) => s.isDirectory())
+    .catch(() => false);
+}
+
 /** True while nobody has moved the run off `provisioning` (a Stop would). */
 async function stillProvisioning(
   ledger: LedgerClient,
@@ -301,16 +341,24 @@ export function sessionModeOf(
   return run.autoApprove ? AUTO_APPROVE_MODE_ID : null;
 }
 
-export async function continueStart(
+async function continueStartLocked(
   deps: StartRunDeps & { daemonApi: DaemonRunsApi },
   run: AgentRun,
-  /** The picked folder: the repository to take a worktree of, or the cwd itself. */
   folderPath: string,
-  firstMessage: string | null = null,
-  options: ContinueStartOptions = {},
+  firstMessage: string | null,
+  options: ContinueStartOptions,
 ): Promise<void> {
   const { ledger, daemonApi: daemon } = deps;
   let stage: 'worktree' | 'session' = 'worktree';
+  // Once the daemon has answered a session, nothing below may mark the
+  // run failed (round 6 of review): a bookkeeping write that failed
+  // after that used to fall into the same catch as a failed spawn and
+  // write `failed` over a run whose session was up and working — and
+  // the next reconcile, seeing an ended status with a live session,
+  // killed it as stale. Past this point a failure is logged and the
+  // status left alone: `provisioning` with a live session reattaches
+  // at the next reconcile, and the next send continues it.
+  let sessionStarted = false;
   try {
     let cwd = folderPath;
     let branch: string | null = null;
@@ -347,15 +395,41 @@ export async function continueStart(
 
     stage = 'session';
     const modeId = sessionModeOf(run);
+    // Never-lock (design §2.4 trigger 1): messages typed while this start
+    // was on its way ride in as the session's initial queue, after the
+    // first message — claimed `sending` first, so a host that dies before
+    // the daemon answers leaves the same evidence a plain drain would.
+    const pending = await claimForInitialQueue(
+      { ledger, logger: deps.logger },
+      run,
+    ).catch((error: unknown) => {
+      deps.logger.warn('engine: outbox could not be read for the start', {
+        runId: run.id,
+        message: describe(error),
+      });
+      return [] as Awaited<ReturnType<typeof claimForInitialQueue>>;
+    });
+    const initialQueue = [
+      ...(firstMessage ? [{ text: firstMessage }] : []),
+      ...pending.map((p) => ({ text: p.text })),
+    ];
     const { sessionId } = await daemon.startSession({
       conversationId: run.id,
       providerId: run.providerId,
       cwd,
       sessionId: null,
       modeId,
-      ...(firstMessage ? { initialQueue: [{ text: firstMessage }] } : {}),
+      ...(initialQueue.length ? { initialQueue } : {}),
       ...(options.env ? { env: options.env } : {}),
     });
+    sessionStarted = true;
+    // The stillProvisioning check runs BEFORE marking these delivered
+    // (found in review): a Stop landing in the window while startSession
+    // was in flight kills the session right below, and this same start
+    // is the only witness to whether the agent ever actually saw its
+    // initialQueue — recording `delivered` first and then destroying
+    // that session left rows permanently marked delivered with no way
+    // to know if they were.
     if (!(await stillProvisioning(ledger, run.id))) {
       deps.logger.info(
         'engine: run was stopped while its session started; killing it',
@@ -363,6 +437,13 @@ export async function continueStart(
           runId: run.id,
         },
       );
+      if (pending.length) {
+        await revertClaimed(
+          { ledger, logger: deps.logger },
+          run.id,
+          pending.map((p) => p.row),
+        );
+      }
       await daemon.killSession(run.id).catch((error: unknown) =>
         deps.logger.warn('engine: kill after a cancelled start did not apply', {
           runId: run.id,
@@ -370,6 +451,13 @@ export async function continueStart(
         }),
       );
       return;
+    }
+    if (pending.length) {
+      await markDelivered(
+        { ledger, logger: deps.logger },
+        run.id,
+        pending.map((p) => p.row),
+      );
     }
 
     const running = await ledger.updateRun(run.id, {
@@ -404,6 +492,19 @@ export async function continueStart(
       providerSessionId: sessionId,
     });
   } catch (error) {
+    if (sessionStarted) {
+      deps.logger.warn(
+        'engine: session started but its bookkeeping did not land; leaving the run as it is',
+        { runId: run.id, message: describe(error) },
+      );
+      await ledger
+        .appendEvent(run.id, 'error', {
+          stage: 'start-bookkeeping',
+          message: clip(describe(error), MAX_EVENT_MESSAGE),
+        })
+        .catch(() => {});
+      return;
+    }
     // A Stop that landed while the worktree was being made: the ledger
     // says cancelled and refused the worktree write (409). The person's
     // verdict stands; the worktree stays on disk as W2's rule says.
@@ -416,6 +517,34 @@ export async function continueStart(
     }
     await failStart(deps, run.id, stage, error);
   }
+}
+
+export function continueStart(
+  deps: StartRunDeps & { daemonApi: DaemonRunsApi },
+  run: AgentRun,
+  /** The picked folder: the repository to take a worktree of, or the cwd itself. */
+  folderPath: string,
+  firstMessage: string | null = null,
+  options: ContinueStartOptions = {},
+): Promise<void> {
+  // Under the run's own lock, worktree through session start (round 5 of
+  // review): this was the one path that starts a session for a run
+  // without it. Boot reconcile runs on every daemon reconnect and, seeing
+  // a `provisioning` row with no daemon session — true of every run
+  // right here, for as long as its worktree takes — planned an
+  // `interrupt`; its guard re-reads the ledger and re-asks the daemon
+  // under this lock, and both still said "provisioning, no session", so
+  // it wrote `interrupted`, `stillProvisioning` below bailed, and the
+  // first message — a bare argument, never in the outbox — was gone.
+  // With the lock held, reconcile skips the run (its own safe failure)
+  // and looks again next pass. A send arriving meanwhile is outboxed as
+  // `starting` either way (sendPrompt.ts's busy check), so nothing waits.
+  // The two callers fire this and return without awaiting it, so the
+  // per-ticket lock dispatch.ts holds at that moment is never awaited
+  // from inside this one (runLock.ts's ordering rule).
+  return withRunLock(run.id, () =>
+    continueStartLocked(deps, run, folderPath, firstMessage, options),
+  );
 }
 
 /**
@@ -507,6 +636,63 @@ function firstLines(text: string, max: number): string {
   return `${lines.slice(0, max).join('\n')}\n… (${lines.length - max} more)`;
 }
 
+/** Whether the run's worktree had to be recreated for this resume (ROAD-XXX), and how much of its prior state survived. */
+export interface ResumeWorktreeState {
+  recreated: boolean;
+  /** recreated only: the run's own branch still existed and was reused, vs. a fresh branch of the same name from baseRef. Meaningless when `recreated` is false. */
+  branchReused: boolean;
+}
+
+const WORKTREE_INTACT: ResumeWorktreeState = {
+  recreated: false,
+  branchReused: true,
+};
+
+/**
+ * The four sentences a resume note can open with — exported so finalize
+ * can recognise a legacy Waypoint-authored note *turn* (design §4.6:
+ * before never-lock the note was sent as a prompt of its own, and the
+ * agent's "understood" reply must not be filed as a report).
+ */
+export const RESUME_NOTE_OPENINGS: readonly string[] = [
+  'Waypoint resumed this run, but its worktree had been removed since it last ran',
+  'Waypoint resumed this run, but its worktree — and the branch itself — were both gone',
+  'Waypoint resumed this run; it never had a session running before',
+  'Waypoint resumed this run after an interruption, but your previous conversation could not be restored',
+];
+
+/** Whether a prompt is (was) one of Waypoint's own resume notes rather than a person's words. */
+export function isResumeNoteText(text: string): boolean {
+  const head = text.trimStart();
+  return RESUME_NOTE_OPENINGS.some((opening) => head.startsWith(opening));
+}
+
+/** The note's first sentence: the one thing about this resume the agent most needs to hear. */
+function resumeOpening(
+  providerSessionId: string | null,
+  worktree: ResumeWorktreeState,
+): string {
+  // A recreated worktree (this run's own checkout was gone, or never
+  // successfully made) takes priority over the conversation framings
+  // below — it is the more consequential discontinuity (files on disk,
+  // not just the provider's own memory of the conversation), and worth
+  // naming plainly rather than folding into the ordinary "fresh session"
+  // note.
+  if (worktree.recreated) {
+    return worktree.branchReused
+      ? 'Waypoint resumed this run, but its worktree had been removed since it last ran (or was never successfully made); it was recreated by checking out the same branch again, so your committed work is intact. Only UNCOMMITTED changes from before are gone. Here is where things stand now.'
+      : 'Waypoint resumed this run, but its worktree — and the branch itself — were both gone; Waypoint could not recover your prior state, so this is a fresh branch from the base, in a new worktree. Here is where things stand now.';
+  }
+  // ROAD-XXX: a run that died before any session ever started (queued or
+  // provisioning straight to failed, say) has never had a "previous
+  // conversation" to fail to restore — this is its first session, not a
+  // fresh one replacing a lost one.
+  if (providerSessionId === null) {
+    return 'Waypoint resumed this run; it never had a session running before, so this is its first one, in the worktree as it stands. Here is where things stand.';
+  }
+  return 'Waypoint resumed this run after an interruption, but your previous conversation could not be restored, so this is a fresh session in the same worktree. Here is where things stand.';
+}
+
 /**
  * What a fresh session is told about the worktree it woke up in: the
  * branch, the commits on it since the base, the uncommitted changes.
@@ -515,7 +701,11 @@ function firstLines(text: string, max: number): string {
  */
 export async function buildResumeNote(
   deps: Pick<StartRunDeps, 'git' | 'assertWorktreeGitDir'>,
-  run: Pick<AgentRun, 'worktreePath' | 'branch' | 'baseRef'>,
+  run: Pick<
+    AgentRun,
+    'worktreePath' | 'branch' | 'baseRef' | 'providerSessionId'
+  >,
+  worktree: ResumeWorktreeState = WORKTREE_INTACT,
 ): Promise<string> {
   const cwd = run.worktreePath;
   if (!cwd) throw new Error('This run has no worktree.');
@@ -542,8 +732,9 @@ export async function buildResumeNote(
   const commits = log.code === 0 ? firstLines(log.stdout, NOTE_MAX_LINES) : '';
   const changes =
     status.code === 0 ? firstLines(status.stdout, NOTE_MAX_LINES) : '';
+  const opening = resumeOpening(run.providerSessionId, worktree);
   return [
-    'Waypoint resumed this run after an interruption, but your previous conversation could not be restored, so this is a fresh session in the same worktree. Here is where things stand.',
+    opening,
     '',
     `Branch: ${run.branch ?? '(unknown)'}${run.baseRef ? ` (from ${run.baseRef})` : ''}`,
     `Commits on this branch${run.baseRef ? ` since ${run.baseRef}` : ''}:`,
@@ -551,104 +742,348 @@ export async function buildResumeNote(
     '',
     'Uncommitted changes:',
     changes || '(none)',
-    '',
-    'Wait for the next instruction; do not start work on your own.',
   ].join('\n');
 }
 
-async function sendResumeNote(
-  deps: StartRunDeps,
-  daemon: DaemonRunsApi,
-  run: AgentRun,
-): Promise<void> {
-  const note = await buildResumeNote(deps, run);
-  await daemon.sendPrompt(run.id, note);
-  await deps.ledger.appendEvent(run.id, 'prompt_sent', {
-    by: 'waypoint',
-    kind: 'resume-note',
-  });
+/**
+ * The statuses a run can be continued from — every status that is not
+ * live (never-lock, 2026-09-20) — mirrors the backend's
+ * `REVIVABLE_RUN_STATUSES` (runStatusMachine.ts) exactly; duplicated
+ * across the repo boundary the same way reconcile.ts's
+ * `LIVE_RUN_STATUSES` already is, with the same drift test
+ * (startRun.test.ts reads the backend's source).
+ */
+export const RESUMABLE_RUN_STATUSES: readonly AgentRunStatus[] = [
+  'needs-review',
+  'done',
+  'interrupted',
+  'failed',
+  'cancelled',
+];
+
+/** Who asked — the explicit Resume action, a send, or the pane opening (warm-up materialised by the first send). */
+export type ResumeTrigger = 'button' | 'message' | 'open-then-message';
+
+/**
+ * Never-lock: what `resumeRunCore` hands its caller beyond the wire-facing
+ * result — the `hiddenContext` the first prompt after this resume should
+ * carry (the resume note and/or the continuation note), never sent as a
+ * turn of its own.
+ */
+export interface ResumeRunCoreResult extends ResumeRunResult {
+  /** Present after a successful resume; empty when nothing needs saying. */
+  hiddenContext?: string;
 }
 
 /**
- * An `interrupted` run, back on its worktree. Answers the outcome; a
- * daemon refusal (auth, spawn) returns the run to `interrupted` with the
- * reason on the row and rethrows, so the panel shows the sentence and the
- * run stays resumable.
+ * The continuation note (design §4.7): a dispatched run whose report was
+ * already filed is told how Waypoint decides whether a later turn is
+ * work (file a report → published) or conversation (just answer).
  */
-export async function resumeRun(
+export function continuationNote(
+  run: Pick<AgentRun, 'finalizeCount' | 'verdict' | 'ticketId'>,
+  ticketLabel: string | null,
+): string | null {
+  if (run.finalizeCount === 0) return null;
+  const where = ticketLabel ?? 'its ticket';
+  return [
+    `This run's last report was already filed on ${where}${run.verdict ? ` (verdict: ${run.verdict})` : ''}.`,
+    'If you make changes in this conversation, end that turn with the same `Verdict:` / `## Summary` report you gave before, so Waypoint publishes them and files a follow-up.',
+    'When you are only answering a question, reply normally, without a Verdict line — nothing is filed for a plain answer.',
+  ].join(' ');
+}
+
+/** The last committed turn's id in the ledger's snapshot — where a marker for this resume anchors (design §5.2). */
+async function lastSnapshotTurnId(
+  ledger: LedgerClient,
+  runId: string,
+): Promise<string | null> {
+  try {
+    const snapshot = await ledger.getTranscript(runId);
+    const turns = (snapshot?.turns ?? []) as Array<{ id?: unknown }>;
+    const last = turns[turns.length - 1];
+    return typeof last?.id === 'string' ? last.id : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A run that is not live, back on its worktree — needs-review, done,
+ * interrupted, failed or cancelled (never-lock, 2026-09-20). Answers the
+ * outcome; never refuses:
+ *
+ *  - a live run is `already-live` (the caller sends to the session);
+ *  - a worktree that cannot be reached and cannot be recreated is
+ *    `cannot-reach-worktree` with the outbox reason (the caller accepts
+ *    the message into the run's outbox; nothing is reopened);
+ *  - a daemon refusal (auth, spawn) returns the run to the status it was
+ *    actually in before this call — not unconditionally `interrupted` —
+ *    and answers `spawn-failed` (the caller outboxes; the explicit Resume
+ *    action shows the daemon's sentence);
+ *  - a Stop landing between reopenRun and startSession is
+ *    `cancelled-mid-resume` (the person overrode the resume).
+ *
+ * The resume note (a fresh provider session, or a recreated worktree) is
+ * no longer a turn of its own: it comes back as `hiddenContext` for the
+ * caller's first prompt (design §4.7), so a resume never spends an agent
+ * turn and never leaves a Waypoint-authored message in the transcript.
+ */
+export async function resumeRunCore(
   deps: StartRunDeps,
   runId: unknown,
-): Promise<ResumeRunResult> {
+  trigger: ResumeTrigger,
+  /** For a session already loaded by a warm-up (warm.ts): its provider id and whether it was the same one. */
+  warmed: { sessionId: string; loaded: boolean } | null = null,
+): Promise<ResumeRunCoreResult> {
   if (typeof runId !== 'string') throw new Error('Not a run id.');
   assertRunId(runId);
   const run = await deps.ledger.getRun(runId);
   if (!run) throw new Error(`No run ${runId} in the ledger.`);
-  if (run.status !== 'interrupted') {
-    return { outcome: 'not-resumable', status: run.status };
+  if (!RESUMABLE_RUN_STATUSES.includes(run.status)) {
+    return { outcome: 'already-live', status: run.status };
   }
-  const cwd = run.cwd ?? run.worktreePath;
-  if (!cwd) {
-    return { outcome: 'worktree-gone', status: run.status };
-  }
-  // A worktree run's cwd must be under worktreesDir — the same rule every
-  // other main-side use of the path applies: a row naming a place outside
-  // it is a row someone edited, not a cwd to hand an agent. A direct
-  // run's cwd is the folder the person picked; it only has to exist.
-  if (run.isolation !== 'directory') {
-    await assertUnder(cwd, deps.worktreesDir);
-  }
-  const present = await fs
-    .stat(cwd)
-    .then((s) => s.isDirectory())
-    .catch(() => false);
-  if (!present) {
-    return { outcome: 'worktree-gone', status: run.status };
-  }
+  const originalStatus = run.status;
   const daemon = deps.daemon();
   if (!daemon) throw new Error(ENGINE_NOT_RUNNING);
 
-  const provisioning = await deps.ledger.updateRun(run.id, {
-    status: 'provisioning',
-    reason: 'Resume from the sessions panel',
-  });
-  deps.notify({ runId: run.id, status: provisioning.status });
-
-  let sessionId: string;
-  try {
-    ({ sessionId } = await daemon.startSession({
-      conversationId: run.id,
-      providerId: run.providerId,
-      cwd,
-      sessionId: run.providerSessionId,
-      modeId: sessionModeOf(run),
-      // A dispatched writing session comes back with the same scrubbed
-      // env it started with (agentEnv.ts); an independent one with none.
-      ...(agentEnvFor(run) ? { env: agentEnvFor(run) } : {}),
-    }));
-  } catch (error) {
-    const message = describe(error);
-    deps.logger.warn('engine: resume failed', { runId: run.id, message });
-    await deps.ledger
-      .updateRun(run.id, {
-        status: 'interrupted',
-        reason: 'Resume failed; still resumable',
-        errorKind: 'resume',
-        errorMessage: clip(message, MAX_ERROR_MESSAGE),
-      })
-      .catch(() => {});
-    await deps.ledger
-      .appendEvent(run.id, 'error', {
-        stage: 'resume',
-        message: clip(message, MAX_EVENT_MESSAGE),
-      })
-      .catch(() => {});
-    deps.notify({ runId: run.id, status: 'interrupted' });
-    throw error;
+  let cwd = run.cwd ?? run.worktreePath;
+  let { branch } = run;
+  let worktreeRecreated = false;
+  let branchReused = true;
+  if (run.isolation === 'directory') {
+    // A hand-picked folder, not a Waypoint-managed worktree — there is no
+    // branch or repo to recreate it from. Not a refusal: the message
+    // waits in the outbox until the folder is back (design §2.4).
+    const present =
+      cwd !== null &&
+      (await fs
+        .stat(cwd)
+        .then((s) => s.isDirectory())
+        .catch(() => false));
+    if (!present) {
+      return {
+        outcome: 'cannot-reach-worktree',
+        status: run.status,
+        reason: 'folder-missing',
+        message: `this run's folder is not on disk at ${cwd ?? '(unknown)'}`,
+      };
+    }
+  } else {
+    // A row naming a place outside worktreesDir at all is a row someone
+    // edited (or a bug) — this throws straight out, not folded into the
+    // reprovision path below (isUsableWorktree's own doc comment).
+    if (cwd !== null) await assertUnder(cwd, deps.worktreesDir);
+    const usable = cwd !== null && (await isUsableWorktree(deps, cwd));
+    if (!usable) {
+      // Gone from disk (`git worktree remove`, a cleanup) or never
+      // successfully made at all (the run died during its own
+      // provisioning): recreate it, on the run's own branch when that
+      // still exists (history intact), else a fresh branch of the same
+      // name from baseRef — mirrors emdash's own `replayWorktreeCreation`.
+      const project = run.projectId
+        ? await deps.ledger.getProject(run.projectId)
+        : null;
+      if (!project?.repoPath) {
+        return {
+          outcome: 'cannot-reach-worktree',
+          status: run.status,
+          reason: 'repository-missing',
+          message: "the project's repository is not linked",
+        };
+      }
+      try {
+        const reprovisioned = await reprovisionWorktree(
+          {
+            daemon,
+            ledger: deps.ledger,
+            worktreesDir: deps.worktreesDir,
+            logger: deps.logger,
+          },
+          run,
+          project.repoPath,
+        );
+        cwd = reprovisioned.worktreePath;
+        branch = reprovisioned.branch;
+        branchReused = reprovisioned.branchReused;
+        worktreeRecreated = true;
+      } catch (error) {
+        deps.logger.warn(
+          'engine: could not recreate the run worktree for resume',
+          { runId: run.id, message: describe(error) },
+        );
+        return {
+          outcome: 'cannot-reach-worktree',
+          status: run.status,
+          reason: 'repository-missing',
+          message: describe(error),
+        };
+      }
+    }
+  }
+  if (!cwd) {
+    // Unreachable in practice — every path above either returns or
+    // leaves cwd a real string — closing the type gap for startSession.
+    return {
+      outcome: 'cannot-reach-worktree',
+      status: run.status,
+      reason: 'folder-missing',
+      message: 'this run has no folder recorded',
+    };
   }
 
-  const loaded =
-    run.providerSessionId !== null && sessionId === run.providerSessionId;
+  // Where a marker for this resume anchors: after the last turn the
+  // ledger's snapshot holds right now (design §5.2). Read before the
+  // reopen so a Stop mid-resume costs nothing more than the read. A run
+  // with no snapshot (one that never reached a turn end under Waypoint)
+  // gets its anchor from the daemon's restored history below, once the
+  // session is loaded — found live: anchored to nothing, the marker fell
+  // after the turn the message itself started.
+  let afterTurnId = await lastSnapshotTurnId(deps.ledger, run.id);
+
+  const { run: provisioning } = await deps.ledger.reopenRun(
+    run.id,
+    trigger === 'button'
+      ? 'Resume from the sessions panel'
+      : 'Continued by a new message',
+  );
+  deps.notify({ runId: run.id, status: provisioning.status });
+
+  // A Stop landing mid-resume (the same guard continueStart already
+  // applies at its own two call sites) — reopenRun just put this run
+  // live again, and nothing else re-reads it before the daemon call
+  // below.
+  if (!(await stillProvisioning(deps.ledger, run.id))) {
+    const current = await deps.ledger.getRun(run.id);
+    deps.logger.info(
+      'engine: run left provisioning during resume; not starting its session',
+      { runId: run.id, status: current?.status },
+    );
+    return {
+      outcome: 'cancelled-mid-resume',
+      status: current?.status ?? 'cancelled',
+    };
+  }
+
+  if (worktreeRecreated) {
+    // The fields reprovisionWorktree deliberately leaves for the caller
+    // (its own doc comment): only now, past reopenRun, is the row no
+    // longer terminal and so writable at all. Same values as a fresh
+    // provisionWorktree would write, and identical to what a
+    // previously-recorded worktree already carries, so the write-once
+    // guard is satisfied in every case.
+    await deps.ledger.updateRun(run.id, {
+      worktreePath: cwd,
+      branch,
+      baseRef: run.baseRef ?? DEFAULT_BASE_REF,
+      daemonWorkspaceId: run.id,
+      // A branch that had to be cut afresh was deleted — on merge, the
+      // usual reason — so the PR it had is over; the next report opens
+      // a new one against the new branch (design §4.5).
+      ...(!branchReused && run.prUrl ? { prUrl: null } : {}),
+    });
+    if (!branchReused && run.prUrl) {
+      await deps.ledger
+        .appendEvent(run.id, 'note', {
+          stage: 'resume',
+          publish: 'pr-superseded',
+          previousUrl: run.prUrl,
+          reason: 'branch recreated',
+        })
+        .catch(() => {});
+    }
+  }
+
+  // Found in review: a warm-up (warm.ts) never touches the ledger, so
+  // boot reconcile's kill-stale — which only re-reads the LEDGER's status
+  // under its own lock before killing — cannot see one and can kill this
+  // exact daemon session in the window between the warm-up and this
+  // resume actually using it. Trusting `warmed` unconditionally past that
+  // point would write the ledger to `running` for a session that no
+  // longer exists, with nothing catching it until the caller's own
+  // `daemon.sendPrompt` fails afterward. One cheap re-check closes it —
+  // if the daemon no longer has ANY session for this run, the warm-up is
+  // stale: fall through to a real spawn below, exactly as if there had
+  // been no warm-up at all.
+  let effectiveWarmed = warmed;
+  if (effectiveWarmed) {
+    const sessions = await daemon
+      .listSessions()
+      .catch((): Record<string, DaemonSessionSummary> => ({}));
+    if (!sessions[run.id]) effectiveWarmed = null;
+  }
+
+  let sessionId: string;
+  if (effectiveWarmed) {
+    ({ sessionId } = effectiveWarmed);
+  } else {
+    try {
+      ({ sessionId } = await daemon.startSession({
+        conversationId: run.id,
+        providerId: run.providerId,
+        cwd,
+        sessionId: run.providerSessionId,
+        modeId: sessionModeOf(run),
+        // A dispatched writing session comes back with the same scrubbed
+        // env it started with (agentEnv.ts); an independent one with none.
+        ...(agentEnvFor(run) ? { env: agentEnvFor(run) } : {}),
+      }));
+    } catch (error) {
+      const message = describe(error);
+      deps.logger.warn('engine: resume failed', { runId: run.id, message });
+      // Back where it was — where the status machine allows it. A
+      // finished run (done / needs-review, revivable under never-lock)
+      // has no way back from `provisioning`: the backend refuses
+      // provisioning → done (found in review, round 6: that 409 was
+      // swallowed here and the row stayed `provisioning` — live in the
+      // ledger, no session, nothing to send to). `interrupted` is the
+      // honest status for "its session is not up", and revivable.
+      const landing: AgentRunStatus =
+        originalStatus === 'done' || originalStatus === 'needs-review'
+          ? 'interrupted'
+          : originalStatus;
+      await deps.ledger
+        .updateRun(run.id, {
+          status: landing,
+          reason: 'Resume failed; the run is back where it was',
+          errorKind: 'resume',
+          errorMessage: clip(message, MAX_ERROR_MESSAGE),
+        })
+        .catch((ledgerError: unknown) =>
+          deps.logger.warn('engine: resume failure could not be recorded', {
+            runId: run.id,
+            message: describe(ledgerError),
+          }),
+        );
+      await deps.ledger
+        .appendEvent(run.id, 'error', {
+          stage: 'resume',
+          message: clip(message, MAX_EVENT_MESSAGE),
+        })
+        .catch(() => {});
+      deps.notify({ runId: run.id, status: landing });
+      return {
+        outcome: 'spawn-failed',
+        status: landing,
+        reason: 'spawn-failed',
+        message,
+      };
+    }
+  }
+
+  const loaded = effectiveWarmed
+    ? effectiveWarmed.loaded
+    : run.providerSessionId !== null && sessionId === run.providerSessionId;
   const outcome = loaded ? 'loaded' : 'replaced-by-new';
+  if (afterTurnId === null && loaded) {
+    afterTurnId = await Promise.resolve()
+      .then(() => daemon.getHistory(run.id, 100))
+      .then((turns) => {
+        const last = turns[turns.length - 1];
+        return typeof last?.id === 'string' ? last.id : null;
+      })
+      .catch((): string | null => null);
+  }
   const running = await deps.ledger.updateRun(run.id, {
     status: 'running',
     reason: loaded
@@ -661,21 +1096,76 @@ export async function resumeRun(
   });
   await deps.ledger.appendEvent(run.id, 'session_resumed', {
     outcome,
+    trigger,
+    from: originalStatus,
     providerSessionId: sessionId,
     previousProviderSessionId: run.providerSessionId,
+    afterTurnId,
+    ...(worktreeRecreated ? { worktreeRecreated, branchReused } : {}),
   });
   deps.notify({ runId: run.id, status: running.status });
-  deps.logger.info('engine: run resumed', { runId: run.id, outcome });
+  deps.logger.info('engine: run resumed', {
+    runId: run.id,
+    outcome,
+    trigger,
+    worktreeRecreated,
+  });
 
-  if (!loaded) {
-    // Fire and forget: the note is the fresh session's first turn, and a
-    // turn is not something a resume waits on. Its failure is logged.
-    void sendResumeNote(deps, daemon, run).catch((error: unknown) =>
-      deps.logger.warn('engine: resume note was not delivered', {
+  // What the first prompt after this resume carries as hidden context:
+  // the branch-state note when the provider's own memory could not be
+  // restored or the files under it changed (a recreated worktree), and
+  // the continuation note for a dispatched run whose report is filed.
+  const notes: string[] = [];
+  if (!loaded || worktreeRecreated) {
+    try {
+      notes.push(
+        await buildResumeNote(
+          deps,
+          { ...run, worktreePath: cwd, branch },
+          { recreated: worktreeRecreated, branchReused },
+        ),
+      );
+    } catch (error) {
+      deps.logger.warn('engine: resume note could not be built', {
         runId: run.id,
         message: describe(error),
-      }),
-    );
+      });
+    }
   }
-  return { outcome, status: running.status };
+  const continuation = continuationNote(run, null);
+  if (continuation) notes.push(continuation);
+  return {
+    outcome,
+    status: running.status,
+    ...(worktreeRecreated ? { worktreeRecreated, branchReused } : {}),
+    ...(notes.length ? { hiddenContext: notes.join('\n\n') } : {}),
+  };
+}
+
+/** The explicit "Resume" action (runs:resume). */
+export async function resumeRun(
+  deps: StartRunDeps,
+  runId: unknown,
+): Promise<ResumeRunResult> {
+  if (typeof runId !== 'string') throw new Error('Not a run id.');
+  assertRunId(runId);
+  // The same answer every send-side path takes (warmed.ts): a warm-up
+  // that already loaded this run's session is taken over, never started
+  // a second time (round 6 of review — this path alone skipped it).
+  const run = await deps.ledger.getRun(runId);
+  const daemon = deps.daemon();
+  let alive: Warmed | null = null;
+  if (run && daemon && RESUMABLE_RUN_STATUSES.includes(run.status)) {
+    const sessions = await daemon
+      .listSessions()
+      .catch((): Record<string, DaemonSessionSummary> => ({}));
+    alive = aliveSessionFor(run, sessions[runId]);
+  }
+  const { hiddenContext: _note, ...result } = await resumeRunCore(
+    deps,
+    runId,
+    'button',
+    alive,
+  );
+  return result;
 }

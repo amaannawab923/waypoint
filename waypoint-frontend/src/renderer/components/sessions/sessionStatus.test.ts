@@ -1,10 +1,12 @@
 import type { AgentRun, AgentRunStatus } from '@/types/agentRuns';
 import {
+  pendingReasonSentence,
   providerView,
   runTitle,
   shortRunId,
   STATUS_VIEW,
   waitingReason,
+  worktreeRecreatedNotice,
 } from './sessionStatus';
 
 const ALL: AgentRunStatus[] = [
@@ -25,12 +27,12 @@ const run = (over: Partial<AgentRun>): AgentRun =>
 
 describe('STATUS_VIEW', () => {
   it('names every agent_run_status once, with a label, a sentence and a dot colour', () => {
-    for (const status of ALL) {
+    ALL.forEach((status) => {
       const view = STATUS_VIEW[status];
       expect(view.label).toBeTruthy();
       expect(view.sentence).toMatch(/\.$/);
       expect(view.dotClass).toMatch(/^bg-/);
-    }
+    });
   });
 
   it('live means the daemon should have a session; stoppable follows the status machine', () => {
@@ -46,6 +48,72 @@ describe('STATUS_VIEW', () => {
       'failed',
       'cancelled',
     ]);
+  });
+
+  // Never-lock (2026-09-20): no status view may carry a gate on the
+  // composer, and no sentence may tell a person a run is over for good.
+  it('has no `resumable` (or any other composer gate) and never says a session has ended or cannot be resumed', () => {
+    ALL.forEach((status) => {
+      const view = STATUS_VIEW[status] as unknown as Record<string, unknown>;
+      expect(view).not.toHaveProperty('resumable');
+      expect(view).not.toHaveProperty('canCompose');
+      expect(String(view.sentence)).not.toMatch(
+        /has ended|nothing to resume|cannot be resumed|can't be resumed/i,
+      );
+    });
+    // Every status that is not live says what a message does.
+    ALL.filter((s) => !STATUS_VIEW[s].live).forEach((status) => {
+      expect(STATUS_VIEW[status].sentence).toMatch(
+        /Message it to continue|message you send now goes/,
+      );
+    });
+  });
+});
+
+// ROAD-XXX: the two worktree notices a resume can end in — recreated
+// (what survived depends only on whether the branch did), or genuinely
+// unrecoverable (which now means the recreation attempt failed, not that
+// none was made). A plain folder has no branch to recreate from at all.
+describe('worktree notices', () => {
+  it('recreated: names what survived by whether the branch did', () => {
+    expect(worktreeRecreatedNotice(true)).toMatch(/Committed work is intact/);
+    expect(worktreeRecreatedNotice(true)).toMatch(/uncommitted changes.*gone/);
+    expect(worktreeRecreatedNotice(false)).toMatch(/could not be recovered/);
+    expect(worktreeRecreatedNotice(false)).toMatch(/fresh branch/);
+  });
+});
+
+// Never-lock (design §2.4): the outbox's own sentences — a message that
+// is waiting is never a message that was refused.
+describe('pendingReasonSentence', () => {
+  it('says when Waypoint sends it, per reason, and never reads as a refusal', () => {
+    const reasons = [
+      'starting',
+      'finishing',
+      'folder-missing',
+      'repository-missing',
+      'spawn-failed',
+      'owner-offline',
+    ] as const;
+    reasons.forEach((reason) => {
+      const text = pendingReasonSentence(reason, {
+        cwd: '/w/run',
+        lastError: 'boom',
+        ownerName: 'Ana',
+      });
+      expect(text).toMatch(/Waiting to send|Queued for/);
+      expect(text).not.toMatch(/not sent|refused|cannot send|has ended/i);
+    });
+    expect(pendingReasonSentence('folder-missing', { cwd: '/w/run' })).toMatch(
+      /at \/w\/run/,
+    );
+    expect(
+      pendingReasonSentence('spawn-failed', { lastError: 'boom' }),
+    ).toMatch(/\(boom\)/);
+    expect(
+      pendingReasonSentence('owner-offline', { ownerName: 'Ana' }),
+    ).toMatch(/Ana's Waypoint/);
+    expect(pendingReasonSentence('owner-offline')).toMatch(/the run owner/);
   });
 });
 

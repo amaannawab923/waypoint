@@ -14,7 +14,7 @@ describe('SessionComposer', () => {
     render(
       <SessionComposer
         onSend={onSend}
-        disabledReason={null}
+        sendBlockedReason={null}
         attachedToBand={false}
       />,
     );
@@ -36,7 +36,7 @@ describe('SessionComposer', () => {
     render(
       <SessionComposer
         onSend={onSend}
-        disabledReason={null}
+        sendBlockedReason={null}
         attachedToBand={false}
       />,
     );
@@ -51,21 +51,73 @@ describe('SessionComposer', () => {
     expect(box).toHaveValue('hello');
   });
 
-  it('is disabled with the reason as its placeholder', () => {
+  it('never disables the box: with Send held back (engine down) the text is still typed and kept, and only the button is off', () => {
     render(
       <SessionComposer
+        draftKey="run-blocked"
         onSend={jest.fn()}
-        disabledReason="This session has ended (done)."
+        sendBlockedReason="The agent engine is not running — your message is kept here until it is."
         attachedToBand={false}
       />,
     );
     const box = screen.getByLabelText('Message this session');
-    expect(box).toBeDisabled();
+    expect(box).not.toBeDisabled();
+    expect(box).not.toHaveAttribute('readonly');
     expect(box).toHaveAttribute(
       'placeholder',
-      'This session has ended (done).',
+      'The agent engine is not running — your message is kept here until it is.',
     );
+    fireEvent.change(box, { target: { value: 'while you were out' } });
+    expect(box).toHaveValue('while you were out');
     expect(screen.getByLabelText('Send')).toBeDisabled();
+  });
+
+  it('is never rendered disabled under any prop combination (never-lock)', () => {
+    [null, 'engine down'].forEach((sendBlockedReason) => {
+      [false, true].forEach((attachedToBand) => {
+        const { unmount } = render(
+          <SessionComposer
+            onSend={jest.fn()}
+            sendBlockedReason={sendBlockedReason}
+            attachedToBand={attachedToBand}
+            placeholder="anything"
+          />,
+        );
+        expect(
+          screen.getByLabelText('Message this session'),
+        ).not.toBeDisabled();
+        unmount();
+      });
+    });
+  });
+
+  it('empties the box the moment a send starts, and puts the text back — ahead of anything typed since — when it did not land', async () => {
+    let settle: (ok: boolean) => void = () => {};
+    const onSend = jest.fn(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          settle = (ok) => (ok ? resolve() : reject(new Error('not sent')));
+        }),
+    );
+    render(
+      <SessionComposer
+        onSend={onSend}
+        sendBlockedReason={null}
+        attachedToBand={false}
+      />,
+    );
+    const box = screen.getByLabelText('Message this session');
+    fireEvent.change(box, { target: { value: 'first' } });
+    await act(async () => {
+      fireEvent.keyDown(box, { key: 'Enter', metaKey: true });
+    });
+    expect(box).toHaveValue('');
+    expect(box).not.toBeDisabled();
+    fireEvent.change(box, { target: { value: 'second' } });
+    await act(async () => {
+      settle(false);
+    });
+    expect(box).toHaveValue('first\nsecond');
   });
 
   describe('draft per run (W4, ROAD-68)', () => {
@@ -82,7 +134,7 @@ describe('SessionComposer', () => {
         <SessionComposer
           draftKey="run-a"
           onSend={onSend}
-          disabledReason={null}
+          sendBlockedReason={null}
           attachedToBand={false}
         />,
       );
@@ -108,7 +160,7 @@ describe('SessionComposer', () => {
         <SessionComposer
           draftKey="run-b"
           onSend={jest.fn(async () => {})}
-          disabledReason={null}
+          sendBlockedReason={null}
           attachedToBand={false}
         />,
       );
@@ -120,6 +172,93 @@ describe('SessionComposer', () => {
       expect(readSessionDraft('run-a')).toBe('');
       clearSessionDraft('run-b');
       expect(readSessionDraft('run-b')).toBe('');
+    });
+
+    // Found in review, round 4: the composer is mounted per run, so a
+    // person who switched runs while a send was in flight had already
+    // unmounted it by the time the send failed — the catch's setText was
+    // dropped by React, the draft effect never ran, and the message was
+    // simply gone, toast or no toast.
+    it('a send that fails after the person has switched away still puts the text back in the run’s draft', async () => {
+      let settle: (ok: boolean) => void = () => {};
+      const onSend = jest.fn(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            settle = (ok) => (ok ? resolve() : reject(new Error('not sent')));
+          }),
+      );
+      const { unmount } = render(
+        <SessionComposer
+          draftKey="run-c"
+          onSend={onSend}
+          sendBlockedReason={null}
+          attachedToBand={false}
+        />,
+      );
+      const box = screen.getByLabelText('Message this session');
+      fireEvent.change(box, { target: { value: 'the message' } });
+      await act(async () => {
+        fireEvent.keyDown(box, { key: 'Enter', metaKey: true });
+      });
+      expect(readSessionDraft('run-c')).toBe('');
+      unmount();
+      await act(async () => {
+        settle(false);
+      });
+      expect(readSessionDraft('run-c')).toBe('the message');
+      clearSessionDraft('run-c');
+    });
+
+    // Round 5 of review: the fix above wrote the recovered text to storage
+    // — but a person who switched away and BACK had a fresh composer for
+    // the same run by then, typing, and its next debounced draft write
+    // overwrote storage with its own text: the recovered message was gone
+    // again. A recovery now goes to the mounted composer when there is
+    // one, so it lands in the box, ahead of what was typed since.
+    it('a send that fails after the person switched away and back lands in the new composer, ahead of what they typed since', async () => {
+      let settle: (ok: boolean) => void = () => {};
+      const onSend = jest.fn(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            settle = (ok) => (ok ? resolve() : reject(new Error('not sent')));
+          }),
+      );
+      const first = render(
+        <SessionComposer
+          draftKey="run-d"
+          onSend={onSend}
+          sendBlockedReason={null}
+          attachedToBand={false}
+        />,
+      );
+      const box = screen.getByLabelText('Message this session');
+      fireEvent.change(box, { target: { value: 'the message' } });
+      await act(async () => {
+        fireEvent.keyDown(box, { key: 'Enter', metaKey: true });
+      });
+      first.unmount();
+
+      // Back to the same run: a fresh composer, typing.
+      render(
+        <SessionComposer
+          draftKey="run-d"
+          onSend={jest.fn(async () => {})}
+          sendBlockedReason={null}
+          attachedToBand={false}
+        />,
+      );
+      const again = screen.getByLabelText('Message this session');
+      fireEvent.change(again, { target: { value: 'hi' } });
+      await act(async () => {
+        settle(false);
+      });
+      expect(again).toHaveValue('the message\nhi');
+      // And the next debounced write keeps it.
+      act(() => {
+        jest.advanceTimersByTime(DRAFT_WRITE_MS);
+      });
+      expect(readSessionDraft('run-d')).toBe('the message\nhi');
+      clearSessionDraft('run-d');
     });
   });
 });

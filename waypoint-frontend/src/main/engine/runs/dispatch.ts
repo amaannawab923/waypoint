@@ -24,6 +24,7 @@ import {
 import { describeFolder } from './folders';
 import { lookupJiraRepo, projectKeyOf, rememberJiraRepo } from './jiraRepos';
 import { JIRA_NOT_CONNECTED, type JiraRunDeps } from './jiraRuns';
+import { serializeBy } from './keyedQueue';
 import {
   assertRunId,
   isTicketRef,
@@ -603,30 +604,19 @@ export function validateDispatchInput(input: unknown): ValidatedDispatchInput {
  * the ticket: the next one still runs once it is this dispatch's turn.
  *
  * Scope: this serializes dispatches within this one Electron main
- * process. The ledger itself — a shared HTTP backend, `LedgerClient` —
- * enforces nothing of its own about one-writer-per-ticket, so a second
- * app instance, a process restart mid-provision, or any other ledger
- * client can still race past this queue and double-create. Closing that
- * for real needs a constraint on the backend's own `/agent-runs` route
- * (a conditional insert or a partial unique index); tracked separately.
+ * process. Across processes and app instances the backend's own
+ * transaction-scoped advisory lock on the ticket (createRun and
+ * claimPublish, agentRuns.service.ts) is the backstop. Exported for
+ * finalize.ts (never-lock): a follow-up publish runs under this same
+ * lock, so two finalizes on one ticket in one Waypoint can't both push.
  */
 const dispatchQueues = new Map<string, Promise<unknown>>();
 
-function withTicketDispatchLock<T>(
+export function withTicketDispatchLock<T>(
   ticketId: string,
   fn: () => Promise<T>,
 ): Promise<T> {
-  const previous = dispatchQueues.get(ticketId) ?? Promise.resolve();
-  const settled = previous.then(fn, fn);
-  const bare = settled.then(
-    () => undefined,
-    () => undefined,
-  );
-  dispatchQueues.set(ticketId, bare);
-  void bare.then(() => {
-    if (dispatchQueues.get(ticketId) === bare) dispatchQueues.delete(ticketId);
-  });
-  return settled;
+  return serializeBy(dispatchQueues, ticketId, fn);
 }
 
 // The actual body of a Start, run only once `dispatchTicketRun` below has

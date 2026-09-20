@@ -41,6 +41,8 @@ export const SESSION_TOOL_NAMES = [
 /** What `open_pull_request` gets back from main (engine/runsIpc.ts's verb). */
 export type OpenPullRequestOutcome =
   | { kind: 'opened'; url: string }
+  /** Never-lock: the branch's PR was still open; new commits were pushed to it. */
+  | { kind: 'updated'; url: string }
   | { kind: 'pushed-only'; reason: string }
   | { kind: 'skipped'; reason: string }
   | { kind: 'failed'; stage: 'push' | 'pr'; message: string };
@@ -446,6 +448,8 @@ export function buildSessionToolSpecs(
         switch (outcome.kind) {
           case 'opened':
             return `Pull request opened for run ${run.id} (${run.title ?? run.branch}): ${outcome.url}. Ready for review. The person can merge it from GitHub.`;
+          case 'updated':
+            return `Pull request updated for run ${run.id} (${run.title ?? run.branch}): ${outcome.url} — the new commits were pushed to it.`;
           case 'pushed-only':
           case 'skipped':
             return outcome.reason;

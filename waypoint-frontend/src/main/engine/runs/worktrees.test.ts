@@ -13,6 +13,7 @@ import {
   preferredBranchName,
   provisionWorktree,
   releaseWorktree,
+  reprovisionWorktree,
   repositoryRecordId,
   shortRunId,
   worktreePathFor,
@@ -52,6 +53,10 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     outputTokens: 0,
     costUsd: null,
     retryOfRunId: null,
+    reopenCount: 0,
+    lastReopenedAt: null,
+    finalizeCount: 0,
+    finalizedHeadSha: null,
     createdAt: '2026-09-12T00:00:00.000Z',
     startedAt: null,
     endedAt: null,
@@ -557,6 +562,146 @@ describe('provisionWorktree', () => {
       'run-abc1234',
       'worktree_created',
       expect.anything(),
+    );
+  });
+});
+
+describe('reprovisionWorktree', () => {
+  it('reuses the run’s own branch when it still exists, and writes the same ledger fields provisionWorktree does', async () => {
+    const daemon = fakeDaemon({
+      listLocalBranches: jest.fn(async () => ['main', 'agent/ROAD-55']),
+    });
+    const ledger = fakeLedger();
+    const deps = { daemon, ledger, worktreesDir: WORKTREES, logger };
+
+    const result = await reprovisionWorktree(
+      deps,
+      run({ branch: 'agent/ROAD-55', baseRef: 'main' }),
+      '/Users/me/proj',
+    );
+
+    expect(daemon.createWorktree).toHaveBeenCalledWith({
+      workspaceId: 'run-abc1234',
+      repositoryId: repositoryRecordId('/Users/me/proj'),
+      branch: 'agent/ROAD-55',
+      baseRef: 'main',
+      path: path.join(WORKTREES, 'run-abc1234'),
+    });
+    expect(result).toEqual({
+      worktreePath: canonical(path.join(WORKTREES, 'run-abc1234')),
+      branch: 'agent/ROAD-55',
+      baseRef: 'main',
+      daemonWorkspaceId: 'run-abc1234',
+      repositoryId: repositoryRecordId('/Users/me/proj'),
+      branchReused: true,
+    });
+    // Found live: this runs on a dead row, and the ledger refuses every
+    // patch to a terminal one — the fields are the caller's to write once
+    // reopenRun has made the row writable (resumeRunCore). The event,
+    // which appends fine on a terminal row, is written here.
+    expect(ledger.updateRun).not.toHaveBeenCalled();
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'worktree_created',
+      expect.objectContaining({ reprovisioned: true, branchReused: true }),
+    );
+  });
+
+  it('cuts a fresh branch of the same name from baseRef when the run’s own branch is also gone', async () => {
+    const daemon = fakeDaemon({
+      listLocalBranches: jest.fn(async () => ['main']),
+    });
+    const ledger = fakeLedger();
+    const deps = { daemon, ledger, worktreesDir: WORKTREES, logger };
+
+    const result = await reprovisionWorktree(
+      deps,
+      run({ branch: 'agent/ROAD-55', baseRef: 'main' }),
+      '/Users/me/proj',
+    );
+
+    expect(daemon.createWorktree).toHaveBeenCalledWith(
+      expect.objectContaining({ branch: 'agent/ROAD-55', baseRef: 'main' }),
+    );
+    expect(result.branchReused).toBe(false);
+  });
+
+  it('mints a fresh branch name (chooseBranchName) when the run never had one at all', async () => {
+    const daemon = fakeDaemon({
+      listLocalBranches: jest.fn(async () => ['main']),
+    });
+    const ledger = fakeLedger();
+    const deps = { daemon, ledger, worktreesDir: WORKTREES, logger };
+
+    const result = await reprovisionWorktree(
+      deps,
+      run({ branch: null, baseRef: null, entry: 'independent' }),
+      '/Users/me/proj',
+    );
+
+    expect(daemon.createWorktree).toHaveBeenCalledWith(
+      expect.objectContaining({ branch: 'session/abc1234', baseRef: 'main' }),
+    );
+    expect(result.branchReused).toBe(false);
+  });
+
+  it('clears a stale daemon record for this workspace before creating — deleteWorktree failing is not fatal', async () => {
+    const daemon = fakeDaemon({
+      deleteWorktree: jest.fn(async () => {
+        throw new Error('no such worktree record');
+      }),
+    });
+    const ledger = fakeLedger();
+    const deps = { daemon, ledger, worktreesDir: WORKTREES, logger };
+
+    await expect(
+      reprovisionWorktree(deps, run(), '/Users/me/proj'),
+    ).resolves.toBeDefined();
+    expect(daemon.deleteWorktree).toHaveBeenCalledWith('run-abc1234', {
+      deleteBranch: false,
+    });
+    expect(daemon.deleteWorktree.mock.invocationCallOrder[0]).toBeLessThan(
+      daemon.createWorktree.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('a genuinely bad base ref still refuses before touching the daemon, same as provisionWorktree', async () => {
+    const daemon = fakeDaemon();
+    const ledger = fakeLedger();
+    const deps = { daemon, ledger, worktreesDir: WORKTREES, logger };
+
+    await expect(
+      reprovisionWorktree(deps, run({ baseRef: '--detach' }), '/Users/me/proj'),
+    ).rejects.toThrow('Not a usable base ref');
+    expect(daemon.registerRepository).not.toHaveBeenCalled();
+  });
+
+  // Found in review: unlike provisionWorktree, a failed recreation left no
+  // trail at all — no way to distinguish it from any other resume failure.
+  it('leaves an `error` event on a failed recreation attempt — never a ledger field write, since the row is still terminal here', async () => {
+    const daemon = fakeDaemon({
+      createWorktree: jest
+        .fn()
+        .mockRejectedValue(new Error('stage-failed: add-worktree: locked')),
+    });
+    const ledger = fakeLedger();
+    const deps = { daemon, ledger, worktreesDir: WORKTREES, logger };
+
+    await expect(
+      reprovisionWorktree(deps, run(), '/Users/me/proj'),
+    ).rejects.toThrow('stage-failed: add-worktree: locked');
+
+    expect(ledger.appendEvent).toHaveBeenCalledWith('run-abc1234', 'error', {
+      stage: 'worktree',
+      message: 'stage-failed: add-worktree: locked',
+    });
+    // The doc comment's own rule: this runs on a row the ledger still
+    // treats as terminal — a field write here would just 409, so it is
+    // never attempted; only the caller, after reopenRun, writes fields.
+    expect(ledger.updateRun).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'engine: run worktree reprovision failed',
+      { runId: 'run-abc1234', message: 'stage-failed: add-worktree: locked' },
     );
   });
 });

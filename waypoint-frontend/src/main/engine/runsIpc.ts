@@ -22,12 +22,26 @@ import {
   assertRunId,
   createLedgerClient,
   JIRA_ISSUE_KEY,
+  LedgerRequestError,
   type AgentRun,
   type LedgerClient,
 } from './runs/ledgerClient';
 import { assertUnder } from './runs/worktrees';
 import { listRunBranches, resumeRun, startRun } from './runs/startRun';
-import { buildBriefPreview, dispatchTicketRun } from './runs/dispatch';
+import {
+  buildBriefPreview,
+  dispatchTicketRun,
+  withTicketDispatchLock,
+} from './runs/dispatch';
+import { withRunLock } from './runs/runLock';
+import {
+  deliverPendingAfterFinalize,
+  drainIfLive,
+  dropPendingPrompt,
+  retryPendingPrompt,
+  sendRunPrompt,
+} from './runs/sendPrompt';
+import { warmRun } from './runs/warm';
 import {
   describeRunTicket,
   JIRA_NOT_CONNECTED,
@@ -497,6 +511,14 @@ export async function assertPublishableCwd(
 export interface RunsHostApi {
   /** W6: push a run's branch and open its pull request, as the person. */
   openRunPullRequest(runId: string): Promise<OpenPrResult>;
+  /** Never-lock: finalize's last step — deliver a message typed while it held the row (sendPrompt.ts). */
+  deliverPendingAfterFinalize(runId: string): Promise<void>;
+  /**
+   * Never-lock: deliver every run's outbox whose session is live — the
+   * drain the boot reconcile and app focus trigger (design §2.4). Runs
+   * whose session is not live keep their rows for their next resume.
+   */
+  drainLiveOutboxes(trigger: 'boot' | 'focus'): Promise<void>;
 }
 
 export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
@@ -561,7 +583,10 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
     // Proves the exact cwd `publish` itself will use (round 2 of this
     // review: branching on `run.isolation` here checked a *different*
     // path than `worktreePath ?? cwd`, which is what `publish` derives).
-    await assertPublishableCwd(run, deps.worktreesDir);
+    // Proved INSIDE the ticket lock, right before the push — not up here
+    // (round 5 of review): the lock can wait behind another publish for
+    // minutes, and under never-lock the session that writes to this
+    // worktree is still alive the whole time. finalize.ts does the same.
     let closing = run.summary ?? '';
     let title = run.title ?? run.branch;
     let ticketUrl: string | null = null;
@@ -582,24 +607,84 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
         ticketUrl = ticket.url;
       }
     }
-    const outcome = await deps.pullRequests.publish({
-      run,
-      closingMessage: closing,
-      title,
-      ticketUrl,
-    });
-    if (outcome.kind === 'opened') {
+    // Never-lock §3.3b: the header's retry takes the same publish claim
+    // finalize does — one publisher per ticket — and goes through
+    // publishFollowUp, so a run whose PR was merged since gets a new one.
+    const claimAndPublish = async (): Promise<OpenPrResult> => {
+      try {
+        await ledger.claimPublish(run.id, null);
+      } catch (error) {
+        if (error instanceof LedgerRequestError && error.status === 409) {
+          await ledger
+            .appendEvent(run.id, 'note', {
+              stage: 'open-pr',
+              publish: 'skipped',
+              claim: 'refused',
+              reason: error.message,
+            })
+            .catch(() => {});
+          return { kind: 'skipped', reason: error.message };
+        }
+        // Found in review (round 4): the same non-409 rethrow finalize.ts's
+        // own claim used to have — a timeout or a 5xx here escaped past the
+        // ticket lock as a bare IPC rejection, with no trail. A failed
+        // outcome instead, exactly like a push that fails.
+        const message = error instanceof Error ? error.message : String(error);
+        deps.logger.warn('engine: could not claim the publish', {
+          runId: run.id,
+          message,
+        });
+        await ledger
+          .appendEvent(run.id, 'note', {
+            stage: 'open-pr',
+            publish: 'failed',
+            claim: 'failed',
+            reason: message,
+          })
+          .catch(() => {});
+        return {
+          kind: 'failed',
+          stage: 'push',
+          message: `Could not claim the publish for this ticket: ${message}`,
+        };
+      }
+      try {
+        await assertPublishableCwd(run, deps.worktreesDir);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        deps.logger.warn(
+          'engine: refused to publish — cwd provenance check failed',
+          { runId: run.id, message },
+        );
+        return { kind: 'failed', stage: 'push', message };
+      }
+      return deps.pullRequests!.publishFollowUp({
+        run,
+        closingMessage: closing,
+        title,
+        ticketUrl,
+      });
+    };
+    // The publish claim only refuses a SECOND run's claim on the same
+    // ticket — it does nothing to stop this run's own two concurrent
+    // callers (this button and an in-flight automatic follow-up
+    // finalize both racing to publish the same run's report). Same lock
+    // finalize's own publish takes (found in review): so the two can
+    // never interleave their push/`gh pr create` calls.
+    const outcome = run.ticketId
+      ? await withTicketDispatchLock(run.ticketId, claimAndPublish)
+      : await claimAndPublish();
+    if (outcome.kind === 'opened' || outcome.kind === 'updated') {
       deps.notify({ runId: run.id, status: run.status });
       await ledger
         .postCopilotNote(
           run.id,
-          `Run ${run.title ?? run.id}: pull request opened · ${outcome.url}`,
+          `Run ${run.title ?? run.id}: pull request ${outcome.kind} · ${outcome.url}`,
         )
         .catch(() => {});
+      return { kind: outcome.kind, url: outcome.url };
     }
-    return outcome.kind === 'opened'
-      ? { kind: 'opened', url: outcome.url }
-      : outcome;
+    return outcome;
   };
 
   const folders: FolderDeps = {
@@ -625,7 +710,39 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
       path.join(path.dirname(deps.recentsFile), 'jira-project-repos.json'),
   };
   deps.host.handle(RUNS_IPC.start, (input) => startRun(startDeps, input));
-  deps.host.handle(RUNS_IPC.resume, (runId) => resumeRun(startDeps, runId));
+  // The same per-run lock a send (sendPrompt.ts) and the pane's warm-up
+  // (warm.ts) take — see runLock.ts's own doc comment for why every path
+  // must share it. A non-string runId skips the lock and goes straight to
+  // resumeRun's own validation, which throws the right sentence for it;
+  // there's nothing to key a lock on otherwise.
+  deps.host.handle(RUNS_IPC.resume, (runId) =>
+    typeof runId === 'string'
+      ? withRunLock(runId, () => resumeRun(startDeps, runId))
+      : resumeRun(startDeps, runId),
+  );
+  // Never-lock: every send lands somewhere (sendPrompt.ts takes the lock
+  // itself, or outboxes without it when the lock is busy).
+  deps.host.handle(RUNS_IPC.sendPrompt, (input) =>
+    sendRunPrompt(startDeps, input),
+  );
+  deps.host.handle(RUNS_IPC.warm, (runId) => warmRun(startDeps, runId));
+  deps.host.handle(RUNS_IPC.listPendingPrompts, async (runId) => {
+    // The same boundary check every sibling single-runId handler goes
+    // through `loadRun` for (found in review: this one used its own
+    // inline check, format-only — `assertRunId` closes the gap a copy
+    // of this handler could otherwise inherit by accident). `async` so
+    // that check's throw is a rejection like every sibling's, not a
+    // throw from the IPC call itself.
+    if (typeof runId !== 'string') throw new Error('Not a run id.');
+    assertRunId(runId);
+    return ledger.listPendingPrompts(runId);
+  });
+  deps.host.handle(RUNS_IPC.dropPendingPrompt, (input) =>
+    dropPendingPrompt(startDeps, input),
+  );
+  deps.host.handle(RUNS_IPC.retryPendingPrompt, (input) =>
+    retryPendingPrompt(startDeps, input),
+  );
   // W5a: a session on a ticket. The renderer names a ticket and a verb;
   // main builds the brief from the ledger and resolves the project's
   // repository itself (runs/dispatch.ts).
@@ -783,5 +900,32 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
     );
   });
 
-  return { openRunPullRequest };
+  const drainLiveOutboxes = async (
+    trigger: 'boot' | 'focus',
+  ): Promise<void> => {
+    const daemon = daemonFor(deps.supervisor);
+    if (!daemon) return;
+    const sessions = await daemon.listSessions().catch(() => null);
+    if (!sessions) return;
+    const runIds = Object.keys(sessions).filter((id) => id.startsWith('run-'));
+    await Promise.all(
+      runIds.map((runId) =>
+        withRunLock(runId, () => drainIfLive(startDeps, runId, trigger)).catch(
+          (error: unknown) =>
+            deps.logger.warn('engine: outbox drain failed', {
+              runId,
+              trigger,
+              message: error instanceof Error ? error.message : String(error),
+            }),
+        ),
+      ),
+    );
+  };
+
+  return {
+    openRunPullRequest,
+    deliverPendingAfterFinalize: (runId) =>
+      deliverPendingAfterFinalize(startDeps, runId),
+    drainLiveOutboxes,
+  };
 }
