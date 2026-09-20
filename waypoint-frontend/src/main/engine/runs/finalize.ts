@@ -430,6 +430,29 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
     meta: Record<string, unknown> = {},
   ) => deps.logger.warn(message, { ...meta, error: describe(error) });
 
+  /**
+   * The outbox, once the row is settled — the last step of every way a
+   * run leaves `finishing` (design §4.4): REST, FILE, and (round 5 of
+   * review, found missing on every first-finalize failure branch) a run
+   * that failed. A message typed while finalize held the row is not the
+   * finalize's fault, and `failed` is revivable: deliverPendingAfterFinalize
+   * resumes the run for it if it must. Never throws.
+   */
+  const drainOutbox = async (runId: string, after: string): Promise<void> => {
+    await deps
+      .drainOutbox?.(runId)
+      .catch((error: unknown) =>
+        warn(`engine: outbox drain after ${after} failed`, error, { runId }),
+      );
+  };
+
+  /**
+   * A run that cannot be finalized is `failed` — visible, revivable, with
+   * the reason on the row — never left at `finishing`. Any session kill
+   * belongs BEFORE this call: the drain at the end may resume the run to
+   * deliver a waiting message, and a kill after it would take that new
+   * session down.
+   */
   const fail = async (
     run: AgentRun,
     reason: string,
@@ -462,6 +485,40 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
       .catch((error: unknown) =>
         warn('engine: Copilot note not posted', error, { runId: run.id }),
       );
+    await drainOutbox(run.id, 'a failed finalize');
+  };
+
+  /**
+   * THE way a run leaves `finishing` for a settled status — needs-review
+   * or done. Three review rounds each found a hand-written copy of this
+   * tail that, on a failed write, warned and returned: the run stayed at
+   * `finishing`, a status nothing revives and reconcile treats as live.
+   * One copy now. A write that fails falls back to `fail()` — revivable,
+   * and it drains the outbox itself — and answers null; a write that
+   * lands is notified and answered, and the caller finishes its own
+   * bookkeeping, draining the outbox last.
+   */
+  const settle = async (
+    run: AgentRun,
+    patch: Parameters<LedgerClient['updateRun']>[1],
+    onFailure: { reason: string; detail?: Record<string, unknown> },
+  ): Promise<AgentRun | null> => {
+    let settled: AgentRun;
+    try {
+      settled = await deps.ledger.updateRun(run.id, patch);
+    } catch (error) {
+      warn('engine: finalize could not write the final status', error, {
+        runId: run.id,
+        status: patch.status,
+      });
+      await fail(run, `${onFailure.reason}: ${describe(error)}`, {
+        stage: 'final-write',
+        ...onFailure.detail,
+      });
+      return null;
+    }
+    deps.notify({ runId: run.id, status: settled.status });
+    return settled;
   };
 
   const killSession = async (
@@ -549,17 +606,16 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
       }
     }
     const status: AgentRunStatus = open > 0 ? 'needs-review' : 'done';
-    let rested: AgentRun;
-    try {
-      rested = await deps.ledger.updateRun(run.id, {
+    const rested = await settle(
+      run,
+      {
         status,
         reason: `Turn ended; nothing to file (${reason})`,
         ...(turns ? { turnCount: countTurns(turns) } : {}),
-      });
-    } catch (error) {
-      warn('engine: rest could not write the status', error, { runId: run.id });
-      return;
-    }
+      },
+      { reason: 'Could not record that the turn was conversation' },
+    );
+    if (!rested) return;
     if (Object.keys(detail).length || /error|could not/i.test(reason)) {
       await deps.ledger
         .appendEvent(run.id, 'note', {
@@ -569,14 +625,9 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         })
         .catch(() => {});
     }
-    deps.notify({ runId: run.id, status: rested.status });
     deps.logger.info('engine: run rested', { runId: run.id, status, reason });
     if (turns) await deps.transcripts?.capture(run.id, turns);
-    await deps.drainOutbox?.(run.id).catch((error: unknown) =>
-      warn('engine: outbox drain after rest failed', error, {
-        runId: run.id,
-      }),
-    );
+    await drainOutbox(run.id, 'rest');
   };
 
   const prFact = (
@@ -829,10 +880,10 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
     }
 
     const turnCount = countTurns(turns);
-    let reviewed: AgentRun;
-    try {
-      const headline = report.summary || closing;
-      reviewed = await deps.ledger.updateRun(run.id, {
+    const headline = report.summary || closing;
+    const reviewed = await settle(
+      run,
+      {
         status: 'needs-review',
         reason: `Follow-up ${sequence}: ${filed} proposal${filed === 1 ? '' : 's'} filed`,
         summary: clip(
@@ -843,29 +894,13 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         turnCount,
         finalizeCount: sequence,
         finalizedHeadSha: headSha,
-      });
-    } catch (error) {
-      // Found in review, round 3: this used to only warn and return,
-      // leaving the run at `finishing` forever — its proposals (filed
-      // just above, successfully) exist, but nothing ever moves the row
-      // off `finishing`, and no later idle event retries a run that has
-      // already left `running`. `fail()` makes the same outcome visible
-      // and actionable instead of a silent wedge: `failed` is revivable
-      // (never-lock), so a person can pick the conversation back up. The
-      // session itself is left alone — follow-ups keep it alive on
-      // purpose — so the outbox still gets a chance to drain.
-      await fail(
-        run,
-        `Could not record the follow-up's report: ${describe(error)}`,
-        { stage: 'needs-review-write', followUp: sequence },
-      );
-      await deps.drainOutbox?.(run.id).catch((drainError: unknown) =>
-        warn('engine: outbox drain after a wedged follow-up failed', drainError, {
-          runId: run.id,
-        }),
-      );
-      return;
-    }
+      },
+      {
+        reason: "Could not record the follow-up's report",
+        detail: { followUp: sequence },
+      },
+    );
+    if (!reviewed) return;
     await deps.ledger
       .appendEvent(run.id, 'finalized', {
         sequence,
@@ -878,7 +913,6 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         afterTurnId: lastTurnId(turns),
       })
       .catch(() => {});
-    deps.notify({ runId: run.id, status: reviewed.status });
     deps.logger.info('engine: run follow-up finalized', {
       runId: run.id,
       sequence,
@@ -901,11 +935,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
       .catch((error: unknown) =>
         warn('engine: Copilot note not posted', error, { runId: run.id }),
       );
-    await deps.drainOutbox?.(run.id).catch((error: unknown) =>
-      warn('engine: outbox drain after follow-up failed', error, {
-        runId: run.id,
-      }),
-    );
+    await drainOutbox(run.id, 'a follow-up');
   };
 
   const finalize = async (runId: string): Promise<void> => {
@@ -950,10 +980,10 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         });
         return;
       }
+      await killSession(daemon, run);
       await fail(run, "The agent's turn ended in an error.", {
         stopReason: summary.lastStopReason ?? null,
       });
-      await killSession(daemon, run);
       return;
     }
 
@@ -969,11 +999,11 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         );
         return;
       }
+      await killSession(daemon, run);
       await fail(
         run,
         `The session's history could not be read: ${describe(error)}`,
       );
-      await killSession(daemon, run);
       return;
     }
     const closing = closingMessageOf(turns);
@@ -984,10 +1014,10 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         });
         return;
       }
+      await killSession(daemon, run, turns);
       await fail(run, 'The agent ended its turn without a closing message.', {
         stopReason: summary.lastStopReason ?? null,
       });
-      await killSession(daemon, run, turns);
       return;
     }
 
@@ -1054,7 +1084,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
       // loses TypeScript's non-null narrowing — captured once, here,
       // as the row this publish attempt actually runs against.
       const runToPublish = run;
-      const branch = run.branch;
+      const { branch } = run;
       const push = () =>
         deps.pullRequests!.publish({
           run: runToPublish,
@@ -1158,18 +1188,22 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         }
       }
     } catch (error) {
+      await killSession(daemon, run, turns);
       await fail(run, `The proposal could not be filed: ${describe(error)}`, {
         filed,
       });
-      await killSession(daemon, run, turns);
       return;
     }
 
     const turnCount = countTurns(turns);
-    let reviewed: AgentRun;
-    try {
-      const headline = report.summary || closing;
-      reviewed = await deps.ledger.updateRun(run.id, {
+    const headline = report.summary || closing;
+    // The session is left alone either way — the success path just below
+    // keeps it alive (never-lock), and a failed write is no reason to
+    // take a healthy conversation down (round 5 of review: this used to
+    // kill it, a leftover from before never-lock).
+    const reviewed = await settle(
+      run,
+      {
         status: 'needs-review',
         reason: `${filed} proposal${filed === 1 ? '' : 's'} filed`,
         summary: clip(
@@ -1180,20 +1214,10 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         turnCount,
         finalizeCount: 1,
         finalizedHeadSha: headSha,
-      });
-    } catch (error) {
-      // Found in review, round 3: this used to only warn, kill the
-      // session, and return — leaving the run at `finishing` forever,
-      // same wedge as the follow-up path's identical failure (fixed
-      // above). `fail()` makes it visible and actionable instead.
-      await fail(
-        run,
-        `Could not record the finalized report: ${describe(error)}`,
-        { stage: 'needs-review-write' },
-      );
-      await killSession(daemon, run, turns);
-      return;
-    }
+      },
+      { reason: 'Could not record the finalized report' },
+    );
+    if (!reviewed) return;
     await deps.ledger
       .appendEvent(run.id, 'finalized', {
         sequence: 1,
@@ -1205,7 +1229,6 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         afterTurnId: lastTurnId(turns),
       })
       .catch(() => {});
-    deps.notify({ runId: run.id, status: reviewed.status });
     deps.logger.info('engine: run finalized', {
       runId: run.id,
       intent: run.intent,
@@ -1231,11 +1254,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
       .catch((error: unknown) =>
         warn('engine: Copilot note not posted', error, { runId: run.id }),
       );
-    await deps.drainOutbox?.(run.id).catch((error: unknown) =>
-      warn('engine: outbox drain after finalize failed', error, {
-        runId: run.id,
-      }),
-    );
+    await drainOutbox(run.id, 'finalize');
   };
 
   return {

@@ -450,7 +450,8 @@ describe('runs:open-pr', () => {
       supervisor: supervisorWith(true),
       host,
       worktreesDir,
-      ledger: fakeLedger({
+      ledger: {
+        ...fakeLedger({
         'run-openprplanted': {
           status: 'needs-review',
           entry: 'dispatched',
@@ -459,6 +460,8 @@ describe('runs:open-pr', () => {
           ticketId: null,
         },
       }),
+        claimPublish: jest.fn(async () => {}),
+      },
       git: scriptedGit({}),
       reveal: jest.fn(),
       notify: jest.fn(),
@@ -469,9 +472,14 @@ describe('runs:open-pr', () => {
       pullRequests: { publish, publishFollowUp: publish },
     });
 
-    await expect(invoke(RUNS_IPC.openPr, 'run-openprplanted')).rejects.toThrow(
-      /Refusing/,
-    );
+    // A refusal is a failed outcome, the same way finalize.ts reports it
+    // (round 5 of review: the check moved inside the ticket lock, right
+    // before the push — so its answer is an outcome, not a thrown IPC).
+    await expect(invoke(RUNS_IPC.openPr, 'run-openprplanted')).resolves.toMatchObject({
+      kind: 'failed',
+      stage: 'push',
+      message: expect.stringMatching(/Refusing/),
+    });
     expect(publish).not.toHaveBeenCalled();
   });
 
@@ -483,7 +491,8 @@ describe('runs:open-pr', () => {
       supervisor: supervisorWith(true),
       host,
       worktreesDir,
-      ledger: fakeLedger({
+      ledger: {
+        ...fakeLedger({
         'run-openprgone': {
           status: 'needs-review',
           entry: 'dispatched',
@@ -494,6 +503,8 @@ describe('runs:open-pr', () => {
           ticketId: null,
         },
       }),
+        claimPublish: jest.fn(async () => {}),
+      },
       git: scriptedGit({}),
       reveal: jest.fn(),
       notify: jest.fn(),
@@ -504,9 +515,11 @@ describe('runs:open-pr', () => {
       pullRequests: { publish, publishFollowUp: publish },
     });
 
-    await expect(invoke(RUNS_IPC.openPr, 'run-openprgone')).rejects.toThrow(
-      /not a folder on this machine any more/,
-    );
+    await expect(invoke(RUNS_IPC.openPr, 'run-openprgone')).resolves.toMatchObject({
+      kind: 'failed',
+      stage: 'push',
+      message: expect.stringMatching(/not a folder on this machine any more/),
+    });
     expect(publish).not.toHaveBeenCalled();
   });
 

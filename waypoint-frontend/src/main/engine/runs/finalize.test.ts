@@ -628,6 +628,29 @@ describe('createRunFinalizer', () => {
     );
   });
 
+  // Round 5 of review: every first-finalize failure branch killed the
+  // session and stopped — a message typed into the outbox while finalize
+  // held the row was delivered by nobody (the session it would have gone
+  // to was dead, so no live drain ever picked it up). `fail()` drains
+  // now, after the kill, so the drain may resume the run for it.
+  it('a failed finalize still drains the outbox — after the kill, never before it', async () => {
+    const { ledger } = fakeLedger(run());
+    const daemon = fakeDaemon({
+      turns: [turn([{ kind: 'message', role: 'user', text: 'brief' }])],
+    });
+    const order: string[] = [];
+    daemon.killSession.mockImplementation(async () => {
+      order.push('kill');
+    });
+    const drainOutbox = jest.fn(async () => {
+      order.push('drain');
+    });
+    const { deps } = depsWith(ledger, daemon, { drainOutbox });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+    expect(drainOutbox).toHaveBeenCalledWith('run-abc1234');
+    expect(order).toEqual(['kill', 'drain']);
+  });
+
   it('a turn that errored fails the run without reading history', async () => {
     const { ledger, rows } = fakeLedger(run());
     const daemon = fakeDaemon({
@@ -1298,7 +1321,9 @@ describe('W6: the branch is published before the proposals', () => {
     expect(rows.get('run-abc1234')?.errorMessage).toContain(
       'Could not record the finalized report',
     );
-    expect(daemon.killSession).toHaveBeenCalled();
+    // The success path keeps the session alive (never-lock); a failed
+    // write is no reason to take it down (round 5 of review).
+    expect(daemon.killSession).not.toHaveBeenCalled();
   });
 });
 
@@ -1331,6 +1356,35 @@ describe('follow-up finalize (a continued run)', () => {
         return { stdout: `${opts.count ?? '0'}\n`, code: 0 };
       return { stdout: '', code: 0 };
     });
+
+  // Round 5 of review: rest() — new in this PR, six call sites — had its
+  // own warn-and-return on a failed status write, the third copy of the
+  // wedge round 3 and round 4 each fixed once. There is one copy now
+  // (settle), and this is its regression test.
+  it('a failed status write in REST does not wedge the run at finishing — it becomes failed, and the outbox still drains', async () => {
+    const { ledger, rows } = fakeLedger(filed());
+    const daemon = fakeDaemon({
+      turns: [turn([{ kind: 'message', role: 'assistant', text: 'ok' }])],
+    });
+    const realUpdateRun = ledger.updateRun.getMockImplementation()!;
+    (ledger.updateRun as jest.Mock).mockImplementation(
+      async (id: string, patch: Record<string, unknown>) => {
+        if (patch.status === 'done' || patch.status === 'needs-review') {
+          throw new Error('ledger unreachable');
+        }
+        return realUpdateRun(id, patch);
+      },
+    );
+    const drainOutbox = jest.fn(async () => {});
+    const { deps } = depsWith(ledger, daemon, { drainOutbox });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+    expect(rows.get('run-abc1234')?.status).toBe('failed');
+    expect(rows.get('run-abc1234')?.errorMessage).toContain(
+      'Could not record that the turn was conversation',
+    );
+    expect(drainOutbox).toHaveBeenCalledWith('run-abc1234');
+    expect(daemon.killSession).not.toHaveBeenCalled();
+  });
 
   it('a plain answer (no Verdict line) RESTS: no proposal, no publish, summary/verdict untouched, back to done with no open proposals — and the outbox drained last', async () => {
     const { ledger, rows } = fakeLedger(filed());

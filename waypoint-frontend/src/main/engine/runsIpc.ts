@@ -583,7 +583,10 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
     // Proves the exact cwd `publish` itself will use (round 2 of this
     // review: branching on `run.isolation` here checked a *different*
     // path than `worktreePath ?? cwd`, which is what `publish` derives).
-    await assertPublishableCwd(run, deps.worktreesDir);
+    // Proved INSIDE the ticket lock, right before the push — not up here
+    // (round 5 of review): the lock can wait behind another publish for
+    // minutes, and under never-lock the session that writes to this
+    // worktree is still alive the whole time. finalize.ts does the same.
     let closing = run.summary ?? '';
     let title = run.title ?? run.branch;
     let ticketUrl: string | null = null;
@@ -612,6 +615,14 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
         await ledger.claimPublish(run.id, null);
       } catch (error) {
         if (error instanceof LedgerRequestError && error.status === 409) {
+          await ledger
+            .appendEvent(run.id, 'note', {
+              stage: 'open-pr',
+              publish: 'skipped',
+              claim: 'refused',
+              reason: error.message,
+            })
+            .catch(() => {});
           return { kind: 'skipped', reason: error.message };
         }
         // Found in review (round 4): the same non-409 rethrow finalize.ts's
@@ -636,6 +647,16 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
           stage: 'push',
           message: `Could not claim the publish for this ticket: ${message}`,
         };
+      }
+      try {
+        await assertPublishableCwd(run, deps.worktreesDir);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        deps.logger.warn(
+          'engine: refused to publish — cwd provenance check failed',
+          { runId: run.id, message },
+        );
+        return { kind: 'failed', stage: 'push', message };
       }
       return deps.pullRequests!.publishFollowUp({
         run,
