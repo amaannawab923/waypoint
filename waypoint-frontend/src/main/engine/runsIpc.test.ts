@@ -12,7 +12,11 @@ import {
 import type { EngineSupervisor } from './supervisor';
 import { RUNS_IPC, MAX_DIFF_PATCH_CHARS } from './types';
 import type { DaemonRunsApi } from './runs/daemonApi';
-import type { AgentRun, LedgerClient } from './runs/ledgerClient';
+import {
+  LedgerRequestError,
+  type AgentRun,
+  type LedgerClient,
+} from './runs/ledgerClient';
 import {
   assertWorktreeGitDir,
   computeRunDiff,
@@ -461,7 +465,7 @@ describe('runs:open-pr', () => {
       recentsFile: path.join(worktreesDir, 'recent-folders.json'),
       daemon: () => null,
       logger,
-      pullRequests: { publish },
+      pullRequests: { publish, publishFollowUp: publish },
     });
 
     await expect(invoke(RUNS_IPC.openPr, 'run-openprplanted')).rejects.toThrow(
@@ -496,7 +500,7 @@ describe('runs:open-pr', () => {
       recentsFile: path.join(worktreesDir, 'recent-folders.json'),
       daemon: () => null,
       logger,
-      pullRequests: { publish },
+      pullRequests: { publish, publishFollowUp: publish },
     });
 
     await expect(invoke(RUNS_IPC.openPr, 'run-openprgone')).rejects.toThrow(
@@ -514,6 +518,7 @@ describe('runs:open-pr', () => {
       pushed: true as const,
     }));
     const notify = jest.fn();
+    const claimPublish = jest.fn(async () => {});
     const ledger = {
       ...fakeLedger({
         'run-openprlegit': {
@@ -527,6 +532,7 @@ describe('runs:open-pr', () => {
         },
       }),
       postCopilotNote: jest.fn(async () => true),
+      claimPublish,
     };
     registerRunsIpc({
       supervisor: supervisorWith(true),
@@ -540,14 +546,60 @@ describe('runs:open-pr', () => {
       recentsFile: path.join(worktreesDir, 'recent-folders.json'),
       daemon: () => null,
       logger,
-      pullRequests: { publish },
+      // Never-lock: the header goes through publishFollowUp (a run whose
+      // PR was merged since gets a new one) after the backend's claim.
+      pullRequests: { publish: jest.fn(), publishFollowUp: publish },
     });
 
     await expect(invoke(RUNS_IPC.openPr, 'run-openprlegit')).resolves.toEqual({
       kind: 'opened',
       url: 'https://github.com/acme/widgets/pull/9',
     });
+    expect(claimPublish).toHaveBeenCalledWith('run-openprlegit', null);
     expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it("a refused publish claim (another writer holds the ticket) is a skipped outcome carrying the backend's sentence, and never publishes", async () => {
+    const { host, invoke } = fakeHost();
+    const legit = worktreeOf('run-openprclaim');
+    const publishFollowUp = jest.fn();
+    const ledger = {
+      ...fakeLedger({
+        'run-openprclaim': {
+          status: 'done',
+          entry: 'dispatched',
+          branch: 'agent/road-131',
+          worktreePath: legit,
+          ticketId: null,
+        },
+      }),
+      claimPublish: jest.fn(async () => {
+        throw new LedgerRequestError(
+          409,
+          'Not published: this ticket has a live writer (Other).',
+        );
+      }),
+    };
+    registerRunsIpc({
+      supervisor: supervisorWith(true),
+      host,
+      worktreesDir,
+      ledger,
+      git: scriptedGit({}),
+      reveal: jest.fn(),
+      notify: jest.fn(),
+      chooseDirectory: async () => null,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
+      daemon: () => null,
+      logger,
+      pullRequests: { publish: jest.fn(), publishFollowUp },
+    });
+
+    await expect(invoke(RUNS_IPC.openPr, 'run-openprclaim')).resolves.toEqual({
+      kind: 'skipped',
+      reason: 'Not published: this ticket has a live writer (Other).',
+    });
+    expect(publishFollowUp).not.toHaveBeenCalled();
   });
 });
 
@@ -844,7 +896,7 @@ describe('runs:start, runs:resume, runs:list-branches, runs:choose-folder, runs:
     });
   });
 
-  it('runs:resume answers not-resumable for a running run without writing', async () => {
+  it('runs:resume answers already-live for a running run without writing', async () => {
     const { host, invoke } = fakeHost();
     const ledger = fakeLedger({ 'run-a1': { status: 'running' } });
     registerRunsIpc({
@@ -860,7 +912,7 @@ describe('runs:start, runs:resume, runs:list-branches, runs:choose-folder, runs:
       logger,
     });
     await expect(invoke(RUNS_IPC.resume, 'run-a1')).resolves.toEqual({
-      outcome: 'not-resumable',
+      outcome: 'already-live',
       status: 'running',
     });
     expect(ledger.updateRun).not.toHaveBeenCalled();

@@ -13,7 +13,9 @@ import {
   continueStart,
   ENGINE_NOT_RUNNING,
   listRunBranches,
+  RESUMABLE_RUN_STATUSES,
   resumeRun,
+  resumeRunCore,
   startRun,
   titleFromMessage,
   validateStartInput,
@@ -88,6 +90,10 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     outputTokens: 0,
     costUsd: null,
     retryOfRunId: null,
+    reopenCount: 0,
+    lastReopenedAt: null,
+    finalizeCount: 0,
+    finalizedHeadSha: null,
     createdAt: '2026-09-12T00:00:00.000Z',
     startedAt: null,
     endedAt: null,
@@ -671,27 +677,46 @@ describe('resumeRun', () => {
     });
   }
 
-  it('is not-resumable for a live or successfully-ended status', async () => {
-    const { ledger } = fakeLedger([
+  // Never-lock (2026-09-20): every status that is not live can be
+  // continued — done and needs-review too. Only a live run has nothing
+  // to reopen; that is `already-live`, never a refusal.
+  it('is already-live for a live status, and continues done and needs-review like any other', async () => {
+    const { ledger, rows } = fakeLedger([
       run({ id: 'run-r1', status: 'running' }),
-      run({ id: 'run-d1', status: 'done' }),
-      run({ id: 'run-nr1', status: 'needs-review' }),
+      interrupted({
+        id: 'run-d1',
+        status: 'done',
+        providerSessionId: 'sess-old',
+      }),
+      interrupted({
+        id: 'run-nr1',
+        status: 'needs-review',
+        providerSessionId: 'sess-old',
+      }),
     ]);
-    const deps = depsWith(ledger, fakeDaemon());
+    const daemon = fakeDaemon({
+      startSession: jest.fn(async () => ({ sessionId: 'sess-old' })),
+    });
+    const deps = depsWith(ledger, daemon);
     await expect(resumeRun(deps, 'run-r1')).resolves.toEqual({
-      outcome: 'not-resumable',
+      outcome: 'already-live',
       status: 'running',
     });
-    await expect(resumeRun(deps, 'run-d1')).resolves.toEqual({
-      outcome: 'not-resumable',
-      status: 'done',
-    });
-    await expect(resumeRun(deps, 'run-nr1')).resolves.toEqual({
-      outcome: 'not-resumable',
-      status: 'needs-review',
-    });
-    expect(ledger.updateRun).not.toHaveBeenCalled();
     expect(ledger.reopenRun).not.toHaveBeenCalled();
+
+    await expect(resumeRun(deps, 'run-d1')).resolves.toEqual({
+      outcome: 'loaded',
+      status: 'running',
+    });
+    expect(ledger.reopenRun).toHaveBeenCalledWith(
+      'run-d1',
+      'Resume from the sessions panel',
+    );
+    expect(rows.get('run-d1')?.status).toBe('running');
+    await expect(resumeRun(deps, 'run-nr1')).resolves.toMatchObject({
+      outcome: 'loaded',
+      status: 'running',
+    });
   });
 
   // ROAD-XXX: found live (the founder's own words) — a worktree missing,
@@ -768,7 +793,10 @@ describe('resumeRun', () => {
     );
   });
 
-  it('still refuses — worktree-gone — when there is no linked repository to reprovision from', async () => {
+  // Never-lock: a worktree that cannot be reached and cannot be
+  // recreated is not a refusal — the caller (sendPrompt.ts) accepts the
+  // message into the outbox under the reason answered here.
+  it('cannot-reach-worktree, with the outbox reason, when there is no linked repository to reprovision from', async () => {
     const { ledger } = fakeLedger([
       interrupted({
         id: 'run-i4',
@@ -783,19 +811,20 @@ describe('resumeRun', () => {
     ]);
     const deps = depsWith(ledger, fakeDaemon());
     // proj-nolink: a real project, but nothing is linked (repoPath: null).
-    await expect(resumeRun(deps, 'run-i4')).resolves.toEqual({
-      outcome: 'worktree-gone',
+    await expect(resumeRun(deps, 'run-i4')).resolves.toMatchObject({
+      outcome: 'cannot-reach-worktree',
       status: 'interrupted',
+      reason: 'repository-missing',
     });
     // proj-ghost: not a project getProject knows at all.
-    await expect(resumeRun(deps, 'run-i5')).resolves.toEqual({
-      outcome: 'worktree-gone',
-      status: 'interrupted',
+    await expect(resumeRun(deps, 'run-i5')).resolves.toMatchObject({
+      outcome: 'cannot-reach-worktree',
+      reason: 'repository-missing',
     });
     expect(ledger.reopenRun).not.toHaveBeenCalled();
   });
 
-  it('worktree-gone when reprovisioning itself fails', async () => {
+  it("cannot-reach-worktree when reprovisioning itself fails, carrying the daemon's sentence", async () => {
     const { ledger } = fakeLedger([interrupted({ worktreePath: null })]);
     const daemon = fakeDaemon({
       createWorktree: jest.fn(async () => {
@@ -803,35 +832,32 @@ describe('resumeRun', () => {
       }),
     });
     const deps = depsWith(ledger, daemon);
-    await expect(resumeRun(deps, 'run-i1')).resolves.toEqual({
-      outcome: 'worktree-gone',
+    await expect(resumeRun(deps, 'run-i1')).resolves.toMatchObject({
+      outcome: 'cannot-reach-worktree',
       status: 'interrupted',
+      reason: 'repository-missing',
+      message: 'daemon: repository unreachable',
     });
     expect(ledger.reopenRun).not.toHaveBeenCalled();
   });
 
-  // ROAD-XXX: resume dead sessions — failed and cancelled runs now come
-  // back the same way an interrupted one always has.
-  it.each(['interrupted', 'failed', 'cancelled'] as const)(
-    'revives a %s run: reopens it, then starts the session',
-    async (status) => {
-      const { ledger, rows } = fakeLedger([interrupted({ status })]);
-      const daemon = fakeDaemon({
-        startSession: jest.fn(async () => ({ sessionId: 'sess-old' })),
-      });
-      const deps = depsWith(ledger, daemon);
-
-      await expect(resumeRun(deps, 'run-i1')).resolves.toEqual({
-        outcome: 'loaded',
-        status: 'running',
-      });
-      expect(ledger.reopenRun).toHaveBeenCalledWith(
-        'run-i1',
-        'Resume from the sessions panel',
-      );
-      expect(rows.get('run-i1')?.status).toBe('running');
-    },
-  );
+  it('a directory-isolation run whose folder is gone is cannot-reach-worktree with folder-missing — nothing to recreate it from', async () => {
+    const { ledger } = fakeLedger([
+      interrupted({
+        id: 'run-dir',
+        isolation: 'directory',
+        cwd: path.join(worktreesDir, 'gone-folder'),
+        worktreePath: null,
+      }),
+    ]);
+    await expect(
+      resumeRun(depsWith(ledger, fakeDaemon()), 'run-dir'),
+    ).resolves.toMatchObject({
+      outcome: 'cannot-reach-worktree',
+      reason: 'folder-missing',
+    });
+    expect(ledger.reopenRun).not.toHaveBeenCalled();
+  });
 
   it('a daemon refusal returns the run to its ORIGINAL status, not unconditionally interrupted — a failed run whose resume also fails stays failed', async () => {
     const { ledger, rows } = fakeLedger([interrupted({ status: 'failed' })]);
@@ -842,7 +868,14 @@ describe('resumeRun', () => {
     });
     const deps = depsWith(ledger, daemon);
 
-    await expect(resumeRun(deps, 'run-i1')).rejects.toThrow(/spawn-failed/);
+    // Never-lock: answered, not thrown — the caller outboxes the message
+    // under `spawn-failed` rather than refusing it.
+    await expect(resumeRun(deps, 'run-i1')).resolves.toMatchObject({
+      outcome: 'spawn-failed',
+      status: 'failed',
+      reason: 'spawn-failed',
+      message: 'spawn-failed: no such provider',
+    });
     expect(rows.get('run-i1')).toMatchObject({
       status: 'failed',
       errorKind: 'resume',
@@ -852,7 +885,7 @@ describe('resumeRun', () => {
     ).toEqual(['provisioning', 'failed']);
   });
 
-  it('a refusal from reopenRun itself (superseded, live writer, backoff, not owner) propagates and never reaches the daemon', async () => {
+  it("a refusal from reopenRun itself (live, or another member's run) propagates and never reaches the daemon", async () => {
     const { ledger } = fakeLedger([interrupted({ status: 'cancelled' })]);
     const daemon = fakeDaemon();
     const deps = depsWith(ledger, daemon);
@@ -947,7 +980,11 @@ describe('resumeRun', () => {
     ).toEqual(['provisioning', 'running']);
   });
 
-  it('replaced-by-new: keeps the new id and sends the branch-state note once', async () => {
+  // Never-lock (design §4.7): the branch-state note is no longer a prompt
+  // turn of its own — it comes back as hiddenContext for the caller's
+  // first real prompt, so a resume never spends an agent turn and leaves
+  // no Waypoint-authored message in the transcript.
+  it('replaced-by-new: keeps the new id and hands back the branch-state note as hiddenContext — no prompt of its own', async () => {
     const { ledger, rows } = fakeLedger([interrupted()]);
     const daemon = fakeDaemon({
       startSession: jest.fn(async () => ({ sessionId: 'sess-fresh' })),
@@ -958,32 +995,130 @@ describe('resumeRun', () => {
     }));
     const deps = depsWith(ledger, daemon, { git });
 
-    await expect(resumeRun(deps, 'run-i1')).resolves.toEqual({
+    const result = await resumeRunCore(deps, 'run-i1', 'message');
+    expect(result).toMatchObject({
       outcome: 'replaced-by-new',
       status: 'running',
     });
-    // The note is fire-and-forget; let it land.
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-
     expect(rows.get('run-i1')?.providerSessionId).toBe('sess-fresh');
-    expect(daemon.sendPrompt).toHaveBeenCalledTimes(1);
-    const [, note] = daemon.sendPrompt.mock.calls[0];
+    expect(daemon.sendPrompt).not.toHaveBeenCalled();
+    const note = result.hiddenContext ?? '';
     expect(note).toContain('could not be restored');
     expect(note).toContain('abc123 first commit');
     expect(note).toContain(' M src/a.ts');
     expect(note).toContain('session/i1 (from main)');
+    expect(note).not.toContain('Wait for the next instruction');
     expect(deps.assertWorktreeGitDir).toHaveBeenCalledWith(
       rows.get('run-i1')?.worktreePath,
     );
+    // The explicit Resume action drops the note (no prompt to attach it to).
+    expect(
+      await resumeRun(
+        depsWith(fakeLedger([interrupted()]).ledger, daemon, { git }),
+        'run-i1',
+      ),
+    ).not.toHaveProperty('hiddenContext');
+    // A loaded session with nothing recreated carries no note at all.
+    const loadedDaemon = fakeDaemon({
+      startSession: jest.fn(async () => ({ sessionId: 'sess-old' })),
+    });
+    expect(
+      await resumeRunCore(
+        depsWith(fakeLedger([interrupted()]).ledger, loadedDaemon, { git }),
+        'run-i1',
+        'message',
+      ),
+    ).not.toHaveProperty('hiddenContext');
     expect(ledger.appendEvent).toHaveBeenCalledWith(
       'run-i1',
-      'prompt_sent',
-      expect.objectContaining({ by: 'waypoint', kind: 'resume-note' }),
+      'session_resumed',
+      expect.objectContaining({
+        outcome: 'replaced-by-new',
+        trigger: 'message',
+        from: 'interrupted',
+        afterTurnId: null,
+      }),
+    );
+  });
+
+  it('a dispatched run whose report is filed gets the continuation note (finalizeCount > 0), even when the session loaded', async () => {
+    const { ledger } = fakeLedger([
+      interrupted({
+        status: 'done',
+        entry: 'dispatched',
+        finalizeCount: 1,
+        verdict: 'fixed',
+        ticketId: 'wi-1',
+      }),
+    ]);
+    const daemon = fakeDaemon({
+      startSession: jest.fn(async () => ({ sessionId: 'sess-old' })),
+    });
+    const result = await resumeRunCore(
+      depsWith(ledger, daemon),
+      'run-i1',
+      'message',
+    );
+    expect(result.outcome).toBe('loaded');
+    expect(result.hiddenContext).toMatch(/last report was already filed/);
+    expect(result.hiddenContext).toMatch(/verdict: fixed/);
+    expect(result.hiddenContext).toMatch(/Verdict:/);
+  });
+
+  it("a warmed session (warm.ts) is used as-is: no startSession, the warm-up's outcome decides loaded vs replaced-by-new", async () => {
+    const { ledger, rows } = fakeLedger([interrupted({ status: 'done' })]);
+    const daemon = fakeDaemon();
+    const result = await resumeRunCore(
+      depsWith(ledger, daemon),
+      'run-i1',
+      'open-then-message',
+      {
+        sessionId: 'sess-old',
+        loaded: true,
+      },
+    );
+    expect(result).toMatchObject({ outcome: 'loaded', status: 'running' });
+    expect(daemon.startSession).not.toHaveBeenCalled();
+    expect(rows.get('run-i1')).toMatchObject({
+      status: 'running',
+      providerSessionId: 'sess-old',
+    });
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-i1',
+      'session_resumed',
+      expect.objectContaining({ trigger: 'open-then-message', from: 'done' }),
+    );
+  });
+
+  it("a recreated worktree on a fresh branch clears the run's PR, since the branch it was for is gone", async () => {
+    const { ledger, rows } = fakeLedger([
+      interrupted({
+        status: 'done',
+        worktreePath: null,
+        prUrl: 'https://github.com/acme/w/pull/3',
+      }),
+    ]);
+    // listLocalBranches lacks session/i1 → the branch is cut fresh.
+    const daemon = fakeDaemon({
+      startSession: jest.fn(async () => ({ sessionId: 'sess-old' })),
+    });
+    const result = await resumeRunCore(
+      depsWith(ledger, daemon),
+      'run-i1',
+      'message',
+    );
+    expect(result).toMatchObject({
+      worktreeRecreated: true,
+      branchReused: false,
+    });
+    expect(rows.get('run-i1')?.prUrl).toBeNull();
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-i1',
+      'note',
+      expect.objectContaining({
+        publish: 'pr-superseded',
+        previousUrl: 'https://github.com/acme/w/pull/3',
+      }),
     );
   });
 
@@ -1031,7 +1166,7 @@ describe('resumeRun', () => {
     );
   });
 
-  it('a daemon refusal returns the run to interrupted with the reason, and rethrows', async () => {
+  it('a daemon refusal returns the run to interrupted with the reason, answered as spawn-failed', async () => {
     const { ledger, rows } = fakeLedger([interrupted()]);
     const daemon = fakeDaemon({
       startSession: jest.fn(async () => {
@@ -1040,7 +1175,10 @@ describe('resumeRun', () => {
     });
     const deps = depsWith(ledger, daemon);
 
-    await expect(resumeRun(deps, 'run-i1')).rejects.toThrow(/spawn-failed/);
+    await expect(resumeRun(deps, 'run-i1')).resolves.toMatchObject({
+      outcome: 'spawn-failed',
+      status: 'interrupted',
+    });
     expect(rows.get('run-i1')).toMatchObject({
       status: 'interrupted',
       errorKind: 'resume',
@@ -1131,5 +1269,38 @@ describe('buildResumeNote', () => {
     expect(git).toHaveBeenCalledWith(expect.arrayContaining(['log', 'HEAD']), {
       cwd: '/wt',
     });
+  });
+});
+
+// Never-lock: RESUMABLE_RUN_STATUSES is REVIVABLE_RUN_STATUSES copied
+// across the repo boundary (the same way reconcile.test.ts holds
+// LIVE_RUN_STATUSES to the backend's). A backend that widens or narrows
+// what can be continued without this copy following would either refuse
+// a send the backend would take, or reopen a run the backend refuses.
+describe('RESUMABLE_RUN_STATUSES', () => {
+  it("matches the backend's REVIVABLE_RUN_STATUSES exactly", () => {
+    const backend = fs.readFileSync(
+      path.join(
+        __dirname,
+        '..',
+        '..',
+        '..',
+        '..',
+        '..',
+        'waypoint-backend',
+        'src',
+        'services',
+        'runStatusMachine.ts',
+      ),
+      'utf8',
+    );
+    const match = backend.match(
+      /REVIVABLE_RUN_STATUSES[^=]*=\s*new Set\(\[([^\]]*)\]\)/,
+    );
+    expect(match).not.toBeNull();
+    const backendList = [...match![1].matchAll(/'([a-z-]+)'/g)].map(
+      (m) => m[1],
+    );
+    expect([...RESUMABLE_RUN_STATUSES]).toEqual(backendList);
   });
 });

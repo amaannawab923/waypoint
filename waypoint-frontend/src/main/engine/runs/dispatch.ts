@@ -604,17 +604,15 @@ export function validateDispatchInput(input: unknown): ValidatedDispatchInput {
  * the ticket: the next one still runs once it is this dispatch's turn.
  *
  * Scope: this serializes dispatches within this one Electron main
- * process. The ledger itself — a shared HTTP backend, `LedgerClient` —
- * enforces nothing of its own on this route about one-writer-per-ticket,
- * so a second app instance, a process restart mid-provision, or any
- * other ledger client can still race past this queue and double-create.
- * ROAD-XXX's `agent_runs_one_live_writer_per_ticket` partial unique
- * index closes that for `reopenRun`; `createRun`'s own dispatch route
- * still has no such backstop.
+ * process. Across processes and app instances the backend's own
+ * transaction-scoped advisory lock on the ticket (createRun and
+ * claimPublish, agentRuns.service.ts) is the backstop. Exported for
+ * finalize.ts (never-lock): a follow-up publish runs under this same
+ * lock, so two finalizes on one ticket in one Waypoint can't both push.
  */
 const dispatchQueues = new Map<string, Promise<unknown>>();
 
-function withTicketDispatchLock<T>(
+export function withTicketDispatchLock<T>(
   ticketId: string,
   fn: () => Promise<T>,
 ): Promise<T> {

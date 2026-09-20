@@ -22,6 +22,7 @@ import {
   assertRunId,
   createLedgerClient,
   JIRA_ISSUE_KEY,
+  LedgerRequestError,
   type AgentRun,
   type LedgerClient,
 } from './runs/ledgerClient';
@@ -29,7 +30,14 @@ import { assertUnder } from './runs/worktrees';
 import { listRunBranches, resumeRun, startRun } from './runs/startRun';
 import { buildBriefPreview, dispatchTicketRun } from './runs/dispatch';
 import { withRunLock } from './runs/runLock';
-import { sendRunPrompt } from './runs/sendPrompt';
+import {
+  deliverPendingAfterFinalize,
+  drainIfLive,
+  dropPendingPrompt,
+  retryPendingPrompt,
+  sendRunPrompt,
+} from './runs/sendPrompt';
+import { warmRun } from './runs/warm';
 import {
   describeRunTicket,
   JIRA_NOT_CONNECTED,
@@ -499,6 +507,14 @@ export async function assertPublishableCwd(
 export interface RunsHostApi {
   /** W6: push a run's branch and open its pull request, as the person. */
   openRunPullRequest(runId: string): Promise<OpenPrResult>;
+  /** Never-lock: finalize's last step — deliver a message typed while it held the row (sendPrompt.ts). */
+  deliverPendingAfterFinalize(runId: string): Promise<void>;
+  /**
+   * Never-lock: deliver every run's outbox whose session is live — the
+   * drain the boot reconcile and app focus trigger (design §2.4). Runs
+   * whose session is not live keep their rows for their next resume.
+   */
+  drainLiveOutboxes(trigger: 'boot' | 'focus'): Promise<void>;
 }
 
 export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
@@ -584,24 +600,34 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
         ticketUrl = ticket.url;
       }
     }
-    const outcome = await deps.pullRequests.publish({
+    // Never-lock §3.3b: the header's retry takes the same publish claim
+    // finalize does — one publisher per ticket — and goes through
+    // publishFollowUp, so a run whose PR was merged since gets a new one.
+    try {
+      await ledger.claimPublish(run.id, null);
+    } catch (error) {
+      if (error instanceof LedgerRequestError && error.status === 409) {
+        return { kind: 'skipped', reason: error.message };
+      }
+      throw error;
+    }
+    const outcome = await deps.pullRequests.publishFollowUp({
       run,
       closingMessage: closing,
       title,
       ticketUrl,
     });
-    if (outcome.kind === 'opened') {
+    if (outcome.kind === 'opened' || outcome.kind === 'updated') {
       deps.notify({ runId: run.id, status: run.status });
       await ledger
         .postCopilotNote(
           run.id,
-          `Run ${run.title ?? run.id}: pull request opened · ${outcome.url}`,
+          `Run ${run.title ?? run.id}: pull request ${outcome.kind} · ${outcome.url}`,
         )
         .catch(() => {});
+      return { kind: outcome.kind, url: outcome.url };
     }
-    return outcome.kind === 'opened'
-      ? { kind: 'opened', url: outcome.url }
-      : outcome;
+    return outcome;
   };
 
   const folders: FolderDeps = {
@@ -627,20 +653,31 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
       path.join(path.dirname(deps.recentsFile), 'jira-project-repos.json'),
   };
   deps.host.handle(RUNS_IPC.start, (input) => startRun(startDeps, input));
-  // ROAD-XXX: the same per-run lock a transparent resume-on-message
-  // (sendPrompt.ts) takes — see runLock.ts's own doc comment for why both
-  // paths must share it. A non-string runId skips the lock and goes
-  // straight to resumeRun's own validation, which throws the right
-  // sentence for it; there's nothing to key a lock on otherwise.
+  // The same per-run lock a send (sendPrompt.ts) and the pane's warm-up
+  // (warm.ts) take — see runLock.ts's own doc comment for why every path
+  // must share it. A non-string runId skips the lock and goes straight to
+  // resumeRun's own validation, which throws the right sentence for it;
+  // there's nothing to key a lock on otherwise.
   deps.host.handle(RUNS_IPC.resume, (runId) =>
     typeof runId === 'string'
       ? withRunLock(runId, () => resumeRun(startDeps, runId))
       : resumeRun(startDeps, runId),
   );
-  // ROAD-XXX: takes the same per-run lock itself (sendRunPrompt already
-  // wraps its own body in withRunLock — see runLock.ts).
+  // Never-lock: every send lands somewhere (sendPrompt.ts takes the lock
+  // itself, or outboxes without it when the lock is busy).
   deps.host.handle(RUNS_IPC.sendPrompt, (input) =>
     sendRunPrompt(startDeps, input),
+  );
+  deps.host.handle(RUNS_IPC.warm, (runId) => warmRun(startDeps, runId));
+  deps.host.handle(RUNS_IPC.listPendingPrompts, (runId) => {
+    if (typeof runId !== 'string') throw new Error('Not a run id.');
+    return ledger.listPendingPrompts(runId);
+  });
+  deps.host.handle(RUNS_IPC.dropPendingPrompt, (input) =>
+    dropPendingPrompt(startDeps, input),
+  );
+  deps.host.handle(RUNS_IPC.retryPendingPrompt, (input) =>
+    retryPendingPrompt(startDeps, input),
   );
   // W5a: a session on a ticket. The renderer names a ticket and a verb;
   // main builds the brief from the ledger and resolves the project's
@@ -799,5 +836,32 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
     );
   });
 
-  return { openRunPullRequest };
+  const drainLiveOutboxes = async (
+    trigger: 'boot' | 'focus',
+  ): Promise<void> => {
+    const daemon = daemonFor(deps.supervisor);
+    if (!daemon) return;
+    const sessions = await daemon.listSessions().catch(() => null);
+    if (!sessions) return;
+    const runIds = Object.keys(sessions).filter((id) => id.startsWith('run-'));
+    await Promise.all(
+      runIds.map((runId) =>
+        withRunLock(runId, () => drainIfLive(startDeps, runId, trigger)).catch(
+          (error: unknown) =>
+            deps.logger.warn('engine: outbox drain failed', {
+              runId,
+              trigger,
+              message: error instanceof Error ? error.message : String(error),
+            }),
+        ),
+      ),
+    );
+  };
+
+  return {
+    openRunPullRequest,
+    deliverPendingAfterFinalize: (runId) =>
+      deliverPendingAfterFinalize(startDeps, runId),
+    drainLiveOutboxes,
+  };
 }

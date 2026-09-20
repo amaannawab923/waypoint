@@ -1,24 +1,34 @@
 import { isBusy, serializeBy } from './keyedQueue';
 
 /**
- * ROAD-XXX (resume dead sessions): one run's revive-and-start is
- * serialized against every other revive-and-start for that SAME run —
- * the button's explicit Resume (runsIpc.ts) and a transparent
- * resume-on-message (sendPrompt.ts) must share this lock, or both can
- * read the run as dead and both call `daemon.startSession` for it in the
- * narrow window between `reopenRun`'s ledger commit and the daemon call.
+ * One run's revive-and-start is serialized against every other
+ * revive-and-start for that SAME run — the explicit Resume (runsIpc.ts),
+ * a send (sendPrompt.ts), the pane's warm-up on open (warm.ts) and an
+ * outbox drain must share this lock, or two of them can read the run as
+ * not live and both call `daemon.startSession` for it in the narrow
+ * window between `reopenRun`'s ledger commit and the daemon call.
  *
- * This is NOT what prevents two dispatches from writing two runs on one
- * ticket — that is `dispatch.ts`'s own per-TICKET lock, a different
- * invariant (many runs, one ticket) enforced a different way (plus, for
- * the cross-process case neither lock can reach, a DB constraint — see
- * `agent_runs_one_live_writer_per_ticket`). This lock's invariant is
- * narrower: one run, one revive at a time. Not reentrant, and never held
- * at the same time as the per-ticket lock — nothing here needs both, and
- * nesting a non-reentrant queue inside itself deadlocks trivially, so
- * keep it that way.
+ * This is NOT what keeps a ticket to one automatic dispatch — that is
+ * `dispatch.ts`'s own per-TICKET lock and the backend's advisory lock in
+ * createRun, a different invariant enforced a different way. This lock's
+ * invariant is narrower: one run, one revive at a time. Not reentrant,
+ * and never held at the same time as the per-ticket lock — nothing here
+ * needs both, and nesting a non-reentrant queue inside itself deadlocks
+ * trivially, so keep it that way.
  */
 const runQueues = new Map<string, Promise<unknown>>();
+
+/**
+ * Whether `runId`'s lock is held or queued right now — a synchronous
+ * `Map.has`. sendPrompt.ts reads this with NO `await` between the read
+ * and its own `withRunLock` call (design §2.5, A5): a send arriving while
+ * a warm-up holds the lock goes to the outbox instead of waiting a cold
+ * spawn out, and because `serializeBy` registers synchronously there is
+ * no gap in which a warm-up could start between the check and the lock.
+ */
+export function isRunBusy(runId: string): boolean {
+  return isBusy(runQueues, runId);
+}
 
 export function withRunLock<T>(
   runId: string,

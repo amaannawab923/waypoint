@@ -17,7 +17,7 @@ import type { LedgerClient } from './ledgerClient';
  * a reviewer reads.
  */
 export interface TranscriptKeeperDeps {
-  ledger: Pick<LedgerClient, 'saveTranscript'>;
+  ledger: Pick<LedgerClient, 'saveTranscript' | 'getTranscript'>;
   daemon: () => Pick<DaemonRunsApi, 'getHistory'> | null;
   logger: {
     info: (m: string, meta?: Record<string, unknown>) => void;
@@ -56,11 +56,31 @@ function fingerprint(turns: DaemonTranscriptTurn[]): string {
   return `${turns.length}:${last?.seq ?? ''}:${last?.outcome?.kind ?? ''}:${last?.items.length ?? 0}`;
 }
 
+/**
+ * Never-lock (design §5.4): a session the provider could not restore
+ * (`replaced-by-new`) starts its history afresh, so the daemon's page no
+ * longer holds the turns before the resume — but the ledger's snapshot
+ * does. The kept transcript is the snapshot's turns the page lacks (by
+ * id, in their order) followed by the page, so a continued conversation
+ * reads whole. A turn the page does have wins (it is the daemon's
+ * current rendering of it).
+ */
+export function mergeTurns(
+  snapshot: DaemonTranscriptTurn[],
+  page: DaemonTranscriptTurn[],
+): DaemonTranscriptTurn[] {
+  const inPage = new Set(page.map((t) => t.id));
+  const kept = snapshot.filter((t) => !inPage.has(t.id));
+  return kept.length ? [...kept, ...page] : page;
+}
+
 export function createTranscriptKeeper(
   deps: TranscriptKeeperDeps,
 ): TranscriptKeeper {
   const lastSaved = new Map<string, string>();
   const inFlight = new Map<string, Promise<void>>();
+  const prior = new Map<string, DaemonTranscriptTurn[]>();
+  const priorLoaded = new Set<string>();
 
   const snapshot = async (
     runId: string,
@@ -83,13 +103,26 @@ export function createTranscriptKeeper(
       }
     }
     if (turns.length === 0) return;
-    const key = fingerprint(turns);
+    // The snapshot's own earlier turns, read once per run per process —
+    // what a fresh session's page no longer carries (mergeTurns).
+    if (!priorLoaded.has(runId)) {
+      priorLoaded.add(runId);
+      try {
+        const kept = await deps.ledger.getTranscript(runId);
+        prior.set(runId, (kept?.turns ?? []) as DaemonTranscriptTurn[]);
+      } catch {
+        prior.set(runId, []);
+      }
+    }
+    const merged = mergeTurns(prior.get(runId) ?? [], turns);
+    const key = fingerprint(merged);
     if (lastSaved.get(runId) === key) return;
     try {
       const { turnCount } = await deps.ledger.saveTranscript(
         runId,
-        fitTurns(turns),
+        fitTurns(merged),
       );
+      prior.set(runId, merged);
       lastSaved.set(runId, key);
       deps.logger.info('engine: transcript kept', { runId, turns: turnCount });
     } catch (error) {

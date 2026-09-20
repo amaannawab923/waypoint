@@ -18,7 +18,11 @@ import {
   pickReviewTransition,
   type JiraRunDeps,
 } from './jiraRuns';
-import type { AgentRun, LedgerClient } from './ledgerClient';
+import {
+  LedgerRequestError,
+  type AgentRun,
+  type LedgerClient,
+} from './ledgerClient';
 
 // Host-side finalize against fakes (docs/design/w5a-investigate-fix.md
 // §6): the turn-ended fact, proposals filed once, an empty closing
@@ -58,6 +62,10 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     outputTokens: 0,
     costUsd: null,
     retryOfRunId: null,
+    reopenCount: 0,
+    lastReopenedAt: null,
+    finalizeCount: 0,
+    finalizedHeadSha: null,
     createdAt: '2026-09-12T00:00:00.000Z',
     startedAt: null,
     endedAt: null,
@@ -146,6 +154,10 @@ function fakeLedger(seed: AgentRun) {
     postCopilotNote: jest.fn(async () => true),
     getTicket: jest.fn(async () => null),
     getTicketRef: jest.fn(async () => null),
+    // Never-lock: what a follow-up finalize reads and writes.
+    listTicketProposals: jest.fn(async () => []),
+    listEvents: jest.fn(async () => []),
+    claimPublish: jest.fn(async () => {}),
   } as unknown as jest.Mocked<LedgerClient>;
   return { ledger, rows };
 }
@@ -357,14 +369,27 @@ describe('createRunFinalizer', () => {
         kind: 'comment',
       },
     );
-    expect(daemon.killSession).toHaveBeenCalledWith('run-abc1234');
-    expect(ledger.appendEvent).toHaveBeenCalledWith(
+    // Never-lock: the session stays alive on success — a finished run is
+    // a conversation that can be continued; the ledger remembers the
+    // report was filed (finalizeCount) and says so in the trail.
+    expect(daemon.killSession).not.toHaveBeenCalled();
+    expect(ledger.appendEvent).not.toHaveBeenCalledWith(
       'run-abc1234',
       'session_ended',
-      { reason: 'finalized' },
+      expect.anything(),
+    );
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'finalized',
+      expect.objectContaining({
+        sequence: 1,
+        verdict: 'root-cause',
+        proposals: [{ id: 'prop-1', kind: 'comment' }],
+      }),
     );
     expect(rows.get('run-abc1234')).toMatchObject({
       status: 'needs-review',
+      finalizeCount: 1,
       summary: 'The root cause is X.',
       verdict: 'root-cause',
       turnCount: 1,
@@ -413,7 +438,7 @@ describe('createRunFinalizer', () => {
     expect(ledger.createRunProposal).toHaveBeenCalledTimes(2);
     const [, comment] = ledger.createRunProposal.mock.calls[0];
     expect(comment.kind).toBe('comment');
-    const body = (comment as { body: string }).body;
+    const { body } = comment as { body: string };
     // W5c: the counts, not the listing — the PR body has the listing.
     expect(body).toContain('**Verdict:** fixed');
     expect(body).toContain(
@@ -451,7 +476,7 @@ describe('createRunFinalizer', () => {
 
     expect(ledger.createRunProposal).toHaveBeenCalledTimes(2);
     const [, comment] = ledger.createRunProposal.mock.calls[0];
-    const body = (comment as { body: string }).body;
+    const { body } = comment as { body: string };
     expect(body).toContain('**Verdict:** not a bug');
     expect(body).toContain('The 500 is the upstream timeout, by design.');
     expect(body).not.toContain('src/x.ts:3');
@@ -491,7 +516,7 @@ describe('createRunFinalizer', () => {
     });
     const publish = jest.fn();
     const { deps } = depsWith(ledger, daemon, {
-      pullRequests: { publish },
+      pullRequests: { publish, publishFollowUp: jest.fn() },
       git: jest.fn(async () => ({ stdout: '', code: 0 })),
       assertWorktreeGitDir: jest.fn(async () => {}),
     });
@@ -690,8 +715,8 @@ describe('finishedNote', () => {
   });
 });
 
-describe('the transcript before the kill (ROAD-124)', () => {
-  it('hands the keeper the turns it read, before killSession', async () => {
+describe('the transcript snapshot (ROAD-124)', () => {
+  it('hands the keeper the turns it read on success — and no kill follows (never-lock)', async () => {
     const { ledger } = fakeLedger(run());
     const daemon = fakeDaemon();
     const order: string[] = [];
@@ -703,7 +728,22 @@ describe('the transcript before the kill (ROAD-124)', () => {
     });
     const { deps } = depsWith(ledger, daemon, { transcripts: { capture } });
     await createRunFinalizer(deps).onSessionIdle('run-abc1234');
-    expect(order).toEqual(['capture:1', 'kill']);
+    expect(order).toEqual(['capture:1']);
+  });
+
+  it('still snapshots before the kill on a failure path', async () => {
+    const { ledger } = fakeLedger(run());
+    const daemon = fakeDaemon({ turns: [] });
+    const order: string[] = [];
+    daemon.killSession.mockImplementation(async () => {
+      order.push('kill');
+    });
+    const capture = jest.fn(async (_id: string, turns?: unknown[]) => {
+      order.push(`capture:${turns?.length ?? 'read'}`);
+    });
+    const { deps } = depsWith(ledger, daemon, { transcripts: { capture } });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+    expect(order).toEqual(['capture:0', 'kill']);
   });
 });
 
@@ -874,7 +914,7 @@ describe('W5b: a run on a Jira issue', () => {
     }));
     const { deps } = depsWith(ledger, daemon, {
       jira,
-      pullRequests: { publish },
+      pullRequests: { publish, publishFollowUp: jest.fn() },
     });
     await createRunFinalizer(deps).onSessionIdle('run-abc1234');
 
@@ -999,7 +1039,9 @@ describe('W6: the branch is published before the proposals', () => {
       url: 'https://github.com/o/r/pull/61',
       pushed: true as const,
     }));
-    const { deps } = depsWith(ledger, daemon, { pullRequests: { publish } });
+    const { deps } = depsWith(ledger, daemon, {
+      pullRequests: { publish, publishFollowUp: jest.fn() },
+    });
     await createRunFinalizer(deps).onSessionIdle('run-abc1234');
 
     expect(publish).toHaveBeenCalledWith(
@@ -1023,7 +1065,7 @@ describe('W6: the branch is published before the proposals', () => {
 
     const investigate = fakeLedger(run());
     const { deps: planDeps } = depsWith(investigate.ledger, fakeDaemon(), {
-      pullRequests: { publish },
+      pullRequests: { publish, publishFollowUp: jest.fn() },
     });
     await createRunFinalizer(planDeps).onSessionIdle('run-abc1234');
     expect(publish).toHaveBeenCalledTimes(1);
@@ -1052,7 +1094,9 @@ describe('W6: the branch is published before the proposals', () => {
       stage: 'push' as const,
       message: 'could not read Username',
     }));
-    const { deps } = depsWith(ledger, daemon, { pullRequests: { publish } });
+    const { deps } = depsWith(ledger, daemon, {
+      pullRequests: { publish, publishFollowUp: jest.fn() },
+    });
     await createRunFinalizer(deps).onSessionIdle('run-abc1234');
     expect(rows.get('run-abc1234')?.status).toBe('needs-review');
     const [, comment] = ledger.createRunProposal.mock.calls[0];
@@ -1091,7 +1135,7 @@ describe('W6: the branch is published before the proposals', () => {
       );
     });
     const { deps } = depsWith(ledger, daemon, {
-      pullRequests: { publish },
+      pullRequests: { publish, publishFollowUp: jest.fn() },
       assertPublishableCwd,
     });
     await createRunFinalizer(deps).onSessionIdle('run-abc1234');
@@ -1104,6 +1148,316 @@ describe('W6: the branch is published before the proposals', () => {
     const [, comment] = ledger.createRunProposal.mock.calls[0];
     expect((comment as { body: string }).body).toContain(
       "push failed: This worktree's gitdir is inside the worktree itself",
+    );
+  });
+});
+
+// Never-lock (design §4): a run whose report is filed (finalizeCount > 0)
+// is a conversation. Its later turns REST unless the agent explicitly
+// ends one with a report; then a follow-up is filed, and published only
+// when there are new commits.
+describe('follow-up finalize (a continued run)', () => {
+  const filed = (over: Partial<AgentRun> = {}) =>
+    run({
+      status: 'running',
+      entry: 'dispatched',
+      intent: 'fix',
+      ticketId: 'wi-1',
+      modeId: 'bypassPermissions',
+      branch: 'agent/ROAD-1',
+      worktreePath: '/wt/run-abc1234',
+      finalizeCount: 1,
+      finalizedHeadSha: 'aaaaaaa',
+      verdict: 'fixed',
+      summary: 'Fixed it.',
+      prUrl: 'https://github.com/a/b/pull/1',
+      ...over,
+    });
+  const gitWith = (opts: { head?: string; count?: string }) =>
+    jest.fn(async (args: string[]) => {
+      if (args[0] === 'rev-parse')
+        return { stdout: `${opts.head ?? 'aaaaaaa'}\n`, code: 0 };
+      if (args[0] === 'rev-list')
+        return { stdout: `${opts.count ?? '0'}\n`, code: 0 };
+      return { stdout: '', code: 0 };
+    });
+
+  it('a plain answer (no Verdict line) RESTS: no proposal, no publish, summary/verdict untouched, back to done with no open proposals — and the outbox drained last', async () => {
+    const { ledger, rows } = fakeLedger(filed());
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: 'Because setDate keeps the wall-clock time.',
+          },
+        ]),
+      ],
+    });
+    const drainOutbox = jest.fn(async () => {});
+    const { deps, notify } = depsWith(ledger, daemon, {
+      git: gitWith({}),
+      assertWorktreeGitDir: jest.fn(async () => {}),
+      drainOutbox,
+    });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+
+    expect(ledger.createRunProposal).not.toHaveBeenCalled();
+    expect(rows.get('run-abc1234')).toMatchObject({
+      status: 'done',
+      summary: 'Fixed it.',
+      verdict: 'fixed',
+      finalizeCount: 1,
+    });
+    expect(notify).toHaveBeenLastCalledWith({
+      runId: 'run-abc1234',
+      status: 'done',
+    });
+    expect(daemon.killSession).not.toHaveBeenCalled();
+    expect(ledger.postCopilotNote).not.toHaveBeenCalled();
+    expect(drainOutbox).toHaveBeenCalledWith('run-abc1234');
+  });
+
+  it('RESTS to needs-review when the run still has open proposals', async () => {
+    const { ledger, rows } = fakeLedger(filed());
+    (ledger.listTicketProposals as jest.Mock).mockResolvedValue([
+      {
+        id: 'prop-1',
+        agentRunId: 'run-abc1234',
+        status: 'proposed',
+        kind: 'comment',
+        payload: {},
+      },
+    ]);
+    const daemon = fakeDaemon({
+      turns: [turn([{ kind: 'message', role: 'assistant', text: 'Sure.' }])],
+    });
+    const { deps } = depsWith(ledger, daemon, { git: gitWith({}) });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+    expect(rows.get('run-abc1234')?.status).toBe('needs-review');
+  });
+
+  it('an answer with new commits but no report RESTS and leaves a marker note: "N new commits, not published"', async () => {
+    const { ledger } = fakeLedger(filed());
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          { kind: 'message', role: 'assistant', text: 'Tidied the lockfile.' },
+        ]),
+      ],
+    });
+    const { deps } = depsWith(ledger, daemon, {
+      git: gitWith({ head: 'bbbbbbb', count: '2' }),
+      assertWorktreeGitDir: jest.fn(async () => {}),
+    });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+    expect(ledger.createRunProposal).not.toHaveBeenCalled();
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'note',
+      expect.objectContaining({
+        stage: 'finalize',
+        unpublishedCommits: 2,
+        headSha: 'bbbbbbb',
+        afterTurnId: 't1',
+      }),
+    );
+  });
+
+  it('an explicit report with new commits FILES a follow-up and PUBLISHES under the claim and the ticket lock; the verdict’s default is never applied', async () => {
+    const { ledger, rows } = fakeLedger(filed());
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: 'Verdict: fixed\n\n## Summary\nAlso handled DST.',
+          },
+        ]),
+      ],
+    });
+    const publishFollowUp = jest.fn(async () => ({
+      kind: 'updated' as const,
+      url: 'https://github.com/a/b/pull/1',
+      pushed: true as const,
+    }));
+    const order: string[] = [];
+    const withTicketLock = jest.fn(
+      async <T>(_t: string, fn: () => Promise<T>): Promise<T> => {
+        order.push('lock');
+        const r = await fn();
+        order.push('unlock');
+        return r;
+      },
+    ) as unknown as FinalizeDeps['withTicketLock'] & jest.Mock;
+    (ledger.claimPublish as jest.Mock).mockImplementation(async () => {
+      order.push('claim');
+    });
+    const { deps } = depsWith(ledger, daemon, {
+      git: gitWith({ head: 'bbbbbbb', count: '1' }),
+      assertWorktreeGitDir: jest.fn(async () => {}),
+      pullRequests: { publish: jest.fn(), publishFollowUp },
+      withTicketLock,
+    });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+
+    expect(order).toEqual(['lock', 'claim', 'unlock']);
+    expect(withTicketLock).toHaveBeenCalledWith('wi-1', expect.any(Function));
+    expect(ledger.claimPublish).toHaveBeenCalledWith('run-abc1234', 'bbbbbbb');
+    expect(publishFollowUp).toHaveBeenCalledTimes(1);
+    expect(ledger.createRunProposal).toHaveBeenCalledWith(
+      'run-abc1234',
+      expect.objectContaining({
+        kind: 'comment',
+        body: expect.stringContaining('Follow-up 2'),
+      }),
+      expect.anything(),
+    );
+    // Same verdict as before: no state-change proposal again.
+    expect(ledger.createRunProposal).toHaveBeenCalledTimes(1);
+    expect(rows.get('run-abc1234')).toMatchObject({
+      status: 'needs-review',
+      finalizeCount: 2,
+      finalizedHeadSha: 'bbbbbbb',
+      summary: 'Also handled DST.',
+      prUrl: 'https://github.com/a/b/pull/1',
+    });
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'finalized',
+      expect.objectContaining({
+        sequence: 2,
+        pr: { action: 'updated', url: 'https://github.com/a/b/pull/1' },
+        newCommits: 1,
+      }),
+    );
+    expect(ledger.postCopilotNote).toHaveBeenCalledWith(
+      'run-abc1234',
+      expect.stringContaining('follow-up 2'),
+    );
+    expect(daemon.killSession).not.toHaveBeenCalled();
+  });
+
+  it('a refused publish claim (another writer holds the ticket) still files the comment, unpublished, with how to retry', async () => {
+    const { ledger, rows } = fakeLedger(filed());
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: 'Verdict: fixed\n\n## Summary\nMore.',
+          },
+        ]),
+      ],
+    });
+    (ledger.claimPublish as jest.Mock).mockRejectedValue(
+      new LedgerRequestError(
+        409,
+        'Not published: this ticket has a live writer (Other).',
+      ),
+    );
+    const publishFollowUp = jest.fn();
+    const { deps } = depsWith(ledger, daemon, {
+      git: gitWith({ head: 'ccccccc', count: '3' }),
+      assertWorktreeGitDir: jest.fn(async () => {}),
+      pullRequests: { publish: jest.fn(), publishFollowUp },
+    });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+    expect(publishFollowUp).not.toHaveBeenCalled();
+    expect(ledger.createRunProposal).toHaveBeenCalledTimes(1);
+    expect(rows.get('run-abc1234')?.status).toBe('needs-review');
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'finalized',
+      expect.objectContaining({
+        pr: expect.objectContaining({
+          action: 'skipped',
+          reason: expect.stringMatching(
+            /live writer \(Other\).*Open PR from the run header/,
+          ),
+        }),
+      }),
+    );
+  });
+
+  it('a report that repeats the last filed summary is conversation: RESTS', async () => {
+    const { ledger } = fakeLedger(filed());
+    (ledger.listEvents as jest.Mock).mockResolvedValue([
+      {
+        runId: 'run-abc1234',
+        seq: 5,
+        kind: 'finalized',
+        payload: { sequence: 1, summary: 'Fixed it.' },
+        at: '',
+      },
+    ]);
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: 'Verdict: fixed\n\n## Summary\nFixed it.',
+          },
+        ]),
+      ],
+    });
+    const { deps } = depsWith(ledger, daemon, { git: gitWith({}) });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+    expect(ledger.createRunProposal).not.toHaveBeenCalled();
+  });
+
+  it('a turn that answered a legacy resume-note prompt is never a report (first finalize or not)', async () => {
+    const { ledger } = fakeLedger(
+      run({
+        status: 'running',
+        entry: 'dispatched',
+        intent: 'fix',
+        ticketId: 'wi-1',
+        worktreePath: '/wt/x',
+      }),
+    );
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'message',
+            role: 'user',
+            text: 'Waypoint resumed this run after an interruption, but your previous conversation could not be restored, so this is a fresh session in the same worktree. Here is where things stand.\n\nBranch: x',
+          },
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: 'Understood. Standing by.',
+          },
+        ]),
+      ],
+    });
+    const { deps } = depsWith(ledger, daemon, { git: gitWith({}) });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+    expect(ledger.createRunProposal).not.toHaveBeenCalled();
+    expect(daemon.killSession).not.toHaveBeenCalled();
+  });
+
+  it('an errored turn on a continued run RESTS with a note — never `failed`', async () => {
+    const { ledger, rows } = fakeLedger(filed());
+    const daemon = fakeDaemon({
+      sessions: { 'run-abc1234': summary({ lastTurnErrored: true }) },
+    });
+    const { deps } = depsWith(ledger, daemon, { git: gitWith({}) });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+    expect(rows.get('run-abc1234')?.status).toBe('done');
+    expect(daemon.killSession).not.toHaveBeenCalled();
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'note',
+      expect.objectContaining({
+        stage: 'finalize',
+        rest: expect.stringContaining('error'),
+      }),
     );
   });
 });

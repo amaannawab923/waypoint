@@ -523,16 +523,30 @@ export const RUNS_IPC = {
    * `changed`.
    */
   start: 'runs:start',
-  /** (runId) → ResumeRunResult. An interrupted run, back on its worktree (ROAD-69). */
+  /** (runId) → ResumeRunResult. A run that is not live, back on its worktree — the explicit path; a send does the same on its own (never-lock). */
   resume: 'runs:resume',
   /**
-   * ({ runId, text }) → SendRunPromptResult. ROAD-XXX: sends a chat
-   * message to a run, transparently reviving it first if it's dead
-   * (interrupted/failed/cancelled) — replaces the renderer's old direct
-   * use of the generic `acp.sendPrompt` daemon-bridge procedure, which
-   * has no run-status awareness at all.
+   * ({ runId, text }) → SendRunPromptResult. Sends a chat message to a
+   * run — whatever its status (never-lock, 2026-09-20): handed to the
+   * daemon, queued behind a working turn, continued/resumed first, or
+   * accepted into the run's outbox and delivered when it can be. Replaces
+   * the renderer's old direct use of the generic `acp.sendPrompt`
+   * daemon-bridge procedure, which has no run-status awareness at all.
    */
   sendPrompt: 'runs:send-prompt',
+  /**
+   * (runId) → WarmRunResult. Never-lock: on opening a run whose daemon
+   * session is gone, load it again — daemon only, the ledger untouched —
+   * so the person's first message is a plain send. Parity with emdash's
+   * `start()` on tab open.
+   */
+  warm: 'runs:warm',
+  /** (runId) → PendingPrompt[]. The run's outbox, for the transcript's pending rows. */
+  listPendingPrompts: 'runs:list-pending-prompts',
+  /** ({ runId, pendingId }) → PendingPrompt. The person drops an outbox row. */
+  dropPendingPrompt: 'runs:drop-pending-prompt',
+  /** ({ runId, pendingId }) → SendRunPromptResult. Retry a pending row now (resets its automatic-attempt counter). */
+  retryPendingPrompt: 'runs:retry-pending-prompt',
   /** (folder handle) → RunBranches. The folder's local branches, through the engine. */
   listBranches: 'runs:list-branches',
   /**
@@ -761,6 +775,8 @@ export interface RunFocus {
 /** What `runs:open-pr` answers. */
 export type OpenPrResult =
   | { kind: 'opened'; url: string }
+  /** Never-lock: the branch had a PR still open; new commits were pushed to it. */
+  | { kind: 'updated'; url: string }
   | { kind: 'pushed-only'; reason: string }
   | { kind: 'skipped'; reason: string }
   | { kind: 'failed'; stage: 'push' | 'pr'; message: string };
@@ -806,6 +822,31 @@ export interface StartRunInput {
   firstMessage?: string | null;
 }
 
+/** Why a message sits in the run's outbox rather than with the daemon (agent_run_pending_prompts.reason). */
+export type PendingPromptReason =
+  | 'starting'
+  | 'finishing'
+  | 'folder-missing'
+  | 'repository-missing'
+  | 'spawn-failed'
+  | 'owner-offline';
+export type PendingPromptState =
+  'queued' | 'sending' | 'delivered' | 'unresolved' | 'dropped';
+export interface PendingPrompt {
+  id: string;
+  runId: string;
+  seq: number;
+  byMemberId: string;
+  text: string;
+  reason: PendingPromptReason;
+  state: PendingPromptState;
+  autoAttempts: number;
+  lastError: string | null;
+  claimedAt: string | null;
+  resolvedAt: string | null;
+  createdAt: string;
+}
+
 export type ResumeRunOutcome =
   /** The provider restored the previous conversation. */
   | 'loaded'
@@ -816,46 +857,69 @@ export type ResumeRunOutcome =
    */
   | 'replaced-by-new'
   /**
-   * Only an interrupted/failed/cancelled run can be resumed (ROAD-XXX);
-   * this one is `status` (never dead — done/needs-review/live), or a Stop
-   * arrived mid-resume and `status` is wherever that landed. A refusal
-   * `reopenRun` itself makes (superseded by a retry, another live writer
-   * on the ticket, backoff, not the owner) is not this outcome — it
-   * throws, carrying the backend's own sentence, the same as a daemon
-   * failure does.
+   * The run was live already — nothing to resume; the caller sends to
+   * the live session (never-lock: never a refusal).
    */
-  | 'not-resumable'
+  | 'already-live'
   /**
-   * A directory-isolation run whose folder is gone (nothing to recreate
-   * it from), or a worktree run whose repository itself could not be
-   * resolved or whose recreation attempt failed (ROAD-XXX:
-   * `reprovisionWorktree`) — a worktree merely missing or never made is
-   * NOT this outcome any more; that is recreated transparently instead
-   * (see `worktreeRecreated` on the result).
+   * A Stop landed between reopenRun and startSession: the person
+   * overrode the resume. The status is wherever the Stop left it.
    */
-  | 'worktree-gone';
+  | 'cancelled-mid-resume'
+  /**
+   * The run's worktree could not be reached and could not be recreated —
+   * its repository is not linked, or its plain folder is gone, or the
+   * recreation itself failed (`reason` says which). Not a refusal: a
+   * send that meets this is accepted into the run's outbox and delivered
+   * when the obstacle clears (sendPrompt.ts).
+   */
+  | 'cannot-reach-worktree'
+  /**
+   * The daemon refused to start the session (auth, spawn). The run is
+   * back on the status it came from; a send that meets this goes to the
+   * outbox with reason `spawn-failed`.
+   */
+  | 'spawn-failed';
 
 export interface ResumeRunResult {
   outcome: ResumeRunOutcome;
   /** The ledger's status after the action. */
   status: string;
-  /** loaded/replaced-by-new only: the run's worktree was gone (or never made) and had to be recreated (ROAD-XXX). */
+  /** loaded/replaced-by-new only: the run's worktree was gone (or never made) and had to be recreated. */
   worktreeRecreated?: boolean;
   /** worktreeRecreated only: the run's own branch still existed and was reused (commits intact) vs. a fresh branch of the same name cut from baseRef. */
   branchReused?: boolean;
+  /** cannot-reach-worktree / spawn-failed only: the outbox reason a send should be accepted under, and the daemon's own sentence. */
+  reason?: PendingPromptReason;
+  message?: string;
 }
 
+/** What `runs:warm` did (never-lock §2.5): daemon only, never the ledger. */
+export type WarmRunResult =
+  | { kind: 'already-live' }
+  | { kind: 'skipped'; why: 'starting' | 'worktree-unusable' | 'no-cwd' }
+  | { kind: 'warmed'; loaded: boolean }
+  | { kind: 'failed'; message: string };
+
+/**
+ * Never-lock (2026-09-20): every send lands somewhere. None of these is a
+ * refusal — the text always leaves the box; a `pending` row shows where
+ * it went. The only send that hands the text back is `cancelled-mid-
+ * resume`, the person's own Stop overriding their own message.
+ */
 export type SendPromptOutcome =
-  /** The run was already live; handed straight to the daemon. */
+  /** The run was live and idle; handed straight to the daemon. */
   | 'sent'
-  /** The run was dead; revived, then the message was handed to the daemon. */
+  /** The run was live and working; the daemon queued it for the next turn. */
+  | 'queued'
+  /** A finished run whose session was still alive: reopened and handed over in one step. */
+  | 'continued'
+  /** The run was not live; resumed (or its worktree recreated), then handed over. */
   | 'resumed-and-sent'
-  /** Nothing could be resumed into — a missing folder (directory isolation) or a worktree recreation that itself failed (ROAD-XXX); the message was NOT sent. */
-  | 'worktree-gone'
-  /** done/needs-review, or a reopenRun refusal; the message was NOT sent. */
-  | 'not-resumable'
-  /** queued/provisioning: a session is already on its way. The message was NOT sent — send again once it's live. */
-  | 'not-ready';
+  /** Accepted into the run's outbox; delivered when `reason` clears. */
+  | 'outboxed'
+  /** A Stop landed mid-resume; the text is the caller's to put back in the box. */
+  | 'cancelled-mid-resume';
 
 export interface SendRunPromptResult {
   outcome: SendPromptOutcome;
@@ -863,10 +927,12 @@ export interface SendRunPromptResult {
   status: string;
   /** resumed-and-sent only: whether the provider restored the prior conversation. */
   resume?: ResumeRunOutcome;
-  /** resumed-and-sent only: the run's worktree was gone (or never made) and had to be recreated (ROAD-XXX). */
+  /** resumed-and-sent only: the run's worktree was gone (or never made) and had to be recreated. */
   worktreeRecreated?: boolean;
   /** worktreeRecreated only: whether the run's own branch was reused (commits intact) vs. a fresh one cut from baseRef. */
   branchReused?: boolean;
+  /** outboxed only: the row, and why. */
+  pending?: PendingPrompt;
 }
 
 export interface RunBranches {

@@ -47,6 +47,10 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
     outputTokens: 0,
     costUsd: null,
     retryOfRunId: null,
+    reopenCount: 0,
+    lastReopenedAt: null,
+    finalizeCount: 0,
+    finalizedHeadSha: null,
     createdAt: '2026-09-12T00:00:00.000Z',
     startedAt: null,
     endedAt: null,
@@ -62,15 +66,17 @@ const bad = (stderr: string, code = 1): CommandResult => ({
   code,
 });
 
-/** A runner scripted by the command's verb: log, diff, remote, push, gh. */
-type Verb = 'log' | 'diff' | 'remote' | 'push' | 'gh';
+/** A runner scripted by the command's verb: log, diff, remote, push, gh (create), ghView (never-lock's `gh pr view`). */
+type Verb = 'log' | 'diff' | 'remote' | 'push' | 'gh' | 'ghView';
 function scripted(answers: Partial<Record<Verb, CommandResult | Error>>) {
   const calls: Array<{ file: string; args: string[]; cwd: string }> = [];
   const runner: HostCommandRunner = async (file, args, options) => {
     calls.push({ file, args, cwd: options.cwd });
+    let ghVerb: Verb = 'gh';
+    if (file === 'gh' && args[1] === 'view') ghVerb = 'ghView';
     const verb: Verb =
       file === 'gh'
-        ? 'gh'
+        ? ghVerb
         : (args.find((a) =>
             ['log', 'diff', 'remote', 'push'].includes(a),
           ) as Verb);
@@ -345,5 +351,195 @@ describe('buildPrBody / describePublish', () => {
     expect(
       describePublish({ kind: 'failed', stage: 'push', message: 'denied' }),
     ).toContain('Open PR');
+  });
+});
+
+// Never-lock (design §4.5): a continued run's later report. The PR the run
+// tracks is looked up under origin's repository: open → push to it
+// (`updated`); merged, closed or not ours → clear it and open a new one;
+// auth/other failure → failed, no push; gh missing → push, pushed-only.
+describe('publishFollowUp', () => {
+  const remote = ok('git@github.com:acme/widgets.git\n');
+  const tracked = () =>
+    run({ prUrl: 'https://github.com/acme/widgets/pull/7' });
+
+  it('with no PR yet it is plain publish', async () => {
+    const { publisher, calls } = harness({
+      remote,
+      log: ok('abc1 one\n'),
+      gh: ok('https://github.com/acme/widgets/pull/9\n'),
+    });
+    const outcome = await publisher.publishFollowUp(
+      input(run({ prUrl: null })),
+    );
+    expect(outcome).toEqual({
+      kind: 'opened',
+      url: 'https://github.com/acme/widgets/pull/9',
+      pushed: true,
+    });
+    expect(calls.some((c) => c.args[1] === 'view')).toBe(false);
+  });
+
+  it('an OPEN PR gets the new commits pushed to it: `updated`, a pushed{followUp} event, the pr_opened{updated} record, never a create', async () => {
+    const { publisher, calls, ledger } = harness({
+      remote,
+      ghView: ok(
+        JSON.stringify({
+          state: 'OPEN',
+          url: 'https://github.com/acme/widgets/pull/7',
+        }),
+      ),
+    });
+    const outcome = await publisher.publishFollowUp(input(tracked()));
+    expect(outcome).toEqual({
+      kind: 'updated',
+      url: 'https://github.com/acme/widgets/pull/7',
+      pushed: true,
+    });
+    const view = calls.find((c) => c.args[1] === 'view')!;
+    expect(view.args).toEqual([
+      'pr',
+      'view',
+      'https://github.com/acme/widgets/pull/7',
+      '--repo',
+      'acme/widgets',
+      '--json',
+      'state,url',
+    ]);
+    const push = calls.find((c) => c.args.includes('push'))!;
+    expect(push.args.slice(-3)).toEqual(['push', 'origin', 'agent/ROAD-103']);
+    expect(push.args).not.toContain('-u');
+    expect(calls.some((c) => c.args[1] === 'create')).toBe(false);
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'pushed',
+      expect.objectContaining({ followUp: true }),
+    );
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'pr_opened',
+      expect.objectContaining({ updated: true }),
+    );
+    expect(ledger.updateRun).not.toHaveBeenCalled();
+  });
+
+  it.each(['MERGED', 'CLOSED'])(
+    'a %s PR is over: prUrl cleared, a pr-superseded note, and a new PR opened',
+    async (state) => {
+      const { publisher, calls, ledger } = harness({
+        remote,
+        log: ok('abc1 one\n'),
+        ghView: ok(
+          JSON.stringify({
+            state,
+            url: 'https://github.com/acme/widgets/pull/7',
+          }),
+        ),
+        gh: ok('https://github.com/acme/widgets/pull/12\n'),
+      });
+      const outcome = await publisher.publishFollowUp(input(tracked()));
+      expect(outcome).toEqual({
+        kind: 'opened',
+        url: 'https://github.com/acme/widgets/pull/12',
+        pushed: true,
+      });
+      expect(ledger.updateRun).toHaveBeenCalledWith('run-abc1234', {
+        prUrl: null,
+      });
+      expect(ledger.appendEvent).toHaveBeenCalledWith(
+        'run-abc1234',
+        'note',
+        expect.objectContaining({
+          publish: 'pr-superseded',
+          previousUrl: 'https://github.com/acme/widgets/pull/7',
+          state,
+        }),
+      );
+      expect(calls.some((c) => c.args[1] === 'create')).toBe(true);
+      expect(ledger.updateRun).toHaveBeenCalledWith('run-abc1234', {
+        prUrl: 'https://github.com/acme/widgets/pull/12',
+      });
+    },
+  );
+
+  it('a PR gh cannot find under origin’s repository (a fork, another remote) is treated as over: a new PR against origin', async () => {
+    const { publisher, ledger } = harness({
+      remote,
+      log: ok('abc1 one\n'),
+      ghView: bad(
+        'GraphQL: Could not resolve to a PullRequest with the number of 7.',
+      ),
+      gh: ok('https://github.com/acme/widgets/pull/13\n'),
+    });
+    const outcome = await publisher.publishFollowUp(input(tracked()));
+    expect(outcome).toMatchObject({
+      kind: 'opened',
+      url: 'https://github.com/acme/widgets/pull/13',
+    });
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'note',
+      expect.objectContaining({ publish: 'pr-superseded', state: 'not-found' }),
+    );
+  });
+
+  it('an auth failure from gh is a pr failure with no push; a timeout or other failure likewise', async () => {
+    const auth = harness({
+      remote,
+      ghView: bad('error: gh auth login required'),
+    });
+    expect(await auth.publisher.publishFollowUp(input(tracked()))).toEqual({
+      kind: 'failed',
+      stage: 'pr',
+      message: 'error: gh auth login required',
+    });
+    expect(auth.calls.some((c) => c.args.includes('push'))).toBe(false);
+    const other = harness({ remote, ghView: bad('timed out after 60000ms') });
+    expect(
+      await other.publisher.publishFollowUp(input(tracked())),
+    ).toMatchObject({ kind: 'failed', stage: 'pr' });
+    expect(other.calls.some((c) => c.args.includes('push'))).toBe(false);
+  });
+
+  it('gh missing, or origin not GitHub: push to the branch and say the PR was left as it is', async () => {
+    const noGh = harness({ remote, ghView: new Error('spawn gh ENOENT') });
+    expect(
+      await noGh.publisher.publishFollowUp(input(tracked())),
+    ).toMatchObject({ kind: 'pushed-only' });
+    expect(noGh.calls.some((c) => c.args.includes('push'))).toBe(true);
+    const notGithub = harness({
+      remote: ok('https://gitlab.com/acme/widgets.git\n'),
+    });
+    expect(
+      await notGithub.publisher.publishFollowUp(input(tracked())),
+    ).toMatchObject({ kind: 'pushed-only' });
+  });
+
+  it('a push to an open PR that fails is a push failure with git’s sentence', async () => {
+    const { publisher } = harness({
+      remote,
+      ghView: ok(
+        JSON.stringify({
+          state: 'OPEN',
+          url: 'https://github.com/acme/widgets/pull/7',
+        }),
+      ),
+      push: bad(
+        '! [rejected] agent/ROAD-103 -> agent/ROAD-103 (non-fast-forward)',
+      ),
+    });
+    expect(await publisher.publishFollowUp(input(tracked()))).toEqual({
+      kind: 'failed',
+      stage: 'push',
+      message:
+        '! [rejected] agent/ROAD-103 -> agent/ROAD-103 (non-fast-forward)',
+    });
+  });
+
+  it('never throws — a runner that throws on view is a failed outcome', async () => {
+    const { publisher } = harness({ remote, ghView: new Error('boom') });
+    await expect(
+      publisher.publishFollowUp(input(tracked())),
+    ).resolves.toMatchObject({ kind: 'failed' });
   });
 });

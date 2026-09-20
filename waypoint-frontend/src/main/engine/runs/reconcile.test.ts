@@ -1,7 +1,7 @@
-import type { DaemonRunsApi } from './daemonApi';
-import type { AgentRun, AgentRunStatus, LedgerClient } from './ledgerClient';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { DaemonRunsApi } from './daemonApi';
+import type { AgentRun, AgentRunStatus, LedgerClient } from './ledgerClient';
 import {
   LIVE_RUN_STATUSES,
   planReconcile,
@@ -76,8 +76,8 @@ describe('planReconcile', () => {
     ).toEqual([{ kind: 'adopt', runId: 'run-a' }]);
   });
 
-  it('kills a session only for a run the ledger has ended for good', () => {
-    for (const status of ['done', 'failed', 'cancelled'] as const) {
+  it("kills a session only for a failed or cancelled run — a stale one; a finished run's session is reattached, silently (never-lock)", () => {
+    for (const status of ['failed', 'cancelled'] as const) {
       expect(
         plan({
           sessions: { 'run-a': session('run-a') },
@@ -85,10 +85,20 @@ describe('planReconcile', () => {
         }),
       ).toEqual([{ kind: 'kill-stale', runId: 'run-a', status }]);
     }
+    // done/needs-review keep their session alive since finalize no longer
+    // kills it; a boot reattaches without an event, so no marker appears.
+    for (const status of ['done', 'needs-review'] as const) {
+      expect(
+        plan({
+          sessions: { 'run-a': session('run-a') },
+          otherRuns: { 'run-a': run('run-a', status) },
+        }),
+      ).toEqual([{ kind: 'reattach', runId: 'run-a', finished: true }]);
+    }
   });
 
   it('leaves — and only reports — a session for a run that is neither live nor ended (review round 2)', () => {
-    for (const status of ['needs-review', 'queued'] as const) {
+    for (const status of ['queued'] as const) {
       expect(
         plan({
           sessions: { 'run-a': session('run-a') },
@@ -159,7 +169,7 @@ describe('planReconcile', () => {
       liveRuns: [run('run-live', 'running'), run('run-lost', 'running')],
       otherRuns: {
         'run-back': run('run-back', 'interrupted'),
-        'run-old': run('run-old', 'done'),
+        'run-old': run('run-old', 'cancelled'),
         'run-x': null,
       },
       workspaces: { 'run-lost': { id: 'run-lost', observedStatus: 'present' } },
@@ -168,7 +178,7 @@ describe('planReconcile', () => {
     expect(actions).toEqual([
       { kind: 'adopt', runId: 'run-back' },
       { kind: 'reattach', runId: 'run-live' },
-      { kind: 'kill-stale', runId: 'run-old', status: 'done' },
+      { kind: 'kill-stale', runId: 'run-old', status: 'cancelled' },
       { kind: 'orphan', conversationId: 'run-x' },
       {
         kind: 'interrupt',
@@ -385,14 +395,14 @@ describe('reconcileRunsAtBoot', () => {
     });
     const ledger = fakeLedger({
       'run-lost': { status: 'running' },
-      'run-old': { status: 'done' },
+      'run-old': { status: 'cancelled' },
     });
 
     const report = await reconcileRunsAtBoot({ daemon, ledger, logger });
 
     expect(report.failures).toEqual([
       {
-        action: { kind: 'kill-stale', runId: 'run-old', status: 'done' },
+        action: { kind: 'kill-stale', runId: 'run-old', status: 'cancelled' },
         message: 'acp.kill: DISCONNECTED',
       },
     ]);

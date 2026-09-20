@@ -11,7 +11,8 @@ import type {
   LedgerClient,
   LedgerState,
 } from './ledgerClient';
-import type { NoteGitRunner } from './startRun';
+import { isResumeNoteText, type NoteGitRunner } from './startRun';
+import { LedgerRequestError } from './ledgerClient';
 import type { TranscriptKeeper } from './transcripts';
 import { isDispatchedWriter } from './agentEnv';
 import {
@@ -81,6 +82,20 @@ export interface FinalizeDeps {
   pullRequests?: PullRequestPublisher;
   /** W5b: main's Jira reads, for the transition a Fix on a Jira issue proposes (runs/jiraRuns.ts). */
   jira?: JiraRunDeps;
+  /**
+   * Never-lock: the per-ticket lock a follow-up publish runs under
+   * (dispatch.ts's withTicketDispatchLock), so two finalizes on one
+   * ticket in one Waypoint can't both push. The backend's publish claim
+   * is the cross-process half (design §3.3b).
+   */
+  withTicketLock?: <T>(ticketId: string, fn: () => Promise<T>) => Promise<T>;
+  /**
+   * Never-lock: deliver the run's outbox once the row is settled — the
+   * last step of REST and FILE (design §4.4), for a message typed while
+   * finalize held the row (`finishing`). sendPrompt.ts's
+   * deliverPendingAfterFinalize; reopens the run if it must.
+   */
+  drainOutbox?: (runId: string) => Promise<void>;
   logger: {
     info: (m: string, meta?: Record<string, unknown>) => void;
     warn: (m: string, meta?: Record<string, unknown>) => void;
@@ -143,6 +158,22 @@ export function closingMessageOf(turns: DaemonTranscriptTurn[]): string | null {
 }
 
 /** The turns a person or Waypoint opened — what the row's turn count shows. */
+/** The first user message of the last turn — what that turn was asked. */
+export function openingPromptOf(turns: DaemonTranscriptTurn[]): string {
+  const last = turns[turns.length - 1];
+  if (!last) return '';
+  const item = last.items.find(
+    (i) => i.kind === 'message' && i.role === 'user',
+  );
+  return item && typeof item.text === 'string' ? item.text : '';
+}
+
+/** The last committed turn's id — where a marker for this finalize anchors (design §5.2). */
+export function lastTurnId(turns: DaemonTranscriptTurn[]): string | null {
+  const last = turns[turns.length - 1];
+  return last?.id ?? null;
+}
+
 export function countTurns(turns: DaemonTranscriptTurn[]): number {
   return turns.length;
 }
@@ -272,6 +303,8 @@ export function finishedNote(
         proposals: number;
         published?: PublishOutcome | null;
         verdict?: Verdict | null;
+        /** Never-lock: a continued run's later report, the nth filed. */
+        followUp?: number;
       }
     | { failed: string },
 ): string {
@@ -287,13 +320,19 @@ export function finishedNote(
       : outcome.proposals === 1
         ? '1 proposal filed, waiting for your review'
         : `${outcome.proposals} proposals filed, waiting for your review`;
-  const pr =
-    outcome.published?.kind === 'opened'
-      ? ` · PR opened: ${outcome.published.url}`
-      : outcome.published?.kind === 'failed'
-        ? ` · the branch was not published (${outcome.published.stage} failed)`
-        : '';
-  return `Run ${label(run)} finished (${outcome.turns} turn${outcome.turns === 1 ? '' : 's'})${verdict} · ${filed}${pr}.`;
+  let pr = '';
+  if (outcome.published?.kind === 'opened')
+    pr = ` · PR opened: ${outcome.published.url}`;
+  else if (outcome.published?.kind === 'updated')
+    pr = ` · PR updated: ${outcome.published.url}`;
+  else if (outcome.published?.kind === 'skipped' && outcome.followUp)
+    pr = ` · ${outcome.published.reason}`;
+  else if (outcome.published?.kind === 'failed')
+    pr = ` · the branch was not published (${outcome.published.stage} failed)`;
+  const what = outcome.followUp
+    ? `filed follow-up ${outcome.followUp} (${outcome.turns} turn${outcome.turns === 1 ? '' : 's'} so far)`
+    : `finished (${outcome.turns} turn${outcome.turns === 1 ? '' : 's'})`;
+  return `Run ${label(run)} ${what}${verdict} · ${filed}${pr}.`;
 }
 
 /**
@@ -432,6 +471,382 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
       .catch(() => {});
   };
 
+  /** The branch HEAD, through the hardened runner, after the worktree check; null for a run without one or when git could not say. */
+  const headShaOf = async (run: AgentRun): Promise<string | null> => {
+    const cwd = run.worktreePath ?? run.cwd;
+    if (
+      !cwd ||
+      !deps.git ||
+      !deps.assertWorktreeGitDir ||
+      run.isolation === 'directory'
+    )
+      return null;
+    try {
+      await deps.assertWorktreeGitDir(cwd);
+      const out = await deps.git(['rev-parse', 'HEAD'], { cwd });
+      const sha = out.stdout.trim();
+      return out.code === 0 && /^[0-9a-f]{7,64}$/.test(sha) ? sha : null;
+    } catch {
+      return null;
+    }
+  };
+
+  /** Commits on the branch past what the last report was filed at; null when it cannot be told. */
+  const newCommitsSince = async (
+    run: AgentRun,
+    since: string | null,
+  ): Promise<number | null> => {
+    const cwd = run.worktreePath ?? run.cwd;
+    if (!since || !cwd || !deps.git || run.isolation === 'directory')
+      return null;
+    try {
+      const out = await deps.git(
+        ['rev-list', '--count', `${since}..HEAD`, '--'],
+        { cwd },
+      );
+      const n = Number(out.stdout.trim());
+      return out.code === 0 && Number.isFinite(n) ? n : null;
+    } catch {
+      return null;
+    }
+  };
+
+  /**
+   * REST (design §4.4): the turn was conversation, not a report. The run
+   * goes back to needs-review if it still has open proposals, else done;
+   * summary/verdict untouched; nothing filed, nothing published. Then the
+   * outbox — a message typed while finalize held the row — is delivered.
+   */
+  const rest = async (
+    run: AgentRun,
+    reason: string,
+    detail: Record<string, unknown>,
+    turns?: DaemonTranscriptTurn[],
+  ): Promise<void> => {
+    let open = 0;
+    if (run.ticketId) {
+      try {
+        const proposals = await deps.ledger.listTicketProposals(run.ticketId);
+        open = proposals.filter(
+          (p) =>
+            p.agentRunId === run.id &&
+            (p.status === 'proposed' || p.status === 'executing'),
+        ).length;
+      } catch (error) {
+        warn('engine: rest could not read the ticket proposals', error, {
+          runId: run.id,
+        });
+      }
+    }
+    const status: AgentRunStatus = open > 0 ? 'needs-review' : 'done';
+    let rested: AgentRun;
+    try {
+      rested = await deps.ledger.updateRun(run.id, {
+        status,
+        reason: `Turn ended; nothing to file (${reason})`,
+        ...(turns ? { turnCount: countTurns(turns) } : {}),
+      });
+    } catch (error) {
+      warn('engine: rest could not write the status', error, { runId: run.id });
+      return;
+    }
+    if (Object.keys(detail).length || /error|could not/i.test(reason)) {
+      await deps.ledger
+        .appendEvent(run.id, 'note', {
+          stage: 'finalize',
+          rest: reason,
+          ...detail,
+        })
+        .catch(() => {});
+    }
+    deps.notify({ runId: run.id, status: rested.status });
+    deps.logger.info('engine: run rested', { runId: run.id, status, reason });
+    if (turns) await deps.transcripts?.capture(run.id, turns);
+    await deps.drainOutbox?.(run.id).catch((error: unknown) =>
+      warn('engine: outbox drain after rest failed', error, {
+        runId: run.id,
+      }),
+    );
+  };
+
+  const prFact = (
+    published: PublishOutcome | null,
+    notPublishedBecause: string | null,
+  ): Record<string, unknown> => {
+    if (published?.kind === 'opened' || published?.kind === 'updated') {
+      return { action: published.kind, url: published.url };
+    }
+    if (published?.kind === 'failed')
+      return { action: 'failed', reason: published.message };
+    if (published?.kind === 'skipped' || published?.kind === 'pushed-only') {
+      return { action: 'skipped', reason: published.reason };
+    }
+    if (notPublishedBecause)
+      return { action: 'skipped', reason: notPublishedBecause };
+    return { action: 'none' };
+  };
+
+  /** The summary the last `finalized` event carried, for the duplicate check. */
+  const lastFinalizedSummary = async (
+    runId: string,
+  ): Promise<string | null> => {
+    try {
+      const events = await deps.ledger.listEvents(runId);
+      const last = [...events].reverse().find((e) => e.kind === 'finalized');
+      const summary = last?.payload.summary;
+      return typeof summary === 'string' ? summary : null;
+    } catch {
+      return null;
+    }
+  };
+
+  /**
+   * FOLLOW-UP (design §4.3): a continued run's turn ends. File iff the
+   * closing message carries an explicit `Verdict:`; the verb's default
+   * verdict is NOT applied. Commits are for the marker, never the
+   * trigger. A duplicate of the last filed summary is conversation.
+   */
+  const finalizeFollowUp = async (
+    daemon: DaemonRunsApi,
+    run: AgentRun,
+    turns: DaemonTranscriptTurn[],
+    closing: string,
+  ): Promise<void> => {
+    const report = parseReport(closing);
+    const headSha = await headShaOf(run);
+    const newCommits = await newCommitsSince(run, run.finalizedHeadSha);
+    const lastSummary = await lastFinalizedSummary(run.id);
+    const duplicate =
+      report.verdict !== null &&
+      lastSummary !== null &&
+      report.summary.trim() === lastSummary.trim();
+
+    if (report.verdict === null || duplicate) {
+      if ((newCommits ?? 0) > 0) {
+        await deps.ledger
+          .appendEvent(run.id, 'note', {
+            stage: 'finalize',
+            unpublishedCommits: newCommits,
+            headSha,
+            afterTurnId: lastTurnId(turns),
+          })
+          .catch(() => {});
+      }
+      await rest(
+        run,
+        duplicate
+          ? 'The report repeated the last one'
+          : 'No report in the closing message',
+        {},
+        turns,
+      );
+      return;
+    }
+
+    const { verdict } = report;
+    const closes = isClosingVerdict(verdict);
+    // The row as this finalize knows it; a publish may set its PR.
+    let current: AgentRun = run;
+    const ticket = await describeRunTicket(deps.ledger, run.ticketId);
+    const external = ticket?.external === true;
+    const sequence = run.finalizeCount + 1;
+
+    let published: PublishOutcome | null = null;
+    let notPublishedBecause: string | null = null;
+    const wantsPublish =
+      !closes &&
+      (newCommits ?? 0) > 0 &&
+      deps.pullRequests &&
+      isDispatchedWriter(run) &&
+      run.branch;
+    if (closes && isDispatchedWriter(run) && run.branch) {
+      notPublishedBecause = `the session's verdict was ${verdictLabel(verdict)}`;
+    } else if (wantsPublish && deps.pullRequests) {
+      const publishOnce = async (): Promise<PublishOutcome> => {
+        // The backend's claim first (§3.3b): one publisher per ticket.
+        try {
+          await deps.ledger.claimPublish(run.id, headSha);
+        } catch (error) {
+          if (error instanceof LedgerRequestError && error.status === 409) {
+            await deps.ledger
+              .appendEvent(run.id, 'note', {
+                stage: 'finalize',
+                publish: 'skipped',
+                claim: 'refused',
+                reason: error.message,
+              })
+              .catch(() => {});
+            return {
+              kind: 'skipped',
+              reason: `${error.message} Open PR from the run header, or ask the agent to summarize its changes again.`,
+            };
+          }
+          throw error;
+        }
+        try {
+          await deps.assertPublishableCwd(run);
+          return await deps.pullRequests!.publishFollowUp({
+            run,
+            closingMessage: closing,
+            title: ticket
+              ? `${ticket.identifier}: ${ticket.title}`
+              : (run.title ?? run.branch!),
+            ticketUrl: ticket?.url ?? null,
+          });
+        } catch (error) {
+          return { kind: 'failed', stage: 'push', message: describe(error) };
+        }
+      };
+      published =
+        run.ticketId && deps.withTicketLock
+          ? await deps.withTicketLock(run.ticketId, publishOnce)
+          : await publishOnce();
+      if (published.kind === 'opened' || published.kind === 'updated') {
+        current = { ...run, prUrl: published.url };
+      }
+    } else if (
+      (newCommits ?? 0) === 0 &&
+      isDispatchedWriter(run) &&
+      run.branch
+    ) {
+      notPublishedBecause = 'no new commits since the last report';
+    }
+
+    let filed = 0;
+    const filedIds: Array<{ id: string; kind: string }> = [];
+    try {
+      const work = isDispatchedWriter(current)
+        ? await describeBranchWork(deps, current)
+        : null;
+      const body = buildRunComment({
+        report,
+        verdict,
+        runLabel: `${label(current)} · follow-up ${sequence}`,
+        work,
+        published,
+        notPublishedBecause,
+      });
+      const comment = await deps.ledger.createRunProposal(
+        run.id,
+        {
+          kind: 'comment',
+          body: clip(`**Follow-up ${sequence}**\n\n${body}`, MAX_PROPOSAL_BODY),
+        },
+        { external },
+      );
+      filed += 1;
+      filedIds.push({ id: comment.id, kind: 'comment' });
+      await deps.ledger
+        .appendEvent(run.id, 'proposal_created', {
+          proposalId: comment.id,
+          kind: 'comment',
+          followUp: sequence,
+        })
+        .catch(() => {});
+      const plan = statePlanFor(run, verdict);
+      if (plan && verdict !== run.verdict) {
+        if (external && ticket?.ref) {
+          filed += await proposeJiraTransition(deps, run, ticket.ref.key, plan);
+        } else if (run.projectId) {
+          const states = await deps.ledger.listStates(run.projectId);
+          const target =
+            plan === 'close'
+              ? pickClosingState(states)
+              : pickReviewState(states);
+          if (target) {
+            const change = await deps.ledger.createRunProposal(run.id, {
+              kind: 'state_change',
+              stateId: target.id,
+            });
+            filed += 1;
+            filedIds.push({ id: change.id, kind: 'state_change' });
+            await deps.ledger
+              .appendEvent(run.id, 'proposal_created', {
+                proposalId: change.id,
+                kind: 'state_change',
+                stateId: target.id,
+                stateName: target.name,
+                plan,
+                followUp: sequence,
+              })
+              .catch(() => {});
+          }
+        }
+      }
+    } catch (error) {
+      await rest(
+        run,
+        `The follow-up proposal could not be filed: ${describe(error)}`,
+        { filed },
+        turns,
+      );
+      return;
+    }
+
+    const turnCount = countTurns(turns);
+    let reviewed: AgentRun;
+    try {
+      const headline = report.summary || closing;
+      reviewed = await deps.ledger.updateRun(run.id, {
+        status: 'needs-review',
+        reason: `Follow-up ${sequence}: ${filed} proposal${filed === 1 ? '' : 's'} filed`,
+        summary: clip(
+          headline.split('\n').find((l) => l.trim()) ?? headline,
+          MAX_SUMMARY_CHARS,
+        ),
+        verdict,
+        turnCount,
+        finalizeCount: sequence,
+        finalizedHeadSha: headSha,
+      });
+    } catch (error) {
+      warn('engine: follow-up finalize could not write needs-review', error, {
+        runId: run.id,
+      });
+      return;
+    }
+    await deps.ledger
+      .appendEvent(run.id, 'finalized', {
+        sequence,
+        verdict,
+        summary: clip(report.summary || closing, MAX_SUMMARY_CHARS),
+        proposals: filedIds,
+        pr: prFact(published, notPublishedBecause),
+        headSha,
+        newCommits,
+        afterTurnId: lastTurnId(turns),
+      })
+      .catch(() => {});
+    deps.notify({ runId: run.id, status: reviewed.status });
+    deps.logger.info('engine: run follow-up finalized', {
+      runId: run.id,
+      sequence,
+      verdict,
+      proposals: filed,
+    });
+    await deps.transcripts?.capture(run.id, turns);
+    deps.onRunStatus?.(reviewed, 'finishing');
+    await deps.ledger
+      .postCopilotNote(
+        run.id,
+        finishedNote(reviewed, {
+          turns: turnCount,
+          proposals: filed,
+          published,
+          verdict,
+          followUp: sequence,
+        }),
+      )
+      .catch((error: unknown) =>
+        warn('engine: Copilot note not posted', error, { runId: run.id }),
+      );
+    await deps.drainOutbox?.(run.id).catch((error: unknown) =>
+      warn('engine: outbox drain after follow-up failed', error, {
+        runId: run.id,
+      }),
+    );
+  };
+
   const finalize = async (runId: string): Promise<void> => {
     const daemon = deps.daemon();
     if (!daemon) return;
@@ -462,7 +877,18 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
     }
     deps.notify({ runId: run.id, status: run.status });
 
+    // Never-lock: a run whose report is already filed is being continued.
+    // Its later turns are conversation unless the agent explicitly ends
+    // one with a report — REST, or FILE a follow-up (design §4).
+    const followUp = run.finalizeCount > 0;
+
     if (summary.lastTurnErrored) {
+      if (followUp) {
+        await rest(run, "The agent's turn ended in an error.", {
+          stopReason: summary.lastStopReason ?? null,
+        });
+        return;
+      }
       await fail(run, "The agent's turn ended in an error.", {
         stopReason: summary.lastStopReason ?? null,
       });
@@ -474,6 +900,14 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
     try {
       turns = await daemon.getHistory(run.id, HISTORY_TURNS);
     } catch (error) {
+      if (followUp) {
+        await rest(
+          run,
+          `The session's history could not be read: ${describe(error)}`,
+          {},
+        );
+        return;
+      }
       await fail(
         run,
         `The session's history could not be read: ${describe(error)}`,
@@ -483,10 +917,29 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
     }
     const closing = closingMessageOf(turns);
     if (!closing) {
+      if (followUp) {
+        await rest(run, 'The agent ended its turn without a closing message.', {
+          stopReason: summary.lastStopReason ?? null,
+        });
+        return;
+      }
       await fail(run, 'The agent ended its turn without a closing message.', {
         stopReason: summary.lastStopReason ?? null,
       });
       await killSession(daemon, run, turns);
+      return;
+    }
+
+    // A legacy Waypoint-authored resume note *turn* (before never-lock the
+    // note was a prompt of its own): the agent's "understood" reply is
+    // not a report (design §4.6).
+    if (isResumeNoteText(openingPromptOf(turns))) {
+      await rest(run, 'The turn answered a resume note', {}, turns);
+      return;
+    }
+
+    if (followUp) {
+      await finalizeFollowUp(daemon, run, turns, closing);
       return;
     }
 
@@ -557,6 +1010,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
     // and the host's facts about the branch and the PR), and the state
     // change the verdict calls for.
     let filed = 0;
+    const filedIds: Array<{ id: string; kind: string }> = [];
     try {
       const work = isDispatchedWriter(run)
         ? await describeBranchWork(deps, run)
@@ -581,6 +1035,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         { external },
       );
       filed += 1;
+      filedIds.push({ id: comment.id, kind: 'comment' });
       await deps.ledger
         .appendEvent(run.id, 'proposal_created', {
           proposalId: comment.id,
@@ -604,6 +1059,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
             stateId: target.id,
           });
           filed += 1;
+          filedIds.push({ id: change.id, kind: 'state_change' });
           await deps.ledger
             .appendEvent(run.id, 'proposal_created', {
               proposalId: change.id,
@@ -643,6 +1099,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
     }
 
     const turnCount = countTurns(turns);
+    const headSha = await headShaOf(run);
     let reviewed: AgentRun;
     try {
       const headline = report.summary || closing;
@@ -655,6 +1112,8 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         ),
         verdict,
         turnCount,
+        finalizeCount: 1,
+        finalizedHeadSha: headSha,
       });
     } catch (error) {
       warn('engine: finalize could not write needs-review', error, {
@@ -663,6 +1122,17 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
       await killSession(daemon, run, turns);
       return;
     }
+    await deps.ledger
+      .appendEvent(run.id, 'finalized', {
+        sequence: 1,
+        verdict,
+        summary: clip(report.summary || closing, MAX_SUMMARY_CHARS),
+        proposals: filedIds,
+        pr: prFact(published, notPublishedBecause),
+        headSha,
+        afterTurnId: lastTurnId(turns),
+      })
+      .catch(() => {});
     deps.notify({ runId: run.id, status: reviewed.status });
     deps.logger.info('engine: run finalized', {
       runId: run.id,
@@ -671,7 +1141,10 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
       proposals: filed,
       turns: turnCount,
     });
-    await killSession(daemon, run, turns);
+    // Never-lock: the session stays alive — a finished run is a
+    // conversation that may be continued (§7.1). The snapshot is still
+    // taken now, so the panel has it if the daemon ever loses the session.
+    await deps.transcripts?.capture(run.id, turns);
     deps.onRunStatus?.(reviewed, 'finishing');
     await deps.ledger
       .postCopilotNote(
@@ -686,6 +1159,11 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
       .catch((error: unknown) =>
         warn('engine: Copilot note not posted', error, { runId: run.id }),
       );
+    await deps.drainOutbox?.(run.id).catch((error: unknown) =>
+      warn('engine: outbox drain after finalize failed', error, {
+        runId: run.id,
+      }),
+    );
   };
 
   return {

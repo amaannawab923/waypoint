@@ -23,6 +23,7 @@ import { installEngine, verifyInstalledEngine } from './installer';
 import { runDaemonCommand } from './daemonCli';
 import { removeStaleStartLock } from './staleLock';
 import { registerBootReconcile } from './runs/bootReconcile';
+import { withTicketDispatchLock } from './runs/dispatch';
 import { registerLiveLedgerFollower } from './runs/liveLedgerFollower';
 import { createDaemonRunsApi } from './runs/daemonApi';
 import { createRunFinalizer } from './runs/finalize';
@@ -247,6 +248,10 @@ export function registerEngineIpc(
   // W6: a writing run's branch is pushed and its PR opened by the host,
   // as the person, when its turn ends (runs/pullRequests.ts).
   const pullRequests = createPullRequestPublisher({ ledger, logger });
+  // Never-lock: finalize's last step delivers a message typed while it
+  // held the row; the runs API that owns that path is built below, so
+  // this is late-bound.
+  let runsHost: RunsHostApi | null = null;
   const finalizer = createRunFinalizer({
     ledger,
     daemon,
@@ -258,6 +263,11 @@ export function registerEngineIpc(
     transcripts,
     pullRequests,
     jira,
+    withTicketLock: withTicketDispatchLock,
+    drainOutbox: (runId) =>
+      runsHost
+        ? runsHost.deliverPendingAfterFinalize(runId)
+        : Promise.resolve(),
     logger,
   });
 
@@ -387,6 +397,22 @@ export function registerEngineIpc(
   ipcMain.handle(ENGINE_IPC.health, (): Promise<EngineHealth | null> =>
     supervisor.health(),
   );
+
+  runsHost = runsApi;
+  // Never-lock (design §2.4 triggers 3 and 5): every live session's
+  // outbox is delivered once the engine is running (after the boot
+  // reconcile has had its pass) and whenever the app comes to the front
+  // — the moment a person comes back to look is when a missing folder is
+  // most likely back. No timer: bootReconcile.ts rules out periodic
+  // passes, and so does this.
+  supervisor.onStatusChange((status) => {
+    if (status.kind === 'running') {
+      runsApi.drainLiveOutboxes('boot').catch(() => {});
+    }
+  });
+  app.on('browser-window-focus', () => {
+    runsApi.drainLiveOutboxes('focus').catch(() => {});
+  });
 
   return runsApi;
 }

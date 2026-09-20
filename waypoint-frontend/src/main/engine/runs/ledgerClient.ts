@@ -13,6 +13,13 @@
  * it to use.
  */
 
+import type {
+  PendingPrompt,
+  PendingPromptReason,
+  PendingPromptState,
+  ResolvedTicket,
+} from '../types';
+
 export type AgentRunStatus =
   | 'queued'
   | 'provisioning'
@@ -78,6 +85,12 @@ export interface AgentRun {
   createdAt: string;
   startedAt: string | null;
   endedAt: string | null;
+  /** How many times reopenRun has continued this run (audit, never a throttle). */
+  reopenCount: number;
+  lastReopenedAt: string | null;
+  /** Never-lock: how many times finalize has filed this run's report, and the branch HEAD it last filed at. */
+  finalizeCount: number;
+  finalizedHeadSha: string | null;
   updatedAt: string;
 }
 
@@ -128,6 +141,8 @@ export interface UpdateAgentRunInput {
   inputTokens?: number;
   outputTokens?: number;
   costUsd?: number | null;
+  finalizeCount?: number;
+  finalizedHeadSha?: string | null;
 }
 
 export type ClientEventKind =
@@ -137,12 +152,15 @@ export type ClientEventKind =
   | 'session_resumed'
   | 'session_ended'
   | 'prompt_sent'
+  | 'prompt_queued'
+  | 'prompt_dropped'
   | 'turn_completed'
   | 'permission_requested'
   | 'permission_answered'
   | 'proposal_created'
   | 'pushed'
   | 'pr_opened'
+  | 'finalized'
   | 'error'
   | 'note';
 
@@ -252,8 +270,6 @@ export interface LedgerTicketRef {
 /** A typed key resolved in either system (the backend's `/tickets/resolve/:identifier`). */
 export type { ResolvedTicket } from '../types';
 
-import type { ResolvedTicket } from '../types';
-
 export interface LedgerClient {
   /**
    * The project a run is about to be started in — read by main, so the
@@ -269,17 +285,46 @@ export interface LedgerClient {
   listAllRuns(query: Omit<ListAgentRunsQuery, 'cursor'>): Promise<AgentRun[]>;
   updateRun(id: string, patch: UpdateAgentRunInput): Promise<AgentRun>;
   /**
-   * Revives an interrupted/failed/cancelled run back to `provisioning`
-   * (ROAD-XXX: resume dead sessions) — the one way past updateRun's
-   * read-only guard on a terminal row; see the backend's reopenRun for the
-   * preconditions it enforces (owner-only, not superseded by a retry, no
-   * second live writer, backoff). Throws LedgerRequestError(409) with the
-   * backend's own sentence on any refusal.
+   * Continues a run that is not live — needs-review, done, interrupted,
+   * failed, cancelled — back to `provisioning` (never-lock): the one way
+   * past updateRun's read-only guard on a terminal row. The backend keeps
+   * only its workspace and owner checks; a LedgerRequestError(409) is a
+   * live run (nothing to reopen) or another member's run.
    */
   reopenRun(
     id: string,
     reason?: string,
   ): Promise<{ run: AgentRun; from: AgentRunStatus }>;
+  /**
+   * Never-lock §3.3b: one publisher per ticket at publish time. Throws
+   * LedgerRequestError(409) naming the writer that holds the ticket.
+   */
+  claimPublish(id: string, headSha: string | null): Promise<void>;
+  /** The run's events, oldest first — what the transcript's markers are drawn from. */
+  listEvents(
+    id: string,
+    options?: { afterSeq?: number },
+  ): Promise<AgentRunEvent[]>;
+  /** The run's transcript snapshot (ROAD-124), or null when none was ever saved. */
+  getTranscript(
+    id: string,
+  ): Promise<{ turns: unknown[]; turnCount: number } | null>;
+  // --- Never-lock: the per-run outbox ---------------------------------------
+  listPendingPrompts(id: string): Promise<PendingPrompt[]>;
+  createPendingPrompt(
+    id: string,
+    input: { text: string; reason: PendingPromptReason },
+  ): Promise<PendingPrompt>;
+  updatePendingPrompt(
+    id: string,
+    pendingId: string,
+    patch: {
+      state?: PendingPromptState;
+      reason?: PendingPromptReason;
+      autoAttempts?: number;
+      lastError?: string | null;
+    },
+  ): Promise<PendingPrompt>;
   appendEvent(
     id: string,
     kind: ClientEventKind,
@@ -559,6 +604,69 @@ export function createLedgerClient(deps: LedgerClientDeps = {}): LedgerClient {
       return (await request<AgentRun>('PATCH', `/agent-runs/${id}`, patch))
         .body;
     },
+    async claimPublish(id, headSha) {
+      assertRunId(id);
+      await request<unknown>('POST', `/agent-runs/${id}/publish-claim`, {
+        ...(headSha ? { headSha } : {}),
+      });
+    },
+    async listEvents(id, options = {}) {
+      assertRunId(id);
+      const params = new URLSearchParams({ limit: '500' });
+      if (options.afterSeq !== undefined)
+        params.set('afterSeq', String(options.afterSeq));
+      return (
+        await request<AgentRunEvent[]>(
+          'GET',
+          `/agent-runs/${id}/events?${params}`,
+        )
+      ).body;
+    },
+    async getTranscript(id) {
+      assertRunId(id);
+      try {
+        return (
+          await request<{ turns: unknown[]; turnCount: number }>(
+            'GET',
+            `/agent-runs/${id}/transcript`,
+          )
+        ).body;
+      } catch (error) {
+        if (error instanceof LedgerRequestError && error.status === 404)
+          return null;
+        throw error;
+      }
+    },
+    async listPendingPrompts(id) {
+      assertRunId(id);
+      return (
+        await request<PendingPrompt[]>(
+          'GET',
+          `/agent-runs/${id}/pending-prompts`,
+        )
+      ).body;
+    },
+    async createPendingPrompt(id, input) {
+      assertRunId(id);
+      return (
+        await request<PendingPrompt>(
+          'POST',
+          `/agent-runs/${id}/pending-prompts`,
+          input,
+        )
+      ).body;
+    },
+    async updatePendingPrompt(id, pendingId, patch) {
+      assertRunId(id);
+      assertRunId(pendingId);
+      return (
+        await request<PendingPrompt>(
+          'PATCH',
+          `/agent-runs/${id}/pending-prompts/${pendingId}`,
+          patch,
+        )
+      ).body;
+    },
     async reopenRun(id, reason) {
       assertRunId(id);
       return (
@@ -661,12 +769,10 @@ export function createLedgerClient(deps: LedgerClientDeps = {}): LedgerClient {
     },
     async listTicketProposals(ticketId) {
       assertRunId(ticketId);
-      const body = (
-        await request<{ proposals?: LedgerProposal[] }>(
-          'GET',
-          `/tickets/${ticketId}/proposals`,
-        )
-      ).body;
+      const { body } = await request<{ proposals?: LedgerProposal[] }>(
+        'GET',
+        `/tickets/${ticketId}/proposals`,
+      );
       return Array.isArray(body?.proposals) ? body.proposals : [];
     },
     async createRunProposal(runId, input, options = {}) {

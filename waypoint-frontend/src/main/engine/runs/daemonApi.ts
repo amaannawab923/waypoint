@@ -30,8 +30,12 @@ export { liveTopic } from '../wire/topics';
  *                                          if the provider cannot, starts fresh in the same
  *                                          cwd and answers a NEW sessionId (W4 QA, 2026-09-12)
  *     → {success:false, error:{type:'auth-required'|'spawn-failed'|'new-session-failed'|…}}
- *   acp.sendPrompt                      {conversationId, prompt:{text}, placement?}
- *     → {success:true, data:{queued}}    resolves when the TURN ends, not when it is queued
+ *   acp.sendPrompt                      {conversationId, prompt:{text, hiddenContext?}, placement?}
+ *     → {success:true, data:{queued}}    resolves when the TURN ends, not when it is queued;
+ *                                          hiddenContext reaches the agent with the prompt and
+ *                                          is not a transcript item of its own (never echoed
+ *                                          by acp.getHistory — the message item carries
+ *                                          kind, id, seq, role, text, attachments only)
  *   acp.getHistory                      {conversationId, limit, before?}
  *     → {success:true, data:{turns, nextCursor}}   the latest `limit` COMMITTED turns, oldest
  *                                          first; an item is {kind:'message', role, text} |
@@ -128,8 +132,8 @@ export interface StartSessionRequest {
   sessionId: string | null;
   /** A session mode the provider offers (`bypassPermissions` for auto-approve, W4b); null = the provider's default. */
   modeId?: string | null;
-  /** Prompts the daemon delivers once the session is ready — the dialog's first message (W4b). */
-  initialQueue?: Array<{ text: string }>;
+  /** Prompts the daemon delivers once the session is ready — the dialog's first message (W4b), or an outbox drained into a start (never-lock). */
+  initialQueue?: Array<{ text: string; hiddenContext?: string }>;
   /**
    * Environment overrides for the agent process, applied over the daemon's
    * own allowlisted env (W5a §2.5: credentials set to '' for an
@@ -179,11 +183,18 @@ export interface DaemonRunsApi {
    */
   startSession(request: StartSessionRequest): Promise<{ sessionId: string }>;
   /**
-   * A text prompt from Waypoint itself — the resume note (ROAD-69). Answers
-   * when the daemon has taken the prompt, not when the turn ends: the
-   * call's own promise is deliberately not awaited past `queued`.
+   * A prompt for the session. Answers when the daemon has taken the
+   * prompt (PROMPT_ACCEPTED_MS), not when the turn ends: the call's own
+   * promise is deliberately not awaited past `queued`. `hiddenContext`
+   * (never-lock) is Waypoint's framing for the agent — the resume note,
+   * the continuation note — delivered with the person's own words and
+   * never a transcript message of its own.
    */
-  sendPrompt(conversationId: string, text: string): Promise<void>;
+  sendPrompt(
+    conversationId: string,
+    text: string,
+    hiddenContext?: string,
+  ): Promise<void>;
   /**
    * The latest `limit` committed turns of a session, oldest first — what
    * host-side finalize reads the closing message from (W5a §2.4).
@@ -414,15 +425,19 @@ export function createDaemonRunsApi(client: WireClient): DaemonRunsApi {
       );
       return page.turns ?? [];
     },
-    async sendPrompt(conversationId, text) {
-      // The daemon answers `acp.sendPrompt` when the turn ends. Waypoint's
-      // note only needs to be taken, so the first of "the turn ended" and
+    async sendPrompt(conversationId, text, hiddenContext) {
+      // The daemon answers `acp.sendPrompt` when the turn ends. A prompt
+      // only needs to be taken, so the first of "the turn ended" and
       // "PROMPT_ACCEPTED_MS passed with no refusal" wins; a refusal inside
       // that window is still a rejection. The late outcome is observed
       // (never an unhandled rejection) and dropped.
       const turn = fallible<{ queued: boolean }>(
         'acp.sendPrompt',
-        { conversationId, prompt: { text }, placement: 'auto' },
+        {
+          conversationId,
+          prompt: { text, ...(hiddenContext ? { hiddenContext } : {}) },
+          placement: 'auto',
+        },
         SEND_PROMPT_TIMEOUT_MS,
       ).then(() => undefined);
       turn.catch(() => {});

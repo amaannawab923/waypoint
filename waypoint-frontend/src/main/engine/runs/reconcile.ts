@@ -73,7 +73,8 @@ export const LIVE_RUN_STATUSES: readonly AgentRunStatus[] = [
 export const RUN_ID_PREFIX = 'run-';
 
 export type ReconcileAction =
-  | { kind: 'reattach'; runId: string }
+  /** `finished`: a done/needs-review run whose session lives on (never-lock) — kept, no event, so a boot leaves no marker in its transcript. */
+  | { kind: 'reattach'; runId: string; finished?: boolean }
   | { kind: 'adopt'; runId: string }
   | { kind: 'kill-stale'; runId: string; status: AgentRunStatus }
   /** A session for a run in a non-live, non-ended status: logged, left. */
@@ -88,12 +89,18 @@ export type ReconcileAction =
     }
   | { kind: 'leave'; conversationId: string };
 
-/** Ended for good — the only statuses whose leftover session is killed. */
-const ENDED_RUN_STATUSES: readonly AgentRunStatus[] = [
-  'done',
-  'failed',
-  'cancelled',
-];
+/**
+ * The only statuses whose leftover session is killed at boot. `done` is
+ * deliberately not here any more (never-lock, 2026-09-20): finalize
+ * keeps a finished run's session alive so the conversation can be
+ * continued, and reconcile reattaches to it like any other. A failed or
+ * cancelled run's session is stale — those runs are revivable too, but a
+ * resume starts them fresh from their provider session id.
+ */
+const ENDED_RUN_STATUSES: readonly AgentRunStatus[] = ['failed', 'cancelled'];
+
+/** A finished run whose session is still alive: reattach, the same as a live one (never-lock §7.2). */
+const FINISHED_ALIVE: readonly AgentRunStatus[] = ['done', 'needs-review'];
 
 export interface ReconcileInput {
   /** `acp.sessions.list`, by conversation id. */
@@ -130,6 +137,8 @@ export function planReconcile(input: ReconcileInput): ReconcileAction[] {
       actions.push({ kind: 'orphan', conversationId });
     } else if (other.status === 'interrupted') {
       actions.push({ kind: 'adopt', runId: other.id });
+    } else if (FINISHED_ALIVE.includes(other.status)) {
+      actions.push({ kind: 'reattach', runId: other.id, finished: true });
     } else if (ENDED_RUN_STATUSES.includes(other.status)) {
       actions.push({
         kind: 'kill-stale',
@@ -184,6 +193,7 @@ async function applyAction(
     case 'leave':
       return;
     case 'reattach':
+      if (action.finished) return;
       await deps.ledger.appendEvent(action.runId, 'session_resumed', {
         at: 'boot',
         note: 'daemon session found live; re-attached',
