@@ -72,18 +72,24 @@ export const LIVE_RUN_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
 ]);
 
 /**
- * Ended abnormally, with its worktree and provider session still on
- * record: `reopenRun` (agentRuns.service.ts) can revive one of these back
- * to `provisioning`. Deliberately NOT wired into `TRANSITIONS` — that
- * table is what the general `PATCH /agent-runs/:id` route enforces, and a
+ * Every status a conversation can be continued from — the five that are
+ * not live. `reopenRun` (agentRuns.service.ts) moves one of these back to
+ * `provisioning`. Deliberately NOT wired into `TRANSITIONS` — that table
+ * is what the general `PATCH /agent-runs/:id` route enforces, and a
  * revive must only ever happen through `reopenRun`'s own preconditions
- * (ownership, not-superseded-by-a-retry, no second live writer, backoff),
- * never through a plain status-only patch. `done`/`needs-review` are not
- * here: those are successful endings, not dead sessions — reviving under
- * an already-reviewed or already-merged run is a different feature
- * (`retryOfRunId` already covers "start fresh from a finished run").
+ * (workspace, ownership), never through a plain status-only patch.
+ *
+ * `done` and `needs-review` are here on purpose (never-lock, 2026-09-20,
+ * the founder's ruling: no session is ever locked, in any scenario). A
+ * finished run is a run whose *agent* finished; the person may still
+ * have questions, or want the work changed. What used to make reviving
+ * them hazardous — a continued turn re-filing the ticket's report — is
+ * handled where it belongs, in finalize (report-triggered, not
+ * silence-triggered), not by refusing the conversation.
  */
 export const REVIVABLE_RUN_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
+  'needs-review',
+  'done',
   'interrupted',
   'failed',
   'cancelled',

@@ -124,11 +124,14 @@ export const listWorkedOnJiraKeysQuerySchema = z
   })
   .strict();
 
-// The kinds a client may append. `created`, `status_changed`, and
-// `run_reopened` are deliberately absent: the service writes those itself,
-// inside the same transaction as the row change they describe, and a
-// client writing them
-// directly could make the trail say something the ledger does not.
+// The kinds a client may append. `created`, `status_changed`,
+// `run_reopened` and `publish_claimed` are deliberately absent: the
+// service writes those itself, inside the same transaction as the row
+// change they describe, and a client writing them directly could make the
+// trail say something the ledger does not. `finalized`, `prompt_queued`
+// and `prompt_dropped` (never-lock) are the host's: they are what the
+// transcript's markers are drawn from, and the pending-prompt rows they
+// name are the service's to keep consistent with them.
 export const CLIENT_EVENT_KINDS = [
   'worktree_created',
   'worktree_removed',
@@ -136,12 +139,15 @@ export const CLIENT_EVENT_KINDS = [
   'session_resumed',
   'session_ended',
   'prompt_sent',
+  'prompt_queued',
+  'prompt_dropped',
   'turn_completed',
   'permission_requested',
   'permission_answered',
   'proposal_created',
   'pushed',
   'pr_opened',
+  'finalized',
   'error',
   'note',
 ] as const;
@@ -171,15 +177,60 @@ export const createRunProposalSchema = z
   ]);
 export type CreateRunProposalInput = z.infer<typeof createRunProposalSchema>;
 
-// ROAD-XXX: revive an interrupted/failed/cancelled run. Deliberately not a
-// PATCH — the body names no column, so reopenRun can only ever do what its
-// name says (see agentRuns.service.ts's reopenRun).
+// Continue a run that is not live. Deliberately not a PATCH — the body
+// names no column, so reopenRun can only ever do what its name says (see
+// agentRuns.service.ts's reopenRun).
 export const reopenAgentRunSchema = z
   .object({
     reason: z.string().max(2000).optional(),
   })
   .strict();
 export type ReopenAgentRunInput = z.infer<typeof reopenAgentRunSchema>;
+
+// Never-lock: one publisher per ticket at publish time (claimPublish).
+export const claimPublishSchema = z
+  .object({
+    headSha: z
+      .string()
+      .regex(/^[0-9a-f]{7,64}$/)
+      .nullable()
+      .optional(),
+  })
+  .strict();
+export type ClaimPublishInput = z.infer<typeof claimPublishSchema>;
+
+// Never-lock: the per-run outbox (agent_run_pending_prompts). A message
+// the host could not hand to the daemon yet, or a teammate's message for
+// the owner's Waypoint to deliver.
+export const PENDING_PROMPT_REASONS = [
+  'starting',
+  'finishing',
+  'folder-missing',
+  'repository-missing',
+  'spawn-failed',
+  'owner-offline',
+] as const;
+export const PENDING_PROMPT_STATES = ['queued', 'sending', 'delivered', 'unresolved', 'dropped'] as const;
+/** The same cap as any prompt the host accepts (waypoint-frontend's MAX_FIRST_MESSAGE_CHARS). */
+export const MAX_PENDING_PROMPT_CHARS = 20_000;
+export const createPendingPromptSchema = z
+  .object({
+    text: z.string().min(1).max(MAX_PENDING_PROMPT_CHARS),
+    reason: z.enum(PENDING_PROMPT_REASONS),
+  })
+  .strict();
+export type CreatePendingPromptInput = z.infer<typeof createPendingPromptSchema>;
+export const updatePendingPromptSchema = requireAtLeastOneField(
+  z
+    .object({
+      state: z.enum(PENDING_PROMPT_STATES).optional(),
+      reason: z.enum(PENDING_PROMPT_REASONS).optional(),
+      autoAttempts: z.number().int().min(0).max(1000).optional(),
+      lastError: z.string().max(4000).nullable().optional(),
+    })
+    .strict(),
+);
+export type UpdatePendingPromptInput = z.infer<typeof updatePendingPromptSchema>;
 
 // Everything a run's owner-side process may write back as it learns things:
 // the daemon's handles once provisioning has them, the branch and PR, the
@@ -226,6 +277,13 @@ export const updateAgentRunSchema = requireAtLeastOneField(
       inputTokens: z.number().int().min(0).optional(),
       outputTokens: z.number().int().min(0).optional(),
       costUsd: z.number().min(0).nullable().optional(),
+      // Never-lock: finalize's own bookkeeping (report-triggered follow-ups).
+      finalizeCount: z.number().int().min(0).optional(),
+      finalizedHeadSha: z
+        .string()
+        .regex(/^[0-9a-f]{7,64}$/)
+        .nullable()
+        .optional(),
     })
     .strict(),
 );

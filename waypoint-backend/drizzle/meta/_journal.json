@@ -183,6 +183,13 @@
       "when": 1789837614382,
       "tag": "0025_overconfident_microchip",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1789885679404,
+      "tag": "0026_never_lock_sessions",
+      "breakpoints": true
     }
   ]
 }

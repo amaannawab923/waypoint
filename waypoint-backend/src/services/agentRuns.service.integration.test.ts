@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import postgres from 'postgres';
 
 // The agent-runs ledger's properties that only a real database can prove
@@ -31,6 +31,7 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
   let asc: typeof import('drizzle-orm')['asc'];
   let sql: typeof import('drizzle-orm')['sql'];
   let inArray: typeof import('drizzle-orm')['inArray'];
+  let and: typeof import('drizzle-orm')['and'];
   let runWithIdentity: typeof import('../lib/requestContext.js')['runWithIdentity'];
 
   const stamp = Date.now();
@@ -127,7 +128,7 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
     ({ db } = await import('../db/client.js'));
     service = await import('./agentRuns.service.js');
     schema = await import('../db/schema/index.js');
-    ({ eq, asc, sql, inArray } = await import('drizzle-orm'));
+    ({ eq, asc, sql, inArray, and } = await import('drizzle-orm'));
     ({ runWithIdentity } = await import('../lib/requestContext.js'));
 
     await db.insert(schema.workspaces).values({
@@ -182,6 +183,29 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
       stateId,
       createdById: memberId,
     });
+  });
+
+  // Never-lock: createRun refuses a second *automatic dispatch* on a
+  // ticket while one is queued or live — a real invariant this file's
+  // shared-ticket fixtures were never written to respect (nearly every
+  // test creates a dispatched run and leaves it `queued`). Each test
+  // therefore leaves the shared tickets with no live dispatch. Direct on
+  // the table, not through updateRun: this is fixture hygiene, not a
+  // status move the trail should record.
+  afterEach(async () => {
+    await db
+      .update(schema.agentRuns)
+      .set({ status: 'cancelled', endedAt: new Date() })
+      .where(
+        and(
+          inArray(schema.agentRuns.ticketId, [ticketId, resumeTicketId]),
+          inArray(schema.agentRuns.status, ['queued', 'provisioning', 'running', 'blocked', 'finishing']),
+        ),
+      );
+    // Likewise a publish claim (claimPublish) holds its ticket for up to
+    // PUBLISH_CLAIM_TTL_MS — real behaviour, but not something one test
+    // may leave for the next.
+    await db.delete(schema.agentRunEvents).where(eq(schema.agentRunEvents.kind, 'publish_claimed'));
   });
 
   afterAll(async () => {
@@ -819,30 +843,49 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
       await updateRun(cancelled.id, { status: 'cancelled' });
     });
 
-    it('refuses done and needs-review — a successful ending is not a dead session', async () => {
+    // Never-lock (2026-09-20): a finished run is a conversation that can
+    // be continued — the founder's rule: no session is ever locked.
+    it('continues done and needs-review too, clearing endedAt only once the continuation reaches running', async () => {
       const done = await createRun({ ...base(), ticketId: null, entry: 'independent' });
       await updateRun(done.id, { status: 'provisioning' });
       await updateRun(done.id, { status: 'running' });
       await updateRun(done.id, { status: 'finishing' });
-      await updateRun(done.id, { status: 'done' });
-      await expect(reopenRun(done.id)).rejects.toThrow('finished successfully');
+      const finished = await updateRun(done.id, { status: 'done' });
+      expect(finished.endedAt).not.toBeNull();
+
+      const { run: reopened, from } = await reopenRun(done.id, 'Continued by a new message');
+      expect(from).toBe('done');
+      expect(reopened.status).toBe('provisioning');
+      // reopenRun leaves endedAt alone; updateRun clears it on the
+      // continuation's provisioning → running, keyed on lastReopenedAt.
+      expect(reopened.endedAt?.getTime()).toBe(finished.endedAt!.getTime());
+      const running = await updateRun(done.id, { status: 'running' });
+      expect(running.endedAt).toBeNull();
+      await updateRun(done.id, { status: 'cancelled' });
 
       const needsReview = await createRun({ ...base(), ticketId: null, entry: 'independent' });
       await updateRun(needsReview.id, { status: 'provisioning' });
       await updateRun(needsReview.id, { status: 'running' });
       await updateRun(needsReview.id, { status: 'finishing' });
       await updateRun(needsReview.id, { status: 'needs-review' });
-      await expect(reopenRun(needsReview.id)).rejects.toThrow('finished successfully');
+      expect((await reopenRun(needsReview.id)).from).toBe('needs-review');
+      await updateRun(needsReview.id, { status: 'cancelled' });
+
+      // A live run is the one thing there is nothing to reopen.
+      const live = await createRun({ ...base(), ticketId: null, entry: 'independent' });
+      await updateRun(live.id, { status: 'provisioning' });
+      await updateRun(live.id, { status: 'running' });
+      await expect(reopenRun(live.id)).rejects.toThrow(/is live, not something to reopen/);
     });
 
-    it('refuses a run a retry has already superseded — the reverse-lookup fix (architecture review)', async () => {
+    it('a run a retry has superseded can still be continued — the retry works on its own branch', async () => {
       const first = await createRun(resumeBase());
       await updateRun(first.id, { status: 'provisioning' });
       await updateRun(first.id, { status: 'interrupted' });
       await createRun({ ...resumeBase(), retryOfRunId: first.id }); // cancels `first` under the lock
 
       expect((await getRun(first.id))?.status).toBe('cancelled');
-      await expect(reopenRun(first.id)).rejects.toThrow(/superseded by a retry/);
+      expect((await reopenRun(first.id)).run.status).toBe('provisioning');
     });
 
     it('refuses a non-owner', async () => {
@@ -863,54 +906,52 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
       }
     });
 
-    it('refuses a second live writer already on the ticket; allows a plan-mode run or a ticket-less run alongside one', async () => {
-      // `dead` goes through its own full dead-and-back-alive-to-provisioning-
-      // then-failed lifecycle FIRST, while the ticket is still free — it
-      // needs to pass through `running` itself (deadRun), which would
-      // collide with the DB's own one-live-writer index if `live` already
-      // occupied the ticket. Only once `dead` is safely terminal does
-      // `live` take the ticket's one live slot, so the refusal this test
-      // is actually about (reopenRun's own application-level check) is
-      // what fires — not the DB constraint colliding during setup.
+    it('many conversations may be live on one ticket: a continuation is never refused for another live writer', async () => {
       const dead = await deadRun();
       const live = await createRun(resumeBase());
       await updateRun(live.id, { status: 'provisioning' });
       await updateRun(live.id, { status: 'running' });
 
-      await expect(reopenRun(dead.id)).rejects.toThrow(/already live on this ticket/);
-
-      // A plan-mode dead run on the same ticket never writes, so it's fine
-      // even while `live` still occupies the ticket.
-      const planRun = await createRun({ ...resumeBase(), modeId: 'plan' });
-      await updateRun(planRun.id, { status: 'provisioning' });
-      await updateRun(planRun.id, { status: 'failed', errorKind: 'generic', errorMessage: 'boom' });
-      expect((await reopenRun(planRun.id)).run.status).toBe('provisioning');
-      await updateRun(planRun.id, { status: 'cancelled' });
-
-      // A ticket-less run is unaffected by any ticket's live writer.
-      const noTicket = await createRun({ ...base(), ticketId: null, entry: 'independent' });
-      await updateRun(noTicket.id, { status: 'failed', errorKind: 'generic', errorMessage: 'boom' });
-      expect((await reopenRun(noTicket.id)).run.status).toBe('provisioning');
-      await updateRun(noTicket.id, { status: 'cancelled' });
-
-      // Leave the ticket free for the tests that follow.
-      await updateRun(live.id, { status: 'cancelled' });
+      // Two live writers on one ticket, on purpose (§3.3 of the design).
+      const { run: revived } = await reopenRun(dead.id);
+      expect(revived.status).toBe('provisioning');
+      await updateRun(dead.id, { status: 'running' });
+      const rows = await listRunsForTicket(resumeTicketId);
+      expect(rows.filter((r) => r.status === 'running').map((r) => r.id).sort()).toEqual([dead.id, live.id].sort());
     });
 
-    it('refuses within the backoff window, and past the reopen cap', async () => {
-      const run = await deadRun();
-      await reopenRun(run.id); // reopenCount -> 1, lastReopenedAt -> now
-      // Back to a revivable status directly, so the SECOND call's refusal
-      // is the backoff, not the (also-true) not-revivable check.
-      await db.update(schema.agentRuns).set({ status: 'failed' }).where(eq(schema.agentRuns.id, run.id));
-      await expect(reopenRun(run.id)).rejects.toThrow(/wait a moment/);
+    it('what stays single is the automatic dispatch: createRun refuses a second dispatched writer while one is queued or live', async () => {
+      const first = await createRun(resumeBase()); // queued counts
+      await expect(createRun(resumeBase())).rejects.toThrow(/already live on this ticket .* not dispatched twice/);
+      // A plan-mode dispatch never writes, so it is not a second writer.
+      const plan = await createRun({ ...resumeBase(), modeId: 'plan' });
+      expect(plan.modeId).toBe('plan');
+      // Nor is a run on no ticket.
+      await createRun({ ...base(), ticketId: null, entry: 'independent' });
+      // Once the first is over, a fresh dispatch is fine again.
+      await updateRun(first.id, { status: 'cancelled' });
+      await createRun(resumeBase());
+    });
 
-      // The cap, forced directly rather than looping 20 real reopens; an
-      // old lastReopenedAt clears the backoff so the cap is what refuses.
-      await db.update(schema.agentRuns)
-        .set({ reopenCount: 20, lastReopenedAt: new Date(Date.now() - 3_600_000), status: 'failed' })
+    it('two concurrent dispatches of one ticket: exactly one row lands (the advisory lock, across connections)', async () => {
+      const results = await Promise.allSettled([createRun(resumeBase()), createRun(resumeBase())]);
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
+    });
+
+    it('no cooldown and no cap: a conversation can be continued as often as the person likes', async () => {
+      const run = await deadRun();
+      for (let i = 0; i < 5; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await reopenRun(run.id);
+        // eslint-disable-next-line no-await-in-loop
+        await db.update(schema.agentRuns).set({ status: 'failed' }).where(eq(schema.agentRuns.id, run.id));
+      }
+      await db
+        .update(schema.agentRuns)
+        .set({ reopenCount: 500, lastReopenedAt: new Date(), status: 'failed' })
         .where(eq(schema.agentRuns.id, run.id));
-      await expect(reopenRun(run.id)).rejects.toThrow(/reopened 20 times/);
+      expect((await reopenRun(run.id)).run.reopenCount).toBe(501);
     });
 
     it('two concurrent reopens of the same run: one wins, the other is refused, never two run_reopened events', async () => {
@@ -977,6 +1018,186 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
       const updated = await updateRun(run.id, { cwd: '/tmp/fresh' });
       expect(updated.cwd).toBe('/tmp/fresh');
       await expect(updateRun(run.id, { cwd: '/tmp/other' })).rejects.toThrow('cwd cannot be changed once set.');
+    });
+  });
+
+  // Never-lock (2026-09-20): one publisher per ticket at publish time —
+  // the guarantee that replaced the one-live-writer index (§3.3b).
+  describe('claimPublish', () => {
+    function claimPublish(id: string, headSha: string | null = null, asMemberId = memberId) {
+      return runWithIdentity({ userId: `user-${asMemberId}`, memberId: asMemberId, workspaceId, role: 'admin' }, () =>
+        service.claimPublish(id, headSha),
+      );
+    }
+    async function finishingRun(overrides: Partial<Parameters<typeof service.createRun>[0]> = {}) {
+      const run = await createRun({ ...resumeBase(), ...overrides });
+      await updateRun(run.id, { status: 'provisioning' });
+      await updateRun(run.id, { status: 'running' });
+      await updateRun(run.id, { status: 'finishing' });
+      return run;
+    }
+
+    it('claims for the only writer on the ticket, writing publish_claimed; an own second claim is fine', async () => {
+      const run = await finishingRun();
+      const { run: claimed } = await claimPublish(run.id, 'abc1234');
+      expect(claimed.id).toBe(run.id);
+      const events = await listEvents(run.id);
+      expect(events.at(-1)).toMatchObject({ kind: 'publish_claimed', payload: { headSha: 'abc1234', ticketId: resumeTicketId } });
+      // The header's Open PR re-claims the same run: no self-conflict.
+      await claimPublish(run.id, 'abc1234');
+    });
+
+    it('refuses while another dispatched writer on the ticket is live, naming it', async () => {
+      const mine = await finishingRun();
+      // A second live writer — a continued conversation, say. Direct on
+      // the table: createRun's single-dispatch guard exists exactly so
+      // this cannot arise by dispatch; reopenRun is how it does.
+      const other = await createRun({ ...base(), ticketId: null, entry: 'independent', title: 'Other one' });
+      await db
+        .update(schema.agentRuns)
+        .set({ ticketId: resumeTicketId, entry: 'dispatched', status: 'running' })
+        .where(eq(schema.agentRuns.id, other.id));
+      await expect(claimPublish(mine.id)).rejects.toThrow(/live writer \(Other one\)/);
+      // Its own claim, from the other side, is refused by `mine` too — and
+      // a plan-mode writer never blocks anyone.
+      await db.update(schema.agentRuns).set({ modeId: 'plan' }).where(eq(schema.agentRuns.id, other.id));
+      await claimPublish(mine.id);
+    });
+
+    it("a stale claim (its holder died mid-push) blocks others only until the TTL; a claim followed by `finalized` never does", async () => {
+      const dead = await finishingRun();
+      await claimPublish(dead.id, 'aaaaaaa');
+      await updateRun(dead.id, { status: 'cancelled' }); // no longer live, but its claim stands
+      const mine = await finishingRun();
+      await expect(claimPublish(mine.id)).rejects.toThrow(/publish is in progress/);
+
+      // Its holder finished after all: a `finalized` event after the claim releases it.
+      await appendEvent(dead.id, { kind: 'finalized', payload: { sequence: 1 } });
+      await claimPublish(mine.id);
+
+      // And a claim older than the TTL is ignored even without one.
+      await appendEvent(mine.id, { kind: 'finalized', payload: { sequence: 1 } }); // release mine's own claim
+      await updateRun(mine.id, { status: 'cancelled' }); // the ticket must be free to dispatch `stale`
+      const stale = await finishingRun({ title: 'stale' });
+      await updateRun(stale.id, { status: 'cancelled' });
+      await claimPublish(stale.id, 'bbbbbbb');
+      await db
+        .update(schema.agentRunEvents)
+        .set({ at: new Date(Date.now() - service.PUBLISH_CLAIM_TTL_MS - 1000) })
+        .where(and(eq(schema.agentRunEvents.runId, stale.id), eq(schema.agentRunEvents.kind, 'publish_claimed')));
+      const later = await finishingRun();
+      await claimPublish(later.id);
+    });
+
+    it('two concurrent claims on one ticket: exactly one wins (the advisory lock)', async () => {
+      const a = await finishingRun();
+      await updateRun(a.id, { status: 'cancelled' });
+      const b = await finishingRun();
+      await updateRun(b.id, { status: 'cancelled' });
+      const results = await Promise.allSettled([claimPublish(a.id, 'aaaaaaa'), claimPublish(b.id, 'bbbbbbb')]);
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
+    });
+
+    it('a ticket-less run always claims; a non-owner never does', async () => {
+      const solo = await createRun({ ...base(), ticketId: null, entry: 'independent' });
+      await claimPublish(solo.id);
+      const otherMember = `mem-claim-${stamp}`;
+      await db.insert(schema.members).values({
+        id: otherMember,
+        workspaceId,
+        fullName: 'Other',
+        displayName: 'Other',
+        email: `${otherMember}@example.test`,
+        avatarColor: '#000000',
+      });
+      try {
+        await expect(claimPublish(solo.id, null, otherMember)).rejects.toThrow(/belongs to another member/);
+      } finally {
+        await db.delete(schema.members).where(eq(schema.members.id, otherMember));
+      }
+    });
+  });
+
+  // Never-lock: the per-run outbox (pendingPrompts.service.ts).
+  describe('pending prompts', () => {
+    let pending: typeof import('./pendingPrompts.service.js');
+    beforeAll(async () => {
+      pending = await import('./pendingPrompts.service.js');
+    });
+    const as = <T,>(fn: () => Promise<T>, asMemberId = memberId) =>
+      runWithIdentity({ userId: `user-${asMemberId}`, memberId: asMemberId, workspaceId, role: 'admin' }, fn);
+
+    it('mints FIFO seqs under the row lock, writes prompt_queued, and lists in order', async () => {
+      const run = await createRun({ ...base(), ticketId: null, entry: 'independent' });
+      const rows = await Promise.all(
+        ['one', 'two', 'three'].map((text) => as(() => pending.createPendingPrompt(run.id, { text, reason: 'starting' }))),
+      );
+      expect(rows.map((r) => r.seq).sort()).toEqual([1, 2, 3]);
+      const listed = await as(() => pending.listPendingPrompts(run.id));
+      expect(listed.map((r) => r.seq)).toEqual([1, 2, 3]);
+      expect(listed.every((r) => r.state === 'queued' && r.byMemberId === memberId)).toBe(true);
+      const events = await listEvents(run.id);
+      expect(events.filter((e) => e.kind === 'prompt_queued')).toHaveLength(3);
+      expect(events.find((e) => e.kind === 'prompt_queued')?.payload).toMatchObject({ reason: 'starting', by: memberId });
+    });
+
+    it('queued → sending (claimed) → delivered, one prompt_sent per phase; the owner only', async () => {
+      const run = await createRun({ ...base(), ticketId: null, entry: 'independent' });
+      const row = await as(() => pending.createPendingPrompt(run.id, { text: 'hi', reason: 'finishing' }));
+      const sending = await as(() => pending.updatePendingPrompt(run.id, row.id, { state: 'sending' }));
+      expect(sending.state).toBe('sending');
+      expect(sending.claimedAt).not.toBeNull();
+      const delivered = await as(() => pending.updatePendingPrompt(run.id, row.id, { state: 'delivered' }));
+      expect(delivered.resolvedAt).not.toBeNull();
+      const sent = (await listEvents(run.id)).filter((e) => e.kind === 'prompt_sent');
+      expect(sent.map((e) => e.payload.phase)).toEqual(['claimed', 'delivered']);
+      expect(sent.every((e) => e.payload.queuedId === row.id)).toBe(true);
+      // Delivered is final.
+      await expect(as(() => pending.updatePendingPrompt(run.id, row.id, { state: 'queued' }))).rejects.toThrow(
+        /cannot become queued/,
+      );
+    });
+
+    it('a teammate may enqueue (owner-offline, attributed) and drop their own, but never deliver', async () => {
+      const otherMember = `mem-outbox-${stamp}`;
+      await db.insert(schema.members).values({
+        id: otherMember,
+        workspaceId,
+        fullName: 'Teammate',
+        displayName: 'Teammate',
+        email: `${otherMember}@example.test`,
+        avatarColor: '#000000',
+      });
+      try {
+        const run = await createRun({ ...base(), ticketId: null, entry: 'independent' });
+        const row = await as(() => pending.createPendingPrompt(run.id, { text: 'from a teammate', reason: 'owner-offline' }), otherMember);
+        expect(row.byMemberId).toBe(otherMember);
+        expect((await listEvents(run.id)).at(-1)?.payload).toMatchObject({ by: otherMember, forOwner: memberId });
+        await expect(
+          as(() => pending.updatePendingPrompt(run.id, row.id, { state: 'sending' }), otherMember),
+        ).rejects.toThrow(/Only the run owner delivers/);
+        const dropped = await as(() => pending.updatePendingPrompt(run.id, row.id, { state: 'dropped' }), otherMember);
+        expect(dropped.state).toBe('dropped');
+        expect((await listEvents(run.id)).at(-1)?.kind).toBe('prompt_dropped');
+        // The row restricts on its author (like runs on their owner): the
+        // run's cascade takes it first.
+        await db.delete(schema.agentRuns).where(eq(schema.agentRuns.id, run.id));
+      } finally {
+        await db.delete(schema.members).where(eq(schema.members.id, otherMember));
+      }
+    });
+
+    it('a crash resolution: sending → unresolved, then queued again or delivered; autoAttempts and lastError are plain fields', async () => {
+      const run = await createRun({ ...base(), ticketId: null, entry: 'independent' });
+      const row = await as(() => pending.createPendingPrompt(run.id, { text: 'x', reason: 'spawn-failed' }));
+      await as(() => pending.updatePendingPrompt(run.id, row.id, { state: 'sending' }));
+      const unresolved = await as(() => pending.updatePendingPrompt(run.id, row.id, { state: 'unresolved' }));
+      expect(unresolved.state).toBe('unresolved');
+      const retried = await as(() =>
+        pending.updatePendingPrompt(run.id, row.id, { state: 'queued', autoAttempts: 2, lastError: 'spawn: no provider' }),
+      );
+      expect(retried).toMatchObject({ state: 'queued', autoAttempts: 2, lastError: 'spawn: no provider', claimedAt: null });
     });
   });
 });

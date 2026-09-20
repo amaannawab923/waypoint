@@ -82,19 +82,14 @@ describe('runStatusMachine', () => {
     expect(isAgentRunStatus(42)).toBe(false);
   });
 
-  it('isRevivable is exactly interrupted/failed/cancelled — TRANSITIONS itself stays untouched', () => {
-    for (const s of ['interrupted', 'failed', 'cancelled'] as const) {
+  // Never-lock (2026-09-20): every status that is not live can be
+  // continued — done and needs-review included. TRANSITIONS itself stays
+  // untouched: a continuation goes through reopenRun, never a PATCH.
+  it('isRevivable is exactly the five non-live statuses — TRANSITIONS itself stays untouched', () => {
+    for (const s of ['needs-review', 'done', 'interrupted', 'failed', 'cancelled'] as const) {
       expect(isRevivable(s)).toBe(true);
     }
-    for (const s of [
-      'queued',
-      'provisioning',
-      'running',
-      'blocked',
-      'finishing',
-      'needs-review',
-      'done',
-    ] as const) {
+    for (const s of ['queued', 'provisioning', 'running', 'blocked', 'finishing'] as const) {
       expect(isRevivable(s)).toBe(false);
     }
     // Revival is a deliberately separate arrow from reopenRun, not a
