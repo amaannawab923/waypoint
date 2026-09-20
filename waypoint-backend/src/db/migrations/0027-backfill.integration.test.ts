@@ -1,8 +1,9 @@
+import 'dotenv/config';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { db } from '../client.js';
+import postgres from 'postgres';
 import { sql } from 'drizzle-orm';
 
 // Never-lock (2026-09-20): a regression test for
@@ -20,6 +21,25 @@ import { sql } from 'drizzle-orm';
 // file (Postgres never releases a lock mid-transaction). Moved to its own
 // migration/transaction so it starts with no exclusive lock on agent_runs
 // at all.
+//
+// Same posture as every other *.integration.test.ts: skipped, not failed,
+// without a reachable DATABASE_URL (found by CI, round 6: importing the
+// client at module load threw on a runner with no Postgres).
+async function databaseReachable(): Promise<boolean> {
+  const url = process.env.DATABASE_URL;
+  if (!url) return false;
+  const probe = postgres(url, { max: 1, connect_timeout: 3, onnotice: () => {} });
+  try {
+    await probe`select 1`;
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await probe.end({ timeout: 3 });
+  }
+}
+
+const REAL_DB = await databaseReachable();
 
 const migrationPath = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -41,10 +61,12 @@ function backfillStatement(): string {
   return update;
 }
 
-describe('0027_never_lock_sessions_backfill.sql backfill', () => {
+describe.skipIf(!REAL_DB)('0027_never_lock_sessions_backfill.sql backfill', () => {
+  let db: typeof import('../client.js')['db'];
   const schemaName = `test_0027_backfill_${Date.now()}`;
 
   beforeAll(async () => {
+    ({ db } = await import('../client.js'));
     await db.execute(sql.raw(`CREATE SCHEMA "${schemaName}"`));
     // Only the columns the backfill statement itself reads or writes —
     // a real drift-proof test of that one statement, not a rebuild of
