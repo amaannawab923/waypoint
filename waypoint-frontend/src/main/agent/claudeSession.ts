@@ -7,6 +7,7 @@ import {
   type Options,
   type Query,
 } from '../copilot/claudeSdkClient';
+import { browserGuardHooks } from '../copilot/browserGuard';
 import { getStoredSubscriptionToken } from '../copilot/copilotAuth';
 import { copilotClaudeConfigDir } from '../copilot/copilotConfigDir';
 import { parseSdkMessage } from '../copilot/parseSdkMessage';
@@ -307,6 +308,14 @@ function buildSdkOptions(
     includePartialMessages: true,
     systemPrompt: policy.buildSystemPrompt(repoLinked, browser),
     ...(browser ? { extraArgs: { chrome: null } } : {}),
+    // The browser's tool-level rules ride as hooks (browserGuard.ts): a
+    // PreToolUse deny runs before the allowlist, so the wildcard grant
+    // above still skips prompts while a tab the turn did not open, a
+    // non-http URL, or a never-allowed tool is refused. Still no
+    // canUseTool — see the invariant above.
+    ...(browser && policy.browserGuard
+      ? { hooks: browserGuardHooks(policy.browserGuard) }
+      : {}),
     ...(repoLinked ? { disallowedTools: REPO_DENYLIST_PATTERNS } : {}),
     ...(effectiveResumeSessionId &&
     SESSION_ID_PATTERN.test(effectiveResumeSessionId)

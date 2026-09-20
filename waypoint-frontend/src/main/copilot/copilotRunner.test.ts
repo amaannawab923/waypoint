@@ -1387,6 +1387,7 @@ describe('use my Chrome (Claude in Chrome bridge, POC)', () => {
     expect(optionsAt(0).extraArgs).toBeUndefined();
     expect(optionsAt(0).allowedTools).toEqual(ALL_MCP_TOOLS);
     expect(optionsAt(0).systemPrompt).not.toContain('claude-in-chrome');
+    expect(optionsAt(0).hooks).toBeUndefined();
   });
 
   it("when granted for the turn, passes a bare --chrome via extraArgs, allows the bridge's tools, and tells the model the rules", () => {
@@ -1404,6 +1405,15 @@ describe('use my Chrome (Claude in Chrome bridge, POC)', () => {
     ]);
     expect(optionsAt(0).systemPrompt).toContain('claude-in-chrome');
     expect(optionsAt(0).systemPrompt).toContain('never browse');
+    // The tool-level guardrails ride as hooks on the browser tools only;
+    // canUseTool stays unset (zero-friction propose_* execution).
+    expect(optionsAt(0).hooks?.PreToolUse?.[0].matcher).toBe(
+      'mcp__claude-in-chrome__.*',
+    );
+    expect(optionsAt(0).hooks?.PostToolUse?.[0].matcher).toBe(
+      'mcp__claude-in-chrome__.*',
+    );
+    expect(optionsAt(0).canUseTool).toBeUndefined();
     // The isolation that keeps Copilot to OUR servers is untouched by the
     // flag — the bridge is not an MCP config entry, so strict mode can
     // stay on, and it is not a settings source either.

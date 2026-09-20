@@ -1,3 +1,4 @@
+import { createBrowserGuard, type BrowserGuard } from '../copilot/browserGuard';
 import type { InProcessServerSpec } from '../copilot/claudeSdkClient';
 import { SESSION_TOOL_NAMES } from '../copilot/sessionTools';
 import {
@@ -46,6 +47,9 @@ export interface SessionPolicy {
    * SDK's `--chrome` flag, and the matching tool names must be in
    * `mcpTools`. Absent means exactly V3's options — no flag, no tools. */
   browser?: 'claude-in-chrome';
+  /** With `browser`: this turn's tool-level guardrails (copilot/browserGuard.ts),
+   * one instance per turn — claudeSession.ts turns it into SDK hooks. */
+  browserGuard?: BrowserGuard;
   /** In-process MCP servers beside the backend's — W5a's session tools
    * (copilot/sessionTools.ts), specified per turn with the conversation
    * and a push to the renderer captured, built by claudeSdkClient.ts on
@@ -216,7 +220,12 @@ export function buildCopilotSessionPolicy(
     builtinTools: REPO_READ_TOOLS,
     mcpTools: browser ? [...MCP_TOOLS, ...BROWSER_TOOLS] : MCP_TOOLS,
     mcpHeaders: buildMcpHeaders(input.conversationId),
-    ...(browser ? { browser: 'claude-in-chrome' as const } : {}),
+    ...(browser
+      ? {
+          browser: 'claude-in-chrome' as const,
+          browserGuard: createBrowserGuard(),
+        }
+      : {}),
     ...(input.sessionTools ? { inProcessServers: [input.sessionTools] } : {}),
     buildSystemPrompt,
     promptPreamble: input.promptPreamble,
