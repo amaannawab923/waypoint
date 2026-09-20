@@ -527,6 +527,12 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
         state={state}
         composer="slot"
         composerPlacement="bottom"
+        // chat-ui's default content column is 42rem (672px): at a 1700px
+        // window half the detail pane sat empty (Sessions UX walkthrough,
+        // 2026-09-21, the founder's first caveat). 960px keeps prose lines
+        // readable while using the pane; rows are measured against this
+        // element's width, so the composer slot widens with it.
+        contentClass="mx-auto w-full max-w-[960px] px-8"
         stickToBottom
         onReady={(view) => setReady({ state, view })}
         commands={commands}

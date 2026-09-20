@@ -1,5 +1,5 @@
 import { clsx } from 'clsx';
-import { IconFolder, IconGitBranch, IconSparkles } from '@/components/icons';
+import { IconFolder, IconGitBranch } from '@/components/icons';
 import { formatRelativeTime } from '@/lib/copilotSessions';
 import { useHomeDir } from '@/lib/useHomeDir';
 import { useTicketLabel } from '@/lib/useTicketLabel';
@@ -181,6 +181,9 @@ export function SessionRow({
         <span className="min-w-0 flex-1 truncate text-xs font-semibold text-text">
           {title}
         </span>
+        {/* The verdict is the answer to "how did this go" — against the
+            title, not buried in the second line (Sessions UX walkthrough). */}
+        <VerdictChip run={run} />
         {reason ? (
           <ProviderChip providerId={run.providerId} />
         ) : (
@@ -190,35 +193,47 @@ export function SessionRow({
         )}
       </div>
       <div className="flex min-w-0 items-center gap-1.5 pl-[13px] text-[10.5px] text-text-muted">
+        {/* No "Dispatched" chip: it was true of every row from a ticket
+            and sat in the row's best position saying nothing. A run from
+            a ticket shows its mode instead; an independent run, its
+            provider. */}
         {dispatched ? (
-          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-accent-soft-bg px-1.5 text-[9.5px] font-semibold text-accent-soft-text">
-            <IconSparkles size={9} />
-            Dispatched
-          </span>
+          <IntentChip run={run} />
         ) : (
-          <ProviderChip providerId={run.providerId} size={12} />
+          <>
+            <ProviderChip providerId={run.providerId} size={12} />
+            {run.autoApprove && <AutoMark />}
+          </>
         )}
         {where?.kind === 'branch' && (
           <>
             <IconGitBranch size={10} className="shrink-0" />
-            <span className="truncate font-mono">{where.branch}</span>
+            {/* Tail-truncated: `…PL-10-qtp55qy` is the part worth keeping
+                when space is short, not `agent/P…`. */}
+            <span
+              dir="rtl"
+              className="min-w-0 truncate text-left font-mono"
+              title={where.branch}
+            >
+              <bdi>{where.branch}</bdi>
+            </span>
           </>
         )}
         {where?.kind === 'folder' && (
           <>
             <IconFolder size={10} className="shrink-0" />
-            <span className="truncate font-mono">{where.path}</span>
+            <span
+              dir="rtl"
+              className="min-w-0 truncate text-left font-mono"
+              title={where.path}
+            >
+              <bdi>{where.path}</bdi>
+            </span>
           </>
         )}
         {!where && (
           <span className="truncate">{providerView(run.providerId).name}</span>
         )}
-        {run.entry === 'dispatched' ? (
-          <IntentChip run={run} />
-        ) : (
-          run.autoApprove && <AutoMark />
-        )}
-        <VerdictChip run={run} />
       </div>
       {reason && (
         <div className="truncate pl-[13px] text-[10.5px] text-warning">

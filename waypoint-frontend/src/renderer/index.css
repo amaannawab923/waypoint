@@ -14,7 +14,9 @@
   --border-strong: #d3d3d9;
   --text: #0a0a0c;
   --text-secondary: #53535c;
-  --text-muted: #9a9aa3;
+  /* 5.0:1 on --bg (was #9a9aa3, 2.8:1 — failed AA at the 10–11px sizes the
+     session list, header metadata and usage strip set it at). */
+  --text-muted: #6e6e78;
 
   --accent: #18181b;
   --accent-hover: #000000;
@@ -68,7 +70,8 @@
   --border-strong: #3a3a42;
   --text: #f2f2f4;
   --text-secondary: #a8a8b3;
-  --text-muted: #6b6b76;
+  /* 6.0:1 on --bg (was #6b6b76, 3.8:1 — failed AA). */
+  --text-muted: #8d8d97;
 
   --accent: #f2f2f4;
   --accent-hover: #ffffff;
