@@ -228,6 +228,31 @@ describe('drain', () => {
       expect(rows.get('pp-2')?.state).toBe('queued');
       expect(daemon.sendPrompt).not.toHaveBeenCalled();
     });
+
+    it('is left exactly as claimed — `sending`, no ledger write, blocking what is behind it — while the daemon is still generating; the direct regression for the false-unresolved/duplicate-on-resend bug', async () => {
+      const { ledger, rows } = store([
+        row({ seq: 1, state: 'sending', text: 'lost?' }),
+        row({ seq: 2, text: 'next' }),
+      ]);
+      const daemon = daemonWith({
+        listSessions: jest.fn(async () => ({
+          'run-abc1234': { conversationId: 'run-abc1234', isGenerating: true },
+        })),
+      });
+      const result = await drain({ ledger, logger }, daemon, run, {
+        trigger: 'boot',
+      });
+      expect(result).toMatchObject({
+        delivered: 0,
+        blockedBy: { row: { id: 'pp-1' }, why: 'still-generating' },
+      });
+      // Not `unresolved` — no write at all, `sending` is still the
+      // truth, and nothing behind it moves until this resolves for real.
+      expect(ledger.updatePendingPrompt).not.toHaveBeenCalled();
+      expect(rows.get('pp-1')?.state).toBe('sending');
+      expect(rows.get('pp-2')?.state).toBe('queued');
+      expect(daemon.sendPrompt).not.toHaveBeenCalled();
+    });
   });
 
   it('`only` delivers just those rows — a send’s older-first, then its own text, then the rest', async () => {

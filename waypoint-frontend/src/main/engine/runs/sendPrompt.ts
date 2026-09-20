@@ -175,7 +175,11 @@ async function sendRunPromptLocked(
     // arrived meanwhile — the daemon queues behind a working turn on its
     // own (`placement: 'auto'`).
     const fate = await deliverAround(deps, daemon, run, text, older, trigger);
-    if (fate === 'blocked') return outboxed(deps, run, text, 'starting');
+    // The session itself is live — not starting. Blocked by an earlier
+    // row in this run's outbox still resolving (found in review: this
+    // used to say 'starting', which is false once the session is up).
+    if (fate === 'blocked')
+      return outboxed(deps, run, text, 'blocked-by-earlier');
     await recordSent(deps, run.id);
     return {
       outcome: live.isGenerating ? 'queued' : 'sent',
@@ -215,7 +219,11 @@ async function sendRunPromptLocked(
       return outboxed(deps, run, text, 'spawn-failed');
     }
     const fate = await deliverAround(deps, daemon, run, text, older, trigger);
-    if (fate === 'blocked') return outboxed(deps, run, text, 'starting');
+    // The session itself is live — not starting. Blocked by an earlier
+    // row in this run's outbox still resolving (found in review: this
+    // used to say 'starting', which is false once the session is up).
+    if (fate === 'blocked')
+      return outboxed(deps, run, text, 'blocked-by-earlier');
     await recordSent(deps, run.id);
     return { outcome: 'sent', status: run.status };
   }
@@ -280,7 +288,11 @@ async function sendRunPromptLocked(
     trigger,
     hiddenContext,
   );
-  if (fate === 'blocked') return outboxed(deps, run, text, 'starting');
+  // Just resumed/loaded — not starting either. Blocked by an earlier row
+  // in this run's outbox still resolving (found in review: this used to
+  // say 'starting', which is false once the resume has already landed).
+  if (fate === 'blocked')
+    return outboxed(deps, run, text, 'blocked-by-earlier');
   // No spawn happened in this send: the session was alive, or the pane
   // had already warmed it — `continued`, not `resumed-and-sent`.
   const continued = alive !== null;

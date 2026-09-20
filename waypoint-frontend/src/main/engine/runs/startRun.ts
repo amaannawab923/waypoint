@@ -13,7 +13,7 @@ import {
 import { agentEnvFor } from './agentEnv';
 import type { DaemonRunsApi } from './daemonApi';
 import { describeFolder, rememberFolder, type FolderDeps } from './folders';
-import { claimForInitialQueue, markDelivered } from './outbox';
+import { claimForInitialQueue, markDelivered, revertClaimed } from './outbox';
 import {
   assertRunId,
   type AgentRun,
@@ -412,13 +412,13 @@ export async function continueStart(
       ...(initialQueue.length ? { initialQueue } : {}),
       ...(options.env ? { env: options.env } : {}),
     });
-    if (pending.length) {
-      await markDelivered(
-        { ledger, logger: deps.logger },
-        run.id,
-        pending.map((p) => p.row),
-      );
-    }
+    // The stillProvisioning check runs BEFORE marking these delivered
+    // (found in review): a Stop landing in the window while startSession
+    // was in flight kills the session right below, and this same start
+    // is the only witness to whether the agent ever actually saw its
+    // initialQueue — recording `delivered` first and then destroying
+    // that session left rows permanently marked delivered with no way
+    // to know if they were.
     if (!(await stillProvisioning(ledger, run.id))) {
       deps.logger.info(
         'engine: run was stopped while its session started; killing it',
@@ -426,6 +426,13 @@ export async function continueStart(
           runId: run.id,
         },
       );
+      if (pending.length) {
+        await revertClaimed(
+          { ledger, logger: deps.logger },
+          run.id,
+          pending.map((p) => p.row),
+        );
+      }
       await daemon.killSession(run.id).catch((error: unknown) =>
         deps.logger.warn('engine: kill after a cancelled start did not apply', {
           runId: run.id,
@@ -433,6 +440,13 @@ export async function continueStart(
         }),
       );
       return;
+    }
+    if (pending.length) {
+      await markDelivered(
+        { ledger, logger: deps.logger },
+        run.id,
+        pending.map((p) => p.row),
+      );
     }
 
     const running = await ledger.updateRun(run.id, {

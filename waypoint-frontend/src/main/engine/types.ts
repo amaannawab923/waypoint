@@ -829,7 +829,12 @@ export type PendingPromptReason =
   | 'folder-missing'
   | 'repository-missing'
   | 'spawn-failed'
-  | 'owner-offline';
+  | 'owner-offline'
+  /** An earlier row in this run's outbox is still resolving (found in
+   * review: a live/just-resumed send blocked behind one used to be
+   * mislabeled `starting`, which is false once the session is already
+   * up). */
+  | 'blocked-by-earlier';
 export type PendingPromptState =
   'queued' | 'sending' | 'delivered' | 'unresolved' | 'dropped';
 export interface PendingPrompt {

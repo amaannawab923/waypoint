@@ -4,6 +4,7 @@ import type {
   DaemonWorkspaceRecord,
 } from './daemonApi';
 import type { AgentRun, AgentRunStatus, LedgerClient } from './ledgerClient';
+import { drain } from './outbox';
 import { tryWithRunLock } from './runLock';
 
 /**
@@ -185,6 +186,45 @@ export interface ReconcileReport {
   failures: Array<{ action: ReconcileAction; message: string }>;
 }
 
+/**
+ * Never-lock (design §2.4 trigger 3 / §7.2): a run this reconcile just
+ * found (or confirmed) has a live daemon session may also have rows
+ * sitting in its outbox — messages that arrived while nobody was home,
+ * or a `sending` claim a crash left behind. Nothing else was draining
+ * them (found in review: this trigger was documented, never wired up),
+ * so a stale claim could sit forever on a run nobody happened to reopen.
+ * Non-blocking, like `kill-stale`'s own lock use just below: reconcile
+ * runs on every daemon (re)connect, not only at launch, and a resume
+ * genuinely in flight for this exact run owns the lock legitimately —
+ * skip it this pass rather than stall the rest of reconcile behind it;
+ * the run's own next mount/focus/send drains it same as any other.
+ */
+async function drainOutboxIfLive(
+  deps: ReconcileDeps,
+  runId: string,
+): Promise<void> {
+  // A bonus cleanup riding on `reattach`/`adopt`, not their point — its
+  // own failure never marks the reconcile action itself failed.
+  try {
+    const outcome = await tryWithRunLock(runId, async () => {
+      const run = await deps.ledger.getRun(runId);
+      if (!run) return;
+      await drain(deps, deps.daemon, run, { trigger: 'boot' });
+    });
+    if (!outcome.acquired) {
+      deps.logger.info(
+        'engine: boot outbox drain skipped — the run lock is held',
+        { runId },
+      );
+    }
+  } catch (error) {
+    deps.logger.warn('engine: boot outbox drain failed', {
+      runId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 async function applyAction(
   deps: ReconcileDeps,
   action: ReconcileAction,
@@ -193,11 +233,13 @@ async function applyAction(
     case 'leave':
       return;
     case 'reattach':
-      if (action.finished) return;
-      await deps.ledger.appendEvent(action.runId, 'session_resumed', {
-        at: 'boot',
-        note: 'daemon session found live; re-attached',
-      });
+      if (!action.finished) {
+        await deps.ledger.appendEvent(action.runId, 'session_resumed', {
+          at: 'boot',
+          note: 'daemon session found live; re-attached',
+        });
+      }
+      await drainOutboxIfLive(deps, action.runId);
       return;
     case 'adopt':
       await deps.ledger.updateRun(action.runId, {
@@ -209,6 +251,7 @@ async function applyAction(
         at: 'boot',
         note: 'daemon resumed the session while Waypoint was away',
       });
+      await drainOutboxIfLive(deps, action.runId);
       return;
     case 'kill-stale': {
       // ROAD-XXX: a resume (button or a transparent revive on message)

@@ -205,12 +205,16 @@ function fakeDaemon(
     listWorkspaceRecords: jest.fn(async () => ({})),
     listSessions: jest.fn(async () => ({})),
     killSession: jest.fn(async () => {}),
+    getHistory: jest.fn(async () => []),
+    sendPrompt: jest.fn(async () => {}),
     ...overrides,
   } as jest.Mocked<DaemonRunsApi>;
 }
 
 function fakeLedger(
   rows: Record<string, Partial<AgentRun>> = {},
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a test double's own record shape, not the real PendingPrompt
+  pending: Map<string, any> = new Map(),
 ): jest.Mocked<LedgerClient> {
   return {
     createRun: jest.fn(),
@@ -231,6 +235,20 @@ function fakeLedger(
       payload: {},
       at: '',
     })),
+    listPendingPrompts: jest.fn(async (runId: string) =>
+      [...pending.values()]
+        .filter((p) => p.runId === runId)
+        .sort((a, b) => a.seq - b.seq),
+    ),
+    updatePendingPrompt: jest.fn(
+      async (_runId: string, pendingId: string, patch) => {
+        const current = pending.get(pendingId);
+        if (!current) throw new Error(`no pending prompt ${pendingId}`);
+        const next = { ...current, ...patch };
+        pending.set(pendingId, next);
+        return next;
+      },
+    ),
   } as unknown as jest.Mocked<LedgerClient>;
 }
 
@@ -264,12 +282,16 @@ describe('reconcileRunsAtBoot', () => {
     expect(ledger.listAllRuns).toHaveBeenCalledWith({
       status: ['provisioning', 'running', 'blocked', 'finishing'],
     });
-    // Only the daemon's run-named sessions that are not live get looked
-    // up — 'run-old' twice: once building `otherRuns`, once more inside
-    // kill-stale's own re-read under the run lock (ROAD-XXX), since a
-    // resume could have landed between the plan and this action's turn.
+    // The daemon's run-named sessions that are not live get looked up
+    // building `otherRuns`; 'run-old' again inside kill-stale's own
+    // re-read under the run lock (ROAD-XXX), since a resume could have
+    // landed between the plan and this action's turn; 'run-back' and
+    // 'run-live' again for their outbox drain (never-lock, design
+    // §2.4 trigger 3 — reattach/adopt's own re-read before draining).
     expect(ledger.getRun.mock.calls.map((c) => c[0]).sort()).toEqual([
       'run-back',
+      'run-back',
+      'run-live',
       'run-old',
       'run-old',
       'run-x',
@@ -382,6 +404,145 @@ describe('reconcileRunsAtBoot', () => {
     expect(report.failures).toEqual([]);
     expect(daemon.killSession).not.toHaveBeenCalled();
     expect(ledger.appendEvent).not.toHaveBeenCalled();
+  });
+
+  // Never-lock (design §2.4 trigger 3 / §7.2): a reattach or an adopt
+  // means a live session exists now — its outbox, if it has one, was
+  // never anyone's job to drain until this (found in review: the
+  // trigger was documented, never wired up).
+  describe('the outbox drains at boot, on reattach and on adopt', () => {
+    it('delivers a queued row on a run the daemon still has (reattach)', async () => {
+      const pending = new Map([
+        [
+          'pp-1',
+          {
+            id: 'pp-1',
+            runId: 'run-live',
+            seq: 1,
+            state: 'queued',
+            text: 'while you were away',
+            byMemberId: 'mem-1',
+            reason: 'starting',
+            autoAttempts: 0,
+            lastError: null,
+            claimedAt: null,
+            resolvedAt: null,
+            createdAt: '2026-09-20T00:00:00.000Z',
+          },
+        ],
+      ]);
+      const daemon = fakeDaemon({
+        listSessions: jest.fn(async () => ({
+          'run-live': { conversationId: 'run-live' } as never,
+        })),
+      });
+      const ledger = fakeLedger(
+        { 'run-live': { status: 'running', ownerMemberId: 'mem-1' } },
+        pending,
+      );
+
+      const report = await reconcileRunsAtBoot({ daemon, ledger, logger });
+
+      expect(report.actions.map((a) => a.kind)).toEqual(['reattach']);
+      expect(report.failures).toEqual([]);
+      expect(daemon.sendPrompt).toHaveBeenCalledWith(
+        'run-live',
+        'while you were away',
+        undefined,
+      );
+      expect(pending.get('pp-1')?.state).toBe('delivered');
+    });
+
+    it('delivers a queued row on a run the daemon resumed while Waypoint was away (adopt)', async () => {
+      const pending = new Map([
+        [
+          'pp-1',
+          {
+            id: 'pp-1',
+            runId: 'run-back',
+            seq: 1,
+            state: 'queued',
+            text: 'catch me up',
+            byMemberId: 'mem-1',
+            reason: 'starting',
+            autoAttempts: 0,
+            lastError: null,
+            claimedAt: null,
+            resolvedAt: null,
+            createdAt: '2026-09-20T00:00:00.000Z',
+          },
+        ],
+      ]);
+      const daemon = fakeDaemon({
+        listSessions: jest.fn(async () => ({
+          'run-back': { conversationId: 'run-back' } as never,
+        })),
+      });
+      const ledger = fakeLedger(
+        { 'run-back': { status: 'interrupted', ownerMemberId: 'mem-1' } },
+        pending,
+      );
+
+      const report = await reconcileRunsAtBoot({ daemon, ledger, logger });
+
+      expect(report.actions.map((a) => a.kind)).toEqual(['adopt']);
+      expect(report.failures).toEqual([]);
+      expect(daemon.sendPrompt).toHaveBeenCalledWith(
+        'run-back',
+        'catch me up',
+        undefined,
+      );
+      expect(pending.get('pp-1')?.state).toBe('delivered');
+    });
+
+    it('does not stall the rest of reconcile, and does not mark the action failed, when the run lock is already held', async () => {
+      const pending = new Map([
+        [
+          'pp-1',
+          {
+            id: 'pp-1',
+            runId: 'run-live',
+            seq: 1,
+            state: 'queued',
+            text: 'hello',
+            byMemberId: 'mem-1',
+            reason: 'starting',
+            autoAttempts: 0,
+            lastError: null,
+            claimedAt: null,
+            resolvedAt: null,
+            createdAt: '2026-09-20T00:00:00.000Z',
+          },
+        ],
+      ]);
+      const daemon = fakeDaemon({
+        listSessions: jest.fn(async () => ({
+          'run-live': { conversationId: 'run-live' } as never,
+        })),
+      });
+      const ledger = fakeLedger({ 'run-live': { status: 'running' } }, pending);
+
+      let releaseSend: (() => void) | null = null;
+      const sending = withRunLock('run-live', async () => {
+        await new Promise<void>((resolve) => {
+          releaseSend = resolve;
+        });
+      });
+
+      const report = await reconcileRunsAtBoot({ daemon, ledger, logger });
+
+      expect(report.actions.map((a) => a.kind)).toEqual(['reattach']);
+      expect(report.failures).toEqual([]);
+      expect(daemon.sendPrompt).not.toHaveBeenCalled();
+      expect(pending.get('pp-1')?.state).toBe('queued');
+      expect(logger.info).toHaveBeenCalledWith(
+        'engine: boot outbox drain skipped — the run lock is held',
+        { runId: 'run-live' },
+      );
+
+      releaseSend!();
+      await sending;
+    });
   });
 
   it('isolates a failing action: the rest of the plan still runs and the failure is reported', async () => {

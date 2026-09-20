@@ -64,6 +64,27 @@ function BriefBar({ brief, label }: { brief: string; label: string }) {
   );
 }
 
+/** The outbox strip's second line, per row state — never a nested ternary. */
+function outboxRowSentence(
+  row: PendingPrompt,
+  run: Pick<AgentRun, 'cwd' | 'worktreePath'>,
+): string {
+  if (row.state === 'unresolved') {
+    return 'Waypoint could not tell whether this reached the agent — check the transcript, then resend or discard it.';
+  }
+  if (row.state === 'sending') {
+    // A host that restarted mid-turn leaves a row claimed this way
+    // while the agent may still be working on it (never-lock,
+    // outbox.ts's resolveStale) — not the row's own `reason`, which is
+    // stale once it's gotten this far.
+    return 'Checking whether this reached the agent…';
+  }
+  return pendingReasonSentence(row.reason, {
+    cwd: run.cwd ?? run.worktreePath,
+    lastError: row.lastError,
+  });
+}
+
 /**
  * The outbox strip (never-lock, design §2.4): every message the person
  * sent that is not with the daemon yet — accepted, kept in the ledger,
@@ -96,14 +117,7 @@ function OutboxStrip({
             <div className="truncate text-text" title={row.text}>
               {row.text}
             </div>
-            <div className="text-text-muted">
-              {row.state === 'unresolved'
-                ? 'Waypoint could not tell whether this reached the agent — check the transcript, then resend or discard it.'
-                : pendingReasonSentence(row.reason, {
-                    cwd: run.cwd ?? run.worktreePath,
-                    lastError: row.lastError,
-                  })}
-            </div>
+            <div className="text-text-muted">{outboxRowSentence(row, run)}</div>
           </div>
           {i === 0 && (
             <button

@@ -79,19 +79,29 @@ export async function enqueue(
 /**
  * A `sending` row left behind by a host that died between the daemon
  * call and the `delivered` write. Resolved by looking at what the daemon
- * has: the text among its queued prompts or its recent user messages →
- * it was delivered; the session gone or a different provider session
- * than at claim time → it cannot have been → back to `queued`; else the
- * honest answer is `unresolved`, and only a person moves it on.
+ * has: the text among its recent user messages → it was delivered; the
+ * session gone → it cannot have been → back to `queued`; the session
+ * live but actively generating a turn → the daemon call plausibly went
+ * through and IS that turn, just not committed to history yet — wait
+ * rather than guess (found in review: `daemon.sendPrompt` races its RPC
+ * against a short acceptance window and can resolve well before the
+ * agent's turn actually ends, so "not yet in history" is the ordinary
+ * case for anything still being worked on, not a rare crash window; a
+ * host that crashed mid-turn would otherwise misclassify a genuinely
+ * delivered message as `unresolved` on every restart, and a later Resend
+ * would then hand the same text to the agent a second time). Only when
+ * the session is live, idle, and the text is nowhere in recent history
+ * is the honest answer `unresolved` — and only a person moves it on
+ * from there.
  */
 async function resolveStale(
   deps: OutboxDeps,
   daemon: DaemonRunsApi,
   run: AgentRun,
   row: PendingPrompt,
-): Promise<'delivered' | 'queued' | 'unresolved'> {
+): Promise<'delivered' | 'queued' | 'unresolved' | 'deferred'> {
   const wanted = row.text.trim();
-  const sessions: Record<string, unknown> = await daemon
+  const sessions: Record<string, { isGenerating?: boolean }> = await daemon
     .listSessions()
     .catch(() => ({}));
   const live = sessions[run.id];
@@ -117,6 +127,14 @@ async function resolveStale(
     });
     return 'delivered';
   }
+  if (live.isGenerating) {
+    // Left claimed `sending`, not in history yet, the agent is
+    // working: this drain leaves the row exactly as it found it — no
+    // ledger write — so the next drain (the turn's own end, a later
+    // mount/focus, a person's Resend) re-checks with the turn's actual
+    // outcome on record instead of a guess made mid-flight.
+    return 'deferred';
+  }
   await deps.ledger.updatePendingPrompt(run.id, row.id, {
     state: 'unresolved',
   });
@@ -128,7 +146,7 @@ export interface DrainResult {
   /** A row that could not be sent and now blocks the rest, with why. */
   blockedBy: {
     row: PendingPrompt;
-    why: 'unresolved' | 'spawn-failed' | 'no-session';
+    why: 'unresolved' | 'spawn-failed' | 'no-session' | 'still-generating';
   } | null;
 }
 
@@ -175,6 +193,8 @@ export async function drain(
       }
       if (fate === 'unresolved')
         return { delivered, blockedBy: { row, why: 'unresolved' } };
+      if (fate === 'deferred')
+        return { delivered, blockedBy: { row, why: 'still-generating' } };
       // queued again: falls through to a fresh attempt below
     } else if (row.state === 'unresolved') {
       return { delivered, blockedBy: { row, why: 'unresolved' } };
@@ -253,6 +273,28 @@ export async function markDelivered(
     // eslint-disable-next-line no-await-in-loop
     await deps.ledger
       .updatePendingPrompt(runId, row.id, { state: 'delivered' })
+      .catch(() => {});
+  }
+}
+
+/**
+ * The mirror of `markDelivered`, for a claim that turned out to have
+ * nowhere to land — a start's `initialQueue` whose session was killed
+ * before the caller could tell whether the agent ever saw it (found in
+ * review: `continueStart` used to mark these `delivered` regardless).
+ * Back to `queued`, as undelivered as the day they were claimed; the
+ * backend clears `claimedAt` itself on this transition.
+ */
+export async function revertClaimed(
+  deps: OutboxDeps,
+  runId: string,
+  rows: PendingPrompt[],
+): Promise<void> {
+  // eslint-disable-next-line no-restricted-syntax -- sequential on purpose: FIFO
+  for (const row of rows) {
+    // eslint-disable-next-line no-await-in-loop
+    await deps.ledger
+      .updatePendingPrompt(runId, row.id, { state: 'queued' })
       .catch(() => {});
   }
 }

@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { DaemonRunsApi, DaemonWorkspaceRecord } from './daemonApi';
+import type { PendingPrompt } from '../types';
 import {
   LedgerRequestError,
   type AgentRun,
@@ -103,9 +104,33 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
 }
 
 /** A ledger that keeps its rows: updates are visible to later reads. */
-function fakeLedger(seed: AgentRun[] = []) {
+function fakeLedger(seed: AgentRun[] = [], pendingSeed: PendingPrompt[] = []) {
   const rows = new Map(seed.map((r) => [r.id, r]));
+  const pending = new Map(pendingSeed.map((p) => [p.id, p]));
   const ledger = {
+    listPendingPrompts: jest.fn(async (runId: string) =>
+      [...pending.values()]
+        .filter((p) => p.runId === runId)
+        .sort((a, b) => a.seq - b.seq),
+    ),
+    updatePendingPrompt: jest.fn(
+      async (
+        _runId: string,
+        pendingId: string,
+        patch: Partial<PendingPrompt>,
+      ) => {
+        const current = pending.get(pendingId);
+        if (!current) throw new Error(`no pending prompt ${pendingId}`);
+        const next = {
+          ...current,
+          ...patch,
+          claimedAt:
+            patch.state === 'queued' ? null : (current.claimedAt ?? null),
+        } as PendingPrompt;
+        pending.set(pendingId, next);
+        return next;
+      },
+    ),
     listProjects: jest.fn(async () => [
       { id: 'proj-1', name: 'Waypoint', repoPath: repoDir },
       { id: 'proj-nolink', name: 'Docs', repoPath: null },
@@ -154,7 +179,7 @@ function fakeLedger(seed: AgentRun[] = []) {
     listRuns: jest.fn(),
     listAllRuns: jest.fn(),
   } as unknown as jest.Mocked<LedgerClient>;
-  return { ledger, rows };
+  return { ledger, rows, pending };
 }
 
 // Overrides are loosely typed on purpose: a scripted answer is a
@@ -461,6 +486,50 @@ describe('continueStart', () => {
       ledger.updateRun.mock.calls.some(([, p]) => p.status === 'running'),
     ).toBe(false);
     expect(rows.get('run-a1')?.status).toBe('cancelled');
+  });
+
+  it('reverts outbox rows folded into a killed start’s initialQueue back to `queued` — never `delivered` for a session the agent may never have seen', async () => {
+    const pendingRow: PendingPrompt = {
+      id: 'pp-1',
+      runId: 'run-a1',
+      seq: 1,
+      byMemberId: 'mem-1',
+      text: 'typed while starting',
+      reason: 'starting',
+      state: 'queued',
+      autoAttempts: 0,
+      lastError: null,
+      claimedAt: null,
+      resolvedAt: null,
+      createdAt: '2026-09-20T00:00:00.000Z',
+    };
+    const { ledger, rows, pending } = fakeLedger(
+      [run({ id: 'run-a1', status: 'provisioning' })],
+      [pendingRow],
+    );
+    const daemon = fakeDaemon({
+      startSession: jest.fn(async () => {
+        rows.set('run-a1', {
+          ...(rows.get('run-a1') as AgentRun),
+          status: 'cancelled',
+        });
+        return { sessionId: 'sess-1' };
+      }),
+    });
+
+    await continueStart(
+      depsWith(ledger, daemon),
+      rows.get('run-a1') as AgentRun,
+      repoDir,
+    );
+
+    expect(daemon.killSession).toHaveBeenCalledWith('run-a1');
+    // Not `delivered` — this start's session was killed before anyone
+    // could tell whether the agent ever acted on its initial queue.
+    expect(pending.get('pp-1')).toMatchObject({
+      state: 'queued',
+      claimedAt: null,
+    });
   });
 
   it('a Stop that lands while the worktree is being made: no failure recorded, no session', async () => {

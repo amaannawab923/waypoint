@@ -268,6 +268,8 @@ export function pendingReasonSentence(
       return `Waiting to send — the agent could not be started${detail.lastError ? ` (${detail.lastError})` : ''}. Waypoint retries when you send again, or press Resend.`;
     case 'owner-offline':
       return `Queued for ${detail.ownerName ?? 'the run owner'}'s Waypoint; it is sent when they are online.`;
+    case 'blocked-by-earlier':
+      return 'Waiting to send — behind an earlier message in this run’s outbox. Waypoint sends it right after.';
     default:
       return 'Waiting to send.';
   }
