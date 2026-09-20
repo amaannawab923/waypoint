@@ -6,6 +6,7 @@ import {
   SESSION_BROWSER_SERVER_NAME,
   registerSessionBrowser,
   sessionBrowserEntry,
+  sessionBrowserEntryCandidates,
   sessionBrowserServer,
 } from './sessionBrowser';
 
@@ -93,14 +94,22 @@ describe('sessionBrowserServer', () => {
     expect(server.providers).toEqual(['claude']);
   });
 
-  it('names the entry under the app path, and this checkout really has it at the pinned version', () => {
-    expect(sessionBrowserEntry('/app')).toBe(
+  it('names the entry under the app path — packaged, then release/app in development — and this checkout really has it at the pinned version', () => {
+    expect(sessionBrowserEntryCandidates('/app')).toEqual([
       '/app/node_modules/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js',
+      '/app/release/app/node_modules/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js',
+    ]);
+    // Nothing installed: the packaged path, for the warning to name.
+    expect(sessionBrowserEntry('/nowhere')).toBe(
+      '/nowhere/node_modules/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js',
     );
     const here = sessionBrowserEntry(appPath);
+    expect(here).toBe(sessionBrowserEntryCandidates(appPath)[1]);
     expect(fs.existsSync(here)).toBe(true);
     const pkg = path.join(
       appPath,
+      'release',
+      'app',
       'node_modules',
       'chrome-devtools-mcp',
       'package.json',

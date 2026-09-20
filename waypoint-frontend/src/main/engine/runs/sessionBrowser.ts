@@ -40,22 +40,34 @@ import { createDaemonRunsApi, type DaemonMcpServer } from './daemonApi';
 export const SESSION_BROWSER_SERVER_NAME = 'waypoint-browser';
 
 /**
- * The server's stdio entry under this app's own node_modules. Built from
- * a path, not `require.resolve`: webpack rewrites that to a cwd-relative
- * `./node_modules/…` inside the main bundle (seen live), and the daemon
- * spawns from its own cwd. `appPath` is `app.getAppPath()` — the checkout
- * in development, the bundle when packaged.
+ * The server's stdio entry. It is a `release/app` dependency (beside the
+ * Agent SDK — runtime-only, never bundled: as a root dependency the
+ * renderer DLL build tried to webpack it and CI failed), so it lives at
+ * `<app>/release/app/node_modules/…` in development and at
+ * `<app>/node_modules/…` once packaged (release/app becomes the app
+ * root). Built from a path, not `require.resolve`: webpack rewrites that
+ * to a cwd-relative `./node_modules/…` inside the main bundle (seen
+ * live), and the daemon spawns from its own cwd. `appPath` is
+ * `app.getAppPath()`.
  */
-export function sessionBrowserEntry(appPath: string): string {
-  return path.join(
-    appPath,
-    'node_modules',
+export function sessionBrowserEntryCandidates(appPath: string): string[] {
+  const rel = [
     'chrome-devtools-mcp',
     'build',
     'src',
     'bin',
     'chrome-devtools-mcp.js',
-  );
+  ];
+  return [
+    path.join(appPath, 'node_modules', ...rel),
+    path.join(appPath, 'release', 'app', 'node_modules', ...rel),
+  ];
+}
+
+/** The first candidate that exists, else the first (for the warning). */
+export function sessionBrowserEntry(appPath: string): string {
+  const candidates = sessionBrowserEntryCandidates(appPath);
+  return candidates.find((c) => fs.existsSync(c)) ?? candidates[0];
 }
 
 export function sessionBrowserServer(
