@@ -71,6 +71,14 @@ export async function createPendingPrompt(runId: string, input: CreatePendingPro
       .from(agentRunPendingPrompts)
       .where(eq(agentRunPendingPrompts.runId, runId));
     const by = currentMemberId();
+    // Never trust a caller's own claim for WHY a message is waiting — a
+    // teammate creating a row on someone else's run can only ever be
+    // waiting because that owner's Waypoint isn't the one draining it
+    // (`owner-offline`), whatever `input.reason` says; only the owner's
+    // own host, enqueuing its own outbox row, gets to name the real
+    // obstacle (found in review: the reason was accepted from the client
+    // unconstrained by who was actually calling).
+    const reason = by === run.ownerMemberId ? input.reason : 'owner-offline';
     const [row] = await tx
       .insert(agentRunPendingPrompts)
       .values({
@@ -79,7 +87,7 @@ export async function createPendingPrompt(runId: string, input: CreatePendingPro
         seq: Number(max) + 1,
         byMemberId: by,
         text: input.text,
-        reason: input.reason,
+        reason,
       })
       .returning();
     await writeEvent(tx, runId, 'prompt_queued', {
@@ -135,9 +143,22 @@ export async function updatePendingPrompt(
       }
       if (input.state === 'queued') patch.claimedAt = null;
     }
-    if (input.reason !== undefined) patch.reason = input.reason;
-    if (input.autoAttempts !== undefined) patch.autoAttempts = input.autoAttempts;
-    if (input.lastError !== undefined) patch.lastError = input.lastError;
+    // `reason`/`autoAttempts`/`lastError` are the drain's own bookkeeping
+    // (outbox.ts sets these on the owner's host alone, sometimes with no
+    // `state` change at all — e.g. `resetAutoAttempts`) — never a field a
+    // request without a `state` transition should be able to touch. Gated
+    // here too, not just above: a request with `state` equal to the row's
+    // current state (or omitted) used to skip the owner check entirely and
+    // still fall through to these three unconditional writes, letting any
+    // workspace member rewrite another member's row (found in review).
+    if (input.reason !== undefined || input.autoAttempts !== undefined || input.lastError !== undefined) {
+      if (!isOwner) {
+        throw new ConflictError('Only the run owner updates a pending prompt’s delivery bookkeeping.');
+      }
+      if (input.reason !== undefined) patch.reason = input.reason;
+      if (input.autoAttempts !== undefined) patch.autoAttempts = input.autoAttempts;
+      if (input.lastError !== undefined) patch.lastError = input.lastError;
+    }
     if (Object.keys(patch).length === 0) return current;
 
     const [updated] = await tx

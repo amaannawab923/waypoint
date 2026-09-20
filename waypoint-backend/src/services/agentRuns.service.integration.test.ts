@@ -1188,6 +1188,69 @@ describe.skipIf(!REAL_DB)('agent runs against real Postgres', () => {
       }
     });
 
+    it('a teammate cannot rewrite the owner-only bookkeeping fields by omitting `state` — the direct regression for the field-only bypass', async () => {
+      const otherMember = `mem-outbox-bypass-${stamp}`;
+      await db.insert(schema.members).values({
+        id: otherMember,
+        workspaceId,
+        fullName: 'Teammate',
+        displayName: 'Teammate',
+        email: `${otherMember}@example.test`,
+        avatarColor: '#000000',
+      });
+      try {
+        const run = await createRun({ ...base(), ticketId: null, entry: 'independent' });
+        const row = await as(() => pending.createPendingPrompt(run.id, { text: 'mine', reason: 'starting' }));
+        // No `state` field at all — the check that used to gate these
+        // three writes lived entirely inside the `state`-change branch.
+        await expect(
+          as(
+            () => pending.updatePendingPrompt(run.id, row.id, { autoAttempts: 99, lastError: 'forged' }),
+            otherMember,
+          ),
+        ).rejects.toThrow(/Only the run owner/);
+        // `state` present but equal to the row's current state also used
+        // to skip the whole guard block.
+        await expect(
+          as(
+            () => pending.updatePendingPrompt(run.id, row.id, { state: 'queued', reason: 'spawn-failed' }),
+            otherMember,
+          ),
+        ).rejects.toThrow(/Only the run owner/);
+        const untouched = await as(() => pending.listPendingPrompts(run.id));
+        expect(untouched[0]).toMatchObject({ autoAttempts: 0, lastError: null, reason: 'starting' });
+        // The owner may still do it.
+        const patched = await as(() => pending.updatePendingPrompt(run.id, row.id, { autoAttempts: 1 }));
+        expect(patched.autoAttempts).toBe(1);
+        await db.delete(schema.agentRuns).where(eq(schema.agentRuns.id, run.id));
+      } finally {
+        await db.delete(schema.members).where(eq(schema.members.id, otherMember));
+      }
+    });
+
+    it("a teammate's claimed `reason` is ignored — the server names it owner-offline regardless", async () => {
+      const otherMember = `mem-outbox-reason-${stamp}`;
+      await db.insert(schema.members).values({
+        id: otherMember,
+        workspaceId,
+        fullName: 'Teammate',
+        displayName: 'Teammate',
+        email: `${otherMember}@example.test`,
+        avatarColor: '#000000',
+      });
+      try {
+        const run = await createRun({ ...base(), ticketId: null, entry: 'independent' });
+        const row = await as(
+          () => pending.createPendingPrompt(run.id, { text: 'from a teammate', reason: 'spawn-failed' }),
+          otherMember,
+        );
+        expect(row.reason).toBe('owner-offline');
+        await db.delete(schema.agentRuns).where(eq(schema.agentRuns.id, run.id));
+      } finally {
+        await db.delete(schema.members).where(eq(schema.members.id, otherMember));
+      }
+    });
+
     it('a crash resolution: sending → unresolved, then queued again or delivered; autoAttempts and lastError are plain fields', async () => {
       const run = await createRun({ ...base(), ticketId: null, entry: 'independent' });
       const row = await as(() => pending.createPendingPrompt(run.id, { text: 'x', reason: 'spawn-failed' }));
