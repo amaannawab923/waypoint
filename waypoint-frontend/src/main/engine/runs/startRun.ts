@@ -868,8 +868,12 @@ export async function resumeRunCore(
 
   // Where a marker for this resume anchors: after the last turn the
   // ledger's snapshot holds right now (design §5.2). Read before the
-  // reopen so a Stop mid-resume costs nothing more than the read.
-  const afterTurnId = await lastSnapshotTurnId(deps.ledger, run.id);
+  // reopen so a Stop mid-resume costs nothing more than the read. A run
+  // with no snapshot (one that never reached a turn end under Waypoint)
+  // gets its anchor from the daemon's restored history below, once the
+  // session is loaded — found live: anchored to nothing, the marker fell
+  // after the turn the message itself started.
+  let afterTurnId = await lastSnapshotTurnId(deps.ledger, run.id);
 
   const { run: provisioning } = await deps.ledger.reopenRun(
     run.id,
@@ -970,6 +974,15 @@ export async function resumeRunCore(
     ? warmed.loaded
     : run.providerSessionId !== null && sessionId === run.providerSessionId;
   const outcome = loaded ? 'loaded' : 'replaced-by-new';
+  if (afterTurnId === null && loaded) {
+    afterTurnId = await Promise.resolve()
+      .then(() => daemon.getHistory(run.id, 100))
+      .then((turns) => {
+        const last = turns[turns.length - 1];
+        return typeof last?.id === 'string' ? last.id : null;
+      })
+      .catch((): string | null => null);
+  }
   const running = await deps.ledger.updateRun(run.id, {
     status: 'running',
     reason: loaded

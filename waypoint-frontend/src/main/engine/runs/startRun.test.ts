@@ -1018,17 +1018,33 @@ describe('resumeRun', () => {
         'run-i1',
       ),
     ).not.toHaveProperty('hiddenContext');
-    // A loaded session with nothing recreated carries no note at all.
+    // A loaded session with nothing recreated carries no note at all —
+    // and, with no snapshot to anchor its marker, the anchor is the last
+    // turn of the daemon's restored history (found live: anchored to
+    // nothing, the marker fell after the turn the message started).
     const loadedDaemon = fakeDaemon({
       startSession: jest.fn(async () => ({ sessionId: 'sess-old' })),
+      getHistory: jest.fn(async () => [
+        { id: 'run-i1:turn:0', seq: 0, initiator: 'user', items: [] },
+        { id: 'run-i1:turn:1', seq: 1, initiator: 'user', items: [] },
+      ]),
     });
+    const loadedLedger = fakeLedger([interrupted()]).ledger;
     expect(
       await resumeRunCore(
-        depsWith(fakeLedger([interrupted()]).ledger, loadedDaemon, { git }),
+        depsWith(loadedLedger, loadedDaemon, { git }),
         'run-i1',
         'message',
       ),
     ).not.toHaveProperty('hiddenContext');
+    expect(loadedLedger.appendEvent).toHaveBeenCalledWith(
+      'run-i1',
+      'session_resumed',
+      expect.objectContaining({
+        outcome: 'loaded',
+        afterTurnId: 'run-i1:turn:1',
+      }),
+    );
     expect(ledger.appendEvent).toHaveBeenCalledWith(
       'run-i1',
       'session_resumed',

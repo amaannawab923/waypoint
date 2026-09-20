@@ -261,11 +261,11 @@ export function pendingReasonSentence(
     case 'finishing':
       return "Waiting to send — Waypoint is filing the run's report; your message goes next.";
     case 'folder-missing':
-      return `Waiting to send — this run's folder is not on disk${detail.cwd ? ` at ${detail.cwd}` : ''}. Put it back and press Retry, or reopen this pane.`;
+      return `Waiting to send — this run's folder is not on disk${detail.cwd ? ` at ${detail.cwd}` : ''}. Put it back and press Resend, or reopen this pane.`;
     case 'repository-missing':
-      return "Waiting to send — the project's repository is not linked. Link it in project settings, then press Retry.";
+      return "Waiting to send — the project's repository is not linked. Link it in project settings, then press Resend.";
     case 'spawn-failed':
-      return `Waiting to send — the agent could not be started${detail.lastError ? ` (${detail.lastError})` : ''}. Waypoint retries when you send again, or press Retry.`;
+      return `Waiting to send — the agent could not be started${detail.lastError ? ` (${detail.lastError})` : ''}. Waypoint retries when you send again, or press Resend.`;
     case 'owner-offline':
       return `Queued for ${detail.ownerName ?? 'the run owner'}'s Waypoint; it is sent when they are online.`;
     default:
