@@ -132,5 +132,12 @@ describe('verdict helpers', () => {
     expect(isClosingVerdict('wont-fix')).toBe(true);
     expect(isClosingVerdict('fixed')).toBe(false);
     expect(isClosingVerdict(null)).toBe(false);
+    // Feedback round 1: what the ticket asks for already shipped — closes
+    // the ticket as done, not cancelled; nothing to publish.
+    expect(parseVerdictWord('delivered')).toBe('delivered');
+    expect(parseVerdictWord('already built')).toBe('delivered');
+    expect(parseVerdictWord('shipped')).toBe('delivered');
+    expect(verdictLabel('delivered')).toBe('already delivered');
+    expect(isClosingVerdict('delivered')).toBe(true);
   });
 });

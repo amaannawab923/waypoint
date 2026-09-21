@@ -124,3 +124,28 @@ export function pickClosingTransition(
   if (named) return named;
   return transitions.find((t) => t.targetStateCategory === 'done') ?? null;
 }
+
+/** A status name that says the work is done. */
+const COMPLETION_STATE_NAME = /done|complete|resolved|shipped|released/i;
+
+/**
+ * The transition a `delivered` verdict proposes (customer feedback round
+ * 1): the first *done*-category target NOT named for closing-without-doing
+ * (Won't Do, Cancelled…), preferring one named Done / Resolved / Shipped.
+ * Null when the issue offers no such transition; the caller then falls
+ * back to the closing transition with a note saying so.
+ */
+export function pickCompletionTransition(
+  transitions: JiraWireTransition[],
+): JiraWireTransition | null {
+  const done = transitions.filter(
+    (t) =>
+      t.targetStateCategory === 'done' &&
+      !CLOSING_STATE_NAME.test(t.targetStateName),
+  );
+  return (
+    done.find((t) => COMPLETION_STATE_NAME.test(t.targetStateName)) ??
+    done[0] ??
+    null
+  );
+}

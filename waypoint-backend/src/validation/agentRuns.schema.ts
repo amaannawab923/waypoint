@@ -251,6 +251,7 @@ export const runVerdictSchema = z.enum([
   'partial',
   'not-a-bug',
   'wont-fix',
+  'delivered',
   'needs-info',
 ]);
 export type RunVerdict = z.infer<typeof runVerdictSchema>;
