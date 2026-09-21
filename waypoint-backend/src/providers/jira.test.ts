@@ -777,6 +777,24 @@ describe('jiraProvider.resolveGadgetBinding (ROAD-157)', () => {
     expect(jiraGet).toHaveBeenNthCalledWith(2, CREDENTIAL, '/rest/api/3/filter/10123');
   });
 
+  // Confirmed live (ROAD-166) against a real "Two Dimensional Filter
+  // Statistics" gadget: its config key is `filterId` (this exact case), not
+  // `filterid`, and its value carries the same "filter-<id>" prefix as the
+  // `filterid`/`projectOrFilterId` conventions above — a shape the
+  // pre-ROAD-166 code recognized under neither key, so every 2D-stats
+  // gadget on a real dashboard came back unresolved.
+  it('resolves a filter-bound gadget via the "filterId" (this case) config key carrying a "filter-<id>" value', async () => {
+    vi.mocked(jiraGet)
+      .mockResolvedValueOnce(
+        ok({ key: 'config', value: { filterId: 'filter-15580', xstattype: 'issuetype', ystattype: 'assignees' } }),
+      )
+      .mockResolvedValueOnce(ok({ id: '15580', name: 'Analytics Filter', jql: 'project = ANL' }));
+
+    const binding = await provider().resolveGadgetBinding('10810', '16155');
+
+    expect(binding).toEqual({ kind: 'filter', filterId: '15580', filterName: 'Analytics Filter', jql: 'project = ANL' });
+  });
+
   it('resolves a project-bound gadget via the "project-<key>" config convention, with no filter lookup', async () => {
     vi.mocked(jiraGet).mockResolvedValue(ok({ key: 'config', value: { filterid: 'project-ENG' } }));
 
