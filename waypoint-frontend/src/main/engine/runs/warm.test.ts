@@ -103,6 +103,7 @@ function depsWith(
 function daemonWith(over: Partial<Record<keyof DaemonRunsApi, unknown>> = {}) {
   return {
     listSessions: jest.fn(async () => ({})),
+    createConversation: jest.fn(async () => ({ mismatch: [] })),
     startSession: jest.fn(async () => ({ sessionId: 'sess-old' })),
     ...over,
   } as unknown as jest.Mocked<DaemonRunsApi>;
@@ -133,6 +134,38 @@ describe('warmRun', () => {
       loaded: true,
     });
     expect(takeWarmed('run-abc1234')).toBeNull();
+  });
+
+  it('registers the run in the daemon’s conversation index before the spawn, and still spawns when that fails', async () => {
+    const daemon = daemonWith();
+    await warmRun(depsWith(run(), daemon), 'run-abc1234');
+    expect(daemon.createConversation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: 'run-abc1234',
+        cwd: path.join(worktreesDir, 'run-abc1234'),
+      }),
+    );
+    expect(daemon.createConversation.mock.invocationCallOrder[0]).toBeLessThan(
+      daemon.startSession.mock.invocationCallOrder[0],
+    );
+
+    // Consume what the first warm remembered, so the second is a real spawn.
+    takeWarmed('run-abc1234');
+    const refusing = daemonWith({
+      createConversation: jest.fn(async () => {
+        throw new Error('index down');
+      }),
+    });
+    const deps = depsWith(run(), refusing);
+    await expect(warmRun(deps, 'run-abc1234')).resolves.toEqual({
+      kind: 'warmed',
+      loaded: true,
+    });
+    expect(refusing.startSession).toHaveBeenCalledTimes(1);
+    expect(deps.logger.warn).toHaveBeenCalledWith(
+      'engine: conversation registration failed',
+      expect.objectContaining({ runId: 'run-abc1234', message: 'index down' }),
+    );
   });
 
   it('remembers replaced-by-new when the provider started a fresh session', async () => {

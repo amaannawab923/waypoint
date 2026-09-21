@@ -218,6 +218,7 @@ function fakeDaemon(
     listWorkspaceRecords: jest.fn(),
     // None live unless a test says so (resumeRun asks, round 6).
     listSessions: jest.fn(async () => ({})),
+    createConversation: jest.fn(async () => ({ mismatch: [] })),
     startSession: jest.fn(async () => ({ sessionId: 'sess-1' })),
     sendPrompt: jest.fn(async () => {}),
     cancelTurn: jest.fn(async () => {}),
@@ -423,6 +424,43 @@ describe('continueStart', () => {
       status: 'running',
     });
     expect(rows.get('run-a1')?.status).toBe('running');
+  });
+
+  it('registers the run in the daemon’s conversation index before the session, and a refusal there never stops the start', async () => {
+    const { ledger, rows } = fakeLedger([
+      run({ id: 'run-a1', status: 'provisioning' }),
+    ]);
+    const daemon = fakeDaemon();
+    await continueStart(
+      depsWith(ledger, daemon),
+      rows.get('run-a1') as AgentRun,
+      repoDir,
+    );
+    expect(daemon.createConversation).toHaveBeenCalledWith({
+      conversationId: 'run-a1',
+      providerId: 'claude',
+      cwd: path.join(worktreesDir, 'run-a1'),
+      createdAt: Date.parse(rows.get('run-a1')!.createdAt),
+      title: rows.get('run-a1')!.title,
+    });
+    expect(daemon.createConversation.mock.invocationCallOrder[0]).toBeLessThan(
+      daemon.startSession.mock.invocationCallOrder[0],
+    );
+
+    const refused = fakeLedger([run({ id: 'run-a2', status: 'provisioning' })]);
+    const refusing = fakeDaemon({
+      createConversation: jest.fn(async () => {
+        throw new Error('index down');
+      }),
+    });
+    const deps = depsWith(refused.ledger, refusing);
+    await continueStart(deps, refused.rows.get('run-a2') as AgentRun, repoDir);
+    expect(refusing.startSession).toHaveBeenCalledTimes(1);
+    expect(refused.rows.get('run-a2')?.status).toBe('running');
+    expect(deps.logger.warn).toHaveBeenCalledWith(
+      'engine: conversation registration failed',
+      expect.objectContaining({ runId: 'run-a2', message: 'index down' }),
+    );
   });
 
   it('does not start the session when a Stop landed during the worktree', async () => {
@@ -1190,6 +1228,23 @@ describe('resumeRun', () => {
     expect(
       deps.notify.mock.calls.map(([c]: [{ status: string }]) => c.status),
     ).toEqual(['provisioning', 'running']);
+  });
+
+  it('a resume registers the run again before the session (same cwd and createdAt: the index answers already-registered)', async () => {
+    const { ledger, rows } = fakeLedger([interrupted()]);
+    const daemon = fakeDaemon({
+      startSession: jest.fn(async () => ({ sessionId: 'sess-old' })),
+    });
+    await resumeRun(depsWith(ledger, daemon), 'run-i1');
+    expect(daemon.createConversation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: 'run-i1',
+        createdAt: Date.parse(rows.get('run-i1')!.createdAt),
+      }),
+    );
+    expect(daemon.createConversation.mock.invocationCallOrder[0]).toBeLessThan(
+      daemon.startSession.mock.invocationCallOrder[0],
+    );
   });
 
   // Never-lock (design §4.7): the branch-state note is no longer a prompt

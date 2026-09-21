@@ -227,6 +227,65 @@ describe('useSessionTranscript', () => {
   });
 });
 
+describe('reconnecting a stale session on visibility/focus regain', () => {
+  // Confirmed live (two separate runs): a session's own live topic can go
+  // `closed` while the engine itself never stops — a transient IPC error,
+  // a busy-retry that gave up — and the only OTHER trigger this hook has
+  // (onEngineStatusChanged's 'running' transition) never fires for that,
+  // since the engine never restarted. Left unaddressed, a session left
+  // idle or backgrounded reads as permanently dead until an unrelated
+  // global engine event happens to reconnect it.
+  it('reconnects the closed follower when the window regains focus', async () => {
+    const activeTurnTopic = 'acp.session.activeTurn|{"conversationId":"run-a"}';
+    const fb = fakeBridge({}, []);
+    renderHook(() => useSessionTranscript('run-a', { bridge: fb.bridge }));
+    await flush();
+
+    const initialSubscribes = (fb.bridge.subscribeTopic as jest.Mock).mock.calls
+      .length;
+    expect(initialSubscribes).toBe(5);
+
+    // The active-turn follower's topic closes — the daemon-side session
+    // report stopped landing, same shape as the live bug.
+    const activeTurnSub = [...fb.subs.values()].find(
+      (s) => s.topic === activeTurnTopic,
+    )!;
+    act(() => activeTurnSub.handlers.onClosed({ kind: 'disconnected' }));
+
+    // Regaining focus — the user coming back to this session's pane —
+    // must reconnect it without waiting for any engine-status transition.
+    act(() => window.dispatchEvent(new Event('focus')));
+    await flush();
+
+    const afterFocus = (fb.bridge.subscribeTopic as jest.Mock).mock.calls;
+    expect(afterFocus.length).toBe(initialSubscribes + 1);
+    expect(afterFocus[afterFocus.length - 1][0]).toBe(activeTurnTopic);
+  });
+
+  it('leaves a finished run alone: its session is gone, so focus reconnects nothing', async () => {
+    const activeTurnTopic = 'acp.session.activeTurn|{"conversationId":"run-a"}';
+    const fb = fakeBridge({}, []);
+    renderHook(() =>
+      useSessionTranscript('run-a', {
+        bridge: fb.bridge,
+        sessionMayBeLive: false,
+      }),
+    );
+    await flush();
+    const initialSubscribes = (fb.bridge.subscribeTopic as jest.Mock).mock.calls
+      .length;
+    const activeTurnSub = [...fb.subs.values()].find(
+      (s) => s.topic === activeTurnTopic,
+    )!;
+    act(() => activeTurnSub.handlers.onClosed({ kind: 'disconnected' }));
+    act(() => window.dispatchEvent(new Event('focus')));
+    await flush();
+    expect((fb.bridge.subscribeTopic as jest.Mock).mock.calls.length).toBe(
+      initialSubscribes,
+    );
+  });
+});
+
 describe('the kept transcript (ROAD-124)', () => {
   const { getAgentRunTranscript } = jest.requireMock('@/data/api') as {
     getAgentRunTranscript: jest.Mock;

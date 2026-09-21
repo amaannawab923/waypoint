@@ -196,6 +196,83 @@ describe('createDaemonRunsApi', () => {
     );
   });
 
+  it('createConversation sends the exact conversation-index create shape, with the run’s own createdAt', async () => {
+    const { client } = fakeClient({
+      calls: {
+        'conversations.create': {
+          success: true,
+          data: { conversationId: 'run-1' },
+        },
+      },
+    });
+    const api = createDaemonRunsApi(client);
+
+    await expect(
+      api.createConversation({
+        conversationId: 'run-1',
+        providerId: 'claude',
+        cwd: '/wt/run-1',
+        createdAt: 1_760_000_000_000,
+        title: 'Fix the thing',
+      }),
+    ).resolves.toEqual({ mismatch: [] });
+
+    expect(client.call).toHaveBeenCalledWith(
+      'conversations.create',
+      {
+        conversationId: 'run-1',
+        provider: 'claude',
+        type: 'acp',
+        cwd: '/wt/run-1',
+        workspacePath: '/wt/run-1',
+        idRegime: 'provider-minted',
+        createdAt: 1_760_000_000_000,
+        title: 'Fix the thing',
+        config: { version: '1', type: 'acp' },
+      },
+      expect.any(Object),
+    );
+  });
+
+  it('createConversation treats an immutable-field mismatch as already registered, naming the fields, and still throws on a real failure', async () => {
+    const mismatch = createDaemonRunsApi(
+      fakeClient({
+        calls: {
+          'conversations.create': {
+            success: false,
+            error: {
+              type: 'immutable-field-mismatch',
+              conversationId: 'run-1',
+              fields: ['cwd'],
+              message: 'cwd does not match the existing record',
+            },
+          },
+        },
+      }).client,
+    );
+    await expect(
+      mismatch.createConversation({
+        conversationId: 'run-1',
+        providerId: 'claude',
+        cwd: '/wt/run-1-moved',
+        createdAt: 1_760_000_000_000,
+        title: null,
+      }),
+    ).resolves.toEqual({ mismatch: ['cwd'] });
+
+    // No such procedure (an engine without the index): a real failure.
+    const absent = createDaemonRunsApi(fakeClient({ calls: {} }).client);
+    await expect(
+      absent.createConversation({
+        conversationId: 'run-1',
+        providerId: 'claude',
+        cwd: '/wt/run-1',
+        createdAt: 1_760_000_000_000,
+        title: null,
+      }),
+    ).rejects.toThrow('conversations.create');
+  });
+
   it('createWorktree sends the daemon’s input shape with a long timeout and surfaces stage failures with their detail', async () => {
     const { client } = fakeClient({
       calls: {

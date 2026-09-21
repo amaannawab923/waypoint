@@ -164,6 +164,7 @@ function fakeDaemon(
   overrides: Partial<Record<keyof DaemonRunsApi, unknown>> = {},
 ) {
   return {
+    createConversation: jest.fn(async () => ({ mismatch: [] })),
     startSession: jest.fn(async () => ({ sessionId: 'sess-old' })),
     sendPrompt: jest.fn(async () => {}),
     // The daemon's live sessions — none unless a test says so.
@@ -259,6 +260,34 @@ describe('sendRunPrompt', () => {
       'run-abc1234',
       'prompt_sent',
       expect.objectContaining({ by: 'user', kind: 'message' }),
+    );
+  });
+
+  it('a live-status run the daemon has no session for is registered in the conversation index, then started, then sent — even when the index refuses', async () => {
+    const { ledger } = fakeLedger([run({ status: 'running' })]);
+    const daemon = fakeDaemon({
+      createConversation: jest.fn(async () => {
+        throw new Error('index down');
+      }),
+    });
+    const deps = depsWith(ledger, daemon);
+
+    await sendRunPrompt(deps, { runId: 'run-abc1234', text: 'still there?' });
+    expect(daemon.createConversation).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: 'run-abc1234' }),
+    );
+    expect(daemon.createConversation.mock.invocationCallOrder[0]).toBeLessThan(
+      daemon.startSession.mock.invocationCallOrder[0],
+    );
+    expect(daemon.startSession).toHaveBeenCalledTimes(1);
+    expect(daemon.sendPrompt).toHaveBeenCalledWith(
+      'run-abc1234',
+      'still there?',
+      undefined,
+    );
+    expect(deps.logger.warn).toHaveBeenCalledWith(
+      'engine: conversation registration failed',
+      expect.objectContaining({ runId: 'run-abc1234', message: 'index down' }),
     );
   });
 
