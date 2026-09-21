@@ -781,7 +781,17 @@ export class JiraProvider implements TicketProvider {
       return { kind: 'unresolved', reason: 'This gadget has no stored configuration to resolve.' };
     }
 
-    const combined = config.filterid ?? config.projectOrFilterId;
+    // `filterId` (this exact case) is a THIRD real key that carries the same
+    // prefixed "filter-<id>"/"project-<id>" shape as `filterid`/
+    // `projectOrFilterId` above — confirmed live against a real Two
+    // Dimensional Filter Statistics gadget (ROAD-157 follow-up, ROAD-166):
+    // its config is `{filterId: "filter-15580", xstattype: …, ystattype: …}`.
+    // Before this, only a BARE numeric `filterId` was recognized (the
+    // `bareFilterId` check below) — a real, confirmed shape too, just a
+    // different one — so a prefixed `filterId` value matched neither branch
+    // and every 2D-stats gadget on a real dashboard came back unresolved
+    // despite carrying a perfectly good filter binding.
+    const combined = config.filterid ?? config.projectOrFilterId ?? config.filterId;
     if (combined) {
       const filterMatch = /^filter-(\d+)$/.exec(combined);
       // Anchored to Jira's own project-key shape (round-2 review, ROAD-157)
