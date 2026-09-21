@@ -71,7 +71,7 @@ const expectedServer = sessionBrowserServer(
 );
 
 describe('sessionBrowserServer', () => {
-  it("is this app's own binary as node running the vendored chrome-devtools-mcp, isolated and headless, for the claude provider", () => {
+  it("is this app's own binary as node running the vendored chrome-devtools-mcp, isolated, headless and phoning nobody, for the claude provider", () => {
     const server = sessionBrowserServer(
       '/Applications/Waypoint.app/Contents/MacOS/Waypoint',
       '/app/node_modules/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js',
@@ -83,11 +83,22 @@ describe('sessionBrowserServer', () => {
     expect(server.command).toBe(
       '/Applications/Waypoint.app/Contents/MacOS/Waypoint',
     );
-    expect(server.env).toEqual({ ELECTRON_RUN_AS_NODE: '1' });
+    // Nothing leaves the machine but the session's own browsing: usage
+    // statistics off both ways the server reads it (on, it reports to
+    // Google through a detached watchdog child spawned from OUR binary, one
+    // per live server — the stray processes people saw), no CrUX URL
+    // reports, and no daily npm update check (another detached child).
+    expect(server.env).toEqual({
+      ELECTRON_RUN_AS_NODE: '1',
+      CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS: '1',
+      CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: '1',
+    });
     expect(server.args).toEqual([
       '/app/node_modules/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js',
       '--isolated',
       '--headless',
+      '--no-usage-statistics',
+      '--no-performance-crux',
     ]);
     // Never the person's own Chrome: no --autoConnect, no --browserUrl.
     expect(server.args.join(' ')).not.toMatch(/autoConnect|browserUrl/);
