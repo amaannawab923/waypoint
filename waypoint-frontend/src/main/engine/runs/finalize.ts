@@ -359,6 +359,7 @@ async function proposeJiraTransition(
   run: AgentRun,
   key: string,
   plan: 'review' | 'close',
+  groupId: string,
 ): Promise<number> {
   const note = async (message: string, extra: Record<string, unknown>) => {
     deps.logger.info(`engine: finalize ${message}`, {
@@ -400,7 +401,7 @@ async function proposeJiraTransition(
   }
   const change = await deps.ledger.createRunProposal(
     run.id,
-    { kind: 'state_change', stateId: target.id },
+    { kind: 'state_change', stateId: target.id, groupId },
     { external: true },
   );
   await deps.ledger
@@ -836,11 +837,13 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         published,
         notPublishedBecause,
       });
+      const groupId = `${run.id}:${sequence}`;
       const comment = await deps.ledger.createRunProposal(
         run.id,
         {
           kind: 'comment',
           body: clip(`**Follow-up ${sequence}**\n\n${body}`, MAX_PROPOSAL_BODY),
+          groupId,
         },
         { external },
       );
@@ -856,7 +859,13 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
       const plan = statePlanFor(run, verdict);
       if (plan && verdict !== run.verdict) {
         if (external && ticket?.ref) {
-          filed += await proposeJiraTransition(deps, run, ticket.ref.key, plan);
+          filed += await proposeJiraTransition(
+            deps,
+            run,
+            ticket.ref.key,
+            plan,
+            groupId,
+          );
         } else if (run.projectId) {
           const states = await deps.ledger.listStates(run.projectId);
           const target =
@@ -867,6 +876,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
             const change = await deps.ledger.createRunProposal(run.id, {
               kind: 'state_change',
               stateId: target.id,
+              groupId,
             });
             filed += 1;
             filedIds.push({ id: change.id, kind: 'state_change' });
@@ -1137,11 +1147,13 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
       // A Jira issue's proposals carry the borrowed credential, so the
       // backend can read the issue live and build the external-write card
       // — the path Copilot's own Jira proposals take (W5b §2.4).
+      const groupId = `${run.id}:${run.finalizeCount + 1}`;
       const comment = await deps.ledger.createRunProposal(
         run.id,
         {
           kind: 'comment',
           body: clip(body, MAX_PROPOSAL_BODY),
+          groupId,
         },
         { external },
       );
@@ -1159,7 +1171,13 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         // review, else in progress; or, for a closing verdict, one that
         // closes. None → the comment alone, and the trail says which
         // transitions the issue did offer.
-        filed += await proposeJiraTransition(deps, run, ticket.ref.key, plan);
+        filed += await proposeJiraTransition(
+          deps,
+          run,
+          ticket.ref.key,
+          plan,
+          groupId,
+        );
       } else if (plan && run.projectId) {
         const states = await deps.ledger.listStates(run.projectId);
         const target =
@@ -1168,6 +1186,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
           const change = await deps.ledger.createRunProposal(run.id, {
             kind: 'state_change',
             stateId: target.id,
+            groupId,
           });
           filed += 1;
           filedIds.push({ id: change.id, kind: 'state_change' });

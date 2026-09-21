@@ -358,6 +358,7 @@ describe('createRunFinalizer', () => {
           'The root cause is X.',
           '*Full report — the evidence, files and how it was verified — is on the run in Waypoint (ROAD-116 · Investigate).*',
         ].join('\n\n'),
+        groupId: 'run-abc1234:1',
       },
       { external: false },
     );
@@ -450,6 +451,8 @@ describe('createRunFinalizer', () => {
     expect(ledger.createRunProposal).toHaveBeenNthCalledWith(2, 'run-abc1234', {
       kind: 'state_change',
       stateId: 'st-progress',
+      // The same group as the comment: one card in Review.
+      groupId: 'run-abc1234:1',
     });
     expect(ledger.postCopilotNote).toHaveBeenCalledWith(
       'run-abc1234',
@@ -483,6 +486,7 @@ describe('createRunFinalizer', () => {
     expect(ledger.createRunProposal).toHaveBeenNthCalledWith(2, 'run-abc1234', {
       kind: 'state_change',
       stateId: 'st-cancelled',
+      groupId: 'run-abc1234:1',
     });
     expect(rows.get('run-abc1234')).toMatchObject({
       status: 'needs-review',
@@ -537,6 +541,7 @@ describe('createRunFinalizer', () => {
     expect(ledger.createRunProposal).toHaveBeenNthCalledWith(2, 'run-abc1234', {
       kind: 'state_change',
       stateId: 'st-cancelled',
+      groupId: 'run-abc1234:1',
     });
   });
 
@@ -882,7 +887,7 @@ describe('W5b: a run on a Jira issue', () => {
     expect(ledger.createRunProposal).toHaveBeenNthCalledWith(
       2,
       'run-abc1234',
-      { kind: 'state_change', stateId: '41' },
+      { kind: 'state_change', stateId: '41', groupId: 'run-abc1234:1' },
       { external: true },
     );
     expect(ledger.appendEvent).toHaveBeenCalledWith(
@@ -913,6 +918,7 @@ describe('W5b: a run on a Jira issue', () => {
         body: expect.stringContaining(
           '**Verdict:** root cause found\n\nThe root cause is X.',
         ),
+        groupId: 'run-abc1234:1',
       },
       { external: true },
     );
@@ -953,7 +959,7 @@ describe('W5b: a run on a Jira issue', () => {
     expect(ledger.createRunProposal).toHaveBeenNthCalledWith(
       2,
       'run-abc1234',
-      { kind: 'state_change', stateId: '21' },
+      { kind: 'state_change', stateId: '21', groupId: 'run-abc1234:1' },
       { external: true },
     );
     expect(ledger.appendEvent).toHaveBeenCalledWith(
@@ -1576,6 +1582,8 @@ describe('follow-up finalize (a continued run)', () => {
         body: expect.stringMatching(
           /Follow-up 2[\s\S]*Pull request updated: https:\/\/github\.com\/a\/b\/pull\/1/,
         ),
+        // Its own group: the second report's card, not the first's.
+        groupId: 'run-abc1234:2',
       }),
       expect.anything(),
     );
