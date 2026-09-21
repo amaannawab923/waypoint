@@ -723,7 +723,10 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
 
   /**
    * FOLLOW-UP (design §4.3): a continued run's turn ends. File iff the
-   * closing message carries an explicit `Verdict:`; the verb's default
+   * closing message carries an explicit `Verdict:` AND a `## Summary`
+   * heading — a verdict word alone is conversation that mentioned one
+   * (customer feedback round 1: a reply quoting the old report's
+   * `Verdict:` line was filed and reached Review); the verb's default
    * verdict is NOT applied. Commits are for the marker, never the
    * trigger. A duplicate of the last filed summary is conversation.
    */
@@ -741,7 +744,9 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
       lastSummary !== null &&
       report.summary.trim() === lastSummary.trim();
 
-    if (report.verdict === null || duplicate) {
+    const verdictWithoutSummary =
+      report.verdict !== null && !report.hasSummaryHeading;
+    if (report.verdict === null || verdictWithoutSummary || duplicate) {
       if ((newCommits ?? 0) > 0) {
         await deps.ledger
           .appendEvent(run.id, 'note', {
@@ -752,12 +757,21 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
           })
           .catch(() => {});
       }
+      // A verdict word with no Summary heading gets a note the transcript
+      // shows (markerFold.ts), so a reviewer sees why nothing was filed.
       await rest(
         run,
-        duplicate
-          ? 'The report repeated the last one'
-          : 'No report in the closing message',
-        {},
+        verdictWithoutSummary
+          ? 'Verdict line found without a Summary — treated as conversation'
+          : duplicate
+            ? 'The report repeated the last one'
+            : 'No report in the closing message',
+        verdictWithoutSummary
+          ? {
+              suppressed: 'verdict-without-summary',
+              afterTurnId: lastTurnId(turns),
+            }
+          : {},
         turns,
       );
       return;

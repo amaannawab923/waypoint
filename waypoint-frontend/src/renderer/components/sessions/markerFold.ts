@@ -181,6 +181,9 @@ export function deriveMarkers(
       const commits = num(pick(payload, 'unpublishedCommits'));
       if (pick(payload, 'stage') === 'finalize' && commits && commits > 0) {
         text = `Waypoint · ${commits} new commit${commits === 1 ? '' : 's'} on the branch, not published — ask the agent to summarize its changes to publish`;
+      } else if (pick(payload, 'suppressed') === 'verdict-without-summary') {
+        text =
+          'Waypoint · Verdict line found without a Summary — treated as conversation, nothing filed';
       } else if (pick(payload, 'publish') === 'pr-superseded') {
         const previous = str(pick(payload, 'previousUrl'));
         const named = previous
