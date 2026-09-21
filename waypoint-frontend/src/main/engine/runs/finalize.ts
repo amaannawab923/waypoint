@@ -169,6 +169,40 @@ export function openingPromptOf(turns: DaemonTranscriptTurn[]): string {
   return item && typeof item.text === 'string' ? item.text : '';
 }
 
+/**
+ * Commands a session ran that outlive it on the person's machine
+ * (customer feedback round 1, Marcus: under bypass permissions a session
+ * launched a debug-port Chrome, opened PNGs in Preview, and left both and
+ * an app server running — with nothing in Waypoint saying so). Detection,
+ * not a sandbox: the command already ran; this makes it visible on the
+ * run. Deliberately narrow — a background server started for the
+ * verification browser is the common false positive and is not matched.
+ */
+const LEFTOVER_PROCESS_PATTERNS: readonly RegExp[] = [
+  /(^|[\s;&|])open\s+(-a\s+)?\S/, // macOS `open` — a window on the desktop
+  /--remote-debugging-port(=|\s)/, // a browser reachable from outside
+  /(^|[\s;&|])nohup\s+\S/, // detached from the session on purpose
+  /&\s*disown\b/, // idem
+];
+
+/** Commands in `turns` that match LEFTOVER_PROCESS_PATTERNS, first line each, deduplicated, at most a few. */
+export function leftoverProcessCommands(
+  turns: DaemonTranscriptTurn[],
+): string[] {
+  const found: string[] = [];
+  turns.forEach((turn) => {
+    turn.items.forEach((item) => {
+      if (item.kind !== 'execute-tool-call') return;
+      const { command } = item as { command?: unknown };
+      if (typeof command !== 'string') return;
+      if (!LEFTOVER_PROCESS_PATTERNS.some((re) => re.test(command))) return;
+      const line = command.split('\n')[0].trim().slice(0, 200);
+      if (line && !found.includes(line)) found.push(line);
+    });
+  });
+  return found.slice(0, 5);
+}
+
 /** The last committed turn's id — where a marker for this finalize anchors (design §5.2). */
 export function lastTurnId(turns: DaemonTranscriptTurn[]): string | null {
   const last = turns[turns.length - 1];
@@ -1094,6 +1128,19 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         `The session's history could not be read: ${describe(error)}`,
       );
       return;
+    }
+    // What the session may have left running (see leftoverProcessCommands)
+    // — noted on the run before anything else, whatever the turn says.
+    for (const command of leftoverProcessCommands(turns.slice(-1))) {
+      // eslint-disable-next-line no-await-in-loop
+      await deps.ledger
+        .appendEvent(run.id, 'note', {
+          stage: 'finalize',
+          kind: 'possible-leftover-process',
+          command,
+          afterTurnId: lastTurnId(turns),
+        })
+        .catch(() => {});
     }
     const closing = closingMessageOf(turns);
     if (!closing) {

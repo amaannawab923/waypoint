@@ -8,6 +8,7 @@ import {
   createRunFinalizer,
   finishedNote,
   isTurnEnded,
+  leftoverProcessCommands,
   pickClosingState,
   pickCompletionState,
   pickPlannedState,
@@ -343,6 +344,38 @@ describe('pickClosingState (W5c)', () => {
   });
 });
 
+describe('leftoverProcessCommands (feedback round 1)', () => {
+  const exec = (command: string) =>
+    ({
+      kind: 'execute-tool-call',
+      id: `x-${command.length}`,
+      command,
+    }) as unknown as DaemonTranscriptTurn['items'][number];
+
+  it('names the commands that outlive the session — a desktop open, a debug-port browser, nohup, disown — and nothing else', () => {
+    const found = leftoverProcessCommands([
+      turn([
+        exec('open /tmp/pl10-headed-1-open.png'),
+        exec(
+          'nohup "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=9333 > /tmp/c.log 2>&1 &\necho $! > /tmp/c.pid',
+        ),
+        exec('node server.js & disown'),
+        exec('npm test'),
+        exec('ls -la && cat opener.ts'), // "open" inside a word is not `open`
+        exec('open /tmp/pl10-headed-1-open.png'), // repeated
+      ]),
+    ]);
+    expect(found).toEqual([
+      'open /tmp/pl10-headed-1-open.png',
+      'nohup "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=9333 > /tmp/c.log 2>&1 &',
+      'node server.js & disown',
+    ]);
+    expect(leftoverProcessCommands([turn([exec('npm run build')])])).toEqual(
+      [],
+    );
+  });
+});
+
 describe('statePlanFor (W5c)', () => {
   it.each([
     ['fix', 'fixed', 'review'],
@@ -524,6 +557,40 @@ describe('createRunFinalizer', () => {
       'run-abc1234',
       expect.stringContaining('verdict: not a bug · 2 proposals filed'),
     );
+  });
+
+  it('a run that left a process behind gets a note on the run, before the report is read (feedback round 1)', async () => {
+    const { ledger } = fakeLedger(run());
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'execute-tool-call',
+            id: 'x1',
+            command: 'open /tmp/shot.png',
+          } as unknown as DaemonTranscriptTurn['items'][number],
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: 'Verdict: root-cause\n## Summary\nFound it.',
+          },
+        ]),
+      ],
+    });
+    const { deps } = depsWith(ledger, daemon);
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'note',
+      expect.objectContaining({
+        stage: 'finalize',
+        kind: 'possible-leftover-process',
+        command: 'open /tmp/shot.png',
+        afterTurnId: 't1',
+      }),
+    );
+    // The report is still filed as usual.
+    expect(ledger.createRunProposal).toHaveBeenCalledTimes(1);
   });
 
   it('Investigate that concludes delivered: the DONE state proposed, never Cancelled (feedback round 1)', async () => {
