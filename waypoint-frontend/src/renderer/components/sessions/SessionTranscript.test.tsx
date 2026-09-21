@@ -724,7 +724,8 @@ describe('SessionTranscript — the mode picker (feedback round 1)', () => {
         run={run({ status: 'running', intent: 'investigate' })}
       />,
     );
-    const investigate = screen.getByLabelText('Mode') as HTMLSelectElement;
+    fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+    const investigate = screen.getByLabelText('All modes') as HTMLSelectElement;
     expect([...investigate.options].map((o) => o.value)).toEqual([
       'default',
       'plan',
@@ -733,9 +734,18 @@ describe('SessionTranscript — the mode picker (feedback round 1)', () => {
 
     mockUseSessionTranscript.mockReturnValue(hookState({ config } as never));
     render(
-      <SessionTranscript run={run({ status: 'running', intent: 'fix' })} />,
+      <SessionTranscript
+        run={run({ status: 'running', intent: 'fix', autoApprove: true })}
+      />,
     );
-    const fix = screen.getByLabelText('Mode') as HTMLSelectElement;
+    fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+    const fix = screen.getByLabelText('All modes') as HTMLSelectElement;
     expect([...fix.options].map((o) => o.value)).toContain('bypassPermissions');
+    // An auto-approve Fix's "May edit files" is the bypass mode.
+    expect(
+      screen
+        .getByRole('button', { name: 'May edit files' })
+        .getAttribute('title'),
+    ).toMatch(/^Never asks/);
   });
 });

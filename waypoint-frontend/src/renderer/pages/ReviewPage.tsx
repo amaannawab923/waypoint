@@ -6,6 +6,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { humanizeDuration } from '@/lib/duration';
 import { clsx } from 'clsx';
 import {
   IconBot,
@@ -240,7 +241,7 @@ function HealthStrip({
       </div>
       <div>
         <p className="font-display text-xl font-medium text-text">
-          {medianSecs}s
+          {humanizeDuration(medianSecs)}
         </p>
         <p className="text-xs text-text-secondary">median time to decide</p>
       </div>

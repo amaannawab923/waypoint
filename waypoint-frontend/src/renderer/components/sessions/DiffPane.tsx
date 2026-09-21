@@ -5,6 +5,18 @@ import { IconRefresh } from '@/components/icons';
 import type { AgentRun, RunDiff, RunDiffFile } from '@/types/agentRuns';
 import { statusView } from './sessionStatus';
 
+/** `a/b/c.ts` → `a/b/` — the part a narrow list may cut. */
+function dirOf(path: string): string {
+  const i = path.lastIndexOf('/');
+  return i === -1 ? '' : path.slice(0, i + 1);
+}
+
+/** `a/b/c.ts` → `c.ts` — the part a narrow list always keeps. */
+function baseOf(path: string): string {
+  const i = path.lastIndexOf('/');
+  return i === -1 ? path : path.slice(i + 1);
+}
+
 const GLYPH: Record<
   RunDiffFile['status'],
   { letter: string; className: string }
@@ -222,7 +234,11 @@ export function DiffPane({
         )}
         {diff && diff.files.length === 0 && !error && (
           <div className="px-2 py-3 text-[11px] text-text-muted">
-            No changes against {run.baseRef ?? 'HEAD'} yet.
+            {/* "yet" implies a change is coming; a plan-mode run never
+                changes anything, and says so (feedback round 1, Fix 6). */}
+            {run.modeId === 'plan'
+              ? 'No changes — this was a read-only run.'
+              : `No changes against ${run.baseRef ?? 'HEAD'} yet.`}
           </div>
         )}
         {diff?.files.map((file) => {
@@ -246,8 +262,12 @@ export function DiffPane({
               >
                 {glyph.letter}
               </span>
-              <span className="min-w-0 flex-1 truncate text-text">
-                {file.path}
+              {/* Middle-truncated: the file name is the part worth keeping
+                  when the column is narrow, not the leading directories —
+                  the same call SessionRow makes for a branch. */}
+              <span className="flex min-w-0 flex-1 text-text">
+                <span className="min-w-0 truncate">{dirOf(file.path)}</span>
+                <span className="shrink-0">{baseOf(file.path)}</span>
               </span>
               <span className="flex shrink-0 gap-1 font-mono text-[9.5px]">
                 {file.additions > 0 && (

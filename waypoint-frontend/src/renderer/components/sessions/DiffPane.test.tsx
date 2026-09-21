@@ -117,4 +117,58 @@ describe('DiffPane', () => {
     await flush();
     expect(screen.getByText(/fatal: bad revision/)).toBeInTheDocument();
   });
+
+  // Customer feedback round 1, Fix 6: "yet" implies a change is coming;
+  // a plan-mode run never changes anything.
+  it('an empty diff on a read-only run says so, without "yet"', async () => {
+    const empty: RunDiff = {
+      comparedTo: 'abc123',
+      truncated: false,
+      files: [],
+      patch: '',
+    };
+    (getRunDiff as jest.Mock).mockResolvedValue(empty);
+    const { rerender } = render(
+      <DiffPane run={run({ modeId: 'plan' })} onFileCount={jest.fn()} />,
+    );
+    await flush();
+    expect(
+      screen.getByText('No changes — this was a read-only run.'),
+    ).toBeInTheDocument();
+
+    rerender(
+      <DiffPane run={run({ modeId: 'default' })} onFileCount={jest.fn()} />,
+    );
+    await flush();
+    expect(
+      screen.getByText('No changes against main yet.'),
+    ).toBeInTheDocument();
+  });
+
+  it('keeps the file name whole when a path is cut — the directories give way', async () => {
+    const diff: RunDiff = {
+      comparedTo: 'abc123',
+      truncated: false,
+      files: [
+        {
+          path: 'waypoint-frontend/src/main/jira/jiraClient.test.ts',
+          status: 'modified',
+          additions: 1,
+          deletions: 0,
+        },
+      ],
+      patch: '',
+    };
+    (getRunDiff as jest.Mock).mockResolvedValue(diff);
+    render(<DiffPane run={run()} onFileCount={jest.fn()} />);
+    await flush();
+    const row = screen.getByTitle(
+      'waypoint-frontend/src/main/jira/jiraClient.test.ts',
+    );
+    const [dir, base] = row.querySelectorAll('span.flex.min-w-0 > span');
+    expect(dir).toHaveClass('truncate');
+    expect(dir).toHaveTextContent('waypoint-frontend/src/main/jira/');
+    expect(base).toHaveClass('shrink-0');
+    expect(base).toHaveTextContent('jiraClient.test.ts');
+  });
 });
