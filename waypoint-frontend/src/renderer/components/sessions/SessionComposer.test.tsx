@@ -331,6 +331,28 @@ describe('SessionComposer', () => {
       expect(screen.queryByLabelText('Effort')).toBeNull();
     });
 
+    it('never hands the "—" placeholder (no selection yet) to a setter', () => {
+      const onSetModel = jest.fn();
+      render(
+        <SessionComposer
+          onSend={jest.fn(async () => {})}
+          sendBlockedReason={null}
+          attachedToBand={false}
+          config={{
+            ...config,
+            modelOptions: { ...config.modelOptions, selected: null },
+          }}
+          onSetModel={onSetModel}
+        />,
+      );
+      const model = screen.getByLabelText('Model');
+      expect(model).toHaveValue('');
+      fireEvent.change(model, { target: { value: '' } });
+      expect(onSetModel).not.toHaveBeenCalled();
+      fireEvent.change(model, { target: { value: 'claude-sonnet-5' } });
+      expect(onSetModel).toHaveBeenCalledWith('claude-sonnet-5');
+    });
+
     it('shows no selector before the config lands or when the provider offers none', () => {
       render(
         <SessionComposer

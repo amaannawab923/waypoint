@@ -288,7 +288,11 @@ export function SessionComposer({
             <select
               aria-label={sel.label}
               value={sel.selected ?? ''}
-              onChange={(e) => sel.onChange?.(e.target.value)}
+              // The "—" placeholder option (no selection yet) is not a
+              // choice: main refuses an empty id.
+              onChange={(e) => {
+                if (e.target.value) sel.onChange?.(e.target.value);
+              }}
               disabled={!sel.onChange}
               className="appearance-none bg-transparent pr-1 text-[11px] text-text outline-none"
             >

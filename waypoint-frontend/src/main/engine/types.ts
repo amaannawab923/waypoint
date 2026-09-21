@@ -1150,7 +1150,7 @@ export const ALLOWED_PROCEDURES: Record<string, (input: unknown) => boolean> = {
     isRunInput(input) && Object.keys(input).length === 1,
   // The composer's selectors: a mode (permission policy) or a model /
   // effort the session's own `config` state advertised. One id each; the
-  // daemon refuses one the provider does not offer.
+  // daemon forwards it to the agent, which refuses one it does not offer.
   'acp.setModeOption': (input) => {
     if (!isRunInput(input)) return false;
     const { value, ...rest } = input as {
