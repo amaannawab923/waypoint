@@ -518,6 +518,8 @@ export const RUNS_IPC = {
   diff: 'runs:diff',
   /** (runId) → void. Shows the worktree in the OS file manager. */
   revealWorktree: 'runs:reveal-worktree',
+  /** (runId) → WorktreeHealth. Whether the run's worktree still resolves to a repository, read live from git (feedback round 1, finding A). */
+  worktreeHealth: 'runs:worktree-health',
   /** (runId) → CloseRunPreview. What closing the run would remove, for the confirm (Fix 8). */
   closePreview: 'runs:close-preview',
   /** (runId) → CloseRunResult. Removes a finished run's worktree, and its branch unless a pull request needs it (Fix 8). */
@@ -1005,6 +1007,18 @@ export interface CloseRunPreview {
   hasPullRequest: boolean;
   branchWillBeDeleted: boolean;
 }
+
+/**
+ * What git says about a run's worktree right now (customer feedback round
+ * 1, finding A: ROAD-61 showed a live branch line and an enabled Open PR
+ * from the ledger's row while its parent repository was gone). Read once
+ * when the detail opens; `unknown` when the check could not run, in which
+ * case the stored facts stand.
+ */
+export type WorktreeHealth =
+  | { kind: 'ok'; branch: string | null }
+  | { kind: 'orphaned'; reason: string }
+  | { kind: 'unknown' };
 
 export interface CloseRunResult {
   worktreeRemoved: true;

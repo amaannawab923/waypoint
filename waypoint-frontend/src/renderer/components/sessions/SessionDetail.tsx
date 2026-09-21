@@ -12,6 +12,7 @@ import { renameAgentRun } from '@/data/api';
 import {
   closeRun,
   closeRunPreview,
+  getRunWorktreeHealth,
   openRunPullRequest,
   revealRunWorktree,
   stopRun,
@@ -20,7 +21,7 @@ import { formatRelativeTime } from '@/lib/copilotSessions';
 import { patchSessionRun, refreshSessions } from '@/lib/sessionsStore';
 import { useTicketSummary } from '@/lib/useTicketLabel';
 import { showErrorToast, showInfoToast } from '@/lib/toast';
-import type { AgentRun } from '@/types/agentRuns';
+import type { AgentRun, WorktreeHealth } from '@/types/agentRuns';
 import { useHomeDir } from '@/lib/useHomeDir';
 import { AutoMark, IntentChip, ProviderChip, VerdictChip } from './SessionRow';
 import { SessionStatusPill } from './SessionStatusPill';
@@ -98,6 +99,29 @@ export function SessionDetail({
   // W6: a writing run whose branch was not published (the push or the PR
   // failed at finalize) can be published from here, as the person.
   const [publishing, setPublishing] = useState(false);
+  // Finding A (feedback round 1): the row's facts are what the ledger
+  // recorded; git is asked once per open whether the worktree is still
+  // a repository. Until it answers the stored facts stand (no flash of
+  // an empty header); an orphaned worktree disables Open PR and says so
+  // on the facts line. A worktree does not go from healthy to orphaned
+  // while a person is looking at it, so once is enough.
+  const [health, setHealth] = useState<WorktreeHealth>({ kind: 'unknown' });
+  useEffect(() => {
+    let cancelled = false;
+    setHealth({ kind: 'unknown' });
+    if (run.isolation === 'directory' || !run.worktreePath) return undefined;
+    getRunWorktreeHealth(run.id)
+      .then((result) => {
+        if (!cancelled) setHealth(result);
+      })
+      .catch(() => {
+        // Unknown stands: the stored facts are shown, nothing is claimed.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [run.id, run.isolation, run.worktreePath]);
+  const orphaned = health.kind === 'orphaned';
   const canOpenPr =
     run.entry === 'dispatched' &&
     run.modeId !== 'plan' &&
@@ -285,16 +309,28 @@ export function SessionDetail({
                 <ProviderChip providerId={run.providerId} size={14} />
                 {provider.name}
               </span>
-              {where?.kind === 'branch' && (
+              {where?.kind === 'branch' && !orphaned && (
                 <span className="inline-flex items-center gap-1">
                   <IconGitBranch size={10} />
-                  <span className="font-mono">{where.branch}</span>
+                  <span className="font-mono">
+                    {(health.kind === 'ok' && health.branch) || where.branch}
+                  </span>
                   {where.baseRef && (
                     <>
                       {' '}
                       from <span className="font-mono">{where.baseRef}</span>
                     </>
                   )}
+                </span>
+              )}
+              {orphaned && (
+                <span
+                  className="inline-flex items-center gap-1 text-warning"
+                  title={health.reason}
+                  data-worktree-orphaned
+                >
+                  <IconGitBranch size={10} />
+                  worktree orphaned — its parent repository is gone
                 </span>
               )}
               {where?.kind === 'folder' && (
@@ -376,8 +412,12 @@ export function SessionDetail({
               onClick={() => {
                 openPr().catch(() => {});
               }}
-              disabled={publishing}
-              title="Push the branch and open a pull request, as you"
+              disabled={publishing || orphaned}
+              title={
+                orphaned
+                  ? `Can't open a PR — this worktree's repository is gone. ${health.reason}`
+                  : 'Push the branch and open a pull request, as you'
+              }
             >
               {publishing ? 'Opening PR…' : 'Open PR'}
             </Button>

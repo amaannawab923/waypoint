@@ -37,6 +37,7 @@ export type {
   RunChanged,
   CloseRunPreview,
   CloseRunResult,
+  WorktreeHealth,
   RunDiff,
   RunDiffFile,
   RunDiffFileStatus,
