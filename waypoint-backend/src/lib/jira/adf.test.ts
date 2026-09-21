@@ -239,6 +239,41 @@ describe('buildCopilotJiraCommentAdf for a session (origin agent_run)', () => {
     expect(last).toEqual({ type: 'paragraph', content: [{ type: 'text', text: 'Done.' }] });
   });
 
+  // Customer feedback round 1, Fix 4: the run comment's footer is italic
+  // markdown (`*Full report … *`) and used to land on the issue as literal
+  // asterisks — Dana's "raw markdown in Jira" finding.
+  it('renders single-asterisk italics as em, never mistaking bold or arithmetic for it', () => {
+    const body = [
+      'Fixed.',
+      '',
+      '*Full report — the evidence — is on the run in Waypoint (ROAD-1 · Fix).*',
+      '',
+      'Costs 5 * 3 = 15 and **bold** stays bold, *a* too.',
+    ].join('\n');
+    const [, , footer, mixed] = buildCopilotJiraCommentAdf('Amaan', body, 'agent_run').content;
+
+    expect(footer).toEqual({
+      type: 'paragraph',
+      content: [
+        {
+          type: 'text',
+          text: 'Full report — the evidence — is on the run in Waypoint (ROAD-1 · Fix).',
+          marks: [{ type: 'em' }],
+        },
+      ],
+    });
+    expect(mixed).toEqual({
+      type: 'paragraph',
+      content: [
+        { type: 'text', text: 'Costs 5 * 3 = 15 and ' },
+        { type: 'text', text: 'bold', marks: [{ type: 'strong' }] },
+        { type: 'text', text: ' stays bold, ' },
+        { type: 'text', text: 'a', marks: [{ type: 'em' }] },
+        { type: 'text', text: ' too.' },
+      ],
+    });
+  });
+
   // Jira rejects a document carrying an empty text node; blank lines,
   // empty headings and an empty fence must not produce one.
   it('never emits an empty text node', () => {

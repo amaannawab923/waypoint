@@ -916,17 +916,16 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
 
     let filed = 0;
     const filedIds: Array<{ id: string; kind: string }> = [];
+    // The host's facts about the branch stay with the run (the finalized
+    // event), not on the ticket — Fix 4.
+    const work = isDispatchedWriter(current)
+      ? await describeBranchWork(deps, current)
+      : null;
     try {
-      const work = isDispatchedWriter(current)
-        ? await describeBranchWork(deps, current)
-        : null;
       const body = buildRunComment({
         report,
-        verdict,
         runLabel: `${label(current)} · follow-up ${sequence}`,
-        work,
         published,
-        notPublishedBecause,
       });
       const groupId = `${run.id}:${sequence}`;
       const comment = await deps.ledger.createRunProposal(
@@ -1031,6 +1030,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         summary: clip(report.summary || closing, MAX_SUMMARY_CHARS),
         proposals: filedIds,
         pr: prFact(published, notPublishedBecause),
+        work,
         headSha,
         newCommits,
         afterTurnId: lastTurnId(turns),
@@ -1239,22 +1239,20 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
       if (published.kind === 'opened') run = { ...run, prUrl: published.url };
     }
 
-    // The proposals: the board-shaped comment (the verdict, the Summary,
-    // and the host's facts about the branch and the PR), and the state
-    // change the verdict calls for.
+    // The proposals: the board-shaped comment (the Summary, what was
+    // verified, and the PR when there is one), and the state change the
+    // verdict calls for. The host's facts about the branch stay with the
+    // run (the finalized event), not on the ticket — Fix 4.
     let filed = 0;
     const filedIds: Array<{ id: string; kind: string }> = [];
+    const work = isDispatchedWriter(run)
+      ? await describeBranchWork(deps, run)
+      : null;
     try {
-      const work = isDispatchedWriter(run)
-        ? await describeBranchWork(deps, run)
-        : null;
       const body = buildRunComment({
         report,
-        verdict,
         runLabel: label(run),
-        work,
         published,
-        notPublishedBecause,
       });
       // A Jira issue's proposals carry the borrowed credential, so the
       // backend can read the issue live and build the external-write card
@@ -1380,6 +1378,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         summary: clip(report.summary || closing, MAX_SUMMARY_CHARS),
         proposals: filedIds,
         pr: prFact(published, notPublishedBecause),
+        work,
         headSha,
         afterTurnId: lastTurnId(turns),
       })
