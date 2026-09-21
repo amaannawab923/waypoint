@@ -170,11 +170,16 @@ export type AppendAgentRunEventInput = z.infer<typeof appendAgentRunEventSchema>
 // the agent's closing message as a comment, or the state change Fix
 // asks for. Only these two kinds; a run never creates tickets or
 // reassigns people.
-export const createRunProposalSchema = z
-  .discriminatedUnion('kind', [
-    z.object({ kind: z.literal('comment'), body: z.string().min(1).max(20_000) }).strict(),
-    z.object({ kind: z.literal('state_change'), stateId: id }).strict(),
-  ]);
+// `groupId` ties the comment and the state change one closing message
+// files, so Review shows them as one card (customer feedback round 1).
+const groupId = z
+  .string()
+  .regex(/^run-[A-Za-z0-9]{1,64}:\d{1,6}$/)
+  .optional();
+export const createRunProposalSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('comment'), body: z.string().min(1).max(20_000), groupId }).strict(),
+  z.object({ kind: z.literal('state_change'), stateId: id, groupId }).strict(),
+]);
 export type CreateRunProposalInput = z.infer<typeof createRunProposalSchema>;
 
 // Continue a run that is not live. Deliberately not a PATCH — the body

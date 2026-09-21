@@ -533,19 +533,21 @@ describe('POST /agent-runs/:id/proposals (W5a)', () => {
         agentRunId: 'run-abc1234',
         kind: 'comment',
         payload: { body: 'Root cause: …' },
+        groupId: null,
       },
       null,
     );
 
     const move = await request(app)
       .post('/agent-runs/run-abc1234/proposals')
-      .send({ kind: 'state_change', stateId: 'st-review' });
+      .send({ kind: 'state_change', stateId: 'st-review', groupId: 'run-abc1234:2' });
     expect(move.status).toBe(201);
     expect(proposalsService.createRunProposal).toHaveBeenLastCalledWith(
       {
         agentRunId: 'run-abc1234',
         kind: 'state_change',
         payload: { stateId: 'st-review' },
+        groupId: 'run-abc1234:2',
       },
       null,
     );
@@ -578,7 +580,7 @@ describe('POST /agent-runs/:id/proposals (W5a)', () => {
 
     expect(res.status).toBe(201);
     expect(proposalsService.createRunProposal).toHaveBeenLastCalledWith(
-      { agentRunId: 'run-abc1234', kind: 'state_change', payload: { stateId: '31' } },
+      { agentRunId: 'run-abc1234', kind: 'state_change', payload: { stateId: '31' }, groupId: null },
       { site: 'yourteam.atlassian.net', email: 'max@example.com', apiToken: 'tok', displayName: 'Max Chen' },
     );
   });

@@ -226,8 +226,14 @@ export interface LedgerProposal {
   resolvedAt: string | null;
 }
 
+/**
+ * `groupId` ties the comment and the state change one closing message
+ * files — `<runId>:<report sequence>` — so Review shows them as one card
+ * and approves them together (customer feedback round 1).
+ */
 export type CreateRunProposalInput =
-  { kind: 'comment'; body: string } | { kind: 'state_change'; stateId: string };
+  | { kind: 'comment'; body: string; groupId?: string }
+  | { kind: 'state_change'; stateId: string; groupId?: string };
 
 /** The slice of a project a run start needs (the backend's `/projects/:id`). */
 export interface LedgerProject {

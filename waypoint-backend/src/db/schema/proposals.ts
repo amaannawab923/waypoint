@@ -85,6 +85,13 @@ export const proposals = pgTable(
     projectId: text('project_id'),
     // Set when the proposal originated from triaging an incoming request.
     sourceRequestId: text('source_request_id').references(() => requests.id, { onDelete: 'set null' }),
+    // One closing message of a run files a comment AND a state change
+    // (finalize.ts); this ties them, so Review shows them as ONE card and
+    // approves them together (customer feedback round 1: the two arrived
+    // as unrelated rows, state above the comment that justified it).
+    // `<runId>:<report sequence>`; null for every other origin. Plain
+    // column, no FK — it is a label, not a row.
+    groupId: text('group_id'),
 
     // --- unchanged from copilot_proposals ---------------------------------
     kind: proposalKindEnum('kind').notNull(),

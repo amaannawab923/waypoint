@@ -652,6 +652,71 @@ describe('approveProposal', () => {
     expect(ticketsService.updateTicket).toHaveBeenCalledWith('wi-1', { stateId: 'st-done' }, { activityDetail: 'changed state, as Copilot proposed' });
   });
 
+  it('approving one run’s state change supersedes the other runs’ open proposals on the ticket that start from the same state — never its own, never a run that proposed no state change (feedback round 1)', async () => {
+    const approved = proposalRow({
+      kind: 'state_change',
+      origin: 'agent_run',
+      agentRunId: 'run-a',
+      groupId: 'run-a:1',
+      payload: { stateId: 'st-review' },
+      snapshot: { identifier: 'PL-10', fromStateId: 'st-todo' },
+    });
+    const supersedeChain = chainable([]);
+    db.update
+      .mockReturnValueOnce(chainable([approved]))
+      .mockReturnValueOnce(chainable([{ ...approved, status: 'executed' }]))
+      .mockReturnValueOnce(supersedeChain);
+    // Every select (the workspace guard, the settle reads, the competing
+    // scan) answers with the ticket's other open run proposals; only the
+    // competing scan reads them as such.
+    db.select.mockReturnValue(
+      chainable([
+        { id: 'prop-b-comment', kind: 'comment', snapshot: { identifier: 'PL-10' }, agentRunId: 'run-b' },
+        { id: 'prop-b-state', kind: 'state_change', snapshot: { fromStateId: 'st-todo' }, agentRunId: 'run-b' },
+        { id: 'prop-c-comment', kind: 'comment', snapshot: {}, agentRunId: 'run-c' },
+        // A different starting state: not competing for the same decision.
+        { id: 'prop-d-state', kind: 'state_change', snapshot: { fromStateId: 'st-review' }, agentRunId: 'run-d' },
+      ]),
+    );
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket({ stateId: 'st-todo' }) as never);
+    vi.mocked(statesService.listStates).mockResolvedValue([{ id: 'st-review' }] as never);
+    vi.mocked(ticketsService.updateTicket).mockResolvedValue({} as never);
+
+    await approveProposal('prop-abc1234');
+
+    const setArgs = (supersedeChain.set as Vfn).mock.calls[0][0];
+    expect(setArgs).toMatchObject({
+      status: 'superseded',
+      statusReason: 'Superseded — PL-10 was fixed by a different run.',
+      decidedBy: 'system',
+    });
+    expect(setArgs.resolvedAt).toBeInstanceOf(Date);
+    // run-b's comment AND state change go; run-c (comment only) and run-d
+    // (a different starting state) stay open.
+    expect(inArray).toHaveBeenCalledWith(proposals.id, ['prop-b-comment', 'prop-b-state']);
+  });
+
+  it('a Copilot state change, or a run comment, supersedes nothing', async () => {
+    db.update
+      .mockReturnValueOnce(
+        chainable([
+          proposalRow({
+            kind: 'state_change',
+            payload: { stateId: 'st-done' },
+            snapshot: { fromStateId: 'st-progress' },
+          }),
+        ]),
+      )
+      .mockReturnValueOnce(chainable([proposalRow({ status: 'executed' })]));
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
+    vi.mocked(statesService.listStates).mockResolvedValue([{ id: 'st-done' }] as never);
+    vi.mocked(ticketsService.updateTicket).mockResolvedValue({} as never);
+
+    await approveProposal('prop-abc1234');
+    // The claim and the finalize; no third update.
+    expect(db.update).toHaveBeenCalledTimes(2);
+  });
+
   it('executes a priority change with EXACTLY one patch key — priority', async () => {
     db.update
       .mockReturnValueOnce(
