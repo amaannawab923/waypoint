@@ -399,6 +399,14 @@ export interface JiraConnectionStatus {
   /** Issues in the last read of your queue — which is not the same as issues
    *  in your queue whenever `countsTruncated` is true. */
   issueCount: number;
+  /**
+   * Of those, the ones assigned to you — what the rail badge shows
+   * (customer feedback round 1, Fix 9): every other rail badge is a
+   * "this needs you" count, and the union total (assignee OR reporter OR
+   * watcher) read as one while meaning something else. Optional only for
+   * fixtures that predate it; the real read always fills it.
+   */
+  assignedCount?: number;
   /** Distinct projects across that same read, and capped by it for the same
    *  reason: a project whose only issues fell past the cap is not counted. */
   projectCount: number;

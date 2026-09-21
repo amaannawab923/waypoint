@@ -257,11 +257,16 @@ function MyJiraNavLink() {
       <span className="truncate">My Jira</span>
       {/* A capped read renders "500+", not "500". The badge is a glance, and
           a glance that says a precise wrong number is worse than one that
-          says "at least this many". */}
-      <CountBadge
-        count={connection.issueCount}
-        atLeast={connection.countsTruncated}
-      />
+          says "at least this many". The number is what is ASSIGNED to you
+          (Fix 9) — the union total read as "needs your attention" while
+          meaning "anything you touch"; the Assigned tab says the same
+          number. */}
+      <span title="Issues assigned to you — the Assigned tab's own count">
+        <CountBadge
+          count={connection.assignedCount ?? connection.issueCount}
+          atLeast={connection.countsTruncated}
+        />
+      </span>
     </NavLink>
   );
 }
@@ -425,6 +430,11 @@ export function Sidebar({ onCollapse }: SidebarProps = {}) {
           My work
         </NavLink>
         <MySessionsNavItem />
+        {/* Customer feedback round 1, Fix 9: My Jira sat twelfth down the
+            rail, below every project group, off-screen at 1080px. It is a
+            person's own queue, like My work and My sessions, so it sits
+            with them — always visible, never a scroll away. */}
+        <MyJiraNavItem />
         <NavLink to="/notifications" className={navLinkClass}>
           <IconBell size={15} />
           Notifications
@@ -492,10 +502,6 @@ export function Sidebar({ onCollapse }: SidebarProps = {}) {
         {projects?.map((p) => (
           <ProjectRow key={p.id} project={p} />
         ))}
-      </div>
-
-      <div className="mt-1 flex flex-col gap-0.5 px-2">
-        <MyJiraNavItem />
       </div>
 
       <div className="flex-1" />

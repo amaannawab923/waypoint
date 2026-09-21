@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { humanizeAgo } from '@/lib/duration';
+import { TAB_COUNTS_EXPLAINER } from '@/lib/jiraCopy';
 import { useSearchParams } from 'react-router-dom';
 import { clsx } from 'clsx';
 import {
@@ -350,6 +351,7 @@ export default function MyJiraPage() {
               {t.label}
               {count !== undefined && (
                 <span
+                  title={TAB_COUNTS_EXPLAINER}
                   className={clsx(
                     'rounded-full px-1.5 py-0.5 font-mono text-[10.5px] font-medium',
                     tab === t.key

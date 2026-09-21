@@ -14,6 +14,7 @@ import { IconAlert, IconCircleDot } from '@/components/icons';
 import { JiraMark } from '@/components/domain/JiraMark';
 import { AddProjectWizard } from '@/components/domain/AddProjectWizard';
 import type { JiraConnectionStatus } from '@/types/jira';
+import { TAB_COUNTS_EXPLAINER } from '@/lib/jiraCopy';
 
 /**
  * What a disconnect actually does, in the terms a confirm dialog has to be
@@ -215,6 +216,15 @@ export function JiraConnectionPanel({
             </span>
           </div>
         </div>
+        {/* Fix 9: the rail badge (assigned) and the tab counts differ from
+            the queue total above, and each other, because each is its own
+            search. Said once, where the numbers live. */}
+        <p
+          className="border-t border-border px-4.5 py-2.5 text-[11.5px] text-text-muted"
+          data-tab-counts-explainer
+        >
+          {TAB_COUNTS_EXPLAINER}
+        </p>
 
         <div className="flex flex-wrap gap-2 border-t border-border px-4.5 py-3">
           <Button

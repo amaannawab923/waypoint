@@ -302,13 +302,42 @@ export default function MachinePage() {
           What leaves this machine
         </h2>
         <div className="flex flex-col divide-y divide-border">
-          <div className="flex items-center justify-between py-2 text-sm text-text">
-            <span>Your tickets</span>
-            <Badge tone="success">Never</Badge>
+          {/* Customer feedback round 1, Fix 9: these two said "Never" while
+              Copilot had just read 27 tickets and a Fix session reads the
+              repository. The truth is scoped, not unconditional — said in
+              the same label + badge + sub-line shape as Agent prompts,
+              in a neutral tone: precision, not alarm. Green is for facts
+              with no condition on them, and there are none left here. */}
+          <div
+            className="flex items-center justify-between gap-4 py-2 text-sm text-text"
+            data-leaves-row="tickets"
+          >
+            <div>
+              <span>Your tickets</span>
+              <p className="mt-0.5 text-xs text-text-muted">
+                Copilot reads a ticket only when you ask it something that
+                requires reading one; a session reads only the ticket it was
+                dispatched on.
+              </p>
+            </div>
+            <Badge tone="neutral" className="shrink-0">
+              Only the ones you ask Copilot or a session about
+            </Badge>
           </div>
-          <div className="flex items-center justify-between py-2 text-sm text-text">
-            <span>Your code</span>
-            <Badge tone="success">Never</Badge>
+          <div
+            className="flex items-center justify-between gap-4 py-2 text-sm text-text"
+            data-leaves-row="code"
+          >
+            <div>
+              <span>Your code</span>
+              <p className="mt-0.5 text-xs text-text-muted">
+                A session only reads the repository it was dispatched into, and
+                only while it&apos;s running.
+              </p>
+            </div>
+            <Badge tone="neutral" className="shrink-0">
+              Only what a Fix or Investigate session reads for its ticket
+            </Badge>
           </div>
           <div className="flex items-center justify-between gap-4 py-2 text-sm text-text">
             <div>
