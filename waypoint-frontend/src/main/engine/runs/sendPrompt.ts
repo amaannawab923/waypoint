@@ -5,6 +5,7 @@ import {
   type SendRunPromptResult,
 } from '../types';
 import type { DaemonSessionSummary } from './daemonApi';
+import { registerConversation } from './registerConversation';
 import { assertRunId, LedgerRequestError, type AgentRun } from './ledgerClient';
 import {
   drain,
@@ -262,6 +263,12 @@ async function sendRunPromptLocked(
     // resumeRunCore answers already-live for a live status — so this is
     // the one place a live-status run is put through a start directly.
     try {
+      await registerConversation(
+        daemon,
+        deps.logger,
+        run,
+        run.cwd ?? run.worktreePath ?? '',
+      );
       const { sessionId } = await daemon.startSession({
         conversationId: run.id,
         providerId: run.providerId,
