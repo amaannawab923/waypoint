@@ -24,7 +24,12 @@ export interface IconProps {
 }
 
 function makeIcon(path: ReactNode, defaultSize = 18, defaultStrokeWidth = 2) {
-  return function Icon({ size = defaultSize, className, strokeWidth = defaultStrokeWidth, style }: IconProps) {
+  return function Icon({
+    size = defaultSize,
+    className,
+    strokeWidth = defaultStrokeWidth,
+    style,
+  }: IconProps) {
     return (
       <svg
         width={size}
@@ -66,7 +71,9 @@ export const IconBell = makeIcon(
   </>,
 );
 
-export const IconEdit = makeIcon(<path d="M4 20h4L18.5 9.5a2 2 0 0 0-4-4L4 16z" />);
+export const IconEdit = makeIcon(
+  <path d="M4 20h4L18.5 9.5a2 2 0 0 0-4-4L4 16z" />,
+);
 
 export const IconScratch = makeIcon(
   <>
@@ -233,7 +240,9 @@ export const IconCircleDot = makeIcon(
     <circle cx="12" cy="12" r="3" fill="currentColor" stroke="none" />
   </>,
 );
-export const IconDashed = makeIcon(<circle cx="12" cy="12" r="8" strokeDasharray="2.6 3.2" />);
+export const IconDashed = makeIcon(
+  <circle cx="12" cy="12" r="8" strokeDasharray="2.6 3.2" />,
+);
 export const IconCheck = makeIcon(
   <>
     <circle cx="12" cy="12" r="8" />
@@ -257,7 +266,10 @@ export const IconBot = makeIcon(
   </>,
 );
 
-export const IconFilter = makeIcon(<path d="M3.5 5h17l-6.5 7.5V20l-4-2.5v-5z" />, 16);
+export const IconFilter = makeIcon(
+  <path d="M3.5 5h17l-6.5 7.5V20l-4-2.5v-5z" />,
+  16,
+);
 
 export const IconShield = makeIcon(
   <>
@@ -317,6 +329,18 @@ export const IconAlert = makeIcon(
 // W3, the sessions panel: the composer's send, and the diff tab's file glyphs.
 export const IconSend = makeIcon(
   <path d="M21.5 2.5 11 13M21.5 2.5 15 21.5l-4-8.5-8.5-4z" />,
+);
+
+// The composer's send button as the key that sends it — a return arrow
+// (2026-09-21: Enter sends, so the button says what the key does).
+export const IconReturn = makeIcon(
+  <path d="M20 5v6a3 3 0 0 1-3 3H5M9 10l-4 4 4 4" />,
+);
+
+// The composer's Stop while the agent works: the classic square, filled by
+// the caller (`fill-current`) so it reads as a solid stop, not an outline.
+export const IconStop = makeIcon(
+  <rect x="5" y="5" width="14" height="14" rx="2" />,
 );
 
 export const IconDiff = makeIcon(

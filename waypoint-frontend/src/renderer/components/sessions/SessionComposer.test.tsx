@@ -9,7 +9,7 @@ import {
 } from './SessionComposer';
 
 describe('SessionComposer', () => {
-  it('sends the trimmed text on ⌘Enter and clears; plain Enter stays a newline', async () => {
+  it('sends the trimmed text on Enter and clears; Shift+Enter and a composing Enter stay newlines', async () => {
     const onSend = jest.fn(async () => {});
     render(
       <SessionComposer
@@ -20,13 +20,35 @@ describe('SessionComposer', () => {
     );
     const box = screen.getByLabelText('Message this session');
     fireEvent.change(box, { target: { value: '  Run the tests  ' } });
-    fireEvent.keyDown(box, { key: 'Enter' });
+    fireEvent.keyDown(box, { key: 'Enter', shiftKey: true });
+    fireEvent.keyDown(box, { key: 'Enter', isComposing: true });
     expect(onSend).not.toHaveBeenCalled();
     await act(async () => {
-      fireEvent.keyDown(box, { key: 'Enter', metaKey: true });
+      fireEvent.keyDown(box, { key: 'Enter' });
     });
     expect(onSend).toHaveBeenCalledWith('Run the tests');
     expect(box).toHaveValue('');
+  });
+
+  it('still sends on ⌘Enter and Ctrl+Enter', async () => {
+    const onSend = jest.fn<Promise<void>, [string]>(async () => {});
+    render(
+      <SessionComposer
+        onSend={onSend}
+        sendBlockedReason={null}
+        attachedToBand={false}
+      />,
+    );
+    const box = screen.getByLabelText('Message this session');
+    fireEvent.change(box, { target: { value: 'one' } });
+    await act(async () => {
+      fireEvent.keyDown(box, { key: 'Enter', metaKey: true });
+    });
+    fireEvent.change(box, { target: { value: 'two' } });
+    await act(async () => {
+      fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true });
+    });
+    expect(onSend.mock.calls.map((c) => c[0])).toEqual(['one', 'two']);
   });
 
   it('keeps the text when sending fails, and never sends blank text', async () => {
@@ -259,6 +281,116 @@ describe('SessionComposer', () => {
       });
       expect(readSessionDraft('run-d')).toBe('the message\nhi');
       clearSessionDraft('run-d');
+    });
+  });
+
+  describe('the controls under the box', () => {
+    const config = {
+      modelOptions: {
+        configId: 'model',
+        selected: 'claude-opus-5',
+        available: [
+          { id: 'claude-opus-5', name: 'Claude Opus 5' },
+          { id: 'claude-sonnet-5', name: 'Claude Sonnet 5' },
+        ],
+      },
+      efforts: null,
+      modeOptions: {
+        configId: 'mode',
+        selected: 'bypassPermissions',
+        available: [
+          { id: 'default', name: 'Ask before acting' },
+          { id: 'bypassPermissions', name: 'Auto-approve' },
+        ],
+      },
+      availableCommands: [],
+    };
+
+    it('shows the mode and model the session offers, and hands a change to the setter', () => {
+      const onSetMode = jest.fn();
+      const onSetModel = jest.fn();
+      render(
+        <SessionComposer
+          onSend={jest.fn(async () => {})}
+          sendBlockedReason={null}
+          attachedToBand={false}
+          config={config}
+          onSetMode={onSetMode}
+          onSetModel={onSetModel}
+        />,
+      );
+      const mode = screen.getByLabelText('Mode');
+      expect(mode).toHaveValue('bypassPermissions');
+      fireEvent.change(mode, { target: { value: 'default' } });
+      expect(onSetMode).toHaveBeenCalledWith('default');
+      const model = screen.getByLabelText('Model');
+      expect(model).toHaveValue('claude-opus-5');
+      fireEvent.change(model, { target: { value: 'claude-sonnet-5' } });
+      expect(onSetModel).toHaveBeenCalledWith('claude-sonnet-5');
+      // No effort offered: no effort selector.
+      expect(screen.queryByLabelText('Effort')).toBeNull();
+    });
+
+    it('never hands the "—" placeholder (no selection yet) to a setter', () => {
+      const onSetModel = jest.fn();
+      render(
+        <SessionComposer
+          onSend={jest.fn(async () => {})}
+          sendBlockedReason={null}
+          attachedToBand={false}
+          config={{
+            ...config,
+            modelOptions: { ...config.modelOptions, selected: null },
+          }}
+          onSetModel={onSetModel}
+        />,
+      );
+      const model = screen.getByLabelText('Model');
+      expect(model).toHaveValue('');
+      fireEvent.change(model, { target: { value: '' } });
+      expect(onSetModel).not.toHaveBeenCalled();
+      fireEvent.change(model, { target: { value: 'claude-sonnet-5' } });
+      expect(onSetModel).toHaveBeenCalledWith('claude-sonnet-5');
+    });
+
+    it('shows no selector before the config lands or when the provider offers none', () => {
+      render(
+        <SessionComposer
+          onSend={jest.fn(async () => {})}
+          sendBlockedReason={null}
+          attachedToBand={false}
+          config={null}
+        />,
+      );
+      expect(screen.queryByLabelText('Mode')).toBeNull();
+      expect(screen.queryByLabelText('Model')).toBeNull();
+    });
+
+    it('is a Stop button while the agent is generating, and Send again after', () => {
+      const onStop = jest.fn();
+      const { rerender } = render(
+        <SessionComposer
+          onSend={jest.fn(async () => {})}
+          sendBlockedReason={null}
+          attachedToBand={false}
+          generating
+          onStop={onStop}
+        />,
+      );
+      expect(screen.queryByLabelText('Send')).toBeNull();
+      fireEvent.click(screen.getByLabelText('Stop'));
+      expect(onStop).toHaveBeenCalledTimes(1);
+      rerender(
+        <SessionComposer
+          onSend={jest.fn(async () => {})}
+          sendBlockedReason={null}
+          attachedToBand={false}
+          generating={false}
+          onStop={onStop}
+        />,
+      );
+      expect(screen.queryByLabelText('Stop')).toBeNull();
+      expect(screen.getByLabelText('Send')).toBeDisabled();
     });
   });
 });

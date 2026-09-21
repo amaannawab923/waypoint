@@ -15,6 +15,8 @@ import {
   resolvePermission,
   retryPendingPrompt,
   sendPrompt,
+  setSessionMode,
+  setSessionModelOption,
   warmRun,
 } from '@/data/engineApi';
 import { refreshSessions, useSessionsSnapshot } from '@/lib/sessionsStore';
@@ -46,7 +48,7 @@ function BriefBar({ brief, label }: { brief: string; label: string }) {
   const lines = brief.split('\n').length;
   return (
     <div
-      className="mx-4 mt-3 rounded-[var(--radius-sm)] border border-border bg-bg-inset text-xs"
+      className="mx-18 mt-3 rounded-[var(--radius-sm)] border border-border bg-bg-inset text-xs"
       data-brief-bar
       data-open={open ? 'true' : 'false'}
     >
@@ -183,6 +185,7 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
     hasActiveTurn,
     pendingPermissions,
     usage,
+    config,
     liveStatus,
     isGenerating,
     queuedCount,
@@ -325,15 +328,15 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
   let placeholder: string | undefined;
   let sendingLabel = 'Sending…';
   if (isGenerating)
-    placeholder = 'Add a follow-up…  (⌘↵ queues it for the next turn)';
+    placeholder = 'Add a follow-up…  (↵ queues it for the next turn)';
   else if (run.status === 'queued' || run.status === 'provisioning')
     placeholder =
-      'Starting the session… your message goes with it  (⌘↵ to send)';
+      'Starting the session… your message goes with it  (↵ to send)';
   else if (run.status === 'finishing')
-    placeholder = 'Filing the report… your message goes next  (⌘↵ to send)';
-  else if (warming) placeholder = 'Connecting… you can type  (⌘↵ to send)';
+    placeholder = 'Filing the report… your message goes next  (↵ to send)';
+  else if (warming) placeholder = 'Connecting… you can type  (↵ to send)';
   else if (!status.live) {
-    placeholder = 'Message this session to continue it…  (⌘↵ to send)';
+    placeholder = 'Message this session to continue it…  (↵ to send)';
     sendingLabel = 'Resuming…';
   }
 
@@ -527,6 +530,20 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
         state={state}
         composer="slot"
         composerPlacement="bottom"
+        // chat-ui's default content column is 42rem (672px): at a 1700px
+        // window half the detail pane sat empty (Sessions UX walkthrough,
+        // 2026-09-21, the founder's first caveat), and a 960px cap still left
+        // 30% of the pane blank either side (QA pass, same day). The column
+        // now spans the pane, like the Diff tab beside it; rows are measured
+        // against this element's width, so terminal panels and screenshots
+        // get the room, and the composer slot widens with it. Margin, not
+        // padding: chat-ui positions rows absolutely inside this element, so
+        // padding would narrow the measure without moving the rows. 40px of
+        // margin on top of the scroll container's own 16px gutter and each
+        // row's 16px inset puts the rows 72px from the pane edge (the
+        // founder's call after the full-bleed pass read as too wide); the
+        // dock's mx-4 and the pane notices' mx-18 line up with that.
+        contentClass="mx-10"
         stickToBottom
         onReady={(view) => setReady({ state, view })}
         commands={commands}
@@ -575,6 +592,38 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
         autoFocus
         placeholder={placeholder}
         sendingLabel={sendingLabel}
+        generating={isGenerating}
+        onStop={commands.onStop}
+        config={config}
+        onSetMode={(modeId) => {
+          setSessionMode(run.id, modeId).catch((error: unknown) =>
+            showErrorToast(
+              error instanceof Error
+                ? error.message
+                : 'The mode was not changed.',
+            ),
+          );
+        }}
+        onSetModel={(modelId) => {
+          setSessionModelOption(run.id, 'model', modelId).catch(
+            (error: unknown) =>
+              showErrorToast(
+                error instanceof Error
+                  ? error.message
+                  : 'The model was not changed.',
+              ),
+          );
+        }}
+        onSetEffort={(effortId) => {
+          setSessionModelOption(run.id, 'effort', effortId).catch(
+            (error: unknown) =>
+              showErrorToast(
+                error instanceof Error
+                  ? error.message
+                  : 'The effort was not changed.',
+              ),
+          );
+        }}
       />
     </>
   );
@@ -582,7 +631,7 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {historyStatus.kind === 'failed' && (
-        <div className="mx-4 mt-3 flex items-center gap-3 rounded-[var(--radius-sm)] border border-danger bg-danger-bg px-3 py-2 text-xs text-danger">
+        <div className="mx-18 mt-3 flex items-center gap-3 rounded-[var(--radius-sm)] border border-danger bg-danger-bg px-3 py-2 text-xs text-danger">
           <span className="min-w-0 flex-1 truncate">
             The transcript could not be read: {historyStatus.message}
           </span>
@@ -597,7 +646,7 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
       )}
       {brief && briefLabel && <BriefBar brief={brief} label={briefLabel} />}
       {liveStatus.kind === 'closed' && !engineDown && status.live && (
-        <div className="mx-4 mt-3 rounded-[var(--radius-sm)] border border-border bg-bg-inset px-3 py-2 text-xs text-text-secondary">
+        <div className="mx-18 mt-3 rounded-[var(--radius-sm)] border border-border bg-bg-inset px-3 py-2 text-xs text-text-secondary">
           Live updates stopped
           {liveStatus.reason.kind === 'error' ||
           liveStatus.reason.kind === 'topic-error'
@@ -609,7 +658,7 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
       {nothingYet && (
         <div
           data-nothing-yet
-          className="mx-4 mt-3 rounded-[var(--radius-sm)] border border-border bg-bg-inset px-3 py-2 text-xs text-text-secondary"
+          className="mx-18 mt-3 rounded-[var(--radius-sm)] border border-border bg-bg-inset px-3 py-2 text-xs text-text-secondary"
         >
           No activity in this session yet — {status.sentence}
         </div>

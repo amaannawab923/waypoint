@@ -14,7 +14,15 @@ function readStoredTheme(): Theme {
 }
 
 function applyTheme(theme: Theme): void {
-  document.documentElement.setAttribute('data-theme', theme);
+  const root = document.documentElement;
+  root.setAttribute('data-theme', theme);
+  // The vendored chat-ui picks its palette from an `emdark` / `emlight`
+  // ancestor class (its own theme contract), so the two must travel together
+  // — without this, session transcripts rendered chat-ui's light palette on
+  // Waypoint's dark canvas. index.css then rebinds chat-ui's --chat-* tokens
+  // to Waypoint's own under each theme; index.ejs mirrors this for first paint.
+  root.classList.toggle('emdark', theme === 'dark');
+  root.classList.toggle('emlight', theme !== 'dark');
   try {
     localStorage.setItem(STORAGE_KEY, theme);
   } catch {

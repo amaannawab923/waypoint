@@ -40,7 +40,7 @@ export function UsageStrip({
   return (
     <div
       data-usage-strip
-      className="flex shrink-0 items-center gap-3.5 border-t border-border px-4 py-1 font-mono text-[10px] text-text-muted"
+      className="flex shrink-0 items-center gap-3.5 border-t border-border px-4 py-1 font-mono text-[10.5px] text-text-secondary"
     >
       <span>{turnCount === 1 ? '1 turn' : `${turnCount} turns`}</span>
       {usage && usage.contextSize > 0 && (

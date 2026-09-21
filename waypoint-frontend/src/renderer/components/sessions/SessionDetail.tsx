@@ -184,6 +184,11 @@ export function SessionDetail({
             </IconButton>
           )}
           <div className="min-w-0">
+            {/* The title on its own tier (Sessions UX walkthrough, 2026-09-21):
+                title and rename on one line, the run's state — status, mode,
+                verdict — on the line under it, the facts on a third. Five
+                things of one weight on one baseline read as none of them
+                being the title. */}
             <div className="flex min-w-0 items-center gap-2">
               {renaming ? (
                 <input
@@ -204,11 +209,11 @@ export function SessionDetail({
                       setRenaming(false);
                     }
                   }}
-                  className="h-6 min-w-0 flex-1 rounded-[var(--radius-sm)] border border-border-strong bg-bg px-2 font-display text-[13px] font-semibold text-text outline-none focus:border-accent"
+                  className="h-7 min-w-0 flex-1 rounded-[var(--radius-sm)] border border-border-strong bg-bg px-2 font-display text-[15px] font-semibold text-text outline-none focus:border-accent"
                 />
               ) : (
                 <>
-                  <h1 className="truncate font-display text-[13px] font-semibold text-text">
+                  <h1 className="truncate font-display text-[15px] font-semibold text-text">
                     {title}
                   </h1>
                   <IconButton
@@ -220,6 +225,8 @@ export function SessionDetail({
                   </IconButton>
                 </>
               )}
+            </div>
+            <div className="mt-1 flex flex-wrap items-center gap-1.5">
               <SessionStatusPill status={run.status} />
               {run.entry === 'dispatched' ? (
                 <IntentChip run={run} size="md" />
@@ -228,7 +235,14 @@ export function SessionDetail({
               )}
               <VerdictChip run={run} size="md" />
             </div>
-            <div className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[10.5px] text-text-muted">
+            {/* `·` between the facts, so the line scans in one pass instead
+                of being read word by word. `divide` on flex-wrap would put a
+                rule at a wrapped line's start; an explicit glyph per item
+                keeps it between items only. */}
+            <div
+              className="mt-1 flex flex-wrap items-center gap-y-0.5 text-[10.5px] text-text-secondary [&>*+*]:before:mx-1.5 [&>*+*]:before:text-text-muted [&>*+*]:before:content-['·']"
+              data-run-facts
+            >
               <span className="inline-flex items-center gap-1">
                 <ProviderChip providerId={run.providerId} size={14} />
                 {provider.name}

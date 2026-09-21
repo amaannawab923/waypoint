@@ -1,12 +1,18 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { clsx } from 'clsx';
-import { IconSend } from '@/components/icons';
+import type { SessionConfigState } from '@emdash/core/runtimes/acp/api/client' with {
+  'resolution-mode': 'import',
+};
+import { IconChevron, IconReturn, IconStop } from '@/components/icons';
 
 /**
  * The message box under the transcript (W3, ROAD-62). Text only —
- * attachments are not in W3's allowlist. `⌘Enter` (or Ctrl+Enter) sends;
- * plain Enter is a newline, since a prompt to an agent is usually more
- * than one line.
+ * attachments are not in W3's allowlist. Enter sends; Shift+Enter is a
+ * newline (⌘/Ctrl+Enter still send, for hands used to that). It was the
+ * other way round until 2026-09-21 — the founder kept pressing Enter and
+ * nothing happened, which is how every chat box people already know
+ * behaves. An IME composition's Enter (picking a candidate) is left to
+ * the IME.
  *
  * Never-lock (2026-09-20; emdash parity): the box is NEVER disabled. A
  * person can always type into a run — done, needs-review, failed,
@@ -17,6 +23,14 @@ import { IconSend } from '@/components/icons';
  * Where the message goes is main's business (sendPrompt.ts): straight to
  * the session, queued for the next turn, a resume first, or the run's
  * outbox until the obstacle clears — every send lands somewhere.
+ *
+ * Under the box (2026-09-21, founder): the session's own selectors —
+ * mode (its permission policy: auto-approve or ask), model, and effort
+ * when the provider offers one — read from the daemon's `config` state
+ * and written back with acp.setModeOption / acp.setModelOption; and the
+ * send button becomes Stop (a square in a spinning ring) while the agent
+ * is generating, cancelling the turn. A provider that advertises no
+ * option shows no selector.
  *
  * W4 (ROAD-68): the unsent text is a draft per run, kept on this device
  * (`localStorage`, `DRAFT_PREFIX + run id`) so switching runs — or
@@ -88,6 +102,12 @@ export function SessionComposer({
   autoFocus,
   placeholder,
   sendingLabel,
+  generating = false,
+  onStop,
+  config = null,
+  onSetMode,
+  onSetModel,
+  onSetEffort,
 }: {
   /** The run id: what the draft is remembered under. Absent, nothing is remembered. */
   draftKey?: string;
@@ -105,6 +125,15 @@ export function SessionComposer({
   placeholder?: string;
   /** The placeholder while a send is in flight ("Sending…", "Resuming…"). */
   sendingLabel?: string;
+  /** The agent is mid-turn: the send button is a Stop. */
+  generating?: boolean;
+  /** Cancels the current turn (the Stop button). */
+  onStop?: () => void;
+  /** The session's mode / model / effort options; null before the first snapshot. */
+  config?: SessionConfigState | null;
+  onSetMode?: (modeId: string) => void;
+  onSetModel?: (modelId: string) => void;
+  onSetEffort?: (effortId: string) => void;
 }) {
   const [text, setText] = useState(() =>
     draftKey ? readSessionDraft(draftKey) : '',
@@ -183,17 +212,51 @@ export function SessionComposer({
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      send().catch(() => {});
-    }
+    if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
+    e.preventDefault();
+    send().catch(() => {});
   };
+
+  const selectors: Array<{
+    key: 'mode' | 'model' | 'effort';
+    label: string;
+    selected: string | null;
+    available: ReadonlyArray<{ id: string; name: string }>;
+    onChange: ((id: string) => void) | undefined;
+  }> = [];
+  if (config?.modeOptions && config.modeOptions.available.length > 0) {
+    selectors.push({
+      key: 'mode',
+      label: 'Mode',
+      selected: config.modeOptions.selected,
+      available: config.modeOptions.available,
+      onChange: onSetMode,
+    });
+  }
+  if (config?.modelOptions && config.modelOptions.available.length > 0) {
+    selectors.push({
+      key: 'model',
+      label: 'Model',
+      selected: config.modelOptions.selected,
+      available: config.modelOptions.available,
+      onChange: onSetModel,
+    });
+  }
+  if (config?.efforts && config.efforts.available.length > 0) {
+    selectors.push({
+      key: 'effort',
+      label: 'Effort',
+      selected: config.efforts.selected,
+      available: config.efforts.available,
+      onChange: onSetEffort,
+    });
+  }
 
   return (
     <div
       data-session-composer
       className={clsx(
-        'mx-4 mb-4 flex shrink-0 items-end gap-2 border border-border-strong bg-bg px-2.5 py-2',
+        'mx-4 mb-4 flex shrink-0 flex-col gap-1.5 border border-border-strong bg-bg px-2.5 pb-2 pt-2',
         attachedToBand
           ? 'rounded-b-[var(--radius-sm)]'
           : 'mt-2 rounded-[var(--radius-sm)]',
@@ -208,22 +271,79 @@ export function SessionComposer({
           sendBlockedReason ??
           (sending ? sendingLabel : undefined) ??
           placeholder ??
-          'Message this session…  (⌘↵ to send)'
+          'Message this session…  (↵ to send, ⇧↵ for a new line)'
         }
         aria-label="Message this session"
         rows={Math.min(6, Math.max(1, text.split('\n').length))}
-        className="thin-scroll min-h-[24px] flex-1 resize-none bg-transparent text-[12px] leading-5 text-text outline-none placeholder:text-text-muted"
+        className="thin-scroll min-h-[24px] w-full resize-none bg-transparent text-[12px] leading-5 text-text outline-none placeholder:text-text-muted"
       />
-      <button
-        type="button"
-        aria-label="Send"
-        onClick={() => send().catch(() => {})}
-        disabled={!!sendBlockedReason || sending || !text.trim()}
-        title={sendBlockedReason ?? undefined}
-        className="flex size-6 shrink-0 items-center justify-center rounded-[5px] bg-accent bg-[image:var(--accent-gradient)] text-on-accent disabled:opacity-40"
-      >
-        <IconSend size={12} />
-      </button>
+      <div className="flex items-center gap-1.5">
+        {selectors.map((sel) => (
+          <label
+            key={sel.key}
+            data-composer-selector={sel.key}
+            className="relative inline-flex h-6 items-center gap-1 rounded-[5px] border border-border bg-bg-inset pl-2 pr-6 text-[11px] text-text-secondary hover:border-border-strong hover:text-text focus-within:border-border-strong"
+          >
+            <span className="text-text-muted">{sel.label}</span>
+            <select
+              aria-label={sel.label}
+              value={sel.selected ?? ''}
+              // The "—" placeholder option (no selection yet) is not a
+              // choice: main refuses an empty id.
+              onChange={(e) => {
+                if (e.target.value) sel.onChange?.(e.target.value);
+              }}
+              disabled={!sel.onChange}
+              className="appearance-none bg-transparent pr-1 text-[11px] text-text outline-none"
+            >
+              {sel.selected === null && <option value="">—</option>}
+              {sel.available.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.name}
+                </option>
+              ))}
+            </select>
+            <IconChevron
+              size={12}
+              className="pointer-events-none absolute right-1.5 text-text-muted"
+            />
+          </label>
+        ))}
+        <span className="flex-1" />
+        {generating ? (
+          <button
+            type="button"
+            aria-label="Stop"
+            title="Stop the agent's current turn"
+            onClick={() => onStop?.()}
+            disabled={!onStop}
+            className="relative flex size-6 shrink-0 items-center justify-center rounded-full text-text disabled:opacity-40"
+          >
+            {/* The ring: a track plus one lit arc that circles while the
+                agent works — the classic "busy" around a stop square. */}
+            <span
+              aria-hidden="true"
+              className="absolute inset-0 rounded-full border-[1.5px] border-border-strong"
+            />
+            <span
+              aria-hidden="true"
+              className="absolute inset-0 animate-spin rounded-full border-[1.5px] border-transparent border-t-text"
+            />
+            <IconStop size={9} className="fill-current" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            aria-label="Send"
+            onClick={() => send().catch(() => {})}
+            disabled={!!sendBlockedReason || sending || !text.trim()}
+            title={sendBlockedReason ?? 'Send (↵)'}
+            className="flex size-6 shrink-0 items-center justify-center rounded-[5px] bg-accent bg-[image:var(--accent-gradient)] text-on-accent disabled:opacity-40"
+          >
+            <IconReturn size={12} />
+          </button>
+        )}
+      </div>
     </div>
   );
 }
