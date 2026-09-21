@@ -101,6 +101,45 @@
   color-scheme: dark;
 }
 
+/* The vendored emdash chat-ui (session transcripts) reads its colours from
+   --chat-* tokens whose defaults live under `:where(.emlight)` /
+   `:where(.emdark)` — zero specificity, so a plain :root rule wins. Bind
+   them to Waypoint's own tokens (which already flip with data-theme) so a
+   transcript sits on the same canvas as the rest of the app instead of
+   chat-ui's own greys; lib/theme.ts keeps the emdark/emlight class in step
+   with data-theme for the few chat-ui rules that key on the class itself
+   (code highlighting). The --chat-term-* terminal panel keeps chat-ui's
+   defaults: it is dark in both themes on purpose. */
+:root {
+  --chat-fg: var(--text);
+  --chat-fg-body: var(--text);
+  --chat-fg-muted: var(--text-secondary);
+  --chat-fg-passive: var(--text-muted);
+  --chat-bg: var(--bg);
+  --chat-bg-1: var(--bg-inset);
+  --chat-bg-2: var(--surface-2);
+  --chat-bg-3: var(--surface-2);
+  --chat-border: var(--border);
+  --chat-user-card-bg: var(--surface-2);
+  --chat-user-card-border: var(--border);
+  --chat-user-card-border-hover: var(--border-strong);
+  --chat-bubble-user: var(--surface-2);
+  --chat-bubble-user-fg: var(--text);
+  --chat-code-bg: var(--bg-inset);
+  --chat-table-header-bg: var(--surface-2);
+  --chat-link: var(--info);
+  --chat-fg-error: var(--danger);
+  --chat-diff-added: var(--success);
+  --chat-diff-deleted: var(--danger);
+  --chat-diff-modified: var(--warning);
+  --chat-plan-done: var(--success);
+  --chat-plan-active: var(--warning);
+  --chat-mention-bg: var(--info-bg);
+  --chat-mention-fg: var(--info);
+  --chat-mention-issue-bg: var(--info-bg);
+  --chat-mention-issue-fg: var(--info);
+}
+
 @theme inline {
   --font-sans: var(--font-body);
   --font-display: var(--font-display);

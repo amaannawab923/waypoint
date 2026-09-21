@@ -12,9 +12,10 @@
       // Mirrors lib/theme.ts's own read of the same localStorage key.
       (function () {
         try {
-          if (localStorage.getItem('waypoint:theme') === 'dark') {
-            document.documentElement.setAttribute('data-theme', 'dark');
-          }
+          var dark = localStorage.getItem('waypoint:theme') === 'dark';
+          if (dark) document.documentElement.setAttribute('data-theme', 'dark');
+          // chat-ui's theme class; see lib/theme.ts.
+          document.documentElement.classList.add(dark ? 'emdark' : 'emlight');
         } catch (e) {}
       })();
     </script>

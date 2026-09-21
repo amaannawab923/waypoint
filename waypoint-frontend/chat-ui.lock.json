@@ -3,12 +3,12 @@
   "name": "emdash-chat-ui",
   "version": "1.0.0",
   "sourceRepo": "https://github.com/amaannawab923/emdash",
-  "sourceCommit": "7c0464adc",
+  "sourceCommit": "f6332e585",
   "license": "Apache-2.0",
-  "builtWith": "pnpm --filter @emdash/shared --filter @emdash/core --filter @emdash/chat-ui build, then scripts/build-chat-ui-archive.mjs (2026-09-20)",
-  "file": "emdash-chat-ui-1.0.0-7c0464adc.tar.gz",
-  "sha256": "4832566ee49cc79ee1bce57affc6402b3bbacb6c6196d112ba22c35292e2c85d",
-  "release": "https://github.com/amaannawab923/waypoint/releases/tag/chat-ui-1.0.0-7c0464adc",
+  "builtWith": "pnpm --filter @emdash/shared --filter @emdash/core --filter @emdash/chat-ui build, then scripts/build-chat-ui-archive.mjs (2026-09-21)",
+  "file": "emdash-chat-ui-1.0.0-f6332e585.tar.gz",
+  "sha256": "f3b91502f79a9dacdfd4308eba25d34167a4fd2f8cf7af159388947424beed8a",
+  "release": "https://github.com/amaannawab923/waypoint/releases/tag/chat-ui-1.0.0-f6332e585",
   "peers": {
     "solid-js": "1.9.13 \u2014 the one dependency the build externalises; installed by Waypoint",
     "zod": "4.4.3 \u2014 types only; the vendored @emdash/core declarations are written against it"
