@@ -73,9 +73,10 @@ const flush = () =>
 beforeEach(() => jest.clearAllMocks());
 
 describe('useSessionTranscript', () => {
-  it('creates a chat state per run, follows the four topics, seeds history, and hands back the pending permissions and usage', async () => {
+  it('creates a chat state per run, follows the five topics, seeds history, and hands back the pending permissions, usage and config', async () => {
     const state = 'acp.session.state|{"conversationId":"run-a"}';
     const usage = 'acp.session.usage|{"conversationId":"run-a"}';
+    const config = 'acp.session.config|{"conversationId":"run-a"}';
     const fb = fakeBridge(
       {
         [state]: {
@@ -84,6 +85,16 @@ describe('useSessionTranscript', () => {
           pendingPermissions: [{ requestId: 'p1' }],
         },
         [usage]: { contextSize: 200_000, contextUsed: 18_000, cost: null },
+        [config]: {
+          modelOptions: null,
+          efforts: null,
+          modeOptions: {
+            configId: 'mode',
+            selected: 'default',
+            available: [{ id: 'default', name: 'Default' }],
+          },
+          availableCommands: [],
+        },
       },
       [{ id: 't1', seq: 1 }],
     );
@@ -106,6 +117,7 @@ describe('useSessionTranscript', () => {
         'acp.session.plan|{"conversationId":"run-a"}',
         state,
         usage,
+        config,
       ].sort(),
     );
     expect(fb.bridge.call).toHaveBeenCalledWith('acp.getHistory', {
@@ -134,6 +146,7 @@ describe('useSessionTranscript', () => {
       contextUsed: 18_000,
       cost: null,
     });
+    expect(result.current.config?.modeOptions?.selected).toBe('default');
     expect(result.current.liveStatus).toEqual({ kind: 'live' });
   });
 
@@ -167,8 +180,8 @@ describe('useSessionTranscript', () => {
     await flush();
     expect(first.dispose).toHaveBeenCalledTimes(1);
     expect(disconnect).toHaveBeenCalledTimes(1);
-    // Four followers of run-a were released.
-    expect(fb.unsubscribed).toHaveLength(4);
+    // Five followers of run-a were released.
+    expect(fb.unsubscribed).toHaveLength(5);
     expect(runtime.createChatState).toHaveBeenCalledTimes(2);
     expect(result.current.historyStatus).toEqual({ kind: 'ready' });
   });
@@ -196,7 +209,7 @@ describe('useSessionTranscript', () => {
     rerender({ awaiting: false });
     await flush();
     expect(runtime.createChatState).toHaveBeenCalledTimes(1);
-    expect(fb.bridge.subscribeTopic).toHaveBeenCalledTimes(4);
+    expect(fb.bridge.subscribeTopic).toHaveBeenCalledTimes(5);
     expect(fb.bridge.call).toHaveBeenCalledTimes(1);
     expect(result.current.state).not.toBeNull();
 
@@ -205,7 +218,7 @@ describe('useSessionTranscript', () => {
     rerender({ awaiting: true });
     await flush();
     expect(disconnect).toHaveBeenCalledTimes(1);
-    expect(fb.unsubscribed).toHaveLength(4);
+    expect(fb.unsubscribed).toHaveLength(5);
     expect(result.current.state).toBeNull();
     rerender({ awaiting: false });
     await flush();

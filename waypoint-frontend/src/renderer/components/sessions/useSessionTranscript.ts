@@ -6,7 +6,10 @@ import {
   useSyncExternalStore,
 } from 'react';
 import type { AcpPermissionRequest, ChatState } from '@emdash/chat-ui';
-import type { SessionUsage } from '@emdash/core/runtimes/acp/api/client' with {
+import type {
+  SessionConfigState,
+  SessionUsage,
+} from '@emdash/core/runtimes/acp/api/client' with {
   'resolution-mode': 'import',
 };
 import { getChatUiRuntime } from '@/components/chat/chatUiRuntime';
@@ -45,6 +48,8 @@ interface TranscriptUnit {
   state: ChatState;
   source: SessionSource;
   usage: LiveFollower<SessionUsage | null>;
+  /** The provider's mode / model / effort options and what is selected — the composer's selectors. */
+  config: LiveFollower<SessionConfigState | null>;
 }
 
 const EMPTY_PERMISSIONS: readonly AcpPermissionRequest[] = [];
@@ -273,6 +278,10 @@ export function useSessionTranscript(
         sessionTopic('usage', runId),
         bridge,
       ),
+      config: createLiveFollower<SessionConfigState | null>(
+        sessionTopic('config', runId),
+        bridge,
+      ),
     };
     unitRef.current = created;
     setUnit(created);
@@ -320,6 +329,7 @@ export function useSessionTranscript(
       if (status.kind === 'running') {
         created.source.reconnect();
         created.usage.reconnect();
+        created.config.reconnect();
       }
     });
     // A finalize, a resume, a delivery: main wrote the ledger — the
@@ -342,6 +352,7 @@ export function useSessionTranscript(
       offRun();
       disconnect?.();
       created.usage.dispose();
+      created.config.dispose();
       created.source.dispose();
       created.state.dispose();
     };
@@ -356,6 +367,10 @@ export function useSessionTranscript(
       unit?.source.sessionState.getSnapshot()?.pendingPermissions ??
       EMPTY_PERMISSIONS,
     () => EMPTY_PERMISSIONS,
+  );
+  const config = useSyncExternalStore(
+    unit ? (l) => unit.config.subscribe(l) : noop,
+    () => unit?.config.getSnapshot() ?? null,
   );
   const usage = useSyncExternalStore(
     unit ? (l) => unit.usage.subscribe(l) : noop,
@@ -373,7 +388,7 @@ export function useSessionTranscript(
     () => false,
   );
   // Prompts the daemon holds for the agent's next turn (W4, ROAD-68): a
-  // ⌘↵ during a turn lands here, not in the transcript, until the turn
+  // Enter during a turn lands here, not in the transcript, until the turn
   // ends — the strip says so.
   const queuedCount = useSyncExternalStore(
     unit ? (l) => unit.source.sessionState.subscribe(l) : noop,
@@ -403,6 +418,8 @@ export function useSessionTranscript(
     brief,
     pendingPermissions,
     usage,
+    /** null until the config snapshot lands, or when the provider offers no selectors. */
+    config,
     liveStatus,
     isGenerating,
     queuedCount,
@@ -428,6 +445,7 @@ export function useSessionTranscript(
     reconnect: () => {
       unit?.source.reconnect();
       unit?.usage.reconnect();
+      unit?.config.reconnect();
     },
   };
 }

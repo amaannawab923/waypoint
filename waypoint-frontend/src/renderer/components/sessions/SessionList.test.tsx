@@ -74,7 +74,10 @@ describe('SessionList', () => {
     const blocked = within(waiting).getByRole('option');
     expect(blocked).toHaveTextContent('ROAD-61 · Session list');
     expect(blocked).toHaveTextContent('Wants to run pnpm test');
-    expect(blocked).toHaveTextContent('Dispatched');
+    // A run from a ticket shows its mode, never a "Dispatched" chip (the
+    // Sessions UX walkthrough: constant on every row, said nothing).
+    expect(blocked).not.toHaveTextContent('Dispatched');
+    expect(blocked).toHaveTextContent('Session');
 
     const active = screen.getByRole('group', { name: 'Active' });
     expect(within(active).getByRole('option')).toHaveTextContent(

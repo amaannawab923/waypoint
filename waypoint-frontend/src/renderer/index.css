@@ -14,7 +14,9 @@
   --border-strong: #d3d3d9;
   --text: #0a0a0c;
   --text-secondary: #53535c;
-  --text-muted: #9a9aa3;
+  /* 5.0:1 on --bg (was #9a9aa3, 2.8:1 — failed AA at the 10–11px sizes the
+     session list, header metadata and usage strip set it at). */
+  --text-muted: #6e6e78;
 
   --accent: #18181b;
   --accent-hover: #000000;
@@ -68,7 +70,8 @@
   --border-strong: #3a3a42;
   --text: #f2f2f4;
   --text-secondary: #a8a8b3;
-  --text-muted: #6b6b76;
+  /* 6.0:1 on --bg (was #6b6b76, 3.8:1 — failed AA). */
+  --text-muted: #8d8d97;
 
   --accent: #f2f2f4;
   --accent-hover: #ffffff;
@@ -96,6 +99,45 @@
   --p-grw: #e0a166;
 
   color-scheme: dark;
+}
+
+/* The vendored emdash chat-ui (session transcripts) reads its colours from
+   --chat-* tokens whose defaults live under `:where(.emlight)` /
+   `:where(.emdark)` — zero specificity, so a plain :root rule wins. Bind
+   them to Waypoint's own tokens (which already flip with data-theme) so a
+   transcript sits on the same canvas as the rest of the app instead of
+   chat-ui's own greys; lib/theme.ts keeps the emdark/emlight class in step
+   with data-theme for the few chat-ui rules that key on the class itself
+   (code highlighting). The --chat-term-* terminal panel keeps chat-ui's
+   defaults: it is dark in both themes on purpose. */
+:root {
+  --chat-fg: var(--text);
+  --chat-fg-body: var(--text);
+  --chat-fg-muted: var(--text-secondary);
+  --chat-fg-passive: var(--text-muted);
+  --chat-bg: var(--bg);
+  --chat-bg-1: var(--bg-inset);
+  --chat-bg-2: var(--surface-2);
+  --chat-bg-3: var(--surface-2);
+  --chat-border: var(--border);
+  --chat-user-card-bg: var(--surface-2);
+  --chat-user-card-border: var(--border);
+  --chat-user-card-border-hover: var(--border-strong);
+  --chat-bubble-user: var(--surface-2);
+  --chat-bubble-user-fg: var(--text);
+  --chat-code-bg: var(--bg-inset);
+  --chat-table-header-bg: var(--surface-2);
+  --chat-link: var(--info);
+  --chat-fg-error: var(--danger);
+  --chat-diff-added: var(--success);
+  --chat-diff-deleted: var(--danger);
+  --chat-diff-modified: var(--warning);
+  --chat-plan-done: var(--success);
+  --chat-plan-active: var(--warning);
+  --chat-mention-bg: var(--info-bg);
+  --chat-mention-fg: var(--info);
+  --chat-mention-issue-bg: var(--info-bg);
+  --chat-mention-issue-fg: var(--info);
 }
 
 @theme inline {
