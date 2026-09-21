@@ -91,6 +91,14 @@ export interface SessionTranscriptOptions {
    * ledger events, laid over every history seed; null draws none.
    */
   markerLabel?: string | null;
+  /**
+   * Whether the daemon may still hold this run's session (the ledger says
+   * the run is live). A finished run's session was killed by finalize, so
+   * its closed followers cannot come back — reconnecting them on every
+   * focus would be five doomed subscribes each time (review of PR #86).
+   * Read at event time, never a reason to remake the unit. Default true.
+   */
+  sessionMayBeLive?: boolean;
 }
 
 export function useSessionTranscript(
@@ -102,7 +110,10 @@ export function useSessionTranscript(
     bridge = engineSessionBridge,
     foldBrief: fold = null,
     markerLabel = null,
+    sessionMayBeLive = true,
   } = options;
+  const sessionMayBeLiveRef = useRef(sessionMayBeLive);
+  sessionMayBeLiveRef.current = sessionMayBeLive;
   const foldLabel = fold?.label ?? null;
   const runtime = getChatUiRuntime();
   const context = getSharedChatContext();
@@ -332,6 +343,22 @@ export function useSessionTranscript(
         created.config.reconnect();
       }
     });
+    // The engine-status trigger above only fires on a GLOBAL restart; it
+    // does nothing for a session whose own live topic went `closed` while
+    // the engine itself never stopped (a transient IPC error, a busy-retry
+    // that gave up) — exactly the case of a session left idle, or a tab
+    // backgrounded by the OS, then returned to. `reconnect()` is a no-op
+    // unless the follower is actually `closed` (liveFollower.ts), so it is
+    // safe to call on every visibility regain rather than only once.
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (!sessionMayBeLiveRef.current) return;
+      created.source.reconnect();
+      created.usage.reconnect();
+      created.config.reconnect();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
     // A finalize, a resume, a delivery: main wrote the ledger — the
     // markers and the outbox may have changed; a changed marker set
     // re-seeds so the new line lands in the transcript now, not at the
@@ -349,6 +376,8 @@ export function useSessionTranscript(
       gone = true;
       if (unitRef.current === created) unitRef.current = null;
       offEngine();
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
       offRun();
       disconnect?.();
       created.usage.dispose();
