@@ -407,14 +407,14 @@ describe('createRunFinalizer', () => {
     expect(statuses).toEqual(['finishing', 'needs-review']);
     expect(ledger.createRunProposal).toHaveBeenCalledTimes(1);
     // A native ticket's proposal carries no Jira credential.
-    // W5c: the board-shaped comment — the verb's default verdict when the
-    // session named none, the message as the summary, the footer.
+    // W5c: the board-shaped comment — the message as the summary, the
+    // footer. Fix 4 (feedback round 1): no verdict tag on the ticket; the
+    // verdict is on the row and the note.
     expect(ledger.createRunProposal).toHaveBeenCalledWith(
       'run-abc1234',
       {
         kind: 'comment',
         body: [
-          '**Verdict:** root cause found',
           'The root cause is X.',
           '*Full report — the evidence, files and how it was verified — is on the run in Waypoint (ROAD-116 · Investigate).*',
         ].join('\n\n'),
@@ -500,14 +500,27 @@ describe('createRunFinalizer', () => {
     const [, comment] = ledger.createRunProposal.mock.calls[0];
     expect(comment.kind).toBe('comment');
     const { body } = comment as { body: string };
-    // W5c: the counts, not the listing — the PR body has the listing.
-    expect(body).toContain('**Verdict:** fixed');
-    expect(body).toContain(
-      'Branch `agent/ROAD-116` from `main` · 1 commit · 1 file changed',
-    );
+    // Fix 4 (feedback round 1): the branch facts stay with the run — on
+    // the finalized event, never on the ticket. The PR body has the
+    // listing.
+    expect(body).not.toContain('Verdict');
+    expect(body).not.toContain('Branch `agent/ROAD-116`');
     expect(body).not.toContain('abc1234 fix: guard the write');
     expect(body).not.toContain('M\tsrc/a.ts');
     expect(body).toContain('Guarded the write.');
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'finalized',
+      expect.objectContaining({
+        work: {
+          branch: 'agent/ROAD-116',
+          baseRef: 'main',
+          commits: 1,
+          files: 1,
+          uncommitted: 0,
+        },
+      }),
+    );
     expect(ledger.createRunProposal).toHaveBeenNthCalledWith(2, 'run-abc1234', {
       kind: 'state_change',
       stateId: 'st-progress',
@@ -540,7 +553,7 @@ describe('createRunFinalizer', () => {
     expect(ledger.createRunProposal).toHaveBeenCalledTimes(2);
     const [, comment] = ledger.createRunProposal.mock.calls[0];
     const { body } = comment as { body: string };
-    expect(body).toContain('**Verdict:** not a bug');
+    expect(body).not.toContain('Verdict');
     expect(body).toContain('The 500 is the upstream timeout, by design.');
     expect(body).not.toContain('src/x.ts:3');
     expect(ledger.createRunProposal).toHaveBeenNthCalledWith(2, 'run-abc1234', {
@@ -617,7 +630,7 @@ describe('createRunFinalizer', () => {
     });
     const [, comment] = ledger.createRunProposal.mock.calls[0];
     expect((comment as { body: string }).body).toContain(
-      '**Verdict:** already delivered',
+      'Three of the four items are already built and merged; close as delivered.',
     );
     expect(rows.get('run-abc1234')).toMatchObject({
       status: 'needs-review',
@@ -660,9 +673,16 @@ describe('createRunFinalizer', () => {
         message: "not published: the session's verdict was won't fix",
       }),
     );
+    // Fix 4: why it was not published is the run's business (the note
+    // above, the finalized event's pr fact), never the ticket's.
     const [, comment] = ledger.createRunProposal.mock.calls[0];
-    expect((comment as { body: string }).body).toContain(
-      "Not published: the session's verdict was won't fix",
+    expect((comment as { body: string }).body).not.toContain('Not published');
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'finalized',
+      expect.objectContaining({
+        pr: expect.objectContaining({ action: 'skipped' }),
+      }),
     );
     expect(ledger.createRunProposal).toHaveBeenNthCalledWith(2, 'run-abc1234', {
       kind: 'state_change',
@@ -1051,9 +1071,7 @@ describe('W5b: a run on a Jira issue', () => {
       'run-abc1234',
       {
         kind: 'comment',
-        body: expect.stringContaining(
-          '**Verdict:** root cause found\n\nThe root cause is X.',
-        ),
+        body: expect.stringContaining('The root cause is X.\n\n*Full report'),
         groupId: 'run-abc1234:1',
       },
       { external: true },
@@ -1264,9 +1282,16 @@ describe('W6: the branch is published before the proposals', () => {
     });
     await createRunFinalizer(deps).onSessionIdle('run-abc1234');
     expect(rows.get('run-abc1234')?.status).toBe('needs-review');
+    // Fix 4: the failure is the run's fact (the finalized event, the
+    // Copilot note) — never a sentence on the ticket.
     const [, comment] = ledger.createRunProposal.mock.calls[0];
-    expect((comment as { body: string }).body).toContain(
-      'push failed: could not read Username',
+    expect((comment as { body: string }).body).not.toContain('Username');
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'finalized',
+      expect.objectContaining({
+        pr: { action: 'failed', reason: 'could not read Username' },
+      }),
     );
     expect(ledger.postCopilotNote).toHaveBeenCalledWith(
       'run-abc1234',
@@ -1311,8 +1336,18 @@ describe('W6: the branch is published before the proposals', () => {
     expect(publish).not.toHaveBeenCalled();
     expect(rows.get('run-abc1234')?.status).toBe('needs-review');
     const [, comment] = ledger.createRunProposal.mock.calls[0];
-    expect((comment as { body: string }).body).toContain(
-      "push failed: This worktree's gitdir is inside the worktree itself",
+    expect((comment as { body: string }).body).not.toContain('gitdir');
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'finalized',
+      expect.objectContaining({
+        pr: {
+          action: 'failed',
+          reason: expect.stringContaining(
+            "This worktree's gitdir is inside the worktree itself",
+          ),
+        },
+      }),
     );
   });
 
@@ -1395,7 +1430,17 @@ describe('W6: the branch is published before the proposals', () => {
     expect(publish).not.toHaveBeenCalled();
     expect(rows.get('run-abc1234')?.status).toBe('needs-review');
     const [, comment] = ledger.createRunProposal.mock.calls[0];
-    expect((comment as { body: string }).body).toContain('live writer (Other)');
+    expect((comment as { body: string }).body).not.toContain('live writer');
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'finalized',
+      expect.objectContaining({
+        pr: {
+          action: 'skipped',
+          reason: expect.stringContaining('live writer (Other)'),
+        },
+      }),
+    );
     // The Copilot note must say why too — this line used to be
     // suppressed for a first-ever publish (finishedNote's own `&&
     // outcome.followUp` guard), which would have gone silent here.
@@ -1428,8 +1473,16 @@ describe('W6: the branch is published before the proposals', () => {
     // leaving the row at `finishing` forever.
     expect(rows.get('run-abc1234')?.status).toBe('needs-review');
     const [, comment] = ledger.createRunProposal.mock.calls[0];
-    expect((comment as { body: string }).body).toContain(
-      'Could not claim the publish',
+    expect((comment as { body: string }).body).not.toContain('claim');
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'finalized',
+      expect.objectContaining({
+        pr: {
+          action: 'failed',
+          reason: expect.stringContaining('Could not claim the publish'),
+        },
+      }),
     );
   });
 
@@ -1923,9 +1976,7 @@ describe('follow-up finalize (a continued run)', () => {
       }),
     );
     const [, comment] = ledger.createRunProposal.mock.calls[0];
-    expect((comment as { body: string }).body).toContain(
-      "Not published: the session's verdict was won't fix",
-    );
+    expect((comment as { body: string }).body).not.toContain('Not published');
     // Same verdict as before this follow-up (`wont-fix` → `wont-fix`):
     // no second state-change proposal for a closing state already set.
     expect(ledger.createRunProposal).toHaveBeenCalledTimes(1);

@@ -322,32 +322,48 @@ export function buildCopilotJiraCommentAdf(
 const MAX_ADF_BLOCKS = 400;
 
 /**
- * Inline text with `code` and **strong** marks — the two a session's report
- * uses for file names and emphasis. Everything else (links, italics,
- * stray asterisks) stays literal text: a mark is the only thing this can
- * add, so no input becomes a link or a mention. Never emits an empty text
- * node (Jira rejects the document).
+ * Inline text with `code`, **strong** and *em* marks — the three a session's
+ * comment uses: file names, emphasis, and the italic "Full report … is on
+ * the run in Waypoint" footer (customer feedback round 1, Fix 4: that
+ * footer used to reach Jira as literal asterisks). Everything else (links,
+ * `_underscore_` emphasis, a stray `*` with space around it) stays literal
+ * text: a mark is the only thing this can add, so no input becomes a link
+ * or a mention. Never emits an empty text node (Jira rejects the document).
  */
 export function inlineToAdf(text: string): JiraAdfTextNode[] {
   const out: JiraAdfTextNode[] = [];
-  const push = (chunk: string, mark?: 'code' | 'strong') => {
+  const push = (chunk: string, mark?: 'code' | 'strong' | 'em') => {
     if (!chunk) return;
     out.push(mark ? { type: 'text', text: chunk, marks: [{ type: mark }] } : { type: 'text', text: chunk });
   };
-  // Backtick spans first (their content is verbatim), then bold in the rest.
+  // Backtick spans first (their content is verbatim), then bold in the
+  // rest, then italics in what bold left — `**` is consumed before a
+  // single `*` is ever looked at, so bold never reads as italic.
   const codeSplit = /`([^`\n]+)`/g;
   let last = 0;
   let match: RegExpExecArray | null;
+  const italics = (chunk: string) => {
+    // A single `*` hugging non-space on both sides; "5 * 3" stays literal.
+    const emSplit = /\*(\S(?:[^*\n]*\S)?)\*/g;
+    let from = 0;
+    let em: RegExpExecArray | null;
+    while ((em = emSplit.exec(chunk)) !== null) {
+      push(chunk.slice(from, em.index));
+      push(em[1], 'em');
+      from = em.index + em[0].length;
+    }
+    push(chunk.slice(from));
+  };
   const plain = (chunk: string) => {
     const boldSplit = /\*\*([^*\n]+)\*\*/g;
     let from = 0;
     let bold: RegExpExecArray | null;
     while ((bold = boldSplit.exec(chunk)) !== null) {
-      push(chunk.slice(from, bold.index));
+      italics(chunk.slice(from, bold.index));
       push(bold[1], 'strong');
       from = bold.index + bold[0].length;
     }
-    push(chunk.slice(from));
+    italics(chunk.slice(from));
   };
   while ((match = codeSplit.exec(text)) !== null) {
     plain(text.slice(last, match.index));
