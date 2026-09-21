@@ -511,10 +511,11 @@ export async function buildBriefPreview(
     baseRef,
     branchHint,
     mode,
-    // The founder's default for a writing session is on, with the env
-    // scrub as the guard (§2.5). SESS-36 is the live proof; if it fails on
-    // the pinned daemon this flips to false until ROAD-88.
-    autoApproveDefault: mode === 'write',
+    // Off by default, writing session or not (customer feedback round 1:
+    // "auto-approve is on by default" was the first thing an engineering
+    // manager would not let his PM near). The env scrub (§2.5) still
+    // guards a session a person turns it on for.
+    autoApproveDefault: false,
     seededFromRunId: rca?.runId ?? null,
     liveWriterRunId: liveWriter?.id ?? null,
   };

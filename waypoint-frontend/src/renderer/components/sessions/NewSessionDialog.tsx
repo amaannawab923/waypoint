@@ -79,13 +79,21 @@ export function defaultIsolation(folder: SessionFolder): RunIsolation {
   return folder.kind === 'repo' ? 'worktree' : 'directory';
 }
 
-/** The default auto-approve: what this folder was last started with, else what the isolation implies. */
+/**
+ * The default auto-approve: what this folder was last started with, else
+ * OFF — for a worktree too. It used to default on for a worktree
+ * (customer feedback round 1: "bypass permissions on by default, one
+ * click from my live checkout"); a person who wants it on for a trusted
+ * folder turns it on once and it is remembered.
+ */
 export function defaultAutoApprove(
   folder: SessionFolder,
-  isolation: RunIsolation,
+  // Kept in the signature: the remembered choice is per folder, the
+  // default no longer depends on where the agent works.
+  _isolation: RunIsolation,
 ): boolean {
   if (folder.lastAutoApprove !== null) return folder.lastAutoApprove;
-  return isolation === 'worktree';
+  return false;
 }
 
 const fieldClass =
@@ -234,9 +242,18 @@ export function NewSessionDialog({
   }, [selected, engineRunning]);
 
   // Flipping where the agent works re-defaults auto-approve unless the
-  // person has set it themselves.
+  // person has set it themselves — and switching to the folder itself
+  // while auto-approve is on asks first, instead of a colour change
+  // (customer feedback round 1): the agent would edit the live checkout
+  // without a prompt.
+  const [directConfirm, setDirectConfirm] = useState(false);
   const changeIsolation = (next: RunIsolation) => {
     setIsolation(next);
+    if (next === 'directory' && autoApprove) {
+      setDirectConfirm(true);
+      return;
+    }
+    setDirectConfirm(false);
     if (!autoApproveTouched && selected)
       setAutoApprove(defaultAutoApprove(selected, next));
   };
@@ -293,6 +310,7 @@ export function NewSessionDialog({
     providerId !== null &&
     !selection.createDisabled &&
     (!worktree || (branches.kind === 'ready' && !!baseRef)) &&
+    !directConfirm &&
     !starting;
 
   const start = async () => {
@@ -463,6 +481,41 @@ export function NewSessionDialog({
             </span>
           </label>
         </div>
+        {directConfirm && (
+          <div
+            data-direct-auto-approve-confirm
+            role="alertdialog"
+            aria-label="Turn off auto-approve for a direct folder?"
+            className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-sm)] border border-warning bg-warning-bg px-3 py-2 text-xs text-warning"
+          >
+            <span className="font-medium">
+              Turn off auto-approve for a direct folder?
+            </span>
+            <span className="flex gap-2">
+              <Button
+                size="xs"
+                variant="secondary"
+                onClick={() => {
+                  setAutoApproveTouched(true);
+                  setDirectConfirm(false);
+                }}
+              >
+                Keep it on
+              </Button>
+              <Button
+                size="xs"
+                variant="primary"
+                onClick={() => {
+                  setAutoApprove(false);
+                  setAutoApproveTouched(true);
+                  setDirectConfirm(false);
+                }}
+              >
+                Turn it off
+              </Button>
+            </span>
+          </div>
+        )}
 
         {selected?.kind === 'repo' && (
           <div className="flex flex-col gap-2">

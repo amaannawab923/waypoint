@@ -1,5 +1,11 @@
 import '@testing-library/jest-dom';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { detectLocalClaudeCode, getWorkspace } from '@/data/api';
 import {
@@ -92,10 +98,10 @@ beforeEach(() => {
 });
 
 describe('the defaults fall out of the folder', () => {
-  it('a repository → worktree + auto-approve on; a plain folder → direct + off; the last choice wins', () => {
+  it('a repository → worktree; a plain folder → direct; auto-approve OFF unless the folder remembers a choice (feedback round 1)', () => {
     expect(defaultIsolation(REPO)).toBe('worktree');
     expect(defaultIsolation(PLAIN)).toBe('directory');
-    expect(defaultAutoApprove(REPO, 'worktree')).toBe(true);
+    expect(defaultAutoApprove(REPO, 'worktree')).toBe(false);
     expect(defaultAutoApprove(REPO, 'directory')).toBe(false);
     expect(defaultAutoApprove(PLAIN, 'directory')).toBe(false);
     expect(
@@ -112,7 +118,7 @@ describe('the defaults fall out of the folder', () => {
 });
 
 describe('NewSessionDialog', () => {
-  it('lists the folders main offers, preselects the first, reads its branches, and defaults a repo to worktree + auto-approve', async () => {
+  it('lists the folders main offers, preselects the first, reads its branches, and defaults a repo to worktree with auto-approve OFF', async () => {
     renderDialog();
     const options = await screen.findAllByRole('radio');
     expect(options[0]).toHaveTextContent('waypoint');
@@ -123,12 +129,7 @@ describe('NewSessionDialog', () => {
     expect(options[1]).toHaveTextContent('folder');
     expect(options[0]).toHaveAttribute('aria-checked', 'true');
     await waitFor(() => expect(listRunBranches).toHaveBeenCalledWith('f-1'));
-    await waitFor(() =>
-      expect(screen.getByRole('switch')).toHaveAttribute(
-        'aria-checked',
-        'true',
-      ),
-    );
+    expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
     expect(
       document.querySelector('[data-auto-approve-sentence]'),
     ).toHaveTextContent(/own copy/);
@@ -165,14 +166,11 @@ describe('NewSessionDialog', () => {
     expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
 
     fireEvent.click(options[0]);
-    await waitFor(() =>
-      expect(screen.getByRole('switch')).toHaveAttribute(
-        'aria-checked',
-        'true',
-      ),
-    );
-    fireEvent.click(screen.getByRole('switch'));
+    await waitFor(() => expect(listRunBranches).toHaveBeenCalledWith('f-1'));
+    // Off for a repository too, until the person turns it on.
     expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
+    fireEvent.click(screen.getByRole('switch'));
+    expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
     fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
     fireEvent.change(screen.getByLabelText('Work in'), {
       target: { value: 'directory' },
@@ -180,11 +178,36 @@ describe('NewSessionDialog', () => {
     expect(
       document.querySelector('[data-auto-approve-sentence]'),
     ).toHaveTextContent(/edits this folder directly/);
+    // Auto-approve on + the live folder: asked first, and Start waits.
+    const confirm = screen.getByRole('alertdialog', {
+      name: 'Turn off auto-approve for a direct folder?',
+    });
+    expect(startButton()).toBeDisabled();
+    fireEvent.click(
+      within(confirm).getByRole('button', { name: 'Keep it on' }),
+    );
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
     fireEvent.change(screen.getByLabelText('Work in'), {
       target: { value: 'worktree' },
     });
-    // Set by the person: not re-defaulted to on.
+    // Set by the person: not re-defaulted.
+    expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('“Turn it off” on the direct-folder confirm switches auto-approve off and lets Start proceed', async () => {
+    renderDialog();
+    await screen.findAllByRole('radio');
+    await waitFor(() => expect(listRunBranches).toHaveBeenCalledWith('f-1'));
+    fireEvent.click(screen.getByRole('switch'));
+    fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+    fireEvent.change(screen.getByLabelText('Work in'), {
+      target: { value: 'directory' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Turn it off' }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
     expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
+    await waitFor(() => expect(startButton()).toBeEnabled());
   });
 
   it('Browse… adds the picked folder at the top and selects it; a cancelled picker changes nothing', async () => {
@@ -245,7 +268,7 @@ describe('NewSessionDialog', () => {
       ownerMemberId: 'mem-1',
       providerId: 'claude',
       isolation: 'worktree',
-      autoApprove: true,
+      autoApprove: false,
       baseRef: 'main',
       firstMessage: 'Fix the flaky test\nIt fails on CI.',
     });

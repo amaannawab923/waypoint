@@ -136,6 +136,23 @@ describe('deriveMarkers', () => {
     expect(recreated.text).toMatch(/worktree recreated on a fresh branch$/);
   });
 
+  it('a command that may still be running gets a warning line naming it', () => {
+    const [m] = deriveMarkers(
+      [
+        event(3, 'note', {
+          stage: 'finalize',
+          kind: 'possible-leftover-process',
+          command: 'open /tmp/shot.png',
+          afterTurnId: 't2',
+        }),
+      ],
+      'X',
+    );
+    expect(m.text).toBe(
+      'Waypoint · ⚠ this session ran a command that may still be running on your machine — `open /tmp/shot.png`',
+    );
+  });
+
   it('a follow-up suppressed for lacking a Summary gets a line saying so', () => {
     const [m] = deriveMarkers(
       [

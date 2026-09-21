@@ -369,9 +369,10 @@ describe('SessionTranscript — what a send does, said in the placeholder', () =
     const { rerender } = render(
       <SessionTranscript run={run({ id: 'run-stuck001', status: 'done' })} />,
     );
-    expect(
-      screen.getByLabelText('Message this session'),
-    ).toHaveAttribute('placeholder', expect.stringMatching(/Connecting/));
+    expect(screen.getByLabelText('Message this session')).toHaveAttribute(
+      'placeholder',
+      expect.stringMatching(/Connecting/),
+    );
 
     mockUseSessionTranscript.mockReturnValue(
       hookState({ turnCount: 2, isGenerating: false }),
@@ -697,5 +698,44 @@ describe('SessionTranscript — the outbox strip', () => {
     ).toBeInTheDocument();
     expect(screen.queryByText(/session is starting/)).toBeNull();
     cleanup();
+  });
+});
+
+describe('SessionTranscript — the mode picker (feedback round 1)', () => {
+  const config = {
+    modelOptions: null,
+    efforts: null,
+    modeOptions: {
+      configId: 'mode',
+      selected: 'plan',
+      available: [
+        { id: 'default', name: 'Default' },
+        { id: 'plan', name: 'Plan Mode' },
+        { id: 'bypassPermissions', name: 'Bypass Permissions' },
+      ],
+    },
+    availableCommands: [],
+  };
+
+  it('an Investigate never offers Bypass Permissions; a Fix still does', () => {
+    mockUseSessionTranscript.mockReturnValue(hookState({ config } as never));
+    const { unmount } = render(
+      <SessionTranscript
+        run={run({ status: 'running', intent: 'investigate' })}
+      />,
+    );
+    const investigate = screen.getByLabelText('Mode') as HTMLSelectElement;
+    expect([...investigate.options].map((o) => o.value)).toEqual([
+      'default',
+      'plan',
+    ]);
+    unmount();
+
+    mockUseSessionTranscript.mockReturnValue(hookState({ config } as never));
+    render(
+      <SessionTranscript run={run({ status: 'running', intent: 'fix' })} />,
+    );
+    const fix = screen.getByLabelText('Mode') as HTMLSelectElement;
+    expect([...fix.options].map((o) => o.value)).toContain('bypassPermissions');
   });
 });
