@@ -135,7 +135,9 @@ describe('NewSessionDialog', () => {
     ).toHaveTextContent(/own copy/);
     fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
     await waitFor(() =>
-      expect(screen.getByLabelText('Base branch')).toHaveValue('main'),
+      expect(
+        screen.getByRole('combobox', { name: 'Base branch' }),
+      ).toHaveAttribute('data-value', 'main'),
     );
     expect(screen.getByLabelText('Work in')).toHaveValue('worktree');
     await waitFor(() => expect(startButton()).toBeEnabled());

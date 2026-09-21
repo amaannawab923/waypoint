@@ -56,6 +56,8 @@ import {
   type RunFocus,
   type RunBranches,
   type RunChanged,
+  type CloseRunPreview,
+  type CloseRunResult,
   type RunDiff,
   type SendRunPromptResult,
   type PendingPrompt,
@@ -677,6 +679,13 @@ const electronHandler = {
     },
     revealRunWorktree(runId: string): Promise<void> {
       return ipcRenderer.invoke(RUNS_IPC.revealWorktree, runId);
+    },
+    // Fix 8: what closing a finished run would remove, then the removal.
+    closeRunPreview(runId: string): Promise<CloseRunPreview> {
+      return ipcRenderer.invoke(RUNS_IPC.closePreview, runId);
+    },
+    closeRun(runId: string): Promise<CloseRunResult> {
+      return ipcRenderer.invoke(RUNS_IPC.close, runId);
     },
     // W4: starting and resuming (engine/runs/startRun.ts). The renderer
     // names a project, a provider and a branch; main resolves the

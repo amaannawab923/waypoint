@@ -1,11 +1,11 @@
 import '@testing-library/jest-dom';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { stopRun } from '@/data/engineApi';
+import { closeRun, closeRunPreview, stopRun } from '@/data/engineApi';
 import { patchSessionRun } from '@/lib/sessionsStore';
-import { showErrorToast } from '@/lib/toast';
+import { showErrorToast, showInfoToast } from '@/lib/toast';
 import type { AgentRun } from '@/types/agentRuns';
-import { SessionDetail } from './SessionDetail';
+import { closeRunQuestion, SessionDetail } from './SessionDetail';
 
 // The header — Stop, the failure sentence, rename, Open PR — with the two
 // heavy panes stubbed; the transcript and the diff have their own tests.
@@ -24,13 +24,18 @@ jest.mock('@/data/engineApi', () => ({
   stopRun: jest.fn(),
   revealRunWorktree: jest.fn(),
   openRunPullRequest: jest.fn(),
+  closeRunPreview: jest.fn(),
+  closeRun: jest.fn(),
   getHomeDir: jest.fn(async () => '/Users/me'),
 }));
 jest.mock('@/lib/sessionsStore', () => ({
   patchSessionRun: jest.fn(),
   refreshSessions: jest.fn(async () => {}),
 }));
-jest.mock('@/lib/toast', () => ({ showErrorToast: jest.fn() }));
+jest.mock('@/lib/toast', () => ({
+  showErrorToast: jest.fn(),
+  showInfoToast: jest.fn(),
+}));
 jest.mock('@/data/api', () => ({ renameAgentRun: jest.fn() }));
 
 const run = (over: Partial<AgentRun>): AgentRun =>
@@ -209,6 +214,133 @@ describe('rename (W5a)', () => {
       screen.queryByRole('textbox', { name: 'Run title' }),
     ).not.toBeInTheDocument();
     expect(renameAgentRun).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Customer feedback round 1, Fix 8: a finished run's worktree and branch,
+// gone on request — with a confirm that says what is lost.
+describe('Close run', () => {
+  it('is offered on a finished worktree run, not a live one or a direct-folder one', () => {
+    const { rerender } = renderDetail(run({ status: 'done' }));
+    expect(
+      screen.getByRole('button', { name: 'Close run' }),
+    ).toBeInTheDocument();
+    rerender(
+      <MemoryRouter>
+        <SessionDetail
+          run={run({ status: 'running' })}
+          narrow={false}
+          onBack={jest.fn()}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByRole('button', { name: 'Close run' })).toBeNull();
+    rerender(
+      <MemoryRouter>
+        <SessionDetail
+          run={run({
+            status: 'done',
+            isolation: 'directory',
+            worktreePath: null,
+          })}
+          narrow={false}
+          onBack={jest.fn()}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByRole('button', { name: 'Close run' })).toBeNull();
+  });
+
+  it('asks with the preview’s facts, and removes only on yes', async () => {
+    (closeRunPreview as jest.Mock).mockResolvedValue({
+      branch: 'session/abc1234',
+      worktreePath: '/wt/run-abc1234',
+      unpushedCommits: 2,
+      hasPullRequest: false,
+      branchWillBeDeleted: true,
+    });
+    (closeRun as jest.Mock).mockResolvedValue({
+      worktreeRemoved: true,
+      branchDeleted: true,
+      branchKeptBecause: null,
+    });
+    const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    renderDetail(run({ status: 'done' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close run' }));
+    await waitFor(() => expect(confirm).toHaveBeenCalled());
+    expect(confirm.mock.calls[0][0]).toBe(
+      'Delete the worktree for session/abc1234? Its 2 commits were never pushed and will be lost. The transcript and diff stay in Waypoint.',
+    );
+    expect(closeRun).not.toHaveBeenCalled();
+
+    confirm.mockReturnValue(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Close run' }));
+    await waitFor(() => expect(closeRun).toHaveBeenCalledWith('run-abc1234'));
+    await waitFor(() =>
+      expect(showInfoToast).toHaveBeenCalledWith(
+        'Worktree and branch session/abc1234 deleted.',
+      ),
+    );
+    // Once closed, there is nothing left to close or reveal.
+    expect(screen.queryByRole('button', { name: 'Close run' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Show in Finder' })).toBeNull();
+    confirm.mockRestore();
+  });
+
+  it('a refused close is a toast', async () => {
+    (closeRunPreview as jest.Mock).mockRejectedValue(
+      new Error(
+        'A proposal from this run is still waiting in Review; decide it first.',
+      ),
+    );
+    renderDetail(run({ status: 'needs-review' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close run' }));
+    await waitFor(() =>
+      expect(showErrorToast).toHaveBeenCalledWith(
+        'A proposal from this run is still waiting in Review; decide it first.',
+      ),
+    );
+  });
+});
+
+describe('closeRunQuestion', () => {
+  it('says what is lost: nothing, the unpushed commits, or that the branch stays for its PR', () => {
+    expect(
+      closeRunQuestion({
+        branch: 'b',
+        unpushedCommits: 0,
+        hasPullRequest: false,
+      }),
+    ).toBe(
+      'Delete the worktree and branch for b? The transcript and diff stay in Waypoint.',
+    );
+    expect(
+      closeRunQuestion({
+        branch: 'b',
+        unpushedCommits: null,
+        hasPullRequest: false,
+      }),
+    ).toBe(
+      'Delete the worktree and branch for b? The transcript and diff stay in Waypoint.',
+    );
+    expect(
+      closeRunQuestion({
+        branch: 'b',
+        unpushedCommits: 1,
+        hasPullRequest: false,
+      }),
+    ).toBe(
+      'Delete the worktree for b? Its 1 commit was never pushed and will be lost. The transcript and diff stay in Waypoint.',
+    );
+    expect(
+      closeRunQuestion({
+        branch: 'b',
+        unpushedCommits: 0,
+        hasPullRequest: true,
+      }),
+    ).toBe(
+      'Delete the worktree for b? The branch stays — it still has an open pull request. The transcript and diff stay in Waypoint.',
+    );
   });
 });
 

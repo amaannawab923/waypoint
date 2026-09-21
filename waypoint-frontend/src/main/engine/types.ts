@@ -518,6 +518,10 @@ export const RUNS_IPC = {
   diff: 'runs:diff',
   /** (runId) → void. Shows the worktree in the OS file manager. */
   revealWorktree: 'runs:reveal-worktree',
+  /** (runId) → CloseRunPreview. What closing the run would remove, for the confirm (Fix 8). */
+  closePreview: 'runs:close-preview',
+  /** (runId) → CloseRunResult. Removes a finished run's worktree, and its branch unless a pull request needs it (Fix 8). */
+  close: 'runs:close',
   /**
    * (StartRunInput) → AgentRun, answered once the row is `provisioning`;
    * the worktree and the session follow in main (W4, ROAD-67,
@@ -984,6 +988,29 @@ export interface StopRunResult {
   outcome: StopRunOutcome;
   /** The ledger's row after the action. */
   status: string;
+}
+
+/**
+ * What "Close run" would remove (customer feedback round 1, Fix 8): the
+ * worktree always; the branch unless a pull request still needs it. The
+ * commit count is what the confirm names when those commits were never
+ * pushed and would be lost with the branch.
+ */
+export interface CloseRunPreview {
+  branch: string;
+  worktreePath: string;
+  /** Commits on the branch past its base that no remote has; null when git could not say. */
+  unpushedCommits: number | null;
+  /** The run opened (or updated) a pull request, so the branch is kept. */
+  hasPullRequest: boolean;
+  branchWillBeDeleted: boolean;
+}
+
+export interface CloseRunResult {
+  worktreeRemoved: true;
+  branchDeleted: boolean;
+  /** Why the branch was kept, when it was. */
+  branchKeptBecause: 'pull-request' | null;
 }
 
 export type RunDiffFileStatus =
