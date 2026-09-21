@@ -602,6 +602,12 @@ export interface ProposalView {
   agentId: ID | null;
   agentRunId: ID | null;
   sourceRequestId: ID | null;
+  /**
+   * The comment and the state change one closing message of a run filed
+   * share this (`<runId>:<report sequence>`), so Review shows them as one
+   * card; null for every other proposal.
+   */
+  groupId?: ID | null;
   decidedBy: ProposalDecidedBy | null;
   trustGrantId: ID | null;
   decisionLatencyMs: number | null;
