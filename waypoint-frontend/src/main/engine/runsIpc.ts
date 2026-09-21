@@ -14,6 +14,7 @@ import {
   type CloseRunPreview,
   type CloseRunResult,
   type RunDiff,
+  type WorktreeHealth,
   type RunDiffFile,
   type RunDiffFileStatus,
   type SessionFolder,
@@ -971,6 +972,52 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
     const n = Number.parseInt(count.stdout.trim(), 10);
     return Number.isFinite(n) ? n : null;
   };
+
+  // Finding A (feedback round 1): the header's branch line and Open PR
+  // came from the ledger's row alone; a worktree whose parent repository
+  // is gone still looked healthy. This asks git, read-only, once per
+  // detail open. A directory run has no worktree to check.
+  deps.host.handle(
+    RUNS_IPC.worktreeHealth,
+    async (runId): Promise<WorktreeHealth> => {
+      const run = await loadRun(runId);
+      if (run.isolation === 'directory' || !run.worktreePath) {
+        return { kind: 'unknown' };
+      }
+      let worktree: string;
+      try {
+        worktree = await worktreeOf(run);
+        await assertWorktreeGitDir(worktree);
+      } catch (error) {
+        return {
+          kind: 'orphaned',
+          reason: error instanceof Error ? error.message : String(error),
+        };
+      }
+      const probe = await git(['rev-parse', '--is-inside-work-tree'], {
+        cwd: worktree,
+      }).catch((error: unknown) => ({
+        code: 1,
+        stdout: '',
+        stderr: error instanceof Error ? error.message : String(error),
+      }));
+      if (probe.code !== 0 || probe.stdout.trim() !== 'true') {
+        const reason = (probe.stderr || probe.stdout).trim().split('\n')[0];
+        return {
+          kind: 'orphaned',
+          reason: reason || 'git could not read this worktree.',
+        };
+      }
+      const head = await git(['rev-parse', '--abbrev-ref', 'HEAD'], {
+        cwd: worktree,
+      }).catch(() => null);
+      const branch =
+        head && head.code === 0 && head.stdout.trim() !== 'HEAD'
+          ? head.stdout.trim()
+          : null;
+      return { kind: 'ok', branch };
+    },
+  );
 
   deps.host.handle(
     RUNS_IPC.closePreview,

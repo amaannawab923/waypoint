@@ -1,7 +1,12 @@
 import '@testing-library/jest-dom';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { closeRun, closeRunPreview, stopRun } from '@/data/engineApi';
+import {
+  closeRun,
+  closeRunPreview,
+  getRunWorktreeHealth,
+  stopRun,
+} from '@/data/engineApi';
 import { patchSessionRun } from '@/lib/sessionsStore';
 import { showErrorToast, showInfoToast } from '@/lib/toast';
 import type { AgentRun } from '@/types/agentRuns';
@@ -26,6 +31,7 @@ jest.mock('@/data/engineApi', () => ({
   openRunPullRequest: jest.fn(),
   closeRunPreview: jest.fn(),
   closeRun: jest.fn(),
+  getRunWorktreeHealth: jest.fn(async () => ({ kind: 'unknown' })),
   getHomeDir: jest.fn(async () => '/Users/me'),
 }));
 jest.mock('@/lib/sessionsStore', () => ({
@@ -300,6 +306,68 @@ describe('Close run', () => {
         'A proposal from this run is still waiting in Review; decide it first.',
       ),
     );
+  });
+});
+
+// Customer feedback round 1, finding A: ROAD-61's header showed a live
+// branch line and an enabled Open PR while its parent repository was gone
+// — the facts came from the ledger's row alone.
+describe('worktree health (finding A)', () => {
+  // `clearAllMocks` keeps implementations; a per-test answer must not
+  // outlive its test (the Open PR tests below expect an unknown health).
+  afterEach(() => {
+    (getRunWorktreeHealth as jest.Mock).mockReset();
+    (getRunWorktreeHealth as jest.Mock).mockResolvedValue({ kind: 'unknown' });
+  });
+  const finished = () =>
+    run({
+      status: 'done',
+      entry: 'dispatched',
+      modeId: 'default',
+      branch: 'feat/road-61-list',
+    });
+
+  it('shows the stored facts until git answers, then the live branch', async () => {
+    (getRunWorktreeHealth as jest.Mock).mockResolvedValue({
+      kind: 'ok',
+      branch: 'feat/road-61-list-renamed',
+    });
+    renderDetail(finished());
+    expect(document.querySelector('[data-run-facts]')).toHaveTextContent(
+      'feat/road-61-list',
+    );
+    await waitFor(() =>
+      expect(document.querySelector('[data-run-facts]')).toHaveTextContent(
+        'feat/road-61-list-renamed',
+      ),
+    );
+    expect(screen.getByRole('button', { name: 'Open PR' })).toBeEnabled();
+  });
+
+  it('an orphaned worktree says so on the facts line and disables Open PR with the reason', async () => {
+    (getRunWorktreeHealth as jest.Mock).mockResolvedValue({
+      kind: 'orphaned',
+      reason: 'fatal: not a git repository',
+    });
+    renderDetail(finished());
+    const orphan = await screen.findByText(
+      'worktree orphaned — its parent repository is gone',
+    );
+    expect(orphan).toHaveAttribute('title', 'fatal: not a git repository');
+    const openPr = screen.getByRole('button', { name: 'Open PR' });
+    expect(openPr).toBeDisabled();
+    expect(openPr).toHaveAttribute(
+      'title',
+      "Can't open a PR — this worktree's repository is gone. fatal: not a git repository",
+    );
+    expect(getRunWorktreeHealth).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks nothing for a direct-folder run', () => {
+    renderDetail(
+      run({ status: 'done', isolation: 'directory', worktreePath: null }),
+    );
+    expect(getRunWorktreeHealth).not.toHaveBeenCalled();
   });
 });
 

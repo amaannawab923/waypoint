@@ -59,6 +59,7 @@ import {
   type CloseRunPreview,
   type CloseRunResult,
   type RunDiff,
+  type WorktreeHealth,
   type SendRunPromptResult,
   type PendingPrompt,
   type WarmRunResult,
@@ -679,6 +680,10 @@ const electronHandler = {
     },
     revealRunWorktree(runId: string): Promise<void> {
       return ipcRenderer.invoke(RUNS_IPC.revealWorktree, runId);
+    },
+    // Finding A: whether the worktree still resolves to a repository.
+    runWorktreeHealth(runId: string): Promise<WorktreeHealth> {
+      return ipcRenderer.invoke(RUNS_IPC.worktreeHealth, runId);
     },
     // Fix 8: what closing a finished run would remove, then the removal.
     closeRunPreview(runId: string): Promise<CloseRunPreview> {

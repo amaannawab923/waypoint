@@ -95,8 +95,8 @@ const logger = { info: jest.fn(), warn: jest.fn() };
 function scriptedGit(
   answers: Record<
     string,
-    | { stdout?: string; code?: number }
-    | ((args: string[]) => { stdout?: string; code?: number })
+    | { stdout?: string; stderr?: string; code?: number }
+    | ((args: string[]) => { stdout?: string; stderr?: string; code?: number })
   >,
 ): jest.MockedFunction<GitRunner> {
   // `diff` is asked four ways; the flag tells them apart. The runner's
@@ -112,7 +112,11 @@ function scriptedGit(
   const runner: GitRunner = async (args) => {
     const answer = answers[keyOf(args)] ?? {};
     const value = typeof answer === 'function' ? answer(args) : answer;
-    return { stdout: value.stdout ?? '', stderr: '', code: value.code ?? 0 };
+    return {
+      stdout: value.stdout ?? '',
+      stderr: value.stderr ?? '',
+      code: value.code ?? 0,
+    };
   };
   return jest.fn(runner);
 }
@@ -358,6 +362,93 @@ describe('runs:diff and runs:reveal-worktree', () => {
       /Refusing/,
     );
     expect(reveal).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Customer feedback round 1, finding A: what git says about the worktree
+// now, read-only, for the header.
+describe('runs:worktree-health', () => {
+  function healthHarness(
+    rows: Record<string, Partial<AgentRun>>,
+    gitAnswers = {},
+  ) {
+    const { host, invoke } = fakeHost();
+    const git = scriptedGit({
+      'rev-parse': (args: string[]) =>
+        args[1] === '--abbrev-ref'
+          ? { stdout: 'feat/x\n' }
+          : { stdout: 'true\n' },
+      ...gitAnswers,
+    });
+    registerRunsIpc({
+      supervisor: supervisorWith(true),
+      host,
+      worktreesDir,
+      ledger: fakeLedger(rows),
+      git,
+      reveal: jest.fn(),
+      notify: jest.fn(),
+      chooseDirectory: async () => null,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
+      daemon: () => null,
+      logger,
+    });
+    return { invoke, git };
+  }
+
+  it('a worktree git can read is ok, with its live branch', async () => {
+    const { invoke } = healthHarness({
+      'run-h1': {
+        status: 'done',
+        worktreePath: worktreeOf('run-h1'),
+        isolation: 'worktree',
+      },
+    });
+    expect(await invoke(RUNS_IPC.worktreeHealth, 'run-h1')).toEqual({
+      kind: 'ok',
+      branch: 'feat/x',
+    });
+  });
+
+  it('a worktree git refuses is orphaned, with git’s own first line as the reason', async () => {
+    const { invoke } = healthHarness(
+      {
+        'run-h2': {
+          status: 'done',
+          worktreePath: worktreeOf('run-h2'),
+          isolation: 'worktree',
+        },
+      },
+      {
+        'rev-parse': {
+          code: 128,
+          stdout: '',
+          stderr: 'fatal: not a git repository: /gone/.git/worktrees/run-h2\n',
+        },
+      },
+    );
+    expect(await invoke(RUNS_IPC.worktreeHealth, 'run-h2')).toEqual({
+      kind: 'orphaned',
+      reason: 'fatal: not a git repository: /gone/.git/worktrees/run-h2',
+    });
+  });
+
+  it('a missing worktree is orphaned; a direct run is unknown, never a git call', async () => {
+    const { invoke, git } = healthHarness({
+      'run-h3': {
+        status: 'done',
+        worktreePath: path.join(worktreesDir, 'run-h3-never-made'),
+        isolation: 'worktree',
+      },
+      'run-h4': { status: 'done', cwd: '/tmp/x', isolation: 'directory' },
+    });
+    expect(await invoke(RUNS_IPC.worktreeHealth, 'run-h3')).toMatchObject({
+      kind: 'orphaned',
+    });
+    expect(await invoke(RUNS_IPC.worktreeHealth, 'run-h4')).toEqual({
+      kind: 'unknown',
+    });
+    expect(git).not.toHaveBeenCalled();
   });
 });
 
