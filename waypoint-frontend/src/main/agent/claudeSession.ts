@@ -350,9 +350,18 @@ export type SessionResult =
     }
   | { kind: 'error'; errorKind: CopilotErrorKind; message: string };
 
+/** Fix 7: what a Copilot answer's tool calls look like from the outside — a name and whether it is still running. */
+export interface SessionToolEvent {
+  toolId: string;
+  name: string;
+  status: 'running' | 'done' | 'error';
+}
+
 export interface SessionHooks {
   /** Fired synchronously, in stream order, for every text delta. */
   onChunk: (text: string) => void;
+  /** Fired as each tool call starts and again when its result lands. Optional: a caller with no rows to draw ignores them. */
+  onToolCall?: (event: SessionToolEvent) => void;
   /** Fired synchronously, exactly once, when the session finishes with a
    * reply. Mirrors the resolved SessionResult but delivered eagerly (not
    * via the returned promise) so callers see it in the same synchronous
@@ -488,6 +497,20 @@ export function runSession(
                 break;
               case 'text_delta':
                 hooks.onChunk(parsed.text);
+                break;
+              case 'tool_call':
+                hooks.onToolCall?.({
+                  toolId: parsed.toolId,
+                  name: parsed.name,
+                  status: 'running',
+                });
+                break;
+              case 'tool_done':
+                hooks.onToolCall?.({
+                  toolId: parsed.toolId,
+                  name: '',
+                  status: parsed.isError ? 'error' : 'done',
+                });
                 break;
               case 'result':
                 sawResult = true;

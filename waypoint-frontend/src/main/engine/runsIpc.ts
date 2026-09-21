@@ -30,8 +30,10 @@ import { assertUnder } from './runs/worktrees';
 import { listRunBranches, resumeRun, startRun } from './runs/startRun';
 import {
   buildBriefPreview,
+  describeTicketRepo,
   dispatchTicketRun,
   withTicketDispatchLock,
+  type TicketRepo,
 } from './runs/dispatch';
 import { withRunLock } from './runs/runLock';
 import {
@@ -511,6 +513,8 @@ export async function assertPublishableCwd(
 export interface RunsHostApi {
   /** W6: push a run's branch and open its pull request, as the person. */
   openRunPullRequest(runId: string): Promise<OpenPrResult>;
+  /** Fix 7: the repository a session on a ticket would use, for Copilot's offer card; null when none is known. */
+  describeTicketRepo(ticketId: string): Promise<TicketRepo | null>;
   /** Never-lock: finalize's last step — deliver a message typed while it held the row (sendPrompt.ts). */
   deliverPendingAfterFinalize(runId: string): Promise<void>;
   /**
@@ -924,6 +928,7 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
 
   return {
     openRunPullRequest,
+    describeTicketRepo: (ticketId) => describeTicketRepo(startDeps, ticketId),
     deliverPendingAfterFinalize: (runId) =>
       deliverPendingAfterFinalize(startDeps, runId),
     drainLiveOutboxes,
