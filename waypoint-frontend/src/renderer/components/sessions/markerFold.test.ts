@@ -2,7 +2,7 @@ import type { TranscriptTurn } from '@emdash/core/runtimes/acp/api/client' with 
   'resolution-mode': 'import',
 };
 import type { AgentRunEvent } from '@/types/agentRuns';
-import { deriveMarkers, overlayMarkers } from './markerFold';
+import { deriveMarkers, foldHiddenNotes, overlayMarkers } from './markerFold';
 
 // Markers (never-lock, design §5): what Waypoint did to a run, drawn from
 // its events and laid into the transcript as `role:'thought'` rows —
@@ -374,6 +374,80 @@ describe('overlayMarkers', () => {
     const turns = [turn('t1', 1)];
     expect(overlayMarkers(turns, [])).toEqual(turns);
     overlayMarkers(turns, markers);
+    expect(turns[0].items).toHaveLength(2);
+  });
+});
+
+describe('foldHiddenNotes', () => {
+  const CONTINUATION =
+    "This run's last report was already filed on ROAD-122 (verdict: not-a-bug). If you make changes in this conversation, end that turn with the same `Verdict:` / `## Summary` report you gave before, so Waypoint publishes them and files a follow-up. When you are only answering a question, reply normally, without a Verdict line — nothing is filed for a plain answer.";
+  const RESUME =
+    'Waypoint resumed this run after an interruption, but your previous conversation could not be restored, so this is a fresh session in the same worktree. Here is where things stand.\n\nBranch: agent/ROAD-122 (from main)\nCommits on this branch since main:\n(none)\n\nUncommitted changes:\n(none)';
+
+  const userTurn = (id: string, text: string): TranscriptTurn =>
+    ({
+      id,
+      seq: 7,
+      initiator: 'user',
+      items: [
+        { kind: 'message', id: `${id}-u`, seq: 1, role: 'user', text },
+        {
+          kind: 'message',
+          id: `${id}-a`,
+          seq: 2,
+          role: 'assistant',
+          text: 'ok',
+        },
+      ],
+      outcome: { kind: 'done' },
+    }) as unknown as TranscriptTurn;
+
+  it('cuts the continuation note the agent’s replay glued onto the person’s message into a marker row above it', () => {
+    const [out] = foldHiddenNotes([userTurn('t9', `line one${CONTINUATION}`)]);
+    expect(out.items).toHaveLength(3);
+    expect(out.items[0]).toMatchObject({
+      kind: 'message',
+      role: 'thought',
+      id: 'note:t9:t9-u',
+    });
+    expect((out.items[0] as { text: string }).text).toMatch(
+      /^Waypoint · This run's last report was already filed on ROAD-122/,
+    );
+    expect(out.items[1]).toMatchObject({
+      id: 't9-u',
+      role: 'user',
+      text: 'line one',
+    });
+    expect(out.items[2]).toMatchObject({ id: 't9-a' });
+  });
+
+  it('summarises a glued branch-state note to its first sentence instead of pasting the git log', () => {
+    const [out] = foldHiddenNotes([userTurn('t9', `what next?\n\n${RESUME}`)]);
+    const marker = out.items[0] as { text: string };
+    expect(marker.text).toBe(
+      'Waypoint · Waypoint resumed this run after an interruption, but your previous conversation could not be restored, so this is a fresh session in the same worktree. Here is where things stand. \\(branch state given to the agent\\)',
+    );
+    expect(out.items[1]).toMatchObject({ text: 'what next?' });
+  });
+
+  it('shows one note once: the copy every later message carries is cut out without a second marker', () => {
+    const out = foldHiddenNotes([
+      userTurn('t1', `first${CONTINUATION}`),
+      userTurn('t2', `second${CONTINUATION}`),
+    ]);
+    expect(out[0].items.map((i) => i.id)).toEqual([
+      'note:t1:t1-u',
+      't1-u',
+      't1-a',
+    ]);
+    expect(out[1].items.map((i) => i.id)).toEqual(['t2-u', 't2-a']);
+    expect(out[1].items[0]).toMatchObject({ text: 'second' });
+  });
+
+  it('leaves messages without a note alone, and never mutates its input', () => {
+    const turns = [userTurn('t1', 'plain question')];
+    const out = foldHiddenNotes(turns);
+    expect(out[0]).toBe(turns[0]);
     expect(turns[0].items).toHaveLength(2);
   });
 });
