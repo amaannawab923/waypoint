@@ -12,6 +12,7 @@ import {
 } from '../types';
 import { agentEnvFor } from './agentEnv';
 import type { DaemonRunsApi, DaemonSessionSummary } from './daemonApi';
+import { registerConversation } from './registerConversation';
 import { describeFolder, rememberFolder, type FolderDeps } from './folders';
 import { claimForInitialQueue, markDelivered, revertClaimed } from './outbox';
 import { withRunLock } from './runLock';
@@ -413,6 +414,10 @@ async function continueStartLocked(
       ...(firstMessage ? [{ text: firstMessage }] : []),
       ...pending.map((p) => ({ text: p.text })),
     ];
+    // Registers the run in the daemon's conversation index first, so the
+    // session's lifecycle reports land somewhere (registerConversation.ts:
+    // best-effort, never blocks the start).
+    await registerConversation(daemon, deps.logger, run, cwd);
     const { sessionId } = await daemon.startSession({
       conversationId: run.id,
       providerId: run.providerId,
@@ -1018,6 +1023,10 @@ export async function resumeRunCore(
     ({ sessionId } = effectiveWarmed);
   } else {
     try {
+      // Same registration as the cold start (registerConversation.ts);
+      // a resume carries the same cwd and createdAt, so the index answers
+      // "already registered" and nothing is logged.
+      await registerConversation(daemon, deps.logger, run, cwd);
       ({ sessionId } = await daemon.startSession({
         conversationId: run.id,
         providerId: run.providerId,
