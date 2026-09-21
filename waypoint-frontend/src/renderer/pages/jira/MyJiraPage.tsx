@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { humanizeAgo } from '@/lib/duration';
 import { useSearchParams } from 'react-router-dom';
 import { clsx } from 'clsx';
 import {
@@ -125,19 +126,20 @@ export function LiveSyncIndicator({
     return (
       <span className="ml-auto inline-flex items-center gap-1.5 text-[11.5px] font-bold text-text-muted">
         <span className="size-1.5 shrink-0 rounded-full bg-text-muted" />
-        not synced yet
+        not loaded yet
       </span>
     );
   }
-  const secs = Math.max(
-    0,
-    Math.round((Date.now() - new Date(lastSyncAt).getTime()) / 1000),
-  );
-  const label = secs < 60 ? `${secs}s ago` : `${Math.round(secs / 60)}m ago`;
+  // "loaded", not "synced" (feedback round 1, Fix 6/9): Waypoint reads
+  // Jira on demand and holds a copy; nothing is kept in sync in the
+  // background, and the word should not promise that it is.
   return (
-    <span className="ml-auto inline-flex items-center gap-1.5 text-[11.5px] font-bold text-success">
+    <span
+      className="ml-auto inline-flex items-center gap-1.5 text-[11.5px] font-bold text-success"
+      title="When Waypoint last read your tickets from Jira. Reload to read again."
+    >
       <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-success" />
-      synced {label}
+      loaded {humanizeAgo(lastSyncAt)}
     </span>
   );
 }

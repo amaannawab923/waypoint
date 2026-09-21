@@ -612,6 +612,7 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
               }
             : config
         }
+        writeModeId={run.autoApprove ? 'bypassPermissions' : 'default'}
         onSetMode={(modeId) => {
           setSessionMode(run.id, modeId).catch((error: unknown) =>
             showErrorToast(

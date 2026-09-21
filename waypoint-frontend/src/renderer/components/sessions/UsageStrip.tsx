@@ -16,6 +16,15 @@ const LIVE_WORD: Record<FollowerStatus['kind'], string> = {
   closed: 'not live',
 };
 
+/** Hover text for the live word (feedback round 1, Fix 6): what each state means for a message sent now. */
+const LIVE_TITLE: Record<FollowerStatus['kind'], string> = {
+  connecting: 'Connecting to the agent process.',
+  live: 'The agent process is still running — message it and it replies immediately.',
+  stale: 'The connection dropped; catching up with the agent process.',
+  closed:
+    "This run's process has stopped. Message it and Waypoint restarts it in the same worktree.",
+};
+
 /**
  * The strip under the composer (W3): committed turns as the transcript
  * counts them, context used / size and cost from the daemon's
@@ -61,7 +70,10 @@ export function UsageStrip({
         </span>
       )}
       {generating && <span className="text-info">working…</span>}
-      <span className={live === 'live' ? 'text-success' : ''}>
+      <span
+        title={LIVE_TITLE[live]}
+        className={live === 'live' ? 'text-success' : ''}
+      >
         {LIVE_WORD[live]}
       </span>
     </div>

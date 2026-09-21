@@ -282,6 +282,10 @@ export function intentView(
   verb: string;
   /** `plan` for a reading session; `auto` for an unattended writing one; null for a writing one that asks. */
   mode: 'plan' | 'auto' | null;
+  /** Hover text for the chip — what the verb and the mode mean (feedback round 1, Fix 6). */
+  title: string;
+  /** A ticket verb (Fix, Investigate) or a plain session with none — drawn quieter so an empty-looking chip reads as intentional. */
+  plain: boolean;
 } | null {
   if (run.entry !== 'dispatched') return null;
   const verb =
@@ -291,5 +295,25 @@ export function intentView(
         ? 'Fix'
         : 'Session';
   const mode = run.modeId === 'plan' ? 'plan' : run.autoApprove ? 'auto' : null;
-  return { verb, mode };
+  return {
+    verb,
+    mode,
+    title: intentTitle(verb, mode),
+    plain: verb === 'Session',
+  };
+}
+
+export const MODE_TITLES = {
+  plan: 'Plan mode — reads and reports. Changes nothing.',
+  auto: 'Auto-approve — the agent works without asking; nothing pauses mid-run for your approval.',
+} as const;
+
+function intentTitle(verb: string, mode: 'plan' | 'auto' | null): string {
+  const what =
+    verb === 'Investigate'
+      ? 'Investigate — find the root cause and report; dispatched from a ticket.'
+      : verb === 'Fix'
+        ? 'Fix — change the code on a branch and report; dispatched from a ticket.'
+        : 'An independent session — not dispatched from a ticket, so it has no Fix/Investigate mode to show.';
+  return mode ? `${what} ${MODE_TITLES[mode]}` : what;
 }

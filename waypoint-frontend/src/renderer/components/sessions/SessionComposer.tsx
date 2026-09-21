@@ -105,6 +105,7 @@ export function SessionComposer({
   generating = false,
   onStop,
   config = null,
+  writeModeId,
   onSetMode,
   onSetModel,
   onSetEffort,
@@ -131,6 +132,13 @@ export function SessionComposer({
   onStop?: () => void;
   /** The session's mode / model / effort options; null before the first snapshot. */
   config?: SessionConfigState | null;
+  /**
+   * The provider mode "May edit files" resolves to for this run — the
+   * mode that bypasses permissions when the run auto-approves, the
+   * provider's default otherwise. Without it the picker's write side
+   * takes the first non-plan mode offered.
+   */
+  writeModeId?: string;
   onSetMode?: (modeId: string) => void;
   onSetModel?: (modelId: string) => void;
   onSetEffort?: (effortId: string) => void;
@@ -218,21 +226,12 @@ export function SessionComposer({
   };
 
   const selectors: Array<{
-    key: 'mode' | 'model' | 'effort';
+    key: 'model' | 'effort';
     label: string;
     selected: string | null;
     available: ReadonlyArray<{ id: string; name: string }>;
     onChange: ((id: string) => void) | undefined;
   }> = [];
-  if (config?.modeOptions && config.modeOptions.available.length > 0) {
-    selectors.push({
-      key: 'mode',
-      label: 'Mode',
-      selected: config.modeOptions.selected,
-      available: config.modeOptions.available,
-      onChange: onSetMode,
-    });
-  }
   if (config?.modelOptions && config.modelOptions.available.length > 0) {
     selectors.push({
       key: 'model',
@@ -277,7 +276,15 @@ export function SessionComposer({
         rows={Math.min(6, Math.max(1, text.split('\n').length))}
         className="thin-scroll min-h-[24px] w-full resize-none bg-transparent text-[12px] leading-5 text-text outline-none placeholder:text-text-muted"
       />
-      <div className="flex items-center gap-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {config?.modeOptions && config.modeOptions.available.length > 0 && (
+          <ModePicker
+            options={config.modeOptions.available}
+            selected={config.modeOptions.selected}
+            writeModeId={writeModeId}
+            onChange={onSetMode}
+          />
+        )}
         {selectors.map((sel) => (
           <label
             key={sel.key}
@@ -344,6 +351,150 @@ export function SessionComposer({
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Waypoint's own words for the provider's permission modes (customer
+ * feedback round 1, Fix 6). Only the four whose behaviour is documented;
+ * anything else shows the provider's own description, or nothing — never
+ * a guessed sentence.
+ */
+export const MODE_GLOSS: Record<string, string> = {
+  default: 'Asks before every edit and every command.',
+  acceptEdits:
+    'Edits files without asking; still asks before running a command.',
+  plan: 'Reads and reports. Changes nothing.',
+  bypassPermissions:
+    'Never asks — edits, runs commands, deletes without a prompt. Not recommended on a shared machine.',
+};
+
+function modeTitle(option: {
+  id: string;
+  name: string;
+  description?: string;
+}): string | undefined {
+  return MODE_GLOSS[option.id] ?? option.description;
+}
+
+/**
+ * The mode as two positions — Read-only (the provider's plan mode) and
+ * May edit files (the run's write mode) — with the provider's full list
+ * under Advanced, each mode named as the provider names it and glossed on
+ * hover. A provider that offers no plan mode gets the full list alone.
+ */
+function ModePicker({
+  options,
+  selected,
+  writeModeId,
+  onChange,
+}: {
+  options: ReadonlyArray<{ id: string; name: string; description?: string }>;
+  selected: string | null;
+  writeModeId?: string;
+  onChange: ((modeId: string) => void) | undefined;
+}) {
+  const [advanced, setAdvanced] = useState(false);
+  const plan = options.find((o) => o.id === 'plan');
+  const write =
+    options.find((o) => o.id === writeModeId) ??
+    options.find((o) => o.id !== 'plan');
+  const simple = !!plan && !!write;
+  const readOnly = selected === 'plan';
+  const segment = (pressed: boolean) =>
+    clsx(
+      'h-6 px-2 text-[11px] transition-colors',
+      pressed
+        ? 'bg-surface text-text shadow-sm'
+        : 'text-text-secondary hover:text-text',
+    );
+  return (
+    <div
+      data-composer-selector="mode"
+      className="inline-flex items-center gap-1.5"
+    >
+      {simple && (
+        <div
+          role="group"
+          aria-label="Mode"
+          className="inline-flex overflow-hidden rounded-[5px] border border-border bg-bg-inset p-px"
+        >
+          <button
+            type="button"
+            aria-pressed={readOnly}
+            title={modeTitle(plan)}
+            disabled={!onChange}
+            onClick={() => onChange?.(plan.id)}
+            className={clsx(segment(readOnly), 'rounded-l-[4px]')}
+          >
+            Read-only
+          </button>
+          <button
+            type="button"
+            aria-pressed={selected !== null && !readOnly}
+            title={modeTitle(write)}
+            disabled={!onChange}
+            onClick={() => onChange?.(write.id)}
+            className={clsx(
+              segment(selected !== null && !readOnly),
+              'rounded-r-[4px]',
+            )}
+          >
+            May edit files
+          </button>
+        </div>
+      )}
+      {simple && (
+        <button
+          type="button"
+          aria-expanded={advanced}
+          onClick={() => setAdvanced((a) => !a)}
+          className="text-[10.5px] text-text-muted hover:text-text"
+        >
+          Advanced {advanced ? '▴' : '▾'}
+        </button>
+      )}
+      {(advanced || !simple) && (
+        <label className="relative inline-flex h-6 items-center gap-1 rounded-[5px] border border-border bg-bg-inset pl-2 pr-6 text-[11px] text-text-secondary hover:border-border-strong hover:text-text focus-within:border-border-strong">
+          <select
+            aria-label="All modes"
+            value={selected ?? ''}
+            title={
+              selected
+                ? modeTitle(
+                    options.find((o) => o.id === selected) ?? {
+                      id: selected,
+                      name: selected,
+                    },
+                  )
+                : undefined
+            }
+            // The "—" placeholder option (no selection yet) is not a
+            // choice: main refuses an empty id.
+            onChange={(e) => {
+              if (e.target.value) onChange?.(e.target.value);
+            }}
+            disabled={!onChange}
+            className="appearance-none bg-transparent pr-1 text-[11px] text-text outline-none"
+          >
+            {selected === null && <option value="">—</option>}
+            {options.map((option) => (
+              <option
+                key={option.id}
+                value={option.id}
+                title={modeTitle(option)}
+              >
+                {option.name}
+              </option>
+            ))}
+          </select>
+          <IconChevron
+            size={12}
+            className="pointer-events-none absolute right-1.5 text-text-muted"
+          />
+        </label>
+      )}
     </div>
   );
 }
