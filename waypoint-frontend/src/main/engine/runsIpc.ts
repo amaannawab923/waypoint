@@ -11,6 +11,8 @@ import {
   type OpenPrResult,
   type ResolvedTicket,
   type RunChanged,
+  type CloseRunPreview,
+  type CloseRunResult,
   type RunDiff,
   type RunDiffFile,
   type RunDiffFileStatus,
@@ -26,8 +28,17 @@ import {
   type AgentRun,
   type LedgerClient,
 } from './runs/ledgerClient';
-import { assertUnder } from './runs/worktrees';
-import { listRunBranches, resumeRun, startRun } from './runs/startRun';
+import {
+  assertUnder,
+  isRefSafeComponent,
+  releaseWorktree,
+} from './runs/worktrees';
+import {
+  ENGINE_NOT_RUNNING,
+  listRunBranches,
+  resumeRun,
+  startRun,
+} from './runs/startRun';
 import {
   buildBriefPreview,
   describeTicketRepo,
@@ -893,6 +904,129 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
     const worktree = await worktreeOf(run);
     await assertWorktreeGitDir(worktree);
     return computeRunDiff(git, worktree, run.baseRef);
+  });
+
+  // Customer feedback round 1, Fix 8: a finished run's worktree and
+  // branch used to stay on disk forever. "Close run" removes the worktree
+  // (the transcript and diff stay in Waypoint) and the branch, unless a
+  // pull request still needs it. Never a branch whose commits exist
+  // nowhere else without the person being told so first — hence the
+  // preview the confirm is built from.
+  const CLOSABLE: ReadonlySet<AgentRun['status']> = new Set([
+    'done',
+    'needs-review',
+    'failed',
+    'cancelled',
+    'interrupted',
+  ]);
+  const closableRun = async (runId: unknown): Promise<AgentRun> => {
+    const run = await loadRun(runId);
+    if (run.isolation === 'directory') {
+      throw new Error(
+        'This session works in your folder directly; there is no worktree to remove.',
+      );
+    }
+    if (!CLOSABLE.has(run.status)) {
+      throw new Error(
+        `This run is ${run.status}; stop it first, or wait for it to finish.`,
+      );
+    }
+    if (run.status === 'needs-review' && run.ticketId) {
+      const pending = (
+        await ledger.listTicketProposals(run.ticketId).catch(() => [])
+      ).filter((p) => p.agentRunId === run.id && p.status === 'proposed');
+      if (pending.length > 0) {
+        throw new Error(
+          `${pending.length === 1 ? 'A proposal from this run is' : `${pending.length} proposals from this run are`} still waiting in Review; decide ${pending.length === 1 ? 'it' : 'them'} first.`,
+        );
+      }
+    }
+    if (!run.branch) throw new Error('This run has no branch.');
+    return run;
+  };
+
+  /** Commits on the branch that no remote has — the ones a branch deletion would lose. */
+  const unpushedCommits = async (
+    run: AgentRun,
+    worktree: string,
+  ): Promise<number | null> => {
+    const branch = run.branch!;
+    if (!branch.split('/').every(isRefSafeComponent)) return null;
+    const remote = await git(
+      ['for-each-ref', '--format=%(refname)', `refs/remotes/origin/${branch}`],
+      { cwd: worktree },
+    );
+    const upstream =
+      remote.code === 0 && remote.stdout.trim() ? `origin/${branch}` : null;
+    const base =
+      upstream ??
+      (run.baseRef && run.baseRef.split('/').every(isRefSafeComponent)
+        ? run.baseRef
+        : null);
+    if (!base) return null;
+    const count = await git(['rev-list', '--count', `${base}..HEAD`, '--'], {
+      cwd: worktree,
+    });
+    if (count.code !== 0) return null;
+    const n = Number.parseInt(count.stdout.trim(), 10);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  deps.host.handle(
+    RUNS_IPC.closePreview,
+    async (runId): Promise<CloseRunPreview> => {
+      const run = await closableRun(runId);
+      const worktree = await worktreeOf(run);
+      await assertWorktreeGitDir(worktree);
+      const hasPullRequest = !!run.prUrl;
+      return {
+        branch: run.branch!,
+        worktreePath: worktree,
+        unpushedCommits: hasPullRequest
+          ? 0
+          : await unpushedCommits(run, worktree),
+        hasPullRequest,
+        branchWillBeDeleted: !hasPullRequest,
+      };
+    },
+  );
+
+  deps.host.handle(RUNS_IPC.close, async (runId): Promise<CloseRunResult> => {
+    const run = await closableRun(runId);
+    await worktreeOf(run);
+    // Never-lock: the daemon may still hold this run's session (a
+    // finished run is a conversation that may be continued). It goes
+    // first — a session in a folder that is about to be deleted is not
+    // one to keep.
+    const daemon = daemonFor(deps.supervisor);
+    if (!daemon) throw new Error(ENGINE_NOT_RUNNING);
+    await deps.transcripts?.capture(run.id);
+    await daemon.killSession(run.id).catch((error: unknown) =>
+      deps.logger.warn('engine: kill before close did not apply', {
+        runId: run.id,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    const keepBranch = !!run.prUrl;
+    await releaseWorktree(
+      {
+        daemon,
+        ledger,
+        worktreesDir: deps.worktreesDir,
+        logger: deps.logger,
+      },
+      run,
+      keepBranch ? 'abandoned' : 'merged',
+    );
+    deps.logger.info('engine: run closed', {
+      runId: run.id,
+      branchDeleted: !keepBranch,
+    });
+    return {
+      worktreeRemoved: true,
+      branchDeleted: !keepBranch,
+      branchKeptBecause: keepBranch ? 'pull-request' : null,
+    };
   });
 
   deps.host.handle(RUNS_IPC.revealWorktree, async (runId): Promise<void> => {

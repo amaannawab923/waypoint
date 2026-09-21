@@ -29,6 +29,7 @@ import type {
 import type { EngineStatus } from '@/types/engine';
 import { FolderPicker } from './FolderPicker';
 import { statusView } from './sessionStatus';
+import { BranchPicker } from './BranchPicker';
 
 /**
  * The New session dialog — W4b, ROAD-116 (docs/design/w4b-sessions-anywhere.md
@@ -105,6 +106,12 @@ type BranchState =
   | { kind: 'loading' }
   | { kind: 'ready'; branches: string[]; suggested: string | null }
   | { kind: 'failed'; message: string };
+
+/** What the base-branch field shows: the branch, or why there is none yet. */
+function branchFieldValue(branches: BranchState, baseRef: string): string {
+  if (branches.kind === 'ready') return baseRef;
+  return branches.kind === 'loading' ? 'Reading branches…' : '';
+}
 
 export function NewSessionDialog({
   open,
@@ -563,34 +570,18 @@ export function NewSessionDialog({
                   <label htmlFor="new-session-branch" className={labelClass}>
                     Base branch
                   </label>
-                  <select
+                  <BranchPicker
                     id="new-session-branch"
-                    value={baseRef}
-                    onChange={(e) => setBaseRef(e.target.value)}
+                    branches={
+                      branches.kind === 'ready' ? branches.branches : []
+                    }
+                    value={branchFieldValue(branches, baseRef)}
+                    onChange={setBaseRef}
                     disabled={
                       starting || !worktree || branches.kind !== 'ready'
                     }
                     className={fieldClass}
-                    aria-describedby={
-                      branches.kind === 'failed'
-                        ? 'new-session-branch-error'
-                        : undefined
-                    }
-                  >
-                    {branches.kind === 'ready' ? (
-                      branches.branches.map((b) => (
-                        <option key={b} value={b}>
-                          {b}
-                        </option>
-                      ))
-                    ) : (
-                      <option value="">
-                        {branches.kind === 'loading'
-                          ? 'Reading branches…'
-                          : '—'}
-                      </option>
-                    )}
-                  </select>
+                  />
                   {branches.kind === 'failed' && (
                     <p
                       id="new-session-branch-error"

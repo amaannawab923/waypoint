@@ -10,6 +10,8 @@ import {
 } from '@/components/icons';
 import { renameAgentRun } from '@/data/api';
 import {
+  closeRun,
+  closeRunPreview,
   openRunPullRequest,
   revealRunWorktree,
   stopRun,
@@ -17,7 +19,7 @@ import {
 import { formatRelativeTime } from '@/lib/copilotSessions';
 import { patchSessionRun, refreshSessions } from '@/lib/sessionsStore';
 import { useTicketSummary } from '@/lib/useTicketLabel';
-import { showErrorToast } from '@/lib/toast';
+import { showErrorToast, showInfoToast } from '@/lib/toast';
 import type { AgentRun } from '@/types/agentRuns';
 import { useHomeDir } from '@/lib/useHomeDir';
 import { AutoMark, IntentChip, ProviderChip, VerdictChip } from './SessionRow';
@@ -131,6 +133,42 @@ export function SessionDetail({
       showErrorToast(
         error instanceof Error ? error.message : 'Could not open the folder.',
       ),
+    );
+
+  // Fix 8 (feedback round 1): a finished run's worktree and branch used
+  // to stay on disk forever. The confirm names what is lost: nothing
+  // (branch never pushed, no commits), the commits (never pushed), or
+  // that the branch stays for its pull request.
+  const [closing, setClosing] = useState(false);
+  const [closed, setClosed] = useState(false);
+  const close = async () => {
+    setClosing(true);
+    try {
+      const preview = await closeRunPreview(run.id);
+      const question = closeRunQuestion(preview);
+      // eslint-disable-next-line no-alert
+      if (!window.confirm(question)) return;
+      const result = await closeRun(run.id);
+      setClosed(true);
+      showInfoToast(
+        result.branchKeptBecause === 'pull-request'
+          ? `Worktree deleted. ${preview.branch} was kept — it still has an open pull request.`
+          : `Worktree and branch ${preview.branch} deleted.`,
+      );
+    } catch (error) {
+      showErrorToast(
+        error instanceof Error ? error.message : 'Could not close the run.',
+      );
+    } finally {
+      setClosing(false);
+    }
+  };
+  const closable =
+    !closed &&
+    run.isolation !== 'directory' &&
+    !!run.worktreePath &&
+    ['done', 'needs-review', 'failed', 'cancelled', 'interrupted'].includes(
+      run.status,
     );
 
   const title = runTitle(run, ticket?.label);
@@ -344,7 +382,21 @@ export function SessionDetail({
               {publishing ? 'Opening PR…' : 'Open PR'}
             </Button>
           )}
-          {(run.cwd ?? run.worktreePath) && (
+          {closable && (
+            <Button
+              size="xs"
+              variant="secondary"
+              onClick={() => {
+                close().catch(() => {});
+              }}
+              disabled={closing}
+              title="Delete the worktree and, unless a pull request needs it, the branch. The transcript and diff stay."
+              data-close-run
+            >
+              {closing ? 'Closing…' : 'Close run'}
+            </Button>
+          )}
+          {(run.cwd ?? run.worktreePath) && !closed && (
             <IconButton label="Show in Finder" onClick={reveal}>
               <IconFolder size={14} />
             </IconButton>
@@ -396,4 +448,20 @@ export function SessionDetail({
       </div>
     </section>
   );
+}
+
+/** The confirm for Close run — what is lost, in the person's words (Fix 8). */
+export function closeRunQuestion(preview: {
+  branch: string;
+  unpushedCommits: number | null;
+  hasPullRequest: boolean;
+}): string {
+  if (preview.hasPullRequest) {
+    return `Delete the worktree for ${preview.branch}? The branch stays — it still has an open pull request. The transcript and diff stay in Waypoint.`;
+  }
+  const n = preview.unpushedCommits;
+  if (n !== null && n > 0) {
+    return `Delete the worktree for ${preview.branch}? Its ${n === 1 ? '1 commit was' : `${n} commits were`} never pushed and will be lost. The transcript and diff stay in Waypoint.`;
+  }
+  return `Delete the worktree and branch for ${preview.branch}? The transcript and diff stay in Waypoint.`;
 }

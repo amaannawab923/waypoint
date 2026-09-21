@@ -35,6 +35,8 @@ export type {
   SessionFolder,
   WarmRunResult,
   RunChanged,
+  CloseRunPreview,
+  CloseRunResult,
   RunDiff,
   RunDiffFile,
   RunDiffFileStatus,
