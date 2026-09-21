@@ -325,6 +325,27 @@ describe('listRoleJiraTickets', () => {
   });
 });
 
+// Customer feedback round 1, Fix 9: the rail badge is what is ASSIGNED to
+// you, not everything you touch — counted off the queue read's own roles.
+describe('getJiraConnectionStatus assignedCount', () => {
+  it('counts the issues whose strongest role is assignee', async () => {
+    const api = freshApi();
+    bridge.listTickets.mockResolvedValue(
+      ticketsResult([
+        wireTicket({ id: '1', role: 'assignee' }),
+        wireTicket({ id: '2', role: 'reporter' }),
+        wireTicket({ id: '3', role: 'watcher' }),
+        wireTicket({ id: '4', role: 'assignee' }),
+      ]),
+    );
+    await api.listMyJiraTickets();
+    expect(await api.getJiraConnectionStatus()).toMatchObject({
+      issueCount: 4,
+      assignedCount: 2,
+    });
+  });
+});
+
 describe('listTicketsByJiraKeys', () => {
   it('returns an empty list without calling the bridge at all', async () => {
     const api = freshApi();
@@ -345,7 +366,9 @@ describe('listTicketsByJiraKeys', () => {
     const tickets = await api.listTicketsByJiraKeys(['ENG-1', 'PLAT-2']);
 
     expect(bridge.listTicketsByKeys).toHaveBeenCalledWith(['ENG-1', 'PLAT-2']);
-    expect(tickets).toMatchObject([{ id: '1', key: 'ENG-1', stateColor: 'var(--success)' }]);
+    expect(tickets).toMatchObject([
+      { id: '1', key: 'ENG-1', stateColor: 'var(--success)' },
+    ]);
   });
 
   // Same reasoning as listRoleJiraTickets: a one-off read, never checked
