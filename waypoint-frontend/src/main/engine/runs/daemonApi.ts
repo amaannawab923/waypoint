@@ -124,6 +124,39 @@ export interface CreateWorktreeRequest {
   path: string;
 }
 
+/**
+ * What `conversations.create` needs to register a run in the daemon's own
+ * conversation index (spec §3.4/§4.1) — the durable store the ACP runtime's
+ * lifecycle reports (`session-started`, `session-activity`, `session-ended`)
+ * are written into. The ACP component is wired to the reports-only subset of
+ * that contract and cannot self-register, so without this call first every
+ * report for the conversation is rejected by the index as
+ * `conversation-not-found` (the daemon logs a warning per report, and the
+ * index — what emdash's own UI lists and resumes from — never has the run).
+ * Waypoint's own view of a session's end does not go through the index: the
+ * ledger follower watches `acp.sessions.list` (liveLedgerFollower.ts), so
+ * this is hygiene for the daemon, not the fix for a run that stays
+ * `running` (review of PR #86).
+ *
+ * `createdAt` is one of the index's IMMUTABLE fields (with provider, type,
+ * cwd, workspacePath, idRegime): a second create for the same id must carry
+ * the same value, so callers pass the run's own creation time, never "now".
+ */
+export interface CreateConversationRequest {
+  conversationId: string;
+  providerId: string;
+  cwd: string;
+  /** The run's creation time (epoch ms) — immutable in the index, so the same on every call. */
+  createdAt: number;
+  title: string | null;
+}
+
+/** What `createConversation` found: a record was made, or one already existed (possibly disagreeing on an immutable field). */
+export interface CreateConversationResult {
+  /** Immutable fields whose stored value differs from this request's — empty when the record was created or matches. */
+  mismatch: string[];
+}
+
 export interface StartSessionRequest {
   conversationId: string;
   providerId: string;
@@ -195,6 +228,22 @@ export interface DaemonRunsApi {
   saveMcpServer(server: DaemonMcpServer): Promise<void>;
   /** Local branches plus what the remotes' HEADs point at. */
   listRefs(repoPath: string): Promise<RepositoryRefs>;
+  /**
+   * Registers the run in the daemon's conversation index — see
+   * `CreateConversationRequest`'s own comment for why this happens before
+   * `startSession`. Idempotent for the same run: the contract's only error
+   * is `immutable-field-mismatch` against an existing record with the same
+   * id, which this resolves as "already registered" and reports through
+   * `mismatch` (empty for a record that agrees) rather than throwing — the
+   * record exists either way, which is all the reports need. Throws like
+   * every other call here on a real failure; callers treat it as
+   * best-effort (catch and log, then still start the session): a run
+   * missing from the daemon's index is recoverable, refusing to start it
+   * over a registration hiccup is not.
+   */
+  createConversation(
+    request: CreateConversationRequest,
+  ): Promise<CreateConversationResult>;
   /**
    * Starts (or, with `sessionId`, loads) the ACP session for a run. The
    * daemon takes minutes on a cold provider start (spawning the agent,
@@ -426,6 +475,35 @@ export function createDaemonRunsApi(client: WireClient): DaemonRunsApi {
       await fallible<unknown>('agentConfig.saveMcpServer', { server });
     },
     listRefs,
+    async createConversation(request) {
+      try {
+        await fallible<unknown>('conversations.create', {
+          conversationId: request.conversationId,
+          provider: request.providerId,
+          type: 'acp',
+          cwd: request.cwd,
+          workspacePath: request.cwd,
+          idRegime: 'provider-minted',
+          createdAt: request.createdAt,
+          title: request.title ?? '',
+          config: { version: '1', type: 'acp' },
+        });
+        return { mismatch: [] };
+      } catch (error) {
+        const detail =
+          error instanceof DaemonApiError
+            ? (error.detail as { type?: string; fields?: unknown })
+            : null;
+        if (detail?.type === 'immutable-field-mismatch') {
+          return {
+            mismatch: Array.isArray(detail.fields)
+              ? detail.fields.filter((f): f is string => typeof f === 'string')
+              : [],
+          };
+        }
+        throw error;
+      }
+    },
     startSession(request) {
       const { modeId, initialQueue, env, ...rest } = request;
       return fallible<{ sessionId: string }>(

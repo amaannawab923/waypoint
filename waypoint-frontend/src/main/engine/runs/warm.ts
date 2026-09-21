@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import type { WarmRunResult } from '../types';
 import { agentEnvFor } from './agentEnv';
 import type { DaemonSessionSummary } from './daemonApi';
+import { registerConversation } from './registerConversation';
 import { assertRunId } from './ledgerClient';
 import { withRunLock } from './runLock';
 import { hasWarmed, recordWarmed } from './warmed';
@@ -71,6 +72,9 @@ export async function warmRun(
     }
 
     try {
+      // A warmed session is a real spawn like any other: same registration
+      // in the daemon's conversation index (registerConversation.ts).
+      await registerConversation(daemon, deps.logger, run, cwd);
       const { sessionId } = await daemon.startSession({
         conversationId: run.id,
         providerId: run.providerId,

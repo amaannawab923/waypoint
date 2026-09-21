@@ -267,6 +267,7 @@ function fakeDaemon(
       branches: ['feat/x', 'main'],
       remoteHeads: [{ remote: 'origin', branch: 'main' }],
     })),
+    createConversation: jest.fn(async () => ({ mismatch: [] })),
     startSession: jest.fn(async () => ({ sessionId: 'sess-1' })),
     sendPrompt: jest.fn(async () => {}),
     cancelTurn: jest.fn(async () => {}),

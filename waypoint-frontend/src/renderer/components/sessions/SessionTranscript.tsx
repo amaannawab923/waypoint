@@ -201,6 +201,9 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
     // A dispatched run's first prompt is its brief: folded (W5a).
     foldBrief: run.entry === 'dispatched' ? { label } : null,
     markerLabel: label,
+    // A finished run's session is gone (finalize killed it): nothing to
+    // reconnect to on focus. A resume makes a fresh unit anyway.
+    sessionMayBeLive: statusView(run.status).live,
   });
   const briefLabel =
     run.entry === 'dispatched'
