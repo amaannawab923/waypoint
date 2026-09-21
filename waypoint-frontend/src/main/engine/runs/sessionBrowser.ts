@@ -90,8 +90,32 @@ export function sessionBrowserServer(
     // `--isolated`: a throwaway profile the server creates and discards, so
     // no session sees another's state or anyone's login. `--headless`: N
     // sessions must not raise N windows; the screenshots are the evidence.
-    args: [entry, '--isolated', '--headless'],
-    env: { ELECTRON_RUN_AS_NODE: '1' },
+    // `--no-usage-statistics`: chrome-devtools-mcp otherwise reports usage
+    // to Google (Clearcut) from the person's machine, and does it through
+    // a detached "watchdog" child it spawns from `process.execPath` — which
+    // here is Waypoint's own binary — one companion process per live
+    // server. People saw those as stray Waypoint / "chrome-devtools-mcp"
+    // processes (2026-09-21). Off, the watchdog is never spawned. The env
+    // variable is the same switch; the server's parser is not strict, so
+    // whichever a future build drops, the other still applies and neither
+    // can stop it starting. `--no-performance-crux`: the performance tools
+    // otherwise send trace URLs to Google's CrUX API. NO_UPDATE_CHECKS: the
+    // server otherwise spawns a second detached child from our binary once
+    // a day to ask npm for its latest version — pointless for a build we
+    // pin. With all three, nothing leaves the machine but the session's
+    // own browsing.
+    args: [
+      entry,
+      '--isolated',
+      '--headless',
+      '--no-usage-statistics',
+      '--no-performance-crux',
+    ],
+    env: {
+      ELECTRON_RUN_AS_NODE: '1',
+      CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS: '1',
+      CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: '1',
+    },
     providers: ['claude'],
   };
 }
