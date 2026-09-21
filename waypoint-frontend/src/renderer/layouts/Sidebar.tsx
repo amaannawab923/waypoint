@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { clsx } from 'clsx';
 import { useAsync } from '@/lib/useAsync';
 import {
@@ -19,6 +19,12 @@ import { useLoadedJiraConnection } from '@/lib/jiraStore';
 import { useWaitingSessionsCount } from '@/lib/sessionsStore';
 import { useLocalSummary } from '@/lib/useLocalSummary';
 import { MY_JIRA_ENABLED, SESSIONS_ENABLED } from '@/lib/featureFlags';
+import {
+  activeProjectIdFrom,
+  isProjectOpen,
+  setProjectOpen,
+  useSidebarProjectChoices,
+} from '@/lib/sidebarProjects';
 import type { Project } from '@/types/entities';
 import { CreateProjectModal } from '@/components/domain/CreateProjectModal';
 import { AddProjectWizard } from '@/components/domain/AddProjectWizard';
@@ -150,6 +156,14 @@ function AddMenu({ project }: { project: Project }) {
 
 function ProjectRow({ project }: { project: Project }) {
   const navigate = useNavigate();
+  // Folded by default (founder, 2026-09-21: four seeded projects' sub-navs
+  // covered the whole rail). The project the route is inside shows open
+  // unless it was folded by hand; a fold or unfold is remembered.
+  const { pathname } = useLocation();
+  const choices = useSidebarProjectChoices();
+  const activeId = activeProjectIdFrom(pathname);
+  const open = isProjectOpen(choices, project.id, activeId);
+  const isActive = activeId === project.id;
   const subNav: {
     to: string;
     label: string;
@@ -186,13 +200,30 @@ function ProjectRow({ project }: { project: Project }) {
   if (primitiveCounts.docs > 0)
     subNav.push({ to: 'docs', label: 'Docs', icon: IconFile });
 
+  const Chevron = open ? IconChevron : IconChevronRight;
   return (
-    <div className="flex flex-col gap-0.5">
-      <div className="group flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] px-1.5 text-sm text-text hover:bg-surface-2">
-        <span className="shrink-0 text-sm">{project.icon}</span>
-        <span className="min-w-0 flex-1 truncate font-medium">
-          {project.name}
-        </span>
+    <div className="flex flex-col gap-0.5" data-project-row={project.id}>
+      <div
+        className={clsx(
+          'group flex h-8 items-center gap-1 rounded-[var(--radius-sm)] pr-1.5 pl-0.5 text-sm text-text hover:bg-surface-2',
+          isActive && !open && 'bg-surface-2/60',
+        )}
+      >
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-label={`${open ? 'Fold' : 'Unfold'} ${project.name}`}
+          onClick={() => setProjectOpen(project.id, !open)}
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded text-left"
+        >
+          <Chevron size={12} className="shrink-0 text-text-muted" />
+          <span className="shrink-0 text-sm">{project.icon}</span>
+          <span className="min-w-0 flex-1 truncate font-medium">
+            {project.name}
+          </span>
+          {/* Folded, what still needs a person is not hidden with it. */}
+          {!open && <CountBadge count={primitiveCounts.requestsPending} />}
+        </button>
         <button
           type="button"
           onClick={() => navigate(`/projects/${project.id}/settings/general`)}
@@ -204,35 +235,43 @@ function ProjectRow({ project }: { project: Project }) {
         </button>
       </div>
 
-      <button
-        type="button"
-        onClick={() => navigate(`/projects/${project.id}/settings/codebase`)}
-        className={clsx(
-          'ml-1.5 flex h-6 items-center gap-1.5 truncate rounded-[var(--radius-sm)] px-1.5 text-left text-[11.5px] transition-colors hover:bg-surface-2',
-          project.repoPath
-            ? 'text-text-muted hover:text-text-secondary'
-            : 'text-text-muted italic',
-        )}
-        title={project.repoPath ?? 'Link a repo'}
-      >
-        <IconGitBranch size={13} className="shrink-0" />
-        <span className="truncate">{project.repoPath ?? 'Link a repo'}</span>
-      </button>
-
-      <div className="ml-1.5 flex flex-col gap-0.5 border-l border-border pl-2">
-        {subNav.map((item) => (
-          <NavLink
-            key={item.to}
-            to={`/projects/${project.id}/${item.to}`}
-            className={navLinkClass}
+      {open && (
+        <>
+          <button
+            type="button"
+            onClick={() =>
+              navigate(`/projects/${project.id}/settings/codebase`)
+            }
+            className={clsx(
+              'ml-1.5 flex h-6 items-center gap-1.5 truncate rounded-[var(--radius-sm)] px-1.5 text-left text-[11.5px] transition-colors hover:bg-surface-2',
+              project.repoPath
+                ? 'text-text-muted hover:text-text-secondary'
+                : 'text-text-muted italic',
+            )}
+            title={project.repoPath ?? 'Link a repo'}
           >
-            <item.icon size={14} className="shrink-0" />
-            <span className="truncate">{item.label}</span>
-            {item.count !== undefined && <CountBadge count={item.count} />}
-          </NavLink>
-        ))}
-        <AddMenu project={project} />
-      </div>
+            <IconGitBranch size={13} className="shrink-0" />
+            <span className="truncate">
+              {project.repoPath ?? 'Link a repo'}
+            </span>
+          </button>
+
+          <div className="ml-1.5 flex flex-col gap-0.5 border-l border-border pl-2">
+            {subNav.map((item) => (
+              <NavLink
+                key={item.to}
+                to={`/projects/${project.id}/${item.to}`}
+                className={navLinkClass}
+              >
+                <item.icon size={14} className="shrink-0" />
+                <span className="truncate">{item.label}</span>
+                {item.count !== undefined && <CountBadge count={item.count} />}
+              </NavLink>
+            ))}
+            <AddMenu project={project} />
+          </div>
+        </>
+      )}
     </div>
   );
 }
