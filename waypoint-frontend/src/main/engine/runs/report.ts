@@ -45,6 +45,14 @@ export const VERDICTS: readonly Verdict[] = [
 
 export interface Report {
   verdict: Verdict | null;
+  /**
+   * The message carried a real `## Summary` heading — the one signal that
+   * this turn was a report and not conversation that happened to mention
+   * a verdict (customer feedback round 1: a reply quoting the earlier
+   * `Verdict:` line was filed as a follow-up). A first report is filed
+   * either way (the brief's default verdict applies); a follow-up needs it.
+   */
+  hasSummaryHeading: boolean;
   /** The board-shaped part: what a ticket's readers need. */
   summary: string;
   /**
@@ -65,8 +73,11 @@ export const MAX_VERIFICATION_CHARS = 2_000;
 export const MAX_FALLBACK_SUMMARY_CHARS = 1_400;
 export const MAX_FALLBACK_SUMMARY_LINES = 14;
 
+// No `>` in the prefix: a blockquoted verdict line is a quotation of an
+// earlier report, never this turn's own declaration.
 const VERDICT_LINE =
-  /^\s*(?:[*_#>\-\s]*)verdict\s*[:—–-]\s*\**\s*([a-z][a-z' -]*[a-z])\**/i;
+  /^\s*(?:[*_#\-\s]*)verdict\s*[:—–-]\s*\**\s*([a-z][a-z' -]*[a-z])\**/i;
+const QUOTED = /^\s*>/;
 
 const VERDICT_WORDS: Array<[RegExp, Verdict]> = [
   [/^(root[- ]?cause|found|cause[- ]found|rca)$/i, 'root-cause'],
@@ -96,6 +107,7 @@ function stripVerdictLine(lines: string[]): {
   // The verdict line is expected first; tolerate it anywhere in the first
   // few lines (a model may open with a heading).
   for (let i = 0; i < Math.min(lines.length, 6); i += 1) {
+    if (QUOTED.test(lines[i])) continue;
     const m = VERDICT_LINE.exec(lines[i]);
     if (m) {
       const verdict = parseVerdictWord(m[1]);
@@ -179,7 +191,13 @@ function clip(
 export function parseReport(closing: string): Report {
   const raw = closing.replace(/\r\n/g, '\n').trim();
   if (!raw)
-    return { verdict: null, summary: '', verification: null, details: null };
+    return {
+      verdict: null,
+      hasSummaryHeading: false,
+      summary: '',
+      verification: null,
+      details: null,
+    };
   const { verdict, rest: afterVerdict } = stripVerdictLine(raw.split('\n'));
   const { verification, rest } = liftVerification(afterVerdict);
 
@@ -203,6 +221,7 @@ export function parseReport(closing: string): Report {
     const details = [...before, ...after].join('\n').trim();
     return {
       verdict,
+      hasSummaryHeading: true,
       summary,
       verification,
       details: details.length ? details : null,
@@ -222,6 +241,7 @@ export function parseReport(closing: string): Report {
     const details = rest.slice(cut).join('\n').trim();
     return {
       verdict,
+      hasSummaryHeading: false,
       summary: summary.text,
       verification,
       details: details.length ? details : null,
@@ -240,6 +260,7 @@ export function parseReport(closing: string): Report {
   );
   return {
     verdict,
+    hasSummaryHeading: false,
     summary: text,
     verification,
     details: clipped ? nonEmpty : null,

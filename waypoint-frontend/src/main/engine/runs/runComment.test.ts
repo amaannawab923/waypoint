@@ -151,6 +151,7 @@ describe('buildRunComment', () => {
     const long = buildRunComment({
       report: {
         verdict: 'fixed',
+        hasSummaryHeading: true,
         summary: 's',
         verification: 'v'.repeat(5000),
         details: null,
@@ -166,7 +167,13 @@ describe('buildRunComment', () => {
 
   it('no verdict, no summary: the facts and the footer alone', () => {
     const body = buildRunComment({
-      report: { verdict: null, summary: '', verification: null, details: null },
+      report: {
+        verdict: null,
+        hasSummaryHeading: false,
+        summary: '',
+        verification: null,
+        details: null,
+      },
       verdict: null,
       runLabel: 'r',
       work: null,

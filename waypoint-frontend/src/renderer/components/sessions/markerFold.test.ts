@@ -136,6 +136,23 @@ describe('deriveMarkers', () => {
     expect(recreated.text).toMatch(/worktree recreated on a fresh branch$/);
   });
 
+  it('a follow-up suppressed for lacking a Summary gets a line saying so', () => {
+    const [m] = deriveMarkers(
+      [
+        event(4, 'note', {
+          stage: 'finalize',
+          suppressed: 'verdict-without-summary',
+          afterTurnId: 't3',
+        }),
+      ],
+      'X',
+    );
+    expect(m).toMatchObject({
+      afterTurnId: 't3',
+      text: 'Waypoint · Verdict line found without a Summary — treated as conversation, nothing filed',
+    });
+  });
+
   it('unpublished commits and a superseded PR are notes worth a line; other notes and events are not', () => {
     const markers = deriveMarkers(
       [

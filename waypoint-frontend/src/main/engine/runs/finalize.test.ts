@@ -1295,9 +1295,7 @@ describe('W6: the branch is published before the proposals', () => {
   // session, and return — leaving the run at `finishing` forever, same
   // wedge as the follow-up path's identical failure.
   it('a failure writing needs-review does not wedge the first finalize at finishing — it becomes failed (revivable) instead', async () => {
-    const { ledger, rows } = fakeLedger(
-      run({ intent: 'investigate' }),
-    );
+    const { ledger, rows } = fakeLedger(run({ intent: 'investigate' }));
     const daemon = fakeDaemon({
       turns: [
         turn([
@@ -1467,6 +1465,63 @@ describe('follow-up finalize (a continued run)', () => {
         afterTurnId: 't1',
       }),
     );
+  });
+
+  it('a reply that quotes the old Verdict line, or names a verdict without a Summary heading, RESTS with a note the transcript shows — nothing filed (feedback round 1)', async () => {
+    const quoting = fakeLedger(filed());
+    const quotingDaemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: 'I\'m not sure what "line one" refers to. If you mean the first line of the filed report — it was:\n> Verdict: fixed\n\nPoint me at it.',
+          },
+        ]),
+      ],
+    });
+    const { deps } = depsWith(quoting.ledger, quotingDaemon, {
+      git: gitWith({}),
+      assertWorktreeGitDir: jest.fn(async () => {}),
+    });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+    expect(quoting.ledger.createRunProposal).not.toHaveBeenCalled();
+    expect(quoting.rows.get('run-abc1234')?.status).toBe('done');
+
+    // A bare verdict word with no `## Summary`: still conversation, and
+    // the note says so.
+    const bare = fakeLedger(filed());
+    const bareDaemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: 'Verdict: partial\nI only looked at the first file so far.',
+          },
+        ]),
+      ],
+    });
+    const second = depsWith(bare.ledger, bareDaemon, {
+      git: gitWith({}),
+      assertWorktreeGitDir: jest.fn(async () => {}),
+    });
+    await createRunFinalizer(second.deps).onSessionIdle('run-abc1234');
+    expect(bare.ledger.createRunProposal).not.toHaveBeenCalled();
+    expect(bare.ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'note',
+      expect.objectContaining({
+        stage: 'finalize',
+        suppressed: 'verdict-without-summary',
+        afterTurnId: 't1',
+      }),
+    );
+    expect(bare.rows.get('run-abc1234')).toMatchObject({
+      status: 'done',
+      verdict: 'fixed',
+      finalizeCount: 1,
+    });
   });
 
   it('an explicit report with new commits FILES a follow-up and PUBLISHES under the claim and the ticket lock; the verdict’s default is never applied', async () => {
