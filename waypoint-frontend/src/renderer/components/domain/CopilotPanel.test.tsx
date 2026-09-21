@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import {
@@ -109,6 +110,11 @@ jest.mock('./JiraTicketDrawer', () => ({
 
 type RunPromptHandlers = {
   onChunk: (text: string) => void;
+  onToolCall?: (event: {
+    toolId: string;
+    name: string;
+    status: 'running' | 'done' | 'error';
+  }) => void;
   // needsRepoLink is optional HERE only — the real preload bridge always
   // sends a boolean (it normalizes with `=== true`), but the vast majority
   // of these tests predate V3 and have nothing to say about it, so omitting
@@ -2469,11 +2475,24 @@ describe('sessions in the conversation (W5a)', () => {
             prUrl: null,
           },
         },
+        repo: {
+          displayPath: '~/waypoint-electron',
+          projectName: 'Waypoint Roadmap',
+          remembered: false,
+        },
       });
     });
     const card = await screen.findByText('Session on ROAD-116');
     expect(card.closest('[data-session-offer]')).toHaveTextContent(
       'Sessions anywhere',
+    );
+    // Fix 7 (feedback round 1): the folder, and what a verb does.
+    const offer = card.closest('[data-session-offer]')!;
+    expect(offer.querySelector('[data-offer-repo]')).toHaveTextContent(
+      /~\/waypoint-electron\s*· Waypoint Roadmap/,
+    );
+    expect(offer.querySelector('[data-offer-preview]')).toHaveTextContent(
+      'nothing starts until you press Start session.',
     );
     expect(
       card
@@ -2491,6 +2510,157 @@ describe('sessions in the conversation (W5a)', () => {
       intent: 'fix',
       mayChangeFiles: true,
     });
+  });
+
+  it('an offer with no known folder says the preview will ask, never nothing', async () => {
+    let pushOffer: ((offer: unknown) => void) | null = null;
+    (window as unknown as { electron: typeof window.electron }).electron = {
+      copilot: {
+        runPrompt: copilotIpc.runPrompt,
+        onSessionOffer: (cb: (offer: unknown) => void) => {
+          pushOffer = cb;
+          return () => {};
+        },
+      },
+      repo: { chooseFolder: chooseFolderMock },
+    } as unknown as typeof window.electron;
+    render(
+      <MemoryRouter>
+        <CopilotPanel onClose={jest.fn()} />
+      </MemoryRouter>,
+    );
+    await screen.findByText(/No sessions yet/i);
+    await createAndOpenSession();
+    act(() => {
+      pushOffer?.({
+        conversationId: store[0].id,
+        ticketId: 'tref-eng4',
+        identifier: 'ENG-4',
+        title: 'Retry loop',
+        intent: null,
+        note: null,
+        history: null,
+        repo: null,
+      });
+    });
+    const card = await screen.findByText('Session on ENG-4');
+    expect(
+      card.closest('[data-session-offer]')!.querySelector('[data-offer-repo]'),
+    ).toHaveTextContent('No folder yet — the preview asks for one.');
+  });
+});
+
+// Fix 7 (feedback round 1): Copilot ergonomics — a copy button on every
+// answer, and starter prompts in the empty state that fill the box
+// without sending.
+describe('Copilot ergonomics (feedback round 1)', () => {
+  it('every assistant answer has a Copy button that copies its markdown', async () => {
+    const writeText = jest.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    render(
+      <MemoryRouter>
+        <CopilotPanel onClose={jest.fn()} />
+      </MemoryRouter>,
+    );
+    await screen.findByText(/No sessions yet/i);
+    await createAndOpenSession();
+    await typeAndSend('Summarise the sprint');
+    await act(async () => {});
+    const handlers = await waitForRun('Summarise the sprint');
+    await act(async () => {
+      await handlers.onDone({
+        fullText: '## Sprint 13\n\n- 7 of 48 done',
+        sessionId: 'sess-1',
+      });
+    });
+    await screen.findByText('Sprint 13');
+
+    const copies = screen.getAllByRole('button', { name: 'Copy answer' });
+    // One per assistant answer; the person's own message has none.
+    expect(copies).toHaveLength(1);
+    fireEvent.click(copies[0]);
+    expect(writeText).toHaveBeenCalledWith('## Sprint 13\n\n- 7 of 48 done');
+    expect(await screen.findByText('Copied')).toBeInTheDocument();
+  });
+
+  it('tool calls show as live rows while the answer streams, then fold to one line', async () => {
+    render(
+      <MemoryRouter>
+        <CopilotPanel onClose={jest.fn()} />
+      </MemoryRouter>,
+    );
+    await screen.findByText(/No sessions yet/i);
+    await createAndOpenSession();
+    await typeAndSend("What's on my dashboard?");
+    await act(async () => {});
+    const handlers = await waitForRun("What's on my dashboard?");
+
+    act(() =>
+      handlers.onToolCall?.({
+        toolId: 'toolu_1',
+        name: 'mcp__waypoint_jira__list_jira_dashboards',
+        status: 'running',
+      }),
+    );
+    const rows = () => document.querySelectorAll('[data-tool-call]');
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0]).toHaveAttribute('data-tool-status', 'running');
+    expect(rows()[0]).toHaveTextContent('Listing dashboards');
+    expect(rows()[0]).toHaveTextContent('list_jira_dashboards');
+    expect(screen.getByText('Using a tool…')).toBeInTheDocument();
+
+    act(() =>
+      handlers.onToolCall?.({ toolId: 'toolu_1', name: '', status: 'done' }),
+    );
+    act(() =>
+      handlers.onToolCall?.({
+        toolId: 'toolu_2',
+        name: 'mcp__waypoint_jira__search_dashboard_gadget_issues',
+        status: 'running',
+      }),
+    );
+    expect(rows()).toHaveLength(2);
+    expect(rows()[0]).toHaveAttribute('data-tool-status', 'done');
+    expect(rows()[1]).toHaveTextContent('Querying your dashboard');
+    act(() =>
+      handlers.onToolCall?.({ toolId: 'toolu_2', name: '', status: 'error' }),
+    );
+
+    await act(async () => {
+      await handlers.onDone({ fullText: 'Two gadgets.', sessionId: 'sess-1' });
+    });
+    await screen.findByText('Two gadgets.');
+    // Folded: the process was worth watching, not worth keeping in front
+    // of the answer. A click reopens it.
+    expect(rows()).toHaveLength(0);
+    const fold = screen.getByRole('button', {
+      name: /Used 2 tools · 1 failed/,
+    });
+    fireEvent.click(fold);
+    expect(rows()).toHaveLength(2);
+    expect(rows()[1]).toHaveAttribute('data-tool-status', 'error');
+  });
+
+  it('the empty state offers exactly three starter prompts; one click fills the box and sends nothing', async () => {
+    render(
+      <MemoryRouter>
+        <CopilotPanel onClose={jest.fn()} />
+      </MemoryRouter>,
+    );
+    await screen.findByText(/No sessions yet/i);
+    await createAndOpenSession();
+    await screen.findByText(/Ask Copilot anything/i);
+    const chips = within(
+      document.querySelector('[data-starter-prompts]') as HTMLElement,
+    ).getAllByRole('button');
+    expect(chips.map((c) => c.textContent)).toEqual([
+      "What's on my scrum master's dashboard?",
+      'Which of my assigned bugs are Highest priority and stale?',
+      'Give me a Slack-ready sprint summary',
+    ]);
+    fireEvent.click(chips[2]);
+    expect(getTextarea()).toHaveValue('Give me a Slack-ready sprint summary');
+    expect(copilotIpc.runPrompt).not.toHaveBeenCalled();
   });
 });
 

@@ -3,8 +3,21 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { clsx } from 'clsx';
-import { ArrowLeft, FolderGit2, Loader2, Send, Square } from 'lucide-react';
-import { IconPlus, IconSparkles, IconX } from '@/components/icons';
+import {
+  ArrowLeft,
+  Copy,
+  FolderGit2,
+  Loader2,
+  Send,
+  Square,
+} from 'lucide-react';
+import {
+  IconCheck,
+  IconFolder,
+  IconPlus,
+  IconSparkles,
+  IconX,
+} from '@/components/icons';
 import {
   listTickets,
   markCopilotNotesDelivered,
@@ -103,6 +116,13 @@ function NoteLine({
   );
 }
 
+/** Fix 7: the empty state's three asks — each proven to work in feedback round 1. */
+export const STARTER_PROMPTS = [
+  "What's on my scrum master's dashboard?",
+  'Which of my assigned bugs are Highest priority and stale?',
+  'Give me a Slack-ready sprint summary',
+] as const;
+
 // W5a: what dispatch_session hands the renderer (main/copilot/sessionTools.ts).
 interface CopilotSessionOffer {
   conversationId: string;
@@ -113,6 +133,12 @@ interface CopilotSessionOffer {
   note: string | null;
   /** W5c: the ticket's earlier runs, when it has any. */
   history?: SessionOfferHistory | null;
+  /** Fix 7: where the session would work; null when no folder is linked or remembered yet. */
+  repo?: {
+    displayPath: string;
+    projectName: string | null;
+    remembered: boolean;
+  } | null;
 }
 
 /** "2 earlier runs · latest: Fix, needs review, verdict: not a bug" */
@@ -166,6 +192,38 @@ function SessionOfferCard({
             Session on {offer.identifier}
           </div>
           <div className="truncate text-text">{offer.title}</div>
+          {/* Fix 7 (feedback round 1): the folder the session would work
+              in, and what pressing a verb does — the model used to say
+              "press Start" for a button that does not exist. */}
+          <div
+            className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-text-secondary"
+            data-offer-repo
+          >
+            <IconFolder size={11} className="shrink-0 text-text-muted" />
+            {offer.repo ? (
+              <>
+                <span className="truncate font-mono">
+                  {offer.repo.displayPath}
+                </span>
+                {offer.repo.projectName && (
+                  <span className="shrink-0 text-text-muted">
+                    · {offer.repo.projectName}
+                  </span>
+                )}
+                {offer.repo.remembered && (
+                  <span className="shrink-0 text-text-muted">· remembered</span>
+                )}
+              </>
+            ) : (
+              <span className="text-text-muted">
+                No folder yet — the preview asks for one.
+              </span>
+            )}
+          </div>
+          <div className="mt-1 text-xs text-text-muted" data-offer-preview>
+            Each verb opens a preview first — nothing starts until you press{' '}
+            <b className="font-medium text-text-secondary">Start session</b>.
+          </div>
           {offer.note && (
             <div className="mt-1 text-xs text-text-secondary">{offer.note}</div>
           )}
@@ -211,7 +269,7 @@ function MessageBubble({
   return (
     <div
       className={clsx(
-        'flex flex-col gap-1',
+        'group/bubble flex flex-col gap-1',
         message.role === 'user' ? 'items-end' : 'items-start',
       )}
     >
@@ -224,7 +282,51 @@ function MessageBubble({
         )}
         dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }}
       />
+      {/* Fix 7 (feedback round 1): every answer can be copied — as the
+          markdown it was written in, so headings and lists survive a
+          paste into Slack or a doc. Hover-only: an answer is read before
+          it is copied, unlike a command in a terminal row. */}
+      {message.role === 'assistant' && (
+        <CopyAnswerButton markdown={message.content} />
+      )}
     </div>
+  );
+}
+
+function CopyAnswerButton({ markdown }: { markdown: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return undefined;
+    const id = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(id);
+  }, [copied]);
+  return (
+    <button
+      type="button"
+      aria-label="Copy answer"
+      title="Copy as markdown"
+      data-copy-answer
+      onClick={() => {
+        navigator.clipboard
+          .writeText(markdown)
+          .then(() => setCopied(true))
+          .catch(() => showErrorToast('Could not copy the answer.'));
+      }}
+      className={clsx(
+        'flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-text-muted transition-opacity hover:bg-surface-2 hover:text-text focus-visible:opacity-100',
+        copied ? 'opacity-100' : 'opacity-0 group-hover/bubble:opacity-100',
+      )}
+    >
+      {copied ? (
+        <>
+          <IconCheck size={11} /> Copied
+        </>
+      ) : (
+        <>
+          <Copy size={11} /> Copy
+        </>
+      )}
+    </button>
   );
 }
 
@@ -235,6 +337,121 @@ function MessageBubble({
 // once real text starts arriving. prefers-reduced-motion swaps the bounce
 // for a plain static dim, matching this app's existing @media
 // (prefers-reduced-motion: reduce) convention (see index.css).
+/** One tool the model called during a reply, as the panel tracks it. */
+interface CopilotToolCall {
+  id: string;
+  name: string;
+  status: 'running' | 'done' | 'error';
+}
+
+/**
+ * What each of Copilot's tools is doing, in a person's words (Fix 7).
+ * Keyed by the tool's bare name — an MCP id `mcp__<server>__<tool>` is
+ * reduced to `<tool>` first. Anything not listed shows its name.
+ */
+export const TOOL_LABELS: Record<string, string> = {
+  search_dashboard_gadget_issues: 'Querying your dashboard',
+  list_jira_dashboards: 'Listing dashboards',
+  describe_jira_dashboard: "Reading a dashboard's gadgets",
+  get_run: "Reading a run's report",
+  dispatch_session: 'Offering a session',
+  open_pull_request: 'Opening a pull request',
+  propose_comment: 'Drafting a comment',
+  propose_state_change: 'Drafting a state change',
+  search_jira_issues: 'Searching Jira',
+  get_jira_issue: 'Reading an issue',
+  list_my_jira_issues: 'Listing your issues',
+  Read: 'Reading a file',
+  Grep: 'Searching the code',
+  Glob: 'Finding files',
+  Bash: 'Running a command',
+  WebFetch: 'Fetching a page',
+  WebSearch: 'Searching the web',
+};
+
+/** `mcp__waypoint_jira__get_jira_issue` → `get_jira_issue`. */
+export function bareToolName(name: string): string {
+  const m = /^mcp__[^_].*?__(.+)$/.exec(name);
+  return m ? m[1] : name;
+}
+
+export function toolLabel(name: string): string {
+  return TOOL_LABELS[bareToolName(name)] ?? bareToolName(name);
+}
+
+/**
+ * The tools a reply calls, shown as they happen: a row per call, the
+ * name in mono and what it is doing in words, a tick once it returns.
+ * When the answer has finished they fold to one "Used N tools" line —
+ * the process was worth watching, not worth keeping in front of the
+ * answer — and open again on a click.
+ */
+function ToolCallRows({
+  tools,
+  live,
+}: {
+  tools: CopilotToolCall[];
+  live: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const expanded = live || open;
+  const running = tools.filter((t) => t.status === 'running').length;
+  const failed = tools.filter((t) => t.status === 'error').length;
+  return (
+    <div className="flex max-w-[85%] flex-col gap-0.5" data-tool-calls>
+      <button
+        type="button"
+        aria-expanded={expanded}
+        disabled={live}
+        onClick={() => setOpen((o) => !o)}
+        className={clsx(
+          'self-start rounded px-1 text-[11px] text-text-muted',
+          !live && 'hover:bg-surface-2 hover:text-text',
+        )}
+      >
+        {live
+          ? running > 0
+            ? `Using ${tools.length === 1 ? 'a tool' : `${tools.length} tools`}…`
+            : `Used ${tools.length === 1 ? '1 tool' : `${tools.length} tools`}`
+          : `Used ${tools.length === 1 ? '1 tool' : `${tools.length} tools`}${
+              failed ? ` · ${failed} failed` : ''
+            } ${open ? '▴' : '▾'}`}
+      </button>
+      {expanded &&
+        tools.map((tool) => (
+          <div
+            key={tool.id}
+            data-tool-call
+            data-tool-status={tool.status}
+            className="flex items-center gap-2 px-1 text-[11.5px] text-text-secondary"
+          >
+            <span
+              aria-hidden="true"
+              className={clsx(
+                'inline-flex size-3 shrink-0 items-center justify-center',
+                tool.status === 'running' && 'text-info',
+                tool.status === 'done' && 'text-success',
+                tool.status === 'error' && 'text-danger',
+              )}
+            >
+              {tool.status === 'running' ? (
+                <Loader2 size={11} className="animate-spin" />
+              ) : tool.status === 'done' ? (
+                <IconCheck size={11} />
+              ) : (
+                <IconX size={11} />
+              )}
+            </span>
+            <span className="truncate">{toolLabel(tool.name)}</span>
+            <span className="truncate font-mono text-[10.5px] text-text-muted">
+              {bareToolName(tool.name)}
+            </span>
+          </div>
+        ))}
+    </div>
+  );
+}
+
 function TypingIndicator() {
   return (
     <div className="flex flex-col items-start gap-1">
@@ -338,12 +555,15 @@ function CopilotRepoLinkCard({
 function Composer({
   disabled,
   isStreaming,
+  prefill = null,
   onSend,
   onStop,
   onSlash,
   tickets,
 }: {
   disabled: boolean;
+  /** Text to put in the box (a starter prompt); `nonce` changes per click so the same text fills twice. */
+  prefill?: { text: string; nonce: number } | null;
   /** A reply is currently streaming — distinct from `sending` below (which
    * only covers the synchronous send/slash await): this is what swaps Send
    * for Stop and shows the "Copilot is working…" indicator. */
@@ -360,6 +580,18 @@ function Composer({
   const [slashError, setSlashError] = useState<string | null>(null);
   const [highlight, setHighlight] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // A starter prompt fills the box and puts the caret at its end — it
+  // never sends; that stays the person's own keypress.
+  useEffect(() => {
+    if (!prefill) return;
+    setValue(prefill.text);
+    const el = textareaRef.current;
+    if (el) {
+      el.focus();
+      el.setSelectionRange(prefill.text.length, prefill.text.length);
+    }
+  }, [prefill]);
 
   // Auto-grow: the textarea has no intrinsic sense of its own content height
   // (rows={1} pins it to one line), so pasting or typing a long message just
@@ -630,6 +862,11 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
   // "its history is on screen" that wasn't there when everything lived in
   // localStorage.
   const [loadingMessages, setLoadingMessages] = useState(false);
+  // Fix 7: a starter prompt chip hands its text to the composer.
+  const [prefill, setPrefill] = useState<{
+    text: string;
+    nonce: number;
+  } | null>(null);
   // Set when a session's lazy message fetch (openSession) fails — distinct
   // from a genuinely empty conversation, so a failed load shows a real error
   // with a retry instead of silently rendering as "Ask Copilot anything",
@@ -649,6 +886,14 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
   const [streaming, setStreaming] = useState<{
     sessionId: string;
     text: string;
+  } | null>(null);
+  // Fix 7 (feedback round 1): the tools the current (or last) reply
+  // called, in order — live rows while the answer streams, one folded
+  // "Used N tools" line after. Tagged with the session like `streaming`;
+  // cleared by the next send in that session, never persisted.
+  const [toolCalls, setToolCalls] = useState<{
+    sessionId: string;
+    tools: CopilotToolCall[];
   } | null>(null);
   // `kind` drives the run-error UI: 'auth_failed' gets the real "Connect
   // your Claude subscription" action; 'save_failed' means the reply itself
@@ -1092,6 +1337,7 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
     clearStreamBuffer();
     streamBufferRef.current = { sessionId, text: '' };
     setStreaming({ sessionId, text: '' });
+    setToolCalls({ sessionId, tools: [] });
     setRunError(null);
     setLastFailedPrompt(null);
     setPendingAssistantReply(null);
@@ -1126,6 +1372,37 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
             onRequestId: (id) => {
               requestIdForThisRun = id;
               requestIdBySessionRef.current.set(sessionId, id);
+            },
+            onToolCall: (event) => {
+              if (isStale()) return;
+              setToolCalls((prev) => {
+                const tools = prev?.sessionId === sessionId ? prev.tools : [];
+                const known = tools.find((t) => t.id === event.toolId);
+                if (event.status === 'running') {
+                  return known
+                    ? prev
+                    : {
+                        sessionId,
+                        tools: [
+                          ...tools,
+                          {
+                            id: event.toolId,
+                            name: event.name,
+                            status: 'running',
+                          },
+                        ],
+                      };
+                }
+                // A result for a call this reply never announced (a
+                // reconnect mid-turn) is nothing to draw.
+                if (!known) return prev;
+                return {
+                  sessionId,
+                  tools: tools.map((t) =>
+                    t.id === event.toolId ? { ...t, status: event.status } : t,
+                  ),
+                };
+              });
             },
             onChunk: (text) => {
               if (isStale()) return;
@@ -1724,9 +2001,31 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
               </div>
             )}
             {isEmpty && (
-              <p className="mt-6 text-center text-sm text-text-muted">
-                Ask Copilot anything — it can help with your tickets.
-              </p>
+              <div className="mt-6 flex flex-col items-center gap-3">
+                <p className="text-center text-sm text-text-muted">
+                  Ask Copilot anything — it can help with your tickets.
+                </p>
+                {/* Fix 7 (feedback round 1): three real, working asks.
+                    Each fills the box; nothing is sent until the person
+                    sends it. */}
+                <div
+                  className="flex flex-wrap justify-center gap-1.5"
+                  data-starter-prompts
+                >
+                  {STARTER_PROMPTS.map((prompt) => (
+                    <button
+                      key={prompt}
+                      type="button"
+                      onClick={() =>
+                        setPrefill({ text: prompt, nonce: Date.now() })
+                      }
+                      className="rounded-full border border-border bg-surface px-3 py-1 text-xs text-text-secondary hover:border-border-strong hover:text-text"
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+              </div>
             )}
             <div className="flex flex-col gap-3">
               {transcriptEntries.map((entry) =>
@@ -1770,6 +2069,14 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
                   }
                 />
               ))}
+              {toolCalls &&
+                toolCalls.sessionId === activeSessionId &&
+                toolCalls.tools.length > 0 && (
+                  <ToolCallRows
+                    tools={toolCalls.tools}
+                    live={isStreamingHere}
+                  />
+                )}
               {isStreamingHere &&
                 (streaming?.text ? (
                   <MessageBubble
@@ -1820,6 +2127,7 @@ export function CopilotPanel({ onClose }: { onClose: () => void }) {
           <Composer
             disabled={isStreamingHere}
             isStreaming={isStreamingHere}
+            prefill={prefill}
             onSend={handleSend}
             onStop={() => activeSessionId && stopStreaming(activeSessionId)}
             {...(SESSIONS_ENABLED

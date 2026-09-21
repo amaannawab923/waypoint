@@ -89,8 +89,11 @@ export type CopilotErrorKind = 'binary_not_found' | 'auth_failed' | 'generic';
 
 interface CopilotStreamPayload {
   requestId: string;
-  type: 'chunk' | 'done' | 'error';
+  type: 'chunk' | 'tool' | 'done' | 'error';
   text?: string;
+  toolId?: string;
+  name?: string;
+  status?: 'running' | 'done' | 'error';
   fullText?: string;
   sessionId?: string | null;
   needsRepoLink?: boolean;
@@ -142,6 +145,12 @@ const electronHandler = {
       },
       handlers: {
         onChunk: (text: string) => void;
+        /** Fix 7: a tool call starting or finishing during the reply — optional; a caller with no rows ignores it. */
+        onToolCall?: (event: {
+          toolId: string;
+          name: string;
+          status: 'running' | 'done' | 'error';
+        }) => void;
         onDone: (result: {
           fullText: string;
           sessionId: string | null;
@@ -167,6 +176,19 @@ const electronHandler = {
         if (payload.requestId !== requestId) return;
         if (payload.type === 'chunk' && typeof payload.text === 'string') {
           handlers.onChunk(payload.text);
+          return;
+        }
+        if (
+          payload.type === 'tool' &&
+          typeof payload.toolId === 'string' &&
+          typeof payload.name === 'string' &&
+          payload.status
+        ) {
+          handlers.onToolCall?.({
+            toolId: payload.toolId,
+            name: payload.name,
+            status: payload.status,
+          });
           return;
         }
         // done/error are terminal — this run will never emit anything else

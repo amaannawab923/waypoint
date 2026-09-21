@@ -21,6 +21,10 @@ export type ParsedStreamEvent =
     }
   | { kind: 'result_error'; message: string; sessionId: string | null }
   | { kind: 'auth_error'; message: string }
+  /** Fix 7: a tool the model called, as it starts — the renderer shows a live row. */
+  | { kind: 'tool_call'; toolId: string; name: string }
+  /** The result of that call came back; `isError` when the tool refused or failed. */
+  | { kind: 'tool_done'; toolId: string; isError: boolean }
   | { kind: 'ignored' };
 
 // Copilot V3's structural "I needed code I don't have" signal. The model is
@@ -86,6 +90,47 @@ export function parseSdkMessage(message: SDKMessage): ParsedStreamEvent {
       inner.delta.type === 'text_delta'
     ) {
       return { kind: 'text_delta', text: inner.delta.text };
+    }
+    if (
+      inner.type === 'content_block_start' &&
+      inner.content_block.type === 'tool_use'
+    ) {
+      return {
+        kind: 'tool_call',
+        toolId: inner.content_block.id,
+        name: inner.content_block.name,
+      };
+    }
+    return { kind: 'ignored' };
+  }
+
+  // A tool's result rides back on a user-role message: one tool_result
+  // block per call, naming the call it answers. Only the first is read —
+  // the SDK sends one block per message today; a second would be the
+  // same event twice, which the renderer's keyed map already tolerates.
+  if (message.type === 'user') {
+    const content = message.message?.content;
+    if (Array.isArray(content)) {
+      const result = content.find(
+        (
+          block,
+        ): block is {
+          type: 'tool_result';
+          tool_use_id: string;
+          is_error?: boolean;
+        } =>
+          typeof block === 'object' &&
+          block !== null &&
+          (block as { type?: unknown }).type === 'tool_result' &&
+          typeof (block as { tool_use_id?: unknown }).tool_use_id === 'string',
+      );
+      if (result) {
+        return {
+          kind: 'tool_done',
+          toolId: result.tool_use_id,
+          isError: result.is_error === true,
+        };
+      }
     }
     return { kind: 'ignored' };
   }
