@@ -373,7 +373,7 @@ export function useSessionTranscript(
     () => false,
   );
   // Prompts the daemon holds for the agent's next turn (W4, ROAD-68): a
-  // ⌘↵ during a turn lands here, not in the transcript, until the turn
+  // Enter during a turn lands here, not in the transcript, until the turn
   // ends — the strip says so.
   const queuedCount = useSyncExternalStore(
     unit ? (l) => unit.source.sessionState.subscribe(l) : noop,

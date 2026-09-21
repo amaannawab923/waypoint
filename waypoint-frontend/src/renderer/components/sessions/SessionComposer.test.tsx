@@ -9,7 +9,7 @@ import {
 } from './SessionComposer';
 
 describe('SessionComposer', () => {
-  it('sends the trimmed text on ⌘Enter and clears; plain Enter stays a newline', async () => {
+  it('sends the trimmed text on Enter and clears; Shift+Enter and a composing Enter stay newlines', async () => {
     const onSend = jest.fn(async () => {});
     render(
       <SessionComposer
@@ -20,13 +20,35 @@ describe('SessionComposer', () => {
     );
     const box = screen.getByLabelText('Message this session');
     fireEvent.change(box, { target: { value: '  Run the tests  ' } });
-    fireEvent.keyDown(box, { key: 'Enter' });
+    fireEvent.keyDown(box, { key: 'Enter', shiftKey: true });
+    fireEvent.keyDown(box, { key: 'Enter', isComposing: true });
     expect(onSend).not.toHaveBeenCalled();
     await act(async () => {
-      fireEvent.keyDown(box, { key: 'Enter', metaKey: true });
+      fireEvent.keyDown(box, { key: 'Enter' });
     });
     expect(onSend).toHaveBeenCalledWith('Run the tests');
     expect(box).toHaveValue('');
+  });
+
+  it('still sends on ⌘Enter and Ctrl+Enter', async () => {
+    const onSend = jest.fn<Promise<void>, [string]>(async () => {});
+    render(
+      <SessionComposer
+        onSend={onSend}
+        sendBlockedReason={null}
+        attachedToBand={false}
+      />,
+    );
+    const box = screen.getByLabelText('Message this session');
+    fireEvent.change(box, { target: { value: 'one' } });
+    await act(async () => {
+      fireEvent.keyDown(box, { key: 'Enter', metaKey: true });
+    });
+    fireEvent.change(box, { target: { value: 'two' } });
+    await act(async () => {
+      fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true });
+    });
+    expect(onSend.mock.calls.map((c) => c[0])).toEqual(['one', 'two']);
   });
 
   it('keeps the text when sending fails, and never sends blank text', async () => {

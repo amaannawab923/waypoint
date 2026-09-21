@@ -4,9 +4,12 @@ import { IconSend } from '@/components/icons';
 
 /**
  * The message box under the transcript (W3, ROAD-62). Text only —
- * attachments are not in W3's allowlist. `⌘Enter` (or Ctrl+Enter) sends;
- * plain Enter is a newline, since a prompt to an agent is usually more
- * than one line.
+ * attachments are not in W3's allowlist. Enter sends; Shift+Enter is a
+ * newline (⌘/Ctrl+Enter still send, for hands used to that). It was the
+ * other way round until 2026-09-21 — the founder kept pressing Enter and
+ * nothing happened, which is how every chat box people already know
+ * behaves. An IME composition's Enter (picking a candidate) is left to
+ * the IME.
  *
  * Never-lock (2026-09-20; emdash parity): the box is NEVER disabled. A
  * person can always type into a run — done, needs-review, failed,
@@ -183,10 +186,9 @@ export function SessionComposer({
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      send().catch(() => {});
-    }
+    if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
+    e.preventDefault();
+    send().catch(() => {});
   };
 
   return (
@@ -208,7 +210,7 @@ export function SessionComposer({
           sendBlockedReason ??
           (sending ? sendingLabel : undefined) ??
           placeholder ??
-          'Message this session…  (⌘↵ to send)'
+          'Message this session…  (↵ to send, ⇧↵ for a new line)'
         }
         aria-label="Message this session"
         rows={Math.min(6, Math.max(1, text.split('\n').length))}

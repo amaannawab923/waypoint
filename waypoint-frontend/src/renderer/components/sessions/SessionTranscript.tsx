@@ -325,15 +325,15 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
   let placeholder: string | undefined;
   let sendingLabel = 'Sending…';
   if (isGenerating)
-    placeholder = 'Add a follow-up…  (⌘↵ queues it for the next turn)';
+    placeholder = 'Add a follow-up…  (↵ queues it for the next turn)';
   else if (run.status === 'queued' || run.status === 'provisioning')
     placeholder =
-      'Starting the session… your message goes with it  (⌘↵ to send)';
+      'Starting the session… your message goes with it  (↵ to send)';
   else if (run.status === 'finishing')
-    placeholder = 'Filing the report… your message goes next  (⌘↵ to send)';
-  else if (warming) placeholder = 'Connecting… you can type  (⌘↵ to send)';
+    placeholder = 'Filing the report… your message goes next  (↵ to send)';
+  else if (warming) placeholder = 'Connecting… you can type  (↵ to send)';
   else if (!status.live) {
-    placeholder = 'Message this session to continue it…  (⌘↵ to send)';
+    placeholder = 'Message this session to continue it…  (↵ to send)';
     sendingLabel = 'Resuming…';
   }
 
