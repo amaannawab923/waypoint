@@ -203,6 +203,16 @@ describe('registerTopicsIpc', () => {
     expect(
       isAllowedTopic('acp.session.activeTurn|{"conversationId":"conv-1"}'),
     ).toBe(false);
+    // The composer's selectors follow the session's config; draft and
+    // terminals stay out of reach.
+    expect(
+      isAllowedTopic(
+        liveTopic('acp.session.config', { conversationId: 'run-abc1234' }),
+      ),
+    ).toBe(true);
+    expect(
+      isAllowedTopic('acp.session.draft|{"conversationId":"run-abc1234"}'),
+    ).toBe(false);
     expect(
       isAllowedTopic('acp.session.secrets|{"conversationId":"run-abc1234"}'),
     ).toBe(false);
@@ -426,7 +436,16 @@ describe('registerTopicsIpc', () => {
     await invoke(ENGINE_IPC.call, 'acp.cancelTurn', {
       conversationId: 'run-abc1234',
     });
-    expect(daemon.client.call).toHaveBeenCalledTimes(4);
+    await invoke(ENGINE_IPC.call, 'acp.setModeOption', {
+      conversationId: 'run-abc1234',
+      value: 'default',
+    });
+    await invoke(ENGINE_IPC.call, 'acp.setModelOption', {
+      conversationId: 'run-abc1234',
+      dimension: 'model',
+      value: 'claude-sonnet-5',
+    });
+    expect(daemon.client.call).toHaveBeenCalledTimes(6);
 
     const refused: Array<[string, unknown]> = [
       // Not one of our runs.
@@ -479,6 +498,17 @@ describe('registerTopicsIpc', () => {
       ],
       ['acp.cancelTurn', { conversationId: 'run-abc1234', force: true }],
       ['acp.cancelTurn', { conversationId: 'conv-1' }],
+      ['acp.setModeOption', { conversationId: 'run-abc1234', value: '' }],
+      ['acp.setModeOption', { conversationId: 'conv-1', value: 'default' }],
+      [
+        'acp.setModeOption',
+        { conversationId: 'run-abc1234', value: 'default', extra: 1 },
+      ],
+      [
+        'acp.setModelOption',
+        { conversationId: 'run-abc1234', dimension: 'mode', value: 'x' },
+      ],
+      ['acp.setModelOption', { conversationId: 'run-abc1234', value: 'x' }],
     ];
     for (const [procedure, input] of refused) {
       await expect(invoke(ENGINE_IPC.call, procedure, input)).rejects.toThrow(
@@ -500,12 +530,13 @@ describe('registerTopicsIpc', () => {
         `Procedure is not available to the renderer: ${name}`,
       );
     }
-    expect(daemon.client.call).toHaveBeenCalledTimes(4);
+    expect(daemon.client.call).toHaveBeenCalledTimes(6);
     // sendPrompt spans the agent's turn: no deadline; the others have one.
     const { calls } = (daemon.client.call as jest.Mock).mock;
     expect(calls[0][2]).toBeUndefined();
-    expect(calls[2][2]).toEqual({ timeoutMs: 30_000 });
-    expect(calls[3][2]).toEqual({ timeoutMs: 30_000 });
+    [2, 3, 4, 5].forEach((i) => {
+      expect(calls[i][2]).toEqual({ timeoutMs: 30_000 });
+    });
   });
 
   it('an update the client replays inside the snapshot tick reaches the renderer (the attachment is registered before the attach answers)', async () => {

@@ -352,3 +352,24 @@ export function resolvePermission(
 export function cancelTurn(runId: string): Promise<void> {
   return callEngineFallible<void>('acp.cancelTurn', { conversationId: runId });
 }
+
+/** Switches the session's mode (its permission policy — `default`, `bypassPermissions`, …) to one its `config` state offers. */
+export function setSessionMode(runId: string, modeId: string): Promise<void> {
+  return callEngineFallible<void>('acp.setModeOption', {
+    conversationId: runId,
+    value: modeId,
+  });
+}
+
+/** Switches the session's model or effort to one its `config` state offers. */
+export function setSessionModelOption(
+  runId: string,
+  dimension: 'model' | 'effort',
+  value: string,
+): Promise<void> {
+  return callEngineFallible<void>('acp.setModelOption', {
+    conversationId: runId,
+    dimension,
+    value,
+  });
+}

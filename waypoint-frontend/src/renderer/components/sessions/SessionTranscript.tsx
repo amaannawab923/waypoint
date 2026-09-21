@@ -15,6 +15,8 @@ import {
   resolvePermission,
   retryPendingPrompt,
   sendPrompt,
+  setSessionMode,
+  setSessionModelOption,
   warmRun,
 } from '@/data/engineApi';
 import { refreshSessions, useSessionsSnapshot } from '@/lib/sessionsStore';
@@ -183,6 +185,7 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
     hasActiveTurn,
     pendingPermissions,
     usage,
+    config,
     liveStatus,
     isGenerating,
     queuedCount,
@@ -589,6 +592,38 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
         autoFocus
         placeholder={placeholder}
         sendingLabel={sendingLabel}
+        generating={isGenerating}
+        onStop={commands.onStop}
+        config={config}
+        onSetMode={(modeId) => {
+          setSessionMode(run.id, modeId).catch((error: unknown) =>
+            showErrorToast(
+              error instanceof Error
+                ? error.message
+                : 'The mode was not changed.',
+            ),
+          );
+        }}
+        onSetModel={(modelId) => {
+          setSessionModelOption(run.id, 'model', modelId).catch(
+            (error: unknown) =>
+              showErrorToast(
+                error instanceof Error
+                  ? error.message
+                  : 'The model was not changed.',
+              ),
+          );
+        }}
+        onSetEffort={(effortId) => {
+          setSessionModelOption(run.id, 'effort', effortId).catch(
+            (error: unknown) =>
+              showErrorToast(
+                error instanceof Error
+                  ? error.message
+                  : 'The effort was not changed.',
+              ),
+          );
+        }}
       />
     </>
   );

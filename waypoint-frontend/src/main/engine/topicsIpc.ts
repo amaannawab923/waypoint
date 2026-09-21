@@ -173,6 +173,8 @@ export const CALL_DEADLINES_MS: Record<string, number | undefined> = {
   'acp.getHistory': 30_000,
   'acp.resolvePermission': 30_000,
   'acp.cancelTurn': 30_000,
+  'acp.setModeOption': 30_000,
+  'acp.setModelOption': 30_000,
   'acp.sendPrompt': undefined,
 };
 

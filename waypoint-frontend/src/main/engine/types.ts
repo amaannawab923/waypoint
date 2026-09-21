@@ -1051,17 +1051,20 @@ const RUN_CONVERSATION = /^run-[A-Za-z0-9]{1,64}$/;
  */
 const ALLOWED_KEYLESS_TOPICS = new Set(['workspaceRegistry.records.list']);
 /**
- * Per-session states of `acp.session` the renderer may follow — the four
- * the panel reads (transcript, plan, pending permissions, usage). The
- * daemon also publishes config/agents/draft/terminals/mcpServers; nothing
- * in the renderer follows them, so they are not reachable (least
- * privilege, security round 1). Add here when a panel feature needs one.
+ * Per-session states of `acp.session` the renderer may follow — the five
+ * the panel reads (transcript, plan, pending permissions, usage, and
+ * `config`: the provider's mode / model / effort options, for the
+ * composer's selectors). The daemon also publishes
+ * agents/draft/terminals/mcpServers; nothing in the renderer follows them,
+ * so they are not reachable (least privilege, security round 1). Add here
+ * when a panel feature needs one.
  */
 const ALLOWED_SESSION_STATES = new Set([
   'state',
   'usage',
   'plan',
   'activeTurn',
+  'config',
 ]);
 
 /**
@@ -1145,4 +1148,28 @@ export const ALLOWED_PROCEDURES: Record<string, (input: unknown) => boolean> = {
   },
   'acp.cancelTurn': (input) =>
     isRunInput(input) && Object.keys(input).length === 1,
+  // The composer's selectors: a mode (permission policy) or a model /
+  // effort the session's own `config` state advertised. One id each; the
+  // daemon refuses one the provider does not offer.
+  'acp.setModeOption': (input) => {
+    if (!isRunInput(input)) return false;
+    const { value, ...rest } = input as {
+      conversationId: string;
+      value?: unknown;
+    };
+    return Object.keys(rest).length === 1 && isNonEmptyString(value);
+  },
+  'acp.setModelOption': (input) => {
+    if (!isRunInput(input)) return false;
+    const { dimension, value, ...rest } = input as {
+      conversationId: string;
+      dimension?: unknown;
+      value?: unknown;
+    };
+    return (
+      Object.keys(rest).length === 1 &&
+      (dimension === 'model' || dimension === 'effort') &&
+      isNonEmptyString(value)
+    );
+  },
 };
