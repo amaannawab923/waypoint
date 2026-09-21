@@ -18,6 +18,7 @@ import { isDispatchedWriter } from './agentEnv';
 import {
   describeRunTicket,
   pickClosingTransition,
+  pickCompletionTransition,
   pickReviewTransition,
   type JiraRunDeps,
 } from './jiraRuns';
@@ -212,17 +213,60 @@ export function pickClosingState(states: LedgerState[]): LedgerState | null {
   );
 }
 
+/** A native state name that says the work is done. */
+const COMPLETION_STATE_NAME = /done|complete|resolved|shipped|released/i;
+
+/**
+ * The state a `delivered` verdict proposes (customer feedback round 1: a
+ * feature the session found already built was proposed Cancelled): a
+ * `completed`-group state named for it when the project has one, else
+ * the last `completed`-group state. Null when the project has no
+ * completed group; the caller falls back to the closing state and says so.
+ */
+export function pickCompletionState(states: LedgerState[]): LedgerState | null {
+  const byOrder = [...states]
+    .filter((s) => s.group === 'completed')
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+  return (
+    byOrder.find((s) => COMPLETION_STATE_NAME.test(s.name)) ??
+    byOrder[byOrder.length - 1] ??
+    null
+  );
+}
+
 /**
  * Which state change a finished run proposes, from its verb and its
  * verdict: a Fix that is fixed or partial → the review state (as W5a); a
- * closing verdict on Investigate or Fix → the closing state; anything
- * else (a root cause found, needs a decision, *Something else…*) → none.
+ * closing verdict on Investigate or Fix → the closing state; `delivered`
+ * → the completion state (done, never cancelled); anything else (a root
+ * cause found, needs a decision, *Something else…*) → none.
  */
+export type StatePlan = 'review' | 'close' | 'complete';
+
+/**
+ * The native state a plan lands on. A `complete` plan on a project with no
+ * completed group falls back to the closing state — with `substituted`
+ * set, so the caller can say so in a note rather than silently file
+ * Cancelled for something that shipped.
+ */
+export function pickPlannedState(
+  states: LedgerState[],
+  plan: StatePlan,
+): { state: LedgerState | null; substituted: boolean } {
+  if (plan === 'review')
+    return { state: pickReviewState(states), substituted: false };
+  if (plan === 'close')
+    return { state: pickClosingState(states), substituted: false };
+  const completion = pickCompletionState(states);
+  if (completion) return { state: completion, substituted: false };
+  return { state: pickClosingState(states), substituted: true };
+}
 export function statePlanFor(
   run: Pick<AgentRun, 'intent'>,
   verdict: Verdict | null,
-): 'review' | 'close' | null {
+): StatePlan | null {
   if (run.intent !== 'investigate' && run.intent !== 'fix') return null;
+  if (verdict === 'delivered') return 'complete';
   if (isClosingVerdict(verdict)) return 'close';
   if (run.intent === 'fix' && (verdict === 'fixed' || verdict === 'partial')) {
     return 'review';
@@ -358,7 +402,7 @@ async function proposeJiraTransition(
   deps: FinalizeDeps,
   run: AgentRun,
   key: string,
-  plan: 'review' | 'close',
+  plan: StatePlan,
   groupId: string,
 ): Promise<number> {
   const note = async (message: string, extra: Record<string, unknown>) => {
@@ -382,15 +426,28 @@ async function proposeJiraTransition(
     });
     return 0;
   }
-  const target =
+  let target =
     plan === 'close'
       ? pickClosingTransition(listed.value)
-      : pickReviewTransition(listed.value);
+      : plan === 'complete'
+        ? pickCompletionTransition(listed.value)
+        : pickReviewTransition(listed.value);
+  if (!target && plan === 'complete') {
+    // Nothing named done: the closing transition, said plainly, rather
+    // than no proposal for something that shipped.
+    target = pickClosingTransition(listed.value);
+    if (target) {
+      await note(
+        'no transition to done — proposing the closing transition instead',
+        { key, plan, target: target.targetStateName },
+      );
+    }
+  }
   if (!target) {
     await note(
-      plan === 'close'
-        ? 'filed only the comment: no transition that closes the issue'
-        : 'filed only the comment: no transition to review or in progress',
+      plan === 'review'
+        ? 'filed only the comment: no transition to review or in progress'
+        : 'filed only the comment: no transition that closes the issue',
       {
         key,
         plan,
@@ -868,10 +925,18 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
           );
         } else if (run.projectId) {
           const states = await deps.ledger.listStates(run.projectId);
-          const target =
-            plan === 'close'
-              ? pickClosingState(states)
-              : pickReviewState(states);
+          const { state: target, substituted } = pickPlannedState(states, plan);
+          if (substituted && target) {
+            await deps.ledger
+              .appendEvent(run.id, 'note', {
+                stage: 'finalize',
+                message:
+                  'no state that says done — proposing the closing state instead',
+                plan,
+                stateName: target.name,
+              })
+              .catch(() => {});
+          }
           if (target) {
             const change = await deps.ledger.createRunProposal(run.id, {
               kind: 'state_change',
@@ -1180,8 +1245,18 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         );
       } else if (plan && run.projectId) {
         const states = await deps.ledger.listStates(run.projectId);
-        const target =
-          plan === 'close' ? pickClosingState(states) : pickReviewState(states);
+        const { state: target, substituted } = pickPlannedState(states, plan);
+        if (substituted && target) {
+          await deps.ledger
+            .appendEvent(run.id, 'note', {
+              stage: 'finalize',
+              message:
+                'no state that says done — proposing the closing state instead',
+              plan,
+              stateName: target.name,
+            })
+            .catch(() => {});
+        }
         if (target) {
           const change = await deps.ledger.createRunProposal(run.id, {
             kind: 'state_change',
@@ -1201,7 +1276,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
             .catch(() => {});
         } else {
           deps.logger.info(
-            `engine: finalize found no ${plan === 'close' ? 'closing' : 'review'} state to propose`,
+            `engine: finalize found no ${plan === 'review' ? 'review' : 'closing'} state to propose`,
             {
               runId: run.id,
               projectId: run.projectId,
@@ -1211,9 +1286,9 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
             .appendEvent(run.id, 'note', {
               stage: 'finalize',
               message:
-                plan === 'close'
-                  ? 'filed only the comment: the project has no state that closes a ticket without completing it'
-                  : 'filed only the comment: the project has no review or started state',
+                plan === 'review'
+                  ? 'filed only the comment: the project has no review or started state'
+                  : 'filed only the comment: the project has no state that closes a ticket',
               plan,
               offered: states.map((s) => s.name),
             })

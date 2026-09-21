@@ -31,6 +31,12 @@ export type Verdict =
   | 'not-a-bug'
   /** Either: should not be done as asked; close it. */
   | 'wont-fix'
+  /**
+   * Investigate: what the ticket asks for is already built and shipped;
+   * close it as done, never as cancelled (customer feedback round 1: a
+   * delivered feature was proposed Cancelled under not-a-bug).
+   */
+  | 'delivered'
   /** Either: the session could not settle it without a person. */
   | 'needs-info';
 
@@ -40,6 +46,7 @@ export const VERDICTS: readonly Verdict[] = [
   'partial',
   'not-a-bug',
   'wont-fix',
+  'delivered',
   'needs-info',
 ];
 
@@ -88,6 +95,10 @@ const VERDICT_WORDS: Array<[RegExp, Verdict]> = [
     'not-a-bug',
   ],
   [/^(won'?t[- ]?(fix|do)|wontfix|declined|out[- ]of[- ]scope)$/i, 'wont-fix'],
+  [
+    /^(delivered|already[- ](delivered|done|built|shipped|implemented)|shipped)$/i,
+    'delivered',
+  ],
   [
     /^(needs[- ]info|need[- ]info|cannot[- ]reproduce|can'?t[- ]reproduce|blocked|unclear|needs[- ]decision)$/i,
     'needs-info',
@@ -282,6 +293,7 @@ const VERDICT_LABEL: Record<Verdict, string> = {
   partial: 'partly fixed',
   'not-a-bug': 'not a bug',
   'wont-fix': "won't fix",
+  delivered: 'already delivered',
   'needs-info': 'needs a decision',
 };
 
@@ -290,7 +302,12 @@ export function verdictLabel(verdict: Verdict): string {
   return VERDICT_LABEL[verdict];
 }
 
-/** Verdicts that close the ticket rather than move it forward. */
+/**
+ * Verdicts that close the ticket rather than move it forward — nothing
+ * to publish, a closing (or, for `delivered`, a done) state proposed.
+ */
 export function isClosingVerdict(verdict: Verdict | null): boolean {
-  return verdict === 'not-a-bug' || verdict === 'wont-fix';
+  return (
+    verdict === 'not-a-bug' || verdict === 'wont-fix' || verdict === 'delivered'
+  );
 }

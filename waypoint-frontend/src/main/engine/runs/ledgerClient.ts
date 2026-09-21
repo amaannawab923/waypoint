@@ -36,7 +36,13 @@ export type AgentRunEntry = 'independent' | 'dispatched';
 
 /** Mirrors the backend's runVerdictSchema; report.ts's Verdict is the same set. */
 export type RunVerdict =
-  'root-cause' | 'fixed' | 'partial' | 'not-a-bug' | 'wont-fix' | 'needs-info';
+  | 'root-cause'
+  | 'fixed'
+  | 'partial'
+  | 'not-a-bug'
+  | 'wont-fix'
+  | 'delivered'
+  | 'needs-info';
 
 /** The row as the backend serialises it (timestamps as ISO strings). */
 export interface AgentRun {

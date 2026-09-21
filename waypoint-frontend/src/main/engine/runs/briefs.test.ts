@@ -72,7 +72,7 @@ describe('buildBrief', () => {
       'Waypoint reads only the final message of this turn',
     );
     expect(brief).toContain(
-      'Verdict: <one of root-cause | not-a-bug | needs-info>',
+      'Verdict: <one of root-cause | not-a-bug | delivered | needs-info>',
     );
     expect(brief).toContain('## Summary');
     expect(brief).toContain('## Details');

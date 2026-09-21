@@ -9,12 +9,15 @@ import {
   finishedNote,
   isTurnEnded,
   pickClosingState,
+  pickCompletionState,
+  pickPlannedState,
   pickReviewState,
   statePlanFor,
   type FinalizeDeps,
 } from './finalize';
 import {
   pickClosingTransition,
+  pickCompletionTransition,
   pickReviewTransition,
   type JiraRunDeps,
 } from './jiraRuns';
@@ -316,6 +319,28 @@ describe('pickClosingState (W5c)', () => {
     ).toBe('c2');
     expect(pickClosingState([done])).toBeNull();
   });
+
+  it('pickCompletionState: a completed-group state named done, else the last completed-group state, never a cancelled one (feedback round 1)', () => {
+    const shipped = state('s', 'Shipped', 'completed', 4);
+    const done = state('d', 'Done', 'completed', 3);
+    const cancelled = state('c', 'Cancelled', 'cancelled', 5);
+    expect(pickCompletionState([cancelled, shipped, done])?.id).toBe('d');
+    expect(
+      pickCompletionState([cancelled, state('f', 'Finished', 'completed', 3)])
+        ?.id,
+    ).toBe('f');
+    expect(pickCompletionState([cancelled])).toBeNull();
+    // A `complete` plan on a project with no completed group falls back to
+    // the closing state and says so.
+    expect(pickPlannedState([cancelled], 'complete')).toEqual({
+      state: cancelled,
+      substituted: true,
+    });
+    expect(pickPlannedState([cancelled, done], 'complete')).toEqual({
+      state: done,
+      substituted: false,
+    });
+  });
 });
 
 describe('statePlanFor (W5c)', () => {
@@ -328,6 +353,8 @@ describe('statePlanFor (W5c)', () => {
     ['fix', null, null],
     ['investigate', 'root-cause', null],
     ['investigate', 'not-a-bug', 'close'],
+    ['investigate', 'delivered', 'complete'],
+    ['fix', 'delivered', 'complete'],
     ['investigate', 'needs-info', null],
     ['custom', 'wont-fix', null],
     [null, 'fixed', null],
@@ -497,6 +524,38 @@ describe('createRunFinalizer', () => {
       'run-abc1234',
       expect.stringContaining('verdict: not a bug · 2 proposals filed'),
     );
+  });
+
+  it('Investigate that concludes delivered: the DONE state proposed, never Cancelled (feedback round 1)', async () => {
+    const { ledger, rows } = fakeLedger(run());
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: 'Verdict: delivered\n## Summary\nThree of the four items are already built and merged; close as delivered.\n## Details\nsee commits.',
+          },
+        ]),
+      ],
+    });
+    const { deps } = depsWith(ledger, daemon);
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+
+    expect(ledger.createRunProposal).toHaveBeenCalledTimes(2);
+    expect(ledger.createRunProposal).toHaveBeenNthCalledWith(2, 'run-abc1234', {
+      kind: 'state_change',
+      stateId: 'st-done',
+      groupId: 'run-abc1234:1',
+    });
+    const [, comment] = ledger.createRunProposal.mock.calls[0];
+    expect((comment as { body: string }).body).toContain(
+      '**Verdict:** already delivered',
+    );
+    expect(rows.get('run-abc1234')).toMatchObject({
+      status: 'needs-review',
+      verdict: 'delivered',
+    });
   });
 
   it("Fix that concludes won't fix: not published, the closing state proposed, never the review state", async () => {
@@ -854,6 +913,16 @@ describe('W5b: a run on a Jira issue', () => {
         done,
       ])?.id,
     ).toBe('51');
+    // delivered: a done-category target that is not a closing name,
+    // preferring one named Done — never Won't Do.
+    expect(pickCompletionTransition([progress, wontDo, done])).toBe(done);
+    expect(pickCompletionTransition([progress, wontDo])).toBeNull();
+    expect(
+      pickCompletionTransition([
+        transition('61', 'Released', 'done'),
+        transition('62', 'Closed', 'done'),
+      ])?.id,
+    ).toBe('61');
   });
 
   it('Investigate on a Jira issue that concludes not-a-bug: the closing transition, with the borrowed credential', async () => {
