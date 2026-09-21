@@ -17,9 +17,13 @@ const PANEL_HEIGHT_ESTIMATE = 260; // corrected on mount by the hook
  * into one `onSelect(transition, fieldValues)` call, then getting out of the
  * way (the caller closes it, whether or not the write ultimately succeeds).
  *
- * A transition with no required fields fires `onSelect` immediately. One
- * that does swaps this SAME panel's content into a small form in place
- * (never a second popover/modal) — a "Cancel" reverts to the option list.
+ * No pick writes on its own click (customer feedback round 1, Fix 5: the
+ * pill used to move the real ticket on the first click, no confirm). A
+ * transition with no required fields swaps this SAME panel's content for
+ * a one-line confirm — "Move ENG-77 to In Review?" [Cancel] [Move] — and
+ * `onSelect` fires on Move. One that needs a field swaps to a small form
+ * in place instead (never a second popover/modal), whose own "Move to …"
+ * button is that confirm; a "Cancel" reverts either to the option list.
  *
  * Portaled to `document.body` and positioned with real viewport coordinates.
  * This used to be a plain `position: absolute` sibling of the state chip,
@@ -72,6 +76,8 @@ export function JiraTransitionPopover({
   const [formTransition, setFormTransition] = useState<JiraTransition | null>(
     null,
   );
+  const [confirmTransition, setConfirmTransition] =
+    useState<JiraTransition | null>(null);
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
 
   // `formTransition` and the loading/error flags each swap the panel's
@@ -86,7 +92,13 @@ export function JiraTransitionPopover({
     // Right-aligned, which is how this popover has always hung off its chip.
     align: 'right',
     label: `Move ${ticketKey} to`,
-    remeasureOn: [formTransition, loading, error, transitions],
+    remeasureOn: [
+      formTransition,
+      confirmTransition,
+      loading,
+      error,
+      transitions,
+    ],
   });
 
   // The `panelRef.current?.focus()` blur guards that used to sit in `pick`
@@ -100,7 +112,7 @@ export function JiraTransitionPopover({
   // this from, which is both a better destination and an actually durable one.
   function pick(transition: JiraTransition) {
     if (transition.requiresFields.length === 0) {
-      onSelect(transition, {});
+      setConfirmTransition(transition);
       return;
     }
     setFormTransition(transition);
@@ -134,7 +146,33 @@ export function JiraTransitionPopover({
       // ToastHost's z-[200], which must sit above any popover.
       className="fixed z-[60] w-[270px] overflow-hidden rounded-[var(--radius)] border border-border-strong bg-surface text-left shadow-2xl outline-none"
     >
-      {!formTransition ? (
+      {confirmTransition && (
+        <div className="p-3" data-transition-confirm>
+          <p className="mb-2.5 text-[12.5px] leading-relaxed text-text">
+            Move <b className="font-semibold">{ticketKey}</b> to{' '}
+            <b className="font-semibold">{confirmTransition.targetStateName}</b>
+            ?{' '}
+            <span className="text-text-muted">Watchers will be notified.</span>
+          </p>
+          <div className="flex gap-2">
+            <Button
+              size="xs"
+              variant="secondary"
+              onClick={() => setConfirmTransition(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="xs"
+              variant="primary"
+              onClick={() => onSelect(confirmTransition, {})}
+            >
+              Move
+            </Button>
+          </div>
+        </div>
+      )}
+      {!confirmTransition && !formTransition && (
         <>
           <div className="px-3 pt-2.5 pb-1.5 text-[10.5px] font-bold tracking-wide text-text-muted uppercase">
             Move {ticketKey} to
@@ -186,7 +224,8 @@ export function JiraTransitionPopover({
             </div>
           )}
         </>
-      ) : (
+      )}
+      {!confirmTransition && formTransition && (
         <div className="p-3">
           <h4 className="mb-0.5 text-[12.5px] font-semibold text-text">
             Jira needs one more field

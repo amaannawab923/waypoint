@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { clsx } from 'clsx';
 import { IconAlert, IconX } from '@/components/icons';
-import { subscribeToasts } from '@/lib/toast';
+import { subscribeToasts, type Toast } from '@/lib/toast';
 
-interface ToastEntry {
+interface ToastEntry extends Toast {
   id: number;
-  message: string;
 }
 
 const AUTO_DISMISS_MS = 6000;
@@ -16,30 +16,60 @@ export function ToastHost() {
   const [toasts, setToasts] = useState<ToastEntry[]>([]);
 
   useEffect(() => {
-    return subscribeToasts((message) => {
+    return subscribeToasts((toast) => {
       const id = Date.now() + Math.random();
-      setToasts((t) => [...t, { id, message }]);
-      setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), AUTO_DISMISS_MS);
+      setToasts((t) => [...t, { ...toast, id }]);
+      setTimeout(
+        () => setToasts((t) => t.filter((x) => x.id !== id)),
+        toast.durationMs ?? AUTO_DISMISS_MS,
+      );
     });
   }, []);
 
   if (toasts.length === 0) return null;
+
+  const dismiss = (id: number) =>
+    setToasts((cur) => cur.filter((x) => x.id !== id));
 
   return createPortal(
     <div className="fixed bottom-4 right-4 z-[200] flex w-full max-w-sm flex-col gap-2">
       {toasts.map((t) => (
         <div
           key={t.id}
-          role="alert"
-          className="flex items-start gap-2.5 rounded-[var(--radius-sm)] border border-danger/30 bg-danger-bg px-4 py-3 text-sm text-danger shadow-2xl"
+          role={t.tone === 'error' ? 'alert' : 'status'}
+          className={clsx(
+            'flex items-start gap-2.5 rounded-[var(--radius-sm)] border px-4 py-3 text-sm shadow-2xl',
+            t.tone === 'error'
+              ? 'border-danger/30 bg-danger-bg text-danger'
+              : 'border-border-strong bg-surface text-text',
+          )}
         >
-          <IconAlert size={16} className="mt-0.5 shrink-0" />
+          {t.tone === 'error' && (
+            <IconAlert size={16} className="mt-0.5 shrink-0" />
+          )}
           <span className="min-w-0 flex-1 break-words">{t.message}</span>
+          {t.action && (
+            <button
+              type="button"
+              onClick={() => {
+                dismiss(t.id);
+                t.action?.onClick();
+              }}
+              className="shrink-0 rounded px-1.5 py-0.5 text-xs font-semibold text-accent hover:bg-surface-2"
+            >
+              {t.action.label}
+            </button>
+          )}
           <button
             type="button"
             aria-label="Dismiss"
-            onClick={() => setToasts((cur) => cur.filter((x) => x.id !== t.id))}
-            className="shrink-0 text-danger/70 hover:text-danger"
+            onClick={() => dismiss(t.id)}
+            className={clsx(
+              'shrink-0',
+              t.tone === 'error'
+                ? 'text-danger/70 hover:text-danger'
+                : 'text-text-muted hover:text-text',
+            )}
           >
             <IconX size={14} />
           </button>
