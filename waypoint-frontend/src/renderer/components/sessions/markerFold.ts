@@ -211,6 +211,92 @@ function markerItem(marker: Marker, seq: number): Item {
 }
 
 /**
+ * The notes Waypoint hands the agent as hidden context on a resume
+ * (startRun.ts: the branch-state note from `resumeOpening`, the
+ * continuation note from `continuationNote`). They travel as a second
+ * text block of the person's prompt — never as a transcript message of
+ * their own — but the agent's own replayed history on a later resume
+ * flattens a prompt's blocks into one string, and the daemon's history
+ * then hands that back as the person's message: `line oneThis run's last
+ * report was already filed…` (customer feedback round 1: all three
+ * personas). Matched by their fixed openings, which only Waypoint writes.
+ */
+const HIDDEN_NOTE_OPENINGS = [
+  "This run's last report was already filed on ",
+  'Waypoint resumed this run',
+] as const;
+
+function hiddenNoteStart(text: string): number {
+  let at = -1;
+  HIDDEN_NOTE_OPENINGS.forEach((opening) => {
+    const i = text.indexOf(opening);
+    if (i >= 0 && (at < 0 || i < at)) at = i;
+  });
+  return at;
+}
+
+/** One line for the marker: the note's first sentence, the branch state summarised rather than pasted. */
+function hiddenNoteLine(note: string): string {
+  const firstParagraph = note.split(/\n\s*\n/)[0] ?? note;
+  const rest = note.slice(firstParagraph.length).trim();
+  const summary = rest
+    ? `${firstParagraph} (branch state given to the agent)`
+    : firstParagraph;
+  return `Waypoint · ${escapeMdText(summary)}`;
+}
+
+/**
+ * The turns with any hidden note cut out of the person's own messages
+ * and shown as the italic marker row it always should have been, placed
+ * just above that message. The same note rides on every message sent
+ * after a finalize, so it is shown the first time only — a line on
+ * literally every message defeats never-lock's "feels seamless" (the
+ * same rule `resumedText` follows); later copies are cut out silently.
+ * A message with no note is returned as is.
+ */
+export function foldHiddenNotes(
+  turns: readonly TranscriptTurn[],
+): TranscriptTurn[] {
+  const shown = new Set<string>();
+  return turns.map((turn) => {
+    if (!Array.isArray(turn.items)) return turn;
+    let changed = false;
+    const items: Item[] = [];
+    turn.items.forEach((item) => {
+      if (item.kind !== 'message' || item.role !== 'user') {
+        items.push(item);
+        return;
+      }
+      const at = hiddenNoteStart(item.text);
+      if (at < 0) {
+        items.push(item);
+        return;
+      }
+      changed = true;
+      const own = item.text.slice(0, at).trim();
+      const note = item.text.slice(at).trim();
+      const line = hiddenNoteLine(note);
+      if (!shown.has(line)) {
+        shown.add(line);
+        items.push(
+          markerItem(
+            {
+              id: `note:${turn.id}:${item.id}`,
+              seq: item.seq,
+              afterTurnId: turn.id,
+              text: line,
+            },
+            item.seq,
+          ),
+        );
+      }
+      if (own) items.push({ ...item, text: own });
+    });
+    return changed ? { ...turn, items } : turn;
+  });
+}
+
+/**
  * The turns with each marker appended to its anchoring turn's items —
  * by turn id; a marker whose turn is gone (or was never named) follows
  * the last turn. With no turns at all the markers make a turn of their
