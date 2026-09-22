@@ -33,7 +33,9 @@ export function readStoredTypesafeApiKey(): string | null {
     const parsed = JSON.parse(raw) as { encrypted?: string };
     if (!parsed.encrypted) return null;
     if (!safeStorage.isEncryptionAvailable()) return null;
-    const decrypted = safeStorage.decryptString(Buffer.from(parsed.encrypted, 'base64'));
+    const decrypted = safeStorage.decryptString(
+      Buffer.from(parsed.encrypted, 'base64'),
+    );
     return decrypted.length > 0 ? decrypted : null;
   } catch {
     return null;

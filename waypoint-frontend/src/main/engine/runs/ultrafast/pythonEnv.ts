@@ -109,7 +109,10 @@ export function findUv(
   const pathEnv = deps.pathEnv ?? process.env.PATH ?? '';
   const homeDir = deps.homeDir ?? os.homedir();
   const candidates = [
-    ...pathEnv.split(path.delimiter).filter(Boolean).map((dir) => path.join(dir, 'uv')),
+    ...pathEnv
+      .split(path.delimiter)
+      .filter(Boolean)
+      .map((dir) => path.join(dir, 'uv')),
     ...UV_FIXED_CANDIDATES,
     path.join(homeDir, '.local', 'bin', 'uv'),
   ];
@@ -129,7 +132,9 @@ function readPinnedMarker(
 ): PinnedMarker | null {
   try {
     if (!existsSync(pinnedFile)) return null;
-    const parsed = JSON.parse(readFileSync(pinnedFile)) as Partial<PinnedMarker>;
+    const parsed = JSON.parse(
+      readFileSync(pinnedFile),
+    ) as Partial<PinnedMarker>;
     if (
       typeof parsed.jevCommit !== 'string' ||
       typeof parsed.harnessVersion !== 'string' ||
@@ -156,8 +161,7 @@ export interface ProvisionDeps {
 }
 
 export type ProvisionResult =
-  | { ok: true; alreadyProvisioned: boolean }
-  | { ok: false; message: string };
+  { ok: true; alreadyProvisioned: boolean } | { ok: false; message: string };
 
 // One provisioning attempt per venv directory at a time — a second call
 // while the first is still installing joins the same promise rather than
@@ -168,9 +172,13 @@ const inFlight = new Map<string, Promise<ProvisionResult>>();
 async function provisionOnce(deps: ProvisionDeps): Promise<ProvisionResult> {
   const { paths, uvPath, run } = deps;
   const existsSync = deps.existsSync ?? fs.existsSync;
-  const readFileSync = deps.readFileSync ?? ((p: string) => fs.readFileSync(p, 'utf8'));
-  const writeFileSync = deps.writeFileSync ?? ((p: string, data: string) => fs.writeFileSync(p, data));
-  const mkdirSync = deps.mkdirSync ?? ((p: string) => fs.mkdirSync(p, { recursive: true }));
+  const readFileSync =
+    deps.readFileSync ?? ((p: string) => fs.readFileSync(p, 'utf8'));
+  const writeFileSync =
+    deps.writeFileSync ??
+    ((p: string, data: string) => fs.writeFileSync(p, data));
+  const mkdirSync =
+    deps.mkdirSync ?? ((p: string) => fs.mkdirSync(p, { recursive: true }));
 
   const marker = readPinnedMarker(paths.pinnedFile, existsSync, readFileSync);
   const upToDate =
@@ -210,9 +218,17 @@ async function provisionOnce(deps: ProvisionDeps): Promise<ProvisionResult> {
   // must not fail the whole provision when the venv itself is good, so it
   // is logged and swallowed rather than returned as an error.
   try {
-    const telemetry = await run(paths.venvBrowserHarness, ['telemetry', 'disable'], {
-      env: { BH_HOME: paths.bhHome, BH_RUNTIME_DIR: paths.bhRuntimeDir, BH_UPDATE_CHECK: '0' },
-    });
+    const telemetry = await run(
+      paths.venvBrowserHarness,
+      ['telemetry', 'disable'],
+      {
+        env: {
+          BH_HOME: paths.bhHome,
+          BH_RUNTIME_DIR: paths.bhRuntimeDir,
+          BH_UPDATE_CHECK: '0',
+        },
+      },
+    );
     if (telemetry.code !== 0) {
       deps.logger?.warn('ultrafast: browser-harness telemetry disable failed', {
         code: telemetry.code,
@@ -248,7 +264,9 @@ async function provisionOnce(deps: ProvisionDeps): Promise<ProvisionResult> {
  * arriving close together — the settings page's status check racing the
  * person's Test click — cannot corrupt one venv with two installs.
  */
-export function provisionPythonEnv(deps: ProvisionDeps): Promise<ProvisionResult> {
+export function provisionPythonEnv(
+  deps: ProvisionDeps,
+): Promise<ProvisionResult> {
   const key = deps.paths.venvDir;
   const existing = inFlight.get(key);
   if (existing) return existing;
@@ -262,10 +280,14 @@ export function provisionPythonEnv(deps: ProvisionDeps): Promise<ProvisionResult
  *  status IPC handler uses before deciding whether to provision. */
 export function isProvisioned(
   paths: UltrafastPaths,
-  deps: { existsSync?: (p: string) => boolean; readFileSync?: (p: string) => string } = {},
+  deps: {
+    existsSync?: (p: string) => boolean;
+    readFileSync?: (p: string) => string;
+  } = {},
 ): boolean {
   const existsSync = deps.existsSync ?? fs.existsSync;
-  const readFileSync = deps.readFileSync ?? ((p: string) => fs.readFileSync(p, 'utf8'));
+  const readFileSync =
+    deps.readFileSync ?? ((p: string) => fs.readFileSync(p, 'utf8'));
   const marker = readPinnedMarker(paths.pinnedFile, existsSync, readFileSync);
   return (
     marker !== null &&

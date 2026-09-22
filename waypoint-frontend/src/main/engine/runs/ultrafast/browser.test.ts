@@ -15,7 +15,8 @@ describe('findChromiumBinary', () => {
   });
 
   it('falls back to the system Chrome when no puppeteer cache exists', () => {
-    const systemChrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+    const systemChrome =
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
     const found = findChromiumBinary({
       homeDir: '/Users/x',
       readdirSync: () => {
@@ -39,7 +40,9 @@ describe('findChromiumBinary', () => {
 /** A ChildProcess-shaped fake that never actually exists as a process. */
 function fakeChild(): ChildProcess {
   const emitter = new EventEmitter() as unknown as ChildProcess;
-  (emitter as unknown as { kill: (signal?: string) => boolean }).kill = jest.fn(() => true);
+  (emitter as unknown as { kill: (signal?: string) => boolean }).kill = jest.fn(
+    () => true,
+  );
   return emitter;
 }
 
@@ -55,7 +58,8 @@ describe('launchIsolatedChromium', () => {
     });
 
     const handle = await launchIsolatedChromium({
-      binaryPath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      binaryPath:
+        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
       spawnFn,
       mkdtempSync: (prefix) => `${prefix}abc123`,
       rm,
@@ -64,8 +68,13 @@ describe('launchIsolatedChromium', () => {
     });
 
     expect(spawnFn).toHaveBeenCalledTimes(1);
-    const [binary, args] = spawnFn.mock.calls[0] as unknown as [string, string[]];
-    expect(binary).toBe('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome');
+    const [binary, args] = spawnFn.mock.calls[0] as unknown as [
+      string,
+      string[],
+    ];
+    expect(binary).toBe(
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    );
     expect(args).toEqual(
       expect.arrayContaining([
         '--no-first-run',
@@ -74,7 +83,9 @@ describe('launchIsolatedChromium', () => {
         '--headless=new',
       ]),
     );
-    expect(args.some((a) => a.startsWith('--remote-debugging-port='))).toBe(true);
+    expect(args.some((a) => a.startsWith('--remote-debugging-port='))).toBe(
+      true,
+    );
     expect(args.some((a) => a.startsWith('--user-data-dir='))).toBe(true);
     expect(handle.cdpUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     expect(handle.profileDir).toContain('abc123');
@@ -87,9 +98,9 @@ describe('launchIsolatedChromium', () => {
   });
 
   it('throws when no Chromium binary is available', async () => {
-    await expect(
-      launchIsolatedChromium({ binaryPath: null }),
-    ).rejects.toThrow(/No Chromium found/);
+    await expect(launchIsolatedChromium({ binaryPath: null })).rejects.toThrow(
+      /No Chromium found/,
+    );
   });
 
   it('kills the process and removes the profile when the CDP endpoint never answers', async () => {
@@ -99,7 +110,8 @@ describe('launchIsolatedChromium', () => {
 
     await expect(
       launchIsolatedChromium({
-        binaryPath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        binaryPath:
+          '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
         spawnFn: () => child,
         mkdtempSync: (prefix) => `${prefix}xyz`,
         rm,
@@ -109,7 +121,7 @@ describe('launchIsolatedChromium', () => {
       }),
     ).rejects.toThrow(/did not answer on CDP port/);
 
-    expect((child.kill as jest.Mock)).toHaveBeenCalledWith('SIGKILL');
+    expect(child.kill as jest.Mock).toHaveBeenCalledWith('SIGKILL');
     expect(rm).toHaveBeenCalled();
   });
 });

@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-'use strict';
 
 /**
  * The `waypoint-ultrafast` MCP server — Ultrafast browser tasks.
@@ -64,7 +63,9 @@ const config = {
   venvPython: process.env.ULTRAFAST_VENV_PYTHON || '',
   runnerPath: process.env.ULTRAFAST_RUNNER_PATH || '',
   bhHome: process.env.ULTRAFAST_BH_HOME || '',
-  evidenceRoot: process.env.ULTRAFAST_EVIDENCE_ROOT || path.join(os.tmpdir(), 'waypoint-ultrafast-evidence'),
+  evidenceRoot:
+    process.env.ULTRAFAST_EVIDENCE_ROOT ||
+    path.join(os.tmpdir(), 'waypoint-ultrafast-evidence'),
   chromiumBinary: process.env.ULTRAFAST_CHROMIUM_BINARY || '',
   textModel: process.env.ULTRAFAST_TEXT_MODEL || 'claude-haiku-4-5-20251001',
 };
@@ -99,7 +100,10 @@ const BROWSER_TASK_TOOL = {
     type: 'object',
     properties: {
       url: { type: 'string', description: 'The page to start the walk from.' },
-      goal: { type: 'string', description: 'The steps to carry out, in plain words.' },
+      goal: {
+        type: 'string',
+        description: 'The steps to carry out, in plain words.',
+      },
       maxSteps: {
         type: 'number',
         description: 'The most actions to take before giving up (default 20).',
@@ -140,7 +144,11 @@ async function handleMessage(message) {
         sendError(id, -32601, `Unknown method: ${method}`);
     }
   } catch (error) {
-    sendError(id, -32603, error && error.message ? error.message : String(error));
+    sendError(
+      id,
+      -32603,
+      error && error.message ? error.message : String(error),
+    );
   }
 }
 
@@ -157,7 +165,9 @@ async function handleToolCall(params) {
   if (!url || !goal) {
     return {
       isError: true,
-      content: [{ type: 'text', text: 'browser_task needs both a url and a goal.' }],
+      content: [
+        { type: 'text', text: 'browser_task needs both a url and a goal.' },
+      ],
     };
   }
   const maxSteps = normalizeMaxSteps(args.maxSteps);
@@ -173,7 +183,10 @@ async function handleToolCall(params) {
     return {
       isError: true,
       content: [
-        { type: 'text', text: `browser_task failed: ${error && error.message ? error.message : String(error)}` },
+        {
+          type: 'text',
+          text: `browser_task failed: ${error && error.message ? error.message : String(error)}`,
+        },
       ],
     };
   }
@@ -186,7 +199,8 @@ function normalizeMaxSteps(value) {
 }
 
 function configurationProblem() {
-  if (!config.typesafeApiKey) return 'No TypeSafe API key is configured for Ultrafast browser tasks.';
+  if (!config.typesafeApiKey)
+    return 'No TypeSafe API key is configured for Ultrafast browser tasks.';
   if (!config.venvPython || !fs.existsSync(config.venvPython)) {
     return "Ultrafast's Python environment isn't provisioned on this machine yet.";
   }
@@ -230,12 +244,12 @@ let sdkPromise = null;
 function loadSdk() {
   if (!sdkPromise) {
     const explicit = process.env.ULTRAFAST_SDK_ENTRY;
-    sdkPromise = (explicit ? import(explicit) : import('@anthropic-ai/claude-agent-sdk')).catch(
-      (error) => {
-        sdkPromise = null;
-        throw error;
-      },
-    );
+    sdkPromise = (
+      explicit ? import(explicit) : import('@anthropic-ai/claude-agent-sdk')
+    ).catch((error) => {
+      sdkPromise = null;
+      throw error;
+    });
   }
   return sdkPromise;
 }
@@ -283,7 +297,9 @@ async function startTextModelServer() {
   async function* prompts() {
     for (;;) {
       while (pending.length === 0) {
-        // eslint-disable-next-line no-await-in-loop
+        // This loop's own job is to block until `wake` is (re)assigned —
+        // there is no queue/array-method equivalent of "sleep until woken".
+        // eslint-disable-next-line no-await-in-loop, no-loop-func
         await new Promise((resolve) => {
           wake = resolve;
         });
@@ -341,8 +357,8 @@ async function startTextModelServer() {
   function ask(user) {
     return new Promise((resolve) => {
       let finish;
-      const done = new Promise((r) => {
-        finish = r;
+      const done = new Promise((_resolve) => {
+        finish = _resolve;
       });
       pending.push({ user, resolve, finish, done });
       wake?.();
@@ -350,7 +366,11 @@ async function startTextModelServer() {
   }
 
   const server = http.createServer(async (req, res) => {
-    if (req.method !== 'POST' || !req.url || !req.url.endsWith('/chat/completions')) {
+    if (
+      req.method !== 'POST' ||
+      !req.url ||
+      !req.url.endsWith('/chat/completions')
+    ) {
       res.writeHead(404).end();
       return;
     }
@@ -372,14 +392,22 @@ async function startTextModelServer() {
           object: 'chat.completion',
           model: config.textModel,
           choices: [
-            { index: 0, message: { role: 'assistant', content: JSON.stringify(json) }, finish_reason: 'stop' },
+            {
+              index: 0,
+              message: { role: 'assistant', content: JSON.stringify(json) },
+              finish_reason: 'stop',
+            },
           ],
           usage: {},
         }),
       );
     } catch (error) {
       res.writeHead(500, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: { message: String((error && error.message) || error) } }));
+      res.end(
+        JSON.stringify({
+          error: { message: String((error && error.message) || error) },
+        }),
+      );
     }
   });
 
@@ -405,10 +433,13 @@ async function startTextModelServer() {
 // the other.
 
 function findChromiumBinary() {
-  if (config.chromiumBinary && fs.existsSync(config.chromiumBinary)) return config.chromiumBinary;
+  if (config.chromiumBinary && fs.existsSync(config.chromiumBinary))
+    return config.chromiumBinary;
   const cacheDir = path.join(os.homedir(), '.cache', 'puppeteer', 'chrome');
   try {
+    // eslint-disable-next-line no-restricted-syntax
     for (const version of fs.readdirSync(cacheDir)) {
+      // eslint-disable-next-line no-restricted-syntax
       for (const arch of ['chrome-mac-arm64', 'chrome-mac-x64']) {
         const candidate = path.join(
           cacheDir,
@@ -425,7 +456,8 @@ function findChromiumBinary() {
   } catch {
     // No puppeteer cache on this machine.
   }
-  const systemChrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  const systemChrome =
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
   return fs.existsSync(systemChrome) ? systemChrome : null;
 }
 
@@ -446,16 +478,21 @@ async function waitForCdp(port, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     try {
+      // eslint-disable-next-line no-await-in-loop
       const res = await fetch(`http://127.0.0.1:${port}/json/version`);
       if (res.ok) return;
     } catch {
       // Not up yet.
     }
     if (Date.now() >= deadline) {
-      throw new Error(`Chromium did not answer on CDP port ${port} within ${timeoutMs}ms.`);
+      throw new Error(
+        `Chromium did not answer on CDP port ${port} within ${timeoutMs}ms.`,
+      );
     }
     // eslint-disable-next-line no-await-in-loop
-    await new Promise((r) => setTimeout(r, 150));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 150);
+    });
   }
 }
 
@@ -466,7 +503,9 @@ async function launchChromium() {
       'No Chromium found for Ultrafast browser tasks — expected the puppeteer-managed Chrome for Testing build or /Applications/Google Chrome.app.',
     );
   }
-  const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'waypoint-ultrafast-'));
+  const profileDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'waypoint-ultrafast-'),
+  );
   const port = await findFreePort();
   const child = spawn(
     binary,
@@ -491,7 +530,9 @@ async function launchChromium() {
     } catch {
       // Already gone.
     }
-    await fs.promises.rm(profileDir, { recursive: true, force: true }).catch(() => {});
+    await fs.promises
+      .rm(profileDir, { recursive: true, force: true })
+      .catch(() => {});
   };
 
   try {
@@ -527,7 +568,10 @@ function buildRunnerEnv({ textModelBaseUrl, cdpUrl, bhRuntimeDir }) {
 async function runBrowserTask({ url, goal, maxSteps }) {
   const taskId = crypto.randomUUID();
   const recordDir = path.join(config.evidenceRoot, taskId);
-  const bhRuntimeDir = path.join(os.tmpdir(), `waypoint-ultrafast-bh-${taskId}`);
+  const bhRuntimeDir = path.join(
+    os.tmpdir(),
+    `waypoint-ultrafast-bh-${taskId}`,
+  );
   fs.mkdirSync(recordDir, { recursive: true });
   fs.mkdirSync(bhRuntimeDir, { recursive: true });
 
@@ -536,7 +580,9 @@ async function runBrowserTask({ url, goal, maxSteps }) {
   // the seam the protocol test below uses so it never has to load the real
   // Claude Agent SDK (which needs the founder's own login) just to
   // exercise stdio framing and the image-content assembly.
-  const textModelBaseUrl = process.env.ULTRAFAST_TEXT_MODEL_BASE_URL || (await ensureTextModelServer());
+  const textModelBaseUrl =
+    process.env.ULTRAFAST_TEXT_MODEL_BASE_URL ||
+    (await ensureTextModelServer());
   const chromium = await launchChromium();
 
   let child;
@@ -557,7 +603,11 @@ async function runBrowserTask({ url, goal, maxSteps }) {
   try {
     const result = await new Promise((resolve, reject) => {
       child = spawn(config.venvPython, [config.runnerPath], {
-        env: buildRunnerEnv({ textModelBaseUrl, cdpUrl: chromium.cdpUrl, bhRuntimeDir }),
+        env: buildRunnerEnv({
+          textModelBaseUrl,
+          cdpUrl: chromium.cdpUrl,
+          bhRuntimeDir,
+        }),
         stdio: ['pipe', 'pipe', 'pipe'],
         detached: true,
       });
@@ -572,7 +622,10 @@ async function runBrowserTask({ url, goal, maxSteps }) {
       let finalResult = null;
       let stderrTail = '';
 
-      const rl = readline.createInterface({ input: child.stdout, terminal: false });
+      const rl = readline.createInterface({
+        input: child.stdout,
+        terminal: false,
+      });
       rl.on('line', (line) => {
         if (!line.trim()) return;
         let parsed;
@@ -604,7 +657,9 @@ async function runBrowserTask({ url, goal, maxSteps }) {
         );
       });
 
-      child.stdin.write(`${JSON.stringify({ url, goal, maxSteps, recordDir })}\n`);
+      child.stdin.write(
+        `${JSON.stringify({ url, goal, maxSteps, recordDir })}\n`,
+      );
       child.stdin.end();
     });
 
@@ -612,7 +667,9 @@ async function runBrowserTask({ url, goal, maxSteps }) {
   } finally {
     clearTimeout(timeout);
     await chromium.close();
-    await fs.promises.rm(bhRuntimeDir, { recursive: true, force: true }).catch(() => {});
+    await fs.promises
+      .rm(bhRuntimeDir, { recursive: true, force: true })
+      .catch(() => {});
   }
 }
 
@@ -621,15 +678,19 @@ function buildToolResult(result) {
     `status: ${result.status} · ${result.steps} step(s) · ${result.elapsedMs}ms · ${result.jevDecisions} jev decision(s) · ${result.textCalls} text call(s)`,
   ];
   if (result.error) lines.push(`error: ${result.error}`);
+  // eslint-disable-next-line no-restricted-syntax
   for (const h of result.history || []) {
     const bits = [`${h.step ?? '?'}.`, h.action || h.operation || '(action)'];
     if (h.text) bits.push(`text=${JSON.stringify(h.text)}`);
     if (typeof h.jevMs === 'number') bits.push(`jev=${h.jevMs}ms`);
     lines.push(bits.join(' '));
   }
-  lines.push("`done` is Jev's claim — check the screenshots before saying the behaviour matches.");
+  lines.push(
+    "`done` is Jev's claim — check the screenshots before saying the behaviour matches.",
+  );
 
   const content = [{ type: 'text', text: lines.join('\n') }];
+  // eslint-disable-next-line no-restricted-syntax
   for (const screenshotPath of result.screenshots || []) {
     try {
       const data = fs.readFileSync(screenshotPath).toString('base64');

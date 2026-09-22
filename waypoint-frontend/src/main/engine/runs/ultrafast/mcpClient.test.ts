@@ -38,9 +38,21 @@ const HANGING_RUNNER = path.join(
 );
 
 beforeAll(() => {
-  expect(fs.existsSync(SERVER_ENTRY)).toBe(true);
-  expect(fs.existsSync(FAKE_RUNNER)).toBe(true);
-  expect(fs.existsSync(FAKE_CHROMIUM)).toBe(true);
+  // A plain assertion, not expect(): jest/no-standalone-expect forbids
+  // expect() outside a test block, and a missing fixture here should fail
+  // every test in this file with one clear message, not run them all
+  // first and let each one fail confusingly against a nonexistent server.
+  (
+    [
+      ['ultrafast-mcp.js', SERVER_ENTRY],
+      ['fakeRunner.js', FAKE_RUNNER],
+      ['fakeChromium.js', FAKE_CHROMIUM],
+    ] as const
+  ).forEach(([label, fixturePath]) => {
+    if (!fs.existsSync(fixturePath)) {
+      throw new Error(`Fixture missing: ${label} (${fixturePath})`);
+    }
+  });
 });
 
 function baseEnv(): Record<string, string> {

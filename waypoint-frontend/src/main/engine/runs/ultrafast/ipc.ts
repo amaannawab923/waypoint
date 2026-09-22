@@ -208,6 +208,6 @@ export function registerUltrafastIpc(): void {
 }
 
 /** Test-only: clears the module-level `lastTest` cache between test runs. */
-export function _resetUltrafastIpcStateForTests(): void {
+export function resetUltrafastIpcStateForTests(): void {
   lastTest = null;
 }

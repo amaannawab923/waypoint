@@ -57,7 +57,9 @@ export function findChromiumBinary(
 
   try {
     const versions = readdirSync(cacheDir);
+    // eslint-disable-next-line no-restricted-syntax
     for (const version of versions) {
+      // eslint-disable-next-line no-restricted-syntax
       for (const arch of ['chrome-mac-arm64', 'chrome-mac-x64']) {
         const candidate = path.join(
           cacheDir,
@@ -112,12 +114,14 @@ async function waitForCdp(
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
+    // eslint-disable-next-line no-await-in-loop
     if (await probe(port)) return;
     if (Date.now() >= deadline) {
       throw new Error(
         `Chromium did not answer on CDP port ${port} within ${timeoutMs}ms.`,
       );
     }
+    // eslint-disable-next-line no-await-in-loop
     await sleep(150);
   }
 }
@@ -153,7 +157,8 @@ export async function launchIsolatedChromium(
     );
   }
 
-  const mkdtempSync = deps.mkdtempSync ?? ((prefix: string) => fs.mkdtempSync(prefix));
+  const mkdtempSync =
+    deps.mkdtempSync ?? ((prefix: string) => fs.mkdtempSync(prefix));
   const tmpdir = deps.tmpdir ?? os.tmpdir();
   const profileDir = mkdtempSync(path.join(tmpdir, 'waypoint-ultrafast-'));
   const port = await findFreePort();
@@ -167,7 +172,8 @@ export async function launchIsolatedChromium(
     ...(deps.headless === false ? [] : ['--headless=new']),
   ];
   const spawnFn =
-    deps.spawnFn ?? ((command, spawnArgs) => spawn(command, spawnArgs, { stdio: 'ignore' }));
+    deps.spawnFn ??
+    ((command, spawnArgs) => spawn(command, spawnArgs, { stdio: 'ignore' }));
   const child = spawnFn(binaryPath, args);
   // A launch failure (bad binary path, exec permission) surfaces as an
   // 'error' event asynchronously; swallow it here so it cannot become an
@@ -175,7 +181,8 @@ export async function launchIsolatedChromium(
   // timeout is what actually reports the failure to the caller.
   child.on('error', () => {});
 
-  const rm = deps.rm ?? ((p: string) => fsp.rm(p, { recursive: true, force: true }));
+  const rm =
+    deps.rm ?? ((p: string) => fsp.rm(p, { recursive: true, force: true }));
   let closed = false;
   const close = async () => {
     if (closed) return;
@@ -193,7 +200,11 @@ export async function launchIsolatedChromium(
       port,
       deps.readyTimeoutMs ?? 15_000,
       deps.probe ?? defaultCdpProbe,
-      deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
+      deps.sleep ??
+        ((ms) =>
+          new Promise((resolve) => {
+            setTimeout(resolve, ms);
+          })),
     );
   } catch (error) {
     await close();

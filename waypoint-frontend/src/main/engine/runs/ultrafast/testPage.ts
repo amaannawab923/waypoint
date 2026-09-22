@@ -47,7 +47,10 @@ export function startTestPage(): Promise<TestPageHandle> {
       const port = address && typeof address === 'object' ? address.port : 0;
       resolve({
         url: `http://127.0.0.1:${port}`,
-        close: () => new Promise((res) => server.close(() => res())),
+        close: () =>
+          new Promise<void>((_resolve) => {
+            server.close(() => _resolve());
+          }),
       });
     });
   });

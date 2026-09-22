@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-'use strict';
 
 // Stands in for the isolated Chromium binary in ultrafast-mcp.test.js:
 // ultrafast-mcp.js spawns "chromium" with `--remote-debugging-port=N`
@@ -9,7 +8,9 @@
 
 const http = require('http');
 
-const portArg = process.argv.find((a) => a.startsWith('--remote-debugging-port='));
+const portArg = process.argv.find((a) =>
+  a.startsWith('--remote-debugging-port='),
+);
 const port = portArg ? Number(portArg.split('=')[1]) : 0;
 
 const server = http.createServer((req, res) => {

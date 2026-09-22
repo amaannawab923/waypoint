@@ -1,7 +1,9 @@
 const getPathMock = jest.fn(() => '/fake/userData');
 const isEncryptionAvailableMock = jest.fn(() => true);
 const encryptStringMock = jest.fn((s: string) => Buffer.from(`enc:${s}`));
-const decryptStringMock = jest.fn((b: Buffer) => b.toString().replace(/^enc:/, ''));
+const decryptStringMock = jest.fn((b: Buffer) =>
+  b.toString().replace(/^enc:/, ''),
+);
 
 jest.mock('electron', () => ({
   app: { getPath: getPathMock },
@@ -55,7 +57,11 @@ describe('readStoredTypesafeApiKey', () => {
   });
 
   it('decrypts a stored key', () => {
-    readFileSyncMock.mockReturnValue(JSON.stringify({ encrypted: Buffer.from(`enc:${KEY}`).toString('base64') }));
+    readFileSyncMock.mockReturnValue(
+      JSON.stringify({
+        encrypted: Buffer.from(`enc:${KEY}`).toString('base64'),
+      }),
+    );
     expect(readStoredTypesafeApiKey()).toBe(KEY);
   });
 
@@ -80,7 +86,10 @@ describe('writeStoredTypesafeApiKey', () => {
       expect.any(String),
       { mode: 0o600 },
     );
-    expect(chmodSyncMock).toHaveBeenCalledWith('/fake/userData/ultrafast-auth.json', 0o600);
+    expect(chmodSyncMock).toHaveBeenCalledWith(
+      '/fake/userData/ultrafast-auth.json',
+      0o600,
+    );
   });
 
   it('throws rather than writing in the clear when encryption is unavailable', () => {
@@ -93,7 +102,9 @@ describe('writeStoredTypesafeApiKey', () => {
 describe('deleteStoredTypesafeApiKey', () => {
   it('unlinks the file', () => {
     deleteStoredTypesafeApiKey();
-    expect(unlinkSyncMock).toHaveBeenCalledWith('/fake/userData/ultrafast-auth.json');
+    expect(unlinkSyncMock).toHaveBeenCalledWith(
+      '/fake/userData/ultrafast-auth.json',
+    );
   });
 
   it('is a no-op when the file is already gone', () => {

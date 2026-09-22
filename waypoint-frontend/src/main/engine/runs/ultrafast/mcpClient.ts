@@ -87,8 +87,8 @@ export function callBrowserTask(
       const response = new Promise<{
         result?: unknown;
         error?: { message: string };
-      }>((res) => {
-        waiters.set(id, res);
+      }>((_resolve) => {
+        waiters.set(id, _resolve);
       });
       child.stdin?.write(
         `${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`,
