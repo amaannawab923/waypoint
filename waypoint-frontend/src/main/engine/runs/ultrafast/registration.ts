@@ -1,4 +1,7 @@
 import * as fs from 'fs';
+import * as os from 'os';
+import { getStoredSubscriptionToken } from '../../../copilot/copilotAuth';
+import { copilotClaudeConfigDir } from '../../../copilot/copilotConfigDir';
 import type { EngineSupervisor } from '../../supervisor';
 import type { Unsubscribe } from '../../types';
 import { createDaemonRunsApi, type DaemonMcpServer } from '../daemonApi';
@@ -70,18 +73,46 @@ function buildServer(
   };
 }
 
-function buildServerEnv(
+/**
+ * The env the MCP server runs with. Found on the first live Test
+ * (2026-09-22): the ULTRAFAST_* values alone were not enough — the server
+ * hosts the Claude text-model shim, and the Claude Code CLI the Agent SDK
+ * spawns for it reads the person's login from the OS keychain, which needs
+ * HOME and USER (a probe with HOME alone still said "Not logged in"). So
+ * the host essentials ride along — HOME, USER, LOGNAME, TMPDIR, a PATH —
+ * plus, when Copilot has a connected subscription token, the same
+ * CLAUDE_CODE_OAUTH_TOKEN + CLAUDE_CONFIG_DIR pair copilotRunner's own
+ * buildEnv() sets, so the shim signs in exactly the way Copilot does.
+ * Still not the whole process env: nothing else of the host leaks into a
+ * process that talks to a third party.
+ */
+export function buildServerEnv(
   key: string,
   paths: UltrafastPaths,
   scripts: { runnerPath: string },
 ): Record<string, string> {
-  return {
+  const env: Record<string, string> = {
     ULTRAFAST_TYPESAFE_API_KEY: key,
     ULTRAFAST_VENV_PYTHON: paths.venvPython,
     ULTRAFAST_RUNNER_PATH: scripts.runnerPath,
     ULTRAFAST_BH_HOME: paths.bhHome,
     ULTRAFAST_EVIDENCE_ROOT: paths.evidenceRoot,
+    HOME: process.env.HOME ?? os.homedir(),
+    USER: process.env.USER ?? os.userInfo().username,
+    LOGNAME: process.env.LOGNAME ?? process.env.USER ?? os.userInfo().username,
+    PATH: process.env.PATH ?? '/usr/bin:/bin:/usr/sbin:/sbin',
   };
+  if (process.env.TMPDIR) env.TMPDIR = process.env.TMPDIR;
+  ['HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY'].forEach((name) => {
+    const value = process.env[name];
+    if (value) env[name] = value;
+  });
+  const subscriptionToken = getStoredSubscriptionToken();
+  if (subscriptionToken) {
+    env.CLAUDE_CODE_OAUTH_TOKEN = subscriptionToken;
+    env.CLAUDE_CONFIG_DIR = copilotClaudeConfigDir();
+  }
+  return env;
 }
 
 export function registerUltrafastBrowser(
