@@ -1,10 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import {
-  getJiraPriorityOptions,
-  getJiraTransitions,
-  setJiraTicketPriority,
-  transitionJiraTicket,
-} from '@/data/jiraApi';
+import { getJiraPriorityOptions, getJiraTransitions } from '@/data/jiraApi';
 import { showErrorToast } from '@/lib/toast';
 import { Avatar } from '@/components/ui/Avatar';
 import {
@@ -15,6 +10,10 @@ import {
   JiraStateChip,
   JiraTransitionPopover,
 } from '@/components/domain/JiraTransitionPopover';
+import {
+  moveJiraTicketWithUndo,
+  setJiraTicketPriorityWithUndo,
+} from '@/components/domain/jiraUndoableWrites';
 import { jiraProjectColor } from '@/types/jira';
 import type {
   JiraPriorityOption,
@@ -136,8 +135,7 @@ export function JiraTicketRow({
     setPriorityOpen(false);
     setSavingPriority(true);
     try {
-      const updated = await setJiraTicketPriority(ticket.id, option.id);
-      onTicketUpdated(updated);
+      await setJiraTicketPriorityWithUndo({ onTicketUpdated }, ticket, option);
     } catch (err) {
       showErrorToast(
         err instanceof Error
@@ -156,12 +154,12 @@ export function JiraTicketRow({
     setPopoverOpen(false);
     setSaving(true);
     try {
-      const updated = await transitionJiraTicket(
-        ticket.id,
-        transition.id,
+      await moveJiraTicketWithUndo(
+        { onTicketUpdated },
+        ticket,
+        transition,
         fieldValues,
       );
-      onTicketUpdated(updated);
     } catch (err) {
       showErrorToast(
         err instanceof Error

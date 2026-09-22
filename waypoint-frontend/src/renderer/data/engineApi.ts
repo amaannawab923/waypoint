@@ -34,6 +34,9 @@ import type {
   SendRunPromptResult,
   SessionFolder,
   RunChanged,
+  CloseRunPreview,
+  CloseRunResult,
+  WorktreeHealth,
   RunDiff,
   StartRunInput,
   StopRunResult,
@@ -203,6 +206,21 @@ export function getRunDiff(runId: string): Promise<RunDiff> {
 
 export function revealRunWorktree(runId: string): Promise<void> {
   return bridge().revealRunWorktree(runId).catch(unwrapIpcError);
+}
+
+// Fix 8 (feedback round 1): a finished run's worktree and branch, gone
+// on request — the preview first, so the confirm can say what is lost.
+export function closeRunPreview(runId: string): Promise<CloseRunPreview> {
+  return bridge().closeRunPreview(runId).catch(unwrapIpcError);
+}
+
+/** Finding A: what git says about the worktree now — never a network call. */
+export function getRunWorktreeHealth(runId: string): Promise<WorktreeHealth> {
+  return bridge().runWorktreeHealth(runId).catch(unwrapIpcError);
+}
+
+export function closeRun(runId: string): Promise<CloseRunResult> {
+  return bridge().closeRun(runId).catch(unwrapIpcError);
 }
 
 // W4 (docs/design/w4-start-session.md §5): the renderer names a project,

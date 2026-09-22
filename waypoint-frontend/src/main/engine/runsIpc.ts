@@ -11,7 +11,10 @@ import {
   type OpenPrResult,
   type ResolvedTicket,
   type RunChanged,
+  type CloseRunPreview,
+  type CloseRunResult,
   type RunDiff,
+  type WorktreeHealth,
   type RunDiffFile,
   type RunDiffFileStatus,
   type SessionFolder,
@@ -26,12 +29,23 @@ import {
   type AgentRun,
   type LedgerClient,
 } from './runs/ledgerClient';
-import { assertUnder } from './runs/worktrees';
-import { listRunBranches, resumeRun, startRun } from './runs/startRun';
+import {
+  assertUnder,
+  isRefSafeComponent,
+  releaseWorktree,
+} from './runs/worktrees';
+import {
+  ENGINE_NOT_RUNNING,
+  listRunBranches,
+  resumeRun,
+  startRun,
+} from './runs/startRun';
 import {
   buildBriefPreview,
+  describeTicketRepo,
   dispatchTicketRun,
   withTicketDispatchLock,
+  type TicketRepo,
 } from './runs/dispatch';
 import { withRunLock } from './runs/runLock';
 import {
@@ -511,6 +525,8 @@ export async function assertPublishableCwd(
 export interface RunsHostApi {
   /** W6: push a run's branch and open its pull request, as the person. */
   openRunPullRequest(runId: string): Promise<OpenPrResult>;
+  /** Fix 7: the repository a session on a ticket would use, for Copilot's offer card; null when none is known. */
+  describeTicketRepo(ticketId: string): Promise<TicketRepo | null>;
   /** Never-lock: finalize's last step — deliver a message typed while it held the row (sendPrompt.ts). */
   deliverPendingAfterFinalize(runId: string): Promise<void>;
   /**
@@ -891,6 +907,214 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
     return computeRunDiff(git, worktree, run.baseRef);
   });
 
+  // Customer feedback round 1, Fix 8: a finished run's worktree and
+  // branch used to stay on disk forever. "Close run" removes the worktree
+  // (the transcript and diff stay in Waypoint) and the branch, unless a
+  // pull request still needs it. Never a branch whose commits exist
+  // nowhere else without the person being told so first — hence the
+  // preview the confirm is built from.
+  const CLOSABLE: ReadonlySet<AgentRun['status']> = new Set([
+    'done',
+    'needs-review',
+    'failed',
+    'cancelled',
+    'interrupted',
+  ]);
+  const closableRun = async (runId: unknown): Promise<AgentRun> => {
+    const run = await loadRun(runId);
+    if (run.isolation === 'directory') {
+      throw new Error(
+        'This session works in your folder directly; there is no worktree to remove.',
+      );
+    }
+    if (!CLOSABLE.has(run.status)) {
+      throw new Error(
+        `This run is ${run.status}; stop it first, or wait for it to finish.`,
+      );
+    }
+    if (run.status === 'needs-review' && run.ticketId) {
+      const pending = (
+        await ledger.listTicketProposals(run.ticketId).catch(() => [])
+      ).filter((p) => p.agentRunId === run.id && p.status === 'proposed');
+      if (pending.length > 0) {
+        throw new Error(
+          `${pending.length === 1 ? 'A proposal from this run is' : `${pending.length} proposals from this run are`} still waiting in Review; decide ${pending.length === 1 ? 'it' : 'them'} first.`,
+        );
+      }
+    }
+    if (!run.branch) throw new Error('This run has no branch.');
+    return run;
+  };
+
+  /** Commits on the branch that no remote has — the ones a branch deletion would lose. */
+  const unpushedCommits = async (
+    run: AgentRun,
+    worktree: string,
+  ): Promise<number | null> => {
+    const branch = run.branch!;
+    if (!branch.split('/').every(isRefSafeComponent)) return null;
+    const remote = await git(
+      ['for-each-ref', '--format=%(refname)', `refs/remotes/origin/${branch}`],
+      { cwd: worktree },
+    );
+    const upstream =
+      remote.code === 0 && remote.stdout.trim() ? `origin/${branch}` : null;
+    const base =
+      upstream ??
+      (run.baseRef && run.baseRef.split('/').every(isRefSafeComponent)
+        ? run.baseRef
+        : null);
+    if (!base) return null;
+    const count = await git(['rev-list', '--count', `${base}..HEAD`, '--'], {
+      cwd: worktree,
+    });
+    if (count.code !== 0) return null;
+    const n = Number.parseInt(count.stdout.trim(), 10);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  /**
+   * Working-tree files with no commit at all, tracked or not — the ones
+   * `unpushedCommits` above says nothing about (B1, PR #88 review):
+   * `CLOSABLE` includes `failed`, `cancelled` and `interrupted`, where an
+   * agent's turn ending mid-edit is the normal case, not the exception —
+   * eleven files changed, nothing committed, and the old preview read
+   * `unpushedCommits: 0` as if there were nothing to lose. Counted the
+   * way `describeBranchWork` (finalize.ts) already counts a run's
+   * uncommitted files for its own comment: one line per changed path out
+   * of `git status`, tolerant of a git failure (null, not thrown) so an
+   * unreadable worktree never blocks the confirm from opening at all.
+   */
+  const uncommittedFileCount = async (
+    worktree: string,
+  ): Promise<number | null> => {
+    const status = await git(
+      ['status', '--short', '--untracked-files=all', '--'],
+      { cwd: worktree },
+    );
+    if (status.code !== 0) return null;
+    return status.stdout.split('\n').filter((line) => line.trim().length > 0)
+      .length;
+  };
+
+  // Finding A (feedback round 1): the header's branch line and Open PR
+  // came from the ledger's row alone; a worktree whose parent repository
+  // is gone still looked healthy. This asks git, read-only, once per
+  // detail open. A directory run has no worktree to check.
+  deps.host.handle(
+    RUNS_IPC.worktreeHealth,
+    async (runId): Promise<WorktreeHealth> => {
+      const run = await loadRun(runId);
+      if (run.isolation === 'directory' || !run.worktreePath) {
+        return { kind: 'unknown' };
+      }
+      let worktree: string;
+      try {
+        worktree = await worktreeOf(run);
+        await assertWorktreeGitDir(worktree);
+      } catch (error) {
+        return {
+          kind: 'orphaned',
+          reason: error instanceof Error ? error.message : String(error),
+        };
+      }
+      const probe = await git(['rev-parse', '--is-inside-work-tree'], {
+        cwd: worktree,
+      }).catch((error: unknown) => ({
+        code: 1,
+        stdout: '',
+        stderr: error instanceof Error ? error.message : String(error),
+      }));
+      if (probe.code !== 0 || probe.stdout.trim() !== 'true') {
+        const reason = (probe.stderr || probe.stdout).trim().split('\n')[0];
+        return {
+          kind: 'orphaned',
+          reason: reason || 'git could not read this worktree.',
+        };
+      }
+      const head = await git(['rev-parse', '--abbrev-ref', 'HEAD'], {
+        cwd: worktree,
+      }).catch(() => null);
+      const branch =
+        head && head.code === 0 && head.stdout.trim() !== 'HEAD'
+          ? head.stdout.trim()
+          : null;
+      return { kind: 'ok', branch };
+    },
+  );
+
+  deps.host.handle(
+    RUNS_IPC.closePreview,
+    async (runId): Promise<CloseRunPreview> => {
+      const run = await closableRun(runId);
+      const worktree = await worktreeOf(run);
+      await assertWorktreeGitDir(worktree);
+      const hasPullRequest = !!run.prUrl;
+      return {
+        branch: run.branch!,
+        worktreePath: worktree,
+        unpushedCommits: hasPullRequest
+          ? 0
+          : await unpushedCommits(run, worktree),
+        // Unlike unpushedCommits, this is not skipped when there is a
+        // pull request: a PR only reflects what was pushed, and an
+        // uncommitted change is lost with the worktree either way (B1).
+        uncommittedFiles: await uncommittedFileCount(worktree),
+        hasPullRequest,
+        branchWillBeDeleted: !hasPullRequest,
+      };
+    },
+  );
+
+  // B4 (PR #88 review): every other mutating run path — resume, a send,
+  // the pane's warm-up on open — takes runLock.ts's per-run lock, and
+  // under never-lock the composer is always live, so a send can land
+  // mid-flight while close is killing the session and deleting the
+  // worktree out from under it. This handler used to run with no lock at
+  // all, the one mutating path that didn't.
+  const closeRunLocked = async (runId: unknown): Promise<CloseRunResult> => {
+    const run = await closableRun(runId);
+    await worktreeOf(run);
+    // Never-lock: the daemon may still hold this run's session (a
+    // finished run is a conversation that may be continued). It goes
+    // first — a session in a folder that is about to be deleted is not
+    // one to keep.
+    const daemon = daemonFor(deps.supervisor);
+    if (!daemon) throw new Error(ENGINE_NOT_RUNNING);
+    await deps.transcripts?.capture(run.id);
+    await daemon.killSession(run.id).catch((error: unknown) =>
+      deps.logger.warn('engine: kill before close did not apply', {
+        runId: run.id,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    const keepBranch = !!run.prUrl;
+    await releaseWorktree(
+      {
+        daemon,
+        ledger,
+        worktreesDir: deps.worktreesDir,
+        logger: deps.logger,
+      },
+      run,
+      keepBranch ? 'abandoned' : 'merged',
+    );
+    deps.logger.info('engine: run closed', {
+      runId: run.id,
+      branchDeleted: !keepBranch,
+    });
+    return {
+      worktreeRemoved: true,
+      branchDeleted: !keepBranch,
+      branchKeptBecause: keepBranch ? 'pull-request' : null,
+    };
+  };
+  deps.host.handle(RUNS_IPC.close, (runId) =>
+    typeof runId === 'string'
+      ? withRunLock(runId, () => closeRunLocked(runId))
+      : closeRunLocked(runId),
+  );
+
   deps.host.handle(RUNS_IPC.revealWorktree, async (runId): Promise<void> => {
     const run = await loadRun(runId);
     deps.reveal(
@@ -924,6 +1148,7 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
 
   return {
     openRunPullRequest,
+    describeTicketRepo: (ticketId) => describeTicketRepo(startDeps, ticketId),
     deliverPendingAfterFinalize: (runId) =>
       deliverPendingAfterFinalize(startDeps, runId),
     drainLiveOutboxes,

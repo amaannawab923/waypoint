@@ -29,6 +29,7 @@ import type {
 import type { EngineStatus } from '@/types/engine';
 import { FolderPicker } from './FolderPicker';
 import { statusView } from './sessionStatus';
+import { BranchPicker } from './BranchPicker';
 
 /**
  * The New session dialog — W4b, ROAD-116 (docs/design/w4b-sessions-anywhere.md
@@ -79,13 +80,21 @@ export function defaultIsolation(folder: SessionFolder): RunIsolation {
   return folder.kind === 'repo' ? 'worktree' : 'directory';
 }
 
-/** The default auto-approve: what this folder was last started with, else what the isolation implies. */
+/**
+ * The default auto-approve: what this folder was last started with, else
+ * OFF — for a worktree too. It used to default on for a worktree
+ * (customer feedback round 1: "bypass permissions on by default, one
+ * click from my live checkout"); a person who wants it on for a trusted
+ * folder turns it on once and it is remembered.
+ */
 export function defaultAutoApprove(
   folder: SessionFolder,
-  isolation: RunIsolation,
+  // Kept in the signature: the remembered choice is per folder, the
+  // default no longer depends on where the agent works.
+  _isolation: RunIsolation,
 ): boolean {
   if (folder.lastAutoApprove !== null) return folder.lastAutoApprove;
-  return isolation === 'worktree';
+  return false;
 }
 
 const fieldClass =
@@ -97,6 +106,12 @@ type BranchState =
   | { kind: 'loading' }
   | { kind: 'ready'; branches: string[]; suggested: string | null }
   | { kind: 'failed'; message: string };
+
+/** What the base-branch field shows: the branch, or why there is none yet. */
+function branchFieldValue(branches: BranchState, baseRef: string): string {
+  if (branches.kind === 'ready') return baseRef;
+  return branches.kind === 'loading' ? 'Reading branches…' : '';
+}
 
 export function NewSessionDialog({
   open,
@@ -234,9 +249,18 @@ export function NewSessionDialog({
   }, [selected, engineRunning]);
 
   // Flipping where the agent works re-defaults auto-approve unless the
-  // person has set it themselves.
+  // person has set it themselves — and switching to the folder itself
+  // while auto-approve is on asks first, instead of a colour change
+  // (customer feedback round 1): the agent would edit the live checkout
+  // without a prompt.
+  const [directConfirm, setDirectConfirm] = useState(false);
   const changeIsolation = (next: RunIsolation) => {
     setIsolation(next);
+    if (next === 'directory' && autoApprove) {
+      setDirectConfirm(true);
+      return;
+    }
+    setDirectConfirm(false);
     if (!autoApproveTouched && selected)
       setAutoApprove(defaultAutoApprove(selected, next));
   };
@@ -293,6 +317,7 @@ export function NewSessionDialog({
     providerId !== null &&
     !selection.createDisabled &&
     (!worktree || (branches.kind === 'ready' && !!baseRef)) &&
+    !directConfirm &&
     !starting;
 
   const start = async () => {
@@ -443,6 +468,18 @@ export function NewSessionDialog({
             onChange={(next) => {
               setAutoApprove(next);
               setAutoApproveTouched(true);
+              // S7 (PR #88 review): `changeIsolation` raises this same
+              // confirm when isolation flips to 'directory' while
+              // auto-approve is already on — but a plain, non-repo
+              // folder gets isolation: 'directory' automatically
+              // (defaultIsolation, the folder-selection effect above),
+              // never through `changeIsolation` at all, and
+              // defaultAutoApprove now defaults OFF. So the natural
+              // path — pick a folder, tick Auto-approve, Start — never
+              // went through `changeIsolation` and never asked. Raised
+              // here too, the mirror image of that check: turning auto-
+              // approve ON while already on a direct folder.
+              if (next && isolation === 'directory') setDirectConfirm(true);
             }}
           />
           <label
@@ -463,6 +500,41 @@ export function NewSessionDialog({
             </span>
           </label>
         </div>
+        {directConfirm && (
+          <div
+            data-direct-auto-approve-confirm
+            role="alertdialog"
+            aria-label="Turn off auto-approve for a direct folder?"
+            className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-sm)] border border-warning bg-warning-bg px-3 py-2 text-xs text-warning"
+          >
+            <span className="font-medium">
+              Turn off auto-approve for a direct folder?
+            </span>
+            <span className="flex gap-2">
+              <Button
+                size="xs"
+                variant="secondary"
+                onClick={() => {
+                  setAutoApproveTouched(true);
+                  setDirectConfirm(false);
+                }}
+              >
+                Keep it on
+              </Button>
+              <Button
+                size="xs"
+                variant="primary"
+                onClick={() => {
+                  setAutoApprove(false);
+                  setAutoApproveTouched(true);
+                  setDirectConfirm(false);
+                }}
+              >
+                Turn it off
+              </Button>
+            </span>
+          </div>
+        )}
 
         {selected?.kind === 'repo' && (
           <div className="flex flex-col gap-2">
@@ -510,34 +582,18 @@ export function NewSessionDialog({
                   <label htmlFor="new-session-branch" className={labelClass}>
                     Base branch
                   </label>
-                  <select
+                  <BranchPicker
                     id="new-session-branch"
-                    value={baseRef}
-                    onChange={(e) => setBaseRef(e.target.value)}
+                    branches={
+                      branches.kind === 'ready' ? branches.branches : []
+                    }
+                    value={branchFieldValue(branches, baseRef)}
+                    onChange={setBaseRef}
                     disabled={
                       starting || !worktree || branches.kind !== 'ready'
                     }
                     className={fieldClass}
-                    aria-describedby={
-                      branches.kind === 'failed'
-                        ? 'new-session-branch-error'
-                        : undefined
-                    }
-                  >
-                    {branches.kind === 'ready' ? (
-                      branches.branches.map((b) => (
-                        <option key={b} value={b}>
-                          {b}
-                        </option>
-                      ))
-                    ) : (
-                      <option value="">
-                        {branches.kind === 'loading'
-                          ? 'Reading branches…'
-                          : '—'}
-                      </option>
-                    )}
-                  </select>
+                  />
                   {branches.kind === 'failed' && (
                     <p
                       id="new-session-branch-error"

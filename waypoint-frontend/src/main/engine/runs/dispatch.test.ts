@@ -482,7 +482,8 @@ describe('buildBriefPreview', () => {
       intent: 'fix',
     });
     expect(preview.mode).toBe('write');
-    expect(preview.autoApproveDefault).toBe(true);
+    // Off by default for a writing session too (feedback round 1).
+    expect(preview.autoApproveDefault).toBe(false);
     expect(preview.seededFromRunId).toBe('run-inv00001');
     expect(preview.brief).toContain(
       '## Root cause, as approved\nThe write is not guarded.',

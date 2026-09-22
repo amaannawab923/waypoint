@@ -23,6 +23,7 @@ import type {
   SupportedProviderId,
 } from '@/types/agentRuns';
 import { FolderPicker } from './FolderPicker';
+import { BranchPicker } from './BranchPicker';
 
 /**
  * The brief preview — W5a, ROAD-119 (docs/design/w5a-investigate-fix.md
@@ -406,19 +407,13 @@ export function BriefPreviewDialog({
                 <span className="font-mono">{preview.branchHint}</span>
                 <span className="text-text-muted">from</span>
                 {preview.repo ? (
-                  <select
-                    aria-label="Base branch"
+                  <BranchPicker
+                    branches={preview.branches.branches}
                     value={preview.baseRef ?? ''}
-                    onChange={(e) => setBaseRef(e.target.value)}
+                    onChange={setBaseRef}
                     disabled={starting}
                     className={fieldClass}
-                  >
-                    {preview.branches.branches.map((b) => (
-                      <option key={b} value={b}>
-                        {b}
-                      </option>
-                    ))}
-                  </select>
+                  />
                 ) : (
                   <span className="text-text-muted">
                     (the folder&apos;s default branch)

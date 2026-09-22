@@ -36,7 +36,13 @@ export type AgentRunEntry = 'independent' | 'dispatched';
 
 /** Mirrors the backend's runVerdictSchema; report.ts's Verdict is the same set. */
 export type RunVerdict =
-  'root-cause' | 'fixed' | 'partial' | 'not-a-bug' | 'wont-fix' | 'needs-info';
+  | 'root-cause'
+  | 'fixed'
+  | 'partial'
+  | 'not-a-bug'
+  | 'wont-fix'
+  | 'delivered'
+  | 'needs-info';
 
 /** The row as the backend serialises it (timestamps as ISO strings). */
 export interface AgentRun {
@@ -93,6 +99,14 @@ export interface AgentRun {
   finalizedHeadSha: string | null;
   updatedAt: string;
 }
+
+/**
+ * How many events one `listEvents` call returns, oldest first. Exported
+ * so a caller that needs the TAIL of a long run's events (startRun.ts's
+ * `wasClosedByRunsClose`) can tell a full page from the last one and page
+ * forward with `afterSeq`, instead of hard-coding this number twice.
+ */
+export const LEDGER_EVENT_PAGE_SIZE = 500;
 
 export interface AgentRunEvent {
   runId: string;
@@ -226,8 +240,14 @@ export interface LedgerProposal {
   resolvedAt: string | null;
 }
 
+/**
+ * `groupId` ties the comment and the state change one closing message
+ * files — `<runId>:<report sequence>` — so Review shows them as one card
+ * and approves them together (customer feedback round 1).
+ */
 export type CreateRunProposalInput =
-  { kind: 'comment'; body: string } | { kind: 'state_change'; stateId: string };
+  | { kind: 'comment'; body: string; groupId?: string }
+  | { kind: 'state_change'; stateId: string; groupId?: string };
 
 /** The slice of a project a run start needs (the backend's `/projects/:id`). */
 export interface LedgerProject {
@@ -612,7 +632,9 @@ export function createLedgerClient(deps: LedgerClientDeps = {}): LedgerClient {
     },
     async listEvents(id, options = {}) {
       assertRunId(id);
-      const params = new URLSearchParams({ limit: '500' });
+      const params = new URLSearchParams({
+        limit: String(LEDGER_EVENT_PAGE_SIZE),
+      });
       if (options.afterSeq !== undefined)
         params.set('afterSeq', String(options.afterSeq));
       return (

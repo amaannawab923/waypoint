@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/Button';
 import { renderMarkdown } from '@/lib/markdown';
 import { editProposal } from '@/lib/proposalStore';
 import { useAgentRunSummary } from '@/lib/useAgentRunSummary';
+import { justificationOf, whyItExists } from '@/pages/review/groupProposals';
 import { PriorityIcon, PRIORITY_LABEL } from './PriorityIcon';
 
 // Ported 1:1 from the approved mockup (docs/qa/copilot-write-approval-mockup.html)
@@ -578,12 +579,20 @@ function resolutionNote(proposal: ProposalView): { ok: boolean; text: string } {
  */
 export function CopilotProposalCard({
   proposal,
+  companion = null,
   onApprove,
   onReject,
   onEdit = editProposal,
   agentName,
 }: {
   proposal: ProposalView;
+  /**
+   * The state change filed with this comment by the same closing message
+   * (customer feedback round 1): drawn under the comment with the sentence
+   * that justifies it, decided by the same Approve / Reject. Never
+   * editable on its own — reject the pair if the state is wrong.
+   */
+  companion?: ProposalView | null;
   onApprove: (id: string) => Promise<unknown>;
   onReject: (id: string) => Promise<unknown>;
   /**
@@ -627,6 +636,10 @@ export function CopilotProposalCard({
     setActing(true);
     try {
       await fn(proposal.id);
+      // The comment first, then its state change — the order the ticket's
+      // readers see them in; a comment that did not land leaves the state
+      // proposal pending, never the other way round.
+      if (companion && companion.status === 'proposed') await fn(companion.id);
     } finally {
       // The card re-renders from the patched proposal prop; on a resolved
       // outcome this footer unmounts entirely, so re-enabling here only
@@ -641,6 +654,13 @@ export function CopilotProposalCard({
   const [draft, setDraft] = useState<string | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
   const editing = draft !== null;
+
+  // S1 (PR #88 review): "Why this exists" reads the verdict off the run
+  // itself, the same cached lookup RunOriginLine already makes for this
+  // proposal's "from run … ↗" line — undefined while it loads, null when
+  // the run could not be read; whyItExists falls back to the comment
+  // body's own (anchored) Verdict line either way.
+  const runSummary = useAgentRunSummary(proposal.agentRunId);
 
   async function saveEdit() {
     if (draft === null) return;
@@ -697,12 +717,20 @@ export function CopilotProposalCard({
     >
       <div className="flex items-center justify-between gap-2 border-b border-border bg-bg-inset px-3 py-2">
         <span className="text-[10.5px] font-bold tracking-wider text-text-secondary uppercase">
-          {KIND_LABELS[proposal.kind]}
+          {companion
+            ? 'Proposed change · Comment + state'
+            : KIND_LABELS[proposal.kind]}
         </span>
         <StatusBadge status={status} />
       </div>
 
       <div className="flex flex-col gap-2.5 p-3">
+        <div
+          className="text-[11.5px] leading-snug text-text-muted"
+          data-proposal-why
+        >
+          Why this exists: {whyItExists(proposal, runSummary?.verdict)}
+        </div>
         <ProposalBody
           proposal={proposal}
           agentName={agentName}
@@ -717,6 +745,44 @@ export function CopilotProposalCard({
             {editError}
           </div>
         )}
+        {companion && companion.kind === 'state_change' && (
+          <div
+            className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border border-border px-3 py-2"
+            data-proposal-companion={companion.id}
+          >
+            <StateChip
+              name={companion.snapshot.fromStateName}
+              color={companion.snapshot.fromStateColor}
+            />
+            <ArrowRight size={14} className="text-text-muted" />
+            <StateChip
+              name={companion.snapshot.toStateName}
+              color={companion.snapshot.toStateColor}
+              highlight
+            />
+            {(() => {
+              const why = justificationOf(proposal.payload.body);
+              return why ? (
+                <span className="min-w-0 text-[12.5px] text-text-secondary italic">
+                  “{why}”
+                </span>
+              ) : null;
+            })()}
+            {companion.status !== 'proposed' && (
+              <span className="ml-auto text-[11px] text-text-muted">
+                {companion.status}
+              </span>
+            )}
+          </div>
+        )}
+        {!companion &&
+          proposal.kind === 'state_change' &&
+          proposal.origin === 'agent_run' && (
+            <div className="text-[11.5px] text-text-muted">
+              The comment that justifies this is a separate card above or below
+              — they were filed before proposals were grouped.
+            </div>
+          )}
         <ExternalWriteBanner snapshot={proposal.snapshot} />
         {isStale && (
           <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-warning bg-warning-bg px-2.5 py-2 text-[12.5px] leading-snug font-medium text-warning">

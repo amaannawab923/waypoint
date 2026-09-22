@@ -34,7 +34,12 @@ import {
 import { getSharedChatContext } from '@/lib/chatContext';
 import type { AgentRunEvent, PendingPrompt } from '@/types/agentRuns';
 import { briefTurnSeq, foldBrief, foldTurn } from './briefFold';
-import { deriveMarkers, overlayMarkers, type Marker } from './markerFold';
+import {
+  deriveMarkers,
+  foldHiddenNotes,
+  overlayMarkers,
+  type Marker,
+} from './markerFold';
 
 /** How the transcript's history read stands. */
 export type HistoryStatus =
@@ -197,6 +202,9 @@ export function useSessionTranscript(
       briefSeqRef.current = folded.seq;
       setBrief(folded.brief);
     }
+    // A resume note or continuation note the agent's replay glued onto
+    // the person's message comes out as its own marker row.
+    seeded = foldHiddenNotes(seeded);
     // Then the markers (never-lock, design §5.3): after the fold, before
     // the seed, so every commit and every restart re-applies them.
     seeded = overlayMarkers(seeded, markersRef.current);

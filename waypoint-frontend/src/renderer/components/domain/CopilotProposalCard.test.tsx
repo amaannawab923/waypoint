@@ -119,6 +119,65 @@ describe('CopilotProposalCard', () => {
     );
   });
 
+  it('a comment with its state change is one card: the transition under the comment with its justifying sentence, one Approve deciding both in order (feedback round 1)', async () => {
+    const calls: string[] = [];
+    const onApprove = jest.fn(async (id: string) => {
+      calls.push(id);
+    });
+    const comment = proposal({
+      id: 'prop-comment',
+      kind: 'comment',
+      origin: 'agent_run',
+      agentRunId: 'run-a',
+      groupId: 'run-a:1',
+      payload: {
+        body: '**Verdict:** fixed\n\nThe name field was never read on submit. Fixed it.',
+      },
+    });
+    const change = proposal({
+      id: 'prop-state',
+      kind: 'state_change',
+      origin: 'agent_run',
+      agentRunId: 'run-a',
+      groupId: 'run-a:1',
+      snapshot: {
+        identifier: 'PL-10',
+        title: 'Greeting',
+        fromStateId: 'st-todo',
+        fromStateName: 'Todo',
+        toStateName: 'In Review',
+      },
+    });
+    render(
+      <CopilotProposalCard
+        proposal={comment}
+        companion={change}
+        onApprove={onApprove}
+        onReject={jest.fn().mockResolvedValue(undefined)}
+      />,
+    );
+    expect(
+      screen.getByText('Proposed change · Comment + state'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Why this exists: this run's closing report — verdict fixed/,
+      ),
+    ).toBeInTheDocument();
+    const pair = document.querySelector(
+      '[data-proposal-companion="prop-state"]',
+    )!;
+    expect(pair).toHaveTextContent('Todo');
+    expect(pair).toHaveTextContent('In Review');
+    expect(pair).toHaveTextContent(
+      '“The name field was never read on submit.”',
+    );
+    // One Approve for the pair.
+    expect(screen.getAllByRole('button', { name: 'Approve' })).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    await waitFor(() => expect(calls).toEqual(['prop-comment', 'prop-state']));
+  });
+
   it('an executed card shows Applied ✓ with the buttons UNMOUNTED, not merely disabled', () => {
     renderCard(
       proposal({ status: 'executed', resolvedAt: '2026-01-01T01:00:00.000Z' }),

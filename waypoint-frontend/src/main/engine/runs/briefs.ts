@@ -237,7 +237,15 @@ function verificationTask(noun: 'ticket' | 'issue'): string {
   ].join(' ');
 }
 
-const INVESTIGATE_VERDICTS = ['root-cause', 'not-a-bug', 'needs-info'];
+// `delivered`: the ticket's ask is already built and shipped — closes as
+// done, unlike not-a-bug. Not a Fix verdict: a Fix implements, it does
+// not judge scope.
+const INVESTIGATE_VERDICTS = [
+  'root-cause',
+  'not-a-bug',
+  'delivered',
+  'needs-info',
+];
 const FIX_VERDICTS = [
   'fixed',
   'partial',

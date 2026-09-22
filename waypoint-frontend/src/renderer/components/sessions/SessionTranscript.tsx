@@ -597,7 +597,22 @@ export function SessionTranscript({ run }: { run: AgentRun }) {
         sendingLabel={sendingLabel}
         generating={isGenerating}
         onStop={commands.onStop}
-        config={config}
+        // An Investigate reads and reports; it never gets the mode that
+        // bypasses every permission (customer feedback round 1).
+        config={
+          run.intent === 'investigate' && config?.modeOptions
+            ? {
+                ...config,
+                modeOptions: {
+                  ...config.modeOptions,
+                  available: config.modeOptions.available.filter(
+                    (m) => m.id !== 'bypassPermissions',
+                  ),
+                },
+              }
+            : config
+        }
+        writeModeId={run.autoApprove ? 'bypassPermissions' : 'default'}
         onSetMode={(modeId) => {
           setSessionMode(run.id, modeId).catch((error: unknown) =>
             showErrorToast(

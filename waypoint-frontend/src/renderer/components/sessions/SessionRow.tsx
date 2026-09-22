@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/Badge';
 import { verdictLabel, verdictTone } from '@/lib/runVerdict';
 import {
   intentView,
+  MODE_TITLES,
   providerView,
   runTitle,
   runWhere,
@@ -89,8 +90,15 @@ export function IntentChip({
   return (
     <span
       data-intent-chip
+      title={view.title}
       className={clsx(
-        'inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-bg-inset px-1.5 font-medium text-text-secondary',
+        'inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 font-medium',
+        // A plain `Session` (no ticket verb) is drawn quieter than a
+        // Fix/Investigate chip, so it reads as intentionally plain rather
+        // than a chip missing its data (feedback round 1, Fix 6).
+        view.plain
+          ? 'border-dashed border-border text-text-muted'
+          : 'border-border bg-bg-inset text-text-secondary',
         size === 'sm' ? 'text-[9px] leading-[14px]' : 'text-[10px] leading-4',
       )}
     >
@@ -113,7 +121,7 @@ export function AutoMark({ size = 'sm' }: { size?: 'sm' | 'md' }) {
   return (
     <span
       data-auto-mark
-      title="Auto-approve: the agent works without asking"
+      title={MODE_TITLES.auto}
       className={clsx(
         'inline-flex shrink-0 items-center rounded-full border border-warning/40 bg-warning-bg px-1.5 font-semibold tracking-wide text-warning uppercase',
         size === 'sm'

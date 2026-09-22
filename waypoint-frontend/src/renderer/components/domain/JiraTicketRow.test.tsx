@@ -1,7 +1,12 @@
 import '@testing-library/jest-dom';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { getJiraPriorityOptions, setJiraTicketPriority } from '@/data/jiraApi';
-import { showErrorToast } from '@/lib/toast';
+import {
+  getJiraPriorityOptions,
+  getJiraTransitions,
+  setJiraTicketPriority,
+  transitionJiraTicket,
+} from '@/data/jiraApi';
+import { showErrorToast, showInfoToast } from '@/lib/toast';
 import type { JiraTicket } from '@/types/jira';
 import { JiraTicketRow } from './JiraTicketRow';
 
@@ -15,7 +20,10 @@ jest.mock('@/data/jiraApi', () => ({
   getJiraPriorityOptions: jest.fn(),
   setJiraTicketPriority: jest.fn(),
 }));
-jest.mock('@/lib/toast', () => ({ showErrorToast: jest.fn() }));
+jest.mock('@/lib/toast', () => ({
+  showErrorToast: jest.fn(),
+  showInfoToast: jest.fn(),
+}));
 
 function ticket(overrides: Partial<JiraTicket> = {}): JiraTicket {
   return {
@@ -174,14 +182,45 @@ describe('opening the priority picker', () => {
   });
 });
 
+// Customer feedback round 1, Fix 5: a pick no longer writes on its own
+// click — the panel asks first, and a write that went through gets an
+// undo toast whose button is a real inverse write.
 describe('choosing a priority', () => {
-  it('writes the chosen id and hands the re-read ticket up', async () => {
-    const updated = ticket({ priority: 'medium', priorityId: '3' });
+  it('writes nothing on the pick alone — the panel asks first', async () => {
+    renderRow();
+
+    fireEvent.click(priorityChip());
+    fireEvent.click(await screen.findByRole('button', { name: 'Medium' }));
+
+    expect(
+      document.querySelector('[data-priority-confirm]')?.textContent,
+    ).toMatch(/Set ENG-421 to Medium\?/);
+    expect(setJiraTicketPriority).not.toHaveBeenCalled();
+  });
+
+  it('Cancel returns to the options, nothing written', async () => {
+    renderRow();
+
+    fireEvent.click(priorityChip());
+    fireEvent.click(await screen.findByRole('button', { name: 'Medium' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.getByRole('button', { name: 'Lowest' })).toBeInTheDocument();
+    expect(setJiraTicketPriority).not.toHaveBeenCalled();
+  });
+
+  it('Set writes the chosen id, hands the re-read ticket up, and offers Undo', async () => {
+    const updated = ticket({
+      priority: 'medium',
+      priorityId: '3',
+      priorityName: 'Medium',
+    });
     jest.mocked(setJiraTicketPriority).mockResolvedValue(updated);
     renderRow();
 
     fireEvent.click(priorityChip());
     fireEvent.click(await screen.findByRole('button', { name: 'Medium' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Set' }));
 
     // The id, not the label: "Medium" is this site's word for priority 3 and
     // another site's word for nothing at all.
@@ -189,6 +228,28 @@ describe('choosing a priority', () => {
       expect(setJiraTicketPriority).toHaveBeenCalledWith('10421', '3'),
     );
     expect(onTicketUpdated).toHaveBeenCalledWith(updated);
+    await waitFor(() =>
+      expect(showInfoToast).toHaveBeenCalledWith(
+        'Set ENG-421 to Medium.',
+        expect.objectContaining({
+          action: expect.objectContaining({ label: 'Undo' }),
+        }),
+      ),
+    );
+
+    // Undo is the previous priority written back — a real write.
+    const reverted = ticket();
+    jest.mocked(setJiraTicketPriority).mockResolvedValue(reverted);
+    const [, options] = jest.mocked(showInfoToast).mock.calls[0];
+    options?.action?.onClick();
+    await waitFor(() =>
+      expect(setJiraTicketPriority).toHaveBeenLastCalledWith('10421', '1'),
+    );
+    expect(onTicketUpdated).toHaveBeenLastCalledWith(reverted);
+    expect(showInfoToast).toHaveBeenLastCalledWith(
+      'Reverted.',
+      expect.anything(),
+    );
   });
 
   it('surfaces a rejected write and updates nothing', async () => {
@@ -199,6 +260,7 @@ describe('choosing a priority', () => {
 
     fireEvent.click(priorityChip());
     fireEvent.click(await screen.findByRole('button', { name: 'Medium' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Set' }));
 
     await waitFor(() =>
       expect(showErrorToast).toHaveBeenCalledWith(
@@ -206,6 +268,123 @@ describe('choosing a priority', () => {
       ),
     );
     expect(onTicketUpdated).not.toHaveBeenCalled();
+    expect(showInfoToast).not.toHaveBeenCalled();
+  });
+});
+
+describe('moving a ticket', () => {
+  const REVIEW = {
+    id: '21',
+    targetStateName: 'In Review',
+    targetStateColor: 'var(--accent)',
+    requiresFields: [],
+  };
+  const BACK = {
+    id: '11',
+    targetStateName: 'In Progress',
+    targetStateColor: 'var(--warning)',
+    requiresFields: [],
+  };
+
+  function stateChip(): HTMLElement {
+    return screen.getByRole('button', { name: /In Progress/ });
+  }
+
+  it('writes nothing on the pick alone — the panel asks first, naming the state', async () => {
+    jest.mocked(getJiraTransitions).mockResolvedValue([REVIEW]);
+    renderRow();
+
+    fireEvent.click(stateChip());
+    fireEvent.click(await screen.findByRole('button', { name: /In Review/ }));
+
+    const confirm = document.querySelector('[data-transition-confirm]');
+    expect(confirm?.textContent).toMatch(/Move ENG-421 to In Review\?/);
+    expect(confirm?.textContent).toMatch(/Watchers will be notified/);
+    expect(transitionJiraTicket).not.toHaveBeenCalled();
+  });
+
+  it('Move writes, then offers Undo as the workflow’s own way back', async () => {
+    const moved = ticket({ stateName: 'In Review' });
+    jest.mocked(getJiraTransitions).mockResolvedValueOnce([REVIEW]);
+    jest.mocked(transitionJiraTicket).mockResolvedValue(moved);
+    // After the move, the transitions legal from In Review.
+    jest.mocked(getJiraTransitions).mockResolvedValueOnce([BACK]);
+    renderRow();
+
+    fireEvent.click(stateChip());
+    fireEvent.click(await screen.findByRole('button', { name: /In Review/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move' }));
+
+    await waitFor(() =>
+      expect(transitionJiraTicket).toHaveBeenCalledWith('10421', '21', {}),
+    );
+    expect(onTicketUpdated).toHaveBeenCalledWith(moved);
+    await waitFor(() =>
+      expect(showInfoToast).toHaveBeenCalledWith(
+        'Moved ENG-421 to In Review.',
+        expect.objectContaining({
+          action: expect.objectContaining({ label: 'Undo' }),
+        }),
+      ),
+    );
+
+    const reverted = ticket();
+    jest.mocked(transitionJiraTicket).mockResolvedValue(reverted);
+    const [, options] = jest.mocked(showInfoToast).mock.calls[0];
+    options?.action?.onClick();
+    await waitFor(() =>
+      expect(transitionJiraTicket).toHaveBeenLastCalledWith('10421', '11', {}),
+    );
+    expect(onTicketUpdated).toHaveBeenLastCalledWith(reverted);
+  });
+
+  it('offers no Undo when the workflow has no way back', async () => {
+    const moved = ticket({ stateName: 'In Review' });
+    jest.mocked(getJiraTransitions).mockResolvedValueOnce([REVIEW]);
+    jest.mocked(transitionJiraTicket).mockResolvedValue(moved);
+    jest
+      .mocked(getJiraTransitions)
+      .mockResolvedValueOnce([
+        { ...REVIEW, id: '31', targetStateName: 'Done' },
+      ]);
+    renderRow();
+
+    fireEvent.click(stateChip());
+    fireEvent.click(await screen.findByRole('button', { name: /In Review/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move' }));
+
+    await waitFor(() =>
+      expect(showInfoToast).toHaveBeenCalledWith(
+        'Moved ENG-421 to In Review.',
+        expect.not.objectContaining({ action: expect.anything() }),
+      ),
+    );
+  });
+
+  it('a failed Undo is an error toast, not a pretended revert', async () => {
+    const moved = ticket({ stateName: 'In Review' });
+    jest.mocked(getJiraTransitions).mockResolvedValueOnce([REVIEW]);
+    jest.mocked(transitionJiraTicket).mockResolvedValueOnce(moved);
+    jest.mocked(getJiraTransitions).mockResolvedValueOnce([BACK]);
+    renderRow();
+
+    fireEvent.click(stateChip());
+    fireEvent.click(await screen.findByRole('button', { name: /In Review/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move' }));
+    await waitFor(() => expect(showInfoToast).toHaveBeenCalled());
+
+    jest
+      .mocked(transitionJiraTicket)
+      .mockRejectedValueOnce(new Error('Transition 11 is not valid here.'));
+    const [, options] = jest.mocked(showInfoToast).mock.calls[0];
+    options?.action?.onClick();
+
+    await waitFor(() =>
+      expect(showErrorToast).toHaveBeenCalledWith(
+        'Transition 11 is not valid here.',
+      ),
+    );
+    expect(onTicketUpdated).toHaveBeenCalledTimes(1);
   });
 });
 

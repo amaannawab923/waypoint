@@ -11,8 +11,6 @@ import {
   listJiraComments,
   prepareJiraCommentEdit,
   setJiraTicketAssignee,
-  setJiraTicketPriority,
-  transitionJiraTicket,
   uploadJiraAttachment,
   type JiraCommentPermissions,
   type JiraMentionSpan,
@@ -36,6 +34,10 @@ import {
   JiraStateChip,
   JiraTransitionPopover,
 } from '@/components/domain/JiraTransitionPopover';
+import {
+  moveJiraTicketWithUndo,
+  setJiraTicketPriorityWithUndo,
+} from '@/components/domain/jiraUndoableWrites';
 import {
   JiraCommentComposer,
   type JiraEditTarget,
@@ -759,8 +761,11 @@ export function JiraTicketDetail({
     setStateOpen(false);
     setSavingState(true);
     try {
-      onTicketUpdated(
-        await transitionJiraTicket(ticket.id, transition.id, fieldValues),
+      await moveJiraTicketWithUndo(
+        { onTicketUpdated },
+        ticket,
+        transition,
+        fieldValues,
       );
     } catch (err) {
       showErrorToast(
@@ -777,7 +782,7 @@ export function JiraTicketDetail({
     setPriorityOpen(false);
     setSavingPriority(true);
     try {
-      onTicketUpdated(await setJiraTicketPriority(ticket.id, option.id));
+      await setJiraTicketPriorityWithUndo({ onTicketUpdated }, ticket, option);
     } catch (err) {
       showErrorToast(
         err instanceof Error
@@ -1116,21 +1121,28 @@ export function JiraTicketDetail({
             />
           ) : (
             <>
-              {/* ROAD-27 / docs/qa/manual-test-cases.md's JIRA-155: a comment
-                  body is plain text (not routed through JiraRichText, unlike
-                  the description below), so it needs its own `break-words`
-                  — same choice and same reasoning as JiraRichText's root
-                  (prefers a whitespace break, only splits a pasted stack
-                  trace / base64 blob / long URL mid-token when there is
-                  nowhere else to break). It only takes effect because the
-                  comment's own column above is already `min-w-0 flex-1`
-                  (see renderComment's outer div) — without that, this flex
-                  item would refuse to shrink below the unbroken token's
-                  width in the first place, and break-words would have
-                  nothing to work with. */}
-              <div className="text-[12.5px] leading-relaxed whitespace-pre-wrap break-words text-text-secondary">
-                {c.body}
-              </div>
+              {/* Customer feedback round 1, Fix 4: a comment renders from
+                  its ADF the way the description below does, so a session's
+                  filed report (bold, italics, lists — posted to Jira as real
+                  marks by the backend's ADF builder) reads as formatting
+                  here, not as literal asterisks. A person's plain-text
+                  comment is unchanged: Jira keeps a typed `**` as text in
+                  the ADF, so it still shows as `**`, exactly as Jira itself
+                  shows it. The flattened `body` stays the fallback for a
+                  comment with no ADF (a legacy wiki-markup body).
+
+                  ROAD-27 / docs/qa/manual-test-cases.md's JIRA-155: the
+                  `break-words` is JiraRichText's own `wrap-anywhere`; it
+                  only takes effect because the comment's own column above
+                  is already `min-w-0 flex-1` (see renderComment's outer
+                  div) — without that, this flex item would refuse to
+                  shrink below an unbroken token's width in the first
+                  place. */}
+              <JiraRichText
+                adf={c.bodyAdf}
+                fallback={c.body}
+                className="text-[12.5px] leading-relaxed whitespace-pre-wrap text-text-secondary"
+              />
               {/* Four of Jira's five comment-row actions now: Reply, Edit,
                   Copy link, and Delete — permission-gated per comment
                   (see canDeleteComment/canEditComment above) rather than
@@ -1384,6 +1396,120 @@ export function JiraTicketDetail({
     );
   }
 
+  // Customer feedback round 1, Fix 5: in the drawer the three fields a
+  // person reaches for first — State, Assignee, Priority — sit in a strip
+  // directly under the title, above the description and the comments,
+  // instead of at the bottom of a page of comments (dana-09). They are
+  // moved there, not copied: each chip anchors its own popover to one
+  // ref, so one control per field. The page variant keeps them in its
+  // rail with everything else. `layout` only changes the wrapper.
+  const coreFields = (layout: 'strip' | 'rows') => {
+    // A plain function, not a nested component: a component defined inside
+    // a render has a new identity every render, which would remount the
+    // chips (and drop the popover anchored to one) on every keystroke.
+    const field = (label: string, children: ReactNode) =>
+      layout === 'rows' ? (
+        <PropertyRow key={label} label={label}>
+          {children}
+        </PropertyRow>
+      ) : (
+        <div key={label} className="flex min-w-0 items-center gap-2">
+          <span className="shrink-0 text-[10.5px] font-bold tracking-wide text-text-muted uppercase">
+            {label}
+          </span>
+          {children}
+        </div>
+      );
+    return (
+      <>
+        {field(
+          'State',
+          <div className="relative">
+            <JiraStateChip
+              stateName={ticket.stateName}
+              stateColor={ticket.stateColor}
+              disabled={ticket.hasConflict}
+              disabledTitle="Write paused until reloaded"
+              saving={savingState}
+              open={stateOpen}
+              buttonRef={stateChipRef}
+              onClick={() => setStateOpen((o) => !o)}
+            />
+            {stateOpen && (
+              <JiraTransitionPopover
+                ticketKey={ticket.key}
+                projectKey={ticket.projectKey}
+                currentStateName={ticket.stateName}
+                transitions={transitions}
+                loading={loadingTransitions}
+                error={transitionsError}
+                triggerRef={stateChipRef}
+                onSelect={handleSelectTransition}
+                onClose={() => setStateOpen(false)}
+              />
+            )}
+          </div>,
+        )}
+        {field(
+          'Assignee',
+          <div className="relative">
+            <JiraAssigneeChip
+              assigneeName={ticket.assigneeName}
+              disabled={ticket.hasConflict}
+              disabledTitle="Write paused until reloaded"
+              saving={savingAssignee}
+              open={assigneeOpen}
+              compact
+              buttonRef={assigneeChipRef}
+              onClick={() => setAssigneeOpen((o) => !o)}
+            />
+            {assigneeOpen && (
+              <JiraAssigneePicker
+                // The KEY, not the id: Jira's assignable-user search takes
+                // `issueKey`, and this is the one call in the feature that does.
+                ticketKey={ticket.key}
+                currentAssigneeAccountId={ticket.assigneeAccountId}
+                triggerRef={assigneeChipRef}
+                onSelect={handleSelectAssignee}
+                onClose={() => setAssigneeOpen(false)}
+              />
+            )}
+          </div>,
+        )}
+        {field(
+          'Priority',
+          <div className="relative flex items-center gap-2">
+            <JiraPriorityChip
+              priority={ticket.priority}
+              priorityName={ticket.priorityName}
+              disabled={ticket.hasConflict}
+              disabledTitle="Write paused until reloaded"
+              saving={savingPriority}
+              open={priorityOpen}
+              buttonRef={priorityChipRef}
+              onClick={() => setPriorityOpen((o) => !o)}
+            />
+            <span className="truncate text-sm text-text">
+              {ticket.priorityName}
+            </span>
+            {priorityOpen && (
+              <JiraPriorityPicker
+                ticketKey={ticket.key}
+                currentPriorityId={ticket.priorityId}
+                options={priorityOptions}
+                loading={loadingPriorities}
+                error={prioritiesError}
+                triggerRef={priorityChipRef}
+                onSelect={handleSelectPriority}
+                onClose={() => setPriorityOpen(false)}
+              />
+            )}
+          </div>,
+        )}
+      </>
+    );
+  };
+
   return (
     <div
       className={clsx(
@@ -1478,6 +1604,15 @@ export function JiraTicketDetail({
           <h3 className="mb-3 font-display text-[19px] leading-snug font-semibold text-text">
             {ticket.title}
           </h3>
+
+          {isDrawer && (
+            <div
+              data-core-fields
+              className="mb-5 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-[var(--radius)] border border-border bg-surface-2/40 px-3 py-2"
+            >
+              {coreFields('strip')}
+            </div>
+          )}
 
           {/* `whitespace-pre-wrap`, matching the comment bodies below —
               JiraRichText's own plain-text fallback is adfToPlainText's
@@ -1781,89 +1916,7 @@ export function JiraTicketDetail({
             'md:w-[300px] md:self-start md:border-t-0 md:px-5 md:py-6',
         )}
       >
-        <PropertyRow label="State">
-          <div className="relative">
-            <JiraStateChip
-              stateName={ticket.stateName}
-              stateColor={ticket.stateColor}
-              disabled={ticket.hasConflict}
-              disabledTitle="Write paused until reloaded"
-              saving={savingState}
-              open={stateOpen}
-              buttonRef={stateChipRef}
-              onClick={() => setStateOpen((o) => !o)}
-            />
-            {stateOpen && (
-              <JiraTransitionPopover
-                ticketKey={ticket.key}
-                projectKey={ticket.projectKey}
-                currentStateName={ticket.stateName}
-                transitions={transitions}
-                loading={loadingTransitions}
-                error={transitionsError}
-                triggerRef={stateChipRef}
-                onSelect={handleSelectTransition}
-                onClose={() => setStateOpen(false)}
-              />
-            )}
-          </div>
-        </PropertyRow>
-
-        <PropertyRow label="Assignee">
-          <div className="relative">
-            <JiraAssigneeChip
-              assigneeName={ticket.assigneeName}
-              disabled={ticket.hasConflict}
-              disabledTitle="Write paused until reloaded"
-              saving={savingAssignee}
-              open={assigneeOpen}
-              compact
-              buttonRef={assigneeChipRef}
-              onClick={() => setAssigneeOpen((o) => !o)}
-            />
-            {assigneeOpen && (
-              <JiraAssigneePicker
-                // The KEY, not the id: Jira's assignable-user search takes
-                // `issueKey`, and this is the one call in the feature that does.
-                ticketKey={ticket.key}
-                currentAssigneeAccountId={ticket.assigneeAccountId}
-                triggerRef={assigneeChipRef}
-                onSelect={handleSelectAssignee}
-                onClose={() => setAssigneeOpen(false)}
-              />
-            )}
-          </div>
-        </PropertyRow>
-
-        <PropertyRow label="Priority">
-          <div className="relative flex items-center gap-2">
-            <JiraPriorityChip
-              priority={ticket.priority}
-              priorityName={ticket.priorityName}
-              disabled={ticket.hasConflict}
-              disabledTitle="Write paused until reloaded"
-              saving={savingPriority}
-              open={priorityOpen}
-              buttonRef={priorityChipRef}
-              onClick={() => setPriorityOpen((o) => !o)}
-            />
-            <span className="truncate text-sm text-text">
-              {ticket.priorityName}
-            </span>
-            {priorityOpen && (
-              <JiraPriorityPicker
-                ticketKey={ticket.key}
-                currentPriorityId={ticket.priorityId}
-                options={priorityOptions}
-                loading={loadingPriorities}
-                error={prioritiesError}
-                triggerRef={priorityChipRef}
-                onSelect={handleSelectPriority}
-                onClose={() => setPriorityOpen(false)}
-              />
-            )}
-          </div>
-        </PropertyRow>
+        {!isDrawer && coreFields('rows')}
 
         <PropertyRow label="Labels">
           {ticket.labels.length === 0 ? (

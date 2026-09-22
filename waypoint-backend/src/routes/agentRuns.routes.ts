@@ -182,7 +182,7 @@ agentRunsRouter.post(
     const payload = input.kind === 'comment' ? { body: input.body } : { stateId: input.stateId };
     res.status(201).json(
       await proposalsService.createRunProposal(
-        { agentRunId: req.params.id, kind: input.kind, payload },
+        { agentRunId: req.params.id, kind: input.kind, payload, groupId: input.groupId ?? null },
         parseJiraCredentialHeader(req.header(JIRA_CREDENTIAL_HEADER)),
       ),
     );

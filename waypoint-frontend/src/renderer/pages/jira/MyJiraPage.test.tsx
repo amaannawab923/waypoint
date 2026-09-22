@@ -817,8 +817,8 @@ describe('MyJiraPage — sync indicator', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('not synced yet')).toBeInTheDocument();
-    expect(screen.queryByText(/^synced /)).not.toBeInTheDocument();
+    expect(await screen.findByText('not loaded yet')).toBeInTheDocument();
+    expect(screen.queryByText(/^loaded /)).not.toBeInTheDocument();
   });
 
   it('reports a real age once a read has landed', async () => {
@@ -832,8 +832,10 @@ describe('MyJiraPage — sync indicator', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText(/^synced \d+s ago$/)).toBeInTheDocument();
-    expect(screen.queryByText('not synced yet')).not.toBeInTheDocument();
+    expect(
+      await screen.findByText(/^loaded (just now|\d+s ago)$/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('not loaded yet')).not.toBeInTheDocument();
   });
 });
 

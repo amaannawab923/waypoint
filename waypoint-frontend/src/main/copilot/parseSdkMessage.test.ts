@@ -47,6 +47,66 @@ describe('parseSdkMessage', () => {
     ).toEqual({ kind: 'ignored' });
   });
 
+  // Fix 7 (feedback round 1): tool calls are visible while they happen.
+  it('parses a tool_use content_block_start into a tool_call', () => {
+    expect(
+      parseSdkMessage(
+        message({
+          type: 'stream_event',
+          event: {
+            type: 'content_block_start',
+            index: 1,
+            content_block: {
+              type: 'tool_use',
+              id: 'toolu_1',
+              name: 'mcp__waypoint_jira__list_jira_dashboards',
+              input: {},
+            },
+          },
+        }),
+      ),
+    ).toEqual({
+      kind: 'tool_call',
+      toolId: 'toolu_1',
+      name: 'mcp__waypoint_jira__list_jira_dashboards',
+    });
+  });
+
+  it("parses a user message's tool_result into a tool_done, with its error flag", () => {
+    const result = (is_error?: boolean) =>
+      message({
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_1',
+              content: 'ok',
+              ...(is_error === undefined ? {} : { is_error }),
+            },
+          ],
+        },
+      });
+    expect(parseSdkMessage(result())).toEqual({
+      kind: 'tool_done',
+      toolId: 'toolu_1',
+      isError: false,
+    });
+    expect(parseSdkMessage(result(true))).toEqual({
+      kind: 'tool_done',
+      toolId: 'toolu_1',
+      isError: true,
+    });
+    // A user message that is not a tool result (a plain prompt echo) is
+    // still nothing to draw.
+    expect(
+      parseSdkMessage(
+        message({ type: 'user', message: { role: 'user', content: 'hi' } }),
+      ),
+    ).toEqual({ kind: 'ignored' });
+  });
+
   it('parses a success result into the full text and session id', () => {
     expect(
       parseSdkMessage(
@@ -333,10 +393,12 @@ describe('parseSdkMessage', () => {
 
   // Pin for Copilot V2: with the propose_* tools allowed, the stream now
   // routinely carries assistant tool_use blocks (and their stream_event
-  // deltas). None of that is user-visible text — it must keep parsing as
-  // `ignored`, exactly as before, with NO new parsing added for it (the
-  // proposal flow is pull-based via REST, not stream-parsed, by design).
-  it('still ignores tool_use stream events — proposals are never parsed out of the stream', () => {
+  // deltas). None of that is user-visible text, and a proposal's CONTENT
+  // is never parsed out of the stream (the proposal flow is pull-based via
+  // REST, by design). Fix 7 surfaces only that a tool was called — its
+  // name and whether it is done — never its input: the input_json deltas
+  // and the assistant-message copy of the block stay `ignored`.
+  it('surfaces a tool call by name only — its input is never parsed out of the stream', () => {
     expect(
       parseSdkMessage(
         message({
@@ -351,7 +413,11 @@ describe('parseSdkMessage', () => {
           },
         }),
       ),
-    ).toEqual({ kind: 'ignored' });
+    ).toEqual({
+      kind: 'tool_call',
+      toolId: 'toolu_01',
+      name: 'mcp__waypoint__propose_comment',
+    });
 
     expect(
       parseSdkMessage(

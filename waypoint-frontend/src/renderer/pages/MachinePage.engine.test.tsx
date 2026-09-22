@@ -113,6 +113,31 @@ async function mount(): Promise<void> {
   });
 }
 
+// Customer feedback round 1, Fix 9: "Your tickets — Never" and "Your code
+// — Never" while Copilot had just read 27 tickets and a Fix session reads
+// the repository. Scoped, not unconditional — and never green.
+describe('MachinePage — What leaves this machine', () => {
+  it('says what is scoped, not "Never", with the scope under each row', async () => {
+    jest.mocked(installEngine).mockResolvedValue(STOPPED);
+    await mount();
+    const tickets = document.querySelector('[data-leaves-row="tickets"]');
+    const code = document.querySelector('[data-leaves-row="code"]');
+    expect(tickets).toHaveTextContent(
+      'Only the ones you ask Copilot or a session about',
+    );
+    expect(tickets).toHaveTextContent(
+      'a session reads only the ticket it was dispatched on',
+    );
+    expect(code).toHaveTextContent(
+      'Only what a Fix or Investigate session reads for its ticket',
+    );
+    expect(code).toHaveTextContent('only while it');
+    expect(screen.queryByText('Never')).toBeNull();
+    // The prose the round praised stays verbatim.
+    expect(screen.getByText(/would still be false/)).toBeInTheDocument();
+  });
+});
+
 describe('MachinePage — Agent engine section', () => {
   it('shows the pinned engine name, version, and commit', async () => {
     jest.mocked(installEngine).mockResolvedValue(STOPPED);

@@ -6,6 +6,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { humanizeDuration } from '@/lib/duration';
 import { clsx } from 'clsx';
 import {
   IconBot,
@@ -39,6 +40,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
 import { registerActiveSelectableView } from '@/lib/useActiveSelectableView';
 import type { ProposalKind } from '@/types/entities';
+import { clusterProposals } from './review/groupProposals';
 
 // W4.3 (architecture §4.4) — three segments, tab-style, each a different
 // slice of the same `proposals` table (§4.4's ruling: "Blocked" projects
@@ -239,7 +241,7 @@ function HealthStrip({
       </div>
       <div>
         <p className="font-display text-xl font-medium text-text">
-          {medianSecs}s
+          {humanizeDuration(medianSecs)}
         </p>
         <p className="text-xs text-text-secondary">median time to decide</p>
       </div>
@@ -359,6 +361,12 @@ export default function ReviewPage() {
     const result = await approveProposal(id);
     queue.refreshCounts();
     health.reload();
+    // Approving one run's state change supersedes the other runs' cards on
+    // the ticket (the backend marks them); the list is re-read so they
+    // show as such without a manual refresh.
+    if (result?.kind === 'state_change' && result.origin === 'agent_run') {
+      queue.reload().catch(() => {});
+    }
     return result;
   }
 
@@ -564,28 +572,76 @@ export default function ReviewPage() {
             />
           );
         }
+        // One card per closing message (comment + state), one cluster per
+        // ticket, a banner when several runs compete for the same decision
+        // (customer feedback round 1, Fix 1).
+        const clusters = clusterProposals(queue.proposals);
         return (
-          <div className="flex flex-col gap-3">
-            {queue.proposals.map((p) => (
-              <div key={p.id} className="flex items-start gap-2.5">
-                {showCheckboxes && (
-                  <input
-                    type="checkbox"
-                    className="mt-3.5 shrink-0 accent-[var(--accent)]"
-                    checked={selected.has(p.id)}
-                    onChange={() => toggleSelected(p.id)}
-                    aria-label={`Select proposal ${p.id}`}
-                  />
-                )}
-                <div className="min-w-0 flex-1">
-                  <CopilotProposalCard
-                    proposal={p}
-                    onApprove={handleApprove}
-                    onReject={handleReject}
-                  />
-                </div>
-              </div>
-            ))}
+          <div className="flex flex-col gap-4">
+            {clusters.map((cluster) => {
+              const clustered =
+                cluster.groups.length > 1 || cluster.competingRuns > 0;
+              const cards = cluster.groups.map((group) => {
+                const ids = [
+                  group.primary.id,
+                  ...(group.companion ? [group.companion.id] : []),
+                ];
+                return (
+                  <div key={group.key} className="flex items-start gap-2.5">
+                    {showCheckboxes && (
+                      <input
+                        type="checkbox"
+                        className="mt-3.5 shrink-0 accent-[var(--accent)]"
+                        checked={ids.every((id) => selected.has(id))}
+                        onChange={() => ids.forEach((id) => toggleSelected(id))}
+                        aria-label={`Select proposal ${group.primary.id}`}
+                      />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <CopilotProposalCard
+                        proposal={group.primary}
+                        companion={group.companion}
+                        onApprove={handleApprove}
+                        onReject={handleReject}
+                      />
+                    </div>
+                  </div>
+                );
+              });
+              if (!clustered) return cards;
+              return (
+                <section
+                  key={cluster.key}
+                  className="flex flex-col gap-2.5"
+                  data-review-cluster={cluster.ticketId ?? cluster.key}
+                >
+                  <h2 className="flex items-baseline gap-2 text-[13px]">
+                    {cluster.identifier && (
+                      <span className="rounded border border-border bg-surface-2 px-1.5 py-px font-mono text-[11.5px] font-semibold text-text-secondary">
+                        {cluster.identifier}
+                      </span>
+                    )}
+                    <span className="truncate font-semibold">
+                      {cluster.title ?? 'Ticket'}
+                    </span>
+                    <span className="text-text-muted">
+                      · {cluster.groups.length} proposals
+                    </span>
+                  </h2>
+                  {cluster.competingRuns > 1 && (
+                    <div
+                      className="rounded-[var(--radius-sm)] border border-warning bg-warning-bg px-3 py-2 text-[12.5px] font-medium text-warning"
+                      role="status"
+                    >
+                      {cluster.competingRuns} fixes are proposed for{' '}
+                      {cluster.identifier ?? 'this ticket'} — approving one
+                      supersedes the other {cluster.competingRuns - 1}.
+                    </div>
+                  )}
+                  <div className="flex flex-col gap-3">{cards}</div>
+                </section>
+              );
+            })}
           </div>
         );
       })()}

@@ -1625,8 +1625,10 @@ describe('comment body wrapping (ROAD-27)', () => {
     });
     renderDrawer();
 
+    // JiraRichText's own overflow-wrap (the description uses the same),
+    // since Fix 4 routed comment bodies through it.
     const body = await screen.findByText(longUrl);
-    expect(body).toHaveClass('break-words');
+    expect(body).toHaveClass('wrap-anywhere');
   });
 });
 
@@ -1681,6 +1683,90 @@ describe("copying a comment's permalink", () => {
 // comment gets its own dedicated coverage below rather than being inferred
 // from the deleteAll case, since this machine's own account cannot reveal
 // that gap by accident.
+// Customer feedback round 1, Fix 4: a session's filed report reaches Jira
+// as ADF with real marks; read back, the drawer used to flatten it to
+// text and show the emphasis as literal asterisks (Dana §2.3).
+describe('a comment body', () => {
+  it('renders from its ADF, so a filed report shows real emphasis', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          body: 'Fixed the retry. Full report is on the run.',
+          bodyAdf: {
+            type: 'doc',
+            version: 1,
+            content: [
+              {
+                type: 'paragraph',
+                content: [
+                  { type: 'text', text: 'Fixed the ' },
+                  { type: 'text', text: 'retry', marks: [{ type: 'strong' }] },
+                  { type: 'text', text: '.' },
+                ],
+              },
+              {
+                type: 'paragraph',
+                content: [
+                  {
+                    type: 'text',
+                    text: 'Full report is on the run.',
+                    marks: [{ type: 'em' }],
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+
+    const strong = await screen.findByText('retry');
+    expect(strong.tagName).toBe('STRONG');
+    expect(screen.getByText('Full report is on the run.').tagName).toBe('EM');
+    expect(screen.queryByText(/\*\*/)).not.toBeInTheDocument();
+  });
+
+  it("keeps a person's typed asterisks literal — Jira holds them as text", async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({
+          id: 'c1',
+          body: 'not **bold** here',
+          bodyAdf: {
+            type: 'doc',
+            version: 1,
+            content: [
+              {
+                type: 'paragraph',
+                content: [{ type: 'text', text: 'not **bold** here' }],
+              },
+            ],
+          },
+        }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+
+    expect(await screen.findByText('not **bold** here')).toBeInTheDocument();
+  });
+
+  it('falls back to the flattened body when the comment has no ADF', async () => {
+    jest.mocked(listJiraComments).mockResolvedValue({
+      comments: [
+        comment({ id: 'c1', body: 'legacy wiki body', bodyAdf: null }),
+      ],
+      total: 1,
+    });
+    renderDrawer();
+
+    expect(await screen.findByText('legacy wiki body')).toBeInTheDocument();
+  });
+});
+
 describe('deleting a comment', () => {
   beforeEach(() => {
     jest.spyOn(window, 'confirm').mockReturnValue(true);
@@ -3250,6 +3336,8 @@ describe('docks beside Copilot when it is open', () => {
     // otherwise this drawer's edge trails a few frames behind the panel's
     // true width on every pointermove, opening a brief visible overlap.
     expect(drawerRoot().className).toContain('transition-transform');
-    expect(drawerRoot().className).not.toContain('transition-[right,transform]');
+    expect(drawerRoot().className).not.toContain(
+      'transition-[right,transform]',
+    );
   });
 });

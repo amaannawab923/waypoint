@@ -10,6 +10,9 @@ import {
 } from '@/components/icons';
 import { renameAgentRun } from '@/data/api';
 import {
+  closeRun,
+  closeRunPreview,
+  getRunWorktreeHealth,
   openRunPullRequest,
   revealRunWorktree,
   stopRun,
@@ -17,8 +20,8 @@ import {
 import { formatRelativeTime } from '@/lib/copilotSessions';
 import { patchSessionRun, refreshSessions } from '@/lib/sessionsStore';
 import { useTicketSummary } from '@/lib/useTicketLabel';
-import { showErrorToast } from '@/lib/toast';
-import type { AgentRun } from '@/types/agentRuns';
+import { showErrorToast, showInfoToast } from '@/lib/toast';
+import type { AgentRun, WorktreeHealth } from '@/types/agentRuns';
 import { useHomeDir } from '@/lib/useHomeDir';
 import { AutoMark, IntentChip, ProviderChip, VerdictChip } from './SessionRow';
 import { SessionStatusPill } from './SessionStatusPill';
@@ -96,6 +99,29 @@ export function SessionDetail({
   // W6: a writing run whose branch was not published (the push or the PR
   // failed at finalize) can be published from here, as the person.
   const [publishing, setPublishing] = useState(false);
+  // Finding A (feedback round 1): the row's facts are what the ledger
+  // recorded; git is asked once per open whether the worktree is still
+  // a repository. Until it answers the stored facts stand (no flash of
+  // an empty header); an orphaned worktree disables Open PR and says so
+  // on the facts line. A worktree does not go from healthy to orphaned
+  // while a person is looking at it, so once is enough.
+  const [health, setHealth] = useState<WorktreeHealth>({ kind: 'unknown' });
+  useEffect(() => {
+    let cancelled = false;
+    setHealth({ kind: 'unknown' });
+    if (run.isolation === 'directory' || !run.worktreePath) return undefined;
+    getRunWorktreeHealth(run.id)
+      .then((result) => {
+        if (!cancelled) setHealth(result);
+      })
+      .catch(() => {
+        // Unknown stands: the stored facts are shown, nothing is claimed.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [run.id, run.isolation, run.worktreePath]);
+  const orphaned = health.kind === 'orphaned';
   const canOpenPr =
     run.entry === 'dispatched' &&
     run.modeId !== 'plan' &&
@@ -131,6 +157,42 @@ export function SessionDetail({
       showErrorToast(
         error instanceof Error ? error.message : 'Could not open the folder.',
       ),
+    );
+
+  // Fix 8 (feedback round 1): a finished run's worktree and branch used
+  // to stay on disk forever. The confirm names what is lost: nothing
+  // (branch never pushed, no commits), the commits (never pushed), or
+  // that the branch stays for its pull request.
+  const [closing, setClosing] = useState(false);
+  const [closed, setClosed] = useState(false);
+  const close = async () => {
+    setClosing(true);
+    try {
+      const preview = await closeRunPreview(run.id);
+      const question = closeRunQuestion(preview);
+      // eslint-disable-next-line no-alert
+      if (!window.confirm(question)) return;
+      const result = await closeRun(run.id);
+      setClosed(true);
+      showInfoToast(
+        result.branchKeptBecause === 'pull-request'
+          ? `Worktree deleted. ${preview.branch} was kept — it still has an open pull request.`
+          : `Worktree and branch ${preview.branch} deleted.`,
+      );
+    } catch (error) {
+      showErrorToast(
+        error instanceof Error ? error.message : 'Could not close the run.',
+      );
+    } finally {
+      setClosing(false);
+    }
+  };
+  const closable =
+    !closed &&
+    run.isolation !== 'directory' &&
+    !!run.worktreePath &&
+    ['done', 'needs-review', 'failed', 'cancelled', 'interrupted'].includes(
+      run.status,
     );
 
   const title = runTitle(run, ticket?.label);
@@ -247,16 +309,28 @@ export function SessionDetail({
                 <ProviderChip providerId={run.providerId} size={14} />
                 {provider.name}
               </span>
-              {where?.kind === 'branch' && (
+              {where?.kind === 'branch' && !orphaned && (
                 <span className="inline-flex items-center gap-1">
                   <IconGitBranch size={10} />
-                  <span className="font-mono">{where.branch}</span>
+                  <span className="font-mono">
+                    {(health.kind === 'ok' && health.branch) || where.branch}
+                  </span>
                   {where.baseRef && (
                     <>
                       {' '}
                       from <span className="font-mono">{where.baseRef}</span>
                     </>
                   )}
+                </span>
+              )}
+              {orphaned && (
+                <span
+                  className="inline-flex items-center gap-1 text-warning"
+                  title={health.reason}
+                  data-worktree-orphaned
+                >
+                  <IconGitBranch size={10} />
+                  worktree orphaned — its parent repository is gone
                 </span>
               )}
               {where?.kind === 'folder' && (
@@ -338,13 +412,31 @@ export function SessionDetail({
               onClick={() => {
                 openPr().catch(() => {});
               }}
-              disabled={publishing}
-              title="Push the branch and open a pull request, as you"
+              disabled={publishing || orphaned}
+              title={
+                orphaned
+                  ? `Can't open a PR — this worktree's repository is gone. ${health.reason}`
+                  : 'Push the branch and open a pull request, as you'
+              }
             >
               {publishing ? 'Opening PR…' : 'Open PR'}
             </Button>
           )}
-          {(run.cwd ?? run.worktreePath) && (
+          {closable && (
+            <Button
+              size="xs"
+              variant="secondary"
+              onClick={() => {
+                close().catch(() => {});
+              }}
+              disabled={closing}
+              title="Delete the worktree and, unless a pull request needs it, the branch. The transcript stays in Waypoint; the diff will not be available afterward."
+              data-close-run
+            >
+              {closing ? 'Closing…' : 'Close run'}
+            </Button>
+          )}
+          {(run.cwd ?? run.worktreePath) && !closed && (
             <IconButton label="Show in Finder" onClick={reveal}>
               <IconFolder size={14} />
             </IconButton>
@@ -396,4 +488,54 @@ export function SessionDetail({
       </div>
     </section>
   );
+}
+
+/**
+ * The confirm for Close run — what is lost, in the person's words (Fix 8;
+ * B1 and B2, PR #88 review).
+ *
+ * B2: this used to say "The transcript and diff stay in Waypoint." That
+ * was false for the diff — `runs:diff` (runsIpc.ts) computes it live from
+ * the worktree, and Close only snapshots the transcript before deleting
+ * the worktree, so the Diff tab throws the moment this finishes. Making
+ * the diff actually survive would mean capturing and storing a patch
+ * server-side (a new column, a size cap of its own, a read path DiffPane
+ * would need to branch on) for a feature whose whole point is deleting
+ * the worktree quickly — out of proportion to this fix. Said plainly
+ * instead: the transcript stays, the diff does not.
+ *
+ * B1: `unpushedCommits` alone said nothing about uncommitted work, and
+ * CLOSABLE (runsIpc.ts) includes `failed`, `cancelled` and `interrupted`
+ * — exactly the statuses where an agent's turn ended mid-edit with
+ * nothing committed. `uncommittedFiles` names that loss too, whether or
+ * not a pull request keeps the branch (a PR only reflects what was
+ * pushed).
+ */
+export function closeRunQuestion(preview: {
+  branch: string;
+  unpushedCommits: number | null;
+  uncommittedFiles: number | null;
+  hasPullRequest: boolean;
+}): string {
+  const stays =
+    'The transcript stays in Waypoint; the diff will not be available once the worktree is gone.';
+  const uncommittedWarning =
+    preview.uncommittedFiles !== null && preview.uncommittedFiles > 0
+      ? ` ${
+          preview.uncommittedFiles === 1
+            ? '1 uncommitted change was'
+            : `${preview.uncommittedFiles} uncommitted changes were`
+        } never committed and will be lost.`
+      : '';
+  if (preview.hasPullRequest) {
+    return `Delete the worktree for ${preview.branch}? The branch stays — it still has an open pull request.${uncommittedWarning} ${stays}`;
+  }
+  const n = preview.unpushedCommits;
+  if (n !== null && n > 0) {
+    return `Delete the worktree for ${preview.branch}? Its ${n === 1 ? '1 commit was' : `${n} commits were`} never pushed and will be lost.${uncommittedWarning} ${stays}`;
+  }
+  if (preview.uncommittedFiles !== null && preview.uncommittedFiles > 0) {
+    return `Delete the worktree for ${preview.branch}?${uncommittedWarning} ${stays}`;
+  }
+  return `Delete the worktree and branch for ${preview.branch}? ${stays}`;
 }

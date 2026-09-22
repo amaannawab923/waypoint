@@ -174,6 +174,7 @@ describe('dispatch_session', () => {
         intent: 'investigate',
         note: null,
         history: null,
+        repo: null,
       },
     ]);
     expect(answer).toContain(
@@ -181,7 +182,46 @@ describe('dispatch_session', () => {
     );
     expect(answer).toContain('You suggested Investigate');
     expect(answer).toContain('ROAD-116 has no earlier runs.');
+    expect(answer).toContain('No folder is linked or remembered');
+    expect(answer).toContain('press "Start session"');
     expect(answer).toContain('Nothing has started');
+  });
+
+  // Fix 7 (feedback round 1): the offer names the folder the session
+  // would work in, from the engine; an engine that cannot say still
+  // offers.
+  it('names the repository on the offer when the engine can say, and offers without one when it cannot', async () => {
+    const { tool, offers, deps } = harness();
+    deps.describeTicketRepo = async () => ({
+      displayPath: '~/waypoint-electron',
+      projectName: 'Waypoint Roadmap',
+      remembered: false,
+    });
+    const answer = await tool('dispatch_session').handler({
+      ticket: 'ROAD-116',
+    });
+    expect(offers[0]?.repo).toEqual({
+      displayPath: '~/waypoint-electron',
+      projectName: 'Waypoint Roadmap',
+      remembered: false,
+    });
+    expect(answer).toContain(
+      'The session would work in ~/waypoint-electron (Waypoint Roadmap).',
+    );
+
+    deps.describeTicketRepo = async () => {
+      throw new Error('engine down');
+    };
+    await tool('dispatch_session').handler({ ticket: 'ROAD-116' });
+    expect(offers[1]?.repo).toBeNull();
+  });
+
+  it('tells the model the real button label and to pass a stated preference as intent', () => {
+    const { tool } = harness();
+    const { description } = tool('dispatch_session');
+    expect(description).toContain('press "Start session"');
+    expect(description).not.toMatch(/press Start\b(?! session)/);
+    expect(description).toContain('pass it as `intent`');
   });
 
   // W5c: the ticket's earlier runs ride on the offer and in the reply —

@@ -115,6 +115,17 @@ describe('pendingReasonSentence', () => {
     ).toMatch(/Ana's Waypoint/);
     expect(pendingReasonSentence('owner-offline')).toMatch(/the run owner/);
   });
+
+  // B4 (PR #88 review): unlike every reason above, `closed` never clears
+  // on its own — runs:close already deleted the worktree and branch on
+  // purpose — so it is deliberately left out of the "Waiting to send"
+  // sweep above rather than dressed up as one more thing Waypoint will
+  // eventually retry.
+  it("names 'closed' as a dead end, not a retry", () => {
+    const text = pendingReasonSentence('closed');
+    expect(text).toMatch(/new session/i);
+    expect(text).not.toMatch(/Waiting to send|press Resend/i);
+  });
 });
 
 describe('waitingReason', () => {

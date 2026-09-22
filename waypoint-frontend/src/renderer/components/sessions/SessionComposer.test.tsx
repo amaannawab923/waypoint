@@ -319,7 +319,9 @@ describe('SessionComposer', () => {
           onSetModel={onSetModel}
         />,
       );
-      const mode = screen.getByLabelText('Mode');
+      // No plan mode offered: the provider's own list, nothing simpler.
+      expect(screen.queryByRole('group', { name: 'Mode' })).toBeNull();
+      const mode = screen.getByLabelText('All modes');
       expect(mode).toHaveValue('bypassPermissions');
       fireEvent.change(mode, { target: { value: 'default' } });
       expect(onSetMode).toHaveBeenCalledWith('default');
@@ -362,8 +364,151 @@ describe('SessionComposer', () => {
           config={null}
         />,
       );
-      expect(screen.queryByLabelText('Mode')).toBeNull();
+      expect(screen.queryByLabelText('All modes')).toBeNull();
+      expect(screen.queryByRole('group', { name: 'Mode' })).toBeNull();
       expect(screen.queryByLabelText('Model')).toBeNull();
+    });
+
+    // Customer feedback round 1, Fix 6: two positions a person can read
+    // without knowing the provider's six names, the full list under
+    // Advanced with each name glossed.
+    describe('the two-way mode picker', () => {
+      const claude = {
+        ...config,
+        modeOptions: {
+          configId: 'mode',
+          selected: 'default',
+          available: [
+            { id: 'default', name: 'Default' },
+            { id: 'acceptEdits', name: 'Accept Edits' },
+            { id: 'plan', name: 'Plan Mode' },
+            { id: 'bypassPermissions', name: 'Bypass Permissions' },
+            { id: 'auto', name: 'Auto', description: 'The provider says so.' },
+            { id: 'dontAsk', name: "Don't Ask" },
+          ],
+        },
+      };
+
+      // S6 (PR #88 review): the write-side button used to say "May edit
+      // files" no matter which mode it actually set — here, the run's
+      // write mode is `bypassPermissions`, glossed "Never asks — edits,
+      // runs commands, deletes without a prompt", with only the title
+      // tooltip saying so. The button is now named for the mode itself.
+      it('Read-only is plan; the write button is named for the run’s actual write mode', () => {
+        const onSetMode = jest.fn();
+        render(
+          <SessionComposer
+            onSend={jest.fn(async () => {})}
+            sendBlockedReason={null}
+            attachedToBand={false}
+            config={{
+              ...claude,
+              // The session is actually running in the run's write mode
+              // (matches writeModeId below) — the button should read
+              // pressed for its own mode, not merely "any non-plan mode".
+              modeOptions: {
+                ...claude.modeOptions,
+                selected: 'bypassPermissions',
+              },
+            }}
+            writeModeId="bypassPermissions"
+            onSetMode={onSetMode}
+          />,
+        );
+        const readOnly = screen.getByRole('button', { name: 'Read-only' });
+        const edit = screen.getByRole('button', { name: 'Bypass Permissions' });
+        expect(readOnly).toHaveAttribute('aria-pressed', 'false');
+        expect(edit).toHaveAttribute('aria-pressed', 'true');
+        expect(readOnly).toHaveAttribute(
+          'title',
+          'Reads and reports. Changes nothing.',
+        );
+        expect(edit.getAttribute('title')).toMatch(/^Never asks/);
+        fireEvent.click(readOnly);
+        expect(onSetMode).toHaveBeenCalledWith('plan');
+        fireEvent.click(edit);
+        expect(onSetMode).toHaveBeenLastCalledWith('bypassPermissions');
+        // The full list is folded away until asked for.
+        expect(screen.queryByLabelText('All modes')).toBeNull();
+      });
+
+      // S6: a run already on a THIRD mode (acceptEdits) — not plan, not
+      // the write mode the segment sets — used to show the write button
+      // already pressed (aria-pressed was true for any non-plan mode),
+      // so clicking it looked like a no-op while it silently escalated
+      // straight to bypassPermissions. Now the button correctly shows
+      // not-pressed (it does not represent the current mode) AND the
+      // click itself is a no-op — never an escalation the person did not
+      // ask for by name.
+      it('a run already on a different non-plan mode: the write button shows unpressed and a click never escalates it', () => {
+        const onSetMode = jest.fn();
+        render(
+          <SessionComposer
+            onSend={jest.fn(async () => {})}
+            sendBlockedReason={null}
+            attachedToBand={false}
+            config={{
+              ...claude,
+              modeOptions: { ...claude.modeOptions, selected: 'acceptEdits' },
+            }}
+            writeModeId="bypassPermissions"
+            onSetMode={onSetMode}
+          />,
+        );
+        const edit = screen.getByRole('button', {
+          name: 'Bypass Permissions',
+        });
+        expect(edit).toHaveAttribute('aria-pressed', 'false');
+        expect(edit.getAttribute('title')).toMatch(
+          /^Currently Accept Edits\. Switch to Read-only first/,
+        );
+        fireEvent.click(edit);
+        expect(onSetMode).not.toHaveBeenCalled();
+        // Read-only itself is unaffected — still a real, working switch.
+        fireEvent.click(screen.getByRole('button', { name: 'Read-only' }));
+        expect(onSetMode).toHaveBeenCalledWith('plan');
+      });
+
+      it('Advanced opens the provider’s full list, each mode glossed — never a guessed one', () => {
+        const onSetMode = jest.fn();
+        render(
+          <SessionComposer
+            onSend={jest.fn(async () => {})}
+            sendBlockedReason={null}
+            attachedToBand={false}
+            config={{
+              ...claude,
+              modeOptions: { ...claude.modeOptions, selected: 'plan' },
+            }}
+            writeModeId="default"
+            onSetMode={onSetMode}
+          />,
+        );
+        expect(
+          screen.getByRole('button', { name: 'Read-only' }),
+        ).toHaveAttribute('aria-pressed', 'true');
+        fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+        const all = screen.getByLabelText('All modes') as HTMLSelectElement;
+        expect([...all.options].map((o) => o.text)).toEqual([
+          'Default',
+          'Accept Edits',
+          'Plan Mode',
+          'Bypass Permissions',
+          'Auto',
+          "Don't Ask",
+        ]);
+        const byValue = (id: string) =>
+          [...all.options].find((o) => o.value === id)!;
+        expect(byValue('acceptEdits').title).toBe(
+          'Edits files without asking; still asks before running a command.',
+        );
+        // The provider's own description when Waypoint has no gloss; no
+        // title at all when neither says anything.
+        expect(byValue('auto').title).toBe('The provider says so.');
+        expect(byValue('dontAsk').title).toBe('');
+        fireEvent.change(all, { target: { value: 'acceptEdits' } });
+        expect(onSetMode).toHaveBeenCalledWith('acceptEdits');
+      });
     });
 
     it('is a Stop button while the agent is generating, and Send again after', () => {
