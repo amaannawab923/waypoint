@@ -39,6 +39,12 @@ import type {
 // (see that file's own header) — unlike jiraClient.ts or copilotDetect.ts,
 // nothing about it would bloat what ships in the preload bundle.
 import {
+  ULTRAFAST_IPC,
+  type UltrafastSaveKeyResult,
+  type UltrafastStatus,
+  type UltrafastTestResult,
+} from './engine/runs/ultrafast/ipcTypes';
+import {
   ENGINE_IPC,
   RUNS_IPC,
   type BriefPreview,
@@ -782,6 +788,28 @@ const electronHandler = {
       return () => {
         ipcRenderer.removeListener(RUNS_IPC.changed, subscription);
       };
+    },
+  },
+
+  // Ultrafast browser tasks (docs/design/ultrafast-browser-tasks.md):
+  // the settings page's own surface — save/clear the TypeSafe key, read
+  // status, and run the real end-to-end test. Request/response only, the
+  // same shape as `copilot.auth` above; the tool call itself
+  // (`browser_task`) never crosses IPC at all — it is a session's MCP
+  // tool call, made by the agent, not something this app's renderer ever
+  // invokes directly.
+  ultrafast: {
+    status(): Promise<UltrafastStatus> {
+      return ipcRenderer.invoke(ULTRAFAST_IPC.status);
+    },
+    saveKey(key: string): Promise<UltrafastSaveKeyResult> {
+      return ipcRenderer.invoke(ULTRAFAST_IPC.saveKey, key);
+    },
+    clearKey(): Promise<{ ok: true }> {
+      return ipcRenderer.invoke(ULTRAFAST_IPC.clearKey);
+    },
+    test(): Promise<UltrafastTestResult> {
+      return ipcRenderer.invoke(ULTRAFAST_IPC.test);
     },
   },
 
