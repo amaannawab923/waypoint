@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -712,6 +713,101 @@ describe('runs:close-preview and runs:close', () => {
     expect(
       (daemon as unknown as { deleteWorktree: jest.Mock }).deleteWorktree,
     ).not.toHaveBeenCalled();
+  });
+
+  it('runs:close takes the per-run lock — a resume issued while it is still deleting the worktree queues behind it instead of racing the deletion (B4, PR #88 review)', async () => {
+    const inside = worktreeOf('run-closeLock');
+    const { invoke, ledger, daemon } = closeHarness({
+      'run-closeLock': {
+        status: 'failed',
+        worktreePath: inside,
+        branch: 'agent/PL-15',
+        baseRef: 'main',
+        prUrl: null,
+        isolation: 'worktree',
+        daemonWorkspaceId: 'run-closeLock',
+      },
+    });
+    const order: string[] = [];
+    // killSession is the first thing close's locked body awaits — held
+    // open so a concurrent resume has a real window to race into, the
+    // same shape as the bug: a send arriving mid-`resumeRunCore` while
+    // close kills the session and deletes the worktree out from under it.
+    let releaseKill: () => void = () => {};
+    const killGate = new Promise<void>((resolve) => {
+      releaseKill = resolve;
+    });
+    (daemon.killSession as jest.Mock).mockImplementation(async () => {
+      order.push('close:kill-start');
+      await killGate;
+      order.push('close:kill-done');
+    });
+    // The real daemon actually removes the directory; this harness's
+    // default deleteWorktree does not, so a resume racing in here would
+    // still find a perfectly usable worktree and prove nothing.
+    (daemon as unknown as { deleteWorktree: jest.Mock }).deleteWorktree =
+      jest.fn(async () => {
+        rmSync(inside, { recursive: true, force: true });
+      });
+    (daemon as unknown as { listSessions: jest.Mock }).listSessions = jest.fn(
+      async () => ({}),
+    );
+    // Stands in for a real ledger's queryable history: after a genuine
+    // close, listEvents would carry the worktree_removed event
+    // releaseWorktree appends — resumeRunCore's own closed-run check
+    // (startRun.ts's wasClosedByRunsClose) reads exactly this.
+    (ledger as unknown as { listEvents: jest.Mock }).listEvents = jest.fn(
+      async () => [
+        {
+          runId: 'run-closeLock',
+          seq: 1,
+          kind: 'worktree_removed',
+          payload: { reason: 'merged', branchDeleted: true },
+          at: '2026-09-20T00:00:00.000Z',
+        },
+      ],
+    );
+
+    const closePromise = invoke(RUNS_IPC.close, 'run-closeLock').then((r) => {
+      order.push('close:done');
+      return r;
+    });
+    // Issued right after, with no await between: withRunLock registers
+    // synchronously (runLock.ts's own doc comment), so this is already
+    // queued behind close's lock by the time it would otherwise start.
+    const resumePromise = invoke(RUNS_IPC.resume, 'run-closeLock').then((r) => {
+      order.push('resume:done');
+      return r;
+    });
+
+    // Real filesystem awaits (assertUnder's fs.mkdir/fs.realpath, inside
+    // closableRun/worktreeOf) resolve through libuv, not a bare
+    // microtask — flushing actual event-loop turns, not just
+    // Promise.resolve() chains, is what lets close reach killSession.
+    for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 0));
+    // Only close has started; the resume handler has not run at all yet.
+    expect(order).toEqual(['close:kill-start']);
+    releaseKill();
+    const [closeResult, resumeResult] = await Promise.all([
+      closePromise,
+      resumePromise,
+    ]);
+    expect(order).toEqual([
+      'close:kill-start',
+      'close:kill-done',
+      'close:done',
+      'resume:done',
+    ]);
+    expect(closeResult).toMatchObject({ worktreeRemoved: true });
+    // Never a silent reprovision: the queued resume sees the worktree
+    // genuinely gone (this harness's overridden deleteWorktree actually
+    // removed it) AND the worktree_removed event, so it refuses with the
+    // clear, permanent `closed` reason rather than cutting a fresh branch
+    // of the same name from baseRef.
+    expect(resumeResult).toMatchObject({
+      outcome: 'cannot-reach-worktree',
+      reason: 'closed',
+    });
   });
 });
 

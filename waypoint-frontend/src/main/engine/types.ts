@@ -849,7 +849,14 @@ export type PendingPromptReason =
    * review: a live/just-resumed send blocked behind one used to be
    * mislabeled `starting`, which is false once the session is already
    * up). */
-  | 'blocked-by-earlier';
+  | 'blocked-by-earlier'
+  /**
+   * `runs:close` already removed this run's worktree and branch (B4,
+   * PR #88 review) — unlike every other reason here, nothing clears
+   * this on its own; there is no worktree left to recreate on purpose.
+   * The person has to start a new session.
+   */
+  | 'closed';
 export type PendingPromptState =
   'queued' | 'sending' | 'delivered' | 'unresolved' | 'dropped';
 export interface PendingPrompt {

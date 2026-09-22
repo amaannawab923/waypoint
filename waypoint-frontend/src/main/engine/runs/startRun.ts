@@ -272,6 +272,24 @@ async function isUsableWorktree(
     .catch(() => false);
 }
 
+/**
+ * Whether `runs:close` (runsIpc.ts) already removed this run's worktree —
+ * B4, PR #88 review. `releaseWorktree` (worktrees.ts) appends a
+ * `worktree_removed` event on every success and is called from nowhere
+ * else in the codebase, so its presence is the one durable, queryable
+ * fact that this specific worktree was deliberately deleted rather than
+ * merely lost. Best-effort: a ledger read that fails answers "not
+ * closed" — the caller falls through to the existing reprovision path,
+ * the same failure mode this had before the check existed.
+ */
+async function wasClosedByRunsClose(
+  ledger: LedgerClient,
+  runId: string,
+): Promise<boolean> {
+  const events = await ledger.listEvents(runId).catch(() => []);
+  return events.some((event) => event.kind === 'worktree_removed');
+}
+
 /** True while nobody has moved the run off `provisioning` (a Stop would). */
 async function stillProvisioning(
   ledger: LedgerClient,
@@ -881,6 +899,33 @@ export async function resumeRunCore(
     if (cwd !== null) await assertUnder(cwd, deps.worktreesDir);
     const usable = cwd !== null && (await isUsableWorktree(deps, cwd));
     if (!usable) {
+      // B4 (PR #88 review): a worktree `runs:close` already removed for
+      // THIS run must never be silently reprovisioned. worktreePath is a
+      // write-once fact at the ledger (agentRuns.service.ts: "written
+      // exactly once elsewhere in this codebase ... and never
+      // legitimately rewritten after" — close cannot null it out even if
+      // it wanted to), so the row's own fields can't say "closed"; the
+      // only durable record is the `worktree_removed` event
+      // `releaseWorktree` (worktrees.ts) always appends on success, from
+      // the one call site that ever calls it (runsIpc.ts's close
+      // handler). Checked only here, in the already-rare "not usable"
+      // branch — a worktree missing for any OTHER reason (an external
+      // `git worktree remove`, a disk cleanup, a run that died before it
+      // ever finished provisioning) has no such event and still falls
+      // through to the reprovision below, unchanged.
+      if (cwd !== null && (await wasClosedByRunsClose(deps.ledger, run.id))) {
+        deps.logger.info(
+          'engine: resume refused — runs:close already removed this worktree',
+          { runId: run.id },
+        );
+        return {
+          outcome: 'cannot-reach-worktree',
+          status: run.status,
+          reason: 'closed',
+          message:
+            "This run's worktree and branch were removed with Close run. Start a new session to continue this work.",
+        };
+      }
       // Gone from disk (`git worktree remove`, a cleanup) or never
       // successfully made at all (the run died during its own
       // provisioning): recreate it, on the run's own branch when that

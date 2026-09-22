@@ -1066,7 +1066,13 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
     },
   );
 
-  deps.host.handle(RUNS_IPC.close, async (runId): Promise<CloseRunResult> => {
+  // B4 (PR #88 review): every other mutating run path — resume, a send,
+  // the pane's warm-up on open — takes runLock.ts's per-run lock, and
+  // under never-lock the composer is always live, so a send can land
+  // mid-flight while close is killing the session and deleting the
+  // worktree out from under it. This handler used to run with no lock at
+  // all, the one mutating path that didn't.
+  const closeRunLocked = async (runId: unknown): Promise<CloseRunResult> => {
     const run = await closableRun(runId);
     await worktreeOf(run);
     // Never-lock: the daemon may still hold this run's session (a
@@ -1102,7 +1108,12 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
       branchDeleted: !keepBranch,
       branchKeptBecause: keepBranch ? 'pull-request' : null,
     };
-  });
+  };
+  deps.host.handle(RUNS_IPC.close, (runId) =>
+    typeof runId === 'string'
+      ? withRunLock(runId, () => closeRunLocked(runId))
+      : closeRunLocked(runId),
+  );
 
   deps.host.handle(RUNS_IPC.revealWorktree, async (runId): Promise<void> => {
     const run = await loadRun(runId);
