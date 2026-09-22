@@ -741,11 +741,11 @@ describe('SessionTranscript — the mode picker (feedback round 1)', () => {
     fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
     const fix = screen.getByLabelText('All modes') as HTMLSelectElement;
     expect([...fix.options].map((o) => o.value)).toContain('bypassPermissions');
-    // An auto-approve Fix's "May edit files" is the bypass mode.
-    expect(
-      screen
-        .getByRole('button', { name: 'May edit files' })
-        .getAttribute('title'),
-    ).toMatch(/^Never asks/);
+    // An auto-approve Fix's write button is the bypass mode — named for
+    // what it actually sets (S6, PR #88 review), not a blanket "May edit
+    // files" that would say less than "Never asks — edits, runs
+    // commands, deletes without a prompt."
+    const write = screen.getByRole('button', { name: 'Bypass Permissions' });
+    expect(write.getAttribute('title')).toMatch(/^Never asks/);
   });
 });
