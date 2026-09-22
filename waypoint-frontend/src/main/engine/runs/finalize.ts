@@ -888,7 +888,15 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
     // actually take, not on isClosingVerdict alone — see the identical
     // comment on the first-finalize path below.
     const plan = statePlanFor(run, verdict);
-    const closes = plan === 'close';
+    // `statePlanFor` returns null for every intent it does not own —
+    // including `custom`, which TicketRunsSection dispatches with
+    // `mayChangeFiles`, i.e. a real writer. For those runs there is no
+    // plan to read the intent off, so fall back to the verdict itself:
+    // a won't-fix custom run must still skip the push, or it opens the
+    // exact noise PR this branch exists to prevent (B3 follow-up, PR #88
+    // round-2 review).
+    const closes =
+      plan === 'close' || (plan === null && isClosingVerdict(verdict));
     // The row as this finalize knows it; a publish may set its PR.
     let current: AgentRun = run;
     const ticket = await describeRunTicket(deps.ledger, run.ticketId);
@@ -1201,7 +1209,15 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
     // publish, unlike an Investigate run reaching the same verdict, which
     // plans `complete` and correctly skips the push.
     const plan = statePlanFor(run, verdict);
-    const closes = plan === 'close';
+    // `statePlanFor` returns null for every intent it does not own —
+    // including `custom`, which TicketRunsSection dispatches with
+    // `mayChangeFiles`, i.e. a real writer. For those runs there is no
+    // plan to read the intent off, so fall back to the verdict itself:
+    // a won't-fix custom run must still skip the push, or it opens the
+    // exact noise PR this branch exists to prevent (B3 follow-up, PR #88
+    // round-2 review).
+    const closes =
+      plan === 'close' || (plan === null && isClosingVerdict(verdict));
 
     // The run's ticket — a native ticket, or a Jira issue's handle (W5b):
     // its label for the PR, and which write path its proposals take.
