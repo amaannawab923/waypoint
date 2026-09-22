@@ -45,6 +45,12 @@ const DEAD_TEXT_MODEL_SDK = path.join(
   'testFixtures',
   'deadTextModelSdk.mjs',
 );
+const ALWAYS_HANGING_RUNNER = path.join(
+  __dirname,
+  'ultrafast',
+  'testFixtures',
+  'alwaysHangingRunner.js',
+);
 
 /** Spawns the server and returns helpers to send a request and await its
  *  matching response by id, plus a close() to tear it down. */
@@ -133,6 +139,38 @@ function postJson(url, body) {
     req.once('error', reject);
     req.end(JSON.stringify(body));
   });
+}
+
+/** Polls `check()` until it returns a truthy value, or throws after
+ *  `timeoutMs`. Used by the F10 test to wait for state this process
+ *  doesn't control directly (a spawned server's own child process, a
+ *  temp dir it created) rather than guessing a fixed delay. */
+async function waitUntil(check, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = check();
+    if (value) return value;
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `waitUntil: condition never became true within ${timeoutMs}ms`,
+      );
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+  }
+}
+
+/** Whether a pid is a live process — process.kill(pid, 0) sends no signal,
+ *  it only checks. Throws ESRCH once the process is actually gone. */
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Pulls the `ENV_SNAPSHOT {…}` JSON envEchoRunner.js rides on a
@@ -410,6 +448,63 @@ describe('ultrafast-mcp.js protocol', () => {
       const secondUrl = readEnvSnapshot(second).TEXT_MODEL_BASE_URL;
       expect(secondUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1$/);
       expect(secondUrl).not.toBe(firstUrl);
+    } finally {
+      server.close();
+    }
+  });
+
+  // F10 (tech-lead review, 2026-09-22): a forceful kill of the MCP server
+  // (mcpClient.ts's callBrowserTask sends SIGTERM, then SIGKILL after a
+  // grace window) used to call process.exit(0) right after killing
+  // tracked Chromium children — never letting runBrowserTask's own
+  // `finally` run, which is the only place that would otherwise clean up
+  // the runner (spawned detached, its own process group) and remove its
+  // bhRuntimeDir. Drives a REAL hung runner (ALWAYS_HANGING_RUNNER, spawned as a
+  // real child process — this needs the actual OS process gone, not a
+  // server-internal accounting change) and proves both: the runner
+  // process is dead, and its /tmp/wpuf-* runtime dir no longer exists,
+  // after nothing but a SIGTERM to the server.
+  it('kills the runner and removes its runtime dir on a forceful SIGTERM mid-task', async () => {
+    const wpufDirsBefore = new Set(
+      fs.readdirSync('/tmp').filter((name) => name.startsWith('wpuf-')),
+    );
+    const server = startServer({
+      ULTRAFAST_RUNNER_PATH: ALWAYS_HANGING_RUNNER,
+    });
+    try {
+      // Fire the call but deliberately don't await it — ALWAYS_HANGING_RUNNER
+      // never answers, so this would otherwise hang for the whole task
+      // timeout.
+      server.call('tools/call', {
+        name: 'browser_task',
+        arguments: { url: 'http://localhost:5199', goal: 'do something' },
+      });
+
+      // This task's own /tmp/wpuf-* runtime dir (runBrowserTask mkdtemp's
+      // it before spawning anything) and, inside it, the pid file
+      // ALWAYS_HANGING_RUNNER writes on start (see that fixture's own comment on
+      // why BH_RUNTIME_DIR, not an ad-hoc test env var, is the seam).
+      const wpufDir = await waitUntil(() => {
+        const found = fs
+          .readdirSync('/tmp')
+          .find(
+            (name) => name.startsWith('wpuf-') && !wpufDirsBefore.has(name),
+          );
+        return found ? path.join('/tmp', found) : null;
+      });
+      const pidFile = path.join(wpufDir, 'runner.pid');
+      const runnerPid = Number(
+        await waitUntil(
+          () => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8'),
+        ),
+      );
+      expect(isProcessAlive(runnerPid)).toBe(true);
+
+      server.child.kill('SIGTERM');
+      await waitUntil(() => !isProcessAlive(server.child.pid));
+
+      expect(isProcessAlive(runnerPid)).toBe(false);
+      expect(fs.existsSync(wpufDir)).toBe(false);
     } finally {
       server.close();
     }

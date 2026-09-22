@@ -540,6 +540,23 @@ async function waitForCdp(port, timeoutMs) {
 // still-running fakeChromium.js fixtures from killed test servers).
 const activeChromiumChildren = new Set();
 
+// F10 (tech-lead review, 2026-09-22): the same problem as
+// activeChromiumChildren above, but for the python runner rather than
+// Chromium. process.on('SIGTERM'/'SIGINT') below (mcpClient.ts's
+// callBrowserTask sends SIGTERM, then SIGKILL after a grace window, on a
+// forceful stop) kill every tracked Chromium child and then call
+// process.exit(0) directly — which never lets runBrowserTask's own
+// `finally` run. That `finally` is the only place that would otherwise
+// `await`-clean up the runner (spawned `detached: true`, its own process
+// group — see the TASK_TIMEOUT_MS handler above) and remove bhRuntimeDir,
+// so a forceful kill left the runner (and, through it, browser-harness
+// and whatever it spawned) running, still holding this task's env, and
+// its /tmp/wpuf-* directory on disk. One record per in-flight runner —
+// `pid` for the SIGKILL, `bhRuntimeDir` for the synchronous rm —
+// populated when runBrowserTask spawns it, cleared in that same
+// `finally` on the normal-exit path.
+const activeRunners = new Set();
+
 async function launchChromium() {
   const binary = findChromiumBinary();
   if (!binary) {
@@ -654,6 +671,7 @@ async function runBrowserTask({ url, goal, maxSteps }) {
   const chromiumMs = Date.now() - chromiumStarted;
 
   let child;
+  let runnerRecord = null; // F10: this task's entry in activeRunners, once child exists
   let killedForTimeout = false;
   const timeout = setTimeout(() => {
     killedForTimeout = true;
@@ -679,6 +697,8 @@ async function runBrowserTask({ url, goal, maxSteps }) {
         stdio: ['pipe', 'pipe', 'pipe'],
         detached: true,
       });
+      runnerRecord = { pid: child.pid, bhRuntimeDir };
+      activeRunners.add(runnerRecord);
 
       // Individual "step" lines are read (so a future version can stream
       // progress) but not folded into the final result: the "result" line
@@ -741,6 +761,7 @@ async function runBrowserTask({ url, goal, maxSteps }) {
     });
   } finally {
     clearTimeout(timeout);
+    if (runnerRecord) activeRunners.delete(runnerRecord);
     await chromium.close();
     await fs.promises
       .rm(bhRuntimeDir, { recursive: true, force: true })
@@ -871,13 +892,44 @@ function killActiveChromiumChildrenSync() {
   });
   activeChromiumChildren.clear();
 }
-process.on('exit', killActiveChromiumChildrenSync);
-process.on('SIGTERM', () => {
+
+/** F10 (tech-lead review, 2026-09-22): the runner's own backstop, same
+ *  shape as killActiveChromiumChildrenSync above and run alongside it —
+ *  `activeRunners`'s own comment has the full story. `-pid` (not `pid`)
+ *  because the runner is spawned `detached: true` into its own process
+ *  group (the same reason TASK_TIMEOUT_MS's own kill above uses it):
+ *  signaling only the direct child would leave whatever IT spawned
+ *  (browser-harness's daemon among them, until F9's runner.py fix)
+ *  running. `fs.rmSync` rather than the `finally`'s own
+ *  `fs.promises.rm`: this runs from a synchronous 'exit'/signal handler,
+ *  which cannot await a promise. */
+function killActiveRunnersSync() {
+  activeRunners.forEach((record) => {
+    try {
+      if (record.pid) process.kill(-record.pid, 'SIGKILL');
+    } catch {
+      // Already gone.
+    }
+    try {
+      fs.rmSync(record.bhRuntimeDir, { recursive: true, force: true });
+    } catch {
+      // Best effort — a locked or already-removed dir is not fatal here.
+    }
+  });
+  activeRunners.clear();
+}
+
+function killActiveChildrenSync() {
   killActiveChromiumChildrenSync();
+  killActiveRunnersSync();
+}
+process.on('exit', killActiveChildrenSync);
+process.on('SIGTERM', () => {
+  killActiveChildrenSync();
   process.exit(0);
 });
 process.on('SIGINT', () => {
-  killActiveChromiumChildrenSync();
+  killActiveChildrenSync();
   process.exit(0);
 });
 
