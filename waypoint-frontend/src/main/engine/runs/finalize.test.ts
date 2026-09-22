@@ -1517,6 +1517,48 @@ describe('W6: the branch is published before the proposals', () => {
     );
   });
 
+  // B3 follow-up (PR #88 round-2 review): the publish gate moved from
+  // isClosingVerdict(verdict) to plan === 'close', and statePlanFor
+  // returns null for every intent it doesn't own — including `custom`,
+  // which TicketRunsSection dispatches with `mayChangeFiles`, i.e. a
+  // real writer in write mode. Without the plan === null fallback a
+  // custom run that closes with "won't fix" pushes its branch and opens
+  // a PR for work the agent just declared won't-fix — exactly the noise
+  // this branch exists to prevent.
+  it("a custom-intent writing run's won't-fix is not published, even though it has no state plan", async () => {
+    const { ledger } = fakeLedger(
+      run({ intent: 'custom', modeId: 'bypassPermissions' }),
+    );
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: "Verdict: won't fix\n\nThe API was already correct.",
+          },
+        ]),
+      ],
+    });
+    const publish = jest.fn();
+    const { deps } = depsWith(ledger, daemon, {
+      pullRequests: { publish, publishFollowUp: jest.fn() },
+    });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'finalized',
+      expect.objectContaining({
+        pr: {
+          action: 'skipped',
+          reason: expect.stringContaining("won't fix"),
+        },
+      }),
+    );
+  });
+
   it('a non-409 claim failure on a first-ever publish never throws past this — the run still reaches needs-review, not wedged at finishing', async () => {
     const { ledger, rows } = fakeLedger(
       run({ intent: 'fix', modeId: 'bypassPermissions' }),
