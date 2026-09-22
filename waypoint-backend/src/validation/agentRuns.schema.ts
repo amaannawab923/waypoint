@@ -215,6 +215,10 @@ export const PENDING_PROMPT_REASONS = [
   'spawn-failed',
   'owner-offline',
   'blocked-by-earlier',
+  // B4 (PR #88 review): runs:close already removed this run's worktree
+  // and branch — unlike every other reason here, nothing clears this on
+  // its own; the person has to start a new session.
+  'closed',
 ] as const;
 export const PENDING_PROMPT_STATES = ['queued', 'sending', 'delivered', 'unresolved', 'dropped'] as const;
 /** The same cap as any prompt the host accepts (waypoint-frontend's MAX_FIRST_MESSAGE_CHARS). */
