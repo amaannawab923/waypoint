@@ -148,12 +148,33 @@ async function runUltrafastTest(): Promise<UltrafastTestResult> {
     });
     const elapsedMs = Date.now() - started;
     const { status, steps } = parseSummaryLine(result);
+    // F20 (tech-lead review, 2026-09-22): `ok: !result.isError` used to be
+    // the WHOLE check — buildToolResult's own isError is only ever true
+    // for jev's `status: "failed"` (never "blocked"), so a run that
+    // clicked Continue without ever actually typing "Ada" into the field
+    // (the page's greeting defaults its own name to "there") came back
+    // `status: done`, `isError: false`, and a green Test result — jev's
+    // own claim, unverified, exactly the thing this tool's own honesty
+    // line ("`done` is Jev's claim — check the screenshots…") tells a
+    // SESSION never to trust blindly. testPage.ts's greeting field now
+    // reports what it actually rendered (see its own comment); a real
+    // pass requires jev's status to be a real success AND the page to
+    // have actually greeted Ada.
+    const greeting = page.greeting();
+    const greetingMatchesAda = greeting === 'Hello, Ada!';
+    const ok = !result.isError && greetingMatchesAda;
     const record: UltrafastTestResult = {
-      ok: !result.isError,
+      ok,
       status,
       steps,
       elapsedMs,
-      message: summaryText(result),
+      message: ok
+        ? summaryText(result)
+        : `${summaryText(result)}\n\nThe page never actually greeted Ada (${
+            greeting
+              ? `it said "${greeting}"`
+              : 'no greeting was recorded at all'
+          }) — jev's own "${status ?? 'unknown'}" claim does not mean this worked.`,
       screenshotDataUrl: lastScreenshotDataUrl(result),
       testedAt,
     };

@@ -207,14 +207,29 @@ function statusLine(
   return { text: 'Ready', tone: 'success' };
 }
 
+// F20 (tech-lead review, 2026-09-22): a `status: blocked` result used to
+// render under exactly the same "Last test failed: …" line as any other
+// failure — and, before ipc.ts's own F20 fix, a blocked run whose
+// isError happened to be false (buildToolResult's isError is only ever
+// true for "failed", never "blocked") rendered under the SUCCESS line
+// instead, indistinguishable from a real pass. jev got stuck partway
+// through is a different outcome from either "it worked" or "it threw" —
+// this gives it its own line rather than collapsing into one of the
+// other two.
+function lastTestLine(result: UltrafastTestResult): string {
+  if (result.ok) {
+    return `Last test: ${result.steps ?? '?'} step(s) in ${result.elapsedMs ?? '?'}ms · status: ${result.status ?? 'unknown'}`;
+  }
+  if (result.status === 'blocked') {
+    return `Last test blocked: jev could not finish — ${result.message}`;
+  }
+  return `Last test failed: ${result.message}`;
+}
+
 function LastTestSummary({ result }: { result: UltrafastTestResult }) {
   return (
     <div className="mt-2 border-t border-border pt-3">
-      <p className="text-xs text-text-secondary">
-        {result.ok
-          ? `Last test: ${result.steps ?? '?'} step(s) in ${result.elapsedMs ?? '?'}ms · status: ${result.status ?? 'unknown'}`
-          : `Last test failed: ${result.message}`}
-      </p>
+      <p className="text-xs text-text-secondary">{lastTestLine(result)}</p>
       {result.screenshotDataUrl && (
         <img
           src={result.screenshotDataUrl}

@@ -259,6 +259,42 @@ describe('UltrafastBrowserTasksSetting', () => {
       screen.queryByAltText('Ultrafast test — final page'),
     ).not.toBeInTheDocument();
   });
+
+  // F20 (tech-lead review, 2026-09-22): a blocked run is neither a clean
+  // pass nor a hard failure — it used to render under the exact same
+  // "Last test failed: …" line as a real failure (or, before ipc.ts's own
+  // F20 fix, could render under the SUCCESS line if isError happened to
+  // be false, since buildToolResult's isError is only ever true for
+  // "failed", never "blocked"). This gives it its own, distinct line.
+  it('distinguishes a blocked run from both a pass and a hard failure', async () => {
+    (getUltrafastStatus as jest.Mock).mockResolvedValue({
+      uvAvailable: true,
+      provisioned: true,
+      scriptsInstalled: true,
+      registered: true,
+      key: { configured: true, tail: '…1234', source: 'settings' },
+      lastTest: null,
+    });
+    (testUltrafast as jest.Mock).mockResolvedValue({
+      ok: false,
+      status: 'blocked',
+      steps: 3,
+      elapsedMs: 900,
+      message:
+        'The page never actually greeted Ada (no greeting was recorded at all) — jev\'s own "blocked" claim does not mean this worked.',
+      screenshotDataUrl: null,
+      testedAt: '2026-09-22T00:00:00.000Z',
+    });
+
+    render(<UltrafastBrowserTasksSetting />);
+    await flush();
+    fireEvent.click(screen.getByRole('button', { name: 'Test' }));
+    await flush();
+
+    expect(screen.getByText(/^Last test blocked:/)).toBeInTheDocument();
+    expect(screen.queryByText(/^Last test failed:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Last test:/)).not.toBeInTheDocument();
+  });
 });
 
 // Founder (2026-09-22): a key pasted into waypoint-frontend/.env also works.

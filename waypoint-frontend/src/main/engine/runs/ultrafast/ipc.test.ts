@@ -79,9 +79,15 @@ jest.mock('./scriptPaths', () => ({
   }),
 }));
 
+// F20 (tech-lead review, 2026-09-22): defaults to a matching greeting so
+// every existing "success" test keeps meaning success without change;
+// F20's own new tests override `greeting` per case to prove
+// runUltrafastTest() no longer trusts jev's status alone.
+const testPageGreetingMock = jest.fn<string | null, []>(() => 'Hello, Ada!');
 const startTestPageMock = jest.fn(async () => ({
   url: 'http://127.0.0.1:9999',
   close: jest.fn(async () => {}),
+  greeting: () => testPageGreetingMock(),
 }));
 jest.mock('./testPage', () => ({
   startTestPage: () => startTestPageMock(),
@@ -357,6 +363,62 @@ describe('ultrafast:test', () => {
     });
   });
 
+  // F20 (tech-lead review, 2026-09-22): the exact scenario the finding
+  // named — a run that clicks Continue without ever typing a name (the
+  // field defaults to "there") still reports jev's own `status: done`
+  // with `isError: false`. Before this fix, `ok: !result.isError` alone
+  // made that a green Test result.
+  it('reports failure when jev claims done but the page never actually greeted Ada', async () => {
+    readStoredTypesafeApiKeyMock.mockReturnValue('ts_live_abcd1234');
+    findUvMock.mockReturnValue('/opt/homebrew/bin/uv');
+    isProvisionedMock.mockReturnValue(true);
+    runCommandMock.mockResolvedValue({ code: 0, stdout: 'ok', stderr: '' });
+    testPageGreetingMock.mockReturnValueOnce('Hello, there!');
+    callBrowserTaskMock.mockResolvedValue({
+      isError: false,
+      content: [
+        {
+          type: 'text',
+          text: 'status: done · 1 step(s) · 300ms · 1 jev decision(s) · 0 text call(s)',
+        },
+      ],
+    });
+
+    const result = await invoke(ULTRAFAST_IPC.test);
+    expect(result).toMatchObject({
+      ok: false,
+      status: 'done',
+      message: expect.stringContaining('never actually greeted Ada'),
+    });
+    expect((result as { message: string }).message).toContain(
+      'it said "Hello, there!"',
+    );
+  });
+
+  it('reports failure when jev claims done but the page recorded no greeting at all', async () => {
+    readStoredTypesafeApiKeyMock.mockReturnValue('ts_live_abcd1234');
+    findUvMock.mockReturnValue('/opt/homebrew/bin/uv');
+    isProvisionedMock.mockReturnValue(true);
+    runCommandMock.mockResolvedValue({ code: 0, stdout: 'ok', stderr: '' });
+    testPageGreetingMock.mockReturnValueOnce(null);
+    callBrowserTaskMock.mockResolvedValue({
+      isError: false,
+      content: [
+        {
+          type: 'text',
+          text: 'status: blocked · 3 step(s) · 900ms · 3 jev decision(s) · 1 text call(s)',
+        },
+      ],
+    });
+
+    const result = await invoke(ULTRAFAST_IPC.test);
+    expect(result).toMatchObject({
+      ok: false,
+      status: 'blocked',
+      message: expect.stringContaining('no greeting was recorded at all'),
+    });
+  });
+
   it('closes the test page even when callBrowserTask throws', async () => {
     readStoredTypesafeApiKeyMock.mockReturnValue('ts_live_abcd1234');
     findUvMock.mockReturnValue('/opt/homebrew/bin/uv');
@@ -366,6 +428,10 @@ describe('ultrafast:test', () => {
     startTestPageMock.mockResolvedValue({
       url: 'http://127.0.0.1:9999',
       close,
+      // callBrowserTask rejects below, so runUltrafastTest never reaches
+      // page.greeting() — this is here only to satisfy TestPageHandle's
+      // shape.
+      greeting: () => null,
     });
     callBrowserTaskMock.mockRejectedValue(new Error('timed out'));
 
