@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-'use strict';
 
 // A runner fixture that never answers — for exercising the timeout/kill
 // path in mcpClient.test.ts (and, if ever needed, ultrafast-mcp.test.js)

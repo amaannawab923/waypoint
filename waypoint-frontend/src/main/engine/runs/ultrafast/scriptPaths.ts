@@ -27,7 +27,11 @@ export interface UltrafastScriptPaths {
   runnerPath: string;
 }
 
-function candidates(appPath: string, resourcesPath: string, rel: string[]): string[] {
+function candidates(
+  appPath: string,
+  resourcesPath: string,
+  rel: string[],
+): string[] {
   return [
     // Packaged: electron-builder's extraResources land beside app.asar,
     // under `Contents/Resources/<rel>`.
@@ -41,7 +45,10 @@ function candidates(appPath: string, resourcesPath: string, rel: string[]): stri
   ];
 }
 
-function firstExisting(paths: string[], existsSync: (p: string) => boolean): string {
+function firstExisting(
+  paths: string[],
+  existsSync: (p: string) => boolean,
+): string {
   return paths.find((p) => existsSync(p)) ?? paths[0];
 }
 

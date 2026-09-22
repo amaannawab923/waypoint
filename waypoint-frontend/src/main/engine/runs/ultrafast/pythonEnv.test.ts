@@ -10,13 +10,17 @@ import {
 
 describe('resolveUltrafastPaths', () => {
   it('nests everything under <userData>/ultrafast', () => {
-    const paths = resolveUltrafastPaths('/Users/x/Library/Application Support/Waypoint');
+    const paths = resolveUltrafastPaths(
+      '/Users/x/Library/Application Support/Waypoint',
+    );
     expect(paths.root).toBe(
       '/Users/x/Library/Application Support/Waypoint/ultrafast',
     );
     expect(paths.venvDir).toBe(`${paths.root}/venv`);
     expect(paths.venvPython).toBe(`${paths.venvDir}/bin/python`);
-    expect(paths.venvBrowserHarness).toBe(`${paths.venvDir}/bin/browser-harness`);
+    expect(paths.venvBrowserHarness).toBe(
+      `${paths.venvDir}/bin/browser-harness`,
+    );
     expect(paths.pinnedFile).toBe(`${paths.root}/pinned.json`);
   });
 });
@@ -50,7 +54,13 @@ describe('findUv', () => {
   });
 
   it('returns null rather than throwing when uv is nowhere', () => {
-    expect(findUv({ pathEnv: '/usr/bin', homeDir: '/Users/x', existsSync: () => false })).toBeNull();
+    expect(
+      findUv({
+        pathEnv: '/usr/bin',
+        homeDir: '/Users/x',
+        existsSync: () => false,
+      }),
+    ).toBeNull();
   });
 });
 
@@ -67,7 +77,11 @@ function makeFakeEnv() {
   let callIndex = 0;
   const run: CommandRunner = async (command, args) => {
     calls.push({ command, args });
-    const result = commandResults[callIndex] ?? { code: 0, stdout: '', stderr: '' };
+    const result = commandResults[callIndex] ?? {
+      code: 0,
+      stdout: '',
+      stderr: '',
+    };
     callIndex += 1;
     return result;
   };
@@ -156,7 +170,11 @@ describe('provisionPythonEnv', () => {
     const paths = resolveUltrafastPaths('/tmp/waypoint-3');
     env.files.set(
       paths.pinnedFile,
-      JSON.stringify({ jevCommit: 'stale-commit', harnessVersion: '0.1.0', provisionedAt: 1 }),
+      JSON.stringify({
+        jevCommit: 'stale-commit',
+        harnessVersion: '0.1.0',
+        provisionedAt: 1,
+      }),
     );
     env.files.set(paths.venvPython, '');
 
@@ -176,7 +194,11 @@ describe('provisionPythonEnv', () => {
 
   it('reports uv venv failing as a sentence, without attempting install', async () => {
     const env = makeFakeEnv();
-    env.commandResults[0] = { code: 1, stdout: '', stderr: 'python3.12 not found' };
+    env.commandResults[0] = {
+      code: 1,
+      stdout: '',
+      stderr: 'python3.12 not found',
+    };
     const paths = resolveUltrafastPaths('/tmp/waypoint-4');
 
     const result = await provisionPythonEnv({
@@ -198,7 +220,11 @@ describe('provisionPythonEnv', () => {
 
   it('reports the install step failing without swallowing it as success', async () => {
     const env = makeFakeEnv();
-    env.commandResults[1] = { code: 1, stdout: '', stderr: 'no matching distribution' };
+    env.commandResults[1] = {
+      code: 1,
+      stdout: '',
+      stderr: 'no matching distribution',
+    };
     const paths = resolveUltrafastPaths('/tmp/waypoint-5');
 
     const result = await provisionPythonEnv({
@@ -290,6 +316,8 @@ describe('isProvisioned', () => {
 
   it('is false when nothing has been written yet', () => {
     const paths = resolveUltrafastPaths('/tmp/waypoint-9');
-    expect(isProvisioned(paths, { existsSync: () => false, readFileSync: () => '' })).toBe(false);
+    expect(
+      isProvisioned(paths, { existsSync: () => false, readFileSync: () => '' }),
+    ).toBe(false);
   });
 });

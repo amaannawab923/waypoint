@@ -50,7 +50,7 @@ jest.mock('./pythonEnv', () => {
   };
 });
 
-const existsSyncMock = jest.fn((_p: string) => true);
+const existsSyncMock = jest.fn<boolean, [string]>(() => true);
 jest.mock('fs', () => ({
   existsSync: (p: string) => existsSyncMock(p),
   mkdirSync: jest.fn(),
@@ -97,7 +97,7 @@ jest.mock('./mcpClient', () => ({
 // eslint-disable-next-line import/order, import/first
 import { ULTRAFAST_IPC } from './ipcTypes';
 // eslint-disable-next-line import/order, import/first
-import { _resetUltrafastIpcStateForTests, registerUltrafastIpc } from './ipc';
+import { resetUltrafastIpcStateForTests, registerUltrafastIpc } from './ipc';
 
 function invoke(channel: string, ...args: unknown[]) {
   const handler = handlers.get(channel);
@@ -110,7 +110,7 @@ beforeEach(() => {
   handlers.clear();
   isUltrafastSecureStorageAvailableMock.mockReturnValue(true);
   existsSyncMock.mockReturnValue(true);
-  _resetUltrafastIpcStateForTests();
+  resetUltrafastIpcStateForTests();
   registerUltrafastIpc();
 });
 

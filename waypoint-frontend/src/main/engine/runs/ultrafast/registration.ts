@@ -84,7 +84,9 @@ function buildServerEnv(
   };
 }
 
-export function registerUltrafastBrowser(deps: UltrafastRegistrationDeps): Unsubscribe {
+export function registerUltrafastBrowser(
+  deps: UltrafastRegistrationDeps,
+): Unsubscribe {
   let registeredSince: number | null = null;
   const execPath = deps.execPath ?? process.execPath;
   const scripts = resolveUltrafastScriptPaths(deps.appPath, deps.resourcesPath);
@@ -123,7 +125,9 @@ export function registerUltrafastBrowser(deps: UltrafastRegistrationDeps): Unsub
     registeredSince = since;
     const attempt = async () => {
       if (!isProvisioned(paths)) {
-        deps.logger.info('engine: provisioning ultrafast browser tasks in the background');
+        deps.logger.info(
+          'engine: provisioning ultrafast browser tasks in the background',
+        );
         const result = await provisionPythonEnv({
           paths,
           uvPath,
@@ -143,7 +147,11 @@ export function registerUltrafastBrowser(deps: UltrafastRegistrationDeps): Unsub
       try {
         fs.mkdirSync(paths.evidenceRoot, { recursive: true });
         await createDaemonRunsApi(client).saveMcpServer(
-          buildServer(execPath, scripts.mcpServerEntry, buildServerEnv(key, paths, scripts)),
+          buildServer(
+            execPath,
+            scripts.mcpServerEntry,
+            buildServerEnv(key, paths, scripts),
+          ),
         );
         deps.logger.info('engine: ultrafast browser tasks registered', {
           name: ULTRAFAST_SERVER_NAME,
@@ -185,7 +193,9 @@ export function ultrafastAvailability(deps: {
     keyConfigured: readStoredTypesafeApiKey() !== null,
     uvAvailable: findUv() !== null,
     provisioned: isProvisioned(paths),
-    scriptsInstalled: fs.existsSync(scripts.mcpServerEntry) && fs.existsSync(scripts.runnerPath),
+    scriptsInstalled:
+      fs.existsSync(scripts.mcpServerEntry) &&
+      fs.existsSync(scripts.runnerPath),
   };
 }
 
