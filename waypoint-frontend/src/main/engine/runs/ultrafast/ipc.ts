@@ -7,6 +7,7 @@ import {
   resolveTypesafeApiKey,
   writeStoredTypesafeApiKey,
 } from './auth';
+import { buildServerEnv } from './registration';
 import {
   ULTRAFAST_IPC,
   type UltrafastStatus,
@@ -132,13 +133,9 @@ async function runUltrafastTest(): Promise<UltrafastTestResult> {
     const result = await callBrowserTask({
       entry: scripts.mcpServerEntry,
       execPath: process.execPath,
-      env: {
-        ULTRAFAST_TYPESAFE_API_KEY: key,
-        ULTRAFAST_VENV_PYTHON: paths.venvPython,
-        ULTRAFAST_RUNNER_PATH: scripts.runnerPath,
-        ULTRAFAST_BH_HOME: paths.bhHome,
-        ULTRAFAST_EVIDENCE_ROOT: paths.evidenceRoot,
-      },
+      // The exact env registration gives the server, so a passing Test
+      // means a session's browser_task has what it needs too.
+      env: buildServerEnv(key, paths, scripts),
       url: page.url,
       goal: 'Type Ada into the "Your name" field, then press the Continue button.',
       maxSteps: 6,

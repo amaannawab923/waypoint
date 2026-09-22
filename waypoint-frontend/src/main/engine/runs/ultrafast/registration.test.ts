@@ -12,6 +12,13 @@ jest.mock('../daemonApi', () => ({
 }));
 
 const readStoredTypesafeApiKeyMock = jest.fn<string | null, []>();
+const getStoredSubscriptionTokenMock = jest.fn<string | null, []>(() => null);
+jest.mock('../../../copilot/copilotAuth', () => ({
+  getStoredSubscriptionToken: () => getStoredSubscriptionTokenMock(),
+}));
+jest.mock('../../../copilot/copilotConfigDir', () => ({
+  copilotClaudeConfigDir: () => '/fake/copilot-config',
+}));
 jest.mock('./auth', () => ({
   readStoredTypesafeApiKey: () => readStoredTypesafeApiKeyMock(),
   resolveTypesafeApiKey: () => {
@@ -154,6 +161,32 @@ describe('registerUltrafastBrowser', () => {
       path.join(resourcesPath, 'scripts', 'ultrafast', 'runner.py'),
     );
     expect(server.providers).toEqual(['claude']);
+    // Found on the first live Test: the Claude Code CLI the shim's SDK
+    // spawns reads the login from the keychain, which needs HOME and USER;
+    // without them every field value came back "Not logged in".
+    expect(server.env.HOME).toBeTruthy();
+    expect(server.env.USER).toBeTruthy();
+    expect(server.env.PATH).toBeTruthy();
+    expect(server.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+  });
+
+  it('hands the shim Copilot’s connected subscription token, when there is one', async () => {
+    getStoredSubscriptionTokenMock.mockReturnValue('sk-ant-oat01-xyz');
+    const supervisor = fakeSupervisor(running(1));
+    registerUltrafastBrowser({
+      supervisor,
+      appPath,
+      resourcesPath,
+      userData,
+      logger,
+      execPath: '/bin/waypoint',
+    });
+    await flush();
+    const server = saveMcpServer.mock.calls[0][0] as {
+      env: Record<string, string>;
+    };
+    expect(server.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-ant-oat01-xyz');
+    expect(server.env.CLAUDE_CONFIG_DIR).toBe('/fake/copilot-config');
   });
 
   it('registers nothing, silently, when no key is configured', async () => {
