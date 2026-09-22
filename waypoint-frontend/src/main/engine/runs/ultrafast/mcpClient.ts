@@ -68,8 +68,25 @@ export function callBrowserTask(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      // SIGTERM, not SIGKILL: gives the server's own `process.on('SIGTERM')`
+      // handler a chance to kill any Chromium it still has open (see that
+      // handler's own comment on `activeChromiumChildren`) — a SIGKILL here
+      // cannot be caught by the receiving process at all, so on a call that
+      // finishes while the server is still mid-task (the timeout path
+      // below, most notably) that Chromium and its temp profile would
+      // otherwise be silently orphaned. A short grace window, then SIGKILL
+      // as the real fallback for a server that is wedged even on SIGTERM.
       try {
-        child.kill('SIGKILL');
+        child.kill('SIGTERM');
+        const forceKill = setTimeout(() => {
+          try {
+            child.kill('SIGKILL');
+          } catch {
+            // Already gone.
+          }
+        }, 2_000);
+        forceKill.unref?.();
+        child.once('exit', () => clearTimeout(forceKill));
       } catch {
         // Already gone.
       }

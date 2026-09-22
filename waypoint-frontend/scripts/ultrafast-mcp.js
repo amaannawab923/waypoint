@@ -496,6 +496,18 @@ async function waitForCdp(port, timeoutMs) {
   }
 }
 
+// Every Chromium child this process currently has open, so a signal or an
+// uncaught crash of THIS process can still kill them synchronously before
+// exiting (see the process.on('exit'/'SIGTERM'/'SIGINT') handlers below).
+// Without this, a Chromium spawned by launchChromium() would be silently
+// orphaned — not killed — if the daemon terminates this MCP server process
+// mid-task (a restart, a crash, `agentConfig` re-saving the server list):
+// Node's child_process does not propagate a parent's death to its own
+// children on its own. Found via a real leak during this feature's own
+// test development (`ps aux` after a long test session showed several
+// still-running fakeChromium.js fixtures from killed test servers).
+const activeChromiumChildren = new Set();
+
 async function launchChromium() {
   const binary = findChromiumBinary();
   if (!binary) {
@@ -520,11 +532,13 @@ async function launchChromium() {
     { stdio: 'ignore' },
   );
   child.on('error', () => {});
+  activeChromiumChildren.add(child);
 
   let closed = false;
   const close = async () => {
     if (closed) return;
     closed = true;
+    activeChromiumChildren.delete(child);
     try {
       child.kill('SIGKILL');
     } catch {
@@ -730,6 +744,30 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (error) => {
   // eslint-disable-next-line no-console
   console.error('[ultrafast-mcp] unhandled rejection:', error);
+});
+
+/** Kills every still-open Chromium synchronously — the last-resort cleanup
+ *  for a signal or an 'exit' this process cannot async-await through (see
+ *  `activeChromiumChildren`'s own comment). Never throws: a child already
+ *  gone is not a problem this handler needs to report. */
+function killActiveChromiumChildrenSync() {
+  activeChromiumChildren.forEach((child) => {
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // Already gone.
+    }
+  });
+  activeChromiumChildren.clear();
+}
+process.on('exit', killActiveChromiumChildrenSync);
+process.on('SIGTERM', () => {
+  killActiveChromiumChildrenSync();
+  process.exit(0);
+});
+process.on('SIGINT', () => {
+  killActiveChromiumChildrenSync();
+  process.exit(0);
 });
 
 module.exports = {
