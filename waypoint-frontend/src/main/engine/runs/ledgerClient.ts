@@ -100,6 +100,14 @@ export interface AgentRun {
   updatedAt: string;
 }
 
+/**
+ * How many events one `listEvents` call returns, oldest first. Exported
+ * so a caller that needs the TAIL of a long run's events (startRun.ts's
+ * `wasClosedByRunsClose`) can tell a full page from the last one and page
+ * forward with `afterSeq`, instead of hard-coding this number twice.
+ */
+export const LEDGER_EVENT_PAGE_SIZE = 500;
+
 export interface AgentRunEvent {
   runId: string;
   seq: number;
@@ -624,7 +632,9 @@ export function createLedgerClient(deps: LedgerClientDeps = {}): LedgerClient {
     },
     async listEvents(id, options = {}) {
       assertRunId(id);
-      const params = new URLSearchParams({ limit: '500' });
+      const params = new URLSearchParams({
+        limit: String(LEDGER_EVENT_PAGE_SIZE),
+      });
       if (options.afterSeq !== undefined)
         params.set('afterSeq', String(options.afterSeq));
       return (

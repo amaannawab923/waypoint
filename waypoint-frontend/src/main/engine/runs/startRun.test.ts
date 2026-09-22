@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import type { DaemonRunsApi, DaemonWorkspaceRecord } from './daemonApi';
 import type { PendingPrompt } from '../types';
 import {
+  LEDGER_EVENT_PAGE_SIZE,
   LedgerRequestError,
   type AgentRun,
   type LedgerClient,
@@ -1040,6 +1041,89 @@ describe('resumeRun', () => {
     // Never reprovisioned: no fresh branch cut, nothing reopened.
     expect(daemon.createWorktree).not.toHaveBeenCalled();
     expect(daemon.registerRepository).not.toHaveBeenCalled();
+    expect(ledger.reopenRun).not.toHaveBeenCalled();
+  });
+
+  // Round-2 of the same review: listEvents serves the OLDEST page
+  // (limit=500, ordered by seq ascending), and worktree_removed is by
+  // construction the NEWEST event on the run. A never-lock session is
+  // finalized once per idle turn, so the long-lived runs somebody
+  // eventually closes are exactly the ones past 500 events — where a
+  // single head-of-list read silently answers "not closed" and re-cuts
+  // the branch, which is B4's original symptom.
+  it('finds worktree_removed past the first page of events', async () => {
+    const { ledger } = fakeLedger([
+      interrupted({
+        id: 'run-closed2',
+        worktreePath: path.join(worktreesDir, 'run-closed2-gone'),
+        branch: 'agent/PL-10',
+      }),
+    ]);
+    const filler = (from: number) =>
+      Array.from({ length: LEDGER_EVENT_PAGE_SIZE }, (_, i) => ({
+        runId: 'run-closed2',
+        seq: from + i,
+        kind: 'note',
+        payload: {},
+        at: '2026-09-20T00:00:00.000Z',
+      }));
+    const seen: (number | undefined)[] = [];
+    (ledger.listEvents as jest.Mock).mockImplementation(
+      async (_id: string, options: { afterSeq?: number } = {}) => {
+        seen.push(options.afterSeq);
+        // Two full pages of noise, then the close on the third.
+        if (options.afterSeq === undefined) return filler(1);
+        if (options.afterSeq === LEDGER_EVENT_PAGE_SIZE)
+          return filler(LEDGER_EVENT_PAGE_SIZE + 1);
+        return [
+          {
+            runId: 'run-closed2',
+            seq: LEDGER_EVENT_PAGE_SIZE * 2 + 1,
+            kind: 'worktree_removed',
+            payload: { reason: 'merged', branchDeleted: true },
+            at: '2026-09-20T00:00:00.000Z',
+          },
+        ];
+      },
+    );
+    const daemon = fakeDaemon();
+    await expect(
+      resumeRun(depsWith(ledger, daemon), 'run-closed2'),
+    ).resolves.toMatchObject({
+      outcome: 'cannot-reach-worktree',
+      reason: 'closed',
+    });
+    // It actually paged with afterSeq rather than re-reading the head.
+    expect(seen).toEqual([
+      undefined,
+      LEDGER_EVENT_PAGE_SIZE,
+      LEDGER_EVENT_PAGE_SIZE * 2,
+    ]);
+    expect(daemon.createWorktree).not.toHaveBeenCalled();
+  });
+
+  // The read fails CLOSED. A transient ledger error used to answer "not
+  // closed", which re-cuts the branch: a false refusal costs the user a
+  // new session, a false reprovision costs them the work.
+  it('refuses rather than re-cutting when the event read itself fails', async () => {
+    const { ledger } = fakeLedger([
+      interrupted({
+        id: 'run-closed3',
+        worktreePath: path.join(worktreesDir, 'run-closed3-gone'),
+        branch: 'agent/PL-11',
+      }),
+    ]);
+    (ledger.listEvents as jest.Mock).mockRejectedValue(
+      new Error('ledger unreachable'),
+    );
+    const daemon = fakeDaemon();
+    await expect(
+      resumeRun(depsWith(ledger, daemon), 'run-closed3'),
+    ).resolves.toMatchObject({
+      outcome: 'cannot-reach-worktree',
+      reason: 'closed',
+    });
+    expect(daemon.createWorktree).not.toHaveBeenCalled();
     expect(ledger.reopenRun).not.toHaveBeenCalled();
   });
 
