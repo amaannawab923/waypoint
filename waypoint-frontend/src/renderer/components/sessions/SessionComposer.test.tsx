@@ -389,20 +389,34 @@ describe('SessionComposer', () => {
         },
       };
 
-      it('Read-only is plan; May edit files is the run’s write mode', () => {
+      // S6 (PR #88 review): the write-side button used to say "May edit
+      // files" no matter which mode it actually set — here, the run's
+      // write mode is `bypassPermissions`, glossed "Never asks — edits,
+      // runs commands, deletes without a prompt", with only the title
+      // tooltip saying so. The button is now named for the mode itself.
+      it('Read-only is plan; the write button is named for the run’s actual write mode', () => {
         const onSetMode = jest.fn();
         render(
           <SessionComposer
             onSend={jest.fn(async () => {})}
             sendBlockedReason={null}
             attachedToBand={false}
-            config={claude}
+            config={{
+              ...claude,
+              // The session is actually running in the run's write mode
+              // (matches writeModeId below) — the button should read
+              // pressed for its own mode, not merely "any non-plan mode".
+              modeOptions: {
+                ...claude.modeOptions,
+                selected: 'bypassPermissions',
+              },
+            }}
             writeModeId="bypassPermissions"
             onSetMode={onSetMode}
           />,
         );
         const readOnly = screen.getByRole('button', { name: 'Read-only' });
-        const edit = screen.getByRole('button', { name: 'May edit files' });
+        const edit = screen.getByRole('button', { name: 'Bypass Permissions' });
         expect(readOnly).toHaveAttribute('aria-pressed', 'false');
         expect(edit).toHaveAttribute('aria-pressed', 'true');
         expect(readOnly).toHaveAttribute(
@@ -416,6 +430,43 @@ describe('SessionComposer', () => {
         expect(onSetMode).toHaveBeenLastCalledWith('bypassPermissions');
         // The full list is folded away until asked for.
         expect(screen.queryByLabelText('All modes')).toBeNull();
+      });
+
+      // S6: a run already on a THIRD mode (acceptEdits) — not plan, not
+      // the write mode the segment sets — used to show the write button
+      // already pressed (aria-pressed was true for any non-plan mode),
+      // so clicking it looked like a no-op while it silently escalated
+      // straight to bypassPermissions. Now the button correctly shows
+      // not-pressed (it does not represent the current mode) AND the
+      // click itself is a no-op — never an escalation the person did not
+      // ask for by name.
+      it('a run already on a different non-plan mode: the write button shows unpressed and a click never escalates it', () => {
+        const onSetMode = jest.fn();
+        render(
+          <SessionComposer
+            onSend={jest.fn(async () => {})}
+            sendBlockedReason={null}
+            attachedToBand={false}
+            config={{
+              ...claude,
+              modeOptions: { ...claude.modeOptions, selected: 'acceptEdits' },
+            }}
+            writeModeId="bypassPermissions"
+            onSetMode={onSetMode}
+          />,
+        );
+        const edit = screen.getByRole('button', {
+          name: 'Bypass Permissions',
+        });
+        expect(edit).toHaveAttribute('aria-pressed', 'false');
+        expect(edit.getAttribute('title')).toMatch(
+          /^Currently Accept Edits\. Switch to Read-only first/,
+        );
+        fireEvent.click(edit);
+        expect(onSetMode).not.toHaveBeenCalled();
+        // Read-only itself is unaffected — still a real, working switch.
+        fireEvent.click(screen.getByRole('button', { name: 'Read-only' }));
+        expect(onSetMode).toHaveBeenCalledWith('plan');
       });
 
       it('Advanced opens the provider’s full list, each mode glossed — never a guessed one', () => {

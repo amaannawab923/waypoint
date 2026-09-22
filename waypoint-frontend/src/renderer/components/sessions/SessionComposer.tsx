@@ -133,10 +133,12 @@ export function SessionComposer({
   /** The session's mode / model / effort options; null before the first snapshot. */
   config?: SessionConfigState | null;
   /**
-   * The provider mode "May edit files" resolves to for this run — the
-   * mode that bypasses permissions when the run auto-approves, the
-   * provider's default otherwise. Without it the picker's write side
-   * takes the first non-plan mode offered.
+   * The picker's write-side mode for this run — the mode that bypasses
+   * permissions when the run auto-approves, the provider's default
+   * otherwise. The button is named for whichever mode this is (S6, PR #88
+   * review), never a fixed "May edit files" that could say less than it
+   * does. Without it the picker's write side takes the first non-plan
+   * mode offered.
    */
   writeModeId?: string;
   onSetMode?: (modeId: string) => void;
@@ -380,9 +382,27 @@ function modeTitle(option: {
 
 /**
  * The mode as two positions — Read-only (the provider's plan mode) and
- * May edit files (the run's write mode) — with the provider's full list
- * under Advanced, each mode named as the provider names it and glossed on
+ * the run's own write mode — with the provider's full list under
+ * Advanced, each mode named as the provider names it and glossed on
  * hover. A provider that offers no plan mode gets the full list alone.
+ *
+ * S6 (PR #88 review, "Fix 2 territory — be conservative"): the write
+ * button used to say "May edit files" no matter which mode it actually
+ * set — for an auto-approve run that is `bypassPermissions`, glossed
+ * "Never asks — edits, runs commands, deletes without a prompt", with
+ * the truth living only in the `title` tooltip nobody hovers before
+ * clicking. Worse, `aria-pressed` used to be true for ANY non-plan mode
+ * (`selected !== null && !readOnly`) — so a run already on `acceptEdits`
+ * (a real, different, less-permissive mode never named the write mode)
+ * showed this button already pressed. Clicking it then looked like a
+ * no-op and silently escalated straight to `bypassPermissions`. Now the
+ * button is named for the mode it will actually set (the provider's own
+ * name, same as every mode in the Advanced list gets), `aria-pressed`
+ * is true only when the CURRENT mode genuinely is that one, and a click
+ * while on any other non-plan mode is a no-op — the person has to go
+ * through Read-only first, same as switching away from any other mode
+ * they picked deliberately. Never a click that reads as inert but
+ * escalates permissions underneath it.
  */
 function ModePicker({
   options,
@@ -402,6 +422,11 @@ function ModePicker({
     options.find((o) => o.id !== 'plan');
   const simple = !!plan && !!write;
   const readOnly = selected === 'plan';
+  const onWriteMode = selected === write?.id;
+  // A real, different mode is already active (acceptEdits, say) — never
+  // silently jump from it straight to the write mode a click here would
+  // otherwise set; the person goes through Read-only first.
+  const otherModeActive = selected !== null && !readOnly && !onWriteMode;
   const segment = (pressed: boolean) =>
     clsx(
       'h-6 px-2 text-[11px] transition-colors',
@@ -432,16 +457,20 @@ function ModePicker({
           </button>
           <button
             type="button"
-            aria-pressed={selected !== null && !readOnly}
-            title={modeTitle(write)}
+            aria-pressed={onWriteMode}
+            title={
+              otherModeActive
+                ? `Currently ${options.find((o) => o.id === selected)?.name ?? selected}. Switch to Read-only first, then here, to change to ${write.name}.`
+                : modeTitle(write)
+            }
             disabled={!onChange}
-            onClick={() => onChange?.(write.id)}
-            className={clsx(
-              segment(selected !== null && !readOnly),
-              'rounded-r-[4px]',
-            )}
+            onClick={() => {
+              if (otherModeActive) return;
+              onChange?.(write.id);
+            }}
+            className={clsx(segment(onWriteMode), 'rounded-r-[4px]')}
           >
-            May edit files
+            {write.name}
           </button>
         </div>
       )}
