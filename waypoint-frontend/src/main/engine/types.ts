@@ -1003,6 +1003,15 @@ export interface CloseRunPreview {
   worktreePath: string;
   /** Commits on the branch past its base that no remote has; null when git could not say. */
   unpushedCommits: number | null;
+  /**
+   * Working-tree files with no commit at all — tracked or not — that
+   * `runs:close` would delete with the worktree; null when git could not
+   * say (B1, PR #88 review). `CLOSABLE` includes `failed`, `cancelled`
+   * and `interrupted`, where uncommitted work is the norm: an agent
+   * mid-edit when the turn errors leaves nothing committed, and
+   * `unpushedCommits` alone said nothing about that.
+   */
+  uncommittedFiles: number | null;
   /** The run opened (or updated) a pull request, so the branch is kept. */
   hasPullRequest: boolean;
   branchWillBeDeleted: boolean;
