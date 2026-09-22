@@ -944,6 +944,8 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         report,
         runLabel: `${label(current)} · follow-up ${sequence}`,
         published,
+        verdict,
+        plan,
       });
       const groupId = `${run.id}:${sequence}`;
       const comment = await deps.ledger.createRunProposal(
@@ -1278,6 +1280,8 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         report,
         runLabel: label(run),
         published,
+        verdict,
+        plan,
       });
       // A Jira issue's proposals carry the borrowed credential, so the
       // backend can read the issue live and build the external-write card

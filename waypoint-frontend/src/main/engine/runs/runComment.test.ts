@@ -26,6 +26,8 @@ describe('buildRunComment', () => {
         url: 'https://github.com/o/r/pull/9',
         pushed: true,
       },
+      verdict: 'fixed',
+      plan: 'review',
     });
     expect(body).toBe(
       [
@@ -47,6 +49,8 @@ describe('buildRunComment', () => {
       ),
       runLabel: 'ENG-77 · Investigate',
       published: null,
+      verdict: 'not-a-bug',
+      plan: 'close',
     });
     expect(body).toBe(
       [
@@ -56,7 +60,14 @@ describe('buildRunComment', () => {
     );
   });
 
-  it("a failed publish is the run's business, not the ticket's: no PR line, no reason", () => {
+  // S4 (PR #88 review): before this, a failed push read exactly like a
+  // successful one to the ticket — no line at all — so a Fix that could
+  // not push filed a comment that looked like finished work, paired with
+  // a state change to review. The REASON is still the run's business,
+  // not the ticket's (Fix 4's own deviation): the message it carries
+  // ("could not read Username") must never appear on the ticket, only
+  // the honest fact that there is no PR yet.
+  it("a failed publish gets one honest line — no PR yet — but never the reason, which stays the run's business", () => {
     const body = buildRunComment({
       report: parseReport('Fixed it.'),
       runLabel: 'ROAD-1 · Fix',
@@ -65,29 +76,48 @@ describe('buildRunComment', () => {
         stage: 'push',
         message: 'could not read Username',
       },
+      verdict: 'fixed',
+      plan: 'review',
     });
-    expect(body).toBe(['Fixed it.', FOOTER('ROAD-1 · Fix')].join('\n\n'));
+    expect(body).toBe(
+      [
+        'Fixed it.',
+        'No pull request yet — the branch was not published; the details are on the run in Waypoint.',
+        FOOTER('ROAD-1 · Fix'),
+      ].join('\n\n'),
+    );
     expect(body).not.toContain('Username');
-    expect(body).not.toContain('Not published');
+    expect(body).not.toContain('push');
   });
 
-  it.each([
-    [
-      'pushed-only',
-      { kind: 'pushed-only' as const, reason: 'no origin remote' },
-    ],
-    ['skipped', { kind: 'skipped' as const, reason: 'nothing to publish' }],
-  ])(
-    'a %s publish has no PR, so no PR line and none of the reason',
-    (_kind, published) => {
-      const body = buildRunComment({
-        report: parseReport('Verdict: fixed\n## Summary\nDone.'),
-        runLabel: 'r',
-        published,
-      });
-      expect(body).toBe(['Done.', FOOTER('r')].join('\n\n'));
-    },
-  );
+  it('pushed-only (the branch went up, gh pr create did not) gets the same honest line, without its own reason', () => {
+    const body = buildRunComment({
+      report: parseReport('Verdict: fixed\n## Summary\nDone.'),
+      runLabel: 'r',
+      published: { kind: 'pushed-only', reason: 'no gh on PATH' },
+      verdict: 'fixed',
+      plan: 'review',
+    });
+    expect(body).toBe(
+      [
+        'Done.',
+        'No pull request yet — the branch was not published; the details are on the run in Waypoint.',
+        FOOTER('r'),
+      ].join('\n\n'),
+    );
+    expect(body).not.toContain('no gh on PATH');
+  });
+
+  it('skipped (a closing verdict, or nothing to publish) has no PR line at all — not a broken push', () => {
+    const body = buildRunComment({
+      report: parseReport('Verdict: fixed\n## Summary\nDone.'),
+      runLabel: 'r',
+      published: { kind: 'skipped', reason: 'nothing to publish' },
+      verdict: 'fixed',
+      plan: 'review',
+    });
+    expect(body).toBe(['Done.', FOOTER('r')].join('\n\n'));
+  });
 
   // Found in review, round 3: publishLine's switch had no case for
   // 'updated' — a follow-up that pushed new commits to an already-open
@@ -102,6 +132,8 @@ describe('buildRunComment', () => {
         url: 'https://github.com/o/r/pull/9',
         pushed: true,
       },
+      verdict: 'fixed',
+      plan: 'review',
     });
     expect(body).toContain(
       'Pull request updated: https://github.com/o/r/pull/9',
@@ -115,6 +147,8 @@ describe('buildRunComment', () => {
       ),
       runLabel: 'r',
       published: null,
+      verdict: 'fixed',
+      plan: 'review',
     });
     expect(body).toContain(
       'Done.\n\n**Verification**\nDrove the form; 01-after.png shows the fix.',
@@ -129,6 +163,8 @@ describe('buildRunComment', () => {
       },
       runLabel: 'r',
       published: null,
+      verdict: 'fixed',
+      plan: 'review',
     });
     expect(long).toContain(`${'v'.repeat(1999)}…`);
     expect(long).not.toContain('v'.repeat(2001));
@@ -145,8 +181,78 @@ describe('buildRunComment', () => {
       },
       runLabel: 'r',
       published: null,
+      verdict: null,
+      plan: null,
     });
     expect(body).toBe(FOOTER('r'));
+  });
+
+  // S5 (PR #88 review): statePlanFor returns null for root-cause and
+  // needs-info on every intent, and for a custom-intent run's verdict
+  // regardless — "the paired state change says it" (this module's own
+  // header comment) was never true for those. Before this, the ticket
+  // got the summary and nothing else: no sign the session only found a
+  // cause, or is stuck wanting a decision.
+  it('root-cause and needs-info (no state change to carry them) get the verdict tag back — plan null is the only trigger', () => {
+    const rootCause = buildRunComment({
+      report: parseReport(
+        'Verdict: root-cause\n## Summary\nThe cache key omits the tenant id.',
+      ),
+      runLabel: 'ENG-9 · Investigate',
+      published: null,
+      verdict: 'root-cause',
+      plan: null,
+    });
+    expect(rootCause).toBe(
+      [
+        '**Verdict:** root cause found',
+        'The cache key omits the tenant id.',
+        FOOTER('ENG-9 · Investigate'),
+      ].join('\n\n'),
+    );
+
+    const needsInfo = buildRunComment({
+      report: parseReport(
+        'Verdict: needs-info\n## Summary\nTwo readings of the spec; a person must pick one.',
+      ),
+      runLabel: 'ENG-9 · Fix',
+      published: null,
+      verdict: 'needs-info',
+      plan: null,
+    });
+    expect(needsInfo).toBe(
+      [
+        '**Verdict:** needs a decision',
+        'Two readings of the spec; a person must pick one.',
+        FOOTER('ENG-9 · Fix'),
+      ].join('\n\n'),
+    );
+
+    // The exact same verdict word, but WITH a plan (a Fix's fixed/partial
+    // proposes review) — the paired state change says it, so no tag.
+    const withPlan = buildRunComment({
+      report: parseReport('Verdict: fixed\n## Summary\nDone.'),
+      runLabel: 'r',
+      published: null,
+      verdict: 'fixed',
+      plan: 'review',
+    });
+    expect(withPlan).not.toContain('Verdict');
+  });
+
+  // A defaulted verdict (the agent's closing message named none —
+  // finalize.ts's defaultVerdict) still needs the tag when its plan is
+  // null: `report.verdict` alone is null here, but the caller's
+  // `verdict` (what actually lands on the row) is not.
+  it('a defaulted verdict with no plan still gets the tag, even though report.verdict itself is null', () => {
+    const body = buildRunComment({
+      report: parseReport('Looked into it; the cache key omits the tenant id.'),
+      runLabel: 'ENG-9 · Investigate',
+      published: null,
+      verdict: 'root-cause',
+      plan: null,
+    });
+    expect(body).toContain('**Verdict:** root cause found');
   });
 });
 
