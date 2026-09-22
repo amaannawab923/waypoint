@@ -387,7 +387,12 @@ describe('statePlanFor (W5c)', () => {
     ['investigate', 'root-cause', null],
     ['investigate', 'not-a-bug', 'close'],
     ['investigate', 'delivered', 'complete'],
-    ['fix', 'delivered', 'complete'],
+    // B3 (PR #88 review): a Fix run's verdict can still parse to
+    // `delivered` (parseVerdictWord maps "shipped" etc. to it even
+    // though FIX_VERDICTS never offers it), and unlike Investigate that
+    // must not skip review — the branch may carry real work that still
+    // needs a push and a PR.
+    ['fix', 'delivered', 'review'],
     ['investigate', 'needs-info', null],
     ['custom', 'wont-fix', null],
     [null, 'fixed', null],
@@ -408,13 +413,17 @@ describe('createRunFinalizer', () => {
     expect(ledger.createRunProposal).toHaveBeenCalledTimes(1);
     // A native ticket's proposal carries no Jira credential.
     // W5c: the board-shaped comment — the message as the summary, the
-    // footer. Fix 4 (feedback round 1): no verdict tag on the ticket; the
-    // verdict is on the row and the note.
+    // footer. Fix 4 (feedback round 1): no verdict tag on the ticket when
+    // the paired state change says it — but `root-cause` proposes none
+    // (statePlanFor), so S5 (PR #88 review) puts the tag back for exactly
+    // this gap: nothing else on the ticket would otherwise say the
+    // session only found a cause rather than fixed anything.
     expect(ledger.createRunProposal).toHaveBeenCalledWith(
       'run-abc1234',
       {
         kind: 'comment',
         body: [
+          '**Verdict:** root cause found',
           'The root cause is X.',
           '*Full report — the evidence, files and how it was verified — is on the run in Waypoint (ROAD-116 · Investigate).*',
         ].join('\n\n'),
@@ -687,6 +696,64 @@ describe('createRunFinalizer', () => {
     expect(ledger.createRunProposal).toHaveBeenNthCalledWith(2, 'run-abc1234', {
       kind: 'state_change',
       stateId: 'st-cancelled',
+      groupId: 'run-abc1234:1',
+    });
+  });
+
+  it('Fix that closes with "Verdict: shipped": still publishes and proposes review, never Done with an unpushed branch (B3, PR #88 review)', async () => {
+    // The brief never offers `delivered` to a Fix session (FIX_VERDICTS
+    // excludes it), but nothing stops the agent writing a verdict word
+    // that parses to it anyway — parseVerdictWord maps "shipped" to
+    // `delivered`. Before this fix, `closes` was `isClosingVerdict(verdict)`
+    // regardless of intent, so this reached the `closes` branch: no push,
+    // no PR, and (via the old `delivered` → `complete` mapping in
+    // statePlanFor) a proposal to move the ticket straight to Done —
+    // leaving the only copy of the work in a worktree that Close run (B1)
+    // would then offer to delete outright.
+    const { ledger, rows } = fakeLedger(
+      run({
+        intent: 'fix',
+        modeId: 'bypassPermissions',
+        title: 'ROAD-116 · Fix',
+      }),
+    );
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: 'Verdict: shipped\n## Summary\nThe change was already on main; verified and nothing left to do.',
+          },
+        ]),
+      ],
+    });
+    const publish = jest.fn(async () => ({
+      kind: 'opened' as const,
+      url: 'https://github.com/o/r/pull/71',
+      pushed: true as const,
+    }));
+    const { deps } = depsWith(ledger, daemon, {
+      pullRequests: { publish, publishFollowUp: jest.fn() },
+      git: jest.fn(async () => ({ stdout: '', code: 0 })),
+      assertWorktreeGitDir: jest.fn(async () => {}),
+    });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+
+    // The real publisher writes prUrl to the ledger (pullRequests.test.ts
+    // covers that); what matters here is that publish was actually
+    // attempted rather than short-circuited by `closes`.
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(rows.get('run-abc1234')).toMatchObject({
+      status: 'needs-review',
+      verdict: 'delivered',
+    });
+    // Review, not the completed-group state a plain `delivered` on an
+    // Investigate run would get — there is no "In Review" state here, so
+    // pickReviewState falls back to the last started-group state.
+    expect(ledger.createRunProposal).toHaveBeenNthCalledWith(2, 'run-abc1234', {
+      kind: 'state_change',
+      stateId: 'st-progress',
       groupId: 'run-abc1234:1',
     });
   });
@@ -1448,6 +1515,78 @@ describe('W6: the branch is published before the proposals', () => {
       'run-abc1234',
       expect.stringContaining('live writer (Other)'),
     );
+  });
+
+  // B3 follow-up (PR #88 round-2 review): the publish gate moved from
+  // isClosingVerdict(verdict) to plan === 'close', and statePlanFor
+  // returns null for every intent it doesn't own — including `custom`,
+  // which TicketRunsSection dispatches with `mayChangeFiles`, i.e. a
+  // real writer in write mode. Without the plan === null fallback a
+  // custom run that closes with "won't fix" pushes its branch and opens
+  // a PR for work the agent just declared won't-fix — exactly the noise
+  // this branch exists to prevent.
+  it("a custom-intent writing run's won't-fix is not published, even though it has no state plan", async () => {
+    const { ledger } = fakeLedger(
+      run({ intent: 'custom', modeId: 'bypassPermissions' }),
+    );
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: "Verdict: won't fix\n\nThe API was already correct.",
+          },
+        ]),
+      ],
+    });
+    const publish = jest.fn();
+    const { deps } = depsWith(ledger, daemon, {
+      pullRequests: { publish, publishFollowUp: jest.fn() },
+    });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'finalized',
+      expect.objectContaining({
+        pr: {
+          action: 'skipped',
+          reason: expect.stringContaining("won't fix"),
+        },
+      }),
+    );
+  });
+
+  // The other half of the same fallback (round-3 review): `delivered` is
+  // a closing verdict, so the plan === null branch would have suppressed
+  // it too — undoing 33f86a7 on exactly the writer class that commit
+  // couldn't reach. CUSTOM_VERDICTS (briefs.ts) never offers `shipped`,
+  // but parseVerdictWord is intent-blind and a model writes what it
+  // writes; the run's only copy of the work is its branch.
+  it("a custom-intent writing run's delivered IS published — the fallback must not suppress that one", async () => {
+    const { ledger } = fakeLedger(
+      run({ intent: 'custom', modeId: 'bypassPermissions' }),
+    );
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: 'Verdict: shipped\n\nThe caching layer is in and on the branch.',
+          },
+        ]),
+      ],
+    });
+    const publish = jest.fn();
+    const { deps } = depsWith(ledger, daemon, {
+      pullRequests: { publish, publishFollowUp: jest.fn() },
+    });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+
+    expect(publish).toHaveBeenCalledTimes(1);
   });
 
   it('a non-409 claim failure on a first-ever publish never throws past this — the run still reaches needs-review, not wedged at finishing', async () => {

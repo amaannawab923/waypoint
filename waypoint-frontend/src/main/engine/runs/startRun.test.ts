@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import type { DaemonRunsApi, DaemonWorkspaceRecord } from './daemonApi';
 import type { PendingPrompt } from '../types';
 import {
+  LEDGER_EVENT_PAGE_SIZE,
   LedgerRequestError,
   type AgentRun,
   type LedgerClient,
@@ -178,6 +179,11 @@ function fakeLedger(seed: AgentRun[] = [], pendingSeed: PendingPrompt[] = []) {
       return { run: next, from };
     }),
     appendEvent: jest.fn(async () => ({}) as never),
+    // B4: resumeRunCore's "was this worktree deliberately closed" check
+    // (wasClosedByRunsClose) reads events; empty by default so every
+    // existing reprovision test's worktree is "missing for some other
+    // reason", unchanged. The dedicated B4 test overrides this per row.
+    listEvents: jest.fn(async () => []),
     listRuns: jest.fn(),
     listAllRuns: jest.fn(),
   } as unknown as jest.Mocked<LedgerClient>;
@@ -739,7 +745,12 @@ describe('continueStart (W4b)', () => {
     });
     const deps = depsWith(ledger, daemon);
 
-    const starting = continueStart(deps, rows.get('run-d2') as AgentRun, plainDir, 'first');
+    const starting = continueStart(
+      deps,
+      rows.get('run-d2') as AgentRun,
+      plainDir,
+      'first',
+    );
     await new Promise<void>((r) => {
       setTimeout(r, 10);
     });
@@ -989,6 +1000,133 @@ describe('resumeRun', () => {
     );
   });
 
+  // B4 (PR #88 review): before this, ANY missing worktree — closed on
+  // purpose or merely lost — took the exact same path above and was
+  // silently reprovisioned: a fresh branch of the same name, cut from
+  // baseRef, with the transcript still showing the original work as if
+  // it had survived. A worktree runs:close explicitly removed carries a
+  // worktree_removed event (releaseWorktree, worktrees.ts) that a
+  // worktree missing for any other reason never gets — that is the only
+  // signal available, since worktreePath/branch are write-once at the
+  // ledger and close cannot null them out.
+  it('refuses instead of silently re-cutting a branch when runs:close already removed this worktree', async () => {
+    const { ledger } = fakeLedger([
+      interrupted({
+        id: 'run-closed1',
+        worktreePath: path.join(worktreesDir, 'run-closed1-gone'),
+        branch: 'agent/PL-9',
+      }),
+    ]);
+    (ledger.listEvents as jest.Mock).mockImplementation(async (id: string) =>
+      id === 'run-closed1'
+        ? [
+            {
+              runId: 'run-closed1',
+              seq: 1,
+              kind: 'worktree_removed',
+              payload: { reason: 'merged', branchDeleted: true },
+              at: '2026-09-20T00:00:00.000Z',
+            },
+          ]
+        : [],
+    );
+    const daemon = fakeDaemon();
+    const deps = depsWith(ledger, daemon);
+    await expect(resumeRun(deps, 'run-closed1')).resolves.toEqual({
+      outcome: 'cannot-reach-worktree',
+      status: 'interrupted',
+      reason: 'closed',
+      message: expect.stringContaining('Close run'),
+    });
+    // Never reprovisioned: no fresh branch cut, nothing reopened.
+    expect(daemon.createWorktree).not.toHaveBeenCalled();
+    expect(daemon.registerRepository).not.toHaveBeenCalled();
+    expect(ledger.reopenRun).not.toHaveBeenCalled();
+  });
+
+  // Round-2 of the same review: listEvents serves the OLDEST page
+  // (limit=500, ordered by seq ascending), and worktree_removed is by
+  // construction the NEWEST event on the run. A never-lock session is
+  // finalized once per idle turn, so the long-lived runs somebody
+  // eventually closes are exactly the ones past 500 events — where a
+  // single head-of-list read silently answers "not closed" and re-cuts
+  // the branch, which is B4's original symptom.
+  it('finds worktree_removed past the first page of events', async () => {
+    const { ledger } = fakeLedger([
+      interrupted({
+        id: 'run-closed2',
+        worktreePath: path.join(worktreesDir, 'run-closed2-gone'),
+        branch: 'agent/PL-10',
+      }),
+    ]);
+    const filler = (from: number) =>
+      Array.from({ length: LEDGER_EVENT_PAGE_SIZE }, (_, i) => ({
+        runId: 'run-closed2',
+        seq: from + i,
+        kind: 'note',
+        payload: {},
+        at: '2026-09-20T00:00:00.000Z',
+      }));
+    const seen: (number | undefined)[] = [];
+    (ledger.listEvents as jest.Mock).mockImplementation(
+      async (_id: string, options: { afterSeq?: number } = {}) => {
+        seen.push(options.afterSeq);
+        // Two full pages of noise, then the close on the third.
+        if (options.afterSeq === undefined) return filler(1);
+        if (options.afterSeq === LEDGER_EVENT_PAGE_SIZE)
+          return filler(LEDGER_EVENT_PAGE_SIZE + 1);
+        return [
+          {
+            runId: 'run-closed2',
+            seq: LEDGER_EVENT_PAGE_SIZE * 2 + 1,
+            kind: 'worktree_removed',
+            payload: { reason: 'merged', branchDeleted: true },
+            at: '2026-09-20T00:00:00.000Z',
+          },
+        ];
+      },
+    );
+    const daemon = fakeDaemon();
+    await expect(
+      resumeRun(depsWith(ledger, daemon), 'run-closed2'),
+    ).resolves.toMatchObject({
+      outcome: 'cannot-reach-worktree',
+      reason: 'closed',
+    });
+    // It actually paged with afterSeq rather than re-reading the head.
+    expect(seen).toEqual([
+      undefined,
+      LEDGER_EVENT_PAGE_SIZE,
+      LEDGER_EVENT_PAGE_SIZE * 2,
+    ]);
+    expect(daemon.createWorktree).not.toHaveBeenCalled();
+  });
+
+  // The read fails CLOSED. A transient ledger error used to answer "not
+  // closed", which re-cuts the branch: a false refusal costs the user a
+  // new session, a false reprovision costs them the work.
+  it('refuses rather than re-cutting when the event read itself fails', async () => {
+    const { ledger } = fakeLedger([
+      interrupted({
+        id: 'run-closed3',
+        worktreePath: path.join(worktreesDir, 'run-closed3-gone'),
+        branch: 'agent/PL-11',
+      }),
+    ]);
+    (ledger.listEvents as jest.Mock).mockRejectedValue(
+      new Error('ledger unreachable'),
+    );
+    const daemon = fakeDaemon();
+    await expect(
+      resumeRun(depsWith(ledger, daemon), 'run-closed3'),
+    ).resolves.toMatchObject({
+      outcome: 'cannot-reach-worktree',
+      reason: 'closed',
+    });
+    expect(daemon.createWorktree).not.toHaveBeenCalled();
+    expect(ledger.reopenRun).not.toHaveBeenCalled();
+  });
+
   // Never-lock: a worktree that cannot be reached and cannot be
   // recreated is not a refusal — the caller (sendPrompt.ts) accepts the
   // message into the outbox under the reason answered here.
@@ -1094,7 +1232,10 @@ describe('resumeRun', () => {
       (ledger.updateRun as jest.Mock).mockImplementation(
         async (id: string, patch: Parameters<typeof real>[1]) => {
           if (patch.status === 'done' || patch.status === 'needs-review') {
-            throw new LedgerRequestError(409, `provisioning → ${patch.status} is not a transition`);
+            throw new LedgerRequestError(
+              409,
+              `provisioning → ${patch.status} is not a transition`,
+            );
           }
           return real(id, patch);
         },
@@ -1121,17 +1262,24 @@ describe('resumeRun', () => {
   // asked what a warm-up had already loaded — after a warm-up it started
   // the daemon's conversation a second time.
   it('an explicit resume after a warm-up takes the warmed session over — never a second startSession', async () => {
-    const { ledger, rows } = fakeLedger([interrupted({ status: 'done', providerSessionId: 'sess-old' })]);
+    const { ledger, rows } = fakeLedger([
+      interrupted({ status: 'done', providerSessionId: 'sess-old' }),
+    ]);
     const daemon = fakeDaemon({
       // The warm-up's own session, live now; the provider had replaced it.
-      listSessions: jest.fn(async () => ({ 'run-i1': { conversationId: 'run-i1' } })),
+      listSessions: jest.fn(async () => ({
+        'run-i1': { conversationId: 'run-i1' },
+      })),
     });
     const deps = depsWith(ledger, daemon);
     recordWarmed('run-i1', { sessionId: 'sess-new', loaded: false });
 
     const result = await resumeRun(deps, 'run-i1');
     expect(daemon.startSession).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ outcome: 'replaced-by-new', status: 'running' });
+    expect(result).toMatchObject({
+      outcome: 'replaced-by-new',
+      status: 'running',
+    });
     expect(rows.get('run-i1')?.providerSessionId).toBe('sess-new');
   });
 
@@ -1355,7 +1503,9 @@ describe('resumeRun', () => {
       // liveness re-check (found in review: a warm-up never touches the
       // ledger, so a concurrent kill-stale can silently kill it) must
       // see this and trust the warm-up, not fall through to a fresh spawn.
-      listSessions: jest.fn(async () => ({ 'run-i1': { conversationId: 'run-i1' } })),
+      listSessions: jest.fn(async () => ({
+        'run-i1': { conversationId: 'run-i1' },
+      })),
     });
     const result = await resumeRunCore(
       depsWith(ledger, daemon),

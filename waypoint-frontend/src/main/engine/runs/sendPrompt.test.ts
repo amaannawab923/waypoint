@@ -117,6 +117,10 @@ function fakeLedger(seed: AgentRun[] = []) {
       return { run: next, from };
     }),
     appendEvent: jest.fn(async () => ({}) as never),
+    // B4: resumeRunCore's "was this worktree deliberately closed"
+    // check (startRun.ts's wasClosedByRunsClose) reads events; no test
+    // here models a closed run, so an empty history is always correct.
+    listEvents: jest.fn(async () => []),
     getTranscript: jest.fn(async () => null),
     // Never-lock: the per-run outbox, in memory, with the backend's own
     // state rules.
