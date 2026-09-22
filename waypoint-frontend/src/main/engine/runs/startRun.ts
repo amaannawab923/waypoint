@@ -19,7 +19,9 @@ import { withRunLock } from './runLock';
 import { aliveSessionFor, type Warmed } from './warmed';
 import {
   assertRunId,
+  LEDGER_EVENT_PAGE_SIZE,
   type AgentRun,
+  type AgentRunEvent,
   type AgentRunStatus,
   type LedgerClient,
 } from './ledgerClient';
@@ -273,21 +275,56 @@ async function isUsableWorktree(
 }
 
 /**
+ * How many `listEvents` pages `wasClosedByRunsClose` will walk before it
+ * gives up and refuses (fail closed). 40 pages is 20,000 events — far past
+ * anything a real run produces, and a hard stop if the ledger ever serves
+ * a page that never shortens.
+ */
+const MAX_EVENT_PAGES = 40;
+
+/**
  * Whether `runs:close` (runsIpc.ts) already removed this run's worktree —
  * B4, PR #88 review. `releaseWorktree` (worktrees.ts) appends a
  * `worktree_removed` event on every success and is called from nowhere
  * else in the codebase, so its presence is the one durable, queryable
  * fact that this specific worktree was deliberately deleted rather than
- * merely lost. Best-effort: a ledger read that fails answers "not
- * closed" — the caller falls through to the existing reprovision path,
- * the same failure mode this had before the check existed.
+ * merely lost.
+ *
+ * Two things this has to get right, both from the round-2 review:
+ *
+ * 1. `listEvents` serves the OLDEST page (ledgerClient sends limit=500,
+ *    the service orders by `seq` ascending), and `worktree_removed` is by
+ *    construction the run's NEWEST event. A long-lived never-lock session
+ *    is finalized once per idle turn and finalize alone has 18 appendEvent
+ *    sites, so those runs cross 500 events — exactly the ones somebody
+ *    eventually closes. Page forward with `afterSeq` until a short page
+ *    so the check reads the tail, not the head.
+ * 2. Fail CLOSED. A transient ledger error used to answer "not closed",
+ *    which re-cuts the branch — a false refusal costs a new session, a
+ *    false reprovision costs the work.
  */
 async function wasClosedByRunsClose(
   ledger: LedgerClient,
   runId: string,
 ): Promise<boolean> {
-  const events = await ledger.listEvents(runId).catch(() => []);
-  return events.some((event) => event.kind === 'worktree_removed');
+  const pageSize = LEDGER_EVENT_PAGE_SIZE;
+  let afterSeq: number | undefined;
+  // Bounded so a ledger that never returns a short page cannot spin.
+  for (let page = 0; page < MAX_EVENT_PAGES; page += 1) {
+    let events: AgentRunEvent[];
+    try {
+      events = await ledger.listEvents(
+        runId,
+        afterSeq === undefined ? {} : { afterSeq },
+      );
+    } catch {
+      return true; // fail closed: refuse the resume rather than re-cut
+    }
+    if (events.some((event) => event.kind === 'worktree_removed')) return true;
+    if (events.length < pageSize) return false;
+    afterSeq = events[events.length - 1]!.seq;
+  }
+  return true; // fail closed for the same reason
 }
 
 /** True while nobody has moved the run off `provisioning` (a Stop would). */
