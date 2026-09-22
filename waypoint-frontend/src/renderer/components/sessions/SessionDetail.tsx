@@ -430,7 +430,7 @@ export function SessionDetail({
                 close().catch(() => {});
               }}
               disabled={closing}
-              title="Delete the worktree and, unless a pull request needs it, the branch. The transcript and diff stay."
+              title="Delete the worktree and, unless a pull request needs it, the branch. The transcript stays in Waypoint; the diff will not be available afterward."
               data-close-run
             >
               {closing ? 'Closing…' : 'Close run'}
@@ -490,18 +490,52 @@ export function SessionDetail({
   );
 }
 
-/** The confirm for Close run — what is lost, in the person's words (Fix 8). */
+/**
+ * The confirm for Close run — what is lost, in the person's words (Fix 8;
+ * B1 and B2, PR #88 review).
+ *
+ * B2: this used to say "The transcript and diff stay in Waypoint." That
+ * was false for the diff — `runs:diff` (runsIpc.ts) computes it live from
+ * the worktree, and Close only snapshots the transcript before deleting
+ * the worktree, so the Diff tab throws the moment this finishes. Making
+ * the diff actually survive would mean capturing and storing a patch
+ * server-side (a new column, a size cap of its own, a read path DiffPane
+ * would need to branch on) for a feature whose whole point is deleting
+ * the worktree quickly — out of proportion to this fix. Said plainly
+ * instead: the transcript stays, the diff does not.
+ *
+ * B1: `unpushedCommits` alone said nothing about uncommitted work, and
+ * CLOSABLE (runsIpc.ts) includes `failed`, `cancelled` and `interrupted`
+ * — exactly the statuses where an agent's turn ended mid-edit with
+ * nothing committed. `uncommittedFiles` names that loss too, whether or
+ * not a pull request keeps the branch (a PR only reflects what was
+ * pushed).
+ */
 export function closeRunQuestion(preview: {
   branch: string;
   unpushedCommits: number | null;
+  uncommittedFiles: number | null;
   hasPullRequest: boolean;
 }): string {
+  const stays =
+    'The transcript stays in Waypoint; the diff will not be available once the worktree is gone.';
+  const uncommittedWarning =
+    preview.uncommittedFiles !== null && preview.uncommittedFiles > 0
+      ? ` ${
+          preview.uncommittedFiles === 1
+            ? '1 uncommitted change was'
+            : `${preview.uncommittedFiles} uncommitted changes were`
+        } never committed and will be lost.`
+      : '';
   if (preview.hasPullRequest) {
-    return `Delete the worktree for ${preview.branch}? The branch stays — it still has an open pull request. The transcript and diff stay in Waypoint.`;
+    return `Delete the worktree for ${preview.branch}? The branch stays — it still has an open pull request.${uncommittedWarning} ${stays}`;
   }
   const n = preview.unpushedCommits;
   if (n !== null && n > 0) {
-    return `Delete the worktree for ${preview.branch}? Its ${n === 1 ? '1 commit was' : `${n} commits were`} never pushed and will be lost. The transcript and diff stay in Waypoint.`;
+    return `Delete the worktree for ${preview.branch}? Its ${n === 1 ? '1 commit was' : `${n} commits were`} never pushed and will be lost.${uncommittedWarning} ${stays}`;
   }
-  return `Delete the worktree and branch for ${preview.branch}? The transcript and diff stay in Waypoint.`;
+  if (preview.uncommittedFiles !== null && preview.uncommittedFiles > 0) {
+    return `Delete the worktree for ${preview.branch}?${uncommittedWarning} ${stays}`;
+  }
+  return `Delete the worktree and branch for ${preview.branch}? ${stays}`;
 }

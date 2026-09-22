@@ -973,6 +973,30 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
     return Number.isFinite(n) ? n : null;
   };
 
+  /**
+   * Working-tree files with no commit at all, tracked or not — the ones
+   * `unpushedCommits` above says nothing about (B1, PR #88 review):
+   * `CLOSABLE` includes `failed`, `cancelled` and `interrupted`, where an
+   * agent's turn ending mid-edit is the normal case, not the exception —
+   * eleven files changed, nothing committed, and the old preview read
+   * `unpushedCommits: 0` as if there were nothing to lose. Counted the
+   * way `describeBranchWork` (finalize.ts) already counts a run's
+   * uncommitted files for its own comment: one line per changed path out
+   * of `git status`, tolerant of a git failure (null, not thrown) so an
+   * unreadable worktree never blocks the confirm from opening at all.
+   */
+  const uncommittedFileCount = async (
+    worktree: string,
+  ): Promise<number | null> => {
+    const status = await git(
+      ['status', '--short', '--untracked-files=all', '--'],
+      { cwd: worktree },
+    );
+    if (status.code !== 0) return null;
+    return status.stdout.split('\n').filter((line) => line.trim().length > 0)
+      .length;
+  };
+
   // Finding A (feedback round 1): the header's branch line and Open PR
   // came from the ledger's row alone; a worktree whose parent repository
   // is gone still looked healthy. This asks git, read-only, once per
@@ -1032,6 +1056,10 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
         unpushedCommits: hasPullRequest
           ? 0
           : await unpushedCommits(run, worktree),
+        // Unlike unpushedCommits, this is not skipped when there is a
+        // pull request: a PR only reflects what was pushed, and an
+        // uncommitted change is lost with the worktree either way (B1).
+        uncommittedFiles: await uncommittedFileCount(worktree),
         hasPullRequest,
         branchWillBeDeleted: !hasPullRequest,
       };

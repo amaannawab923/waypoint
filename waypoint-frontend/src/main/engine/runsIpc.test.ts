@@ -504,6 +504,7 @@ describe('runs:close-preview and runs:close', () => {
       branch: 'agent/PL-10',
       worktreePath: inside,
       unpushedCommits: 3,
+      uncommittedFiles: 0,
       hasPullRequest: false,
       branchWillBeDeleted: true,
     });
@@ -554,6 +555,81 @@ describe('runs:close-preview and runs:close', () => {
       branchWillBeDeleted: false,
       unpushedCommits: 0,
     });
+  });
+
+  it('the preview counts uncommitted files too — the CLOSABLE case where a turn errored with nothing committed (B1, PR #88 review)', async () => {
+    // failed/cancelled/interrupted are CLOSABLE, and an agent whose turn
+    // errors mid-edit is the normal way a run lands there: eleven files
+    // changed, nothing on a commit yet. Before this fix the preview only
+    // ever asked git about commits, so it read `unpushedCommits: 0` —
+    // "nothing to lose" — for a run that was about to lose everything.
+    const inside = worktreeOf('run-closeUncommitted');
+    const { invoke, git } = closeHarness(
+      {
+        'run-closeUncommitted': {
+          status: 'failed',
+          worktreePath: inside,
+          branch: 'agent/PL-12',
+          baseRef: 'main',
+          prUrl: null,
+          isolation: 'worktree',
+        },
+        // A pull request does not exempt uncommitted work: the PR only
+        // reflects what was pushed, so an uncommitted file is still lost
+        // when the worktree goes.
+        'run-closePrDirty': {
+          status: 'done',
+          worktreePath: worktreeOf('run-closePrDirty'),
+          branch: 'agent/PL-13',
+          baseRef: 'main',
+          prUrl: 'https://github.com/o/r/pull/12',
+          isolation: 'worktree',
+        },
+      },
+      {
+        status: {
+          stdout: [' M src/a.ts', 'M  src/b.ts', '?? src/new-file.ts', ''].join(
+            '\n',
+          ),
+        },
+      },
+    );
+    expect(
+      await invoke(RUNS_IPC.closePreview, 'run-closeUncommitted'),
+    ).toMatchObject({
+      unpushedCommits: 3,
+      uncommittedFiles: 3,
+    });
+    expect(git).toHaveBeenCalledWith(
+      ['status', '--short', '--untracked-files=all', '--'],
+      expect.objectContaining({ cwd: inside }),
+    );
+    expect(
+      await invoke(RUNS_IPC.closePreview, 'run-closePrDirty'),
+    ).toMatchObject({
+      hasPullRequest: true,
+      unpushedCommits: 0,
+      uncommittedFiles: 3,
+    });
+  });
+
+  it('a git status failure leaves uncommittedFiles null rather than throwing — the confirm still opens', async () => {
+    const { invoke } = closeHarness(
+      {
+        'run-closeUnreadable': {
+          status: 'cancelled',
+          worktreePath: worktreeOf('run-closeUnreadable'),
+          branch: 'agent/PL-14',
+          baseRef: 'main',
+          prUrl: null,
+          isolation: 'worktree',
+        },
+      },
+      { status: { code: 128, stderr: 'fatal: not a git repository' } },
+    );
+    expect(
+      await invoke(RUNS_IPC.closePreview, 'run-closeUnreadable'),
+    ).toMatchObject({ uncommittedFiles: null });
   });
 
   it('close kills the session first, removes the worktree, and deletes the branch only without a pull request', async () => {
