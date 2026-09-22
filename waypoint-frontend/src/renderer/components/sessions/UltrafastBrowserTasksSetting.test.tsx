@@ -30,7 +30,7 @@ describe('UltrafastBrowserTasksSetting', () => {
     (getUltrafastStatus as jest.Mock).mockResolvedValue({
       uvAvailable: false,
       provisioned: false,
-      key: { configured: true, tail: '…1234' },
+      key: { configured: true, tail: '…1234', source: 'settings' },
       lastTest: null,
     });
     render(<UltrafastBrowserTasksSetting />);
@@ -42,7 +42,7 @@ describe('UltrafastBrowserTasksSetting', () => {
     (getUltrafastStatus as jest.Mock).mockResolvedValue({
       uvAvailable: true,
       provisioned: false,
-      key: { configured: false, tail: null },
+      key: { configured: false, tail: null, source: null },
       lastTest: null,
     });
     render(<UltrafastBrowserTasksSetting />);
@@ -55,7 +55,7 @@ describe('UltrafastBrowserTasksSetting', () => {
     (getUltrafastStatus as jest.Mock).mockResolvedValue({
       uvAvailable: true,
       provisioned: true,
-      key: { configured: true, tail: '…1234' },
+      key: { configured: true, tail: '…1234', source: 'settings' },
       lastTest: null,
     });
     render(<UltrafastBrowserTasksSetting />);
@@ -69,13 +69,13 @@ describe('UltrafastBrowserTasksSetting', () => {
       .mockResolvedValueOnce({
         uvAvailable: true,
         provisioned: false,
-        key: { configured: false, tail: null },
+        key: { configured: false, tail: null, source: null },
         lastTest: null,
       })
       .mockResolvedValueOnce({
         uvAvailable: true,
         provisioned: false,
-        key: { configured: true, tail: '…cdef' },
+        key: { configured: true, tail: '…cdef', source: 'settings' },
         lastTest: null,
       });
     (saveUltrafastKey as jest.Mock).mockResolvedValue({
@@ -100,7 +100,7 @@ describe('UltrafastBrowserTasksSetting', () => {
     (getUltrafastStatus as jest.Mock).mockResolvedValue({
       uvAvailable: true,
       provisioned: false,
-      key: { configured: false, tail: null },
+      key: { configured: false, tail: null, source: null },
       lastTest: null,
     });
     (saveUltrafastKey as jest.Mock).mockResolvedValue({
@@ -126,7 +126,7 @@ describe('UltrafastBrowserTasksSetting', () => {
     (getUltrafastStatus as jest.Mock).mockResolvedValue({
       uvAvailable: true,
       provisioned: true,
-      key: { configured: true, tail: '…1234' },
+      key: { configured: true, tail: '…1234', source: 'settings' },
       lastTest: null,
     });
     (clearUltrafastKey as jest.Mock).mockResolvedValue({ ok: true });
@@ -142,7 +142,7 @@ describe('UltrafastBrowserTasksSetting', () => {
     (getUltrafastStatus as jest.Mock).mockResolvedValue({
       uvAvailable: true,
       provisioned: true,
-      key: { configured: true, tail: '…1234' },
+      key: { configured: true, tail: '…1234', source: 'settings' },
       lastTest: null,
     });
     (testUltrafast as jest.Mock).mockResolvedValue({
@@ -172,7 +172,7 @@ describe('UltrafastBrowserTasksSetting', () => {
     (getUltrafastStatus as jest.Mock).mockResolvedValue({
       uvAvailable: true,
       provisioned: true,
-      key: { configured: true, tail: '…1234' },
+      key: { configured: true, tail: '…1234', source: 'settings' },
       lastTest: null,
     });
     (testUltrafast as jest.Mock).mockResolvedValue({
@@ -196,5 +196,25 @@ describe('UltrafastBrowserTasksSetting', () => {
     expect(
       screen.queryByAltText('Ultrafast test — final page'),
     ).not.toBeInTheDocument();
+  });
+});
+
+// Founder (2026-09-22): a key pasted into waypoint-frontend/.env also works.
+// The section says so, shows the tail, and offers no Clear — there is
+// nothing stored to clear; the file is the person's own.
+describe('a key from .env', () => {
+  it('says where the key comes from and offers no Clear', async () => {
+    (getUltrafastStatus as jest.Mock).mockResolvedValue({
+      uvAvailable: true,
+      provisioned: true,
+      key: { configured: true, tail: '…9f0e', source: 'env' },
+      lastTest: null,
+    });
+    render(<UltrafastBrowserTasksSetting />);
+    expect(await screen.findByText(/Using/)).toHaveTextContent(
+      'Using TYPESAFE_API_KEY from .env (…9f0e)',
+    );
+    expect(screen.queryByRole('button', { name: 'Clear' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Test' })).toBeEnabled();
   });
 });

@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import type { EngineSupervisor } from '../../supervisor';
 import type { Unsubscribe } from '../../types';
 import { createDaemonRunsApi, type DaemonMcpServer } from '../daemonApi';
-import { readStoredTypesafeApiKey } from './auth';
+import { resolveTypesafeApiKey } from './auth';
 import {
   findUv,
   isProvisioned,
@@ -97,7 +97,7 @@ export function registerUltrafastBrowser(
     const client = deps.supervisor.client();
     if (!client) return;
 
-    const key = readStoredTypesafeApiKey();
+    const key = resolveTypesafeApiKey()?.key ?? null;
     if (!key) return; // no key: nothing to say, this is the ordinary unconfigured state
 
     const uvPath = findUv();
@@ -190,7 +190,7 @@ export function ultrafastAvailability(deps: {
   const scripts = resolveUltrafastScriptPaths(deps.appPath, deps.resourcesPath);
   const paths = resolveUltrafastPaths(deps.userData);
   return {
-    keyConfigured: readStoredTypesafeApiKey() !== null,
+    keyConfigured: resolveTypesafeApiKey() !== null,
     uvAvailable: findUv() !== null,
     provisioned: isProvisioned(paths),
     scriptsInstalled:

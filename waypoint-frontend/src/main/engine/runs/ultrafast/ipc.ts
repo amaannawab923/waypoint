@@ -4,7 +4,7 @@ import {
   deleteStoredTypesafeApiKey,
   isUltrafastSecureStorageAvailable,
   maskedTail,
-  readStoredTypesafeApiKey,
+  resolveTypesafeApiKey,
   writeStoredTypesafeApiKey,
 } from './auth';
 import {
@@ -90,8 +90,11 @@ async function runUltrafastTest(): Promise<UltrafastTestResult> {
     testedAt,
   });
 
-  const key = readStoredTypesafeApiKey();
-  if (!key) return fail('Save a TypeSafe API key first.');
+  const key = resolveTypesafeApiKey()?.key ?? null;
+  if (!key)
+    return fail(
+      'Save a TypeSafe API key first, or put TYPESAFE_API_KEY in .env.',
+    );
 
   const uvPath = findUv();
   if (!uvPath) {
@@ -165,11 +168,15 @@ async function runUltrafastTest(): Promise<UltrafastTestResult> {
 
 export function registerUltrafastIpc(): void {
   ipcMain.handle(ULTRAFAST_IPC.status, (): UltrafastStatus => {
-    const key = readStoredTypesafeApiKey();
+    const resolved = resolveTypesafeApiKey();
     return {
       uvAvailable: findUv() !== null,
       provisioned: isProvisioned(currentPaths()),
-      key: { configured: key !== null, tail: key ? maskedTail(key) : null },
+      key: {
+        configured: resolved !== null,
+        tail: resolved ? maskedTail(resolved.key) : null,
+        source: resolved?.source ?? null,
+      },
       lastTest,
     };
   });

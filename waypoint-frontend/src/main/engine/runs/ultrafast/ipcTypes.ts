@@ -21,6 +21,9 @@ export interface UltrafastKeyStatus {
   configured: boolean;
   /** `…a1b2` — the last four characters only; the key itself never crosses IPC. */
   tail: string | null;
+  /** Where the key in use came from: the settings page's encrypted store, or
+   *  `TYPESAFE_API_KEY` in the environment / the app's `.env`. Null when unconfigured. */
+  source: 'settings' | 'env' | null;
 }
 
 export interface UltrafastStatus {

@@ -14,6 +14,10 @@ jest.mock('../daemonApi', () => ({
 const readStoredTypesafeApiKeyMock = jest.fn<string | null, []>();
 jest.mock('./auth', () => ({
   readStoredTypesafeApiKey: () => readStoredTypesafeApiKeyMock(),
+  resolveTypesafeApiKey: () => {
+    const stored = readStoredTypesafeApiKeyMock();
+    return stored ? { key: stored, source: 'settings' } : null;
+  },
 }));
 
 const findUvMock = jest.fn<string | null, []>();

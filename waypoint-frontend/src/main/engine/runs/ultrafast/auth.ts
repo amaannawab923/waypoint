@@ -74,3 +74,66 @@ export function deleteStoredTypesafeApiKey(): void {
 export function maskedTail(key: string): string {
   return `…${key.slice(-4)}`;
 }
+
+// -----------------------------------------------------------------------
+// The .env fallback (founder, 2026-09-22): "keep a .env file where I can
+// paste my TypeSafe key." A key saved from the settings page still wins —
+// it is encrypted at rest; the .env path is the dev convenience: a
+// `TYPESAFE_API_KEY=…` line in waypoint-frontend/.env (gitignored at the
+// repo root; `.env.example` carries the empty placeholder), or the same
+// variable in the environment the app was launched with. The value is
+// read on demand, never cached across a Save/Clear, and never logged.
+// -----------------------------------------------------------------------
+
+export type TypesafeKeySource = 'settings' | 'env';
+
+/** The `.env` file the fallback reads: the app root in development (where
+ *  package.json is); a packaged app has no such file and reads nothing. */
+export function envFilePath(): string {
+  return path.join(app.getAppPath(), '.env');
+}
+
+/** `KEY=value` lines only — no expansion, no export prefix, no quotes
+ *  beyond one matching pair stripped; comments and blanks skipped. Enough
+ *  for a pasted key, and nothing more that could surprise. */
+export function readDotenvValue(filePath: string, name: string): string | null {
+  let text: string;
+  try {
+    text = fs.readFileSync(filePath, 'utf8');
+  } catch {
+    return null;
+  }
+  const match = text
+    .split(/\r?\n/)
+    .map((rawLine) => rawLine.trim())
+    .filter((line) => line && !line.startsWith('#') && line.includes('='))
+    .find((line) => line.slice(0, line.indexOf('=')).trim() === name);
+  if (!match) return null;
+  let value = match.slice(match.indexOf('=') + 1).trim();
+  if (
+    value.length >= 2 &&
+    ((value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'")))
+  ) {
+    value = value.slice(1, -1);
+  }
+  return value.length > 0 ? value : null;
+}
+
+/**
+ * The key the feature actually runs with, and where it came from:
+ * the settings-page secret first, else `TYPESAFE_API_KEY` from the
+ * process environment or the app's `.env`. Null when none is set.
+ */
+export function resolveTypesafeApiKey(): {
+  key: string;
+  source: TypesafeKeySource;
+} | null {
+  const stored = readStoredTypesafeApiKey();
+  if (stored) return { key: stored, source: 'settings' };
+  const fromProcess = process.env.TYPESAFE_API_KEY?.trim();
+  if (fromProcess) return { key: fromProcess, source: 'env' };
+  const fromFile = readDotenvValue(envFilePath(), 'TYPESAFE_API_KEY');
+  if (fromFile) return { key: fromFile, source: 'env' };
+  return null;
+}
