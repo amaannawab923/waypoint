@@ -69,6 +69,7 @@ def save_frame(record_dir: Path, name: str, screenshot_b64: str) -> str:
 
 def run(request):
     from jev_ultrafast.agent import Agent
+    from browser_harness.admin import restart_daemon
 
     url = request["url"]
     goal = request["goal"]
@@ -80,85 +81,121 @@ def run(request):
     text_calls = 0
     started = time.perf_counter()
 
-    with Agent(url, goal, record_dir=record_dir, screenshots=True) as agent:
-        # The very first frame (000000.jpg), taken by Agent's own
-        # constructor before this loop runs at all.
-        if record_dir:
-            first = record_dir / "000000.jpg"
-            if first.exists():
-                screenshots.append(str(first))
-
-        for state in agent.run():
-            history = state.get("history") or []
-            step = history[-1] if history else {}
-            emit(
-                {
-                    "type": "step",
-                    "elapsedMs": state.get("elapsed_ms", 0),
-                    "status": state.get("status"),
-                    "operation": step.get("operation"),
-                    "target": step.get("target"),
-                    "action": step.get("action"),
-                    "text": step.get("text"),
-                    "confidence": step.get("confidence"),
-                    "jevMs": step.get("latency_ms"),
-                }
-            )
+    # F9 (tech-lead review, 2026-09-22): `Browser.__init__`
+    # (jev_ultrafast/browser.py) calls `ensure_daemon()`, which spawns a
+    # `browser_harness.daemon` process detached from this one
+    # (`start_new_session=True` — it reparents to init, not to us) to own
+    # the CDP connection. `Agent.close()`/`Browser.close()` (invoked by
+    # this `with` block's own `__exit__`) only closes the CDP *target*
+    # that daemon created; the daemon itself is never told to stop, so it
+    # outlives this process forever, still holding TYPESAFE_API_KEY (and
+    # everything else in buildRunnerEnv) in its own environment. Each task
+    # gets a fresh BH_RUNTIME_DIR (ultrafast-mcp.js's buildRunnerEnv
+    # mkdtemp's one per call), so each task's `ensure_daemon()` spawns a
+    # genuinely distinct daemon process under that runtime dir rather than
+    # reusing a shared one — meaning every browser_task call before this
+    # fix leaked one (four were found still alive on the reviewer's own
+    # machine from four runs).
+    #
+    # `restart_daemon()` (despite the name — see its own docstring: "Name
+    # is historical… The function itself only stops") is the exact
+    # best-effort shutdown browser-harness's own `stop_remote_daemon()`
+    # and `--reload` paths use: it sends `{"meta": "shutdown"}` over the
+    # daemon's IPC socket and SIGTERMs if that doesn't land. Called with
+    # no args, it targets `BU_NAME` (unset here, so "default") under
+    # whatever BH_RUNTIME_DIR is current in THIS process's env — exactly
+    # the daemon this task's own `ensure_daemon()` call spawned via
+    # `Agent`/`Browser` above. A `finally` around the whole walk: this
+    # must run whether the walk finished, raised, or the max-steps cap
+    # broke out early. A daemon that never came up (`Agent()` raised
+    # before `ensure_daemon()` finished) or already exited is not an
+    # error here — this is cleanup, not part of the task's own result, so
+    # any failure is swallowed.
+    try:
+        with Agent(url, goal, record_dir=record_dir, screenshots=True) as agent:
+            # The very first frame (000000.jpg), taken by Agent's own
+            # constructor before this loop runs at all.
             if record_dir:
-                frame = record_dir / f"{state.get('elapsed_ms', 0):06d}.jpg"
-                if frame.exists():
-                    screenshots.append(str(frame))
-            if len(history) >= max_steps and state.get("status") not in ("done", "blocked"):
-                # Our own cap, independent of jev-ultrafast's internal
-                # MAX_STEPS/model-call budget (questions.py) — a caller may
-                # ask for fewer steps than that budget allows, and this is
-                # the only place that honors it.
-                break
+                first = record_dir / "000000.jpg"
+                if first.exists():
+                    screenshots.append(str(first))
 
-        final_state = agent.state
+            for state in agent.run():
+                history = state.get("history") or []
+                step = history[-1] if history else {}
+                emit(
+                    {
+                        "type": "step",
+                        "elapsedMs": state.get("elapsed_ms", 0),
+                        "status": state.get("status"),
+                        "operation": step.get("operation"),
+                        "target": step.get("target"),
+                        "action": step.get("action"),
+                        "text": step.get("text"),
+                        "confidence": step.get("confidence"),
+                        "jevMs": step.get("latency_ms"),
+                    }
+                )
+                if record_dir:
+                    frame = record_dir / f"{state.get('elapsed_ms', 0):06d}.jpg"
+                    if frame.exists():
+                        screenshots.append(str(frame))
+                if len(history) >= max_steps and state.get("status") not in ("done", "blocked"):
+                    # Our own cap, independent of jev-ultrafast's internal
+                    # MAX_STEPS/model-call budget (questions.py) — a caller may
+                    # ask for fewer steps than that budget allows, and this is
+                    # the only place that honors it.
+                    break
 
-        # jev's own record_dir only ever holds a frame taken BEFORE the
-        # action that produced `done`/`blocked` — there is never a frame of
-        # what the page looks like once the walk is actually finished. One
-        # more screenshot here, taken after the loop and before the browser
-        # closes, is what lets a person (or Claude, reading the MCP
-        # response) actually see the outcome rather than the second-to-last
-        # step.
+            final_state = agent.state
+
+            # jev's own record_dir only ever holds a frame taken BEFORE the
+            # action that produced `done`/`blocked` — there is never a frame of
+            # what the page looks like once the walk is actually finished. One
+            # more screenshot here, taken after the loop and before the browser
+            # closes, is what lets a person (or Claude, reading the MCP
+            # response) actually see the outcome rather than the second-to-last
+            # step.
+            try:
+                final_page = agent.browser.observe(screenshot=True)
+                final_b64 = final_page.get("screenshot")
+            except Exception:
+                final_b64 = None
+
+            if final_b64 and record_dir:
+                screenshots.append(save_frame(record_dir, "999999-final.jpg", final_b64))
+
+            jev_decisions = len(final_state.get("decisions") or [])
+            text_calls = len(final_state.get("text_calls") or [])
+            # Where the time went (founder, 2026-09-22: "how did Jev perform"):
+            # the decision model's own latency and the text model's, summed
+            # from what jev-ultrafast records per decision / per text call.
+            jev_ms_total = sum(
+                int(d.get("latency_ms") or 0) for d in (final_state.get("decisions") or [])
+            )
+            text_ms_total = sum(
+                int(t.get("latency_ms") or 0) for t in (final_state.get("text_calls") or [])
+            )
+            status = final_state.get("status", "blocked")
+            history_out = [
+                {
+                    "step": h.get("step"),
+                    "action": h.get("action"),
+                    "kind": h.get("kind"),
+                    "operation": h.get("operation"),
+                    "target": h.get("target"),
+                    "text": h.get("text"),
+                    "confidence": h.get("confidence"),
+                    "jevMs": h.get("latency_ms"),
+                    "pageChanged": h.get("page_changed"),
+                }
+                for h in (final_state.get("history") or [])
+            ]
+    finally:
         try:
-            final_page = agent.browser.observe(screenshot=True)
-            final_b64 = final_page.get("screenshot")
+            restart_daemon()
         except Exception:
-            final_b64 = None
-
-        if final_b64 and record_dir:
-            screenshots.append(save_frame(record_dir, "999999-final.jpg", final_b64))
-
-        jev_decisions = len(final_state.get("decisions") or [])
-        text_calls = len(final_state.get("text_calls") or [])
-        # Where the time went (founder, 2026-09-22: "how did Jev perform"):
-        # the decision model's own latency and the text model's, summed
-        # from what jev-ultrafast records per decision / per text call.
-        jev_ms_total = sum(
-            int(d.get("latency_ms") or 0) for d in (final_state.get("decisions") or [])
-        )
-        text_ms_total = sum(
-            int(t.get("latency_ms") or 0) for t in (final_state.get("text_calls") or [])
-        )
-        status = final_state.get("status", "blocked")
-        history_out = [
-            {
-                "step": h.get("step"),
-                "action": h.get("action"),
-                "kind": h.get("kind"),
-                "operation": h.get("operation"),
-                "target": h.get("target"),
-                "text": h.get("text"),
-                "confidence": h.get("confidence"),
-                "jevMs": h.get("latency_ms"),
-                "pageChanged": h.get("page_changed"),
-            }
-            for h in (final_state.get("history") or [])
-        ]
+            pass
 
     emit(
         {
