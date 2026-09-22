@@ -140,9 +140,16 @@ describe('ultrafast-mcp.js protocol', () => {
       const textBlock = result.content.find((c) => c.type === 'text');
       expect(textBlock.text).toContain('status: done');
       // Founder (2026-09-22): where the time went, one line the agent
-      // can quote in its report.
+      // can quote in its report. The wall/Chromium figures are real
+      // clock reads (this test doesn't control those), so only their
+      // shape is pinned; jevMsTotal/textMsTotal come straight from the
+      // fixture's own result line (695ms over 2 decisions, 220ms over 1
+      // text call — fakeRunner.js), so those are asserted exactly (F23:
+      // this used to only match the line's shape, and the fixture never
+      // set these fields, so every run silently asserted against "0.0 s"
+      // regardless of what timingLine() actually computed).
       expect(textBlock.text).toMatch(
-        /Timing: \d+\.\d s wall · Chromium ready in \d+\.\d s · Jev \d+ decision\(s\) \d+\.\d s total.* · Claude \d+ text call\(s\) \d+\.\d s · \d+ screenshot\(s\) returned/,
+        /^Timing: \d+\.\d s wall · Chromium ready in \d+\.\d s · Jev 2 decision\(s\) 0\.7 s total \(avg 348 ms\) · Claude 1 text call\(s\) 0\.2 s · 2 screenshot\(s\) returned$/m,
       );
       expect(textBlock.text).toContain('2 step(s)');
       expect(textBlock.text).toContain("done` is Jev's claim");
