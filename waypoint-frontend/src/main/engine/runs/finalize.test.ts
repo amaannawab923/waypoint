@@ -413,13 +413,17 @@ describe('createRunFinalizer', () => {
     expect(ledger.createRunProposal).toHaveBeenCalledTimes(1);
     // A native ticket's proposal carries no Jira credential.
     // W5c: the board-shaped comment — the message as the summary, the
-    // footer. Fix 4 (feedback round 1): no verdict tag on the ticket; the
-    // verdict is on the row and the note.
+    // footer. Fix 4 (feedback round 1): no verdict tag on the ticket when
+    // the paired state change says it — but `root-cause` proposes none
+    // (statePlanFor), so S5 (PR #88 review) puts the tag back for exactly
+    // this gap: nothing else on the ticket would otherwise say the
+    // session only found a cause rather than fixed anything.
     expect(ledger.createRunProposal).toHaveBeenCalledWith(
       'run-abc1234',
       {
         kind: 'comment',
         body: [
+          '**Verdict:** root cause found',
           'The root cause is X.',
           '*Full report — the evidence, files and how it was verified — is on the run in Waypoint (ROAD-116 · Investigate).*',
         ].join('\n\n'),
