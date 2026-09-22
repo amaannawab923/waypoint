@@ -311,3 +311,47 @@ export function isClosingVerdict(verdict: Verdict | null): boolean {
     verdict === 'not-a-bug' || verdict === 'wont-fix' || verdict === 'delivered'
   );
 }
+
+/**
+ * The QA-cycle time the brief asks the session to end its Verification
+ * section with (founder, 2026-09-22: "how did Jev perform"):
+ * `Verification: 6.8 s via browser_task` or `Verification: 14 tool calls
+ * via waypoint-browser`. Parsed leniently from anywhere in the section
+ * (the model may add the tool's Jev/Claude figures after it); null when
+ * the section has no such line. Rides on the `finalized` event so the
+ * marker row can say "QA cycle: 6.8 s via browser_task" (markerFold.ts —
+ * F21, tech-lead review, 2026-09-22: worded to claim only the timing
+ * fact itself, never "verified", regardless of the turn's own verdict).
+ */
+export interface VerificationTiming {
+  seconds: number | null;
+  toolCalls: number | null;
+  via: 'browser_task' | 'waypoint-browser' | null;
+}
+
+// F14 (tech-lead review, 2026-09-22): `\s*s(?:ec(?:ond)?s?)?` had no word
+// boundary after the bare `s` branch, and "steps"/"screenshots" — the two
+// nouns the brief's own Verification section uses most, right next to a
+// step or screenshot count — both start with `s`. "Verification: 5 steps
+// via browser_task" matched the bare `s` off "steps" and was read as
+// `{seconds: 5}`; "3 screenshots taken" the same way. `\b` after the
+// alternation closes that: "steps"/"screenshots" no longer satisfy it (the
+// `s` is followed by another word character, not a boundary), while
+// "6.8 s", "12 seconds" and "3 secs" still do.
+const VERIFICATION_TIMING =
+  /verification\**\s*[:—–-]\s*\**\s*(?:(\d+(?:\.\d+)?)\s*(?:s|secs?|seconds?)\b|(\d+)\s*tool calls?)(?:\s*(?:via|with|through)\s*`?(browser_task|waypoint-browser)`?)?/i;
+
+export function parseVerificationTiming(
+  verification: string | null,
+): VerificationTiming | null {
+  if (!verification) return null;
+  const m = VERIFICATION_TIMING.exec(verification);
+  if (!m) return null;
+  const via =
+    m[3] === 'browser_task' || m[3] === 'waypoint-browser' ? m[3] : null;
+  return {
+    seconds: m[1] !== undefined ? Number(m[1]) : null,
+    toolCalls: m[2] !== undefined ? Number(m[2]) : null,
+    via,
+  };
+}

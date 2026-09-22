@@ -11,6 +11,7 @@ import { Avatar } from '@/components/ui/Avatar';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { NotWired } from '@/components/ui/NotWired';
 import { DefaultProviderSetting } from '@/components/sessions/DefaultProviderSetting';
+import { UltrafastBrowserTasksSetting } from '@/components/sessions/UltrafastBrowserTasksSetting';
 import { SESSIONS_ENABLED } from '@/lib/featureFlags';
 
 export default function Agents() {
@@ -48,8 +49,9 @@ export default function Agents() {
       {/* W4: the provider every new session runs on (flag-gated with the
           sessions panel it belongs to). */}
       {SESSIONS_ENABLED && (
-        <div className="mb-6">
+        <div className="mb-6 flex flex-col gap-3">
           <DefaultProviderSetting />
+          <UltrafastBrowserTasksSetting />
         </div>
       )}
 
