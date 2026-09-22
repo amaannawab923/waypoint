@@ -582,12 +582,17 @@ function buildRunnerEnv({ textModelBaseUrl, cdpUrl, bhRuntimeDir }) {
 async function runBrowserTask({ url, goal, maxSteps }) {
   const taskId = crypto.randomUUID();
   const recordDir = path.join(config.evidenceRoot, taskId);
-  const bhRuntimeDir = path.join(
-    os.tmpdir(),
-    `waypoint-ultrafast-bh-${taskId}`,
-  );
+  // browser-harness binds an AF_UNIX socket inside BH_RUNTIME_DIR, and
+  // sun_path is 104 bytes on macOS. Found on the second live Test: the
+  // macOS per-user tmpdir (/var/folders/xx/…/T/) plus a UUID-named dir
+  // blew that ("fatal: AF_UNIX path too long"). A short, world-writable
+  // root with a short random suffix keeps the socket path well under it;
+  // it is still one dir per task, made 0o700 and removed when the task
+  // ends. Only the harness's runtime state lives here — never a screenshot.
+  const shortTmp = process.platform === 'win32' ? os.tmpdir() : '/tmp';
+  const bhRuntimeDir = fs.mkdtempSync(path.join(shortTmp, 'wpuf-'));
+  fs.chmodSync(bhRuntimeDir, 0o700);
   fs.mkdirSync(recordDir, { recursive: true });
-  fs.mkdirSync(bhRuntimeDir, { recursive: true });
 
   // ULTRAFAST_TEXT_MODEL_BASE_URL, when set, skips starting the real
   // SDK-backed shim and points the runner straight at that URL instead —
