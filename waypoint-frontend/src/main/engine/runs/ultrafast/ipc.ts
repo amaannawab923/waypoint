@@ -49,7 +49,12 @@ function currentPaths() {
 }
 
 function currentScripts() {
-  return resolveUltrafastScriptPaths(app.getAppPath(), process.resourcesPath);
+  // `process.resourcesPath` is Electron-only — undefined under plain Node,
+  // the same fallback engineIpc.ts's own registration call uses.
+  return resolveUltrafastScriptPaths(
+    app.getAppPath(),
+    process.resourcesPath ?? app.getAppPath(),
+  );
 }
 
 async function runSelfTest(): Promise<

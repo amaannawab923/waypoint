@@ -27,7 +27,10 @@ import { withTicketDispatchLock } from './runs/dispatch';
 import { registerLiveLedgerFollower } from './runs/liveLedgerFollower';
 import { createDaemonRunsApi } from './runs/daemonApi';
 import { registerSessionBrowser } from './runs/sessionBrowser';
-import { registerUltrafastBrowser } from './runs/ultrafast/registration';
+import {
+  registerUltrafastBrowser,
+  ultrafastAvailability,
+} from './runs/ultrafast/registration';
 import { registerUltrafastIpc } from './runs/ultrafast/ipc';
 import { createRunFinalizer } from './runs/finalize';
 import { createLedgerClient } from './runs/ledgerClient';
@@ -216,7 +219,11 @@ export function registerEngineIpc(
   registerUltrafastBrowser({
     supervisor,
     appPath: app.getAppPath(),
-    resourcesPath: process.resourcesPath,
+    // `process.resourcesPath` is an Electron-only global, undefined under
+    // plain Node (every test in this file, and jest's own environment) —
+    // falling back to appPath keeps scriptPaths.ts's candidate list valid
+    // (if pointless) rather than throwing out of path.join with undefined.
+    resourcesPath: process.resourcesPath ?? app.getAppPath(),
     userData: app.getPath('userData'),
     logger,
   });
@@ -394,6 +401,22 @@ export function registerEngineIpc(
       path.dirname(worktreesDir),
       'jira-project-repos.json',
     ),
+    // Read fresh per brief, not cached: whether `browser_task` would
+    // actually be offered can flip between one preview and the next (a
+    // background provision finishing, a key just saved).
+    ultrafastAvailable: () => {
+      const availability = ultrafastAvailability({
+        appPath: app.getAppPath(),
+        resourcesPath: process.resourcesPath ?? app.getAppPath(),
+        userData: app.getPath('userData'),
+      });
+      return (
+        availability.keyConfigured &&
+        availability.uvAvailable &&
+        availability.provisioned &&
+        availability.scriptsInstalled
+      );
+    },
     logger,
   });
 

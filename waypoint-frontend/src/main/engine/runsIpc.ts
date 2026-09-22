@@ -137,6 +137,8 @@ export interface RunsIpcDeps {
   jira?: JiraRunDeps;
   /** W5b: where main remembers which folder a Jira project's code lives in; defaults to beside the recents file. */
   jiraReposFile?: string;
+  /** Ultrafast browser tasks: see DispatchDeps' own comment (dispatch.ts). */
+  ultrafastAvailable?: () => boolean;
   logger: {
     info: (m: string, meta?: Record<string, unknown>) => void;
     warn: (m: string, meta?: Record<string, unknown>) => void;
@@ -724,6 +726,9 @@ export function registerRunsIpc(deps: RunsIpcDeps): RunsHostApi {
     jiraReposFile:
       deps.jiraReposFile ??
       path.join(path.dirname(deps.recentsFile), 'jira-project-repos.json'),
+    ...(deps.ultrafastAvailable
+      ? { ultrafastAvailable: deps.ultrafastAvailable }
+      : {}),
   };
   deps.host.handle(RUNS_IPC.start, (input) => startRun(startDeps, input));
   // The same per-run lock a send (sendPrompt.ts) and the pane's warm-up

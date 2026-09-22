@@ -160,6 +160,47 @@ describe('buildBrief', () => {
     expect(write).toContain('waypoint-browser tools');
   });
 
+  // Ultrafast browser tasks: the paragraph only appears alongside the
+  // fine-grained waypoint-browser one, and only when the tool is actually
+  // registered for this session (registration.ts's gate, threaded through
+  // as ultrafastAvailable).
+  it('with ultrafastAvailable, adds the browser_task paragraph beside the fine-grained tools', () => {
+    const brief = buildBrief(
+      input({ intent: 'fix', verifyInBrowser: true, ultrafastAvailable: true }),
+    );
+    expect(brief).toContain('waypoint-browser tools');
+    expect(brief).toContain('call browser_task once with the URL');
+    expect(brief).toContain('Its "done" is a claim, not proof');
+    expect(brief.indexOf('waypoint-browser tools')).toBeLessThan(
+      brief.indexOf('call browser_task once'),
+    );
+  });
+
+  it('without ultrafastAvailable, says nothing about browser_task even with verifyInBrowser on', () => {
+    const brief = buildBrief(
+      input({
+        intent: 'fix',
+        verifyInBrowser: true,
+        ultrafastAvailable: false,
+      }),
+    );
+    expect(brief).toContain('waypoint-browser tools');
+    expect(brief).not.toContain('browser_task');
+  });
+
+  it('ultrafastAvailable alone, without verifyInBrowser, adds neither paragraph', () => {
+    const brief = buildBrief(
+      input({
+        intent: 'fix',
+        verifyInBrowser: false,
+        ultrafastAvailable: true,
+      }),
+    );
+    expect(brief).not.toContain('## Verification');
+    expect(brief).not.toContain('waypoint-browser');
+    expect(brief).not.toContain('browser_task');
+  });
+
   it('Fix without an RCA says nothing about one', () => {
     const brief = buildBrief(input({ intent: 'fix' }));
     expect(brief).not.toContain('Root cause');
