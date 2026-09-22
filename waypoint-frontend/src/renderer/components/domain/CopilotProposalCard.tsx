@@ -655,6 +655,13 @@ export function CopilotProposalCard({
   const [editError, setEditError] = useState<string | null>(null);
   const editing = draft !== null;
 
+  // S1 (PR #88 review): "Why this exists" reads the verdict off the run
+  // itself, the same cached lookup RunOriginLine already makes for this
+  // proposal's "from run … ↗" line — undefined while it loads, null when
+  // the run could not be read; whyItExists falls back to the comment
+  // body's own (anchored) Verdict line either way.
+  const runSummary = useAgentRunSummary(proposal.agentRunId);
+
   async function saveEdit() {
     if (draft === null) return;
     const body = draft.trim();
@@ -722,7 +729,7 @@ export function CopilotProposalCard({
           className="text-[11.5px] leading-snug text-text-muted"
           data-proposal-why
         >
-          Why this exists: {whyItExists(proposal)}
+          Why this exists: {whyItExists(proposal, runSummary?.verdict)}
         </div>
         <ProposalBody
           proposal={proposal}
