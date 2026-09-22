@@ -73,6 +73,19 @@ async function main() {
     elapsedMs: 640,
     jevDecisions: 2,
     textCalls: 1,
+    // F23 (tech-lead review, 2026-09-22): the two step lines above already
+    // carry real jevMs figures (340, 355) — runner.py's own result line
+    // sums exactly these into jevMsTotal/textMsTotal (runner.py:141-146).
+    // This fixture used to omit both fields entirely, so timingLine()'s
+    // `secs(result.jevMsTotal)`/`secs(result.textMsTotal)` always read
+    // undefined -> 0 -> "0.0 s", and ultrafast-mcp.test.js's own Timing
+    // assertion could not have failed on a wrong number even if timingLine
+    // computed one, because every run produced the same "0.0 s" either
+    // way. Real, distinct figures here (695 = 340+355; 220 for the one
+    // text call) let that test assert the actual seconds string rather
+    // than just the line's shape.
+    jevMsTotal: 695,
+    textMsTotal: 220,
     history: [
       {
         step: 1,
